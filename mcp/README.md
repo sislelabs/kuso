@@ -38,20 +38,20 @@ The server speaks MCP over stdio. Wire it up in your client by pointing at the `
 
 The full v1 tool surface is specified in [`docs/PRD.md` Workstream B](../docs/PRD.md). Current state:
 
-| Tool         | Status      |
-| ------------ | ----------- |
-| `health`     | implemented |
-| `list_apps`  | planned     |
-| `describe_app` | planned   |
-| `deploy_app` | planned     |
-| `troubleshoot_app` | planned |
-| `set_app_config` | planned |
-| `manage_secret` | planned  |
-| `tail_logs`  | planned     |
-| `exec_app`   | planned     |
-| `cluster_health` | planned |
-| `cost_report` | planned    |
-| `bootstrap_product` | planned |
+| Tool                | Status      |
+| ------------------- | ----------- |
+| `health`            | implemented |
+| `list_apps`         | implemented |
+| `describe_app`      | implemented |
+| `troubleshoot_app`  | implemented |
+| `deploy_app`        | planned     |
+| `set_app_config`    | planned     |
+| `manage_secret`     | planned     |
+| `tail_logs`         | planned     |
+| `exec_app`          | planned     |
+| `cluster_health`    | planned     |
+| `cost_report`       | planned     |
+| `bootstrap_product` | planned     |
 
 ## Layout
 
