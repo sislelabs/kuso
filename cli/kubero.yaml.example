@@ -1,0 +1,8 @@
+instances:
+    kubero-examlpe:
+      iacBaseDir: .kubero/
+      apiurl: http://localhost:80
+      tunnel: 
+        subdomain: kubero-local-dev-example
+        port: 80
+        host: localhost
