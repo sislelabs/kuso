@@ -69,3 +69,19 @@ mcp/
 ```
 
 Adding a new tool: create a `register<Name>` function in `internal/tools/`, call it from `Register()`, define an args struct (with jsonschema tags) and a result struct.
+
+## Tests
+
+Unit tests (httptest-driven, fast):
+
+```bash
+go test ./...
+```
+
+Integration tests (build the binary, spawn it, drive it via the MCP SDK over stdio):
+
+```bash
+go test -tags=integration ./...
+```
+
+The integration suite is the strongest local check we have short of a real kuso install — it catches tool-registration regressions, JSON shape bugs, transport wiring issues, env var handling, and the read-only flag plumbing.
