@@ -13,8 +13,8 @@ import i18n from './i18n'
 
 /*
 import axios from 'axios'
-axios.defaults.headers.common['User-Agent'] = 'Kubero/3.x'
-axios.defaults.headers.common['Authorization'] = 'Bearer ' + localStorage.getItem('kubero.JWT_TOKEN')
+axios.defaults.headers.common['User-Agent'] = 'Kuso/3.x'
+axios.defaults.headers.common['Authorization'] = 'Bearer ' + localStorage.getItem('kuso.JWT_TOKEN')
 */
 // Types
 import type { App } from 'vue'

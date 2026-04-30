@@ -3,11 +3,11 @@ Copyright © 2022 NAME HERE <EMAIL ADDRESS>
 */
 package main
 
-import "kubero/cmd/kuberoCli"
+import "kuso/cmd/kusoCli"
 
 func main() {
 
-	kuberoCli.Execute()
+	kusoCli.Execute()
 }
 
-// var configPath = os.Getenv("HOME") + "/.config/kubero-cli"
+// var configPath = os.Getenv("HOME") + "/.config/kuso-cli"

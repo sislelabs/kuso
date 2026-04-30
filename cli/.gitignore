@@ -14,8 +14,8 @@
 # Dependency directories (remove the comment below to include it)
 # vendor/
 
-/kubero
-kubero.yaml
+/kuso
+kuso.yaml
 credentials.yaml
 
 notes.txt
@@ -23,8 +23,8 @@ pipeline.yaml
 app.*.yaml
 kind.yaml
 
-cmd/kuberoCli/VERSION
+cmd/kusoCli/VERSION
 
-.kubero
+.kuso
 *VERSION
 *CLI_VERSION

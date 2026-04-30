@@ -109,7 +109,7 @@ export class LogsService {
     if (contextName) {
       this.kubectl.getPods(namespace, contextName).then((pods: any[]) => {
         for (const pod of pods) {
-          if (pod.metadata.name.startsWith(appName + '-kuberoapp')) {
+          if (pod.metadata.name.startsWith(appName + '-kusoapp')) {
             for (const container of pod.spec.containers) {
               this.emitLogs(
                 pipelineName,
@@ -169,7 +169,7 @@ export class LogsService {
             const ll = await this.fetchLogs(
               namespace,
               pod.metadata.name,
-              'kuberoapp-' + container,
+              'kusoapp-' + container,
               pipelineName,
               phaseName,
               appName,

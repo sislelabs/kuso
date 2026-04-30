@@ -9,7 +9,7 @@ import {
 } from './types';
 import { Repo } from './repo';
 import gitUrlParse = require('git-url-parse');
-debug('app:kubero:github:api');
+debug('app:kuso:github:api');
 
 //const { Octokit } = require("@octokit/core");
 import { Octokit } from '@octokit/core';
@@ -199,7 +199,7 @@ export class GithubApi extends Repo {
       statusText: 'error',
       data: {
         id: 0,
-        title: 'bot@kubero',
+        title: 'bot@kuso',
         verified: false,
         created_at: '2020-01-01T00:00:00Z',
         url: '',
@@ -215,7 +215,7 @@ export class GithubApi extends Repo {
         {
           owner: owner,
           repo: repo,
-          title: 'bot@kubero',
+          title: 'bot@kuso',
           key: keyPair.pubKey,
           read_only: true,
         },
@@ -250,7 +250,7 @@ export class GithubApi extends Repo {
     body: any,
   ): IWebhook | boolean {
     //https://docs.github.com/en/developers/webhooks-and-events/webhooks/securing-your-webhooks
-    const secret = process.env.KUBERO_WEBHOOK_SECRET as string;
+    const secret = process.env.KUSO_WEBHOOK_SECRET as string;
     const hash =
       'sha256=' +
       crypto

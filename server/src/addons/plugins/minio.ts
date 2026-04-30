@@ -14,7 +14,7 @@ export class Tenant extends Plugin implements IPlugin {
     'https://artifacthub.io/packages/olm/community-operators/minio-operator';
   public docs = [
     {
-      title: 'Kubero Docs',
+      title: 'Kuso Docs',
       url: '',
     },
   ];

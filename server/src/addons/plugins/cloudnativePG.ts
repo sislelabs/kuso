@@ -11,15 +11,15 @@ export class Cluster extends Plugin implements IPlugin {
   public icon = '/img/addons/pgsql.svg';
   public install: string = 'kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.27/releases/cnpg-1.27.0.yaml';
   public url =
-    'https://artifacthub.io/packages/olm/community-operators/kubero-operator';
+    'https://artifacthub.io/packages/olm/community-operators/kuso-operator';
   public docs = [
     {
-      title: 'Kubero Docs',
+      title: 'Kuso Docs',
       url: '',
     },
   ];
   public artifact_url =
-    'https://artifacthub.io/api/v1/packages/olm/kubero/kubero-operator';
+    'https://artifacthub.io/api/v1/packages/olm/kuso/kuso-operator';
   public beta: boolean = false;
   public deprecated: boolean = false;
 
@@ -110,7 +110,7 @@ export class Cluster extends Plugin implements IPlugin {
         name: "cluster-example-full"
       },
       spec: {
-        description: "Kubero generated postgresql cluster",
+        description: "Kuso generated postgresql cluster",
         imageName: "ghcr.io/cloudnative-pg/postgresql:17.5",
         instances: 3,
         startDelay: 300,

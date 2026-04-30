@@ -6,7 +6,7 @@
 
 <script lang="ts">
 import { defineComponent } from 'vue'
-import { useKuberoStore } from '../../stores/kubero'
+import { useKusoStore } from '../../stores/kuso'
 import { useAuthStore } from '../../stores/auth'
 import { mapWritableState } from 'pinia'
 
@@ -16,9 +16,9 @@ const { cookies } = useCookies();
 const authStore = useAuthStore();
 
 import axios from 'axios'
-//axios.defaults.headers.common['User-Agent'] = 'Kubero/3.x'
-//axios.defaults.headers.common['Authorization'] = 'Bearer ' + localStorage.getItem('kubero.JWT_TOKEN')
-const token = cookies.get("kubero.JWT_TOKEN")
+//axios.defaults.headers.common['User-Agent'] = 'Kuso/3.x'
+//axios.defaults.headers.common['Authorization'] = 'Bearer ' + localStorage.getItem('kuso.JWT_TOKEN')
+const token = cookies.get("kuso.JWT_TOKEN")
 if (token) {
     authStore.loadToken(token);
     axios.defaults.headers.common['Authorization'] = 'Bearer ' + token
@@ -34,8 +34,8 @@ export default defineComponent({
         this.checkSession();
     },
     computed: {
-        ...mapWritableState(useKuberoStore, [
-            'kubero',
+        ...mapWritableState(useKusoStore, [
+            'kuso',
         ]),
     },
     data: () => ({
@@ -55,17 +55,17 @@ export default defineComponent({
                         console.log("isAuthenticated: " + result.data.isAuthenticated);
 
                         // safe version to vuetufy gloabl scope for use in components
-                        this.kubero.templatesEnabled = result.data.templatesEnabled;
-                        this.kubero.version = result.data.version;
-                        this.kubero.operatorVersion = result.data.operatorVersion;
-                        this.kubero.kubernetesVersion = result.data.kubernetesVersion;
-                        this.kubero.isAuthenticated = result.data.isAuthenticated;
-                        this.kubero.adminDisabled = result.data.adminDisabled;
-                        this.kubero.buildPipeline = result.data.buildPipeline;
-                        this.kubero.auditEnabled = result.data.auditEnabled;
-                        this.kubero.consoleEnabled = result.data.consoleEnabled;
-                        this.kubero.metricsEnabled = result.data.metricsEnabled;
-                        this.kubero.sleepEnabled = result.data.sleepEnabled;
+                        this.kuso.templatesEnabled = result.data.templatesEnabled;
+                        this.kuso.version = result.data.version;
+                        this.kuso.operatorVersion = result.data.operatorVersion;
+                        this.kuso.kubernetesVersion = result.data.kubernetesVersion;
+                        this.kuso.isAuthenticated = result.data.isAuthenticated;
+                        this.kuso.adminDisabled = result.data.adminDisabled;
+                        this.kuso.buildPipeline = result.data.buildPipeline;
+                        this.kuso.auditEnabled = result.data.auditEnabled;
+                        this.kuso.consoleEnabled = result.data.consoleEnabled;
+                        this.kuso.metricsEnabled = result.data.metricsEnabled;
+                        this.kuso.sleepEnabled = result.data.sleepEnabled;
                     })
                     .catch((err) => {
                         if (err.response && err.response.status === 401) {

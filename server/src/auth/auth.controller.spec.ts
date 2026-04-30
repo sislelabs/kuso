@@ -54,7 +54,7 @@ describe('AuthController', () => {
         send: jest.fn(),
       };
       await controller.logout(mockRes as any);
-      expect(mockRes.clearCookie).toHaveBeenCalledWith('kubero.JWT_TOKEN');
+      expect(mockRes.clearCookie).toHaveBeenCalledWith('kuso.JWT_TOKEN');
       expect(mockRes.send).toHaveBeenCalledWith({
         message: 'Logged out',
         status: '200',
@@ -109,7 +109,7 @@ describe('AuthController', () => {
       const mockRes = { cookie: jest.fn(), redirect: jest.fn() };
       await controller.githubCallback(mockReq as any, mockRes as any);
       expect(service.loginOAuth2).toHaveBeenCalledWith({"username": "user"});
-      expect(mockRes.cookie).toHaveBeenCalledWith('kubero.JWT_TOKEN', 'token');
+      expect(mockRes.cookie).toHaveBeenCalledWith('kuso.JWT_TOKEN', 'token');
       expect(mockRes.redirect).toHaveBeenCalledWith('/');
     });
   });
@@ -121,7 +121,7 @@ describe('AuthController', () => {
       const mockRes = { cookie: jest.fn(), redirect: jest.fn() };
       await controller.oauth2Callback(mockReq as any, mockRes as any);
       expect(service.loginOAuth2).toHaveBeenCalledWith({"username": "user"});
-      expect(mockRes.cookie).toHaveBeenCalledWith('kubero.JWT_TOKEN', 'token');
+      expect(mockRes.cookie).toHaveBeenCalledWith('kuso.JWT_TOKEN', 'token');
       expect(mockRes.redirect).toHaveBeenCalledWith('/');
     });
   });

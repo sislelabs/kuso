@@ -1,0 +1,24 @@
+# permissions for end users to edit kusoelasticsearches.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kusoelasticsearch-editor-role
+rules:
+- apiGroups:
+  - application.kuso.sislelabs.com
+  resources:
+  - kusoelasticsearches
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - application.kuso.sislelabs.com
+  resources:
+  - kusoelasticsearches/status
+  verbs:
+  - get

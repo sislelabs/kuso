@@ -324,7 +324,7 @@ export default defineComponent({
             });
         },
         deleteAddon(addon: Addon) {
-            // remove addon from local view and kuberoapp yaml
+            // remove addon from local view and kusoapp yaml
             for (let i = 0; i < this.addons.length; i++) {
               if (this.addons[i].kind == addon.kind) {
                 this.addons.splice(i, 1);

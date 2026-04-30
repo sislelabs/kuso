@@ -1,4 +1,4 @@
-module kubero
+module kuso
 
 go 1.23.0
 

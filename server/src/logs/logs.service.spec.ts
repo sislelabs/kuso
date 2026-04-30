@@ -82,7 +82,7 @@ describe('LogsService', () => {
       pipelinesService.getContext.mockResolvedValue('ctx');
       kubectl.getPods.mockResolvedValue([
         {
-          metadata: { name: 'app-kuberoapp-123', labels: {} },
+          metadata: { name: 'app-kusoapp-123', labels: {} },
           spec: { containers: [{ name: 'web' }] },
         },
       ]);
@@ -92,7 +92,7 @@ describe('LogsService', () => {
         'pipe',
         'phase',
         'app',
-        'app-kuberoapp-123',
+        'app-kusoapp-123',
         'web',
         ['group1', 'group2'],
       );
@@ -104,7 +104,7 @@ describe('LogsService', () => {
       pipelinesService.getContext.mockResolvedValue('ctx');
       kubectl.getPods.mockResolvedValue([
         {
-          metadata: { name: 'app-kuberoapp-123', labels: {} },
+          metadata: { name: 'app-kusoapp-123', labels: {} },
           spec: { containers: [{ name: 'web' }] },
         },
       ]);
@@ -115,7 +115,7 @@ describe('LogsService', () => {
           pipeline: 'pipe',
           phase: 'phase',
           app: 'app',
-          pod: 'app-kuberoapp-123',
+          pod: 'app-kusoapp-123',
           podID: '123-undefined',
           container: 'web',
           color: '#000000',
@@ -137,7 +137,7 @@ describe('LogsService', () => {
       pipelinesService.getContext.mockResolvedValue('ctx');
       kubectl.getPods.mockResolvedValue([
         {
-          metadata: { name: 'app-kuberoapp-123', labels: {} },
+          metadata: { name: 'app-kusoapp-123', labels: {} },
           spec: { containers: [{ name: 'web' }] },
         },
       ]);

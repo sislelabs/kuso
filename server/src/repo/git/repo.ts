@@ -61,13 +61,13 @@ export abstract class Repo {
   }> {
     this.logger.log('connectPipeline: ' + gitrepo);
 
-    if (process.env.KUBERO_WEBHOOK_SECRET == undefined) {
-      this.logger.log('KUBERO_WEBHOOK_SECRET is not defined');
-      throw new Error('KUBERO_WEBHOOK_SECRET is not defined');
+    if (process.env.KUSO_WEBHOOK_SECRET == undefined) {
+      this.logger.log('KUSO_WEBHOOK_SECRET is not defined');
+      throw new Error('KUSO_WEBHOOK_SECRET is not defined');
     }
-    if (process.env.KUBERO_WEBHOOK_URL == undefined) {
-      this.logger.log('KUBERO_WEBHOOK_URL is not defined');
-      throw new Error('KUBERO_WEBHOOK_URL is not defined');
+    if (process.env.KUSO_WEBHOOK_URL == undefined) {
+      this.logger.log('KUSO_WEBHOOK_URL is not defined');
+      throw new Error('KUSO_WEBHOOK_URL is not defined');
     }
 
     const repository = await this.getRepository(gitrepo);
@@ -78,7 +78,7 @@ export abstract class Repo {
       statusText: 'error',
       data: {
         id: 0,
-        title: 'bot@kubero',
+        title: 'bot@kuso',
         verified: false,
         created_at: '2020-01-01T00:00:00Z',
         url: '',
@@ -103,8 +103,8 @@ export abstract class Repo {
       webhook = await this.addWebhook(
         repository.data.owner,
         repository.data.name,
-        process.env.KUBERO_WEBHOOK_URL + '/' + this.repoProvider,
-        process.env.KUBERO_WEBHOOK_SECRET,
+        process.env.KUSO_WEBHOOK_URL + '/' + this.repoProvider,
+        process.env.KUSO_WEBHOOK_SECRET,
       );
 
       keys = await this.addDeployKey(

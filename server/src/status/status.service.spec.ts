@@ -35,16 +35,16 @@ describe('StatusService', () => {
 
   it('should increment counter if pipelines are counted', async () => {
     mockPipelinesService.countPipelines.mockResolvedValue(5);
-    await service.updateKuberoMetrics();
+    await service.updateKusoMetrics();
     expect(mockGauge.set).toHaveBeenCalledWith({}, 5);
   });
 
-  describe('updateKuberoMetrics', () => {
+  describe('updateKusoMetrics', () => {
     it('should increment both counters with correct values', async () => {
       mockPipelinesService.countPipelines.mockResolvedValue(7);
       mockAppsService.countApps.mockResolvedValue(12);
 
-      await service.updateKuberoMetrics();
+      await service.updateKusoMetrics();
 
       expect(mockGauge.set).toHaveBeenCalledWith({}, 7);
       expect(mockGauge.set).toHaveBeenCalledWith({}, 12);

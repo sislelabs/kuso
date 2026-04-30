@@ -516,7 +516,7 @@ export default defineComponent({
 
     // Watch for locale changes and save to localStorage
     watch(locale, (newLocale) => {
-      localStorage.setItem('kubero.locale', newLocale)
+      localStorage.setItem('kuso.locale', newLocale)
     })
 
     onMounted(() => {

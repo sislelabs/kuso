@@ -1,13 +1,13 @@
 export const buildpacksTemplate = `---
-# Source: kuberobuild/templates/job-buikdpacks.yaml
+# Source: kusobuild/templates/job-buikdpacks.yaml
 apiVersion: batch/v1
 kind: Job
 metadata:
   labels:
     batch.kubernetes.io/job-name: example-test-20240631-2237
     buildstrategy: buildpacks
-    kuberoapp: example
-    kuberopipeline: test
+    kusoapp: example
+    kusopipeline: test
     job-name: example-test-20240631-2237
   name: example-test-20240631-2237
 spec:
@@ -24,8 +24,8 @@ spec:
       labels:
         batch.kubernetes.io/job-name: example-test-20240631-2237
         buildstrategy: buildpacks
-        kuberoapp: example
-        kuberopipeline: test
+        kusoapp: example
+        kusopipeline: test
         job-name: example-test-20240631-2237
     spec:
       automountServiceAccountToken: true
@@ -35,7 +35,7 @@ spec:
         - name: deploy
           env:
           - name: REPOSITORY
-            value: registry-kubero.yourdomain.com/optionalrepositoryowner/pipeline/app
+            value: registry-kuso.yourdomain.com/optionalrepositoryowner/pipeline/app
           - name: TAG
             value: "123456"
           - name: APP
@@ -43,7 +43,7 @@ spec:
           command:
           - sh
           - -c
-          - 'kubectl patch kuberoapps $APP --type=merge -p "{\"spec\":{\"image\":{\"repository\":
+          - 'kubectl patch kusoapps $APP --type=merge -p "{\"spec\":{\"image\":{\"repository\":
             \"$REPOSITORY\",\"tag\": \"$TAG\"}}}"'
           image: bitnami/kubectl:latest
           imagePullPolicy: Always
@@ -57,9 +57,9 @@ spec:
             value: git@github.com:kubero-dev/template-nodeapp.git
           - name: GIT_REF
             value: main
-          - name: KUBERO_BUILDPACK_DEFAULT_RUN_CMD
+          - name: KUSO_BUILDPACK_DEFAULT_RUN_CMD
             value: "exit 0"
-          - name: KUBERO_BUILDPACK_DEFAULT_BUILD_CMD
+          - name: KUSO_BUILDPACK_DEFAULT_BUILD_CMD
             value: "exit 0"
           image: "ghcr.io/kubero-dev/fetch:latest"
           imagePullPolicy: Always
@@ -69,7 +69,7 @@ spec:
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
           volumeMounts:
-          - mountPath: /home/kubero/.ssh-mounted
+          - mountPath: /home/kuso/.ssh-mounted
             name: deployment-keys
             readOnly: true
           - mountPath: /app
@@ -91,11 +91,11 @@ spec:
         - name: build
           args:
           - '-app=.'
-          - registry-kubero.yourdomain.com/optionalrepositoryowner/pipeline/app:mytag-id
+          - registry-kuso.yourdomain.com/optionalrepositoryowner/pipeline/app:mytag-id
           command: ['/cnb/lifecycle/creator']
           # https://github.com/buildpacks/pack/issues/564#issuecomment-943345649
           # https://github.com/buildpacks/spec/blob/platform/v0.13/platform.md#creator
-          #command: ['/cnb/lifecycle/creator', '-app=.', '-buildpacks=/cnb/buildpacks', '-platform=/platform', '-run-image=ghcr.io/kubero-dev/run:v1.4.0', '-uid=1000', '-gid=1000', 'kubero-local-dev-0037732.loca.lt/example/exampled:latest']
+          #command: ['/cnb/lifecycle/creator', '-app=.', '-buildpacks=/cnb/buildpacks', '-platform=/platform', '-run-image=ghcr.io/kubero-dev/run:v1.4.0', '-uid=1000', '-gid=1000', 'kuso-local-dev-0037732.loca.lt/example/exampled:latest']
           #command: ['tail', '-f', '/dev/null']
           image: "paketobuildpacks/builder-jammy-full:latest" #List of Builders : https://paketo.io/docs/reference/builders-reference/
           imagePullPolicy: Always
@@ -117,8 +117,8 @@ spec:
           workingDir: /app
       restartPolicy: Never
       schedulerName: default-scheduler
-      serviceAccount: example-kuberoapp
-      serviceAccountName: example-kuberoapp
+      serviceAccount: example-kusoapp
+      serviceAccountName: example-kusoapp
       terminationGracePeriodSeconds: 30
       volumes:
       - name: deployment-keys
@@ -129,12 +129,12 @@ spec:
         name: app-storage
       - name: docker-config
         secret:
-          secretName: kubero-pull-secret
+          secretName: kuso-pull-secret
           items:
             - key: .dockerconfigjson
               path: config.json
 #      - name: pull-secret
 #        secret:
 #          defaultMode: 0384
-#          secretName: kubero-pull-secret
+#          secretName: kuso-pull-secret
 `;

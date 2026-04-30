@@ -31,7 +31,7 @@
             v-if="app.deploymentstrategy != 'docker'"
             class="mx-0 my-1"
         >
-            <v-icon start style="vertical-align:baseline" color="kubero">mdi-git</v-icon>
+            <v-icon start style="vertical-align:baseline" color="kuso">mdi-git</v-icon>
             <div class="grey--text text-subtitle-1">
                 {{ app.gitrepo.ssh_url }}
             </div>
@@ -40,7 +40,7 @@
             v-if="app.deploymentstrategy == 'docker'"
             class="mx-0 my-1"
         >
-            <v-icon start x-small color="kubero">mdi-docker</v-icon>
+            <v-icon start x-small color="kuso">mdi-docker</v-icon>
             <div class="grey--text text-subtitle-1">
                 {{ app.image.repository }}:{{ app.image.tag }}
             </div>
@@ -258,7 +258,7 @@ export default defineComponent({
                 showCancelButton: true,
                 confirmButtonText: "Delete",
                 cancelButtonText: "Cancel",
-                confirmButtonColor: "rgb(var(--v-theme-kubero))",
+                confirmButtonColor: "rgb(var(--v-theme-kuso))",
                 background: "rgb(var(--v-theme-cardBackground))",
                 /*background: "rgb(var(--v-theme-on-surface-variant))",*/
                 color: "rgba(var(--v-theme-on-background),var(--v-high-emphasis-opacity));",

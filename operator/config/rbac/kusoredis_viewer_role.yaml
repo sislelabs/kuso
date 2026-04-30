@@ -1,0 +1,20 @@
+# permissions for end users to view kusoredis.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kusoredis-viewer-role
+rules:
+- apiGroups:
+  - application.kuso.sislelabs.com
+  resources:
+  - kusoredis
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - application.kuso.sislelabs.com
+  resources:
+  - kusoredis/status
+  verbs:
+  - get

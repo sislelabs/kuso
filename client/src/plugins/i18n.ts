@@ -7,7 +7,7 @@ import deCH from '../locale/de-CH'
 import pt from '../locale/pt'
 
 // Get saved locale from localStorage or default to 'de'
-const savedLocale = localStorage.getItem('kubero.locale') || process.env.KUBERO_DEFAULT_LOCALE || 'en'
+const savedLocale = localStorage.getItem('kuso.locale') || process.env.KUSO_DEFAULT_LOCALE || 'en'
 
 const i18n = createI18n({
   legacy: false,

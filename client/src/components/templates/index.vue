@@ -270,10 +270,10 @@ export default defineComponent({
         clickedTemplate: {} as Template,
         catalogId: 0,
         addonImages: {
-            'KuberoPostgresql': '/img/addons/pgsql.svg',
-            'KuberoMysql': '/img/addons/mysql.svg',
-            'KuberoRedis': '/img/addons/redis.svg',
-            'KuberoMongoDB': '/img/addons/mongo.svg',
+            'KusoPostgresql': '/img/addons/pgsql.svg',
+            'KusoMysql': '/img/addons/mysql.svg',
+            'KusoRedis': '/img/addons/redis.svg',
+            'KusoMongoDB': '/img/addons/mongo.svg',
         } as { [key: string]: string },
         templates: {
             enabled: true,

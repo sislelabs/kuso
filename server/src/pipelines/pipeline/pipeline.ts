@@ -42,12 +42,12 @@ export class KubectlPipeline implements IKubectlPipeline {
   public spec: Pipeline;
 
   constructor(pipeline: IPipeline) {
-    this.apiVersion = 'application.kubero.dev/v1alpha1';
-    this.kind = 'KuberoPipeline';
+    this.apiVersion = 'application.kuso.sislelabs.com/v1alpha1';
+    this.kind = 'KusoPipeline';
     this.metadata = {
       name: pipeline.name,
       labels: {
-        manager: 'kubero',
+        manager: 'kuso',
       },
     };
     this.spec = pipeline;

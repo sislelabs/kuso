@@ -33,7 +33,7 @@ export class PipelinesService {
     this.logger.debug('listApps in ' + pipelineName);
 
     await this.kubectl.setCurrentContext(
-      process.env.KUBERO_CONTEXT || 'default',
+      process.env.KUSO_CONTEXT || 'default',
     );
     const kpipeline = await this.kubectl.getPipeline(pipelineName);
 
@@ -130,9 +130,9 @@ export class PipelinesService {
   public deletePipeline(pipelineName: string, user: IUser) {
     this.logger.debug('deletePipeline: ' + pipelineName);
 
-    if (process.env.KUBERO_READONLY == 'true') {
+    if (process.env.KUSO_READONLY == 'true') {
       console.log(
-        'KUBERO_READONLY is set to true, not deleting pipeline ' + pipelineName,
+        'KUSO_READONLY is set to true, not deleting pipeline ' + pipelineName,
       );
       return;
     }
@@ -174,9 +174,9 @@ export class PipelinesService {
   ) {
     this.logger.debug('update Pipeline: ' + pipeline.name);
 
-    if (process.env.KUBERO_READONLY == 'true') {
+    if (process.env.KUSO_READONLY == 'true') {
       this.logger.log(
-        'KUBERO_READONLY is set to true, not updating pipelline ' +
+        'KUSO_READONLY is set to true, not updating pipelline ' +
           pipeline.name,
       );
       return;
@@ -216,9 +216,9 @@ export class PipelinesService {
   public async createPipeline(pipeline: IPipeline, user: IUser) {
     this.logger.debug('create Pipeline: ' + pipeline.name);
 
-    if (process.env.KUBERO_READONLY == 'true') {
+    if (process.env.KUSO_READONLY == 'true') {
       console.log(
-        'KUBERO_READONLY is set to true, not creting pipeline ' + pipeline.name,
+        'KUSO_READONLY is set to true, not creting pipeline ' + pipeline.name,
       );
       return;
     }

@@ -1,4 +1,4 @@
-export type IKuberoBuildjob = {
+export type IKusoBuildjob = {
   creationTimestamp: string;
   name: string;
   app: string;
@@ -33,7 +33,7 @@ export type IKuberoBuildjob = {
   };
 };
 
-export type KuberoBuild = {
+export type KusoBuild = {
   apiVersion: string;
   kind: string;
   metadata: {
@@ -95,9 +95,9 @@ export type KuberoBuild = {
   };
 };
 
-export type KuberoBuildList = {
+export type KusoBuildList = {
   apiVersion: string;
-  items: Array<KuberoBuild>;
+  items: Array<KusoBuild>;
   kind: string;
   metadata: {
     continue: string;
@@ -110,6 +110,6 @@ export interface DeploymentOptions {
     kubectl: Kubectl;
     notifications: Notifications;
     io: any;
-    kubero: Kubero;
+    kuso: Kuso;
 }
 */

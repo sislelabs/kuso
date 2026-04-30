@@ -14,7 +14,7 @@ kubectl apply -n mongodb-operator-system --server-side -f https://raw.githubuser
     'https://artifacthub.io/packages/olm/community-operators/mongodb-operator';
   public docs = [
     {
-      title: 'Kubero Docs',
+      title: 'Kuso Docs',
       url: '',
     },
   ];
@@ -71,10 +71,10 @@ kubectl apply -n mongodb-operator-system --server-side -f https://raw.githubuser
       metadata: {
         annotations: {
           'meta.helm.sh/release-name': 'test',
-          'meta.helm.sh/release-namespace': 'kubero-dev',
+          'meta.helm.sh/release-namespace': 'kuso-dev',
         },
         labels: {
-          'app.kubernetes.io/managed-by': 'Kubero',
+          'app.kubernetes.io/managed-by': 'Kuso',
         },
         name: 'mongodb-secret',
       },

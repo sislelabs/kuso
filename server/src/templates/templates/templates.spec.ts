@@ -20,15 +20,15 @@ describe('KubectlTemplate', () => {
 
   it('should create a KubectlTemplate with correct apiVersion and kind', () => {
     const tpl = new KubectlTemplate(mockApp);
-    expect(tpl.apiVersion).toBe('application.kubero.dev/v1alpha1');
-    expect(tpl.kind).toBe('KuberoApp');
+    expect(tpl.apiVersion).toBe('application.kuso.sislelabs.com/v1alpha1');
+    expect(tpl.kind).toBe('KusoApp');
   });
 
   it('should set metadata name and labels', () => {
     const tpl = new KubectlTemplate(mockApp);
     expect(tpl.metadata.name).toBe('test-app');
     expect(tpl.metadata.labels).toBeDefined();
-    expect(tpl.metadata.labels?.manager).toBe('kubero');
+    expect(tpl.metadata.labels?.manager).toBe('kuso');
   });
 
   it('should set spec properties from app', () => {
@@ -47,7 +47,7 @@ describe('KubectlTemplate', () => {
   it('should use default image repository and tag if not provided', () => {
     const app = { ...mockApp, image: { containerPort: 80 } } as any;
     const tpl = new KubectlTemplate(app);
-    expect(tpl.spec.image.repository).toBe('ghcr.io/kubero-dev/idler');
+    expect(tpl.spec.image.repository).toBe('ghcr.io/kuso-dev/idler');
     expect(tpl.spec.image.tag).toBe('v1');
   });
 });

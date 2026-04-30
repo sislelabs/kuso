@@ -10,17 +10,17 @@
 
 <script lang="ts">
 
-import { useKuberoStore } from '../../stores/kubero'
+import { useKusoStore } from '../../stores/kuso'
 import { useCookies } from "vue3-cookies";
 import { useSocketIO } from '../../socket.io';
 
 const { cookies } = useCookies();
-const token = cookies.get("kubero.JWT_TOKEN");
+const token = cookies.get("kuso.JWT_TOKEN");
 //console.log("COOKIE token", token);
 const { socket } = useSocketIO(token);
 
 // Write socket to pinia
-const kuberoStore = useKuberoStore();
-kuberoStore.kubero.socket = socket;
+const kusoStore = useKusoStore();
+kusoStore.kuso.socket = socket;
 
 </script>

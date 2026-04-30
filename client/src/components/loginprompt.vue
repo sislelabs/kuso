@@ -19,7 +19,7 @@
         ></v-img>
 
 
-        <!-- Show info panel if domain is demo.kubero.dev -->
+        <!-- Show info panel if domain is demo.kuso.sislelabs.com -->
         <v-alert
             v-if="isDemoDomain"
             type="info"
@@ -27,7 +27,7 @@
             class="mt-5"
         >
             User: <b>demo/reader</b><br>
-            Pass: <b>kubero</b>
+            Pass: <b>kuso</b>
         </v-alert>
         <div v-if="authMethods.local" class="py-5">
             <v-alert
@@ -119,14 +119,14 @@ export default defineComponent({
     computed: {
         isDemoDomain(): boolean {
             const demoDomains = [
-                'demo.kubero.dev',
-                //'kubero.localhost',
+                'demo.kuso.sislelabs.com',
+                //'kuso.localhost',
                 'localhost'
             ];
             const demoDomain = demoDomains.includes(window.location.hostname)
             if (demoDomain) {
                 this.username = 'demo';
-                this.password = 'kubero';
+                this.password = 'kuso';
             }
             return demoDomain;
         }
@@ -160,9 +160,9 @@ export default defineComponent({
                         //console.log("Logged in"+response)
 
                         // Save topen token in local storage
-                        //localStorage.setItem("kubero.JWT_TOKEN", response.data.access_token);
+                        //localStorage.setItem("kuso.JWT_TOKEN", response.data.access_token);
 
-                        const token = cookies.set("kubero.JWT_TOKEN", response.data.access_token);
+                        const token = cookies.set("kuso.JWT_TOKEN", response.data.access_token);
                         window.location.href = "/"
                     })
                     .catch((errors) => {
@@ -182,9 +182,9 @@ export default defineComponent({
                     //console.log("Logged in"+response)
 
                     // Save topen token in local storage
-                    //localStorage.setItem("kubero.JWT_TOKEN", response.data.access_token);
+                    //localStorage.setItem("kuso.JWT_TOKEN", response.data.access_token);
 
-                    const token = cookies.set("kubero.JWT_TOKEN", response.data.access_token);
+                    const token = cookies.set("kuso.JWT_TOKEN", response.data.access_token);
                     window.location.href = "/"
                 })
                 .catch((errors) => {

@@ -92,10 +92,10 @@ describe('ConfigController', () => {
     service.validateKubeconfig.mockResolvedValueOnce({ valid: true });
     const body = {
       KUBECONFIG_BASE64: Buffer.from('config').toString('base64'),
-      KUBERO_CONTEXT: 'ctx',
-      KUBERO_NAMESPACE: 'ns',
-      KUBERO_SESSION_KEY: 'key',
-      KUBERO_WEBHOOK_SECRET: 'secret',
+      KUSO_CONTEXT: 'ctx',
+      KUSO_NAMESPACE: 'ns',
+      KUSO_SESSION_KEY: 'key',
+      KUSO_WEBHOOK_SECRET: 'secret',
     };
     await expect(controller.updateRunningConfig(body)).resolves.toBe(
       'updatedConfig',
@@ -107,10 +107,10 @@ describe('ConfigController', () => {
     service.validateKubeconfig.mockResolvedValueOnce({ valid: false });
     const body = {
       KUBECONFIG_BASE64: Buffer.from('config').toString('base64'),
-      KUBERO_CONTEXT: 'ctx',
-      KUBERO_NAMESPACE: 'ns',
-      KUBERO_SESSION_KEY: 'key',
-      KUBERO_WEBHOOK_SECRET: 'secret',
+      KUSO_CONTEXT: 'ctx',
+      KUSO_NAMESPACE: 'ns',
+      KUSO_SESSION_KEY: 'key',
+      KUSO_WEBHOOK_SECRET: 'secret',
     };
     await expect(controller.updateRunningConfig(body)).resolves.toEqual({
       valid: false,

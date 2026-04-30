@@ -1,0 +1,244 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "kuso.fullname" . }}
+  labels:
+    {{- include "kuso.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "kuso.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "kuso.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "kuso.serviceAccountName" . }}
+      terminationGracePeriodSeconds: 0
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          volumeMounts:
+            - mountPath: /etc/kuso
+              name: kuso-config-volume
+            - mountPath: /app/server/db
+              name: kuso-data
+              readOnly: false
+          env:
+            - name: NODE_TLS_REJECT_UNAUTHORIZED
+              value: "0"
+            - name: KUSO_CONTEXT
+              value: "{{ .Values.kuso.context }}"
+            - name: KUSO_NAMESPACE
+              value: "{{ .Values.kuso.namespace }}"
+            - name: KUSO_WEBHOOK_URL
+              value: "{{ .Values.kuso.webhook_url }}"
+            - name: KUBERNETES_INGRESS_CLASSNAME
+              value: "{{ .Values.ingress.className }}"
+            {{- if .Values.kuso.auditLogs.enabled }}
+            - name: KUSO_AUDIT
+              value: "{{ .Values.kuso.auditLogs.enabled }}"
+            - name: KUSO_AUDIT_DB_PATH
+              value: /app/server/db
+            - name: KUSO_AUDIT_LIMIT
+              value: "{{ .Values.kuso.auditLogs.limit }}"
+            {{- end }}
+            {{- if .Values.registry.enabled }}
+            - name: KUSO_BUILD_REGISTRY
+              value: "{{ .Values.registry.host }}"
+            {{- end }}
+            - name: KUSO_WEBHOOK_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: KUSO_WEBHOOK_SECRET
+            - name: KUSO_USERS
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: KUSO_USERS
+                  optional: true
+            - name: KUSO_ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: KUSO_ADMIN_USERNAME
+                  optional: true
+            - name: KUSO_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: KUSO_ADMIN_PASSWORD
+                  optional: true
+            - name: KUSO_SESSION_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: KUSO_SESSION_KEY
+                  optional: true
+            - name: GITHUB_PERSONAL_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: GITHUB_PERSONAL_ACCESS_TOKEN
+                  optional: true
+            - name: GITHUB_BASEURL
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: GITHUB_BASEURL
+                  optional: true
+            - name: GITEA_PERSONAL_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: GITEA_PERSONAL_ACCESS_TOKEN
+                  optional: true
+            - name: GITEA_BASEURL
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: GITEA_BASEURL
+                  optional: true
+            - name: GITLAB_PERSONAL_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: GITLAB_PERSONAL_ACCESS_TOKEN
+                  optional: true
+            - name: GITLAB_BASEURL
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: GITLAB_BASEURL
+                  optional: true
+            - name: GOGS_PERSONAL_ACCESS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: GOGS_PERSONAL_ACCESS_TOKEN
+                  optional: true
+            - name: GOGS_BASEURL
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: GOGS_BASEURL
+                  optional: true
+            - name: BITBUCKET_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: BITBUCKET_USERNAME
+                  optional: true
+            - name: BITBUCKET_APP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: BITBUCKET_APP_PASSWORD
+                  optional: true
+            - name: KUBECONFIG_BASE64
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: KUBECONFIG_BASE64
+                  optional: true
+            {{- if .Values.prometheus.enabled }}
+            - name: KUSO_PROMETHEUS_ENDPOINT
+              value: {{ .Values.prometheus.endpoint | quote }}
+            {{- end }}
+            {{- if .Values.kuso.auth.github.enabled }}
+            - name: GITHUB_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: GITHUB_CLIENT_SECRET
+            - name: GITHUB_CLIENT_ID
+              value: {{ .Values.kuso.auth.github.id | quote }}
+            - name: GITHUB_CLIENT_CALLBACKURL
+              value: {{ .Values.kuso.auth.github.callbackUrl | quote }}
+            - name: GITHUB_CLIENT_ORG
+              value: {{ .Values.kuso.auth.github.org | quote }}
+            {{- end }}
+            {{- if .Values.kuso.auth.oauth2.enabled }}
+            - name: OAUTH2_CLIENT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: OAUTH2_CLIENT_SECRET
+            - name: OAUTH2_CLIENT_NAME
+              value: {{ .Values.kuso.auth.oauth2.name | quote }}
+            - name: OAUTH2_CLIENT_ID
+              {{- if .Values.kuso.auth.oauth2.id }}
+              value: {{ .Values.kuso.auth.oauth2.id | quote }}
+              {{ else }}
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: OAUTH2_CLIENT_ID
+              {{- end }}
+            - name: OAUTH2_CLIENT_AUTH_URL
+              value: {{ .Values.kuso.auth.oauth2.authUrl | quote }}
+            - name: OAUTH2_CLIENT_TOKEN_URL
+              value: {{ .Values.kuso.auth.oauth2.tokenUrl | quote }}
+            - name: OAUTH2_CLIENT_CALLBACKURL
+              value: {{ .Values.kuso.auth.oauth2.callbackUrl | quote }}
+            {{- if .Values.kuso.auth.oauth2.scope }}
+            - name: OAUTH2_CLIENT_SCOPE
+              value: {{ .Values.kuso.auth.oauth2.scope | quote }}
+            {{- end }}
+            {{- end }}
+            - name: DEBUG
+              value: "{{ .Values.kuso.debug }}"
+            - name: KUSO_CONFIG_PATH
+              value: /etc/kuso/config.yaml
+            - name: PORT
+              value: "{{ .Values.service.port }}"
+          ports:
+            - name: http
+              containerPort: {{ .Values.service.port }}
+              protocol: TCP
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: kuso-config-volume
+          configMap:
+            name: kuso-config
+        - name: kuso-data
+          persistentVolumeClaim:
+            claimName: {{ include "kuso.fullname" . }}-data
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

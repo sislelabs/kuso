@@ -16,7 +16,7 @@ const messages = {
     runpacks: 'ランパック',
     podSizes: 'Podサイズ',
     notifications: '通知',
-    kuberoAPI: 'Kubero API',
+    kusoAPI: 'Kuso API',
     github: 'GitHub',
     discord: 'Discord',
   },
@@ -359,7 +359,7 @@ const messages = {
   notifications: {
     name: '通知',
     helpTitle: '通知とは？',
-    helpText: '<p><strong>通知</strong>を使うと、Kuberoアプリケーションのイベントに関するアラートを受け取ることができます。Slack、Discord、Webhook通知を設定して、デプロイやエラー、その他の重要なイベントを把握しましょう。</p><p class="mt-2"><a href="https://www.kubero.dev/docs/usermanual/notifications/" target="_blank" rel="noopener">Kuberoドキュメントで詳細を読む</a></p>',
+    helpText: '<p><strong>通知</strong>を使うと、Kusoアプリケーションのイベントに関するアラートを受け取ることができます。Slack、Discord、Webhook通知を設定して、デプロイやエラー、その他の重要なイベントを把握しましょう。</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/notifications/" target="_blank" rel="noopener">Kusoドキュメントで詳細を読む</a></p>',
     form: {
       name: '名前',
       type: 'タイプ',
@@ -392,7 +392,7 @@ const messages = {
   runpacks: {
     name: 'ランパック',
     helpTitle: 'ランパックとは？',
-    helpText: '<p><strong>ランパック</strong>は、Kubernetesクラスター内でアプリケーションがどのように取得、ビルド、実行されるかを定義します。各ランパックは3つの段階で構成されています：</p><ul class="ma-4"><li><strong>Fetch</strong>：コンテナイメージを使用してGitリポジトリからコードを取得します。デフォルトを使用するか、カスタマイズできます。</li><li><strong>Build</strong>：選択したコンテナ（任意のDockerイメージ）でビルドコマンドを実行します。ここで依存関係がインストールされるか、アプリがコンパイルされます。</li><li><strong>Run</strong>：最終的なコンテナを起動します。<em>web</em>ポッドはインターネットに公開され、<em>worker</em>ポッドはバックグラウンドジョブ用です。</li></ul><p>ランパックは非常に柔軟で、さまざまな言語やフレームワークに合わせてカスタマイズできます。公開されているコンテナイメージに依存しています。<a href="https://github.com/kubero-dev/runpacks/tree/main/packs" target="_blank" rel="noopener">kubero-dev/runpacks</a>でランパックの例を見つけることができます。</p><p class="mt-2"><a href="https://www.kubero.dev/docs/usermanual/runpacks/" target="_blank" rel="noopener">Kuberoドキュメントで詳細を読む</a></p>',
+    helpText: '<p><strong>ランパック</strong>は、Kubernetesクラスター内でアプリケーションがどのように取得、ビルド、実行されるかを定義します。各ランパックは3つの段階で構成されています：</p><ul class="ma-4"><li><strong>Fetch</strong>：コンテナイメージを使用してGitリポジトリからコードを取得します。デフォルトを使用するか、カスタマイズできます。</li><li><strong>Build</strong>：選択したコンテナ（任意のDockerイメージ）でビルドコマンドを実行します。ここで依存関係がインストールされるか、アプリがコンパイルされます。</li><li><strong>Run</strong>：最終的なコンテナを起動します。<em>web</em>ポッドはインターネットに公開され、<em>worker</em>ポッドはバックグラウンドジョブ用です。</li></ul><p>ランパックは非常に柔軟で、さまざまな言語やフレームワークに合わせてカスタマイズできます。公開されているコンテナイメージに依存しています。<a href="https://github.com/kuso-dev/runpacks/tree/main/packs" target="_blank" rel="noopener">kuso-dev/runpacks</a>でランパックの例を見つけることができます。</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/runpacks/" target="_blank" rel="noopener">Kusoドキュメントで詳細を読む</a></p>',
     table: {
       name: '名前',
       language: '言語',
@@ -455,7 +455,7 @@ const messages = {
   settings: {
     deployment: {
       title: 'リポジトリの接続',
-      configAlert: '設定の変更は、Kubero UIコンテナを手動で再起動するまで有効になりません。',
+      configAlert: '設定の変更は、Kuso UIコンテナを手動で再起動するまで有効になりません。',
       webhookEndpoint: 'Webhookエンドポイント',
       url: 'URL',
       secret: 'シークレット',
@@ -488,9 +488,9 @@ const messages = {
       },
     },
     general: {
-      title: '一般的なKubero設定',
+      title: '一般的なKuso設定',
       description: '一部の設定値を有効にするには、ブラウザの更新(*)またはポッドの再起動(**)が必要です。',
-      namespace: 'Kubero ネームスペース',
+      namespace: 'Kuso ネームスペース',
       readonlyMode: '読み取り専用モード (**)',
       adminDisabled: '管理者無効',
       ttyConsoleEnabled: 'TTYコンソール有効',
@@ -533,7 +533,7 @@ const messages = {
   podsizes: {
     name: 'Podサイズ',
     helpTitle: 'Podサイズとは？',
-    helpText: '<p><strong>Podサイズ</strong>は、KuberoでアプリケーションのPodに割り当てるリソース要求と制限を定義します。ワークロード要件に合わせてPodサイズを作成、編集、削除できます。</p><p class="mt-2"><a href="https://www.kubero.dev/docs/usermanual/podsizes/" target="_blank" rel="noopener">Kuberoドキュメントで詳細を読む</a></p>',
+    helpText: '<p><strong>Podサイズ</strong>は、KusoでアプリケーションのPodに割り当てるリソース要求と制限を定義します。ワークロード要件に合わせてPodサイズを作成、編集、削除できます。</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/podsizes/" target="_blank" rel="noopener">Kusoドキュメントで詳細を読む</a></p>',
     form: {
       name: 'Podサイズ名',
       description: '説明',

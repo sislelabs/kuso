@@ -7,14 +7,14 @@
             <v-col class="text-right">
                 <v-btn
                 elevation="2"
-                :disabled="kubero.kubernetesVersion == 'unknown' || !authStore.hasPermission('pipeline:write')"
+                :disabled="kuso.kubernetesVersion == 'unknown' || !authStore.hasPermission('pipeline:write')"
                 color="primary"
                 :to="{ name: 'Pipeline Form', params: { pipeline: 'new' }}"
                 >{{ $t('pipeline.buttons.new') }}</v-btn>
             </v-col>
         </v-row>
 
-        <v-row v-if="(pipelines && pipelines.length < 1) && kubero.kubernetesVersion != 'unknown'" class="delay-visible-enter-active">
+        <v-row v-if="(pipelines && pipelines.length < 1) && kuso.kubernetesVersion != 'unknown'" class="delay-visible-enter-active">
             <v-alert
                 color="info"
                 icon="mdi-star-outline"
@@ -23,15 +23,15 @@
                             prominent
                             closable
                 >
-                If you find Kubero useful, please consider starring the project 
-                <a href="https://github.com/kubero-dev/kubero" target="_blank">on GitHub</a>. 
+                If you find Kuso useful, please consider starring the project 
+                <a href="https://github.com/kuso-dev/kuso" target="_blank">on GitHub</a>. 
                 Your support contributes to the project's growth and development.
             </v-alert>
             <v-col cols="12" style="text-align: center;">
                 <img src="/img/empty.svg" alt="Empty" class="empty" width="100%" style="max-width: 500px; filter: invert(39%) sepia(47%) saturate(584%) hue-rotate(228deg) brightness(95%) contrast(80%);">
 
-                <h1 style="font-size: 3em;">👋 Welcome to Kubero!</h1>
-                <p>Congratulations on successfully installing Kubero! We're glad to have you on board.</p>
+                <h1 style="font-size: 3em;">👋 Welcome to Kuso!</h1>
+                <p>Congratulations on successfully installing Kuso! We're glad to have you on board.</p>
                 <br>
 
                 <v-btn
@@ -41,14 +41,14 @@
                 >Create your first pipeline</v-btn>
             </v-col>
         </v-row>
-        <v-row v-if="kubero.kubernetesVersion == 'unknown'">
+        <v-row v-if="kuso.kubernetesVersion == 'unknown'">
             <v-alert
                 type="error"
                 prominent
                 title="Kubernetes Connection Error"
                 variant="tonal"
                 >
-                <p>Kubero can't reach your kubernetes cluster. Please proceed with the setup to continue.</p>
+                <p>Kuso can't reach your kubernetes cluster. Please proceed with the setup to continue.</p>
 
                 <v-btn
                 color="success"
@@ -146,7 +146,7 @@
 import axios from "axios";
 import { ref, defineComponent } from 'vue'
 import Breadcrumbs from "../breadcrumbs.vue";
-import { useKuberoStore } from '../../stores/kubero'
+import { useKusoStore } from '../../stores/kuso'
 import { mapState } from 'pinia'
 import Swal from 'sweetalert2';
 import { useAuthStore } from '../../stores/auth'
@@ -175,7 +175,7 @@ type Pipeline = {
     }[]
 }
 
-const socket = useKuberoStore().kubero.socket as any;
+const socket = useKusoStore().kuso.socket as any;
 
 socket.on('updatePipeline', (instances: any) => {
     //console.log("updatedPipelines", instances);
@@ -220,7 +220,7 @@ export default defineComponent({
         ],
     }},
     computed: {
-      ...mapState(useKuberoStore, ['kubero']),
+      ...mapState(useKusoStore, ['kuso']),
     },
     methods: {
       async loadPipelinesList() {
@@ -242,7 +242,7 @@ export default defineComponent({
             showCancelButton: true,
             confirmButtonText: "Delete",
             cancelButtonText: "Cancel",
-            confirmButtonColor: "rgb(var(--v-theme-kubero))",
+            confirmButtonColor: "rgb(var(--v-theme-kuso))",
             background: "rgb(var(--v-theme-cardBackground))",
             /*background: "rgb(var(--v-theme-on-surface-variant))",*/
             color: "rgba(var(--v-theme-on-background),var(--v-high-emphasis-opacity));",

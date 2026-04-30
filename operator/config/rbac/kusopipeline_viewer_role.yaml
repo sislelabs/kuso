@@ -1,0 +1,20 @@
+# permissions for end users to view kusopipelines.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kusopipeline-viewer-role
+rules:
+- apiGroups:
+  - application.kuso.sislelabs.com
+  resources:
+  - kusopipelines
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - application.kuso.sislelabs.com
+  resources:
+  - kusopipelines/status
+  verbs:
+  - get

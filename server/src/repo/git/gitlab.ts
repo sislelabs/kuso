@@ -175,7 +175,7 @@ export class GitlabApi extends Repo {
   async addDeployKey(owner: string, repo: string): Promise<IDeploykeyR> {
     const keyPair = this.createDeployKeyPair();
 
-    const title: string = 'bot@kubero.' + Date.now();
+    const title: string = 'bot@kuso.' + Date.now();
 
     let ret: IDeploykeyR = {
       status: 500,
@@ -233,7 +233,7 @@ export class GitlabApi extends Repo {
     token: string,
     body: any,
   ): IWebhook | boolean {
-    const secret = process.env.KUBERO_WEBHOOK_SECRET as string;
+    const secret = process.env.KUSO_WEBHOOK_SECRET as string;
 
     let verified = false;
     if (secret === token) {

@@ -57,21 +57,21 @@ export interface Secrets {
   BITBUCKET_USERNAME: string;
   GOGS_PERSONAL_ACCESS_TOKEN: string;
   GOGS_BASEURL: string;
-  KUBERO_WEBHOOK_SECRET: string;
+  KUSO_WEBHOOK_SECRET: string;
   GITHUB_CLIENT_SECRET: string;
   OAUTH2_CLIENT_SECRET: string;
 }
 
 
 export interface Settings {
-  settings: Kuberoes;
+  settings: Kusoes;
   secrets: Secrets;
   /*
   repositoryProviders: RepositoryProviders;
   webhook: Webhook;
   /*
   podSizeList?: (PodSize)[] | null;
-  kubero: Kubero;
+  kuso: Kuso;
   buildpacks?: (Buildpack)[] | null;
   templates: Templates;
   auth: Auth;
@@ -79,13 +79,13 @@ export interface Settings {
   env: Env;
 */
 }
-export interface Kuberoes {
+export interface Kusoes {
   affinity: any;
   fullnameOverride: string;
   image: Image;
   imagePullSecrets?: (null)[] | null;
   ingress: Ingress;
-  kubero: Kubero1;
+  kuso: Kuso1;
   nameOverride: string;
   nodeSelector: any;
   podAnnotations: any;
@@ -119,7 +119,7 @@ export interface PathsEntity {
   path: string;
   pathType: string;
 }
-export interface Kubero1 {
+export interface Kuso1 {
   auditLogs: AuditLogs;
   auth: Auth;
   config: Config;
@@ -156,7 +156,7 @@ export interface Oauth2 {
 export interface Config {
   buildpacks?: (Buildpack)[] | null;
   clusterissuer: string;
-  kubero: Kubero;
+  kuso: Kuso;
   podSizeList?: (PodSize)[] | null;
   templates: Templates;
 }
@@ -206,7 +206,7 @@ export interface Run {
   securityContext: SecurityContext;
   tag: string;
 }
-export interface Kubero {
+export interface Kuso {
   banner: Banner;
   console: {
     enabled: boolean;
@@ -382,7 +382,7 @@ export default defineComponent({
           GOGS_BASEURL: '',
           BITBUCKET_APP_PASSWORD: '',
           BITBUCKET_USERNAME: '',
-          KUBERO_WEBHOOK_SECRET: '',
+          KUSO_WEBHOOK_SECRET: '',
           GITHUB_CLIENT_SECRET: '',
           OAUTH2_CLIENT_SECRET: '',
         } as Secrets,
@@ -402,7 +402,7 @@ export default defineComponent({
             hosts: [],
             tls: [],
           } as Ingress,
-          kubero: {
+          kuso: {
             namespace: '',
             auditLogs: {
               accessModes: ["ReadWriteOnce"],
@@ -434,7 +434,7 @@ export default defineComponent({
               buildPacks: [] as Buildpack[],
               clusterissuer: '' as string,
               notifications: [] as Notification[],
-              kubero: {
+              kuso: {
                 banner: {
                   bgcolor: '',
                   fontcolor: '',
@@ -448,7 +448,7 @@ export default defineComponent({
                   disabled: false,
                 },
                 readonly: false,
-              } as Kubero,
+              } as Kuso,
               podSizeList: [] as PodSize[],
               templates: {
                 catalogs: [] as Catalog[],
@@ -498,11 +498,11 @@ export default defineComponent({
       saveSettings() {
         const self = this;
 
-        self.settings.settings.kubero.config.podSizeList.forEach((podSize: PodSize) => {
+        self.settings.settings.kuso.config.podSizeList.forEach((podSize: PodSize) => {
           delete podSize.editable;
         });
 
-        self.settings.settings.kubero.config.buildPacks.forEach((buildpack: Buildpack) => {
+        self.settings.settings.kuso.config.buildPacks.forEach((buildpack: Buildpack) => {
           delete buildpack.advanced;
         });
 

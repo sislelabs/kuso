@@ -17,7 +17,7 @@ export class GithubStrategy extends PassportStrategy(Strategy) {
       scope: ConfigService.getAuthenticationScope(
         process.env.GITHUB_CLIENT_SCOPE,
       ),
-      userAgent: 'kubero/v3',
+      userAgent: 'kuso/v3',
     } as StrategyOptions);
   }
   async validate(accessToken: string, _refreshToken: string, profile: Profile) {

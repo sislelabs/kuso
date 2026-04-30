@@ -1,5 +1,5 @@
 ---
-# Source: kuberobuild/templates/job-nixpack.yaml
+# Source: kusobuild/templates/job-nixpack.yaml
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -7,8 +7,8 @@ metadata:
   labels:
     batch.kubernetes.io/job-name: example-test-20240631-2237
     buildstrategy: nixpacks
-    kuberoapp: example
-    kuberopipeline: test
+    kusoapp: example
+    kusopipeline: test
     job-name: example-test-20240631-2237
   name: example-test-20240631-2237
 spec:
@@ -26,8 +26,8 @@ spec:
       labels:
         batch.kubernetes.io/job-name: example-test-20240631-2237
         buildstrategy: nixpacks
-        kuberoapp: example
-        kuberopipeline: test
+        kusoapp: example
+        kusopipeline: test
         job-name: example-test-20240631-2237
     spec:
       automountServiceAccountToken: true
@@ -36,7 +36,7 @@ spec:
       containers:
         - env:
           - name: REPOSITORY
-            value: registry-kubero.yourdomain.com/optionalrepositoryowner/pipeline/app
+            value: registry-kuso.yourdomain.com/optionalrepositoryowner/pipeline/app
           - name: TAG
             value: 123456
           - name: APP
@@ -44,7 +44,7 @@ spec:
           command:
           - sh
           - -c
-          - 'kubectl patch kuberoapps $APP --type=merge -p "{\"spec\":{\"image\":{\"repository\":
+          - 'kubectl patch kusoapps $APP --type=merge -p "{\"spec\":{\"image\":{\"repository\":
             \"$REPOSITORY\",\"tag\": \"$TAG\"}}}"'
           image: bitnami/kubectl:latest
           imagePullPolicy: Always
@@ -59,9 +59,9 @@ spec:
             value: git@github.com:kubero-dev/template-nodeapp.git
           - name: GIT_REF
             value: main
-          - name: KUBERO_BUILDPACK_DEFAULT_RUN_CMD
+          - name: KUSO_BUILDPACK_DEFAULT_RUN_CMD
             value: "exit 0"
-          - name: KUBERO_BUILDPACK_DEFAULT_BUILD_CMD
+          - name: KUSO_BUILDPACK_DEFAULT_BUILD_CMD
             value: "exit 0"
           image: "ghcr.io/kubero-dev/fetch:latest"
           imagePullPolicy: Always
@@ -71,7 +71,7 @@ spec:
           terminationMessagePath: /dev/termination-log
           terminationMessagePolicy: File
           volumeMounts:
-          - mountPath: /home/kubero/.ssh-mounted
+          - mountPath: /home/kuso/.ssh-mounted
             name: deployment-keys
             readOnly: true
           - mountPath: /app
@@ -110,7 +110,7 @@ spec:
           - name: REGISTRY_AUTH_FILE
             value: /etc/buildah/auth/.dockerconfigjson
           - name: BUILD_IMAGE
-            value: registry-kubero.yourdomain.com/optionalrepositoryowner/pipeline/app:123456
+            value: registry-kuso.yourdomain.com/optionalrepositoryowner/pipeline/app:123456
           - name: BUILDAH_DOCKERFILE_PATH
             value: Dockerfile
           - name: BUILD_BASE_DIR
@@ -132,8 +132,8 @@ spec:
           workingDir: /app
       restartPolicy: Never
       schedulerName: default-scheduler
-      serviceAccount: example-kuberoapp
-      serviceAccountName: example-kuberoapp
+      serviceAccount: example-kusoapp
+      serviceAccountName: example-kusoapp
       terminationGracePeriodSeconds: 30
       volumes:
       - name: deployment-keys
@@ -145,4 +145,4 @@ spec:
       - name: pull-secret
         secret:
           defaultMode: 384
-          secretName: kubero-pull-secret
+          secretName: kuso-pull-secret

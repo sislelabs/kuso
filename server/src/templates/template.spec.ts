@@ -59,8 +59,8 @@ describe('KubectlTemplate', () => {
 
   it('should create a KubectlTemplate instance', () => {
     const kubectlTemplate = new KubectlTemplate(mockApp);
-    expect(kubectlTemplate.apiVersion).toBe('application.kubero.dev/v1alpha1');
-    expect(kubectlTemplate.kind).toBe('KuberoApp');
+    expect(kubectlTemplate.apiVersion).toBe('application.kuso.sislelabs.com/v1alpha1');
+    expect(kubectlTemplate.kind).toBe('KusoApp');
     expect(kubectlTemplate.metadata.name).toBe('test-app');
     expect(kubectlTemplate.spec).toBeInstanceOf(Template);
   });

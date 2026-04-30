@@ -1,5 +1,5 @@
 import { INotificationConfig } from '../notifications/notifications.interface';
-export interface IKuberoConfig {
+export interface IKusoConfig {
   podSizeList: IPodSize[];
   buildpacks: IBuildpack[];
   clusterissuer: string;
@@ -17,7 +17,7 @@ export interface IKuberoConfig {
       },
     ];
   };
-  kubero: {
+  kuso: {
     console: {
       enabled: boolean;
     };
@@ -34,8 +34,8 @@ export interface IKuberoConfig {
   };
 }
 
-export type IKuberoCRD = {
-  kubero: {
+export type IKusoCRD = {
+  kuso: {
     debug: string;
     namespace: string;
     context: string;
@@ -65,7 +65,7 @@ export type IKuberoCRD = {
       size: string;
       limit: number;
     };
-    config: IKuberoConfig;
+    config: IKusoConfig;
   };
 };
 

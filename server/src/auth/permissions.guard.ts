@@ -13,7 +13,7 @@ export class PermissionsGuard implements CanActivate {
     ]);
     /* Disabling for RBAC
     if (
-      !process.env.KUBERO_USERS &&
+      !process.env.KUSO_USERS &&
       !process.env.GITHUB_CLIENT_SECRET &&
       !process.env.OAUTH2_CLIENT_SECRET
     ) {

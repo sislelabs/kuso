@@ -40,7 +40,7 @@ export class DatabaseService {
       process.env.DATABASE_URL === '' ||
       process.env.DATABASE_URL === undefined
     ) {
-      process.env.DATABASE_URL = 'file:../db/kubero.sqlite';
+      process.env.DATABASE_URL = 'file:../db/kuso.sqlite';
       process.env.DATABASE_TYPE = 'sqlite';
       Logger.debug(
         'DATABASE_URL is not set. Using SQLite database: ' +
@@ -83,14 +83,14 @@ export class DatabaseService {
       return;
     }
 
-    const role = process.env.KUBERO_SYSTEM_USER_ROLE || 'guest';
+    const role = process.env.KUSO_SYSTEM_USER_ROLE || 'guest';
     const userGroups = ['everyone'];
     try {
       await prisma.user.create({
         data: {
           id: '1',
           username: 'system',
-          email: 'system@kubero.dev',
+          email: 'system@kuso.sislelabs.com',
           password: '', // No password for system user
           isActive: false,
           role: { connect: { name: role } },
@@ -120,15 +120,15 @@ export class DatabaseService {
       return;
     }
 
-    const adminUser = process.env.KUBERO_ADMIN_USERNAME || 'admin';
-    const adminEmail = process.env.KUBERO_ADMIN_EMAIL || 'admin@kubero.dev';
-    const role = process.env.KUBERO_SYSTEM_USER_ROLE || 'admin';
+    const adminUser = process.env.KUSO_ADMIN_USERNAME || 'admin';
+    const adminEmail = process.env.KUSO_ADMIN_EMAIL || 'admin@kuso.sislelabs.com';
+    const role = process.env.KUSO_SYSTEM_USER_ROLE || 'admin';
     const userGroups = ['everyone', 'admin'];
 
     try {
       let plainPassword: string;
 
-      if (!process.env.KUBERO_ADMIN_PASSWORD && process.env.KUBERO_ADMIN_PASSWORD !== '') {
+      if (!process.env.KUSO_ADMIN_PASSWORD && process.env.KUSO_ADMIN_PASSWORD !== '') {
         // Generate a random password
         plainPassword = crypto
           .randomBytes(25)
@@ -136,7 +136,7 @@ export class DatabaseService {
           .slice(0, 19);
 
       } else {
-        plainPassword = process.env.KUBERO_ADMIN_PASSWORD;
+        plainPassword = process.env.KUSO_ADMIN_PASSWORD;
       }
 
       // create bcrypt hash
@@ -178,9 +178,9 @@ export class DatabaseService {
    */
   async resetAdminUser(): Promise<void> {
     const prisma = new PrismaClient();
-    const adminUser = process.env.KUBERO_ADMIN_USERNAME || 'admin';
-    const adminEmail = process.env.KUBERO_ADMIN_EMAIL || 'admin@kubero.dev';
-    const role = process.env.KUBERO_SYSTEM_USER_ROLE || 'admin';
+    const adminUser = process.env.KUSO_ADMIN_USERNAME || 'admin';
+    const adminEmail = process.env.KUSO_ADMIN_EMAIL || 'admin@kuso.sislelabs.com';
+    const role = process.env.KUSO_SYSTEM_USER_ROLE || 'admin';
     const userGroups = ['everyone', 'admin'];
 
     try {
@@ -251,12 +251,12 @@ export class DatabaseService {
       return;
     }
 
-    if (!process.env.KUBERO_USERS || process.env.KUBERO_USERS === '') {
-      Logger.log('No legacy users to migrate. KUBERO_USERS is not set.', 'DatabaseService');
+    if (!process.env.KUSO_USERS || process.env.KUSO_USERS === '') {
+      Logger.log('No legacy users to migrate. KUSO_USERS is not set.', 'DatabaseService');
       return;
     }
 
-    const u = Buffer.from(process.env.KUBERO_USERS, 'base64').toString('utf-8');
+    const u = Buffer.from(process.env.KUSO_USERS, 'base64').toString('utf-8');
     const users = JSON.parse(u);
 
     for (const user of users) {
@@ -264,7 +264,7 @@ export class DatabaseService {
       if (
         user.insecure &&
         user.insecure === true &&
-        process.env.KUBERO_SESSION_KEY
+        process.env.KUSO_SESSION_KEY
       ) {
         Logger.warn(
           'User with unencrypted Password detected: "' +
@@ -273,7 +273,7 @@ export class DatabaseService {
           'DatabaseService',
         );
         password = crypto
-          .createHmac('sha256', process.env.KUBERO_SESSION_KEY)
+          .createHmac('sha256', process.env.KUSO_SESSION_KEY)
           .update(password)
           .digest('hex');
       }
@@ -286,7 +286,7 @@ export class DatabaseService {
           data: {
             id: userID,
             username: user.username,
-            email: user.username + '@kubero.dev',
+            email: user.username + '@kuso.sislelabs.com',
             password: password,
             isActive: true,
             role: { connect: { name: role } },

@@ -134,9 +134,9 @@ import axios from "axios";
 import { defineComponent } from 'vue'
 import Buildsform from './buildsform.vue'
 import Logs from './logs.vue'
-import { useKuberoStore } from '../../stores/kubero'
+import { useKusoStore } from '../../stores/kuso'
 
-const socket = useKuberoStore().kubero.socket as any;
+const socket = useKusoStore().kuso.socket as any;
 
 type Build = {
   creationTimestamp: string

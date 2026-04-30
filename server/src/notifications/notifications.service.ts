@@ -10,14 +10,14 @@ import {
   INotificationDiscord,
 } from './notifications.interface';
 import { EventsGateway } from '../events/events.gateway';
-import { IKuberoConfig } from '../config/config.interface';
+import { IKusoConfig } from '../config/config.interface';
 import fetch from 'node-fetch';
 
 @Injectable()
 export class NotificationsService {
   //public kubectl: Kubectl;
   //private audit: Audit;
-  private config: IKuberoConfig;
+  private config: IKusoConfig;
   private logger = new Logger(NotificationsService.name);
 
   constructor(
@@ -26,11 +26,11 @@ export class NotificationsService {
     private kubectl: KubernetesService,
     private notificationsDbService: NotificationsDbService,
   ) {
-    this.config = {} as IKuberoConfig;
+    this.config = {} as IKusoConfig;
     this.logger.log('NotificationsService initialized');
   }
 
-  public setConfig(config: IKuberoConfig) {
+  public setConfig(config: IKusoConfig) {
     this.config = config;
   }
 

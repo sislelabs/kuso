@@ -72,9 +72,9 @@ export class AppsService {
         app.deploymentstrategy,
     );
 
-    if (process.env.KUBERO_READONLY == 'true') {
+    if (process.env.KUSO_READONLY == 'true') {
       this.logger.log(
-        'KUBERO_READONLY is set to true, not creating app ' + app.name,
+        'KUSO_READONLY is set to true, not creating app ' + app.name,
       );
       return;
     }
@@ -173,7 +173,7 @@ export class AppsService {
           ref: app.spec.branch, //git commit reference
         },
         {
-          image: `${process.env.KUBERO_BUILD_REGISTRY}/${pipeline}-${appName}`,
+          image: `${process.env.KUSO_BUILD_REGISTRY}/${pipeline}-${appName}`,
           tag: app.spec.branch + '-' + timestamp,
         },
       );
@@ -201,9 +201,9 @@ export class AppsService {
       'delete App: ' + appName + ' in ' + pipelineName + ' phase: ' + phaseName,
     );
 
-    if (process.env.KUBERO_READONLY == 'true') {
+    if (process.env.KUSO_READONLY == 'true') {
       console.log(
-        'KUBERO_READONLY is set to true, not deleting app ' +
+        'KUSO_READONLY is set to true, not deleting app ' +
           appName +
           ' in ' +
           pipelineName +
@@ -258,9 +258,9 @@ export class AppsService {
   ) {
     const podSizeList = await this.configService.getPodSizes();
 
-    if (process.env.KUBERO_READONLY == 'true') {
+    if (process.env.KUSO_READONLY == 'true') {
       console.log(
-        'KUBERO_READONLY is set to true, not creating PR app ' +
+        'KUSO_READONLY is set to true, not creating PR app ' +
           title +
           ' in ' +
           branch +
@@ -413,7 +413,7 @@ export class AppsService {
     this.logger.debug('getAppsByBranch: ' + branch);
 
     const appslist = await this.getAllAppsList(
-      process.env.KUBERO_CONTEXT || 'default',
+      process.env.KUSO_CONTEXT || 'default',
     );
     const apps: IApp[] = [];
     for (const app of appslist) {
@@ -430,7 +430,7 @@ export class AppsService {
     const websaveTitle = title.toLowerCase().replace(/[^a-z0-9-]/g, '-'); //TODO improve websave title
 
     const appslist = await this.getAllAppsList(
-      process.env.KUBERO_CONTEXT || 'default',
+      process.env.KUSO_CONTEXT || 'default',
     );
 
     for (const app of appslist) {
@@ -539,9 +539,9 @@ export class AppsService {
     user: IUser,
     userGroups: string[],
   ) {
-    if (process.env.KUBERO_READONLY == 'true') {
+    if (process.env.KUSO_READONLY == 'true') {
       console.log(
-        'KUBERO_READONLY is set to true, not restarting app' +
+        'KUSO_READONLY is set to true, not restarting app' +
           appName +
           ' in ' +
           pipelineName +
@@ -614,9 +614,9 @@ export class AppsService {
     );
     //await this.pipelinesService.setContext(app.pipeline, app.phase);
 
-    if (process.env.KUBERO_READONLY == 'true') {
+    if (process.env.KUSO_READONLY == 'true') {
       console.log(
-        'KUBERO_READONLY is set to true, not updating app ' + app.name,
+        'KUSO_READONLY is set to true, not updating app ' + app.name,
       );
       return;
     }
@@ -685,7 +685,7 @@ export class AppsService {
       //return workload
       for (const pod of workload) {
         // check if app label name starts with appName
-        if (!pod.metadata?.generateName?.startsWith(appName + '-kuberoapp')) {
+        if (!pod.metadata?.generateName?.startsWith(appName + '-kusoapp')) {
           continue;
         }
 
@@ -730,8 +730,8 @@ export class AppsService {
   ) {
     /*TODO: Fails. Needs to be loaded somewhere
     const settings = await this.settingsService.getSettings();
-    console.log(settings.kubero?.console?.enabled)
-    if (settings.kubero?.console?.enabled != true) {
+    console.log(settings.kuso?.console?.enabled)
+    if (settings.kuso?.console?.enabled != true) {
         this.logger.warning('Warning: console is nost set or disabled in config');
         return;
     }
@@ -745,9 +745,9 @@ export class AppsService {
     if (contextName) {
       const streamname = `${pipelineName}-${phaseName}-${appName}-${podName}-${containerName}-terminal`;
 
-      if (process.env.KUBERO_READONLY == 'true') {
+      if (process.env.KUSO_READONLY == 'true') {
         console.log(
-          'KUBERO_READONLY is set to true, terminal access not allowed',
+          'KUSO_READONLY is set to true, terminal access not allowed',
         );
         return;
       }

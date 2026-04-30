@@ -136,8 +136,8 @@ describe('KubectlApp', () => {
   it('should create a KubectlApp instance', () => {
     const app = new App(baseApp);
     const kubectlApp = new KubectlApp(app);
-    expect(kubectlApp.apiVersion).toBe('application.kubero.dev/v1alpha1');
-    expect(kubectlApp.kind).toBe('KuberoApp');
+    expect(kubectlApp.apiVersion).toBe('application.kuso.sislelabs.com/v1alpha1');
+    expect(kubectlApp.kind).toBe('KusoApp');
     expect(kubectlApp.metadata.name).toBe(app.name);
     expect(kubectlApp.spec).toBe(app);
   });

@@ -63,7 +63,7 @@ import axios from "axios";
 import Appcard from "./appcard.vue";
 import PRcard from "./prcard.vue";
 import Breadcrumbs from "../breadcrumbs.vue";
-import { useKuberoStore } from '../../stores/kubero'
+import { useKusoStore } from '../../stores/kuso'
 import { useAuthStore } from '../../stores/auth'
 const authStore = useAuthStore();
 
@@ -95,7 +95,7 @@ type Pullrequest = {
     created_at: string,
     updated_at: string,
 }
-const socket = useKuberoStore().kubero.socket as any;
+const socket = useKusoStore().kuso.socket as any;
 
 const phases = ref([] as Array<Phase>);
 const reviewapps = ref(false);

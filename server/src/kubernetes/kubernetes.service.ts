@@ -50,10 +50,10 @@ export class KubernetesService {
   private customObjectsApi: CustomObjectsApi = {} as CustomObjectsApi;
   private networkingV1Api: NetworkingV1Api = {} as NetworkingV1Api;
   public kubeVersion: VersionInfo | void;
-  public kuberoOperatorVersion: string | undefined;
+  public kusoOperatorVersion: string | undefined;
   private patchUtils: PatchUtils = {} as PatchUtils;
   public log: KubeLog;
-  //public config: IKuberoConfig;
+  //public config: IKusoConfig;
   private exec: Exec = {} as Exec;
   private readonly logger = new Logger(KubernetesService.name);
   private YAML = require('yaml');
@@ -116,7 +116,7 @@ export class KubernetesService {
           this.logger.debug('ℹ️  Kube version: ' + v.gitVersion);
         } else {
           this.logger.error('❌ Failed to get Kubernetes version');
-          process.env.KUBERO_SETUP = 'enabled';
+          process.env.KUSO_SETUP = 'enabled';
         }
         this.kubeVersion = v;
       })
@@ -127,7 +127,7 @@ export class KubernetesService {
 
     await this.loadOperatorVersion().then((v) => {
       this.logger.debug('ℹ️  Operator version: ' + v);
-      this.kuberoOperatorVersion = v || 'unknown';
+      this.kusoOperatorVersion = v || 'unknown';
     });
   }
 
@@ -152,12 +152,12 @@ export class KubernetesService {
   }
 
   public getOperatorVersion(): string | undefined {
-    return this.kuberoOperatorVersion;
+    return this.kusoOperatorVersion;
   }
 
   private async loadOperatorVersion(): Promise<string | void> {
     const contextName = this.getCurrentContext();
-    const namespace = 'kubero-operator-system';
+    const namespace = 'kuso-operator-system';
 
     if (contextName) {
       const pods = await this.getPods(namespace, contextName).catch((error) => {
@@ -169,7 +169,7 @@ export class KubernetesService {
         for (const pod of pods) {
           if (
             pod?.metadata?.name?.startsWith(
-              'kubero-operator-controller-manager',
+              'kuso-operator-controller-manager',
             )
           ) {
             const container = pod?.spec?.containers.filter(
@@ -204,15 +204,15 @@ export class KubernetesService {
   public async getPipelinesList(
     userGroups: string[] = [],
   ): Promise<IKubectlPipelineList> {
-    this.kc.setCurrentContext(process.env.KUBERO_CONTEXT || 'default');
+    this.kc.setCurrentContext(process.env.KUSO_CONTEXT || 'default');
     let pipelines = {} as IKubectlPipelineList;
     pipelines.items = [];
     try {
       const ps = await this.customObjectsApi.listNamespacedCustomObject(
-        'application.kubero.dev',
+        'application.kuso.sislelabs.com',
         'v1alpha1',
-        process.env.KUBERO_NAMESPACE || 'kubero',
-        'kuberopipelines',
+        process.env.KUSO_NAMESPACE || 'kuso',
+        'kusopipelines',
       );
       pipelines = ps.body as IKubectlPipelineList;
       //return pipelines.body as IKubectlPipelineList;
@@ -241,13 +241,13 @@ export class KubernetesService {
     this.logger.debug('create pipeline: ' + pl.name);
     const pipeline = new KubectlPipeline(pl);
 
-    this.kc.setCurrentContext(process.env.KUBERO_CONTEXT || 'default');
+    this.kc.setCurrentContext(process.env.KUSO_CONTEXT || 'default');
     await this.customObjectsApi
       .createNamespacedCustomObject(
-        'application.kubero.dev',
+        'application.kuso.sislelabs.com',
         'v1alpha1',
-        process.env.KUBERO_NAMESPACE || 'kubero',
-        'kuberopipelines',
+        process.env.KUSO_NAMESPACE || 'kuso',
+        'kusopipelines',
         pipeline,
       )
       .catch((error) => {
@@ -261,13 +261,13 @@ export class KubernetesService {
     const pipeline = new KubectlPipeline(pl);
     pipeline.metadata.resourceVersion = resourceVersion;
 
-    this.kc.setCurrentContext(process.env.KUBERO_CONTEXT || 'default');
+    this.kc.setCurrentContext(process.env.KUSO_CONTEXT || 'default');
     await this.customObjectsApi
       .replaceNamespacedCustomObject(
-        'application.kubero.dev',
+        'application.kuso.sislelabs.com',
         'v1alpha1',
-        process.env.KUBERO_NAMESPACE || 'kubero',
-        'kuberopipelines',
+        process.env.KUSO_NAMESPACE || 'kuso',
+        'kusopipelines',
         pl.name,
         pipeline,
       )
@@ -279,13 +279,13 @@ export class KubernetesService {
 
   public async deletePipeline(pipelineName: string) {
     this.logger.debug('delete pipeline: ' + pipelineName);
-    this.kc.setCurrentContext(process.env.KUBERO_CONTEXT || 'default');
+    this.kc.setCurrentContext(process.env.KUSO_CONTEXT || 'default');
     await this.customObjectsApi
       .deleteNamespacedCustomObject(
-        'application.kubero.dev',
+        'application.kuso.sislelabs.com',
         'v1alpha1',
-        process.env.KUBERO_NAMESPACE || 'kubero',
-        'kuberopipelines',
+        process.env.KUSO_NAMESPACE || 'kuso',
+        'kusopipelines',
         pipelineName,
       )
       .catch((error) => {
@@ -294,13 +294,13 @@ export class KubernetesService {
   }
 
   public async getPipeline(pipelineName: string): Promise<IKubectlPipeline> {
-    this.kc.setCurrentContext(process.env.KUBERO_CONTEXT || 'default');
+    this.kc.setCurrentContext(process.env.KUSO_CONTEXT || 'default');
     const pipeline = await this.customObjectsApi
       .getNamespacedCustomObject(
-        'application.kubero.dev',
+        'application.kuso.sislelabs.com',
         'v1alpha1',
-        process.env.KUBERO_NAMESPACE || 'kubero',
-        'kuberopipelines',
+        process.env.KUSO_NAMESPACE || 'kuso',
+        'kusopipelines',
         pipelineName,
       )
       .catch((error) => {
@@ -326,10 +326,10 @@ export class KubernetesService {
 
     await this.customObjectsApi
       .createNamespacedCustomObject(
-        'application.kubero.dev',
+        'application.kuso.sislelabs.com',
         'v1alpha1',
         namespace,
-        'kuberoapps',
+        'kusoapps',
         appl,
       )
       .catch((error) => {
@@ -351,10 +351,10 @@ export class KubernetesService {
         //await this.customObjectsApi.patchNamespacedCustomObject(
         // patch : https://stackoverflow.com/questions/67520468/patch-k8s-custom-resource-with-kubernetes-client-node
         // https://github.com/kubernetes-client/javascript/blob/master/examples/patch-example.js
-        'application.kubero.dev',
+        'application.kuso.sislelabs.com',
         'v1alpha1',
         namespace,
-        'kuberoapps',
+        'kusoapps',
         app.name,
         appl,
       )
@@ -376,10 +376,10 @@ export class KubernetesService {
 
     await this.customObjectsApi
       .deleteNamespacedCustomObject(
-        'application.kubero.dev',
+        'application.kuso.sislelabs.com',
         'v1alpha1',
         namespace,
-        'kuberoapps',
+        'kusoapps',
         appName,
       )
       .catch((error) => {
@@ -398,10 +398,10 @@ export class KubernetesService {
 
     const app = await this.customObjectsApi
       .getNamespacedCustomObject(
-        'application.kubero.dev',
+        'application.kuso.sislelabs.com',
         'v1alpha1',
         namespace,
-        'kuberoapps',
+        'kusoapps',
         appName,
       )
       .catch((error) => {
@@ -422,10 +422,10 @@ export class KubernetesService {
     this.kc.setCurrentContext(context);
     try {
       const appslist = await this.customObjectsApi.listNamespacedCustomObject(
-        'application.kubero.dev',
+        'application.kuso.sislelabs.com',
         'v1alpha1',
         namespace,
-        'kuberoapps',
+        'kusoapps',
       );
       return appslist.body as IKubectlAppList;
     } catch (_error) {
@@ -441,9 +441,9 @@ export class KubernetesService {
     this.kc.setCurrentContext(context);
     try {
       const appslist = await this.customObjectsApi.listClusterCustomObject(
-        'application.kubero.dev',
+        'application.kuso.sislelabs.com',
         'v1alpha1',
-        'kuberoapps',
+        'kusoapps',
       );
       return appslist.body as IKubectlAppList;
     } catch (_error) {
@@ -466,7 +466,7 @@ export class KubernetesService {
     this.kc.setCurrentContext(context);
 
     const namespace = pipelineName + '-' + phaseName;
-    const deploymentName = appName + '-kuberoapp-' + workloadType;
+    const deploymentName = appName + '-kusoapp-' + workloadType;
     const date = new Date();
 
     // format : https://jsonpatch.com/
@@ -481,8 +481,8 @@ export class KubernetesService {
     ];
 
     const apiVersion = 'v1alpha1';
-    const group = 'application.kubero.dev';
-    const plural = 'kuberoapps';
+    const group = 'application.kuso.sislelabs.com';
+    const plural = 'kusoapps';
 
     const options = {
       headers: { 'Content-type': 'application/json-patch+json' },
@@ -571,15 +571,15 @@ export class KubernetesService {
     event.reason = reason;
     event.metadata = {
       name: eventName + '.' + Date.now().toString(),
-      namespace: process.env.KUBERO_NAMESPACE || 'kubero',
+      namespace: process.env.KUSO_NAMESPACE || 'kuso',
     };
     event.involvedObject = {
-      kind: 'Kubero',
-      namespace: process.env.KUBERO_NAMESPACE || 'kubero',
+      kind: 'Kuso',
+      namespace: process.env.KUSO_NAMESPACE || 'kuso',
     };
 
     await this.coreV1Api
-      .createNamespacedEvent(process.env.KUBERO_NAMESPACE || 'kubero', event)
+      .createNamespacedEvent(process.env.KUSO_NAMESPACE || 'kuso', event)
       .catch((error) => {
         // this.logger.debug(error);
       });
@@ -885,12 +885,12 @@ export class KubernetesService {
     gitrepo: string,
     branch: string,
   ): Promise<any> {
-    await this.deleteScanJob(namespace, app + '-kuberoapp-vuln');
+    await this.deleteScanJob(namespace, app + '-kusoapp-vuln');
     const job = {
       apiVersion: 'batch/v1',
       kind: 'Job',
       metadata: {
-        name: app + '-kuberoapp-vuln',
+        name: app + '-kusoapp-vuln',
         namespace: namespace,
       },
       spec: {
@@ -950,12 +950,12 @@ export class KubernetesService {
     tag: string,
     withCredentials: boolean,
   ): Promise<any> {
-    await this.deleteScanJob(namespace, app + '-kuberoapp-vuln');
+    await this.deleteScanJob(namespace, app + '-kusoapp-vuln');
     const job = {
       apiVersion: 'batch/v1',
       kind: 'Job',
       metadata: {
-        name: app + '-kuberoapp-vuln',
+        name: app + '-kusoapp-vuln',
         namespace: namespace,
       },
       spec: {
@@ -1100,7 +1100,7 @@ export class KubernetesService {
   }
 
   public deployApp(namespace: string, appName: string, tag: string) {
-    const deploymentName = appName + '-kuberoapp-web';
+    const deploymentName = appName + '-kusoapp-web';
     this.logger.error(
       'deploy app: ' + appName,
       ',namespace: ' + namespace,
@@ -1118,8 +1118,8 @@ export class KubernetesService {
     ];
 
     const apiVersion = 'v1alpha1';
-    const group = 'application.kubero.dev';
-    const plural = 'kuberoapps';
+    const group = 'application.kuso.sislelabs.com';
+    const plural = 'kusoapps';
 
     const options = {
       headers: { 'Content-type': 'application/json-patch+json' },
@@ -1189,25 +1189,25 @@ export class KubernetesService {
     return ws;
   }
 
-  public async getKuberoConfig(namespace: string) {
-    this.kc.setCurrentContext(process.env.KUBERO_CONTEXT || 'default');
+  public async getKusoConfig(namespace: string) {
+    this.kc.setCurrentContext(process.env.KUSO_CONTEXT || 'default');
     try {
       const config = await this.customObjectsApi.getNamespacedCustomObject(
-        'application.kubero.dev',
+        'application.kuso.sislelabs.com',
         'v1alpha1',
         namespace,
-        'kuberoes',
-        'kubero',
+        'kusoes',
+        'kuso',
       );
       //console.log(config.body);
       return config.body as any;
     } catch (error) {
       // this.logger.debug(error);
-      this.logger.debug('getKuberoConfig: error getting config');
+      this.logger.debug('getKusoConfig: error getting config');
     }
   }
 
-  public async updateKuberoConfig(namespace: string, config: any) {
+  public async updateKusoConfig(namespace: string, config: any) {
     const patch = [
       {
         op: 'replace',
@@ -1221,11 +1221,11 @@ export class KubernetesService {
     };
     try {
       await this.customObjectsApi.patchNamespacedCustomObject(
-        'application.kubero.dev',
+        'application.kuso.sislelabs.com',
         'v1alpha1',
         namespace,
-        'kuberoes',
-        'kubero',
+        'kusoes',
+        'kuso',
         patch,
         undefined,
         undefined,
@@ -1237,7 +1237,7 @@ export class KubernetesService {
     }
   }
 
-  public async updateKuberoSecret(namespace: string, secret: any) {
+  public async updateKusoSecret(namespace: string, secret: any) {
     const patch = [
       {
         op: 'replace',
@@ -1251,7 +1251,7 @@ export class KubernetesService {
     };
     try {
       await this.coreV1Api.patchNamespacedSecret(
-        'kubero-secrets',
+        'kuso-secrets',
         namespace,
         patch,
         undefined,
@@ -1297,15 +1297,15 @@ export class KubernetesService {
     //job.metadata.namespace = namespace;
     job.metadata.labels['job-name'] = name.substring(0, 53);
     job.metadata.labels['batch.kubernetes.io/job-name'] = name.substring(0, 53);
-    job.metadata.labels['kuberoapp'] = appName;
-    job.metadata.labels['kuberopipeline'] = pipelineName;
+    job.metadata.labels['kusoapp'] = appName;
+    job.metadata.labels['kusopipeline'] = pipelineName;
     job.spec.template.metadata.labels['job-name'] = name.substring(0, 53);
     job.spec.template.metadata.labels['batch.kubernetes.io/job-name'] =
       name.substring(0, 53);
-    job.spec.template.metadata.labels['kuberoapp'] = appName;
-    job.spec.template.metadata.labels['kuberopipeline'] = pipelineName;
-    job.spec.template.spec.serviceAccountName = appName + '-kuberoapp';
-    job.spec.template.spec.serviceAccount = appName + '-kuberoapp';
+    job.spec.template.metadata.labels['kusoapp'] = appName;
+    job.spec.template.metadata.labels['kusopipeline'] = pipelineName;
+    job.spec.template.spec.serviceAccountName = appName + '-kusoapp';
+    job.spec.template.spec.serviceAccount = appName + '-kusoapp';
     job.spec.template.spec.initContainers[0].env[0].value = git.url;
     job.spec.template.spec.initContainers[0].env[1].value = git.ref;
     job.spec.template.spec.containers[0].env[0].value = repository.image;
@@ -1341,7 +1341,7 @@ export class KubernetesService {
     }
   }
 
-  public async deleteKuberoBuildJob(namespace: string, buildName: string) {
+  public async deleteKusoBuildJob(namespace: string, buildName: string) {
     try {
       await this.batchV1Api.deleteNamespacedJob(buildName, namespace);
     } catch (error) {

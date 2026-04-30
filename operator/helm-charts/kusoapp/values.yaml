@@ -1,0 +1,258 @@
+# Default values for kusoapp.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+mainnamespace: kuso
+buildpack: Docker
+deploymentstrategy: git # git|docker
+buildstrategy: plain # plain|nixpacks|dockerfile|kpacks|external
+registry: registry-service.kuso.svc.cluster.local:5000
+sleep: disabled
+restartedAt: 
+
+gitrepo:
+  id: 123456789
+  admin: false
+  private: false
+  push: false
+  visibility: public
+  description: Hello World for Node.js
+  homepage: https://github.com/foo/bar
+  language: JavaScript
+  name: node-hello
+  node_id: X_XxxXxyyYYY
+  owner: foo
+  ssh_url: git@github.com:foo/bar.git
+  clone_url: https://github.com/foo/bar.git
+  default_branch: main
+
+image:
+  repository: ghcr.io/kuso-dev/idler
+  tag: v1
+  pullPolicy: Always
+  containerPort: 8080
+  command:
+  #command:
+  #  - npm
+  #  - start
+  fetch:
+    repository: ghcr.io/kubero-dev/fetch
+    tag: v1
+    securityContext:
+      readOnlyRootFilesystem: false
+  # capabilities:
+  #   drop:
+  #   - ALL
+    runAsNonRoot: true
+    runAsUser: 1000
+  build:
+    repository: node
+    tag: latest
+    command: "npm install"
+    securityContext:
+      readOnlyRootFilesystem: false
+  # capabilities:
+  #   drop:
+  #   - ALL
+    runAsNonRoot: true
+    runAsUser: 1000
+  run:
+    readOnlyAppStorage: true
+    repository: node
+    tag: latest
+    command: "node index.js"
+    securityContext:
+      readOnlyRootFilesystem: true
+  # capabilities:
+  #   drop:
+  #   - ALL
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+branch: master
+ref: 
+autodeploy: false
+envVars:
+  - name: EXAMPLE
+    value: foo
+  - name: BAR
+    value: 3000
+podsize:
+  default: true
+  description: 'Small (CPU: 0.25, Memory: 0.5Gi)'
+  name: small
+  resources:
+    limits:
+      cpu: 500m
+      memory: 1Gi
+    requests:
+      cpu: 250m
+      memory: 0.5Gi
+name: kusoapp-sample
+phase: production
+pipeline: samplepipeline
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template
+  name: ""
+
+podAnnotations: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # kubernetes.io/tls-acme: "true"
+  hosts:
+    - host: kuso.lacolhost.com
+      paths:
+        - path: /
+          pathType: ImplementationSpecific
+  tls: []
+  #  - secretName: chart-example-tls
+  #    hosts:
+  #      - chart-example.local
+
+web:
+  replicaCount: 1
+  autoscaling:
+    minReplicas: 1
+    maxReplicas: 100
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+
+worker:
+  replicaCount: 1
+  autoscaling:
+    minReplicas: 1
+    maxReplicas: 100
+    targetCPUUtilizationPercentage: 80
+    targetMemoryUtilizationPercentage: 80
+
+resources: {}
+  # We usually recommend not to specify default resources and to leave this as a conscious
+  # choice for the user. This also increases chances charts run on environments with little
+  # resources, such as Minikube. If you do want to specify resources, uncomment the following
+  # lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+  # limits:
+  #   cpu: 100m
+  #   memory: 128Mi
+  # requests:
+  #   cpu: 100m
+  #   memory: 128Mi
+
+basicAuth:
+  enabled: false
+  realm: "Protected"
+  accounts: []
+    #- user: foo
+    #  pass: bar
+    #  hash: ""
+    #- user: bar
+    #  pass: foo
+    #  hash: ""
+
+autoscaling:
+  enabled: false
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
+
+extraVolumes: []
+#  - name: "test-volume"
+#    emptyDir: false
+#    storageClass: "standard"
+#    size: "1Gi"
+#    accessModes:
+#      - "ReadWriteOnce"
+#    mountPath: "/test-volume"
+
+
+cronjobs: []
+# cronjobs:
+#   - name: "cronjob-sample"
+#     schedule: '* */6 * * *'
+#     image: busybox:1.28
+#     command:
+#       - /bin/sh
+#       - -c
+#       - date; echo Hello from the Kubernetes cluster
+#     restartPolicy: OnFailure
+#     env: []
+
+addons: []
+# addons:
+#   - env: []
+#     id: mongodb-operator
+#     kind: MongoDB
+#     resourceDefinitions:
+#       MongoDB:
+#         apiVersion: opstreelabs.in/v1alpha1
+#         kind: MongoDB
+#         metadata:
+#           name: mongodbinstanceasdf
+#         spec:
+#           kubernetesConfig:
+#             image: quay.io/opstree/mongo:v5.0.6
+#             imagePullPolicy: IfNotPresent
+#             securityContext:
+#               fsGroup: 1001
+#           mongoDBSecurity:
+#             mongoDBAdminUser: admin
+#             secretRef:
+#               key: password
+#               name: mongodb-secret
+#           storage:
+#             accessModes:
+#             - ReadWriteOnce
+#             storageClass: standard
+#             storageSize: 1Gi
+#       mongodbSecret:
+#         apiVersion: v1
+#         kind: Secret
+#         metadata:
+#           annotations:
+#             meta.helm.sh/release-name: test
+#             meta.helm.sh/release-namespace: kuso-dev
+#           labels:
+#             app.kubernetes.io/managed-by: Kuso
+#           name: mongodb-secret
+#         stringData:
+#           password: test
+#         type: Opaque
+#     version:
+#       installed: 0.3.0
+
+vulnerabilityscan:
+  enabled: false
+  schedule: "0 0 * * *"
+  image:
+    repository: aquasec/trivy
+    tag: latest
+
+healthcheck:
+  enabled: true
+  path: /
+  startupSeconds: 90
+  timeoutSeconds: 2
+  periodSeconds: 15

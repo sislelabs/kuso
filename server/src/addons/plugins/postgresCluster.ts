@@ -14,7 +14,7 @@ kubectl apply --server-side -k github.com/CrunchyData/postgres-operator-examples
     'https://artifacthub.io/packages/olm/community-operators/postgresql';
   public docs = [
     {
-      title: 'Kubero Docs',
+      title: 'Kuso Docs',
       url: '',
     },
   ];

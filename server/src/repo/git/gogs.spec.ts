@@ -151,7 +151,7 @@ describe('GogsApi', () => {
 
   describe('getWebhook', () => {
     it('should return false if signature is invalid', () => {
-      process.env.KUBERO_WEBHOOK_SECRET = 'secret';
+      process.env.KUSO_WEBHOOK_SECRET = 'secret';
       const result = gogs.getWebhook('push', 'delivery', 'invalidsig', {
         foo: 'bar',
       });

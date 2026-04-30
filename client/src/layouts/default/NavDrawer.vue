@@ -48,13 +48,13 @@
         </v-list-item>
         <v-list-item 
             link to="/templates" 
-            v-if="kubero.templatesEnabled"
+            v-if="kuso.templatesEnabled"
             prepend-icon="mdi-list-box-outline"
             :title="$t('navigation.templates')">
         </v-list-item>
         <v-list-item 
             link to="/activity"
-            v-if="kubero.auditEnabled && (authStore.hasPermission('audit:write') || authStore.hasPermission('audit:read'))"
+            v-if="kuso.auditEnabled && (authStore.hasPermission('audit:write') || authStore.hasPermission('audit:read'))"
             prepend-icon="mdi-bell-outline"
             :title="$t('navigation.activity')">
         </v-list-item>
@@ -65,13 +65,13 @@
         </v-list-item>
         <v-list-item 
             link to="/accounts" 
-            v-if="kubero.isAuthenticated && !kubero.adminDisabled && (authStore.hasPermission('user:write') || authStore.hasPermission('user:read'))"
+            v-if="kuso.isAuthenticated && !kuso.adminDisabled && (authStore.hasPermission('user:write') || authStore.hasPermission('user:read'))"
             prepend-icon="mdi-account-outline"
             :title="$t('navigation.accounts')">
         </v-list-item>
         <!-- Settings subsection -->
         <v-list-group
-          v-if="kubero.isAuthenticated && !kubero.adminDisabled && (authStore.hasPermission('config:write') || authStore.hasPermission('config:read'))"
+          v-if="kuso.isAuthenticated && !kuso.adminDisabled && (authStore.hasPermission('config:write') || authStore.hasPermission('config:read'))"
           v-model="settingsOpen"
           prepend-icon="mdi-cog-outline"
           value="settings"
@@ -90,21 +90,21 @@
           -->
           <v-list-item 
               link to="/runpacks" 
-              v-if="kubero.isAuthenticated && !kubero.adminDisabled"
+              v-if="kuso.isAuthenticated && !kuso.adminDisabled"
               prepend-icon="mdi-cube-outline"
               style="transform: scale(0.9);"
               :title="$t('navigation.runpacks')">
           </v-list-item>
           <v-list-item 
               link to="/podsizes" 
-              v-if="kubero.isAuthenticated && !kubero.adminDisabled"
+              v-if="kuso.isAuthenticated && !kuso.adminDisabled"
               prepend-icon="mdi-arrow-expand-vertical"
               style="transform: scale(0.9);"
               :title="$t('navigation.podSizes')">
           </v-list-item>
           <v-list-item 
               link to="/notifications" 
-              v-if="kubero.isAuthenticated && !kubero.adminDisabled"
+              v-if="kuso.isAuthenticated && !kuso.adminDisabled"
               prepend-icon="mdi-email-fast-outline"
               style="transform: scale(0.9);"
               :title="$t('navigation.notifications')">
@@ -125,23 +125,23 @@
                 link href="/api/docs" 
                 target="_blank"
                 prepend-icon="mdi-api"
-                :title="$t('navigation.kuberoAPI')">
+                :title="$t('navigation.kusoAPI')">
             </v-list-item>
             <v-list-item 
-                link href="https://www.kubero.dev/docs" 
+                link href="https://www.kuso.sislelabs.com/docs" 
                 target="_blank"
                 prepend-icon="mdi-book-open-variant"
                 :title="$t('navigation.documentation')">
             </v-list-item>
             <v-list-item 
-                link href="https://github.com/kubero-dev/kubero" 
+                link href="https://github.com/kuso-dev/kuso" 
                 target="_blank"
                 prepend-icon="mdi-github"
                 :title="$t('navigation.github')">
             </v-list-item>
             <!--
             <v-list-item 
-                link href="https://www.reddit.com/r/kubero/" 
+                link href="https://www.reddit.com/r/kuso/" 
                 target="_blank"
                 prepend-icon="mdi-reddit"
                 title="Reddit">
@@ -156,7 +156,7 @@
             </v-list-item>
             <!--
             <v-list-item 
-                link href="https://join.slack.com/t/kubero/shared_invite/zt-1leocjhrm-kYwk_dcwHUcEkcjUgQCFaA" 
+                link href="https://join.slack.com/t/kuso/shared_invite/zt-1leocjhrm-kYwk_dcwHUcEkcjUgQCFaA" 
                 target="_blank"
                 prepend-icon="mdi-slack"
                 title="Slack">
@@ -165,11 +165,11 @@
             <v-list-item
                 @click="debugDialog = true"
                 prepend-icon="mdi-star"
-                :title="''+ kubero.version">
+                :title="''+ kuso.version">
             </v-list-item>
             <v-list-item 
                 @click="logout()" 
-                v-if="kubero.isAuthenticated"
+                v-if="kuso.isAuthenticated"
                 prepend-icon="mdi-logout"
                 :title="$t('navigation.logout')"
                 class="logout-primary-item"
@@ -191,29 +191,29 @@
                 <v-col cols="12">
                     <v-textarea
                     label="Debug"
-                        :model-value="'Kubero UI Version: ' + kubero.version
-                        + '\nKubero Operator Version: ' + kubero.operatorVersion
-                        + '\nKubernetes Version: ' + kubero.kubernetesVersion
-                        + '\nTemplates: ' + kubero.templatesEnabled
-                        + '\nAdmin: ' + kubero.adminDisabled
-                        + '\nWeb Console: ' + kubero.consoleEnabled
-                        + '\nBuild Pipeline: ' + kubero.buildPipeline
-                        + '\nMetrics: ' + kubero.metricsEnabled
-                        + '\nAudit: ' + kubero.auditEnabled
-                        + '\nZeropod Sleep: ' + kubero.sleepEnabled"
+                        :model-value="'Kuso UI Version: ' + kuso.version
+                        + '\nKuso Operator Version: ' + kuso.operatorVersion
+                        + '\nKubernetes Version: ' + kuso.kubernetesVersion
+                        + '\nTemplates: ' + kuso.templatesEnabled
+                        + '\nAdmin: ' + kuso.adminDisabled
+                        + '\nWeb Console: ' + kuso.consoleEnabled
+                        + '\nBuild Pipeline: ' + kuso.buildPipeline
+                        + '\nMetrics: ' + kuso.metricsEnabled
+                        + '\nAudit: ' + kuso.auditEnabled
+                        + '\nZeropod Sleep: ' + kuso.sleepEnabled"
                         readonly
                         name="debug"
                         variant="filled"
                         auto-grow
                     ></v-textarea>
 
-                    <a href="https://github.com/kubero-dev/kubero/releases" target="_blank">List of latest Kubero releases</a>
+                    <a href="https://github.com/kuso-dev/kuso/releases" target="_blank">List of latest Kuso releases</a>
                 </v-col>
                 <!--
                 <v-col cols="12">
                     <v-text-field
-                        label="Kubero UI Version"
-                        v-model="kubero.version"
+                        label="Kuso UI Version"
+                        v-model="kuso.version"
                         readonly
                         density="compact"
                         variant="plain"
@@ -221,8 +221,8 @@
                 </v-col>
                 <v-col cols="12">
                     <v-text-field
-                        label="Kubero Operotor Version"
-                        v-model="kubero.operatorVersion"
+                        label="Kuso Operotor Version"
+                        v-model="kuso.operatorVersion"
                         readonly
                         density="compact"
                         variant="plain"
@@ -231,20 +231,20 @@
                 <v-col cols="12">
                     <v-text-field
                         label="Kubernetes Version"
-                        v-model="kubero.kubernetesVersion"
+                        v-model="kuso.kubernetesVersion"
                         readonly
                         density="compact"
                         variant="plain"
                     ></v-text-field>
                 </v-col>
                 <v-col cols="12">
-                    <v-checkbox readonly density="compact" label="Templates" v-model="kubero.templatesEnabled"></v-checkbox>
-                    <v-checkbox readonly density="compact" label="Admin" v-model="kubero.adminDisabled"></v-checkbox>
-                    <v-checkbox readonly density="compact" label="Web Console" v-model="kubero.consoleEnabled"></v-checkbox>
-                    <v-checkbox readonly density="compact" label="Build Pipeline" v-model="kubero.buildPipeline"></v-checkbox>
-                    <v-checkbox readonly density="compact" label="Metrics" v-model="kubero.metricsEnabled"></v-checkbox>
-                    <v-checkbox readonly density="compact" label="Audit" v-model="kubero.auditEnabled"></v-checkbox>
-                    <v-checkbox readonly density="compact" label="Zeropod Sleep" v-model="kubero.sleepEnabled"></v-checkbox>
+                    <v-checkbox readonly density="compact" label="Templates" v-model="kuso.templatesEnabled"></v-checkbox>
+                    <v-checkbox readonly density="compact" label="Admin" v-model="kuso.adminDisabled"></v-checkbox>
+                    <v-checkbox readonly density="compact" label="Web Console" v-model="kuso.consoleEnabled"></v-checkbox>
+                    <v-checkbox readonly density="compact" label="Build Pipeline" v-model="kuso.buildPipeline"></v-checkbox>
+                    <v-checkbox readonly density="compact" label="Metrics" v-model="kuso.metricsEnabled"></v-checkbox>
+                    <v-checkbox readonly density="compact" label="Audit" v-model="kuso.auditEnabled"></v-checkbox>
+                    <v-checkbox readonly density="compact" label="Zeropod Sleep" v-model="kuso.sleepEnabled"></v-checkbox>
                 </v-col>
                 -->
             </v-row>
@@ -302,7 +302,7 @@ theme.global.name.value = localStorage.getItem("theme") || 'light';
 import { useCookies } from "vue3-cookies";
 import router from "../../router"
 import { defineComponent } from 'vue'
-import { useKuberoStore } from '../../stores/kubero'
+import { useKusoStore } from '../../stores/kuso'
 import { useAuthStore } from '../../stores/auth'
 import { mapState } from 'pinia'
 
@@ -322,13 +322,13 @@ export default defineComponent({
         }
     },
     computed: {
-      ...mapState(useKuberoStore, ['kubero']),
+      ...mapState(useKusoStore, ['kuso']),
     },
     methods: {
         logout: () => {
-            //localStorage.removeItem("kubero.JWT_TOKEN");
+            //localStorage.removeItem("kuso.JWT_TOKEN");
             // Remove cookie
-            cookies.remove("kubero.JWT_TOKEN");
+            cookies.remove("kuso.JWT_TOKEN");
             router.push("/login")
         },
     },

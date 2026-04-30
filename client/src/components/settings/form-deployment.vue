@@ -29,7 +29,7 @@
                 md="8"
             >
                 <v-text-field
-                v-model="settings.settings.kubero.webhook_url"
+                v-model="settings.settings.kuso.webhook_url"
                 :label="$t('settings.deployment.url')"
                 required
                 ></v-text-field>
@@ -41,7 +41,7 @@
                 md="8"
             >
                 <v-text-field
-                v-model="settings.secrets.KUBERO_WEBHOOK_SECRET"
+                v-model="settings.secrets.KUSO_WEBHOOK_SECRET"
                 :label="$t('settings.deployment.secret')"
                 required
                 :append-icon="show ? 'mdi-eye' : 'mdi-eye-off'"

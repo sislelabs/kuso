@@ -1,4 +1,4 @@
-kubero:
+kuso:
   readonly: false
   console:
     enabled: true
@@ -6,7 +6,7 @@ kubero:
     disabled: false
   banner:
     show: false
-    message: "Welcome to Kubero!"
+    message: "Welcome to Kuso!"
     bgcolor: "#8560a963"
     fontcolor: "#00000087"
   defaultannotations:
@@ -17,14 +17,14 @@ clusterissuer: letsencrypt-prod
 templates:
   enabled: true
   catalogs:
-  - name: "Kubero"
-    description: "Kubero templates"
+  - name: "Kuso"
+    description: "Kuso templates"
     templateBasePath: "https://raw.githubusercontent.com/kubero-dev/kubero/main/services/"
     index: 
       url: "https://raw.githubusercontent.com/kubero-dev/templates/main/index.json"
       format: "json" # json or yaml # TODO has no effect yet. json is always used
-  - name: "Kubero Frameworks"
-    description: "Kubero templates"
+  - name: "Kuso Frameworks"
+    description: "Kuso templates"
     templateBasePath: "https://raw.githubusercontent.com/kubero-dev/kubero/main/services/"
     index: 
       url: "https://raw.githubusercontent.com/kubero-dev/templates/main/index-frameworks.json"
@@ -35,7 +35,7 @@ notifications:
     type: "slack"
     config:
       url: "https://hooks.slack.example/replace-me"
-      channel: "#kubero"
+      channel: "#kuso"
   - name: "Webhook"
     enabled: false
     type: "webhook"
@@ -47,7 +47,7 @@ notifications:
     type: "discord"
     config:
       url: "https://discord.example/api/webhooks/replace-me"
-      channel: "#kubero"
+      channel: "#kuso"
 buildPacks:
   - name: NodeJS
     language: JavaScript

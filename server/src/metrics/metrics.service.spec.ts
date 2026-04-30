@@ -29,7 +29,7 @@ jest.mock('prometheus-query', () => {
                 {
                   labels: {
                     namespace: 'pipe-phase',
-                    service: 'app-kuberoapp',
+                    service: 'app-kusoapp',
                   },
                 },
               ],

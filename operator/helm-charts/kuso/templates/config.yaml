@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kuso-config
+data:
+  config.yaml: |
+{{- if and .Values.kuso.config (kindIs "string" .Values.kuso.config) }}
+{{ .Values.kuso.config | indent 4 }}
+{{- else if and .Values.kuso.config (kindIs "map" .Values.kuso.config) }}
+{{ .Values.kuso.config | toYaml | indent 4 }}
+{{- else }}
+{{ .Values.kuso.config | toYaml | indent 4 }}
+{{- end }}  

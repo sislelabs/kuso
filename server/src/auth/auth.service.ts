@@ -27,14 +27,14 @@ export class AuthService {
     const user = await this.usersService.findOneFull(username);
 
     if (user) {
-      if (process.env.KUBERO_SESSION_KEY === undefined) {
-        this.logger.error('KUBERO_SESSION_KEY is not defined');
+      if (process.env.KUSO_SESSION_KEY === undefined) {
+        this.logger.error('KUSO_SESSION_KEY is not defined');
         throw new HttpException('Forbidden', HttpStatus.FORBIDDEN);
       }
 
       // DEPRECATED in v3.0.0: sha256 is considered insecure hashing. Kept for backward compatibility
       const password = crypto
-        .createHmac('sha256', process.env.KUBERO_SESSION_KEY)
+        .createHmac('sha256', process.env.KUSO_SESSION_KEY)
         .update(pass)
         .digest('hex');
 
@@ -92,7 +92,7 @@ export class AuthService {
   async loginOAuth2(reqUser: any) {
     const username = reqUser.username || reqUser.email || reqUser.id;
     const email =
-      reqUser.emails[0]?.value || reqUser.email || 'undefined@kubero.dev';
+      reqUser.emails[0]?.value || reqUser.email || 'undefined@kuso.sislelabs.com';
     const provider = reqUser.provider || 'oauth2';
 
     // extract image data from url
@@ -166,7 +166,7 @@ export class AuthService {
 
     const message = {
       isAuthenticated: isAuthenticated,
-      version: this.configService.getKuberoUIVersion(),
+      version: this.configService.getKusoUIVersion(),
       kubernetesVersion: this.kubectl.getKubernetesVersion(),
       operatorVersion: this.kubectl.getOperatorVersion(),
       buildPipeline: this.configService.getBuildpipelineEnabled(),

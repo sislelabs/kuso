@@ -11,11 +11,11 @@ export class AuditService {
   private prisma = new PrismaClient();
 
   constructor() {
-    this.logmaxbackups = process.env.KUBERO_AUDIT_LIMIT
-      ? parseInt(process.env.KUBERO_AUDIT_LIMIT)
+    this.logmaxbackups = process.env.KUSO_AUDIT_LIMIT
+      ? parseInt(process.env.KUSO_AUDIT_LIMIT)
       : 1000;
 
-    if (process.env.KUBERO_AUDIT !== 'true') {
+    if (process.env.KUSO_AUDIT !== 'true') {
       this.enabled = false;
       Logger.log('⏸️ Audit logging not enabled', 'Feature');
       return;

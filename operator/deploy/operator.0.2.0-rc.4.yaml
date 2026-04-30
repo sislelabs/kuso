@@ -3,25 +3,25 @@ kind: Namespace
 metadata:
   labels:
     control-plane: controller-manager
-  name: kubero-operator-system
+  name: kuso-operator-system
 ---
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberoaddonmongodbs.application.kubero.dev
+  name: kusoaddonmongodbs.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoAddonMongodb
-    listKind: KuberoAddonMongodbList
-    plural: kuberoaddonmongodbs
-    singular: kuberoaddonmongodb
+    kind: KusoAddonMongodb
+    listKind: KusoAddonMongodbList
+    plural: kusoaddonmongodbs
+    singular: kusoaddonmongodb
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoAddonMongodb is the Schema for the kuberoaddonmongodbs
+        description: KusoAddonMongodb is the Schema for the kusoaddonmongodbs
           API
         properties:
           apiVersion:
@@ -37,11 +37,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoAddonMongodb
+            description: Spec defines the desired state of KusoAddonMongodb
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoAddonMongodb
+            description: Status defines the observed state of KusoAddonMongodb
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -53,20 +53,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberoaddonmysqls.application.kubero.dev
+  name: kusoaddonmysqls.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoAddonMysql
-    listKind: KuberoAddonMysqlList
-    plural: kuberoaddonmysqls
-    singular: kuberoaddonmysql
+    kind: KusoAddonMysql
+    listKind: KusoAddonMysqlList
+    plural: kusoaddonmysqls
+    singular: kusoaddonmysql
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoAddonMysql is the Schema for the kuberoaddonmysqls API
+        description: KusoAddonMysql is the Schema for the kusoaddonmysqls API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -81,11 +81,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoAddonMysql
+            description: Spec defines the desired state of KusoAddonMysql
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoAddonMysql
+            description: Status defines the observed state of KusoAddonMysql
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -97,20 +97,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberoaddonpostgres.application.kubero.dev
+  name: kusoaddonpostgres.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoAddonPostgres
-    listKind: KuberoAddonPostgresList
-    plural: kuberoaddonpostgres
-    singular: kuberoaddonpostgres
+    kind: KusoAddonPostgres
+    listKind: KusoAddonPostgresList
+    plural: kusoaddonpostgres
+    singular: kusoaddonpostgres
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoAddonPostgres is the Schema for the kuberoaddonpostgres
+        description: KusoAddonPostgres is the Schema for the kusoaddonpostgres
           API
         properties:
           apiVersion:
@@ -126,11 +126,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoAddonPostgres
+            description: Spec defines the desired state of KusoAddonPostgres
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoAddonPostgres
+            description: Status defines the observed state of KusoAddonPostgres
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -142,20 +142,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberoaddonrabbitmqs.application.kubero.dev
+  name: kusoaddonrabbitmqs.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoAddonRabbitmq
-    listKind: KuberoAddonRabbitmqList
-    plural: kuberoaddonrabbitmqs
-    singular: kuberoaddonrabbitmq
+    kind: KusoAddonRabbitmq
+    listKind: KusoAddonRabbitmqList
+    plural: kusoaddonrabbitmqs
+    singular: kusoaddonrabbitmq
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoAddonRabbitmq is the Schema for the kuberoaddonrabbitmqs
+        description: KusoAddonRabbitmq is the Schema for the kusoaddonrabbitmqs
           API
         properties:
           apiVersion:
@@ -171,11 +171,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoAddonRabbitmq
+            description: Spec defines the desired state of KusoAddonRabbitmq
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoAddonRabbitmq
+            description: Status defines the observed state of KusoAddonRabbitmq
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -187,20 +187,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberoaddonredis.application.kubero.dev
+  name: kusoaddonredis.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoAddonRedis
-    listKind: KuberoAddonRedisList
-    plural: kuberoaddonredis
-    singular: kuberoaddonredis
+    kind: KusoAddonRedis
+    listKind: KusoAddonRedisList
+    plural: kusoaddonredis
+    singular: kusoaddonredis
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoAddonRedis is the Schema for the kuberoaddonredis API
+        description: KusoAddonRedis is the Schema for the kusoaddonredis API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -215,11 +215,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoAddonRedis
+            description: Spec defines the desired state of KusoAddonRedis
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoAddonRedis
+            description: Status defines the observed state of KusoAddonRedis
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -231,20 +231,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberoapps.application.kubero.dev
+  name: kusoapps.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoApp
-    listKind: KuberoAppList
-    plural: kuberoapps
-    singular: kuberoapp
+    kind: KusoApp
+    listKind: KusoAppList
+    plural: kusoapps
+    singular: kusoapp
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoApp is the Schema for the kuberoapps API
+        description: KusoApp is the Schema for the kusoapps API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -259,11 +259,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoApp
+            description: Spec defines the desired state of KusoApp
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoApp
+            description: Status defines the observed state of KusoApp
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -275,20 +275,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberobuilds.application.kubero.dev
+  name: kusobuilds.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoBuild
-    listKind: KuberoBuildList
-    plural: kuberobuilds
-    singular: kuberobuild
+    kind: KusoBuild
+    listKind: KusoBuildList
+    plural: kusobuilds
+    singular: kusobuild
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoBuild is the Schema for the kuberobuilds API
+        description: KusoBuild is the Schema for the kusobuilds API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -303,11 +303,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoBuild
+            description: Spec defines the desired state of KusoBuild
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoBuild
+            description: Status defines the observed state of KusoBuild
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -319,20 +319,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberocouchdbs.application.kubero.dev
+  name: kusocouchdbs.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoCouchDB
-    listKind: KuberoCouchDBList
-    plural: kuberocouchdbs
-    singular: kuberocouchdb
+    kind: KusoCouchDB
+    listKind: KusoCouchDBList
+    plural: kusocouchdbs
+    singular: kusocouchdb
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoCouchDB is the Schema for the kuberocouchdbs API
+        description: KusoCouchDB is the Schema for the kusocouchdbs API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -347,11 +347,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoCouchDB
+            description: Spec defines the desired state of KusoCouchDB
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoCouchDB
+            description: Status defines the observed state of KusoCouchDB
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -363,20 +363,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberoelasticsearches.application.kubero.dev
+  name: kusoelasticsearches.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoElasticsearch
-    listKind: KuberoElasticsearchList
-    plural: kuberoelasticsearches
-    singular: kuberoelasticsearch
+    kind: KusoElasticsearch
+    listKind: KusoElasticsearchList
+    plural: kusoelasticsearches
+    singular: kusoelasticsearch
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoElasticsearch is the Schema for the kuberoelasticsearches
+        description: KusoElasticsearch is the Schema for the kusoelasticsearches
           API
         properties:
           apiVersion:
@@ -392,11 +392,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoElasticsearch
+            description: Spec defines the desired state of KusoElasticsearch
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoElasticsearch
+            description: Status defines the observed state of KusoElasticsearch
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -408,20 +408,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberoes.application.kubero.dev
+  name: kusoes.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: Kubero
-    listKind: KuberoList
-    plural: kuberoes
-    singular: kubero
+    kind: Kuso
+    listKind: KusoList
+    plural: kusoes
+    singular: kuso
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Kubero is the Schema for the kuberoes API
+        description: Kuso is the Schema for the kusoes API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -436,11 +436,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of Kubero
+            description: Spec defines the desired state of Kuso
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of Kubero
+            description: Status defines the observed state of Kuso
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -452,20 +452,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberokafkas.application.kubero.dev
+  name: kusokafkas.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoKafka
-    listKind: KuberoKafkaList
-    plural: kuberokafkas
-    singular: kuberokafka
+    kind: KusoKafka
+    listKind: KusoKafkaList
+    plural: kusokafkas
+    singular: kusokafka
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoKafka is the Schema for the kuberokafkas API
+        description: KusoKafka is the Schema for the kusokafkas API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -480,11 +480,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoKafka
+            description: Spec defines the desired state of KusoKafka
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoKafka
+            description: Status defines the observed state of KusoKafka
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -496,20 +496,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberomails.application.kubero.dev
+  name: kusomails.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoMail
-    listKind: KuberoMailList
-    plural: kuberomails
-    singular: kuberomail
+    kind: KusoMail
+    listKind: KusoMailList
+    plural: kusomails
+    singular: kusomail
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoMail is the Schema for the kuberomails API
+        description: KusoMail is the Schema for the kusomails API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -524,11 +524,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoMail
+            description: Spec defines the desired state of KusoMail
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoMail
+            description: Status defines the observed state of KusoMail
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -540,20 +540,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberomemcacheds.application.kubero.dev
+  name: kusomemcacheds.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoMemcached
-    listKind: KuberoMemcachedList
-    plural: kuberomemcacheds
-    singular: kuberomemcached
+    kind: KusoMemcached
+    listKind: KusoMemcachedList
+    plural: kusomemcacheds
+    singular: kusomemcached
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoMemcached is the Schema for the kuberomemcacheds API
+        description: KusoMemcached is the Schema for the kusomemcacheds API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -568,11 +568,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoMemcached
+            description: Spec defines the desired state of KusoMemcached
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoMemcached
+            description: Status defines the observed state of KusoMemcached
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -584,20 +584,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberomongodbs.application.kubero.dev
+  name: kusomongodbs.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoMongoDB
-    listKind: KuberoMongoDBList
-    plural: kuberomongodbs
-    singular: kuberomongodb
+    kind: KusoMongoDB
+    listKind: KusoMongoDBList
+    plural: kusomongodbs
+    singular: kusomongodb
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoMongoDB is the Schema for the kuberomongodbs API
+        description: KusoMongoDB is the Schema for the kusomongodbs API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -612,11 +612,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoMongoDB
+            description: Spec defines the desired state of KusoMongoDB
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoMongoDB
+            description: Status defines the observed state of KusoMongoDB
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -628,20 +628,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberomysqls.application.kubero.dev
+  name: kusomysqls.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoMysql
-    listKind: KuberoMysqlList
-    plural: kuberomysqls
-    singular: kuberomysql
+    kind: KusoMysql
+    listKind: KusoMysqlList
+    plural: kusomysqls
+    singular: kusomysql
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoMysql is the Schema for the kuberomysqls API
+        description: KusoMysql is the Schema for the kusomysqls API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -656,11 +656,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoMysql
+            description: Spec defines the desired state of KusoMysql
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoMysql
+            description: Status defines the observed state of KusoMysql
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -672,20 +672,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberopipelines.application.kubero.dev
+  name: kusopipelines.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoPipeline
-    listKind: KuberoPipelineList
-    plural: kuberopipelines
-    singular: kuberopipeline
+    kind: KusoPipeline
+    listKind: KusoPipelineList
+    plural: kusopipelines
+    singular: kusopipeline
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoPipeline is the Schema for the kuberopipelines API
+        description: KusoPipeline is the Schema for the kusopipelines API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -700,11 +700,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoPipeline
+            description: Spec defines the desired state of KusoPipeline
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoPipeline
+            description: Status defines the observed state of KusoPipeline
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -716,20 +716,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberopostgresqls.application.kubero.dev
+  name: kusopostgresqls.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoPostgresql
-    listKind: KuberoPostgresqlList
-    plural: kuberopostgresqls
-    singular: kuberopostgresql
+    kind: KusoPostgresql
+    listKind: KusoPostgresqlList
+    plural: kusopostgresqls
+    singular: kusopostgresql
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoPostgresql is the Schema for the kuberopostgresqls API
+        description: KusoPostgresql is the Schema for the kusopostgresqls API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -744,11 +744,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoPostgresql
+            description: Spec defines the desired state of KusoPostgresql
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoPostgresql
+            description: Status defines the observed state of KusoPostgresql
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -760,20 +760,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberoprometheuses.application.kubero.dev
+  name: kusoprometheuses.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoPrometheus
-    listKind: KuberoPrometheusList
-    plural: kuberoprometheuses
-    singular: kuberoprometheus
+    kind: KusoPrometheus
+    listKind: KusoPrometheusList
+    plural: kusoprometheuses
+    singular: kusoprometheus
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoPrometheus is the Schema for the kuberoprometheuses API
+        description: KusoPrometheus is the Schema for the kusoprometheuses API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -788,11 +788,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoPrometheus
+            description: Spec defines the desired state of KusoPrometheus
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoPrometheus
+            description: Status defines the observed state of KusoPrometheus
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -804,20 +804,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberorabbitmqs.application.kubero.dev
+  name: kusorabbitmqs.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoRabbitMQ
-    listKind: KuberoRabbitMQList
-    plural: kuberorabbitmqs
-    singular: kuberorabbitmq
+    kind: KusoRabbitMQ
+    listKind: KusoRabbitMQList
+    plural: kusorabbitmqs
+    singular: kusorabbitmq
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoRabbitMQ is the Schema for the kuberorabbitmqs API
+        description: KusoRabbitMQ is the Schema for the kusorabbitmqs API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -832,11 +832,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoRabbitMQ
+            description: Spec defines the desired state of KusoRabbitMQ
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoRabbitMQ
+            description: Status defines the observed state of KusoRabbitMQ
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -848,20 +848,20 @@ spec:
 apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
-  name: kuberoredis.application.kubero.dev
+  name: kusoredis.application.kuso.sislelabs.com
 spec:
-  group: application.kubero.dev
+  group: application.kuso.sislelabs.com
   names:
-    kind: KuberoRedis
-    listKind: KuberoRedisList
-    plural: kuberoredis
-    singular: kuberoredis
+    kind: KusoRedis
+    listKind: KusoRedisList
+    plural: kusoredis
+    singular: kusoredis
   scope: Namespaced
   versions:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: KuberoRedis is the Schema for the kuberoredis API
+        description: KusoRedis is the Schema for the kusoredis API
         properties:
           apiVersion:
             description: 'APIVersion defines the versioned schema of this representation
@@ -876,11 +876,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: Spec defines the desired state of KuberoRedis
+            description: Spec defines the desired state of KusoRedis
             type: object
             x-kubernetes-preserve-unknown-fields: true
           status:
-            description: Status defines the observed state of KuberoRedis
+            description: Status defines the observed state of KusoRedis
             type: object
             x-kubernetes-preserve-unknown-fields: true
         type: object
@@ -892,14 +892,14 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: kubero-operator-controller-manager
-  namespace: kubero-operator-system
+  name: kuso-operator-controller-manager
+  namespace: kuso-operator-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: kubero-operator-leader-election-role
-  namespace: kubero-operator-system
+  name: kuso-operator-leader-election-role
+  namespace: kuso-operator-system
 rules:
 - apiGroups:
   - ""
@@ -938,19 +938,19 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonmongodb-admin-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonmongodb-admin-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmongodbs
+  - kusoaddonmongodbs
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmongodbs/status
+  - kusoaddonmongodbs/status
   verbs:
   - get
 ---
@@ -959,13 +959,13 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonmongodb-editor-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonmongodb-editor-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmongodbs
+  - kusoaddonmongodbs
   verbs:
   - create
   - delete
@@ -975,9 +975,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmongodbs/status
+  - kusoaddonmongodbs/status
   verbs:
   - get
 ---
@@ -986,21 +986,21 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonmongodb-viewer-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonmongodb-viewer-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmongodbs
+  - kusoaddonmongodbs
   verbs:
   - get
   - list
   - watch
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmongodbs/status
+  - kusoaddonmongodbs/status
   verbs:
   - get
 ---
@@ -1009,19 +1009,19 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonmysql-admin-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonmysql-admin-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmysqls
+  - kusoaddonmysqls
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmysqls/status
+  - kusoaddonmysqls/status
   verbs:
   - get
 ---
@@ -1030,13 +1030,13 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonmysql-editor-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonmysql-editor-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmysqls
+  - kusoaddonmysqls
   verbs:
   - create
   - delete
@@ -1046,9 +1046,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmysqls/status
+  - kusoaddonmysqls/status
   verbs:
   - get
 ---
@@ -1057,21 +1057,21 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonmysql-viewer-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonmysql-viewer-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmysqls
+  - kusoaddonmysqls
   verbs:
   - get
   - list
   - watch
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmysqls/status
+  - kusoaddonmysqls/status
   verbs:
   - get
 ---
@@ -1080,19 +1080,19 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonpostgres-admin-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonpostgres-admin-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonpostgres
+  - kusoaddonpostgres
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonpostgres/status
+  - kusoaddonpostgres/status
   verbs:
   - get
 ---
@@ -1101,13 +1101,13 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonpostgres-editor-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonpostgres-editor-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonpostgres
+  - kusoaddonpostgres
   verbs:
   - create
   - delete
@@ -1117,9 +1117,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonpostgres/status
+  - kusoaddonpostgres/status
   verbs:
   - get
 ---
@@ -1128,21 +1128,21 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonpostgres-viewer-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonpostgres-viewer-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonpostgres
+  - kusoaddonpostgres
   verbs:
   - get
   - list
   - watch
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonpostgres/status
+  - kusoaddonpostgres/status
   verbs:
   - get
 ---
@@ -1151,19 +1151,19 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonrabbitmq-admin-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonrabbitmq-admin-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonrabbitmqs
+  - kusoaddonrabbitmqs
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonrabbitmqs/status
+  - kusoaddonrabbitmqs/status
   verbs:
   - get
 ---
@@ -1172,13 +1172,13 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonrabbitmq-editor-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonrabbitmq-editor-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonrabbitmqs
+  - kusoaddonrabbitmqs
   verbs:
   - create
   - delete
@@ -1188,9 +1188,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonrabbitmqs/status
+  - kusoaddonrabbitmqs/status
   verbs:
   - get
 ---
@@ -1199,21 +1199,21 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonrabbitmq-viewer-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonrabbitmq-viewer-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonrabbitmqs
+  - kusoaddonrabbitmqs
   verbs:
   - get
   - list
   - watch
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonrabbitmqs/status
+  - kusoaddonrabbitmqs/status
   verbs:
   - get
 ---
@@ -1222,19 +1222,19 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonredis-admin-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonredis-admin-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonredis
+  - kusoaddonredis
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonredis/status
+  - kusoaddonredis/status
   verbs:
   - get
 ---
@@ -1243,13 +1243,13 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonredis-editor-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonredis-editor-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonredis
+  - kusoaddonredis
   verbs:
   - create
   - delete
@@ -1259,9 +1259,9 @@ rules:
   - update
   - watch
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonredis/status
+  - kusoaddonredis/status
   verbs:
   - get
 ---
@@ -1270,28 +1270,28 @@ kind: ClusterRole
 metadata:
   labels:
     app.kubernetes.io/managed-by: kustomize
-    app.kubernetes.io/name: kubero-operator
-  name: kubero-operator-kuberoaddonredis-viewer-role
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonredis-viewer-role
 rules:
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonredis
+  - kusoaddonredis
   verbs:
   - get
   - list
   - watch
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonredis/status
+  - kusoaddonredis/status
   verbs:
   - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kubero-operator-manager-role
+  name: kuso-operator-manager-role
 rules:
 - apiGroups:
   - ""
@@ -1329,11 +1329,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoapps
-  - kuberoapps/status
-  - kuberoapps/finalizers
+  - kusoapps
+  - kusoapps/status
+  - kusoapps/finalizers
   verbs:
   - create
   - delete
@@ -1448,11 +1448,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoes
-  - kuberoes/status
-  - kuberoes/finalizers
+  - kusoes
+  - kusoes/status
+  - kusoes/finalizers
   verbs:
   - create
   - delete
@@ -1491,11 +1491,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberopipelines
-  - kuberopipelines/status
-  - kuberopipelines/finalizers
+  - kusopipelines
+  - kusopipelines/status
+  - kusopipelines/finalizers
   verbs:
   - create
   - delete
@@ -1525,11 +1525,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberomysqls
-  - kuberomysqls/status
-  - kuberomysqls/finalizers
+  - kusomysqls
+  - kusomysqls/status
+  - kusomysqls/finalizers
   verbs:
   - create
   - delete
@@ -1575,11 +1575,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberopostgresqls
-  - kuberopostgresqls/status
-  - kuberopostgresqls/finalizers
+  - kusopostgresqls
+  - kusopostgresqls/status
+  - kusopostgresqls/finalizers
   verbs:
   - create
   - delete
@@ -1625,11 +1625,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoredis
-  - kuberoredis/status
-  - kuberoredis/finalizers
+  - kusoredis
+  - kusoredis/status
+  - kusoredis/finalizers
   verbs:
   - create
   - delete
@@ -1675,11 +1675,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberomongodbs
-  - kuberomongodbs/status
-  - kuberomongodbs/finalizers
+  - kusomongodbs
+  - kusomongodbs/status
+  - kusomongodbs/finalizers
   verbs:
   - create
   - delete
@@ -1725,11 +1725,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoelasticsearches
-  - kuberoelasticsearches/status
-  - kuberoelasticsearches/finalizers
+  - kusoelasticsearches
+  - kusoelasticsearches/status
+  - kusoelasticsearches/finalizers
   verbs:
   - create
   - delete
@@ -1775,11 +1775,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberocouchdbs
-  - kuberocouchdbs/status
-  - kuberocouchdbs/finalizers
+  - kusocouchdbs
+  - kusocouchdbs/status
+  - kusocouchdbs/finalizers
   verbs:
   - create
   - delete
@@ -1825,11 +1825,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberokafkas
-  - kuberokafkas/status
-  - kuberokafkas/finalizers
+  - kusokafkas
+  - kusokafkas/status
+  - kusokafkas/finalizers
   verbs:
   - create
   - delete
@@ -1882,11 +1882,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberomails
-  - kuberomails/status
-  - kuberomails/finalizers
+  - kusomails
+  - kusomails/status
+  - kusomails/finalizers
   verbs:
   - create
   - delete
@@ -1909,11 +1909,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberorabbitmqs
-  - kuberorabbitmqs/status
-  - kuberorabbitmqs/finalizers
+  - kusorabbitmqs
+  - kusorabbitmqs/status
+  - kusorabbitmqs/finalizers
   verbs:
   - create
   - delete
@@ -1936,11 +1936,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberomemcacheds
-  - kuberomemcacheds/status
-  - kuberomemcacheds/finalizers
+  - kusomemcacheds
+  - kusomemcacheds/status
+  - kusomemcacheds/finalizers
   verbs:
   - create
   - delete
@@ -1963,11 +1963,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoprometheuses
-  - kuberoprometheuses/status
-  - kuberoprometheuses/finalizers
+  - kusoprometheuses
+  - kusoprometheuses/status
+  - kusoprometheuses/finalizers
   verbs:
   - create
   - delete
@@ -1996,11 +1996,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberobuilds
-  - kuberobuilds/status
-  - kuberobuilds/finalizers
+  - kusobuilds
+  - kusobuilds/status
+  - kusobuilds/finalizers
   verbs:
   - create
   - delete
@@ -2022,11 +2022,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmysqls
-  - kuberoaddonmysqls/status
-  - kuberoaddonmysqls/finalizers
+  - kusoaddonmysqls
+  - kusoaddonmysqls/status
+  - kusoaddonmysqls/finalizers
   verbs:
   - create
   - delete
@@ -2049,11 +2049,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonpostgres
-  - kuberoaddonpostgres/status
-  - kuberoaddonpostgres/finalizers
+  - kusoaddonpostgres
+  - kusoaddonpostgres/status
+  - kusoaddonpostgres/finalizers
   verbs:
   - create
   - delete
@@ -2076,11 +2076,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonredis
-  - kuberoaddonredis/status
-  - kuberoaddonredis/finalizers
+  - kusoaddonredis
+  - kusoaddonredis/status
+  - kusoaddonredis/finalizers
   verbs:
   - create
   - delete
@@ -2103,11 +2103,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonrabbitmqs
-  - kuberoaddonrabbitmqs/status
-  - kuberoaddonrabbitmqs/finalizers
+  - kusoaddonrabbitmqs
+  - kusoaddonrabbitmqs/status
+  - kusoaddonrabbitmqs/finalizers
   verbs:
   - create
   - delete
@@ -2130,11 +2130,11 @@ rules:
   verbs:
   - '*'
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmongodbs
-  - kuberoaddonmongodbs/status
-  - kuberoaddonmongodbs/finalizers
+  - kusoaddonmongodbs
+  - kusoaddonmongodbs/status
+  - kusoaddonmongodbs/finalizers
   verbs:
   - create
   - delete
@@ -2160,7 +2160,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kubero-operator-metrics-reader
+  name: kuso-operator-metrics-reader
 rules:
 - nonResourceURLs:
   - /metrics
@@ -2170,7 +2170,7 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: kubero-operator-proxy-role
+  name: kuso-operator-proxy-role
 rules:
 - apiGroups:
   - authentication.k8s.io
@@ -2188,42 +2188,42 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: kubero-operator-leader-election-rolebinding
-  namespace: kubero-operator-system
+  name: kuso-operator-leader-election-rolebinding
+  namespace: kuso-operator-system
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: kubero-operator-leader-election-role
+  name: kuso-operator-leader-election-role
 subjects:
 - kind: ServiceAccount
-  name: kubero-operator-controller-manager
-  namespace: kubero-operator-system
+  name: kuso-operator-controller-manager
+  namespace: kuso-operator-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: kubero-operator-manager-rolebinding
+  name: kuso-operator-manager-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: kubero-operator-manager-role
+  name: kuso-operator-manager-role
 subjects:
 - kind: ServiceAccount
-  name: kubero-operator-controller-manager
-  namespace: kubero-operator-system
+  name: kuso-operator-controller-manager
+  namespace: kuso-operator-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: kubero-operator-proxy-rolebinding
+  name: kuso-operator-proxy-rolebinding
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: kubero-operator-proxy-role
+  name: kuso-operator-proxy-role
 subjects:
 - kind: ServiceAccount
-  name: kubero-operator-controller-manager
-  namespace: kubero-operator-system
+  name: kuso-operator-controller-manager
+  namespace: kuso-operator-system
 ---
 apiVersion: v1
 data:
@@ -2237,19 +2237,19 @@ data:
 
     leaderElection:
       leaderElect: true
-      resourceName: 811c9dc5.kubero.dev
+      resourceName: 811c9dc5.kuso.sislelabs.com
 kind: ConfigMap
 metadata:
-  name: kubero-operator-manager-config
-  namespace: kubero-operator-system
+  name: kuso-operator-manager-config
+  namespace: kuso-operator-system
 ---
 apiVersion: v1
 kind: Service
 metadata:
   labels:
     control-plane: controller-manager
-  name: kubero-operator-controller-manager-metrics-service
-  namespace: kubero-operator-system
+  name: kuso-operator-controller-manager-metrics-service
+  namespace: kuso-operator-system
 spec:
   ports:
   - name: https
@@ -2264,8 +2264,8 @@ kind: Deployment
 metadata:
   labels:
     control-plane: controller-manager
-  name: kubero-operator-controller-manager
-  namespace: kubero-operator-system
+  name: kuso-operator-controller-manager
+  namespace: kuso-operator-system
 spec:
   replicas: 1
   selector:
@@ -2301,9 +2301,9 @@ spec:
         - --health-probe-bind-address=:8081
         - --metrics-bind-address=127.0.0.1:8080
         - --leader-elect
-        - --leader-election-id=kubero-operator
+        - --leader-election-id=kuso-operator
         - --zap-log-level=info
-        image: ghcr.io/kubero-dev/kubero-operator/kuberoapp:v0.2.0-rc.4
+        image: ghcr.io/sislelabs/kuso-operator/kusoapp:v0.2.0-rc.4
         livenessProbe:
           httpGet:
             path: /healthz
@@ -2328,5 +2328,5 @@ spec:
           allowPrivilegeEscalation: false
       securityContext:
         runAsNonRoot: true
-      serviceAccountName: kubero-operator-controller-manager
+      serviceAccountName: kuso-operator-controller-manager
       terminationGracePeriodSeconds: 10

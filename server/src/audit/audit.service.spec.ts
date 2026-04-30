@@ -12,8 +12,8 @@ describe('AuditService', () => {
     mockPrisma = new PrismaClient() as jest.Mocked<PrismaClient>;
     (PrismaClient as jest.Mock).mockImplementation(() => mockPrisma);
 
-    process.env.KUBERO_AUDIT = 'true';
-    process.env.KUBERO_AUDIT_LIMIT = '10';
+    process.env.KUSO_AUDIT = 'true';
+    process.env.KUSO_AUDIT_LIMIT = '10';
     AuditService.prototype.init = jest.fn();
     service = new AuditService();
     service['enabled'] = true;
@@ -28,8 +28,8 @@ describe('AuditService', () => {
     expect(service).toBeDefined();
   });
 
-  it('should not enable audit if KUBERO_AUDIT is not true', () => {
-    process.env.KUBERO_AUDIT = 'false';
+  it('should not enable audit if KUSO_AUDIT is not true', () => {
+    process.env.KUSO_AUDIT = 'false';
     const s = new AuditService();
     expect(s.getAuditEnabled()).toBe(false);
   });
@@ -40,7 +40,7 @@ describe('AuditService', () => {
     service['enabled'] = true;
     await service.init();
     expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
-      user: 'kubero',
+      user: 'kuso',
       severity: 'normal',
       action: 'start',
       namespace: '',

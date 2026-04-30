@@ -20,12 +20,12 @@ import { StatusController } from './status.controller';
     StatusService,
     AppsService,
     makeGaugeProvider({
-      name: 'kubero_pipelines_total',
+      name: 'kuso_pipelines_total',
       help: 'Total number of pipelines',
       labelNames: ['pipeline', 'phase', 'app', 'namespace', 'status'],
     }),
     makeGaugeProvider({
-      name: 'kubero_apps_total',
+      name: 'kuso_apps_total',
       help: 'Total number of apps',
       labelNames: ['pipeline', 'phase', 'app', 'namespace', 'status'],
     }),

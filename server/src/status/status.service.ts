@@ -9,14 +9,14 @@ import { AppsService } from '../apps/apps.service';
 export class StatusService {
   private readonly logger = new Logger(StatusService.name);
   constructor(
-    @InjectMetric('kubero_pipelines_total') public pipelineTotal: Gauge<string>,
-    @InjectMetric('kubero_apps_total') public appsTotal: Gauge<string>,
+    @InjectMetric('kuso_pipelines_total') public pipelineTotal: Gauge<string>,
+    @InjectMetric('kuso_apps_total') public appsTotal: Gauge<string>,
     private pipelinesService: PipelinesService,
     private appsService: AppsService,
   ) {}
 
   @Cron('*/15 * * * * *')
-  async updateKuberoMetrics(): Promise<void> {
+  async updateKusoMetrics(): Promise<void> {
     const pipelineTotal = await this.pipelinesService.countPipelines();
     this.pipelineTotal.set({}, pipelineTotal);
 

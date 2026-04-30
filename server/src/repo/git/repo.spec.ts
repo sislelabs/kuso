@@ -26,13 +26,13 @@ describe('Repo', () => {
 
   beforeEach(() => {
     repo = new TestRepo('test');
-    process.env.KUBERO_WEBHOOK_SECRET = 'secret';
-    process.env.KUBERO_WEBHOOK_URL = 'http://webhook.url';
+    process.env.KUSO_WEBHOOK_SECRET = 'secret';
+    process.env.KUSO_WEBHOOK_URL = 'http://webhook.url';
   });
 
   afterEach(() => {
-    delete process.env.KUBERO_WEBHOOK_SECRET;
-    delete process.env.KUBERO_WEBHOOK_URL;
+    delete process.env.KUSO_WEBHOOK_SECRET;
+    delete process.env.KUSO_WEBHOOK_URL;
     jest.clearAllMocks();
   });
 
@@ -49,17 +49,17 @@ describe('Repo', () => {
     expect(keyPair).toHaveProperty('fingerprint');
   });
 
-  it('should throw if KUBERO_WEBHOOK_SECRET is not set', async () => {
-    delete process.env.KUBERO_WEBHOOK_SECRET;
+  it('should throw if KUSO_WEBHOOK_SECRET is not set', async () => {
+    delete process.env.KUSO_WEBHOOK_SECRET;
     await expect(repo.connectRepo('git@host:owner/repo.git')).rejects.toThrow(
-      'KUBERO_WEBHOOK_SECRET is not defined',
+      'KUSO_WEBHOOK_SECRET is not defined',
     );
   });
 
-  it('should throw if KUBERO_WEBHOOK_URL is not set', async () => {
-    delete process.env.KUBERO_WEBHOOK_URL;
+  it('should throw if KUSO_WEBHOOK_URL is not set', async () => {
+    delete process.env.KUSO_WEBHOOK_URL;
     await expect(repo.connectRepo('git@host:owner/repo.git')).rejects.toThrow(
-      'KUBERO_WEBHOOK_URL is not defined',
+      'KUSO_WEBHOOK_URL is not defined',
     );
   });
 

@@ -11,7 +11,7 @@
         </v-tabs>
         <div class="console" id="console">
             <div v-for="line in loglines" :key="line.id">
-            {{ new Date(line.time).toLocaleDateString() }} {{ new Date(line.time).toLocaleTimeString()}} <span :style="'color:' +line.color">[{{ line.podID }}/{{ line.container.replace('kuberoapp-', '') }}]</span>
+            {{ new Date(line.time).toLocaleDateString() }} {{ new Date(line.time).toLocaleTimeString()}} <span :style="'color:' +line.color">[{{ line.podID }}/{{ line.container.replace('kusoapp-', '') }}]</span>
             {{ line.log }}
             </div>
             <span style="margin: 25px;"></span>
@@ -23,7 +23,7 @@
 <script lang="ts">
 import axios from "axios";
 import { ref, reactive, defineComponent } from 'vue'
-import { useKuberoStore } from '../../stores/kubero'
+import { useKusoStore } from '../../stores/kuso'
 
 type LogLine = {
     app: string;
@@ -38,7 +38,7 @@ type LogLine = {
     color: string;
 }
 
-const socket = useKuberoStore().kubero.socket as any;
+const socket = useKusoStore().kuso.socket as any;
 const loglines = ref([] as LogLine[]);
 
 socket.on('log', (data: LogLine) => {
@@ -108,12 +108,12 @@ export default defineComponent({
             /* example
             {
                 app: "bla"
-                container: "kuberoapp-web"
+                container: "kusoapp-web"
                 id: "049464b6-3f35-4b72-a885-6c263e64aec7"
                 log: "logtest: nana\n"
                 phase: "production"
                 pipeline: "hoho"
-                pod: "bla-kuberoapp-web-6dfd5c4c9b-mxg9v"
+                pod: "bla-kusoapp-web-6dfd5c4c9b-mxg9v"
                 podID: "6dfd5c4c9b-mxg9v"
                 time: 1656970421989
             },

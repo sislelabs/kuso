@@ -66,7 +66,7 @@
             true-icon="mdi-sleep"
             false-icon="mdi-sleep-off"
             label="Sleep"
-            :disabled="!kuberoConfig.sleepEnabled"
+            :disabled="!kusoConfig.sleepEnabled"
             inset
           ></v-switch>
         -->
@@ -191,19 +191,19 @@
                       key="1"
                       :label="$t('app.strategy.nixpacks')"
                       value="nixpacks"
-                      :disabled="!kuberoConfig.buildPipeline"
+                      :disabled="!kusoConfig.buildPipeline"
                     ></v-radio>
                     <v-radio
                       key="1"
                       :label="$t('app.strategy.buildpacks')"
                       value="buildpacks"
-                      :disabled="!kuberoConfig.buildPipeline"
+                      :disabled="!kusoConfig.buildPipeline"
                     ></v-radio>
                     <v-radio
                       key="2"
                       :label="$t('app.strategy.dockerfile')"
                       value="dockerfile"
-                      :disabled="!kuberoConfig.buildPipeline"
+                      :disabled="!kusoConfig.buildPipeline"
                     ></v-radio>
                   </v-radio-group>
                 </v-col>
@@ -274,7 +274,7 @@
                     variant="tonal"
                     type="info"
                     border="start"
-                    v-if="!kuberoConfig.buildPipeline"
+                    v-if="!kusoConfig.buildPipeline"
                     style="margin-top: 20px"
                   >
                     <h3>
@@ -1233,7 +1233,7 @@
 import axios from "axios";
 import Addons from "./addons.vue";
 import { defineComponent } from "vue";
-import { useKuberoStore } from "../../stores/kubero";
+import { useKusoStore } from "../../stores/kuso";
 import Breadcrumbs from "../breadcrumbs.vue";
 import Swal from "sweetalert2";
 
@@ -1418,7 +1418,7 @@ export default defineComponent({
         },
       ],
       takenDomains: [] as string[],
-      advanced: localStorage.getItem("kubero-advanced-app-config") === "true",
+      advanced: localStorage.getItem("kuso-advanced-app-config") === "true",
       panel: [0],
       valid: false,
       sleep: "disabled",
@@ -1543,7 +1543,7 @@ export default defineComponent({
       branch: "main",
       branchesList: [] as string[],
       docker: {
-        image: "ghcr.io/kubero-dev/idler",
+        image: "ghcr.io/kuso-dev/idler",
         tag: "latest",
         command: "",
       },
@@ -1762,9 +1762,9 @@ export default defineComponent({
     };
   },
   computed: {
-    kuberoConfig() {
-      const store = useKuberoStore();
-      return store.kubero;
+    kusoConfig() {
+      const store = useKusoStore();
+      return store.kuso;
     },
     overlapHeaders() {
       return [
@@ -1781,7 +1781,7 @@ export default defineComponent({
   },
   watch: {
     advanced(newValue) {
-      localStorage.setItem("kubero-advanced-app-config", newValue.toString());
+      localStorage.setItem("kuso-advanced-app-config", newValue.toString());
     },
   },
   async mounted() {
@@ -2432,7 +2432,7 @@ export default defineComponent({
         }
 
         if (this.deploymentstrategy == "git" && this.buildstrategy != "plain") {
-          this.docker.image = "ghcr.io/kubero-dev/idler";
+          this.docker.image = "ghcr.io/kuso-dev/idler";
           this.docker.tag = "v1";
         }
 

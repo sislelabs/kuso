@@ -21,7 +21,7 @@ describe('AuthService', () => {
       findOneOrCreate: jest.fn().mockResolvedValue({
         userId: 3,
         username: 'oauthuser',
-        emails: [{ value: 'undefined@kubero.dev'  }],
+        emails: [{ value: 'undefined@kuso.sislelabs.com'  }],
       }),
     };
     rolesService = {
@@ -35,7 +35,7 @@ describe('AuthService', () => {
       getOperatorVersion: jest.fn().mockReturnValue('v1.0.0'),
     };
     configService = {
-      getKuberoUIVersion: jest.fn().mockReturnValue('v2.0.0'),
+      getKusoUIVersion: jest.fn().mockReturnValue('v2.0.0'),
       getBuildpipelineEnabled: jest.fn().mockReturnValue(true),
       getTemplateEnabled: jest.fn().mockReturnValue(true),
       checkAdminDisabled: jest.fn().mockReturnValue(false),
@@ -59,11 +59,11 @@ describe('AuthService', () => {
       auditService,
       jwtService,
     );
-    process.env.KUBERO_SESSION_KEY = 'testkey';
+    process.env.KUSO_SESSION_KEY = 'testkey';
   });
 
   afterEach(() => {
-    delete process.env.KUBERO_SESSION_KEY;
+    delete process.env.KUSO_SESSION_KEY;
   });
 
   describe('validateUser', () => {
@@ -76,7 +76,7 @@ describe('AuthService', () => {
       // Simulates SHA256 Hash
       const crypto = require('crypto');
       const hash = crypto
-        .createHmac('sha256', process.env.KUBERO_SESSION_KEY)
+        .createHmac('sha256', process.env.KUSO_SESSION_KEY)
         .update('pass')
         .digest('hex');
       usersService.findOneFull.mockResolvedValueOnce({
@@ -105,8 +105,8 @@ describe('AuthService', () => {
       expect(result).toBeNull();
     });
 
-    it('should throw if KUBERO_SESSION_KEY is not set', async () => {
-      delete process.env.KUBERO_SESSION_KEY;
+    it('should throw if KUSO_SESSION_KEY is not set', async () => {
+      delete process.env.KUSO_SESSION_KEY;
       usersService.findOneFull.mockResolvedValueOnce({
         userId: 1,
         username: 'test',
@@ -151,7 +151,7 @@ describe('AuthService', () => {
       });
       const reqUser = {
         username: 'oauthuser',
-        emails: [{ value: 'undefined@kubero.dev' }],
+        emails: [{ value: 'undefined@kuso.sislelabs.com' }],
         strategy: 'github',
       };
       const result = await service.loginOAuth2(reqUser);

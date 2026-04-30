@@ -1,24 +1,24 @@
 ## Append samples you want in your CSV to this file as resources ##
 resources:
-- application_v1alpha1_kuberoapp.yaml
-- application_v1alpha1_kubero.yaml
-- application_v1alpha1_kuberopipeline.yaml
-- application_v1alpha1_kuberomysql.yaml
-- application_v1alpha1_kuberopostgresql.yaml
-- application_v1alpha1_kuberoredis.yaml
-- application_v1alpha1_kuberomongodb.yaml
-- application_v1alpha1_kuberoelasticsearch.yaml
-- application_v1alpha1_kuberocouchdb.yaml
-- application_v1alpha1_kuberokafka.yaml
-- application_v1alpha1_kuberomail.yaml
-- application_v1alpha1_kuberorabbitmq.yaml
-- application_v1alpha1_kuberomemcached.yaml
-- application_v1alpha1_kuberoprometheus.yaml
-- application_v1alpha1_kuberobuild.yaml
-- application_v1alpha1_kuberoaddonmysql.yaml
-- application_v1alpha1_kuberoaddonpostgres.yaml
-- application_v1alpha1_kuberoaddonredis.yaml
-- application_v1alpha1_kuberoaddonrabbitmq.yaml
-- application_v1alpha1_kuberoaddonmongodb.yaml
-- application_v1alpha1_kuberoaddonmemcached.yaml
+- application_v1alpha1_kusoapp.yaml
+- application_v1alpha1_kuso.yaml
+- application_v1alpha1_kusopipeline.yaml
+- application_v1alpha1_kusomysql.yaml
+- application_v1alpha1_kusopostgresql.yaml
+- application_v1alpha1_kusoredis.yaml
+- application_v1alpha1_kusomongodb.yaml
+- application_v1alpha1_kusoelasticsearch.yaml
+- application_v1alpha1_kusocouchdb.yaml
+- application_v1alpha1_kusokafka.yaml
+- application_v1alpha1_kusomail.yaml
+- application_v1alpha1_kusorabbitmq.yaml
+- application_v1alpha1_kusomemcached.yaml
+- application_v1alpha1_kusoprometheus.yaml
+- application_v1alpha1_kusobuild.yaml
+- application_v1alpha1_kusoaddonmysql.yaml
+- application_v1alpha1_kusoaddonpostgres.yaml
+- application_v1alpha1_kusoaddonredis.yaml
+- application_v1alpha1_kusoaddonrabbitmq.yaml
+- application_v1alpha1_kusoaddonmongodb.yaml
+- application_v1alpha1_kusoaddonmemcached.yaml
 #+kubebuilder:scaffold:manifestskustomizesamples

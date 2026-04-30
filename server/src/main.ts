@@ -24,7 +24,7 @@ async function bootstrap() {
 
   const app = await NestFactory.create(AppModule, {
     logger: new CustomConsoleLogger({
-      prefix: 'Kubero',
+      prefix: 'Kuso',
       logLevels: logLevels as LogLevel[],
     }),
     cors: true,
@@ -62,9 +62,9 @@ async function bootstrap() {
   );
 
   const config = new DocumentBuilder()
-    .setTitle('Kubero')
+    .setTitle('Kuso')
     .setDescription(
-      'Kubero is a web-based tool deploy applications on a Kubernetes clusters. It provides a simple and intuitive interface to manage your clusters, applications, and pipelines.',
+      'Kuso is a web-based tool deploy applications on a Kubernetes clusters. It provides a simple and intuitive interface to manage your clusters, applications, and pipelines.',
     )
     .setVersion('3.0')
     .addServer('/', 'Local (default)')
@@ -89,7 +89,7 @@ async function bootstrap() {
     .build();
   const documentFactory = () => SwaggerModule.createDocument(app, config);
   SwaggerModule.setup('api/docs', app, documentFactory, {
-    customSiteTitle: 'Kubero API Documentation',
+    customSiteTitle: 'Kuso API Documentation',
     //customfavIcon: '/favicon.ico',
     swaggerOptions: {
       tagsSorter: 'alpha',
@@ -99,7 +99,7 @@ async function bootstrap() {
     },
   });
 
-  await app.listen(process.env.PORT ?? 2000); // Use port 2000 for compatibility with kubero v2
+  await app.listen(process.env.PORT ?? 2000); // Use port 2000 for compatibility with kuso v2
 
   Logger.log(
     `⚡️[server]: Server is running at: ${await app.getUrl()}`,

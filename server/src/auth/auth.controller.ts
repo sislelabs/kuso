@@ -61,7 +61,7 @@ export class AuthController {
     isArray: false,
   })
   async logout(@Response() res: any): Promise<void> {
-    res.clearCookie('kubero.JWT_TOKEN');
+    res.clearCookie('kuso.JWT_TOKEN');
     res.send({ message: 'Logged out', status: '200' } as OKDTO);
   }
 
@@ -122,7 +122,7 @@ export class AuthController {
   async githubCallback(@Request() req: any, @Response() res: any) {
     //console.log(req.user); // debug github user data
     const token = await this.authService.loginOAuth2(req.user);
-    res.cookie('kubero.JWT_TOKEN', token);
+    res.cookie('kuso.JWT_TOKEN', token);
     res.redirect('/');
   }
 
@@ -139,7 +139,7 @@ export class AuthController {
   async oauth2Callback(@Request() req: any, @Response() res: any) {
     //console.log(req.user);
     const token = await this.authService.loginOAuth2(req.user);
-    res.cookie('kubero.JWT_TOKEN', token);
+    res.cookie('kuso.JWT_TOKEN', token);
     res.redirect('/');
   }
 }

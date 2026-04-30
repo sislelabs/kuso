@@ -109,8 +109,8 @@ const mockApp = {
 const mockUSerGroups = ['group1', 'group2'];
 
 export const mockKubectlApp = {
-  apiVersion: 'kubero.io/v1',
-  kind: 'KuberoApp',
+  apiVersion: 'kuso.io/v1',
+  kind: 'KusoApp',
   spec: mockApp,
   status: {},
 } as IKubectlApp;
@@ -188,7 +188,7 @@ describe('AppsService', () => {
 
   describe('createApp', () => {
     beforeEach(() => {
-      process.env.KUBERO_READONLY = 'false';
+      process.env.KUSO_READONLY = 'false';
     });
     it('should call createApp and send notification', async () => {
       (pipelinesService.getContext as jest.Mock).mockResolvedValue('ctx');
@@ -198,7 +198,7 @@ describe('AppsService', () => {
       expect(notificationsService.send).toHaveBeenCalled();
     });
     it('should not call createApp if readonly', async () => {
-      process.env.KUBERO_READONLY = 'true';
+      process.env.KUSO_READONLY = 'true';
       const app = new App(mockApp);
       await service.createApp(app, { username: 'u' } as any, mockUSerGroups);
       expect(kubectl.createApp).not.toHaveBeenCalled();
@@ -207,7 +207,7 @@ describe('AppsService', () => {
 
   describe('deleteApp', () => {
     beforeEach(() => {
-      process.env.KUBERO_READONLY = 'false';
+      process.env.KUSO_READONLY = 'false';
     });
     it('should call deleteApp and send notification', async () => {
       (pipelinesService.getContext as jest.Mock).mockResolvedValue('ctx');
@@ -216,7 +216,7 @@ describe('AppsService', () => {
       expect(notificationsService.send).toHaveBeenCalled();
     });
     it('should not call deleteApp if readonly', async () => {
-      process.env.KUBERO_READONLY = 'true';
+      process.env.KUSO_READONLY = 'true';
       await service.deleteApp('p', 'ph', 'a', { username: 'u' } as any, mockUSerGroups);
       expect(kubectl.deleteApp).not.toHaveBeenCalled();
     });
@@ -293,7 +293,7 @@ describe('AppsService', () => {
 
   describe('updateApp', () => {
     beforeEach(() => {
-      process.env.KUBERO_READONLY = 'false';
+      process.env.KUSO_READONLY = 'false';
     });
     it('should call updateApp and send notification', async () => {
       (pipelinesService.getContext as jest.Mock).mockResolvedValue('ctx');
@@ -303,7 +303,7 @@ describe('AppsService', () => {
       expect(notificationsService.send).toHaveBeenCalled();
     });
     it('should not call updateApp if readonly', async () => {
-      process.env.KUBERO_READONLY = 'true';
+      process.env.KUSO_READONLY = 'true';
       const app = new App(mockApp);
       await service.updateApp(app, 'rv', { username: 'u' } as any, mockUSerGroups);
       expect(kubectl.updateApp).not.toHaveBeenCalled();
@@ -353,8 +353,8 @@ describe('AppsService', () => {
       ).resolves.toBeUndefined();
     });
 
-    it('should not execute if KUBERO_READONLY is true', async () => {
-      process.env.KUBERO_READONLY = 'true';
+    it('should not execute if KUSO_READONLY is true', async () => {
+      process.env.KUSO_READONLY = 'true';
       await expect(
         service.execInContainer(
           'pipe',
@@ -367,7 +367,7 @@ describe('AppsService', () => {
           mockUSerGroups,
         ),
       ).resolves.toBeUndefined();
-      delete process.env.KUBERO_READONLY;
+      delete process.env.KUSO_READONLY;
     });
 
     it('should not execute if execStream already running and open', async () => {
@@ -617,7 +617,7 @@ describe('AppsService', () => {
 
     it('should call getAllAppsList with correct context', async () => {
       mockGetAllAppsList.mockResolvedValue([]);
-      process.env.KUBERO_CONTEXT = 'my-context';
+      process.env.KUSO_CONTEXT = 'my-context';
       await service.deletePRApp(
         'feature-1',
         'My PR Title',
@@ -625,7 +625,7 @@ describe('AppsService', () => {
         mockUSerGroups
       );
       expect(mockGetAllAppsList).toHaveBeenCalledWith('my-context');
-      delete process.env.KUBERO_CONTEXT;
+      delete process.env.KUSO_CONTEXT;
     });
 
     it('should log debug message', async () => {
@@ -648,7 +648,7 @@ describe('AppsService', () => {
     let mockNotificationsService: any;
 
     beforeEach(() => {
-      process.env.KUBERO_READONLY = 'false';
+      process.env.KUSO_READONLY = 'false';
       process.env.INGRESS_CLASSNAME = 'test-nginx';
 
       mockPipelinesService = {
@@ -678,8 +678,8 @@ describe('AppsService', () => {
       service['logger'] = { debug: jest.fn() } as any;
     });
 
-    it('should return early if KUBERO_READONLY is true', async () => {
-      process.env.KUBERO_READONLY = 'true';
+    it('should return early if KUSO_READONLY is true', async () => {
+      process.env.KUSO_READONLY = 'true';
 
       const result = await service.createPRApp(
         'feature-branch',
@@ -944,12 +944,12 @@ describe('AppsService', () => {
     });
 
     afterEach(() => {
-      delete process.env.KUBERO_READONLY;
+      delete process.env.KUSO_READONLY;
       jest.clearAllMocks();
     });
 
-    it('should not restart app if KUBERO_READONLY is true', async () => {
-      process.env.KUBERO_READONLY = 'true';
+    it('should not restart app if KUSO_READONLY is true', async () => {
+      process.env.KUSO_READONLY = 'true';
       const user = { id: '1', username: 'testuser' };
       const logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
       await service.restartApp('pipe', 'dev', 'app1', user as any, mockUSerGroups);
@@ -1044,7 +1044,7 @@ describe('AppsService', () => {
           metadata: {
             name: 'pod-1',
             namespace: 'pipe-dev',
-            generateName: 'app1-kuberoapp-',
+            generateName: 'app1-kusoapp-',
             creationTimestamp: '2024-01-01T00:00:00Z',
           },
           status: {
@@ -1066,7 +1066,7 @@ describe('AppsService', () => {
           metadata: {
             name: 'pod-2',
             namespace: 'pipe-dev',
-            generateName: 'otherapp-kuberoapp-',
+            generateName: 'otherapp-kusoapp-',
             creationTimestamp: '2024-01-01T01:00:00Z',
           },
           status: {
@@ -1128,7 +1128,7 @@ describe('AppsService', () => {
           metadata: {
             name: 'pod-2',
             namespace: 'pipe-dev',
-            generateName: 'otherapp-kuberoapp-',
+            generateName: 'otherapp-kusoapp-',
             creationTimestamp: '2024-01-01T01:00:00Z',
           },
           status: {

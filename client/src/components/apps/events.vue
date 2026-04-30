@@ -105,7 +105,7 @@ export default defineComponent({
                 uid: "049464b6-3f35-4b72-a885-6c263e64aec7",
                 type: "Normal",
                 reason: "Scheduled",
-                message: "Successfully assigned default/bla-kuberoapp-web-6dfd5c4c9b-mxg9v to kubero-worker-1",
+                message: "Successfully assigned default/bla-kusoapp-web-6dfd5c4c9b-mxg9v to kuso-worker-1",
                 color: "grey lighten-2",
                 icon: "mdi-folder-outline",
             },

@@ -31,7 +31,7 @@ export default createVuetify({
           cardBackground: '#212121',
           "on-cardBackground": '#CCC',
           navBG: '#262626',
-          kubero: '#684888',
+          kuso: '#684888',
           "on-surface-variant": "#1B1B1B",
           
           accent: '#8c9eff',
@@ -49,7 +49,7 @@ export default createVuetify({
           cardBackground: '#FAFAFA',
           "on-cardBackground": '#444',
           navBG: '#F7F8FB',
-          kubero: '#684888',
+          kuso: '#684888',
 
           accent: '#82B1FF',
           error: '#FF5252',

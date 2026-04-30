@@ -1,0 +1,36 @@
+{{- if and ( .Values.autoscaling.enabled) (gt (.Values.worker.autoscaling.minReplicas | float64) 0.0) }}
+{{- if semverCompare ">=1.23-0" .Capabilities.KubeVersion.GitVersion -}}
+apiVersion: autoscaling/v2
+{{- else -}}
+apiVersion: autoscaling/v2beta2
+{{- end }}
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "kusoapp.fullname" . }}-worker
+  labels:
+    {{- include "kusoapp.labels" . | nindent 4 }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "kusoapp.fullname" . }}-worker
+  minReplicas: {{ .Values.worker.autoscaling.minReplicas }}
+  maxReplicas: {{ .Values.worker.autoscaling.maxReplicas }}
+  metrics:
+    {{- if .Values.worker.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.worker.autoscaling.targetCPUUtilizationPercentage }}
+    {{- end }}
+    {{- if .Values.worker.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ .Values.worker.autoscaling.targetMemoryUtilizationPercentage }}
+    {{- end }}
+{{- end }}

@@ -124,7 +124,7 @@ describe('GithubApi', () => {
         status: 201,
         data: {
           id: 1,
-          title: 'bot@kubero',
+          title: 'bot@kuso',
           verified: true,
           created_at: '2020-01-01T00:00:00Z',
           url: 'url',
@@ -141,7 +141,7 @@ describe('GithubApi', () => {
 
   describe('getWebhook', () => {
     it('should return false if signature is invalid', () => {
-      process.env.KUBERO_WEBHOOK_SECRET = 'secret';
+      process.env.KUSO_WEBHOOK_SECRET = 'secret';
       const result = github.getWebhook('push', 'delivery', 'invalidsig', {
         foo: 'bar',
       });
@@ -149,7 +149,7 @@ describe('GithubApi', () => {
     });
 
     it('should return a webhook object if signature is valid', () => {
-      process.env.KUBERO_WEBHOOK_SECRET = 'secret';
+      process.env.KUSO_WEBHOOK_SECRET = 'secret';
       const crypto = require('crypto');
       const body = {
         repository: { ssh_url: 'ssh://repo' },

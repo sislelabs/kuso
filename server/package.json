@@ -1,5 +1,5 @@
 {
-  "name": "kubero",
+  "name": "kuso",
   "description": "Heroku clone on Kubernetes",
   "main": "index.js",
   "author": "Gianni Carafa",

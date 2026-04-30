@@ -9,7 +9,7 @@ import {
 } from './types';
 import { Repo } from './repo';
 import gitUrlParse = require('git-url-parse');
-debug('app:kubero:gogs:api');
+debug('app:kuso:gogs:api');
 
 //https://www.npmjs.com/package/gitea-js
 import { giteaApi } from 'gitea-js';
@@ -163,7 +163,7 @@ export class GogsApi extends Repo {
   ): Promise<IDeploykeyR> {
     const keyPair = this.createDeployKeyPair();
 
-    const title: string = 'bot@kubero.' + crypto.randomBytes(4).toString('hex');
+    const title: string = 'bot@kuso.' + crypto.randomBytes(4).toString('hex');
 
     let ret: IDeploykeyR = {
       status: 500,
@@ -214,7 +214,7 @@ export class GogsApi extends Repo {
     signature: string,
     body: any,
   ): IWebhook | boolean {
-    const secret = process.env.KUBERO_WEBHOOK_SECRET as string;
+    const secret = process.env.KUSO_WEBHOOK_SECRET as string;
     const hash = crypto
       .createHmac('sha256', secret)
       .update(JSON.stringify(body, null, '  '))

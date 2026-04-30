@@ -25,12 +25,12 @@ export class KubectlApp implements IKubectlApp {
   };
 
   constructor(app: App) {
-    this.apiVersion = 'application.kubero.dev/v1alpha1';
-    this.kind = 'KuberoApp';
+    this.apiVersion = 'application.kuso.sislelabs.com/v1alpha1';
+    this.kind = 'KusoApp';
     this.metadata = {
       name: app.name,
       labels: {
-        manager: 'kubero',
+        manager: 'kuso',
       },
     };
     this.spec = app;
@@ -228,7 +228,7 @@ export class App implements IApp {
       (this.image = {
         containerPort: app.image.containerPort,
         pullPolicy: 'Always',
-        repository: app.image.repository || 'ghcr.io/kubero-dev/idler',
+        repository: app.image.repository || 'ghcr.io/kuso-dev/idler',
         tag: app.image.tag || 'v1',
         command: app.image.command,
         fetch: app.image.fetch,

@@ -20,7 +20,7 @@
                 Create a new Pipeline
             </h2>
             <h2 v-if="pipeline!='new'">
-                Edit <span style="color: rgb(var(--v-theme-kubero))">{{ pipelineName }}</span>
+                Edit <span style="color: rgb(var(--v-theme-kuso))">{{ pipelineName }}</span>
             </h2>
             <p class="text-justify">
                 A Pipeline may have several stages with apps
@@ -95,7 +95,7 @@
               md="8"
             >
             <v-tabs v-model="repotab" stacked centered @click="loadRepository">
-                <v-tab value="github" :disabled="repositoriesList.github == false"><v-icon class="mb-2 kubero">mdi-github</v-icon>Github</v-tab>
+                <v-tab value="github" :disabled="repositoriesList.github == false"><v-icon class="mb-2 kuso">mdi-github</v-icon>Github</v-tab>
                 <v-tab value="gitea" :disabled="repositoriesList.gitea == false"><v-icon class="mb-2 gitea"></v-icon>Gitea</v-tab>
                 <v-tab value="gitlab" :disabled="repositoriesList.gitlab == false"><v-icon class="mb-2">mdi-gitlab</v-icon>Gitlab</v-tab>
                 <v-tab value="gogs" :disabled="repositoriesList.gogs == false"><v-icon class="mb-2 gogs"></v-icon>Gogs</v-tab>

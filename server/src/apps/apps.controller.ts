@@ -262,7 +262,7 @@ export class AppsController {
     @Body() body: any,
     @Request() req: any,
   ) {
-    if (process.env.KUBERO_CONSOLE_ENABLED !== 'true') {
+    if (process.env.KUSO_CONSOLE_ENABLED !== 'true') {
       const msg = 'Console is not enabled';
       Logger.warn(msg);
       throw new HttpException(msg, HttpStatus.BAD_REQUEST);

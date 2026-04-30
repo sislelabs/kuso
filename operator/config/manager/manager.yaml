@@ -29,7 +29,7 @@ spec:
       containers:
       - args:
         - --leader-elect
-        - --leader-election-id=kubero-operator
+        - --leader-election-id=kuso-operator
         image: controller:latest
         name: manager
         securityContext:

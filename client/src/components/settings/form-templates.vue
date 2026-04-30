@@ -3,7 +3,7 @@
     <div>
 
         <v-switch
-            v-model="settings.kubero.config.templates.enabled"
+            v-model="settings.kuso.config.templates.enabled"
             label="Allow Templates"
             color="primary"
             required
@@ -13,7 +13,7 @@
             multiple
         >
 
-            <v-expansion-panel bg-color="rgb(var(--v-theme-cardBackground))" v-for="(catalog, index) in settings.kubero.config.templates.catalogs" :key="index">
+            <v-expansion-panel bg-color="rgb(var(--v-theme-cardBackground))" v-for="(catalog, index) in settings.kuso.config.templates.catalogs" :key="index">
             <v-expansion-panel-title class="text-uppercase text-caption-2 font-weight-medium" color="cardBackground">{{ catalog.name }}</v-expansion-panel-title>
             <v-expansion-panel-text>
             <v-row>
@@ -143,10 +143,10 @@ export default defineComponent({
     methods: {
         deleteBuildpack(catalog: Catalog) {
             this.panel = -1
-            this.settings.kubero.config.templates.catalogs.splice(this.settings.kubero.config.templates.catalogs.indexOf(catalog), 1)
+            this.settings.kuso.config.templates.catalogs.splice(this.settings.kuso.config.templates.catalogs.indexOf(catalog), 1)
         },
         addTemplateCatalog() {
-            this.settings.kubero.config.templates.catalogs.push({
+            this.settings.kuso.config.templates.catalogs.push({
                 name: '',
                 description: '',
                 index: {
@@ -156,7 +156,7 @@ export default defineComponent({
             })
 
             // open panel 
-            this.panel = this.settings.kubero.config.templates.catalogs.length - 1
+            this.panel = this.settings.kuso.config.templates.catalogs.length - 1
         }
     }
 })

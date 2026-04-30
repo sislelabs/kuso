@@ -49,9 +49,9 @@
 import axios from "axios";
 import { Terminal, ITerminalOptions } from 'xterm';
 import { ref, reactive, defineComponent } from 'vue'
-import { useKuberoStore } from '../../stores/kubero'
+import { useKusoStore } from '../../stores/kuso'
 
-const socket = useKuberoStore().kubero.socket as any;
+const socket = useKusoStore().kuso.socket as any;
 
 type Pod = {
     name: string,

@@ -23,7 +23,7 @@ export class ConfigController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @Permissions('config:read', 'config:write')
   @ApiBearerAuth('bearerAuth')
-  @ApiOperation({ summary: 'Get the Kubero settings' })
+  @ApiOperation({ summary: 'Get the Kuso settings' })
   @ApiForbiddenResponse({
     description: 'Error: Unauthorized',
     type: OKDTO,
@@ -38,7 +38,7 @@ export class ConfigController {
   @Permissions('config:write')
   @UseGuards(ReadonlyGuard)
   @ApiBearerAuth('bearerAuth')
-  @ApiOperation({ summary: 'Update the Kubero settings' })
+  @ApiOperation({ summary: 'Update the Kuso settings' })
   @ApiForbiddenResponse({
     description: 'Error: Unauthorized',
     type: OKDTO,
@@ -403,31 +403,31 @@ export class ConfigController {
           type: 'string',
           description: 'Base64 encoded kubeconfig',
         },
-        KUBERO_CONTEXT: {
+        KUSO_CONTEXT: {
           type: 'string',
           description: 'Kubernetes context to use',
         },
-        KUBERO_NAMESPACE: {
+        KUSO_NAMESPACE: {
           type: 'string',
-          description: 'Namespace for Kubero',
+          description: 'Namespace for Kuso',
         },
-        KUBERO_SESSION_KEY: {
+        KUSO_SESSION_KEY: {
           type: 'string',
-          description: 'Session key for Kubero',
+          description: 'Session key for Kuso',
         },
-        KUBERO_WEBHOOK_SECRET: {
+        KUSO_WEBHOOK_SECRET: {
           type: 'string',
-          description: 'Webhook secret for Kubero',
+          description: 'Webhook secret for Kuso',
         },
       },
     },
   })
   async updateRunningConfig(@Body() body) {
     const kubeconfigBase64 = body.KUBECONFIG_BASE64;
-    const kubeContext = body.KUBERO_CONTEXT;
-    const kuberoNamespace = body.KUBERO_NAMESPACE;
-    const KuberoSessionKey = body.KUBERO_SESSION_KEY;
-    const kuberoWebhookSecret = body.KUBERO_WEBHOOK_SECRET;
+    const kubeContext = body.KUSO_CONTEXT;
+    const kusoNamespace = body.KUSO_NAMESPACE;
+    const KusoSessionKey = body.KUSO_SESSION_KEY;
+    const kusoWebhookSecret = body.KUSO_WEBHOOK_SECRET;
 
     const kubeconfigDecoded = Buffer.from(kubeconfigBase64, 'base64').toString(
       'utf-8',
@@ -443,9 +443,9 @@ export class ConfigController {
     const resultUpdateConfig = await this.configService.updateRunningConfig(
       kubeconfigBase64,
       kubeContext,
-      kuberoNamespace,
-      KuberoSessionKey,
-      kuberoWebhookSecret,
+      kusoNamespace,
+      KusoSessionKey,
+      kusoWebhookSecret,
     );
 
     return resultUpdateConfig;

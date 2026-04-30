@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  creationTimestamp: null
+  labels:
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/name: kuso-operator
+  name: kuso-operator-kusoaddonrabbitmq-viewer-role
+rules:
+- apiGroups:
+  - application.kuso.sislelabs.com
+  resources:
+  - kusoaddonrabbitmqs
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - application.kuso.sislelabs.com
+  resources:
+  - kusoaddonrabbitmqs/status
+  verbs:
+  - get

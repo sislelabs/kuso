@@ -49,7 +49,7 @@ export class Oauth2Strategy extends PassportStrategy(Strategy) {
       clientID: process.env.OAUTH2_CLIENT_ID,
       clientSecret: process.env.OAUTH2_CLIENT_SECRET,
       callbackURL: process.env.OAUTH2_CLIENT_CALLBACKURL,
-      customHeaders: { 'User-Agent': 'kubero/v3' },
+      customHeaders: { 'User-Agent': 'kuso/v3' },
       scope: ConfigService.getAuthenticationScope(
         process.env.OAUTH2_CLIENT_SCOPE,
       ),

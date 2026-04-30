@@ -40,7 +40,7 @@ jest.mock('fs', () => ({
 }));
 jest.mock('yaml', () => ({
   parse: jest.fn(() => ({
-    kubero: {
+    kuso: {
       admin: { disabled: false },
       banner: { show: true },
       config: {},
@@ -83,9 +83,9 @@ describe('ConfigService', () => {
     jest.clearAllMocks();
 
     kubectl = {
-      getKuberoConfig: jest.fn().mockResolvedValue({
+      getKusoConfig: jest.fn().mockResolvedValue({
         spec: {
-          kubero: {
+          kuso: {
             admin: { disabled: false },
             banner: {
               show: true,
@@ -108,8 +108,8 @@ describe('ConfigService', () => {
           templates: { enabled: true },
         },
       }),
-      updateKuberoConfig: jest.fn(),
-      updateKuberoSecret: jest.fn(),
+      updateKusoConfig: jest.fn(),
+      updateKusoSecret: jest.fn(),
       validateKubeconfig: jest.fn().mockResolvedValue({ valid: true }),
       updateKubectlConfig: jest.fn(),
       createNamespace: jest.fn(),
@@ -123,7 +123,7 @@ describe('ConfigService', () => {
       buildpacks: [],
       clusterissuer: 'issuer',
       notifications: [],
-      kubero: {
+      kuso: {
         admin: { disabled: false },
         readonly: false,
         banner: {
@@ -157,11 +157,11 @@ describe('ConfigService', () => {
   /*
   it('should update settings', async () => {
     process.env.NODE_ENV = 'development';
-    const config = { settings: { kubero: { config: {} } }, secrets: {} };
-    kubectl.getKuberoConfig.mockResolvedValueOnce({ spec: { kubero: { config: {} } } });
+    const config = { settings: { kuso: { config: {} } }, secrets: {} };
+    kubectl.getKusoConfig.mockResolvedValueOnce({ spec: { kuso: { config: {} } } });
     const result = await service.updateSettings(config);
-    expect(kubectl.updateKuberoConfig).toHaveBeenCalled();
-    expect(kubectl.updateKuberoSecret).toHaveBeenCalled();
+    expect(kubectl.updateKusoConfig).toHaveBeenCalled();
+    expect(kubectl.updateKusoSecret).toHaveBeenCalled();
     expect(notification.send).toHaveBeenCalled();
     expect(result).toBeDefined();
   });
@@ -180,27 +180,27 @@ describe('ConfigService', () => {
 
   /*
   it('should check admin disabled', () => {
-    service['runningConfig'].kubero.admin.disabled = true;
+    service['runningConfig'].kuso.admin.disabled = true;
     expect(service.checkAdminDisabled()).toBe(true);
-    service['runningConfig'].kubero.admin.disabled = false;
+    service['runningConfig'].kuso.admin.disabled = false;
     expect(service.checkAdminDisabled()).toBe(false);
   });
   */
 
   it('should validate kubeconfig if setup enabled', async () => {
-    process.env.KUBERO_SETUP = 'enabled';
+    process.env.KUSO_SETUP = 'enabled';
     const result = await service.validateKubeconfig('kube', 'ctx');
     expect(result).toEqual({ valid: true });
   });
 
   it('should return error if setup is disabled in validateKubeconfig', async () => {
-    process.env.KUBERO_SETUP = 'disabled';
+    process.env.KUSO_SETUP = 'disabled';
     const result = await service.validateKubeconfig('kube', 'ctx');
     expect(result.status).toBe('error');
   });
 
   it('should update running config if setup enabled', async () => {
-    process.env.KUBERO_SETUP = 'enabled';
+    process.env.KUSO_SETUP = 'enabled';
     const result = await service.updateRunningConfig(
       'kube',
       'ctx',
@@ -214,7 +214,7 @@ describe('ConfigService', () => {
   });
 
   it('should return error if setup is disabled in updateRunningConfig', async () => {
-    process.env.KUBERO_SETUP = 'disabled';
+    process.env.KUSO_SETUP = 'disabled';
     const result = await service.updateRunningConfig(
       'kube',
       'ctx',
@@ -246,9 +246,9 @@ describe('ConfigService', () => {
   });
 
   it('should get buildpipeline enabled', () => {
-    process.env.KUBERO_BUILD_REGISTRY = 'true';
+    process.env.KUSO_BUILD_REGISTRY = 'true';
     expect(service.getBuildpipelineEnabled()).toBe(true);
-    delete process.env.KUBERO_BUILD_REGISTRY;
+    delete process.env.KUSO_BUILD_REGISTRY;
   });
 
   it('should get template enabled', () => {
@@ -288,9 +288,9 @@ describe('ConfigService', () => {
 
   /*
   it('should get runpacks', async () => {
-    kubectl.getKuberoConfig.mockResolvedValueOnce({
+    kubectl.getKusoConfig.mockResolvedValueOnce({
       spec: {
-        kubero: { config: { buildpacks: [{ name: 'bp' }] } },
+        kuso: { config: { buildpacks: [{ name: 'bp' }] } },
       },
     });
     const result = await service.getRunpacks();
@@ -305,9 +305,9 @@ describe('ConfigService', () => {
 
   /*
   it('should get pod sizes', async () => {
-    kubectl.getKuberoConfig.mockResolvedValueOnce({
+    kubectl.getKusoConfig.mockResolvedValueOnce({
       spec: {
-        kubero: { config: { podSizeList: [{ name: 'small' }] } },
+        kuso: { config: { podSizeList: [{ name: 'small' }] } },
       },
     });
     const result = await service.getPodSizes();
@@ -316,9 +316,9 @@ describe('ConfigService', () => {
 */
 
   it('should getLocalauthEnabled', () => {
-    process.env.KUBERO_SESSION_KEY = 'key';
+    process.env.KUSO_SESSION_KEY = 'key';
     expect(ConfigService.getLocalauthEnabled()).toBe(true);
-    delete process.env.KUBERO_SESSION_KEY;
+    delete process.env.KUSO_SESSION_KEY;
   });
 
   it('should getGithubEnabled', () => {
@@ -355,11 +355,11 @@ describe('ConfigService', () => {
     expect(ConfigService.getAuthenticationScope(undefined)).toEqual([]);
   });
 
-  it('should getKuberoUIVersion', () => {
+  it('should getKusoUIVersion', () => {
     process.env.npm_package_version = '1.2.3';
-    expect(service.getKuberoUIVersion()).toBe('1.2.3');
+    expect(service.getKusoUIVersion()).toBe('1.2.3');
     delete process.env.npm_package_version;
-    expect(service.getKuberoUIVersion()).toBe('0.0.0');
+    expect(service.getKusoUIVersion()).toBe('0.0.0');
   });
 
   describe('getRunpacks', () => {
@@ -371,7 +371,7 @@ describe('ConfigService', () => {
           language: 'javascript',
           fetch: {
             id: 'fetch1',
-            repository: 'kubero/fetch',
+            repository: 'kuso/fetch',
             tag: 'latest',
             command: 'fetch-cmd',
             readOnlyAppStorage: true,
@@ -386,7 +386,7 @@ describe('ConfigService', () => {
           },
           build: {
             id: 'build1',
-            repository: 'kubero/build',
+            repository: 'kuso/build',
             tag: 'latest',
             command: 'build-cmd',
             readOnlyAppStorage: true,
@@ -401,7 +401,7 @@ describe('ConfigService', () => {
           },
           run: {
             id: 'run1',
-            repository: 'kubero/run',
+            repository: 'kuso/run',
             tag: 'latest',
             command: 'run-cmd',
             readOnlyAppStorage: false,
@@ -506,7 +506,7 @@ describe('ConfigService', () => {
         name: 'python',
         language: 'python',
         fetch: {
-          repository: 'kubero/fetch-python',
+          repository: 'kuso/fetch-python',
           tag: 'latest',
           command: 'fetch-python-cmd',
           readOnlyAppStorage: true,
@@ -520,7 +520,7 @@ describe('ConfigService', () => {
           },
         },
         build: {
-          repository: 'kubero/build-python',
+          repository: 'kuso/build-python',
           tag: 'latest',
           command: 'build-python-cmd',
           readOnlyAppStorage: true,
@@ -534,7 +534,7 @@ describe('ConfigService', () => {
           },
         },
         run: {
-          repository: 'kubero/run-python',
+          repository: 'kuso/run-python',
           tag: 'latest',
           command: 'run-python-cmd',
           readOnlyAppStorage: false,

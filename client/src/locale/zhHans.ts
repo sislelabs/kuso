@@ -15,7 +15,7 @@ const messages = {
     runpacks: '运行包',
     podSizes: 'Pod 大小',
     notifications: '通知',
-    kuberoAPI: 'Kubero API',
+    kusoAPI: 'Kuso API',
     github: 'GitHub',
     discord: 'Discord',
   },
@@ -358,7 +358,7 @@ const messages = {
   notifications: {
     name: '通知',
     helpTitle: '什么是通知？',
-    helpText: '<p><strong>通知</strong>允许您接收有关 Kubero 应用程序事件的提醒。您可以配置 Slack、Discord 或 Webhook 通知，以便及时了解部署、错误和其他重要事件。</p><p class="mt-2"><a href="https://www.kubero.dev/docs/usermanual/notifications/" target="_blank" rel="noopener">在 Kubero 文档中阅读更多</a></p>',
+    helpText: '<p><strong>通知</strong>允许您接收有关 Kuso 应用程序事件的提醒。您可以配置 Slack、Discord 或 Webhook 通知，以便及时了解部署、错误和其他重要事件。</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/notifications/" target="_blank" rel="noopener">在 Kuso 文档中阅读更多</a></p>',
     form: {
       name: '名称',
       type: '类型',
@@ -391,7 +391,7 @@ const messages = {
   runpacks: {
     name: 'Runpacks',
     helpTitle: '什么是 Runpacks？',
-    helpText: '<p><strong>Runpacks</strong> 在 Kubero 中定义应用程序如何在 Kubernetes 集群内获取、构建和运行。每个 runpack 包含三个阶段：</p><ul class="ma-4"><li><strong>Fetch</strong>：使用容器镜像从 Git 仓库检索代码。您可以使用默认设置或自定义。</li><li><strong>Build</strong>：在您选择的容器中运行构建命令（任何 Docker 镜像）。这是安装依赖项或编译应用程序的地方。</li><li><strong>Run</strong>：启动最终容器。<em>web</em> pod 暴露到互联网，而 <em>worker</em> pod 用于后台作业。</li></ul><p>Runpacks 非常灵活，可以为不同的语言和框架进行自定义。它们依赖于公开可用的容器镜像。您可以在 <a href="https://github.com/kubero-dev/runpacks/tree/main/packs" target="_blank" rel="noopener">kubero-dev/runpacks</a> 找到示例 runpacks。</p><p class="mt-2"><a href="https://www.kubero.dev/docs/usermanual/runpacks/" target="_blank" rel="noopener">在 Kubero 文档中阅读更多</a></p>',
+    helpText: '<p><strong>Runpacks</strong> 在 Kuso 中定义应用程序如何在 Kubernetes 集群内获取、构建和运行。每个 runpack 包含三个阶段：</p><ul class="ma-4"><li><strong>Fetch</strong>：使用容器镜像从 Git 仓库检索代码。您可以使用默认设置或自定义。</li><li><strong>Build</strong>：在您选择的容器中运行构建命令（任何 Docker 镜像）。这是安装依赖项或编译应用程序的地方。</li><li><strong>Run</strong>：启动最终容器。<em>web</em> pod 暴露到互联网，而 <em>worker</em> pod 用于后台作业。</li></ul><p>Runpacks 非常灵活，可以为不同的语言和框架进行自定义。它们依赖于公开可用的容器镜像。您可以在 <a href="https://github.com/kuso-dev/runpacks/tree/main/packs" target="_blank" rel="noopener">kuso-dev/runpacks</a> 找到示例 runpacks。</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/runpacks/" target="_blank" rel="noopener">在 Kuso 文档中阅读更多</a></p>',
     table: {
       name: '名称',
       language: '语言',
@@ -454,7 +454,7 @@ const messages = {
   settings: {
     deployment: {
       title: '连接仓库',
-      configAlert: '配置更改需要手动重启 Kubero UI 容器后才能生效。',
+      configAlert: '配置更改需要手动重启 Kuso UI 容器后才能生效。',
       webhookEndpoint: 'Webhook 端点',
       url: 'URL',
       secret: '密钥',
@@ -487,9 +487,9 @@ const messages = {
       },
     },
     general: {
-      title: '通用 Kubero 设置',
+      title: '通用 Kuso 设置',
       description: '一些配置值需要浏览器刷新(*) 或 Pod 重启(**) 才能生效。',
-      namespace: 'Kubero 命名空间',
+      namespace: 'Kuso 命名空间',
       readonlyMode: '只读模式 (**)',
       adminDisabled: '禁用管理员',
       ttyConsoleEnabled: '启用 TTY 控制台',
@@ -532,7 +532,7 @@ const messages = {
   podsizes: {
     name: 'Pod大小',
     helpTitle: '什么是Pod大小？',
-    helpText: '<p><strong>Pod大小</strong>定义了Kubero中应用Pod的资源请求和限制。您可以创建、编辑和删除Pod大小以匹配您的工作负载需求。</p><p class="mt-2"><a href="https://www.kubero.dev/docs/usermanual/podsizes/" target="_blank" rel="noopener">在Kubero文档中了解更多</a></p>',
+    helpText: '<p><strong>Pod大小</strong>定义了Kuso中应用Pod的资源请求和限制。您可以创建、编辑和删除Pod大小以匹配您的工作负载需求。</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/podsizes/" target="_blank" rel="noopener">在Kuso文档中了解更多</a></p>',
     form: {
       name: 'Pod大小名称',
       description: '描述',

@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 
 ################################################################################
-# This Script is used to install kubero-cli binaries.                          #
+# This Script is used to install kuso-cli binaries.                          #
 #                                                                              #
 # Supported OS: Linux, macOS ---> Windows(not supported)                       #
 # Supported Architecture: amd64, arm64                                         #
-# Source: https://github.com/kubero-dev/kubero-cli                             #
-# Binary Release: https://github.com/kubero-dev/kubero-cli/releases/latest     #
+# Source: https://github.com/kuso-dev/kuso-cli                             #
+# Binary Release: https://github.com/kuso-dev/kuso-cli/releases/latest     #
 # License: Apache License 2.0                                                  #
 # Usage:                                                                       #
-#   curl -fsSL get.kubero.dev | bash                                           #
-#   curl -fsSL get.kubero.dev | bash -s -- v1.10.0                             #
-#   bash <(curl -fsSL get.kubero.dev) v1.9.2                                   #
+#   curl -fsSL get.kuso.sislelabs.com | bash                                           #
+#   curl -fsSL get.kuso.sislelabs.com | bash -s -- v1.10.0                             #
+#   bash <(curl -fsSL get.kuso.sislelabs.com) v1.9.2                                   #
 ################################################################################
 
 set -eo pipefail
@@ -42,25 +42,25 @@ if [[ "$os" == "unsupported" || "$arch" == "unsupported" ]]; then
     exit 1
 fi
 
-if [[ -f "/usr/local/bin/kubero" ]]; then
+if [[ -f "/usr/local/bin/kuso" ]]; then
     read -r -p "Do you want to replace it? [y/n] " replaceBinary
     [[ "$replaceBinary" != "y" && "$replaceBinary" != "" ]] && echo "Aborting installation." && exit 1
 fi
 
-release_url="https://github.com/kubero-dev/kubero-cli/releases/${version}/download/kubero-cli_${os}_${arch}.tar.gz"
+release_url="https://github.com/kuso-dev/kuso-cli/releases/${version}/download/kuso-cli_${os}_${arch}.tar.gz"
 temp_dir=$(mktemp -d)
 
 echo "Downloading ${release_url} ..."
-curl -L -s -o "${temp_dir}/kubero-cli.tar.gz" "$release_url" || { echo "Failed to download the binary."; rm -rf "$temp_dir"; exit 1; }
+curl -L -s -o "${temp_dir}/kuso-cli.tar.gz" "$release_url" || { echo "Failed to download the binary."; rm -rf "$temp_dir"; exit 1; }
 
 echo "Unpacking the binary..."
-tar -xzvf "${temp_dir}/kubero-cli.tar.gz" -C "$temp_dir" || { echo "Failed to unpack the binary."; rm -rf "$temp_dir"; exit 1; }
+tar -xzvf "${temp_dir}/kuso-cli.tar.gz" -C "$temp_dir" || { echo "Failed to unpack the binary."; rm -rf "$temp_dir"; exit 1; }
 
-[[ ! -f "${temp_dir}/kubero" ]] && { echo "Failed to unpack the binary."; rm -rf "$temp_dir"; exit 1; }
+[[ ! -f "${temp_dir}/kuso" ]] && { echo "Failed to unpack the binary."; rm -rf "$temp_dir"; exit 1; }
 
-echo "Installing kubero in /usr/local/bin ..."
-sudo mv "${temp_dir}/kubero" "/usr/local/bin/kubero" || { echo "Failed to install kubero."; rm -rf "$temp_dir"; exit 1; }
+echo "Installing kuso in /usr/local/bin ..."
+sudo mv "${temp_dir}/kuso" "/usr/local/bin/kuso" || { echo "Failed to install kuso."; rm -rf "$temp_dir"; exit 1; }
 
 rm -rf "$temp_dir"
-echo "Kubero has been successfully installed."
-echo "Run 'kubero install' to create a kubernetes cluster."
+echo "Kuso has been successfully installed."
+echo "Run 'kuso install' to create a kubernetes cluster."

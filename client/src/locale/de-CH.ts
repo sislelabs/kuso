@@ -15,7 +15,7 @@ const messages = {
     runpacks: 'Runpacks',
     podSizes: 'Pod-Größen',
     notifications: 'Benachrichtigunge',
-    kuberoAPI: 'Kubero API',
+    kusoAPI: 'Kuso API',
     github: 'GitHub',
     discord: 'Discord',
   },
@@ -358,7 +358,7 @@ const messages = {
   notifications: {
     name: 'Benachrichtigunge',
     helpTitle: 'Was sind Benachrichtigunge?',
-    helpText: '<p><strong>Benachrichtigunge</strong> ermöglichet dir, über Ereignisse in dine Kubero-Applikation informiert z werde. Du chasch Slack-, Discord- oder Webhook-Benachrichtigige konfiguriere, um über Deployments, Fehler und anderi wichtige Ereignisse informiert z bliibe.</p><p class="mt-2"><a href="https://www.kubero.dev/docs/usermanual/notifications/" target="_blank" rel="noopener">Meh in de Kubero-Dokumentation</a></p>',
+    helpText: '<p><strong>Benachrichtigunge</strong> ermöglichet dir, über Ereignisse in dine Kuso-Applikation informiert z werde. Du chasch Slack-, Discord- oder Webhook-Benachrichtigige konfiguriere, um über Deployments, Fehler und anderi wichtige Ereignisse informiert z bliibe.</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/notifications/" target="_blank" rel="noopener">Meh in de Kuso-Dokumentation</a></p>',
     form: {
       name: 'Name',
       type: 'Typ',
@@ -391,7 +391,7 @@ const messages = {
   runpacks: {
     name: 'Rönpacks',
     helpTitle: 'Was sind Rönpacks?',
-    helpText: '<p><strong>Runpacks</strong> in Kubero definiere, wie dini Applikation im Kubernetes-Cluster abgrue, baut und usgfüehrt wird. Jedes Runpack besteit us drü Phasen:</p><ul class="ma-4"><li><strong>Fetch</strong>: Rueft din Code us eme Git-Repository mit eme Container-Image ab. Du chasch s Standard verwende oder es aapasse.</li><li><strong>Build</strong>: Füehrt Build-Befähl in eme Container vo dinere Wahl us (beliebiigs Docker-Image). Da werde Abhängigkeite installiert oder dini App kompiliert.</li><li><strong>Run</strong>: Startet de final Container. De <em>web</em>-Pod wird is Internet freigäh, während <em>worker</em>-Pods für Hindergrundufgabe sind.</li></ul><p>Runpacks sind sehr flexibel und chönd für verschideni Sprache und Frameworks apasst werde. Si basiere uf öffentlich verfüegbare Container-Images. Bispil-Runpacks findsch unter <a href="https://github.com/kubero-dev/runpacks/tree/main/packs" target="_blank" rel="noopener">kubero-dev/runpacks</a>.</p><p class="mt-2"><a href="https://www.kubero.dev/docs/usermanual/runpacks/" target="_blank" rel="noopener">Meh in de Kubero-Dokumentation</a></p>',
+    helpText: '<p><strong>Runpacks</strong> in Kuso definiere, wie dini Applikation im Kubernetes-Cluster abgrue, baut und usgfüehrt wird. Jedes Runpack besteit us drü Phasen:</p><ul class="ma-4"><li><strong>Fetch</strong>: Rueft din Code us eme Git-Repository mit eme Container-Image ab. Du chasch s Standard verwende oder es aapasse.</li><li><strong>Build</strong>: Füehrt Build-Befähl in eme Container vo dinere Wahl us (beliebiigs Docker-Image). Da werde Abhängigkeite installiert oder dini App kompiliert.</li><li><strong>Run</strong>: Startet de final Container. De <em>web</em>-Pod wird is Internet freigäh, während <em>worker</em>-Pods für Hindergrundufgabe sind.</li></ul><p>Runpacks sind sehr flexibel und chönd für verschideni Sprache und Frameworks apasst werde. Si basiere uf öffentlich verfüegbare Container-Images. Bispil-Runpacks findsch unter <a href="https://github.com/kuso-dev/runpacks/tree/main/packs" target="_blank" rel="noopener">kuso-dev/runpacks</a>.</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/runpacks/" target="_blank" rel="noopener">Meh in de Kuso-Dokumentation</a></p>',
     table: {
       name: 'Name',
       language: 'Sprach',
@@ -454,7 +454,7 @@ const messages = {
   settings: {
     deployment: {
       title: 'Repositories verbinde',
-      configAlert: 'Konfigurationsänderige wärded erst wirksam, wänn de Kubero UI Container manuell neu gstartet wird.',
+      configAlert: 'Konfigurationsänderige wärded erst wirksam, wänn de Kuso UI Container manuell neu gstartet wird.',
       webhookEndpoint: 'Webhook-Endpunkt',
       url: 'URL',
       secret: 'Gheimnis',
@@ -487,9 +487,9 @@ const messages = {
       },
     },
     general: {
-      title: 'Allgemäini Kubero-Istellige',
+      title: 'Allgemäini Kuso-Istellige',
       description: 'Einigi Konfigurationswärt bruched es Browser-Update(*) oder en Pod-Neustart(**), zum wirksam z wärde.',
-      namespace: 'Kubero Namespace',
+      namespace: 'Kuso Namespace',
       readonlyMode: 'Nur-Läse-Modus (**)',
       adminDisabled: 'Admin deaktiviert',
       ttyConsoleEnabled: 'TTY-Konsole aktiviert',
@@ -532,7 +532,7 @@ const messages = {
   podsizes: {
     name: 'Pod-Grössene',
     helpTitle: 'Was sind Pod-Grössene?',
-    helpText: '<p><strong>Pod-Grössene</strong> definieren die Ressourcenanforderige und -limits für die Pods Ihrer Anwendung in Kubero. Sie können Pod-Grössene erstellen, bearbeiten und löschen, um sie an Ihre Workload-Anforderungen anzupassen.</p><p class="mt-2"><a href="https://www.kubero.dev/docs/usermanual/podsizes/" target="_blank" rel="noopener">Mehr in der Kubero-Dokumentation</a></p>',
+    helpText: '<p><strong>Pod-Grössene</strong> definieren die Ressourcenanforderige und -limits für die Pods Ihrer Anwendung in Kuso. Sie können Pod-Grössene erstellen, bearbeiten und löschen, um sie an Ihre Workload-Anforderungen anzupassen.</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/podsizes/" target="_blank" rel="noopener">Mehr in der Kuso-Dokumentation</a></p>',
     form: {
       name: 'Pod-Grössenname',
       description: 'Beschriibig',

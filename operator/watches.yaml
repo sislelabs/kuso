@@ -1,88 +1,88 @@
 # Use the 'create api' subcommand to add watches to this file.
-- group: application.kubero.dev
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoApp
-  chart: helm-charts/kuberoapp
+  kind: KusoApp
+  chart: helm-charts/kusoapp
   reconcilePeriod: 3m
-- group: application.kubero.dev
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: Kubero
-  chart: helm-charts/kubero
-- group: application.kubero.dev
+  kind: Kuso
+  chart: helm-charts/kuso
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoPipeline
-  chart: helm-charts/kuberopipeline
+  kind: KusoPipeline
+  chart: helm-charts/kusopipeline
   reconcilePeriod: 3m
-- group: application.kubero.dev
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoMysql
-  chart: helm-charts/kuberomysql
-- group: application.kubero.dev
+  kind: KusoMysql
+  chart: helm-charts/kusomysql
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoPostgresql
-  chart: helm-charts/kuberopostgresql
-- group: application.kubero.dev
+  kind: KusoPostgresql
+  chart: helm-charts/kusopostgresql
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoRedis
-  chart: helm-charts/kuberoredis
-- group: application.kubero.dev
+  kind: KusoRedis
+  chart: helm-charts/kusoredis
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoMongoDB
-  chart: helm-charts/kuberomongodb
-- group: application.kubero.dev
+  kind: KusoMongoDB
+  chart: helm-charts/kusomongodb
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoElasticsearch
-  chart: helm-charts/kuberoelasticsearch
-- group: application.kubero.dev
+  kind: KusoElasticsearch
+  chart: helm-charts/kusoelasticsearch
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoCouchDB
-  chart: helm-charts/kuberocouchdb
-- group: application.kubero.dev
+  kind: KusoCouchDB
+  chart: helm-charts/kusocouchdb
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoKafka
-  chart: helm-charts/kuberokafka
-- group: application.kubero.dev
+  kind: KusoKafka
+  chart: helm-charts/kusokafka
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoMail
-  chart: helm-charts/kuberomail
-- group: application.kubero.dev
+  kind: KusoMail
+  chart: helm-charts/kusomail
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoRabbitMQ
-  chart: helm-charts/kuberorabbitmq
-- group: application.kubero.dev
+  kind: KusoRabbitMQ
+  chart: helm-charts/kusorabbitmq
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoMemcached
-  chart: helm-charts/kuberomemcached
-- group: application.kubero.dev
+  kind: KusoMemcached
+  chart: helm-charts/kusomemcached
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoPrometheus
-  chart: helm-charts/kuberoprometheus
-- group: application.kubero.dev
+  kind: KusoPrometheus
+  chart: helm-charts/kusoprometheus
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoBuild
-  chart: helm-charts/kuberobuild
-- group: application.kubero.dev
+  kind: KusoBuild
+  chart: helm-charts/kusobuild
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoAddonMysql
-  chart: helm-charts/kuberoaddonmysql
-- group: application.kubero.dev
+  kind: KusoAddonMysql
+  chart: helm-charts/kusoaddonmysql
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoAddonPostgres
-  chart: helm-charts/kuberoaddonpostgres
-- group: application.kubero.dev
+  kind: KusoAddonPostgres
+  chart: helm-charts/kusoaddonpostgres
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoAddonRedis
-  chart: helm-charts/kuberoaddonredis
-- group: application.kubero.dev
+  kind: KusoAddonRedis
+  chart: helm-charts/kusoaddonredis
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoAddonRabbitmq
-  chart: helm-charts/kuberoaddonrabbitmq
-- group: application.kubero.dev
+  kind: KusoAddonRabbitmq
+  chart: helm-charts/kusoaddonrabbitmq
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoAddonMongodb
-  chart: helm-charts/kuberoaddonmongodb
-- group: application.kubero.dev
+  kind: KusoAddonMongodb
+  chart: helm-charts/kusoaddonmongodb
+- group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KuberoAddonMemcached
-  chart: helm-charts/kuberoaddonmemcached
+  kind: KusoAddonMemcached
+  chart: helm-charts/kusoaddonmemcached
 #+kubebuilder:scaffold:watch

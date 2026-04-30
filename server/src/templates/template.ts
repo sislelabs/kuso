@@ -64,7 +64,7 @@ export class Template implements ITemplate {
     this.image = {
       containerPort: app.image.containerPort,
       pullPolicy: 'Always',
-      repository: app.image.repository || 'ghcr.io/kubero-dev/idler',
+      repository: app.image.repository || 'ghcr.io/kuso-dev/idler',
       tag: app.image.tag || 'v1',
       //run: app.image.run,
     };
@@ -82,24 +82,24 @@ export class KubectlTemplate implements IKubectlTemplate {
   spec: Template;
 
   constructor(app: IApp) {
-    this.apiVersion = 'application.kubero.dev/v1alpha1';
-    this.kind = 'KuberoApp';
+    this.apiVersion = 'application.kuso.sislelabs.com/v1alpha1';
+    this.kind = 'KusoApp';
     this.metadata = {
       name: app.name,
       annotations: {
-        'kubero.dev/template.architecture': '[]',
-        'kubero.dev/template.description': '',
-        'kubero.dev/template.icon': '',
-        'kubero.dev/template.installation': '',
-        'kubero.dev/template.links': '[]',
-        'kubero.dev/template.screenshots': '[]',
-        'kubero.dev/template.source': '',
-        'kubero.dev/template.categories': '[]',
-        'kubero.dev/template.title': '',
-        'kubero.dev/template.website': '',
+        'kuso.sislelabs.com/template.architecture': '[]',
+        'kuso.sislelabs.com/template.description': '',
+        'kuso.sislelabs.com/template.icon': '',
+        'kuso.sislelabs.com/template.installation': '',
+        'kuso.sislelabs.com/template.links': '[]',
+        'kuso.sislelabs.com/template.screenshots': '[]',
+        'kuso.sislelabs.com/template.source': '',
+        'kuso.sislelabs.com/template.categories': '[]',
+        'kuso.sislelabs.com/template.title': '',
+        'kuso.sislelabs.com/template.website': '',
       },
       labels: {
-        manager: 'kubero',
+        manager: 'kuso',
       },
     };
     this.spec = new Template(app);

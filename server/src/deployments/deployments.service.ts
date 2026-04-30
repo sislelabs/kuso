@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { IKuberoBuildjob } from './deployments.interface';
+import { IKusoBuildjob } from './deployments.interface';
 import { KubernetesService } from '../kubernetes/kubernetes.service';
 import { IKubectlApp } from '../kubernetes/kubernetes.interface';
 import { NotificationsService } from '../notifications/notifications.service';
@@ -26,7 +26,7 @@ export class DeploymentsService {
     //this.kubectl = options.kubectl
     //this._io = options.io
     //this.notification = options.notifications
-    //this.kubero = options.kubero
+    //this.kuso = options.kuso
   }
 
   private logger = new Logger(DeploymentsService.name);
@@ -55,19 +55,19 @@ export class DeploymentsService {
       };
     }
 
-    const retJobs = [] as IKuberoBuildjob[];
+    const retJobs = [] as IKusoBuildjob[];
     for (const j of jobs.items as any) {
       // skip non matching apps
-      if (j.metadata.labels.kuberoapp != appName) {
+      if (j.metadata.labels.kusoapp != appName) {
         continue;
       }
 
-      const retJob = {} as IKuberoBuildjob;
+      const retJob = {} as IKusoBuildjob;
       retJob.creationTimestamp = j.metadata.creationTimestamp;
       retJob.name = j.metadata.name;
-      retJob.app = j.metadata.labels.kuberoapp;
-      retJob.pipeline = j.metadata.labels.kuberopipeline;
-      retJob.phase = j.metadata.labels.kuberophase || '';
+      retJob.app = j.metadata.labels.kusoapp;
+      retJob.pipeline = j.metadata.labels.kusopipeline;
+      retJob.phase = j.metadata.labels.kusophase || '';
       retJob.buildstrategy = j.metadata.labels.buildstrategy;
       retJob.gitrepo = j.spec.template.spec.initContainers[0].env.find(
         (e: any) => e.name == 'GIT_REPOSITORY',
@@ -120,9 +120,9 @@ export class DeploymentsService {
   ): Promise<any> {
     //this.logger.debug('triggerBuildjob: ' + pipeline + ' ' + phase + ' ' + app + ' ' + buildstrategy + ' ' + gitrepo + ' ' + reference + ' ' + dockerfilePath + ' ' + user.username);
 
-    if (process.env.KUBERO_READONLY == 'true') {
+    if (process.env.KUSO_READONLY == 'true') {
       this.logger.log(
-        'KUBERO_READONLY is set to true, not triggering build for app: ' +
+        'KUSO_READONLY is set to true, not triggering build for app: ' +
           app +
           ' in pipeline: ' +
           pipeline,
@@ -132,8 +132,8 @@ export class DeploymentsService {
 
     const namespace = pipeline + '-' + phase;
 
-    if (process.env.KUBERO_READONLY == 'true') {
-      this.logger.log('KUBERO_READONLY is set to true');
+    if (process.env.KUSO_READONLY == 'true') {
+      this.logger.log('KUSO_READONLY is set to true');
       return;
     }
 
@@ -150,13 +150,13 @@ export class DeploymentsService {
           url: gitrepo,
         },
         {
-          image: process.env.KUBERO_BUILD_REGISTRY + '/' + pipeline + '-' + app,
+          image: process.env.KUSO_BUILD_REGISTRY + '/' + pipeline + '-' + app,
           tag: reference,
         },
       );
     } catch (error) {
       this.logger.error(
-        'kubectl.createBuildJob: Error creating Kubero build job',
+        'kubectl.createBuildJob: Error creating Kuso build job',
         error,
       );
     }
@@ -189,9 +189,9 @@ export class DeploymentsService {
     buildName: string,
     user: IUser,
   ): Promise<any> {
-    if (process.env.KUBERO_READONLY == 'true') {
+    if (process.env.KUSO_READONLY == 'true') {
       this.logger.log(
-        'KUBERO_READONLY is set to true, not creating app: ' +
+        'KUSO_READONLY is set to true, not creating app: ' +
           app +
           ' in pipeline: ' +
           pipeline,
@@ -200,7 +200,7 @@ export class DeploymentsService {
     }
 
     const namespace = pipeline + '-' + phase;
-    await this.kubectl.deleteKuberoBuildJob(namespace, buildName);
+    await this.kubectl.deleteKusoBuildJob(namespace, buildName);
 
     const m = {
       name: 'newBuild',
@@ -245,7 +245,7 @@ export class DeploymentsService {
       for (const pod of pods) {
         //this.logger.log('Fetching logs for pod: ', pod.metadata?.labels?.["job-name"], buildName)
         if (
-          pod.metadata?.labels?.kuberoapp == appName &&
+          pod.metadata?.labels?.kusoapp == appName &&
           pod.metadata.name &&
           pod.metadata?.labels?.['job-name'] == buildName
         ) {

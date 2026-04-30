@@ -1,15 +1,15 @@
 import { Injectable } from '@nestjs/common';
 import { IPlugin } from './plugins/plugin.interface';
-import { KuberoMysql } from './plugins/kuberoMysql';
-import { KuberoRedis } from './plugins/kuberoRedis';
-import { KuberoPostgresql } from './plugins/kuberoPostgresql';
-import { KuberoMongoDB } from './plugins/kuberoMongoDB';
-import { KuberoMemcached } from './plugins/kuberoMemcached';
-import { KuberoElasticsearch } from './plugins/kuberoElasticsearch';
-import { KuberoCouchDB } from './plugins/kuberoCouchDB';
-import { KuberoKafka } from './plugins/kuberoKafka';
-import { KuberoMail } from './plugins/kuberoMail';
-import { KuberoRabbitMQ } from './plugins/kuberoRabbitMQ';
+import { KusoMysql } from './plugins/kusoMysql';
+import { KusoRedis } from './plugins/kusoRedis';
+import { KusoPostgresql } from './plugins/kusoPostgresql';
+import { KusoMongoDB } from './plugins/kusoMongoDB';
+import { KusoMemcached } from './plugins/kusoMemcached';
+import { KusoElasticsearch } from './plugins/kusoElasticsearch';
+import { KusoCouchDB } from './plugins/kusoCouchDB';
+import { KusoKafka } from './plugins/kusoKafka';
+import { KusoMail } from './plugins/kusoMail';
+import { KusoRabbitMQ } from './plugins/kusoRabbitMQ';
 import { Tunnel } from './plugins/cloudflare';
 import { PostgresCluster } from './plugins/postgresCluster';
 import { RedisCluster } from './plugins/redisCluster';
@@ -19,12 +19,12 @@ import { Cockroachdb } from './plugins/cockroachDB';
 import { Tenant } from './plugins/minio';
 import { ClickHouseInstallation } from './plugins/clickhouse';
 import { KubernetesService } from '../kubernetes/kubernetes.service';
-import { KuberoAddonPostgres } from './plugins/kuberoaddonsPostgres';
-import { KuberoAddonMysql } from './plugins/kuberoaddonsMysql';
-import { KuberoAddonRedis } from './plugins/kuberoaddonsRedis';
-import { KuberoAddonRabbitmq } from './plugins/kuberoaddonsRabbitmq';
-import { KuberoAddonMongodb } from './plugins/kuberoaddonsMongodb';
-import { KuberoAddonMemcached } from './plugins/kuberoaddonsMemcached';
+import { KusoAddonPostgres } from './plugins/kusoaddonsPostgres';
+import { KusoAddonMysql } from './plugins/kusoaddonsMysql';
+import { KusoAddonRedis } from './plugins/kusoaddonsRedis';
+import { KusoAddonRabbitmq } from './plugins/kusoaddonsRabbitmq';
+import { KusoAddonMongodb } from './plugins/kusoaddonsMongodb';
+import { KusoAddonMemcached } from './plugins/kusoaddonsMemcached';
 import { Cluster as CloudnativePG } from './plugins/cloudnativePG';
 import { Elasticsearch } from './plugins/elasticsearch';
 
@@ -43,29 +43,29 @@ export class AddonsService {
     this.CRDList = await this.kubectl.getCustomresources();
 
 
-    const kuberoAddonPostgres = new KuberoAddonPostgres(this.CRDList);
-    this.addonsList.push(kuberoAddonPostgres);
+    const kusoAddonPostgres = new KusoAddonPostgres(this.CRDList);
+    this.addonsList.push(kusoAddonPostgres);
 
-    const kuberoAddonRedis = new KuberoAddonRedis(this.CRDList);
-    this.addonsList.push(kuberoAddonRedis);
+    const kusoAddonRedis = new KusoAddonRedis(this.CRDList);
+    this.addonsList.push(kusoAddonRedis);
     
-    const kuberoAddonMysql = new KuberoAddonMysql(this.CRDList);
-    this.addonsList.push(kuberoAddonMysql);
+    const kusoAddonMysql = new KusoAddonMysql(this.CRDList);
+    this.addonsList.push(kusoAddonMysql);
 
-    const kuberoAddonMemcached = new KuberoAddonMemcached(this.CRDList);
-    this.addonsList.push(kuberoAddonMemcached);
+    const kusoAddonMemcached = new KusoAddonMemcached(this.CRDList);
+    this.addonsList.push(kusoAddonMemcached);
 
-    const kuberoAddonMongodb = new KuberoAddonMongodb(this.CRDList);
-    this.addonsList.push(kuberoAddonMongodb);
+    const kusoAddonMongodb = new KusoAddonMongodb(this.CRDList);
+    this.addonsList.push(kusoAddonMongodb);
 
-    const kuberoCouchDB = new KuberoCouchDB(this.CRDList);
-    this.addonsList.push(kuberoCouchDB);
+    const kusoCouchDB = new KusoCouchDB(this.CRDList);
+    this.addonsList.push(kusoCouchDB);
 
-    const kuberoMail = new KuberoMail(this.CRDList);
-    this.addonsList.push(kuberoMail);
+    const kusoMail = new KusoMail(this.CRDList);
+    this.addonsList.push(kusoMail);
 
-    const kuberoAddonRabbitMQ = new KuberoAddonRabbitmq(this.CRDList);
-    this.addonsList.push(kuberoAddonRabbitMQ);
+    const kusoAddonRabbitMQ = new KusoAddonRabbitmq(this.CRDList);
+    this.addonsList.push(kusoAddonRabbitMQ);
 
     const tunnel = new Tunnel(this.CRDList);
     this.addonsList.push(tunnel);
@@ -97,29 +97,29 @@ export class AddonsService {
     const clickhouse = new ClickHouseInstallation(this.CRDList);
     this.addonsList.push(clickhouse);
 
-    const kuberoMysql = new KuberoMysql(this.CRDList);
-    this.addonsList.push(kuberoMysql);
+    const kusoMysql = new KusoMysql(this.CRDList);
+    this.addonsList.push(kusoMysql);
 
-    const kuberoRedis = new KuberoRedis(this.CRDList);
-    this.addonsList.push(kuberoRedis);
+    const kusoRedis = new KusoRedis(this.CRDList);
+    this.addonsList.push(kusoRedis);
 
-    const kuberoKafka = new KuberoKafka(this.CRDList);
-    this.addonsList.push(kuberoKafka);
+    const kusoKafka = new KusoKafka(this.CRDList);
+    this.addonsList.push(kusoKafka);
 
-    const kuberoMemcached = new KuberoMemcached(this.CRDList);
-    this.addonsList.push(kuberoMemcached);
+    const kusoMemcached = new KusoMemcached(this.CRDList);
+    this.addonsList.push(kusoMemcached);
 
-    const kuberoElasticsearch = new KuberoElasticsearch(this.CRDList);
-    this.addonsList.push(kuberoElasticsearch);
+    const kusoElasticsearch = new KusoElasticsearch(this.CRDList);
+    this.addonsList.push(kusoElasticsearch);
 
-    const kuberoMongoDB = new KuberoMongoDB(this.CRDList);
-    this.addonsList.push(kuberoMongoDB);
+    const kusoMongoDB = new KusoMongoDB(this.CRDList);
+    this.addonsList.push(kusoMongoDB);
 
-    const kuberoPostgresql = new KuberoPostgresql(this.CRDList);
-    this.addonsList.push(kuberoPostgresql);
+    const kusoPostgresql = new KusoPostgresql(this.CRDList);
+    this.addonsList.push(kusoPostgresql);
 
-    const kuberoRabbitMQ = new KuberoRabbitMQ(this.CRDList);
-    this.addonsList.push(kuberoRabbitMQ);
+    const kusoRabbitMQ = new KusoRabbitMQ(this.CRDList);
+    this.addonsList.push(kusoRabbitMQ);
 
   }
 

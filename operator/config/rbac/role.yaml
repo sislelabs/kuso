@@ -31,7 +31,7 @@ rules:
   - create
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoApp
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoApp
 ##
 - apiGroups:
   - rbac.authorization.k8s.io
@@ -49,11 +49,11 @@ rules:
   verbs:
   - "*"
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoapps
-  - kuberoapps/status
-  - kuberoapps/finalizers
+  - kusoapps
+  - kusoapps/status
+  - kusoapps/finalizers
   verbs:
   - create
   - delete
@@ -169,14 +169,14 @@ rules:
   verbs:
     - "*"
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: Kubero
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: Kuso
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoes
-  - kuberoes/status
-  - kuberoes/finalizers
+  - kusoes
+  - kusoes/status
+  - kusoes/finalizers
   verbs:
   - create
   - delete
@@ -216,14 +216,14 @@ rules:
   - "*"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoPipeline
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoPipeline
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberopipelines
-  - kuberopipelines/status
-  - kuberopipelines/finalizers
+  - kusopipelines
+  - kusopipelines/status
+  - kusopipelines/finalizers
   verbs:
   - create
   - delete
@@ -254,14 +254,14 @@ rules:
   - "secrets"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoMysql
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoMysql
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberomysqls
-  - kuberomysqls/status
-  - kuberomysqls/finalizers
+  - kusomysqls
+  - kusomysqls/status
+  - kusomysqls/finalizers
   verbs:
   - create
   - delete
@@ -309,14 +309,14 @@ rules:
 
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoPostgresql
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoPostgresql
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberopostgresqls
-  - kuberopostgresqls/status
-  - kuberopostgresqls/finalizers
+  - kusopostgresqls
+  - kusopostgresqls/status
+  - kusopostgresqls/finalizers
   verbs:
   - create
   - delete
@@ -363,14 +363,14 @@ rules:
   - "*"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoRedis
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoRedis
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoredis
-  - kuberoredis/status
-  - kuberoredis/finalizers
+  - kusoredis
+  - kusoredis/status
+  - kusoredis/finalizers
   verbs:
   - create
   - delete
@@ -417,14 +417,14 @@ rules:
   - "*"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoMongoDB
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoMongoDB
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberomongodbs
-  - kuberomongodbs/status
-  - kuberomongodbs/finalizers
+  - kusomongodbs
+  - kusomongodbs/status
+  - kusomongodbs/finalizers
   verbs:
   - create
   - delete
@@ -471,14 +471,14 @@ rules:
   - "*"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoElasticsearch
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoElasticsearch
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoelasticsearches
-  - kuberoelasticsearches/status
-  - kuberoelasticsearches/finalizers
+  - kusoelasticsearches
+  - kusoelasticsearches/status
+  - kusoelasticsearches/finalizers
   verbs:
   - create
   - delete
@@ -525,14 +525,14 @@ rules:
   - "*"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoCouchDB
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoCouchDB
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberocouchdbs
-  - kuberocouchdbs/status
-  - kuberocouchdbs/finalizers
+  - kusocouchdbs
+  - kusocouchdbs/status
+  - kusocouchdbs/finalizers
   verbs:
   - create
   - delete
@@ -578,14 +578,14 @@ rules:
   verbs:
   - "*"
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoKafka
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoKafka
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberokafkas
-  - kuberokafkas/status
-  - kuberokafkas/finalizers
+  - kusokafkas
+  - kusokafkas/status
+  - kusokafkas/finalizers
   verbs:
   - create
   - delete
@@ -639,14 +639,14 @@ rules:
   - "*"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoMail
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoMail
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberomails
-  - kuberomails/status
-  - kuberomails/finalizers
+  - kusomails
+  - kusomails/status
+  - kusomails/finalizers
   verbs:
   - create
   - delete
@@ -670,14 +670,14 @@ rules:
   - "deployments"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoRabbitMQ
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoRabbitMQ
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberorabbitmqs
-  - kuberorabbitmqs/status
-  - kuberorabbitmqs/finalizers
+  - kusorabbitmqs
+  - kusorabbitmqs/status
+  - kusorabbitmqs/finalizers
   verbs:
   - create
   - delete
@@ -701,14 +701,14 @@ rules:
   - "services"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoMemcached
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoMemcached
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberomemcacheds
-  - kuberomemcacheds/status
-  - kuberomemcacheds/finalizers
+  - kusomemcacheds
+  - kusomemcacheds/status
+  - kusomemcacheds/finalizers
   verbs:
   - create
   - delete
@@ -732,14 +732,14 @@ rules:
   - "deployments"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoPrometheus
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoPrometheus
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoprometheuses
-  - kuberoprometheuses/status
-  - kuberoprometheuses/finalizers
+  - kusoprometheuses
+  - kusoprometheuses/status
+  - kusoprometheuses/finalizers
   verbs:
   - create
   - delete
@@ -762,20 +762,20 @@ rules:
   resources:
   - "deployments"
 - apiGroups:
-  - "" # strange but required by "system:serviceaccount:kubero-operator-system:kubero-operator-controlle" from User "kubero-prometheus-kube-state-metrics" 
+  - "" # strange but required by "system:serviceaccount:kuso-operator-system:kuso-operator-controlle" from User "kuso-prometheus-kube-state-metrics" 
   resources:
   - "clusterrolebindings"
   verbs:
   - "*"
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoBuild
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoBuild
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberobuilds
-  - kuberobuilds/status
-  - kuberobuilds/finalizers
+  - kusobuilds
+  - kusobuilds/status
+  - kusobuilds/finalizers
   verbs:
   - create
   - delete
@@ -798,14 +798,14 @@ rules:
   - "pods"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoAddonMysql
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoAddonMysql
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmysqls
-  - kuberoaddonmysqls/status
-  - kuberoaddonmysqls/finalizers
+  - kusoaddonmysqls
+  - kusoaddonmysqls/status
+  - kusoaddonmysqls/finalizers
   verbs:
   - create
   - delete
@@ -829,14 +829,14 @@ rules:
   - "deployments"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoAddonPostgres
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoAddonPostgres
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonpostgres
-  - kuberoaddonpostgres/status
-  - kuberoaddonpostgres/finalizers
+  - kusoaddonpostgres
+  - kusoaddonpostgres/status
+  - kusoaddonpostgres/finalizers
   verbs:
   - create
   - delete
@@ -860,14 +860,14 @@ rules:
   - "deployments"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoAddonRedis
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoAddonRedis
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonredis
-  - kuberoaddonredis/status
-  - kuberoaddonredis/finalizers
+  - kusoaddonredis
+  - kusoaddonredis/status
+  - kusoaddonredis/finalizers
   verbs:
   - create
   - delete
@@ -891,14 +891,14 @@ rules:
   - "deployments"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoAddonRabbitmq
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoAddonRabbitmq
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonrabbitmqs
-  - kuberoaddonrabbitmqs/status
-  - kuberoaddonrabbitmqs/finalizers
+  - kusoaddonrabbitmqs
+  - kusoaddonrabbitmqs/status
+  - kusoaddonrabbitmqs/finalizers
   verbs:
   - create
   - delete
@@ -922,14 +922,14 @@ rules:
   - "deployments"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoAddonMongodb
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoAddonMongodb
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmongodbs
-  - kuberoaddonmongodbs/status
-  - kuberoaddonmongodbs/finalizers
+  - kusoaddonmongodbs
+  - kusoaddonmongodbs/status
+  - kusoaddonmongodbs/finalizers
   verbs:
   - create
   - delete
@@ -953,14 +953,14 @@ rules:
   - "deployments"
 
 ##
-## Rules for application.kubero.dev/v1alpha1, Kind: KuberoAddonMemcached
+## Rules for application.kuso.sislelabs.com/v1alpha1, Kind: KusoAddonMemcached
 ##
 - apiGroups:
-  - application.kubero.dev
+  - application.kuso.sislelabs.com
   resources:
-  - kuberoaddonmemcacheds
-  - kuberoaddonmemcacheds/status
-  - kuberoaddonmemcacheds/finalizers
+  - kusoaddonmemcacheds
+  - kusoaddonmemcacheds/status
+  - kusoaddonmemcacheds/finalizers
   verbs:
   - create
   - delete

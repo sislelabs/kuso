@@ -46,7 +46,7 @@
                   <v-row>
                     <v-col cols="12">
                       <v-alert
-                        text="Kubero usually runs within a Kubernetes cluster. This setup wizard will help you generate a configuration file that you can use on this running instance."
+                        text="Kuso usually runs within a Kubernetes cluster. This setup wizard will help you generate a configuration file that you can use on this running instance."
                         title="Setup"
                         type="info"
                         variant="tonal"
@@ -106,22 +106,22 @@
                   </v-row>
                   <v-row>
                     <v-col cols="12">
-                      <v-text-field label="kubeconfig context" readonly v-model="dotenv.KUBERO_CONTEXT"></v-text-field>
+                      <v-text-field label="kubeconfig context" readonly v-model="dotenv.KUSO_CONTEXT"></v-text-field>
                     </v-col>
                   </v-row>
                   <v-row>
                     <v-col cols="12">
-                      <v-text-field label="kubero namespace" v-model="dotenv.KUBERO_NAMESPACE"></v-text-field>
+                      <v-text-field label="kuso namespace" v-model="dotenv.KUSO_NAMESPACE"></v-text-field>
                     </v-col>
                   </v-row>
                   <v-row>
                     <v-col cols="12">
-                      <v-text-field label="kubero session key" v-model="dotenv.KUBERO_SESSION_KEY"></v-text-field>
+                      <v-text-field label="kuso session key" v-model="dotenv.KUSO_SESSION_KEY"></v-text-field>
                     </v-col>
                   </v-row>
                   <v-row>
                     <v-col cols="12">
-                      <v-text-field label="kubero webhook secret" v-model="dotenv.KUBERO_WEBHOOK_SECRET"></v-text-field>
+                      <v-text-field label="kuso webhook secret" v-model="dotenv.KUSO_WEBHOOK_SECRET"></v-text-field>
                     </v-col>
                   </v-row>
                   <!-- SAVE Button -->
@@ -132,7 +132,7 @@
                         color="primary"
                         @click="save(dotenv)"
                       >
-                        Save as Running Config to this Kubero UI instance
+                        Save as Running Config to this Kuso UI instance
                       </v-btn>
                     </v-col>
                   </v-row>
@@ -154,13 +154,13 @@
                   <v-row>
                     <v-col cols="12">
                       <v-alert
-                        title="Kubero Operator"
+                        title="Kuso Operator"
                         :type="installedComponents.operator ? 'success' : 'error'"
                         variant="tonal"
                       >
                         <v-row>
                           <v-col cols="8">
-                            Check if the Kubero operator is installed in your cluster. The operator is responsible for managing the Kubero application.
+                            Check if the Kuso operator is installed in your cluster. The operator is responsible for managing the Kuso application.
                           </v-col>
                           <v-col cols="4" class="d-flex justify-end">
                             <v-btn
@@ -176,7 +176,7 @@
                           <v-col cols="12">
                             <p>Install the operator by running the following command: </p>
                             <VCodeBlock
-                              code="kubectl apply -f https://raw.githubusercontent.com/kubero-dev/kubero-operator/main/deploy/operator.yaml"
+                              code="kubectl apply -f https://raw.githubusercontent.com/sislelabs/kuso/main/operator/deploy/operator.yaml"
                               highlightjs
                               copy-tab
                               tabs
@@ -200,7 +200,7 @@
                       >
                         <v-row>
                           <v-col cols="8">
-                            Check if the Nginx Ingress controller is installed in your cluster. The Ingress controller is responsible for routing traffic to the Kubero application.
+                            Check if the Nginx Ingress controller is installed in your cluster. The Ingress controller is responsible for routing traffic to the Kuso application.
                           </v-col>
                           <v-col cols="4" class="d-flex justify-end">
                             <v-btn
@@ -358,10 +358,10 @@ users:
 `,
       dotenv: {
         KUBECONFIG_BASE64: '',
-        KUBERO_CONTEXT: '',
-        KUBERO_NAMESPACE: 'kubero',
-        KUBERO_SESSION_KEY: '',
-        KUBERO_WEBHOOK_SECRET: ''
+        KUSO_CONTEXT: '',
+        KUSO_NAMESPACE: 'kuso',
+        KUSO_SESSION_KEY: '',
+        KUSO_WEBHOOK_SECRET: ''
       } as Record<string, string>,
       kubeconfigValid: false,
       installedComponents: {
@@ -529,9 +529,9 @@ users:
     generateConfig() {
       this.dotenv.KUBECONFIG_BASE64 = btoa(this.kubeConfig)
       //this.dotenv.KUBECONFIG_BASE64 = Buffer.from(this.kubeConfig).toString('base64')
-      this.dotenv.KUBERO_CONTEXT = this.kubeContext
-      this.dotenv.KUBERO_SESSION_KEY = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
-      this.dotenv.KUBERO_WEBHOOK_SECRET = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
+      this.dotenv.KUSO_CONTEXT = this.kubeContext
+      this.dotenv.KUSO_SESSION_KEY = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
+      this.dotenv.KUSO_WEBHOOK_SECRET = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15)
     }
   },
 })

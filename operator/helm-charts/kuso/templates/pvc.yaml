@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kuso.fullname" . }}-data
+  labels:
+    {{- include "kuso.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.kuso.database.storageClassName }}
+  storageClassName: {{ .Values.kuso.database.storageClassName | quote }}
+  {{- else  }}
+  storageClassName: ""
+  {{- end }}
+  accessModes:
+    {{- if .Values.kuso.database.accessModes }}
+    {{- toYaml .Values.kuso.database.accessModes | nindent 4 }}
+    {{- else }}
+    - ReadWriteOnce
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.kuso.database.size | default "10Gi" }}

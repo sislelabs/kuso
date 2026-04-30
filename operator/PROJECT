@@ -2,159 +2,159 @@
 # This file is used to track the info used to scaffold your project
 # and allow the plugins properly work.
 # More info: https://book.kubebuilder.io/reference/project-config.html
-domain: kubero.dev
+domain: kuso.sislelabs.com
 layout:
 - helm.sdk.operatorframework.io/v1
 plugins:
   manifests.sdk.operatorframework.io/v2: {}
   scorecard.sdk.operatorframework.io/v2: {}
-projectName: kubero-operator
+projectName: kuso-operator
 resources:
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoApp
+  kind: KusoApp
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: Kubero
+  kind: Kuso
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoPipeline
+  kind: KusoPipeline
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoMysql
+  kind: KusoMysql
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoPostgresql
+  kind: KusoPostgresql
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoRedis
+  kind: KusoRedis
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoMongoDB
+  kind: KusoMongoDB
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoElasticsearch
+  kind: KusoElasticsearch
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoCouchDB
+  kind: KusoCouchDB
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoKafka
+  kind: KusoKafka
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoMail
+  kind: KusoMail
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoRabbitMQ
+  kind: KusoRabbitMQ
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoMemcached
+  kind: KusoMemcached
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoPrometheus
+  kind: KusoPrometheus
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoBuild
+  kind: KusoBuild
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoAddonMysql
+  kind: KusoAddonMysql
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoAddonPostgres
+  kind: KusoAddonPostgres
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoAddonRedis
+  kind: KusoAddonRedis
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoAddonRabbitmq
+  kind: KusoAddonRabbitmq
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoAddonMongodb
+  kind: KusoAddonMongodb
   version: v1alpha1
 - api:
     crdVersion: v1
     namespaced: true
-  domain: kubero.dev
+  domain: kuso.sislelabs.com
   group: application
-  kind: KuberoAddonMemcached
+  kind: KusoAddonMemcached
   version: v1alpha1
 version: "3"

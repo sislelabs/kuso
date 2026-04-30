@@ -1,15 +1,15 @@
 import { AddonsService } from './addons.service';
 
-jest.mock('./plugins/kuberoMysql');
-jest.mock('./plugins/kuberoRedis');
-jest.mock('./plugins/kuberoPostgresql');
-jest.mock('./plugins/kuberoMongoDB');
-jest.mock('./plugins/kuberoMemcached');
-jest.mock('./plugins/kuberoElasticsearch');
-jest.mock('./plugins/kuberoCouchDB');
-jest.mock('./plugins/kuberoKafka');
-jest.mock('./plugins/kuberoMail');
-jest.mock('./plugins/kuberoRabbitMQ');
+jest.mock('./plugins/kusoMysql');
+jest.mock('./plugins/kusoRedis');
+jest.mock('./plugins/kusoPostgresql');
+jest.mock('./plugins/kusoMongoDB');
+jest.mock('./plugins/kusoMemcached');
+jest.mock('./plugins/kusoElasticsearch');
+jest.mock('./plugins/kusoCouchDB');
+jest.mock('./plugins/kusoKafka');
+jest.mock('./plugins/kusoMail');
+jest.mock('./plugins/kusoRabbitMQ');
 jest.mock('./plugins/cloudflare');
 jest.mock('./plugins/postgresCluster');
 jest.mock('./plugins/redisCluster');

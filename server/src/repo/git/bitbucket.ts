@@ -8,7 +8,7 @@ import {
 } from './types';
 import { Repo } from './repo';
 import gitUrlParse = require('git-url-parse');
-debug('app:kubero:bitbucket:api');
+debug('app:kuso:bitbucket:api');
 
 import { Bitbucket, APIClient } from 'bitbucket';
 import { RequestError } from '@octokit/types';
@@ -139,7 +139,7 @@ export class BitbucketApi extends Repo {
           repo_slug: repo,
           workspace: owner,
           _body: {
-            description: 'Kubero webhook',
+            description: 'Kuso webhook',
             url: url,
             active: true,
             //skip_cert_verification: false,
@@ -192,7 +192,7 @@ export class BitbucketApi extends Repo {
       statusText: 'error',
       data: {
         id: 0,
-        title: 'bot@kubero',
+        title: 'bot@kuso',
         verified: false,
         created_at: '2020-01-01T00:00:00Z',
         url: '',
@@ -205,7 +205,7 @@ export class BitbucketApi extends Repo {
     try {
       // https://bitbucketjs.netlify.app/#api-repositories-repositories_createDeployKey
       const res = await this.bitbucket.repositories.createDeployKey({
-        label: 'bot@kubero',
+        label: 'bot@kuso',
         key: keyPair.pubKey,
         repo_slug: repo,
         workspace: owner,

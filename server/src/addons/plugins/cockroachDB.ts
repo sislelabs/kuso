@@ -15,7 +15,7 @@ export class Cockroachdb extends Plugin implements IPlugin {
     'https://artifacthub.io/packages/olm/community-operators/cockroachdb';
   public docs = [
     {
-      title: 'Kubero Docs',
+      title: 'Kuso Docs',
       url: '',
     },
   ];

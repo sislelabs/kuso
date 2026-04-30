@@ -1,0 +1,8 @@
+instances:
+    kuso-examlpe:
+      iacBaseDir: .kuso/
+      apiurl: http://localhost:80
+      tunnel: 
+        subdomain: kuso-local-dev-example
+        port: 80
+        host: localhost

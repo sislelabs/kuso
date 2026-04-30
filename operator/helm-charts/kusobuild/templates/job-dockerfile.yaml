@@ -1,0 +1,125 @@
+{{- if eq .Values.buildstrategy "dockerfile" }}
+{{- $name := printf "%s-%s-%s" .Values.app .Values.pipeline .Values.id -}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  generation: 1
+  labels:
+    batch.kubernetes.io/job-name: {{ $name }}
+    buildstrategy: dockerfile
+    kusoapp: {{ .Values.app }}
+    kusopipeline: {{ .Values.pipeline }}
+    job-name: {{ $name }}
+  name: {{ $name }}
+spec:
+  backoffLimit: 1
+  completionMode: NonIndexed
+  completions: 1
+  manualSelector: false
+  parallelism: 1
+  podReplacementPolicy: TerminatingOrFailed
+  suspend: false
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        batch.kubernetes.io/job-name: {{ $name }}
+        buildstrategy: {{ .Values.buildstrategy }}
+        kusoapp: {{ .Values.app }}
+        kusopipeline: {{ .Values.pipeline }}
+        job-name: {{ $name }}
+    spec:
+      automountServiceAccountToken: true
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - env:
+          - name: REPOSITORY
+            value: {{ .Values.repository.image }}
+          - name: TAG
+            value: {{ .Values.repository.tag | default "latest"}}
+          - name: APP
+            value: {{ .Values.app }}
+          command:
+          - sh
+          - -c
+          - 'kubectl patch kusoapps $APP --type=merge -p "{\"spec\":{\"image\":{\"repository\":
+            \"$REPOSITORY\",\"tag\": \"$TAG\"}}}"'
+          image: bitnami/kubectl:latest
+          imagePullPolicy: Always
+          name: deploy
+          resources: {}
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+      initContainers:
+        - name: fetch
+          env:
+          - name: GIT_REPOSITORY
+            value: {{ .Values.git.url }}
+          - name: GIT_REF
+            value: {{ .Values.git.ref }}
+          - name: KUSO_BUILDPACK_DEFAULT_RUN_CMD
+            value: "exit 0"
+          - name: KUSO_BUILDPACK_DEFAULT_BUILD_CMD
+            value: "exit 0"
+          image: "ghcr.io/kubero-dev/fetch:latest"
+          imagePullPolicy: Always
+          resources: {}
+          securityContext:
+            readOnlyRootFilesystem: false
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /home/kuso/.ssh-mounted
+            name: deployment-keys
+            readOnly: true
+          - mountPath: /app
+            name: app-storage
+          workingDir: /app
+        - name: push
+          command:
+          - sh
+          - -c
+          - |-
+            buildah build -f $BUILDAH_DOCKERFILE_PATH --isolation chroot -t $BUILD_IMAGE .
+            buildah push --tls-verify=false $BUILD_IMAGE
+          env:
+          - name: REGISTRY_AUTH_FILE
+            value: /etc/buildah/auth/.dockerconfigjson
+          - name: BUILD_IMAGE
+            value: {{ .Values.repository.image }}:{{ .Values.repository.tag | default "latest"}}
+          - name: BUILDAH_DOCKERFILE_PATH
+            value: /app/{{ .Values.dockerfile.path}}
+          image: "quay.io/containers/buildah:v1.35"
+          imagePullPolicy: IfNotPresent
+          resources: {}
+          securityContext:
+            privileged: true
+          terminationMessagePath: /dev/termination-log
+          terminationMessagePolicy: File
+          volumeMounts:
+          - mountPath: /app
+            name: app-storage
+            readOnly: true
+          - mountPath: /etc/buildah/auth
+            name: pull-secret
+            readOnly: true
+          workingDir: /app
+      restartPolicy: Never
+      schedulerName: default-scheduler
+      serviceAccount: {{ .Values.app }}-kusoapp
+      serviceAccountName: {{ .Values.app }}-kusoapp
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: deployment-keys
+        secret:
+          defaultMode: 0666
+          secretName: deployment-keys
+      - emptyDir: {}
+        name: app-storage
+      - name: pull-secret
+        secret:
+          defaultMode: 384
+          secretName: kuso-pull-secret
+  ttlSecondsAfterFinished: 31536000
+{{- end }}

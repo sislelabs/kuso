@@ -17,7 +17,7 @@ kubectl apply -f https://raw.githubusercontent.com/OT-CONTAINER-KIT/redis-operat
     'https://artifacthub.io/packages/olm/community-operators/redis-operator';
   public docs = [
     {
-      title: 'Kubero Docs',
+      title: 'Kuso Docs',
       url: '',
     },
   ];

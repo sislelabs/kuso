@@ -7,8 +7,8 @@ import { KubernetesService } from '../kubernetes/kubernetes.service';
 import { INotification } from '../notifications/notifications.interface';
 import { NotificationsService } from '../notifications/notifications.service';
 import { Runpack } from './buildpack/runpack';
-import { IKuberoCRD, IKuberoConfig, IRegistry } from './config.interface';
-import { KuberoConfig } from './kubero-config/kubero-config';
+import { IKusoCRD, IKusoConfig, IRegistry } from './config.interface';
+import { KusoConfig } from './kuso-config/kuso-config';
 import { PodSize } from './podsize/podsize';
 
 import * as dotenv from 'dotenv';
@@ -18,7 +18,7 @@ dotenv.config();
 export class ConfigService {
   private readonly logger = new Logger(ConfigService.name);
   private readonly prisma = new PrismaClient();
-  private runningConfig: IKuberoConfig;
+  private runningConfig: IKusoConfig;
   private features: { [key: string]: boolean } = {
     sleep: false,
     metrics: false,
@@ -41,10 +41,10 @@ export class ConfigService {
   ) {
     this.reloadRunningConfig();
     this.runFeatureCheck();
-    this.setKuberoUIVersion();
+    this.setKusoUIVersion();
   }
 
-  private setKuberoUIVersion() {
+  private setKusoUIVersion() {
     if (process.env.npm_package_version == undefined) {
       const fs = require('fs');
       const path = require('path');
@@ -56,22 +56,22 @@ export class ConfigService {
       }
     }
 
-    this.logger.debug('Kubero UI Version: ' + process.env.npm_package_version);
+    this.logger.debug('Kuso UI Version: ' + process.env.npm_package_version);
   }
   // Load settings from a file or from kubernetes
-  async getSettings(): Promise<KuberoConfig> {
+  async getSettings(): Promise<KusoConfig> {
     if (this.checkAdminDisabled()) {
-      return new KuberoConfig(new Object() as IKuberoConfig);
+      return new KusoConfig(new Object() as IKusoConfig);
     }
 
     // TODO: This might fail with a local filesystem config
     const config: any = {};
-    const namespace = process.env.KUBERO_NAMESPACE || 'kubero';
-    const kuberoes = await this.kubectl.getKuberoConfig(namespace);
-    config.settings = kuberoes.spec;
+    const namespace = process.env.KUSO_NAMESPACE || 'kuso';
+    const kusoes = await this.kubectl.getKusoConfig(namespace);
+    config.settings = kusoes.spec;
     /*
-        const kuberoconfig = await this.readConfig()
-        config.settings = new KuberoConfig(kuberoconfig)
+        const kusoconfig = await this.readConfig()
+        config.settings = new KusoConfig(kusoconfig)
         */
 
     config['secrets'] = {
@@ -88,30 +88,30 @@ export class ConfigService {
       BITBUCKET_USERNAME: process.env.BITBUCKET_USERNAME || '',
       GOGS_PERSONAL_ACCESS_TOKEN: process.env.GOGS_PERSONAL_ACCESS_TOKEN || '',
       GOGS_BASEURL: process.env.GOGS_BASEURL || '',
-      KUBERO_WEBHOOK_SECRET: process.env.KUBERO_WEBHOOK_SECRET || '',
+      KUSO_WEBHOOK_SECRET: process.env.KUSO_WEBHOOK_SECRET || '',
       GITHUB_CLIENT_SECRET: process.env.GITHUB_CLIENT_SECRET || '',
       OAUTH2_CLIENT_SECRET: process.env.OAUTH2_CLIENT_SECRET || '',
     };
     return config;
   }
 
-  public async updateSettings(config: any): Promise<KuberoConfig> {
+  public async updateSettings(config: any): Promise<KusoConfig> {
     if (this.checkAdminDisabled()) {
-      return new KuberoConfig({} as IKuberoConfig);
+      return new KusoConfig({} as IKusoConfig);
     }
 
-    const namespace = process.env.KUBERO_NAMESPACE || 'kubero';
-    const kuberoes = await this.kubectl.getKuberoConfig(namespace);
-    kuberoes.spec = config.settings;
+    const namespace = process.env.KUSO_NAMESPACE || 'kuso';
+    const kusoes = await this.kubectl.getKusoConfig(namespace);
+    kusoes.spec = config.settings;
 
     // Write local config file in dev mode
     if (process.env.NODE_ENV != 'production') {
       console.log('DEV MODE: write local config');
-      this.writeConfig(kuberoes.spec.kubero.config);
+      this.writeConfig(kusoes.spec.kuso.config);
     }
 
-    await this.kubectl.updateKuberoConfig(namespace, kuberoes);
-    await this.kubectl.updateKuberoSecret(namespace, config.secrets);
+    await this.kubectl.updateKusoConfig(namespace, kusoes);
+    await this.kubectl.updateKusoSecret(namespace, config.secrets);
     this.setSecretEnv(config.secrets);
 
     const m = {
@@ -120,7 +120,7 @@ export class ConfigService {
       resource: 'system',
       action: 'update',
       severity: 'normal',
-      message: 'Kubero settings updated',
+      message: 'Kuso settings updated',
       pipelineName: '',
       phaseName: '',
       appName: '',
@@ -128,7 +128,7 @@ export class ConfigService {
     } as INotification;
     await this.notification.send(m);
 
-    return kuberoes;
+    return kusoes;
   }
 
   private setSecretEnv(secrets: any) {
@@ -150,7 +150,7 @@ export class ConfigService {
     process.env.BITBUCKET_USERNAME = secrets.BITBUCKET_USERNAME;
     process.env.GOGS_PERSONAL_ACCESS_TOKEN = secrets.GOGS_PERSONAL_ACCESS_TOKEN;
     process.env.GOGS_BASEURL = secrets.GOGS_BASEURL;
-    process.env.KUBERO_WEBHOOK_SECRET = secrets.KUBERO_WEBHOOK_SECRET;
+    process.env.KUSO_WEBHOOK_SECRET = secrets.KUSO_WEBHOOK_SECRET;
     process.env.GITHUB_CLIENT_SECRET = secrets.GITHUB_CLIENT_SECRET;
     process.env.OAUTH2_CLIENT_SECRET = secrets.OAUTH2_CLIENT_SECRET;
   }
@@ -163,42 +163,42 @@ export class ConfigService {
     }
   }
 
-  private loadDeprecatedVarsToEnv(config: IKuberoConfig): void {
+  private loadDeprecatedVarsToEnv(config: IKusoConfig): void {
     // Update environment variables based on the config
     this.setEnvVar(
-      'KUBERO_READONLY',
-      config.kubero?.readonly ? 'true' : 'false',
+      'KUSO_READONLY',
+      config.kuso?.readonly ? 'true' : 'false',
     );
     this.setEnvVar(
-      'KUBERO_CONSOLE_ENABLED',
-      config.kubero?.console?.enabled ? 'true' : 'false',
+      'KUSO_CONSOLE_ENABLED',
+      config.kuso?.console?.enabled ? 'true' : 'false',
     );
     this.setEnvVar(
-      'KUBERO_ADMIN_DISABLED',
-      config.kubero?.admin?.disabled ? 'true' : 'false',
+      'KUSO_ADMIN_DISABLED',
+      config.kuso?.admin?.disabled ? 'true' : 'false',
     );
     this.setEnvVar(
-      'KUBERO_BANNER_SHOW',
-      config.kubero?.banner?.show ? 'true' : 'false',
+      'KUSO_BANNER_SHOW',
+      config.kuso?.banner?.show ? 'true' : 'false',
     );
     this.setEnvVar(
-      'KUBERO_BANNER_MESSAGE',
-      config.kubero?.banner?.message || 'Welcome to Kubero!',
+      'KUSO_BANNER_MESSAGE',
+      config.kuso?.banner?.message || 'Welcome to Kuso!',
     );
     this.setEnvVar(
-      'KUBERO_BANNER_BGCOLOR',
-      config.kubero?.banner?.bgcolor || '#8560a963',
+      'KUSO_BANNER_BGCOLOR',
+      config.kuso?.banner?.bgcolor || '#8560a963',
     );
     this.setEnvVar(
-      'KUBERO_BANNER_FONTCOLOR',
-      config.kubero?.banner?.fontcolor || '#00000087',
+      'KUSO_BANNER_FONTCOLOR',
+      config.kuso?.banner?.fontcolor || '#00000087',
     );
     this.setEnvVar(
-      'KUBERO_TEMPLATES_ENABLED',
+      'KUSO_TEMPLATES_ENABLED',
       config.templates?.enabled ? 'true' : 'false',
     );
     this.setEnvVar(
-      'KUBERO_CLUSTER_ISSUER',
+      'KUSO_CLUSTER_ISSUER',
       config.clusterissuer || 'letsencrypt-prod',
     );
   }
@@ -206,42 +206,42 @@ export class ConfigService {
   private reloadRunningConfig(): void {
     this.readConfig()
       .then((config) => {
-        this.logger.debug('Kubero config loaded');
+        this.logger.debug('Kuso config loaded');
         this.runningConfig = config;
         this.loadDeprecatedVarsToEnv(config);
       })
       .catch((error) => {
-        this.logger.error('Error reading kuberoes config');
+        this.logger.error('Error reading kusoes config');
         this.logger.error(error);
       });
   }
 
-  private async readConfig(): Promise<IKuberoConfig> {
+  private async readConfig(): Promise<IKusoConfig> {
     if (process.env.NODE_ENV === 'production') {
-      const kuberoCRD = await this.readConfigFromKubernetes();
-      this.logger.debug('Kubero config loaded from Kubernetes');
-      return kuberoCRD.kubero.config;
+      const kusoCRD = await this.readConfigFromKubernetes();
+      this.logger.debug('Kuso config loaded from Kubernetes');
+      return kusoCRD.kuso.config;
     } else {
-      this.logger.debug('Kubero config loaded from filesystem (dev mode)');
+      this.logger.debug('Kuso config loaded from filesystem (dev mode)');
       return this.readConfigFromFS();
     }
   }
 
-  private async readConfigFromKubernetes(): Promise<IKuberoCRD> {
-    const namespace = process.env.KUBERO_NAMESPACE || 'kubero';
-    const kuberoes = await this.kubectl.getKuberoConfig(namespace);
-    if (!kuberoes || !kuberoes.spec) {
-      this.logger.error('Kubero config not found in Kubernetes');
-      throw new Error('Kubero config not found');
+  private async readConfigFromKubernetes(): Promise<IKusoCRD> {
+    const namespace = process.env.KUSO_NAMESPACE || 'kuso';
+    const kusoes = await this.kubectl.getKusoConfig(namespace);
+    if (!kusoes || !kusoes.spec) {
+      this.logger.error('Kuso config not found in Kubernetes');
+      throw new Error('Kuso config not found');
     }
-    return kuberoes.spec;
+    return kusoes.spec;
   }
 
-  private readConfigFromFS(): IKuberoConfig {
+  private readConfigFromFS(): IKusoConfig {
     // read config from local filesystem (dev mode)
     let configPath: string;
-    if (process.env.KUBERO_CONFIG_PATH) {
-      configPath = process.env.KUBERO_CONFIG_PATH;
+    if (process.env.KUSO_CONFIG_PATH) {
+      configPath = process.env.KUSO_CONFIG_PATH;
     } else {
       // In development, look in the project root; in production, look in dist
       const isProduction = process.env.NODE_ENV === 'production';
@@ -253,21 +253,21 @@ export class ConfigService {
     let settings: string;
     try {
       settings = readFileSync(configPath, 'utf8');
-      return YAML.parse(settings) as IKuberoConfig;
+      return YAML.parse(settings) as IKusoConfig;
     } catch (_error) {
       this.logger.error('Error reading config file');
       this.logger.error(`Attempted path: ${configPath}`);
       this.logger.error(_error);
 
-      return new Object() as IKuberoConfig;
+      return new Object() as IKusoConfig;
     }
   }
 
   // write config to local filesystem (dev mode)
-  private writeConfig(configMap: KuberoConfig) {
+  private writeConfig(configMap: KusoConfig) {
     let configPath: string;
-    if (process.env.KUBERO_CONFIG_PATH) {
-      configPath = process.env.KUBERO_CONFIG_PATH;
+    if (process.env.KUSO_CONFIG_PATH) {
+      configPath = process.env.KUSO_CONFIG_PATH;
     } else {
       // In development, write to project root; in production, write to dist
       const isProduction = process.env.NODE_ENV === 'production';
@@ -283,26 +283,26 @@ export class ConfigService {
   }
 
   public async getDefaultRegistry(): Promise<any> {
-    let registry = process.env.KUBERO_REGISTRY || {
+    let registry = process.env.KUSO_REGISTRY || {
       account: {
         hash: '$2y$05$czQZpvtDYc5OzM/1r1pH0eAplT/okohh/mXoWl/Y65ZP/8/jnSWZq',
-        password: 'kubero',
-        username: 'kubero',
+        password: 'kuso',
+        username: 'kuso',
       },
       create: false,
       enabled: false,
-      host: 'registry.demo.kubero.dev',
+      host: 'registry.demo.kuso.sislelabs.com',
       port: 443,
       storage: '1Gi',
       storageClassName: null,
       subpath: '',
     };
     try {
-      const namespace = process.env.KUBERO_NAMESPACE || 'kubero';
-      const kuberoes = await this.kubectl.getKuberoConfig(namespace);
-      registry = kuberoes.spec.registry;
+      const namespace = process.env.KUSO_NAMESPACE || 'kuso';
+      const kusoes = await this.kubectl.getKusoConfig(namespace);
+      registry = kusoes.spec.registry;
     } catch (_error) {
-      this.logger.error('Error getting kuberoes config');
+      this.logger.error('Error getting kusoes config');
     }
     return registry;
   }
@@ -315,12 +315,12 @@ export class ConfigService {
       fontcolor: 'white',
     };
 
-    const banner = this.runningConfig.kubero?.banner || defaultbanner;
+    const banner = this.runningConfig.kuso?.banner || defaultbanner;
     return banner;
   }
 
   public checkAdminDisabled(): boolean {
-    if (process.env.KUBERO_ADMIN_DISABLED === 'true') {
+    if (process.env.KUSO_ADMIN_DISABLED === 'true') {
       this.logger.warn('Admin is disabled');
       return true;
     }
@@ -331,9 +331,9 @@ export class ConfigService {
     kubeConfig: string,
     kubeContext: string,
   ): Promise<any> {
-    if (process.env.KUBERO_SETUP != 'enabled') {
+    if (process.env.KUSO_SETUP != 'enabled') {
       return {
-        error: 'Setup is disabled. Set env KUBERO_SETUP=enabled and retry',
+        error: 'Setup is disabled. Set env KUSO_SETUP=enabled and retry',
         status: 'error',
       };
     }
@@ -343,26 +343,26 @@ export class ConfigService {
   public async updateRunningConfig(
     kubeConfig: string,
     kubeContext: string,
-    kuberoNamespace: string,
-    KuberoSessionKey: string,
-    kuberoWebhookSecret: string,
+    kusoNamespace: string,
+    KusoSessionKey: string,
+    kusoWebhookSecret: string,
   ): Promise<{ error: string; status: string }> {
-    if (process.env.KUBERO_SETUP != 'enabled') {
+    if (process.env.KUSO_SETUP != 'enabled') {
       return {
-        error: 'Setup is disabled. Set env KUBERO_SETUP=enabled and retry',
+        error: 'Setup is disabled. Set env KUSO_SETUP=enabled and retry',
         status: 'error',
       };
     }
 
-    process.env.KUBERO_CONTEXT = kubeContext;
-    process.env.KUBERO_NAMESPACE = kuberoNamespace;
-    process.env.KUBERO_SESSION_KEY = KuberoSessionKey;
+    process.env.KUSO_CONTEXT = kubeContext;
+    process.env.KUSO_NAMESPACE = kusoNamespace;
+    process.env.KUSO_SESSION_KEY = KusoSessionKey;
     process.env.KUBECONFIG_BASE64 = kubeConfig;
-    process.env.KUBERO_SETUP = 'disabled';
+    process.env.KUSO_SETUP = 'disabled';
 
     this.kubectl.updateKubectlConfig(kubeConfig, kubeContext);
 
-    await this.kubectl.createNamespace(kuberoNamespace);
+    await this.kubectl.createNamespace(kusoNamespace);
     return {
       error: '',
       status: 'ok',
@@ -376,9 +376,9 @@ export class ConfigService {
     };
 
     if (component === 'operator') {
-      //let operator = await this.kubectl.checkCustomResourceDefinition("kuberoes.application.kubero.dev")
+      //let operator = await this.kubectl.checkCustomResourceDefinition("kusoes.application.kuso.sislelabs.com")
       const operator = await this.kubectl.checkNamespace(
-        'kubero-operator-system',
+        'kuso-operator-system',
       );
       if (operator) {
         ret.status = 'ok';
@@ -413,16 +413,16 @@ export class ConfigService {
   }
 
   getBuildpipelineEnabled() {
-    return process.env.KUBERO_BUILD_REGISTRY
-      ? process.env.KUBERO_BUILD_REGISTRY != undefined
+    return process.env.KUSO_BUILD_REGISTRY
+      ? process.env.KUSO_BUILD_REGISTRY != undefined
       : false;
   }
 
   getTemplateEnabled() {
-    if (process.env.KUBERO_TEMPLATES_ENABLED == undefined) {
+    if (process.env.KUSO_TEMPLATES_ENABLED == undefined) {
       return false;
     }
-    if (process.env.KUBERO_TEMPLATES_ENABLED == 'true') {
+    if (process.env.KUSO_TEMPLATES_ENABLED == 'true') {
       return true;
     }
     return false;
@@ -433,13 +433,13 @@ export class ConfigService {
   }
 
   getConsoleEnabled(): boolean {
-    if (process.env.KUBERO_CONSOLE_ENABLED == undefined) {
+    if (process.env.KUSO_CONSOLE_ENABLED == undefined) {
       this.logger.warn(
-        'KUBERO_CONSOLE_ENABLED is not set, defaulting to false',
+        'KUSO_CONSOLE_ENABLED is not set, defaulting to false',
       );
       return false;
     }
-    if (process.env.KUBERO_CONSOLE_ENABLED == 'true') {
+    if (process.env.KUSO_CONSOLE_ENABLED == 'true') {
       return true;
     }
     return false;
@@ -486,9 +486,9 @@ export class ConfigService {
   }
 
   public async getRegistry(): Promise<IRegistry> {
-    const namespace = process.env.KUBERO_NAMESPACE || 'kubero';
-    const kuberoes = await this.kubectl.getKuberoConfig(namespace);
-    return kuberoes.spec.registry;
+    const namespace = process.env.KUSO_NAMESPACE || 'kuso';
+    const kusoes = await this.kubectl.getKusoConfig(namespace);
+    return kusoes.spec.registry;
   }
 
   public async getRunpacks(): Promise<Runpack[]> {
@@ -660,7 +660,7 @@ export class ConfigService {
 
   public getClusterIssuer(): { clusterissuer: string } {
     return {
-      clusterissuer: process.env.KUBERO_CLUSTER_ISSUER || 'letsencrypt-prod',
+      clusterissuer: process.env.KUSO_CLUSTER_ISSUER || 'letsencrypt-prod',
     };
   }
 
@@ -764,8 +764,8 @@ export class ConfigService {
   public static getLocalauthEnabled(): boolean {
     // return true only when a non-empty session key exists
     return (
-      process.env.KUBERO_SESSION_KEY !== undefined &&
-      process.env.KUBERO_SESSION_KEY !== ''
+      process.env.KUSO_SESSION_KEY !== undefined &&
+      process.env.KUSO_SESSION_KEY !== ''
     );
   }
 
@@ -797,7 +797,7 @@ export class ConfigService {
     return scope.split(' ');
   }
 
-  public getKuberoUIVersion(): string {
+  public getKusoUIVersion(): string {
     if (process.env.npm_package_version == undefined) {
       return '0.0.0';
     }

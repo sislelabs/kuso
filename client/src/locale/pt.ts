@@ -13,7 +13,7 @@ const messages = {
     podSizes: 'Tamanhos de Pod',
     notifications: 'Notificações',
     theme: 'Modo Escuro/Claro',
-    kuberoAPI: 'Kubero API',
+    kusoAPI: 'Kuso API',
     documentation: 'Documentação',
     github: 'GitHub',
     discord: 'Discord',
@@ -357,7 +357,7 @@ const messages = {
   notifications: {
     name: 'Notificações',
     helpTitle: 'O que são Notificações?',
-    helpText: '<p><strong>Notificações</strong> permitem que você receba alertas sobre eventos em suas aplicações Kubero. Você pode configurar notificações do Slack, Discord ou webhook para se manter informado sobre implantações, erros e outros eventos importantes.</p><p class="mt-2"><a href="https://www.kubero.dev/docs/usermanual/notifications/" target="_blank" rel="noopener">Leia mais na documentação do Kubero</a></p>',
+    helpText: '<p><strong>Notificações</strong> permitem que você receba alertas sobre eventos em suas aplicações Kuso. Você pode configurar notificações do Slack, Discord ou webhook para se manter informado sobre implantações, erros e outros eventos importantes.</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/notifications/" target="_blank" rel="noopener">Leia mais na documentação do Kuso</a></p>',
     form: {
       name: 'Nome',
       type: 'Tipo',
@@ -390,7 +390,7 @@ const messages = {
   podsizes: {
     name: 'Tamanhos de Pod',
     helpTitle: 'O que são PodSizes?',
-    helpText: '<p><strong>PodSizes</strong> definem as solicitações e limites de recursos para os pods da sua aplicação no Kubero. Você pode criar, editar e excluir tamanhos de pod para corresponder aos requisitos da sua carga de trabalho.</p><p class="mt-2"><a href="https://www.kubero.dev/docs/usermanual/podsizes/" target="_blank" rel="noopener">Leia mais na documentação do Kubero</a></p>',
+    helpText: '<p><strong>PodSizes</strong> definem as solicitações e limites de recursos para os pods da sua aplicação no Kuso. Você pode criar, editar e excluir tamanhos de pod para corresponder aos requisitos da sua carga de trabalho.</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/podsizes/" target="_blank" rel="noopener">Leia mais na documentação do Kuso</a></p>',
     form: {
       name: 'Nome do Tamanho do Pod',
       description: 'Descrição',
@@ -412,7 +412,7 @@ const messages = {
   runpacks: {
     name: 'Runpacks',
     helpTitle: 'O que são Runpacks?',
-    helpText: '<p><strong>Runpacks</strong> no Kubero definem como sua aplicação é buscada, construída e executada dentro do cluster Kubernetes. Cada runpack consiste em três estágios:</p><ul class="ma-4"><li><strong>Fetch</strong>: Recupera seu código de um repositório Git usando uma imagem de contêiner. Você pode usar o padrão ou personalizá-lo.</li><li><strong>Build</strong>: Executa comandos de build em um contêiner de sua escolha (qualquer imagem Docker). É aqui que as dependências são instaladas ou seu aplicativo é compilado.</li><li><strong>Run</strong>: Inicia o contêiner final. O pod <em>web</em> é exposto à internet, enquanto os pods <em>worker</em> são para trabalhos em segundo plano.</li></ul><p>Runpacks são altamente flexíveis e podem ser personalizados para diferentes linguagens e frameworks. Eles dependem de imagens de contêiner publicamente disponíveis. Você pode encontrar exemplos de runpacks em <a href="https://github.com/kubero-dev/runpacks/tree/main/packs" target="_blank" rel="noopener">kubero-dev/runpacks</a>.</p><p class="mt-2"><a href="https://www.kubero.dev/docs/usermanual/runpacks/" target="_blank" rel="noopener">Leia mais na documentação do Kubero</a></p>',
+    helpText: '<p><strong>Runpacks</strong> no Kuso definem como sua aplicação é buscada, construída e executada dentro do cluster Kubernetes. Cada runpack consiste em três estágios:</p><ul class="ma-4"><li><strong>Fetch</strong>: Recupera seu código de um repositório Git usando uma imagem de contêiner. Você pode usar o padrão ou personalizá-lo.</li><li><strong>Build</strong>: Executa comandos de build em um contêiner de sua escolha (qualquer imagem Docker). É aqui que as dependências são instaladas ou seu aplicativo é compilado.</li><li><strong>Run</strong>: Inicia o contêiner final. O pod <em>web</em> é exposto à internet, enquanto os pods <em>worker</em> são para trabalhos em segundo plano.</li></ul><p>Runpacks são altamente flexíveis e podem ser personalizados para diferentes linguagens e frameworks. Eles dependem de imagens de contêiner publicamente disponíveis. Você pode encontrar exemplos de runpacks em <a href="https://github.com/kuso-dev/runpacks/tree/main/packs" target="_blank" rel="noopener">kuso-dev/runpacks</a>.</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/runpacks/" target="_blank" rel="noopener">Leia mais na documentação do Kuso</a></p>',
     table: {
       name: 'Nome',
       language: 'Linguagem',
@@ -475,7 +475,7 @@ const messages = {
   settings: {
     deployment: {
       title: 'Conectando repositórios',
-      configAlert: 'As alterações de configuração não terão efeito até que o contêiner da UI do Kubero seja reiniciado manualmente.',
+      configAlert: 'As alterações de configuração não terão efeito até que o contêiner da UI do Kuso seja reiniciado manualmente.',
       webhookEndpoint: 'Endpoint do Webhook',
       url: 'URL',
       secret: 'Segredo',

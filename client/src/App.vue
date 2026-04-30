@@ -5,7 +5,7 @@
 <style>
 a {
   text-decoration: none;
-  color: rgba(var(--v-theme-kubero),var(--v-high-emphasis-opacity));
+  color: rgba(var(--v-theme-kuso),var(--v-high-emphasis-opacity));
 }
 
 </style>

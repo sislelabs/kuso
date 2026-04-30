@@ -16,6 +16,6 @@ cache
 
 /notes.txt
 
-helm-charts/kubero/secrets.yaml
+helm-charts/kuso/secrets.yaml
 
 .DS_Store

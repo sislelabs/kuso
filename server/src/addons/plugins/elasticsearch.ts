@@ -14,12 +14,12 @@ export class Elasticsearch extends Plugin implements IPlugin {
     'https://artifacthub.io/packages/olm/community-operators/elastic-cloud-eck';
   public docs = [
     {
-      title: 'Kubero Docs',
+      title: 'Kuso Docs',
       url: '',
     },
   ];
   public artifact_url =
-    'https://artifacthub.io/api/v1/packages/olm/kubero/kubero-operator';
+    'https://artifacthub.io/api/v1/packages/olm/kuso/kuso-operator';
   public beta: boolean = false;
   public deprecated: boolean = false;
 

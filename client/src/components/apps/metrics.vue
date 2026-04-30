@@ -1,7 +1,7 @@
 <template>
     <v-container>
 
-      <div v-if="!kubero.metricsEnabled">
+      <div v-if="!kuso.metricsEnabled">
         <v-row>
             <v-col
             cols="12"
@@ -16,13 +16,13 @@
                 >
                     <h3>No metrics available</h3>
                     <p>
-                        Metrics are not available for this application. Metrics can be enabled in the Kubero CRD.
+                        Metrics are not available for this application. Metrics can be enabled in the Kuso CRD.
                     </p>
                 </v-alert>
             </v-col>
         </v-row>
       </div>
-      <div v-if="kubero.metricsEnabled">
+      <div v-if="kuso.metricsEnabled">
         <v-row class="justify-space-between mb-2">
             <v-col cols="12" sm="12" md="8">
               <Alerts :app="app" :phase="phase" :pipeline="pipeline"/>
@@ -101,7 +101,7 @@
 <script lang="ts">
 import { defineComponent } from 'vue'
 import VueApexCharts from "vue3-apexcharts";
-import { useKuberoStore } from '../../stores/kubero'
+import { useKusoStore } from '../../stores/kuso'
 import { mapState } from 'pinia'
 
 import axios from "axios";
@@ -622,7 +622,7 @@ export default defineComponent({
         }
     },
     computed: {
-      ...mapState(useKuberoStore, ['kubero']),
+      ...mapState(useKusoStore, ['kuso']),
     },
     methods: {
         /*
@@ -642,7 +642,7 @@ export default defineComponent({
             }, 4000);
         },
         refreshMetrics() {
-          if (this.kubero.metricsEnabled) {
+          if (this.kuso.metricsEnabled) {
             this.getMemoryMetrics();
             //this.getLoadMetrics();
             //this.getCpuMetrics();

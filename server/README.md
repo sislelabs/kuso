@@ -1,6 +1,6 @@
 ## Description
 
-This is Kubero server part of the Kubero project. It is a NestJS application that provides REST API for the Kubero project. It is a part of the Kubero project that is a platform for managing Kubernetes clusters.
+This is Kuso server part of the Kuso project. It is a NestJS application that provides REST API for the Kuso project. It is a part of the Kuso project that is a platform for managing Kubernetes clusters.
 
 ## Project setup
 

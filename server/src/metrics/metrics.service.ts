@@ -26,8 +26,8 @@ export class MetricsService {
     const options = {
       enabled: true,
       endpoint:
-        process.env.KUBERO_PROMETHEUS_ENDPOINT ||
-        'http://kubero-prometheus-server',
+        process.env.KUSO_PROMETHEUS_ENDPOINT ||
+        'http://kuso-prometheus-server',
     } as MetricsOptions;
 
     this.prom = new PrometheusDriver({
@@ -111,7 +111,7 @@ export class MetricsService {
     metric: string,
     q: PrometheusQuery,
   ): Promise<QueryResult | undefined> {
-    const query = `${metric}{namespace="${q.pipeline}-${q.phase}", container=~"kuberoapp-web|kuberoapp-worker"}`;
+    const query = `${metric}{namespace="${q.pipeline}-${q.phase}", container=~"kusoapp-web|kusoapp-worker"}`;
     //console.log(query);
     const { end, start, step, vector } = this.getStepsAndStart(q.scale);
     let result: QueryResult | undefined;
@@ -225,7 +225,7 @@ export class MetricsService {
 
     const { end, start, step, vector } = this.getStepsAndStart(q.scale);
     // rate(nginx_ingress_controller_requests{namespace="asdf-production", host="a.a.localhost"}[10m])
-    const query = `${q.calc}(container_cpu_usage_seconds_total{namespace="${q.pipeline}-${q.phase}", container=~"kuberoapp-web|kuberoapp-worker"}[${vector}])`;
+    const query = `${q.calc}(container_cpu_usage_seconds_total{namespace="${q.pipeline}-${q.phase}", container=~"kusoapp-web|kusoapp-worker"}[${vector}])`;
     //console.log(query);
     try {
       metrics = await this.prom.rangeQuery(query, start, end, step);
@@ -377,18 +377,18 @@ export class MetricsService {
               a.labels.service +
               ' q.app: ' +
               q.app +
-              '-kuberoapp',
+              '-kusoapp',
           );
           return (
             a.labels.namespace === q.pipeline + '-' + q.phase &&
-            (a.labels.service === q.app + '-kuberoapp' ||
-              a.labels.deployment?.startsWith(q.app + '-kuberoapp') ||
-              a.labels.replicaset?.startsWith(q.app + '-kuberoapp') ||
-              a.labels.statefulset === q.app + '-kuberoapp' ||
-              a.labels.daemonset === q.app + '-kuberoapp' ||
-              a.labels.pod === q.app + '-kuberoapp' ||
-              a.labels.container === q.app + '-kuberoapp' ||
-              a.labels.job === q.app + '-kuberoapp')
+            (a.labels.service === q.app + '-kusoapp' ||
+              a.labels.deployment?.startsWith(q.app + '-kusoapp') ||
+              a.labels.replicaset?.startsWith(q.app + '-kusoapp') ||
+              a.labels.statefulset === q.app + '-kusoapp' ||
+              a.labels.daemonset === q.app + '-kusoapp' ||
+              a.labels.pod === q.app + '-kusoapp' ||
+              a.labels.container === q.app + '-kusoapp' ||
+              a.labels.job === q.app + '-kusoapp')
           );
         });
 

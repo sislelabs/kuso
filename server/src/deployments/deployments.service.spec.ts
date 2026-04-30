@@ -31,7 +31,7 @@ describe('DeploymentsService', () => {
     kubectl = {
       getJobs: jest.fn(),
       createBuildJob: jest.fn(),
-      deleteKuberoBuildJob: jest.fn(),
+      deleteKusoBuildJob: jest.fn(),
       getPods: jest.fn(),
     } as any;
 
@@ -93,9 +93,9 @@ describe('DeploymentsService', () => {
               creationTimestamp: '2024-05-23T12:00:00Z',
               name: 'job1',
               labels: {
-                kuberoapp: 'app',
-                kuberopipeline: 'pipe',
-                kuberophase: 'phase',
+                kusoapp: 'app',
+                kusopipeline: 'pipe',
+                kusophase: 'phase',
                 buildstrategy: 'dockerfile',
               },
             },
@@ -147,9 +147,9 @@ describe('DeploymentsService', () => {
               creationTimestamp: '2024-05-23T12:00:00Z',
               name: 'job2',
               labels: {
-                kuberoapp: 'otherapp',
-                kuberopipeline: 'pipe',
-                kuberophase: 'phase',
+                kusoapp: 'otherapp',
+                kusopipeline: 'pipe',
+                kusophase: 'phase',
                 buildstrategy: 'dockerfile',
               },
             },
@@ -187,8 +187,8 @@ describe('DeploymentsService', () => {
   });
 
   describe('triggerBuildjob', () => {
-    it('should not trigger build if KUBERO_READONLY is true', async () => {
-      process.env.KUBERO_READONLY = 'true';
+    it('should not trigger build if KUSO_READONLY is true', async () => {
+      process.env.KUSO_READONLY = 'true';
       const user: IUser = { username: 'test' } as any;
       const result = await service.triggerBuildjob(
         'pipe',
@@ -201,11 +201,11 @@ describe('DeploymentsService', () => {
         user,
       );
       expect(result).toBeUndefined();
-      delete process.env.KUBERO_READONLY;
+      delete process.env.KUSO_READONLY;
     });
 
     it('should trigger build and send notification', async () => {
-      process.env.KUBERO_BUILD_REGISTRY = 'reg';
+      process.env.KUSO_BUILD_REGISTRY = 'reg';
       const user: IUser = { username: 'test' } as any;
       await service.triggerBuildjob(
         'pipe',
@@ -219,13 +219,13 @@ describe('DeploymentsService', () => {
       );
       expect(kubectl.createBuildJob).toHaveBeenCalled();
       expect(notificationsService.send).toHaveBeenCalled();
-      delete process.env.KUBERO_BUILD_REGISTRY;
+      delete process.env.KUSO_BUILD_REGISTRY;
     });
   });
 
   describe('deleteBuildjob', () => {
-    it('should not delete build if KUBERO_READONLY is true', async () => {
-      process.env.KUBERO_READONLY = 'true';
+    it('should not delete build if KUSO_READONLY is true', async () => {
+      process.env.KUSO_READONLY = 'true';
       const user: IUser = { username: 'test' } as any;
       const result = await service.deleteBuildjob(
         'pipe',
@@ -235,13 +235,13 @@ describe('DeploymentsService', () => {
         user,
       );
       expect(result).toBeUndefined();
-      delete process.env.KUBERO_READONLY;
+      delete process.env.KUSO_READONLY;
     });
 
     it('should delete build and send notification', async () => {
       const user: IUser = { username: 'test' } as any;
       await service.deleteBuildjob('pipe', 'phase', 'app', 'build1', user);
-      expect(kubectl.deleteKuberoBuildJob).toHaveBeenCalled();
+      expect(kubectl.deleteKusoBuildJob).toHaveBeenCalled();
       expect(notificationsService.send).toHaveBeenCalled();
     });
   });
@@ -254,7 +254,7 @@ describe('DeploymentsService', () => {
           metadata: {
             name: 'pod1',
             labels: {
-              kuberoapp: 'app',
+              kusoapp: 'app',
               'job-name': 'build1',
             },
           },

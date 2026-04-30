@@ -52,7 +52,7 @@
                 <v-list-item 
                     @click="openConsole"
                     prepend-icon="mdi-console"
-                    :disabled="!kubero.consoleEnabled || !authStore.hasPermission('console:ok')"
+                    :disabled="!kuso.consoleEnabled || !authStore.hasPermission('console:ok')"
                     :title="$t('app.actions.openConsole')">
                 </v-list-item>
                 <v-divider class="my-3"></v-divider>
@@ -100,7 +100,7 @@ import Metrics from "./metrics.vue";
 import Builds from "./builds.vue";
 import Vulnerabilities from "./vulnerabilities.vue";
 import Swal from 'sweetalert2';
-import { useKuberoStore } from '../../stores/kubero'
+import { useKusoStore } from '../../stores/kuso'
 import { mapState } from 'pinia'
 import { useAuthStore } from '../../stores/auth'
 const authStore = useAuthStore();
@@ -154,7 +154,7 @@ export default defineComponent({
         }
     },
     computed: {
-      ...mapState(useKuberoStore, ['kubero']),
+      ...mapState(useKusoStore, ['kuso']),
       hasBuilds() {
         // disable the builds tab if the buildstrategy is plain or external
         return this.appData.spec.deploymentstrategy == 'git' && this.appData.spec.buildstrategy != 'plain' && this.appData.spec.buildstrategy != 'external';
@@ -201,7 +201,7 @@ export default defineComponent({
                 showCancelButton: true,
                 confirmButtonText: "Delete",
                 cancelButtonText: "Cancel",
-                confirmButtonColor: "rgb(var(--v-theme-kubero))",
+                confirmButtonColor: "rgb(var(--v-theme-kuso))",
                 background: "rgb(var(--v-theme-cardBackground))",
                 /*background: "rgb(var(--v-theme-on-surface-variant))",*/
                 color: "rgba(var(--v-theme-on-background),var(--v-high-emphasis-opacity));",

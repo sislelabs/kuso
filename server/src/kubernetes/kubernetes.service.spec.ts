@@ -353,25 +353,25 @@ describe('KubernetesService', () => {
     expect(result).toBe(ws);
   });
 
-  it('should getKuberoConfig', async () => {
-    await expect(service.getKuberoConfig('ns')).resolves.toBeDefined();
+  it('should getKusoConfig', async () => {
+    await expect(service.getKusoConfig('ns')).resolves.toBeDefined();
   });
 
-  it('should updateKuberoConfig', async () => {
+  it('should updateKusoConfig', async () => {
     await expect(
-      service.updateKuberoConfig('ns', { spec: {} }),
+      service.updateKusoConfig('ns', { spec: {} }),
     ).resolves.toBeUndefined();
   });
 
-  it('should updateKuberoSecret', async () => {
+  it('should updateKusoSecret', async () => {
     await expect(
-      service.updateKuberoSecret('ns', { key: 'value' }),
+      service.updateKusoSecret('ns', { key: 'value' }),
     ).resolves.toBeUndefined();
   });
 
-  it('should deleteKuberoBuildJob', async () => {
+  it('should deleteKusoBuildJob', async () => {
     await expect(
-      service.deleteKuberoBuildJob('ns', 'build'),
+      service.deleteKusoBuildJob('ns', 'build'),
     ).resolves.toBeUndefined();
   });
 
