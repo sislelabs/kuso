@@ -10,6 +10,7 @@ Project-specific skills for AI agents working on kuso. Each `.md` file is a skil
 | [`rebrand-conventions.md`](./rebrand-conventions.md) | Before adding code or auditing leftover `kubero` strings.                    |
 | [`crd-architecture.md`](./crd-architecture.md)   | Before touching the operator or thinking about CRDs.                             |
 | [`agentic-workflow.md`](./agentic-workflow.md)   | Before making changes — sets ground rules for what to do without asking.         |
+| [`mcp-development.md`](./mcp-development.md)     | Before touching `mcp/` — tool design rules, layout, how to add a new tool.       |
 
 ## Adding a skill
 
