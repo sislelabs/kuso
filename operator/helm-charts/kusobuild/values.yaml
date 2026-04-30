@@ -8,7 +8,7 @@ repository:
   image: "registry-kuso.yourdomain.com/optionalrepositoryowner/pipeline/app"
   tag: "123456" # (optional) defaults to "latest
 git:
-  url: "git@github.com:kubero-dev/template-nodeapp.git"
+  url: "git@github.com:sislelabs/kuso-template-nodeapp.git"
   ref: "main"
 podSecurityContext:
   fsGroup: 1000

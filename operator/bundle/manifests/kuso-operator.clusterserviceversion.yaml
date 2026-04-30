@@ -15,7 +15,7 @@ metadata:
             "fullnameOverride": "",
             "image": {
               "pullPolicy": "Always",
-              "repository": "ghcr.io/sislelabs/kuso-server/kuso",
+              "repository": "ghcr.io/sislelabs/kuso-server",
               "tag": "latest"
             },
             "imagePullSecrets": [],
@@ -77,7 +77,7 @@ metadata:
                       "tag": "latest"
                     },
                     "fetch": {
-                      "repository": "ghcr.io/kubero-dev/fetch",
+                      "repository": "ghcr.io/sislelabs/kuso-fetch",
                       "securityContext": {
                         "runAsUser": 1000
                       },
@@ -98,7 +98,7 @@ metadata:
                       "tag": "latest"
                     },
                     "fetch": {
-                      "repository": "ghcr.io/kubero-dev/fetch",
+                      "repository": "ghcr.io/sislelabs/kuso-fetch",
                       "securityContext": {
                         "runAsUser": 1000
                       },
@@ -124,7 +124,7 @@ metadata:
                       "tag": "3.10-buster"
                     },
                     "fetch": {
-                      "repository": "ghcr.io/kubero-dev/fetch",
+                      "repository": "ghcr.io/sislelabs/kuso-fetch",
                       "securityContext": {
                         "runAsUser": 1000
                       },
@@ -145,7 +145,7 @@ metadata:
                       "tag": "alpine"
                     },
                     "fetch": {
-                      "repository": "ghcr.io/kubero-dev/fetch",
+                      "repository": "ghcr.io/sislelabs/kuso-fetch",
                       "securityContext": {
                         "runAsUser": 1000
                       },
@@ -166,7 +166,7 @@ metadata:
                       "tag": "latest"
                     },
                     "fetch": {
-                      "repository": "ghcr.io/kubero-dev/fetch",
+                      "repository": "ghcr.io/sislelabs/kuso-fetch",
                       "securityContext": {
                         "runAsUser": 1000
                       },
@@ -187,7 +187,7 @@ metadata:
                       "tag": "2.7"
                     },
                     "fetch": {
-                      "repository": "ghcr.io/kubero-dev/fetch",
+                      "repository": "ghcr.io/sislelabs/kuso-fetch",
                       "securityContext": {
                         "runAsUser": 1000
                       },
@@ -208,7 +208,7 @@ metadata:
                       "tag": "latest"
                     },
                     "fetch": {
-                      "repository": "ghcr.io/kubero-dev/fetch",
+                      "repository": "ghcr.io/sislelabs/kuso-fetch",
                       "securityContext": {
                         "runAsUser": 1000
                       },
@@ -292,19 +292,19 @@ metadata:
                       "description": "Kuso templates",
                       "index": {
                         "format": "json",
-                        "url": "https://raw.githubusercontent.com/kubero-dev/templates/main/index.json"
+                        "url": "https://raw.githubusercontent.com/sislelabs/kuso-templates/main/index.json"
                       },
                       "name": "Kuso",
-                      "templateBasePath": "https://raw.githubusercontent.com/kubero-dev/kubero/main/services/"
+                      "templateBasePath": "https://raw.githubusercontent.com/sislelabs/kuso/main/services/"
                     },
                     {
                       "description": "Kuso templates",
                       "index": {
                         "format": "json",
-                        "url": "https://raw.githubusercontent.com/kubero-dev/templates/main/index-frameworks.json"
+                        "url": "https://raw.githubusercontent.com/sislelabs/kuso-templates/main/index-frameworks.json"
                       },
                       "name": "Kuso Frameworks",
-                      "templateBasePath": "https://raw.githubusercontent.com/kubero-dev/kubero/main/services/"
+                      "templateBasePath": "https://raw.githubusercontent.com/sislelabs/kuso/main/services/"
                     }
                   ],
                   "enabled": true
@@ -718,14 +718,14 @@ metadata:
               },
               "containerPort": 8080,
               "fetch": {
-                "repository": "ghcr.io/kubero-dev/buildpacks/fetch",
+                "repository": "ghcr.io/sislelabs/kuso-buildpacks/fetch",
                 "securityContext": {
                   "readOnlyRootFilesystem": false
                 },
                 "tag": "main"
               },
               "pullPolicy": "Always",
-              "repository": "ghcr.io/sislelabs/docker-images/node",
+              "repository": "ghcr.io/sislelabs/kuso-runpacks/node",
               "run": {
                 "command": "node index.js",
                 "readOnlyAppStorage": true,
@@ -826,17 +826,17 @@ metadata:
             },
             "buildstrategy": "nixpack",
             "dockerfile": {
-              "fetcher": "ghcr.io/kubero-dev/buildpacks/fetch:latest",
+              "fetcher": "ghcr.io/sislelabs/kuso-buildpacks/fetch:latest",
               "path": "Dockerfile",
               "pusher": "quay.io/containers/buildah:v1.29"
             },
             "git": {
               "revision": "main",
-              "url": "git@github.com:kubero-dev/template-nodeapp.git"
+              "url": "git@github.com:sislelabs/kuso-template-nodeapp.git"
             },
             "nixpack": {
-              "builder": "ghcr.io/kubero-dev/buildpacks/build:latest",
-              "fetcher": "ghcr.io/kubero-dev/buildpacks/fetch:latest",
+              "builder": "ghcr.io/sislelabs/kuso-buildpacks/build:latest",
+              "fetcher": "ghcr.io/sislelabs/kuso-buildpacks/fetch:latest",
               "path": ".nixpacks/Dockerfile",
               "pusher": "quay.io/containers/buildah:v1.29"
             },
@@ -1381,7 +1381,7 @@ metadata:
     capabilities: Basic Install
     categories: Integration & Delivery
     certified: "false"
-    containerImage: ghcr.io/sislelabs/kuso-operator/kusoapp:v0.2.2
+    containerImage: ghcr.io/sislelabs/kuso-operator:v0.2.2
     createdAt: "2025-09-17T09:17:12Z"
     description: Kuso is a GitOps continuous delivery tool for Kubernetes.
     operators.operatorframework.io/builder: operator-sdk-v1.41.1
@@ -2483,7 +2483,7 @@ spec:
                 - --leader-elect
                 - --leader-election-id=kuso-operator
                 - --zap-log-level=info
-                image: ghcr.io/sislelabs/kuso-operator/kusoapp:v0.2.2
+                image: ghcr.io/sislelabs/kuso-operator:v0.2.2
                 livenessProbe:
                   httpGet:
                     path: /healthz

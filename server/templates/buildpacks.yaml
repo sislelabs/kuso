@@ -54,14 +54,14 @@ spec:
         - name: fetch
           env:
           - name: GIT_REPOSITORY
-            value: git@github.com:kubero-dev/template-nodeapp.git
+            value: git@github.com:sislelabs/kuso-template-nodeapp.git
           - name: GIT_REF
             value: main
           - name: KUSO_BUILDPACK_DEFAULT_RUN_CMD
             value: "exit 0"
           - name: KUSO_BUILDPACK_DEFAULT_BUILD_CMD
             value: "exit 0"
-          image: "ghcr.io/kubero-dev/fetch:latest"
+          image: "ghcr.io/sislelabs/kuso-fetch:latest"
           imagePullPolicy: Always
           resources: {}
           securityContext:
@@ -95,7 +95,7 @@ spec:
           command: ['/cnb/lifecycle/creator']
           # https://github.com/buildpacks/pack/issues/564#issuecomment-943345649
           # https://github.com/buildpacks/spec/blob/platform/v0.13/platform.md#creator
-          #command: ['/cnb/lifecycle/creator', '-app=.', '-buildpacks=/cnb/buildpacks', '-platform=/platform', '-run-image=ghcr.io/kubero-dev/run:v1.4.0', '-uid=1000', '-gid=1000', 'kuso-local-dev-0037732.loca.lt/example/exampled:latest']
+          #command: ['/cnb/lifecycle/creator', '-app=.', '-buildpacks=/cnb/buildpacks', '-platform=/platform', '-run-image=ghcr.io/sislelabs/kuso-run:v1.4.0', '-uid=1000', '-gid=1000', 'kuso-local-dev-0037732.loca.lt/example/exampled:latest']
           #command: ['tail', '-f', '/dev/null']
           image: "paketobuildpacks/builder-jammy-full:latest" #List of Builders : https://paketo.io/docs/reference/builders-reference/
           imagePullPolicy: Always

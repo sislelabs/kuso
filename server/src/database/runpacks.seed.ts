@@ -2,7 +2,7 @@ export const runpacks = `
   - name: NodeJS
     language: JavaScript
     fetch:
-      repository: ghcr.io/kubero-dev/buildpacks/fetch
+      repository: ghcr.io/sislelabs/kuso-buildpacks/fetch
       tag: v1.2
       readOnlyAppStorage: false
       securityContext:
@@ -45,7 +45,7 @@ export const runpacks = `
   - name: PHP
     language: PHP
     fetch:
-      repository: ghcr.io/kubero-dev/buildpacks/fetch
+      repository: ghcr.io/sislelabs/kuso-buildpacks/fetch
       tag: v1.2
       readOnlyAppStorage: false
       securityContext:
@@ -72,7 +72,7 @@ export const runpacks = `
           add: []
           drop: []
     run:
-      repository: ghcr.io/kubero-dev/buildpacks/php
+      repository: ghcr.io/sislelabs/kuso-buildpacks/php
       tag: "main"
       command: "apache2-foreground"
       readOnlyAppStorage: false
@@ -88,7 +88,7 @@ export const runpacks = `
   - name: Python
     language: Python
     fetch:
-      repository: ghcr.io/kubero-dev/buildpacks/fetch
+      repository: ghcr.io/sislelabs/kuso-buildpacks/fetch
       tag: v1.2
       readOnlyAppStorage: false
       securityContext:
@@ -131,7 +131,7 @@ export const runpacks = `
   - name: GoLang
     language: GoLang
     fetch:
-      repository: ghcr.io/kubero-dev/buildpacks/fetch
+      repository: ghcr.io/sislelabs/kuso-buildpacks/fetch
       tag: v1.2
       readOnlyAppStorage: false
       securityContext:
@@ -174,7 +174,7 @@ export const runpacks = `
   - name: Hugo
     language: GoLang
     fetch:
-      repository: ghcr.io/kubero-dev/buildpacks/fetch
+      repository: ghcr.io/sislelabs/kuso-buildpacks/fetch
       tag: v1.2
       readOnlyAppStorage: false
       securityContext:
@@ -217,7 +217,7 @@ export const runpacks = `
   - name: Ruby
     language: Ruby
     fetch:
-      repository: ghcr.io/kubero-dev/buildpacks/fetch
+      repository: ghcr.io/sislelabs/kuso-buildpacks/fetch
       tag: v1.2
       readOnlyAppStorage: false
       securityContext:
@@ -260,7 +260,7 @@ export const runpacks = `
   - name: Static
     language: HTML
     fetch:
-      repository: ghcr.io/kubero-dev/buildpacks/fetch
+      repository: ghcr.io/sislelabs/kuso-buildpacks/fetch
       tag: v1.2
       readOnlyAppStorage: false
       securityContext:

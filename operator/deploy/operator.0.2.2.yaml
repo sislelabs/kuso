@@ -2446,7 +2446,7 @@ spec:
         - --leader-elect
         - --leader-election-id=kuso-operator
         - --zap-log-level=info
-        image: ghcr.io/sislelabs/kuso-operator/kusoapp:v0.2.2
+        image: ghcr.io/sislelabs/kuso-operator:v0.2.2
         livenessProbe:
           httpGet:
             path: /healthz

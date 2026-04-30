@@ -19,12 +19,12 @@ spec:
     ssh_url: git@github.com:foo/bar.git
     clone_url: https://github.com/foo/bar.git
   image:
-    repository: ghcr.io/sislelabs/docker-images/node
+    repository: ghcr.io/sislelabs/kuso-runpacks/node
     tag: main
     pullPolicy: Always
     containerPort: 8080
     fetch:
-      repository: ghcr.io/kubero-dev/buildpacks/fetch
+      repository: ghcr.io/sislelabs/kuso-buildpacks/fetch
       tag: main
       securityContext:
         readOnlyRootFilesystem: false

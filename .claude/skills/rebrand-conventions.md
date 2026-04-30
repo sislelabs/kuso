@@ -27,13 +27,15 @@ kuso forked kubero-dev/kubero with a wholesale rebrand. Anywhere you'd be tempte
 
 ## What stays as `kubero-dev`
 
-Some upstream URLs are deliberately preserved because we don't host equivalents yet. **Don't replace these without checking `docs/REBRAND.md`:**
+Nothing in code. As of the mirror-plan commit, every `kubero-dev` reference in the codebase has been rewritten to its `sislelabs/kuso-*` target — see `docs/REBRAND.md` for the full mapping. The actual mirror artifacts (images, git repos) don't exist yet; they get created at first end-to-end install time. **The rewrites still resolve to 404 until then; that's expected.**
 
-- `ghcr.io/kubero-dev/buildpacks/*`
-- `ghcr.io/kubero-dev/{fetch,build,run}`
-- `raw.githubusercontent.com/kubero-dev/templates/*`
-- `raw.githubusercontent.com/kubero-dev/kubero/main/services/*`
-- `git@github.com:kubero-dev/template-*`
+The only places `kubero-dev` still appears:
+
+- `LICENSE`, `NOTICE`, root `README.md` (attribution, required by GPL-3.0)
+- `docs/REBRAND.md`, `docs/PRD.md` (documentation of fork origin)
+- `.claude/skills/*.md` (skill descriptions documenting the fork)
+
+If you find a `kubero-dev` reference outside those files, it's a bug — file or fix it.
 
 ## What stays as `Kubero`
 

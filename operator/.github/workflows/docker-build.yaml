@@ -43,8 +43,8 @@ jobs:
           # Use Docker `latest` tag convention
           [ "$VERSION" == "main" ] && VERSION=latest
 
-          echo "IMG=ghcr.io/sislelabs/kuso-operator/kusoapp:${VERSION}" >> $GITHUB_ENV
-          echo "BUNDLE_IMG=ghcr.io/sislelabs/kuso-operator/kusoapp-bundle:${VERSION}" >> $GITHUB_ENV
+          echo "IMG=ghcr.io/sislelabs/kuso-operator:${VERSION}" >> $GITHUB_ENV
+          echo "BUNDLE_IMG=ghcr.io/sislelabs/kuso-operator-bundle:${VERSION}" >> $GITHUB_ENV
 
           echo ::set-output name=VERSION::$(cat VERSION)
 

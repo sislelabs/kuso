@@ -6,7 +6,7 @@ metadata:
     capabilities: Basic Install
     categories: Integration & Delivery
     certified: "false"
-    containerImage: ghcr.io/sislelabs/kuso-operator/kusoapp:v0.2.2
+    containerImage: ghcr.io/sislelabs/kuso-operator:v0.2.2
     description: Kuso is a GitOps continuous delivery tool for Kubernetes.
     repository: https://github.com/sislelabs/kuso
     support: Kuso Community

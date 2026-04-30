@@ -56,14 +56,14 @@ spec:
         - name: fetch
           env:
           - name: GIT_REPOSITORY
-            value: git@github.com:kubero-dev/template-nodeapp.git
+            value: git@github.com:sislelabs/kuso-template-nodeapp.git
           - name: GIT_REF
             value: main
           - name: KUSO_BUILDPACK_DEFAULT_RUN_CMD
             value: "exit 0"
           - name: KUSO_BUILDPACK_DEFAULT_BUILD_CMD
             value: "exit 0"
-          image: "ghcr.io/kubero-dev/fetch:latest"
+          image: "ghcr.io/sislelabs/kuso-fetch:latest"
           imagePullPolicy: Always
           resources: {}
           securityContext:
@@ -87,7 +87,7 @@ spec:
           env:
           - name: BUILD_BASE_DIR
             value: /app
-          image: "ghcr.io/kubero-dev/build:latest"
+          image: "ghcr.io/sislelabs/kuso-build:latest"
           imagePullPolicy: Always
           resources: {}
           securityContext:

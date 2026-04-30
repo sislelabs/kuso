@@ -1510,7 +1510,7 @@ spec:
         - --metrics-bind-address=127.0.0.1:8080
         - --leader-elect
         - --leader-election-id=kuso-operator
-        image: ghcr.io/sislelabs/kuso-operator/kusoapp:v0.1.3
+        image: ghcr.io/sislelabs/kuso-operator:v0.1.3
         livenessProbe:
           httpGet:
             path: /healthz

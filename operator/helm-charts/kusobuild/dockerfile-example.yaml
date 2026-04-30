@@ -48,7 +48,7 @@ spec:
       initContainers:
         - env:
           - name: GIT_REPOSITORY
-            value: git@github.com:kubero-dev/template-nodeapp.git
+            value: git@github.com:sislelabs/kuso-template-nodeapp.git
           - name: GIT_BRANCH
             value: main
           - name: GIT_REF
@@ -57,7 +57,7 @@ spec:
             value: "exit 0"
           - name: KUSO_BUILDPACK_DEFAULT_BUILD_CMD
             value: "exit 0"
-          image: ghcr.io/kubero-dev/buildpacks/fetch:latest
+          image: ghcr.io/sislelabs/kuso-buildpacks/fetch:latest
           imagePullPolicy: Always
           name: fetch
           resources: {}

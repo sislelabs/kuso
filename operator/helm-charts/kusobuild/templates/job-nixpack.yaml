@@ -62,7 +62,7 @@ spec:
             value: "exit 0"
           - name: KUSO_BUILDPACK_DEFAULT_BUILD_CMD
             value: "exit 0"
-          image: "ghcr.io/kubero-dev/fetch:latest"
+          image: "ghcr.io/sislelabs/kuso-fetch:latest"
           imagePullPolicy: Always
           resources: {}
           securityContext:
@@ -81,7 +81,7 @@ spec:
           - sh
           - -c
           - nixpacks build . -o .
-          image: "ghcr.io/kubero-dev/build:latest"
+          image: "ghcr.io/sislelabs/kuso-build:latest"
           imagePullPolicy: Always
           resources: {}
           securityContext:

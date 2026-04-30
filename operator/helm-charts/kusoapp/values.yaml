@@ -36,7 +36,7 @@ image:
   #  - npm
   #  - start
   fetch:
-    repository: ghcr.io/kubero-dev/fetch
+    repository: ghcr.io/sislelabs/kuso-fetch
     tag: v1
     securityContext:
       readOnlyRootFilesystem: false

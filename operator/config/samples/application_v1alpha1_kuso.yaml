@@ -8,7 +8,7 @@ spec:
   fullnameOverride: ""
   image:
     pullPolicy: Always
-    repository: ghcr.io/sislelabs/kuso-server/kuso
+    repository: ghcr.io/sislelabs/kuso-server
     tag: "latest"
   imagePullSecrets: []
   ingress:
@@ -104,21 +104,21 @@ spec:
         catalogs:
         - name: "Kuso"
           description: "Kuso templates"
-          templateBasePath: "https://raw.githubusercontent.com/kubero-dev/kubero/main/services/"
+          templateBasePath: "https://raw.githubusercontent.com/sislelabs/kuso/main/services/"
           index: 
-            url: "https://raw.githubusercontent.com/kubero-dev/templates/main/index.json"
+            url: "https://raw.githubusercontent.com/sislelabs/kuso-templates/main/index.json"
             format: "json" # json or yaml # TODO has no effect yet. json is always used
         - name: "Kuso Frameworks"
           description: "Kuso templates"
-          templateBasePath: "https://raw.githubusercontent.com/kubero-dev/kubero/main/services/"
+          templateBasePath: "https://raw.githubusercontent.com/sislelabs/kuso/main/services/"
           index: 
-            url: "https://raw.githubusercontent.com/kubero-dev/templates/main/index-frameworks.json"
+            url: "https://raw.githubusercontent.com/sislelabs/kuso-templates/main/index-frameworks.json"
             format: "json" # json or yaml # TODO has no effect yet. json is always used
       buildPacks:
         - name: NodeJS
           language: JavaScript
           fetch:
-            repository: ghcr.io/kubero-dev/fetch
+            repository: ghcr.io/sislelabs/kuso-fetch
             tag: v1
             securityContext:
               runAsUser: 1000
@@ -135,7 +135,7 @@ spec:
         - name: PHP
           language: PHP
           fetch:
-            repository: ghcr.io/kubero-dev/fetch
+            repository: ghcr.io/sislelabs/kuso-fetch
             tag: v1
             securityContext:
               runAsUser: 1000
@@ -154,7 +154,7 @@ spec:
         - name: Python
           language: Python
           fetch:
-            repository: ghcr.io/kubero-dev/fetch
+            repository: ghcr.io/sislelabs/kuso-fetch
             tag: v1
             securityContext:
               runAsUser: 1000
@@ -169,7 +169,7 @@ spec:
         - name: GoLang
           language: GoLang
           fetch:
-            repository: ghcr.io/kubero-dev/fetch
+            repository: ghcr.io/sislelabs/kuso-fetch
             tag: v1
             securityContext:
               runAsUser: 1000
@@ -184,7 +184,7 @@ spec:
         - name: Hugo
           language: GoLang
           fetch:
-            repository: ghcr.io/kubero-dev/fetch
+            repository: ghcr.io/sislelabs/kuso-fetch
             tag: v1
             securityContext:
               runAsUser: 1000
@@ -199,7 +199,7 @@ spec:
         - name: Ruby
           language: Ruby
           fetch:
-            repository: ghcr.io/kubero-dev/fetch
+            repository: ghcr.io/sislelabs/kuso-fetch
             tag: v1
             securityContext:
               runAsUser: 1000
@@ -214,7 +214,7 @@ spec:
         - name: Static
           language: HTML
           fetch:
-            repository: ghcr.io/kubero-dev/fetch
+            repository: ghcr.io/sislelabs/kuso-fetch
             tag: v1
             securityContext:
               runAsUser: 1000
