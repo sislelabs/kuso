@@ -647,7 +647,7 @@ metadata:
                     "metadata": {
                       "annotations": {
                         "meta.helm.sh/release-name": "test",
-                        "meta.helm.sh/release-namespace": "kuso-dev"
+                        "meta.helm.sh/release-namespace": "sislelabs"
                       },
                       "labels": {
                         "app.kubernetes.io/managed-by": "Kuso"
@@ -725,7 +725,7 @@ metadata:
                 "tag": "main"
               },
               "pullPolicy": "Always",
-              "repository": "ghcr.io/kuso-dev/docker-images/node",
+              "repository": "ghcr.io/sislelabs/docker-images/node",
               "run": {
                 "command": "node index.js",
                 "readOnlyAppStorage": true,
@@ -1386,7 +1386,7 @@ metadata:
     description: Kuso is a GitOps continuous delivery tool for Kubernetes.
     operators.operatorframework.io/builder: operator-sdk-v1.41.1
     operators.operatorframework.io/project_layout: helm.sdk.operatorframework.io/v1
-    repository: https://github.com/kuso-dev/kuso
+    repository: https://github.com/sislelabs/kuso
     support: Kuso Community
   name: kuso-operator.v0.2.2
   namespace: placeholder
@@ -2560,14 +2560,14 @@ spec:
   - workflow
   links:
   - name: Kuso Operator
-    url: https://github.com/kuso-dev/kuso-operator
+    url: https://github.com/sislelabs/kuso-operator
   - name: Kuso UI
-    url: https://github.com/kuso-dev/kuso
+    url: https://github.com/sislelabs/kuso
   maintainers:
   - email: gicara+kuso@gmail.com
     name: Gianni Carafa
   maturity: alpha
   provider:
     name: kuso
-    url: https://github.com/kuso-dev/
+    url: https://github.com/sislelabs/
   version: 0.2.2

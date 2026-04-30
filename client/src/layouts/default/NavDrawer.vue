@@ -134,7 +134,7 @@
                 :title="$t('navigation.documentation')">
             </v-list-item>
             <v-list-item 
-                link href="https://github.com/kuso-dev/kuso" 
+                link href="https://github.com/sislelabs/kuso" 
                 target="_blank"
                 prepend-icon="mdi-github"
                 :title="$t('navigation.github')">
@@ -207,7 +207,7 @@
                         auto-grow
                     ></v-textarea>
 
-                    <a href="https://github.com/kuso-dev/kuso/releases" target="_blank">List of latest Kuso releases</a>
+                    <a href="https://github.com/sislelabs/kuso/releases" target="_blank">List of latest Kuso releases</a>
                 </v-col>
                 <!--
                 <v-col cols="12">

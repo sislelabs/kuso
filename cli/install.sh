@@ -5,8 +5,8 @@
 #                                                                              #
 # Supported OS: Linux, macOS ---> Windows(not supported)                       #
 # Supported Architecture: amd64, arm64                                         #
-# Source: https://github.com/kuso-dev/kuso-cli                             #
-# Binary Release: https://github.com/kuso-dev/kuso-cli/releases/latest     #
+# Source: https://github.com/sislelabs/kuso-cli                             #
+# Binary Release: https://github.com/sislelabs/kuso-cli/releases/latest     #
 # License: Apache License 2.0                                                  #
 # Usage:                                                                       #
 #   curl -fsSL get.kuso.sislelabs.com | bash                                           #
@@ -47,7 +47,7 @@ if [[ -f "/usr/local/bin/kuso" ]]; then
     [[ "$replaceBinary" != "y" && "$replaceBinary" != "" ]] && echo "Aborting installation." && exit 1
 fi
 
-release_url="https://github.com/kuso-dev/kuso-cli/releases/${version}/download/kuso-cli_${os}_${arch}.tar.gz"
+release_url="https://github.com/sislelabs/kuso-cli/releases/${version}/download/kuso-cli_${os}_${arch}.tar.gz"
 temp_dir=$(mktemp -d)
 
 echo "Downloading ${release_url} ..."

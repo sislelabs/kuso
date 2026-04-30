@@ -95,7 +95,7 @@ class Template implements ITemplate {
     this.image = {
       containerPort: app.image.containerPort,
       pullPolicy: 'Always',
-      repository: app.image.repository || 'ghcr.io/kuso-dev/idler',
+      repository: app.image.repository || 'ghcr.io/sislelabs/idler',
       tag: app.image.tag || 'v1',
       //run: app.image.run,
     };

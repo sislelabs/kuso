@@ -1,12 +1,12 @@
 # kuso-cli
 
-![Version](https://img.shields.io/github/v/release/kuso-dev/kuso-cli)
-![Build Status](https://img.shields.io/github/actions/workflow/status/kuso-dev/kuso-cli/build.yml?branch=main)
-![License](https://img.shields.io/github/license/kuso-dev/kuso-cli)
+![Version](https://img.shields.io/github/v/release/sislelabs/kuso-cli)
+![Build Status](https://img.shields.io/github/actions/workflow/status/sislelabs/kuso-cli/build.yml?branch=main)
+![License](https://img.shields.io/github/license/sislelabs/kuso-cli)
 
-A powerful and user-friendly Command Line Interface (CLI) for [Kuso](https://github.com/kuso-dev/kuso), the simplest Platform as a Service (PaaS) for Kubernetes.
+A powerful and user-friendly Command Line Interface (CLI) for [Kuso](https://github.com/sislelabs/kuso), the simplest Platform as a Service (PaaS) for Kubernetes.
 
-> **Note:** Please report any issues in the [main repository](https://github.com/kuso-dev/kuso).
+> **Note:** Please report any issues in the [main repository](https://github.com/sislelabs/kuso).
 
 ---
 
@@ -69,7 +69,7 @@ If Homebrew is not installed, install it first:
 Install Kuso CLI via Homebrew:
 
 ```shell
-brew tap kuso-dev/kuso
+brew tap sislelabs/kuso
 brew install kuso-cli
 ```
 
@@ -88,7 +88,7 @@ For advanced use cases, build and package the binary manually.
 1. **Clone the Repository:**
 
    ```shell
-   git clone https://github.com/kuso-dev/kuso-cli.git
+   git clone https://github.com/sislelabs/kuso-cli.git
    ```
 
 2. **Navigate to the Project Directory:**
@@ -271,7 +271,7 @@ echo "dev" > cmd/kusoCli/VERSION
 
 ## Contributing
 
-We welcome contributions from the community! Please check out our [Contributing Guidelines](https://github.com/kuso-dev/kuso/blob/main/CONTRIBUTING.md) for more information.
+We welcome contributions from the community! Please check out our [Contributing Guidelines](https://github.com/sislelabs/kuso/blob/main/CONTRIBUTING.md) for more information.
 
 ---
 
@@ -283,12 +283,12 @@ This project is licensed under the [MIT License](LICENSE).
 
 ## Acknowledgments
 
-- **[Kuso](https://github.com/kuso-dev/kuso):** The simplest PaaS for Kubernetes.
+- **[Kuso](https://github.com/sislelabs/kuso):** The simplest PaaS for Kubernetes.
 - **[Go](https://golang.org/):** The programming language used for development.
 - **Community Contributors:** Thank you to all who have contributed to this project.
 
 ---
 
-Thank you for using **kuso-cli**! If you have suggestions or encounter issues, please open an issue in the [main repository](https://github.com/kuso-dev/kuso).
+Thank you for using **kuso-cli**! If you have suggestions or encounter issues, please open an issue in the [main repository](https://github.com/sislelabs/kuso).
 
 ---

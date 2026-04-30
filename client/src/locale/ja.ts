@@ -392,7 +392,7 @@ const messages = {
   runpacks: {
     name: 'ランパック',
     helpTitle: 'ランパックとは？',
-    helpText: '<p><strong>ランパック</strong>は、Kubernetesクラスター内でアプリケーションがどのように取得、ビルド、実行されるかを定義します。各ランパックは3つの段階で構成されています：</p><ul class="ma-4"><li><strong>Fetch</strong>：コンテナイメージを使用してGitリポジトリからコードを取得します。デフォルトを使用するか、カスタマイズできます。</li><li><strong>Build</strong>：選択したコンテナ（任意のDockerイメージ）でビルドコマンドを実行します。ここで依存関係がインストールされるか、アプリがコンパイルされます。</li><li><strong>Run</strong>：最終的なコンテナを起動します。<em>web</em>ポッドはインターネットに公開され、<em>worker</em>ポッドはバックグラウンドジョブ用です。</li></ul><p>ランパックは非常に柔軟で、さまざまな言語やフレームワークに合わせてカスタマイズできます。公開されているコンテナイメージに依存しています。<a href="https://github.com/kuso-dev/runpacks/tree/main/packs" target="_blank" rel="noopener">kuso-dev/runpacks</a>でランパックの例を見つけることができます。</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/runpacks/" target="_blank" rel="noopener">Kusoドキュメントで詳細を読む</a></p>',
+    helpText: '<p><strong>ランパック</strong>は、Kubernetesクラスター内でアプリケーションがどのように取得、ビルド、実行されるかを定義します。各ランパックは3つの段階で構成されています：</p><ul class="ma-4"><li><strong>Fetch</strong>：コンテナイメージを使用してGitリポジトリからコードを取得します。デフォルトを使用するか、カスタマイズできます。</li><li><strong>Build</strong>：選択したコンテナ（任意のDockerイメージ）でビルドコマンドを実行します。ここで依存関係がインストールされるか、アプリがコンパイルされます。</li><li><strong>Run</strong>：最終的なコンテナを起動します。<em>web</em>ポッドはインターネットに公開され、<em>worker</em>ポッドはバックグラウンドジョブ用です。</li></ul><p>ランパックは非常に柔軟で、さまざまな言語やフレームワークに合わせてカスタマイズできます。公開されているコンテナイメージに依存しています。<a href="https://github.com/sislelabs/runpacks/tree/main/packs" target="_blank" rel="noopener">sislelabs/runpacks</a>でランパックの例を見つけることができます。</p><p class="mt-2"><a href="https://www.kuso.sislelabs.com/docs/usermanual/runpacks/" target="_blank" rel="noopener">Kusoドキュメントで詳細を読む</a></p>',
     table: {
       name: '名前',
       language: '言語',

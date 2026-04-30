@@ -8,7 +8,7 @@ metadata:
     certified: "false"
     containerImage: ghcr.io/sislelabs/kuso-operator/kusoapp:v0.2.2
     description: Kuso is a GitOps continuous delivery tool for Kubernetes.
-    repository: https://github.com/kuso-dev/kuso
+    repository: https://github.com/sislelabs/kuso
     support: Kuso Community
   name: kuso-operator.v0.0.0
   namespace: placeholder
@@ -154,14 +154,14 @@ spec:
   - workflow
   links:
   - name: Kuso Operator
-    url: https://github.com/kuso-dev/kuso-operator
+    url: https://github.com/sislelabs/kuso-operator
   - name: Kuso UI
-    url: https://github.com/kuso-dev/kuso
+    url: https://github.com/sislelabs/kuso
   maintainers:
   - email: gicara+kuso@gmail.com
     name: Gianni Carafa
   maturity: alpha
   provider:
     name: kuso
-    url: https://github.com/kuso-dev/
+    url: https://github.com/sislelabs/
   version: 0.0.0

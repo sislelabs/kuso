@@ -34,7 +34,7 @@ changelog:
 brews:
   -
     repository:
-      owner: kuso-dev
+      owner: sislelabs
       name: homebrew-kuso
       token: "{{ .Env.GORELEASER_GITHUB_TOKEN }}"
     homepage: "https://www.kuso.sislelabs.com"

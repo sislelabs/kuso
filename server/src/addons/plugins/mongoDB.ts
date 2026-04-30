@@ -71,7 +71,7 @@ kubectl apply -n mongodb-operator-system --server-side -f https://raw.githubuser
       metadata: {
         annotations: {
           'meta.helm.sh/release-name': 'test',
-          'meta.helm.sh/release-namespace': 'kuso-dev',
+          'meta.helm.sh/release-namespace': 'sislelabs',
         },
         labels: {
           'app.kubernetes.io/managed-by': 'Kuso',

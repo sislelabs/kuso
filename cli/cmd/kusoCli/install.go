@@ -601,7 +601,7 @@ func installKusoUi() {
 		installer := resty.New()
 
 		installer.SetBaseURL("https://raw.githubusercontent.com")
-		kf, _ := installer.R().Get("kuso-dev/kuso-operator/main/config/samples/application_v1alpha1_kuso.yaml")
+		kf, _ := installer.R().Get("sislelabs/kuso-operator/main/config/samples/application_v1alpha1_kuso.yaml")
 
 		var kusoUIConfig KusoUIConfig
 		_ = yaml.Unmarshal(kf.Body(), &kusoUIConfig)
@@ -935,7 +935,7 @@ func installCertManagerClusterIssuer(namespace string) {
 	installer := resty.New()
 
 	installer.SetBaseURL("https://raw.githubusercontent.com")
-	kf, err := installer.R().Get("kuso-dev/kuso-cli/refs/heads/main/templates/certmanagerClusterIssuer.prod.yaml")
+	kf, err := installer.R().Get("sislelabs/kuso-cli/refs/heads/main/templates/certmanagerClusterIssuer.prod.yaml")
 	if err != nil {
 		fmt.Println(err)
 		cfmt.Println("{{✗ Failed to create CertManager ClusterIssuer. Rerunn command after finalized installer with: kuso install -c certManager}}::red")

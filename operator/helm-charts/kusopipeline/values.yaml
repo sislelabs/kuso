@@ -18,14 +18,14 @@ git:
     pub: XXXXXXXXX=
     read_only: true
     title: bot@kuso
-    url: https://api.github.com/repos/kuso-dev/template-nodeapp/keys/87654321
+    url: https://api.github.com/repos/sislelabs/template-nodeapp/keys/87654321
     verified: true
   repository:
     description: Simple example Node app
     id: 121212122
     name: template-nodeapp
     node_id: R_asdfasdfaa
-    owner: kuso-dev
+    owner: sislelabs
     private: true
     ssh_url: git@github.com:kubero-dev/template-nodeapp.git
   webhook:

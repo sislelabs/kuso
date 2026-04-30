@@ -47,7 +47,7 @@ describe('KubectlTemplate', () => {
   it('should use default image repository and tag if not provided', () => {
     const app = { ...mockApp, image: { containerPort: 80 } } as any;
     const tpl = new KubectlTemplate(app);
-    expect(tpl.spec.image.repository).toBe('ghcr.io/kuso-dev/idler');
+    expect(tpl.spec.image.repository).toBe('ghcr.io/sislelabs/idler');
     expect(tpl.spec.image.tag).toBe('v1');
   });
 });

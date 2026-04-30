@@ -1543,7 +1543,7 @@ export default defineComponent({
       branch: "main",
       branchesList: [] as string[],
       docker: {
-        image: "ghcr.io/kuso-dev/idler",
+        image: "ghcr.io/sislelabs/idler",
         tag: "latest",
         command: "",
       },
@@ -2432,7 +2432,7 @@ export default defineComponent({
         }
 
         if (this.deploymentstrategy == "git" && this.buildstrategy != "plain") {
-          this.docker.image = "ghcr.io/kuso-dev/idler";
+          this.docker.image = "ghcr.io/sislelabs/idler";
           this.docker.tag = "v1";
         }
 

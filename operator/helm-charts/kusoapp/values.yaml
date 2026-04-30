@@ -27,7 +27,7 @@ gitrepo:
   default_branch: main
 
 image:
-  repository: ghcr.io/kuso-dev/idler
+  repository: ghcr.io/sislelabs/idler
   tag: v1
   pullPolicy: Always
   containerPort: 8080
@@ -233,7 +233,7 @@ addons: []
 #         metadata:
 #           annotations:
 #             meta.helm.sh/release-name: test
-#             meta.helm.sh/release-namespace: kuso-dev
+#             meta.helm.sh/release-namespace: sislelabs
 #           labels:
 #             app.kubernetes.io/managed-by: Kuso
 #           name: mongodb-secret

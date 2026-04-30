@@ -1,7 +1,7 @@
-![](https://raw.githubusercontent.com/kuso-dev/docs/refs/heads/main/static/assets/logo/kuso-logo-horizontal.png)
+![](https://raw.githubusercontent.com/sislelabs/docs/refs/heads/main/static/assets/logo/kuso-logo-horizontal.png)
 
 > [!NOTE]
-> Please open issues in the [Kuso](https://github.com/kuso-dev/kuso/issues) main repository.
+> Please open issues in the [Kuso](https://github.com/sislelabs/kuso/issues) main repository.
 
 <br>
 

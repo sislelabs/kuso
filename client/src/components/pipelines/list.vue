@@ -24,7 +24,7 @@
                             closable
                 >
                 If you find Kuso useful, please consider starring the project 
-                <a href="https://github.com/kuso-dev/kuso" target="_blank">on GitHub</a>. 
+                <a href="https://github.com/sislelabs/kuso" target="_blank">on GitHub</a>. 
                 Your support contributes to the project's growth and development.
             </v-alert>
             <v-col cols="12" style="text-align: center;">
