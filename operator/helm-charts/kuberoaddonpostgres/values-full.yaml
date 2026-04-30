@@ -1,0 +1,239 @@
+postgres:
+  ## @section Global parameters
+  global:
+    ## @param global.imageRegistry Global Docker Image registry
+    imageRegistry: ""
+    ## @param global.imagePullSecrets Global Docker registry secret names as an array
+    imagePullSecrets: []
+
+  ## @section Common parameters
+  ## @param nameOverride String to partially override postgres.fullname
+  nameOverride: ""
+  ## @param fullnameOverride String to fully override postgres.fullname
+  fullnameOverride: ""
+  ## @param commonLabels Labels to add to all deployed objects
+  commonLabels: {}
+  ## @param commonAnnotations Annotations to add to all deployed objects
+  commonAnnotations: {}
+
+  ## @section PostgreSQL image configuration
+  image:
+    ## @param image.registry PostgreSQL image registry
+    registry: docker.io
+    ## @param image.repository PostgreSQL image repository
+    repository: postgres
+    ## @param image.tag PostgreSQL image tag (immutable tags are recommended)
+    tag: "17.6@sha256:29e0bb09c8e7e7fc265ea9f4367de9622e55bae6b0b97e7cce740c2d63c2ebc0"
+    ## @param image.imagePullPolicy PostgreSQL image pull policy
+    imagePullPolicy: Always
+
+  ## @section Deployment configuration
+  ## @param replicaCount Number of PostgreSQL replicas to deploy (Note: PostgreSQL doesn't support multi-master replication by default)
+  replicaCount: 1
+
+  ## @section Pod annotations and labels
+  ## @param podAnnotations Map of annotations to add to the pods
+  podAnnotations: {}
+  ## @param podLabels Map of labels to add to the pods
+  podLabels: {}
+
+  ## @section Security Context
+  podSecurityContext:
+    ## @param podSecurityContext.fsGroup Group ID for the volumes of the pod
+    fsGroup: 999
+
+  securityContext:
+    ## @param securityContext.allowPrivilegeEscalation Enable container privilege escalation
+    allowPrivilegeEscalation: false
+    ## @param securityContext.runAsNonRoot Configure the container to run as a non-root user
+    runAsNonRoot: true
+    ## @param securityContext.runAsUser User ID for the PostgreSQL container
+    runAsUser: 999
+    ## @param securityContext.runAsGroup Group ID for the PostgreSQL container
+    runAsGroup: 999
+    ## @param securityContext.readOnlyRootFilesystem Mount container root filesystem as read-only
+    readOnlyRootFilesystem: false
+    ## @param securityContext.capabilities.drop Linux capabilities to be dropped
+    capabilities:
+      drop:
+        - ALL
+
+  ## @section PostgreSQL Authentication
+  auth:
+    ## @param auth.enablePostgresUser Enable/disable the postgres user
+    enablePostgresUser: true
+    ## @param auth.postgresPassword Password for the postgres admin user. If not set, a random password will be generated
+    postgresPassword: ""
+    ## @param auth.username Name for a custom user to create
+    username: ""
+    ## @param auth.password Password for the custom user to create
+    password: ""
+    ## @param auth.database Name for a custom database to create
+    database: ""
+    ## @param auth.existingSecret Name of existing secret to use for PostgreSQL credentials
+    existingSecret: ""
+    ## @param auth.secretKeys.adminPasswordKey Name of key in existing secret to use for PostgreSQL credentials
+    ## @param auth.secretKeys.userPasswordKey Name of key in existing secret to use for PostgreSQL credentials
+    ## @param auth.secretKeys.replicationPasswordKey Name of key in existing secret to use for replication user password
+    secretKeys:
+      adminPasswordKey: "postgres-password"
+      userPasswordKey: "password"
+      replicationPasswordKey: "replication-password"
+
+  ## @section PostgreSQL Configuration
+  config:
+    ## @param config.postgresqlSharedPreloadLibraries Shared preload libraries (comma-separated list)
+    postgresqlSharedPreloadLibraries: ""
+    ## @param config.postgresqlMaxConnections Maximum number of connections
+    postgresqlMaxConnections: 100
+    ## @param config.postgresqlSharedBuffers Amount of memory the database server uses for shared memory buffers
+    postgresqlSharedBuffers: ""
+    ## @param config.postgresqlEffectiveCacheSize Effective cache size
+    postgresqlEffectiveCacheSize: ""
+    ## @param config.postgresqlWorkMem Amount of memory to be used by internal sort operations and hash tables
+    postgresqlWorkMem: ""
+    ## @param config.postgresqlMaintenanceWorkMem Maximum amount of memory to be used by maintenance operations
+    postgresqlMaintenanceWorkMem: ""
+    ## @param config.postgresqlWalBuffers Amount of memory used in shared memory for WAL data
+    postgresqlWalBuffers: ""
+    ## @param config.postgresqlCheckpointCompletionTarget Time spent flushing dirty buffers during checkpoint, as fraction of checkpoint interval
+    postgresqlCheckpointCompletionTarget: ""
+    ## @param config.postgresqlRandomPageCost Sets the planner's estimate of the cost of a non-sequentially-fetched disk page
+    postgresqlRandomPageCost: ""
+    ## @param config.postgresqlLogStatement Sets the type of statements logged
+    postgresqlLogStatement: ""
+    ## @param config.postgresqlLogMinDurationStatement Sets the minimum execution time above which statements will be logged
+    postgresqlLogMinDurationStatement: ""
+    ## @param config.extraConfig Additional PostgreSQL configuration parameters
+    extraConfig: []
+    ## @param config.existingConfigmap Name of existing ConfigMap with PostgreSQL configuration
+    existingConfigmap: ""
+
+  ## @section Service configuration
+  service:
+    ## @param service.type PostgreSQL service type
+    type: ClusterIP
+    ## @param service.port PostgreSQL service port
+    port: 5432
+    ## @param service.targetPort PostgreSQL container port
+    targetPort: 5432
+    ## @param service.annotations Service annotations
+    annotations: {}
+
+  ## @section Ingress configuration
+  ingress:
+    ## @param ingress.enabled Enable ingress record generation for PostgreSQL
+    enabled: false
+    ## @param ingress.className IngressClass that will be used to implement the Ingress
+    className: ""
+    ## @param ingress.annotations Additional annotations for the Ingress resource
+    annotations: {}
+      # kubernetes.io/ingress.class: nginx
+      # kubernetes.io/tls-acme: "true"
+    ## @param ingress.hosts[0].host Hostname for PostgreSQL ingress
+    ## @param ingress.hosts[0].paths[0].path Path for PostgreSQL ingress
+    ## @param ingress.hosts[0].paths[0].pathType Path type for PostgreSQL ingress
+    hosts:
+      - host: postgres.local
+        paths:
+          - path: /
+            pathType: Prefix
+    ## @param ingress.tls TLS configuration for PostgreSQL ingress
+    tls: []
+    #  - secretName: postgres-tls
+    #    hosts:
+    #      - postgres.local
+
+  ## @section Resources
+  resources: {}
+    ## We usually recommend not to specify default resources and to leave this as a conscious
+    ## choice for the user. This also increases chances charts run on environments with little
+    ## resources, such as Minikube. If you do want to specify resources, uncomment the following
+    ## lines, adjust them as necessary, and remove the curly braces after 'resources:'.
+    # limits:
+    #   cpu: 500m
+    #   memory: 512Mi
+    # requests:
+    #   cpu: 250m
+    #   memory: 256Mi
+
+  ## @section Persistence
+  persistence:
+    ## @param persistence.enabled Enable persistence using Persistent Volume Claims
+    enabled: true
+    ## @param persistence.storageClass Persistent Volume storage class
+    storageClass: ""
+    ## @param persistence.annotations Persistent Volume Claim annotations
+    annotations: {}
+    ## @param persistence.size Persistent Volume size
+    size: 8Gi
+    ## @param persistence.accessModes Persistent Volume access modes
+    accessModes:
+      - ReadWriteOnce
+    ## @param persistence.existingClaim The name of an existing PVC to use for persistence
+    existingClaim: ""
+
+  ## @section Liveness and readiness probes
+  livenessProbe:
+    ## @param livenessProbe.enabled Enable livenessProbe on PostgreSQL containers
+    enabled: true
+    ## @param livenessProbe.initialDelaySeconds Initial delay seconds for livenessProbe
+    initialDelaySeconds: 30
+    ## @param livenessProbe.periodSeconds Period seconds for livenessProbe
+    periodSeconds: 10
+    ## @param livenessProbe.timeoutSeconds Timeout seconds for livenessProbe
+    timeoutSeconds: 5
+    ## @param livenessProbe.failureThreshold Failure threshold for livenessProbe
+    failureThreshold: 3
+    ## @param livenessProbe.successThreshold Success threshold for livenessProbe
+    successThreshold: 1
+
+  readinessProbe:
+    ## @param readinessProbe.enabled Enable readinessProbe on PostgreSQL containers
+    enabled: true
+    ## @param readinessProbe.initialDelaySeconds Initial delay seconds for readinessProbe
+    initialDelaySeconds: 5
+    ## @param readinessProbe.periodSeconds Period seconds for readinessProbe
+    periodSeconds: 5
+    ## @param readinessProbe.timeoutSeconds Timeout seconds for readinessProbe
+    timeoutSeconds: 5
+    ## @param readinessProbe.failureThreshold Failure threshold for readinessProbe
+    failureThreshold: 3
+    ## @param readinessProbe.successThreshold Success threshold for readinessProbe
+    successThreshold: 1
+
+  startupProbe:
+    ## @param startupProbe.enabled Enable startupProbe on PostgreSQL containers
+    enabled: true
+    ## @param startupProbe.initialDelaySeconds Initial delay seconds for startupProbe
+    initialDelaySeconds: 30
+    ## @param startupProbe.periodSeconds Period seconds for startupProbe
+    periodSeconds: 10
+    ## @param startupProbe.timeoutSeconds Timeout seconds for startupProbe
+    timeoutSeconds: 5
+    ## @param startupProbe.failureThreshold Failure threshold for startupProbe
+    failureThreshold: 30
+    ## @param startupProbe.successThreshold Success threshold for startupProbe
+    successThreshold: 1
+
+  ## @section Node Selection
+  ## @param nodeSelector Node labels for pod assignment
+  nodeSelector: {}
+
+  ## @param tolerations Toleration labels for pod assignment
+  tolerations: []
+
+  ## @param affinity Affinity settings for pod assignment
+  affinity: {}
+
+
+  ## @section Service Account
+  serviceAccount:
+    ## @param serviceAccount.create Specifies whether a service account should be created
+    create: false
+    ## @param serviceAccount.annotations Annotations to add to the service account
+    annotations: {}
+    ## @param serviceAccount.name The name of the service account to use. If not set and create is true, a name is generated using the `fullname` template.
+    name: ""
+    ## @param serviceAccount.automountServiceAccountToken whether to automount the SA token inside the pod
+    automountServiceAccountToken: false

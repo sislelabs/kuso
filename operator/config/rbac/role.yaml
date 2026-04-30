@@ -1,0 +1,986 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+##
+## Base operator rules
+##
+# We need to get namespaces so the operator can read namespaces to ensure they exist
+- apiGroups:
+  - ""
+  resources:
+  - namespaces
+  verbs:
+  - get
+# We need to manage Helm release secrets
+- apiGroups:
+  - ""
+  - "apps"
+  resources:
+  - configmaps
+  - secrets
+  verbs:
+  - "*"
+# We need to create events on CRs about things happening during reconciliation
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoApp
+##
+- apiGroups:
+  - rbac.authorization.k8s.io
+  - ""
+  resources:
+  - "roles"
+  - "clusterroles"
+  - "clusterrolebindings"
+  - "rolebindings"
+  - "secrets"
+  - "deployments"
+  - "namespaces"
+  - "services"
+  - "ingresses"
+  verbs:
+  - "*"
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberoapps
+  - kuberoapps/status
+  - kuberoapps/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "serviceaccounts"
+  - "services"
+- verbs:
+  - "*"
+  apiGroups:
+  - "apps"
+  - ""
+  resources:
+  - "deployments"
+  - "serviceaccounts"
+- verbs:
+  - "*"
+  apiGroups:
+  - "autoscaling"
+  resources:
+  - "horizontalpodautoscalers"
+- verbs:
+  - "*"
+  apiGroups:
+  - "networking.k8s.io"
+  - ""
+  resources:
+  - "ingresses"
+  - "rolebindings"
+  - "services"
+  - "jobs"
+- verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+  apiGroups:
+  - "batch"
+  resources:
+  - "cronjobs"
+#### Addons
+- apiGroups:
+    - "opstreelabs.in"
+  resources:
+    - "mongodbs"
+  verbs:
+    - "*"
+- apiGroups:
+    - "redis.redis.opstreelabs.in"
+  resources:
+    - "redis"
+    - "redisclusters"
+  verbs:
+    - "*"
+- apiGroups:
+    - "postgres-operator.crunchydata.com"
+  resources:
+    - "postgresclusters"
+  verbs:
+    - "*"
+- apiGroups:
+    - "minio.min.io"
+  resources:
+    - "tenants"
+  verbs:
+    - "*"
+- apiGroups:
+    - "charts.operatorhub.io"
+  resources:
+    - "cockroachdbs"
+  verbs:
+    - "*"
+- apiGroups:
+    - "apiextensions.k8s.io"
+  resources:
+    - "customresourcedefinitions" # some how this is needed for cockroachdb
+  verbs:
+    - "*"
+- apiGroups:
+    - "networking.cfargotunnel.com"
+  resources:
+    - "tunnels"
+    - "tunnelbindings"
+  verbs:
+    - "*"
+- apiGroups:
+    - "clickhouse.altinity.com"
+  resources:
+    - "clickhouseinstallations"
+  verbs:
+    - "*"
+- apiGroups:
+    - "postgresql.cnpg.io"
+  resources:
+    - "clusters"
+  verbs:
+    - "*"
+- apiGroups:
+    - "elasticsearch.k8s.elastic.co"
+  resources:
+    - "elasticsearches"
+  verbs:
+    - "*"
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: Kubero
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberoes
+  - kuberoes/status
+  - kuberoes/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+- apiGroups:
+  - ""
+  verbs:
+  - "*"
+  resources:
+  - "serviceaccounts"
+  - "services"
+  - "persistentvolumeclaims"
+  - "persistentvolumes"
+  - "persistentvolumeclaims/finalizers"
+  - "persistentvolumes/finalizers"
+- apiGroups:
+  - "operators.coreos.com"
+  verbs:
+  - "*"
+  resources:
+  - "clusterserviceversions"
+- apiGroups:
+  - "cert-manager.io"
+  resources:
+  - "certificates"
+  verbs:
+  - "*"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoPipeline
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberopipelines
+  - kuberopipelines/status
+  - kuberopipelines/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "serviceaccounts"
+  - "services"
+- verbs:
+  - "*"
+  apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "namespaces"
+  - "secrets"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoMysql
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberomysqls
+  - kuberomysqls/status
+  - kuberomysqls/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - "apps"
+  resources:
+  - "statefulsets"
+  verbs:
+  - "*"
+- apiGroups:
+  - ""
+  resources:
+  - "secrets"
+  - "configmaps"
+  - "serviceaccounts"
+  - "services"
+  - "persistentvolumeclaims"
+  - "persistentvolumes"
+  verbs:
+  - "*"
+- apiGroups:
+  - "policy"
+  resources:
+  - "poddisruptionbudgets"
+  verbs:
+  - "*"
+- apiGroups:
+  - "networking.k8s.io"
+  resources:
+  - "networkpolicies"
+  verbs:
+  - "*"
+- apiGroups:
+  - "rbac.authorization.k8s.io"
+  resources:
+  - "roles"
+  - "rolebindings"
+  verbs:
+  - "*"
+
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoPostgresql
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberopostgresqls
+  - kuberopostgresqls/status
+  - kuberopostgresqls/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - "apps"
+  resources:
+  - "statefulsets"
+  verbs:
+  - "*"
+- apiGroups:
+  - ""
+  resources:
+  - "secrets"
+  - "configmaps"
+  - "serviceaccounts"
+  - "services"
+  - "persistentvolumeclaims"
+  - "persistentvolumes"
+  verbs:
+  - "*"
+- apiGroups:
+  - "policy"
+  resources:
+  - "poddisruptionbudgets"
+  verbs:
+  - "*"
+- apiGroups:
+  - "networking.k8s.io"
+  resources:
+  - "networkpolicies"
+  verbs:
+  - "*"
+- apiGroups:
+  - "rbac.authorization.k8s.io"
+  resources:
+  - "roles"
+  - "rolebindings"
+  verbs:
+  - "*"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoRedis
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberoredis
+  - kuberoredis/status
+  - kuberoredis/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - "apps"
+  resources:
+  - "statefulsets"
+  verbs:
+  - "*"
+- apiGroups:
+  - ""
+  resources:
+  - "secrets"
+  - "configmaps"
+  - "serviceaccounts"
+  - "services"
+  - "persistentvolumeclaims"
+  - "persistentvolumes"
+  verbs:
+  - "*"
+- apiGroups:
+  - "policy"
+  resources:
+  - "poddisruptionbudgets"
+  verbs:
+  - "*"
+- apiGroups:
+  - "networking.k8s.io"
+  resources:
+  - "networkpolicies"
+  verbs:
+  - "*"
+- apiGroups:
+  - "rbac.authorization.k8s.io"
+  resources:
+  - "roles"
+  - "rolebindings"
+  verbs:
+  - "*"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoMongoDB
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberomongodbs
+  - kuberomongodbs/status
+  - kuberomongodbs/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - "apps"
+  resources:
+  - "statefulsets"
+  verbs:
+  - "*"
+- apiGroups:
+  - ""
+  resources:
+  - "secrets"
+  - "configmaps"
+  - "serviceaccounts"
+  - "services"
+  - "persistentvolumeclaims"
+  - "persistentvolumes"
+  verbs:
+  - "*"
+- apiGroups:
+  - "policy"
+  resources:
+  - "poddisruptionbudgets"
+  verbs:
+  - "*"
+- apiGroups:
+  - "networking.k8s.io"
+  resources:
+  - "networkpolicies"
+  verbs:
+  - "*"
+- apiGroups:
+  - "rbac.authorization.k8s.io"
+  resources:
+  - "roles"
+  - "rolebindings"
+  verbs:
+  - "*"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoElasticsearch
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberoelasticsearches
+  - kuberoelasticsearches/status
+  - kuberoelasticsearches/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - "apps"
+  resources:
+  - "statefulsets"
+  verbs:
+  - "*"
+- apiGroups:
+  - ""
+  resources:
+  - "secrets"
+  - "configmaps"
+  - "serviceaccounts"
+  - "services"
+  - "persistentvolumeclaims"
+  - "persistentvolumes"
+  verbs:
+  - "*"
+- apiGroups:
+  - "policy"
+  resources:
+  - "poddisruptionbudgets"
+  verbs:
+  - "*"
+- apiGroups:
+  - "networking.k8s.io"
+  resources:
+  - "networkpolicies"
+  verbs:
+  - "*"
+- apiGroups:
+  - "rbac.authorization.k8s.io"
+  resources:
+  - "roles"
+  - "rolebindings"
+  verbs:
+  - "*"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoCouchDB
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberocouchdbs
+  - kuberocouchdbs/status
+  - kuberocouchdbs/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - "apps"
+  resources:
+  - "statefulsets"
+  verbs:
+  - "*"
+- apiGroups:
+  - ""
+  resources:
+  - "secrets"
+  - "configmaps"
+  - "serviceaccounts"
+  - "services"
+  - "persistentvolumeclaims"
+  - "persistentvolumes"
+  verbs:
+  - "*"
+- apiGroups:
+  - "policy"
+  resources:
+  - "poddisruptionbudgets"
+  verbs:
+  - "*"
+- apiGroups:
+  - "networking.k8s.io"
+  resources:
+  - "networkpolicies"
+  verbs:
+  - "*"
+- apiGroups:
+  - "rbac.authorization.k8s.io"
+  resources:
+  - "roles"
+  - "rolebindings"
+  verbs:
+  - "*"
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoKafka
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberokafkas
+  - kuberokafkas/status
+  - kuberokafkas/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+  - "statefulsets"
+  verbs:
+  - "*"
+- apiGroups:
+  - ""
+  resources:
+  - "secrets"
+  - "configmaps"
+  - "serviceaccounts"
+  - "services"
+  - "persistentvolumeclaims"
+  - "persistentvolumes"
+  verbs:
+  - "*"
+- apiGroups:
+  - "job"
+  resources:
+  - "batch"
+  verbs:
+  - "*"
+- apiGroups:
+  - "policy"
+  resources:
+  - "poddisruptionbudgets"
+  verbs:
+  - "*"
+- apiGroups:
+  - "networking.k8s.io"
+  resources:
+  - "networkpolicies"
+  verbs:
+  - "*"
+- apiGroups:
+  - "rbac.authorization.k8s.io"
+  resources:
+  - "roles"
+  - "rolebindings"
+  verbs:
+  - "*"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoMail
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberomails
+  - kuberomails/status
+  - kuberomails/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "serviceaccounts"
+  - "services"
+- verbs:
+  - "*"
+  apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoRabbitMQ
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberorabbitmqs
+  - kuberorabbitmqs/status
+  - kuberorabbitmqs/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "serviceaccounts"
+  - "services"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoMemcached
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberomemcacheds
+  - kuberomemcacheds/status
+  - kuberomemcacheds/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "serviceaccounts"
+  - "services"
+- verbs:
+  - "*"
+  apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoPrometheus
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberoprometheuses
+  - kuberoprometheuses/status
+  - kuberoprometheuses/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "serviceaccounts"
+  - "services"
+- verbs:
+  - "*"
+  apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+- apiGroups:
+  - "" # strange but required by "system:serviceaccount:kubero-operator-system:kubero-operator-controlle" from User "kubero-prometheus-kube-state-metrics" 
+  resources:
+  - "clusterrolebindings"
+  verbs:
+  - "*"
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoBuild
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberobuilds
+  - kuberobuilds/status
+  - kuberobuilds/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - "batch"
+  resources:
+  - "jobs"
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "pods"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoAddonMysql
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberoaddonmysqls
+  - kuberoaddonmysqls/status
+  - kuberoaddonmysqls/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "serviceaccounts"
+  - "services"
+- verbs:
+  - "*"
+  apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoAddonPostgres
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberoaddonpostgres
+  - kuberoaddonpostgres/status
+  - kuberoaddonpostgres/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "serviceaccounts"
+  - "services"
+- verbs:
+  - "*"
+  apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoAddonRedis
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberoaddonredis
+  - kuberoaddonredis/status
+  - kuberoaddonredis/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "serviceaccounts"
+  - "services"
+- verbs:
+  - "*"
+  apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoAddonRabbitmq
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberoaddonrabbitmqs
+  - kuberoaddonrabbitmqs/status
+  - kuberoaddonrabbitmqs/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "serviceaccounts"
+  - "services"
+- verbs:
+  - "*"
+  apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoAddonMongodb
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberoaddonmongodbs
+  - kuberoaddonmongodbs/status
+  - kuberoaddonmongodbs/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "serviceaccounts"
+  - "services"
+- verbs:
+  - "*"
+  apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+
+##
+## Rules for application.kubero.dev/v1alpha1, Kind: KuberoAddonMemcached
+##
+- apiGroups:
+  - application.kubero.dev
+  resources:
+  - kuberoaddonmemcacheds
+  - kuberoaddonmemcacheds/status
+  - kuberoaddonmemcacheds/finalizers
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- verbs:
+  - "*"
+  apiGroups:
+  - ""
+  resources:
+  - "serviceaccounts"
+  - "services"
+- verbs:
+  - "*"
+  apiGroups:
+  - "apps"
+  resources:
+  - "deployments"
+
+#+kubebuilder:scaffold:rules

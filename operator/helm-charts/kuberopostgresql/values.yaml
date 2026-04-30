@@ -1,0 +1,22 @@
+postgresql:
+  global:
+    storageClass: ""
+    postgresql:
+      auth:
+        postgresPassword: ""
+        username: ""
+        password: ""
+        database: ""
+  image:
+    repository: "bitnamilegacy/postgresql"
+  volumePermissions:
+    image:
+      repository: "bitnamilegacy/bitnami-shell"
+  metrics:
+    image:
+      repository: "bitnamilegacy/postgres-exporter"
+  primary:
+    persistence:
+      ## @param primary.persistence.size PVC Storage Request for PostgreSQL volume
+      ##
+      size: 8Gi

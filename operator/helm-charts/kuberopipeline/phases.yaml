@@ -1,0 +1,70 @@
+{{- $mainnamespace := .Values.mainnamespace | default "kubero" -}}
+{{- $secretObj := (lookup "v1" "Secret" $mainnamespace "registry-login") | default dict }}
+{{- $secretData := (get $secretObj "data") | default dict }}
+{{- $dockerconfigjson := (get $secretData ".dockerconfigjson") | default "" }}
+{{- $registryUsername := (get $secretData "username") | default "" }}
+{{- $registryPassword := (get $secretData "password") | default "" }}
+
+{{- if eq .Values.enabled "showcomments"  -}}
+## Do not print comments to avoid reconsiclation issues
+# https://itnext.io/manage-auto-generated-secrets-in-your-helm-charts-5aee48ba6918
+#{{- $kuberoObj := (lookup "application.kubero.dev/v1alpha1" "Kubero" $mainnamespace "kubero") | default dict }}
+#{{- $specData := (get $kuberoObj "spec") | default dict }}
+#{{- $registryData := (get $specData "registry") | default dict }}
+#{{- $registryHost := (get $registryData "host") | default "missingregistry.mydomain.com/example" }}
+#{{- $registryProtocol := (get $registryData "protocol") | default "https" }}
+#{{- $registryPort := (get $registryData "port") | default 443 }}
+{{- end }}
+
+{{- $name := .Values.name -}}
+{{- $deploymentstrategy := .Values.deploymentstrategy -}}
+{{- $deploykey := .Values.git.keys.priv -}}
+{{- $deploykeyPub := .Values.git.keys.pub -}}
+{{- $deploykeySshUrl := splitList ":" .Values.git.repository.ssh_url | first -}}
+
+{{- range .Values.phases }}
+{{- if .enabled }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ $name }}-{{ .name }}
+---
+{{- if and (eq $deploymentstrategy "git") ($deploykeyPub) }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: "deployment-keys"
+  namespace: {{ $name }}-{{ .name }}
+  annotations:
+    app.kubernetes.io/comment: "used by kuberoes Runpacks to pull the code"
+type: Opaque
+data:
+  deploykey: {{ $deploykey | quote }}
+  deploykey.pub: {{ $deploykeyPub | quote }}
+---
+{{- end }}
+{{- if and (eq $deploymentstrategy "git") (ne $registryUsername "") }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kubero-pull-secret
+  namespace: {{ $name }}-{{ .name }}
+type: kubernetes.io/dockerconfigjson
+data:
+  .dockerconfigjson: {{ $dockerconfigjson | quote }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: registry-credentials
+  namespace: {{ $name }}-{{ .name }}
+  annotations:
+    app.kubernetes.io/comment: "required by trivy to scan the image"
+type: Opaque
+data:
+  username: {{ $registryUsername | quote }}
+  password: {{ $registryPassword | quote }}
+---
+{{- end }}
+{{- end }}
+{{- end }}

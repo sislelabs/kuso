@@ -1,0 +1,6 @@
+{{- range .Values.addons }}
+{{- range .resourceDefinitions }}
+{{- toYaml . }}
+---
+{{- end }}
+{{- end }}

@@ -1,0 +1,24 @@
+## Append samples you want in your CSV to this file as resources ##
+resources:
+- application_v1alpha1_kuberoapp.yaml
+- application_v1alpha1_kubero.yaml
+- application_v1alpha1_kuberopipeline.yaml
+- application_v1alpha1_kuberomysql.yaml
+- application_v1alpha1_kuberopostgresql.yaml
+- application_v1alpha1_kuberoredis.yaml
+- application_v1alpha1_kuberomongodb.yaml
+- application_v1alpha1_kuberoelasticsearch.yaml
+- application_v1alpha1_kuberocouchdb.yaml
+- application_v1alpha1_kuberokafka.yaml
+- application_v1alpha1_kuberomail.yaml
+- application_v1alpha1_kuberorabbitmq.yaml
+- application_v1alpha1_kuberomemcached.yaml
+- application_v1alpha1_kuberoprometheus.yaml
+- application_v1alpha1_kuberobuild.yaml
+- application_v1alpha1_kuberoaddonmysql.yaml
+- application_v1alpha1_kuberoaddonpostgres.yaml
+- application_v1alpha1_kuberoaddonredis.yaml
+- application_v1alpha1_kuberoaddonrabbitmq.yaml
+- application_v1alpha1_kuberoaddonmongodb.yaml
+- application_v1alpha1_kuberoaddonmemcached.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples

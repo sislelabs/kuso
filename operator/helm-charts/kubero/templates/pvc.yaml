@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "kubero.fullname" . }}-data
+  labels:
+    {{- include "kubero.labels" . | nindent 4 }}
+spec:
+  {{- if .Values.kubero.database.storageClassName }}
+  storageClassName: {{ .Values.kubero.database.storageClassName | quote }}
+  {{- else  }}
+  storageClassName: ""
+  {{- end }}
+  accessModes:
+    {{- if .Values.kubero.database.accessModes }}
+    {{- toYaml .Values.kubero.database.accessModes | nindent 4 }}
+    {{- else }}
+    - ReadWriteOnce
+    {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.kubero.database.size | default "10Gi" }}

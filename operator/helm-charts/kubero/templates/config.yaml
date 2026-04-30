@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kubero-config
+data:
+  config.yaml: |
+{{- if and .Values.kubero.config (kindIs "string" .Values.kubero.config) }}
+{{ .Values.kubero.config | indent 4 }}
+{{- else if and .Values.kubero.config (kindIs "map" .Values.kubero.config) }}
+{{ .Values.kubero.config | toYaml | indent 4 }}
+{{- else }}
+{{ .Values.kubero.config | toYaml | indent 4 }}
+{{- end }}  
