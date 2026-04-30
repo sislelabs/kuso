@@ -1,0 +1,100 @@
+# Smoke-test KusoApp: deploys nginxdemos/hello and exposes it via ingress.
+# Validates that the kuso-operator renders a KusoApp into a real Deployment +
+# Service + Ingress and that traffic reaches the pod.
+apiVersion: application.kuso.sislelabs.com/v1alpha1
+kind: KusoApp
+metadata:
+  name: hello
+  namespace: default
+spec:
+  name: hello
+  pipeline: smoke
+  phase: production
+  deploymentstrategy: docker
+  buildstrategy: dockerfile
+  sleep: disabled
+  fullnameOverride: hello
+  affinity: {}
+  podAnnotations: {}
+  podSize: {}
+  podSecurityContext: {}
+  securityContext: {}
+  resources: {}
+  nameOverride: ""
+  imagePullSecrets: []
+  service:
+    type: ClusterIP
+    port: 5678
+  serviceAccount:
+    create: false
+    annotations: {}
+    name: ""
+  autoscaling:
+    enabled: false
+    maxReplicas: 5
+    minReplicas: 1
+    targetCPUUtilizationPercentage: 80
+  envVars: []
+  cronjobs: []
+  addons: []
+  extraVolumes: []
+  basicAuth:
+    enabled: false
+    realm: ""
+    accounts: []
+  vulnerabilityscan:
+    enabled: false
+    schedule: "0 0 * * *"
+    image:
+      repository: aquasec/trivy
+      tag: latest
+  web:
+    replicaCount: 1
+    autoscaling:
+      maxReplicas: 5
+      minReplicas: 1
+      targetCPUUtilizationPercentage: 80
+  worker:
+    replicaCount: 0
+    autoscaling:
+      maxReplicas: 5
+      minReplicas: 0
+      targetCPUUtilizationPercentage: 80
+  image:
+    repository: hashicorp/http-echo
+    tag: latest
+    pullPolicy: IfNotPresent
+    containerPort: 5678
+    command:
+      - "/http-echo"
+      - "-listen=:5678"
+      - "-text=hello from kuso"
+    fetch:
+      repository: ghcr.io/sislelabs/kuso-fetch
+      tag: latest
+      securityContext: {}
+    build:
+      repository: alpine
+      tag: latest
+      securityContext: {}
+    run:
+      repository: nginxdemos/hello
+      tag: plain-text
+      readOnlyAppStorage: false
+      securityContext: {}
+  ingress:
+    enabled: true
+    className: traefik
+    annotations:
+      cert-manager.io/cluster-issuer: letsencrypt-prod
+    hosts:
+      - host: hello.sislelabs.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - hosts:
+          - hello.sislelabs.com
+        secretName: hello-tls
+  gitrepo: {}
+  branch: main

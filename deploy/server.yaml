@@ -1,0 +1,173 @@
+# kuso server deployment.
+#
+# Run after deploy/operator.yaml. Assumes:
+#   - cert-manager installed and a ClusterIssuer named "letsencrypt-prod" exists
+#   - an ingress controller is reachable on the cluster (k3s ships with traefik
+#     by default, or you can disable it and bring your own)
+#   - DNS for the configured Host points at the ingress IP
+#
+# Override the defaults via environment in production: KUSO_ADMIN_PASSWORD,
+# JWT_SECRET, KUSO_SESSION_KEY at minimum.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kuso
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuso-server
+  namespace: kuso
+---
+# kuso-server needs cluster-wide read of kuso CRs (it's the control plane UI)
+# and read+write on Secrets/ConfigMaps in app namespaces. For v0.1 we grant
+# cluster-admin to keep the install simple. Tighten for production.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kuso-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: kuso-server
+    namespace: kuso
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kuso-server-secrets
+  namespace: kuso
+type: Opaque
+stringData:
+  # OVERRIDE THESE in production. Defaults are for the first-boot smoke test
+  # only.
+  KUSO_SESSION_KEY: "change-me-session-key-32-chars-min"
+  JWT_SECRET: "change-me-jwt-secret-32-chars-minimum"
+  KUSO_ADMIN_PASSWORD: "kuso-admin"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kuso-server-data
+  namespace: kuso
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kuso-server
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-server
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kuso-server
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kuso-server
+    spec:
+      serviceAccountName: kuso-server
+      containers:
+        - name: kuso-server
+          image: ghcr.io/sislelabs/kuso-server:v0.1.0-dev
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 2000
+          env:
+            - name: NODE_ENV
+              value: production
+            - name: PORT
+              value: "2000"
+            - name: KUSO_NAMESPACE
+              value: kuso
+            - name: KUSO_ADMIN_USERNAME
+              value: admin
+            - name: KUSO_ADMIN_EMAIL
+              value: admin@kuso.sislelabs.com
+            - name: KUSO_SETUP
+              value: enabled
+            - name: KUSO_TEMPLATES_ENABLED
+              value: "true"
+            - name: KUSO_CLUSTER_ISSUER
+              value: letsencrypt-prod
+            - name: KUBERNETES_INGRESS_CLASSNAME
+              value: traefik
+            - name: DATABASE_TYPE
+              value: sqlite
+            - name: DATABASE_URL
+              value: file:/app/server/db/kuso.sqlite
+          envFrom:
+            - secretRef:
+                name: kuso-server-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /app/server/db
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: kuso-server-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kuso-server
+  namespace: kuso
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kuso-server
+  ports:
+    - name: http
+      port: 80
+      targetPort: 2000
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kuso-server
+  namespace: kuso
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  tls:
+    - hosts:
+        - kuso.sislelabs.com
+      secretName: kuso-server-tls
+  rules:
+    - host: kuso.sislelabs.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: kuso-server
+                port:
+                  name: http
