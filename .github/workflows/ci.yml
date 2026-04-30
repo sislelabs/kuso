@@ -77,6 +77,35 @@ jobs:
             helm lint "$chart"
           done
 
+  crd-smoke:
+    name: CRD dry-run on kind
+    needs: changes
+    if: needs.changes.outputs.operator == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: helm/kind-action@v1
+        with:
+          cluster_name: kuso-smoke
+          wait: 90s
+      - name: apply CRDs and dry-run all sample CRs
+        run: |
+          kubectl apply -f operator/config/crd/bases/
+          fail=0
+          for f in operator/config/samples/application_v1alpha1_*.yaml; do
+            if kubectl apply --dry-run=server -f "$f" >/dev/null 2>&1; then
+              echo "OK    $f"
+            else
+              echo "FAIL  $f"
+              kubectl apply --dry-run=server -f "$f" 2>&1 | sed 's/^/      /'
+              fail=$((fail + 1))
+            fi
+          done
+          if [[ "$fail" -gt 0 ]]; then
+            echo "==> $fail sample(s) failed"
+            exit 1
+          fi
+
   server:
     name: server (NestJS)
     needs: changes

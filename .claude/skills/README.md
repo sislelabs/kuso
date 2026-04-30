@@ -11,6 +11,7 @@ Project-specific skills for AI agents working on kuso. Each `.md` file is a skil
 | [`crd-architecture.md`](./crd-architecture.md)   | Before touching the operator or thinking about CRDs.                             |
 | [`agentic-workflow.md`](./agentic-workflow.md)   | Before making changes — sets ground rules for what to do without asking.         |
 | [`mcp-development.md`](./mcp-development.md)     | Before touching `mcp/` — tool design rules, layout, how to add a new tool.       |
+| [`smoke-tests.md`](./smoke-tests.md)             | Before opening a PR — which smoke test catches what, in cost order.              |
 
 ## Adding a skill
 
