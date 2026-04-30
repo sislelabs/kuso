@@ -20,4 +20,6 @@ func Register(server *mcp.Server, cfg *config.Config) {
 	registerListApps(server, client)
 	registerDescribeApp(server, client)
 	registerTroubleshootApp(server, client)
+	registerRestartApp(server, client)
+	registerTailLogs(server, client)
 }

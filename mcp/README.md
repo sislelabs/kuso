@@ -44,10 +44,11 @@ The full v1 tool surface is specified in [`docs/PRD.md` Workstream B](../docs/PR
 | `list_apps`         | implemented |
 | `describe_app`      | implemented |
 | `troubleshoot_app`  | implemented |
+| `tail_logs`         | implemented |
+| `restart_app`       | implemented (mutating; requires `confirm: true`) |
 | `deploy_app`        | planned     |
-| `set_app_config`    | planned     |
-| `manage_secret`     | planned     |
-| `tail_logs`         | planned     |
+| `set_app_config`    | planned (blocked on full IApp shape modeling) |
+| `manage_secret`     | planned (blocked on operator envFrom support — Workstream C) |
 | `exec_app`          | planned     |
 | `cluster_health`    | planned     |
 | `cost_report`       | planned     |
