@@ -13,7 +13,8 @@ Open https://github.com/organizations/sislelabs/settings/apps/new and fill in:
 | **GitHub App name** | `kuso-sislelabs` (or any unique name; this becomes the App's slug) |
 | **Description** | "kuso PaaS — connects repos to deploys" |
 | **Homepage URL** | `https://kuso.sislelabs.com` |
-| **Identifying and authorizing users** → **Callback URL** | `https://kuso.sislelabs.com/api/auth/github/callback` |
+| **Identifying and authorizing users** → **Callback URL** | `https://kuso.sislelabs.com/api/github/setup-callback` |
+| **Post installation** → **Setup URL (optional)** | `https://kuso.sislelabs.com/api/github/setup-callback` |
 | **Identifying and authorizing users** → **Request user authorization (OAuth) during installation** | ✅ checked |
 | **Webhook** → **Active** | ✅ checked |
 | **Webhook URL** | `https://kuso.sislelabs.com/api/webhooks/github` |

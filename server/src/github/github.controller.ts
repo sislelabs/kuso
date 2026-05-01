@@ -15,15 +15,17 @@ import {
   Get,
   Headers,
   HttpCode,
+  Logger,
   Param,
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
 import { createHmac, timingSafeEqual } from 'crypto';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
 import { JwtAuthGuard } from '../auth/strategies/jwt.guard';
 import { GithubService } from './github.service';
 import { GithubWebhooksService } from './github-webhooks.service';
@@ -93,10 +95,49 @@ export class GithubController {
   @Post('/github/installations/refresh')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth('bearerAuth')
-  @ApiOperation({ summary: 'Force a refresh of the installation cache from GitHub' })
+  @ApiOperation({
+    summary: 'Force a refresh of the installation cache from GitHub',
+  })
   async refreshInstallations() {
     await this.github.refreshInstallations();
     return { ok: true };
+  }
+
+  /**
+   * Public landing page after a user installs (or reinstalls) the kuso
+   * GitHub App. GitHub appends `installation_id`, `setup_action=install`,
+   * and an OAuth `code` to whatever URL was registered as the App's
+   * "Setup URL" / "Callback URL". We:
+   *
+   *   1. Refresh the installation cache so the new installation +
+   *      its repos show up in subsequent /api/github/installations calls.
+   *   2. Redirect to /projects/new where the UI can pick up the cached
+   *      installation via the repo picker.
+   *
+   * Public (no JwtAuthGuard) because the user is mid-redirect and may
+   * not have the JWT cookie attached. The `code` we ignore for now —
+   * full OAuth-sign-in flow is a follow-up; for v0.2 we only need the
+   * App installation, not the user identity.
+   */
+  @Get('/github/setup-callback')
+  @ApiOperation({ summary: 'GitHub App post-install redirect handler' })
+  async setupCallback(
+    @Query('installation_id') installationId: string,
+    @Query('setup_action') setupAction: string,
+    @Res() res: Response,
+  ) {
+    const log = new Logger('GithubSetupCallback');
+    log.log(
+      `setup-callback installation_id=${installationId} action=${setupAction}`,
+    );
+    try {
+      await this.github.refreshInstallations();
+    } catch (e: any) {
+      log.warn(`refresh installations failed: ${e?.message}`);
+      // Don't 500 — the install itself happened on GitHub's side. The
+      // next view in the UI can re-trigger the refresh.
+    }
+    res.redirect('/projects/new?github=installed');
   }
 
   // ---------------- repo introspection ----------------
@@ -112,8 +153,15 @@ export class GithubController {
     @Query('branch') branch: string,
     @Query('path') path?: string,
   ) {
-    if (!branch) throw new BadRequestException('branch query param is required');
-    return this.github.listRepoTree(Number(id), owner, repo, branch, path || '');
+    if (!branch)
+      throw new BadRequestException('branch query param is required');
+    return this.github.listRepoTree(
+      Number(id),
+      owner,
+      repo,
+      branch,
+      path || '',
+    );
   }
 
   @Post('/github/detect-runtime')
@@ -145,9 +193,14 @@ export class GithubController {
   }
 }
 
-function verifySignature(secret: string, raw: Buffer, signature: string): boolean {
+function verifySignature(
+  secret: string,
+  raw: Buffer,
+  signature: string,
+): boolean {
   if (!signature || !signature.startsWith('sha256=')) return false;
-  const expected = 'sha256=' + createHmac('sha256', secret).update(raw).digest('hex');
+  const expected =
+    'sha256=' + createHmac('sha256', secret).update(raw).digest('hex');
   const a = Buffer.from(expected);
   const b = Buffer.from(signature);
   if (a.length !== b.length) return false;
