@@ -1,0 +1,9 @@
+apiVersion: v2
+name: kusoproject
+description: A kuso project. Owns the default repo, base domain, and previews
+  toggle; groups N services and M addons. Renders no workload resources of its
+  own — services and environments do that. Exists so the operator can track
+  status and so the server has a CR-shaped source of truth for project metadata.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

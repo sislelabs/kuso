@@ -1,0 +1,31 @@
+# permissions for end users to edit kusoprojects.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  labels:
+    app.kubernetes.io/name: clusterrole
+    app.kubernetes.io/instance: kusoproject-editor-role
+    app.kubernetes.io/component: rbac
+    app.kubernetes.io/created-by: kuso-operator
+    app.kubernetes.io/part-of: kuso-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: kusoproject-editor-role
+rules:
+- apiGroups:
+  - application.kuso.sislelabs.com
+  resources:
+  - kusoprojects
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - application.kuso.sislelabs.com
+  resources:
+  - kusoprojects/status
+  verbs:
+  - get

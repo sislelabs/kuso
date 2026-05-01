@@ -36,6 +36,9 @@ trap cleanup EXIT
 echo "==> creating kind cluster ${CLUSTER_NAME}"
 kind create cluster --name "${CLUSTER_NAME}" --wait 90s >/dev/null
 
+echo "==> creating kuso namespace (sample CRs reference it)"
+kubectl --context "${CONTEXT}" create namespace kuso >/dev/null
+
 echo "==> applying CRDs"
 kubectl --context "${CONTEXT}" apply -f operator/config/crd/bases/ >/dev/null
 

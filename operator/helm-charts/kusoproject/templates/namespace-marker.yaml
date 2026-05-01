@@ -1,0 +1,23 @@
+{{/*
+KusoProject deliberately renders zero Kubernetes resources of its own. The
+chart exists so the helm-operator has a target to reconcile and so we can
+emit status, but the actual workload lives on KusoService and KusoEnvironment.
+
+A ConfigMap is emitted as a marker so helm has SOMETHING to track, otherwise
+helm-operator shows the release as "no resources". Marker contains the project
+metadata copied from the CR spec for debugging.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-project
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+data:
+  description: {{ .Values.description | quote }}
+  baseDomain: {{ .Values.baseDomain | quote }}
+  defaultRepoUrl: {{ .Values.defaultRepo.url | quote }}
+  defaultBranch: {{ .Values.defaultRepo.defaultBranch | quote }}
+  githubInstallationId: {{ .Values.github.installationId | quote }}
+  previewsEnabled: {{ .Values.previews.enabled | quote }}
+  previewsTtlDays: {{ .Values.previews.ttlDays | quote }}

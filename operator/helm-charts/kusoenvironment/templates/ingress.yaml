@@ -1,0 +1,31 @@
+{{- if .Values.host }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "kusoenvironment.fullname" . }}
+  labels:
+    {{- include "kusoenvironment.labels" . | nindent 4 }}
+  {{- if .Values.tlsEnabled }}
+  annotations:
+    cert-manager.io/cluster-issuer: {{ .Values.clusterIssuer | quote }}
+  {{- end }}
+spec:
+  ingressClassName: {{ .Values.ingressClassName | quote }}
+  {{- if .Values.tlsEnabled }}
+  tls:
+    - hosts:
+        - {{ .Values.host | quote }}
+      secretName: {{ include "kusoenvironment.fullname" . }}-tls
+  {{- end }}
+  rules:
+    - host: {{ .Values.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "kusoenvironment.fullname" . }}
+                port:
+                  name: http
+{{- end }}

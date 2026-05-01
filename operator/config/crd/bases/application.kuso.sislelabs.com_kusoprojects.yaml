@@ -1,0 +1,73 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: kusoprojects.application.kuso.sislelabs.com
+spec:
+  group: application.kuso.sislelabs.com
+  names:
+    kind: KusoProject
+    listKind: KusoProjectList
+    plural: kusoprojects
+    singular: kusoproject
+    shortNames: [kp, kproj]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Repo
+          type: string
+          jsonPath: .spec.defaultRepo.url
+        - name: Branch
+          type: string
+          jsonPath: .spec.defaultRepo.defaultBranch
+        - name: Previews
+          type: boolean
+          jsonPath: .spec.previews.enabled
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          description: KusoProject is the top-level grouping for one product.
+          type: object
+          properties:
+            apiVersion: { type: string }
+            kind: { type: string }
+            metadata: { type: object }
+            spec:
+              type: object
+              properties:
+                description:
+                  type: string
+                baseDomain:
+                  type: string
+                  description: Domain under which auto-generated service hostnames are emitted.
+                defaultRepo:
+                  type: object
+                  properties:
+                    url:
+                      type: string
+                    defaultBranch:
+                      type: string
+                      default: main
+                github:
+                  type: object
+                  properties:
+                    installationId:
+                      type: integer
+                      format: int64
+                previews:
+                  type: object
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: false
+                    ttlDays:
+                      type: integer
+                      default: 7
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true

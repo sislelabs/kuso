@@ -1,88 +1,26 @@
-# Use the 'create api' subcommand to add watches to this file.
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoApp
-  chart: helm-charts/kusoapp
-  reconcilePeriod: 3m
+# helm-operator watches. v0.2 reshape — see docs/REDESIGN.md.
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: Kuso
   chart: helm-charts/kuso
 - group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KusoPipeline
-  chart: helm-charts/kusopipeline
+  kind: KusoProject
+  chart: helm-charts/kusoproject
   reconcilePeriod: 3m
 - group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KusoMysql
-  chart: helm-charts/kusomysql
+  kind: KusoService
+  chart: helm-charts/kusoservice
+  reconcilePeriod: 3m
 - group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KusoPostgresql
-  chart: helm-charts/kusopostgresql
+  kind: KusoEnvironment
+  chart: helm-charts/kusoenvironment
+  reconcilePeriod: 3m
 - group: application.kuso.sislelabs.com
   version: v1alpha1
-  kind: KusoRedis
-  chart: helm-charts/kusoredis
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoMongoDB
-  chart: helm-charts/kusomongodb
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoElasticsearch
-  chart: helm-charts/kusoelasticsearch
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoCouchDB
-  chart: helm-charts/kusocouchdb
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoKafka
-  chart: helm-charts/kusokafka
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoMail
-  chart: helm-charts/kusomail
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoRabbitMQ
-  chart: helm-charts/kusorabbitmq
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoMemcached
-  chart: helm-charts/kusomemcached
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoPrometheus
-  chart: helm-charts/kusoprometheus
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoBuild
-  chart: helm-charts/kusobuild
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoAddonMysql
-  chart: helm-charts/kusoaddonmysql
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoAddonPostgres
-  chart: helm-charts/kusoaddonpostgres
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoAddonRedis
-  chart: helm-charts/kusoaddonredis
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoAddonRabbitmq
-  chart: helm-charts/kusoaddonrabbitmq
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoAddonMongodb
-  chart: helm-charts/kusoaddonmongodb
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoAddonMemcached
-  chart: helm-charts/kusoaddonmemcached
+  kind: KusoAddon
+  chart: helm-charts/kusoaddon
+  reconcilePeriod: 3m
 #+kubebuilder:scaffold:watch

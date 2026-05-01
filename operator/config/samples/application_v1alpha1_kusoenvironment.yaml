@@ -1,0 +1,27 @@
+apiVersion: application.kuso.sislelabs.com/v1alpha1
+kind: KusoEnvironment
+metadata:
+  name: example-api-production
+  namespace: kuso
+  labels:
+    kuso.sislelabs.com/project: example
+    kuso.sislelabs.com/service: example-api
+    kuso.sislelabs.com/env: production
+spec:
+  project: example
+  service: example-api
+  kind: production
+  branch: main
+  image:
+    repository: ghcr.io/sislelabs/example-api
+    tag: latest
+    pullPolicy: IfNotPresent
+  port: 8080
+  replicaCount: 1
+  host: api.example.kuso.sislelabs.com
+  tlsEnabled: true
+  clusterIssuer: letsencrypt-prod
+  ingressClassName: traefik
+  envFromSecrets:
+    - example-pg-conn
+    - example-redis-conn

@@ -1,0 +1,19 @@
+{{- $supported := list "postgres" "redis" -}}
+{{- if not (has .Values.kind $supported) }}
+
+# Skeleton for addon kinds reserved in v0.2.0 but not yet implemented:
+#   mongodb, mysql, rabbitmq, memcached, clickhouse, elasticsearch, kafka,
+#   cockroachdb, couchdb
+#
+# Real implementations land across v0.2.x. For now we emit a marker
+# ConfigMap so the helm-operator reconcile succeeds and the user gets a
+# clear "not yet supported" status to read.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kusoaddon.fullname" . }}-pending
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+data:
+  status: "addon kind '{{ .Values.kind }}' is reserved but not implemented in v0.2.0 — see docs/REDESIGN.md"
+{{- end }}

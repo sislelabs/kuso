@@ -1,0 +1,23 @@
+{{/*
+Like KusoProject, KusoService renders zero workload resources. A ConfigMap
+marker exists so helm-operator can track the release and so server/CLI/MCP
+can read denormalized service metadata from a familiar Kubernetes object
+without re-fetching the CR.
+*/}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Release.Name }}-service
+  labels:
+    {{- include "kusoservice.labels" . | nindent 4 }}
+data:
+  project: {{ .Values.project | quote }}
+  repoUrl: {{ .Values.repo.url | quote }}
+  repoPath: {{ .Values.repo.path | quote }}
+  runtime: {{ .Values.runtime | quote }}
+  port: {{ .Values.port | quote }}
+  scaleMin: {{ .Values.scale.min | quote }}
+  scaleMax: {{ .Values.scale.max | quote }}
+  scaleTargetCPU: {{ .Values.scale.targetCPU | quote }}
+  sleepEnabled: {{ .Values.sleep.enabled | quote }}
+  sleepAfterMinutes: {{ .Values.sleep.afterMinutes | quote }}

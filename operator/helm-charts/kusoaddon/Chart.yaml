@@ -1,0 +1,10 @@
+apiVersion: v2
+name: kusoaddon
+description: A managed dependency (Postgres, Redis, MongoDB, ...) belonging to
+  a kuso project. Polymorphic — `spec.kind` selects which engine to deploy.
+  Always emits a connection-info Secret named `<project>-<addon>-conn` that
+  every service in the project picks up via envFrom (DATABASE_URL, REDIS_URL,
+  etc.).
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

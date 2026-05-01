@@ -1,0 +1,13 @@
+apiVersion: application.kuso.sislelabs.com/v1alpha1
+kind: KusoAddon
+metadata:
+  name: pg
+  namespace: kuso
+  labels:
+    kuso.sislelabs.com/project: example
+spec:
+  project: example
+  kind: postgres
+  version: "16"
+  size: small
+  database: example

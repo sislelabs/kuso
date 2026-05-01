@@ -1,0 +1,23 @@
+apiVersion: application.kuso.sislelabs.com/v1alpha1
+kind: KusoService
+metadata:
+  name: example-api
+  namespace: kuso
+  labels:
+    kuso.sislelabs.com/project: example
+spec:
+  project: example
+  repo:
+    url: https://github.com/sislelabs/example
+    path: services/api
+  runtime: dockerfile
+  port: 8080
+  envVars:
+    - name: LOG_LEVEL
+      value: info
+  scale:
+    min: 1
+    max: 5
+    targetCPU: 70
+  sleep:
+    enabled: false

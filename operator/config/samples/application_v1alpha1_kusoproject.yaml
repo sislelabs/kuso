@@ -1,0 +1,16 @@
+apiVersion: application.kuso.sislelabs.com/v1alpha1
+kind: KusoProject
+metadata:
+  name: example
+  namespace: kuso
+spec:
+  description: "Example project"
+  baseDomain: example.kuso.sislelabs.com
+  defaultRepo:
+    url: https://github.com/sislelabs/example
+    defaultBranch: main
+  github:
+    installationId: 0
+  previews:
+    enabled: true
+    ttlDays: 7

@@ -1,0 +1,47 @@
+# Default values for KusoAddon CRs. Polymorphic — set spec.kind to one of
+# the supported engines below. The chart emits a kind-specific StatefulSet
+# (or Deployment) plus a `<project>-<addon>-conn` Secret that every
+# KusoEnvironment in the project picks up via envFrom.
+#
+# Kinds supported in v0.2.0:
+#   postgres   — full implementation (StatefulSet + PVC, password generated)
+#   redis      — full implementation (StatefulSet + PVC, password generated)
+#
+# Kinds reserved (skeleton-only in v0.2.0; real impls in v0.2.x):
+#   mongodb, mysql, rabbitmq, memcached, clickhouse, elasticsearch, kafka,
+#   cockroachdb, couchdb
+#
+# project: required. Used for the connection secret name and label scoping.
+project: ""
+
+# kind: required. One of the values listed above.
+kind: postgres
+
+# version: engine version tag. Defaults are kind-specific; see
+# templates/<kind>.yaml.
+version: ""
+
+# size: small | medium | large; maps to default cpu/mem/storage requests.
+size: small
+
+# ha: when true, switch to clustered chart variant where supported. v0.2.0
+# only honours this for redis (sentinel mode); other kinds ignore it.
+ha: false
+
+# storageSize: PVC size override; defaults derived from size.
+storageSize: ""
+
+# resources: per-engine cpu/mem overrides; defaults derived from size.
+resources: {}
+
+# password: optional explicit password. When empty, the server (or a hook)
+# generates a random one and stores it in the connection secret.
+password: ""
+
+# database: kind-specific default database name. For postgres/mongodb defaults
+# to `<project>` if empty.
+database: ""
+
+backup:
+  schedule: ""
+  retentionDays: 14

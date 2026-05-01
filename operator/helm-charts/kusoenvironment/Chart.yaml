@@ -1,0 +1,8 @@
+apiVersion: v2
+name: kusoenvironment
+description: A running instance of one kuso service in one environment
+  (production or preview-pr-N). Renders the Deployment + Service + Ingress
+  (+optional HPA) that actually serve traffic.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

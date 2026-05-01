@@ -1,0 +1,21 @@
+# Default values for KusoProject CRs. Mirrors KusoProject.spec from
+# docs/REDESIGN.md. The helm-operator copies the CR's spec into these values
+# at reconcile time.
+
+description: ""
+
+# baseDomain: domain under which auto-generated service hostnames are emitted.
+# A blank value falls back to <project>.<KUSO_BASE_DOMAIN env var on the server>.
+baseDomain: ""
+
+defaultRepo:
+  url: ""
+  defaultBranch: main
+
+github:
+  # Installation id of the kuso GitHub App on the org/user that owns the repo.
+  installationId: 0
+
+previews:
+  enabled: false
+  ttlDays: 7

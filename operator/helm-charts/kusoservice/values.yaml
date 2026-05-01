@@ -1,0 +1,45 @@
+# Default values for KusoService CRs. Mirrors KusoService.spec from
+# docs/REDESIGN.md. helm-operator copies the CR spec onto these at reconcile.
+
+# project: required. The KusoProject this service belongs to. Used for label
+# scoping and to find the project's defaultRepo / addon connection secrets.
+project: ""
+
+# repo: optional override of the project's defaultRepo.
+# When empty, KusoEnvironment reconciliation reads the project's repo.
+repo:
+  url: ""
+  path: "."
+
+# runtime: dockerfile | nixpacks | buildpacks | static
+# Auto-detected at create time by the server (see docs/REDESIGN.md "Auto-detect
+# runtime"). User-overridable. Empty means "ask".
+runtime: ""
+
+# port: container port the service listens on. Auto-detected at create time;
+# user-overridable. Empty means "ask".
+port: 0
+
+# domains: optional per-service overrides. When empty, the server emits a
+# default `<service>.<project>.<baseDomain>` hostname to KusoEnvironment.
+domains: []
+# - host: api.example.com
+#   tls: true
+
+envVars: []
+# - name: LOG_LEVEL
+#   value: info
+# - name: STRIPE_SECRET_KEY
+#   valueFrom:
+#     secretKeyRef:
+#       name: my-secret
+#       key: stripe
+
+scale:
+  min: 1
+  max: 5
+  targetCPU: 70
+
+sleep:
+  enabled: false
+  afterMinutes: 30

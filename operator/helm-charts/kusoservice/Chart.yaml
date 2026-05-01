@@ -1,0 +1,9 @@
+apiVersion: v2
+name: kusoservice
+description: A kuso service. Owns the runtime, repo override, env vars, scale,
+  and sleep policy for one deployable inside a project. Renders no workload
+  resources directly — KusoEnvironment instances created by the server (one
+  per service per environment) do that.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

@@ -1,0 +1,97 @@
+{{- if eq .Values.kind "postgres" -}}
+{{- $version := .Values.version | default "16" -}}
+{{- $database := .Values.database | default .Values.project -}}
+{{- $password := .Values.password | default (randAlphaNum 24) -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+
+# StatefulSet running the upstream Postgres image. Plain non-HA single-node;
+# good enough for v0.2 and most indie-dev workloads. Switch to CloudNativePG
+# in v0.3 for HA + automated backups.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+    spec:
+      containers:
+        - name: postgres
+          image: "postgres:{{ $version }}"
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: {{ $database | quote }}
+            - name: POSTGRES_USER
+              value: kuso
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kusoaddon.connSecretName" . }}
+                  key: POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "kuso", "-d", {{ $database | quote }}]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ include "kusoaddon.storageSize" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres
+---
+# Connection secret. Picked up by every KusoEnvironment in the project via
+# envFrom. Standard env names match Heroku/Railway conventions so apps that
+# already speak those don't need configuration.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kusoaddon.connSecretName" . }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  POSTGRES_HOST: {{ $name | quote }}
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: kuso
+  POSTGRES_PASSWORD: {{ $password | quote }}
+  POSTGRES_DB: {{ $database | quote }}
+  DATABASE_URL: "postgres://kuso:{{ $password }}@{{ $name }}:5432/{{ $database }}"
+{{- end }}

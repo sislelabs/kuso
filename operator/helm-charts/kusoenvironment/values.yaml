@@ -1,0 +1,72 @@
+# Default values for KusoEnvironment CRs. The server creates these — one per
+# (service, env) tuple. Mirrors KusoEnvironment.spec from docs/REDESIGN.md.
+
+# project / service: required. The KusoProject and KusoService this env
+# belongs to. Used for label scoping, addon-secret discovery, and ownership.
+project: ""
+service: ""
+
+# kind: production | preview
+kind: production
+
+# branch: git ref this env tracks. For production envs this is the project
+# defaultBranch; for previews it's the PR head ref.
+branch: main
+
+# image: container image to run. Set by the build pipeline (server-side) to
+# the freshly built image after a push or PR sync.
+image:
+  repository: ""
+  tag: latest
+  pullPolicy: IfNotPresent
+
+# port: container port to expose, copied from KusoService.spec.port.
+port: 8080
+
+# replicaCount, autoscaling: copied from KusoService.spec.scale, optionally
+# overridden by KusoEnvironment.spec.overrides.scale.
+replicaCount: 1
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 70
+
+# sleep: copied from KusoService.spec.sleep.
+sleep:
+  enabled: false
+
+# host: ingress hostname. Auto-emitted by the server as
+# <service>.<project>.<baseDomain> for production or
+# <service>-pr-<n>.<project>.<baseDomain> for previews.
+# Per-service domain overrides from KusoService.spec.domains can replace this.
+host: ""
+
+# tlsEnabled: when true, attach cert-manager.io/cluster-issuer annotation and
+# request a per-host cert via Ingress.spec.tls. Defaults to true; override to
+# false on bare-IP installs without cert-manager.
+tlsEnabled: true
+clusterIssuer: letsencrypt-prod
+
+# ingressClassName: usually "traefik" on k3s. Override per-cluster.
+ingressClassName: traefik
+
+# envVars: per-env env var overrides. The server merges these on top of the
+# KusoService.spec.envVars at reconcile time before stamping into the values.
+envVars: []
+# - name: LOG_LEVEL
+#   value: debug
+
+# envFromSecrets: list of Secret names whose entries are injected as envFrom.
+# The server populates this with the project's addon connection secrets so
+# that DATABASE_URL, REDIS_URL, etc. are available in every container.
+envFromSecrets: []
+# - my-project-pg-conn
+# - my-project-redis-conn
+
+# resources: per-env CPU/mem limits and requests.
+resources: {}
+
+# Used by helm release naming inside templates.
+nameOverride: ""
+fullnameOverride: ""
