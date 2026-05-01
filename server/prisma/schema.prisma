@@ -15,7 +15,13 @@ datasource db {
 }
 
 generator client {
-  provider = "prisma-client-js"
+  provider      = "prisma-client-js"
+  // Generate engines for both glibc OpenSSL ABIs we might encounter at
+  // runtime. v0.1 used node:22-alpine (musl) which auto-resolved to
+  // linux-musl. v0.2 switched to node:22-bookworm-slim because bcrypt
+  // didn't ship a musl prebuild; bookworm uses OpenSSL 3.0.x by default
+  // but some derived images still ship 1.1.x. Listing both keeps us safe.
+  binaryTargets = ["native", "debian-openssl-3.0.x", "debian-openssl-1.1.x", "linux-musl"]
 }
 
 model Audit {
