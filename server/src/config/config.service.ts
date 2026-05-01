@@ -18,7 +18,47 @@ dotenv.config();
 export class ConfigService {
   private readonly logger = new Logger(ConfigService.name);
   private readonly prisma = new PrismaClient();
-  private runningConfig: IKusoConfig;
+  // runningConfig is populated asynchronously in reloadRunningConfig() from
+  // the cluster-wide Kuso CR. Initialise to a safe empty default so methods
+  // like getBanner() / getTemplateConfig() don't NPE before the CR is loaded
+  // (or when no CR exists yet, e.g. on a fresh install where the operator
+  // didn't deploy the server itself).
+  private runningConfig: IKusoConfig = {
+    podSizeList: [],
+    buildpacks: [],
+    clusterissuer: process.env.KUSO_CLUSTER_ISSUER || 'letsencrypt-prod',
+    notifications: [],
+    templates: {
+      enabled: process.env.KUSO_TEMPLATES_ENABLED !== 'false',
+      // Default catalog points at the upstream Kubero template index until
+      // sislelabs/kuso-templates is mirrored. The operator-managed Kuso CR
+      // can override this once present (see reloadRunningConfig).
+      catalogs: [
+        {
+          name: 'Kuso Apps',
+          description: 'Community-maintained app templates',
+          index: {
+            url: 'https://raw.githubusercontent.com/kubero-dev/templates/main/index.json',
+            format: 'json',
+          },
+        },
+        {
+          name: 'Kuso Frameworks',
+          description: 'Framework starters',
+          index: {
+            url: 'https://raw.githubusercontent.com/kubero-dev/templates/main/index-frameworks.json',
+            format: 'json',
+          },
+        },
+      ] as any,
+    },
+    kuso: {
+      console: { enabled: false },
+      admin: { disabled: false },
+      readonly: false,
+      banner: { message: '', bgcolor: 'white', fontcolor: 'white', show: false },
+    } as any,
+  } as IKusoConfig;
   private features: { [key: string]: boolean } = {
     sleep: false,
     metrics: false,
