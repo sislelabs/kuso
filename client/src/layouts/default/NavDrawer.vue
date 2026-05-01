@@ -290,11 +290,12 @@ onMounted(() => {
 })
 
 function toggleTheme() {
-    theme.global.name.value = theme.global.current.value.dark ? 'light' : 'dark'
-    localStorage.setItem("theme", theme.global.name.value);
+    const next = theme.global.current.value.dark ? 'light' : 'dark'
+    theme.change(next)
+    localStorage.setItem("theme", next);
 }
 
-theme.global.name.value = localStorage.getItem("theme") || 'light';
+theme.change(localStorage.getItem("theme") || 'light');
 
 </script>
 

@@ -30,6 +30,9 @@ export default defineComponent({
         this.banner.message = response.data.message;
         this.banner.bgcolor = response.data.bgcolor;
         this.banner.fontcolor = response.data.fontcolor;
+      }).catch(() => {
+        // Banner is optional and 401s when not logged in. Swallow the error
+        // so it doesn't bubble up as an unhandled promise rejection.
       })
     },
 
