@@ -447,6 +447,34 @@ For the existing Hetzner cluster: the `hello` `KusoApp` we deployed during the v
 
 Each phase ends in a commit + push. `main` stays runnable; if a phase breaks the cluster, the previous tag works.
 
+## v0.2.0 status (after Phase 7)
+
+End-to-end smoke on the live Hetzner cluster passed:
+
+- Created `KusoProject` "smoke" via `POST /api/projects` ✅
+- Service "echo" added; production env auto-emitted ✅
+- Operator reconciled env into Deployment + Service + Ingress ✅
+- `https://echo.smoke.sislelabs.com` returned `hello-world` over HTTPS ✅
+- Postgres addon "pg" added; `StatefulSet`, `Service`, `Secret/smoke-pg-conn` rendered ✅
+- Service deployment picked up `envFrom: [smoke-pg-conn]` ✅
+
+Bugs found and fixed during the smoke:
+
+- `kusoaddon` chart's connection-secret name had a doubled project prefix (`<project>-<release>-conn`); release name is already prefixed. Reduced to `<release>-conn`.
+- `ProjectsService.refreshEnvironmentsAddonSecrets` used delete+create on envs; that races with helm-operator's uninstall finalizer and ends in "object is being deleted". Replaced with merge-patch.
+- Several stuck CRs from intermediate states had to be force-cleared with `kubectl patch ... finalizers=[]`. The legitimate path through the API doesn't hit this; it was a side effect of the partial reset.
+
+## Deferred cleanup (v0.2.1)
+
+The server's `app.module.ts` still imports v0.1 modules that reference deleted CRDs:
+
+- `AppsModule`, `PipelinesModule`, `DeploymentsModule` — entirely v0.1-shaped, dead routes.
+- `RepoModule`, `AddonsModule` (the v1 one) — reference deleted concepts.
+- The `SecurityModule` has a hard import of `PipelinesModule`; refactor before deleting.
+- Several Vue views under `client/src/views/` (Activity, Notifications, Podsizes, Runpacks, Pipeline) and components (`pipelines/`, `apps/`) are unrouted but still on disk.
+
+Build still works because none of the deleted CRDs are referenced at compile time — only at runtime, where the routes 404 from the kubernetes API. Cleanup was deferred to keep Phase 7's blast radius manageable.
+
 ## Open questions parked for later
 
 - **Wildcard certs per project.** Defer; per-host certs are fine for v0.2.

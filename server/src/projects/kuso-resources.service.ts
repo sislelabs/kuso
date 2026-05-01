@@ -148,7 +148,10 @@ export class KusoResourcesService {
 
   // ---------------- Environments ----------------
 
-  async listEnvironments(project?: string, service?: string): Promise<KusoEnvironment[]> {
+  async listEnvironments(
+    project?: string,
+    service?: string,
+  ): Promise<KusoEnvironment[]> {
     const parts: string[] = [];
     if (project) parts.push(`kuso.sislelabs.com/project=${project}`);
     if (service) parts.push(`kuso.sislelabs.com/service=${service}`);
@@ -193,6 +196,30 @@ export class KusoResourcesService {
       body,
     );
     return res.body as KusoEnvironment;
+  }
+
+  /**
+   * Merge-patch an environment's spec. Used by the addon-secret refresh
+   * path so we update existing envs in place instead of delete+create —
+   * delete+create races with helm-operator's uninstall finalizer and ends
+   * up stuck in "object is being deleted" when the recreate is attempted.
+   */
+  async patchEnvironment(
+    name: string,
+    patch: Record<string, any>,
+  ): Promise<void> {
+    await this.api.patchNamespacedCustomObject(
+      GROUP,
+      VERSION,
+      this.namespace,
+      'kusoenvironments',
+      name,
+      patch,
+      undefined,
+      undefined,
+      undefined,
+      { headers: { 'Content-Type': 'application/merge-patch+json' } },
+    );
   }
 
   async deleteEnvironment(name: string): Promise<void> {

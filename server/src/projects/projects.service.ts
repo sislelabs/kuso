@@ -1,4 +1,9 @@
-import { Injectable, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
+import {
+  Injectable,
+  BadRequestException,
+  NotFoundException,
+  Logger,
+} from '@nestjs/common';
 import { KusoResourcesService } from './kuso-resources.service';
 import {
   CreateAddonDTO,
@@ -40,13 +45,18 @@ export class ProjectsService {
 
   async create(dto: CreateProjectDTO): Promise<KusoProject> {
     if (!dto.name) throw new BadRequestException('name is required');
-    if (!dto.defaultRepo?.url) throw new BadRequestException('defaultRepo.url is required');
+    if (!dto.defaultRepo?.url)
+      throw new BadRequestException('defaultRepo.url is required');
 
     const existing = await this.resources.getProject(dto.name);
-    if (existing) throw new BadRequestException(`project ${dto.name} already exists`);
+    if (existing)
+      throw new BadRequestException(`project ${dto.name} already exists`);
 
     const project: KusoProject = {
-      metadata: { name: dto.name, labels: { 'kuso.sislelabs.com/project': dto.name } },
+      metadata: {
+        name: dto.name,
+        labels: { 'kuso.sislelabs.com/project': dto.name },
+      },
       spec: {
         description: dto.description,
         baseDomain: dto.baseDomain,
@@ -74,8 +84,10 @@ export class ProjectsService {
       this.resources.listServices(name),
       this.resources.listAddons(name),
     ]);
-    for (const e of envs) await this.resources.deleteEnvironment(e.metadata.name);
-    for (const s of services) await this.resources.deleteService(s.metadata.name);
+    for (const e of envs)
+      await this.resources.deleteEnvironment(e.metadata.name);
+    for (const s of services)
+      await this.resources.deleteService(s.metadata.name);
     for (const a of addons) await this.resources.deleteAddon(a.metadata.name);
     await this.resources.deleteProject(name);
   }
@@ -89,18 +101,24 @@ export class ProjectsService {
   async getService(project: string, name: string): Promise<KusoService> {
     const fqn = this.svcName(project, name);
     const svc = await this.resources.getService(fqn);
-    if (!svc) throw new NotFoundException(`service ${project}/${name} not found`);
+    if (!svc)
+      throw new NotFoundException(`service ${project}/${name} not found`);
     return svc;
   }
 
-  async addService(project: string, dto: CreateServiceDTO): Promise<KusoService> {
+  async addService(
+    project: string,
+    dto: CreateServiceDTO,
+  ): Promise<KusoService> {
     if (!dto.name) throw new BadRequestException('name is required');
     const proj = await this.resources.getProject(project);
     if (!proj) throw new NotFoundException(`project ${project} not found`);
 
     const fqn = this.svcName(project, dto.name);
     if (await this.resources.getService(fqn)) {
-      throw new BadRequestException(`service ${project}/${dto.name} already exists`);
+      throw new BadRequestException(
+        `service ${project}/${dto.name} already exists`,
+      );
     }
 
     const repoUrl = dto.repo?.url || proj.spec.defaultRepo?.url || '';
@@ -161,10 +179,12 @@ export class ProjectsService {
   async deleteService(project: string, name: string): Promise<void> {
     const fqn = this.svcName(project, name);
     const svc = await this.resources.getService(fqn);
-    if (!svc) throw new NotFoundException(`service ${project}/${name} not found`);
+    if (!svc)
+      throw new NotFoundException(`service ${project}/${name} not found`);
 
     const envs = await this.resources.listEnvironments(project, fqn);
-    for (const e of envs) await this.resources.deleteEnvironment(e.metadata.name);
+    for (const e of envs)
+      await this.resources.deleteEnvironment(e.metadata.name);
     await this.resources.deleteService(fqn);
   }
 
@@ -174,19 +194,26 @@ export class ProjectsService {
     return this.resources.listEnvironments(project);
   }
 
-  async getEnvironment(project: string, name: string): Promise<KusoEnvironment> {
+  async getEnvironment(
+    project: string,
+    name: string,
+  ): Promise<KusoEnvironment> {
     const fqn = this.envName(project, name);
     const env = await this.resources.getEnvironment(fqn);
-    if (!env) throw new NotFoundException(`environment ${project}/${name} not found`);
+    if (!env)
+      throw new NotFoundException(`environment ${project}/${name} not found`);
     return env;
   }
 
   async deleteEnvironment(project: string, name: string): Promise<void> {
     const fqn = this.envName(project, name);
     const env = await this.resources.getEnvironment(fqn);
-    if (!env) throw new NotFoundException(`environment ${project}/${name} not found`);
+    if (!env)
+      throw new NotFoundException(`environment ${project}/${name} not found`);
     if (env.spec.kind === 'production') {
-      throw new BadRequestException('cannot delete production environment; delete the service instead');
+      throw new BadRequestException(
+        'cannot delete production environment; delete the service instead',
+      );
     }
     await this.resources.deleteEnvironment(fqn);
   }
@@ -206,7 +233,9 @@ export class ProjectsService {
 
     const fqn = this.addonName(project, dto.name);
     if (await this.resources.getAddon(fqn)) {
-      throw new BadRequestException(`addon ${project}/${dto.name} already exists`);
+      throw new BadRequestException(
+        `addon ${project}/${dto.name} already exists`,
+      );
     }
 
     const addon: KusoAddon = {
@@ -241,7 +270,8 @@ export class ProjectsService {
   async deleteAddon(project: string, name: string): Promise<void> {
     const fqn = this.addonName(project, name);
     const addon = await this.resources.getAddon(fqn);
-    if (!addon) throw new NotFoundException(`addon ${project}/${name} not found`);
+    if (!addon)
+      throw new NotFoundException(`addon ${project}/${name} not found`);
 
     await this.resources.deleteAddon(fqn);
     await this.refreshEnvironmentsAddonSecrets(project);
@@ -261,33 +291,44 @@ export class ProjectsService {
     return name.startsWith(`${project}-`) ? name : `${project}-${name}`;
   }
 
-  private defaultHost(service: string, project: string, baseDomain: string): string {
+  private defaultHost(
+    service: string,
+    project: string,
+    baseDomain: string,
+  ): string {
     return `${service}.${baseDomain}`.replace(/^\.+/, '');
   }
 
   private async collectAddonSecrets(project: string): Promise<string[]> {
+    // Secret name convention agreed with kusoaddon helm chart's
+    // connSecretName template: `<addon-CR-name>-conn`. The addon CR is
+    // already named `<project>-<short>` by addonName(), so the rendered
+    // secret ends up like `smoke-pg-conn` for project=smoke addon=pg.
     const addons = await this.resources.listAddons(project);
-    return addons.map((a) => `${project}-${this.shortAddonName(a.metadata.name, project)}-conn`);
+    return addons.map((a) => `${a.metadata.name}-conn`);
   }
 
   private shortAddonName(fqn: string, project: string): string {
     return fqn.startsWith(`${project}-`) ? fqn.slice(project.length + 1) : fqn;
   }
 
-  private async refreshEnvironmentsAddonSecrets(project: string): Promise<void> {
+  private async refreshEnvironmentsAddonSecrets(
+    project: string,
+  ): Promise<void> {
     const [envs, secrets] = await Promise.all([
       this.resources.listEnvironments(project),
       this.collectAddonSecrets(project),
     ]);
+    // Merge-patch each env's spec.envFromSecrets. Earlier we did delete +
+    // create, but that races with helm-operator's uninstall finalizer:
+    // delete blocks on the helm uninstall, the create lands in
+    // "object is being deleted", and the env never recovers. PATCH is
+    // also the right semantic — we're updating one field, not replacing
+    // the resource — and the operator re-reconciles on spec change.
     for (const env of envs) {
-      const next = { ...env, spec: { ...env.spec, envFromSecrets: secrets } };
-      // Recreate via delete+create. Simpler than PATCH and the operator
-      // re-reconciles the helm release on next sync.
-      await this.resources.deleteEnvironment(env.metadata.name);
-      delete (next.metadata as any).resourceVersion;
-      delete (next.metadata as any).uid;
-      delete (next.metadata as any).creationTimestamp;
-      await this.resources.createEnvironment(next);
+      await this.resources.patchEnvironment(env.metadata.name, {
+        spec: { envFromSecrets: secrets },
+      });
     }
   }
 }

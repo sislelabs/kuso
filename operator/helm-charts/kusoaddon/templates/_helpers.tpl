@@ -10,7 +10,7 @@ populates KusoEnvironment.spec.envFromSecrets so every container gets the
 addon's connection envs via envFrom.
 */}}
 {{- define "kusoaddon.connSecretName" -}}
-{{ .Values.project }}-{{ .Release.Name }}-conn
+{{ .Release.Name }}-conn
 {{- end -}}
 
 {{- define "kusoaddon.labels" -}}
