@@ -1,9 +1,17 @@
 ---
 name: crd-architecture
-description: Use when working on the operator, adding fields to KusoApp, or thinking about how an app definition propagates from REST API to running pod. Explains the CRD model and reconciliation loop.
+description: Historical — describes the v0.1 CRDs (KusoPipeline / KusoApp / per-addon kinds). v0.2 replaces these wholesale; read .claude/skills/projects-redesign.md first.
 ---
 
-# kuso CRD architecture
+# kuso CRD architecture (v0.1 — DEPRECATED)
+
+> **NOTE:** This skill describes the v0.1 model. v0.2 is a hard fork that deletes
+> these CRDs and replaces them with `KusoProject` / `KusoService` /
+> `KusoEnvironment` / polymorphic `KusoAddon`. See
+> [`projects-redesign.md`](./projects-redesign.md) and
+> [`docs/REDESIGN.md`](../../docs/REDESIGN.md) for the canonical model.
+>
+> This file is kept for context on what we're migrating *away* from.
 
 kuso is Kubernetes-native. Every concept (app, pipeline, addon) is a CRD reconciled by the operator. There is no separate database for app state — the source of truth lives in `etcd` as Kubernetes objects.
 
