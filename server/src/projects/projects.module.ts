@@ -4,6 +4,7 @@ import { ProjectsService } from './projects.service';
 import { KusoResourcesService } from './kuso-resources.service';
 import { PreviewCleanupService } from './preview-cleanup.service';
 import { BuildsService } from './builds.service';
+import { LogsService } from './logs.service';
 import { GithubModule } from '../github/github.module';
 
 // KubernetesModule is @Global() so we don't need to import it here.
@@ -16,8 +17,9 @@ import { GithubModule } from '../github/github.module';
     KusoResourcesService,
     PreviewCleanupService,
     BuildsService,
+    LogsService,
   ],
   controllers: [ProjectsController],
-  exports: [ProjectsService, KusoResourcesService, BuildsService],
+  exports: [ProjectsService, KusoResourcesService, BuildsService, LogsService],
 })
 export class ProjectsModule {}

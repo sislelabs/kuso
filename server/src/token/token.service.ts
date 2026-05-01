@@ -35,6 +35,7 @@ export class TokenService {
     username: string,
     role: string,
     userGroups: any,
+    permissions: string[] = [],
   ): Promise<{
     name: string;
     token: string;
@@ -43,16 +44,22 @@ export class TokenService {
     if (!name || !expiresAt || !userId) {
       throw new Error('Invalid token data');
     }
-    //create a new JWT Token
+    //create a new JWT Token. Forwarding the issuer's current permissions
+    // so the generated token has the same access — without this the
+    // token's payload.permissions came back as [] and every guarded
+    // route 403'd.
     const token = await this.authService.generateToken(
       userId,
       username,
       role,
       userGroups,
+      permissions,
     );
 
-    // transoform userGroups to a string 
-    const userGroupsString = userGroups.map((group: any) => group.name).join(',');
+    // transoform userGroups to a string
+    const userGroupsString = userGroups
+      .map((group: any) => group.name)
+      .join(',');
     const newToken = {
       name: name || '', // Optional name field
       role: role || 'guest', // Default to 'user' if not provided

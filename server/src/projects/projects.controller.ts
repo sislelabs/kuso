@@ -5,6 +5,7 @@ import {
   Get,
   Param,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
@@ -13,6 +14,7 @@ import { PermissionsGuard } from '../auth/permissions.guard';
 import { Permissions } from '../auth/permissions.decorator';
 import { ProjectsService } from './projects.service';
 import { BuildsService } from './builds.service';
+import { LogsService } from './logs.service';
 import {
   CreateAddonDTO,
   CreateProjectDTO,
@@ -28,6 +30,7 @@ export class ProjectsController {
   constructor(
     private readonly projects: ProjectsService,
     private readonly builds: BuildsService,
+    private readonly logs: LogsService,
   ) {}
 
   // ---------------- projects ----------------
@@ -123,6 +126,24 @@ export class ProjectsController {
     @Body() body: CreateBuildRequest,
   ) {
     return this.builds.createBuild(project, service, body || {});
+  }
+
+  // ---------------- logs ----------------
+
+  @Get(':project/services/:service/logs')
+  @Permissions('app:read', 'app:write')
+  @ApiOperation({
+    summary:
+      'Tail recent log lines for a service. ?env=production|preview-pr-N (default production), ?lines=N (default 200, max 2000)',
+  })
+  tailLogs(
+    @Param('project') project: string,
+    @Param('service') service: string,
+    @Query('env') env?: string,
+    @Query('lines') lines?: string,
+  ) {
+    const n = Math.min(2000, Math.max(1, Number(lines) || 200));
+    return this.logs.tail(project, service, env || 'production', n);
   }
 
   // ---------------- env vars ----------------

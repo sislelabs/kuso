@@ -30,7 +30,7 @@ export class TokenController {
 
   @Get('/')
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @Permissions('token:write','token:read')
+  @Permissions('token:write', 'token:read')
   @ApiBearerAuth('bearerAuth')
   @ApiForbiddenResponse({
     description: 'Error: Unauthorized',
@@ -102,6 +102,7 @@ export class TokenController {
       req.user.username,
       req.user.role,
       req.user.userGroups,
+      req.user.permissions || [],
     );
     return token;
   }

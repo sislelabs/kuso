@@ -72,7 +72,7 @@ export class AuthService {
 
     const permissions = await this.rolesService.getPermissions(user.roleId);
     user.permissions = permissions.map((p) => `${p.resource}:${p.action}`);
-    
+
     // Defines the user object to be signed in the JWT
     // Add more fields if needed
     const u = {
@@ -92,7 +92,9 @@ export class AuthService {
   async loginOAuth2(reqUser: any) {
     const username = reqUser.username || reqUser.email || reqUser.id;
     const email =
-      reqUser.emails[0]?.value || reqUser.email || 'undefined@kuso.sislelabs.com';
+      reqUser.emails[0]?.value ||
+      reqUser.email ||
+      'undefined@kuso.sislelabs.com';
     const provider = reqUser.provider || 'oauth2';
 
     // extract image data from url
@@ -134,6 +136,7 @@ export class AuthService {
     username: string,
     role: string,
     userGroups: string[],
+    permissions: string[] = [],
   ): Promise<string> {
     if (!userId || !username || !role) {
       this.logger.error('Invalid user data for token generation', {
@@ -149,7 +152,7 @@ export class AuthService {
       username: username,
       role: role,
       userGroups: userGroups,
-      permissions: [],
+      permissions,
       strategy: 'token',
     };
     const token = this.jwtService.sign(u, {

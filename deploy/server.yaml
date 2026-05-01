@@ -36,23 +36,20 @@ subjects:
     name: kuso-server
     namespace: kuso
 ---
-apiVersion: v1
-kind: Secret
-metadata:
-  name: kuso-server-secrets
-  namespace: kuso
-type: Opaque
-stringData:
-  # OVERRIDE THESE in production. Defaults are for the first-boot smoke test
-  # only.
-  KUSO_SESSION_KEY: "change-me-session-key-32-chars-min"
-  JWT_SECRET: "change-me-jwt-secret-32-chars-minimum"
-  KUSO_ADMIN_PASSWORD: "kuso-admin"
-  # GitHub App config lives in a separate Secret (kuso-github-app) so the
-  # PEM private key isn't in this committed manifest. Create that Secret
-  # by following docs/GITHUB_APP_SETUP.md. The Deployment below mounts
-  # both Secrets via envFrom; if the github one is missing the server
-  # boots in "GitHub disabled" mode and the UI shows the Install CTA.
+# Notes on Secrets:
+#
+# kuso-server-secrets       (KUSO_SESSION_KEY, JWT_SECRET,
+#                            KUSO_ADMIN_PASSWORD) is created by
+#                            hack/install.sh with random values, OR by
+#                            you with kubectl create secret. NOT defined
+#                            in this manifest so we don't ship default
+#                            credentials.
+#
+# kuso-github-app           (GITHUB_APP_*) optional; created when you
+#                            register the GitHub App per
+#                            docs/GITHUB_APP_SETUP.md. The Deployment
+#                            mounts it via envFrom optional:true so a
+#                            missing Secret leaves GitHub disabled.
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

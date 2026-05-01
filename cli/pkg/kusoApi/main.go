@@ -256,3 +256,9 @@ func (k *KusoClient) Login(user string, pass string) (*resty.Response, error) {
 
 	return res, err
 }
+
+// RawGet is a generic helper for endpoints that don't have a typed
+// wrapper yet. Path should start with "/".
+func (k *KusoClient) RawGet(path string) (*resty.Response, error) {
+	return k.client.Get(path)
+}

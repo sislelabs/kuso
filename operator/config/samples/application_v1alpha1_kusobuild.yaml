@@ -1,0 +1,26 @@
+# Sample KusoBuild — one build attempt for ivo9999/kuso-hello-go.
+# Normally created by the kuso server when a push event fires or `kuso
+# build trigger` is invoked. This sample exists so the CRD dry-run
+# smoke (hack/smoke/crd-dryrun.sh) covers all 6 v0.2 kinds.
+apiVersion: application.kuso.sislelabs.com/v1alpha1
+kind: KusoBuild
+metadata:
+  name: hello-web-abc1234567ab
+  namespace: kuso
+  labels:
+    kuso.sislelabs.com/project: hello
+    kuso.sislelabs.com/service: hello-web
+    kuso.sislelabs.com/build-ref: abc1234567ab
+spec:
+  project: hello
+  service: hello-web
+  ref: abc1234567ab1111111111111111111111111111
+  branch: main
+  repo:
+    url: https://github.com/ivo9999/kuso-hello-go
+    path: "."
+  strategy: dockerfile
+  image:
+    repository: kuso-registry.kuso.svc.cluster.local:5000/hello/web
+    tag: abc1234567ab
+  githubInstallationId: 0
