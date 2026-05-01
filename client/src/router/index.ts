@@ -1,6 +1,11 @@
 // Composables
-import { createRouter, createWebHistory } from 'vue-router'    
-import { useAuthStore } from '@/stores/auth'
+import { createRouter, createWebHistory } from 'vue-router'
+
+// v0.2 redesign — see docs/REDESIGN.md.
+//
+// "/" is the projects list. Pipelines/apps/phases are gone.
+// Templates, Accounts, Notifications, Pod Sizes, Runpacks, Activity stay
+// available as legacy admin pages but are not surfaced on the main nav.
 
 const routes = [
   {
@@ -9,35 +14,19 @@ const routes = [
     children: [
       {
         path: '/',
-        name: 'Pipelines',
-        // route level code-splitting
-        // this generates a separate chunk (Pipeline-[hash].js) for this route
-        // which is lazy-loaded when the route is visited.
-        component: () => import('@/views/Pipeline.vue'),
+        name: 'Projects',
+        component: () => import('@/views/Projects.vue'),
       },
       {
-        path: '/pipeline/:pipeline',
-        name: 'Pipeline Form',
-        props: true,
-        component: () => import('@/components/pipelines/form.vue'),
+        path: '/projects/new',
+        name: 'New Project',
+        component: () => import('@/views/ProjectNew.vue'),
       },
       {
-        path: '/pipeline/:pipeline/apps',
-        name: 'Pipeline Apps',
+        path: '/projects/:project',
+        name: 'Project',
         props: true,
-        component: () => import('@/components/pipelines/detail.vue'),
-      },
-      {
-        path: "/pipeline/:pipeline/:phase/apps/:app",
-        name: "App Form",
-        props: true,
-        component: () => import('@/components/apps/form.vue'),
-      },
-      {
-        path: "/pipeline/:pipeline/:phase/:app/detail",
-        name: "App Dashboard",
-        props: true,
-        component: () => import('@/components/apps/detail.vue'),
+        component: () => import('@/views/ProjectDetail.vue'),
       },
     ],
   },
@@ -49,28 +38,6 @@ const routes = [
         path: '/profile',
         name: 'Profile',
         component: () => import('@/views/Profile.vue'),
-      },
-    ],
-  },
-  {
-    path: '/addons',
-    component: () => import('@/layouts/default/Default.vue'),
-    children: [
-      {
-        path: '/addons',
-        name: 'Addons',
-        component: () => import('@/views/Addons.vue'),
-      },
-    ],
-  },
-  {
-    path: '/activity',
-    component: () => import('@/layouts/default/Default.vue'),
-    children: [
-      {
-        path: '/activity',
-        name: 'Activity',
-        component: () => import('@/views/Activity.vue'),
       },
     ],
   },
@@ -97,52 +64,6 @@ const routes = [
       },
     ],
   },
-  /*
-  {
-    path: '/settings',
-    component: () => import('@/layouts/default/Default.vue'),
-    children: [
-      {
-        path: '/settings',
-        name: 'Settings',
-        component: () => import('@/views/Settings.vue'),
-      },
-    ],
-  },
-  */
-  {
-    path: '/runpacks',
-    component: () => import('@/layouts/default/Default.vue'),
-    children: [
-      {
-        path: '/runpacks',
-        name: 'Runpacks',
-        component: () => import('@/views/Runpacks.vue'),
-      },
-    ],
-  },
-  {
-    path: '/podsizes',
-    component: () => import('@/layouts/default/Default.vue'),
-    children: [
-      {
-        path: '/podsizes',
-        name: 'Pod Sizes',
-        component: () => import('@/views/Podsizes.vue'),
-      },
-    ],
-  },
-  {
-    path: '/notifications',
-    component: () => import('@/layouts/default/Default.vue'),
-    children: [
-      {
-        path: '/notifications',
-        name: 'Notifications',
-        component: () => import('@/views/Notifications.vue'),
-      },
-    ],
-  },
   {
     path: '/login',
     component: () => import('@/layouts/login/Login.vue'),
@@ -165,24 +86,6 @@ const routes = [
       },
     ],
   },
-  {
-    path: '/popup',
-    component: () => import('@/layouts/default/Popup.vue'),
-    children: [
-      {
-        path: '/popup/logs/:pipeline/:phase/:app/:deploymentstrategy/:buildstrategy',
-        name: 'Pupup Logs',
-        props: true,
-        component: () => import('@/components/apps/logs.vue'),
-      },
-      {
-        path: '/popup/console/:pipeline/:phase/:app',
-        name: 'Pupup Console',
-        props: true,
-        component: () => import('@/components/apps/console.vue'),
-      }
-    ],
-  },
 ]
 
 const router = createRouter({
@@ -190,16 +93,4 @@ const router = createRouter({
   routes,
 })
 
-/* Forced Permission redirect
-router.beforeEach((to, from, next) => {
-  const authStore = useAuthStore()
-  if (to.matched.some(record => record.meta.requiresUserWrite)) {
-    // If not logged in or missing permission, redirect to home
-    if (!authStore.hasPermission('user:write') && !authStore.hasPermission('user:read')) {
-      return next({ path: '/' })
-    }
-  }
-  next()
-})
-*/
 export default router

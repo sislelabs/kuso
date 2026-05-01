@@ -40,31 +40,22 @@
     <v-divider></v-divider>
 
     <v-list nav density="compact">
-        <v-list-item 
+        <!-- v0.2: projects replace pipelines. Templates and Accounts stay as
+             secondary admin links; the Add-Ons and Activity legacy pages
+             have been removed (addons are now per-project). -->
+        <v-list-item
             link to="/"
-            prepend-icon="mdi-server"
-            v-if="authStore.hasPermission('pipeline:write') || authStore.hasPermission('pipeline:read')"
-            :title="$t('navigation.pipelines')">
+            prepend-icon="mdi-rocket-launch-outline"
+            title="Projects">
         </v-list-item>
-        <v-list-item 
-            link to="/templates" 
+        <v-list-item
+            link to="/templates"
             v-if="kuso.templatesEnabled"
             prepend-icon="mdi-list-box-outline"
             :title="$t('navigation.templates')">
         </v-list-item>
-        <v-list-item 
-            link to="/activity"
-            v-if="kuso.auditEnabled && (authStore.hasPermission('audit:write') || authStore.hasPermission('audit:read'))"
-            prepend-icon="mdi-bell-outline"
-            :title="$t('navigation.activity')">
-        </v-list-item>
-        <v-list-item 
-            link to="/addons"
-            prepend-icon="mdi-bookshelf"
-            :title="$t('navigation.addOns')">
-        </v-list-item>
-        <v-list-item 
-            link to="/accounts" 
+        <v-list-item
+            link to="/accounts"
             v-if="kuso.isAuthenticated && !kuso.adminDisabled && (authStore.hasPermission('user:write') || authStore.hasPermission('user:read'))"
             prepend-icon="mdi-account-outline"
             :title="$t('navigation.accounts')">
