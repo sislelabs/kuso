@@ -31,9 +31,9 @@ The SDK is [`github.com/modelcontextprotocol/go-sdk`](https://github.com/modelco
 
 These come from `docs/PRD.md` Workstream B and Anthropic's MCP guidance. Don't ship a tool that violates them.
 
-1. **Intent-grouped, not REST-mirrored.** Wrong: `get_app`, `get_app_logs`, `get_app_status`. Right: `describe_app` returns all of that in one call. Wrong: `delete_env`, `set_env`, `update_env`. Right: `set_app_config(name, patch)` with idempotent partial updates.
+1. **Intent-grouped, not REST-mirrored.** Wrong: `get_project`, `get_project_services`, `get_project_envs`. Right: `describe_project` returns all of that in one call. Wrong: `delete_addon`, `add_addon`, `update_addon`. Right: `manage_addon(project, action, …)` with one entrypoint per resource.
 
-2. **Composite tools beat chains.** `troubleshoot_app(name)` should return status + recent logs + recent events + addon health in one structured response. Agents make worse decisions when they have to chain three tools to debug something.
+2. **Composite tools beat chains.** `describe_project(name)` rolls up project metadata + services + environments + addons in one response. `troubleshoot_service` (planned) will do the same for runtime diagnostics. Agents make worse decisions when they have to chain three tools to inspect a project.
 
 3. **Every tool returns structured data + a human-readable summary.** The SDK's `CallToolResult` has `Content` (the human summary) and a typed return value (the structured data). Use both.
 
@@ -41,7 +41,7 @@ These come from `docs/PRD.md` Workstream B and Anthropic's MCP guidance. Don't s
 
 5. **Honor `--read-only`.** Mutating tools should check `client.ReadOnly()` and return an error if set. Read tools can ignore the flag.
 
-6. **Tool descriptions explicitly tell the agent which composite to prefer.** Example for `tail_logs`: "Use this for live log streaming; for one-shot debugging, prefer `troubleshoot_app` which bundles logs with status and events."
+6. **Tool descriptions explicitly tell the agent which composite to prefer.** Example for `tail_logs` (planned): "Use this for live log streaming; for one-shot debugging, prefer `troubleshoot_service` which bundles logs with status and events."
 
 ## Adding a new tool
 

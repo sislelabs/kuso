@@ -10,14 +10,13 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// getCmd is the agent-friendly read entrypoint. Unlike `kuso app` which
-// uses interactive prompts to fill in pipeline/stage/app, `kuso get`
-// works in flag-driven, non-interactive mode and supports -o json for
-// machine consumption.
+// getCmd is the agent-friendly read entrypoint. v0.2 surfaces:
+//   kuso get projects [-o json]
+//   kuso get services <project> [-o json]
+//   kuso get envs <project> [-o json]
+//   kuso get addons <project> [-o json]
 //
-// The subcommand surface is intentionally narrow (`apps`, `pipelines`)
-// so the JSON shape is stable. Add new subcommands as new resources
-// become first-class, not by overloading the existing ones.
+// Output is deterministic (stable sort) so JSON diffs round-trip cleanly.
 var getCmd = &cobra.Command{
 	Use:   "get",
 	Short: "Read kuso resources non-interactively",
@@ -26,130 +25,211 @@ machine and human consumption respectively. Designed to be safe to call
 from scripts, CI, and AI agents.`,
 }
 
-var (
-	getPipelineFilter string
-	getPhaseFilter    string
-)
+// ---------------- get projects ----------------
 
-var getAppsCmd = &cobra.Command{
-	Use:     "apps",
-	Aliases: []string{"app"},
-	Short:   "List apps the caller has access to",
-	Example: `  kuso get apps
-  kuso get apps -o json
-  kuso get apps --pipeline analiz --phase production -o json | jq '.[] | .name'`,
+var getProjectsCmd = &cobra.Command{
+	Use:     "projects",
+	Aliases: []string{"project", "p"},
+	Short:   "List projects the caller has access to",
+	Example: `  kuso get projects
+  kuso get projects -o json | jq '.[].metadata.name'`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.GetApps()
+		resp, err := api.GetProjects()
 		if err != nil {
-			return fmt.Errorf("fetch apps: %w", err)
+			return fmt.Errorf("fetch projects: %w", err)
 		}
-
-		var apps []map[string]any
-		if err := json.Unmarshal(resp.Body(), &apps); err != nil {
-			return fmt.Errorf("decode apps response: %w", err)
+		var items []map[string]any
+		if err := json.Unmarshal(resp.Body(), &items); err != nil {
+			return fmt.Errorf("decode response: %w", err)
 		}
-
-		filtered := apps[:0]
-		for _, a := range apps {
-			if getPipelineFilter != "" && asString(a["pipeline"]) != getPipelineFilter {
-				continue
-			}
-			if getPhaseFilter != "" && asString(a["phase"]) != getPhaseFilter {
-				continue
-			}
-			filtered = append(filtered, a)
-		}
-		sort.Slice(filtered, func(i, j int) bool {
-			pi, pj := asString(filtered[i]["pipeline"]), asString(filtered[j]["pipeline"])
-			if pi != pj {
-				return pi < pj
-			}
-			phi, phj := asString(filtered[i]["phase"]), asString(filtered[j]["phase"])
-			if phi != phj {
-				return phi < phj
-			}
-			return asString(filtered[i]["name"]) < asString(filtered[j]["name"])
+		sort.Slice(items, func(i, j int) bool {
+			return projectName(items[i]) < projectName(items[j])
 		})
-
 		switch outputFormat {
 		case "json":
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(filtered)
+			return jsonOut(items)
 		case "table", "":
 			t := tablewriter.NewWriter(os.Stdout)
-			t.SetHeader([]string{"PIPELINE", "PHASE", "APP", "SLEEP", "BRANCH"})
-			for _, a := range filtered {
+			t.SetHeader([]string{"NAME", "REPO", "BRANCH", "PREVIEWS"})
+			for _, p := range items {
+				spec := mapAt(p, "spec")
+				repo := mapAt(spec, "defaultRepo")
+				previews := mapAt(spec, "previews")
 				t.Append([]string{
-					asString(a["pipeline"]),
-					asString(a["phase"]),
-					asString(a["name"]),
-					asString(a["sleep"]),
-					asString(a["branch"]),
+					projectName(p),
+					asString(repo["url"]),
+					asString(repo["defaultBranch"]),
+					boolText(previews["enabled"]),
 				})
 			}
 			t.Render()
 			return nil
 		default:
-			return fmt.Errorf("unsupported output format %q (want: table, json)", outputFormat)
+			return fmt.Errorf("unsupported output format %q", outputFormat)
 		}
 	},
 }
 
-var getPipelinesCmd = &cobra.Command{
-	Use:     "pipelines",
-	Aliases: []string{"pipeline"},
-	Short:   "List pipelines the caller has access to",
-	Example: `  kuso get pipelines
-  kuso get pipelines -o json`,
+// ---------------- get services <project> ----------------
+
+var getServicesCmd = &cobra.Command{
+	Use:     "services <project>",
+	Aliases: []string{"service", "s"},
+	Short:   "List services in a project",
+	Args:    cobra.ExactArgs(1),
+	Example: `  kuso get services analiz
+  kuso get services analiz -o json`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.GetPipelines()
+		resp, err := api.GetServices(args[0])
 		if err != nil {
-			return fmt.Errorf("fetch pipelines: %w", err)
+			return fmt.Errorf("fetch services: %w", err)
 		}
-
-		var pipelines []map[string]any
-		if err := json.Unmarshal(resp.Body(), &pipelines); err != nil {
-			return fmt.Errorf("decode pipelines response: %w", err)
+		var items []map[string]any
+		if err := json.Unmarshal(resp.Body(), &items); err != nil {
+			return fmt.Errorf("decode response: %w", err)
 		}
-		sort.Slice(pipelines, func(i, j int) bool {
-			return asString(pipelines[i]["name"]) < asString(pipelines[j]["name"])
+		sort.Slice(items, func(i, j int) bool {
+			return resourceName(items[i]) < resourceName(items[j])
 		})
-
 		switch outputFormat {
 		case "json":
-			enc := json.NewEncoder(os.Stdout)
-			enc.SetIndent("", "  ")
-			return enc.Encode(pipelines)
+			return jsonOut(items)
 		case "table", "":
 			t := tablewriter.NewWriter(os.Stdout)
-			t.SetHeader([]string{"NAME", "PHASES"})
-			for _, p := range pipelines {
-				phases := ""
-				if list, ok := p["phases"].([]any); ok {
-					for i, ph := range list {
-						if i > 0 {
-							phases += ","
-						}
-						if m, ok := ph.(map[string]any); ok {
-							phases += asString(m["name"])
-						}
-					}
-				}
-				t.Append([]string{asString(p["name"]), phases})
+			t.SetHeader([]string{"NAME", "RUNTIME", "PORT", "PATH"})
+			for _, s := range items {
+				spec := mapAt(s, "spec")
+				repo := mapAt(spec, "repo")
+				short := stripPrefix(resourceName(s), args[0]+"-")
+				t.Append([]string{
+					short,
+					asString(spec["runtime"]),
+					asString(spec["port"]),
+					asString(repo["path"]),
+				})
 			}
 			t.Render()
 			return nil
 		default:
-			return fmt.Errorf("unsupported output format %q (want: table, json)", outputFormat)
+			return fmt.Errorf("unsupported output format %q", outputFormat)
 		}
 	},
+}
+
+// ---------------- get envs <project> ----------------
+
+var getEnvsCmd = &cobra.Command{
+	Use:     "envs <project>",
+	Aliases: []string{"env", "environments", "e"},
+	Short:   "List environments in a project",
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.GetEnvironments(args[0])
+		if err != nil {
+			return fmt.Errorf("fetch environments: %w", err)
+		}
+		var items []map[string]any
+		if err := json.Unmarshal(resp.Body(), &items); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		sort.Slice(items, func(i, j int) bool {
+			return resourceName(items[i]) < resourceName(items[j])
+		})
+		switch outputFormat {
+		case "json":
+			return jsonOut(items)
+		case "table", "":
+			t := tablewriter.NewWriter(os.Stdout)
+			t.SetHeader([]string{"NAME", "SERVICE", "KIND", "BRANCH", "HOST"})
+			for _, e := range items {
+				spec := mapAt(e, "spec")
+				t.Append([]string{
+					resourceName(e),
+					stripPrefix(asString(spec["service"]), args[0]+"-"),
+					asString(spec["kind"]),
+					asString(spec["branch"]),
+					asString(spec["host"]),
+				})
+			}
+			t.Render()
+			return nil
+		default:
+			return fmt.Errorf("unsupported output format %q", outputFormat)
+		}
+	},
+}
+
+// ---------------- get addons <project> ----------------
+
+var getAddonsCmd = &cobra.Command{
+	Use:     "addons <project>",
+	Aliases: []string{"addon", "a"},
+	Short:   "List addons in a project",
+	Args:    cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.GetAddonsForProject(args[0])
+		if err != nil {
+			return fmt.Errorf("fetch addons: %w", err)
+		}
+		var items []map[string]any
+		if err := json.Unmarshal(resp.Body(), &items); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		sort.Slice(items, func(i, j int) bool {
+			return resourceName(items[i]) < resourceName(items[j])
+		})
+		switch outputFormat {
+		case "json":
+			return jsonOut(items)
+		case "table", "":
+			t := tablewriter.NewWriter(os.Stdout)
+			t.SetHeader([]string{"NAME", "KIND", "VERSION", "SIZE", "HA"})
+			for _, a := range items {
+				spec := mapAt(a, "spec")
+				short := stripPrefix(resourceName(a), args[0]+"-")
+				t.Append([]string{
+					short,
+					asString(spec["kind"]),
+					asString(spec["version"]),
+					asString(spec["size"]),
+					boolText(spec["ha"]),
+				})
+			}
+			t.Render()
+			return nil
+		default:
+			return fmt.Errorf("unsupported output format %q", outputFormat)
+		}
+	},
+}
+
+// ---------------- helpers ----------------
+
+func mapAt(m map[string]any, key string) map[string]any {
+	if v, ok := m[key].(map[string]any); ok {
+		return v
+	}
+	return map[string]any{}
+}
+
+func projectName(p map[string]any) string {
+	return resourceName(p)
+}
+
+func resourceName(o map[string]any) string {
+	return asString(mapAt(o, "metadata")["name"])
 }
 
 func asString(v any) string {
@@ -162,12 +242,35 @@ func asString(v any) string {
 	return fmt.Sprint(v)
 }
 
+func boolText(v any) string {
+	if b, ok := v.(bool); ok {
+		if b {
+			return "true"
+		}
+		return "false"
+	}
+	return ""
+}
+
+func stripPrefix(s, prefix string) string {
+	if len(s) > len(prefix) && s[:len(prefix)] == prefix {
+		return s[len(prefix):]
+	}
+	return s
+}
+
+func jsonOut(v any) error {
+	enc := json.NewEncoder(os.Stdout)
+	enc.SetIndent("", "  ")
+	return enc.Encode(v)
+}
+
 func init() {
 	rootCmd.AddCommand(getCmd)
-	getCmd.AddCommand(getAppsCmd)
-	getCmd.AddCommand(getPipelinesCmd)
+	getCmd.AddCommand(getProjectsCmd)
+	getCmd.AddCommand(getServicesCmd)
+	getCmd.AddCommand(getEnvsCmd)
+	getCmd.AddCommand(getAddonsCmd)
 
 	getCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
-	getAppsCmd.Flags().StringVar(&getPipelineFilter, "pipeline", "", "if set, only show apps in this pipeline")
-	getAppsCmd.Flags().StringVar(&getPhaseFilter, "phase", "", "if set, only show apps in this phase (production, staging, ...)")
 }

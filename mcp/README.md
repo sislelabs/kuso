@@ -36,23 +36,24 @@ The server speaks MCP over stdio. Wire it up in your client by pointing at the `
 
 ## Tool surface
 
-The full v1 tool surface is specified in [`docs/PRD.md` Workstream B](../docs/PRD.md). Current state:
+v0.2 reshape (see [`docs/REDESIGN.md`](../docs/REDESIGN.md)) replaces the
+pipelines/apps tool surface with a project-shaped one. Current state:
 
 | Tool                | Status      |
 | ------------------- | ----------- |
 | `health`            | implemented |
-| `list_apps`         | implemented |
-| `describe_app`      | implemented |
-| `troubleshoot_app`  | implemented |
-| `tail_logs`         | implemented |
-| `restart_app`       | implemented (mutating; requires `confirm: true`) |
-| `deploy_app`        | planned     |
-| `set_app_config`    | planned (blocked on full IApp shape modeling) |
-| `manage_secret`     | planned (blocked on operator envFrom support — Workstream C) |
-| `exec_app`          | planned     |
-| `cluster_health`    | planned     |
-| `cost_report`       | planned     |
-| `bootstrap_product` | planned     |
+| `list_projects`     | implemented |
+| `describe_project`  | implemented |
+| `bootstrap_project` | implemented (mutating; `confirm: true`) |
+| `add_service`       | implemented (mutating; `confirm: true`) |
+| `manage_addon`      | implemented — add / delete (mutating; `confirm: true`) |
+| `deploy_service`        | planned (lands with the build pipeline) |
+| `set_service_config`    | planned |
+| `tail_logs`             | planned (per-environment) |
+| `troubleshoot_service`  | planned |
+| `manage_env`            | planned (delete preview env, redeploy) |
+| `cluster_health`        | planned |
+| `cost_report`           | planned |
 
 ## Layout
 

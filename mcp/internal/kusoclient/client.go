@@ -63,6 +63,14 @@ func (c *Client) PostJSON(ctx context.Context, path string, body, out any) error
 	return c.doJSON(ctx, http.MethodPost, path, body, out)
 }
 
+// DeleteJSON issues a DELETE. Refused in read-only mode.
+func (c *Client) DeleteJSON(ctx context.Context, path string) error {
+	if c.cfg.ReadOnly {
+		return fmt.Errorf("kuso-mcp is in read-only mode; refusing %s %s", http.MethodDelete, path)
+	}
+	return c.doJSON(ctx, http.MethodDelete, path, nil, nil)
+}
+
 func (c *Client) doJSON(ctx context.Context, method, path string, body, out any) error {
 	var rdr io.Reader
 	if body != nil {

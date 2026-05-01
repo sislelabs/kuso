@@ -1,19 +1,14 @@
 //go:build integration
 
-// End-to-end MCP integration test.
+// End-to-end MCP integration test for the v0.2 tool surface.
 //
-// Builds the kuso-mcp binary, spawns it as a child process pointed at a
-// fake kuso server, and exercises every tool via the official MCP SDK
-// over stdio. This is the strongest local check we have short of a real
-// kuso install — it catches: tool registration regressions, JSON shape
-// bugs in args/results, transport wiring, KUSO_URL/KUSO_TOKEN handling,
-// and read-only flag plumbing.
+// Builds kuso-mcp, spawns it as a child process pointed at a fake kuso
+// server, and exercises every registered tool via the official MCP SDK
+// over stdio. Catches tool-registration regressions, JSON shape bugs,
+// confirm-flag enforcement, --read-only refusal, and transport wiring.
 //
 // Run with:
-//
-//	go test -tags=integration ./...
-//
-// Skipped by default (the build tag) so unit-test runs stay fast.
+//   go test -tags=integration ./...
 
 package main_test
 
@@ -32,7 +27,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// startFakeKuso returns a fake kuso server that mirrors the subset of
+// startFakeKuso returns a fake kuso server that mirrors the subset of v0.2
 // endpoints kuso-mcp's tools call.
 func startFakeKuso(t *testing.T) *httptest.Server {
 	t.Helper()
@@ -44,39 +39,54 @@ func startFakeKuso(t *testing.T) *httptest.Server {
 		w.Header().Set("Content-Type", "application/json")
 
 		switch {
-		case r.URL.Path == "/api/apps":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/projects":
 			_ = json.NewEncoder(w).Encode([]map[string]any{
-				{"name": "web", "pipeline": "analiz", "phase": "production", "sleep": "disabled", "branch": "main"},
-				{"name": "api", "pipeline": "analiz", "phase": "production", "sleep": "enabled", "branch": "main"},
+				{
+					"metadata": map[string]any{"name": "analiz"},
+					"spec": map[string]any{
+						"defaultRepo": map[string]any{
+							"url":           "https://github.com/sislelabs/analiz",
+							"defaultBranch": "main",
+						},
+						"previews": map[string]any{"enabled": true},
+					},
+				},
 			})
 
-		case strings.HasPrefix(r.URL.Path, "/api/pipelines/analiz/production/api"):
+		case r.Method == http.MethodGet && r.URL.Path == "/api/projects/analiz":
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"name": "api", "pipeline": "analiz", "phase": "production",
-				"sleep": "enabled", "branch": "main",
-				"image": map[string]any{"repository": "ghcr.io/sislelabs/example", "tag": "v1.2"},
-				"web":   map[string]any{"replicaCount": 2, "autoscaling": map[string]any{"minReplicas": 1, "maxReplicas": 5, "targetCPUUtilizationPercentage": 80}},
+				"project": map[string]any{
+					"metadata": map[string]any{"name": "analiz"},
+					"spec": map[string]any{
+						"defaultRepo": map[string]any{
+							"url":           "https://github.com/sislelabs/analiz",
+							"defaultBranch": "main",
+						},
+					},
+				},
+				"services":     []any{map[string]any{"metadata": map[string]any{"name": "analiz-api"}}},
+				"environments": []any{},
+				"addons":       []any{},
 			})
 
-		case strings.HasPrefix(r.URL.Path, "/api/apps/analiz/production/api/pods"):
-			_ = json.NewEncoder(w).Encode([]map[string]any{
-				{"name": "api-7c4b", "phase": "Running", "image": "ghcr.io/sislelabs/example:v1.2"},
-			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/projects":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"metadata":{"name":"new"}}`))
 
-		case strings.HasPrefix(r.URL.Path, "/api/logs/analiz/production/api/web/history"):
-			_ = json.NewEncoder(w).Encode([]string{"line 1", "line 2", "line 3"})
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/projects/") && strings.HasSuffix(r.URL.Path, "/services"):
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"metadata":{"name":"x-y"}}`))
 
-		case r.URL.Path == "/api/kubernetes/namespace":
-			_ = json.NewEncoder(w).Encode([]map[string]any{
-				{"type": "Warning", "reason": "BackOff", "message": "container exited"},
-			})
+		case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/projects/") && strings.HasSuffix(r.URL.Path, "/addons"):
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"metadata":{"name":"x-pg"}}`))
 
-		case strings.HasSuffix(r.URL.Path, "/restart"):
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/addons/"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{}`))
 
 		default:
-			http.Error(w, "unknown path: "+r.URL.Path, http.StatusNotFound)
+			http.Error(w, "unknown path: "+r.Method+" "+r.URL.Path, http.StatusNotFound)
 		}
 	}))
 	t.Cleanup(srv.Close)
@@ -105,7 +115,6 @@ func newSession(t *testing.T, bin string, kusoURL string, extraArgs ...string) *
 		"KUSO_TOKEN=fake-token",
 	)
 	transport := &mcp.CommandTransport{Command: cmd}
-
 	client := mcp.NewClient(&mcp.Implementation{Name: "kuso-mcp-test", Version: "v0"}, nil)
 	session, err := client.Connect(ctx, transport, nil)
 	if err != nil {
@@ -113,6 +122,29 @@ func newSession(t *testing.T, bin string, kusoURL string, extraArgs ...string) *
 	}
 	t.Cleanup(func() { _ = session.Close() })
 	return session
+}
+
+func callTool(t *testing.T, s *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult {
+	t.Helper()
+	res, err := s.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		t.Fatalf("CallTool %s: %v", name, err)
+	}
+	if res.IsError {
+		t.Fatalf("CallTool %s returned IsError; content: %+v", name, res.Content)
+	}
+	return res
+}
+
+func contentText(t *testing.T, res *mcp.CallToolResult) string {
+	t.Helper()
+	var sb strings.Builder
+	for _, c := range res.Content {
+		if tc, ok := c.(*mcp.TextContent); ok {
+			sb.WriteString(tc.Text)
+		}
+	}
+	return sb.String()
 }
 
 func TestMCPListTools(t *testing.T) {
@@ -126,12 +158,12 @@ func TestMCPListTools(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"health":           true,
-		"list_apps":        true,
-		"describe_app":     true,
-		"troubleshoot_app": true,
-		"restart_app":      true,
-		"tail_logs":        true,
+		"health":            true,
+		"list_projects":     true,
+		"describe_project":  true,
+		"bootstrap_project": true,
+		"add_service":       true,
+		"manage_addon":      true,
 	}
 	got := map[string]bool{}
 	for _, tool := range res.Tools {
@@ -144,99 +176,46 @@ func TestMCPListTools(t *testing.T) {
 	}
 }
 
-func callTool(t *testing.T, s *mcp.ClientSession, name string, args map[string]any) *mcp.CallToolResult {
-	t.Helper()
-	res, err := s.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: name, Arguments: args,
-	})
-	if err != nil {
-		t.Fatalf("CallTool %s: %v", name, err)
-	}
-	if res.IsError {
-		t.Fatalf("CallTool %s returned IsError; content: %+v", name, res.Content)
-	}
-	return res
-}
-
-func TestMCPHealth(t *testing.T) {
+func TestMCPListProjects(t *testing.T) {
 	srv := startFakeKuso(t)
 	bin := buildBinary(t)
 	s := newSession(t, bin, srv.URL)
 
-	res := callTool(t, s, "health", nil)
-	if len(res.Content) == 0 {
-		t.Fatalf("health returned no content")
-	}
-}
-
-func TestMCPListAppsRoundTrip(t *testing.T) {
-	srv := startFakeKuso(t)
-	bin := buildBinary(t)
-	s := newSession(t, bin, srv.URL)
-
-	res := callTool(t, s, "list_apps", nil)
+	res := callTool(t, s, "list_projects", nil)
 	text := contentText(t, res)
-	if !strings.Contains(text, "2 app(s) total") {
-		t.Errorf("summary missing total count: %q", text)
+	if !strings.Contains(text, "1 project(s)") {
+		t.Errorf("expected count summary, got %q", text)
 	}
-	if !strings.Contains(text, "[sleeping]") {
-		t.Errorf("sleeping marker missing: %q", text)
+	if !strings.Contains(text, "analiz") {
+		t.Errorf("expected analiz in summary, got %q", text)
 	}
-	if !strings.Contains(text, "analiz/production/api") {
-		t.Errorf("analiz/production/api missing: %q", text)
+	if !strings.Contains(text, "[previews on]") {
+		t.Errorf("expected previews marker, got %q", text)
 	}
 }
 
-func TestMCPDescribeAppRoundTrip(t *testing.T) {
+func TestMCPDescribeProject(t *testing.T) {
 	srv := startFakeKuso(t)
 	bin := buildBinary(t)
 	s := newSession(t, bin, srv.URL)
 
-	res := callTool(t, s, "describe_app", map[string]any{
-		"pipeline": "analiz", "phase": "production", "app": "api",
-	})
+	res := callTool(t, s, "describe_project", map[string]any{"project": "analiz"})
 	text := contentText(t, res)
-	if !strings.Contains(text, "analiz/production/api") {
-		t.Errorf("path missing: %q", text)
-	}
-	if !strings.Contains(text, "ghcr.io/sislelabs/example:v1.2") {
-		t.Errorf("image missing: %q", text)
-	}
-	if !strings.Contains(text, "[sleeping]") {
-		t.Errorf("sleep marker missing: %q", text)
+	if !strings.Contains(text, "services: 1") {
+		t.Errorf("expected services count, got %q", text)
 	}
 }
 
-func TestMCPTroubleshootAppAggregates(t *testing.T) {
-	srv := startFakeKuso(t)
-	bin := buildBinary(t)
-	s := newSession(t, bin, srv.URL)
-
-	res := callTool(t, s, "troubleshoot_app", map[string]any{
-		"pipeline": "analiz", "phase": "production", "app": "api",
-	})
-	text := contentText(t, res)
-	if !strings.Contains(text, "pods: 1") {
-		t.Errorf("pods count missing: %q", text)
-	}
-	if !strings.Contains(text, "log lines: 3") {
-		t.Errorf("log lines count missing: %q", text)
-	}
-	if !strings.Contains(text, "events: 1") {
-		t.Errorf("events count missing: %q", text)
-	}
-}
-
-func TestMCPRestartAppRequiresConfirm(t *testing.T) {
+func TestMCPBootstrapRequiresConfirm(t *testing.T) {
 	srv := startFakeKuso(t)
 	bin := buildBinary(t)
 	s := newSession(t, bin, srv.URL)
 
 	res, err := s.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "restart_app",
+		Name: "bootstrap_project",
 		Arguments: map[string]any{
-			"pipeline": "analiz", "phase": "production", "app": "api",
-			// confirm omitted
+			"name":     "x",
+			"repo_url": "https://github.com/x/x",
 		},
 	})
 	if err != nil {
@@ -247,30 +226,103 @@ func TestMCPRestartAppRequiresConfirm(t *testing.T) {
 	}
 }
 
-func TestMCPRestartAppHappyPath(t *testing.T) {
+func TestMCPBootstrapHappyPath(t *testing.T) {
 	srv := startFakeKuso(t)
 	bin := buildBinary(t)
 	s := newSession(t, bin, srv.URL)
 
-	res := callTool(t, s, "restart_app", map[string]any{
-		"pipeline": "analiz", "phase": "production", "app": "api",
-		"confirm": true,
+	res := callTool(t, s, "bootstrap_project", map[string]any{
+		"name":     "newproj",
+		"repo_url": "https://github.com/x/x",
+		"branch":   "main",
+		"confirm":  true,
 	})
 	text := contentText(t, res)
-	if !strings.Contains(text, "restart triggered") {
-		t.Errorf("restart confirmation missing: %q", text)
+	if !strings.Contains(text, "newproj created") {
+		t.Errorf("expected create confirmation, got %q", text)
 	}
 }
 
-func TestMCPReadOnlyRefusesRestart(t *testing.T) {
+func TestMCPReadOnlyRefusesBootstrap(t *testing.T) {
 	srv := startFakeKuso(t)
 	bin := buildBinary(t)
 	s := newSession(t, bin, srv.URL, "--read-only")
 
 	res, err := s.CallTool(context.Background(), &mcp.CallToolParams{
-		Name: "restart_app",
+		Name: "bootstrap_project",
 		Arguments: map[string]any{
-			"pipeline": "analiz", "phase": "production", "app": "api",
+			"name":     "x",
+			"repo_url": "https://github.com/x/x",
+			"confirm":  true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError {
+		t.Errorf("expected IsError under --read-only")
+	}
+}
+
+func TestMCPAddService(t *testing.T) {
+	srv := startFakeKuso(t)
+	bin := buildBinary(t)
+	s := newSession(t, bin, srv.URL)
+
+	res := callTool(t, s, "add_service", map[string]any{
+		"project": "analiz",
+		"name":    "api",
+		"runtime": "dockerfile",
+		"port":    8080,
+		"confirm": true,
+	})
+	text := contentText(t, res)
+	if !strings.Contains(text, "analiz/api added") {
+		t.Errorf("expected add confirmation, got %q", text)
+	}
+}
+
+func TestMCPManageAddon(t *testing.T) {
+	srv := startFakeKuso(t)
+	bin := buildBinary(t)
+	s := newSession(t, bin, srv.URL)
+
+	add := callTool(t, s, "manage_addon", map[string]any{
+		"project": "analiz",
+		"action":  "add",
+		"name":    "pg",
+		"kind":    "postgres",
+		"version": "16",
+		"confirm": true,
+	})
+	text := contentText(t, add)
+	if !strings.Contains(text, "analiz/pg added") {
+		t.Errorf("expected addon add confirmation, got %q", text)
+	}
+
+	del := callTool(t, s, "manage_addon", map[string]any{
+		"project": "analiz",
+		"action":  "delete",
+		"name":    "pg",
+		"confirm": true,
+	})
+	if !strings.Contains(contentText(t, del), "analiz/pg deleted") {
+		t.Errorf("expected addon delete confirmation, got %q", contentText(t, del))
+	}
+}
+
+func TestMCPManageAddonRejectsUnknownKind(t *testing.T) {
+	srv := startFakeKuso(t)
+	bin := buildBinary(t)
+	s := newSession(t, bin, srv.URL)
+
+	res, err := s.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "manage_addon",
+		Arguments: map[string]any{
+			"project": "analiz",
+			"action":  "add",
+			"name":    "x",
+			"kind":    "not-a-real-engine",
 			"confirm": true,
 		},
 	})
@@ -278,32 +330,6 @@ func TestMCPReadOnlyRefusesRestart(t *testing.T) {
 		t.Fatalf("CallTool: %v", err)
 	}
 	if !res.IsError {
-		t.Errorf("expected IsError when --read-only and restart called")
+		t.Errorf("expected IsError for unsupported kind")
 	}
-}
-
-func TestMCPTailLogsRoundTrip(t *testing.T) {
-	srv := startFakeKuso(t)
-	bin := buildBinary(t)
-	s := newSession(t, bin, srv.URL)
-
-	res := callTool(t, s, "tail_logs", map[string]any{
-		"pipeline": "analiz", "phase": "production", "app": "api",
-		"lines": 10,
-	})
-	text := contentText(t, res)
-	if !strings.Contains(text, "3 log lines") {
-		t.Errorf("line count missing: %q", text)
-	}
-}
-
-func contentText(t *testing.T, res *mcp.CallToolResult) string {
-	t.Helper()
-	var sb strings.Builder
-	for _, c := range res.Content {
-		if tc, ok := c.(*mcp.TextContent); ok {
-			sb.WriteString(tc.Text)
-		}
-	}
-	return sb.String()
 }
