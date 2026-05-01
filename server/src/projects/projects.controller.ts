@@ -12,18 +12,23 @@ import { JwtAuthGuard } from '../auth/strategies/jwt.guard';
 import { PermissionsGuard } from '../auth/permissions.guard';
 import { Permissions } from '../auth/permissions.decorator';
 import { ProjectsService } from './projects.service';
+import { BuildsService } from './builds.service';
 import {
   CreateAddonDTO,
   CreateProjectDTO,
   CreateServiceDTO,
 } from './projects.types';
+import { CreateBuildRequest } from './builds.types';
 
 @ApiTags('projects')
 @Controller({ path: 'api/projects' })
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @ApiBearerAuth('bearerAuth')
 export class ProjectsController {
-  constructor(private readonly projects: ProjectsService) {}
+  constructor(
+    private readonly projects: ProjectsService,
+    private readonly builds: BuildsService,
+  ) {}
 
   // ---------------- projects ----------------
 
@@ -43,7 +48,9 @@ export class ProjectsController {
 
   @Get(':project')
   @Permissions('app:read', 'app:write')
-  @ApiOperation({ summary: 'Get a project with services, environments, addons rolled up' })
+  @ApiOperation({
+    summary: 'Get a project with services, environments, addons rolled up',
+  })
   describe(@Param('project') project: string) {
     return this.projects.describe(project);
   }
@@ -66,7 +73,9 @@ export class ProjectsController {
 
   @Post(':project/services')
   @Permissions('app:write')
-  @ApiOperation({ summary: 'Add a service to a project (auto-creates production env)' })
+  @ApiOperation({
+    summary: 'Add a service to a project (auto-creates production env)',
+  })
   addService(@Param('project') project: string, @Body() dto: CreateServiceDTO) {
     return this.projects.addService(project, dto);
   }
@@ -91,6 +100,31 @@ export class ProjectsController {
     return this.projects.deleteService(project, service);
   }
 
+  // ---------------- builds ----------------
+
+  @Get(':project/services/:service/builds')
+  @Permissions('app:read', 'app:write')
+  @ApiOperation({ summary: 'List builds for a service (newest first)' })
+  listBuilds(
+    @Param('project') project: string,
+    @Param('service') service: string,
+  ) {
+    return this.builds.list(project, service);
+  }
+
+  @Post(':project/services/:service/builds')
+  @Permissions('app:write')
+  @ApiOperation({
+    summary: 'Trigger a build for a service. Body: {branch?, ref?}',
+  })
+  createBuild(
+    @Param('project') project: string,
+    @Param('service') service: string,
+    @Body() body: CreateBuildRequest,
+  ) {
+    return this.builds.createBuild(project, service, body || {});
+  }
+
   // ---------------- environments ----------------
 
   @Get(':project/envs')
@@ -103,20 +137,16 @@ export class ProjectsController {
   @Get(':project/envs/:env')
   @Permissions('app:read', 'app:write')
   @ApiOperation({ summary: 'Get one environment' })
-  getEnv(
-    @Param('project') project: string,
-    @Param('env') env: string,
-  ) {
+  getEnv(@Param('project') project: string, @Param('env') env: string) {
     return this.projects.getEnvironment(project, env);
   }
 
   @Delete(':project/envs/:env')
   @Permissions('app:write')
-  @ApiOperation({ summary: 'Delete a preview environment (production cannot be deleted)' })
-  removeEnv(
-    @Param('project') project: string,
-    @Param('env') env: string,
-  ) {
+  @ApiOperation({
+    summary: 'Delete a preview environment (production cannot be deleted)',
+  })
+  removeEnv(@Param('project') project: string, @Param('env') env: string) {
     return this.projects.deleteEnvironment(project, env);
   }
 
@@ -131,7 +161,10 @@ export class ProjectsController {
 
   @Post(':project/addons')
   @Permissions('app:write')
-  @ApiOperation({ summary: 'Add an addon to a project (refreshes envFromSecrets on every env)' })
+  @ApiOperation({
+    summary:
+      'Add an addon to a project (refreshes envFromSecrets on every env)',
+  })
   addAddon(@Param('project') project: string, @Body() dto: CreateAddonDTO) {
     return this.projects.addAddon(project, dto);
   }

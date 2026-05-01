@@ -43,6 +43,10 @@
           Addons
           <v-badge :content="addons.length" inline color="primary" class="ml-2" />
         </v-tab>
+        <v-tab value="deploys">
+          Deploys
+          <v-badge :content="builds.length" inline color="primary" class="ml-2" />
+        </v-tab>
       </v-tabs>
 
       <v-window v-model="tab" class="mt-4">
@@ -83,6 +87,10 @@
                   </div>
                 </v-card-text>
                 <v-card-actions>
+                  <v-btn variant="text" @click="redeploy(s)" color="primary">
+                    Redeploy
+                  </v-btn>
+                  <v-spacer />
                   <v-btn variant="text" @click="deleteService(s)" color="error">
                     Delete
                   </v-btn>
@@ -185,6 +193,43 @@
             </v-col>
           </v-row>
         </v-window-item>
+
+        <!-- Deploys -->
+        <v-window-item value="deploys">
+          <v-card v-if="builds.length === 0" variant="outlined" class="pa-8 text-center">
+            <v-icon size="48" color="primary" class="mb-3">mdi-rocket-launch-outline</v-icon>
+            <div class="text-subtitle-1 mb-2">No deploys yet</div>
+            <div class="text-body-2 text-medium-emphasis">
+              Push to your default branch, or click "Redeploy" on a service.
+            </div>
+          </v-card>
+          <v-table v-else>
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Service</th>
+                <th>Branch</th>
+                <th>Commit</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="b in builds" :key="b.metadata.name">
+                <td>{{ relativeTime(b.metadata.creationTimestamp) }}</td>
+                <td>{{ shortServiceName(b.spec.service) }}</td>
+                <td><code>{{ b.spec.branch || '-' }}</code></td>
+                <td>
+                  <code>{{ (b.spec.ref || '').slice(0, 12) }}</code>
+                </td>
+                <td>
+                  <v-chip size="x-small" :color="phaseColor(b.status?.phase)">
+                    {{ b.status?.phase || 'pending' }}
+                  </v-chip>
+                </td>
+              </tr>
+            </tbody>
+          </v-table>
+        </v-window-item>
       </v-window>
 
       <!-- Add Service Dialog -->
@@ -254,6 +299,7 @@ const project = ref<any>(null)
 const services = ref<any[]>([])
 const environments = ref<any[]>([])
 const addons = ref<any[]>([])
+const builds = ref<any[]>([])
 const tab = ref('services')
 
 const showAddService = ref(false)
@@ -270,10 +316,72 @@ async function load() {
     services.value = data.services || []
     environments.value = data.environments || []
     addons.value = data.addons || []
+    await loadBuilds()
   } catch {
     project.value = null
   } finally {
     loading.value = false
+  }
+}
+
+async function loadBuilds() {
+  // Builds are listed per-service; fan out and merge.
+  const all: any[] = []
+  for (const s of services.value) {
+    const short = shortServiceName(s.metadata.name)
+    try {
+      const r = await axios.get(
+        `/api/projects/${projectName.value}/services/${short}/builds`,
+      )
+      const items = Array.isArray(r.data) ? r.data : []
+      all.push(...items)
+    } catch {
+      // ignore — empty list on 404 etc.
+    }
+  }
+  // Newest first
+  all.sort((a, b) =>
+    String(b.metadata.creationTimestamp || '').localeCompare(
+      String(a.metadata.creationTimestamp || ''),
+    ),
+  )
+  builds.value = all
+}
+
+async function redeploy(s: any) {
+  const short = shortServiceName(s.metadata.name)
+  try {
+    await axios.post(`/api/projects/${projectName.value}/services/${short}/builds`, {})
+    // Switch to deploys tab to show progress, then refresh
+    tab.value = 'deploys'
+    await loadBuilds()
+  } catch (e: any) {
+    alert(`Redeploy failed: ${e?.response?.data?.message || e?.message}`)
+  }
+}
+
+function relativeTime(iso?: string): string {
+  if (!iso) return '-'
+  const d = Date.now() - Date.parse(iso)
+  const s = Math.max(0, Math.floor(d / 1000))
+  if (s < 60) return `${s}s ago`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  return `${Math.floor(h / 24)}d ago`
+}
+
+function phaseColor(phase?: string): string {
+  switch (phase) {
+    case 'succeeded':
+      return 'success'
+    case 'failed':
+      return 'error'
+    case 'running':
+      return 'info'
+    default:
+      return 'warning'
   }
 }
 

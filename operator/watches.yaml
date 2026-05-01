@@ -23,4 +23,9 @@
   kind: KusoAddon
   chart: helm-charts/kusoaddon
   reconcilePeriod: 3m
+- group: application.kuso.sislelabs.com
+  version: v1alpha1
+  kind: KusoBuild
+  chart: helm-charts/kusobuild
+  reconcilePeriod: 1m
 #+kubebuilder:scaffold:watch

@@ -21,7 +21,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { App } from 'octokit';
 import { PrismaClient } from '@prisma/client';
-import { CachedInstallation, CachedRepo, DetectedRuntime, RepoTreeEntry } from './github.types';
+import {
+  CachedInstallation,
+  CachedRepo,
+  DetectedRuntime,
+  RepoTreeEntry,
+} from './github.types';
 
 @Injectable()
 export class GithubService {
@@ -207,10 +212,14 @@ export class GithubService {
       });
       const data = res.data as any;
       if (typeof data?.content !== 'string') return '';
-      return Buffer.from(data.content, data.encoding || 'base64').toString('utf8');
+      return Buffer.from(data.content, data.encoding || 'base64').toString(
+        'utf8',
+      );
     } catch (e: any) {
       if (e?.status === 404) return '';
-      this.logger.warn(`readFile ${owner}/${repo}@${branch}:${path} failed: ${e?.message}`);
+      this.logger.warn(
+        `readFile ${owner}/${repo}@${branch}:${path} failed: ${e?.message}`,
+      );
       return '';
     }
   }
@@ -226,7 +235,13 @@ export class GithubService {
     branch: string,
     pathPrefix: string,
   ): Promise<DetectedRuntime> {
-    const entries = await this.listRepoTree(installationId, owner, repo, branch, pathPrefix);
+    const entries = await this.listRepoTree(
+      installationId,
+      owner,
+      repo,
+      branch,
+      pathPrefix,
+    );
     const has = (p: string) => entries.some((e) => e.path === p);
 
     if (has('Dockerfile')) {
@@ -235,7 +250,9 @@ export class GithubService {
         owner,
         repo,
         branch,
-        pathPrefix ? `${pathPrefix.replace(/\/+$/, '')}/Dockerfile` : 'Dockerfile',
+        pathPrefix
+          ? `${pathPrefix.replace(/\/+$/, '')}/Dockerfile`
+          : 'Dockerfile',
       );
       const port = this.parseExpose(dockerfile) ?? 8080;
       return { runtime: 'dockerfile', port, reason: 'Dockerfile detected' };
@@ -258,7 +275,9 @@ export class GithubService {
         owner,
         repo,
         branch,
-        pathPrefix ? `${pathPrefix.replace(/\/+$/, '')}/package.json` : 'package.json',
+        pathPrefix
+          ? `${pathPrefix.replace(/\/+$/, '')}/package.json`
+          : 'package.json',
       );
       const port = this.guessNodePort(pkg);
       return { runtime: 'nixpacks', port, reason: 'package.json detected' };
@@ -270,9 +289,57 @@ export class GithubService {
       return { runtime: 'nixpacks', port: 8080, reason: 'Cargo.toml detected' };
     }
     if (has('requirements.txt') || has('pyproject.toml')) {
-      return { runtime: 'nixpacks', port: 8000, reason: 'Python project detected' };
+      return {
+        runtime: 'nixpacks',
+        port: 8000,
+        reason: 'Python project detected',
+      };
     }
-    return { runtime: 'unknown', port: 8080, reason: 'no recognised marker file' };
+    return {
+      runtime: 'unknown',
+      port: 8080,
+      reason: 'no recognised marker file',
+    };
+  }
+
+  // ---------------- build pipeline support ----------------
+
+  /**
+   * Mint a short-lived (1h) GitHub App installation token. The kaniko
+   * builder Job consumes this via a Secret to clone private repos.
+   * Returns null when the App isn't configured.
+   */
+  async mintInstallationToken(installationId: number): Promise<string | null> {
+    if (!this.app) return null;
+    const octokit = await this.app.getInstallationOctokit(installationId);
+    const auth = (await (octokit as any).auth({ type: 'installation' })) as {
+      token: string;
+    };
+    return auth.token;
+  }
+
+  /**
+   * Resolve a branch name to a commit SHA. Build IDs use the SHA so a
+   * second push to the same branch produces a distinct build with a
+   * different image tag.
+   */
+  async resolveBranchSha(
+    installationId: number,
+    owner: string,
+    repo: string,
+    branch: string,
+  ): Promise<string | null> {
+    if (!this.app) return null;
+    const octokit = await this.app.getInstallationOctokit(installationId);
+    try {
+      const res = await octokit.rest.repos.getBranch({ owner, repo, branch });
+      return res.data.commit?.sha ?? null;
+    } catch (e: any) {
+      this.logger.warn(
+        `resolveBranchSha ${owner}/${repo}@${branch} failed: ${e?.message}`,
+      );
+      return null;
+    }
   }
 
   // ---------------- internals ----------------
@@ -303,7 +370,9 @@ export class GithubService {
     }
   }
 
-  private async fetchInstallationRepos(installationId: number): Promise<CachedRepo[]> {
+  private async fetchInstallationRepos(
+    installationId: number,
+  ): Promise<CachedRepo[]> {
     if (!this.app) return [];
     const octokit = await this.app.getInstallationOctokit(installationId);
     const out: CachedRepo[] = [];

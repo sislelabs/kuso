@@ -14,6 +14,7 @@ import {
   KusoProject,
   KusoService,
 } from './projects.types';
+import { KusoBuild } from './builds.types';
 
 const GROUP = 'application.kuso.sislelabs.com';
 const VERSION = 'v1alpha1';
@@ -287,6 +288,72 @@ export class KusoResourcesService {
       this.namespace,
       'kusoaddons',
       name,
+    );
+  }
+
+  // ---------------- Builds ----------------
+
+  async listBuilds(project?: string, service?: string): Promise<KusoBuild[]> {
+    const parts: string[] = [];
+    if (project) parts.push(`kuso.sislelabs.com/project=${project}`);
+    if (service) parts.push(`kuso.sislelabs.com/service=${service}`);
+    const labelSelector = parts.length ? parts.join(',') : undefined;
+    const res = await this.api.listNamespacedCustomObject(
+      GROUP,
+      VERSION,
+      this.namespace,
+      'kusobuilds',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      labelSelector,
+    );
+    return ((res.body as any)?.items || []) as KusoBuild[];
+  }
+
+  async getBuild(name: string): Promise<KusoBuild | null> {
+    try {
+      const res = await this.api.getNamespacedCustomObject(
+        GROUP,
+        VERSION,
+        this.namespace,
+        'kusobuilds',
+        name,
+      );
+      return res.body as KusoBuild;
+    } catch (e: any) {
+      if (e?.response?.statusCode === 404) return null;
+      throw e;
+    }
+  }
+
+  async createBuild(build: KusoBuild): Promise<KusoBuild> {
+    const body = this.materialise('KusoBuild', 'kusobuilds', build);
+    const res = await this.api.createNamespacedCustomObject(
+      GROUP,
+      VERSION,
+      this.namespace,
+      'kusobuilds',
+      body,
+    );
+    return res.body as KusoBuild;
+  }
+
+  async patchBuildStatus(name: string, status: any): Promise<void> {
+    // KusoBuild's CRD doesn't define a status subresource, so a regular
+    // merge-patch on the parent object updates the status field directly.
+    await this.api.patchNamespacedCustomObject(
+      GROUP,
+      VERSION,
+      this.namespace,
+      'kusobuilds',
+      name,
+      { status },
+      undefined,
+      undefined,
+      undefined,
+      { headers: { 'Content-Type': 'application/merge-patch+json' } },
     );
   }
 

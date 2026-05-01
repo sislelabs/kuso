@@ -1,0 +1,10 @@
+apiVersion: v2
+name: kusobuild
+description: One build attempt. Renders a Kubernetes Job that runs kaniko —
+  clones the repo (with a GitHub App token if private), builds the image
+  from a Dockerfile, and pushes to the in-cluster registry. Status is
+  surfaced via the Job's completion state; the kuso server polls and on
+  success patches the matching KusoEnvironment with the new image tag.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

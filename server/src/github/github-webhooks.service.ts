@@ -10,6 +10,7 @@ import { GithubService } from './github.service';
 import { ProjectsService } from '../projects/projects.service';
 import { KusoResourcesService } from '../projects/kuso-resources.service';
 import { KusoEnvironment } from '../projects/projects.types';
+import { BuildsService } from '../projects/builds.service';
 
 interface PushEvent {
   ref: string;
@@ -44,6 +45,7 @@ export class GithubWebhooksService {
     private readonly github: GithubService,
     private readonly projects: ProjectsService,
     private readonly resources: KusoResourcesService,
+    private readonly builds: BuildsService,
   ) {}
 
   async dispatch(event: string, payload: any): Promise<void> {
@@ -73,17 +75,30 @@ export class GithubWebhooksService {
   private async onPush(p: PushEvent): Promise<void> {
     const branch = p.ref.replace(/^refs\/heads\//, '');
     const repo = p.repository.full_name;
-    // Find every project whose defaultRepo matches this repo+branch and
-    // re-trigger production envs. Phase 6's reconciler picks up the build.
     const projects = await this.projects.list();
     for (const proj of projects) {
       const repoUrl = proj.spec.defaultRepo?.url || '';
       const defaultBranch = proj.spec.defaultRepo?.defaultBranch || 'main';
-      if (!this.repoMatches(repoUrl, repo) || branch !== defaultBranch) continue;
-      this.logger.log(`push to ${repo}@${branch} → triggering project ${proj.metadata.name}`);
-      // Phase 6 will replace this with a real build trigger. For now we
-      // bump a status annotation so the operator re-reconciles each env.
-      // Actual rebuild logic lands with the build pipeline in v0.2.x.
+      if (!this.repoMatches(repoUrl, repo) || branch !== defaultBranch)
+        continue;
+      this.logger.log(
+        `push to ${repo}@${branch} → triggering builds for project ${proj.metadata.name}`,
+      );
+      const services = await this.projects.listServices(proj.metadata.name);
+      for (const svc of services) {
+        const shortName = svc.metadata.name.startsWith(`${proj.metadata.name}-`)
+          ? svc.metadata.name.slice(proj.metadata.name.length + 1)
+          : svc.metadata.name;
+        try {
+          await this.builds.createBuild(proj.metadata.name, shortName, {
+            branch,
+          });
+        } catch (e: any) {
+          this.logger.warn(
+            `build trigger ${proj.metadata.name}/${shortName} failed: ${e?.message}`,
+          );
+        }
+      }
     }
   }
 
@@ -99,12 +114,20 @@ export class GithubWebhooksService {
         case 'reopened':
         case 'synchronize':
           for (const svc of services) {
-            await this.ensurePreviewEnv(proj.metadata.name, svc.metadata.name, p);
+            await this.ensurePreviewEnv(
+              proj.metadata.name,
+              svc.metadata.name,
+              p,
+            );
           }
           break;
         case 'closed':
           for (const svc of services) {
-            await this.deletePreviewEnv(proj.metadata.name, svc.metadata.name, p.number);
+            await this.deletePreviewEnv(
+              proj.metadata.name,
+              svc.metadata.name,
+              p.number,
+            );
           }
           break;
       }
@@ -150,7 +173,9 @@ export class GithubWebhooksService {
       ? serviceFqn.slice(project.length + 1)
       : serviceFqn;
     const ttlDays = proj.spec.previews?.ttlDays ?? 7;
-    const expiresAt = new Date(Date.now() + ttlDays * 24 * 3600 * 1000).toISOString();
+    const expiresAt = new Date(
+      Date.now() + ttlDays * 24 * 3600 * 1000,
+    ).toISOString();
 
     const env: KusoEnvironment = {
       metadata: {
@@ -185,6 +210,22 @@ export class GithubWebhooksService {
     }
     await this.resources.createEnvironment(env);
     this.logger.log(`PR #${pr.number}: preview env ${envName} ready`);
+
+    // Trigger a build off the PR head ref. When the build succeeds the
+    // BuildsService poller patches the production env with the new image —
+    // for previews we need a per-env promotion. v0.2.x: extend
+    // BuildsService to know about preview envs. For now the preview env's
+    // image must be set manually; build CR is created so the user sees
+    // it in the deploys panel.
+    try {
+      await this.builds.createBuild(project, shortService, {
+        branch: pr.pull_request.head.ref,
+      });
+    } catch (e: any) {
+      this.logger.warn(
+        `preview build trigger PR #${pr.number} failed: ${e?.message}`,
+      );
+    }
   }
 
   private async deletePreviewEnv(

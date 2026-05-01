@@ -1,0 +1,37 @@
+# Default values for KusoBuild CRs. The operator copies the CR spec onto
+# these and renders a Job that runs kaniko.
+
+project: ""
+service: ""
+ref: ""        # commit SHA — used as image tag
+branch: main
+
+repo:
+  url: ""
+  path: "."
+
+# Build strategy. v0.2 ships dockerfile only.
+strategy: dockerfile
+
+# Target registry. The server fills this in with the in-cluster registry
+# URL (kuso-registry.kuso.svc.cluster.local:5000/<project>/<service>) and
+# the immutable tag (commit SHA).
+image:
+  repository: ""
+  tag: ""
+
+# GitHub App installation id. When non-zero, an init container mints a
+# clone-time installation token from a Kubernetes Secret named
+# `kuso-github-app` (the same one the server uses) and configures git to
+# use it. When zero, the repo is assumed public and cloned anonymously.
+githubInstallationId: 0
+
+# Resources for the kaniko Job pod. Builds are CPU-heavy; defaults aim
+# at "small Hetzner box" — bigger boxes can override.
+resources:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: 1500m
+    memory: 2Gi

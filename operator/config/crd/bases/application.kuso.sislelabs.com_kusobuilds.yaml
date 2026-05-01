@@ -1,0 +1,91 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: kusobuilds.application.kuso.sislelabs.com
+spec:
+  group: application.kuso.sislelabs.com
+  names:
+    kind: KusoBuild
+    listKind: KusoBuildList
+    plural: kusobuilds
+    singular: kusobuild
+    shortNames: [kb, kbuild]
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      additionalPrinterColumns:
+        - name: Project
+          type: string
+          jsonPath: .spec.project
+        - name: Service
+          type: string
+          jsonPath: .spec.service
+        - name: Ref
+          type: string
+          jsonPath: .spec.ref
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          description: KusoBuild is one build attempt. The operator renders a kaniko Job that clones the repo, builds the image, and pushes it to the in-cluster registry.
+          type: object
+          properties:
+            apiVersion: { type: string }
+            kind: { type: string }
+            metadata: { type: object }
+            spec:
+              type: object
+              required: [project, service, ref]
+              properties:
+                project:
+                  type: string
+                service:
+                  type: string
+                # Git context. URL must be HTTPS for build-time fetch (kaniko
+                # uses git clone). For private repos the build job is wired to
+                # a token-providing initContainer; see the helm chart.
+                repo:
+                  type: object
+                  properties:
+                    url:
+                      type: string
+                    path:
+                      type: string
+                      default: "."
+                # branch + commit SHA. Both stored — the SHA is the immutable
+                # truth (image tag), the branch is the human label.
+                ref:
+                  type: string
+                branch:
+                  type: string
+                # GitHub App installation id, used to mint a clone token if
+                # the repo is private. Empty for public repos.
+                githubInstallationId:
+                  type: integer
+                  format: int64
+                # Build strategy. v0.2 ships dockerfile only — kaniko handles
+                # any Dockerfile-based build. nixpacks/buildpacks come later
+                # by swapping the kaniko image for the right builder.
+                strategy:
+                  type: string
+                  enum: [dockerfile]
+                  default: dockerfile
+                # Where to push. Server fills this with the in-cluster
+                # registry URL + a tag derived from the commit SHA.
+                image:
+                  type: object
+                  properties:
+                    repository:
+                      type: string
+                    tag:
+                      type: string
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true

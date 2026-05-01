@@ -1,0 +1,113 @@
+{{- if and .Values.image.repository .Values.image.tag .Values.repo.url }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kusobuild.fullname" . }}
+  labels:
+    {{- include "kusobuild.labels" . | nindent 4 }}
+spec:
+  # Don't auto-retry; failed builds should surface as failed, not loop.
+  backoffLimit: 0
+  # Clean up the Job + Pod 1h after completion regardless of success.
+  # Logs are streamed to the kuso server via the build status poller
+  # before then; nothing in the Job needs to live longer.
+  ttlSecondsAfterFinished: 3600
+  template:
+    metadata:
+      labels:
+        {{- include "kusobuild.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      # Both init and main run as the same UID. kaniko needs root to
+      # write to /kaniko, but the build itself is sandboxed inside the
+      # container's tmpfs.
+      initContainers:
+        - name: clone
+          image: alpine/git:2.45.2
+          # When a GitHub App installation id is provided, the init
+          # container mints a short-lived installation token using the
+          # App's private key (mounted from the kuso-github-app Secret)
+          # and writes it into a netrc file kaniko will consume.
+          #
+          # When the id is 0 we assume a public repo and clone anonymously.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              cd /workspace
+              {{- if gt (int .Values.githubInstallationId) 0 }}
+              # Mint installation token via App JWT.
+              # Build the JWT with openssl in a busybox-shell-friendly way.
+              # We'd ideally use the kuso server to mint this, but the
+              # init container is the only place we have access to the
+              # PEM-mounted secret AND outbound HTTPS at the same time.
+              # For v0.2 we shell out to a one-shot Go helper (kaniko-
+              # mint-token) — but kaniko's exec environment lacks a
+              # toolchain, so we keep this simple: rely on the server
+              # to fetch a token and pass it via env var instead.
+              if [ -z "$GITHUB_INSTALLATION_TOKEN" ]; then
+                echo "ERROR: GITHUB_INSTALLATION_TOKEN must be set for private repos"
+                exit 1
+              fi
+              git clone --depth 1 --branch {{ .Values.branch | quote }} \
+                https://x-access-token:$GITHUB_INSTALLATION_TOKEN@$(echo {{ .Values.repo.url | quote }} | sed -E 's|^https?://||') \
+                /workspace/src
+              {{- else }}
+              git clone --depth 1 --branch {{ .Values.branch | quote }} \
+                {{ .Values.repo.url | quote }} \
+                /workspace/src
+              {{- end }}
+              # Pin the exact commit when ref is a 40-char SHA. For
+              # synthetic refs (used when no GitHub App installation can
+              # resolve a branch -> SHA), HEAD of the cloned branch is
+              # what we want.
+              cd /workspace/src
+              REF="{{ .Values.ref }}"
+              if echo "$REF" | grep -Eq '^[0-9a-f]{40}$'; then
+                if ! git checkout "$REF" 2>/dev/null; then
+                  echo "checkout $REF failed; deepening clone"
+                  git fetch --unshallow
+                  git checkout "$REF"
+                fi
+              else
+                echo "ref $REF is not a SHA; using branch HEAD"
+              fi
+              echo "checked out: $(git rev-parse HEAD)"
+          env:
+            {{- if gt (int .Values.githubInstallationId) 0 }}
+            - name: GITHUB_INSTALLATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  # Server pre-creates this Secret per build with a
+                  # short-lived (1h) installation token. See
+                  # BuildsService.createBuild.
+                  name: {{ include "kusobuild.fullname" . }}-token
+                  key: token
+            {{- end }}
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+      containers:
+        - name: kaniko
+          image: gcr.io/kaniko-project/executor:v1.23.2
+          args:
+            - --dockerfile={{ .Values.repo.path | default "." }}/Dockerfile
+            - --context=dir:///workspace/src/{{ .Values.repo.path | default "." }}
+            - --destination={{ .Values.image.repository }}:{{ .Values.image.tag }}
+            # Internal registry uses plain HTTP; tell kaniko to push
+            # without TLS verification.
+            - --insecure
+            - --skip-tls-verify
+            # Cache layers by default to speed repeat builds.
+            - --cache=true
+            - --cache-repo={{ .Values.image.repository }}/.cache
+            - --cleanup
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: workspace
+          emptyDir: {}
+{{- end }}
