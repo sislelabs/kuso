@@ -50,7 +50,9 @@ WORKDIR /app/
 
 COPY --from=build /build/server/dist /app/server
 COPY --from=build /build/server/package.json /app/server/package.json
-COPY --from=build /build/server/src/deployments/templates /app/server/deployments/templates
+# deployments/templates lived under v0.1's deployments module; deleted in
+# the v0.2.x cleanup. Build-time templates now live in the operator's
+# helm charts (operator/helm-charts/kusobuild) instead.
 COPY --from=build /build/server/node_modules /app/server/node_modules
 COPY server/prisma /app/server/prisma
 

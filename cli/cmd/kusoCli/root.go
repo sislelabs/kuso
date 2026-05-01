@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"kuso/cmd/kusoCli/version"
 	"os"
-	"reflect"
 	"strings"
 
 	"kuso/pkg/kusoApi"
@@ -140,48 +139,6 @@ func confirmationLine(question, def string) bool {
 	return true
 }
 
-func loadRepositories() {
-	res, err := api.GetRepositories()
-	if res == nil {
-		fmt.Println("Error: Can't reach Kuso API. Make sure, you are logged in.")
-		os.Exit(1)
-	}
-	if res.StatusCode() != 200 {
-		fmt.Println("Error:", res.StatusCode(), "Can't reach Kuso API. Make sure, you are logged in.")
-		os.Exit(1)
-	}
-	if err != nil {
-		fmt.Println("Error: Unable to load repositories")
-		fmt.Println(err)
-		os.Exit(1)
-	}
-	var availRep Repositories
-	jsonUnmarshalErr := json.Unmarshal(res.Body(), &availRep)
-	if jsonUnmarshalErr != nil {
-		fmt.Println("Error: Unable to load repositories")
-		return
-	}
-	t := reflect.TypeOf(availRep)
-	repoSimpleList = make([]string, t.NumField())
-	for i := range repoSimpleList {
-		if reflect.ValueOf(availRep).Field(i).Bool() {
-			repoSimpleList[i] = t.Field(i).Name
-		}
-	}
-}
-
-func loadContexts() {
-	cont, _ := api.GetContexts()
-	var contexts Contexts
-	jsonUnmarshalErr := json.Unmarshal(cont.Body(), &contexts)
-	if jsonUnmarshalErr != nil {
-		fmt.Println("Error: Unable to load contexts")
-		return
-	}
-	for _, context := range contexts {
-		contextSimpleList = append(contextSimpleList, context.Name)
-	}
-}
 
 func getGitRemote() string {
 	gitdir := getGitdir() + "/.git"
@@ -229,33 +186,6 @@ func getIACBaseDir() string {
 	return basePath
 }
 
-//func loadConfigs(basePath, pipelineName string) {
-//	baseDir := getIACBaseDir()
-//	dir := baseDir + "/" + pipelineName
-//	pipelineConfig = viper.New()
-//	pipelineConfig.SetConfigName("pipeline")
-//	pipelineConfig.SetConfigType("yaml")
-//	pipelineConfig.AddConfigPath(dir)
-//	readInConfigErr := pipelineConfig.ReadInConfig()
-//	if readInConfigErr != nil {
-//		fmt.Println("Error while loading pipeline config file:", readInConfigErr)
-//		return
-//	}
-//}
-
-func loadConfigs(pipelineName string) {
-	baseDir := getIACBaseDir()
-	dir := baseDir + "/" + pipelineName
-	pipelineConfig = viper.New()
-	pipelineConfig.SetConfigName("pipeline")
-	pipelineConfig.SetConfigType("yaml")
-	pipelineConfig.AddConfigPath(dir)
-	readInConfigErr := pipelineConfig.ReadInConfig()
-	if readInConfigErr != nil {
-		fmt.Println("Error while loading pipeline config file:", readInConfigErr)
-		return
-	}
-}
 
 func loadCLIConfig() {
 	dir := getGitdir()
@@ -351,59 +281,6 @@ func boolToEmoji(b bool) string {
 	return "❌"
 }
 
-func ensurePipelineIsSet(pipelinesList []string) {
-	if pipelineName == "" {
-		fmt.Println("")
-		prompt := &survey.Select{
-			Message: "Select a pipeline",
-			Options: pipelinesList,
-		}
-		askOneErr := survey.AskOne(prompt, &pipelineName)
-		if askOneErr != nil {
-			fmt.Println("Error while selecting pipeline:", askOneErr)
-			return
-		}
-	}
-}
-
-func ensureAppNameIsSet() {
-	if appName == "" {
-		appName = promptLine("Define a app name", "", appName)
-	}
-}
-
-func ensureStageNameIsSet() {
-	if stageName == "" {
-		fmt.Println("")
-		pipelineConfig := loadPipelineConfig(pipelineName, false)
-		availablePhases := getPipelinePhasesFromCRD(pipelineConfig)
-		prompt := &survey.Select{
-			Message: "Select a stage",
-			Options: availablePhases,
-		}
-		askOneErr := survey.AskOne(prompt, &stageName)
-		if askOneErr != nil {
-			fmt.Println("Error while selecting stage:", askOneErr)
-			os.Exit(1)
-			return
-		}
-	}
-}
-
-func ensureAppNameIsSelected(availableApps []string) {
-	if appName == "" {
-		fmt.Println("")
-		prompt := &survey.Select{
-			Message: "Select an app",
-			Options: availableApps,
-		}
-		askOneErr := survey.AskOne(prompt, &appName)
-		if askOneErr != nil {
-			fmt.Println("Error while selecting app:", askOneErr)
-			return
-		}
-	}
-}
 
 func prettyPrintJson(data []byte) {
 	var prettyJSON bytes.Buffer
