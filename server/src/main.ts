@@ -28,7 +28,18 @@ async function bootstrap() {
       logLevels: logLevels as LogLevel[],
     }),
     cors: true,
+    // Stash raw body bytes on the Express request so the GitHub webhook
+    // controller can verify the X-Hub-Signature-256 HMAC. Without this
+    // bodyParser parses+drops the original buffer and we can't recompute
+    // the signature.
+    bodyParser: false,
   });
+  const bodyParser = await import('body-parser');
+  const rawSaver = (req: any, _res: any, buf: Buffer) => {
+    if (buf?.length) req.rawBody = buf;
+  };
+  app.use(bodyParser.json({ limit: '10mb', verify: rawSaver }));
+  app.use(bodyParser.urlencoded({ extended: true, verify: rawSaver }));
 
   await DatabaseService.DBinit();
 

@@ -267,3 +267,39 @@ enum NotificationType {
   webhook
   discord
 }
+// GITHUB APP — Phase 3 of the v0.2 redesign.
+//
+// One row per GitHub App installation. The kuso GitHub App is installed on
+// an organisation or user account; that grants kuso read access to the repos
+// the user picks during the install flow. We cache the installation id and
+// the list of accessible repos here so the project create flow can show a
+// repo picker without re-querying GitHub on every page load.
+model GithubInstallation {
+  id              Int      @id // GitHub installation id (not auto-incremented)
+  accountLogin    String   // org or user login the App is installed on
+  accountType     String   // "Organization" or "User"
+  accountId       Int
+  // Cached list of repos accessible via this installation. JSON-encoded
+  // [{id, name, fullName, private, defaultBranch}]. Refreshed on webhook
+  // installation_repositories events.
+  repositoriesJson String   @default("[]")
+  // We don't store installation tokens; @octokit/auth-app mints them
+  // on demand and caches them in-memory until they expire.
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
+
+// One row per kuso user who has linked their GitHub identity. Created on
+// first OAuth sign-in; lets us correlate a logged-in user with the App
+// installations they can access.
+model GithubUserLink {
+  id          String   @id @default(cuid())
+  userId      String   @unique // kuso User.id
+  githubLogin String
+  githubId    Int      @unique
+  // Cached oauth access token; used only for "list installations the user
+  // can see" — App installations themselves use installation tokens.
+  accessToken String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}

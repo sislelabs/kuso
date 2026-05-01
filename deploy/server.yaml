@@ -48,6 +48,21 @@ stringData:
   KUSO_SESSION_KEY: "change-me-session-key-32-chars-min"
   JWT_SECRET: "change-me-jwt-secret-32-chars-minimum"
   KUSO_ADMIN_PASSWORD: "kuso-admin"
+  # GitHub App (Phase 3 of v0.2 — see docs/REDESIGN.md and the
+  # post-install instructions for kuso.sislelabs.com). Empty means the
+  # GitHub integration is disabled and the install-flow CTA in the UI
+  # tells the user how to enable it. Replace with real values after
+  # registering the App at:
+  #   https://github.com/organizations/sislelabs/settings/apps/new
+  GITHUB_APP_ID: ""
+  GITHUB_APP_SLUG: ""
+  GITHUB_APP_CLIENT_ID: ""
+  GITHUB_APP_CLIENT_SECRET: ""
+  GITHUB_APP_WEBHOOK_SECRET: ""
+  # Multi-line PEM. Set as a value with literal "\n" sequences so it
+  # round-trips through stringData. github.service.ts replaces \n with
+  # real newlines when initialising Octokit.
+  GITHUB_APP_PRIVATE_KEY: ""
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim

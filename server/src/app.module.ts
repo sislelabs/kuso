@@ -26,6 +26,7 @@ import { RolesModule } from './roles/roles.module';
 import { TokenModule } from './token/token.module';
 import { CliModule } from './cli/cli.module';
 import { ProjectsModule } from './projects/projects.module';
+import { GithubModule } from './github/github.module';
 
 @Module({
   imports: [
@@ -53,6 +54,7 @@ import { ProjectsModule } from './projects/projects.module';
     TokenModule,
     CliModule,
     ProjectsModule,
+    GithubModule,
   ],
   controllers: [AppController, TemplatesController],
   providers: [AppService, TemplatesService],
