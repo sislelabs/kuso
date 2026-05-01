@@ -25,6 +25,7 @@ import (
 	"github.com/spf13/cobra"
 	_ "github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -282,15 +283,29 @@ func loadCLIConfig() {
 		}
 	}
 
-	viperUnmarshalErr := viper.UnmarshalKey("instances", &instanceList)
-	if viperUnmarshalErr != nil {
-		fmt.Println("Error while unmarshalling instances:", viperUnmarshalErr)
-		return
+	// Read instances directly from the YAML file because viper's "."
+	// key delimiter splits dotted instance names like "kuso.sislelabs.com"
+	// into nested maps, which UnmarshalKey then can't reassemble.
+	if instanceList == nil {
+		instanceList = map[string]Instance{}
 	}
-	for instanceName, instance := range instanceList {
-		instance.Name = instanceName
-		instance.ConfigPath = viper.ConfigFileUsed()
-		instanceList[instanceName] = instance
+	if cfg := viper.ConfigFileUsed(); cfg != "" {
+		raw, _ := os.ReadFile(cfg)
+		var doc map[string]any
+		if err := yaml.Unmarshal(raw, &doc); err == nil {
+			if insts, ok := doc["instances"].(map[string]any); ok {
+				for k, v := range insts {
+					if m, ok := v.(map[string]any); ok {
+						instanceList[k] = Instance{
+							Name:       k,
+							ApiUrl:     asString(m["apiurl"]),
+							IacBaseDir: asString(m["iacBaseDir"]),
+							ConfigPath: cfg,
+						}
+					}
+				}
+			}
+		}
 	}
 
 	var repoInstancesList map[string]Instance
@@ -316,7 +331,9 @@ func loadCLIConfig() {
 }
 
 func loadCredentials() {
-	credentialsConfig = viper.New()
+	// Use a non-dot key delimiter so instance names like
+	// "kuso.sislelabs.com" don't get split into nested map keys by viper.
+	credentialsConfig = viper.NewWithOptions(viper.KeyDelimiter("\x00"))
 	credentialsConfig.SetConfigName("credentials")
 	credentialsConfig.SetConfigType("yaml")
 	credentialsConfig.AddConfigPath("/etc/kuso/")

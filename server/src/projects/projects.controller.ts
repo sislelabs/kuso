@@ -125,6 +125,84 @@ export class ProjectsController {
     return this.builds.createBuild(project, service, body || {});
   }
 
+  // ---------------- env vars ----------------
+
+  @Get(':project/services/:service/env')
+  @Permissions('app:read', 'app:write')
+  @ApiOperation({
+    summary:
+      'List a service env: plain key=value pairs, plus the keys of any secret-typed entries (values redacted)',
+  })
+  getServiceEnv(
+    @Param('project') project: string,
+    @Param('service') service: string,
+  ) {
+    return this.projects.getEnv(project, service);
+  }
+
+  @Post(':project/services/:service/env')
+  @Permissions('app:write')
+  @ApiOperation({
+    summary:
+      'Replace the service env list. Body: { envVars: [{name, value} | {name, valueFrom: {secretKeyRef: {name, key}}}] }',
+  })
+  setEnv(
+    @Param('project') project: string,
+    @Param('service') service: string,
+    @Body() body: { envVars?: any[] },
+  ) {
+    return this.projects.setEnv(project, service, body?.envVars || []);
+  }
+
+  // ---------------- secrets ----------------
+
+  @Get(':project/services/:service/secrets')
+  @Permissions('app:read', 'app:write')
+  @ApiOperation({
+    summary: 'List secret keys for a service (values are never returned)',
+  })
+  listSecrets(
+    @Param('project') project: string,
+    @Param('service') service: string,
+  ) {
+    return this.projects
+      .listSecretKeys(project, service)
+      .then((keys) => ({ keys }));
+  }
+
+  @Post(':project/services/:service/secrets')
+  @Permissions('app:write')
+  @ApiOperation({
+    summary: 'Set or replace a secret key. Body: { key, value }',
+  })
+  setSecret(
+    @Param('project') project: string,
+    @Param('service') service: string,
+    @Body() body: { key?: string; value?: string },
+  ) {
+    return this.projects
+      .setSecret(
+        project,
+        service,
+        String(body?.key || ''),
+        String(body?.value ?? ''),
+      )
+      .then(() => ({ ok: true }));
+  }
+
+  @Delete(':project/services/:service/secrets/:key')
+  @Permissions('app:write')
+  @ApiOperation({ summary: 'Unset a secret key' })
+  unsetSecret(
+    @Param('project') project: string,
+    @Param('service') service: string,
+    @Param('key') key: string,
+  ) {
+    return this.projects
+      .unsetSecret(project, service, key)
+      .then(() => ({ ok: true }));
+  }
+
   // ---------------- environments ----------------
 
   @Get(':project/envs')

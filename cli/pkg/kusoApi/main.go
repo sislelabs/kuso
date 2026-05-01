@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v4"
 
@@ -104,7 +105,9 @@ func (k *KusoClient) SetApiUrl(apiUrl string, bearerToken string) {
 		SetHeader("Host", k.host).
 		SetHeader("Accept", "application/json").
 		SetHeader("Content-Type", "application/json").
-		SetHeader("User-Agent", "kuso-cli/"+version)
+		// version is read via //go:embed and may include a trailing
+		// newline. Strip it — invalid header values otherwise.
+		SetHeader("User-Agent", "kuso-cli/"+strings.TrimSpace(version))
 
 	k.bearerToken = bearerToken
 

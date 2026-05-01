@@ -22,10 +22,11 @@ var projectCmd = &cobra.Command{
 // ---------------- project create ----------------
 
 var (
-	projectCreateRepo     string
-	projectCreateBranch   string
-	projectCreateDomain   string
-	projectCreatePreviews bool
+	projectCreateRepo            string
+	projectCreateBranch          string
+	projectCreateDomain          string
+	projectCreatePreviews        bool
+	projectCreateInstallationID  int64
 )
 
 var projectCreateCmd = &cobra.Command{
@@ -45,6 +46,11 @@ var projectCreateCmd = &cobra.Command{
 		req.DefaultRepo.URL = projectCreateRepo
 		req.DefaultRepo.DefaultBranch = projectCreateBranch
 		req.Previews.Enabled = projectCreatePreviews
+		if projectCreateInstallationID > 0 {
+			req.GitHub = &struct {
+				InstallationID int64 `json:"installationId,omitempty"`
+			}{InstallationID: projectCreateInstallationID}
+		}
 		resp, err := api.CreateProject(req)
 		if err != nil {
 			return fmt.Errorf("create: %w", err)
@@ -302,6 +308,7 @@ func init() {
 
 	projectCmd.AddCommand(projectCreateCmd)
 	projectCreateCmd.Flags().StringVar(&projectCreateRepo, "repo", "", "git repo URL (required)")
+	projectCreateCmd.Flags().Int64Var(&projectCreateInstallationID, "github-installation", 0, "GitHub App installation id (use 'kuso github installations' to list)")
 	projectCreateCmd.Flags().StringVar(&projectCreateBranch, "branch", "main", "default branch")
 	projectCreateCmd.Flags().StringVar(&projectCreateDomain, "domain", "", "base domain (services get <name>.<this>)")
 	projectCreateCmd.Flags().BoolVar(&projectCreatePreviews, "previews", false, "enable PR-based preview environments")

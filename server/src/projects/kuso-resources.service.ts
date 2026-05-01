@@ -147,6 +147,21 @@ export class KusoResourcesService {
     );
   }
 
+  async patchService(name: string, patch: Record<string, any>): Promise<void> {
+    await this.api.patchNamespacedCustomObject(
+      GROUP,
+      VERSION,
+      this.namespace,
+      'kusoservices',
+      name,
+      patch,
+      undefined,
+      undefined,
+      undefined,
+      { headers: { 'Content-Type': 'application/merge-patch+json' } },
+    );
+  }
+
   // ---------------- Environments ----------------
 
   async listEnvironments(

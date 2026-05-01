@@ -4,6 +4,8 @@ import {
   NotFoundException,
   Logger,
 } from '@nestjs/common';
+import { CoreV1Api } from '@kubernetes/client-node';
+import { KubernetesService } from '../kubernetes/kubernetes.service';
 import { KusoResourcesService } from './kuso-resources.service';
 import {
   CreateAddonDTO,
@@ -19,7 +21,10 @@ import {
 export class ProjectsService {
   private readonly logger = new Logger(ProjectsService.name);
 
-  constructor(private readonly resources: KusoResourcesService) {}
+  constructor(
+    private readonly resources: KusoResourcesService,
+    private readonly kubectl: KubernetesService,
+  ) {}
 
   // ---------------- projects ----------------
 
@@ -174,6 +179,221 @@ export class ProjectsService {
     await this.resources.createEnvironment(env);
 
     return created;
+  }
+
+  // ---------------- secrets ----------------
+
+  /**
+   * Lists the keys (NOT values) of a service's secrets. Secret-typed
+   * env vars live in a real Kubernetes Secret named
+   * `<project>-<service>-secrets`. The KusoEnvironment chart picks them
+   * up via envFromSecrets, so they appear as env vars in the container
+   * without ever being written into the CR spec.
+   */
+  async listSecretKeys(project: string, service: string): Promise<string[]> {
+    await this.getService(project, service); // 404s if missing
+    const secret = await this.readSecret(this.secretName(project, service));
+    return secret ? Object.keys(secret) : [];
+  }
+
+  async setSecret(
+    project: string,
+    service: string,
+    key: string,
+    value: string,
+  ): Promise<void> {
+    if (!key) throw new BadRequestException('key is required');
+    await this.getService(project, service);
+    const name = this.secretName(project, service);
+    const current = (await this.readSecret(name)) || {};
+    current[key] = value;
+    await this.writeSecret(name, current);
+    await this.attachSecretToEnvironments(project, service, name);
+  }
+
+  async unsetSecret(
+    project: string,
+    service: string,
+    key: string,
+  ): Promise<void> {
+    await this.getService(project, service);
+    const name = this.secretName(project, service);
+    const current = (await this.readSecret(name)) || {};
+    if (!(key in current)) {
+      throw new NotFoundException(`secret key ${key} not found`);
+    }
+    delete current[key];
+    if (Object.keys(current).length === 0) {
+      await this.deleteSecret(name);
+      // Also drop the envFromSecrets reference from the service's envs
+      // so the next reconcile doesn't keep mounting an empty Secret.
+      await this.detachSecretFromEnvironments(project, service, name);
+    } else {
+      await this.writeSecret(name, current);
+    }
+  }
+
+  private secretName(project: string, service: string): string {
+    return `${this.svcName(project, service)}-secrets`;
+  }
+
+  private async readSecret(
+    name: string,
+  ): Promise<Record<string, string> | null> {
+    const coreApi = (this.kubectl as any).coreV1Api as CoreV1Api;
+    try {
+      const res = await coreApi.readNamespacedSecret(
+        name,
+        process.env.KUSO_NAMESPACE || 'kuso',
+      );
+      const data = res.body.data || {};
+      const out: Record<string, string> = {};
+      for (const [k, v] of Object.entries(data)) {
+        out[k] = Buffer.from(v as string, 'base64').toString('utf8');
+      }
+      return out;
+    } catch (e: any) {
+      if (e?.response?.statusCode === 404) return null;
+      throw e;
+    }
+  }
+
+  private async writeSecret(
+    name: string,
+    data: Record<string, string>,
+  ): Promise<void> {
+    const coreApi = (this.kubectl as any).coreV1Api as CoreV1Api;
+    const ns = process.env.KUSO_NAMESPACE || 'kuso';
+    const body: any = {
+      apiVersion: 'v1',
+      kind: 'Secret',
+      metadata: { name, namespace: ns },
+      type: 'Opaque',
+      stringData: data,
+    };
+    try {
+      await coreApi.createNamespacedSecret(ns, body);
+    } catch (e: any) {
+      if (e?.response?.statusCode === 409) {
+        await coreApi.replaceNamespacedSecret(name, ns, body);
+      } else {
+        throw e;
+      }
+    }
+  }
+
+  private async deleteSecret(name: string): Promise<void> {
+    const coreApi = (this.kubectl as any).coreV1Api as CoreV1Api;
+    try {
+      await coreApi.deleteNamespacedSecret(
+        name,
+        process.env.KUSO_NAMESPACE || 'kuso',
+      );
+    } catch (e: any) {
+      if (e?.response?.statusCode !== 404) throw e;
+    }
+  }
+
+  private async attachSecretToEnvironments(
+    project: string,
+    service: string,
+    secretName: string,
+  ): Promise<void> {
+    const envs = await this.envsForService(project, service);
+    for (const env of envs) {
+      const existing = (env.spec.envFromSecrets || []) as string[];
+      if (existing.includes(secretName)) continue;
+      const next = [...existing, secretName];
+      await this.resources.patchEnvironment(env.metadata.name, {
+        spec: { envFromSecrets: next },
+      });
+    }
+  }
+
+  private async detachSecretFromEnvironments(
+    project: string,
+    service: string,
+    secretName: string,
+  ): Promise<void> {
+    const envs = await this.envsForService(project, service);
+    for (const env of envs) {
+      const existing = (env.spec.envFromSecrets || []) as string[];
+      if (!existing.includes(secretName)) continue;
+      const next = existing.filter((s) => s !== secretName);
+      await this.resources.patchEnvironment(env.metadata.name, {
+        spec: { envFromSecrets: next },
+      });
+    }
+  }
+
+  /**
+   * Find every KusoEnvironment for a given (project, service). Filters
+   * project-wide and matches on spec.service. We can't rely on the
+   * `kuso.sislelabs.com/service` label because some envs label with the
+   * short name ("web") and others with the fqn ("hello-web") — this
+   * looks at the spec instead, which is canonical.
+   */
+  private async envsForService(
+    project: string,
+    service: string,
+  ): Promise<KusoEnvironment[]> {
+    const fqn = this.svcName(project, service);
+    const all = await this.resources.listEnvironments(project);
+    return all.filter((e) => {
+      const s = e.spec.service;
+      return s === fqn || s === service;
+    });
+  }
+
+  // ---------------- env vars ----------------
+
+  /**
+   * Returns the service's plain env vars (key=value pairs) AND the keys
+   * of any secret-typed env vars (without values). Secret values are
+   * never sent over the wire — to inspect them, the user must read the
+   * underlying Secret directly via kubectl.
+   */
+  async getEnv(
+    project: string,
+    name: string,
+  ): Promise<{
+    plain: { name: string; value: string }[];
+    secretKeys: string[];
+  }> {
+    const svc = await this.getService(project, name);
+    const envVars = (svc.spec.envVars || []) as any[];
+    const plain: { name: string; value: string }[] = [];
+    const secretKeys: string[] = [];
+    for (const e of envVars) {
+      if (e?.valueFrom?.secretKeyRef) {
+        secretKeys.push(String(e.name));
+      } else {
+        plain.push({ name: String(e.name), value: String(e.value ?? '') });
+      }
+    }
+    return { plain, secretKeys };
+  }
+
+  /**
+   * Replace the service's env var list. Pass-through to the CR; helm
+   * re-renders the Deployment on the next env reconcile. Caller decides
+   * whether each entry is plain {name,value} or secretKeyRef-shaped.
+   */
+  async setEnv(project: string, name: string, envVars: any[]): Promise<void> {
+    const fqn = this.svcName(project, name);
+    if (!(await this.resources.getService(fqn))) {
+      throw new NotFoundException(`service ${project}/${name} not found`);
+    }
+    await this.resources.patchService(fqn, { spec: { envVars } });
+    // Also patch every environment of this service so existing
+    // KusoEnvironments pick up the new envVars (the env's spec.envVars
+    // list is server-merged on top of the service's).
+    const envs = await this.resources.listEnvironments(project, fqn);
+    for (const env of envs) {
+      await this.resources.patchEnvironment(env.metadata.name, {
+        spec: { envVars },
+      });
+    }
   }
 
   async deleteService(project: string, name: string): Promise<void> {
