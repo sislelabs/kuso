@@ -27,6 +27,7 @@ import { TokenModule } from './token/token.module';
 import { CliModule } from './cli/cli.module';
 import { ProjectsModule } from './projects/projects.module';
 import { GithubModule } from './github/github.module';
+import { ScheduleModule } from '@nestjs/schedule';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { GithubModule } from './github/github.module';
     CliModule,
     ProjectsModule,
     GithubModule,
+    ScheduleModule.forRoot(),
   ],
   controllers: [AppController, TemplatesController],
   providers: [AppService, TemplatesService],
