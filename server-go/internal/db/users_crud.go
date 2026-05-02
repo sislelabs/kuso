@@ -101,18 +101,40 @@ func (d *DB) UpdateUser(ctx context.Context, id string, in UpdateUserInput) erro
 	return nil
 }
 
-// DeleteUser removes a user. Cascades through the FK schema — Audit and
-// Token rows reference the user with ON DELETE RESTRICT, so the caller
-// must clear those first if the user has any.
+// DeleteUser removes a user. The Prisma schema marks Audit.user and
+// Token.userId as ON DELETE RESTRICT, so a naive DELETE fails as soon
+// as the user has logged in once or issued a token. Clear the FK
+// rows in the same transaction so the caller gets a usable result.
+//
+// _UserToUserGroup pivot rows have no RESTRICT but are cleared
+// explicitly so the audit log shows what happened on user removal.
+// GithubUserLink is dropped along with the user.
 func (d *DB) DeleteUser(ctx context.Context, id string) error {
-	res, err := d.DB.ExecContext(ctx, `DELETE FROM "User" WHERE id = ?`, id)
+	tx, err := d.DB.BeginTx(ctx, nil)
 	if err != nil {
+		return fmt.Errorf("db: begin: %w", err)
+	}
+	for _, q := range []string{
+		`DELETE FROM "Audit" WHERE user = ?`,
+		`DELETE FROM "Token" WHERE "userId" = ?`,
+		`DELETE FROM "_UserToUserGroup" WHERE "A" = ?`,
+		`DELETE FROM "GithubUserLink" WHERE "userId" = ?`,
+	} {
+		if _, err := tx.ExecContext(ctx, q, id); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("db: delete user fks: %w", err)
+		}
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM "User" WHERE id = ?`, id)
+	if err != nil {
+		_ = tx.Rollback()
 		return fmt.Errorf("db: delete user: %w", err)
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
+		_ = tx.Rollback()
 		return ErrNotFound
 	}
-	return nil
+	return tx.Commit()
 }
 
 // UpdateUserPassword writes a new password hash, bumping updatedAt.
