@@ -47,3 +47,8 @@ kubeconfig
 
 client/.yarn/
 client/.yarnrc.yml
+
+# Generated frontend dist (output of scripts/build-frontend.sh, embedded
+# into the Go binary at build time; the .gitkeep is what we track).
+server-go/internal/web/dist-next/*
+!server-go/internal/web/dist-next/.gitkeep
