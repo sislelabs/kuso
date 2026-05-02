@@ -25,8 +25,10 @@
 # Tunable env (with defaults):
 #   KUSO_DOMAIN          hostname for kuso UI (default: kuso.sislelabs.com)
 #   KUSO_EMAIL           email for Let's Encrypt (default: ivilthe69@gmail.com)
-#   KUSO_VERSION         server / operator image tag (default: v0.1.0-dev,
-#                        always tracks the latest pushed dev image)
+#   KUSO_VERSION         operator image tag (default: v0.1.0-dev-secrets-env)
+#   KUSO_SERVER_VERSION  server image tag (default: v0.2.0-rc5; a Go
+#                        binary published at
+#                        ghcr.io/sislelabs/kuso-server-go)
 #   KUSO_REPO            GitHub source for raw manifest URLs
 #                        (default: sislelabs/kuso)
 #   KUSO_ADMIN_PASSWORD  override the auto-generated admin password
@@ -39,7 +41,8 @@ set -euo pipefail
 
 KUSO_DOMAIN="${KUSO_DOMAIN:-kuso.sislelabs.com}"
 KUSO_EMAIL="${KUSO_EMAIL:-ivilthe69@gmail.com}"
-KUSO_VERSION="${KUSO_VERSION:-v0.1.0-dev}"
+KUSO_VERSION="${KUSO_VERSION:-v0.1.0-dev-secrets-env}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.2.0-rc5}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_RAW="https://raw.githubusercontent.com/${KUSO_REPO}/main"
 
@@ -230,10 +233,61 @@ kubectl wait --for=condition=Available --timeout=180s \
   deployment/kuso-operator-controller-manager -n kuso-operator-system
 
 # -------- 11. server --------
-log "applying kuso server (host ${KUSO_DOMAIN}, image tag ${KUSO_VERSION})"
-curl -sfL "${KUSO_RAW}/deploy/server.yaml" \
-  | sed "s|kuso.sislelabs.com|${KUSO_DOMAIN}|g; s|kuso-server:v0.1.0-dev|kuso-server:${KUSO_VERSION}|g" \
+log "applying kuso server (host ${KUSO_DOMAIN}, image tag ${KUSO_SERVER_VERSION})"
+curl -sfL "${KUSO_RAW}/deploy/server-go.yaml" \
+  | sed "s|kuso-server-go:v0.2.0-rc5|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
   | kubectl apply -f - >/dev/null
+
+# Service + Ingress weren't included in deploy/server-go.yaml because
+# the existing manual install on Hetzner already had them. For a fresh
+# install we have to create them here so https://${KUSO_DOMAIN}/
+# actually routes to the Go server.
+kubectl apply -f - <<EOF >/dev/null
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: kuso-server, namespace: kuso }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: kuso-server-cluster-admin }
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: cluster-admin
+subjects:
+  - kind: ServiceAccount
+    name: kuso-server
+    namespace: kuso
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kuso-server
+  namespace: kuso
+  labels: { app.kubernetes.io/name: kuso-server }
+spec:
+  selector: { app.kubernetes.io/name: kuso-server }
+  ports:
+    - { name: http, port: 80, targetPort: 3000, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: kuso-server
+  namespace: kuso
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: traefik
+  tls:
+    - { hosts: [${KUSO_DOMAIN}], secretName: kuso-server-tls }
+  rules:
+    - host: ${KUSO_DOMAIN}
+      http:
+        paths:
+          - { path: /, pathType: Prefix, backend: { service: { name: kuso-server, port: { number: 80 } } } }
+EOF
+
 kubectl wait --for=condition=Available --timeout=180s \
   deployment/kuso-server -n kuso
 
