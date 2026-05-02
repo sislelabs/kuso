@@ -20,6 +20,7 @@ import (
 	"kuso/server/internal/kube"
 	"kuso/server/internal/builds"
 	ghpkg "kuso/server/internal/github"
+	"kuso/server/internal/logs"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/version"
@@ -64,13 +65,15 @@ func main() {
 	var projSvc *projects.Service
 	var secSvc *secrets.Service
 	var buildSvc *builds.Service
+	var logsSvc *logs.Service
 	var ghDeps *httpsrv.GithubDeps
 	if kc, err := kube.NewClient(); err != nil {
-		logger.Warn("kube: client unavailable, project + secret + build routes disabled", "err", err)
+		logger.Warn("kube: client unavailable, project + secret + build + log routes disabled", "err", err)
 	} else {
 		projSvc = projects.New(kc, *namespace)
 		secSvc = secrets.New(kc, *namespace)
 		buildSvc = builds.New(kc, *namespace)
+		logsSvc = logs.New(kc, *namespace)
 		// Background poller: stamps KusoBuild status from kaniko Job
 		// outcomes and promotes the image tag onto the production env.
 		// Disabled when KUSO_BUILD_POLLER_DISABLED=true (matches TS env).
@@ -96,6 +99,7 @@ func main() {
 		Projects:   projSvc,
 		Secrets:    secSvc,
 		Builds:     buildSvc,
+		Logs:       logsSvc,
 		Github:     ghDeps,
 		Logger:     logger,
 	})

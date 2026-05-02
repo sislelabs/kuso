@@ -13,6 +13,7 @@ import (
 	"kuso/server/internal/db"
 	"kuso/server/internal/github"
 	httphandlers "kuso/server/internal/http/handlers"
+	"kuso/server/internal/logs"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/version"
@@ -29,6 +30,7 @@ type Deps struct {
 	Projects   *projects.Service
 	Secrets    *secrets.Service
 	Builds     *builds.Service
+	Logs       *logs.Service
 	Github     *GithubDeps
 	Logger     *slog.Logger
 }
@@ -83,6 +85,14 @@ func NewRouter(d Deps) http.Handler {
 		if d.Builds != nil {
 			buildH := &httphandlers.BuildsHandler{Svc: d.Builds, Logger: d.Logger}
 			buildH.Mount(r)
+		}
+		if d.Logs != nil {
+			logsH := &httphandlers.LogsHandler{Svc: d.Logs, Logger: d.Logger}
+			logsH.Mount(r)
+		}
+		if d.DB != nil && d.Issuer != nil {
+			adminH := &httphandlers.AdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
+			adminH.Mount(r)
 		}
 	})
 
