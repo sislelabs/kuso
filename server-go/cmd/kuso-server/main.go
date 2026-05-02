@@ -64,6 +64,32 @@ func main() {
 
 	auditSvc := audit.New(database)
 
+	// First-boot bootstrap: seed admin role + user from
+	// KUSO_ADMIN_USERNAME / KUSO_ADMIN_PASSWORD when the DB is virgin.
+	// On every subsequent boot, EnsureAdminPassword keeps the env value
+	// as the source of truth — rotating the Secret rotates the hash on
+	// next pod start.
+	if pw := os.Getenv("KUSO_ADMIN_PASSWORD"); pw != "" {
+		username := os.Getenv("KUSO_ADMIN_USERNAME")
+		if username == "" {
+			username = "admin"
+		}
+		email := os.Getenv("KUSO_ADMIN_EMAIL")
+		hash, err := auth.HashPassword(pw, 0)
+		if err != nil {
+			logger.Error("admin: hash password", "err", err)
+			os.Exit(2)
+		}
+		if err := database.BootstrapAdmin(ctx, username, email, hash); err != nil {
+			logger.Error("admin: bootstrap", "err", err)
+			os.Exit(2)
+		}
+		if _, err := database.EnsureAdminPassword(ctx, username, hash); err != nil && !errors.Is(err, db.ErrNotFound) {
+			logger.Warn("admin: ensure password", "err", err)
+		}
+		logger.Info("admin user ready", "username", username)
+	}
+
 	// Kube client is optional during early development — if config
 	// resolution fails (no kubeconfig and no in-cluster), boot without
 	// project routes rather than crash. The /healthz + /api/auth/login

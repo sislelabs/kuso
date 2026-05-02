@@ -28,14 +28,14 @@ func (d *DB) CreateToken(ctx context.Context, t *Token) error {
 	if t.ID == "" {
 		return errors.New("db: token id required")
 	}
-	now := time.Now().UTC()
+	now := prismaNow()
 	if t.CreatedAt.IsZero() {
-		t.CreatedAt = now
+		t.CreatedAt = now.Time
 	}
 	_, err := d.DB.ExecContext(ctx, `
 INSERT INTO "Token" (id, name, "userId", "expiresAt", "isActive", role, groups, "createdAt", "updatedAt")
 VALUES (?, ?, ?, ?, ?, '', '', ?, ?)`,
-		t.ID, t.Name, t.UserID, t.ExpiresAt, t.IsActive, t.CreatedAt, now,
+		t.ID, t.Name, t.UserID, prismaAt(t.ExpiresAt), t.IsActive, prismaAt(t.CreatedAt), now,
 	)
 	if err != nil {
 		return fmt.Errorf("db: create token: %w", err)
@@ -55,9 +55,14 @@ FROM "Token" WHERE "userId" = ? ORDER BY "createdAt" DESC`, userID)
 	var out []Token
 	for rows.Next() {
 		var t Token
-		if err := rows.Scan(&t.ID, &t.Name, &t.UserID, &t.ExpiresAt, &t.IsActive, &t.LastUsed, &t.LastIP, &t.CreatedAt); err != nil {
+		var expiresAt, createdAt prismaTime
+		var lastUsed nullPrismaTime
+		if err := rows.Scan(&t.ID, &t.Name, &t.UserID, &expiresAt, &t.IsActive, &lastUsed, &t.LastIP, &createdAt); err != nil {
 			return nil, fmt.Errorf("db: scan token: %w", err)
 		}
+		t.ExpiresAt = expiresAt.Time
+		t.CreatedAt = createdAt.Time
+		t.LastUsed = sql.NullTime{Time: lastUsed.Time, Valid: lastUsed.Valid}
 		out = append(out, t)
 	}
 	return out, rows.Err()
@@ -106,9 +111,14 @@ ORDER BY t."createdAt" DESC`)
 	var out []AdminToken
 	for rows.Next() {
 		var a AdminToken
-		if err := rows.Scan(&a.ID, &a.Name, &a.UserID, &a.Username, &a.Email, &a.ExpiresAt, &a.IsActive, &a.LastUsed, &a.CreatedAt); err != nil {
+		var expiresAt, createdAt prismaTime
+		var lastUsed nullPrismaTime
+		if err := rows.Scan(&a.ID, &a.Name, &a.UserID, &a.Username, &a.Email, &expiresAt, &a.IsActive, &lastUsed, &createdAt); err != nil {
 			return nil, err
 		}
+		a.ExpiresAt = expiresAt.Time
+		a.CreatedAt = createdAt.Time
+		a.LastUsed = sql.NullTime{Time: lastUsed.Time, Valid: lastUsed.Valid}
 		out = append(out, a)
 	}
 	return out, rows.Err()

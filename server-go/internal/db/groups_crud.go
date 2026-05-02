@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 )
 
 // CreateGroup inserts a new UserGroup row.
@@ -12,7 +11,7 @@ func (d *DB) CreateGroup(ctx context.Context, id, name, description string) erro
 	if id == "" || name == "" {
 		return errors.New("db: id and name required")
 	}
-	now := time.Now().UTC()
+	now := prismaNow()
 	_, err := d.DB.ExecContext(ctx, `
 INSERT INTO "UserGroup" (id, name, description, "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?)`,
 		id, name, sqlNullable(description), now, now,
@@ -27,7 +26,7 @@ INSERT INTO "UserGroup" (id, name, description, "createdAt", "updatedAt") VALUES
 func (d *DB) UpdateGroup(ctx context.Context, id, name, description string) error {
 	res, err := d.DB.ExecContext(ctx, `
 UPDATE "UserGroup" SET name = ?, description = ?, "updatedAt" = ? WHERE id = ?`,
-		name, sqlNullable(description), time.Now().UTC(), id,
+		name, sqlNullable(description), prismaNow(), id,
 	)
 	if err != nil {
 		return fmt.Errorf("db: update group: %w", err)

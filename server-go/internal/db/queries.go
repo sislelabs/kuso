@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 // ListUsers returns every user as a slim profile shape suitable for the
@@ -101,7 +102,7 @@ func (d *DB) ListGroups(ctx context.Context) ([]Group, error) {
 // AuditEntry is one row from /api/audit (newest-first list).
 type AuditEntry struct {
 	ID        int
-	Timestamp string
+	Timestamp string // RFC3339 — converted from Prisma int64 millis at scan time
 	Severity  string
 	Action    string
 	Namespace string
@@ -128,8 +129,12 @@ FROM "Audit" ORDER BY id DESC LIMIT ?`, limit)
 	var out []AuditEntry
 	for rows.Next() {
 		var a AuditEntry
-		if err := rows.Scan(&a.ID, &a.Timestamp, &a.Severity, &a.Action, &a.Namespace, &a.Phase, &a.App, &a.Pipeline, &a.Resource, &a.Message, &a.User); err != nil {
+		var ts prismaTime
+		if err := rows.Scan(&a.ID, &ts, &a.Severity, &a.Action, &a.Namespace, &a.Phase, &a.App, &a.Pipeline, &a.Resource, &a.Message, &a.User); err != nil {
 			return nil, fmt.Errorf("db: scan audit: %w", err)
+		}
+		if !ts.Time.IsZero() {
+			a.Timestamp = ts.Time.UTC().Format(time.RFC3339)
 		}
 		out = append(out, a)
 	}

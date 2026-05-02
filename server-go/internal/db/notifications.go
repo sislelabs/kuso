@@ -66,7 +66,7 @@ func (d *DB) CreateNotification(ctx context.Context, n *Notification) error {
 	}
 	pj, _ := json.Marshal(coalesceStringSlice(n.Pipelines))
 	ej, _ := json.Marshal(coalesceStringSlice(n.Events))
-	now := time.Now().UTC()
+	now := prismaNow()
 	cfg := configCols(n.Type, n.Config)
 	_, err := d.DB.ExecContext(ctx, `
 INSERT INTO "Notification" (id, name, enabled, type, pipelines, events,
@@ -80,7 +80,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 	if err != nil {
 		return fmt.Errorf("db: create notification: %w", err)
 	}
-	n.CreatedAt, n.UpdatedAt = now, now
+	n.CreatedAt, n.UpdatedAt = now.Time, now.Time
 	return nil
 }
 
@@ -99,7 +99,7 @@ UPDATE "Notification" SET name = ?, enabled = ?, type = ?, pipelines = ?, events
 WHERE id = ?`,
 		n.Name, n.Enabled, n.Type, string(pj), string(ej),
 		cfg.webhookURL, cfg.webhookSecret, cfg.slackURL, cfg.slackChannel, cfg.discordURL,
-		time.Now().UTC(), n.ID,
+		prismaNow(), n.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("db: update notification: %w", err)
@@ -129,13 +129,16 @@ func scanNotification(s interface {
 	var n Notification
 	var pipelines, events string
 	var webhookURL, webhookSecret, slackURL, slackChannel, discordURL sql.NullString
+	var createdAt, updatedAt prismaTime
 	if err := s.Scan(
 		&n.ID, &n.Name, &n.Enabled, &n.Type, &pipelines, &events,
 		&webhookURL, &webhookSecret, &slackURL, &slackChannel, &discordURL,
-		&n.CreatedAt, &n.UpdatedAt,
+		&createdAt, &updatedAt,
 	); err != nil {
 		return nil, err
 	}
+	n.CreatedAt = createdAt.Time
+	n.UpdatedAt = updatedAt.Time
 	_ = json.Unmarshal([]byte(pipelines), &n.Pipelines)
 	_ = json.Unmarshal([]byte(events), &n.Events)
 	n.Config = map[string]any{}

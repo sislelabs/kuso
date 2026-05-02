@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 )
 
 // Runpack mirrors the Prisma Runpack model joined with its three phases
@@ -215,7 +214,7 @@ func (d *DB) CreatePodSize(ctx context.Context, p *PodSize) error {
 	if p.ID == "" {
 		return errors.New("db: pod size id required")
 	}
-	now := time.Now().UTC()
+	now := prismaNow()
 	_, err := d.DB.ExecContext(ctx, `
 INSERT INTO "PodSize" (id, name, "cpuLimit", "memoryLimit", "cpuRequest", "memoryRequest", description, "createdAt", "updatedAt")
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -229,7 +228,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 
 // UpdatePodSize replaces the named PodSize columns.
 func (d *DB) UpdatePodSize(ctx context.Context, p *PodSize) error {
-	now := time.Now().UTC()
+	now := prismaNow()
 	res, err := d.DB.ExecContext(ctx, `
 UPDATE "PodSize" SET name = ?, "cpuLimit" = ?, "memoryLimit" = ?, "cpuRequest" = ?, "memoryRequest" = ?, description = ?, "updatedAt" = ?
 WHERE id = ?`,

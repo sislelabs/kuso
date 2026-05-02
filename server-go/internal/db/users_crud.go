@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 )
 
 // CreateUserInput is the field set the create-user handler accepts.
@@ -29,7 +28,7 @@ func (d *DB) CreateUser(ctx context.Context, in CreateUserInput) error {
 	if in.Username == "" || in.Email == "" || in.PasswordHash == "" {
 		return errors.New("db: username, email, password are required")
 	}
-	now := time.Now().UTC()
+	now := prismaNow()
 	var roleID any = nil
 	if in.RoleID != "" {
 		roleID = in.RoleID
@@ -61,7 +60,7 @@ type UpdateUserInput struct {
 // matches.
 func (d *DB) UpdateUser(ctx context.Context, id string, in UpdateUserInput) error {
 	sets := []string{`"updatedAt" = ?`}
-	args := []any{time.Now().UTC()}
+	args := []any{prismaNow()}
 	if in.FirstName != nil {
 		sets = append(sets, `"firstName" = ?`)
 		args = append(args, sqlNullable(*in.FirstName))
@@ -119,7 +118,7 @@ func (d *DB) DeleteUser(ctx context.Context, id string) error {
 // UpdateUserPassword writes a new password hash, bumping updatedAt.
 func (d *DB) UpdateUserPassword(ctx context.Context, id, hash string) error {
 	res, err := d.DB.ExecContext(ctx, `UPDATE "User" SET password = ?, "updatedAt" = ? WHERE id = ?`,
-		hash, time.Now().UTC(), id)
+		hash, prismaNow(), id)
 	if err != nil {
 		return fmt.Errorf("db: update password: %w", err)
 	}

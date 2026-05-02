@@ -46,9 +46,9 @@ func (d *DB) UpsertGithubInstallation(ctx context.Context, in GithubInstallation
 	if in.ID == 0 {
 		return errors.New("db: github installation id required")
 	}
-	now := time.Now().UTC()
+	now := prismaNow()
 	if in.CreatedAt.IsZero() {
-		in.CreatedAt = now
+		in.CreatedAt = now.Time
 	}
 	if in.RepositoriesJSON == "" {
 		in.RepositoriesJSON = "[]"
@@ -62,7 +62,7 @@ ON CONFLICT(id) DO UPDATE SET
   "accountId" = excluded."accountId",
   "repositoriesJson" = excluded."repositoriesJson",
   "updatedAt" = excluded."updatedAt"`,
-		in.ID, in.AccountLogin, in.AccountType, in.AccountID, in.RepositoriesJSON, in.CreatedAt, now,
+		in.ID, in.AccountLogin, in.AccountType, in.AccountID, in.RepositoriesJSON, prismaAt(in.CreatedAt), now,
 	)
 	if err != nil {
 		return fmt.Errorf("db: upsert github installation: %w", err)
@@ -82,7 +82,7 @@ func (d *DB) SetGithubInstallationRepos(ctx context.Context, id int64, repos []G
 	}
 	res, err := d.DB.ExecContext(ctx, `
 UPDATE "GithubInstallation" SET "repositoriesJson" = ?, "updatedAt" = ? WHERE id = ?`,
-		string(body), time.Now().UTC(), id)
+		string(body), prismaNow(), id)
 	if err != nil {
 		return fmt.Errorf("db: set installation repos: %w", err)
 	}
@@ -112,9 +112,12 @@ FROM "GithubInstallation" ORDER BY "accountLogin"`)
 	var out []GithubInstallation
 	for rows.Next() {
 		var g GithubInstallation
-		if err := rows.Scan(&g.ID, &g.AccountLogin, &g.AccountType, &g.AccountID, &g.RepositoriesJSON, &g.CreatedAt, &g.UpdatedAt); err != nil {
+		var createdAt, updatedAt prismaTime
+		if err := rows.Scan(&g.ID, &g.AccountLogin, &g.AccountType, &g.AccountID, &g.RepositoriesJSON, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
+		g.CreatedAt = createdAt.Time
+		g.UpdatedAt = updatedAt.Time
 		out = append(out, g)
 	}
 	return out, rows.Err()
@@ -145,9 +148,9 @@ func (d *DB) UpsertGithubUserLink(ctx context.Context, link GithubUserLink) erro
 	if link.ID == "" {
 		link.ID = mustRandomID()
 	}
-	now := time.Now().UTC()
+	now := prismaNow()
 	if link.CreatedAt.IsZero() {
-		link.CreatedAt = now
+		link.CreatedAt = now.Time
 	}
 	_, err := d.DB.ExecContext(ctx, `
 INSERT INTO "GithubUserLink" (id, "userId", "githubLogin", "githubId", "accessToken", "createdAt", "updatedAt")
@@ -157,7 +160,7 @@ ON CONFLICT("userId") DO UPDATE SET
   "githubId" = excluded."githubId",
   "accessToken" = excluded."accessToken",
   "updatedAt" = excluded."updatedAt"`,
-		link.ID, link.UserID, link.GithubLogin, link.GithubID, link.AccessToken, link.CreatedAt, now,
+		link.ID, link.UserID, link.GithubLogin, link.GithubID, link.AccessToken, prismaAt(link.CreatedAt), now,
 	)
 	if err != nil {
 		return fmt.Errorf("db: upsert github user link: %w", err)

@@ -44,3 +44,6 @@ kubeconfig
 
 # Local kind / dev
 .kube/
+
+client/.yarn/
+client/.yarnrc.yml

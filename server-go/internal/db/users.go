@@ -17,7 +17,7 @@ type User struct {
 	FirstName     sql.NullString
 	LastName      sql.NullString
 	Email         string
-	EmailVerified sql.NullTime
+	EmailVerified sql.NullTime // see scanUser below — backed by a prismaTime adapter
 	Password      string
 	TwoFaEnabled  bool
 	TwoFaSecret   sql.NullString
@@ -43,13 +43,21 @@ func scanUser(s interface {
 	Scan(...any) error
 }) (*User, error) {
 	var u User
+	var (
+		emailVerified, lastLogin nullPrismaTime
+		createdAt, updatedAt     prismaTime
+	)
 	if err := s.Scan(
-		&u.ID, &u.Username, &u.FirstName, &u.LastName, &u.Email, &u.EmailVerified,
+		&u.ID, &u.Username, &u.FirstName, &u.LastName, &u.Email, &emailVerified,
 		&u.Password, &u.TwoFaEnabled, &u.TwoFaSecret, &u.Image, &u.RoleID, &u.IsActive,
-		&u.LastLogin, &u.LastIP, &u.Provider, &u.ProviderID, &u.CreatedAt, &u.UpdatedAt,
+		&lastLogin, &u.LastIP, &u.Provider, &u.ProviderID, &createdAt, &updatedAt,
 	); err != nil {
 		return nil, err
 	}
+	u.EmailVerified = sql.NullTime{Time: emailVerified.Time, Valid: emailVerified.Valid}
+	u.LastLogin = sql.NullTime{Time: lastLogin.Time, Valid: lastLogin.Valid}
+	u.CreatedAt = createdAt.Time
+	u.UpdatedAt = updatedAt.Time
 	return &u, nil
 }
 

@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"time"
 )
 
 // PermissionRow is one row from the Permission table joined as part of
@@ -95,7 +94,7 @@ func (d *DB) CreateRole(ctx context.Context, id, name, description string, perms
 	if id == "" || name == "" {
 		return errors.New("db: id and name required")
 	}
-	now := time.Now().UTC()
+	now := prismaNow()
 	tx, err := d.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("db: begin: %w", err)
@@ -115,7 +114,7 @@ INSERT INTO "Role" (id, name, description, "createdAt", "updatedAt") VALUES (?, 
 
 // UpdateRole replaces a role's name + description + permissions atomically.
 func (d *DB) UpdateRole(ctx context.Context, id, name, description string, perms []PermissionInput) error {
-	now := time.Now().UTC()
+	now := prismaNow()
 	tx, err := d.DB.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("db: begin: %w", err)
@@ -171,7 +170,7 @@ func (d *DB) DeleteRole(ctx context.Context, id string) error {
 // new — Prisma schema has no uniqueness on resource+action so we
 // follow the same shape.
 func insertRolePermissions(ctx context.Context, tx *sql.Tx, roleID string, perms []PermissionInput) error {
-	now := time.Now().UTC()
+	now := prismaNow()
 	for _, p := range perms {
 		if p.Resource == "" || p.Action == "" {
 			continue
