@@ -19,10 +19,12 @@ import (
 	httpsrv "kuso/server/internal/http"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/builds"
+	"kuso/server/internal/config"
 	ghpkg "kuso/server/internal/github"
 	"kuso/server/internal/logs"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/secrets"
+	"kuso/server/internal/status"
 	"kuso/server/internal/version"
 )
 
@@ -66,6 +68,8 @@ func main() {
 	var secSvc *secrets.Service
 	var buildSvc *builds.Service
 	var logsSvc *logs.Service
+	var cfgSvc *config.Service
+	var statSvc *status.Service
 	var ghDeps *httpsrv.GithubDeps
 	if kc, err := kube.NewClient(); err != nil {
 		logger.Warn("kube: client unavailable, project + secret + build + log routes disabled", "err", err)
@@ -74,6 +78,14 @@ func main() {
 		secSvc = secrets.New(kc, *namespace)
 		buildSvc = builds.New(kc, *namespace)
 		logsSvc = logs.New(kc, *namespace)
+		cfgSvc = config.New(kc, *namespace)
+		statSvc = status.New(kc, 5*time.Minute)
+		// Reload the Kuso CR cache every minute so the feature-flag
+		// surface stays fresh without forcing every request to hit the
+		// API server.
+		go cfgSvc.Run(ctx, 60*time.Second, func(err error) {
+			logger.Warn("config: reload", "err", err)
+		})
 		// Background poller: stamps KusoBuild status from kaniko Job
 		// outcomes and promotes the image tag onto the production env.
 		// Disabled when KUSO_BUILD_POLLER_DISABLED=true (matches TS env).
@@ -100,6 +112,8 @@ func main() {
 		Secrets:    secSvc,
 		Builds:     buildSvc,
 		Logs:       logsSvc,
+		Config:     cfgSvc,
+		Status:     statSvc,
 		Github:     ghDeps,
 		Logger:     logger,
 	})

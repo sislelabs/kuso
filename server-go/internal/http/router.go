@@ -10,12 +10,14 @@ import (
 
 	"kuso/server/internal/auth"
 	"kuso/server/internal/builds"
+	"kuso/server/internal/config"
 	"kuso/server/internal/db"
 	"kuso/server/internal/github"
 	httphandlers "kuso/server/internal/http/handlers"
 	"kuso/server/internal/logs"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/secrets"
+	"kuso/server/internal/status"
 	"kuso/server/internal/version"
 
 	"github.com/go-chi/chi/v5"
@@ -31,6 +33,8 @@ type Deps struct {
 	Secrets    *secrets.Service
 	Builds     *builds.Service
 	Logs       *logs.Service
+	Config     *config.Service
+	Status     *status.Service
 	Github     *GithubDeps
 	Logger     *slog.Logger
 }
@@ -51,14 +55,20 @@ func NewRouter(d Deps) http.Handler {
 
 	// Unauthenticated routes.
 	r.Get("/healthz", healthz)
+	if d.Status != nil {
+		statusH := &httphandlers.StatusHandler{Status: d.Status, Logger: d.Logger}
+		r.Get("/api/status", statusH.Handler())
+	}
 
 	authH := &httphandlers.AuthHandler{
 		DB:         d.DB,
 		Issuer:     d.Issuer,
 		SessionKey: d.SessionKey,
+		Config:     d.Config,
 		Logger:     d.Logger,
 	}
 	r.Post("/api/auth/login", authH.Login)
+	r.Get("/api/auth/methods", authH.Methods)
 
 	if d.Github != nil && d.Github.Cfg != nil {
 		gh := &httphandlers.GithubHandler{
@@ -93,6 +103,10 @@ func NewRouter(d Deps) http.Handler {
 		if d.DB != nil && d.Issuer != nil {
 			adminH := &httphandlers.AdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			adminH.Mount(r)
+		}
+		if d.Config != nil {
+			cfgH := &httphandlers.ConfigHandler{Cfg: d.Config, DB: d.DB, Logger: d.Logger}
+			cfgH.Mount(r)
 		}
 	})
 

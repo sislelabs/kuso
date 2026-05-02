@@ -13,16 +13,21 @@ import (
 	"time"
 
 	"kuso/server/internal/auth"
+	"kuso/server/internal/config"
 	"kuso/server/internal/db"
 )
 
 // AuthHandler implements POST /api/auth/login (and friends). It depends
 // on the DB for password verify + permissions lookup and on the Issuer
 // for JWT signing. SessionKey is the legacy HMAC fallback secret.
+//
+// Config is optional — when wired, /api/auth/session surfaces the
+// feature-flag bundle the Vue UI's nav reads on first paint.
 type AuthHandler struct {
 	DB         *db.DB
 	Issuer     *auth.Issuer
 	SessionKey string
+	Config     *config.Service
 	Logger     *slog.Logger
 }
 
@@ -122,15 +127,41 @@ func (h *AuthHandler) Session(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	resp := map[string]any{
 		"isAuthenticated": true,
 		"userId":          claims.UserID,
 		"username":        claims.Username,
 		"role":            claims.Role,
 		"userGroups":      claims.UserGroups,
 		"permissions":     claims.Permissions,
-	})
+	}
+	if h.Config != nil {
+		feats := h.Config.Features()
+		// Field names match what the TS server emits so the Vue client's
+		// store layer doesn't need a remap.
+		resp["adminDisabled"] = feats.AdminDisabled
+		resp["templatesEnabled"] = feats.TemplatesEnabled
+		resp["consoleEnabled"] = feats.ConsoleEnabled
+		resp["metricsEnabled"] = feats.Metrics
+		resp["sleepEnabled"] = feats.Sleep
+		resp["auditEnabled"] = feats.AuditEnabled
+		resp["buildPipeline"] = feats.BuildPipeline
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// Methods returns {local, github, oauth2} matching /api/auth/methods.
+func (h *AuthHandler) Methods(w http.ResponseWriter, _ *http.Request) {
+	out := map[string]bool{"local": true, "github": false, "oauth2": false}
+	if h.Config != nil {
+		feats := h.Config.Features()
+		out["local"] = feats.LocalAuth
+		out["github"] = feats.GithubAuth
+		out["oauth2"] = feats.OAuth2Auth
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 // clientIP best-effort extracts the requesting IP for audit fields.
