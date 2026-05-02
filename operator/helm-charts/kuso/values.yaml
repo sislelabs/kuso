@@ -5,12 +5,11 @@
 replicaCount: 1
 
 image:
-  # Go server image. Built from server-go/Dockerfile and pushed to GHCR
-  # by the release pipeline; for in-cluster dev installs, import the
-  # image directly into the node's containerd cache (k3s):
-  #   docker save kuso-server-go:<tag> | k3s ctr images import -
-  # and set pullPolicy to IfNotPresent.
-  repository: kuso-server-go
+  # Go server image, published to GHCR. Set pullPolicy=IfNotPresent in
+  # dev so a locally-imported image (`docker save | k3s ctr images
+  # import -`) is preferred when present, and Always in production
+  # behind a registry pull secret.
+  repository: ghcr.io/sislelabs/kuso-server-go
   pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
   tag: "v0.2.0-rc1"
