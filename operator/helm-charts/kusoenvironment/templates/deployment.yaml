@@ -14,6 +14,10 @@ spec:
       labels:
         {{- include "kusoenvironment.selectorLabels" . | nindent 8 }}
         {{- include "kusoenvironment.labels" . | nindent 8 }}
+      {{- with .Values.secretsRev }}
+      annotations:
+        kuso.sislelabs.com/secrets-rev: {{ . | quote }}
+      {{- end }}
     spec:
       containers:
         - name: app

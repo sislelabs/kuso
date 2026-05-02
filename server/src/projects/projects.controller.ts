@@ -180,26 +180,29 @@ export class ProjectsController {
   @Get(':project/services/:service/secrets')
   @Permissions('app:read', 'app:write')
   @ApiOperation({
-    summary: 'List secret keys for a service (values are never returned)',
+    summary:
+      'List secret keys for a service. ?env=<name> scopes to that env-specific Secret; otherwise lists shared keys.',
   })
   listSecrets(
     @Param('project') project: string,
     @Param('service') service: string,
+    @Query('env') env?: string,
   ) {
     return this.projects
-      .listSecretKeys(project, service)
-      .then((keys) => ({ keys }));
+      .listSecretKeys(project, service, env || undefined)
+      .then((keys) => ({ keys, env: env || null }));
   }
 
   @Post(':project/services/:service/secrets')
   @Permissions('app:write')
   @ApiOperation({
-    summary: 'Set or replace a secret key. Body: { key, value }',
+    summary:
+      'Set or replace a secret key. Body: { key, value, env? }. env scopes to one environment; omit for shared.',
   })
   setSecret(
     @Param('project') project: string,
     @Param('service') service: string,
-    @Body() body: { key?: string; value?: string },
+    @Body() body: { key?: string; value?: string; env?: string },
   ) {
     return this.projects
       .setSecret(
@@ -207,20 +210,22 @@ export class ProjectsController {
         service,
         String(body?.key || ''),
         String(body?.value ?? ''),
+        body?.env || undefined,
       )
       .then(() => ({ ok: true }));
   }
 
   @Delete(':project/services/:service/secrets/:key')
   @Permissions('app:write')
-  @ApiOperation({ summary: 'Unset a secret key' })
+  @ApiOperation({ summary: 'Unset a secret key. ?env=<name> for env-scoped.' })
   unsetSecret(
     @Param('project') project: string,
     @Param('service') service: string,
     @Param('key') key: string,
+    @Query('env') env?: string,
   ) {
     return this.projects
-      .unsetSecret(project, service, key)
+      .unsetSecret(project, service, key, env || undefined)
       .then(() => ({ ok: true }));
   }
 

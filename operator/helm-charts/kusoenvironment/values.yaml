@@ -64,6 +64,14 @@ envFromSecrets: []
 # - my-project-pg-conn
 # - my-project-redis-conn
 
+# secretsRev: opaque revision string bumped by the server every time a
+# secret value referenced by envFromSecrets changes. The chart stamps
+# this into the pod template's annotations so the Deployment rolls a new
+# ReplicaSet when a secret value flips. Without this, env var changes via
+# envFrom are invisible to running pods (kubelet does not restart on
+# Secret data updates for envFrom mounts).
+secretsRev: ""
+
 # resources: per-env CPU/mem limits and requests.
 resources: {}
 

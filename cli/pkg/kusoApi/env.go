@@ -16,6 +16,9 @@ type SetEnvRequest struct {
 type SetSecretRequest struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
+	// Optional: scope this secret to one environment. Empty means
+	// "shared" — applies to every env of the service.
+	Env string `json:"env,omitempty"`
 }
 
 func (k *KusoClient) GetEnv(project, service string) (*resty.Response, error) {
@@ -27,8 +30,18 @@ func (k *KusoClient) SetEnv(project, service string, req SetEnvRequest) (*resty.
 	return k.client.Post("/api/projects/" + project + "/services/" + service + "/env")
 }
 
-func (k *KusoClient) ListSecrets(project, service string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/services/" + service + "/secrets")
+// envQuery returns "?env=<name>" or "" — kept inline rather than using
+// resty's QueryParam to avoid leaking state into later requests on the
+// shared client.
+func envQuery(env string) string {
+	if env == "" {
+		return ""
+	}
+	return "?env=" + env
+}
+
+func (k *KusoClient) ListSecrets(project, service, env string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + project + "/services/" + service + "/secrets" + envQuery(env))
 }
 
 func (k *KusoClient) SetSecret(project, service string, req SetSecretRequest) (*resty.Response, error) {
@@ -36,6 +49,6 @@ func (k *KusoClient) SetSecret(project, service string, req SetSecretRequest) (*
 	return k.client.Post("/api/projects/" + project + "/services/" + service + "/secrets")
 }
 
-func (k *KusoClient) UnsetSecret(project, service, key string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + project + "/services/" + service + "/secrets/" + key)
+func (k *KusoClient) UnsetSecret(project, service, key, env string) (*resty.Response, error) {
+	return k.client.Delete("/api/projects/" + project + "/services/" + service + "/secrets/" + key + envQuery(env))
 }

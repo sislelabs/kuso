@@ -184,15 +184,29 @@ export class ProjectsService {
   // ---------------- secrets ----------------
 
   /**
-   * Lists the keys (NOT values) of a service's secrets. Secret-typed
-   * env vars live in a real Kubernetes Secret named
-   * `<project>-<service>-secrets`. The KusoEnvironment chart picks them
-   * up via envFromSecrets, so they appear as env vars in the container
-   * without ever being written into the CR spec.
+   * Lists the keys (NOT values) of a service's secrets. Secrets are
+   * Kubernetes Secrets mounted into the running pod via envFromSecrets.
+   *
+   * Two scopes:
+   *   - shared: <project>-<service>-secrets, mounted on EVERY env of
+   *             the service (env=undefined or env="*").
+   *   - per-env: <project>-<service>-<env>-secrets, mounted only on
+   *              that specific env. Per-env values OVERRIDE shared
+   *              (envFrom mounts shared first, per-env second).
+   *
+   * When env is undefined, this returns ONLY the shared keys. To list
+   * per-env keys, pass the env name. To list the merged effective set,
+   * call listSecretKeysEffective.
    */
-  async listSecretKeys(project: string, service: string): Promise<string[]> {
+  async listSecretKeys(
+    project: string,
+    service: string,
+    env?: string,
+  ): Promise<string[]> {
     await this.getService(project, service); // 404s if missing
-    const secret = await this.readSecret(this.secretName(project, service));
+    const secret = await this.readSecret(
+      this.secretName(project, service, env),
+    );
     return secret ? Object.keys(secret) : [];
   }
 
@@ -201,23 +215,32 @@ export class ProjectsService {
     service: string,
     key: string,
     value: string,
+    env?: string,
   ): Promise<void> {
     if (!key) throw new BadRequestException('key is required');
     await this.getService(project, service);
-    const name = this.secretName(project, service);
+    if (env) await this.assertEnvExists(project, service, env);
+    const name = this.secretName(project, service, env);
     const current = (await this.readSecret(name)) || {};
     current[key] = value;
     await this.writeSecret(name, current);
-    await this.attachSecretToEnvironments(project, service, name);
+    if (env) {
+      await this.attachSecretToEnvironment(project, service, env, name);
+      await this.bumpSecretsRev(project, service, env);
+    } else {
+      await this.attachSecretToEnvironments(project, service, name);
+      await this.bumpSecretsRev(project, service);
+    }
   }
 
   async unsetSecret(
     project: string,
     service: string,
     key: string,
+    env?: string,
   ): Promise<void> {
     await this.getService(project, service);
-    const name = this.secretName(project, service);
+    const name = this.secretName(project, service, env);
     const current = (await this.readSecret(name)) || {};
     if (!(key in current)) {
       throw new NotFoundException(`secret key ${key} not found`);
@@ -227,14 +250,75 @@ export class ProjectsService {
       await this.deleteSecret(name);
       // Also drop the envFromSecrets reference from the service's envs
       // so the next reconcile doesn't keep mounting an empty Secret.
-      await this.detachSecretFromEnvironments(project, service, name);
+      if (env) {
+        await this.detachSecretFromEnvironment(project, service, env, name);
+      } else {
+        await this.detachSecretFromEnvironments(project, service, name);
+      }
     } else {
       await this.writeSecret(name, current);
     }
+    if (env) {
+      await this.bumpSecretsRev(project, service, env);
+    } else {
+      await this.bumpSecretsRev(project, service);
+    }
   }
 
-  private secretName(project: string, service: string): string {
-    return `${this.svcName(project, service)}-secrets`;
+  /**
+   * Bump spec.secretsRev on the affected env CR(s) so helm-operator
+   * re-renders the Deployment with a new pod-template annotation, which
+   * triggers a rolling restart. Without this, value-only updates to
+   * existing envFrom Secrets are invisible to running pods.
+   *
+   * env: undefined -> bump every env of the service (shared scope).
+   *      defined   -> bump just that one env.
+   */
+  private async bumpSecretsRev(
+    project: string,
+    service: string,
+    env?: string,
+  ): Promise<void> {
+    const rev = String(Date.now());
+    if (env) {
+      const target = await this.findEnv(project, service, env);
+      await this.resources.patchEnvironment(target.metadata.name, {
+        spec: { secretsRev: rev },
+      });
+      return;
+    }
+    const envs = await this.envsForService(project, service);
+    for (const e of envs) {
+      await this.resources.patchEnvironment(e.metadata.name, {
+        spec: { secretsRev: rev },
+      });
+    }
+  }
+
+  /**
+   * Build a per-scope Secret name. env="" or undefined -> shared.
+   * Otherwise the env name is sanitised (lowercase, kebab) and appended.
+   */
+  private secretName(project: string, service: string, env?: string): string {
+    const base = this.svcName(project, service);
+    if (!env) return `${base}-secrets`;
+    const safe = env.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+    return `${base}-${safe}-secrets`;
+  }
+
+  private async assertEnvExists(
+    project: string,
+    service: string,
+    env: string,
+  ): Promise<void> {
+    const fqn = this.svcName(project, service);
+    const envName = env.includes('-') ? env : `${fqn}-${env}`;
+    const found = await this.resources.getEnvironment(envName);
+    if (!found) {
+      throw new NotFoundException(
+        `environment ${envName} not found for ${project}/${service}`,
+      );
+    }
   }
 
   private async readSecret(
@@ -324,6 +408,55 @@ export class ProjectsService {
         spec: { envFromSecrets: next },
       });
     }
+  }
+
+  // env may be either the short env name ("production", "preview-pr-42")
+  // or the fully-qualified KusoEnvironment name ("hello-web-production").
+  private async attachSecretToEnvironment(
+    project: string,
+    service: string,
+    env: string,
+    secretName: string,
+  ): Promise<void> {
+    const target = await this.findEnv(project, service, env);
+    const existing = (target.spec.envFromSecrets || []) as string[];
+    if (existing.includes(secretName)) return;
+    await this.resources.patchEnvironment(target.metadata.name, {
+      spec: { envFromSecrets: [...existing, secretName] },
+    });
+  }
+
+  private async detachSecretFromEnvironment(
+    project: string,
+    service: string,
+    env: string,
+    secretName: string,
+  ): Promise<void> {
+    const target = await this.findEnv(project, service, env);
+    const existing = (target.spec.envFromSecrets || []) as string[];
+    if (!existing.includes(secretName)) return;
+    await this.resources.patchEnvironment(target.metadata.name, {
+      spec: { envFromSecrets: existing.filter((s) => s !== secretName) },
+    });
+  }
+
+  private async findEnv(
+    project: string,
+    service: string,
+    env: string,
+  ): Promise<KusoEnvironment> {
+    const envs = await this.envsForService(project, service);
+    const fqn = this.svcName(project, service);
+    const target = envs.find((e) => {
+      const n = e.metadata.name;
+      return n === env || n === `${fqn}-${env}`;
+    });
+    if (!target) {
+      throw new NotFoundException(
+        `environment ${env} not found for ${project}/${service}`,
+      );
+    }
+    return target;
   }
 
   /**

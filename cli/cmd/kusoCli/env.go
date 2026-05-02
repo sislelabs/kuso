@@ -176,6 +176,23 @@ var envUnsetCmd = &cobra.Command{
 }
 
 // ----------------- secrets -----------------
+//
+// Secrets are mounted into the running pod via envFromSecrets on the
+// KusoEnvironment. There are two scopes:
+//
+//   - shared (default): one Secret per service, mounted on every env.
+//   - per-env (--env <name>): a Secret only mounted on that env. Per-env
+//     values OVERRIDE shared, since shared is mounted first.
+//
+// Examples:
+//   kuso secret set hello web DATABASE_URL postgres://...
+//     # shared — every env gets it (production + every preview)
+//   kuso secret set hello web SENTRY_DSN $prodDsn --env production
+//     # only the production env sees this
+//   kuso secret set hello web FEATURE_X 1 --env preview-pr-42
+//     # only the preview-pr-42 env sees this
+
+var secretEnvFlag string
 
 var secretCmd = &cobra.Command{
 	Use:   "secret",
@@ -191,12 +208,13 @@ var secretListCmd = &cobra.Command{
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.ListSecrets(args[0], args[1])
+		resp, err := api.ListSecrets(args[0], args[1], secretEnvFlag)
 		if err != nil {
 			return err
 		}
 		var data struct {
 			Keys []string `json:"keys"`
+			Env  *string  `json:"env"`
 		}
 		_ = json.Unmarshal(resp.Body(), &data)
 		sort.Strings(data.Keys)
@@ -204,10 +222,15 @@ var secretListCmd = &cobra.Command{
 		case "json":
 			return jsonOut(data)
 		default:
+			scope := "shared"
+			if secretEnvFlag != "" {
+				scope = secretEnvFlag
+			}
 			if len(data.Keys) == 0 {
-				fmt.Println("(no secrets)")
+				fmt.Printf("(no secrets in scope %q)\n", scope)
 				return nil
 			}
+			fmt.Printf("# scope: %s\n", scope)
 			for _, k := range data.Keys {
 				fmt.Println(k)
 			}
@@ -218,40 +241,52 @@ var secretListCmd = &cobra.Command{
 
 var secretSetCmd = &cobra.Command{
 	Use:   "set <project> <service> KEY VALUE",
-	Short: "Set or replace a secret value",
+	Short: "Set or replace a secret value (default scope: shared; --env to scope to one env)",
 	Args:  cobra.ExactArgs(4),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.SetSecret(args[0], args[1], kusoApi.SetSecretRequest{Key: args[2], Value: args[3]})
+		resp, err := api.SetSecret(args[0], args[1], kusoApi.SetSecretRequest{
+			Key:   args[2],
+			Value: args[3],
+			Env:   secretEnvFlag,
+		})
 		if err != nil {
 			return err
 		}
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
-		fmt.Printf("secret %s set on %s/%s\n", args[2], args[0], args[1])
+		scope := "shared"
+		if secretEnvFlag != "" {
+			scope = secretEnvFlag
+		}
+		fmt.Printf("secret %s set on %s/%s [%s]\n", args[2], args[0], args[1], scope)
 		return nil
 	},
 }
 
 var secretUnsetCmd = &cobra.Command{
 	Use:   "unset <project> <service> KEY",
-	Short: "Remove a secret key from a service",
+	Short: "Remove a secret key from a service (--env to scope to one env)",
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.UnsetSecret(args[0], args[1], args[2])
+		resp, err := api.UnsetSecret(args[0], args[1], args[2], secretEnvFlag)
 		if err != nil {
 			return err
 		}
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
-		fmt.Printf("secret %s unset on %s/%s\n", args[2], args[0], args[1])
+		scope := "shared"
+		if secretEnvFlag != "" {
+			scope = secretEnvFlag
+		}
+		fmt.Printf("secret %s unset on %s/%s [%s]\n", args[2], args[0], args[1], scope)
 		return nil
 	},
 }
@@ -264,4 +299,5 @@ func init() {
 	rootCmd.AddCommand(secretCmd)
 	secretCmd.AddCommand(secretListCmd, secretSetCmd, secretUnsetCmd)
 	secretCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	secretCmd.PersistentFlags().StringVar(&secretEnvFlag, "env", "", "scope to one environment (production|preview-pr-N); empty = shared across all envs")
 }

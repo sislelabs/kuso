@@ -116,6 +116,8 @@ spec:
                   type: array
                   items:
                     type: string
+                secretsRev:
+                  type: string
                 resources:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
