@@ -71,6 +71,14 @@ func (c *Client) DeleteJSON(ctx context.Context, path string) error {
 	return c.doJSON(ctx, http.MethodDelete, path, nil, nil)
 }
 
+// PatchJSON issues a PATCH with a JSON body. Refused in read-only mode.
+func (c *Client) PatchJSON(ctx context.Context, path string, body, out any) error {
+	if c.cfg.ReadOnly {
+		return fmt.Errorf("kuso-mcp is in read-only mode; refusing %s %s", http.MethodPatch, path)
+	}
+	return c.doJSON(ctx, http.MethodPatch, path, body, out)
+}
+
 func (c *Client) doJSON(ctx context.Context, method, path string, body, out any) error {
 	var rdr io.Reader
 	if body != nil {

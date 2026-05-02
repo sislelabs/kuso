@@ -90,6 +90,15 @@ spec:
                     afterMinutes:
                       type: integer
                       default: 30
+                # Strategy-specific build config. Only consulted when
+                # spec.runtime matches; fields and defaults documented
+                # in the kusobuild helm chart's values.yaml.
+                static:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                buildpacks:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

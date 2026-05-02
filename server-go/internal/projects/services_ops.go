@@ -19,22 +19,45 @@ func decodeInto(u *unstructured.Unstructured, out any) error {
 	return runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, out)
 }
 
+// toStaticSpec maps the wire-shape into the kube CR shape, dropping
+// nil-valued requests. Empty pointer = use chart defaults.
+func toStaticSpec(in *ServiceStaticSpec) *kube.KusoStaticSpec {
+	if in == nil {
+		return nil
+	}
+	return &kube.KusoStaticSpec{
+		BuilderImage: in.BuilderImage,
+		RuntimeImage: in.RuntimeImage,
+		BuildCmd:     in.BuildCmd,
+		OutputDir:    in.OutputDir,
+	}
+}
+
+func toBuildpacksSpec(in *ServiceBuildpacksSpec) *kube.KusoBuildpacksSpec {
+	if in == nil {
+		return nil
+	}
+	return &kube.KusoBuildpacksSpec{
+		BuilderImage:   in.BuilderImage,
+		LifecycleImage: in.LifecycleImage,
+	}
+}
+
 // validateRuntime rejects runtimes the operator's kusobuild chart can't
-// actually render. The chart today supports `dockerfile` (kaniko reads a
-// Dockerfile at <path>/Dockerfile) and `nixpacks` (an init container
-// runs `nixpacks build --out` to emit a Dockerfile + context, then
-// kaniko builds from there). `buildpacks` and `static` aren't wired
-// through; reject them so users don't get silently-broken builds.
+// actually render. The chart supports four strategies:
+//   - dockerfile: kaniko reads <path>/Dockerfile (default).
+//   - nixpacks: init container emits Dockerfile + .nixpacks/, kaniko builds.
+//   - buildpacks: CNB lifecycle creator runs the full daemonless flow.
+//   - static: init container runs an optional buildCmd then synthesizes
+//     a tiny nginx Dockerfile that COPYs outputDir as the site root.
 //
-// Empty string is accepted and treated as the default (dockerfile).
+// Empty string is accepted and treated as dockerfile.
 func validateRuntime(rt string) error {
 	switch rt {
-	case "", "dockerfile", "nixpacks":
+	case "", "dockerfile", "nixpacks", "buildpacks", "static":
 		return nil
-	case "buildpacks", "static":
-		return fmt.Errorf("%w: runtime %q is not supported yet — supported: dockerfile, nixpacks", ErrInvalid, rt)
 	default:
-		return fmt.Errorf("%w: unknown runtime %q (supported: dockerfile, nixpacks)", ErrInvalid, rt)
+		return fmt.Errorf("%w: unknown runtime %q (supported: dockerfile, nixpacks, buildpacks, static)", ErrInvalid, rt)
 	}
 }
 
@@ -45,7 +68,11 @@ func (s *Service) ListServices(ctx context.Context, project string) ([]kube.Kuso
 
 // GetService loads a single service by FQN <project>-<service>.
 func (s *Service) GetService(ctx context.Context, project, service string) (*kube.KusoService, error) {
-	svc, err := s.Kube.GetKusoService(ctx, s.Namespace, serviceCRName(project, service))
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	svc, err := s.Kube.GetKusoService(ctx, ns, serviceCRName(project, service))
 	if apierrors.IsNotFound(err) {
 		return nil, ErrNotFound
 	}
@@ -65,8 +92,12 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	if err != nil {
 		return nil, err
 	}
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
 	fqn := serviceCRName(project, req.Name)
-	if existing, err := s.Kube.GetKusoService(ctx, s.Namespace, fqn); err == nil && existing != nil {
+	if existing, err := s.Kube.GetKusoService(ctx, ns, fqn); err == nil && existing != nil {
 		return nil, fmt.Errorf("%w: service %s/%s already exists", ErrConflict, project, req.Name)
 	} else if err != nil && !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("preflight: %w", err)
@@ -113,17 +144,19 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			},
 		},
 		Spec: kube.KusoServiceSpec{
-			Project: project,
-			Repo:    &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
-			Runtime: req.Runtime,
-			Port:    req.Port,
-			Domains: convertDomains(req.Domains),
-			EnvVars: convertEnvVars(req.EnvVars),
-			Scale:   scale,
-			Sleep:   sleep,
+			Project:    project,
+			Repo:       &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
+			Runtime:    req.Runtime,
+			Port:       req.Port,
+			Domains:    convertDomains(req.Domains),
+			EnvVars:    convertEnvVars(req.EnvVars),
+			Scale:      scale,
+			Sleep:      sleep,
+			Static:     toStaticSpec(req.Static),
+			Buildpacks: toBuildpacksSpec(req.Buildpacks),
 		},
 	}
-	created, err := s.Kube.CreateKusoService(ctx, s.Namespace, svc)
+	created, err := s.Kube.CreateKusoService(ctx, ns, svc)
 	if err != nil {
 		return nil, fmt.Errorf("create service: %w", err)
 	}
@@ -161,9 +194,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			IngressClassName: "traefik",
 		},
 	}
-	if _, err := s.Kube.CreateKusoEnvironment(ctx, s.Namespace, env); err != nil {
+	if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {
 		// Best-effort cleanup so we don't leak a service without its env.
-		_ = s.Kube.DeleteKusoService(ctx, s.Namespace, fqn)
+		_ = s.Kube.DeleteKusoService(ctx, ns, fqn)
 		return nil, fmt.Errorf("create production env: %w", err)
 	}
 	return created, nil
@@ -174,18 +207,22 @@ func (s *Service) DeleteService(ctx context.Context, project, service string) er
 	if _, err := s.GetService(ctx, project, service); err != nil {
 		return err
 	}
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(s.Namespace).List(ctx, metav1.ListOptions{
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return err
+	}
+	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector(map[string]string{labelProject: project, labelService: service}),
 	})
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
 	}
 	for i := range envs.Items {
-		if err := s.Kube.DeleteKusoEnvironment(ctx, s.Namespace, envs.Items[i].GetName()); err != nil && !apierrors.IsNotFound(err) {
+		if err := s.Kube.DeleteKusoEnvironment(ctx, ns, envs.Items[i].GetName()); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete env %s: %w", envs.Items[i].GetName(), err)
 		}
 	}
-	if err := s.Kube.DeleteKusoService(ctx, s.Namespace, serviceCRName(project, service)); err != nil && !apierrors.IsNotFound(err) {
+	if err := s.Kube.DeleteKusoService(ctx, ns, serviceCRName(project, service)); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete service: %w", err)
 	}
 	return nil
@@ -219,8 +256,12 @@ func (s *Service) SetEnv(ctx context.Context, project, service string, envVars [
 	if err != nil {
 		return err
 	}
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return err
+	}
 	svc.Spec.EnvVars = convertEnvVars(envVars)
-	if _, err := s.Kube.UpdateKusoService(ctx, s.Namespace, svc); err != nil {
+	if _, err := s.Kube.UpdateKusoService(ctx, ns, svc); err != nil {
 		return fmt.Errorf("update service env: %w", err)
 	}
 	return nil

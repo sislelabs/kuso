@@ -18,33 +18,15 @@ spec:
         {{- include "kusobuild.labels" . | nindent 8 }}
     spec:
       restartPolicy: Never
-      # Both init and main run as the same UID. kaniko needs root to
-      # write to /kaniko, but the build itself is sandboxed inside the
-      # container's tmpfs.
       initContainers:
         - name: clone
           image: alpine/git:2.45.2
-          # When a GitHub App installation id is provided, the init
-          # container mints a short-lived installation token using the
-          # App's private key (mounted from the kuso-github-app Secret)
-          # and writes it into a netrc file kaniko will consume.
-          #
-          # When the id is 0 we assume a public repo and clone anonymously.
           command: ["/bin/sh", "-c"]
           args:
             - |
               set -e
               cd /workspace
               {{- if gt (int .Values.githubInstallationId) 0 }}
-              # Mint installation token via App JWT.
-              # Build the JWT with openssl in a busybox-shell-friendly way.
-              # We'd ideally use the kuso server to mint this, but the
-              # init container is the only place we have access to the
-              # PEM-mounted secret AND outbound HTTPS at the same time.
-              # For v0.2 we shell out to a one-shot Go helper (kaniko-
-              # mint-token) — but kaniko's exec environment lacks a
-              # toolchain, so we keep this simple: rely on the server
-              # to fetch a token and pass it via env var instead.
               if [ -z "$GITHUB_INSTALLATION_TOKEN" ]; then
                 echo "ERROR: GITHUB_INSTALLATION_TOKEN must be set for private repos"
                 exit 1
@@ -57,10 +39,6 @@ spec:
                 {{ .Values.repo.url | quote }} \
                 /workspace/src
               {{- end }}
-              # Pin the exact commit when ref is a 40-char SHA. For
-              # synthetic refs (used when no GitHub App installation can
-              # resolve a branch -> SHA), HEAD of the cloned branch is
-              # what we want.
               cd /workspace/src
               REF="{{ .Values.ref }}"
               if echo "$REF" | grep -Eq '^[0-9a-f]{40}$'; then
@@ -78,9 +56,6 @@ spec:
             - name: GITHUB_INSTALLATION_TOKEN
               valueFrom:
                 secretKeyRef:
-                  # Server pre-creates this Secret per build with a
-                  # short-lived (1h) installation token. See
-                  # BuildsService.createBuild.
                   name: {{ include "kusobuild.fullname" . }}-token
                   key: token
             {{- end }}
@@ -88,14 +63,11 @@ spec:
             - name: workspace
               mountPath: /workspace
         {{- if eq .Values.strategy "nixpacks" }}
-        # Nixpacks doesn't need a docker daemon when invoked with --out:
-        # it generates a Dockerfile + build context (under .nixpacks/)
-        # which kaniko then consumes downstream. The Dockerfile uses
-        # `COPY . /app/.` and expects the *source* dir as the build
-        # context, with .nixpacks/ as a subdirectory — see the nixpacks
-        # CONTRIBUTING docs which run `docker build test -f test/.nixpacks/Dockerfile`.
-        # So we point --out at the source dir itself so the .nixpacks/
-        # subdir lands alongside the repo files.
+        # Nixpacks generates a Dockerfile + build context (.nixpacks/) so
+        # kaniko can build daemonless. We point --out at the source dir
+        # itself so .nixpacks/ lands alongside the repo files (matches
+        # `docker build src -f src/.nixpacks/Dockerfile` from upstream
+        # docs).
         - name: nixpacks-plan
           image: alpine:3.20
           command: ["/bin/sh", "-c"]
@@ -110,39 +82,109 @@ spec:
               cd "$SRC"
               echo "running nixpacks build --out . (writes .nixpacks/ alongside source)"
               nixpacks build . --out .
-              # Sanity-check the emitted Dockerfile + .nixpacks/ context.
-              ls -la .nixpacks
               echo "--- generated Dockerfile ---"
               cat .nixpacks/Dockerfile
           volumeMounts:
             - name: workspace
               mountPath: /workspace
         {{- end }}
+        {{- if eq .Values.strategy "static" }}
+        # Static strategy: optionally run a build command, then synthesize
+        # a tiny nginx Dockerfile that ships .Values.static.outputDir as
+        # /usr/share/nginx/html. Kaniko picks that up downstream. The
+        # build runs in a node:20-alpine sandbox by default — override
+        # via .Values.static.builderImage if you need bun/python/etc.
+        - name: static-plan
+          image: {{ .Values.static.builderImage | default "node:20-alpine" | quote }}
+          workingDir: /workspace/src/{{ .Values.repo.path | default "." }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              {{- if .Values.static.buildCmd }}
+              echo "running build: {{ .Values.static.buildCmd }}"
+              {{ .Values.static.buildCmd }}
+              {{- else }}
+              echo "no buildCmd configured; using existing files in {{ .Values.static.outputDir | default "." }}"
+              {{- end }}
+              OUT="{{ .Values.static.outputDir | default "." }}"
+              if [ ! -d "$OUT" ]; then
+                echo "ERROR: outputDir $OUT does not exist after build"
+                exit 1
+              fi
+              if [ -z "$(ls -A "$OUT")" ]; then
+                echo "ERROR: outputDir $OUT is empty"
+                exit 1
+              fi
+              # Synthesize the runtime Dockerfile in the source dir so
+              # kaniko's --context picks it up. The `COPY $OUT` works
+              # because $OUT is already relative to the build context.
+              cat > .kuso-static.Dockerfile <<EOF
+              FROM {{ .Values.static.runtimeImage | default "nginx:1.27-alpine" }}
+              COPY $OUT /usr/share/nginx/html
+              EOF
+              echo "--- generated Dockerfile ---"
+              cat .kuso-static.Dockerfile
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+        {{- end }}
       containers:
+        {{- if eq .Values.strategy "buildpacks" }}
+        # Cloud Native Buildpacks via the lifecycle's `creator` binary.
+        # creator is daemonless: it auto-detects, downloads buildpacks,
+        # builds, and pushes the OCI image directly. No kaniko needed.
+        # Runs as the lifecycle UID/GID (1000:1000) — that's a baked-in
+        # contract of the lifecycle image.
+        - name: buildpacks
+          image: {{ .Values.buildpacks.lifecycleImage | default "buildpacksio/lifecycle:0.20.5" | quote }}
+          # creator needs writable /layers (its working area) and access
+          # to the source under /workspace.
+          command:
+            - /cnb/lifecycle/creator
+            - -app=/workspace/src/{{ .Values.repo.path | default "." }}
+            - -log-level=info
+            - -no-color
+            # Skip TLS for the in-cluster registry; same trick as kaniko.
+            - -skip-restore
+            - {{ printf "%s:%s" .Values.image.repository .Values.image.tag | quote }}
+          env:
+            - name: CNB_BUILDER_IMAGE
+              value: {{ .Values.buildpacks.builderImage | default "paketobuildpacks/builder-jammy-base:latest" | quote }}
+            - name: CNB_REGISTRY_AUTH
+              # Empty creds + insecure HTTP via plaintext is enough for
+              # our in-cluster registry. Production registries need a
+              # docker-config Secret mounted at /home/cnb/.docker/config.json.
+              value: '{"{{ index (split ":" .Values.image.repository) "_0" }}":{"username":"","password":""}}'
+          securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
+            - name: layers
+              mountPath: /layers
+            - name: cache
+              mountPath: /cache
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+        {{- else }}
         - name: kaniko
           image: gcr.io/kaniko-project/executor:v1.23.2
           args:
             {{- if eq .Values.strategy "nixpacks" }}
-            # Nixpacks wrote .nixpacks/ alongside the source. Build
-            # context is the source dir; Dockerfile sits under
-            # .nixpacks/Dockerfile and `COPY . /app/.` picks up the
-            # real repo files (including the .nixpacks/ subdir).
-            # --dockerfile is relative to --context.
             - --dockerfile=.nixpacks/Dockerfile
             - --context=dir:///workspace/src/{{ .Values.repo.path | default "." }}
+            {{- else if eq .Values.strategy "static" }}
+            - --dockerfile=.kuso-static.Dockerfile
+            - --context=dir:///workspace/src/{{ .Values.repo.path | default "." }}
             {{- else }}
-            # --dockerfile is relative to --context, NOT to /workspace.
-            # Repo is cloned into /workspace/src; the build context is
-            # the optional monorepo subpath inside that clone.
             - --dockerfile=Dockerfile
             - --context=dir:///workspace/src/{{ .Values.repo.path | default "." }}
             {{- end }}
             - --destination={{ .Values.image.repository }}:{{ .Values.image.tag }}
-            # Internal registry uses plain HTTP; tell kaniko to push
-            # without TLS verification.
             - --insecure
             - --skip-tls-verify
-            # Cache layers by default to speed repeat builds.
             - --cache=true
             - --cache-repo={{ .Values.image.repository }}/.cache
             - --cleanup
@@ -151,7 +193,14 @@ spec:
               mountPath: /workspace
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+        {{- end }}
       volumes:
         - name: workspace
           emptyDir: {}
+        {{- if eq .Values.strategy "buildpacks" }}
+        - name: layers
+          emptyDir: {}
+        - name: cache
+          emptyDir: {}
+        {{- end }}
 {{- end }}

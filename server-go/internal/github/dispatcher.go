@@ -20,12 +20,21 @@ import (
 // the cluster, and (optionally) the github cache so installation +
 // installation_repositories events invalidate it.
 type Dispatcher struct {
-	Kube      *kube.Client
-	Builds    *builds.Service
-	Client    *Client     // optional, for cache refresh
-	Cache     CacheStore  // optional, for cache writes
-	Namespace string
-	Logger    *slog.Logger
+	Kube       *kube.Client
+	Builds     *builds.Service
+	Client     *Client     // optional, for cache refresh
+	Cache      CacheStore  // optional, for cache writes
+	Namespace  string
+	NSResolver *kube.ProjectNamespaceResolver
+	Logger     *slog.Logger
+}
+
+// nsFor returns the execution namespace for project, defaulting to home.
+func (d *Dispatcher) nsFor(ctx context.Context, project string) string {
+	if d.NSResolver == nil || project == "" {
+		return d.Namespace
+	}
+	return d.NSResolver.NamespaceFor(ctx, project)
 }
 
 // NewDispatcher constructs a Dispatcher. namespace falls back to "kuso".
@@ -123,8 +132,10 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 		if !repoMatches(repoURL, repoFullName) || branch != defaultBranch {
 			continue
 		}
-		// Trigger a build for every service in the project.
-		raw, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.Namespace).
+		// Trigger a build for every service in the project. Services
+		// live in the project's execution namespace, which may differ
+		// from the home ns when KusoProject.spec.namespace is set.
+		raw, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.nsFor(ctx, proj.Name)).
 			List(ctx, metav1.ListOptions{LabelSelector: "kuso.sislelabs.com/project=" + proj.Name})
 		if err != nil {
 			d.Logger.Error("list services for push", "project", proj.Name, "err", err)
@@ -170,7 +181,7 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 		if !repoMatches(repoURL, repoFullName) {
 			continue
 		}
-		services, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.Namespace).
+		services, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.nsFor(ctx, proj.Name)).
 			List(ctx, metav1.ListOptions{LabelSelector: "kuso.sislelabs.com/project=" + proj.Name})
 		if err != nil {
 			d.Logger.Error("list services for pr", "project", proj.Name, "err", err)
@@ -185,7 +196,7 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 			}
 		case "closed":
 			for i := range services.Items {
-				if err := d.deletePreviewEnv(ctx, services.Items[i].GetName(), pr.Number); err != nil {
+				if err := d.deletePreviewEnv(ctx, proj.Name, services.Items[i].GetName(), pr.Number); err != nil {
 					d.Logger.Warn("delete preview env", "service", services.Items[i].GetName(), "pr", pr.Number, "err", err)
 				}
 			}
@@ -250,13 +261,14 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	}
 	expiresAt := time.Now().Add(time.Duration(ttlDays) * 24 * time.Hour).UTC().Format(time.RFC3339)
 
-	existing, err := d.Kube.GetKusoEnvironment(ctx, d.Namespace, envName)
+	ns := d.nsFor(ctx, proj.Name)
+	existing, err := d.Kube.GetKusoEnvironment(ctx, ns, envName)
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get existing env: %w", err)
 	}
 	var envFromSecrets []string
 	port := int32(8080)
-	if svc, err := d.Kube.GetKusoService(ctx, d.Namespace, serviceFQN); err == nil && svc != nil && svc.Spec.Port > 0 {
+	if svc, err := d.Kube.GetKusoService(ctx, ns, serviceFQN); err == nil && svc != nil && svc.Spec.Port > 0 {
 		port = svc.Spec.Port
 	}
 
@@ -305,11 +317,11 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		envFromSecrets = append([]string(nil), existing.Spec.EnvFromSecrets...)
 		env.Spec.EnvFromSecrets = envFromSecrets
 		env.ObjectMeta.ResourceVersion = existing.ResourceVersion
-		if _, err := d.Kube.UpdateKusoEnvironment(ctx, d.Namespace, env); err != nil {
+		if _, err := d.Kube.UpdateKusoEnvironment(ctx, ns, env); err != nil {
 			return fmt.Errorf("update preview env: %w", err)
 		}
 	} else {
-		if _, err := d.Kube.CreateKusoEnvironment(ctx, d.Namespace, env); err != nil {
+		if _, err := d.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {
 			return fmt.Errorf("create preview env: %w", err)
 		}
 	}
@@ -322,9 +334,9 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	return nil
 }
 
-func (d *Dispatcher) deletePreviewEnv(ctx context.Context, serviceFQN string, prNumber int) error {
+func (d *Dispatcher) deletePreviewEnv(ctx context.Context, project, serviceFQN string, prNumber int) error {
 	envName := fmt.Sprintf("%s-pr-%d", serviceFQN, prNumber)
-	if err := d.Kube.DeleteKusoEnvironment(ctx, d.Namespace, envName); err != nil && !apierrors.IsNotFound(err) {
+	if err := d.Kube.DeleteKusoEnvironment(ctx, d.nsFor(ctx, project), envName); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete preview env %s: %w", envName, err)
 	}
 	d.Logger.Info("PR preview env deleted", "env", envName, "pr", prNumber)

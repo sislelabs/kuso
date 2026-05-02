@@ -14,6 +14,7 @@ type CreateProjectRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 	BaseDomain  string `json:"baseDomain,omitempty"`
+	Namespace   string `json:"namespace,omitempty"`
 	DefaultRepo struct {
 		URL           string `json:"url"`
 		DefaultBranch string `json:"defaultBranch,omitempty"`
@@ -26,6 +27,30 @@ type CreateProjectRequest struct {
 		TTLDays int  `json:"ttlDays,omitempty"`
 	} `json:"previews"`
 }
+
+// UpdateProjectRequest mirrors the server's pointer-field shape so a
+// caller can express "leave this field alone" (omit) vs. "set to zero"
+// (send the zero value). Use Bool / Int / String helpers to build
+// pointer literals tersely.
+type UpdateProjectRequest struct {
+	Description *string `json:"description,omitempty"`
+	BaseDomain  *string `json:"baseDomain,omitempty"`
+	DefaultRepo *struct {
+		URL           string `json:"url,omitempty"`
+		DefaultBranch string `json:"defaultBranch,omitempty"`
+	} `json:"defaultRepo,omitempty"`
+	GitHub *struct {
+		InstallationID int64 `json:"installationId,omitempty"`
+	} `json:"github,omitempty"`
+	Previews *struct {
+		Enabled *bool `json:"enabled,omitempty"`
+		TTLDays *int  `json:"ttlDays,omitempty"`
+	} `json:"previews,omitempty"`
+}
+
+func BoolPtr(b bool) *bool       { return &b }
+func IntPtr(i int) *int          { return &i }
+func StringPtr(s string) *string { return &s }
 
 type CreateServiceRequest struct {
 	Name string `json:"name"`
@@ -62,6 +87,19 @@ func (k *KusoClient) CreateProject(req CreateProjectRequest) (*resty.Response, e
 
 func (k *KusoClient) DeleteProject(name string) (*resty.Response, error) {
 	return k.client.Delete("/api/projects/" + name)
+}
+
+func (k *KusoClient) UpdateProject(name string, req UpdateProjectRequest) (*resty.Response, error) {
+	k.client.SetBody(req)
+	return k.client.Patch("/api/projects/" + name)
+}
+
+// RawPost sends a raw byte body with an explicit content-type. Used by
+// the restore flow where the body is a SQLite file, not JSON.
+func (k *KusoClient) RawPost(path string, body []byte, contentType string) (*resty.Response, error) {
+	k.client.SetHeader("Content-Type", contentType)
+	k.client.SetBody(body)
+	return k.client.Post(path)
 }
 
 // Services

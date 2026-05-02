@@ -24,6 +24,7 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects", h.List)
 	r.Post("/api/projects", h.Create)
 	r.Get("/api/projects/{project}", h.Describe)
+	r.Patch("/api/projects/{project}", h.Update)
 	r.Delete("/api/projects/{project}", h.Delete)
 
 	r.Get("/api/projects/{project}/services", h.ListServices)
@@ -78,6 +79,25 @@ func (h *ProjectsHandler) Describe(w http.ResponseWriter, r *http.Request) {
 	out, err := h.Svc.Describe(ctx, chi.URLParam(r, "project"))
 	if err != nil {
 		h.fail(w, "describe project", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// Update is PATCH /api/projects/{project}. Body is a partial spec —
+// see projects.UpdateProjectRequest. Pointer fields distinguish unset
+// from set-to-zero so callers can explicitly toggle previews.enabled.
+func (h *ProjectsHandler) Update(w http.ResponseWriter, r *http.Request) {
+	var req projects.UpdateProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), req)
+	if err != nil {
+		h.fail(w, "update project", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)

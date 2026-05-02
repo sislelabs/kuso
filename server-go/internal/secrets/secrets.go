@@ -35,9 +35,14 @@ import (
 // Service is the entrypoint for secret operations. Construct with New
 // after the projects.Service is wired so we can reuse its Get/List
 // helpers via dependency injection rather than re-implementing.
+//
+// NSResolver, when set, lets us route per-project Secrets into the
+// project's execution namespace (KusoProject.spec.namespace). Nil
+// resolver = always use the home Namespace (single-tenant default).
 type Service struct {
-	Kube      *kube.Client
-	Namespace string
+	Kube       *kube.Client
+	Namespace  string
+	NSResolver *kube.ProjectNamespaceResolver
 }
 
 // New constructs a Service. namespace defaults to "kuso".
@@ -46,6 +51,15 @@ func New(k *kube.Client, namespace string) *Service {
 		namespace = "kuso"
 	}
 	return &Service{Kube: k, Namespace: namespace}
+}
+
+// nsFor returns the execution namespace for project. Falls back to the
+// home Namespace when no resolver is wired or the project is empty.
+func (s *Service) nsFor(ctx context.Context, project string) string {
+	if s.NSResolver == nil || project == "" {
+		return s.Namespace
+	}
+	return s.NSResolver.NamespaceFor(ctx, project)
 }
 
 // Errors mirroring the projects package — handlers map them to HTTP codes.
@@ -72,7 +86,7 @@ func Name(project, service, env string) string {
 // ListKeys returns the keys (NOT values) stored in the secret for the
 // given scope, or nil if the secret doesn't exist yet.
 func (s *Service) ListKeys(ctx context.Context, project, service, env string) ([]string, error) {
-	sec, err := s.read(ctx, Name(project, service, env))
+	sec, err := s.read(ctx, s.nsFor(ctx, project), Name(project, service, env))
 	if err != nil {
 		return nil, err
 	}
@@ -100,8 +114,9 @@ func (s *Service) SetKey(ctx context.Context, project, service, env, key, value 
 	if key == "" {
 		return fmt.Errorf("%w: key is required", ErrInvalid)
 	}
+	ns := s.nsFor(ctx, project)
 	name := Name(project, service, env)
-	if err := s.upsertKey(ctx, name, key, value); err != nil {
+	if err := s.upsertKey(ctx, ns, name, key, value); err != nil {
 		return err
 	}
 	if env != "" {
@@ -127,8 +142,9 @@ func (s *Service) UnsetKey(ctx context.Context, project, service, env, key strin
 	if key == "" {
 		return fmt.Errorf("%w: key is required", ErrInvalid)
 	}
+	ns := s.nsFor(ctx, project)
 	name := Name(project, service, env)
-	res, err := s.removeKey(ctx, name, key)
+	res, err := s.removeKey(ctx, ns, name, key)
 	if err != nil {
 		return err
 	}
@@ -136,7 +152,7 @@ func (s *Service) UnsetKey(ctx context.Context, project, service, env, key strin
 		return ErrNotFound
 	}
 	if res.empty {
-		if err := s.deleteSecret(ctx, name); err != nil {
+		if err := s.deleteSecret(ctx, ns, name); err != nil {
 			return err
 		}
 		if env != "" {
@@ -157,8 +173,8 @@ func (s *Service) UnsetKey(ctx context.Context, project, service, env, key strin
 
 // read fetches the Secret and returns its decoded Data map (base64 → utf8).
 // Missing → (nil, nil).
-func (s *Service) read(ctx context.Context, name string) (*corev1.Secret, error) {
-	sec, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Get(ctx, name, metav1.GetOptions{})
+func (s *Service) read(ctx context.Context, ns, name string) (*corev1.Secret, error) {
+	sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil, nil
 	}
@@ -168,10 +184,10 @@ func (s *Service) read(ctx context.Context, name string) (*corev1.Secret, error)
 	return sec, nil
 }
 
-func (s *Service) upsertKey(ctx context.Context, name, key, value string) error {
+func (s *Service) upsertKey(ctx context.Context, ns, name, key, value string) error {
 	enc := base64.StdEncoding.EncodeToString([]byte(value))
 	patch := fmt.Sprintf(`{"data":{%q:%q}}`, key, enc)
-	_, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).
+	_, err := s.Kube.Clientset.CoreV1().Secrets(ns).
 		Patch(ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
 	if err == nil {
 		return nil
@@ -179,21 +195,18 @@ func (s *Service) upsertKey(ctx context.Context, name, key, value string) error 
 	if !apierrors.IsNotFound(err) {
 		return fmt.Errorf("patch secret %s: %w", name, err)
 	}
-	// First write — create with just this key.
-	dec, decErr := base64.StdEncoding.DecodeString(enc) // round-trip guard against escape mistakes
+	dec, decErr := base64.StdEncoding.DecodeString(enc)
 	if decErr != nil {
 		return fmt.Errorf("encode value: %w", decErr)
 	}
 	sec := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: s.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 		Type:       corev1.SecretTypeOpaque,
 		Data:       map[string][]byte{key: dec},
 	}
-	if _, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
-		// Race: another caller created the Secret between our Patch 404
-		// and our Create — retry the merge-patch.
+	if _, err := s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, sec, metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			_, err2 := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).
+			_, err2 := s.Kube.Clientset.CoreV1().Secrets(ns).
 				Patch(ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
 			if err2 != nil {
 				return fmt.Errorf("patch after create-race: %w", err2)
@@ -210,8 +223,8 @@ type removeResult struct {
 	empty   bool
 }
 
-func (s *Service) removeKey(ctx context.Context, name, key string) (removeResult, error) {
-	sec, err := s.read(ctx, name)
+func (s *Service) removeKey(ctx context.Context, ns, name, key string) (removeResult, error) {
+	sec, err := s.read(ctx, ns, name)
 	if err != nil {
 		return removeResult{}, err
 	}
@@ -222,25 +235,23 @@ func (s *Service) removeKey(ctx context.Context, name, key string) (removeResult
 		return removeResult{existed: false}, nil
 	}
 	if len(sec.Data) == 1 {
-		// Last key — caller will delete the whole Secret.
 		return removeResult{existed: true, empty: true}, nil
 	}
 	escaped := jsonPointerEscape(key)
 	patch := fmt.Sprintf(`[{"op":"remove","path":"/data/%s"}]`, escaped)
-	_, err = s.Kube.Clientset.CoreV1().Secrets(s.Namespace).
+	_, err = s.Kube.Clientset.CoreV1().Secrets(ns).
 		Patch(ctx, name, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
 	if err == nil {
 		return removeResult{existed: true, empty: false}, nil
 	}
-	// 422: path missing — concurrent removal of the same key.
 	if apierrors.IsInvalid(err) || isStatusUnprocessable(err) {
 		return removeResult{existed: false}, nil
 	}
 	return removeResult{}, fmt.Errorf("patch secret %s: %w", name, err)
 }
 
-func (s *Service) deleteSecret(ctx context.Context, name string) error {
-	if err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+func (s *Service) deleteSecret(ctx context.Context, ns, name string) error {
+	if err := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete secret %s: %w", name, err)
 	}
 	return nil
@@ -277,7 +288,7 @@ func (s *Service) attachToEnv(ctx context.Context, project, service, env, secret
 		}
 	}
 	patch := fmt.Sprintf(`{"spec":{"envFromSecrets":%s}}`, jsonStringList(append(envCR.Spec.EnvFromSecrets, secretName)))
-	return s.patchEnv(ctx, envCR.Name, patch)
+	return s.patchEnv(ctx, s.nsFor(ctx, project), envCR.Name, patch)
 }
 
 func (s *Service) detachFromEnv(ctx context.Context, project, service, env, secretName string) error {
@@ -295,7 +306,7 @@ func (s *Service) detachFromEnv(ctx context.Context, project, service, env, secr
 		return nil
 	}
 	patch := fmt.Sprintf(`{"spec":{"envFromSecrets":%s}}`, jsonStringList(next))
-	return s.patchEnv(ctx, envCR.Name, patch)
+	return s.patchEnv(ctx, s.nsFor(ctx, project), envCR.Name, patch)
 }
 
 func (s *Service) attachToAllEnvs(ctx context.Context, project, service, secretName string) error {
@@ -303,6 +314,7 @@ func (s *Service) attachToAllEnvs(ctx context.Context, project, service, secretN
 	if err != nil {
 		return err
 	}
+	ns := s.nsFor(ctx, project)
 	for _, e := range envs {
 		alreadyAttached := false
 		for _, existing := range e.Spec.EnvFromSecrets {
@@ -315,7 +327,7 @@ func (s *Service) attachToAllEnvs(ctx context.Context, project, service, secretN
 			continue
 		}
 		patch := fmt.Sprintf(`{"spec":{"envFromSecrets":%s}}`, jsonStringList(append(e.Spec.EnvFromSecrets, secretName)))
-		if err := s.patchEnv(ctx, e.Name, patch); err != nil {
+		if err := s.patchEnv(ctx, ns, e.Name, patch); err != nil {
 			return err
 		}
 	}
@@ -327,6 +339,7 @@ func (s *Service) detachFromAllEnvs(ctx context.Context, project, service, secre
 	if err != nil {
 		return err
 	}
+	ns := s.nsFor(ctx, project)
 	for _, e := range envs {
 		next := make([]string, 0, len(e.Spec.EnvFromSecrets))
 		for _, existing := range e.Spec.EnvFromSecrets {
@@ -338,7 +351,7 @@ func (s *Service) detachFromAllEnvs(ctx context.Context, project, service, secre
 			continue
 		}
 		patch := fmt.Sprintf(`{"spec":{"envFromSecrets":%s}}`, jsonStringList(next))
-		if err := s.patchEnv(ctx, e.Name, patch); err != nil {
+		if err := s.patchEnv(ctx, ns, e.Name, patch); err != nil {
 			return err
 		}
 	}
@@ -351,27 +364,28 @@ func (s *Service) detachFromAllEnvs(ctx context.Context, project, service, secre
 func (s *Service) bumpRev(ctx context.Context, project, service, env string) error {
 	rev := strconv.FormatInt(time.Now().UnixMilli(), 10)
 	patch := fmt.Sprintf(`{"spec":{"secretsRev":%q}}`, rev)
+	ns := s.nsFor(ctx, project)
 	if env != "" {
 		envCR, err := s.findEnv(ctx, project, service, env)
 		if err != nil {
 			return err
 		}
-		return s.patchEnv(ctx, envCR.Name, patch)
+		return s.patchEnv(ctx, ns, envCR.Name, patch)
 	}
 	envs, err := s.envsForService(ctx, project, service)
 	if err != nil {
 		return err
 	}
 	for _, e := range envs {
-		if err := s.patchEnv(ctx, e.Name, patch); err != nil {
+		if err := s.patchEnv(ctx, ns, e.Name, patch); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (s *Service) patchEnv(ctx context.Context, name, mergePatch string) error {
-	_, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(s.Namespace).
+func (s *Service) patchEnv(ctx context.Context, ns, name, mergePatch string) error {
+	_, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
 		Patch(ctx, name, types.MergePatchType, []byte(mergePatch), metav1.PatchOptions{})
 	if err != nil {
 		return fmt.Errorf("patch env %s: %w", name, err)
@@ -395,7 +409,7 @@ func (s *Service) findEnv(ctx context.Context, project, service, env string) (*k
 }
 
 func (s *Service) envsForService(ctx context.Context, project, service string) ([]kube.KusoEnvironment, error) {
-	raw, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(s.Namespace).
+	raw, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(s.nsFor(ctx, project)).
 		List(ctx, metav1.ListOptions{
 			LabelSelector: "kuso.sislelabs.com/project=" + project + ",kuso.sislelabs.com/service=" + service,
 		})

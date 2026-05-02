@@ -32,6 +32,7 @@ import (
 // Deps is the explicit dependency bundle the router needs. Wired in main.
 type Deps struct {
 	DB         *db.DB
+	DBPath     string // path on disk; used by /api/admin/backup + restore
 	Issuer     *auth.Issuer
 	SessionKey string
 	Projects   *projects.Service
@@ -133,6 +134,9 @@ func NewRouter(d Deps) http.Handler {
 		if d.DB != nil && d.Issuer != nil {
 			adminH := &httphandlers.AdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			adminH.Mount(r)
+			// Optional: backup/restore endpoints (gated on KUSO_BACKUP_ENABLED=1).
+			// Returns nil + Mount no-ops when disabled.
+			httphandlers.NewBackupHandler(d.DB, d.DBPath, d.Logger).Mount(r)
 			usersH := &httphandlers.UsersHandler{DB: d.DB, Logger: d.Logger}
 			usersH.Mount(r)
 			rolesH := &httphandlers.RolesHandler{DB: d.DB, Logger: d.Logger}

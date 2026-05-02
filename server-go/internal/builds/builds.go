@@ -34,8 +34,9 @@ const RegistryHost = "kuso-registry.kuso.svc.cluster.local:5000"
 
 // Service handles the build domain. Construct via New.
 type Service struct {
-	Kube      *kube.Client
-	Namespace string
+	Kube       *kube.Client
+	Namespace  string
+	NSResolver *kube.ProjectNamespaceResolver
 }
 
 // New constructs a builds.Service with a default namespace fallback.
@@ -44,6 +45,40 @@ func New(k *kube.Client, namespace string) *Service {
 		namespace = "kuso"
 	}
 	return &Service{Kube: k, Namespace: namespace}
+}
+
+// nsFor returns the execution namespace for project, defaulting to the
+// home Namespace.
+func (s *Service) nsFor(ctx context.Context, project string) string {
+	if s.NSResolver == nil || project == "" {
+		return s.Namespace
+	}
+	return s.NSResolver.NamespaceFor(ctx, project)
+}
+
+// scanNamespaces returns every namespace the build poller / promotion
+// flow needs to walk: the home ns plus every distinct spec.namespace
+// declared by a KusoProject. Deduped, errors swallowed (always at
+// least the home ns is returned).
+func (s *Service) scanNamespaces(ctx context.Context) []string {
+	out := []string{s.Namespace}
+	seen := map[string]bool{s.Namespace: true}
+	if s.Kube == nil {
+		return out
+	}
+	projects, err := s.Kube.ListKusoProjects(ctx, s.Namespace)
+	if err != nil {
+		return out
+	}
+	for _, p := range projects {
+		ns := p.Spec.Namespace
+		if ns == "" || seen[ns] {
+			continue
+		}
+		seen[ns] = true
+		out = append(out, ns)
+	}
+	return out
 }
 
 // Errors mirroring the rest of the codebase.
@@ -68,7 +103,7 @@ func (s *Service) List(ctx context.Context, project, service string) ([]kube.Kus
 	if service != "" {
 		selector += ",kuso.sislelabs.com/service=" + project + "-" + service
 	}
-	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(s.Namespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(s.nsFor(ctx, project)).List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
 		return nil, fmt.Errorf("list builds: %w", err)
 	}
@@ -105,13 +140,15 @@ func (s *Service) List(ctx context.Context, project, service string) ([]kube.Kus
 // poller picks up its outcome.
 func (s *Service) Create(ctx context.Context, project, service string, req CreateBuildRequest) (*kube.KusoBuild, error) {
 	fqn := project + "-" + service
-	svcCR, err := s.Kube.GetKusoService(ctx, s.Namespace, fqn)
+	ns := s.nsFor(ctx, project)
+	svcCR, err := s.Kube.GetKusoService(ctx, ns, fqn)
 	if apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("%w: service %s/%s", ErrNotFound, project, service)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("preflight service: %w", err)
 	}
+	// KusoProject CR always lives in the home namespace.
 	proj, err := s.Kube.GetKusoProject(ctx, s.Namespace, project)
 	if apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("%w: project %s", ErrNotFound, project)
@@ -181,9 +218,15 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 			GithubInstallationID: githubInstallationID(proj),
 			Strategy:             strategy,
 			Image:                &kube.KusoImage{Repository: imageRepo, Tag: ImageTag(sha)},
+			// Carry strategy-specific configuration from the service
+			// spec onto the build CR so the helm chart can render the
+			// right command line. Empty pointers leave the chart on
+			// its defaults.
+			Static:     svcCR.Spec.Static,
+			Buildpacks: svcCR.Spec.Buildpacks,
 		},
 	}
-	return s.Kube.CreateKusoBuild(ctx, s.Namespace, build)
+	return s.Kube.CreateKusoBuild(ctx, ns, build)
 }
 
 // ImageTag returns the canonical image tag for a ref: 12-char SHA prefix
@@ -272,41 +315,48 @@ func (p *Poller) Run(ctx context.Context) error {
 }
 
 func (p *Poller) tick(ctx context.Context) error {
-	raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(p.Svc.Namespace).
-		List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("list builds: %w", err)
-	}
-	for i := range raw.Items {
-		var b kube.KusoBuild
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &b); err != nil {
+	// Walk every project's execution namespace, deduped + including the
+	// home namespace so single-tenant clusters keep working.
+	for _, ns := range p.Svc.scanNamespaces(ctx) {
+		raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+			List(ctx, metav1.ListOptions{})
+		if err != nil {
+			p.Logger.Warn("build poller list", "ns", ns, "err", err)
 			continue
 		}
-		phase, _ := b.Status["phase"].(string)
-		if phase == "succeeded" || phase == "failed" {
-			continue
-		}
-		if err := p.checkBuild(ctx, &b); err != nil && !apierrors.IsNotFound(err) {
-			p.Logger.Warn("build poller checkBuild", "build", b.Name, "err", err)
+		for i := range raw.Items {
+			var b kube.KusoBuild
+			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &b); err != nil {
+				continue
+			}
+			phase, _ := b.Status["phase"].(string)
+			if phase == "succeeded" || phase == "failed" {
+				continue
+			}
+			if err := p.checkBuild(ctx, ns, &b); err != nil && !apierrors.IsNotFound(err) {
+				p.Logger.Warn("build poller checkBuild", "build", b.Name, "ns", ns, "err", err)
+			}
 		}
 	}
 	return nil
 }
 
 // checkBuild reads the kaniko Job for one build and reconciles status.
-func (p *Poller) checkBuild(ctx context.Context, b *kube.KusoBuild) error {
-	job, err := p.Svc.Kube.Clientset.BatchV1().Jobs(p.Svc.Namespace).Get(ctx, b.Name, metav1.GetOptions{})
+// ns is the namespace the KusoBuild + Job live in (determined by the
+// project's spec.namespace, looked up by the caller).
+func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) error {
+	job, err := p.Svc.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, b.Name, metav1.GetOptions{})
 	if err != nil {
 		return err
 	}
 	if cond := completedCondition(job); cond != nil {
 		if cond.Type == batchv1.JobComplete {
-			return p.markSucceeded(ctx, b)
+			return p.markSucceeded(ctx, ns, b)
 		}
-		return p.markFailed(ctx, b, cond.Message)
+		return p.markFailed(ctx, ns, b, cond.Message)
 	}
 	if job.Status.Active > 0 {
-		return p.markRunning(ctx, b)
+		return p.markRunning(ctx, ns, b)
 	}
 	return nil
 }
@@ -330,18 +380,18 @@ func completedCondition(job *batchv1.Job) *batchv1.JobCondition {
 // Calling Patch with the "status" subresource path therefore returns
 // 404 "the server could not find the requested resource". The status
 // stanza lives on the main resource; merge-patch it directly.
-func (p *Poller) markSucceeded(ctx context.Context, b *kube.KusoBuild) error {
+func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild) error {
 	patch := fmt.Sprintf(`{"status":{"phase":"succeeded","completedAt":%q}}`, time.Now().UTC().Format(time.RFC3339))
-	if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(p.Svc.Namespace).
+	if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("patch build status: %w", err)
 	}
-	return p.promoteImage(ctx, b)
+	return p.promoteImage(ctx, ns, b)
 }
 
-func (p *Poller) markFailed(ctx context.Context, b *kube.KusoBuild, msg string) error {
+func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, msg string) error {
 	patch := fmt.Sprintf(`{"status":{"phase":"failed","completedAt":%q,"message":%q}}`, time.Now().UTC().Format(time.RFC3339), msg)
-	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(p.Svc.Namespace).
+	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
 	if err != nil {
 		return fmt.Errorf("patch build failed: %w", err)
@@ -349,12 +399,12 @@ func (p *Poller) markFailed(ctx context.Context, b *kube.KusoBuild, msg string) 
 	return nil
 }
 
-func (p *Poller) markRunning(ctx context.Context, b *kube.KusoBuild) error {
+func (p *Poller) markRunning(ctx context.Context, ns string, b *kube.KusoBuild) error {
 	if phase, _ := b.Status["phase"].(string); phase == "running" {
 		return nil
 	}
 	patch := []byte(`{"status":{"phase":"running"}}`)
-	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(p.Svc.Namespace).
+	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 		Patch(ctx, b.Name, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
 		return fmt.Errorf("patch build running: %w", err)
@@ -388,15 +438,14 @@ func (p *Poller) logger() *slog.Logger {
 // rewrite plan §5 / TS comment in github-webhooks.service.ts, that was
 // a known-incomplete feature. We close it here by matching on
 // spec.branch over the env list filtered to this build's service.
-func (p *Poller) promoteImage(ctx context.Context, b *kube.KusoBuild) error {
+func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild) error {
 	if b.Spec.Image == nil {
 		return nil
 	}
-	// List every env in the namespace and filter on spec.service —
-	// label-based filtering would be cheaper but the spec.service field
-	// is the contract, while labels are best-effort metadata that may
-	// be absent on hand-rolled CRs.
-	raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(p.Svc.Namespace).
+	// List every env in the same namespace as the build and filter on
+	// spec.service. The build CR was rendered into the project's
+	// execution namespace, so its envs live there too.
+	raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
 		List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("list envs for promotion: %w", err)
@@ -412,16 +461,10 @@ func (p *Poller) promoteImage(ctx context.Context, b *kube.KusoBuild) error {
 		if e.Spec.Service != b.Spec.Service {
 			continue
 		}
-		// When the build's branch is set (every webhook-triggered build
-		// has it), only promote envs that match. When the env has no
-		// branch (legacy CRs), promote anyway so production gets the
-		// tag — this preserves the TS server's "production gets every
-		// build" behaviour while extending it to preview envs whose
-		// branch matches the PR head ref.
 		if b.Spec.Branch != "" && e.Spec.Branch != "" && e.Spec.Branch != b.Spec.Branch {
 			continue
 		}
-		if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(p.Svc.Namespace).
+		if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
 			Patch(ctx, e.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 			if apierrors.IsNotFound(err) {
 				continue
@@ -429,7 +472,7 @@ func (p *Poller) promoteImage(ctx context.Context, b *kube.KusoBuild) error {
 			return fmt.Errorf("patch env %s: %w", e.Name, err)
 		}
 		matched++
-		p.logger().Info("build promoted", "env", e.Name, "tag", b.Spec.Image.Tag)
+		p.logger().Info("build promoted", "env", e.Name, "ns", ns, "tag", b.Spec.Image.Tag)
 	}
 	if matched == 0 {
 		p.logger().Warn("build succeeded but no env matched for promotion",

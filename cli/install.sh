@@ -63,4 +63,5 @@ sudo mv "${temp_dir}/kuso" "/usr/local/bin/kuso" || { echo "Failed to install ku
 
 rm -rf "$temp_dir"
 echo "Kuso has been successfully installed."
-echo "Run 'kuso install' to create a kubernetes cluster."
+echo "Run 'kuso login --api https://<your-kuso-server> -u admin -p <password>' to start using it."
+echo "Cluster install is a separate one-shot — see hack/install.sh in the kuso repo."

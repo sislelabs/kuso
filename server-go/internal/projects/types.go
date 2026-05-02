@@ -3,12 +3,19 @@ package projects
 // CreateProjectRequest is the body of POST /api/projects, matching the
 // TS CreateProjectDTO shape.
 type CreateProjectRequest struct {
-	Name        string                       `json:"name"`
-	Description string                       `json:"description,omitempty"`
-	BaseDomain  string                       `json:"baseDomain,omitempty"`
-	DefaultRepo *CreateProjectRepoSpec       `json:"defaultRepo,omitempty"`
-	GitHub      *CreateProjectGithubSpec     `json:"github,omitempty"`
-	Previews    *CreateProjectPreviewsSpec   `json:"previews,omitempty"`
+	Name        string                     `json:"name"`
+	Description string                     `json:"description,omitempty"`
+	BaseDomain  string                     `json:"baseDomain,omitempty"`
+	// Namespace is the optional execution namespace for this project's
+	// child resources. The KusoProject CR itself always lives in the
+	// server's home namespace; this field controls only the routing of
+	// services/envs/addons/builds + their Secrets. Empty = home.
+	// When set and the namespace doesn't yet exist, the server makes a
+	// best-effort attempt to create it.
+	Namespace   string                     `json:"namespace,omitempty"`
+	DefaultRepo *CreateProjectRepoSpec     `json:"defaultRepo,omitempty"`
+	GitHub      *CreateProjectGithubSpec   `json:"github,omitempty"`
+	Previews    *CreateProjectPreviewsSpec `json:"previews,omitempty"`
 }
 
 type CreateProjectRepoSpec struct {
@@ -25,16 +32,53 @@ type CreateProjectPreviewsSpec struct {
 	TTLDays int  `json:"ttlDays,omitempty"`
 }
 
+// UpdateProjectRequest is the body of PATCH /api/projects/:name.
+// Pointer fields distinguish "unset" from "set to zero" — sending
+// {"previews":{"enabled":false}} explicitly disables previews; omitting
+// the previews key leaves them alone. Same applies to ttlDays and
+// installationId.
+type UpdateProjectRequest struct {
+	Description *string                    `json:"description,omitempty"`
+	BaseDomain  *string                    `json:"baseDomain,omitempty"`
+	DefaultRepo *CreateProjectRepoSpec     `json:"defaultRepo,omitempty"`
+	GitHub      *CreateProjectGithubSpec   `json:"github,omitempty"`
+	Previews    *UpdateProjectPreviewsSpec `json:"previews,omitempty"`
+}
+
+type UpdateProjectPreviewsSpec struct {
+	Enabled *bool `json:"enabled,omitempty"`
+	TTLDays *int  `json:"ttlDays,omitempty"`
+}
+
 // CreateServiceRequest is the body of POST /api/projects/:project/services.
 type CreateServiceRequest struct {
-	Name    string             `json:"name"`
-	Repo    *CreateServiceRepo `json:"repo,omitempty"`
-	Runtime string             `json:"runtime,omitempty"`
-	Port    int32              `json:"port,omitempty"`
-	Domains []ServiceDomain    `json:"domains,omitempty"`
-	EnvVars []EnvVar           `json:"envVars,omitempty"`
-	Scale   *ServiceScale      `json:"scale,omitempty"`
-	Sleep   *ServiceSleep      `json:"sleep,omitempty"`
+	Name       string                 `json:"name"`
+	Repo       *CreateServiceRepo     `json:"repo,omitempty"`
+	Runtime    string                 `json:"runtime,omitempty"`
+	Port       int32                  `json:"port,omitempty"`
+	Domains    []ServiceDomain        `json:"domains,omitempty"`
+	EnvVars    []EnvVar               `json:"envVars,omitempty"`
+	Scale      *ServiceScale          `json:"scale,omitempty"`
+	Sleep      *ServiceSleep          `json:"sleep,omitempty"`
+	Static     *ServiceStaticSpec     `json:"static,omitempty"`
+	Buildpacks *ServiceBuildpacksSpec `json:"buildpacks,omitempty"`
+}
+
+// ServiceStaticSpec configures the static runtime: optional buildCmd
+// runs in builderImage; outputDir is COPYed into runtimeImage. All
+// fields fall back to the chart defaults when empty.
+type ServiceStaticSpec struct {
+	BuilderImage string `json:"builderImage,omitempty"`
+	RuntimeImage string `json:"runtimeImage,omitempty"`
+	BuildCmd     string `json:"buildCmd,omitempty"`
+	OutputDir    string `json:"outputDir,omitempty"`
+}
+
+// ServiceBuildpacksSpec configures the buildpacks runtime. Both fields
+// default to Paketo's jammy-base + lifecycle 0.20.x when empty.
+type ServiceBuildpacksSpec struct {
+	BuilderImage   string `json:"builderImage,omitempty"`
+	LifecycleImage string `json:"lifecycleImage,omitempty"`
 }
 
 type CreateServiceRepo struct {

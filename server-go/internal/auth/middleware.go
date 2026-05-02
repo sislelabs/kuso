@@ -53,6 +53,14 @@ func ClaimsFromContext(ctx context.Context) (*Claims, bool) {
 	return c, ok
 }
 
+// WithClaimsForTest stuffs claims into ctx using the same key the
+// Middleware would, so tests can short-circuit JWT verification when
+// they only want to exercise a handler. Production code MUST go
+// through Middleware.
+func WithClaimsForTest(ctx context.Context, c *Claims) context.Context {
+	return context.WithValue(ctx, claimsCtxKey, c)
+}
+
 // bearerToken pulls a token out of "Authorization: Bearer <token>".
 // Falls back to false when the header is missing or malformed.
 func bearerToken(r *http.Request) (string, bool) {

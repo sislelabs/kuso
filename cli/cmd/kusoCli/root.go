@@ -54,7 +54,9 @@ var rootCmd = &cobra.Command{
 Documentation:
   https://www.kuso.sislelabs.com/docs
 `,
-	Example: `kuso install`,
+	Example: `  kuso login --api https://kuso.example.com -u admin -p '<password>'
+  kuso project create my-app --repo https://github.com/me/my-app
+  kuso get projects`,
 	Aliases: []string{"kbr"},
 }
 

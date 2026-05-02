@@ -45,6 +45,14 @@ spec:
                 baseDomain:
                   type: string
                   description: Domain under which auto-generated service hostnames are emitted.
+                namespace:
+                  type: string
+                  description: |
+                    Optional execution namespace for this project's child
+                    resources (services, environments, addons, builds,
+                    plus their per-service Secrets). The KusoProject CR
+                    itself always lives in the server's home namespace;
+                    this field controls only child routing. Empty = home.
                 defaultRepo:
                   type: object
                   properties:

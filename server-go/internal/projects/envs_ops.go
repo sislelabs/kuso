@@ -17,7 +17,11 @@ func (s *Service) ListEnvironments(ctx context.Context, project string) ([]kube.
 
 // GetEnvironment loads one environment by name.
 func (s *Service) GetEnvironment(ctx context.Context, project, env string) (*kube.KusoEnvironment, error) {
-	e, err := s.Kube.GetKusoEnvironment(ctx, s.Namespace, env)
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	e, err := s.Kube.GetKusoEnvironment(ctx, ns, env)
 	if apierrors.IsNotFound(err) {
 		return nil, ErrNotFound
 	}
@@ -40,27 +44,50 @@ func (s *Service) GetEnvironment(ctx context.Context, project, env string) (*kub
 // are logged via the supplied callback (or swallowed when nil) so one
 // flaky teardown doesn't stop the sweep.
 func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name string, err error)) (int, error) {
-	envs, err := s.Kube.ListKusoEnvironments(ctx, s.Namespace)
+	// Build the set of namespaces to scan: home + every distinct
+	// spec.namespace declared by a KusoProject. Dedupe so we don't
+	// double-sweep the home ns when a project is unset.
+	projects, err := s.Kube.ListKusoProjects(ctx, s.Namespace)
 	if err != nil {
 		return 0, err
 	}
+	seen := map[string]bool{s.Namespace: true}
+	nss := []string{s.Namespace}
+	for _, p := range projects {
+		ns := p.Spec.Namespace
+		if ns == "" || seen[ns] {
+			continue
+		}
+		seen[ns] = true
+		nss = append(nss, ns)
+	}
+
 	now := time.Now().UTC()
 	deleted := 0
-	for _, e := range envs {
-		if e.Spec.Kind != "preview" || e.Spec.TTL == nil || e.Spec.TTL.ExpiresAt == "" {
-			continue
-		}
-		exp, err := time.Parse(time.RFC3339, e.Spec.TTL.ExpiresAt)
-		if err != nil || !exp.Before(now) {
-			continue
-		}
-		if err := s.Kube.DeleteKusoEnvironment(ctx, s.Namespace, e.Name); err != nil {
+	for _, ns := range nss {
+		envs, err := s.Kube.ListKusoEnvironments(ctx, ns)
+		if err != nil {
 			if onErr != nil {
-				onErr(e.Name, err)
+				onErr("ns:"+ns, err)
 			}
 			continue
 		}
-		deleted++
+		for _, e := range envs {
+			if e.Spec.Kind != "preview" || e.Spec.TTL == nil || e.Spec.TTL.ExpiresAt == "" {
+				continue
+			}
+			exp, err := time.Parse(time.RFC3339, e.Spec.TTL.ExpiresAt)
+			if err != nil || !exp.Before(now) {
+				continue
+			}
+			if err := s.Kube.DeleteKusoEnvironment(ctx, ns, e.Name); err != nil {
+				if onErr != nil {
+					onErr(e.Name, err)
+				}
+				continue
+			}
+			deleted++
+		}
 	}
 	return deleted, nil
 }
@@ -76,7 +103,11 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 	if e.Spec.Kind == "production" {
 		return fmt.Errorf("%w: cannot delete production environment %s", ErrInvalid, env)
 	}
-	if err := s.Kube.DeleteKusoEnvironment(ctx, s.Namespace, env); err != nil && !apierrors.IsNotFound(err) {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return err
+	}
+	if err := s.Kube.DeleteKusoEnvironment(ctx, ns, env); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete env: %w", err)
 	}
 	return nil

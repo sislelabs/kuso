@@ -10,11 +10,16 @@ repo:
   url: ""
   path: "."
 
-# Build strategy. v0.2 ships dockerfile + nixpacks.
+# Build strategy. v0.2 ships dockerfile, nixpacks, buildpacks, static.
 #   - dockerfile: kaniko reads <path>/Dockerfile from the repo (default).
-#   - nixpacks: an init container runs `nixpacks build --out` to emit a
-#     Dockerfile + context, then kaniko builds from there. No docker
-#     daemon is involved; nixpacks --out is a pure source transform.
+#   - nixpacks: init container runs `nixpacks build --out` to emit a
+#     Dockerfile + context, then kaniko builds. Daemonless via --out.
+#   - buildpacks: replaces kaniko with the CNB lifecycle's `creator`,
+#     which auto-detects, builds, and pushes daemonless. Builder image
+#     defaults to paketo jammy-base.
+#   - static: init container runs an optional buildCmd (e.g.
+#     `npm run build`) in a builderImage sandbox, then synthesizes a
+#     tiny Dockerfile that COPYs outputDir into nginx. Kaniko ships it.
 strategy: dockerfile
 
 nixpacks:
@@ -22,6 +27,30 @@ nixpacks:
   # container downloads this exact tag from
   # github.com/railwayapp/nixpacks/releases and runs it under alpine.
   version: "1.41.0"
+
+buildpacks:
+  # Cloud Native Buildpacks lifecycle image. The `creator` binary lives
+  # at /cnb/lifecycle/creator and runs the full
+  # detect→analyze→build→export→push flow in one shot.
+  lifecycleImage: "buildpacksio/lifecycle:0.20.5"
+  # The builder image creator pulls during the build. Paketo's
+  # jammy-base supports Node, Python, Go, Java, .NET, Ruby out of the box.
+  builderImage: "paketobuildpacks/builder-jammy-base:latest"
+
+static:
+  # Runtime image. Default ships a tiny nginx that serves /usr/share/nginx/html.
+  runtimeImage: "nginx:1.27-alpine"
+  # Sandbox image used to run the (optional) buildCmd. Override when
+  # the source needs bun/python/php/etc.
+  builderImage: "node:20-alpine"
+  # Shell command to assemble the static output. Empty = treat the repo
+  # path as already-built static files.
+  buildCmd: ""
+  # Path inside the source dir whose contents become the site root.
+  # Defaults to "." which means "ship the whole repo as-is" — perfect
+  # for static HTML repos. Set to "dist" / "build" / "_site" / etc.
+  # for a build-step output.
+  outputDir: "."
 
 # Target registry. The server fills this in with the in-cluster registry
 # URL (kuso-registry.kuso.svc.cluster.local:5000/<project>/<service>) and

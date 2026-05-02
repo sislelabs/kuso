@@ -352,3 +352,52 @@ func TestGetEnvironment_RejectsCrossProject(t *testing.T) {
 		t.Errorf("expected ErrNotFound for cross-project, got %v", err)
 	}
 }
+
+func TestUpdate_TogglesPreviews(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"},
+		Previews:    &kube.KusoPreviewsSpec{Enabled: false, TTLDays: 7},
+	}))
+	enable := true
+	got, err := s.Update(context.Background(), "alpha", UpdateProjectRequest{
+		Previews: &UpdateProjectPreviewsSpec{Enabled: &enable},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.Spec.Previews == nil || !got.Spec.Previews.Enabled {
+		t.Errorf("previews not enabled: %+v", got.Spec.Previews)
+	}
+	if got.Spec.Previews.TTLDays != 7 {
+		t.Errorf("ttl bled to zero: %d", got.Spec.Previews.TTLDays)
+	}
+	if got.Spec.DefaultRepo.URL != "x" || got.Spec.DefaultRepo.DefaultBranch != "main" {
+		t.Errorf("default repo was clobbered: %+v", got.Spec.DefaultRepo)
+	}
+}
+
+func TestUpdate_ClearsGitHubInstallation(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"},
+		GitHub:      &kube.KusoProjectGithubSpec{InstallationID: 42},
+	}))
+	got, err := s.Update(context.Background(), "alpha", UpdateProjectRequest{
+		GitHub: &CreateProjectGithubSpec{InstallationID: 0},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.Spec.GitHub != nil {
+		t.Errorf("expected GitHub binding cleared; got %+v", got.Spec.GitHub)
+	}
+}
+
+func TestUpdate_NotFound(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t)
+	if _, err := s.Update(context.Background(), "ghost", UpdateProjectRequest{}); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}

@@ -130,12 +130,13 @@ func registerDescribeProject(server *mcp.Server, client *kusoclient.Client) {
 // ---------- bootstrap_project ----------
 
 type bootstrapProjectArgs struct {
-	Name     string `json:"name" jsonschema:"project name (lowercase, alphanumeric + hyphens)"`
-	RepoURL  string `json:"repo_url" jsonschema:"git repo URL (https://github.com/...)"`
-	Branch   string `json:"branch,omitempty" jsonschema:"default branch (default: main)"`
-	Domain   string `json:"domain,omitempty" jsonschema:"base domain (services get <name>.<this>; default: cluster default)"`
-	Previews bool   `json:"previews,omitempty" jsonschema:"enable PR-based preview environments (default: false)"`
-	Confirm  bool   `json:"confirm" jsonschema:"must be true to actually create — prevents accidental project creation"`
+	Name      string `json:"name" jsonschema:"project name (lowercase, alphanumeric + hyphens)"`
+	RepoURL   string `json:"repo_url" jsonschema:"git repo URL (https://github.com/...)"`
+	Branch    string `json:"branch,omitempty" jsonschema:"default branch (default: main)"`
+	Domain    string `json:"domain,omitempty" jsonschema:"base domain (services get <name>.<this>; default: cluster default)"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"execution namespace for this project's child resources (default: server's home namespace)"`
+	Previews  bool   `json:"previews,omitempty" jsonschema:"enable PR-based preview environments (default: false)"`
+	Confirm   bool   `json:"confirm" jsonschema:"must be true to actually create — prevents accidental project creation"`
 }
 
 type bootstrapProjectResult struct {
@@ -161,6 +162,9 @@ func runBootstrapProject(ctx context.Context, client *kusoclient.Client, args bo
 	if args.Domain != "" {
 		body["baseDomain"] = args.Domain
 	}
+	if args.Namespace != "" {
+		body["namespace"] = args.Namespace
+	}
 	if err := client.PostJSON(ctx, "/api/projects", body, nil); err != nil {
 		return bootstrapProjectResult{}, fmt.Errorf("create project: %w", err)
 	}
@@ -183,13 +187,108 @@ func registerBootstrapProject(server *mcp.Server, client *kusoclient.Client) {
 	})
 }
 
+// ---------- update_project ----------
+
+// updateProjectArgs is intentionally pointer-light so the JSON-schema
+// stays simple for LLM consumers. Empty strings / zero values mean
+// "leave it alone"; the explicit flips for the previews/installation
+// have their own dedicated fields with sentinels.
+type updateProjectArgs struct {
+	Name                       string `json:"name" jsonschema:"project name"`
+	Description                string `json:"description,omitempty" jsonschema:"new description (omit to leave alone)"`
+	Domain                     string `json:"domain,omitempty" jsonschema:"new base domain (omit to leave alone)"`
+	RepoURL                    string `json:"repo_url,omitempty" jsonschema:"new default repo URL (omit to leave alone)"`
+	Branch                     string `json:"branch,omitempty" jsonschema:"new default branch (omit to leave alone)"`
+	GithubInstallationID       int64  `json:"github_installation_id,omitempty" jsonschema:"set the bound GitHub App installation id (omit to leave alone)"`
+	ClearGithubInstallation    bool   `json:"clear_github_installation,omitempty" jsonschema:"detach the project from any GitHub App installation"`
+	Previews                   string `json:"previews,omitempty" jsonschema:"\"on\" | \"off\" — flip preview env support; omit to leave alone"`
+	PreviewsTTLDays            int    `json:"previews_ttl_days,omitempty" jsonschema:"new preview env TTL in days (omit to leave alone)"`
+	Confirm                    bool   `json:"confirm" jsonschema:"must be true — guards against accidental edits"`
+}
+
+type updateProjectResult struct {
+	Project string `json:"project"`
+	Status  string `json:"status"`
+}
+
+func runUpdateProject(ctx context.Context, client *kusoclient.Client, args updateProjectArgs) (updateProjectResult, error) {
+	if !args.Confirm {
+		return updateProjectResult{}, errors.New("confirm=true is required")
+	}
+	if client.ReadOnly() {
+		return updateProjectResult{}, errors.New("kuso-mcp is in read-only mode; refusing to update")
+	}
+	if args.Name == "" {
+		return updateProjectResult{}, errors.New("name is required")
+	}
+	body := map[string]any{}
+	if args.Description != "" {
+		body["description"] = args.Description
+	}
+	if args.Domain != "" {
+		body["baseDomain"] = args.Domain
+	}
+	if args.RepoURL != "" || args.Branch != "" {
+		repo := map[string]string{}
+		if args.RepoURL != "" {
+			repo["url"] = args.RepoURL
+		}
+		if args.Branch != "" {
+			repo["defaultBranch"] = args.Branch
+		}
+		body["defaultRepo"] = repo
+	}
+	if args.ClearGithubInstallation {
+		body["github"] = map[string]any{"installationId": 0}
+	} else if args.GithubInstallationID != 0 {
+		body["github"] = map[string]any{"installationId": args.GithubInstallationID}
+	}
+	if args.Previews != "" || args.PreviewsTTLDays > 0 {
+		pv := map[string]any{}
+		switch strings.ToLower(args.Previews) {
+		case "on", "true", "yes":
+			pv["enabled"] = true
+		case "off", "false", "no":
+			pv["enabled"] = false
+		case "":
+			// leave alone
+		default:
+			return updateProjectResult{}, fmt.Errorf("previews must be on|off (got %q)", args.Previews)
+		}
+		if args.PreviewsTTLDays > 0 {
+			pv["ttlDays"] = args.PreviewsTTLDays
+		}
+		body["previews"] = pv
+	}
+	if err := client.PatchJSON(ctx, "/api/projects/"+args.Name, body, nil); err != nil {
+		return updateProjectResult{}, fmt.Errorf("update project: %w", err)
+	}
+	return updateProjectResult{Project: args.Name, Status: "updated"}, nil
+}
+
+func registerUpdateProject(server *mcp.Server, client *kusoclient.Client) {
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "update_project",
+		Description: "Patch a kuso project's spec — flip previews on/off, change default branch, swap or detach a GitHub App installation. " +
+			"Only fields explicitly provided are touched; anything omitted is left alone. REQUIRES confirm=true.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args updateProjectArgs) (*mcp.CallToolResult, updateProjectResult, error) {
+		out, err := runUpdateProject(ctx, client, args)
+		if err != nil {
+			return nil, updateProjectResult{}, err
+		}
+		return &mcp.CallToolResult{
+			Content: []mcp.Content{&mcp.TextContent{Text: fmt.Sprintf("project %s %s", out.Project, out.Status)}},
+		}, out, nil
+	})
+}
+
 // ---------- add_service ----------
 
 type addServiceArgs struct {
 	Project string `json:"project" jsonschema:"project name"`
 	Name    string `json:"name" jsonschema:"service name (e.g. web, api, worker)"`
 	Path    string `json:"path,omitempty" jsonschema:"monorepo subpath (default '.')"`
-	Runtime string `json:"runtime,omitempty" jsonschema:"dockerfile|nixpacks (default: dockerfile; buildpacks/static aren't wired)"`
+	Runtime string `json:"runtime,omitempty" jsonschema:"dockerfile|nixpacks|buildpacks|static (default: dockerfile)"`
 	Port    int    `json:"port,omitempty" jsonschema:"container port (default: 8080)"`
 	Confirm bool   `json:"confirm" jsonschema:"must be true to actually add"`
 }

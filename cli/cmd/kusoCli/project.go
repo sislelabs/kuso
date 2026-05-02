@@ -29,6 +29,7 @@ var (
 	projectCreateDomain          string
 	projectCreatePreviews        bool
 	projectCreateInstallationID  int64
+	projectCreateNamespace       string
 )
 
 var projectCreateCmd = &cobra.Command{
@@ -44,7 +45,11 @@ var projectCreateCmd = &cobra.Command{
 		if projectCreateRepo == "" {
 			return fmt.Errorf("--repo is required")
 		}
-		req := kusoApi.CreateProjectRequest{Name: args[0], BaseDomain: projectCreateDomain}
+		req := kusoApi.CreateProjectRequest{
+			Name:       args[0],
+			BaseDomain: projectCreateDomain,
+			Namespace:  projectCreateNamespace,
+		}
 		req.DefaultRepo.URL = projectCreateRepo
 		req.DefaultRepo.DefaultBranch = projectCreateBranch
 		req.Previews.Enabled = projectCreatePreviews
@@ -61,6 +66,89 @@ var projectCreateCmd = &cobra.Command{
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("project %s created\n", args[0])
+		return nil
+	},
+}
+
+// ---------------- project update ----------------
+
+var (
+	projectUpdateBranch        string
+	projectUpdateRepo          string
+	projectUpdateDomain        string
+	projectUpdateDescription   string
+	projectUpdateInstallation  int64
+	projectUpdateInstallReset  bool
+	projectUpdatePreviews      string // "on" | "off" | "" (leave alone)
+	projectUpdatePreviewsTTL   int
+)
+
+var projectUpdateCmd = &cobra.Command{
+	Use:   "update <name>",
+	Short: "Patch a project's spec (defaults left alone unless flagged)",
+	Long: `Update specific fields on a project. Only the flags you pass are
+changed; everything else is left as-is. To explicitly disable previews
+use --previews=off; to enable, --previews=on. To detach a GitHub App
+installation use --github-installation-clear (sets installationId to 0).`,
+	Args: cobra.ExactArgs(1),
+	Example: `  kuso project update analiz --previews=on
+  kuso project update analiz --branch develop --domain analiz.example.com
+  kuso project update analiz --github-installation 128668920
+  kuso project update analiz --github-installation-clear`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		req := kusoApi.UpdateProjectRequest{}
+		if cmd.Flags().Changed("description") {
+			req.Description = kusoApi.StringPtr(projectUpdateDescription)
+		}
+		if cmd.Flags().Changed("domain") {
+			req.BaseDomain = kusoApi.StringPtr(projectUpdateDomain)
+		}
+		if cmd.Flags().Changed("repo") || cmd.Flags().Changed("branch") {
+			req.DefaultRepo = &struct {
+				URL           string `json:"url,omitempty"`
+				DefaultBranch string `json:"defaultBranch,omitempty"`
+			}{URL: projectUpdateRepo, DefaultBranch: projectUpdateBranch}
+		}
+		if projectUpdateInstallReset {
+			req.GitHub = &struct {
+				InstallationID int64 `json:"installationId,omitempty"`
+			}{InstallationID: 0}
+		} else if cmd.Flags().Changed("github-installation") {
+			req.GitHub = &struct {
+				InstallationID int64 `json:"installationId,omitempty"`
+			}{InstallationID: projectUpdateInstallation}
+		}
+		if cmd.Flags().Changed("previews") || cmd.Flags().Changed("previews-ttl") {
+			pv := &struct {
+				Enabled *bool `json:"enabled,omitempty"`
+				TTLDays *int  `json:"ttlDays,omitempty"`
+			}{}
+			switch projectUpdatePreviews {
+			case "on", "true", "yes":
+				pv.Enabled = kusoApi.BoolPtr(true)
+			case "off", "false", "no":
+				pv.Enabled = kusoApi.BoolPtr(false)
+			case "":
+				// leave alone
+			default:
+				return fmt.Errorf("--previews must be on|off (got %q)", projectUpdatePreviews)
+			}
+			if cmd.Flags().Changed("previews-ttl") {
+				pv.TTLDays = kusoApi.IntPtr(projectUpdatePreviewsTTL)
+			}
+			req.Previews = pv
+		}
+		resp, err := api.UpdateProject(args[0], req)
+		if err != nil {
+			return fmt.Errorf("update: %w", err)
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("project %s updated\n", args[0])
 		return nil
 	},
 }
@@ -376,16 +464,26 @@ func init() {
 	projectCreateCmd.Flags().StringVar(&projectCreateBranch, "branch", "main", "default branch")
 	projectCreateCmd.Flags().StringVar(&projectCreateDomain, "domain", "", "base domain (services get <name>.<this>)")
 	projectCreateCmd.Flags().BoolVar(&projectCreatePreviews, "previews", false, "enable PR-based preview environments")
+	projectCreateCmd.Flags().StringVar(&projectCreateNamespace, "namespace", "", "execution namespace for this project's child resources (default: server's home namespace)")
 
 	projectCmd.AddCommand(projectDeleteCmd)
 	projectDeleteCmd.Flags().BoolVarP(&projectDeleteYes, "yes", "y", false, "skip the confirmation prompt")
+	projectCmd.AddCommand(projectUpdateCmd)
+	projectUpdateCmd.Flags().StringVar(&projectUpdateDescription, "description", "", "new description")
+	projectUpdateCmd.Flags().StringVar(&projectUpdateDomain, "domain", "", "new base domain")
+	projectUpdateCmd.Flags().StringVar(&projectUpdateRepo, "repo", "", "new default repo URL")
+	projectUpdateCmd.Flags().StringVar(&projectUpdateBranch, "branch", "", "new default branch")
+	projectUpdateCmd.Flags().Int64Var(&projectUpdateInstallation, "github-installation", 0, "set the bound GitHub App installation id")
+	projectUpdateCmd.Flags().BoolVar(&projectUpdateInstallReset, "github-installation-clear", false, "detach the project from any GitHub App installation")
+	projectUpdateCmd.Flags().StringVar(&projectUpdatePreviews, "previews", "", "enable/disable preview envs (on|off)")
+	projectUpdateCmd.Flags().IntVar(&projectUpdatePreviewsTTL, "previews-ttl", 0, "preview env TTL in days")
 	projectCmd.AddCommand(projectDescribeCmd)
 	projectDescribeCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 
 	projectCmd.AddCommand(projectServiceCmd)
 	projectServiceCmd.AddCommand(serviceAddCmd)
 	serviceAddCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
-	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "dockerfile", "dockerfile|nixpacks (buildpacks and static aren't wired yet)")
+	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "dockerfile", "dockerfile|nixpacks|buildpacks|static")
 	serviceAddCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	projectServiceCmd.AddCommand(serviceDeleteCmd)
 	serviceDeleteCmd.Flags().BoolVarP(&serviceDeleteYes, "yes", "y", false, "skip the confirmation prompt")

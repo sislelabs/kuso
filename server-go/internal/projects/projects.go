@@ -9,26 +9,87 @@
 package projects
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"kuso/server/internal/kube"
 )
 
 // Service is the entrypoint Phase 3 handlers depend on. It holds a kube
-// client and the configured namespace.
+// client, the home namespace where every KusoProject CR lives, and a
+// small cache of project → execution-namespace lookups.
 type Service struct {
 	Kube      *kube.Client
 	Namespace string
+
+	nsMu    sync.RWMutex
+	nsCache map[string]nsCacheEntry
 }
+
+type nsCacheEntry struct {
+	namespace string
+	expires   time.Time
+}
+
+const nsCacheTTL = 30 * time.Second
 
 // New constructs a Service. namespace falls back to "kuso" when empty.
 func New(k *kube.Client, namespace string) *Service {
 	if namespace == "" {
 		namespace = "kuso"
 	}
-	return &Service{Kube: k, Namespace: namespace}
+	return &Service{Kube: k, Namespace: namespace, nsCache: map[string]nsCacheEntry{}}
+}
+
+// namespaceFor returns the execution namespace for project. KusoProject
+// CRs always live in the home namespace; their spec.namespace tells us
+// where the child resources (services, envs, addons, builds, secrets)
+// for that project go. Empty spec.namespace means "use the home
+// namespace" — the single-tenant default.
+//
+// Lookups are cached for nsCacheTTL to keep hot paths cheap; cache
+// entries are invalidated on project create/update/delete.
+func (s *Service) namespaceFor(ctx context.Context, project string) (string, error) {
+	if project == "" {
+		return s.Namespace, nil
+	}
+	s.nsMu.RLock()
+	if e, ok := s.nsCache[project]; ok && time.Now().Before(e.expires) {
+		s.nsMu.RUnlock()
+		return e.namespace, nil
+	}
+	s.nsMu.RUnlock()
+
+	p, err := s.Kube.GetKusoProject(ctx, s.Namespace, project)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return "", ErrNotFound
+		}
+		return "", err
+	}
+	ns := p.Spec.Namespace
+	if ns == "" {
+		ns = s.Namespace
+	}
+	s.nsMu.Lock()
+	s.nsCache[project] = nsCacheEntry{namespace: ns, expires: time.Now().Add(nsCacheTTL)}
+	s.nsMu.Unlock()
+	return ns, nil
+}
+
+// invalidateNamespace drops a project's cached namespace mapping. Called
+// on project create/update/delete so callers don't see stale routing
+// after a write.
+func (s *Service) invalidateNamespace(project string) {
+	s.nsMu.Lock()
+	delete(s.nsCache, project)
+	s.nsMu.Unlock()
 }
 
 // ---- naming + labels -----------------------------------------------------

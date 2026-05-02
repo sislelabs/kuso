@@ -107,13 +107,21 @@ func main() {
 	if kc, err := kube.NewClient(); err != nil {
 		logger.Warn("kube: client unavailable, project + secret + build + log routes disabled", "err", err)
 	} else {
+		// Single resolver shared across services so all the per-project
+		// namespace lookups hit the same cache. Empty spec.namespace
+		// resolves to the home ns, preserving existing single-tenant
+		// behaviour without per-call overhead.
+		nsResolver := kube.NewProjectNamespaceResolver(kc, *namespace)
 		projSvc = projects.New(kc, *namespace)
 		secSvc = secrets.New(kc, *namespace)
+		secSvc.NSResolver = nsResolver
 		buildSvc = builds.New(kc, *namespace)
+		buildSvc.NSResolver = nsResolver
 		logsSvc = logs.New(kc, *namespace)
 		cfgSvc = config.New(kc, *namespace)
 		statSvc = status.New(kc, 5*time.Minute)
 		addonSvc = addons.New(kc, *namespace)
+		addonSvc.NSResolver = nsResolver
 		// Reload the Kuso CR cache every minute so the feature-flag
 		// surface stays fresh without forcing every request to hit the
 		// API server.
@@ -155,6 +163,7 @@ func main() {
 				ghCache := ghpkg.NewDBCache(database)
 				disp := ghpkg.NewDispatcher(kc, buildSvc, *namespace, logger).
 					WithGithubCache(ghCli, ghCache)
+				disp.NSResolver = nsResolver
 				ghDeps = &httpsrv.GithubDeps{Cfg: ghCfg, Client: ghCli, Cache: ghCache, Dispatcher: disp}
 			}
 		}
@@ -162,6 +171,7 @@ func main() {
 
 	r := httpsrv.NewRouter(httpsrv.Deps{
 		DB:         database,
+		DBPath:     *dbPath,
 		Issuer:     issuer,
 		SessionKey: sessionKey,
 		Projects:   projSvc,

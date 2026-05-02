@@ -29,8 +29,14 @@ type OAuthProfile struct {
 }
 
 // GithubOAuth bundles the env config the GitHub strategy needs.
+//
+// APIBase overrides the GitHub API root for /user and /user/emails
+// requests. Empty defaults to https://api.github.com. Set in tests to
+// point at an httptest.Server that mocks the GitHub responses; the
+// real OAuth endpoint is overridden via Cfg.Endpoint at the same site.
 type GithubOAuth struct {
-	Cfg *oauth2.Config
+	Cfg     *oauth2.Config
+	APIBase string
 }
 
 // NewGithubOAuth reads GITHUB_CLIENT_{ID,SECRET,CALLBACKURL,SCOPE} from
@@ -69,15 +75,22 @@ func (g *GithubOAuth) Exchange(ctx context.Context, code string) (*OAuthProfile,
 		return nil, nil, fmt.Errorf("github oauth: exchange: %w", err)
 	}
 	cli := g.Cfg.Client(ctx, tok)
-	prof, err := fetchGithubUser(ctx, cli)
+	prof, err := fetchGithubUser(ctx, cli, g.apiBase())
 	if err != nil {
 		return nil, tok, err
 	}
 	return prof, tok, nil
 }
 
-func fetchGithubUser(ctx context.Context, cli *http.Client) (*OAuthProfile, error) {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user", nil)
+func (g *GithubOAuth) apiBase() string {
+	if g.APIBase != "" {
+		return g.APIBase
+	}
+	return "https://api.github.com"
+}
+
+func fetchGithubUser(ctx context.Context, cli *http.Client, apiBase string) (*OAuthProfile, error) {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/user", nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := cli.Do(req)
 	if err != nil {
@@ -108,7 +121,7 @@ func fetchGithubUser(ctx context.Context, cli *http.Client) (*OAuthProfile, erro
 	}
 	if prof.Email == "" {
 		// Email is hidden by default — fall back to /user/emails.
-		prof.Email = fetchGithubPrimaryEmail(ctx, cli)
+		prof.Email = fetchGithubPrimaryEmail(ctx, cli, apiBase)
 	}
 	if prof.Username == "" && prof.Email != "" {
 		prof.Username = prof.Email
@@ -119,8 +132,8 @@ func fetchGithubUser(ctx context.Context, cli *http.Client) (*OAuthProfile, erro
 	return prof, nil
 }
 
-func fetchGithubPrimaryEmail(ctx context.Context, cli *http.Client) string {
-	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/user/emails", nil)
+func fetchGithubPrimaryEmail(ctx context.Context, cli *http.Client, apiBase string) string {
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+"/user/emails", nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	resp, err := cli.Do(req)
 	if err != nil {

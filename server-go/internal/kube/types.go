@@ -41,6 +41,12 @@ type KusoProjectSpec struct {
 	DefaultRepo *KusoRepoRef           `json:"defaultRepo,omitempty"`
 	GitHub      *KusoProjectGithubSpec `json:"github,omitempty"`
 	Previews    *KusoPreviewsSpec      `json:"previews,omitempty"`
+	// Namespace is the execution namespace for this project's child
+	// resources (KusoService, KusoEnvironment, KusoAddon, KusoBuild,
+	// and the per-service Secrets). The KusoProject CR itself always
+	// lives in the server's home namespace. Empty = use the home
+	// namespace (the existing single-tenant behaviour).
+	Namespace string `json:"namespace,omitempty"`
 }
 
 type KusoRepoRef struct {
@@ -70,14 +76,16 @@ type KusoService struct {
 }
 
 type KusoServiceSpec struct {
-	Project  string             `json:"project"`
-	Repo     *KusoRepoRef       `json:"repo,omitempty"`
-	Runtime  string             `json:"runtime,omitempty"`
-	Port     int32              `json:"port,omitempty"`
-	Domains  []KusoDomain       `json:"domains,omitempty"`
-	EnvVars  []KusoEnvVar       `json:"envVars,omitempty"`
-	Scale    *KusoScaleSpec     `json:"scale,omitempty"`
-	Sleep    *KusoServiceSleep  `json:"sleep,omitempty"`
+	Project    string              `json:"project"`
+	Repo       *KusoRepoRef        `json:"repo,omitempty"`
+	Runtime    string              `json:"runtime,omitempty"`
+	Port       int32               `json:"port,omitempty"`
+	Domains    []KusoDomain        `json:"domains,omitempty"`
+	EnvVars    []KusoEnvVar        `json:"envVars,omitempty"`
+	Scale      *KusoScaleSpec      `json:"scale,omitempty"`
+	Sleep      *KusoServiceSleep   `json:"sleep,omitempty"`
+	Static     *KusoStaticSpec     `json:"static,omitempty"`
+	Buildpacks *KusoBuildpacksSpec `json:"buildpacks,omitempty"`
 }
 
 type KusoDomain struct {
@@ -208,14 +216,32 @@ type KusoBuild struct {
 }
 
 type KusoBuildSpec struct {
-	Project              string       `json:"project"`
-	Service              string       `json:"service"`
-	Repo                 *KusoRepoRef `json:"repo,omitempty"`
-	Ref                  string       `json:"ref"`
-	Branch               string       `json:"branch,omitempty"`
-	GithubInstallationID int64        `json:"githubInstallationId,omitempty"`
-	Strategy             string       `json:"strategy,omitempty"`
-	Image                *KusoImage   `json:"image,omitempty"`
+	Project              string            `json:"project"`
+	Service              string            `json:"service"`
+	Repo                 *KusoRepoRef      `json:"repo,omitempty"`
+	Ref                  string            `json:"ref"`
+	Branch               string            `json:"branch,omitempty"`
+	GithubInstallationID int64             `json:"githubInstallationId,omitempty"`
+	Strategy             string            `json:"strategy,omitempty"`
+	Image                *KusoImage        `json:"image,omitempty"`
+	Static               *KusoStaticSpec   `json:"static,omitempty"`
+	Buildpacks           *KusoBuildpacksSpec `json:"buildpacks,omitempty"`
+}
+
+// KusoStaticSpec configures the static-strategy build. All fields are
+// optional; the chart applies defaults when empty.
+type KusoStaticSpec struct {
+	BuilderImage string `json:"builderImage,omitempty"`
+	RuntimeImage string `json:"runtimeImage,omitempty"`
+	BuildCmd     string `json:"buildCmd,omitempty"`
+	OutputDir    string `json:"outputDir,omitempty"`
+}
+
+// KusoBuildpacksSpec configures the buildpacks-strategy build. All
+// fields are optional; the chart applies defaults when empty.
+type KusoBuildpacksSpec struct {
+	BuilderImage   string `json:"builderImage,omitempty"`
+	LifecycleImage string `json:"lifecycleImage,omitempty"`
 }
 
 // ---- Kuso (config CRD) ---------------------------------------------------

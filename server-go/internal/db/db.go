@@ -79,3 +79,21 @@ func rewriteCreateAsIfNotExists(s string) string {
 	)
 	return rep.Replace(s)
 }
+
+// BackupTo creates a consistent snapshot of the database at dst using
+// SQLite's VACUUM INTO. The destination file MUST NOT exist (SQLite
+// errors otherwise). Other connections continue writing during the
+// backup — VACUUM INTO is online and atomic.
+//
+// Caller is responsible for cleanup of dst on error and for streaming
+// the resulting file to the client.
+func (d *DB) BackupTo(dst string) error {
+	// VACUUM INTO uses a literal — passing dst via parameter binding
+	// raises "no such table". Quote it explicitly so a path with single
+	// quotes can't break out (we replace ' with '' SQL-style).
+	quoted := strings.ReplaceAll(dst, "'", "''")
+	if _, err := d.DB.Exec("VACUUM INTO '" + quoted + "'"); err != nil {
+		return fmt.Errorf("db: backup to %q: %w", dst, err)
+	}
+	return nil
+}

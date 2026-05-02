@@ -24,8 +24,9 @@ import (
 
 // Service is the entrypoint for /api/projects/:p/addons.
 type Service struct {
-	Kube      *kube.Client
-	Namespace string
+	Kube       *kube.Client
+	Namespace  string
+	NSResolver *kube.ProjectNamespaceResolver
 }
 
 // New constructs a Service. namespace defaults to "kuso".
@@ -34,6 +35,14 @@ func New(k *kube.Client, namespace string) *Service {
 		namespace = "kuso"
 	}
 	return &Service{Kube: k, Namespace: namespace}
+}
+
+// nsFor returns the execution namespace for project, defaulting to home.
+func (s *Service) nsFor(ctx context.Context, project string) string {
+	if s.NSResolver == nil || project == "" {
+		return s.Namespace
+	}
+	return s.NSResolver.NamespaceFor(ctx, project)
 }
 
 // Errors mirroring sibling packages.
@@ -68,7 +77,7 @@ func connSecretName(addonCR string) string { return addonCR + "-conn" }
 
 // List returns every KusoAddon in the project.
 func (s *Service) List(ctx context.Context, project string) ([]kube.KusoAddon, error) {
-	raw, err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(s.Namespace).
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(s.nsFor(ctx, project)).
 		List(ctx, metav1.ListOptions{LabelSelector: "kuso.sislelabs.com/project=" + project})
 	if err != nil {
 		return nil, fmt.Errorf("list addons: %w", err)
@@ -90,14 +99,16 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	if req.Name == "" || req.Kind == "" {
 		return nil, fmt.Errorf("%w: name and kind are required", ErrInvalid)
 	}
+	// Project CR always lives in the home namespace.
 	if _, err := s.Kube.GetKusoProject(ctx, s.Namespace, project); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, fmt.Errorf("%w: project %s", ErrNotFound, project)
 		}
 		return nil, fmt.Errorf("preflight project: %w", err)
 	}
+	ns := s.nsFor(ctx, project)
 	fqn := addonCRName(project, req.Name)
-	if existing, err := s.Kube.GetKusoAddon(ctx, s.Namespace, fqn); err == nil && existing != nil {
+	if existing, err := s.Kube.GetKusoAddon(ctx, ns, fqn); err == nil && existing != nil {
 		return nil, fmt.Errorf("%w: addon %s/%s already exists", ErrConflict, project, req.Name)
 	} else if err != nil && !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("preflight addon: %w", err)
@@ -126,7 +137,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 			Database:    req.Database,
 		},
 	}
-	created, err := createAddon(ctx, s, addon)
+	created, err := createAddon(ctx, s, ns, addon)
 	if err != nil {
 		return nil, err
 	}
@@ -141,14 +152,15 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 // Delete removes a KusoAddon CR and refreshes every env's
 // envFromSecrets list.
 func (s *Service) Delete(ctx context.Context, project, name string) error {
+	ns := s.nsFor(ctx, project)
 	fqn := addonCRName(project, name)
-	if _, err := s.Kube.GetKusoAddon(ctx, s.Namespace, fqn); err != nil {
+	if _, err := s.Kube.GetKusoAddon(ctx, ns, fqn); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ErrNotFound
 		}
 		return err
 	}
-	if err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(s.Namespace).
+	if err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).
 		Delete(ctx, fqn, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete addon: %w", err)
 	}
@@ -170,7 +182,8 @@ func (s *Service) RefreshEnvSecrets(ctx context.Context, project string) error {
 	for _, a := range addons {
 		secrets = append(secrets, connSecretName(a.Name))
 	}
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(s.Namespace).
+	ns := s.nsFor(ctx, project)
+	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
 		List(ctx, metav1.ListOptions{LabelSelector: "kuso.sislelabs.com/project=" + project})
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
@@ -178,7 +191,7 @@ func (s *Service) RefreshEnvSecrets(ctx context.Context, project string) error {
 	for i := range envs.Items {
 		envName := envs.Items[i].GetName()
 		patch := buildEnvFromSecretsPatch(secrets)
-		if _, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(s.Namespace).
+		if _, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
 			Patch(ctx, envName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("patch env %s: %w", envName, err)
 		}
@@ -187,14 +200,14 @@ func (s *Service) RefreshEnvSecrets(ctx context.Context, project string) error {
 }
 
 // createAddon is the typed-write wrapper for addons.
-func createAddon(ctx context.Context, s *Service, a *kube.KusoAddon) (*kube.KusoAddon, error) {
+func createAddon(ctx context.Context, s *Service, ns string, a *kube.KusoAddon) (*kube.KusoAddon, error) {
 	m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(a)
 	if err != nil {
 		return nil, fmt.Errorf("encode addon: %w", err)
 	}
 	u := &unstructured.Unstructured{Object: m}
 	u.SetGroupVersionKind(kube.GVRAddons.GroupVersion().WithKind("KusoAddon"))
-	created, err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(s.Namespace).
+	created, err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).
 		Create(ctx, u, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("create addon: %w", err)

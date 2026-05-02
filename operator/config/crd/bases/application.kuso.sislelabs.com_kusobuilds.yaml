@@ -70,15 +70,27 @@ spec:
                 githubInstallationId:
                   type: integer
                   format: int64
-                # Build strategy. v0.2 ships dockerfile + nixpacks.
-                # dockerfile: kaniko reads <path>/Dockerfile.
-                # nixpacks: an init container runs `nixpacks build --out`
-                # to emit a Dockerfile + context, then kaniko builds from
-                # there. buildpacks/static aren't wired yet.
+                # Build strategy. Four wired:
+                #   - dockerfile: kaniko reads <path>/Dockerfile.
+                #   - nixpacks: init container emits Dockerfile + .nixpacks/,
+                #     kaniko builds from the source dir.
+                #   - buildpacks: CNB lifecycle creator builds + pushes
+                #     daemonless; replaces kaniko entirely for this strategy.
+                #   - static: init container runs an optional buildCmd
+                #     then synthesizes a tiny nginx Dockerfile.
                 strategy:
                   type: string
-                  enum: [dockerfile, nixpacks]
+                  enum: [dockerfile, nixpacks, buildpacks, static]
                   default: dockerfile
+                # Strategy-specific configuration. Both blocks are
+                # preserve-unknown-fields-friendly since the chart
+                # interprets them; the server only needs to round-trip.
+                static:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                buildpacks:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
                 # Where to push. Server fills this with the in-cluster
                 # registry URL + a tag derived from the commit SHA.
                 image:

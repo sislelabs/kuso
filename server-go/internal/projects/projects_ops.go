@@ -90,6 +90,7 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 		Spec: kube.KusoProjectSpec{
 			Description: req.Description,
 			BaseDomain:  req.BaseDomain,
+			Namespace:   req.Namespace,
 			DefaultRepo: &kube.KusoRepoRef{
 				URL:           req.DefaultRepo.URL,
 				DefaultBranch: defaultBranch,
@@ -101,13 +102,89 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 			},
 		},
 	}
-	return s.Kube.CreateKusoProject(ctx, s.Namespace, p)
+	// Best-effort: ensure the execution namespace exists. We don't fail
+	// project creation if the namespace already exists or if RBAC blocks
+	// the create (the cluster admin may have pre-created it). The user
+	// gets a clear apply-error when the project's first child resource
+	// can't land for missing-namespace reasons.
+	if req.Namespace != "" && req.Namespace != s.Namespace {
+		_ = s.Kube.EnsureNamespace(ctx, req.Namespace)
+	}
+	out, err := s.Kube.CreateKusoProject(ctx, s.Namespace, p)
+	if err != nil {
+		return nil, err
+	}
+	s.invalidateNamespace(req.Name)
+	return out, nil
+}
+
+// Update applies a partial spec patch to an existing KusoProject. Only
+// the fields present in the request are touched; nil/zero values leave
+// the existing spec alone. This is what PATCH /api/projects/{name}
+// drives, and it's how callers flip previews.enabled, change the
+// default branch, or rotate the bound GitHub App installation.
+func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequest) (*kube.KusoProject, error) {
+	cur, err := s.Get(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if req.Description != nil {
+		cur.Spec.Description = *req.Description
+	}
+	if req.BaseDomain != nil {
+		cur.Spec.BaseDomain = *req.BaseDomain
+	}
+	if req.DefaultRepo != nil {
+		if cur.Spec.DefaultRepo == nil {
+			cur.Spec.DefaultRepo = &kube.KusoRepoRef{}
+		}
+		if req.DefaultRepo.URL != "" {
+			cur.Spec.DefaultRepo.URL = req.DefaultRepo.URL
+		}
+		if req.DefaultRepo.DefaultBranch != "" {
+			cur.Spec.DefaultRepo.DefaultBranch = req.DefaultRepo.DefaultBranch
+		}
+	}
+	if req.GitHub != nil {
+		// installationId=0 explicitly clears the binding; non-zero sets it.
+		if req.GitHub.InstallationID == 0 {
+			cur.Spec.GitHub = nil
+		} else {
+			cur.Spec.GitHub = &kube.KusoProjectGithubSpec{InstallationID: req.GitHub.InstallationID}
+		}
+	}
+	if req.Previews != nil {
+		if cur.Spec.Previews == nil {
+			cur.Spec.Previews = &kube.KusoPreviewsSpec{TTLDays: 7}
+		}
+		if req.Previews.Enabled != nil {
+			cur.Spec.Previews.Enabled = *req.Previews.Enabled
+		}
+		if req.Previews.TTLDays != nil && *req.Previews.TTLDays > 0 {
+			cur.Spec.Previews.TTLDays = *req.Previews.TTLDays
+		}
+	}
+	out, err := s.Kube.UpdateKusoProject(ctx, s.Namespace, cur)
+	if err != nil {
+		return nil, err
+	}
+	s.invalidateNamespace(name)
+	return out, nil
 }
 
 // Delete cascades: every env, service, and the project itself. Addon
 // cleanup lands in Phase 5; for now we delete what Phase 3 owns.
+//
+// Child resources may live in a different namespace than the project
+// CR (KusoProject.spec.namespace) so we resolve once and route both
+// the listing and the per-resource Delete through that.
 func (s *Service) Delete(ctx context.Context, name string) error {
 	if _, err := s.Get(ctx, name); err != nil {
+		return err
+	}
+	defer s.invalidateNamespace(name)
+	ns, err := s.namespaceFor(ctx, name)
+	if err != nil {
 		return err
 	}
 	envs, err := s.listEnvsForProject(ctx, name)
@@ -115,7 +192,7 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		return fmt.Errorf("list envs: %w", err)
 	}
 	for _, e := range envs {
-		if err := s.Kube.DeleteKusoEnvironment(ctx, s.Namespace, e.Name); err != nil && !apierrors.IsNotFound(err) {
+		if err := s.Kube.DeleteKusoEnvironment(ctx, ns, e.Name); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete env %s: %w", e.Name, err)
 		}
 	}
@@ -124,7 +201,7 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 		return fmt.Errorf("list services: %w", err)
 	}
 	for _, svc := range services {
-		if err := s.Kube.DeleteKusoService(ctx, s.Namespace, svc.Name); err != nil && !apierrors.IsNotFound(err) {
+		if err := s.Kube.DeleteKusoService(ctx, ns, svc.Name); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete service %s: %w", svc.Name, err)
 		}
 	}
@@ -135,9 +212,14 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 }
 
 // listServicesForProject filters by label rather than relying on
-// spec.project so we use indexed lookups.
+// spec.project so we use indexed lookups. Routes through the project's
+// execution namespace.
 func (s *Service) listServicesForProject(ctx context.Context, project string) ([]kube.KusoService, error) {
-	raw, err := s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(s.Namespace).List(ctx, metav1.ListOptions{
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector(map[string]string{labelProject: project}),
 	})
 	if err != nil {
@@ -155,7 +237,11 @@ func (s *Service) listServicesForProject(ctx context.Context, project string) ([
 }
 
 func (s *Service) listEnvsForProject(ctx context.Context, project string) ([]kube.KusoEnvironment, error) {
-	raw, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(s.Namespace).List(ctx, metav1.ListOptions{
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	raw, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: labelSelector(map[string]string{labelProject: project}),
 	})
 	if err != nil {

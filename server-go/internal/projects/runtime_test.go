@@ -15,8 +15,8 @@ func TestValidateRuntime(t *testing.T) {
 		{"", true, ""},
 		{"dockerfile", true, ""},
 		{"nixpacks", true, ""},
-		{"buildpacks", false, "not supported yet"},
-		{"static", false, "not supported yet"},
+		{"buildpacks", true, ""},
+		{"static", true, ""},
 		{"wat", false, "unknown runtime"},
 	}
 	for _, c := range cases {
