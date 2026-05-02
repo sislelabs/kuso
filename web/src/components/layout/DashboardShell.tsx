@@ -4,6 +4,7 @@ import { useState, type ReactNode } from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Header } from "@/components/layout/Header";
 import { MobileNav } from "@/components/layout/MobileNav";
+import { CommandPalette } from "@/components/command/CommandPalette";
 import { useSession } from "@/features/auth";
 
 export function DashboardShell({ children }: { children: ReactNode }) {
@@ -22,6 +23,7 @@ export function DashboardShell({ children }: { children: ReactNode }) {
           {children}
         </main>
       </div>
+      <CommandPalette />
     </div>
   );
 }

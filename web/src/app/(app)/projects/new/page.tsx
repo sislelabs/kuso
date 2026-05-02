@@ -126,7 +126,6 @@ export default function NewProjectPage() {
         );
       })
       .catch(() => { /* best-effort */ });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [picked]);
 
   const onAddService = () => {
