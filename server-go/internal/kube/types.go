@@ -1,0 +1,232 @@
+package kube
+
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+// Group + version for our CRDs. The "kuso" Kuso CRD (group config) lives
+// in the same group despite the historical filename `kuso.dev_kusoes.yaml`
+// — the actual metadata.name is kusoes.application.kuso.sislelabs.com.
+const (
+	GroupName = "application.kuso.sislelabs.com"
+	Version   = "v1alpha1"
+)
+
+// GVRs for each CRD plural. These are the canonical
+// schema.GroupVersionResource values used with dynamic.Interface.
+var (
+	GVRKuso         = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusoes"}
+	GVRProjects     = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusoprojects"}
+	GVRServices     = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusoservices"}
+	GVREnvironments = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusoenvironments"}
+	GVRAddons       = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusoaddons"}
+	GVRBuilds       = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusobuilds"}
+)
+
+// ---- KusoProject ---------------------------------------------------------
+
+// KusoProject mirrors application.kuso.sislelabs.com_kusoprojects.yaml.
+type KusoProject struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   KusoProjectSpec `json:"spec,omitempty"`
+	Status map[string]any  `json:"status,omitempty"`
+}
+
+type KusoProjectSpec struct {
+	Description string                 `json:"description,omitempty"`
+	BaseDomain  string                 `json:"baseDomain,omitempty"`
+	DefaultRepo *KusoRepoRef           `json:"defaultRepo,omitempty"`
+	GitHub      *KusoProjectGithubSpec `json:"github,omitempty"`
+	Previews    *KusoPreviewsSpec      `json:"previews,omitempty"`
+}
+
+type KusoRepoRef struct {
+	URL           string `json:"url,omitempty"`
+	DefaultBranch string `json:"defaultBranch,omitempty"`
+	Path          string `json:"path,omitempty"`
+}
+
+type KusoProjectGithubSpec struct {
+	InstallationID int64 `json:"installationId,omitempty"`
+}
+
+type KusoPreviewsSpec struct {
+	Enabled bool `json:"enabled,omitempty"`
+	TTLDays int  `json:"ttlDays,omitempty"`
+}
+
+// ---- KusoService ---------------------------------------------------------
+
+// KusoService mirrors application.kuso.sislelabs.com_kusoservices.yaml.
+type KusoService struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   KusoServiceSpec `json:"spec,omitempty"`
+	Status map[string]any  `json:"status,omitempty"`
+}
+
+type KusoServiceSpec struct {
+	Project  string             `json:"project"`
+	Repo     *KusoRepoRef       `json:"repo,omitempty"`
+	Runtime  string             `json:"runtime,omitempty"`
+	Port     int32              `json:"port,omitempty"`
+	Domains  []KusoDomain       `json:"domains,omitempty"`
+	EnvVars  []KusoEnvVar       `json:"envVars,omitempty"`
+	Scale    *KusoScaleSpec     `json:"scale,omitempty"`
+	Sleep    *KusoServiceSleep  `json:"sleep,omitempty"`
+}
+
+type KusoDomain struct {
+	Host string `json:"host,omitempty"`
+	TLS  bool   `json:"tls,omitempty"`
+}
+
+// KusoEnvVar is intentionally permissive (preserve-unknown-fields on items)
+// so we can round-trip whatever envFrom shapes the operator produces.
+// Name + Value cover the common case; everything else lands in Extra.
+type KusoEnvVar struct {
+	Name  string `json:"name,omitempty"`
+	Value string `json:"value,omitempty"`
+	// ValueFrom is left as a free-form map so we don't lose
+	// secretKeyRef/configMapKeyRef on round-trip until the consumer needs
+	// them.
+	ValueFrom map[string]any `json:"valueFrom,omitempty"`
+}
+
+type KusoScaleSpec struct {
+	Min       int `json:"min,omitempty"`
+	Max       int `json:"max,omitempty"`
+	TargetCPU int `json:"targetCPU,omitempty"`
+}
+
+type KusoServiceSleep struct {
+	Enabled      bool `json:"enabled,omitempty"`
+	AfterMinutes int  `json:"afterMinutes,omitempty"`
+}
+
+// ---- KusoEnvironment -----------------------------------------------------
+
+// KusoEnvironment mirrors application.kuso.sislelabs.com_kusoenvironments.yaml.
+type KusoEnvironment struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   KusoEnvironmentSpec `json:"spec,omitempty"`
+	Status map[string]any      `json:"status,omitempty"`
+}
+
+type KusoEnvironmentSpec struct {
+	Project          string                  `json:"project"`
+	Service          string                  `json:"service"`
+	Kind             string                  `json:"kind,omitempty"`
+	Branch           string                  `json:"branch,omitempty"`
+	PullRequest      *KusoPullRequest        `json:"pullRequest,omitempty"`
+	TTL              *KusoTTL                `json:"ttl,omitempty"`
+	Image            *KusoImage              `json:"image,omitempty"`
+	Port             int32                   `json:"port,omitempty"`
+	ReplicaCount     int                     `json:"replicaCount,omitempty"`
+	Autoscaling      *KusoAutoscaling        `json:"autoscaling,omitempty"`
+	Sleep            *KusoEnvSleep           `json:"sleep,omitempty"`
+	Host             string                  `json:"host,omitempty"`
+	TLSEnabled       bool                    `json:"tlsEnabled,omitempty"`
+	ClusterIssuer    string                  `json:"clusterIssuer,omitempty"`
+	IngressClassName string                  `json:"ingressClassName,omitempty"`
+	EnvVars          []KusoEnvVar            `json:"envVars,omitempty"`
+	EnvFromSecrets   []string                `json:"envFromSecrets,omitempty"`
+	SecretsRev       string                  `json:"secretsRev,omitempty"`
+	Resources        map[string]any          `json:"resources,omitempty"`
+}
+
+type KusoPullRequest struct {
+	Number  int    `json:"number,omitempty"`
+	HeadRef string `json:"headRef,omitempty"`
+}
+
+type KusoTTL struct {
+	ExpiresAt string `json:"expiresAt,omitempty"`
+}
+
+type KusoImage struct {
+	Repository string `json:"repository,omitempty"`
+	Tag        string `json:"tag,omitempty"`
+	PullPolicy string `json:"pullPolicy,omitempty"`
+}
+
+type KusoAutoscaling struct {
+	Enabled                        bool `json:"enabled,omitempty"`
+	MinReplicas                    int  `json:"minReplicas,omitempty"`
+	MaxReplicas                    int  `json:"maxReplicas,omitempty"`
+	TargetCPUUtilizationPercentage int  `json:"targetCPUUtilizationPercentage,omitempty"`
+}
+
+type KusoEnvSleep struct {
+	Enabled bool `json:"enabled,omitempty"`
+}
+
+// ---- KusoAddon -----------------------------------------------------------
+
+// KusoAddon mirrors application.kuso.sislelabs.com_kusoaddons.yaml.
+type KusoAddon struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   KusoAddonSpec  `json:"spec,omitempty"`
+	Status map[string]any `json:"status,omitempty"`
+}
+
+type KusoAddonSpec struct {
+	Project     string         `json:"project"`
+	Kind        string         `json:"kind"`
+	Version     string         `json:"version,omitempty"`
+	Size        string         `json:"size,omitempty"`
+	HA          bool           `json:"ha,omitempty"`
+	StorageSize string         `json:"storageSize,omitempty"`
+	Resources   map[string]any `json:"resources,omitempty"`
+	Password    string         `json:"password,omitempty"`
+	Database    string         `json:"database,omitempty"`
+	Backup      *KusoBackup    `json:"backup,omitempty"`
+}
+
+type KusoBackup struct {
+	Schedule      string `json:"schedule,omitempty"`
+	RetentionDays int    `json:"retentionDays,omitempty"`
+}
+
+// ---- KusoBuild -----------------------------------------------------------
+
+// KusoBuild mirrors application.kuso.sislelabs.com_kusobuilds.yaml.
+type KusoBuild struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   KusoBuildSpec  `json:"spec,omitempty"`
+	Status map[string]any `json:"status,omitempty"`
+}
+
+type KusoBuildSpec struct {
+	Project              string       `json:"project"`
+	Service              string       `json:"service"`
+	Repo                 *KusoRepoRef `json:"repo,omitempty"`
+	Ref                  string       `json:"ref"`
+	Branch               string       `json:"branch,omitempty"`
+	GithubInstallationID int64        `json:"githubInstallationId,omitempty"`
+	Strategy             string       `json:"strategy,omitempty"`
+	Image                *KusoImage   `json:"image,omitempty"`
+}
+
+// ---- Kuso (config CRD) ---------------------------------------------------
+
+// Kuso mirrors application.kuso.sislelabs.com_kusoes.yaml. The spec is
+// preserve-unknown-fields, so we keep it as a free-form map and let the
+// config package extract typed fields as needed.
+type Kuso struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   map[string]any `json:"spec,omitempty"`
+	Status map[string]any `json:"status,omitempty"`
+}
