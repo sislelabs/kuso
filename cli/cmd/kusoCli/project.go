@@ -3,9 +3,11 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 
 	"kuso/pkg/kusoApi"
 )
@@ -65,6 +67,8 @@ var projectCreateCmd = &cobra.Command{
 
 // ---------------- project delete ----------------
 
+var projectDeleteYes bool
+
 var projectDeleteCmd = &cobra.Command{
 	Use:     "delete <name>",
 	Aliases: []string{"rm"},
@@ -73,6 +77,10 @@ var projectDeleteCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(projectDeleteYes,
+			fmt.Sprintf("Delete project %q (cascades to services, envs, addons)?", args[0])); err != nil {
+			return err
 		}
 		resp, err := api.DeleteProject(args[0])
 		if err != nil {
@@ -171,6 +179,8 @@ var serviceAddCmd = &cobra.Command{
 	},
 }
 
+var serviceDeleteYes bool
+
 var serviceDeleteCmd = &cobra.Command{
 	Use:     "delete <project> <name>",
 	Aliases: []string{"rm"},
@@ -179,6 +189,10 @@ var serviceDeleteCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(serviceDeleteYes,
+			fmt.Sprintf("Delete service %s/%s?", args[0], args[1])); err != nil {
+			return err
 		}
 		resp, err := api.DeleteService(args[0], args[1])
 		if err != nil {
@@ -243,6 +257,8 @@ var addonAddCmd = &cobra.Command{
 	},
 }
 
+var addonDeleteYes bool
+
 var addonDeleteCmd = &cobra.Command{
 	Use:     "delete <project> <name>",
 	Aliases: []string{"rm"},
@@ -251,6 +267,10 @@ var addonDeleteCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(addonDeleteYes,
+			fmt.Sprintf("Delete addon %s/%s?", args[0], args[1])); err != nil {
+			return err
 		}
 		resp, err := api.DeleteAddon(args[0], args[1])
 		if err != nil {
@@ -271,6 +291,8 @@ var projectEnvCmd = &cobra.Command{
 	Short: "Manage environments within a project",
 }
 
+var envDeleteYes bool
+
 var envDeleteCmd = &cobra.Command{
 	Use:     "delete <project> <env>",
 	Aliases: []string{"rm"},
@@ -279,6 +301,10 @@ var envDeleteCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(envDeleteYes,
+			fmt.Sprintf("Delete preview env %s/%s?", args[0], args[1])); err != nil {
+			return err
 		}
 		resp, err := api.DeleteEnvironment(args[0], args[1])
 		if err != nil {
@@ -303,6 +329,44 @@ func contains(haystack []string, needle string) bool {
 	return false
 }
 
+// confirmDestructive prompts the user for a y/N answer on stderr when
+// stdin is a TTY AND skip is false. Returns nil to proceed, error to
+// abort.
+//
+// Non-interactive callers (CI, scripts, agents) hit the !isTTY branch
+// and proceed without a prompt — the caller has already committed to
+// the destructive action by invoking the command. The --yes flag is
+// the explicit opt-out for humans who want to skip the prompt.
+func confirmDestructive(skip bool, prompt string) error {
+	if skip || !stdinIsTTY() {
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "%s [y/N] ", prompt)
+	var ans string
+	if _, err := fmt.Fscanln(os.Stdin, &ans); err != nil {
+		return fmt.Errorf("aborted")
+	}
+	switch strings.ToLower(strings.TrimSpace(ans)) {
+	case "y", "yes":
+		return nil
+	default:
+		return fmt.Errorf("aborted")
+	}
+}
+
+// stdinIsTTY reports whether stdin is connected to a real terminal so
+// destructive commands don't force a prompt a piped caller can't
+// answer.
+//
+// We use golang.org/x/term.IsTerminal rather than checking
+// os.ModeCharDevice — on macOS /dev/null is a character device too, so
+// the os.FileMode check would treat `< /dev/null` as a terminal and
+// fire the prompt anyway, which is exactly the failure mode we are
+// trying to prevent.
+func stdinIsTTY() bool {
+	return term.IsTerminal(int(os.Stdin.Fd()))
+}
+
 func init() {
 	rootCmd.AddCommand(projectCmd)
 
@@ -314,6 +378,7 @@ func init() {
 	projectCreateCmd.Flags().BoolVar(&projectCreatePreviews, "previews", false, "enable PR-based preview environments")
 
 	projectCmd.AddCommand(projectDeleteCmd)
+	projectDeleteCmd.Flags().BoolVarP(&projectDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	projectCmd.AddCommand(projectDescribeCmd)
 	projectDescribeCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 
@@ -323,6 +388,7 @@ func init() {
 	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "dockerfile", "dockerfile|nixpacks|buildpacks|static")
 	serviceAddCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	projectServiceCmd.AddCommand(serviceDeleteCmd)
+	serviceDeleteCmd.Flags().BoolVarP(&serviceDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 
 	projectCmd.AddCommand(projectAddonCmd)
 	projectAddonCmd.AddCommand(addonAddCmd)
@@ -332,7 +398,9 @@ func init() {
 	addonAddCmd.Flags().BoolVar(&addonAddHA, "ha", false, "use clustered chart variant where supported")
 	_ = addonAddCmd.MarkFlagRequired("kind")
 	projectAddonCmd.AddCommand(addonDeleteCmd)
+	addonDeleteCmd.Flags().BoolVarP(&addonDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 
 	projectCmd.AddCommand(projectEnvCmd)
 	projectEnvCmd.AddCommand(envDeleteCmd)
+	envDeleteCmd.Flags().BoolVarP(&envDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 }

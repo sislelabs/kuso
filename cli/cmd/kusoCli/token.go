@@ -164,6 +164,10 @@ func init() {
 	tokenCmd.AddCommand(tokenCreateCmd)
 	tokenCreateCmd.Flags().StringVar(&tokenCreateName, "name", "", "human-readable name for the token (required)")
 	tokenCreateCmd.Flags().StringVar(&tokenCreateExpires, "expires", "90d", "expires after: 90d, 12h, 2026-12-31, or RFC3339")
+	// --expires-at accepted as a synonym so older docs / muscle memory
+	// keep working. When both are set the last-parsed flag wins, which
+	// for cobra means whichever the user typed second.
+	tokenCreateCmd.Flags().StringVar(&tokenCreateExpires, "expires-at", "90d", "alias for --expires")
 	tokenCmd.AddCommand(tokenListCmd)
 	tokenListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	tokenCmd.AddCommand(tokenRevokeCmd)
