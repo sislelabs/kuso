@@ -9,15 +9,20 @@ kuso is a hard fork of [kubero-dev/kubero](https://github.com/kubero-dev/kubero)
 
 ## Layout
 
-| Path        | Stack                                  | What it does                                                            |
-| ----------- | -------------------------------------- | ----------------------------------------------------------------------- |
-| `server/`   | NestJS (TypeScript)                    | REST API, auth, orchestrates k8s via the operator. Uses Prisma + sqlite.|
-| `client/`   | Vue 3 + Vuetify                        | Web UI. Talks only to `server/` REST API.                               |
-| `operator/` | Go + Operator-SDK (helm-based)         | Reconciles `KusoApp`, `KusoPipeline`, `KusoBuild`, addon CRs.            |
-| `cli/`      | Go + Cobra                             | `kuso` command-line tool. Talks to `server/` REST API.                  |
-| `mcp/`      | Go (planned)                           | `kuso-mcp` Model Context Protocol server. Wraps `cli/` and REST API.    |
-| `docs/`     | Markdown                               | PRD, REBRAND notes, architecture docs.                                  |
-| `.claude/`  | Skill files (this dir)                 | Project-specific context for AI agents.                                 |
+| Path         | Stack                                  | What it does                                                                                |
+| ------------ | -------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `server-go/` | Go + chi + client-go                   | REST API, auth, orchestrates k8s via dynamic client. SQLite via modernc.org/sqlite (no CGO). Embeds the Vue SPA via //go:embed. |
+| `client/`    | Vue 3 + Vuetify                        | Web UI. Built into `server-go/internal/web/dist`; the Go binary serves it.                  |
+| `operator/`  | Go + Operator-SDK (helm-based)         | Reconciles `KusoProject`, `KusoService`, `KusoEnvironment`, `KusoBuild`, `KusoAddon` CRs.   |
+| `cli/`       | Go + Cobra                             | `kuso` command-line tool. Talks to the server REST API.                                     |
+| `mcp/`       | Go                                     | `kuso-mcp` Model Context Protocol server. Wraps `cli/` and REST API.                        |
+| `deploy/`    | YAML manifests                         | Production manifests applied to the test cluster.                                           |
+| `docs/`      | Markdown                               | PRD, REBRAND notes, REWRITE plan, WORKFLOWS reference, LIVE_TEST_PLAN runbook.              |
+| `.claude/`   | Skill files (this dir)                 | Project-specific context for AI agents.                                                     |
+
+> **Historical note:** `server/` was a NestJS+TypeScript backend that
+> got rewritten into `server-go/` and removed in May 2026. See
+> `docs/REWRITE.md`.
 
 ## Three things to know before editing
 
@@ -29,20 +34,20 @@ kuso is a hard fork of [kubero-dev/kubero](https://github.com/kubero-dev/kubero)
 
 ## Common tasks → where to look
 
-| Task                                     | Subdir(s)                              |
-| ---------------------------------------- | -------------------------------------- |
-| Add a new CLI command                    | `cli/cmd/kusoCli/` + maybe `cli/pkg/`  |
-| Add a REST endpoint                      | `server/src/<module>/`                 |
-| Change CRD schema                        | `operator/helm-charts/<chart>/`        |
-| Add an MCP tool                          | `mcp/` (TBD — not yet implemented)     |
-| Update UI                                | `client/src/`                          |
-| Add a new addon                          | `operator/helm-charts/kusoaddon<name>` |
+| Task                                     | Subdir(s)                                                |
+| ---------------------------------------- | -------------------------------------------------------- |
+| Add a new CLI command                    | `cli/cmd/kusoCli/` + maybe `cli/pkg/`                    |
+| Add a REST endpoint                      | `server-go/internal/http/handlers/` + a service package  |
+| Change CRD schema                        | `operator/helm-charts/<chart>/` + `server-go/internal/kube/types.go` |
+| Add an MCP tool                          | `mcp/`                                                   |
+| Update UI                                | `client/src/`                                            |
+| Add a new addon                          | `operator/helm-charts/kusoaddon<name>`                   |
 
 ## Before opening a PR
 
 - `cli/`: `cd cli && go build ./... && go vet ./...`
 - `operator/`: `cd operator && make`
-- `server/`: `cd server && yarn lint && yarn test`
-- `client/`: `cd client && yarn lint && yarn build`
+- `server-go/`: `cd server-go && go vet ./... && go build ./... && go test ./...`
+- `client/`: `cd client && yarn build` (output lands in `server-go/internal/web/dist/`)
 
 There is no monorepo-wide build yet — each subproject builds independently.

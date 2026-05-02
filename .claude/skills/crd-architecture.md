@@ -32,7 +32,7 @@ All kuso CRDs live under `application.kuso.sislelabs.com/v1alpha1`.
 ## Reconciliation flow
 
 1. User runs `kuso app deploy myapp` (or hits REST API, or applies YAML).
-2. `server/` validates and writes a `KusoApp` CR via the k8s API.
+2. `server-go/` validates and writes a `KusoApp` CR via the k8s API.
 3. `operator/` reconciles the CR via Helm — renders the chart in `operator/helm-charts/kusoapp/` against the CR spec, applies the rendered manifests (Deployment, Service, Ingress, HPA, etc.).
 4. App pod starts. Health visible via `kubectl get kusoapp myapp` or `kuso app status myapp`.
 
@@ -69,7 +69,7 @@ This is a known gap and is the **C1** workstream in `docs/PRD.md`. Until it land
 1. Edit `operator/helm-charts/<chart>/values.yaml` to add the default.
 2. Edit the chart templates under `operator/helm-charts/<chart>/templates/` to use the new field.
 3. Update the OpenAPI schema in `operator/config/crd/bases/` so kubectl validates it.
-4. Wire it through `server/src/<module>/` if the REST API needs to expose it.
+4. Wire it through `server-go/internal/http/handlers/ + service pkg` if the REST API needs to expose it.
 5. Add CLI flags in `cli/cmd/kusoCli/` and an MCP tool input in `mcp/` (when MCP exists).
 
 ## Adding a new CRD kind

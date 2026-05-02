@@ -1,8 +1,13 @@
 # Kuso Go server: live test plan / runbook
 
+> **Update (2026-05):** the TS server has been retired. The runbook
+> below was written for the side-by-side cutover; the surviving value
+> is the verification checklist (sections 1–9). Section 10 (cutover) +
+> section 11 (rollback) are kept for historical reference but no
+> longer apply — there is no TS deployment to roll back to.
+
 Read alongside `WORKFLOWS.md`. This document is the journey-derived
-runbook to execute against the live Hetzner cluster, side-by-side with
-the still-running TS server, **before** the TS deployment is retired.
+runbook to execute against the live Hetzner cluster.
 
 The goal is end-to-end verification: every workflow the TS server
 serves, exercised against the Go binary, with pass/fail recorded

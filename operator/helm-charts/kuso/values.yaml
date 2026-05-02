@@ -5,10 +5,15 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/sislelabs/kuso-server
-  pullPolicy: Always
+  # Go server image. Built from server-go/Dockerfile and pushed to GHCR
+  # by the release pipeline; for in-cluster dev installs, import the
+  # image directly into the node's containerd cache (k3s):
+  #   docker save kuso-server-go:<tag> | k3s ctr images import -
+  # and set pullPolicy to IfNotPresent.
+  repository: kuso-server-go
+  pullPolicy: IfNotPresent
   # Overrides the image tag whose default is the chart appVersion.
-  tag: "v1.11"
+  tag: "v0.2.0-rc1"
 
 imagePullSecrets: []
 nameOverride: ""
@@ -38,7 +43,7 @@ securityContext:
 
 service:
   type: ClusterIP
-  port: 2000
+  port: 3000
 
 prometheus:
   enabled: false

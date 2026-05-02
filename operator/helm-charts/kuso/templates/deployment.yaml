@@ -35,27 +35,18 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           volumeMounts:
-            - mountPath: /etc/kuso
-              name: kuso-config-volume
-            - mountPath: /app/server/db
+            - mountPath: /data
               name: kuso-data
-              readOnly: false
           env:
-            - name: NODE_TLS_REJECT_UNAUTHORIZED
-              value: "0"
-            - name: KUSO_CONTEXT
-              value: "{{ .Values.kuso.context }}"
+            - name: KUSO_HTTP_ADDR
+              value: ":{{ .Values.service.port }}"
+            - name: KUSO_DB_PATH
+              value: /data/kuso.sqlite
             - name: KUSO_NAMESPACE
               value: "{{ .Values.kuso.namespace }}"
-            - name: KUSO_WEBHOOK_URL
-              value: "{{ .Values.kuso.webhook_url }}"
-            - name: KUBERNETES_INGRESS_CLASSNAME
-              value: "{{ .Values.ingress.className }}"
             {{- if .Values.kuso.auditLogs.enabled }}
             - name: KUSO_AUDIT
-              value: "{{ .Values.kuso.auditLogs.enabled }}"
-            - name: KUSO_AUDIT_DB_PATH
-              value: /app/server/db
+              value: "true"
             - name: KUSO_AUDIT_LIMIT
               value: "{{ .Values.kuso.auditLogs.limit }}"
             {{- end }}
@@ -63,17 +54,6 @@ spec:
             - name: KUSO_BUILD_REGISTRY
               value: "{{ .Values.registry.host }}"
             {{- end }}
-            - name: KUSO_WEBHOOK_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: kuso-secrets
-                  key: KUSO_WEBHOOK_SECRET
-            - name: KUSO_USERS
-              valueFrom:
-                secretKeyRef:
-                  name: kuso-secrets
-                  key: KUSO_USERS
-                  optional: true
             - name: KUSO_ADMIN_USERNAME
               valueFrom:
                 secretKeyRef:
@@ -86,82 +66,17 @@ spec:
                   name: kuso-secrets
                   key: KUSO_ADMIN_PASSWORD
                   optional: true
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-secrets
+                  key: JWT_SECRET
             - name: KUSO_SESSION_KEY
               valueFrom:
                 secretKeyRef:
                   name: kuso-secrets
                   key: KUSO_SESSION_KEY
                   optional: true
-            - name: GITHUB_PERSONAL_ACCESS_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: kuso-secrets
-                  key: GITHUB_PERSONAL_ACCESS_TOKEN
-                  optional: true
-            - name: GITHUB_BASEURL
-              valueFrom:
-                secretKeyRef:
-                  name: kuso-secrets
-                  key: GITHUB_BASEURL
-                  optional: true
-            - name: GITEA_PERSONAL_ACCESS_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: kuso-secrets
-                  key: GITEA_PERSONAL_ACCESS_TOKEN
-                  optional: true
-            - name: GITEA_BASEURL
-              valueFrom:
-                secretKeyRef:
-                  name: kuso-secrets
-                  key: GITEA_BASEURL
-                  optional: true
-            - name: GITLAB_PERSONAL_ACCESS_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: kuso-secrets
-                  key: GITLAB_PERSONAL_ACCESS_TOKEN
-                  optional: true
-            - name: GITLAB_BASEURL
-              valueFrom:
-                secretKeyRef:
-                  name: kuso-secrets
-                  key: GITLAB_BASEURL
-                  optional: true
-            - name: GOGS_PERSONAL_ACCESS_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: kuso-secrets
-                  key: GOGS_PERSONAL_ACCESS_TOKEN
-                  optional: true
-            - name: GOGS_BASEURL
-              valueFrom:
-                secretKeyRef:
-                  name: kuso-secrets
-                  key: GOGS_BASEURL
-                  optional: true
-            - name: BITBUCKET_USERNAME
-              valueFrom:
-                secretKeyRef:
-                  name: kuso-secrets
-                  key: BITBUCKET_USERNAME
-                  optional: true
-            - name: BITBUCKET_APP_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: kuso-secrets
-                  key: BITBUCKET_APP_PASSWORD
-                  optional: true
-            - name: KUBECONFIG_BASE64
-              valueFrom:
-                secretKeyRef:
-                  name: kuso-secrets
-                  key: KUBECONFIG_BASE64
-                  optional: true
-            {{- if .Values.prometheus.enabled }}
-            - name: KUSO_PROMETHEUS_ENDPOINT
-              value: {{ .Values.prometheus.endpoint | quote }}
-            {{- end }}
             {{- if .Values.kuso.auth.github.enabled }}
             - name: GITHUB_CLIENT_SECRET
               valueFrom:
@@ -181,12 +96,10 @@ spec:
                 secretKeyRef:
                   name: kuso-secrets
                   key: OAUTH2_CLIENT_SECRET
-            - name: OAUTH2_CLIENT_NAME
-              value: {{ .Values.kuso.auth.oauth2.name | quote }}
             - name: OAUTH2_CLIENT_ID
               {{- if .Values.kuso.auth.oauth2.id }}
               value: {{ .Values.kuso.auth.oauth2.id | quote }}
-              {{ else }}
+              {{- else }}
               valueFrom:
                 secretKeyRef:
                   name: kuso-secrets
@@ -198,35 +111,39 @@ spec:
               value: {{ .Values.kuso.auth.oauth2.tokenUrl | quote }}
             - name: OAUTH2_CLIENT_CALLBACKURL
               value: {{ .Values.kuso.auth.oauth2.callbackUrl | quote }}
+            - name: OAUTH2_CLIENT_USER_INFO_URL
+              value: {{ .Values.kuso.auth.oauth2.userInfoUrl | quote }}
             {{- if .Values.kuso.auth.oauth2.scope }}
             - name: OAUTH2_CLIENT_SCOPE
               value: {{ .Values.kuso.auth.oauth2.scope | quote }}
             {{- end }}
             {{- end }}
-            - name: DEBUG
-              value: "{{ .Values.kuso.debug }}"
-            - name: KUSO_CONFIG_PATH
-              value: /etc/kuso/config.yaml
-            - name: PORT
-              value: "{{ .Values.service.port }}"
+            # GitHub App envs are read from a separate Secret installed
+            # by hack/install.sh (kuso-github-app). Wire them here too
+            # so the Go server picks them up via envFrom-style refs.
+          envFrom:
+            - secretRef:
+                name: kuso-github-app
+                optional: true
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           livenessProbe:
             httpGet:
-              path: /
+              path: /healthz
               port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /
+              path: /healthz
               port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       volumes:
-        - name: kuso-config-volume
-          configMap:
-            name: kuso-config
         - name: kuso-data
           persistentVolumeClaim:
             claimName: {{ include "kuso.fullname" . }}-data

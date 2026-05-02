@@ -10,14 +10,20 @@ kuso is a Kubernetes-native PaaS designed to be driven entirely from a terminal 
 
 ## Repo layout
 
-| Path        | What it is                                                  |
-| ----------- | ----------------------------------------------------------- |
-| `server/`   | NestJS backend + REST API (TypeScript)                      |
-| `client/`   | Vue.js frontend (TypeScript)                                |
-| `operator/` | Kubernetes operator that reconciles `KusoApp` CRs (Go)      |
-| `cli/`      | `kuso` command-line tool (Go, Cobra)                        |
-| `mcp/`      | `kuso-mcp` Model Context Protocol server (Go) — coming soon |
-| `docs/`     | Product docs and PRDs                                       |
+| Path         | What it is                                                                |
+| ------------ | ------------------------------------------------------------------------- |
+| `server-go/` | Go backend + REST API. Serves the embedded Vue SPA from `internal/web`.   |
+| `client/`    | Vue.js frontend (TypeScript). Built into `server-go/internal/web/dist`.   |
+| `operator/`  | Kubernetes operator that reconciles `Kuso{Project,Service,...}` CRs.     |
+| `cli/`       | `kuso` command-line tool (Go, Cobra).                                     |
+| `mcp/`       | `kuso-mcp` Model Context Protocol server (Go).                            |
+| `deploy/`    | Production manifests applied to the test cluster.                         |
+| `docs/`      | Product docs and PRDs.                                                    |
+
+> **History:** the original NestJS server lived under `server/` and was
+> retired in May 2026 after the Go rewrite reached parity. See
+> `docs/REWRITE.md` for the migration plan and `docs/WORKFLOWS.md` for the
+> HTTP surface reference.
 
 ## License
 

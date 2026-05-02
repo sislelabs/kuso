@@ -11,7 +11,7 @@ kuso is built **for** AI agents and **with** AI agents. The maintainer (Ivo) exp
 
 - Read any file in the repo.
 - Run any non-destructive command: `git status`, `git log`, `git diff`, `go build ./...`, `yarn lint`, `kubectl get`, `kubectl describe`, `kuso app status`, `kuso app logs`.
-- Edit code in `server/`, `client/`, `operator/`, `cli/`, `mcp/`.
+- Edit code in `server-go/`, `client/`, `operator/`, `cli/`, `mcp/`.
 - Create new branches, write commits on a branch, run tests.
 - Write to `.claude/skills/` to capture new conventions you've learned.
 - Update `docs/` as you go (PRD updates, REBRAND.md additions).

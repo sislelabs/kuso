@@ -1,12 +1,23 @@
 # Kuso server: NestJS → Go rewrite spec
 
-This document is the handoff for an agent (or human) executing the full
+> **Status (2026-05): rewrite complete.** The original NestJS code under
+> `server/` has been deleted from the repo. The current production
+> server is `server-go/`. This document is preserved as the historical
+> migration plan — paths and "TS server stays runnable" guarantees below
+> describe the migration window, not the current state.
+>
+> For the current HTTP surface, see `docs/WORKFLOWS.md`. For the
+> validated cutover steps see `docs/LIVE_TEST_PLAN.md`.
+
+---
+
+This document was the handoff for an agent (or human) executing the full
 rewrite of `server/` from NestJS/TypeScript to Go. It is committed so it
 survives any context-window compaction. **Read this end-to-end before
 writing a single line of Go.**
 
-The TS server stays runnable on `main` until the Go server reaches
-parity on a feature-flagged subset. Replacement is per-module, not big
+The TS server stayed runnable on `main` until the Go server reached
+parity on a feature-flagged subset. Replacement was per-module, not big
 bang.
 
 ---
