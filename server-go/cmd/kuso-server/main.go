@@ -122,7 +122,7 @@ func main() {
 		// outcomes and promotes the image tag onto the production env.
 		// Disabled when KUSO_BUILD_POLLER_DISABLED=true (matches TS env).
 		if os.Getenv("KUSO_BUILD_POLLER_DISABLED") != "true" {
-			go (&builds.Poller{Svc: buildSvc, Interval: 30 * time.Second}).Run(ctx)
+			go (&builds.Poller{Svc: buildSvc, Interval: 30 * time.Second, Logger: logger}).Run(ctx)
 		}
 		// Preview-cleanup: every 5 minutes delete preview envs whose
 		// ttl.expiresAt has passed. Disabled by

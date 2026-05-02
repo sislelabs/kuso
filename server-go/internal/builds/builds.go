@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"sort"
 	"strconv"
@@ -233,25 +234,26 @@ func githubInstallationID(proj *kube.KusoProject) int64 {
 type Poller struct {
 	Svc      *Service
 	Interval time.Duration
+	Logger   *slog.Logger
 }
 
 // Run blocks until ctx is cancelled, ticking every Interval and updating
 // any KusoBuild whose phase is not yet succeeded/failed. Returns ctx.Err
-// on shutdown.
+// on shutdown. Errors from individual ticks are logged at warn so we
+// never silently lose state changes — the previous "_ = err" silenced a
+// real bug for an entire test cycle.
 func (p *Poller) Run(ctx context.Context) error {
 	if p.Interval <= 0 {
 		p.Interval = 30 * time.Second
 	}
+	if p.Logger == nil {
+		p.Logger = slog.Default()
+	}
 	tick := time.NewTicker(p.Interval)
 	defer tick.Stop()
 	for {
-		// Run one pass first so a Run() call doesn't sit silent for the
-		// full interval before doing anything.
 		if err := p.tick(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			// Log via fmt is fine — handlers already log via slog when
-			// they call Run; surfacing every transient kube error here
-			// would be noisy.
-			_ = err
+			p.Logger.Warn("build poller tick", "err", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -277,8 +279,7 @@ func (p *Poller) tick(ctx context.Context) error {
 			continue
 		}
 		if err := p.checkBuild(ctx, &b); err != nil && !apierrors.IsNotFound(err) {
-			// transient — try again next tick
-			continue
+			p.Logger.Warn("build poller checkBuild", "build", b.Name, "err", err)
 		}
 	}
 	return nil
@@ -315,10 +316,16 @@ func completedCondition(job *batchv1.Job) *batchv1.JobCondition {
 	return nil
 }
 
+// The KusoBuild CRD does NOT declare a /status subresource (see
+// operator/config/crd/bases/application.kuso.sislelabs.com_kusobuilds.yaml
+// — only spec/metadata properties, no `subresources: status: {}`).
+// Calling Patch with the "status" subresource path therefore returns
+// 404 "the server could not find the requested resource". The status
+// stanza lives on the main resource; merge-patch it directly.
 func (p *Poller) markSucceeded(ctx context.Context, b *kube.KusoBuild) error {
 	patch := fmt.Sprintf(`{"status":{"phase":"succeeded","completedAt":%q}}`, time.Now().UTC().Format(time.RFC3339))
 	if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(p.Svc.Namespace).
-		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}, "status"); err != nil {
+		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("patch build status: %w", err)
 	}
 	return p.promoteImage(ctx, b)
@@ -327,8 +334,11 @@ func (p *Poller) markSucceeded(ctx context.Context, b *kube.KusoBuild) error {
 func (p *Poller) markFailed(ctx context.Context, b *kube.KusoBuild, msg string) error {
 	patch := fmt.Sprintf(`{"status":{"phase":"failed","completedAt":%q,"message":%q}}`, time.Now().UTC().Format(time.RFC3339), msg)
 	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(p.Svc.Namespace).
-		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}, "status")
-	return err
+		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+	if err != nil {
+		return fmt.Errorf("patch build failed: %w", err)
+	}
+	return nil
 }
 
 func (p *Poller) markRunning(ctx context.Context, b *kube.KusoBuild) error {
@@ -337,8 +347,11 @@ func (p *Poller) markRunning(ctx context.Context, b *kube.KusoBuild) error {
 	}
 	patch := []byte(`{"status":{"phase":"running"}}`)
 	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(p.Svc.Namespace).
-		Patch(ctx, b.Name, types.MergePatchType, patch, metav1.PatchOptions{}, "status")
-	return err
+		Patch(ctx, b.Name, types.MergePatchType, patch, metav1.PatchOptions{})
+	if err != nil {
+		return fmt.Errorf("patch build running: %w", err)
+	}
+	return nil
 }
 
 func (p *Poller) promoteImage(ctx context.Context, b *kube.KusoBuild) error {

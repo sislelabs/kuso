@@ -46,12 +46,15 @@ var envListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		// Server returns `{envVars: [{name, value, valueFrom}]}`. Plain
+		// entries have value populated; secret-backed entries have
+		// valueFrom + value redacted to empty.
 		var data struct {
-			Plain []struct {
-				Name  string `json:"name"`
-				Value string `json:"value"`
-			} `json:"plain"`
-			SecretKeys []string `json:"secretKeys"`
+			EnvVars []struct {
+				Name      string         `json:"name"`
+				Value     string         `json:"value"`
+				ValueFrom map[string]any `json:"valueFrom,omitempty"`
+			} `json:"envVars"`
 		}
 		_ = json.Unmarshal(resp.Body(), &data)
 		switch outputFormat {
@@ -60,13 +63,13 @@ var envListCmd = &cobra.Command{
 		default:
 			t := tablewriter.NewWriter(os.Stdout)
 			t.SetHeader([]string{"NAME", "VALUE", "TYPE"})
-			sort.Slice(data.Plain, func(i, j int) bool { return data.Plain[i].Name < data.Plain[j].Name })
-			for _, e := range data.Plain {
-				t.Append([]string{e.Name, e.Value, "plain"})
-			}
-			sort.Strings(data.SecretKeys)
-			for _, k := range data.SecretKeys {
-				t.Append([]string{k, "<secret>", "secret"})
+			sort.Slice(data.EnvVars, func(i, j int) bool { return data.EnvVars[i].Name < data.EnvVars[j].Name })
+			for _, e := range data.EnvVars {
+				if e.ValueFrom != nil {
+					t.Append([]string{e.Name, "<secret>", "secret"})
+				} else {
+					t.Append([]string{e.Name, e.Value, "plain"})
+				}
 			}
 			t.Render()
 			return nil
@@ -85,24 +88,28 @@ var envSetCmd = &cobra.Command{
 		project, service, kvs := args[0], args[1], args[2:]
 
 		// Read current env so we can merge — set should add/update, not replace.
+		// Existing valueFrom-backed entries (secret refs) are preserved.
 		current, err := api.GetEnv(project, service)
 		if err != nil {
 			return err
 		}
 		var existing struct {
-			Plain []map[string]any `json:"plain"`
-			// secretKeys are kept as-is; secret-typed entries on the CR
-			// are referenced via valueFrom so we have to preserve them.
+			EnvVars []map[string]any `json:"envVars"`
 		}
 		_ = json.Unmarshal(current.Body(), &existing)
 
-		// Build a map for easy update.
+		// Build a map for easy update. Preserve valueFrom on existing
+		// entries so secret-backed vars survive a plain-var set.
 		byName := map[string]map[string]any{}
-		for _, e := range existing.Plain {
-			byName[asString(e["name"])] = map[string]any{
-				"name":  e["name"],
-				"value": e["value"],
+		for _, e := range existing.EnvVars {
+			row := map[string]any{"name": e["name"]}
+			if v, ok := e["value"]; ok && v != nil {
+				row["value"] = v
 			}
+			if vf, ok := e["valueFrom"]; ok && vf != nil {
+				row["valueFrom"] = vf
+			}
+			byName[asString(e["name"])] = row
 		}
 		for _, kv := range kvs {
 			eq := -1
@@ -148,7 +155,7 @@ var envUnsetCmd = &cobra.Command{
 			return err
 		}
 		var existing struct {
-			Plain []map[string]any `json:"plain"`
+			EnvVars []map[string]any `json:"envVars"`
 		}
 		_ = json.Unmarshal(current.Body(), &existing)
 
@@ -156,8 +163,8 @@ var envUnsetCmd = &cobra.Command{
 		for _, k := range keys {
 			drop[k] = true
 		}
-		out := make([]map[string]any, 0, len(existing.Plain))
-		for _, e := range existing.Plain {
+		out := make([]map[string]any, 0, len(existing.EnvVars))
+		for _, e := range existing.EnvVars {
 			if drop[asString(e["name"])] {
 				continue
 			}
