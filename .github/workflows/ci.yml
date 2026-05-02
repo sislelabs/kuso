@@ -31,6 +31,9 @@ jobs:
             server:
               - 'server/**'
               - '.github/workflows/ci.yml'
+            server-go:
+              - 'server-go/**'
+              - '.github/workflows/ci.yml'
             client:
               - 'client/**'
               - '.github/workflows/ci.yml'
@@ -125,6 +128,44 @@ jobs:
       - run: yarn install --immutable
       - run: yarn lint
       - run: yarn build
+
+  server-go:
+    name: server-go (Go)
+    needs: changes
+    if: needs.changes.outputs.server-go == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: server-go/go.sum
+      - run: go mod download
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test ./... -count=1
+
+  server-go:
+    name: server-go (Go)
+    needs: changes
+    if: needs.changes.outputs.server-go == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server-go
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.25'
+          cache-dependency-path: server-go/go.sum
+      - run: go mod download
+      - run: go vet ./...
+      - run: go build ./...
+      - run: go test ./... -count=1
 
   client:
     name: client (Vue)
