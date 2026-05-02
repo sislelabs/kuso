@@ -61,6 +61,7 @@ ARG VERSION=v0.2.0-dev
 LABEL maintainer="https://kuso.sislelabs.com"
 LABEL version=$VERSION
 LABEL org.opencontainers.image.source="https://github.com/sislelabs/kuso"
+LABEL org.opencontainers.image.description="kuso control-plane — Go HTTP API + embedded Vue SPA"
 LABEL org.opencontainers.image.licenses="GPL-3.0"
 
 # CA bundle is needed for the GitHub client + any outbound TLS we add

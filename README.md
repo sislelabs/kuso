@@ -2,7 +2,7 @@
 
 Self-hosted, agent-native PaaS for indie developers running a portfolio of products on Kubernetes.
 
-**Status:** v0.1.0 — pre-release. Forked from [kubero-dev/kubero](https://github.com/kubero-dev/kubero) (GPL-3.0). Hard divergence — not tracking upstream.
+**Status:** v0.2.0 — live release. Forked from [kubero-dev/kubero](https://github.com/kubero-dev/kubero) (GPL-3.0). Hard divergence — not tracking upstream.
 
 ## What is kuso?
 
