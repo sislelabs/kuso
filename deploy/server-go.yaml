@@ -27,14 +27,6 @@ spec:
       labels: { app.kubernetes.io/name: kuso-server }
     spec:
       serviceAccountName: kuso-server
-      # If the package is public on GHCR, this imagePullSecret can be
-      # dropped. While it's private the cluster needs a docker-registry
-      # secret named `ghcr-pull` in the kuso namespace — create with:
-      #   kubectl create secret docker-registry ghcr-pull \
-      #     -n kuso --docker-server=ghcr.io --docker-username=<user> \
-      #     --docker-password=<gh-pat>
-      imagePullSecrets:
-        - name: ghcr-pull
       containers:
         - name: server
           image: ghcr.io/sislelabs/kuso-server-go:v0.2.0-rc1
