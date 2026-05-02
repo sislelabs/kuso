@@ -26,7 +26,7 @@
 #   KUSO_DOMAIN          hostname for kuso UI (default: kuso.sislelabs.com)
 #   KUSO_EMAIL           email for Let's Encrypt (default: ivilthe69@gmail.com)
 #   KUSO_VERSION         operator image tag (default: v0.1.0-dev-secrets-env)
-#   KUSO_SERVER_VERSION  server image tag (default: v0.2.0-rc5; a Go
+#   KUSO_SERVER_VERSION  server image tag (default: v0.2.0-rc6; a Go
 #                        binary published at
 #                        ghcr.io/sislelabs/kuso-server-go)
 #   KUSO_REPO            GitHub source for raw manifest URLs
@@ -36,13 +36,22 @@
 #   KUSO_INSECURE_SECRETS=1  reuse the well-known dev secrets instead of
 #                        generating random ones (kuso-admin / dev jwt /
 #                        dev session). Only for local kind clusters.
+#   KUSO_GITHUB_APP_ENV  path to a file with GitHub App credentials
+#                        (one KEY=VALUE per line — APP_ID, APP_SLUG,
+#                        CLIENT_ID, CLIENT_SECRET, WEBHOOK_SECRET, ORG).
+#                        Optional. If set, install creates the
+#                        kuso-github-app Secret + patches kuso-server-secrets
+#                        with the four GITHUB_CLIENT_* envs so OAuth login
+#                        works on first boot.
+#   KUSO_GITHUB_APP_PEM  path to the GitHub App private key .pem file.
+#                        Required iff KUSO_GITHUB_APP_ENV is set.
 
 set -euo pipefail
 
 KUSO_DOMAIN="${KUSO_DOMAIN:-kuso.sislelabs.com}"
 KUSO_EMAIL="${KUSO_EMAIL:-ivilthe69@gmail.com}"
 KUSO_VERSION="${KUSO_VERSION:-v0.1.0-dev-secrets-env}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.2.0-rc5}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.2.0-rc6}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_RAW="https://raw.githubusercontent.com/${KUSO_REPO}/main"
 
@@ -224,6 +233,52 @@ kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o ya
   --from-literal=KUSO_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
   | kubectl apply -f - >/dev/null
 
+# -------- 9b. optional GitHub App seeding --------
+# A reinstall blows away the kuso-github-app Secret; this reads it back from
+# a local file so the OAuth flow + repo picker keep working without manual
+# re-seeding. The file format is one KEY=VALUE per line:
+#   APP_ID=...
+#   APP_SLUG=...
+#   CLIENT_ID=...
+#   CLIENT_SECRET=...
+#   WEBHOOK_SECRET=...
+#   ORG=...
+if [[ -n "${KUSO_GITHUB_APP_ENV:-}" ]]; then
+  if [[ ! -r "$KUSO_GITHUB_APP_ENV" ]]; then
+    die "KUSO_GITHUB_APP_ENV=$KUSO_GITHUB_APP_ENV not readable"
+  fi
+  if [[ -z "${KUSO_GITHUB_APP_PEM:-}" || ! -r "$KUSO_GITHUB_APP_PEM" ]]; then
+    die "KUSO_GITHUB_APP_PEM must point at a readable .pem file"
+  fi
+  log "seeding kuso-github-app from $KUSO_GITHUB_APP_ENV"
+  # shellcheck disable=SC1090
+  set -a; source "$KUSO_GITHUB_APP_ENV"; set +a
+  for k in APP_ID APP_SLUG CLIENT_ID CLIENT_SECRET WEBHOOK_SECRET ORG; do
+    if [[ -z "${!k:-}" ]]; then
+      die "$KUSO_GITHUB_APP_ENV is missing $k"
+    fi
+  done
+  kubectl create secret generic kuso-github-app -n kuso --dry-run=client -o yaml \
+    --from-literal=GITHUB_APP_ID="$APP_ID" \
+    --from-literal=GITHUB_APP_SLUG="$APP_SLUG" \
+    --from-literal=GITHUB_APP_CLIENT_ID="$CLIENT_ID" \
+    --from-literal=GITHUB_APP_CLIENT_SECRET="$CLIENT_SECRET" \
+    --from-literal=GITHUB_APP_WEBHOOK_SECRET="$WEBHOOK_SECRET" \
+    --from-file=GITHUB_APP_PRIVATE_KEY="$KUSO_GITHUB_APP_PEM" \
+    | kubectl apply -f - >/dev/null
+  # The OAuth client envs live on kuso-server-secrets (NOT kuso-github-app)
+  # because the server reads them via env, not via Secret-mount.
+  kubectl patch secret -n kuso kuso-server-secrets --type=merge -p "$(cat <<JSON
+{"stringData":{
+  "GITHUB_CLIENT_ID":"$CLIENT_ID",
+  "GITHUB_CLIENT_SECRET":"$CLIENT_SECRET",
+  "GITHUB_CLIENT_CALLBACKURL":"https://${KUSO_DOMAIN}/api/auth/github/callback",
+  "GITHUB_CLIENT_ORG":"$ORG"
+}}
+JSON
+)" >/dev/null
+fi
+
 # -------- 10. operator --------
 log "applying kuso operator (image tag ${KUSO_VERSION})"
 curl -sfL "${KUSO_RAW}/deploy/operator.yaml" \
@@ -235,7 +290,7 @@ kubectl wait --for=condition=Available --timeout=180s \
 # -------- 11. server --------
 log "applying kuso server (host ${KUSO_DOMAIN}, image tag ${KUSO_SERVER_VERSION})"
 curl -sfL "${KUSO_RAW}/deploy/server-go.yaml" \
-  | sed "s|kuso-server-go:v0.2.0-rc5|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
+  | sed "s|kuso-server-go:v0.2.0-rc6|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
   | kubectl apply -f - >/dev/null
 
 # Service + Ingress weren't included in deploy/server-go.yaml because
@@ -313,6 +368,12 @@ if [[ "${KUSO_INSECURE_SECRETS:-0}" != "1" ]]; then
   GitHub App: not yet configured. Follow docs/GITHUB_APP_SETUP.md to
   enable the repo picker and PR previews. The kuso UI will show a CTA
   until you create the kuso-github-app Secret.
+
+  To seed it automatically on the next install, write your values to
+  /etc/kuso/github-app.env (APP_ID/APP_SLUG/CLIENT_ID/CLIENT_SECRET/
+  WEBHOOK_SECRET/ORG, one per line) and pass:
+    KUSO_GITHUB_APP_ENV=/etc/kuso/github-app.env \\
+    KUSO_GITHUB_APP_PEM=/etc/kuso/github-app.pem  curl ... | sudo -E bash
 EOF
 fi
 echo

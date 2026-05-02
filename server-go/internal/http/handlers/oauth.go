@@ -213,10 +213,16 @@ func verifyStateCookie(r *http.Request) bool {
 
 // setJWTCookie writes the kuso.JWT_TOKEN cookie matching the TS server's
 // shape. SameSite=Lax + Secure so the browser only sends it over TLS.
+//
+// HttpOnly is intentionally false: the SPA reads this cookie from JS
+// (vue3-cookies) to attach it as an Authorization: Bearer header on
+// every /api request. Making it HttpOnly here breaks the entire SPA
+// after OAuth login — the browser holds the cookie but the SPA can't
+// see it, so every /api/* call comes back 401.
 func setJWTCookie(w http.ResponseWriter, jwt string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "kuso.JWT_TOKEN", Value: jwt, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteLaxMode,
+		HttpOnly: false, SameSite: http.SameSiteLaxMode,
 		Secure: true,
 		MaxAge: 36000,
 	})
