@@ -19,6 +19,24 @@ func decodeInto(u *unstructured.Unstructured, out any) error {
 	return runtime.DefaultUnstructuredConverter.FromUnstructured(u.Object, out)
 }
 
+// validateRuntime rejects runtimes the operator's kusobuild chart can't
+// actually render. The chart today renders a kaniko Job that expects a
+// Dockerfile; nixpacks / buildpacks / static aren't wired through.
+// Returning a clear error here is far better than silently accepting
+// the value and letting the build Job fail with "Dockerfile not found".
+//
+// Empty string is accepted and treated as the default (dockerfile).
+func validateRuntime(rt string) error {
+	switch rt {
+	case "", "dockerfile":
+		return nil
+	case "nixpacks", "buildpacks", "static":
+		return fmt.Errorf("%w: runtime %q is not supported yet — only 'dockerfile' is wired through. Track: docs/REWRITE.md", ErrInvalid, rt)
+	default:
+		return fmt.Errorf("%w: unknown runtime %q (supported: dockerfile)", ErrInvalid, rt)
+	}
+}
+
 // ListServices returns every service in the project, label-filtered.
 func (s *Service) ListServices(ctx context.Context, project string) ([]kube.KusoService, error) {
 	return s.listServicesForProject(ctx, project)
@@ -38,6 +56,9 @@ func (s *Service) GetService(ctx context.Context, project, service string) (*kub
 func (s *Service) AddService(ctx context.Context, project string, req CreateServiceRequest) (*kube.KusoService, error) {
 	if req.Name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalid)
+	}
+	if err := validateRuntime(req.Runtime); err != nil {
+		return nil, err
 	}
 	proj, err := s.Get(ctx, project)
 	if err != nil {

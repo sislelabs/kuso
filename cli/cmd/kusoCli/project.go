@@ -158,7 +158,7 @@ var serviceAddCmd = &cobra.Command{
 	Short: "Add a service to a project (creates production env automatically)",
 	Args:  cobra.ExactArgs(2),
 	Example: `  kuso project service add analiz api --runtime dockerfile --port 8080
-  kuso project service add analiz web --path apps/web --runtime nixpacks --port 3000`,
+  kuso project service add analiz web --path apps/web --port 3000`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
@@ -385,7 +385,7 @@ func init() {
 	projectCmd.AddCommand(projectServiceCmd)
 	projectServiceCmd.AddCommand(serviceAddCmd)
 	serviceAddCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
-	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "dockerfile", "dockerfile|nixpacks|buildpacks|static")
+	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "dockerfile", "dockerfile (only one wired through the build chart)")
 	serviceAddCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	projectServiceCmd.AddCommand(serviceDeleteCmd)
 	serviceDeleteCmd.Flags().BoolVarP(&serviceDeleteYes, "yes", "y", false, "skip the confirmation prompt")

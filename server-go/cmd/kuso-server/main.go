@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	httpsrv "kuso/server/internal/http"
@@ -130,6 +132,15 @@ func main() {
 		if os.Getenv("KUSO_PREVIEW_CLEANUP_DISABLED") != "true" {
 			go runPreviewCleanup(ctx, projSvc, logger)
 		}
+		// Helm-finalizer sweep (§6.5): every 5 minutes, strip the
+		// uninstall-helm-release finalizer from any KusoEnvironment /
+		// KusoService / KusoAddon stuck with a deletionTimestamp but
+		// no helm release Secret. Without this, a CR whose chart
+		// failed to render is wedged forever and blocks subsequent
+		// applies on the same name.
+		if os.Getenv("KUSO_FINALIZER_SWEEP_DISABLED") != "true" {
+			go runFinalizerSweep(ctx, kc, *namespace, logger)
+		}
 
 		// GitHub App is opt-in; if env vars are missing the webhook +
 		// install routes simply aren't registered.
@@ -226,6 +237,47 @@ func runPreviewCleanup(ctx context.Context, svc *projects.Service, logger *slog.
 		}
 		if n > 0 {
 			logger.Info("preview-cleanup deleted", "count", n)
+		}
+	}
+	tick()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			tick()
+		}
+	}
+}
+
+// runFinalizerSweep ticks every 5 minutes and clears the
+// uninstall-helm-release finalizer from CRs stuck with a
+// deletionTimestamp set but no helm release Secret. See §6.5.
+func runFinalizerSweep(ctx context.Context, kc *kube.Client, namespace string, logger *slog.Logger) {
+	t := time.NewTicker(5 * time.Minute)
+	defer t.Stop()
+	logFn := func(msg string, kv ...any) { logger.Info(msg, kv...) }
+	tick := func() {
+		c, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+		// Helm-managed CRDs only — KusoBuild renders Jobs directly, no helm release.
+		for _, item := range []struct {
+			label string
+			gvr   schema.GroupVersionResource
+		}{
+			{"kusoenvironments", kube.GVREnvironments},
+			{"kusoservices", kube.GVRServices},
+			{"kusoaddons", kube.GVRAddons},
+			{"kusoprojects", kube.GVRProjects},
+		} {
+			cleared, _, err := kc.CleanupStuckHelmFinalizers(c, namespace, item.gvr, logFn)
+			if err != nil {
+				logger.Warn("finalizer-sweep list", "kind", item.label, "err", err)
+				continue
+			}
+			if cleared > 0 {
+				logger.Info("finalizer-sweep cleared", "kind", item.label, "count", cleared)
+			}
 		}
 	}
 	tick()

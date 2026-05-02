@@ -189,7 +189,7 @@ type addServiceArgs struct {
 	Project string `json:"project" jsonschema:"project name"`
 	Name    string `json:"name" jsonschema:"service name (e.g. web, api, worker)"`
 	Path    string `json:"path,omitempty" jsonschema:"monorepo subpath (default '.')"`
-	Runtime string `json:"runtime,omitempty" jsonschema:"dockerfile|nixpacks|buildpacks|static (default: dockerfile)"`
+	Runtime string `json:"runtime,omitempty" jsonschema:"dockerfile (default; nixpacks/buildpacks/static aren't wired through the build chart yet)"`
 	Port    int    `json:"port,omitempty" jsonschema:"container port (default: 8080)"`
 	Confirm bool   `json:"confirm" jsonschema:"must be true to actually add"`
 }
