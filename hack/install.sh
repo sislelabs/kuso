@@ -187,6 +187,11 @@ curl -sfL "${KUSO_RAW}/operator/config/crd/bases/application.kuso.dev_kusoes.yam
 
 # -------- 8. registry --------
 log "deploying in-cluster registry"
+# Create the kuso namespace first — registry, secrets, and server all
+# live there. Without this, applying registry.yaml fails with
+# "namespaces \"kuso\" not found" since the manifest doesn't include
+# the namespace itself.
+kubectl create namespace kuso 2>/dev/null || true
 curl -sfL "${KUSO_RAW}/deploy/registry.yaml" | kubectl apply -f - >/dev/null
 kubectl wait --for=condition=Available --timeout=180s \
   deployment/kuso-registry -n kuso || warn "kuso-registry not yet ready"
