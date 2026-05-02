@@ -260,7 +260,12 @@ func runFinalizerSweep(ctx context.Context, kc *kube.Client, namespace string, l
 	tick := func() {
 		c, cancel := context.WithTimeout(ctx, 60*time.Second)
 		defer cancel()
-		// Helm-managed CRDs only — KusoBuild renders Jobs directly, no helm release.
+		// All CRDs the helm-operator manages get this finalizer, even
+		// KusoBuild — the build chart renders a Job, but the Job is owned
+		// by a helm release and the same uninstall finalizer is attached
+		// to the CR. If a build is deleted before the chart renders (or
+		// after the Job has GC'd), the helm release secret is gone and
+		// the finalizer can never be satisfied.
 		for _, item := range []struct {
 			label string
 			gvr   schema.GroupVersionResource
@@ -269,6 +274,7 @@ func runFinalizerSweep(ctx context.Context, kc *kube.Client, namespace string, l
 			{"kusoservices", kube.GVRServices},
 			{"kusoaddons", kube.GVRAddons},
 			{"kusoprojects", kube.GVRProjects},
+			{"kusobuilds", kube.GVRBuilds},
 		} {
 			cleared, _, err := kc.CleanupStuckHelmFinalizers(c, namespace, item.gvr, logFn)
 			if err != nil {
