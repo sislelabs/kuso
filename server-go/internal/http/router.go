@@ -109,6 +109,10 @@ func NewRouter(d Deps) http.Handler {
 			usersH.Mount(r)
 			rolesH := &httphandlers.RolesHandler{DB: d.DB, Logger: d.Logger}
 			rolesH.Mount(r)
+			groupsH := &httphandlers.GroupsHandler{DB: d.DB, Logger: d.Logger}
+			groupsH.Mount(r)
+			notifH := &httphandlers.NotificationsHandler{DB: d.DB, Logger: d.Logger}
+			notifH.Mount(r)
 		}
 		if d.Config != nil {
 			cfgH := &httphandlers.ConfigHandler{Cfg: d.Config, DB: d.DB, Logger: d.Logger}
