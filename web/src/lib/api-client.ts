@@ -14,7 +14,21 @@ export class ApiError extends Error {
 
 export function getJwt(): string | null {
   if (typeof window === "undefined") return null;
-  return window.localStorage.getItem(JWT_KEY);
+  const ls = window.localStorage.getItem(JWT_KEY);
+  if (ls) return ls;
+  // Post-OAuth handoff: the server's /api/auth/github/callback sets a
+  // kuso.JWT_TOKEN cookie (HttpOnly=false on purpose) and 302s back to
+  // "/". The first page load after the redirect has the cookie but no
+  // localStorage entry yet — promote it so subsequent api() calls send
+  // the bearer header. Subsequent reloads skip this branch because
+  // localStorage now has it cached.
+  const m = document.cookie.match(/(?:^|; )kuso\.JWT_TOKEN=([^;]+)/);
+  if (m && m[1]) {
+    const token = decodeURIComponent(m[1]);
+    window.localStorage.setItem(JWT_KEY, token);
+    return token;
+  }
+  return null;
 }
 
 export function setJwt(token: string) {
