@@ -83,12 +83,19 @@ export default function NewProjectPage() {
     ADDON_KINDS.map((a) => ({ kind: a.kind, enabled: false }))
   );
   const [submitting, setSubmitting] = useState(false);
+  const [repoQuery, setRepoQuery] = useState("");
 
   const allRepos = useMemo(() => {
     return (installs.data ?? []).flatMap((inst) =>
       inst.repositories.map((r) => ({ installationId: inst.id, repo: r, owner: inst.accountLogin }))
     );
   }, [installs.data]);
+
+  const filteredRepos = useMemo(() => {
+    const q = repoQuery.trim().toLowerCase();
+    if (!q) return allRepos;
+    return allRepos.filter(({ repo }) => repo.fullName.toLowerCase().includes(q));
+  }, [allRepos, repoQuery]);
 
   // When a repo is picked, prefill name and run detect+scan in parallel.
   useEffect(() => {
@@ -293,28 +300,44 @@ export default function NewProjectPage() {
           ) : (
             <div className="space-y-3">
               {!picked && (
-                <ul className="max-h-72 overflow-auto divide-y divide-[var(--border-subtle)] rounded-md border border-[var(--border-subtle)]">
-                  {allRepos.map(({ installationId, repo }) => (
-                    <li key={`${installationId}/${repo.fullName}`}>
-                      <button
-                        type="button"
-                        onClick={() => setPicked({ installationId, repo })}
-                        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-[var(--bg-tertiary)]"
-                      >
-                        <span className="flex items-center gap-2 truncate">
-                          <Github className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
-                          <span className="font-mono truncate">{repo.fullName}</span>
-                          {repo.private && (
-                            <span className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-                              private
+                <>
+                  <Input
+                    type="search"
+                    value={repoQuery}
+                    onChange={(e) => setRepoQuery(e.target.value)}
+                    placeholder={`Filter ${allRepos.length} repositories…`}
+                    className="font-mono"
+                    autoFocus
+                  />
+                  <ul className="max-h-72 overflow-auto divide-y divide-[var(--border-subtle)] rounded-md border border-[var(--border-subtle)]">
+                    {filteredRepos.length === 0 ? (
+                      <li className="px-3 py-2 text-sm text-[var(--text-tertiary)]">
+                        No repos match {repoQuery ? `"${repoQuery}"` : "this filter"}.
+                      </li>
+                    ) : (
+                      filteredRepos.map(({ installationId, repo }) => (
+                        <li key={`${installationId}/${repo.fullName}`}>
+                          <button
+                            type="button"
+                            onClick={() => setPicked({ installationId, repo })}
+                            className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm hover:bg-[var(--bg-tertiary)]"
+                          >
+                            <span className="flex items-center gap-2 truncate">
+                              <Github className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
+                              <span className="font-mono truncate">{repo.fullName}</span>
+                              {repo.private && (
+                                <span className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+                                  private
+                                </span>
+                              )}
                             </span>
-                          )}
-                        </span>
-                        <ArrowRight className="h-3.5 w-3.5 text-[var(--text-tertiary)] shrink-0" />
-                      </button>
-                    </li>
-                  ))}
-                </ul>
+                            <ArrowRight className="h-3.5 w-3.5 text-[var(--text-tertiary)] shrink-0" />
+                          </button>
+                        </li>
+                      ))
+                    )}
+                  </ul>
+                </>
               )}
               {picked && (
                 <div className="flex items-center justify-between rounded-md border border-[var(--accent)]/40 bg-[var(--accent-subtle)] px-3 py-2 text-sm">
