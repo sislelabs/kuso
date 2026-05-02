@@ -11,6 +11,7 @@ import (
 	"kuso/server/internal/auth"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/db"
+	"kuso/server/internal/github"
 	httphandlers "kuso/server/internal/http/handlers"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/secrets"
@@ -28,7 +29,15 @@ type Deps struct {
 	Projects   *projects.Service
 	Secrets    *secrets.Service
 	Builds     *builds.Service
+	Github     *GithubDeps
 	Logger     *slog.Logger
+}
+
+// GithubDeps bundles the optional GitHub-app surface. Nil when the App
+// isn't configured.
+type GithubDeps struct {
+	Cfg        *github.Config
+	Dispatcher *github.Dispatcher
 }
 
 // NewRouter returns the chi router with all routes registered.
@@ -48,6 +57,15 @@ func NewRouter(d Deps) http.Handler {
 		Logger:     d.Logger,
 	}
 	r.Post("/api/auth/login", authH.Login)
+
+	if d.Github != nil && d.Github.Cfg != nil {
+		gh := &httphandlers.GithubHandler{
+			Cfg:        d.Github.Cfg,
+			Dispatcher: d.Github.Dispatcher,
+			Logger:     d.Logger,
+		}
+		r.Post("/api/webhooks/github", gh.Webhook)
+	}
 
 	// Authenticated routes.
 	r.Group(func(r chi.Router) {

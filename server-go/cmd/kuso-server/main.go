@@ -19,6 +19,7 @@ import (
 	httpsrv "kuso/server/internal/http"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/builds"
+	ghpkg "kuso/server/internal/github"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/version"
@@ -63,6 +64,7 @@ func main() {
 	var projSvc *projects.Service
 	var secSvc *secrets.Service
 	var buildSvc *builds.Service
+	var ghDeps *httpsrv.GithubDeps
 	if kc, err := kube.NewClient(); err != nil {
 		logger.Warn("kube: client unavailable, project + secret + build routes disabled", "err", err)
 	} else {
@@ -75,6 +77,16 @@ func main() {
 		if os.Getenv("KUSO_BUILD_POLLER_DISABLED") != "true" {
 			go (&builds.Poller{Svc: buildSvc, Interval: 30 * time.Second}).Run(ctx)
 		}
+
+		// GitHub App is opt-in; if env vars are missing the webhook +
+		// install routes simply aren't registered.
+		ghCfg, err := ghpkg.LoadConfig()
+		if err != nil {
+			logger.Error("github: config", "err", err)
+		} else if ghCfg.IsConfigured() {
+			disp := ghpkg.NewDispatcher(kc, buildSvc, *namespace, logger)
+			ghDeps = &httpsrv.GithubDeps{Cfg: ghCfg, Dispatcher: disp}
+		}
 	}
 
 	r := httpsrv.NewRouter(httpsrv.Deps{
@@ -84,6 +96,7 @@ func main() {
 		Projects:   projSvc,
 		Secrets:    secSvc,
 		Builds:     buildSvc,
+		Github:     ghDeps,
 		Logger:     logger,
 	})
 
