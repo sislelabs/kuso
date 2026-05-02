@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"kuso/server/internal/addons"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
@@ -35,6 +36,7 @@ type Deps struct {
 	Logs       *logs.Service
 	Config     *config.Service
 	Status     *status.Service
+	Addons     *addons.Service
 	Github     *GithubDeps
 	Logger     *slog.Logger
 }
@@ -103,10 +105,18 @@ func NewRouter(d Deps) http.Handler {
 		if d.DB != nil && d.Issuer != nil {
 			adminH := &httphandlers.AdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			adminH.Mount(r)
+			usersH := &httphandlers.UsersHandler{DB: d.DB, Logger: d.Logger}
+			usersH.Mount(r)
+			rolesH := &httphandlers.RolesHandler{DB: d.DB, Logger: d.Logger}
+			rolesH.Mount(r)
 		}
 		if d.Config != nil {
 			cfgH := &httphandlers.ConfigHandler{Cfg: d.Config, DB: d.DB, Logger: d.Logger}
 			cfgH.Mount(r)
+		}
+		if d.Addons != nil {
+			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, Logger: d.Logger}
+			addonsH.Mount(r)
 		}
 	})
 

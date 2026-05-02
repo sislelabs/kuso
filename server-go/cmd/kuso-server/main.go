@@ -18,6 +18,7 @@ import (
 	"kuso/server/internal/db"
 	httpsrv "kuso/server/internal/http"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/addons"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	ghpkg "kuso/server/internal/github"
@@ -70,6 +71,7 @@ func main() {
 	var logsSvc *logs.Service
 	var cfgSvc *config.Service
 	var statSvc *status.Service
+	var addonSvc *addons.Service
 	var ghDeps *httpsrv.GithubDeps
 	if kc, err := kube.NewClient(); err != nil {
 		logger.Warn("kube: client unavailable, project + secret + build + log routes disabled", "err", err)
@@ -80,6 +82,7 @@ func main() {
 		logsSvc = logs.New(kc, *namespace)
 		cfgSvc = config.New(kc, *namespace)
 		statSvc = status.New(kc, 5*time.Minute)
+		addonSvc = addons.New(kc, *namespace)
 		// Reload the Kuso CR cache every minute so the feature-flag
 		// surface stays fresh without forcing every request to hit the
 		// API server.
@@ -114,6 +117,7 @@ func main() {
 		Logs:       logsSvc,
 		Config:     cfgSvc,
 		Status:     statSvc,
+		Addons:     addonSvc,
 		Github:     ghDeps,
 		Logger:     logger,
 	})
