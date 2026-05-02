@@ -221,9 +221,11 @@ export class ProjectsService {
     await this.getService(project, service);
     if (env) await this.assertEnvExists(project, service, env);
     const name = this.secretName(project, service, env);
-    const current = (await this.readSecret(name)) || {};
-    current[key] = value;
-    await this.writeSecret(name, current);
+    // Additive merge-patch — concurrent setSecret calls for different
+    // keys must NOT clobber each other. Read-modify-write would lose
+    // updates on simultaneous writes (we hit this in the resilience
+    // sweep: 4 parallel writes left only 1 key).
+    await this.upsertSecretKey(name, key, value);
     if (env) {
       await this.attachSecretToEnvironment(project, service, env, name);
       await this.bumpSecretsRev(project, service, env);
@@ -241,22 +243,20 @@ export class ProjectsService {
   ): Promise<void> {
     await this.getService(project, service);
     const name = this.secretName(project, service, env);
-    const current = (await this.readSecret(name)) || {};
-    if (!(key in current)) {
+    // Race-free remove: if the key existed and was the last one, delete
+    // the whole Secret + detach. Otherwise JSON-patch the single key
+    // out — concurrent unsetSecret calls for different keys won't fight.
+    const removed = await this.removeSecretKey(name, key);
+    if (!removed.existed) {
       throw new NotFoundException(`secret key ${key} not found`);
     }
-    delete current[key];
-    if (Object.keys(current).length === 0) {
+    if (removed.empty) {
       await this.deleteSecret(name);
-      // Also drop the envFromSecrets reference from the service's envs
-      // so the next reconcile doesn't keep mounting an empty Secret.
       if (env) {
         await this.detachSecretFromEnvironment(project, service, env, name);
       } else {
         await this.detachSecretFromEnvironments(project, service, name);
       }
-    } else {
-      await this.writeSecret(name, current);
     }
     if (env) {
       await this.bumpSecretsRev(project, service, env);
@@ -364,6 +364,100 @@ export class ProjectsService {
         throw e;
       }
     }
+  }
+
+  /**
+   * Race-free single-key upsert. Either creates the Secret with one
+   * key, or merge-patches the new (key, value) pair into the existing
+   * one without touching the other keys.
+   *
+   * Concurrent calls for *different* keys never lose updates; concurrent
+   * calls for the *same* key still last-write-wins, which is fine.
+   */
+  private async upsertSecretKey(
+    name: string,
+    key: string,
+    value: string,
+  ): Promise<void> {
+    const coreApi = (this.kubectl as any).coreV1Api as CoreV1Api;
+    const ns = process.env.KUSO_NAMESPACE || 'kuso';
+    const b64 = Buffer.from(value, 'utf8').toString('base64');
+    const patch = { data: { [key]: b64 } };
+    try {
+      await coreApi.patchNamespacedSecret(
+        name,
+        ns,
+        patch,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { headers: { 'Content-Type': 'application/merge-patch+json' } },
+      );
+    } catch (e: any) {
+      if (e?.response?.statusCode === 404) {
+        // First write — create with just this key.
+        await coreApi.createNamespacedSecret(ns, {
+          apiVersion: 'v1',
+          kind: 'Secret',
+          metadata: { name, namespace: ns },
+          type: 'Opaque',
+          data: { [key]: b64 },
+        });
+        return;
+      }
+      throw e;
+    }
+  }
+
+  /**
+   * Race-free single-key removal. Returns whether the key existed and
+   * whether the Secret is now empty (caller is responsible for deleting
+   * an empty Secret + detaching from envFromSecrets, since that involves
+   * env-CR patches the data layer doesn't know about).
+   *
+   * Uses JSON-patch with `test` so a concurrent removal of the same key
+   * surfaces as "did not exist" rather than overwriting unrelated state.
+   */
+  private async removeSecretKey(
+    name: string,
+    key: string,
+  ): Promise<{ existed: boolean; empty: boolean }> {
+    const current = await this.readSecret(name);
+    if (!current || !(key in current)) {
+      return { existed: false, empty: false };
+    }
+    const remainingKeys = Object.keys(current).filter((k) => k !== key);
+    if (remainingKeys.length === 0) {
+      // Caller will delete the whole Secret — we just report empty.
+      return { existed: true, empty: true };
+    }
+    const coreApi = (this.kubectl as any).coreV1Api as CoreV1Api;
+    const ns = process.env.KUSO_NAMESPACE || 'kuso';
+    // Escape "/" and "~" per RFC 6901 for the JSON-patch path.
+    const escaped = key.replace(/~/g, '~0').replace(/\//g, '~1');
+    const patch = [{ op: 'remove', path: `/data/${escaped}` }];
+    try {
+      await coreApi.patchNamespacedSecret(
+        name,
+        ns,
+        patch as any,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { headers: { 'Content-Type': 'application/json-patch+json' } },
+      );
+    } catch (e: any) {
+      // 422: path missing — someone else already removed it.
+      if (e?.response?.statusCode === 422) {
+        return { existed: false, empty: false };
+      }
+      throw e;
+    }
+    return { existed: true, empty: false };
   }
 
   private async deleteSecret(name: string): Promise<void> {
