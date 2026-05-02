@@ -10,6 +10,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
+
 // fromUnstructured decodes a single unstructured object into out.
 //
 // runtime.DefaultUnstructuredConverter handles json struct tags correctly,
@@ -121,4 +122,113 @@ func (c *Client) GetKuso(ctx context.Context, namespace, name string) (*Kuso, er
 // caller can decide what to do when the cluster is bare.
 func (c *Client) ListKusoes(ctx context.Context, namespace string) ([]Kuso, error) {
 	return list[Kuso](ctx, c, GVRKuso, namespace, metav1.ListOptions{})
+}
+
+// ---- Write ops -----------------------------------------------------------
+
+// toUnstructured serialises a typed CRD struct into the unstructured shape
+// the dynamic client requires, attaching the proper apiVersion + kind.
+func toUnstructured(obj any, gvr schema.GroupVersionResource, kind string) (*unstructured.Unstructured, error) {
+	m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		return nil, fmt.Errorf("kube: encode %s: %w", kind, err)
+	}
+	u := &unstructured.Unstructured{Object: m}
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: gvr.Group, Version: gvr.Version, Kind: kind})
+	return u, nil
+}
+
+// create is the generic typed → dynamic create helper.
+func create[T any](ctx context.Context, c *Client, gvr schema.GroupVersionResource, kind, namespace string, obj *T) (*T, error) {
+	u, err := toUnstructured(obj, gvr, kind)
+	if err != nil {
+		return nil, err
+	}
+	created, err := c.Dynamic.Resource(gvr).Namespace(namespace).Create(ctx, u, metav1.CreateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("kube: create %s in %q: %w", gvr.Resource, namespace, err)
+	}
+	var out T
+	if err := fromUnstructured(created, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+// update is the generic typed → dynamic update helper. Uses Update (PUT)
+// rather than Patch — for spec-level edits where the caller has just
+// fetched the object, this is fine. Secret/secretsRev writes use Patch
+// directly elsewhere because they need merge-patch semantics (§6.4).
+func update[T any](ctx context.Context, c *Client, gvr schema.GroupVersionResource, kind, namespace string, obj *T) (*T, error) {
+	u, err := toUnstructured(obj, gvr, kind)
+	if err != nil {
+		return nil, err
+	}
+	updated, err := c.Dynamic.Resource(gvr).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("kube: update %s in %q: %w", gvr.Resource, namespace, err)
+	}
+	var out T
+	if err := fromUnstructured(updated, &out); err != nil {
+		return nil, err
+	}
+	return &out, nil
+}
+
+func deleteCR(ctx context.Context, c *Client, gvr schema.GroupVersionResource, namespace, name string) error {
+	if err := c.Dynamic.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+		return fmt.Errorf("kube: delete %s/%s in %q: %w", gvr.Resource, name, namespace, err)
+	}
+	return nil
+}
+
+// CreateKusoProject creates a new KusoProject CR.
+func (c *Client) CreateKusoProject(ctx context.Context, namespace string, p *KusoProject) (*KusoProject, error) {
+	return create[KusoProject](ctx, c, GVRProjects, "KusoProject", namespace, p)
+}
+
+// UpdateKusoProject replaces an existing KusoProject's spec.
+func (c *Client) UpdateKusoProject(ctx context.Context, namespace string, p *KusoProject) (*KusoProject, error) {
+	return update[KusoProject](ctx, c, GVRProjects, "KusoProject", namespace, p)
+}
+
+// DeleteKusoProject deletes a KusoProject by name.
+func (c *Client) DeleteKusoProject(ctx context.Context, namespace, name string) error {
+	return deleteCR(ctx, c, GVRProjects, namespace, name)
+}
+
+// CreateKusoService creates a new KusoService CR.
+func (c *Client) CreateKusoService(ctx context.Context, namespace string, s *KusoService) (*KusoService, error) {
+	return create[KusoService](ctx, c, GVRServices, "KusoService", namespace, s)
+}
+
+// UpdateKusoService replaces an existing KusoService's spec.
+func (c *Client) UpdateKusoService(ctx context.Context, namespace string, s *KusoService) (*KusoService, error) {
+	return update[KusoService](ctx, c, GVRServices, "KusoService", namespace, s)
+}
+
+// DeleteKusoService deletes a KusoService by name.
+func (c *Client) DeleteKusoService(ctx context.Context, namespace, name string) error {
+	return deleteCR(ctx, c, GVRServices, namespace, name)
+}
+
+// DeleteKusoEnvironment deletes a KusoEnvironment by name. Used by
+// preview-cleanup and the explicit DELETE endpoint.
+func (c *Client) DeleteKusoEnvironment(ctx context.Context, namespace, name string) error {
+	return deleteCR(ctx, c, GVREnvironments, namespace, name)
+}
+
+// CreateKusoEnvironment creates a new KusoEnvironment CR. Used by the
+// preview-env flow.
+func (c *Client) CreateKusoEnvironment(ctx context.Context, namespace string, e *KusoEnvironment) (*KusoEnvironment, error) {
+	return create[KusoEnvironment](ctx, c, GVREnvironments, "KusoEnvironment", namespace, e)
+}
+
+// UpdateKusoEnvironment replaces an existing KusoEnvironment's spec.
+//
+// NOTE: callers that mutate envFromSecrets values must also bump
+// spec.secretsRev (§6.2) — this wrapper does not do that automatically.
+// Use the secrets package, which has the right call ordering.
+func (c *Client) UpdateKusoEnvironment(ctx context.Context, namespace string, e *KusoEnvironment) (*KusoEnvironment, error) {
+	return update[KusoEnvironment](ctx, c, GVREnvironments, "KusoEnvironment", namespace, e)
 }

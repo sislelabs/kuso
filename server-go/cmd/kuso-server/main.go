@@ -17,12 +17,15 @@ import (
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	httpsrv "kuso/server/internal/http"
+	"kuso/server/internal/kube"
+	"kuso/server/internal/projects"
 	"kuso/server/internal/version"
 )
 
 func main() {
 	addr := flag.String("addr", envOr("KUSO_HTTP_ADDR", ":3000"), "HTTP listen address")
 	dbPath := flag.String("db", envOr("KUSO_DB_PATH", "/var/lib/kuso/kuso.db"), "SQLite database path")
+	namespace := flag.String("namespace", envOr("KUSO_NAMESPACE", "kuso"), "Kubernetes namespace for Kuso CRs")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
@@ -48,10 +51,22 @@ func main() {
 		}
 	}()
 
+	// Kube client is optional during early development — if config
+	// resolution fails (no kubeconfig and no in-cluster), boot without
+	// project routes rather than crash. The /healthz + /api/auth/login
+	// surface still works for cutover smoke tests.
+	var projSvc *projects.Service
+	if kc, err := kube.NewClient(); err != nil {
+		logger.Warn("kube: client unavailable, project routes disabled", "err", err)
+	} else {
+		projSvc = projects.New(kc, *namespace)
+	}
+
 	r := httpsrv.NewRouter(httpsrv.Deps{
 		DB:         database,
 		Issuer:     issuer,
 		SessionKey: sessionKey,
+		Projects:   projSvc,
 		Logger:     logger,
 	})
 

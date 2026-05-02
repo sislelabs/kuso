@@ -11,6 +11,7 @@ import (
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	httphandlers "kuso/server/internal/http/handlers"
+	"kuso/server/internal/projects"
 	"kuso/server/internal/version"
 
 	"github.com/go-chi/chi/v5"
@@ -22,6 +23,7 @@ type Deps struct {
 	DB         *db.DB
 	Issuer     *auth.Issuer
 	SessionKey string
+	Projects   *projects.Service
 	Logger     *slog.Logger
 }
 
@@ -47,6 +49,11 @@ func NewRouter(d Deps) http.Handler {
 	r.Group(func(r chi.Router) {
 		r.Use(d.Issuer.Middleware())
 		r.Get("/api/auth/session", authH.Session)
+
+		if d.Projects != nil {
+			projH := &httphandlers.ProjectsHandler{Svc: d.Projects, Logger: d.Logger}
+			projH.Mount(r)
+		}
 	})
 
 	return r
