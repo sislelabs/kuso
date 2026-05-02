@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useParams } from "next/navigation";
+import { useState } from "react";
 import { useProject, useAddons } from "@/features/projects";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -11,8 +12,10 @@ import { DeployStatusPill, type DeployStatus } from "@/components/service/Deploy
 import { SleepBadge } from "@/components/service/SleepBadge";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
-import { ExternalLink, Plus, Package, Database } from "lucide-react";
+import { ProjectCanvas } from "@/components/canvas/ProjectCanvas";
+import { ExternalLink, Plus, Package, Database, LayoutGrid, List } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
+import { cn } from "@/lib/utils";
 
 function envForService(envs: KusoEnvironment[], svcName: string, kind = "production"): KusoEnvironment | undefined {
   return envs.find((e) => e.spec.service === svcName && e.spec.kind === kind);
@@ -32,75 +35,67 @@ function statusFor(env?: KusoEnvironment): DeployStatus {
 function ServiceCard({
   service,
   envs,
+  project,
 }: {
   service: KusoService;
   envs: KusoEnvironment[];
+  project: string;
 }) {
   const env = envForService(envs, service.metadata.name);
   const status = statusFor(env);
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center justify-between">
-          <span className="flex items-center gap-2 truncate">
-            <RuntimeIcon runtime={service.spec.runtime} />
-            <span className="truncate">{service.metadata.name}</span>
-          </span>
-          <DeployStatusPill status={status} />
-        </CardTitle>
-      </CardHeader>
-      <CardContent>
-        <dl className="space-y-1.5 text-xs">
-          {service.spec.runtime && (
-            <div className="flex items-center gap-2">
-              <dt className="font-mono text-[var(--text-tertiary)]">runtime</dt>
-              <dd className="font-mono text-[var(--text-secondary)]">
-                {service.spec.runtime}
-              </dd>
-            </div>
-          )}
-          {service.spec.port !== undefined && (
-            <div className="flex items-center gap-2">
-              <dt className="font-mono text-[var(--text-tertiary)]">port</dt>
-              <dd className="font-mono text-[var(--text-secondary)]">
-                {service.spec.port}
-              </dd>
-            </div>
-          )}
-          {env?.status?.url && (
-            <div className="flex items-center gap-2">
-              <dt className="font-mono text-[var(--text-tertiary)]">url</dt>
-              <dd className="truncate">
-                <a
-                  href={env.status.url as string}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="font-mono text-[var(--accent)] hover:underline truncate inline-flex items-center gap-1"
-                >
-                  {(env.status.url as string).replace(/^https?:\/\//, "")}
-                  <ExternalLink className="h-3 w-3 shrink-0" />
-                </a>
-              </dd>
-            </div>
-          )}
-          {env?.status?.commit && (
-            <div className="flex items-center gap-2">
-              <dt className="font-mono text-[var(--text-tertiary)]">commit</dt>
-              <dd className="font-mono text-[var(--text-secondary)] truncate">
-                {(env.status.commit as string).slice(0, 7)}
-              </dd>
-            </div>
-          )}
-        </dl>
-        {status === "sleeping" && <SleepBadge className="mt-3" />}
-      </CardContent>
-    </Card>
+    <Link href={`/projects/${project}/services/${service.metadata.name}`} className="block">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <span className="flex items-center gap-2 truncate">
+              <RuntimeIcon runtime={service.spec.runtime} />
+              <span className="truncate">{service.metadata.name}</span>
+            </span>
+            <DeployStatusPill status={status} />
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <dl className="space-y-1.5 text-xs">
+            {service.spec.runtime && (
+              <div className="flex items-center gap-2">
+                <dt className="font-mono text-[var(--text-tertiary)]">runtime</dt>
+                <dd className="font-mono text-[var(--text-secondary)]">
+                  {service.spec.runtime}
+                </dd>
+              </div>
+            )}
+            {service.spec.port !== undefined && (
+              <div className="flex items-center gap-2">
+                <dt className="font-mono text-[var(--text-tertiary)]">port</dt>
+                <dd className="font-mono text-[var(--text-secondary)]">
+                  {service.spec.port}
+                </dd>
+              </div>
+            )}
+            {env?.status?.url && (
+              <div className="flex items-center gap-2">
+                <dt className="font-mono text-[var(--text-tertiary)]">url</dt>
+                <dd className="truncate">
+                  <span className="font-mono text-[var(--accent)] truncate inline-flex items-center gap-1">
+                    {(env.status.url as string).replace(/^https?:\/\//, "")}
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                  </span>
+                </dd>
+              </div>
+            )}
+          </dl>
+          {status === "sleeping" && <SleepBadge className="mt-3" />}
+        </CardContent>
+      </Card>
+    </Link>
   );
 }
 
 export function ProjectDetailView() {
   const params = useParams<{ project: string }>();
   const projectName = params?.project ?? "";
+  const [view, setView] = useState<"canvas" | "list">("canvas");
 
   const project = useProject(projectName);
   const addons = useAddons(projectName);
@@ -109,10 +104,7 @@ export function ProjectDetailView() {
     return (
       <div className="p-6 lg:p-8">
         <Skeleton className="mb-4 h-8 w-48" />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Skeleton className="h-32" />
-          <Skeleton className="h-32" />
-        </div>
+        <Skeleton className="h-64 w-full" />
       </div>
     );
   }
@@ -134,114 +126,169 @@ export function ProjectDetailView() {
   const envs = data.environments;
   const addonsList = addons.data ?? [];
 
-  return (
-    <div className="mx-auto max-w-6xl p-6 lg:p-8">
-      <div className="mb-6 flex items-start justify-between gap-4">
-        <div>
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">
-            {projectName}
-          </h1>
+  // Empty project: skip the canvas and show a centered CTA.
+  if (services.length === 0 && addonsList.length === 0) {
+    return (
+      <div className="p-6 lg:p-8">
+        <div className="mb-6">
+          <h1 className="font-heading text-2xl font-semibold tracking-tight">{projectName}</h1>
           {data.project.spec.description && (
             <p className="mt-1 text-sm text-[var(--text-secondary)]">
               {data.project.spec.description}
             </p>
           )}
+        </div>
+        <EmptyState
+          icon={<Package className="h-5 w-5" />}
+          title="No services or addons yet"
+          description="Add a service from your repo, then attach a Postgres or Redis addon. The canvas lights up as soon as you do."
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col">
+      {/* Toolbar */}
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-2 lg:px-6">
+        <div className="min-w-0">
+          <h1 className="truncate font-heading text-base font-semibold tracking-tight">
+            {projectName}
+          </h1>
           {data.project.spec.defaultRepo?.url && (
-            <p className="mt-1 font-mono text-xs text-[var(--text-tertiary)]">
-              {data.project.spec.defaultRepo.url}
+            <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
+              {data.project.spec.defaultRepo.url.replace(/^https?:\/\/(www\.)?/, "")}
             </p>
           )}
         </div>
-        <Link
-          href={`/projects/${projectName}/settings`}
-          className="text-sm text-[var(--text-secondary)] underline"
-        >
-          settings →
-        </Link>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-md border border-[var(--border-subtle)] p-0.5 text-xs">
+            <button
+              type="button"
+              onClick={() => setView("canvas")}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded px-2 py-1",
+                view === "canvas"
+                  ? "bg-[var(--accent-subtle)] text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+              )}
+            >
+              <LayoutGrid className="h-3 w-3" /> Canvas
+            </button>
+            <button
+              type="button"
+              onClick={() => setView("list")}
+              className={cn(
+                "inline-flex items-center gap-1.5 rounded px-2 py-1",
+                view === "list"
+                  ? "bg-[var(--accent-subtle)] text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+              )}
+            >
+              <List className="h-3 w-3" /> List
+            </button>
+          </div>
+          <Link
+            href={`/projects/${projectName}/settings`}
+            className="text-xs text-[var(--text-secondary)] underline"
+          >
+            settings
+          </Link>
+        </div>
       </div>
 
-      <section className="mb-8">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-heading text-lg font-semibold">Services</h2>
-          <Button variant="outline" size="sm" disabled>
-            <Plus className="h-3.5 w-3.5" /> Add service
-          </Button>
-        </div>
-        {services.length === 0 ? (
-          <EmptyState
-            icon={<Package className="h-5 w-5" />}
-            title="No services yet"
-            description="A service is one deployable process. Add one from your repo to get started."
-          />
-        ) : (
-          <div className="grid gap-4 sm:grid-cols-2">
-            {services.map((s) => (
-              <Link
-                key={s.metadata.uid ?? s.metadata.name}
-                href={`/projects/${projectName}/services/${s.metadata.name}`}
-                className="block"
-              >
-                <ServiceCard service={s} envs={envs} />
-              </Link>
-            ))}
-          </div>
-        )}
-      </section>
+      {view === "canvas" ? (
+        <ProjectCanvas
+          project={projectName}
+          services={services}
+          addons={addonsList}
+          envs={envs}
+        />
+      ) : (
+        <div className="mx-auto w-full max-w-6xl p-6 lg:p-8">
+          <section className="mb-8">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="font-heading text-lg font-semibold">Services</h2>
+              <Button variant="outline" size="sm" disabled>
+                <Plus className="h-3.5 w-3.5" /> Add service
+              </Button>
+            </div>
+            {services.length === 0 ? (
+              <EmptyState
+                icon={<Package className="h-5 w-5" />}
+                title="No services yet"
+                description="A service is one deployable process."
+              />
+            ) : (
+              <div className="grid gap-4 sm:grid-cols-2">
+                {services.map((s) => (
+                  <ServiceCard
+                    key={s.metadata.uid ?? s.metadata.name}
+                    service={s}
+                    envs={envs}
+                    project={projectName}
+                  />
+                ))}
+              </div>
+            )}
+          </section>
 
-      <section className="mb-8">
-        <div className="mb-3 flex items-center justify-between">
-          <h2 className="font-heading text-lg font-semibold">Addons</h2>
-          <Button variant="outline" size="sm" disabled>
-            <Plus className="h-3.5 w-3.5" /> Add addon
-          </Button>
+          <section>
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="font-heading text-lg font-semibold">Addons</h2>
+              <Button variant="outline" size="sm" disabled>
+                <Plus className="h-3.5 w-3.5" /> Add addon
+              </Button>
+            </div>
+            {addonsList.length === 0 ? (
+              <EmptyState
+                icon={<Database className="h-5 w-5" />}
+                title="No addons yet"
+                description="Postgres, Redis, MongoDB — pick one and the connection env vars are wired into every service."
+              />
+            ) : (
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {addonsList.map((a) => (
+                  <Card key={a.metadata.uid ?? a.metadata.name} size="sm">
+                    <CardHeader>
+                      <CardTitle className="flex items-center gap-2">
+                        <AddonIcon kind={a.spec.kind} />
+                        <span className="truncate">{a.metadata.name}</span>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <dl className="space-y-1 text-xs">
+                        <div className="flex items-center gap-2">
+                          <dt className="font-mono text-[var(--text-tertiary)]">kind</dt>
+                          <dd className="font-mono text-[var(--text-secondary)]">
+                            {addonLabel(a.spec.kind)}
+                          </dd>
+                        </div>
+                        {a.spec.version && (
+                          <div className="flex items-center gap-2">
+                            <dt className="font-mono text-[var(--text-tertiary)]">version</dt>
+                            <dd className="font-mono text-[var(--text-secondary)]">
+                              {a.spec.version}
+                            </dd>
+                          </div>
+                        )}
+                        {a.status?.connectionSecret && (
+                          <div className="flex items-center gap-2">
+                            <dt className="font-mono text-[var(--text-tertiary)]">secret</dt>
+                            <dd className="truncate font-mono text-[var(--text-secondary)]">
+                              {a.status.connectionSecret}
+                            </dd>
+                          </div>
+                        )}
+                      </dl>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </section>
         </div>
-        {addonsList.length === 0 ? (
-          <EmptyState
-            icon={<Database className="h-5 w-5" />}
-            title="No addons yet"
-            description="Postgres, Redis, MongoDB, MySQL — pick one and the connection env vars are wired into every service in this project."
-          />
-        ) : (
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            {addonsList.map((a) => (
-              <Card key={a.metadata.uid ?? a.metadata.name} size="sm">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <AddonIcon kind={a.spec.kind} />
-                    <span className="truncate">{a.metadata.name}</span>
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <dl className="space-y-1 text-xs">
-                    <div className="flex items-center gap-2">
-                      <dt className="font-mono text-[var(--text-tertiary)]">kind</dt>
-                      <dd className="font-mono text-[var(--text-secondary)]">
-                        {addonLabel(a.spec.kind)}
-                      </dd>
-                    </div>
-                    {a.spec.version && (
-                      <div className="flex items-center gap-2">
-                        <dt className="font-mono text-[var(--text-tertiary)]">version</dt>
-                        <dd className="font-mono text-[var(--text-secondary)]">
-                          {a.spec.version}
-                        </dd>
-                      </div>
-                    )}
-                    {a.status?.connectionSecret && (
-                      <div className="flex items-center gap-2">
-                        <dt className="font-mono text-[var(--text-tertiary)]">secret</dt>
-                        <dd className="truncate font-mono text-[var(--text-secondary)]">
-                          {a.status.connectionSecret}
-                        </dd>
-                      </div>
-                    )}
-                  </dl>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        )}
-      </section>
+      )}
     </div>
   );
 }
