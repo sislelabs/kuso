@@ -259,14 +259,6 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	if svc, err := d.Kube.GetKusoService(ctx, d.Namespace, serviceFQN); err == nil && svc != nil && svc.Spec.Port > 0 {
 		port = svc.Spec.Port
 	}
-	if existing != nil {
-		envFromSecrets = append([]string(nil), existing.Spec.EnvFromSecrets...)
-		// Recreate to reset spec — the operator reconciles the helm
-		// release against the new values.
-		if err := d.Kube.DeleteKusoEnvironment(ctx, d.Namespace, envName); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete preview env: %w", err)
-		}
-	}
 
 	env := &kube.KusoEnvironment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -296,8 +288,30 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			EnvFromSecrets:   envFromSecrets,
 		},
 	}
-	if _, err := d.Kube.CreateKusoEnvironment(ctx, d.Namespace, env); err != nil {
-		return fmt.Errorf("create preview env: %w", err)
+
+	if existing != nil {
+		// Update in place rather than delete + recreate. The previous
+		// flow (delete, then Create) was racing with helm-operator's
+		// uninstall finalizer (§6.5): delete sets deletionTimestamp,
+		// helm-operator can't uninstall a non-existent helm release so
+		// the finalizer stays, the next Create returns "already exists,
+		// object is being deleted", and the env CR is permanently
+		// stuck — preview pod terminated, no replacement spawned.
+		//
+		// Spec-level Update keeps the same CR alive; the operator
+		// reconciles the helm release against the new values, no
+		// finalizer drama. We carry over EnvFromSecrets so addon
+		// connections aren't dropped on resync.
+		envFromSecrets = append([]string(nil), existing.Spec.EnvFromSecrets...)
+		env.Spec.EnvFromSecrets = envFromSecrets
+		env.ObjectMeta.ResourceVersion = existing.ResourceVersion
+		if _, err := d.Kube.UpdateKusoEnvironment(ctx, d.Namespace, env); err != nil {
+			return fmt.Errorf("update preview env: %w", err)
+		}
+	} else {
+		if _, err := d.Kube.CreateKusoEnvironment(ctx, d.Namespace, env); err != nil {
+			return fmt.Errorf("create preview env: %w", err)
+		}
 	}
 	if d.Builds != nil {
 		if _, err := d.Builds.Create(ctx, proj.Name, short, builds.CreateBuildRequest{Branch: pr.PullRequest.Head.Ref, Ref: pr.PullRequest.Head.SHA}); err != nil {

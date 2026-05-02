@@ -354,18 +354,80 @@ func (p *Poller) markRunning(ctx context.Context, b *kube.KusoBuild) error {
 	return nil
 }
 
+// logger returns the configured Logger or slog.Default(). Used so the
+// poller's helper paths work in unit tests that construct a Poller
+// directly without going through Run().
+func (p *Poller) logger() *slog.Logger {
+	if p.Logger != nil {
+		return p.Logger
+	}
+	return slog.Default()
+}
+
+// promoteImage patches the new image tag onto every KusoEnvironment
+// whose branch matches the build's branch. That's:
+//
+//   - the production env when builds are triggered against the project
+//     default branch (whether by a push webhook or a manual `build trigger`);
+//   - the preview-pr-N env when builds are triggered against a PR head
+//     ref (via the dispatcher's onPullRequest path);
+//   - both envs when somebody manually triggers a build with the same
+//     branch as the PR they're testing — that's a no-op for production
+//     in practice because webhook flows separate the two.
+//
+// The TS server only patched production; preview envs sat at
+// InvalidImageName until a human manually edited spec.image. Per the
+// rewrite plan §5 / TS comment in github-webhooks.service.ts, that was
+// a known-incomplete feature. We close it here by matching on
+// spec.branch over the env list filtered to this build's service.
 func (p *Poller) promoteImage(ctx context.Context, b *kube.KusoBuild) error {
-	envName := b.Spec.Service + "-production"
 	if b.Spec.Image == nil {
 		return nil
 	}
-	patch := fmt.Sprintf(`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}}}`, b.Spec.Image.Repository, b.Spec.Image.Tag)
-	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(p.Svc.Namespace).
-		Patch(ctx, envName, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
-	if apierrors.IsNotFound(err) {
-		return nil
+	// List every env in the namespace and filter on spec.service —
+	// label-based filtering would be cheaper but the spec.service field
+	// is the contract, while labels are best-effort metadata that may
+	// be absent on hand-rolled CRs.
+	raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(p.Svc.Namespace).
+		List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list envs for promotion: %w", err)
 	}
-	return err
+	patch := fmt.Sprintf(`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}}}`,
+		b.Spec.Image.Repository, b.Spec.Image.Tag)
+	matched := 0
+	for i := range raw.Items {
+		var e kube.KusoEnvironment
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &e); err != nil {
+			continue
+		}
+		if e.Spec.Service != b.Spec.Service {
+			continue
+		}
+		// When the build's branch is set (every webhook-triggered build
+		// has it), only promote envs that match. When the env has no
+		// branch (legacy CRs), promote anyway so production gets the
+		// tag — this preserves the TS server's "production gets every
+		// build" behaviour while extending it to preview envs whose
+		// branch matches the PR head ref.
+		if b.Spec.Branch != "" && e.Spec.Branch != "" && e.Spec.Branch != b.Spec.Branch {
+			continue
+		}
+		if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(p.Svc.Namespace).
+			Patch(ctx, e.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("patch env %s: %w", e.Name, err)
+		}
+		matched++
+		p.logger().Info("build promoted", "env", e.Name, "tag", b.Spec.Image.Tag)
+	}
+	if matched == 0 {
+		p.logger().Warn("build succeeded but no env matched for promotion",
+			"service", b.Spec.Service, "branch", b.Spec.Branch, "tag", b.Spec.Image.Tag)
+	}
+	return nil
 }
 
 // asUnstructured is a small helper to build the unstructured shape for
