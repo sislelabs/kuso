@@ -1,42 +1,27 @@
-# server-go/web
+# server-go/internal/web
 
-Holds the embedded Vue SPA bundle. The directory layout:
+Holds the embedded Next.js SPA bundle. Layout:
 
 ```
 web/
-├── dist/           Vue build output. Source-controlled placeholder
-│                   here so `go build` doesn't error; the Dockerfile
-│                   replaces it with the real Vite build before running
-│                   `go build`.
-└── README.md       this file
+├── dist/      Next.js static export. Source-controlled `.gitkeep`
+│              keeps `go:embed` happy in fresh checkouts; the real
+│              bundle is dropped in by the build pipeline before
+│              `go build` runs.
+├── web.go     embed.FS + Dist() helper.
+└── README.md  this file
 ```
 
-## How the bundle gets here in the image
+## How the bundle gets here
 
-The kuso Dockerfile is multi-stage. Stage 1 (`web-build`) runs the Vue
-build with the Go-server-friendly outDir override:
-
-```dockerfile
-FROM node:22-bookworm-slim AS web-build
-WORKDIR /web
-COPY client ./
-RUN yarn install --immutable && \
-    yarn build --outDir /tmp/dist
-```
-
-Stage 2 (`build`) copies that output into `server-go/web/dist`, then
-runs `go build`:
-
-```dockerfile
-COPY --from=web-build /tmp/dist /src/web/dist
-RUN go build -o /out/kuso-server ./cmd/kuso-server
-```
-
-The Go binary then `embed.FS`-includes everything under `web/dist` and
-serves it from `/` with a fall-through to `index.html` for SPA routes.
+`scripts/build-frontend.sh` runs the Next build and rsyncs `web/out/`
+into `server-go/internal/web/dist/`. The Dockerfile's `web-build` stage
+calls the same script, so the binary built in CI and the binary built
+locally end up identical.
 
 ## Local dev
 
 For ad-hoc `go run ./cmd/kuso-server` outside Docker, the placeholder
-`index.html` keeps `embed.FS` happy. Set `KUSO_DEV_CORS=1` and run the
-Vue dev server (`yarn dev`) on a separate port.
+`.gitkeep` keeps `embed.FS` happy. Set `KUSO_DEV_CORS=1` and run the
+Next dev server (`npm run dev` in `web/`) on port 3000 — it proxies
+`/api/*` and `/ws/*` to the Go server via `next.config.ts` rewrites.

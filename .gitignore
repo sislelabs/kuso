@@ -45,10 +45,11 @@ kubeconfig
 # Local kind / dev
 .kube/
 
-client/.yarn/
-client/.yarnrc.yml
-
 # Generated frontend dist (output of scripts/build-frontend.sh, embedded
 # into the Go binary at build time; the .gitkeep is what we track).
-server-go/internal/web/dist-next/*
-!server-go/internal/web/dist-next/.gitkeep
+# The earlier `dist/` rule above ignores the directory's contents; we
+# re-include it here, then negate the .gitkeep so the placeholder is
+# tracked.
+!server-go/internal/web/dist/
+server-go/internal/web/dist/*
+!server-go/internal/web/dist/.gitkeep

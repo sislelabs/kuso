@@ -1,31 +1,32 @@
-# Build kuso-server (Go) image with the embedded Vue SPA bundle.
+# Build kuso-server (Go) image with the embedded Next.js SPA bundle.
 # Build context MUST be the kuso repo root, not server-go/, because the
-# Vue client lives at ../client.
+# Next.js frontend lives at ../web.
 #
 #   docker build -f kuso/server-go/Dockerfile -t ghcr.io/sislelabs/kuso-server-go:v0.2.0-dev kuso
 #
 # Stages:
-#   1. web-build   — compiles client/ into /tmp/dist via vite
+#   1. web-build   — compiles web/ into /tmp/dist via `next build`
+#                    (output: "export"), copying web/out wholesale.
 #   2. build       — copies the dist into server-go/internal/web/dist
 #                    (which is //go:embed-ed by internal/web) and
-#                    runs go build into /out/kuso-server
-#   3. final       — FROM scratch + the static binary + CA bundle
+#                    runs go build into /out/kuso-server.
+#   3. final       — FROM scratch + the static binary + CA bundle.
 
 # ---- 1. web-build --------------------------------------------------------
 
 FROM node:22-bookworm-slim AS web-build
 WORKDIR /web
 
-# Copy package metadata first so yarn install caches across SPA edits
+# Copy package metadata first so npm install caches across SPA edits
 # that don't touch deps.
-COPY client/package.json client/yarn.lock ./
-RUN corepack enable && yarn install --immutable
+COPY web/package.json web/package-lock.json ./
+RUN npm ci --no-audit --no-fund
 
-COPY client/ ./
-# vite.config.ts has outDir=../server/dist/public — override at build
-# time to /tmp/dist so the next stage can grab it without touching the
-# Vue project.
-RUN yarn build --outDir /tmp/dist
+COPY web/ ./
+# next.config.ts has output: "export" — `npm run build` emits the
+# static site into web/out/. Stage the result at /tmp/dist so the
+# next stage can grab it.
+RUN npm run build && cp -R out /tmp/dist
 
 # ---- 2. go build ---------------------------------------------------------
 
@@ -61,7 +62,7 @@ ARG VERSION=v0.2.0-dev
 LABEL maintainer="https://kuso.sislelabs.com"
 LABEL version=$VERSION
 LABEL org.opencontainers.image.source="https://github.com/sislelabs/kuso"
-LABEL org.opencontainers.image.description="kuso control-plane — Go HTTP API + embedded Vue SPA"
+LABEL org.opencontainers.image.description="kuso control-plane — Go HTTP API + embedded Next.js SPA"
 LABEL org.opencontainers.image.licenses="GPL-3.0"
 
 # CA bundle is needed for the GitHub client + any outbound TLS we add

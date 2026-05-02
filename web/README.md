@@ -23,9 +23,9 @@ frontend if you want them simultaneous.
 ./scripts/build-frontend.sh   # from repo root
 ```
 
-Output goes to `server-go/internal/web/dist-next/`. The Go server serves it
-when `KUSO_FRONTEND=next`. While the rewrite is in flight, `KUSO_FRONTEND`
-unset (or anything other than `next`) keeps serving the legacy Vue bundle.
+Output goes to `server-go/internal/web/dist/`. The Go server embeds it via
+`//go:embed` and serves it from `/` with an `index.html` fallback for SPA
+routes. The Dockerfile's `web-build` stage runs the same script.
 
 ## Stack
 

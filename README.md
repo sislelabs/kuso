@@ -13,8 +13,7 @@ kuso is a Kubernetes-native PaaS designed to be driven entirely from a terminal 
 | Path         | What it is                                                                |
 | ------------ | ------------------------------------------------------------------------- |
 | `server-go/` | Go backend + REST API. Serves the embedded SPA from `internal/web`.       |
-| `web/`       | Next.js 16 frontend (target). Built into `server-go/internal/web/dist-next`. Toggle with `KUSO_FRONTEND=next`. |
-| `client/`    | Vue.js frontend (legacy, retired in Phase F of the rewrite).              |
+| `web/`       | Next.js 16 frontend. Built into `server-go/internal/web/dist`.            |
 | `operator/`  | Kubernetes operator that reconciles `Kuso{Project,Service,...}` CRs.     |
 | `cli/`       | `kuso` command-line tool (Go, Cobra).                                     |
 | `mcp/`       | `kuso-mcp` Model Context Protocol server (Go).                            |
@@ -22,9 +21,12 @@ kuso is a Kubernetes-native PaaS designed to be driven entirely from a terminal 
 | `docs/`      | Product docs and PRDs (incl. `docs/superpowers/specs/` for in-flight specs). |
 
 > **History:** the original NestJS server lived under `server/` and was
-> retired in May 2026 after the Go rewrite reached parity. See
-> `docs/REWRITE.md` for the migration plan and `docs/WORKFLOWS.md` for the
-> HTTP surface reference.
+> retired in May 2026 after the Go rewrite reached parity. The Vue 3
+> dashboard lived under `client/` and was retired alongside Phase F of
+> the Next.js rewrite. See `docs/REWRITE.md` for the server migration
+> plan, `docs/superpowers/specs/2026-05-02-frontend-rewrite-nextjs-design.md`
+> for the frontend rewrite, and `docs/WORKFLOWS.md` for the HTTP surface
+> reference.
 
 ## License
 

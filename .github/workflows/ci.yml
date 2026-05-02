@@ -14,7 +14,6 @@ jobs:
       cli: ${{ steps.filter.outputs.cli }}
       operator: ${{ steps.filter.outputs.operator }}
       server-go: ${{ steps.filter.outputs['server-go'] }}
-      client: ${{ steps.filter.outputs.client }}
       web: ${{ steps.filter.outputs.web }}
       mcp: ${{ steps.filter.outputs.mcp }}
 
@@ -32,9 +31,6 @@ jobs:
               - '.github/workflows/ci.yml'
             server-go:
               - 'server-go/**'
-              - '.github/workflows/ci.yml'
-            client:
-              - 'client/**'
               - '.github/workflows/ci.yml'
             web:
               - 'web/**'
@@ -130,25 +126,6 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - run: go test ./... -count=1
-
-  client:
-    name: client (Vue, legacy)
-    needs: changes
-    if: needs.changes.outputs.client == 'true'
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: client
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: yarn
-          cache-dependency-path: client/yarn.lock
-      - run: corepack enable
-      - run: yarn install --immutable
-      - run: yarn build
 
   web:
     name: web (Next.js)
