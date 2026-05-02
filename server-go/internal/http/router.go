@@ -45,6 +45,8 @@ type Deps struct {
 // isn't configured.
 type GithubDeps struct {
 	Cfg        *github.Config
+	Client     *github.Client
+	Cache      github.CacheStore
 	Dispatcher *github.Dispatcher
 }
 
@@ -72,13 +74,30 @@ func NewRouter(d Deps) http.Handler {
 	r.Post("/api/auth/login", authH.Login)
 	r.Get("/api/auth/methods", authH.Methods)
 
+	// OAuth flows are public (no JWT yet) and end with a redirect
+	// carrying the JWT in a cookie. Only mounted when the corresponding
+	// env vars are configured.
+	if d.Issuer != nil {
+		ghOAuth := auth.NewGithubOAuth()
+		gOAuth := auth.NewGenericOAuth()
+		if ghOAuth != nil || gOAuth != nil {
+			oauthH := &httphandlers.OAuthHandler{
+				DB: d.DB, Issuer: d.Issuer, Github: ghOAuth, OAuth2: gOAuth, Logger: d.Logger,
+			}
+			oauthH.MountPublic(r)
+		}
+	}
+
+	var ghHandler *httphandlers.GithubHandler
 	if d.Github != nil && d.Github.Cfg != nil {
-		gh := &httphandlers.GithubHandler{
+		ghHandler = &httphandlers.GithubHandler{
 			Cfg:        d.Github.Cfg,
+			Client:     d.Github.Client,
+			Cache:      d.Github.Cache,
 			Dispatcher: d.Github.Dispatcher,
 			Logger:     d.Logger,
 		}
-		r.Post("/api/webhooks/github", gh.Webhook)
+		ghHandler.MountPublic(r)
 	}
 
 	// Authenticated routes.
@@ -121,6 +140,9 @@ func NewRouter(d Deps) http.Handler {
 		if d.Addons != nil {
 			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, Logger: d.Logger}
 			addonsH.Mount(r)
+		}
+		if ghHandler != nil {
+			ghHandler.MountAuthed(r)
 		}
 	})
 

@@ -102,8 +102,15 @@ func main() {
 		if err != nil {
 			logger.Error("github: config", "err", err)
 		} else if ghCfg.IsConfigured() {
-			disp := ghpkg.NewDispatcher(kc, buildSvc, *namespace, logger)
-			ghDeps = &httpsrv.GithubDeps{Cfg: ghCfg, Dispatcher: disp}
+			ghCli, err := ghpkg.NewClient(ghCfg)
+			if err != nil {
+				logger.Error("github: client", "err", err)
+			} else {
+				ghCache := ghpkg.NewDBCache(database)
+				disp := ghpkg.NewDispatcher(kc, buildSvc, *namespace, logger).
+					WithGithubCache(ghCli, ghCache)
+				ghDeps = &httpsrv.GithubDeps{Cfg: ghCfg, Client: ghCli, Cache: ghCache, Dispatcher: disp}
+			}
 		}
 	}
 

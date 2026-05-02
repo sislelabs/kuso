@@ -17,10 +17,13 @@ import (
 
 // Dispatcher routes verified webhook events to their handlers. Wired
 // with the projects + builds services so push/PR events can reach into
-// the cluster.
+// the cluster, and (optionally) the github cache so installation +
+// installation_repositories events invalidate it.
 type Dispatcher struct {
 	Kube      *kube.Client
 	Builds    *builds.Service
+	Client    *Client     // optional, for cache refresh
+	Cache     CacheStore  // optional, for cache writes
 	Namespace string
 	Logger    *slog.Logger
 }
@@ -36,6 +39,15 @@ func NewDispatcher(k *kube.Client, b *builds.Service, namespace string, logger *
 	return &Dispatcher{Kube: k, Builds: b, Namespace: namespace, Logger: logger}
 }
 
+// WithGithubCache attaches the github API client + cache so the
+// installation/installation_repositories webhook handlers can refresh
+// the cached list on change.
+func (d *Dispatcher) WithGithubCache(c *Client, cache CacheStore) *Dispatcher {
+	d.Client = c
+	d.Cache = cache
+	return d
+}
+
 // Dispatch parses the GitHub webhook payload and routes it to the right
 // handler. Unknown events log at debug and return nil.
 func (d *Dispatcher) Dispatch(ctx context.Context, event string, body []byte) error {
@@ -47,11 +59,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event string, body []byte) er
 	case "installation":
 		return d.onInstallation(ctx, body)
 	case "installation_repositories":
-		// Cache invalidation hook — Phase 6 wires the actual refresh into
-		// the github cache table once the install-callback flow is
-		// landed; here we just log the event.
-		d.Logger.Info("installation_repositories", "len", len(body))
-		return nil
+		return d.onInstallationRepos(ctx, body)
 	default:
 		d.Logger.Debug("ignoring webhook event", "event", event)
 		return nil
@@ -192,10 +200,35 @@ func (d *Dispatcher) onInstallation(ctx context.Context, body []byte) error {
 		return fmt.Errorf("decode installation: %w", err)
 	}
 	d.Logger.Info("installation event", "action", ev.Action, "id", ev.Installation.ID)
-	// Cache refresh hook lands when DB-side cache helpers are wired in
-	// the next iteration; the App still works because installation
-	// transports mint tokens lazily on first use.
-	_ = ctx
+	if d.Cache == nil {
+		return nil
+	}
+	if ev.Action == "deleted" {
+		if err := d.Cache.Delete(ctx, ev.Installation.ID); err != nil {
+			d.Logger.Warn("installation cache delete", "id", ev.Installation.ID, "err", err)
+		}
+		return nil
+	}
+	if d.Client == nil {
+		return nil
+	}
+	if err := d.Client.RefreshInstallations(ctx, d.Cache); err != nil {
+		d.Logger.Warn("installation cache refresh", "err", err)
+	}
+	return nil
+}
+
+func (d *Dispatcher) onInstallationRepos(ctx context.Context, body []byte) error {
+	var ev installationEvent
+	if err := json.Unmarshal(body, &ev); err != nil {
+		return fmt.Errorf("decode installation_repositories: %w", err)
+	}
+	if d.Client == nil || d.Cache == nil {
+		return nil
+	}
+	if err := d.Client.RefreshInstallationRepos(ctx, d.Cache, ev.Installation.ID); err != nil {
+		d.Logger.Warn("installation repos refresh", "id", ev.Installation.ID, "err", err)
+	}
 	return nil
 }
 
