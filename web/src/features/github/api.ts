@@ -1,12 +1,21 @@
 import { api } from "@/lib/api-client";
 
+// GithubInstallation mirrors the server's wire shape — see
+// server-go/internal/http/handlers/github.go. The CLI consumes the
+// same fields, so flattening account.{login,type} and renaming repos
+// → repositories is what the platform uses, not what felt natural at
+// the time the web client was sketched.
 export interface GithubInstallation {
   id: number;
-  account: { login: string; type: string; avatarUrl?: string };
-  repos: GithubRepo[];
+  accountLogin: string;
+  accountType: string;
+  accountId: number;
+  repositories: GithubRepo[];
 }
 
 export interface GithubRepo {
+  id: number;
+  name: string;
   fullName: string;
   defaultBranch: string;
   private: boolean;

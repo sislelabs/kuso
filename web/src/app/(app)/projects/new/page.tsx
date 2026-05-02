@@ -86,7 +86,7 @@ export default function NewProjectPage() {
 
   const allRepos = useMemo(() => {
     return (installs.data ?? []).flatMap((inst) =>
-      inst.repos.map((r) => ({ installationId: inst.id, repo: r, owner: inst.account.login }))
+      inst.repositories.map((r) => ({ installationId: inst.id, repo: r, owner: inst.accountLogin }))
     );
   }, [installs.data]);
 
