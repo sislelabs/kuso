@@ -1,11 +1,11 @@
 "use client";
 
-import { useParams } from "next/navigation";
 import { ActivityFeed } from "@/components/activity/ActivityFeed";
+import { useRouteParams } from "@/lib/dynamic-params";
 
 export function ActivityView() {
-  const params = useParams<{ project: string }>();
-  const project = params?.project ?? "";
+  const params = useRouteParams<{ project: string }>(["project"]);
+  const project = params.project ?? "";
   return (
     <div className="mx-auto max-w-3xl p-6 lg:p-8">
       <h1 className="mb-1 font-heading text-2xl font-semibold tracking-tight">

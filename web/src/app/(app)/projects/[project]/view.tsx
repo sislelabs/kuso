@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
 import { useState } from "react";
+import { useRouteParams } from "@/lib/dynamic-params";
 import { useProject, useAddons } from "@/features/projects";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -93,8 +93,8 @@ function ServiceCard({
 }
 
 export function ProjectDetailView() {
-  const params = useParams<{ project: string }>();
-  const projectName = params?.project ?? "";
+  const params = useRouteParams<{ project: string }>(["project"]);
+  const projectName = params.project ?? "";
   const [view, setView] = useState<"canvas" | "list">("canvas");
 
   const project = useProject(projectName);

@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
+import { useRouteParams } from "@/lib/dynamic-params";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,9 +14,9 @@ import { toast } from "sonner";
 import { Trash2, Save } from "lucide-react";
 
 export function ProjectSettingsView() {
-  const params = useParams<{ project: string }>();
+  const params = useRouteParams<{ project: string }>(["project"]);
   const router = useRouter();
-  const projectName = params?.project ?? "";
+  const projectName = params.project ?? "";
   const project = useProject(projectName);
   const update = useUpdateProject(projectName);
   const del = useDeleteProject();

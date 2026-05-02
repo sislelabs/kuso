@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
 import { useState } from "react";
+import { useRouteParams } from "@/lib/dynamic-params";
 import {
   Card,
   CardContent,
@@ -23,9 +23,9 @@ import { relativeTime } from "@/lib/format";
 import { toast } from "sonner";
 
 export function ServiceDetailView() {
-  const params = useParams<{ project: string; service: string }>();
-  const project = params?.project ?? "";
-  const service = params?.service ?? "";
+  const params = useRouteParams<{ project: string; service: string }>(["project", "service"]);
+  const project = params.project ?? "";
+  const service = params.service ?? "";
   const [tab, setTab] = useState<"overview" | "env" | "builds" | "logs">("overview");
 
   const svc = useService(project, service);

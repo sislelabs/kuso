@@ -1,15 +1,15 @@
 "use client";
 
 import { useState } from "react";
-import { useParams } from "next/navigation";
 import { useProject } from "@/features/projects";
 import { LogStream } from "@/components/logs/LogStream";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useRouteParams } from "@/lib/dynamic-params";
 
 export function LogsView() {
-  const params = useParams<{ project: string }>();
-  const projectName = params?.project ?? "";
+  const params = useRouteParams<{ project: string }>(["project"]);
+  const projectName = params.project ?? "";
   const project = useProject(projectName);
   const services = project.data?.services ?? [];
   const [picked, setPicked] = useState<string | null>(null);
