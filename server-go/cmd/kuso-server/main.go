@@ -19,6 +19,7 @@ import (
 	httpsrv "kuso/server/internal/http"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/projects"
+	"kuso/server/internal/secrets"
 	"kuso/server/internal/version"
 )
 
@@ -56,10 +57,12 @@ func main() {
 	// project routes rather than crash. The /healthz + /api/auth/login
 	// surface still works for cutover smoke tests.
 	var projSvc *projects.Service
+	var secSvc *secrets.Service
 	if kc, err := kube.NewClient(); err != nil {
-		logger.Warn("kube: client unavailable, project routes disabled", "err", err)
+		logger.Warn("kube: client unavailable, project + secret routes disabled", "err", err)
 	} else {
 		projSvc = projects.New(kc, *namespace)
+		secSvc = secrets.New(kc, *namespace)
 	}
 
 	r := httpsrv.NewRouter(httpsrv.Deps{
@@ -67,6 +70,7 @@ func main() {
 		Issuer:     issuer,
 		SessionKey: sessionKey,
 		Projects:   projSvc,
+		Secrets:    secSvc,
 		Logger:     logger,
 	})
 

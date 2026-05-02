@@ -12,6 +12,7 @@ import (
 	"kuso/server/internal/db"
 	httphandlers "kuso/server/internal/http/handlers"
 	"kuso/server/internal/projects"
+	"kuso/server/internal/secrets"
 	"kuso/server/internal/version"
 
 	"github.com/go-chi/chi/v5"
@@ -24,6 +25,7 @@ type Deps struct {
 	Issuer     *auth.Issuer
 	SessionKey string
 	Projects   *projects.Service
+	Secrets    *secrets.Service
 	Logger     *slog.Logger
 }
 
@@ -53,6 +55,10 @@ func NewRouter(d Deps) http.Handler {
 		if d.Projects != nil {
 			projH := &httphandlers.ProjectsHandler{Svc: d.Projects, Logger: d.Logger}
 			projH.Mount(r)
+		}
+		if d.Secrets != nil {
+			secH := &httphandlers.SecretsHandler{Svc: d.Secrets, Logger: d.Logger}
+			secH.Mount(r)
 		}
 	})
 
