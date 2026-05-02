@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"kuso/server/internal/auth"
+	"kuso/server/internal/builds"
 	"kuso/server/internal/db"
 	httphandlers "kuso/server/internal/http/handlers"
 	"kuso/server/internal/projects"
@@ -26,6 +27,7 @@ type Deps struct {
 	SessionKey string
 	Projects   *projects.Service
 	Secrets    *secrets.Service
+	Builds     *builds.Service
 	Logger     *slog.Logger
 }
 
@@ -59,6 +61,10 @@ func NewRouter(d Deps) http.Handler {
 		if d.Secrets != nil {
 			secH := &httphandlers.SecretsHandler{Svc: d.Secrets, Logger: d.Logger}
 			secH.Mount(r)
+		}
+		if d.Builds != nil {
+			buildH := &httphandlers.BuildsHandler{Svc: d.Builds, Logger: d.Logger}
+			buildH.Mount(r)
 		}
 	})
 

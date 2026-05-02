@@ -18,6 +18,7 @@ import (
 	"kuso/server/internal/db"
 	httpsrv "kuso/server/internal/http"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/builds"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/version"
@@ -52,17 +53,28 @@ func main() {
 		}
 	}()
 
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
 	// Kube client is optional during early development — if config
 	// resolution fails (no kubeconfig and no in-cluster), boot without
 	// project routes rather than crash. The /healthz + /api/auth/login
 	// surface still works for cutover smoke tests.
 	var projSvc *projects.Service
 	var secSvc *secrets.Service
+	var buildSvc *builds.Service
 	if kc, err := kube.NewClient(); err != nil {
-		logger.Warn("kube: client unavailable, project + secret routes disabled", "err", err)
+		logger.Warn("kube: client unavailable, project + secret + build routes disabled", "err", err)
 	} else {
 		projSvc = projects.New(kc, *namespace)
 		secSvc = secrets.New(kc, *namespace)
+		buildSvc = builds.New(kc, *namespace)
+		// Background poller: stamps KusoBuild status from kaniko Job
+		// outcomes and promotes the image tag onto the production env.
+		// Disabled when KUSO_BUILD_POLLER_DISABLED=true (matches TS env).
+		if os.Getenv("KUSO_BUILD_POLLER_DISABLED") != "true" {
+			go (&builds.Poller{Svc: buildSvc, Interval: 30 * time.Second}).Run(ctx)
+		}
 	}
 
 	r := httpsrv.NewRouter(httpsrv.Deps{
@@ -71,6 +83,7 @@ func main() {
 		SessionKey: sessionKey,
 		Projects:   projSvc,
 		Secrets:    secSvc,
+		Builds:     buildSvc,
 		Logger:     logger,
 	})
 
@@ -79,9 +92,6 @@ func main() {
 		Handler:           r,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
 
 	go func() {
 		logger.Info("kuso-server listening", "addr", *addr, "version", version.Version())

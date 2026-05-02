@@ -224,6 +224,16 @@ func (c *Client) CreateKusoEnvironment(ctx context.Context, namespace string, e 
 	return create[KusoEnvironment](ctx, c, GVREnvironments, "KusoEnvironment", namespace, e)
 }
 
+// CreateKusoBuild creates a new KusoBuild CR.
+func (c *Client) CreateKusoBuild(ctx context.Context, namespace string, b *KusoBuild) (*KusoBuild, error) {
+	return create[KusoBuild](ctx, c, GVRBuilds, "KusoBuild", namespace, b)
+}
+
+// DeleteKusoBuild removes a KusoBuild by name.
+func (c *Client) DeleteKusoBuild(ctx context.Context, namespace, name string) error {
+	return deleteCR(ctx, c, GVRBuilds, namespace, name)
+}
+
 // UpdateKusoEnvironment replaces an existing KusoEnvironment's spec.
 //
 // NOTE: callers that mutate envFromSecrets values must also bump
