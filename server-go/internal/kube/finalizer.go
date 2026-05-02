@@ -13,13 +13,20 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 )
 
-// helmUninstallFinalizer is the finalizer the operator-sdk helm reconciler
-// adds to every helm-managed CR. It blocks Delete until the helm release
-// secret can be purged. When a CR is deleted before the operator ever
-// renders the chart (or when the chart fails to render), the helm
-// release secret never exists, so the finalizer can never be satisfied
-// and the CR sits with deletionTimestamp set forever.
-const helmUninstallFinalizer = "uninstall-helm-release"
+// helmUninstallFinalizers are the finalizer names the operator-sdk
+// helm reconciler adds to every helm-managed CR. It blocks Delete
+// until the helm release secret can be purged. When a CR is deleted
+// before the operator ever renders the chart (or when the chart fails
+// to render), the helm release secret never exists, so the finalizer
+// can never be satisfied and the CR sits with deletionTimestamp set
+// forever.
+//
+// The newer helm-operator (≥1.30) uses the operatorframework.io
+// prefix; older builds used the bare name. Match either.
+var helmUninstallFinalizers = []string{
+	"helm.sdk.operatorframework.io/uninstall-release",
+	"uninstall-helm-release",
+}
 
 // CleanupStuckHelmFinalizers strips uninstall-helm-release from any CR
 // in `namespace` that has a deletionTimestamp set AND no corresponding
@@ -42,7 +49,7 @@ func (c *Client) CleanupStuckHelmFinalizers(ctx context.Context, namespace strin
 			continue
 		}
 		fins := obj.GetFinalizers()
-		if !containsString(fins, helmUninstallFinalizer) {
+		if !containsAnyString(fins, helmUninstallFinalizers) {
 			continue
 		}
 		// Helm release secrets are named `sh.helm.release.v1.<release>.v<revision>`.
@@ -82,13 +89,17 @@ func (c *Client) CleanupStuckHelmFinalizers(ctx context.Context, namespace strin
 	return released, inspected, nil
 }
 
-// stripFinalizer removes helmUninstallFinalizer from finalizers via a
-// merge-patch on metadata.finalizers. Returns (patched, err) — patched
-// is false if the finalizer wasn't actually present after a re-list.
+// stripFinalizer removes any helm-uninstall finalizer from finalizers
+// via a merge-patch on metadata.finalizers. Returns (patched, err) —
+// patched is false if no such finalizer was present after re-listing.
 func stripFinalizer(ctx context.Context, c *Client, gvr schema.GroupVersionResource, namespace, name string, current []string) (bool, error) {
+	drop := map[string]bool{}
+	for _, f := range helmUninstallFinalizers {
+		drop[f] = true
+	}
 	next := make([]string, 0, len(current))
 	for _, f := range current {
-		if f == helmUninstallFinalizer {
+		if drop[f] {
 			continue
 		}
 		next = append(next, f)
@@ -108,9 +119,13 @@ func stripFinalizer(ctx context.Context, c *Client, gvr schema.GroupVersionResou
 	return true, nil
 }
 
-func containsString(haystack []string, needle string) bool {
+func containsAnyString(haystack []string, needles []string) bool {
+	want := map[string]bool{}
+	for _, n := range needles {
+		want[n] = true
+	}
 	for _, s := range haystack {
-		if s == needle {
+		if want[s] {
 			return true
 		}
 	}

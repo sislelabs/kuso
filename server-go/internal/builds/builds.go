@@ -155,6 +155,14 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	buildName := buildCRName(project, service, sha)
 	imageRepo := fmt.Sprintf("%s/%s/%s", RegistryHost, project, service)
 
+	// Strategy mirrors KusoService.spec.runtime. The chart switches on
+	// `strategy: dockerfile|nixpacks` to pick the kaniko args + the
+	// optional nixpacks-plan init container. Empty defaults to dockerfile.
+	strategy := svcCR.Spec.Runtime
+	if strategy == "" {
+		strategy = "dockerfile"
+	}
+
 	build := &kube.KusoBuild{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: buildName,
@@ -171,7 +179,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 			Branch:               branch,
 			Repo:                 &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
 			GithubInstallationID: githubInstallationID(proj),
-			Strategy:             "dockerfile",
+			Strategy:             strategy,
 			Image:                &kube.KusoImage{Repository: imageRepo, Tag: ImageTag(sha)},
 		},
 	}

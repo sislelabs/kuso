@@ -70,12 +70,14 @@ spec:
                 githubInstallationId:
                   type: integer
                   format: int64
-                # Build strategy. v0.2 ships dockerfile only — kaniko handles
-                # any Dockerfile-based build. nixpacks/buildpacks come later
-                # by swapping the kaniko image for the right builder.
+                # Build strategy. v0.2 ships dockerfile + nixpacks.
+                # dockerfile: kaniko reads <path>/Dockerfile.
+                # nixpacks: an init container runs `nixpacks build --out`
+                # to emit a Dockerfile + context, then kaniko builds from
+                # there. buildpacks/static aren't wired yet.
                 strategy:
                   type: string
-                  enum: [dockerfile]
+                  enum: [dockerfile, nixpacks]
                   default: dockerfile
                 # Where to push. Server fills this with the in-cluster
                 # registry URL + a tag derived from the commit SHA.

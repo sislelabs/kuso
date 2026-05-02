@@ -20,20 +20,21 @@ func decodeInto(u *unstructured.Unstructured, out any) error {
 }
 
 // validateRuntime rejects runtimes the operator's kusobuild chart can't
-// actually render. The chart today renders a kaniko Job that expects a
-// Dockerfile; nixpacks / buildpacks / static aren't wired through.
-// Returning a clear error here is far better than silently accepting
-// the value and letting the build Job fail with "Dockerfile not found".
+// actually render. The chart today supports `dockerfile` (kaniko reads a
+// Dockerfile at <path>/Dockerfile) and `nixpacks` (an init container
+// runs `nixpacks build --out` to emit a Dockerfile + context, then
+// kaniko builds from there). `buildpacks` and `static` aren't wired
+// through; reject them so users don't get silently-broken builds.
 //
 // Empty string is accepted and treated as the default (dockerfile).
 func validateRuntime(rt string) error {
 	switch rt {
-	case "", "dockerfile":
+	case "", "dockerfile", "nixpacks":
 		return nil
-	case "nixpacks", "buildpacks", "static":
-		return fmt.Errorf("%w: runtime %q is not supported yet — only 'dockerfile' is wired through. Track: docs/REWRITE.md", ErrInvalid, rt)
+	case "buildpacks", "static":
+		return fmt.Errorf("%w: runtime %q is not supported yet — supported: dockerfile, nixpacks", ErrInvalid, rt)
 	default:
-		return fmt.Errorf("%w: unknown runtime %q (supported: dockerfile)", ErrInvalid, rt)
+		return fmt.Errorf("%w: unknown runtime %q (supported: dockerfile, nixpacks)", ErrInvalid, rt)
 	}
 }
 

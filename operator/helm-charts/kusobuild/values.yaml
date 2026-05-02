@@ -10,8 +10,18 @@ repo:
   url: ""
   path: "."
 
-# Build strategy. v0.2 ships dockerfile only.
+# Build strategy. v0.2 ships dockerfile + nixpacks.
+#   - dockerfile: kaniko reads <path>/Dockerfile from the repo (default).
+#   - nixpacks: an init container runs `nixpacks build --out` to emit a
+#     Dockerfile + context, then kaniko builds from there. No docker
+#     daemon is involved; nixpacks --out is a pure source transform.
 strategy: dockerfile
+
+nixpacks:
+  # Pin the binary version so builds are reproducible. The init
+  # container downloads this exact tag from
+  # github.com/railwayapp/nixpacks/releases and runs it under alpine.
+  version: "1.41.0"
 
 # Target registry. The server fills this in with the in-cluster registry
 # URL (kuso-registry.kuso.svc.cluster.local:5000/<project>/<service>) and

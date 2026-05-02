@@ -8,13 +8,13 @@ import (
 
 func TestValidateRuntime(t *testing.T) {
 	cases := []struct {
-		in        string
-		wantOK    bool
+		in         string
+		wantOK     bool
 		wantSubstr string
 	}{
 		{"", true, ""},
 		{"dockerfile", true, ""},
-		{"nixpacks", false, "not supported yet"},
+		{"nixpacks", true, ""},
 		{"buildpacks", false, "not supported yet"},
 		{"static", false, "not supported yet"},
 		{"wat", false, "unknown runtime"},
