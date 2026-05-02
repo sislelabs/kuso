@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"time"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/config"
 	"kuso/server/internal/db"
@@ -22,12 +23,14 @@ import (
 // for JWT signing. SessionKey is the legacy HMAC fallback secret.
 //
 // Config is optional — when wired, /api/auth/session surfaces the
-// feature-flag bundle the Vue UI's nav reads on first paint.
+// feature-flag bundle the Vue UI's nav reads on first paint. Audit is
+// optional too — when wired, login attempts emit audit rows.
 type AuthHandler struct {
 	DB         *db.DB
 	Issuer     *auth.Issuer
 	SessionKey string
 	Config     *config.Service
+	Audit      *audit.Service
 	Logger     *slog.Logger
 }
 
@@ -110,6 +113,12 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	// Best-effort login bookkeeping. Failure here MUST NOT block the
 	// response — the user is authenticated regardless.
 	_ = h.DB.UpdateUserLogin(ctx, user.ID, clientIP(r), time.Now())
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User: user.ID, Severity: "info", Action: "login",
+			Resource: "user", Message: "user logged in",
+		})
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(loginResponse{AccessToken: tok}); err != nil {

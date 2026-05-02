@@ -19,6 +19,7 @@ import (
 	httpsrv "kuso/server/internal/http"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/addons"
+	"kuso/server/internal/audit"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	ghpkg "kuso/server/internal/github"
@@ -61,6 +62,8 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
+	auditSvc := audit.New(database)
+
 	// Kube client is optional during early development — if config
 	// resolution fails (no kubeconfig and no in-cluster), boot without
 	// project routes rather than crash. The /healthz + /api/auth/login
@@ -95,6 +98,12 @@ func main() {
 		if os.Getenv("KUSO_BUILD_POLLER_DISABLED") != "true" {
 			go (&builds.Poller{Svc: buildSvc, Interval: 30 * time.Second}).Run(ctx)
 		}
+		// Preview-cleanup: every 5 minutes delete preview envs whose
+		// ttl.expiresAt has passed. Disabled by
+		// KUSO_PREVIEW_CLEANUP_DISABLED=true.
+		if os.Getenv("KUSO_PREVIEW_CLEANUP_DISABLED") != "true" {
+			go runPreviewCleanup(ctx, projSvc, logger)
+		}
 
 		// GitHub App is opt-in; if env vars are missing the webhook +
 		// install routes simply aren't registered.
@@ -125,6 +134,7 @@ func main() {
 		Config:     cfgSvc,
 		Status:     statSvc,
 		Addons:     addonSvc,
+		Audit:      auditSvc,
 		Github:     ghDeps,
 		Logger:     logger,
 	})
@@ -170,6 +180,37 @@ func parseTTL(s string) time.Duration {
 	// let auth use its default and log it once.
 	slog.Warn("auth: JWT_EXPIRESIN unparsable, using default", "value", s)
 	return 0
+}
+
+// runPreviewCleanup ticks every 5 minutes and deletes preview envs
+// whose ttl.expiresAt has passed. Best-effort — kube-side errors
+// surface via the logger, never propagate.
+func runPreviewCleanup(ctx context.Context, svc *projects.Service, logger *slog.Logger) {
+	t := time.NewTicker(5 * time.Minute)
+	defer t.Stop()
+	tick := func() {
+		c, cancel := context.WithTimeout(ctx, 60*time.Second)
+		defer cancel()
+		n, err := svc.SweepExpiredPreviews(c, func(name string, err error) {
+			logger.Warn("preview-cleanup", "env", name, "err", err)
+		})
+		if err != nil {
+			logger.Warn("preview-cleanup list", "err", err)
+			return
+		}
+		if n > 0 {
+			logger.Info("preview-cleanup deleted", "count", n)
+		}
+	}
+	tick()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			tick()
+		}
+	}
 }
 
 func envOr(key, fallback string) string {

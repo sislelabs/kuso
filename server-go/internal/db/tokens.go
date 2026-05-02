@@ -77,3 +77,52 @@ func (d *DB) DeleteUserToken(ctx context.Context, userID, tokenID string) error 
 	}
 	return nil
 }
+
+// AdminToken includes the username for the admin all-users list view.
+type AdminToken struct {
+	ID        string
+	Name      sql.NullString
+	UserID    string
+	Username  string
+	Email     string
+	ExpiresAt time.Time
+	IsActive  bool
+	LastUsed  sql.NullTime
+	CreatedAt time.Time
+}
+
+// ListAllTokens returns every token row joined with the owner's
+// username + email. Admin-only — the slim shape the /api/tokens
+// management page reads.
+func (d *DB) ListAllTokens(ctx context.Context) ([]AdminToken, error) {
+	rows, err := d.DB.QueryContext(ctx, `
+SELECT t.id, t.name, t."userId", u.username, u.email, t."expiresAt", t."isActive", t."lastUsed", t."createdAt"
+FROM "Token" t JOIN "User" u ON u.id = t."userId"
+ORDER BY t."createdAt" DESC`)
+	if err != nil {
+		return nil, fmt.Errorf("db: list all tokens: %w", err)
+	}
+	defer rows.Close()
+	var out []AdminToken
+	for rows.Next() {
+		var a AdminToken
+		if err := rows.Scan(&a.ID, &a.Name, &a.UserID, &a.Username, &a.Email, &a.ExpiresAt, &a.IsActive, &a.LastUsed, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// DeleteToken removes a token by id (admin-only). Cross-user safe via
+// being a primary-key delete.
+func (d *DB) DeleteToken(ctx context.Context, id string) error {
+	res, err := d.DB.ExecContext(ctx, `DELETE FROM "Token" WHERE id = ?`, id)
+	if err != nil {
+		return fmt.Errorf("db: delete token: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}

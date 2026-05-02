@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"fmt"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
@@ -28,6 +29,40 @@ func (s *Service) GetEnvironment(ctx context.Context, project, env string) (*kub
 		return nil, ErrNotFound
 	}
 	return e, nil
+}
+
+// SweepExpiredPreviews scans every preview KusoEnvironment in the
+// configured namespace and deletes any whose spec.ttl.expiresAt is in
+// the past. Webhooks are the primary teardown mechanism; this is the
+// safety net for missed close events / suspended Apps / past outages.
+//
+// Returns the number of envs deleted. Errors against individual envs
+// are logged via the supplied callback (or swallowed when nil) so one
+// flaky teardown doesn't stop the sweep.
+func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name string, err error)) (int, error) {
+	envs, err := s.Kube.ListKusoEnvironments(ctx, s.Namespace)
+	if err != nil {
+		return 0, err
+	}
+	now := time.Now().UTC()
+	deleted := 0
+	for _, e := range envs {
+		if e.Spec.Kind != "preview" || e.Spec.TTL == nil || e.Spec.TTL.ExpiresAt == "" {
+			continue
+		}
+		exp, err := time.Parse(time.RFC3339, e.Spec.TTL.ExpiresAt)
+		if err != nil || !exp.Before(now) {
+			continue
+		}
+		if err := s.Kube.DeleteKusoEnvironment(ctx, s.Namespace, e.Name); err != nil {
+			if onErr != nil {
+				onErr(e.Name, err)
+			}
+			continue
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 // DeleteEnvironment removes a preview env. Production envs cannot be

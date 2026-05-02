@@ -7,8 +7,10 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"os"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
@@ -18,8 +20,10 @@ import (
 	"kuso/server/internal/logs"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/secrets"
+	"kuso/server/internal/spa"
 	"kuso/server/internal/status"
 	"kuso/server/internal/version"
+	"kuso/server/internal/web"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -37,6 +41,7 @@ type Deps struct {
 	Config     *config.Service
 	Status     *status.Service
 	Addons     *addons.Service
+	Audit      *audit.Service
 	Github     *GithubDeps
 	Logger     *slog.Logger
 }
@@ -56,6 +61,9 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(chimw.RequestID)
 	r.Use(chimw.Recoverer)
 	r.Use(slogRequest(d.Logger))
+	if os.Getenv("KUSO_DEV_CORS") == "1" {
+		r.Use(devCORS)
+	}
 
 	// Unauthenticated routes.
 	r.Get("/healthz", healthz)
@@ -69,6 +77,7 @@ func NewRouter(d Deps) http.Handler {
 		Issuer:     d.Issuer,
 		SessionKey: d.SessionKey,
 		Config:     d.Config,
+		Audit:      d.Audit,
 		Logger:     d.Logger,
 	}
 	r.Post("/api/auth/login", authH.Login)
@@ -132,6 +141,8 @@ func NewRouter(d Deps) http.Handler {
 			groupsH.Mount(r)
 			notifH := &httphandlers.NotificationsHandler{DB: d.DB, Logger: d.Logger}
 			notifH.Mount(r)
+			tokAdminH := &httphandlers.TokensAdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
+			tokAdminH.Mount(r)
 		}
 		if d.Config != nil {
 			cfgH := &httphandlers.ConfigHandler{Cfg: d.Config, DB: d.DB, Logger: d.Logger}
@@ -141,12 +152,49 @@ func NewRouter(d Deps) http.Handler {
 			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, Logger: d.Logger}
 			addonsH.Mount(r)
 		}
+		if d.Audit != nil {
+			auditH := &httphandlers.AuditHandler{Svc: d.Audit, Logger: d.Logger}
+			auditH.Mount(r)
+		}
+		if d.Logs != nil { // Logs implies a kube client; reuse it for /api/kubernetes/*.
+			kubeH := &httphandlers.KubernetesHandler{Kube: d.Logs.Kube, Namespace: d.Logs.Namespace, Logger: d.Logger}
+			kubeH.Mount(r)
+		}
 		if ghHandler != nil {
 			ghHandler.MountAuthed(r)
 		}
 	})
 
+	// SPA fallback. Anything that isn't an API or webhook route falls
+	// through to the embedded Vue bundle. The embed.FS always contains
+	// at least a placeholder index.html so this never panics.
+	if spaFS, err := web.Dist(); err == nil {
+		if spaH, err := spa.Handler(spaFS, "/api/", "/healthz"); err == nil {
+			r.NotFound(spaH.ServeHTTP)
+		} else {
+			d.Logger.Warn("spa: handler unavailable", "err", err)
+		}
+	} else {
+		d.Logger.Warn("spa: embedded dist unavailable", "err", err)
+	}
+
 	return r
+}
+
+// devCORS adds permissive CORS headers. Only mounted when
+// KUSO_DEV_CORS=1 — production same-origin must NOT enable this (§6.7
+// landmine).
+func devCORS(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,PATCH,OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Authorization,Content-Type")
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // healthz stays unauthenticated and returns the embedded version. The

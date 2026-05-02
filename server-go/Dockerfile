@@ -1,21 +1,47 @@
-# Build kuso-server (Go) image. Phase 0 of the NestJS → Go rewrite.
-# See kuso/docs/REWRITE.md.
+# Build kuso-server (Go) image with the embedded Vue SPA bundle.
+# Build context MUST be the kuso repo root, not server-go/, because the
+# Vue client lives at ../client.
 #
-#   docker build -t ghcr.io/sislelabs/kuso-server-go:v0.2.0-dev kuso/server-go
+#   docker build -f kuso/server-go/Dockerfile -t ghcr.io/sislelabs/kuso-server-go:v0.2.0-dev kuso
 #
-# Build context is `kuso/server-go/`; the binary is fully self-contained
-# (single-package main, no cgo, embedded VERSION).
+# Stages:
+#   1. web-build   — compiles client/ into /tmp/dist via vite
+#   2. build       — copies the dist into server-go/internal/web/dist
+#                    (which is //go:embed-ed by internal/web) and
+#                    runs go build into /out/kuso-server
+#   3. final       — FROM scratch + the static binary + CA bundle
+
+# ---- 1. web-build --------------------------------------------------------
+
+FROM node:22-bookworm-slim AS web-build
+WORKDIR /web
+
+# Copy package metadata first so yarn install caches across SPA edits
+# that don't touch deps.
+COPY client/package.json client/yarn.lock ./
+RUN corepack enable && yarn install --immutable
+
+COPY client/ ./
+# vite.config.ts has outDir=../server/dist/public — override at build
+# time to /tmp/dist so the next stage can grab it without touching the
+# Vue project.
+RUN yarn build --outDir /tmp/dist
+
+# ---- 2. go build ---------------------------------------------------------
 
 FROM golang:1.25-bookworm AS build
 ARG VERSION=v0.2.0-dev
 
 WORKDIR /src
-COPY go.mod go.sum* ./
+COPY server-go/go.mod server-go/go.sum* ./
 RUN go mod download
-COPY . .
+COPY server-go/ ./
 
-# CGO_ENABLED=0 + -trimpath gives a fully static, reproducible binary that
-# runs in a `scratch` rootfs.
+# Replace the placeholder web/dist with the real SPA bundle.
+COPY --from=web-build /tmp/dist /src/internal/web/dist
+
+# CGO_ENABLED=0 + -trimpath gives a fully static, reproducible binary
+# that runs in a `scratch` rootfs.
 RUN CGO_ENABLED=0 GOOS=linux \
     go build \
       -trimpath \
@@ -26,6 +52,8 @@ RUN CGO_ENABLED=0 GOOS=linux \
 # Stage a writable, world-writable data dir to be COPYed into the
 # scratch image — scratch has no shell to mkdir at runtime.
 RUN mkdir -p /tmp/kuso-data && chmod 777 /tmp/kuso-data
+
+# ---- 3. scratch image ----------------------------------------------------
 
 FROM scratch
 ARG VERSION=v0.2.0-dev
