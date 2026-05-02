@@ -15,8 +15,9 @@ import { Button } from "@/components/ui/button";
 import { DeployStatusPill } from "@/components/service/DeployStatusPill";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { EnvVarsEditor } from "@/components/service/EnvVarsEditor";
-import { useService, useTriggerBuild, useBuilds, useLogsTail } from "@/features/services";
+import { useService, useTriggerBuild, useBuilds } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
+import { LogStream } from "@/components/logs/LogStream";
 import { ChevronLeft, RotateCcw, ExternalLink } from "lucide-react";
 import { relativeTime } from "@/lib/format";
 import { toast } from "sonner";
@@ -31,7 +32,6 @@ export function ServiceDetailView() {
   const envs = useEnvironments(project);
   const builds = useBuilds(project, service);
   const trigger = useTriggerBuild(project, service);
-  const logs = useLogsTail(project, service);
 
   const env = (envs.data ?? []).find(
     (e) => e.spec.service === service && e.spec.kind === "production"
@@ -223,25 +223,10 @@ export function ServiceDetailView() {
             <TabsContent value="logs" className="mt-4">
               <Card>
                 <CardHeader>
-                  <CardTitle className="flex items-center justify-between">
-                    <span>Logs (tail)</span>
-                    <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                      WebSocket streaming lands in Phase D
-                    </span>
-                  </CardTitle>
+                  <CardTitle>Live logs</CardTitle>
                 </CardHeader>
                 <CardContent>
-                  <pre className="max-h-[60vh] overflow-auto rounded-md bg-[var(--bg-inverse)] p-4 font-mono text-[11px] text-[var(--text-inverse)]">
-                    {(logs.data?.lines ?? []).map((l, i) => (
-                      <div key={i}>
-                        <span className="text-[var(--text-tertiary)]">{l.pod}</span>{" "}
-                        {l.line}
-                      </div>
-                    ))}
-                    {logs.data?.lines.length === 0 && (
-                      <span className="text-[var(--text-tertiary)]">no logs yet</span>
-                    )}
-                  </pre>
+                  <LogStream project={project} service={service} env="production" height="55vh" />
                 </CardContent>
               </Card>
             </TabsContent>

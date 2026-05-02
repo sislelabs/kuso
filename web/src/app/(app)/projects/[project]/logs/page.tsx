@@ -1,9 +1,9 @@
-import { PhasePlaceholder } from "@/components/shared/PhasePlaceholder";
+import { LogsView } from "./view";
 
 export function generateStaticParams() {
   return [{ project: "_" }];
 }
 
 export default function ProjectLogsPage() {
-  return <PhasePlaceholder title="Live logs" phase="D" />;
+  return <LogsView />;
 }

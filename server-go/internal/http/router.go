@@ -110,6 +110,19 @@ func NewRouter(d Deps) http.Handler {
 		ghHandler.MountPublic(r)
 	}
 
+	// WebSocket log tail. Auth is handled inside the handler (the bearer
+	// arrives in the Sec-WebSocket-Protocol header, which middleware
+	// can't see), so this route is mounted on the public router.
+	if d.Logs != nil && d.Issuer != nil {
+		wsH := &httphandlers.LogsWSHandler{
+			Svc:        d.Logs,
+			Issuer:     d.Issuer,
+			SessionKey: d.SessionKey,
+			Logger:     d.Logger,
+		}
+		wsH.Mount(r)
+	}
+
 	// Authenticated routes.
 	r.Group(func(r chi.Router) {
 		r.Use(d.Issuer.Middleware())
@@ -173,7 +186,7 @@ func NewRouter(d Deps) http.Handler {
 	// through to the embedded Vue bundle. The embed.FS always contains
 	// at least a placeholder index.html so this never panics.
 	if spaFS, err := web.Dist(); err == nil {
-		if spaH, err := spa.Handler(spaFS, "/api/", "/healthz"); err == nil {
+		if spaH, err := spa.Handler(spaFS, "/api/", "/ws/", "/healthz"); err == nil {
 			r.NotFound(spaH.ServeHTTP)
 		} else {
 			d.Logger.Warn("spa: handler unavailable", "err", err)

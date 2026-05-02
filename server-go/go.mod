@@ -7,6 +7,7 @@ require (
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/google/go-github/v66 v66.0.0
+	github.com/gorilla/websocket v1.5.3
 	golang.org/x/crypto v0.50.0
 	golang.org/x/oauth2 v0.35.0
 	k8s.io/api v0.32.3
