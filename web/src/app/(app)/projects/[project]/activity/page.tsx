@@ -1,9 +1,9 @@
-import { PhasePlaceholder } from "@/components/shared/PhasePlaceholder";
+import { ActivityView } from "./view";
 
 export function generateStaticParams() {
   return [{ project: "_" }];
 }
 
 export default function ProjectActivityPage() {
-  return <PhasePlaceholder title="Activity feed" phase="C" />;
+  return <ActivityView />;
 }

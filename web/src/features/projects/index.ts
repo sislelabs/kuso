@@ -17,3 +17,9 @@ export {
   listEnvironments,
   listAddons,
 } from "./api";
+export {
+  useUpdateProject,
+  useDeleteProject,
+  useCreateProject,
+} from "./mutations";
+export type { UpdateProjectBody, CreateProjectBody } from "./mutations";

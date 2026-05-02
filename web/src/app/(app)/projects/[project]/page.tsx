@@ -1,19 +1,12 @@
-import { PhasePlaceholder } from "@/components/shared/PhasePlaceholder";
+import { ProjectDetailView } from "./view";
 
-// Static export of dynamic segments: emit a single placeholder HTML the
-// SPA router resolves at runtime. The Go server serves index.html for
-// any unknown sub-path under /projects/, so this generated page is a
-// fallback shell.
+// Static export needs a known set of params at build time. Emit a single
+// placeholder; the Go SPA fallback hands any unknown /projects/<name>
+// to the root index, and the client router resolves it at runtime.
 export function generateStaticParams() {
   return [{ project: "_" }];
 }
 
-export default function ProjectCanvasPage() {
-  return (
-    <PhasePlaceholder
-      title="Project canvas"
-      phase="G"
-      description="The React Flow canvas with services + addons + animated connections lands in Phase G."
-    />
-  );
+export default function ProjectDetailPage() {
+  return <ProjectDetailView />;
 }

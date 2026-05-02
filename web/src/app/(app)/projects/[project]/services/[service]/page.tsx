@@ -1,9 +1,9 @@
-import { PhasePlaceholder } from "@/components/shared/PhasePlaceholder";
+import { ServiceDetailView } from "./view";
 
 export function generateStaticParams() {
   return [{ project: "_", service: "_" }];
 }
 
 export default function ServiceDetailPage() {
-  return <PhasePlaceholder title="Service detail" phase="C" />;
+  return <ServiceDetailView />;
 }

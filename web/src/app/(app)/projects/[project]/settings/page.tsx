@@ -1,9 +1,9 @@
-import { PhasePlaceholder } from "@/components/shared/PhasePlaceholder";
+import { ProjectSettingsView } from "./view";
 
 export function generateStaticParams() {
   return [{ project: "_" }];
 }
 
 export default function ProjectSettingsPage() {
-  return <PhasePlaceholder title="Project settings" phase="C" />;
+  return <ProjectSettingsView />;
 }
