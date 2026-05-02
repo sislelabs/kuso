@@ -50,6 +50,41 @@ func (h *GithubHandler) MountAuthed(r chi.Router) {
 	r.Post("/api/github/installations/refresh", h.RefreshInstallations)
 	r.Get("/api/github/installations/{id}/repos/{owner}/{repo}/tree", h.RepoTree)
 	r.Post("/api/github/detect-runtime", h.DetectRuntime)
+	r.Post("/api/github/scan-addons", h.ScanAddons)
+}
+
+// ScanAddons returns suggested addon kinds based on the repo's
+// .env.example / docker-compose hints. Used by the project-creation
+// fast path to pre-check checkboxes.
+func (h *GithubHandler) ScanAddons(w http.ResponseWriter, r *http.Request) {
+	if h.Client == nil {
+		http.Error(w, "github not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var body struct {
+		InstallationID int64  `json:"installationId"`
+		Owner          string `json:"owner"`
+		Repo           string `json:"repo"`
+		Branch         string `json:"branch"`
+		Path           string `json:"path"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if body.InstallationID == 0 || body.Owner == "" || body.Repo == "" || body.Branch == "" {
+		http.Error(w, "installationId, owner, repo, branch required", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	out, err := h.Client.ScanAddons(ctx, body.InstallationID, body.Owner, body.Repo, body.Branch, body.Path)
+	if err != nil {
+		h.Logger.Error("github: scan addons", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"suggestions": out})
 }
 
 // Webhook is POST /api/webhooks/github. Reads raw body, verifies

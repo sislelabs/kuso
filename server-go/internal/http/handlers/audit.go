@@ -30,9 +30,20 @@ func auditCtx(r *http.Request) (context.Context, context.CancelFunc) {
 
 func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	project := r.URL.Query().Get("project")
+	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 	ctx, cancel := auditCtx(r)
 	defer cancel()
-	rows, count, err := h.Svc.Get(ctx, limit)
+	var (
+		rows  []audit.Entry
+		count int
+		err   error
+	)
+	if project != "" {
+		rows, count, err = h.Svc.GetForProject(ctx, project, after, limit)
+	} else {
+		rows, count, err = h.Svc.Get(ctx, limit)
+	}
 	if err != nil {
 		h.Logger.Error("list audit", "err", err)
 		http.Error(w, "internal", http.StatusInternalServerError)

@@ -6,8 +6,10 @@ import {
   getServiceEnv,
   getServiceLogs,
   listBuilds,
+  listAddonSecretKeys,
   setServiceEnv,
   triggerBuild,
+  wakeService,
 } from "./api";
 import type { KusoEnvVar } from "@/types/projects";
 
@@ -71,5 +73,24 @@ export function useLogsTail(project: string, service: string, env = "production"
     queryKey: logsTailQueryKey(project, service, env),
     queryFn: () => getServiceLogs(project, service, env),
     enabled: !!project && !!service,
+  });
+}
+
+export function useWakeService(project: string, service: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => wakeService(project, service),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+    },
+  });
+}
+
+export function useAddonSecretKeys(project: string, addon: string) {
+  return useQuery({
+    queryKey: ["projects", project, "addons", addon, "secret-keys"] as const,
+    queryFn: () => listAddonSecretKeys(project, addon),
+    enabled: !!project && !!addon,
+    staleTime: 5 * 60_000,
   });
 }

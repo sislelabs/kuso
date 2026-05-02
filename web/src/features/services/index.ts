@@ -5,6 +5,8 @@ export {
   useBuilds,
   useTriggerBuild,
   useLogsTail,
+  useWakeService,
+  useAddonSecretKeys,
   serviceQueryKey,
   serviceEnvQueryKey,
   buildsQueryKey,

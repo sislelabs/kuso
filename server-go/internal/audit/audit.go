@@ -112,6 +112,56 @@ FROM "Audit" ORDER BY id DESC LIMIT ?`, limit)
 	return out, total, nil
 }
 
+// GetForProject returns audit rows filtered by project. The Audit
+// table's `pipeline` column carries v0.1's pipeline name and v0.2's
+// project name; both share the lifetime "this is the top-level
+// container" semantics, so a single column is fine.
+//
+// Pagination is keyset on id: pass after=<id> to fetch the page
+// older than that id. limit is clamped [1, 1000].
+func (s *Service) GetForProject(ctx context.Context, project string, after int64, limit int) ([]Entry, int, error) {
+	if s == nil || !s.Enabled {
+		return nil, 0, nil
+	}
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	q := `
+SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, user
+FROM "Audit" WHERE pipeline = ?`
+	args := []any{project}
+	if after > 0 {
+		q += " AND id < ?"
+		args = append(args, after)
+	}
+	q += " ORDER BY id DESC LIMIT ?"
+	args = append(args, limit)
+
+	rows, err := s.DB.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("audit: get for project: %w", err)
+	}
+	defer rows.Close()
+	var out []Entry
+	for rows.Next() {
+		var e Entry
+		var ts time.Time
+		var id int64
+		if err := rows.Scan(&id, &ts, &e.Severity, &e.Action, &e.Namespace, &e.Phase, &e.App, &e.Pipeline, &e.Resource, &e.Message, &e.User); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, err
+	}
+	var total int
+	_ = s.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM "Audit" WHERE pipeline = ?`,
+		project).Scan(&total)
+	return out, total, nil
+}
+
 // GetForApp returns the newest rows filtered by pipeline+phase+app.
 func (s *Service) GetForApp(ctx context.Context, pipeline, phase, app string, limit int) ([]Entry, int, error) {
 	if s == nil || !s.Enabled {

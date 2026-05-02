@@ -33,6 +33,7 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	r.Delete("/api/projects/{project}/services/{service}", h.DeleteService)
 	r.Get("/api/projects/{project}/services/{service}/env", h.GetEnv)
 	r.Post("/api/projects/{project}/services/{service}/env", h.SetEnv)
+	r.Post("/api/projects/{project}/services/{service}/wake", h.Wake)
 
 	r.Get("/api/projects/{project}/envs", h.ListEnvironments)
 	r.Get("/api/projects/{project}/envs/{env}", h.GetEnvironment)
@@ -187,6 +188,19 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// Wake is POST /api/projects/{project}/services/{service}/wake. It
+// nudges the production env's replica count back up so a sleeping
+// service comes back online on the next reconcile tick.
+func (h *ProjectsHandler) Wake(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	if err := h.Svc.WakeService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service")); err != nil {
+		h.fail(w, "wake service", err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
 func (h *ProjectsHandler) ListEnvironments(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
@@ -228,6 +242,8 @@ func (h *ProjectsHandler) fail(w http.ResponseWriter, op string, err error) {
 	case errors.Is(err, projects.ErrConflict):
 		http.Error(w, "conflict", http.StatusConflict)
 	case errors.Is(err, projects.ErrInvalid):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, projects.ErrCompositeVarRef):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:
 		h.Logger.Error("projects handler", "op", op, "err", err)

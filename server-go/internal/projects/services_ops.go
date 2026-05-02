@@ -251,7 +251,16 @@ func (s *Service) GetEnv(ctx context.Context, project, service string) ([]EnvVar
 // usual replaceNamespaced lost-update risk; per the TS code, env-list
 // edits are admin actions issued one at a time, so we don't bother with
 // the secrets §6.4 patch dance here.
+//
+// Variable references of the form `${{ <addon>.<KEY> }}` (whole-string
+// only) are rewritten into valueFrom.secretKeyRef entries pointing at
+// the addon's <addon>-conn secret. Composite references are rejected
+// with ErrCompositeVarRef so the caller can return 400.
 func (s *Service) SetEnv(ctx context.Context, project, service string, envVars []EnvVar) error {
+	rewritten, err := RewriteEnvVars(envVars)
+	if err != nil {
+		return err
+	}
 	svc, err := s.GetService(ctx, project, service)
 	if err != nil {
 		return err
@@ -260,7 +269,7 @@ func (s *Service) SetEnv(ctx context.Context, project, service string, envVars [
 	if err != nil {
 		return err
 	}
-	svc.Spec.EnvVars = convertEnvVars(envVars)
+	svc.Spec.EnvVars = convertEnvVars(rewritten)
 	if _, err := s.Kube.UpdateKusoService(ctx, ns, svc); err != nil {
 		return fmt.Errorf("update service env: %w", err)
 	}

@@ -24,6 +24,21 @@ func (h *AddonsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/addons", h.List)
 	r.Post("/api/projects/{project}/addons", h.Add)
 	r.Delete("/api/projects/{project}/addons/{addon}", h.Delete)
+	r.Get("/api/projects/{project}/addons/{addon}/secret-keys", h.SecretKeys)
+}
+
+// SecretKeys is GET /api/projects/{project}/addons/{addon}/secret-keys.
+// Lists keys in the addon's connection secret without ever exposing the
+// values. Used by the frontend ${{ }} reference autocomplete.
+func (h *AddonsHandler) SecretKeys(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := addonsCtx(r)
+	defer cancel()
+	keys, err := h.Svc.SecretKeys(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"))
+	if err != nil {
+		h.fail(w, "addon secret keys", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
 }
 
 func addonsCtx(r *http.Request) (context.Context, context.CancelFunc) {

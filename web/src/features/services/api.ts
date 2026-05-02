@@ -46,6 +46,17 @@ export async function triggerBuild(
   );
 }
 
+export async function wakeService(project: string, service: string): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/wake`,
+    { method: "POST" }
+  );
+}
+
+export async function listAddonSecretKeys(project: string, addon: string): Promise<{ keys: string[] }> {
+  return api(`/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/secret-keys`);
+}
+
 export async function getServiceLogs(
   project: string,
   service: string,
