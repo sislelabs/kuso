@@ -15,7 +15,9 @@ jobs:
       operator: ${{ steps.filter.outputs.operator }}
       server-go: ${{ steps.filter.outputs['server-go'] }}
       client: ${{ steps.filter.outputs.client }}
+      web: ${{ steps.filter.outputs.web }}
       mcp: ${{ steps.filter.outputs.mcp }}
+
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v3
@@ -33,6 +35,10 @@ jobs:
               - '.github/workflows/ci.yml'
             client:
               - 'client/**'
+              - '.github/workflows/ci.yml'
+            web:
+              - 'web/**'
+              - 'scripts/build-frontend.sh'
               - '.github/workflows/ci.yml'
             mcp:
               - 'mcp/**'
@@ -126,7 +132,7 @@ jobs:
       - run: go test ./... -count=1
 
   client:
-    name: client (Vue)
+    name: client (Vue, legacy)
     needs: changes
     if: needs.changes.outputs.client == 'true'
     runs-on: ubuntu-latest
@@ -143,6 +149,26 @@ jobs:
       - run: corepack enable
       - run: yarn install --immutable
       - run: yarn build
+
+  web:
+    name: web (Next.js)
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --no-audit --no-fund
+      - run: npx tsc --noEmit
+      - run: npm run lint
+      - run: npm run build
 
   mcp:
     name: mcp (Go)

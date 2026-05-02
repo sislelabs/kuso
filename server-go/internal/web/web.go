@@ -15,10 +15,10 @@ import (
 	"os"
 )
 
-//go:embed dist
+//go:embed all:dist
 var distLegacyFS embed.FS
 
-//go:embed dist-next
+//go:embed all:dist-next
 var distNextFS embed.FS
 
 // Dist returns the embedded SPA bundle. Defaults to the legacy Vue dist.
