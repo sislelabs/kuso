@@ -5,6 +5,7 @@ import {
   ReactFlow,
   Background,
   Controls,
+  Panel,
   type Node,
   type Edge,
   type NodeMouseHandler,
@@ -93,9 +94,10 @@ export function ProjectCanvas({
 
   const initialEdges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
-    // Addon → every service: shared connection secret is mounted on
-    // each service's pod via envFrom, so every service has access to
-    // every addon's vars in the project.
+    // Addon → every service: the addon's connection secret is
+    // mounted on every service in the project via envFrom, so this
+    // is a real direct connection (DATABASE_URL, etc. land as pod
+    // env). Solid stroke — these are not "indirect."
     addons.forEach((a) => {
       services.forEach((s) => {
         out.push({
@@ -103,7 +105,11 @@ export function ProjectCanvas({
           source: `addon:${a.metadata.name}`,
           target: `svc:${s.metadata.name}`,
           animated: true,
-          style: { stroke: "var(--accent)", strokeWidth: 1.5, opacity: 0.5 },
+          // The `kind` field is non-standard React Flow data; we
+          // stash the edge category here so the filter chips can
+          // toggle visibility without re-deriving from the id.
+          data: { kind: "addon" },
+          style: { stroke: "var(--accent)", strokeWidth: 1.5, opacity: 0.85 },
         });
       });
     });
@@ -132,7 +138,8 @@ export function ProjectCanvas({
           source: `svc:${targetFqn}`,
           target: `svc:${ownFqn}`,
           animated: true,
-          style: { stroke: "var(--accent)", strokeWidth: 1.5, opacity: 0.7 },
+          data: { kind: "ref" },
+          style: { stroke: "var(--accent)", strokeWidth: 1.5, opacity: 0.85 },
           label: ev.name,
           labelStyle: { fontSize: 10, fontFamily: "var(--font-mono)" },
         });
@@ -159,6 +166,17 @@ export function ProjectCanvas({
     nodeId: string;
   } | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  // Edge category visibility. The two kinds today:
+  //   - addon: the project's addon-conn Secret is mounted on every
+  //            service via envFrom. Real direct dep, not "indirect."
+  //   - ref:   service references another service via env-var refs
+  //            like ${{api.URL}} → ends up as a literal DNS string.
+  // Defaults to both ON; toggling lets you de-clutter dense projects.
+  const [edgeFilters, setEdgeFilters] = useState<{ addon: boolean; ref: boolean }>({
+    addon: true,
+    ref: true,
+  });
 
   const trigger = useTriggerBuild(project, "");
 
@@ -353,7 +371,15 @@ export function ProjectCanvas({
                 : (e: React.MouseEvent) => onAddonContext(e, n.data as AddonNodeData),
           },
         }))}
-        edges={edges}
+        edges={edges.filter((e) => {
+          // Hide categories the user toggled off. Edges without a
+          // kind tag (legacy or future categories) are always shown
+          // so an upgrade can't accidentally swallow them.
+          const kind = (e.data as { kind?: string } | undefined)?.kind;
+          if (kind === "addon" && !edgeFilters.addon) return false;
+          if (kind === "ref" && !edgeFilters.ref) return false;
+          return true;
+        })}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
@@ -365,6 +391,7 @@ export function ProjectCanvas({
       >
         <Background gap={24} size={1} color="var(--border-subtle)" />
         <Controls className="!bg-[var(--bg-elevated)] !border-[var(--border-subtle)]" />
+        <EdgeFilterPanel filters={edgeFilters} setFilters={setEdgeFilters} />
       </ReactFlow>
 
       <CanvasContextMenu
@@ -466,4 +493,60 @@ async function callTrigger(
   void _hint;
   const { triggerBuild } = await import("@/features/services/api");
   await triggerBuild(project, service, {});
+}
+
+// EdgeFilterPanel — bottom-left chip group that toggles edge
+// categories on the canvas. Lives as a React Flow <Panel> so it
+// floats over the graph the same way Controls does.
+function EdgeFilterPanel({
+  filters,
+  setFilters,
+}: {
+  filters: { addon: boolean; ref: boolean };
+  setFilters: React.Dispatch<React.SetStateAction<{ addon: boolean; ref: boolean }>>;
+}) {
+  return (
+    <Panel position="bottom-left" className="!m-3">
+      <div className="flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1 shadow-[var(--shadow-sm)]">
+        <span className="px-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+          edges
+        </span>
+        <FilterChip
+          label="addon mounts"
+          on={filters.addon}
+          onClick={() => setFilters((f) => ({ ...f, addon: !f.addon }))}
+        />
+        <FilterChip
+          label="service refs"
+          on={filters.ref}
+          onClick={() => setFilters((f) => ({ ...f, ref: !f.ref }))}
+        />
+      </div>
+    </Panel>
+  );
+}
+
+function FilterChip({
+  label,
+  on,
+  onClick,
+}: {
+  label: string;
+  on: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={
+        "rounded px-2 py-1 font-mono text-[10px] transition-colors " +
+        (on
+          ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
+          : "text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]")
+      }
+    >
+      {label}
+    </button>
+  );
 }

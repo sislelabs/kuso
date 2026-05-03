@@ -60,6 +60,20 @@ export async function deleteService(project: string, service: string): Promise<v
   );
 }
 
+// renameService is clone-then-delete on the server side. The new
+// service comes up first, the old comes down second; expect a
+// brief 503 window on the live URL during the swap.
+export async function renameService(
+  project: string,
+  service: string,
+  newName: string
+): Promise<KusoService> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/rename`,
+    { method: "POST", body: { newName } }
+  );
+}
+
 export interface PatchServiceBody {
   port?: number;
   runtime?: string;

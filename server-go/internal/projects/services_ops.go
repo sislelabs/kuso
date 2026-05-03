@@ -225,6 +225,13 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 // users get on Group/User/etc names elsewhere in the API.
 var envNameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$`)
 
+// serviceNameRE constrains the user-typed service short name to the
+// same kube-friendly shape: lowercase alpha-numeric + dash, ≤32
+// chars, must start + end with an alpha-numeric. The full CR name
+// is "<project>-<service>" so we leave room for a project prefix
+// without busting kube's 253-char limit.
+var serviceNameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$`)
+
 // CreateEnvRequest is the body of POST /api/projects/{p}/services/{s}/envs.
 // Used to add a custom environment (e.g. "staging" tracking a branch
 // other than the default). Production envs are auto-created with the
@@ -326,6 +333,151 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		return nil, fmt.Errorf("create env: %w", err)
 	}
 	return created, nil
+}
+
+// RenameService is implemented as clone-then-delete because kube
+// resource names are immutable. Steps:
+//   1. validate the new name (regex + uniqueness)
+//   2. clone KusoService spec under the new CR name
+//   3. clone the production KusoEnvironment with adjusted host +
+//      ref back to the renamed service
+//   4. delete the old service + its envs
+//
+// What doesn't transfer:
+//   - per-env Secret CRs (named after the OLD service) — deleted with
+//     the old envs by SecretsCleanupForEnv
+//   - in-flight builds keyed on the old service name
+//   - external references to the old DNS/host (callers must redeploy
+//     to pick up new env-var resolutions)
+//
+// The downtime window equals the helm-operator reconcile lag for the
+// new env (a few seconds in practice) — production traffic to the
+// old hostname returns 503 until the ingress for the new env comes
+// up. We accept this; it's the honest cost of "rename" in kube.
+func (s *Service) RenameService(ctx context.Context, project, oldName, newName string) (*kube.KusoService, error) {
+	if oldName == newName {
+		return nil, fmt.Errorf("%w: new name must differ from old", ErrInvalid)
+	}
+	if !serviceNameRE.MatchString(newName) {
+		return nil, fmt.Errorf("%w: new name must be lowercase letters/digits/dashes (≤32 chars)", ErrInvalid)
+	}
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	old, err := s.GetService(ctx, project, oldName)
+	if err != nil {
+		return nil, err
+	}
+	// Reject if the new name is already taken — surface a clean 409
+	// to the caller instead of a kube "already exists" deep in the
+	// stack.
+	if _, err := s.Kube.GetKusoService(ctx, ns, serviceCRName(project, newName)); err == nil {
+		return nil, fmt.Errorf("%w: service %s/%s already exists", ErrConflict, project, newName)
+	}
+
+	proj, err := s.Kube.GetKusoProject(ctx, s.Namespace, project)
+	if err != nil {
+		return nil, fmt.Errorf("get project: %w", err)
+	}
+
+	// Clone the service spec under the new FQN. ResourceVersion is
+	// reset because we're creating, not updating.
+	newFQN := serviceCRName(project, newName)
+	clone := &kube.KusoService{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   newFQN,
+			Labels: copyLabelsWithService(old.ObjectMeta.Labels, project, newName),
+		},
+		Spec: old.Spec,
+	}
+	created, err := s.Kube.CreateKusoService(ctx, ns, clone)
+	if err != nil {
+		return nil, fmt.Errorf("create renamed service: %w", err)
+	}
+
+	// Pull every existing env so we can decide what to clone. Custom
+	// (non-production) envs come along with their branch + host
+	// preserved; preview envs are dropped (they're short-lived and
+	// the GH webhook will recreate them on the next PR event).
+	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector(map[string]string{labelProject: project, labelService: oldName}),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list envs: %w", err)
+	}
+	for i := range envs.Items {
+		var oldEnv kube.KusoEnvironment
+		if err := decodeInto(&envs.Items[i], &oldEnv); err != nil {
+			continue
+		}
+		if oldEnv.Spec.Kind == "preview" {
+			continue
+		}
+		envShort := envShortName(oldEnv.Name, project, oldName)
+		newEnvName := fmt.Sprintf("%s-%s-%s", project, newName, envShort)
+		newHost := oldEnv.Spec.Host
+		// Recompute host only when it followed the default
+		// "<service>.<project>.<base>" shape — bespoke hosts the
+		// user set explicitly are preserved verbatim.
+		if newHost == defaultHost(oldName, project, proj.Spec.BaseDomain) {
+			newHost = defaultHost(newName, project, proj.Spec.BaseDomain)
+		}
+		newEnv := &kube.KusoEnvironment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: newEnvName,
+				Labels: map[string]string{
+					labelProject: project,
+					labelService: newName,
+					labelEnv:     envShort,
+				},
+			},
+			Spec: oldEnv.Spec,
+		}
+		newEnv.Spec.Service = newFQN
+		newEnv.Spec.Host = newHost
+		if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, newEnv); err != nil {
+			// Best-effort cleanup so we don't half-rename. The new
+			// service CR is also rolled back to keep the rename
+			// transactional from the caller's POV.
+			_ = s.Kube.DeleteKusoService(ctx, ns, newFQN)
+			return nil, fmt.Errorf("clone env %s: %w", envShort, err)
+		}
+	}
+
+	// Now drop the old envs + service. DeleteService cascades to
+	// envs and (via SecretsCleanupForEnv) per-env secrets, so a
+	// single call covers both teardowns.
+	if err := s.DeleteService(ctx, project, oldName); err != nil {
+		// We've already created the new service + envs, so the
+		// rename is half-done. Surface this to the caller — they
+		// might need to delete the old one manually.
+		return created, fmt.Errorf("rename completed but old service teardown failed: %w", err)
+	}
+	return created, nil
+}
+
+// envShortName is the inverse of "<project>-<service>-<short>" → just
+// the short part. Falls back to the full env CR name if the prefix
+// doesn't match (defensive — shouldn't happen under our naming).
+func envShortName(envCRName, project, service string) string {
+	prefix := project + "-" + service + "-"
+	if strings.HasPrefix(envCRName, prefix) {
+		return envCRName[len(prefix):]
+	}
+	return envCRName
+}
+
+// copyLabelsWithService duplicates a label map and overwrites the
+// project + service labels. Keeps any custom labels the user added.
+func copyLabelsWithService(in map[string]string, project, service string) map[string]string {
+	out := make(map[string]string, len(in)+2)
+	for k, v := range in {
+		out[k] = v
+	}
+	out[labelProject] = project
+	out[labelService] = service
+	return out
 }
 
 // DeleteService cascades to the service's environments.

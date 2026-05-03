@@ -47,6 +47,11 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/services/{service}", h.GetService)
 	r.Patch("/api/projects/{project}/services/{service}", h.PatchService)
 	r.Delete("/api/projects/{project}/services/{service}", h.DeleteService)
+	// Rename is a separate endpoint because it's clone-then-delete
+	// rather than a normal patch — the URL the new resource lives
+	// at is different from the one the request came in on, and
+	// callers need to know the cost (brief downtime + DNS cutover).
+	r.Post("/api/projects/{project}/services/{service}/rename", h.RenameService)
 	// Config-as-code: plan/apply a kuso.yml against the project. Body
 	// is the raw YAML; ?dryRun=1 returns the plan without writing.
 	r.Post("/api/projects/{project}/apply", h.Apply)
@@ -283,6 +288,34 @@ func (h *ProjectsHandler) DeleteService(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// RenameService takes a {newName} body and clones the service +
+// envs under the new name, then deletes the old. Returns the new
+// service spec on success so the client can update its URL state.
+func (h *ProjectsHandler) RenameService(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		NewName string `json:"newName"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.NewName == "" {
+		http.Error(w, "newName required", http.StatusBadRequest)
+		return
+	}
+	// Rename can take a few seconds (helm-operator reconciles two
+	// helm releases — the new one + the old uninstall) so we give
+	// it a longer budget than projectCtx default.
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	out, err := h.Svc.RenameService(ctx,
+		chi.URLParam(r, "project"),
+		chi.URLParam(r, "service"),
+		req.NewName,
+	)
+	if err != nil {
+		h.fail(w, "rename service", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *ProjectsHandler) GetEnv(w http.ResponseWriter, r *http.Request) {

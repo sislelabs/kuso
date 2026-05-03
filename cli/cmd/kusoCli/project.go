@@ -3,6 +3,7 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"strings"
 
@@ -294,6 +295,56 @@ var serviceDeleteCmd = &cobra.Command{
 	},
 }
 
+// ---------------- project service rename ----------------
+
+var serviceRenameYes bool
+
+var serviceRenameCmd = &cobra.Command{
+	Use:   "rename <project> <old> <new>",
+	Short: "Rename a service (clone-then-delete; brief downtime)",
+	Long: `Rename a service. Implemented as clone-then-delete because kube
+resource names are immutable, so the operation has real cost:
+
+  - the new KusoService + KusoEnvironment CRs come up first, the old
+    ones come down second; production traffic to the old hostname
+    returns 503 for the seconds in between
+  - DNS the rest of your services use to reference this one (e.g.
+    ${{api.URL}}) re-resolves on the next save — restart consumers
+    or re-set their env vars to pick up the new name
+  - in-flight builds keyed on the old name finish but don't promote
+  - preview envs are dropped (they regenerate on the next PR event)`,
+	Example: `  kuso project service rename analiz api web
+  kuso project service rename analiz worker queue --yes`,
+	Args: cobra.ExactArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		project, oldName, newName := args[0], args[1], args[2]
+		if oldName == newName {
+			return fmt.Errorf("old and new names are the same")
+		}
+		if err := confirmDestructive(serviceRenameYes,
+			fmt.Sprintf("Rename %s/%s → %s/%s? This causes brief downtime.",
+				project, oldName, project, newName)); err != nil {
+			return err
+		}
+		body, _ := json.Marshal(map[string]string{"newName": newName})
+		resp, err := api.RawPost(
+			fmt.Sprintf("/api/projects/%s/services/%s/rename",
+				url.PathEscape(project), url.PathEscape(oldName)),
+			body, "application/json")
+		if err != nil {
+			return fmt.Errorf("rename service: %w", err)
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("service renamed: %s/%s → %s/%s\n", project, oldName, project, newName)
+		return nil
+	},
+}
+
 // ---------------- project addon add ----------------
 
 var (
@@ -487,6 +538,8 @@ func init() {
 	serviceAddCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	projectServiceCmd.AddCommand(serviceDeleteCmd)
 	serviceDeleteCmd.Flags().BoolVarP(&serviceDeleteYes, "yes", "y", false, "skip the confirmation prompt")
+	projectServiceCmd.AddCommand(serviceRenameCmd)
+	serviceRenameCmd.Flags().BoolVarP(&serviceRenameYes, "yes", "y", false, "skip the confirmation prompt")
 
 	projectCmd.AddCommand(projectAddonCmd)
 	projectAddonCmd.AddCommand(addonAddCmd)

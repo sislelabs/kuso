@@ -22,11 +22,19 @@ interface Row {
 
 type Mode = "rows" | "bulk";
 
-function toRow(v: KusoEnvVar): Row {
+function toRow(v: KusoEnvVar, project: string): Row {
   const fromSecret = !!v.valueFrom;
+  const raw = fromSecret ? "" : (v.value ?? "");
   return {
     name: v.name ?? "",
-    value: fromSecret ? "" : (v.value ?? ""),
+    // Reverse server-resolved literals back to ${{ x.KEY }} form so
+    // the editor shows the original ref the user wrote. Without this
+    // round-trip, every reload turns "${{api.URL}}" into the
+    // expanded "http://e2e-test-api.kuso.svc.cluster.local:8080",
+    // which is correct on the wire but ugly in the UI and wrong-ish
+    // on save (the server would re-resolve and we'd lose the
+    // refactor-friendly form).
+    value: fromSecret ? "" : literalToRef(raw, project),
     fromSecret,
     visible: false,
   };
@@ -37,6 +45,46 @@ function toEnvVar(r: Row): KusoEnvVar {
     return { name: r.name };
   }
   return { name: r.name, value: r.value };
+}
+
+// literalToRef reverses the server-side service-ref resolution. When
+// a value matches the cluster-local DNS shape we recognise, render it
+// as the equivalent `${{ <svc>.<KEY> }}` token. The server will
+// re-expand on save, so the round-trip is lossless.
+//
+// Patterns we recognise (URL first to avoid mis-classifying
+// "http://host:port" as a HOST):
+//   http://<svc-fqn>.<ns>.svc.cluster.local:<port> → ${{ svc.URL }}
+//   <svc-fqn>.<ns>.svc.cluster.local              → ${{ svc.HOST }}
+//
+// project is needed to strip the "<project>-" prefix from the FQN
+// back to the short name the user typed. Without it we'd guess at
+// the dash position and break for projects with dashes (e.g.
+// "e2e-test").
+function literalToRef(value: string, project: string): string {
+  if (!value) return value;
+  const urlMatch = value.match(
+    /^http:\/\/([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local(?::\d+)?$/
+  );
+  if (urlMatch) {
+    return `\${{ ${stripProjectPrefix(urlMatch[1], project)}.URL }}`;
+  }
+  const hostMatch = value.match(
+    /^([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local$/
+  );
+  if (hostMatch) {
+    return `\${{ ${stripProjectPrefix(hostMatch[1], project)}.HOST }}`;
+  }
+  return value;
+}
+
+// stripProjectPrefix returns the user-friendly short name from a
+// project-prefixed kube name. KusoService CRs are named
+// "<project>-<short>"; the editor + canvas display the short form.
+function stripProjectPrefix(fqn: string, project: string): string {
+  const prefix = project + "-";
+  if (fqn.startsWith(prefix)) return fqn.slice(prefix.length);
+  return fqn;
 }
 
 // Serialize plain (non-secret) rows to dotenv format. Secret-backed
@@ -107,7 +155,7 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
 
   useEffect(() => {
     if (env.data) {
-      setRows((env.data.envVars ?? []).map(toRow));
+      setRows((env.data.envVars ?? []).map((v) => toRow(v, project)));
       setDirty(false);
     }
   }, [env.data]);

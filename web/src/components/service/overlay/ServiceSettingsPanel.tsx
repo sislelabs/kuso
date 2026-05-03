@@ -14,7 +14,8 @@ import type { KusoService, KusoVolume } from "@/types/projects";
 import {
   Github, Trash2, Network, Layers3, Hammer, Cloud, Save, HardDrive, Plus, X, ExternalLink, MapPin,
 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
 
@@ -251,7 +252,7 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
     <div className="relative">
       <div className="grid grid-cols-[1fr_180px] gap-0 pb-20">
         <div className="space-y-8 px-6 py-6">
-          <SourceSection state={state} setState={setState} />
+          <SourceSection state={state} setState={setState} project={project} service={service} />
           <NetworkingSection state={state} setState={setState} />
           <ScaleSection state={state} setState={setState} />
           <PlacementSection state={state} setState={setState} />
@@ -414,7 +415,7 @@ function Row({
 
 // ---------- Sections ----------
 
-function SourceSection({ state, setState }: SectionProps) {
+function SourceSection({ state, setState, project, service }: SectionProps & { project: string; service: string }) {
   // Pull installations so the user can re-point to a repo behind a
   // different GH App install. Best-effort: we don't gate the rest of
   // the section on this query landing.
@@ -430,6 +431,7 @@ function SourceSection({ state, setState }: SectionProps) {
 
   return (
     <Section id="source" title="Source" icon={Github}>
+      <RenameRow project={project} service={service} />
       <Row
         label="repository"
         hint="full https URL"
@@ -1017,6 +1019,108 @@ function DeploySection({ project, state, setState }: SectionProps & { project: s
         />
       )}
     </Section>
+  );
+}
+
+// RenameRow surfaces the rename action at the top of Source. Rename
+// is cheap to invoke (one API call) but expensive to live with —
+// brief downtime + DNS cutover for any consumer service. We make
+// that explicit in a confirmation dialog so users opt in deliberately.
+function RenameRow({ project, service }: { project: string; service: string }) {
+  const router = useRouter();
+  const qc = useQueryClient();
+  const canWrite = useCan(Perms.ServicesWrite);
+  const [open, setOpen] = useState(false);
+  const [newName, setNewName] = useState(service);
+  const [pending, setPending] = useState(false);
+
+  const submit = async () => {
+    const trimmed = newName.trim();
+    if (!trimmed || trimmed === service) {
+      toast.error("Pick a different name");
+      return;
+    }
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(trimmed)) {
+      toast.error("Lowercase letters/digits/dash, ≤32 chars");
+      return;
+    }
+    setPending(true);
+    try {
+      const { renameService } = await import("@/features/services/api");
+      await renameService(project, service, trimmed);
+      toast.success(`Renamed to ${trimmed}`);
+      // Invalidate every cache the old service name is keyed on.
+      // Easiest: blow away the entire project query subtree.
+      qc.invalidateQueries({ queryKey: ["projects", project] });
+      setOpen(false);
+      // Close the overlay by routing back to the project page.
+      router.push(`/projects/${encodeURIComponent(project)}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Rename failed");
+    } finally {
+      setPending(false);
+    }
+  };
+
+  return (
+    <Row
+      label="name"
+      hint="rename = clone-then-delete; brief downtime"
+      control={
+        <div className="flex w-full items-center gap-1.5">
+          <Input
+            value={service}
+            disabled
+            className="h-7 flex-1 font-mono text-[12px]"
+          />
+          {canWrite && (
+            <Button
+              variant="outline"
+              size="sm"
+              type="button"
+              onClick={() => {
+                setNewName(service);
+                setOpen(true);
+              }}
+            >
+              Rename
+            </Button>
+          )}
+          <ConfirmDialog
+            open={open}
+            title="Rename service?"
+            destructive
+            confirmLabel={pending ? "Renaming…" : "Rename"}
+            pending={pending}
+            body={
+              <div className="space-y-3">
+                <p className="text-[12px] text-[var(--text-secondary)]">
+                  Renaming clones the service under a new name, then deletes the old one.
+                  Production traffic returns 503 for the seconds in between, and any
+                  service referencing this one via{" "}
+                  <span className="font-mono text-[var(--text-tertiary)]">
+                    {"${{...}}"}
+                  </span>{" "}
+                  needs to redeploy to pick up the new DNS.
+                </p>
+                <Input
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  placeholder="new-service-name"
+                  className="font-mono text-sm"
+                  autoFocus
+                  spellCheck={false}
+                />
+              </div>
+            }
+            onConfirm={submit}
+            onCancel={() => {
+              if (!pending) setOpen(false);
+            }}
+          />
+        </div>
+      }
+    />
   );
 }
 
