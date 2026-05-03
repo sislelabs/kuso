@@ -107,32 +107,30 @@ export function ProjectCanvas({
         });
       });
     });
-    // Service → service: derived from `${{ <other-svc>.<KEY> }}` refs
-    // in env vars. Build a short-name → service map first so we can
-    // match a ref's name against either the short form (typed by the
-    // user) or the project-prefixed FQN.
-    const prefix = project + "-";
-    const byShort = new Map<string, string>();
+    // Service → service edges from env-var refs. The server resolves
+    // `${{ x.URL }}` to a literal in-cluster DNS string at SetEnv
+    // time, so by the time the canvas reads spec.envVars the ref is
+    // already gone. We reverse it: any value that points at another
+    // service's cluster-local DNS counts as a dep.
+    //
+    // Pattern: <fqn>.<ns>.svc.cluster.local — fqn is the kube Service
+    // name, which is the same as the KusoService CR name.
     services.forEach((s) => {
-      const fqn = s.metadata.name;
-      const short = fqn.startsWith(prefix) ? fqn.slice(prefix.length) : fqn;
-      byShort.set(short, fqn);
-      byShort.set(fqn, fqn);
-    });
-    const refRe = /^\$\{\{\s*([a-zA-Z0-9_-]+)\.[A-Z_][A-Z0-9_]*\s*\}\}$/;
-    services.forEach((s) => {
+      const ownFqn = s.metadata.name;
       for (const ev of s.spec.envVars ?? []) {
         if (!ev?.value) continue;
-        const m = ev.value.match(refRe);
+        // Match the FQN in the value. The ref forms HOST/URL/etc.
+        // all start with "<fqn>.<ns>.svc.cluster.local" so this
+        // single regex covers all four.
+        const m = ev.value.match(/([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local/);
         if (!m) continue;
-        const refName = m[1];
-        const targetFqn = byShort.get(refName);
-        if (!targetFqn || targetFqn === s.metadata.name) continue; // self-refs are noise
+        const targetFqn = m[1];
+        if (targetFqn === ownFqn) continue;
+        if (!services.some((t) => t.metadata.name === targetFqn)) continue;
         out.push({
-          id: `eref:${targetFqn}->${s.metadata.name}:${ev.name}`,
-          // Source is the referenced service (data flows from it).
+          id: `eref:${targetFqn}->${ownFqn}:${ev.name}`,
           source: `svc:${targetFqn}`,
-          target: `svc:${s.metadata.name}`,
+          target: `svc:${ownFqn}`,
           animated: true,
           style: { stroke: "var(--accent)", strokeWidth: 1.5, opacity: 0.7 },
           label: ev.name,
