@@ -192,6 +192,10 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
+			// Effective placement: service overrides project. Both
+			// nil = schedule anywhere (chart leaves nodeSelector
+			// blank, no affinity).
+			Placement: ResolvePlacement(proj.Spec.Placement, created.Spec.Placement),
 		},
 	}
 	if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {
@@ -276,17 +280,43 @@ func (s *Service) SetEnv(ctx context.Context, project, service string, envVars [
 	return nil
 }
 
+// ResolvePlacement returns the effective placement for an env, given
+// the project-level default and any service-level override. Service
+// override wins when present (even if empty, which is the explicit
+// "this service schedules anywhere" signal).
+func ResolvePlacement(project, service *kube.KusoPlacement) *kube.KusoPlacement {
+	if service != nil {
+		return service
+	}
+	return project
+}
+
 // PatchServiceRequest is the body for PATCH /api/projects/:p/services/:s.
 // Every field is optional — nil means "leave alone". We use pointers
 // for primitive fields too so the client can distinguish unset from
 // zero (port=0 doesn't make sense, but min=0 / sleep.afterMinutes=0
 // might).
 type PatchServiceRequest struct {
-	Port    *int32             `json:"port,omitempty"`
-	Runtime *string            `json:"runtime,omitempty"`
-	Domains *[]ServiceDomain   `json:"domains,omitempty"`
-	Scale   *PatchScaleRequest `json:"scale,omitempty"`
-	Sleep   *PatchSleepRequest `json:"sleep,omitempty"`
+	Port      *int32                 `json:"port,omitempty"`
+	Runtime   *string                `json:"runtime,omitempty"`
+	Domains   *[]ServiceDomain       `json:"domains,omitempty"`
+	Scale     *PatchScaleRequest     `json:"scale,omitempty"`
+	Sleep     *PatchSleepRequest     `json:"sleep,omitempty"`
+	Placement *PatchPlacementRequest `json:"placement,omitempty"`
+}
+
+// PatchPlacementRequest mirrors KusoPlacement on the wire. When the
+// caller sends `placement: null` we clear the override (service falls
+// back to project default); when both labels and nodes are nil we
+// store an explicit empty placement (schedule anywhere, even if
+// project has a default).
+type PatchPlacementRequest struct {
+	Labels map[string]string `json:"labels,omitempty"`
+	Nodes  []string          `json:"nodes,omitempty"`
+	// Clear=true is the explicit "drop the override, use project
+	// default" signal. Otherwise sending placement at all replaces
+	// the service's placement with the new value.
+	Clear bool `json:"clear,omitempty"`
 }
 
 type PatchScaleRequest struct {
@@ -349,12 +379,65 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			svc.Spec.Sleep.AfterMinutes = *req.Sleep.AfterMinutes
 		}
 	}
+	placementChanged := false
+	if req.Placement != nil {
+		if req.Placement.Clear {
+			svc.Spec.Placement = nil
+		} else {
+			svc.Spec.Placement = &kube.KusoPlacement{
+				Labels: req.Placement.Labels,
+				Nodes:  req.Placement.Nodes,
+			}
+		}
+		placementChanged = true
+	}
 
 	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
 	}
+
+	// Placement changes propagate to every env. Without this each env
+	// would keep its old effective placement until the next time the
+	// env spec was rewritten for some other reason.
+	if placementChanged {
+		if err := s.propagatePlacementToEnvs(ctx, ns, project, updated); err != nil {
+			// Don't fail the whole patch — the spec is saved. Surface
+			// the propagation error in the logs and let the next env
+			// reconcile catch up.
+			return updated, nil
+		}
+	}
 	return updated, nil
+}
+
+// propagatePlacementToEnvs updates every KusoEnvironment owned by svc
+// so its spec.placement matches the resolved (project > service)
+// effective value. Called after a service-level placement edit.
+func (s *Service) propagatePlacementToEnvs(ctx context.Context, ns, project string, svc *kube.KusoService) error {
+	proj, err := s.Kube.GetKusoProject(ctx, s.Namespace, project)
+	if err != nil {
+		return fmt.Errorf("get project for placement propagation: %w", err)
+	}
+	effective := ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement)
+
+	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: labelService + "=" + svc.Name,
+	})
+	if err != nil {
+		return fmt.Errorf("list envs for placement propagation: %w", err)
+	}
+	for i := range envs.Items {
+		var env kube.KusoEnvironment
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
+			continue
+		}
+		env.Spec.Placement = effective
+		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
+			return fmt.Errorf("update env %s: %w", env.Name, err)
+		}
+	}
+	return nil
 }
 
 func convertDomains(in []ServiceDomain) []kube.KusoDomain {

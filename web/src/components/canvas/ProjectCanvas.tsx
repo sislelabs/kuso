@@ -251,7 +251,7 @@ export function ProjectCanvas({
         label: "Add service",
         icon: Plus,
         onSelect: () => {
-          window.location.href = `/projects/${encodeURIComponent(project)}/settings`;
+          window.location.href = `/projects/${encodeURIComponent(project)}/services/new`;
         },
       },
       {

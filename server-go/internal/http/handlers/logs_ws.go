@@ -85,23 +85,42 @@ func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 		tail = n
 	}
 
-	conn, err := upgrader.Upgrade(w, r, http.Header{
-		"Sec-WebSocket-Protocol": []string{"kuso.bearer"},
-	})
+	// Echo the client's preferred subprotocol back so the handshake
+	// settles cleanly. Browsers send "kuso.bearer, <jwt>"; if we
+	// blindly answer "kuso.bearer" without considering what they
+	// actually offered, some intermediaries (Traefik) reject. When
+	// no subprotocol is offered (cookie auth path) we omit the
+	// header entirely.
+	respHeader := http.Header{}
+	if sp := r.Header.Get("Sec-WebSocket-Protocol"); sp != "" {
+		respHeader.Set("Sec-WebSocket-Protocol", "kuso.bearer")
+	}
+	conn, err := upgrader.Upgrade(w, r, respHeader)
 	if err != nil {
 		// upgrader writes its own error response.
 		return
 	}
 	defer conn.Close()
 
-	// Detect client disconnect: we read a discard loop from the conn so
-	// pongs/closes are processed. Cancels ctx on close.
+	// Detect client disconnect via a close handler instead of a
+	// ReadMessage loop. The old loop raced with the kube list call
+	// below — gorilla's ReadMessage returned spuriously on some
+	// browsers right after upgrade and our cancel() killed the kube
+	// query before it finished. The close handler only fires on a
+	// real WS close frame.
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
+	conn.SetCloseHandler(func(code int, text string) error {
+		cancel()
+		return nil
+	})
+	// We still need to drain incoming frames so gorilla can process
+	// pings/pongs and invoke the close handler. Run it in a goroutine,
+	// but DON'T cancel on read error — let the streaming write side
+	// detect the dead conn and unwind naturally.
 	go func() {
 		for {
 			if _, _, err := conn.ReadMessage(); err != nil {
-				cancel()
 				return
 			}
 		}

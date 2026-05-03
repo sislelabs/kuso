@@ -38,16 +38,24 @@ export function CanvasContextMenu({ open, x, y, items, onClose }: Props) {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
     };
-    const onClick = (e: MouseEvent) => {
+    // Close on any pointer down outside the menu. We listen in the
+    // capture phase on the document so React Flow's pan/zoom (which
+    // stops propagation on its own pane mousedown) doesn't swallow
+    // the event before we see it. pointerdown also fires for touch +
+    // pen + mouse so the menu dismisses on any input modality.
+    const onPointer = (e: PointerEvent) => {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose();
     };
     window.addEventListener("keydown", onKey);
     // Wait a tick so the same right-click that opened the menu doesn't
     // immediately register as a click-outside.
-    const t = window.setTimeout(() => window.addEventListener("mousedown", onClick), 0);
+    const t = window.setTimeout(
+      () => document.addEventListener("pointerdown", onPointer, true),
+      0
+    );
     return () => {
       window.removeEventListener("keydown", onKey);
-      window.removeEventListener("mousedown", onClick);
+      document.removeEventListener("pointerdown", onPointer, true);
       window.clearTimeout(t);
     };
   }, [open, onClose]);

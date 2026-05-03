@@ -71,8 +71,16 @@ export function ProjectDetailView() {
       <div className="p-6 lg:p-8">
         <EmptyState
           icon={<Package className="h-5 w-5" />}
-          title="No services or addons yet"
-          description="Connect a repo to add a service. Right-click the canvas to add an addon. The graph lights up as soon as you do."
+          title="Empty project"
+          description="A project is a container for services. Add the first service from a GitHub repo to get this canvas lit up."
+          action={
+            <a
+              href={`/projects/${encodeURIComponent(projectName)}/services/new`}
+              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] hover:bg-[var(--accent)]/90"
+            >
+              + Add service
+            </a>
+          }
         />
       </div>
     );

@@ -75,6 +75,23 @@ secretsRev: ""
 # resources: per-env CPU/mem limits and requests.
 resources: {}
 
+# placement: pin pods to a subset of nodes. The server resolves this
+# from env > service > project precedence and stamps the result onto
+# the env CR before reconcile, so the chart only sees the effective
+# value. Empty = schedule anywhere.
+#
+# labels keys are bare (no namespace); the chart prefixes them with
+# kuso.sislelabs.com/ to match what /settings/nodes writes. nodes is
+# a list of kubernetes.io/hostname values.
+placement: {}
+# placement:
+#   labels:
+#     region: eu
+#     tier: premium
+#   nodes:
+#     - node-1
+#     - node-2
+
 # Used by helm release naming inside templates.
 nameOverride: ""
 fullnameOverride: ""

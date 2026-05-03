@@ -19,6 +19,42 @@ spec:
         kuso.sislelabs.com/secrets-rev: {{ . | quote }}
       {{- end }}
     spec:
+      {{- /*
+        Placement — pin to a subset of nodes by label and/or hostname.
+        labels become a nodeSelector; nodes become a required
+        nodeAffinity matchExpression. When labels.region is set we
+        also add a matching toleration so the kuso.sislelabs.com/region
+        NoSchedule taint that the labels editor reconciles doesn't
+        block scheduling.
+      */}}
+      {{- with .Values.placement }}
+      {{- if .labels }}
+      nodeSelector:
+        {{- range $k, $v := .labels }}
+        {{ printf "kuso.sislelabs.com/%s" $k }}: {{ $v | quote }}
+        {{- end }}
+      {{- end }}
+      {{- if .nodes }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      {{- range .nodes }}
+                      - {{ . | quote }}
+                      {{- end }}
+      {{- end }}
+      {{- if .labels.region }}
+      tolerations:
+        - key: kuso.sislelabs.com/region
+          operator: Equal
+          value: {{ .labels.region | quote }}
+          effect: NoSchedule
+      {{- end }}
+      {{- end }}
       containers:
         - name: app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "latest" }}"

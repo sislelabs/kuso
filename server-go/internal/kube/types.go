@@ -47,6 +47,25 @@ type KusoProjectSpec struct {
 	// lives in the server's home namespace. Empty = use the home
 	// namespace (the existing single-tenant behaviour).
 	Namespace string `json:"namespace,omitempty"`
+	// Placement is the project-default node-pinning policy. Services
+	// without their own placement inherit it. New environments
+	// derived from a service inherit the service's effective
+	// placement (with project as fallback).
+	Placement *KusoPlacement `json:"placement,omitempty"`
+}
+
+// KusoPlacement pins workloads to a subset of cluster nodes. Either
+// `labels` (matching node labels — kuso prefixes them with
+// kuso.sislelabs.com/ behind the scenes) or `nodes` (specific
+// hostnames) or both. Empty placement = schedule anywhere.
+//
+// Multiple labels AND together (all must match). The `nodes` list ORs
+// with the labels: a node satisfies placement if it matches all
+// labels AND is in nodes (when nodes is set), or matches all labels
+// (when nodes is empty).
+type KusoPlacement struct {
+	Labels map[string]string `json:"labels,omitempty"`
+	Nodes  []string          `json:"nodes,omitempty"`
 }
 
 type KusoRepoRef struct {
@@ -86,6 +105,10 @@ type KusoServiceSpec struct {
 	Sleep      *KusoServiceSleep   `json:"sleep,omitempty"`
 	Static     *KusoStaticSpec     `json:"static,omitempty"`
 	Buildpacks *KusoBuildpacksSpec `json:"buildpacks,omitempty"`
+	// Placement overrides the project-level placement for this
+	// service. Nil falls through to the project's placement; empty
+	// (non-nil) explicitly clears it.
+	Placement *KusoPlacement `json:"placement,omitempty"`
 }
 
 type KusoDomain struct {
@@ -147,6 +170,10 @@ type KusoEnvironmentSpec struct {
 	EnvFromSecrets   []string                `json:"envFromSecrets,omitempty"`
 	SecretsRev       string                  `json:"secretsRev,omitempty"`
 	Resources        map[string]any          `json:"resources,omitempty"`
+	// Placement is the resolved (effective) placement for this env,
+	// computed as: env > service > project. The operator's helm chart
+	// reads it directly to render nodeSelector/affinity/tolerations.
+	Placement *KusoPlacement `json:"placement,omitempty"`
 }
 
 type KusoPullRequest struct {
