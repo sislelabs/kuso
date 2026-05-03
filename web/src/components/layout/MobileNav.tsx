@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useRouteParams } from "@/lib/dynamic-params";
 import {
   Sheet,
   SheetContent,
@@ -20,8 +20,8 @@ interface Props {
 }
 
 export function MobileNav({ open, onOpenChange }: Props) {
-  const params = useParams<{ project?: string }>();
-  const currentProject = params?.project;
+  const params = useRouteParams<{ project: string }>(["project"]);
+  const currentProject = params.project;
   const projects = useProjects();
   const { data: session } = useSession();
   const user = session?.user;

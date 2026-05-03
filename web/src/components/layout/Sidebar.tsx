@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { usePathname, useParams } from "next/navigation";
+import { usePathname } from "next/navigation";
+import { useRouteParams } from "@/lib/dynamic-params";
 import {
   LayoutGrid,
   Activity,
@@ -45,8 +46,8 @@ function projectHealthDot(project: KusoProject): string {
 
 export function Sidebar() {
   const pathname = usePathname();
-  const params = useParams<{ project?: string }>();
-  const currentProject = params?.project;
+  const params = useRouteParams<{ project: string }>(["project"]);
+  const currentProject = params.project;
   const [collapsed, setCollapsed] = useState(false);
   const { data: session } = useSession();
   const projects = useProjects();

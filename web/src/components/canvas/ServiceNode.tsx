@@ -7,7 +7,7 @@ import type { KusoEnvironment, KusoService } from "@/types/projects";
 import { DeployStatusPill, type DeployStatus } from "@/components/service/DeployStatusPill";
 import { SleepBadge } from "@/components/service/SleepBadge";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
-import { cn } from "@/lib/utils";
+import { cn, serviceShortName } from "@/lib/utils";
 
 export interface ServiceNodeData extends Record<string, unknown> {
   project: string;
@@ -29,6 +29,7 @@ function statusFor(env?: KusoEnvironment): DeployStatus {
 export function ServiceNode({ data }: { data: ServiceNodeData }) {
   const status = statusFor(data.env);
   const url = data.env?.status?.url as string | undefined;
+  const shortName = serviceShortName(data.project, data.service.metadata.name);
 
   return (
     <div
@@ -48,11 +49,11 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
       <div className="flex items-center justify-between gap-2">
         <Link
-          href={`/projects/${data.project}/services/${data.service.metadata.name}`}
+          href={`/projects/${data.project}/services/${shortName}`}
           className="flex items-center gap-2 truncate font-medium text-sm hover:underline"
         >
           <RuntimeIcon runtime={data.service.spec.runtime} />
-          <span className="truncate">{data.service.metadata.name}</span>
+          <span className="truncate">{shortName}</span>
         </Link>
         <DeployStatusPill status={status} />
       </div>

@@ -15,7 +15,7 @@ import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { ProjectCanvas } from "@/components/canvas/ProjectCanvas";
 import { ExternalLink, Plus, Package, Database, LayoutGrid, List } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
-import { cn } from "@/lib/utils";
+import { cn, serviceShortName } from "@/lib/utils";
 
 function envForService(envs: KusoEnvironment[], svcName: string, kind = "production"): KusoEnvironment | undefined {
   return envs.find((e) => e.spec.service === svcName && e.spec.kind === kind);
@@ -41,16 +41,20 @@ function ServiceCard({
   envs: KusoEnvironment[];
   project: string;
 }) {
+  // metadata.name is the FQN ("<project>-<short>"). API URLs + the UI's
+  // user-facing name use the SHORT form. envForService still matches on
+  // the FQN because that's what spec.service stores.
   const env = envForService(envs, service.metadata.name);
   const status = statusFor(env);
+  const shortName = serviceShortName(project, service.metadata.name);
   return (
-    <Link href={`/projects/${project}/services/${service.metadata.name}`} className="block">
+    <Link href={`/projects/${project}/services/${shortName}`} className="block">
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
             <span className="flex items-center gap-2 truncate">
               <RuntimeIcon runtime={service.spec.runtime} />
-              <span className="truncate">{service.metadata.name}</span>
+              <span className="truncate">{shortName}</span>
             </span>
             <DeployStatusPill status={status} />
           </CardTitle>
@@ -148,9 +152,9 @@ export function ProjectDetailView() {
   }
 
   return (
-    <div className="flex flex-col">
-      {/* Toolbar */}
-      <div className="flex items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-2 lg:px-6">
+    <div className="flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden">
+      {/* Toolbar — h-11 to keep canvas math predictable. */}
+      <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 lg:px-6">
         <div className="min-w-0">
           <h1 className="truncate font-heading text-base font-semibold tracking-tight">
             {projectName}

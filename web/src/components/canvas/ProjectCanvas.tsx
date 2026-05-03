@@ -5,7 +5,6 @@ import {
   ReactFlow,
   Background,
   Controls,
-  MiniMap,
   type Node,
   type Edge,
   type NodeMouseHandler,
@@ -131,7 +130,12 @@ export function ProjectCanvas({
   };
 
   return (
-    <div className="h-[calc(100vh-3.5rem)] w-full">
+    // Parent (project view) controls our height: it's a flex-1 region
+    // inside a column that starts below the global Header + toolbar.
+    // Use flex-1 + min-h-0 so we fill that without overflowing. No
+    // explicit calc(100vh - ...) here; that math is brittle when the
+    // toolbar height changes.
+    <div className="flex-1 min-h-0 w-full">
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -139,21 +143,16 @@ export function ProjectCanvas({
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
+        // Cap initial zoom: with one or two nodes, fitView would scale
+        // them up to maxZoom (which used to be 2x) and the canvas
+        // looked like a magnifier. 1.0 = "actual size".
+        fitViewOptions={{ padding: 0.25, maxZoom: 1, minZoom: 0.4 }}
         minZoom={0.2}
-        maxZoom={2}
+        maxZoom={1.5}
         proOptions={{ hideAttribution: true }}
       >
         <Background gap={24} size={1} color="var(--border-subtle)" />
         <Controls className="!bg-[var(--bg-elevated)] !border-[var(--border-subtle)]" />
-        <MiniMap
-          pannable
-          zoomable
-          nodeStrokeColor="var(--text-tertiary)"
-          nodeColor="var(--bg-tertiary)"
-          maskColor="rgba(17,17,16,0.4)"
-          className="!bg-[var(--bg-secondary)] !border !border-[var(--border-subtle)] !rounded-md"
-        />
       </ReactFlow>
     </div>
   );
