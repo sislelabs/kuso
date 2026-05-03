@@ -1,41 +1,141 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { motion, AnimatePresence } from "motion/react";
 import { api } from "@/lib/api-client";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Server, Plus, X, Save } from "lucide-react";
+import { Server, Plus, X, Save, MapPin, Tag } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { NodeSummary } from "@/components/layout/ServersPopover";
 
-interface LabelRow {
+interface Label {
   key: string;
   value: string;
 }
 
-// NodesView is the long-form node manager. We expose a single concept
-// to the operator: kuso labels (key=value chips). The server
-// translates conventions ("region" → matching NoSchedule taint) so the
-// user never sees taints/tolerations directly. That's the whole point
-// of the abstraction — labels are familiar, taints aren't.
+// Common label keys — used as quick-add suggestions in the inline
+// editor. Order = popularity. Adding a `region` chip is special on
+// the server side (it gets a matching NoSchedule taint) so we surface
+// it first + with a marker icon on the chip.
+const SUGGESTED_KEYS = ["region", "tier", "gpu", "arch", "instance-type", "zone"] as const;
+
+// All labels we manage — Map<nodeName, Label[]> — keyed off the
+// initial server response so we can diff per-card without each
+// NodeCard owning its own dirty state.
+type NodeLabels = Record<string, Label[]>;
+
+function fromNodes(nodes: NodeSummary[]): NodeLabels {
+  const out: NodeLabels = {};
+  for (const n of nodes) {
+    out[n.name] = Object.entries(n.kusoLabels ?? {}).map(([k, v]) => ({ key: k, value: v }));
+  }
+  return out;
+}
+
+// Stable serialization for diffing. Sort by key so a re-order of
+// labels (which doesn't matter to k8s) doesn't show as dirty.
+function serialize(labels: Label[]): string {
+  return JSON.stringify(
+    [...labels]
+      .filter((l) => l.key.trim() !== "")
+      .sort((a, b) => a.key.localeCompare(b.key))
+      .map((l) => [l.key.trim(), l.value])
+  );
+}
+
 export function NodesView() {
+  const qc = useQueryClient();
   const nodes = useQuery({
     queryKey: ["kubernetes", "nodes"],
     queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
   });
 
+  // Hoist edits up here so we can render a single floating save bar
+  // covering every node's pending changes — same pattern as service
+  // settings. Per-node Save buttons hidden in tiny card headers were
+  // the original DX bug.
+  const [edits, setEdits] = useState<NodeLabels>({});
+  const baseline = useMemo(() => fromNodes(nodes.data ?? []), [nodes.data]);
+  const baselineRef = useRef(baseline);
+
+  // Re-baseline when the server data changes AND the user has no
+  // pending edits. Otherwise typing would get clobbered every
+  // refetch.
+  useEffect(() => {
+    const dirtyAny = Object.keys(edits).length > 0;
+    if (!dirtyAny) {
+      baselineRef.current = baseline;
+      setEdits({});
+    } else {
+      baselineRef.current = baseline;
+    }
+  }, [baseline]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The server endpoint takes ONE node at a time. We fan out a Save
+  // by submitting a mutation per dirty node and tracking aggregate
+  // pending state.
+  const [saving, setSaving] = useState(false);
+  const saveAll = async () => {
+    setSaving(true);
+    try {
+      for (const [nodeName, labels] of Object.entries(edits)) {
+        const body = {
+          labels: Object.fromEntries(
+            labels.filter((l) => l.key.trim()).map((l) => [l.key.trim(), l.value])
+          ),
+        };
+        await api(`/api/kubernetes/nodes/${encodeURIComponent(nodeName)}/labels`, {
+          method: "PUT",
+          body,
+        });
+      }
+      toast.success(
+        Object.keys(edits).length === 1
+          ? "Node updated"
+          : `${Object.keys(edits).length} nodes updated`
+      );
+      setEdits({});
+      await qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const dirtyCount = Object.keys(edits).length;
+
+  // Each NodeCard reads from edits[node] when present, else baseline.
+  const labelsFor = (n: NodeSummary): Label[] =>
+    edits[n.name] ?? baseline[n.name] ?? [];
+  const setLabels = (n: NodeSummary, next: Label[]) => {
+    const baseSer = serialize(baseline[n.name] ?? []);
+    const nextSer = serialize(next);
+    setEdits((cur) => {
+      const copy = { ...cur };
+      if (nextSer === baseSer) {
+        delete copy[n.name];
+      } else {
+        copy[n.name] = next;
+      }
+      return copy;
+    });
+  };
+
   return (
-    <div className="mx-auto max-w-4xl p-6 lg:p-8">
+    <div className="mx-auto max-w-4xl p-6 lg:p-8 pb-24">
       <header className="mb-6 flex items-start justify-between gap-4">
         <div>
           <h1 className="font-heading text-2xl font-semibold tracking-tight">Cluster nodes</h1>
           <p className="mt-1 text-sm text-[var(--text-secondary)]">
-            Tag nodes with labels (e.g. <span className="font-mono">region=eu</span> or just{" "}
-            <span className="font-mono">gpu</span>) and projects can pin to them. Bare keys
-            without a value work too — useful for capability flags.
+            Tag nodes with labels (e.g. <span className="font-mono">region=eu</span>,{" "}
+            <span className="font-mono">tier=premium</span>) and projects can pin to them.
+            Bare keys without a value work too — useful for capability flags like{" "}
+            <span className="font-mono">gpu</span>.
           </p>
         </div>
         <Server className="h-6 w-6 shrink-0 text-[var(--text-tertiary)]" />
@@ -53,45 +153,91 @@ export function NodesView() {
       ) : (
         <ul className="space-y-3">
           {(nodes.data ?? []).map((n) => (
-            <NodeCard key={n.name} node={n} />
+            <NodeCard
+              key={n.name}
+              node={n}
+              labels={labelsFor(n)}
+              onChange={(next) => setLabels(n, next)}
+              isDirty={n.name in edits}
+            />
           ))}
         </ul>
       )}
+
+      {/* Floating save bar — appears the moment any node is dirty.
+          Covers every dirty node in one click. Same shape as the
+          service settings panel for consistency. */}
+      <FloatingSaveBar
+        dirty={dirtyCount > 0}
+        pending={saving}
+        count={dirtyCount}
+        onSave={saveAll}
+        onReset={() => setEdits({})}
+      />
     </div>
   );
 }
 
-function NodeCard({ node }: { node: NodeSummary }) {
-  const qc = useQueryClient();
-  const initialRows: LabelRow[] = Object.entries(node.kusoLabels ?? {}).map(([k, v]) => ({
-    key: k,
-    value: v,
-  }));
-  const [rows, setRows] = useState<LabelRow[]>(initialRows);
-
-  const dirty =
-    JSON.stringify(rows.filter((r) => r.key.trim()).map((r) => [r.key, r.value]).sort()) !==
-    JSON.stringify(Object.entries(node.kusoLabels ?? {}).sort());
-
-  const save = useMutation({
-    mutationFn: (next: LabelRow[]) =>
-      api(`/api/kubernetes/nodes/${encodeURIComponent(node.name)}/labels`, {
-        method: "PUT",
-        body: {
-          labels: Object.fromEntries(next.filter((r) => r.key.trim()).map((r) => [r.key.trim(), r.value])),
-        },
-      }),
-    onSuccess: () => {
-      toast.success(`${node.name} updated`);
-      qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
-    },
-    onError: (err) => {
-      toast.error(err instanceof Error ? err.message : "Failed to save");
-    },
-  });
-
+function FloatingSaveBar({
+  dirty,
+  pending,
+  count,
+  onSave,
+  onReset,
+}: {
+  dirty: boolean;
+  pending: boolean;
+  count: number;
+  onSave: () => void;
+  onReset: () => void;
+}) {
   return (
-    <li className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
+    <AnimatePresence>
+      {dirty && (
+        <motion.div
+          initial={{ y: 60, opacity: 0 }}
+          animate={{ y: 0, opacity: 1 }}
+          exit={{ y: 60, opacity: 0 }}
+          transition={{ type: "spring", stiffness: 360, damping: 32 }}
+          className="fixed bottom-4 right-4 z-30 flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]"
+        >
+          <span className="mr-auto inline-flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />
+            unsaved on {count} {count === 1 ? "node" : "nodes"}
+          </span>
+          <Button size="sm" variant="outline" onClick={onReset} disabled={pending}>
+            Discard
+          </Button>
+          <Button size="sm" onClick={onSave} disabled={pending}>
+            <Save className="h-3 w-3" />
+            {pending ? "Saving…" : "Save changes"}
+          </Button>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
+function NodeCard({
+  node,
+  labels,
+  onChange,
+  isDirty,
+}: {
+  node: NodeSummary;
+  labels: Label[];
+  onChange: (next: Label[]) => void;
+  isDirty: boolean;
+}) {
+  return (
+    <li
+      className={cn(
+        "rounded-md border bg-[var(--bg-secondary)] p-4 transition-colors",
+        isDirty
+          ? "border-amber-500/30 bg-amber-500/[0.02]"
+          : "border-[var(--border-subtle)]"
+      )}
+    >
       <header className="flex items-start gap-3">
         <span
           className={cn(
@@ -102,7 +248,7 @@ function NodeCard({ node }: { node: NodeSummary }) {
         />
         <div className="min-w-0 flex-1">
           <h3 className="truncate font-mono text-sm font-medium">{node.name}</h3>
-          <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] font-mono text-[var(--text-tertiary)]">
+          <div className="mt-1 flex flex-wrap items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
             {node.roles.map((r) => (
               <span key={r} className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5">
                 {r}
@@ -112,70 +258,244 @@ function NodeCard({ node }: { node: NodeSummary }) {
             {!node.schedulable && (
               <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-400">cordoned</span>
             )}
+            {isDirty && (
+              <span className="ml-auto rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-400">
+                unsaved
+              </span>
+            )}
           </div>
         </div>
-        <Button size="sm" onClick={() => save.mutate(rows)} disabled={!dirty || save.isPending}>
-          <Save className="h-3 w-3" />
-          {save.isPending ? "Saving…" : "Save"}
-        </Button>
       </header>
 
-      <div className="mt-4">
-        <div className="mb-2 flex items-center justify-between">
-          <h4 className="text-xs font-medium text-[var(--text-secondary)]">Labels</h4>
-          <button
-            type="button"
-            onClick={() => setRows((r) => [...r, { key: "", value: "" }])}
-            className="inline-flex items-center gap-1 text-[10px] text-[var(--accent)] hover:underline"
-          >
-            <Plus className="h-3 w-3" /> add label
-          </button>
-        </div>
-
-        {rows.length === 0 ? (
-          <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-4 text-center text-[10px] text-[var(--text-tertiary)]">
-            No labels. Add <span className="font-mono">region=eu</span> to make this node available
-            to projects pinned to <span className="font-mono">eu</span>, or a bare{" "}
-            <span className="font-mono">gpu</span> to flag a capability.
-          </p>
-        ) : (
-          <ul className="space-y-1.5">
-            {rows.map((row, i) => (
-              <li key={i} className="flex items-center gap-1">
-                <Input
-                  value={row.key}
-                  onChange={(e) =>
-                    setRows((rs) => rs.map((r, j) => (j === i ? { ...r, key: e.target.value } : r)))
-                  }
-                  placeholder="key"
-                  className="h-7 w-32 font-mono text-[11px]"
-                />
-                <span className="font-mono text-xs text-[var(--text-tertiary)]/60">=</span>
-                <Input
-                  value={row.value}
-                  onChange={(e) =>
-                    setRows((rs) => rs.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))
-                  }
-                  placeholder="value (optional)"
-                  className="h-7 flex-1 font-mono text-[11px]"
-                />
-                <button
-                  type="button"
-                  onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
-                  aria-label="Remove label"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="mt-2 text-[10px] text-[var(--text-tertiary)]">
-          Tip: <span className="font-mono">region</span> is special — kuso also adds a matching
-          taint so only projects pinned to that region land on this node.
-        </p>
-      </div>
+      {/* The chip strip is the entire label UI now. No header label,
+          no separate "Labels" section — the chips ARE the labels.
+          Adding/removing happens here too. */}
+      <ChipStrip labels={labels} onChange={onChange} />
     </li>
+  );
+}
+
+function ChipStrip({
+  labels,
+  onChange,
+}: {
+  labels: Label[];
+  onChange: (next: Label[]) => void;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [draftKey, setDraftKey] = useState("");
+  const [draftValue, setDraftValue] = useState("");
+  const keyRef = useRef<HTMLInputElement>(null);
+
+  // Focus the key field automatically when the editor opens.
+  useEffect(() => {
+    if (adding) keyRef.current?.focus();
+  }, [adding]);
+
+  const commit = () => {
+    const key = draftKey.trim();
+    if (!key) {
+      // Empty key = discard the in-progress draft. Quieter than
+      // toasting an error for a no-op.
+      setAdding(false);
+      setDraftKey("");
+      setDraftValue("");
+      return;
+    }
+    if (!/^[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?$/.test(key)) {
+      toast.error(`"${key}" — keys must be lowercase, dashes/underscores, ≤63 chars`);
+      return;
+    }
+    if (labels.some((l) => l.key === key)) {
+      toast.error(`Label "${key}" already exists on this node`);
+      return;
+    }
+    onChange([...labels, { key, value: draftValue.trim() }]);
+    // Stay in adding mode but reset for fast multi-add.
+    setDraftKey("");
+    setDraftValue("");
+    keyRef.current?.focus();
+  };
+
+  const cancel = () => {
+    setAdding(false);
+    setDraftKey("");
+    setDraftValue("");
+  };
+
+  const remove = (i: number) => {
+    onChange(labels.filter((_, j) => j !== i));
+  };
+
+  return (
+    <div className="mt-3 flex flex-wrap items-center gap-1.5">
+      {labels.map((l, i) => (
+        <Chip key={`${l.key}-${i}`} label={l} onRemove={() => remove(i)} />
+      ))}
+
+      {!adding ? (
+        <button
+          type="button"
+          onClick={() => setAdding(true)}
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-dashed border-[var(--border-subtle)] px-2 font-mono text-[11px] text-[var(--text-tertiary)] hover:border-[var(--accent)]/40 hover:bg-[var(--accent-subtle)] hover:text-[var(--accent)]"
+        >
+          <Plus className="h-3 w-3" />
+          {labels.length === 0 ? "Add label" : "Add"}
+        </button>
+      ) : (
+        <DraftEditor
+          keyRef={keyRef}
+          draftKey={draftKey}
+          draftValue={draftValue}
+          existingKeys={labels.map((l) => l.key)}
+          onChangeKey={setDraftKey}
+          onChangeValue={setDraftValue}
+          onCommit={commit}
+          onCancel={cancel}
+        />
+      )}
+    </div>
+  );
+}
+
+function Chip({ label, onRemove }: { label: Label; onRemove: () => void }) {
+  // region is special — server-side it auto-applies a matching
+  // NoSchedule taint. Surface that with the MapPin icon so users
+  // know this chip means more than "metadata."
+  const isRegion = label.key === "region";
+  return (
+    <span
+      className={cn(
+        "group inline-flex h-7 items-center gap-1.5 rounded-md border px-2 font-mono text-[11px]",
+        isRegion
+          ? "border-[var(--accent)]/30 bg-[var(--accent-subtle)] text-[var(--accent)]"
+          : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]/60 text-[var(--text-secondary)]"
+      )}
+    >
+      {isRegion ? <MapPin className="h-3 w-3" /> : <Tag className="h-3 w-3 opacity-60" />}
+      <span className="font-medium">{label.key}</span>
+      {label.value && (
+        <>
+          <span className="text-[var(--text-tertiary)]/60">=</span>
+          <span>{label.value}</span>
+        </>
+      )}
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove ${label.key}`}
+        className="ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-primary)] hover:text-red-400 group-hover:opacity-100"
+      >
+        <X className="h-2.5 w-2.5" />
+      </button>
+    </span>
+  );
+}
+
+function DraftEditor({
+  keyRef,
+  draftKey,
+  draftValue,
+  existingKeys,
+  onChangeKey,
+  onChangeValue,
+  onCommit,
+  onCancel,
+}: {
+  keyRef: React.RefObject<HTMLInputElement | null>;
+  draftKey: string;
+  draftValue: string;
+  existingKeys: string[];
+  onChangeKey: (v: string) => void;
+  onChangeValue: (v: string) => void;
+  onCommit: () => void;
+  onCancel: () => void;
+}) {
+  const valueRef = useRef<HTMLInputElement>(null);
+  // Filter the suggestions to keys not already on this node.
+  const suggestions = SUGGESTED_KEYS.filter(
+    (s) => !existingKeys.includes(s) && (draftKey === "" || s.startsWith(draftKey.toLowerCase()))
+  );
+
+  const onKeyKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      // Tab-like behaviour: Enter on key field → focus value (so
+      // "region" + Enter + "eu" + Enter works as a fast keyboard
+      // flow). Empty key + Enter cancels.
+      if (draftKey.trim()) valueRef.current?.focus();
+      else onCancel();
+    } else if (e.key === "Escape") {
+      onCancel();
+    } else if (e.key === "Tab" && !e.shiftKey && draftKey.trim() === "") {
+      e.preventDefault();
+      onCancel();
+    }
+  };
+  const onValueKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      onCommit();
+    } else if (e.key === "Escape") {
+      onCancel();
+    }
+  };
+
+  return (
+    <span className="inline-flex items-center gap-1 rounded-md border border-[var(--accent)]/30 bg-[var(--accent-subtle)]/40 px-1 py-0.5">
+      <Input
+        ref={keyRef}
+        value={draftKey}
+        onChange={(e) => onChangeKey(e.target.value)}
+        onKeyDown={onKeyKeyDown}
+        placeholder="key"
+        list="kuso-node-label-suggestions"
+        className="h-6 w-24 border-0 bg-transparent font-mono text-[11px] focus-visible:ring-0"
+      />
+      <span className="font-mono text-xs text-[var(--text-tertiary)]/60">=</span>
+      <Input
+        ref={valueRef}
+        value={draftValue}
+        onChange={(e) => onChangeValue(e.target.value)}
+        onKeyDown={onValueKeyDown}
+        placeholder="value"
+        className="h-6 w-24 border-0 bg-transparent font-mono text-[11px] focus-visible:ring-0"
+      />
+      <button
+        type="button"
+        onClick={onCommit}
+        className="inline-flex h-5 w-5 items-center justify-center rounded text-[var(--accent)] hover:bg-[var(--bg-primary)]/50"
+        title="Add (Enter)"
+        aria-label="Add label"
+      >
+        <Plus className="h-3 w-3" />
+      </button>
+      <button
+        type="button"
+        onClick={onCancel}
+        className="inline-flex h-5 w-5 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-primary)]/50 hover:text-red-400"
+        title="Cancel (Esc)"
+        aria-label="Cancel"
+      >
+        <X className="h-3 w-3" />
+      </button>
+      {suggestions.length > 0 && (
+        <span className="ml-1 inline-flex items-center gap-0.5">
+          {suggestions.slice(0, 3).map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => {
+                onChangeKey(s);
+                valueRef.current?.focus();
+              }}
+              className="inline-flex h-5 items-center rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)]/60 px-1.5 font-mono text-[10px] text-[var(--text-tertiary)] hover:border-[var(--accent)]/30 hover:text-[var(--accent)]"
+            >
+              {s}
+            </button>
+          ))}
+        </span>
+      )}
+    </span>
   );
 }
