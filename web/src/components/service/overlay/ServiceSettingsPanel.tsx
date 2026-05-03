@@ -266,6 +266,10 @@ function FloatingSaveBar({
   onSave: () => void;
   onReset: () => void;
 }) {
+  // Layout: "unsaved changes" anchored left so the user reads
+  // status first; Discard + Save on the right with Discard as a
+  // proper outline button (was an underline-text affordance —
+  // invisible in dark mode unless you knew where to look).
   return (
     <AnimatePresence>
       {dirty && (
@@ -274,19 +278,15 @@ function FloatingSaveBar({
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 60, opacity: 0 }}
           transition={{ type: "spring", stiffness: 360, damping: 32 }}
-          className="sticky bottom-4 z-20 mx-4 flex items-center justify-end gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]"
+          className="sticky bottom-4 z-20 mx-4 flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]"
         >
-          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          <span className="mr-auto inline-flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+            <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />
             unsaved changes
           </span>
-          <button
-            type="button"
-            onClick={onReset}
-            disabled={pending}
-            className="font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] disabled:opacity-40"
-          >
-            discard
-          </button>
+          <Button size="sm" variant="outline" onClick={onReset} disabled={pending}>
+            Discard
+          </Button>
           <Button size="sm" onClick={onSave} disabled={pending}>
             <Save className="h-3 w-3" />
             {pending ? "Saving…" : "Save changes"}

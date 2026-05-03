@@ -333,7 +333,23 @@ func promQueryRange(ctx context.Context, query string, start, end time.Time, ste
 		}
 		t, _ := p[0].(float64)
 		vstr, _ := p[1].(string)
-		v, _ := strconv.ParseFloat(vstr, 64)
+		// Prom encodes NaN/+Inf/-Inf as the literal strings "NaN",
+		// "+Inf", "-Inf". Go's json.Encode rejects these floats and
+		// silently fails the whole response (content-length: 0,
+		// status 200, no body). Skip them — for the UI a missing
+		// point is identical to "no data" anyway.
+		if vstr == "NaN" || vstr == "+Inf" || vstr == "-Inf" {
+			continue
+		}
+		v, err := strconv.ParseFloat(vstr, 64)
+		if err != nil {
+			continue
+		}
+		// Defensive: even valid parse can land on NaN if Prom sends
+		// e.g. "nan" lowercase. Skip those too.
+		if v != v || v > 1e308 || v < -1e308 {
+			continue
+		}
 		out = append(out, [2]float64{t, v})
 	}
 	return out, nil

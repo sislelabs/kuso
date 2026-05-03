@@ -30,8 +30,8 @@ export const metadata: Metadata = {
     // from cache. Bump v= when the SVG changes; otherwise tabs
     // pinned for weeks keep showing the stale icon.
     icon: [
-      { url: "/favicon.svg?v=3", type: "image/svg+xml" },
-      { url: "/favicon.ico?v=3", sizes: "any" },
+      { url: "/favicon.svg?v=4", type: "image/svg+xml" },
+      { url: "/favicon.ico?v=4", sizes: "any" },
     ],
   },
 };
