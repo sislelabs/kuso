@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useProjects } from "@/features/projects";
+import { useCan, Perms } from "@/features/auth";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
@@ -14,6 +15,10 @@ import { relativeTime } from "@/lib/format";
 // the canvas has the live picture, this page is just navigation.
 export default function ProjectsPage() {
   const { data, isPending, isError, error, refetch } = useProjects();
+  // project:write gates project creation. Users without it can still
+  // see + open projects they belong to (the server already filters
+  // /api/projects to their memberships).
+  const canCreate = useCan(Perms.ProjectWrite);
 
   return (
     <div className="mx-auto max-w-6xl p-6 lg:p-8">
@@ -24,13 +29,15 @@ export default function ProjectsPage() {
             Each project is one product. Connect a repo, kuso builds it on every push.
           </p>
         </div>
-        <Link
-          href="/projects/new"
-          className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] transition-colors hover:bg-[var(--accent)]/90"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          New project
-        </Link>
+        {canCreate && (
+          <Link
+            href="/projects/new"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] transition-colors hover:bg-[var(--accent)]/90"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            New project
+          </Link>
+        )}
       </header>
 
       {isPending && (

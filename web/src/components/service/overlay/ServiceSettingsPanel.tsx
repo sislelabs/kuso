@@ -8,6 +8,7 @@ import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
 import { useDeleteProject } from "@/features/projects";
 import { usePatchService, type PatchServiceBody } from "@/features/services";
+import { useCan, Perms } from "@/features/auth";
 import { useRouter } from "next/navigation";
 import type { KusoService, KusoVolume } from "@/types/projects";
 import {
@@ -94,6 +95,10 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
   const [state, setState] = useState<FormState>(baseline);
   const [pending, setPending] = useState(false);
   const patch = usePatchService(project, service);
+  // Gate the floating save bar on services:write — viewers can scroll
+  // through the panel but can't edit. Inputs are still editable to
+  // preserve copy/paste affordance, just not committable.
+  const canWrite = useCan(Perms.ServicesWrite);
 
   // Whenever the upstream service changes (refetch lands fresh data),
   // re-baseline so the dirty flag clears. We only do this when the
@@ -228,8 +233,22 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
 
       {/* Floating save bar — slides up from bottom-right when ANY
           field is dirty. Sticks to the overlay's right edge so it
-          stays visible while the user scrolls through sections. */}
-      <FloatingSaveBar dirty={dirty} pending={pending} onSave={onSave} onReset={reset} />
+          stays visible while the user scrolls through sections.
+          Gated by services:write — viewers can flip switches in
+          their browser but can't commit. */}
+      <FloatingSaveBar
+        dirty={dirty && canWrite}
+        pending={pending}
+        onSave={onSave}
+        onReset={reset}
+      />
+      {dirty && !canWrite && (
+        <div className="sticky bottom-4 z-20 mx-4 flex items-center justify-end">
+          <span className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 font-mono text-[10px] text-[var(--text-tertiary)] shadow-[var(--shadow-md)]">
+            read-only — your role can&apos;t edit services
+          </span>
+        </div>
+      )}
     </div>
   );
 }

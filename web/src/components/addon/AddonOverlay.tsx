@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
+import { useCan, Perms } from "@/features/auth";
 import { X, RotateCcw, Trash2, Database, HardDrive, Settings, Info, Play } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -67,6 +68,8 @@ export function AddonOverlay({ project, addon, onClose }: Props) {
   const data = (addons.data ?? []).find((a) => a.metadata.name === addon);
   const kind = data?.spec.kind ?? "";
   const isPostgres = kind === "postgres";
+  const canSQL = useCan(Perms.SQLRead);
+  const canWriteAddon = useCan(Perms.AddonsWrite);
 
   return (
     <AnimatePresence>
@@ -117,6 +120,11 @@ export function AddonOverlay({ project, addon, onClose }: Props) {
             <nav className="flex shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] px-3">
               {TABS.map((t) => {
                 if (!isPostgres && (t.id === "backups" || t.id === "sql")) return null;
+                // SQL tab needs sql:read; Settings (delete) needs
+                // addons:write. Hide entirely for users without —
+                // less confusing than rendering then 403'ing on action.
+                if (t.id === "sql" && !canSQL) return null;
+                if (t.id === "settings" && !canWriteAddon) return null;
                 const active = t.id === tab;
                 return (
                   <button

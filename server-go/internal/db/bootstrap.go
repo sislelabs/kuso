@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -91,6 +92,167 @@ VALUES (?, ?, ?, ?, 0, 1, ?, 'local', ?, ?)`,
 		return fmt.Errorf("db: bootstrap: insert user: %w", err)
 	}
 	return tx.Commit()
+}
+
+// EnsureAdminGroup makes sure there's always an admin escape hatch
+// in the cluster. Called from main on every boot:
+//
+//   - If no group has instanceRole=admin, create "kuso-admins" with
+//     that role.
+//   - If the admin group has zero members but a local "admin"-style
+//     user exists, attach that user. This covers the v0.4 → v0.5
+//     migration: legacy clusters had a password seed admin and no
+//     groups; without this they'd boot v0.5 and have no path to
+//     administer.
+//
+// Idempotent. Safe to call on every boot.
+func (d *DB) EnsureAdminGroup(ctx context.Context, seedUsername string) error {
+	// 1. Find or create the admin group.
+	var groupID string
+	row := d.DB.QueryRowContext(ctx,
+		`SELECT id FROM "UserGroup" WHERE "instanceRole" = 'admin' LIMIT 1`)
+	err := row.Scan(&groupID)
+	if err == sql.ErrNoRows {
+		groupID = "grp-bootstrap-admins"
+		now := prismaNow()
+		if _, err := d.DB.ExecContext(ctx, `
+INSERT OR IGNORE INTO "UserGroup" (id, name, description, "instanceRole", "projectMemberships", "createdAt", "updatedAt")
+VALUES (?, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]', ?, ?)`,
+			groupID, now, now); err != nil {
+			return fmt.Errorf("db: ensure admin group: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("db: scan admin group: %w", err)
+	}
+
+	// 2. If the group is empty AND a seed user exists, attach them.
+	var memberCount int
+	if err := d.DB.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM "_UserToUserGroup" WHERE "B" = ?`, groupID).Scan(&memberCount); err != nil {
+		return fmt.Errorf("db: count admin group members: %w", err)
+	}
+	if memberCount == 0 && seedUsername != "" {
+		var seedID string
+		err := d.DB.QueryRowContext(ctx,
+			`SELECT id FROM "User" WHERE username = ?`, seedUsername).Scan(&seedID)
+		if err == nil {
+			if _, err := d.DB.ExecContext(ctx,
+				`INSERT OR IGNORE INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`,
+				seedID, groupID); err != nil {
+				return fmt.Errorf("db: attach seed admin: %w", err)
+			}
+		}
+		// If no seed user — fine. The first OAuth login will land
+		// in this group via the disaster-recovery promotion in the
+		// auth handler.
+	}
+	return nil
+}
+
+// PromoteUserToAdminIfNoAdmin atomically checks "does the cluster
+// have ANY admin-group member?" and, if not, attaches userID to
+// the admin group. Used by the login flow as a disaster-recovery
+// path: even if the seed admin row was deleted, the next OAuth
+// login can re-establish administration.
+//
+// Returns true when promotion happened, false when an admin
+// already exists.
+func (d *DB) PromoteUserToAdminIfNoAdmin(ctx context.Context, userID string) (bool, error) {
+	tx, err := d.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("db: promote: begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	var n int
+	if err := tx.QueryRowContext(ctx, `
+SELECT COUNT(*) FROM "_UserToUserGroup" m
+JOIN "UserGroup" g ON g.id = m."B"
+WHERE g."instanceRole" = 'admin'`).Scan(&n); err != nil {
+		return false, fmt.Errorf("db: promote: count admins: %w", err)
+	}
+	if n > 0 {
+		return false, nil
+	}
+	// Find or create the admin group inside the transaction.
+	var groupID string
+	if err := tx.QueryRowContext(ctx,
+		`SELECT id FROM "UserGroup" WHERE "instanceRole" = 'admin' LIMIT 1`).Scan(&groupID); err == sql.ErrNoRows {
+		groupID = "grp-bootstrap-admins"
+		now := prismaNow()
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO "UserGroup" (id, name, description, "instanceRole", "projectMemberships", "createdAt", "updatedAt")
+VALUES (?, 'kuso-admins', 'instance administrators (auto-created on first login)', 'admin', '[]', ?, ?)`,
+			groupID, now, now); err != nil {
+			return false, fmt.Errorf("db: promote: create group: %w", err)
+		}
+	} else if err != nil {
+		return false, fmt.Errorf("db: promote: find group: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`,
+		userID, groupID); err != nil {
+		return false, fmt.Errorf("db: promote: attach: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("db: promote: commit: %w", err)
+	}
+	return true, nil
+}
+
+// PromoteUsernameToAdmin is the env-flag escape hatch (see
+// main.go's KUSO_PROMOTE_USER). Resolves the username to a User row
+// and attaches it to the admin group, creating the group if it's
+// missing. Also removes the user from any pending group so they
+// don't get re-routed to /awaiting-access on next login.
+//
+// No-op when the user already belongs to the admin group.
+func (d *DB) PromoteUsernameToAdmin(ctx context.Context, username string) error {
+	if username == "" {
+		return errors.New("db: promote: username required")
+	}
+	var userID string
+	if err := d.DB.QueryRowContext(ctx,
+		`SELECT id FROM "User" WHERE username = ?`, username).Scan(&userID); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("db: promote: user %q not found", username)
+		}
+		return fmt.Errorf("db: promote: lookup: %w", err)
+	}
+
+	// Resolve / create admin group.
+	var adminGroupID string
+	if err := d.DB.QueryRowContext(ctx,
+		`SELECT id FROM "UserGroup" WHERE "instanceRole" = 'admin' LIMIT 1`).Scan(&adminGroupID); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("db: promote: find admin group: %w", err)
+		}
+		adminGroupID = "grp-bootstrap-admins"
+		now := prismaNow()
+		if _, err := d.DB.ExecContext(ctx, `
+INSERT OR IGNORE INTO "UserGroup" (id, name, description, "instanceRole", "projectMemberships", "createdAt", "updatedAt")
+VALUES (?, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]', ?, ?)`,
+			adminGroupID, now, now); err != nil {
+			return fmt.Errorf("db: promote: create admin group: %w", err)
+		}
+	}
+	if _, err := d.DB.ExecContext(ctx,
+		`INSERT OR IGNORE INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`,
+		userID, adminGroupID); err != nil {
+		return fmt.Errorf("db: promote: attach to admin: %w", err)
+	}
+	// Remove from pending — otherwise the user's tenancy resolver
+	// still sees a pending row in their union and the perms compute
+	// to "admin" anyway, but the awaiting-access redirect logic
+	// could confuse them. Belt-and-suspenders: drop the pending row.
+	if _, err := d.DB.ExecContext(ctx, `
+DELETE FROM "_UserToUserGroup"
+WHERE "A" = ?
+AND "B" IN (SELECT id FROM "UserGroup" WHERE "instanceRole" = 'pending')`,
+		userID); err != nil {
+		return fmt.Errorf("db: promote: clear pending: %w", err)
+	}
+	return nil
 }
 
 // EnsureAdminPassword (re)sets the admin user's password. Idempotent —

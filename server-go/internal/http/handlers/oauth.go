@@ -165,15 +165,20 @@ func (h *OAuthHandler) upsertAndIssue(ctx context.Context, prof *auth.OAuthProfi
 		}
 		created = true
 	}
-	// Bootstrap: the very first user to log in (no other users in the
-	// DB except the seed admin) gets put into a "instance-admin" group
-	// automatically. Subsequent users land in pending state until an
-	// existing admin grants them a group.
-	if created {
-		if err := h.bootstrapOrPending(ctx, user.ID); err != nil {
-			h.Logger.Warn("oauth: bootstrap user", "err", err, "user", user.ID)
-		}
+	// Bootstrap: pick a group for this user. Runs on EVERY login, not
+	// just newly-created accounts — that catches the regression where
+	// a first-OAuth-login on a pre-tenancy build created the user
+	// without bootstrapping, and every subsequent login skipped the
+	// bootstrap because the user already existed.
+	//
+	// PromoteUserToAdminIfNoAdmin is the core: if the cluster has
+	// zero admin-group members, the current user becomes admin. So
+	// the first person to log in to a fresh install always gets
+	// admin, regardless of which version they're on when they do.
+	if err := h.bootstrapOrPending(ctx, user.ID); err != nil {
+		h.Logger.Warn("oauth: bootstrap user", "err", err, "user", user.ID)
 	}
+	_ = created // retained for future audit logging
 	roleName, _ := h.DB.UserRoleName(ctx, user.ID)
 	if roleName == "" {
 		roleName = "none"
@@ -202,31 +207,34 @@ func (h *OAuthHandler) upsertAndIssue(ctx context.Context, prof *auth.OAuthProfi
 	})
 }
 
-// bootstrapOrPending puts a freshly-created user into one of two
-// groups depending on cluster state:
+// bootstrapOrPending decides where a fresh OAuth user lands. We try
+// in this order:
 //
-//   - First user ever (or no admin group exists yet): creates a
-//     "kuso-bootstrap-admins" group with instanceRole=admin and
-//     adds the user. The seed user becomes the platform admin.
-//   - Otherwise: creates (or reuses) "kuso-pending" group with
-//     instanceRole=pending and adds them. They authenticate but
-//     hit "awaiting access" until an admin moves them.
+//  1. Disaster recovery: if no admin group member exists in the whole
+//     cluster, promote this user to admin. Covers two cases —
+//       (a) first OAuth login on a fresh install (admin group exists
+//           empty after EnsureAdminGroup, no seed admin user), and
+//       (b) the seed admin was deleted and someone needs to take over.
+//  2. Otherwise drop them in the pending group so an admin can grant
+//     access without them stumbling around the UI.
 //
-// Idempotent: if the groups already exist we just re-attach the user.
+// Idempotent: re-running just re-attaches to whichever group they
+// already belong to (INSERT OR IGNORE on the pivot).
 func (h *OAuthHandler) bootstrapOrPending(ctx context.Context, userID string) error {
-	hasAdmin, err := h.anyAdminExists(ctx)
+	promoted, err := h.DB.PromoteUserToAdminIfNoAdmin(ctx, userID)
 	if err != nil {
 		return err
 	}
-	if !hasAdmin {
-		gid := "grp-bootstrap-admins"
-		_ = h.DB.CreateGroup(ctx, gid, "kuso-bootstrap-admins", "first-login bootstrap admin group")
-		if err := h.DB.SetGroupTenancy(ctx, gid, db.GroupTenancy{
-			InstanceRole: db.InstanceRoleAdmin,
-		}); err != nil {
-			return err
-		}
-		return h.DB.AddUserToGroup(ctx, userID, gid)
+	if promoted {
+		h.Logger.Info("oauth: promoted to admin (no other admins)", "user", userID)
+		return nil
+	}
+	// Don't pile users into pending if they're already in any group
+	// — that includes existing admins, project members, and even
+	// users who were already pending (no point inserting twice).
+	groups, gerr := h.DB.UserGroupNames(ctx, userID)
+	if gerr == nil && len(groups) > 0 {
+		return nil
 	}
 	gid := "grp-pending"
 	_ = h.DB.CreateGroup(ctx, gid, "kuso-pending", "users awaiting admin approval")
@@ -236,23 +244,6 @@ func (h *OAuthHandler) bootstrapOrPending(ctx context.Context, userID string) er
 		return err
 	}
 	return h.DB.AddUserToGroup(ctx, userID, gid)
-}
-
-// anyAdminExists reports whether any group has instanceRole=admin
-// AND at least one user in it. The "AND at least one user" guard
-// is what stops a second user from also being bootstrapped if the
-// admins group is dangling-empty (e.g. the seed admin was deleted).
-func (h *OAuthHandler) anyAdminExists(ctx context.Context) (bool, error) {
-	row := h.DB.DB.QueryRowContext(ctx, `
-SELECT COUNT(*)
-FROM "UserGroup" g
-JOIN "_UserToUserGroup" m ON m."B" = g.id
-WHERE g."instanceRole" = ?`, string(db.InstanceRoleAdmin))
-	var n int
-	if err := row.Scan(&n); err != nil {
-		return false, err
-	}
-	return n > 0, nil
 }
 
 // containsStr is a local copy of the helper in auth.go to avoid the

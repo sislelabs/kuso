@@ -93,7 +93,34 @@ func main() {
 		if _, err := database.EnsureAdminPassword(ctx, username, hash); err != nil && !errors.Is(err, db.ErrNotFound) {
 			logger.Warn("admin: ensure password", "err", err)
 		}
+		// v0.5 tenancy: ensure an admin group exists and the seed
+		// password admin is in it. Without this an upgrade from a
+		// pre-tenancy install leaves no path to administer through
+		// the new permissions surface.
+		if err := database.EnsureAdminGroup(ctx, username); err != nil {
+			logger.Warn("admin: ensure admin group", "err", err)
+		}
 		logger.Info("admin user ready", "username", username)
+	} else {
+		// No password admin configured — still ensure the admin
+		// group exists so the first OAuth login can populate it.
+		if err := database.EnsureAdminGroup(ctx, ""); err != nil {
+			logger.Warn("admin: ensure admin group (no seed)", "err", err)
+		}
+	}
+
+	// One-shot escape hatch: KUSO_PROMOTE_USER=<username> attaches
+	// the named user to the admin group on every boot until it's
+	// unset. Useful when an OAuth user got stuck in pending after
+	// upgrading from v0.4.x — operator sets the env var, restarts
+	// the server once, removes the env. Idempotent — re-attaching
+	// when already a member is a no-op.
+	if u := os.Getenv("KUSO_PROMOTE_USER"); u != "" {
+		if err := database.PromoteUsernameToAdmin(ctx, u); err != nil {
+			logger.Warn("admin: promote env user", "user", u, "err", err)
+		} else {
+			logger.Info("admin: promoted env user", "user", u)
+		}
 	}
 
 	// Kube client is optional during early development — if config

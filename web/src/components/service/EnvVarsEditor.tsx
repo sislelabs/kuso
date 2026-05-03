@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Trash2, Plus, Save, Eye, EyeOff, FileText, List } from "lucide-react";
 import { useServiceEnv, useSetServiceEnv } from "@/features/services";
+import { useCan, Perms } from "@/features/auth";
 import type { KusoEnvVar } from "@/types/projects";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -91,6 +92,11 @@ function dotenvToRows(text: string, prevSecrets: Row[]): Row[] {
 export function EnvVarsEditor({ project, service }: { project: string; service: string }) {
   const env = useServiceEnv(project, service);
   const setEnv = useSetServiceEnv(project, service);
+  // secrets:write gates the Save + the per-row destructive
+  // affordances. We intentionally KEEP the values visible (env vars
+  // are already fetched here; if the user can't see them they
+  // shouldn't be in this tab) — this is purely about mutation.
+  const canWrite = useCan(Perms.SecretsWrite);
   const [rows, setRows] = useState<Row[]>([]);
   const [dirty, setDirty] = useState(false);
   const [mode, setMode] = useState<Mode>("rows");
@@ -273,16 +279,25 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
             <Plus className="h-3.5 w-3.5" /> Add
           </Button>
         )}
-        <Button
-          size="sm"
-          onClick={save}
-          type="button"
-          disabled={!dirty || setEnv.isPending}
-        >
-          <Save className="h-3.5 w-3.5" />
-          {setEnv.isPending ? "Saving…" : "Save"}
-        </Button>
-        {dirty && (
+        {canWrite ? (
+          <Button
+            size="sm"
+            onClick={save}
+            type="button"
+            disabled={!dirty || setEnv.isPending}
+          >
+            <Save className="h-3.5 w-3.5" />
+            {setEnv.isPending ? "Saving…" : "Save"}
+          </Button>
+        ) : (
+          <span
+            className="font-mono text-[10px] text-[var(--text-tertiary)]"
+            title="secrets:write permission required"
+          >
+            read-only
+          </span>
+        )}
+        {dirty && canWrite && (
           <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
             unsaved changes
           </span>

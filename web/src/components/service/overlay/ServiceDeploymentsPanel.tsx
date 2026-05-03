@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LogStream } from "@/components/logs/LogStream";
 import { useBuilds, useTriggerBuild } from "@/features/services";
+import { useCan, Perms } from "@/features/auth";
 import type { BuildSummary } from "@/features/services/api";
 import type { KusoEnvironment } from "@/types/projects";
 import { relativeTime } from "@/lib/format";
@@ -54,6 +55,7 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
   const builds = useBuilds(project, service);
   const trigger = useTriggerBuild(project, service);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const canDeploy = useCan(Perms.ServicesWrite);
 
   const onRedeploy = async () => {
     try {
@@ -85,10 +87,19 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
             <span className="font-mono text-[var(--text-tertiary)]">{env.spec.kind}</span>
           )}
         </div>
-        <Button size="sm" onClick={onRedeploy} disabled={trigger.isPending}>
-          <RotateCcw className="h-3.5 w-3.5" />
-          {trigger.isPending ? "Triggering…" : "Redeploy"}
-        </Button>
+        {canDeploy ? (
+          <Button size="sm" onClick={onRedeploy} disabled={trigger.isPending}>
+            <RotateCcw className="h-3.5 w-3.5" />
+            {trigger.isPending ? "Triggering…" : "Redeploy"}
+          </Button>
+        ) : (
+          <span
+            className="font-mono text-[10px] text-[var(--text-tertiary)]"
+            title="services:write permission required"
+          >
+            read-only
+          </span>
+        )}
       </div>
 
       {builds.isPending ? (
