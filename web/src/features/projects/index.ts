@@ -19,6 +19,7 @@ export {
   listAddons,
   addAddon,
   deleteAddon,
+  addonSecret,
   listBackups,
   restoreBackup,
   listSQLTables,

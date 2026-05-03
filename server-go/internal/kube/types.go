@@ -119,6 +119,19 @@ type KusoServiceSpec struct {
 	// so different services can attach to different installations
 	// (different orgs, accounts, etc).
 	Github *KusoServiceGithubSpec `json:"github,omitempty"`
+	// Previews lets a service opt out of PR previews even when the
+	// project-level toggle is on. Useful for shared workers, crons,
+	// internal-only services that don't make sense as throwaway URLs.
+	// Nil = inherit project setting.
+	Previews *KusoServicePreviews `json:"previews,omitempty"`
+}
+
+// KusoServicePreviews carries the per-service preview opt-out. Disabled
+// is set explicitly by the user; nil pointer = no override. We don't
+// model "Enabled" here because the source of truth for ON is the
+// project-level toggle — services can only OFF themselves out of it.
+type KusoServicePreviews struct {
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // KusoServiceGithubSpec is the per-service variant of the project-

@@ -25,6 +25,25 @@ func (h *AddonsHandler) Mount(r chi.Router) {
 	r.Post("/api/projects/{project}/addons", h.Add)
 	r.Delete("/api/projects/{project}/addons/{addon}", h.Delete)
 	r.Get("/api/projects/{project}/addons/{addon}/secret-keys", h.SecretKeys)
+	// Plaintext connection values. Gated behind secrets:read at the
+	// router level so the autocomplete (keys-only) endpoint above
+	// stays open to anyone with addons:read.
+	r.Get("/api/projects/{project}/addons/{addon}/secret", h.Secret)
+}
+
+// Secret returns the addon's connection secret as a key→value map.
+// Plaintext — gate at the router with secrets:read. Used by the addon
+// overview's "Connection" panel so the user can copy DATABASE_URL etc.
+// to connect from psql / their app / a tunnel.
+func (h *AddonsHandler) Secret(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := addonsCtx(r)
+	defer cancel()
+	values, err := h.Svc.SecretValues(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"))
+	if err != nil {
+		h.fail(w, "addon secret", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"values": values})
 }
 
 // SecretKeys is GET /api/projects/{project}/addons/{addon}/secret-keys.

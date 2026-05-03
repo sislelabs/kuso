@@ -413,6 +413,16 @@ type PatchServiceRequest struct {
 	// new repo is private and behind a different GitHub App
 	// installation than the original.
 	Repo *PatchRepoRequest `json:"repo,omitempty"`
+	// Previews carries the per-service preview opt-out. Set
+	// {"disabled": true} to skip PR previews for this service even
+	// when the project toggle is on. Send {"disabled": false} or
+	// previews:null to clear the override.
+	Previews *PatchPreviewsRequest `json:"previews,omitempty"`
+}
+
+type PatchPreviewsRequest struct {
+	Disabled bool `json:"disabled"`
+	Clear    bool `json:"clear,omitempty"`
 }
 
 // PatchRepoRequest is the wire shape for changing a service's source
@@ -560,6 +570,13 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			}
 		}
 		placementChanged = true
+	}
+	if req.Previews != nil {
+		if req.Previews.Clear {
+			svc.Spec.Previews = nil
+		} else {
+			svc.Spec.Previews = &kube.KusoServicePreviews{Disabled: req.Previews.Disabled}
+		}
 	}
 
 	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)

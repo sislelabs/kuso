@@ -61,6 +61,8 @@ interface FormState {
   // Placement
   placement: PlacementRow[];
   placementNodes: string[];
+  // Deploy
+  previewsDisabled: boolean;
 }
 
 interface PlacementRow {
@@ -99,6 +101,10 @@ function fromSvc(svc?: KusoService): FormState {
     })),
     placement: Object.entries(svc?.spec.placement?.labels ?? {}).map(([k, v]) => ({ key: k, value: v })),
     placementNodes: svc?.spec.placement?.nodes ?? [],
+    // Per-service preview opt-out lives on spec.previews.disabled. The
+    // KusoService type may not declare it (newer field), so cast.
+    previewsDisabled:
+      !!(svc?.spec as { previews?: { disabled?: boolean } } | undefined)?.previews?.disabled,
   };
 }
 
@@ -219,6 +225,14 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
       }
       body.volumes = state.volumes.filter((v) => v.name && v.mountPath);
     }
+    if (state.previewsDisabled !== baseline.previewsDisabled) {
+      // Send {disabled} when the user opted-out, or {clear:true} when
+      // they re-enabled (drops the override so the service falls back
+      // to the project toggle's setting).
+      body.previews = state.previewsDisabled
+        ? { disabled: true }
+        : { clear: true };
+    }
 
     setPending(true);
     try {
@@ -243,7 +257,7 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
           <PlacementSection state={state} setState={setState} />
           <VolumesSection state={state} setState={setState} />
           <BuildSection state={state} setState={setState} />
-          <DeploySection project={project} />
+          <DeploySection project={project} state={state} setState={setState} />
           <DangerSection project={project} service={service} />
         </div>
 
@@ -758,7 +772,10 @@ function PlacementSection({ state, setState }: SectionProps) {
         <span className="font-mono">tier=gpu</span>) to match nodes by label, or pick
         specific hostnames below. Nodes need both — empty rules schedule anywhere.
       </p>
-      {/* Label rules */}
+      {/* Label rules — native selects backed by what the cluster
+          actually carries (kusoLabels off /api/kubernetes/nodes). When
+          a cluster has no labels yet we fall back to free-text inputs
+          so the user can still author rules ahead of labeling nodes. */}
       {state.placement.length === 0 ? (
         <p className="px-3 py-2.5 text-[11px] text-[var(--text-tertiary)]">
           No label rules.
@@ -766,31 +783,54 @@ function PlacementSection({ state, setState }: SectionProps) {
       ) : (
         state.placement.map((r, i) => {
           const valuesForKey = allLabels.get(r.key.trim());
+          const haveAnyLabels = allLabels.size > 0;
           return (
             <div
               key={i}
               className="grid grid-cols-[140px_1fr_28px] items-center gap-1.5 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-b-0"
             >
-              <Input
-                value={r.key}
-                onChange={(e) => updLabel(i, { key: e.target.value })}
-                placeholder="region"
-                list="kuso-placement-keys"
-                className="h-7 font-mono text-[11px]"
-              />
-              <Input
-                value={r.value}
-                onChange={(e) => updLabel(i, { value: e.target.value })}
-                placeholder="eu"
-                list={valuesForKey ? `kuso-placement-values-${i}` : undefined}
-                className="h-7 font-mono text-[11px]"
-              />
-              {valuesForKey && (
-                <datalist id={`kuso-placement-values-${i}`}>
-                  {[...valuesForKey].map((v) => (
-                    <option key={v} value={v} />
+              {haveAnyLabels ? (
+                <select
+                  value={r.key}
+                  onChange={(e) => updLabel(i, { key: e.target.value, value: "" })}
+                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+                >
+                  <option value="">— pick label key —</option>
+                  {[...allLabels.keys()].sort().map((k) => (
+                    <option key={k} value={k}>
+                      {k}
+                    </option>
                   ))}
-                </datalist>
+                </select>
+              ) : (
+                <Input
+                  value={r.key}
+                  onChange={(e) => updLabel(i, { key: e.target.value })}
+                  placeholder="region"
+                  className="h-7 font-mono text-[11px]"
+                />
+              )}
+              {valuesForKey && valuesForKey.size > 0 ? (
+                <select
+                  value={r.value}
+                  onChange={(e) => updLabel(i, { value: e.target.value })}
+                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+                >
+                  <option value="">— pick value —</option>
+                  {[...valuesForKey].sort().map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <Input
+                  value={r.value}
+                  onChange={(e) => updLabel(i, { value: e.target.value })}
+                  placeholder={r.key.trim() ? "value" : "eu"}
+                  className="h-7 font-mono text-[11px]"
+                  disabled={haveAnyLabels && !r.key.trim()}
+                />
               )}
               <button
                 type="button"
@@ -812,13 +852,6 @@ function PlacementSection({ state, setState }: SectionProps) {
         <Plus className="h-3 w-3" />
         add label rule
       </button>
-
-      {/* Datalist for label keys is shared across rows. */}
-      <datalist id="kuso-placement-keys">
-        {[...allLabels.keys()].map((k) => (
-          <option key={k} value={k} />
-        ))}
-      </datalist>
 
       {/* Specific-node pinning */}
       <div className="px-3 py-2">
@@ -915,7 +948,7 @@ function BuildSection({ state, setState }: SectionProps) {
   );
 }
 
-function DeploySection({ project }: { project: string }) {
+function DeploySection({ project, state, setState }: SectionProps & { project: string }) {
   // Read the project's previews config so the user sees, in this
   // service's settings, whether PR previews are on for the whole
   // project + how long they live. Saves them digging through the
@@ -935,8 +968,9 @@ function DeploySection({ project }: { project: string }) {
         </p>
         {previewsOn ? (
           <p>
-            PR previews <span className="text-emerald-400">on</span> — every PR gets a
-            throwaway env at <span className="font-mono">&lt;service&gt;-pr-N.&lt;project-domain&gt;</span>,
+            PR previews <span className="text-emerald-400">on</span> for this project —
+            every PR gets a throwaway env at{" "}
+            <span className="font-mono">&lt;service&gt;-pr-N.&lt;project-domain&gt;</span>,
             auto-deleted after the PR closes or {ttlDays} days idle. Previews boot
             with no env vars (set per-env if needed).
           </p>
@@ -954,9 +988,34 @@ function DeploySection({ project }: { project: string }) {
           </p>
         )}
       </div>
-      <p className="border-t border-[var(--border-subtle)] px-3 py-2 font-mono text-[10px] text-[var(--text-tertiary)]">
-        per-service preview opt-out coming next; today the project toggle covers all services
-      </p>
+      {previewsOn && (
+        <Row
+          label="exclude from previews"
+          hint="skip PR previews for this service even when the project toggle is on"
+          control={
+            <button
+              type="button"
+              onClick={() => setState((s) => ({ ...s, previewsDisabled: !s.previewsDisabled }))}
+              aria-pressed={state.previewsDisabled}
+              aria-label="Toggle preview opt-out"
+              className={cn(
+                "inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
+                state.previewsDisabled
+                  ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)]"
+                  : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]"
+              )}
+            >
+              <span
+                className={cn(
+                  "inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform",
+                  state.previewsDisabled ? "translate-x-4" : "translate-x-0.5"
+                )}
+              />
+            </button>
+          }
+          last
+        />
+      )}
     </Section>
   );
 }

@@ -10,6 +10,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
@@ -192,12 +193,23 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 		switch pr.Action {
 		case "opened", "reopened", "synchronize":
 			for i := range services.Items {
+				// Per-service opt-out: a service can set
+				// spec.previews.disabled to skip PR previews even when
+				// the project toggle is on. Useful for internal
+				// services (workers, cron) that have no public URL.
+				if svcPreviewsDisabled(&services.Items[i]) {
+					continue
+				}
 				if err := d.ensurePreviewEnv(ctx, &proj, services.Items[i].GetName(), pr); err != nil {
 					d.Logger.Warn("ensure preview env", "service", services.Items[i].GetName(), "pr", pr.Number, "err", err)
 				}
 			}
 		case "closed":
 			for i := range services.Items {
+				// Always attempt deletion on close — even for opted-out
+				// services. If the user toggled the opt-out on after a
+				// preview already existed, the cleanup path still
+				// needs to run. d.deletePreviewEnv is idempotent.
 				if err := d.deletePreviewEnv(ctx, proj.Name, services.Items[i].GetName(), pr.Number); err != nil {
 					d.Logger.Warn("delete preview env", "service", services.Items[i].GetName(), "pr", pr.Number, "err", err)
 				}
@@ -243,6 +255,22 @@ func (d *Dispatcher) onInstallationRepos(ctx context.Context, body []byte) error
 		d.Logger.Warn("installation repos refresh", "id", ev.Installation.ID, "err", err)
 	}
 	return nil
+}
+
+// svcPreviewsDisabled reads spec.previews.disabled off the unstructured
+// service. We pull straight from the unstructured map rather than
+// decoding the full KusoService — both are O(1) lookups but staying on
+// the unstructured side keeps this file from importing the projects
+// package (and the import cycle that would create).
+func svcPreviewsDisabled(u *unstructured.Unstructured) bool {
+	if u == nil {
+		return false
+	}
+	disabled, found, err := unstructured.NestedBool(u.Object, "spec", "previews", "disabled")
+	if err != nil || !found {
+		return false
+	}
+	return disabled
 }
 
 // ensurePreviewEnv creates (or recreates) the preview KusoEnvironment

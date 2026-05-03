@@ -60,6 +60,19 @@ export async function deleteAddon(project: string, addon: string): Promise<void>
   );
 }
 
+// addonSecret returns the addon's connection secret as plaintext
+// key→value pairs. Used by the overview panel so the user can copy
+// DATABASE_URL / POSTGRES_PASSWORD / etc. and connect from local
+// tools. Server gates this behind secrets:read.
+export async function addonSecret(
+  project: string,
+  addon: string
+): Promise<{ values: Record<string, string> }> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/secret`
+  );
+}
+
 export interface BackupObject {
   key: string;
   size: number;

@@ -69,6 +69,10 @@ export interface PatchServiceBody {
   volumes?: VolumePatch[];
   placement?: PlacementPatch;
   repo?: PatchRepoBody;
+  // Per-service preview opt-out. {disabled:true} skips PR previews
+  // for this service even when the project toggle is on.
+  // {clear:true} drops the override, falling back to project default.
+  previews?: { disabled?: boolean; clear?: boolean };
 }
 
 export interface PatchRepoBody {
