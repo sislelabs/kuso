@@ -26,7 +26,7 @@
 #   KUSO_DOMAIN          hostname for kuso UI (default: kuso.sislelabs.com)
 #   KUSO_EMAIL           email for Let's Encrypt (default: ivilthe69@gmail.com)
 #   KUSO_VERSION         operator image tag (default: v0.2.0)
-#   KUSO_SERVER_VERSION  server image tag (default: v0.4.0; a Go
+#   KUSO_SERVER_VERSION  server image tag (default: v0.4.1; a Go
 #                        binary published at
 #                        ghcr.io/sislelabs/kuso-server-go)
 #   KUSO_REPO            GitHub source for raw manifest URLs
@@ -51,7 +51,7 @@ set -euo pipefail
 KUSO_DOMAIN="${KUSO_DOMAIN:-kuso.sislelabs.com}"
 KUSO_EMAIL="${KUSO_EMAIL:-ivilthe69@gmail.com}"
 KUSO_VERSION="${KUSO_VERSION:-v0.2.0}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.4.0}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.4.1}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_RAW="https://raw.githubusercontent.com/${KUSO_REPO}/main"
 
@@ -290,7 +290,7 @@ kubectl wait --for=condition=Available --timeout=180s \
 # -------- 11. server --------
 log "applying kuso server (host ${KUSO_DOMAIN}, image tag ${KUSO_SERVER_VERSION})"
 curl -sfL "${KUSO_RAW}/deploy/server-go.yaml" \
-  | sed "s|kuso-server-go:v0.4.0|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
+  | sed "s|kuso-server-go:v0.4.1|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
   | kubectl apply -f - >/dev/null
 
 # Service + Ingress weren't included in deploy/server-go.yaml because

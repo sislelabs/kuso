@@ -67,6 +67,16 @@ export interface PatchServiceBody {
   scale?: { min?: number; max?: number; targetCPU?: number };
   sleep?: { enabled?: boolean; afterMinutes?: number };
   volumes?: VolumePatch[];
+  placement?: PlacementPatch;
+}
+
+export interface PlacementPatch {
+  labels?: Record<string, string>;
+  nodes?: string[];
+  // Server interprets clear=true as "drop the override, fall back
+  // to project default". Distinct from sending an empty object,
+  // which means "explicitly schedule anywhere".
+  clear?: boolean;
 }
 
 export interface VolumePatch {

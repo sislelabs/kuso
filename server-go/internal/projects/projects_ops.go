@@ -3,9 +3,13 @@ package projects
 import (
 	"context"
 	"fmt"
+	"strconv"
+	"strings"
 
+	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/kube"
 )
@@ -287,6 +291,105 @@ func populateDerivedStatus(e *kube.KusoEnvironment) {
 	}
 }
 
+// aggregateCPUPercent returns the average CPU usage of an env's pods
+// as a percentage of the container's CPU limit. Sums across containers
+// in each pod, then averages across pods. Returns (0, false) when:
+//   - metrics-server isn't available
+//   - the pod has no CPU limit (we'd be dividing by 0)
+//   - no pods are running
+//
+// We piggyback on the same metrics.k8s.io endpoint the dedicated
+// metrics panel uses so there's only one path the operator has to
+// keep alive.
+func (s *Service) aggregateCPUPercent(ctx context.Context, ns, envName string, depSpec *appsv1.DeploymentSpec) (int, bool) {
+	if s.Kube == nil || s.Kube.Dynamic == nil {
+		return 0, false
+	}
+	gvr := schema.GroupVersionResource{Group: "metrics.k8s.io", Version: "v1beta1", Resource: "pods"}
+	list, err := s.Kube.Dynamic.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/instance=" + envName,
+	})
+	if err != nil || len(list.Items) == 0 {
+		return 0, false
+	}
+	// Container CPU limit (millicores) — we compute it once from the
+	// deployment spec and reuse it across pods. Pods with no limit
+	// give us nothing to compare against, so we skip the calc.
+	limitMilli := int64(0)
+	for _, c := range depSpec.Template.Spec.Containers {
+		if c.Name == "app" || limitMilli == 0 {
+			if q, ok := c.Resources.Limits["cpu"]; ok {
+				limitMilli += q.MilliValue()
+			}
+		}
+	}
+	if limitMilli == 0 {
+		return 0, false
+	}
+
+	var totalPct int64
+	pods := 0
+	for i := range list.Items {
+		obj := list.Items[i].Object
+		containers, ok := obj["containers"].([]any)
+		if !ok {
+			continue
+		}
+		var podMilli int64
+		for _, c := range containers {
+			cm, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			usage, ok := cm["usage"].(map[string]any)
+			if !ok {
+				continue
+			}
+			cpuStr, _ := usage["cpu"].(string)
+			podMilli += parsePodCPU(cpuStr)
+		}
+		totalPct += (podMilli * 100) / limitMilli
+		pods++
+	}
+	if pods == 0 {
+		return 0, false
+	}
+	avg := int(totalPct / int64(pods))
+	if avg < 0 {
+		avg = 0
+	}
+	if avg > 999 {
+		avg = 999
+	}
+	return avg, true
+}
+
+// parsePodCPU mirrors the helper in handlers/kubernetes.go but lives
+// here too so the projects package doesn't import http handlers.
+// k8s quantity formats: nNN, uNN, mNN, plain cores (decimal).
+func parsePodCPU(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	if strings.HasSuffix(s, "n") {
+		n, _ := strconv.ParseInt(strings.TrimSuffix(s, "n"), 10, 64)
+		return n / 1_000_000
+	}
+	if strings.HasSuffix(s, "u") {
+		n, _ := strconv.ParseInt(strings.TrimSuffix(s, "u"), 10, 64)
+		return n / 1_000
+	}
+	if strings.HasSuffix(s, "m") {
+		n, _ := strconv.ParseInt(strings.TrimSuffix(s, "m"), 10, 64)
+		return n
+	}
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return int64(f * 1000)
+	}
+	return 0
+}
+
 // populateLiveStatus reads the Deployment that backs the env and
 // writes runtime fields (replicas ready/desired, phase, ready) onto
 // env.status. The env CR itself doesn't carry a status writer yet,
@@ -312,11 +415,31 @@ func (s *Service) populateLiveStatus(ctx context.Context, ns string, e *kube.Kus
 		desired = *dep.Spec.Replicas
 	}
 	ready := dep.Status.ReadyReplicas
+	// `max` for the canvas badge: prefer the service's autoscale
+	// ceiling so the user sees N/max even when only `desired` are
+	// currently scheduled. Fall back to desired when no autoscale
+	// is configured.
+	max := desired
+	if svc, err := s.Kube.GetKusoService(ctx, ns, e.Spec.Service); err == nil && svc.Spec.Scale != nil && svc.Spec.Scale.Max > 0 {
+		max = int32(svc.Spec.Scale.Max)
+		if max < desired {
+			max = desired
+		}
+	}
 	e.Status["replicas"] = map[string]any{
 		"ready":     ready,
 		"desired":   desired,
+		"max":       max,
 		"available": dep.Status.AvailableReplicas,
 		"updated":   dep.Status.UpdatedReplicas,
+	}
+	// Pull a coarse CPU percentage from metrics-server. We sum
+	// usage across pods, divide by (replicas * limit) to get a
+	// single % the canvas can render. Requests-based denominator
+	// would be more honest for autoscale comparison but limits
+	// match what users typically configure first.
+	if cpuPct, ok := s.aggregateCPUPercent(ctx, ns, e.Name, &dep.Spec); ok {
+		e.Status["cpuPct"] = cpuPct
 	}
 	// Phase: ready when all desired replicas are ready; otherwise
 	// deploying when an update is in flight; otherwise unknown.

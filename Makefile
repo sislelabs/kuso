@@ -56,3 +56,15 @@ cli-linux-amd64:
 cli-linux-arm64:
 	@mkdir -p dist
 	@cd cli && GOOS=linux GOARCH=arm64 go build -o ../dist/kuso-linux-arm64 ./cmd
+
+# Backup image — alpine + aws-cli + postgresql-client. Referenced by
+# the per-addon backup CronJob template. Cross-build amd64 by default
+# since most kuso clusters run on amd64; tag includes the version
+# suffix so old CronJobs don't get re-pulled into a different image.
+.PHONY: backup-image
+BACKUP_VERSION ?= v0.4.0
+backup-image:
+	@docker buildx build --platform linux/amd64 --push \
+		-t ghcr.io/sislelabs/kuso-backup:$(BACKUP_VERSION) \
+		-t ghcr.io/sislelabs/kuso-backup:latest \
+		-f build/backup/Dockerfile build/backup

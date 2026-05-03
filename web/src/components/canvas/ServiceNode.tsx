@@ -31,15 +31,23 @@ function statusFor(env?: KusoEnvironment): DeployStatus {
 
 interface Replicas {
   ready: number;
-  desired: number;
+  max: number;
+  cpuPct?: number;
 }
 
 function replicasFor(env?: KusoEnvironment): Replicas | null {
   const r = env?.status?.replicas as
-    | { ready?: number; desired?: number }
+    | { ready?: number; desired?: number; max?: number }
     | undefined;
-  if (!r || (r.desired === undefined && r.ready === undefined)) return null;
-  return { ready: r.ready ?? 0, desired: r.desired ?? 0 };
+  if (!r || (r.desired === undefined && r.ready === undefined && r.max === undefined)) {
+    return null;
+  }
+  // Prefer max (autoscale ceiling) over desired so the badge reads
+  // 1/5 even when only one pod is currently scheduled. Fall back to
+  // desired when max isn't surfaced yet.
+  const ceil = r.max ?? r.desired ?? 0;
+  const cpu = (env?.status?.cpuPct as number | undefined) ?? undefined;
+  return { ready: r.ready ?? 0, max: ceil, cpuPct: cpu };
 }
 
 export function ServiceNode({ data }: { data: ServiceNodeData }) {
@@ -110,22 +118,34 @@ function ReplicasBadge({
       </span>
     );
   }
-  const allUp = replicas.desired > 0 && replicas.ready === replicas.desired;
+  const allUp = replicas.max > 0 && replicas.ready === replicas.max;
+  const someUp = replicas.ready > 0;
   const dotCls = allUp
     ? "bg-emerald-400"
-    : replicas.ready === 0
+    : !someUp
       ? "bg-[var(--text-tertiary)]/40"
       : "bg-amber-400";
   return (
-    <span className="inline-flex items-center gap-1.5 text-[var(--text-tertiary)]">
-      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotCls)} />
-      <span>
-        <span className="text-[var(--text-secondary)]">{replicas.ready}</span>
-        <span className="text-[var(--text-tertiary)]/60">/{replicas.desired}</span>{" "}
-        <span className="text-[var(--text-tertiary)]/80">
-          {status === "sleeping" ? "asleep" : "ready"}
+    <span className="inline-flex items-center gap-2 text-[var(--text-tertiary)]">
+      <span className="inline-flex items-center gap-1.5">
+        <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotCls)} />
+        <span>
+          <span className="text-[var(--text-secondary)]">{replicas.ready}</span>
+          <span className="text-[var(--text-tertiary)]/60">/{replicas.max}</span>{" "}
+          <span className="text-[var(--text-tertiary)]/80">
+            {status === "sleeping" ? "asleep" : "ready"}
+          </span>
         </span>
       </span>
+      {replicas.cpuPct !== undefined && replicas.ready > 0 && (
+        <span
+          title="Average CPU vs container limit"
+          className="inline-flex items-center gap-1 rounded bg-[var(--bg-tertiary)]/60 px-1.5 py-0.5 font-mono"
+        >
+          <span className="text-[var(--text-secondary)]">{replicas.cpuPct}</span>
+          <span className="text-[var(--text-tertiary)]/70">%</span>
+        </span>
+      )}
     </span>
   );
 }

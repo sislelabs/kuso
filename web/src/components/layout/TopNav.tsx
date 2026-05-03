@@ -51,6 +51,7 @@ import {
   Users,
   Shield,
   UsersRound,
+  HardDrive,
 } from "lucide-react";
 import { ServersPopover } from "./ServersPopover";
 
@@ -404,6 +405,14 @@ function UserMenu() {
             }
           />
         )}
+        <DropdownMenuItem
+          render={
+            <Link href="/settings/backups" className="flex items-center gap-2">
+              <HardDrive className="h-3.5 w-3.5" />
+              Backups
+            </Link>
+          }
+        />
         {canAdmin && (
           <>
             <DropdownMenuSeparator />
