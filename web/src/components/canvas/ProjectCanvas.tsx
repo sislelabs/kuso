@@ -108,8 +108,11 @@ export function ProjectCanvas({
           // The `kind` field is non-standard React Flow data; we
           // stash the edge category here so the filter chips can
           // toggle visibility without re-deriving from the id.
+          // Colour: amber. Distinct from service refs (the accent
+          // colour) so the two categories read as separate at a
+          // glance.
           data: { kind: "addon" },
-          style: { stroke: "var(--accent)", strokeWidth: 1.5, opacity: 0.85 },
+          style: { stroke: "rgb(245 158 11)", strokeWidth: 1.5, opacity: 0.85 },
         });
       });
     });
@@ -121,6 +124,12 @@ export function ProjectCanvas({
     //
     // Pattern: <fqn>.<ns>.svc.cluster.local — fqn is the kube Service
     // name, which is the same as the KusoService CR name.
+    // Dedupe service→service edges. Without this, a service that
+    // references another via three env vars (API_URL, API_HOST,
+    // API_PORT) renders as three parallel lines + label spam. One
+    // edge per (source, target) pair is the right model — the
+    // "direct link" is the dependency, not each individual var.
+    const seenRefEdges = new Set<string>();
     services.forEach((s) => {
       const ownFqn = s.metadata.name;
       for (const ev of s.spec.envVars ?? []) {
@@ -133,15 +142,19 @@ export function ProjectCanvas({
         const targetFqn = m[1];
         if (targetFqn === ownFqn) continue;
         if (!services.some((t) => t.metadata.name === targetFqn)) continue;
+        const edgeKey = `${targetFqn}->${ownFqn}`;
+        if (seenRefEdges.has(edgeKey)) continue;
+        seenRefEdges.add(edgeKey);
         out.push({
-          id: `eref:${targetFqn}->${ownFqn}:${ev.name}`,
+          id: `eref:${edgeKey}`,
           source: `svc:${targetFqn}`,
           target: `svc:${ownFqn}`,
           animated: true,
           data: { kind: "ref" },
+          // Colour: accent (purple). Service-ref edges are direct
+          // dependencies via in-cluster DNS — distinct from addon
+          // mounts (amber).
           style: { stroke: "var(--accent)", strokeWidth: 1.5, opacity: 0.85 },
-          label: ev.name,
-          labelStyle: { fontSize: 10, fontFamily: "var(--font-mono)" },
         });
       }
     });
@@ -506,7 +519,7 @@ function EdgeFilterPanel({
   setFilters: React.Dispatch<React.SetStateAction<{ addon: boolean; ref: boolean }>>;
 }) {
   return (
-    <Panel position="bottom-left" className="!m-3">
+    <Panel position="bottom-right" className="!m-3">
       <div className="flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1 shadow-[var(--shadow-sm)]">
         <span className="px-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
           edges
