@@ -12,15 +12,18 @@ export interface AddonNodeData extends Record<string, unknown> {
 }
 
 export function AddonNode({ data }: { data: AddonNodeData }) {
-  // The helm-operator doesn't populate status.ready on KusoAddon today
-  // (it manages status.deployedRelease, which we don't model). Treat
-  // "connectionSecret exists" as the ready signal — it's accurate
-  // because our addon helm charts emit the secret only after the
-  // workload reaches Deployed, and it's what callers actually need
-  // (they connect via that secret). Without this, every addon showed
-  // a permanent amber pulse even after provisioning succeeded.
+  // helm-operator owns .status on every CR it manages and it doesn't
+  // populate a custom .ready field — only .conditions[] and
+  // .deployedRelease. The right signal is therefore
+  //   conditions[?(@.type=="Deployed" && @.status=="True")]
+  // which flips True the moment the helm release reaches Deployed.
+  // Earlier code looked at .status.ready / .status.connectionSecret;
+  // both are nil on the live CR so addons always pulsed amber.
+  const conditions = (data.addon.status?.conditions ?? []) as Array<{ type?: string; status?: string }>;
   const ready =
-    !!data.addon.status?.ready || !!data.addon.status?.connectionSecret;
+    !!data.addon.status?.ready ||
+    !!data.addon.status?.connectionSecret ||
+    conditions.some((c) => c.type === "Deployed" && c.status === "True");
   return (
     <div
       data-node-context
