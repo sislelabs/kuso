@@ -12,6 +12,8 @@ export interface ServiceNodeData extends Record<string, unknown> {
   project: string;
   service: KusoService;
   env?: KusoEnvironment;
+  // Injected by ProjectCanvas — fires the right-click context menu.
+  __onContext?: (e: React.MouseEvent) => void;
 }
 
 function statusFor(env?: KusoEnvironment): DeployStatus {
@@ -32,6 +34,8 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
 
   return (
     <div
+      data-node-context
+      onContextMenu={data.__onContext}
       className={cn(
         "group w-[260px] rounded-2xl border bg-card p-3 shadow-[var(--shadow-sm)] transition-all",
         "hover:shadow-[var(--shadow-md)]",

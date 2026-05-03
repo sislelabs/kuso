@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  deleteService,
   getService,
   getServiceEnv,
   getServiceLogs,
@@ -82,6 +83,19 @@ export function useWakeService(project: string, service: string) {
     mutationFn: () => wakeService(project, service),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+    },
+  });
+}
+
+export function useDeleteService(project: string, service: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => deleteService(project, service),
+    onSuccess: () => {
+      // Cascade: project detail (rolls services + envs into one shape)
+      // and the bare services list both need a refetch. Easiest: nuke
+      // anything keyed under this project.
+      qc.invalidateQueries({ queryKey: ["projects", project] });
     },
   });
 }

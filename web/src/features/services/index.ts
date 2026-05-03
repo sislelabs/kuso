@@ -6,6 +6,7 @@ export {
   useTriggerBuild,
   useLogsTail,
   useWakeService,
+  useDeleteService,
   useAddonSecretKeys,
   serviceQueryKey,
   serviceEnvQueryKey,

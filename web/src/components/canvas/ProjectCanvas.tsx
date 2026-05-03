@@ -22,7 +22,19 @@ import {
   loadStoredLayout,
   saveStoredLayout,
 } from "./layout";
+import { CanvasContextMenu, type ContextMenuItem } from "./CanvasContextMenu";
 import { serviceShortName } from "@/lib/utils";
+import { useTriggerBuild, useDeleteService } from "@/features/services";
+import {
+  ExternalLink,
+  ScrollText,
+  RotateCcw,
+  Trash2,
+  Eye,
+  Plus,
+  LayoutGrid,
+} from "lucide-react";
+import { toast } from "sonner";
 
 const nodeTypes = {
   service: ServiceNode,
@@ -36,6 +48,13 @@ interface Props {
   envs: KusoEnvironment[];
   onSelectService?: (svcName: string) => void;
   onSelectAddon?: (addonName: string) => void;
+}
+
+interface ContextState {
+  open: boolean;
+  x: number;
+  y: number;
+  items: ContextMenuItem[];
 }
 
 export function ProjectCanvas({
@@ -72,9 +91,6 @@ export function ProjectCanvas({
 
   const initialEdges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
-    // Connect every addon to every service in the project — addon
-    // connection secrets are wired into every service via envFrom, so
-    // the canvas reflects that "broadcast" relationship.
     addons.forEach((a) => {
       services.forEach((s) => {
         out.push({
@@ -91,8 +107,11 @@ export function ProjectCanvas({
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>(initialEdges);
+  const [ctx, setCtx] = useState<ContextState>({ open: false, x: 0, y: 0, items: [] });
 
-  // Layout pass: dagre then overlay any user-saved positions.
+  const trigger = useTriggerBuild(project, "");
+  const del = useDeleteService(project, "");
+
   useEffect(() => {
     if (!project) return;
     const stored = loadStoredLayout(project);
@@ -104,8 +123,6 @@ export function ProjectCanvas({
   const onNodesChange: OnNodesChange = (changes) => {
     setNodes((prev) => {
       const next = applyNodeChanges(changes, prev);
-      // Persist positions on drag end (each ChangeType "position" with
-      // dragging:false marks a settled position).
       const dragged = changes.some(
         (c) => c.type === "position" && c.dragging === false
       );
@@ -123,9 +140,6 @@ export function ProjectCanvas({
   const onNodeClick: NodeMouseHandler = (_e, node) => {
     if (node.type === "service" && onSelectService) {
       const data = node.data as ServiceNodeData;
-      // Pass the SHORT name (without the project prefix) so the URL
-      // hosting the overlay (?service=<short>) matches what the API
-      // expects for /api/projects/:p/services/:s.
       onSelectService(serviceShortName(data.project, data.service.metadata.name));
     } else if (node.type === "addon" && onSelectAddon) {
       const data = node.data as AddonNodeData;
@@ -133,23 +147,156 @@ export function ProjectCanvas({
     }
   };
 
+  // Right-click on a service node — Open / View logs / Trigger build / Delete.
+  const onServiceContext = (
+    e: React.MouseEvent,
+    data: ServiceNodeData
+  ) => {
+    e.preventDefault();
+    const short = serviceShortName(data.project, data.service.metadata.name);
+    const env = envs.find(
+      (x) =>
+        x.spec.service === data.service.metadata.name && x.spec.kind === "production"
+    );
+    const url = env?.status?.url as string | undefined;
+
+    const items: ContextMenuItem[] = [
+      {
+        id: "open",
+        label: "Open service",
+        icon: Eye,
+        onSelect: () => onSelectService?.(short),
+      },
+      {
+        id: "logs",
+        label: "View logs",
+        icon: ScrollText,
+        onSelect: () => onSelectService?.(short),
+      },
+      {
+        id: "trigger",
+        label: "Trigger build",
+        icon: RotateCcw,
+        onSelect: async () => {
+          try {
+            await callTrigger(data.project, short, trigger);
+            toast.success(`Build triggered for ${short}`);
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Failed to trigger build");
+          }
+        },
+      },
+      ...(url
+        ? [
+            {
+              id: "open-url",
+              label: "Open URL in new tab",
+              icon: ExternalLink,
+              onSelect: () => window.open(url, "_blank", "noopener"),
+            } as ContextMenuItem,
+          ]
+        : []),
+      {
+        id: "delete",
+        label: "Delete service",
+        icon: Trash2,
+        destructive: true,
+        onSelect: async () => {
+          if (!window.confirm(`Delete service "${short}"? This cascades to its environments.`)) return;
+          try {
+            await callDelete(data.project, short, del);
+            toast.success(`Service ${short} deleted`);
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Failed to delete");
+          }
+        },
+      },
+    ];
+    setCtx({ open: true, x: e.clientX, y: e.clientY, items });
+  };
+
+  // Right-click on an addon node — Open / Connection / Delete.
+  const onAddonContext = (e: React.MouseEvent, data: AddonNodeData) => {
+    e.preventDefault();
+    const items: ContextMenuItem[] = [
+      {
+        id: "open",
+        label: "Open addon",
+        icon: Eye,
+        onSelect: () => onSelectAddon?.(data.addon.metadata.name),
+      },
+      {
+        id: "delete",
+        label: "Delete addon",
+        icon: Trash2,
+        destructive: true,
+        disabled: true,
+      },
+    ];
+    setCtx({ open: true, x: e.clientX, y: e.clientY, items });
+  };
+
+  // Right-click on empty pane — Add service / Add addon / Reset layout.
+  const onPaneContext = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const items: ContextMenuItem[] = [
+      {
+        id: "add-service",
+        label: "Add service",
+        icon: Plus,
+        onSelect: () => {
+          window.location.href = `/projects/${encodeURIComponent(project)}/settings`;
+        },
+      },
+      {
+        id: "add-addon",
+        label: "Add addon",
+        icon: Plus,
+        disabled: true,
+      },
+      {
+        id: "reset-layout",
+        label: "Reset layout",
+        icon: LayoutGrid,
+        onSelect: () => {
+          saveStoredLayout(project, {});
+          const laid = autoLayout(initialNodes, initialEdges);
+          setNodes(laid);
+        },
+      },
+    ];
+    setCtx({ open: true, x: e.clientX, y: e.clientY, items });
+  };
+
   return (
-    // Parent (project view) controls our height: it's a flex-1 region
-    // inside a column that starts below the global Header + toolbar.
-    // Use flex-1 + min-h-0 so we fill that without overflowing. No
-    // explicit calc(100vh - ...) here; that math is brittle when the
-    // toolbar height changes.
-    <div className="flex-1 min-h-0 w-full">
+    <div
+      className="relative flex-1 min-h-0 w-full"
+      onContextMenuCapture={(e) => {
+        // React Flow's nodeTypes render their own divs; if a node was
+        // right-clicked the event already had its propagation stopped
+        // by our node-level handler. Anything else that bubbles up
+        // here is a pane context and we route it accordingly.
+        const target = e.target as HTMLElement;
+        if (target.closest("[data-node-context]")) return;
+        onPaneContext(e);
+      }}
+    >
       <ReactFlow
-        nodes={nodes}
+        nodes={nodes.map((n) => ({
+          ...n,
+          data: {
+            ...n.data,
+            __onContext:
+              n.type === "service"
+                ? (e: React.MouseEvent) => onServiceContext(e, n.data as ServiceNodeData)
+                : (e: React.MouseEvent) => onAddonContext(e, n.data as AddonNodeData),
+          },
+        }))}
         edges={edges}
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
         fitView
-        // Cap initial zoom: with one or two nodes, fitView would scale
-        // them up to maxZoom (which used to be 2x) and the canvas
-        // looked like a magnifier. 1.0 = "actual size".
         fitViewOptions={{ padding: 0.25, maxZoom: 1, minZoom: 0.4 }}
         minZoom={0.2}
         maxZoom={1.5}
@@ -158,6 +305,38 @@ export function ProjectCanvas({
         <Background gap={24} size={1} color="var(--border-subtle)" />
         <Controls className="!bg-[var(--bg-elevated)] !border-[var(--border-subtle)]" />
       </ReactFlow>
+
+      <CanvasContextMenu
+        open={ctx.open}
+        x={ctx.x}
+        y={ctx.y}
+        items={ctx.items}
+        onClose={() => setCtx((c) => ({ ...c, open: false }))}
+      />
     </div>
   );
+}
+
+// callTrigger / callDelete are tiny adapters: the hooks at the top of
+// this module are bound to a placeholder service name (""), so we
+// re-bind to the actual service via the API directly using the same
+// mutation infra. Keeps the canvas from spinning up N hooks per node.
+async function callTrigger(
+  project: string,
+  service: string,
+  _hint: ReturnType<typeof useTriggerBuild>
+) {
+  void _hint;
+  const { triggerBuild } = await import("@/features/services/api");
+  await triggerBuild(project, service, {});
+}
+
+async function callDelete(
+  project: string,
+  service: string,
+  _hint: ReturnType<typeof useDeleteService>
+) {
+  void _hint;
+  const { deleteService } = await import("@/features/services/api");
+  await deleteService(project, service);
 }

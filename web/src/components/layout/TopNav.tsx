@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
+import { Fragment } from "react";
 import { useMemo, useState } from "react";
 import {
   Avatar,
@@ -57,6 +58,10 @@ import { ServersPopover } from "./ServersPopover";
 export function TopNav() {
   const params = useRouteParams<{ project: string }>(["project"]);
   const currentProject = params.project ?? "";
+  const pathname = usePathname() ?? "";
+  const settingsCrumbs = pathname.startsWith("/settings/")
+    ? settingsBreadcrumb(pathname)
+    : null;
 
   return (
     <header
@@ -67,15 +72,40 @@ export function TopNav() {
         <Logo />
       </Link>
 
-      <Crumb>
-        <ProjectPicker currentProject={currentProject} />
-      </Crumb>
+      {/* Project breadcrumb is suppressed on /settings/* — it'd lie
+          about a project being in scope, and the env switcher would
+          render meaningless options. */}
+      {!settingsCrumbs && (
+        <Crumb>
+          <ProjectPicker currentProject={currentProject} />
+        </Crumb>
+      )}
 
-      {currentProject && (
+      {currentProject && !settingsCrumbs && (
         <Crumb>
           <EnvironmentSwitcher project={currentProject} />
         </Crumb>
       )}
+
+      {settingsCrumbs?.map((c, i) => (
+        <Fragment key={c.href ?? c.label}>
+          <Crumb>
+            {c.href ? (
+              <Link
+                href={c.href}
+                className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+              >
+                {c.label}
+              </Link>
+            ) : (
+              <span className="inline-flex h-7 items-center px-2 text-sm font-medium text-[var(--text-primary)]">
+                {c.label}
+              </span>
+            )}
+          </Crumb>
+          {void i}
+        </Fragment>
+      ))}
 
       <div className="flex-1" />
 
@@ -85,6 +115,33 @@ export function TopNav() {
       <UserMenu />
     </header>
   );
+}
+
+// settingsBreadcrumb returns the crumbs to render for /settings/* paths.
+// "Settings" is a link back to the index; the trailing crumb is the
+// current section (Profile, Tokens, Cluster nodes, etc.) and is not a
+// link because it's where we already are.
+function settingsBreadcrumb(pathname: string): { label: string; href?: string }[] {
+  const segs = pathname.replace(/^\/+|\/+$/g, "").split("/");
+  // segs[0] === "settings"; segs[1] is the section.
+  const section = segs[1];
+  const labels: Record<string, string> = {
+    profile: "Profile",
+    tokens: "API tokens",
+    notifications: "Notifications",
+    nodes: "Cluster nodes",
+    config: "Cluster config",
+    users: "Users",
+    roles: "Roles",
+    groups: "Groups",
+  };
+  const out: { label: string; href?: string }[] = [
+    { label: "Settings", href: "/settings/profile" },
+  ];
+  if (section && labels[section]) {
+    out.push({ label: labels[section] });
+  }
+  return out;
 }
 
 // Crumb wraps a child with a thin chevron separator on its left.

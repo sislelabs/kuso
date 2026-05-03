@@ -1,140 +1,35 @@
 "use client";
 
-import Link from "next/link";
-import { useEffect, useState } from "react";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { useProject, useAddons } from "@/features/projects";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { DeployStatusPill, type DeployStatus } from "@/components/service/DeployStatusPill";
-import { SleepBadge } from "@/components/service/SleepBadge";
-import { RuntimeIcon } from "@/components/service/RuntimeIcon";
-import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { ProjectCanvas } from "@/components/canvas/ProjectCanvas";
 import { ServiceOverlay } from "@/components/service/ServiceOverlay";
-import { ExternalLink, Plus, Package, Database, LayoutGrid, List } from "lucide-react";
-import type { KusoEnvironment, KusoService } from "@/types/projects";
-import { cn, serviceShortName } from "@/lib/utils";
+import { Package } from "lucide-react";
 
-function envForService(envs: KusoEnvironment[], svcName: string, kind = "production"): KusoEnvironment | undefined {
-  return envs.find((e) => e.spec.service === svcName && e.spec.kind === kind);
-}
-
-function statusFor(env?: KusoEnvironment): DeployStatus {
-  if (!env) return "unknown";
-  const phase = (env.status?.phase ?? "").toString().toLowerCase();
-  if (phase === "building") return "building";
-  if (phase === "deploying") return "deploying";
-  if (env.status?.ready) return "active";
-  if (phase === "failed" || phase === "error") return "failed";
-  if (phase === "sleeping") return "sleeping";
-  return "unknown";
-}
-
-function ServiceCard({
-  service,
-  envs,
-  project,
-  onSelect,
-}: {
-  service: KusoService;
-  envs: KusoEnvironment[];
-  project: string;
-  onSelect: (shortName: string) => void;
-}) {
-  const env = envForService(envs, service.metadata.name);
-  const status = statusFor(env);
-  const shortName = serviceShortName(project, service.metadata.name);
-  return (
-    <button
-      type="button"
-      onClick={() => onSelect(shortName)}
-      className="block w-full text-left"
-    >
-      <Card className="hover:border-[var(--accent)]/30 transition-colors">
-        <CardHeader>
-          <CardTitle className="flex items-center justify-between">
-            <span className="flex items-center gap-2 truncate">
-              <RuntimeIcon runtime={service.spec.runtime} />
-              <span className="truncate">{shortName}</span>
-            </span>
-            <DeployStatusPill status={status} />
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <dl className="space-y-1.5 text-xs">
-            {service.spec.runtime && (
-              <div className="flex items-center gap-2">
-                <dt className="font-mono text-[var(--text-tertiary)]">runtime</dt>
-                <dd className="font-mono text-[var(--text-secondary)]">
-                  {service.spec.runtime}
-                </dd>
-              </div>
-            )}
-            {service.spec.port !== undefined && (
-              <div className="flex items-center gap-2">
-                <dt className="font-mono text-[var(--text-tertiary)]">port</dt>
-                <dd className="font-mono text-[var(--text-secondary)]">
-                  {service.spec.port}
-                </dd>
-              </div>
-            )}
-            {env?.status?.url && (
-              <div className="flex items-center gap-2">
-                <dt className="font-mono text-[var(--text-tertiary)]">url</dt>
-                <dd className="truncate">
-                  <span className="font-mono text-[var(--accent)] truncate inline-flex items-center gap-1">
-                    {(env.status.url as string).replace(/^https?:\/\//, "")}
-                    <ExternalLink className="h-3 w-3 shrink-0" />
-                  </span>
-                </dd>
-              </div>
-            )}
-          </dl>
-          {status === "sleeping" && <SleepBadge className="mt-3" />}
-        </CardContent>
-      </Card>
-    </button>
-  );
-}
-
+// ProjectDetailView is canvas-only. Project name + repo live in the
+// TopNav breadcrumb; service interactions happen via right-click on
+// canvas nodes (open / view logs / trigger build / delete) or by
+// clicking a node which opens the ServiceOverlay panel.
 export function ProjectDetailView() {
   const params = useRouteParams<{ project: string }>(["project"]);
   const projectName = params.project ?? "";
-  const [view, setView] = useState<"canvas" | "list">("canvas");
-  const router = useRouter();
-  const pathname = usePathname();
   const search = useSearchParams();
 
-  // ?service=<short> deep-links the overlay open. Sync both ways: canvas/
-  // list clicks update the URL; the URL drives the overlay state on
-  // initial load. Keeps refresh + back/forward sane.
-  const selectedService = search?.get("service") ?? null;
-  // ?env=<name> filters the canvas + overlay to a specific environment.
-  // "production" is the default (and is represented as the URL param
-  // being absent so a clean URL is the common case).
+  // Overlay state — in-component, NOT in the URL. The panel is a
+  // transient inspector, not a route.
+  const [selectedService, setSelectedService] = useState<string | null>(null);
+
+  // Env switcher legitimately changes what's on screen and survives
+  // reload, so it stays in the URL as ?env=<short>.
   const selectedEnv = search?.get("env") ?? "production";
 
   const project = useProject(projectName);
   const addons = useAddons(projectName);
-
-  // When the project name changes (rare in practice — the user navigates
-  // to a different project) clear the overlay's URL param so it doesn't
-  // bleed.
-  useEffect(() => {
-    void projectName;
-  }, [projectName]);
-
-  const setSelectedService = (shortName: string | null) => {
-    const next = new URLSearchParams(search?.toString() ?? "");
-    if (shortName) next.set("service", shortName);
-    else next.delete("service");
-    const qs = next.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-  };
 
   if (project.isPending || addons.isPending) {
     return (
@@ -164,8 +59,7 @@ export function ProjectDetailView() {
 
   // Narrow envs to the one the user picked in the TopNav. "production"
   // matches every env where spec.kind === "production"; everything else
-  // matches a preview env by short name (last "-"-segmented chunk of
-  // metadata.name, e.g. "pr-42" for hello-web-pr-42).
+  // matches a preview env by short name.
   const envs = allEnvs.filter((e) => {
     if (selectedEnv === "production") return e.spec.kind === "production";
     const short = e.metadata.name.split("-").slice(-2).join("-");
@@ -175,18 +69,10 @@ export function ProjectDetailView() {
   if (services.length === 0 && addonsList.length === 0) {
     return (
       <div className="p-6 lg:p-8">
-        <div className="mb-6">
-          <h1 className="font-heading text-2xl font-semibold tracking-tight">{projectName}</h1>
-          {data.project.spec.description && (
-            <p className="mt-1 text-sm text-[var(--text-secondary)]">
-              {data.project.spec.description}
-            </p>
-          )}
-        </div>
         <EmptyState
           icon={<Package className="h-5 w-5" />}
           title="No services or addons yet"
-          description="Add a service from your repo, then attach a Postgres or Redis addon. The canvas lights up as soon as you do."
+          description="Connect a repo to add a service. Right-click the canvas to add an addon. The graph lights up as soon as you do."
         />
       </div>
     );
@@ -194,157 +80,21 @@ export function ProjectDetailView() {
 
   return (
     <>
-      <div className="flex flex-col h-[calc(100vh-3rem)] overflow-hidden">
-        <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 lg:px-6">
-          <div className="min-w-0">
-            <h1 className="truncate font-heading text-base font-semibold tracking-tight">
-              {projectName}
-            </h1>
-            {data.project.spec.defaultRepo?.url && (
-              <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
-                {data.project.spec.defaultRepo.url.replace(/^https?:\/\/(www\.)?/, "")}
-              </p>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="inline-flex rounded-md border border-[var(--border-subtle)] p-0.5 text-xs">
-              <button
-                type="button"
-                onClick={() => setView("canvas")}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded px-2 py-1",
-                  view === "canvas"
-                    ? "bg-[var(--accent-subtle)] text-[var(--text-primary)]"
-                    : "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
-                )}
-              >
-                <LayoutGrid className="h-3 w-3" /> Canvas
-              </button>
-              <button
-                type="button"
-                onClick={() => setView("list")}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded px-2 py-1",
-                  view === "list"
-                    ? "bg-[var(--accent-subtle)] text-[var(--text-primary)]"
-                    : "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
-                )}
-              >
-                <List className="h-3 w-3" /> List
-              </button>
-            </div>
-            <Link
-              href={`/projects/${projectName}/settings`}
-              className="text-xs text-[var(--text-secondary)] underline"
-            >
-              settings
-            </Link>
-          </div>
-        </div>
-
-        {view === "canvas" ? (
-          <ProjectCanvas
-            project={projectName}
-            services={services}
-            addons={addonsList}
-            envs={envs}
-            onSelectService={(shortName) => setSelectedService(shortName)}
-          />
-        ) : (
-          <div className="mx-auto w-full max-w-6xl flex-1 overflow-y-auto p-6 lg:p-8">
-            <section className="mb-8">
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="font-heading text-lg font-semibold">Services</h2>
-                <Button variant="outline" size="sm" disabled>
-                  <Plus className="h-3.5 w-3.5" /> Add service
-                </Button>
-              </div>
-              {services.length === 0 ? (
-                <EmptyState
-                  icon={<Package className="h-5 w-5" />}
-                  title="No services yet"
-                  description="A service is one deployable process."
-                />
-              ) : (
-                <div className="grid gap-4 sm:grid-cols-2">
-                  {services.map((s) => (
-                    <ServiceCard
-                      key={s.metadata.uid ?? s.metadata.name}
-                      service={s}
-                      envs={envs}
-                      project={projectName}
-                      onSelect={setSelectedService}
-                    />
-                  ))}
-                </div>
-              )}
-            </section>
-
-            <section>
-              <div className="mb-3 flex items-center justify-between">
-                <h2 className="font-heading text-lg font-semibold">Addons</h2>
-                <Button variant="outline" size="sm" disabled>
-                  <Plus className="h-3.5 w-3.5" /> Add addon
-                </Button>
-              </div>
-              {addonsList.length === 0 ? (
-                <EmptyState
-                  icon={<Database className="h-5 w-5" />}
-                  title="No addons yet"
-                  description="Postgres, Redis, MongoDB — pick one and the connection env vars are wired into every service."
-                />
-              ) : (
-                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                  {addonsList.map((a) => (
-                    <Card key={a.metadata.uid ?? a.metadata.name} size="sm">
-                      <CardHeader>
-                        <CardTitle className="flex items-center gap-2">
-                          <AddonIcon kind={a.spec.kind} />
-                          <span className="truncate">{a.metadata.name}</span>
-                        </CardTitle>
-                      </CardHeader>
-                      <CardContent>
-                        <dl className="space-y-1 text-xs">
-                          <div className="flex items-center gap-2">
-                            <dt className="font-mono text-[var(--text-tertiary)]">kind</dt>
-                            <dd className="font-mono text-[var(--text-secondary)]">
-                              {addonLabel(a.spec.kind)}
-                            </dd>
-                          </div>
-                          {a.spec.version && (
-                            <div className="flex items-center gap-2">
-                              <dt className="font-mono text-[var(--text-tertiary)]">version</dt>
-                              <dd className="font-mono text-[var(--text-secondary)]">
-                                {a.spec.version}
-                              </dd>
-                            </div>
-                          )}
-                          {a.status?.connectionSecret && (
-                            <div className="flex items-center gap-2">
-                              <dt className="font-mono text-[var(--text-tertiary)]">secret</dt>
-                              <dd className="truncate font-mono text-[var(--text-secondary)]">
-                                {a.status.connectionSecret}
-                              </dd>
-                            </div>
-                          )}
-                        </dl>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              )}
-            </section>
-          </div>
-        )}
+      <div className="flex h-[calc(100vh-3rem)] flex-col overflow-hidden">
+        <ProjectCanvas
+          project={projectName}
+          services={services}
+          addons={addonsList}
+          envs={envs}
+          onSelectService={(shortName) => setSelectedService(shortName)}
+        />
       </div>
 
       <ServiceOverlay
         project={projectName}
         service={selectedService}
         env={selectedEnv}
-        onOpenChange={(open) => {
-          if (!open) setSelectedService(null);
-        }}
+        onClose={() => setSelectedService(null)}
       />
     </>
   );

@@ -8,12 +8,15 @@ import { cn } from "@/lib/utils";
 export interface AddonNodeData extends Record<string, unknown> {
   project: string;
   addon: KusoAddon;
+  __onContext?: (e: React.MouseEvent) => void;
 }
 
 export function AddonNode({ data }: { data: AddonNodeData }) {
   const ready = !!data.addon.status?.ready;
   return (
     <div
+      data-node-context
+      onContextMenu={data.__onContext}
       className={cn(
         "w-[220px] rounded-2xl border bg-card p-3 shadow-[var(--shadow-sm)] transition-all",
         "hover:shadow-[var(--shadow-md)]",

@@ -64,21 +64,26 @@ export function useRouteParams<T extends Record<string, string>>(
 // (matching the keys' positional context) is skipped.
 function parsePathname(pathname: string | null, keys: string[]): Record<string, string> {
 	if (!pathname) return {};
-	// Trim leading and trailing slashes, then split.
 	const segments = pathname.replace(/^\/+|\/+$/g, "").split("/");
 	const out: Record<string, string> = {};
 	if (keys.length === 0) return out;
 
-	// Walk the segments. The route shape we know is:
-	//   /projects/<project>(/services/<service>)?(/...)
-	// Any segment that doesn't match a static literal we recognise is
-	// a dynamic value. Map them positionally.
+	// We only ever want to extract a "project" / "service" param from
+	// the canonical project route shape. Everything else (e.g.
+	// /settings/nodes, /login) shouldn't yield a dynamic value, even
+	// though textually "nodes" looks like one. Without this gate the
+	// TopNav saw "nodes" as the current project and the project view
+	// fired useProject("nodes") → 404 banner.
+	if (segments[0] !== "projects" || segments.length < 2) {
+		return out;
+	}
+
+	// /projects/<project>(/services/<service>)?(/...) — segments at
+	// odd positions are static (services/, envs/, addons/, settings/,
+	// logs/) and segments at even positions are dynamic.
 	const dynamicValues: string[] = [];
 	for (let i = 0; i < segments.length; i++) {
 		const seg = segments[i];
-		// Static literal segments — skip them. The literal set comes
-		// from the route shapes the app currently uses; extend if new
-		// dynamic routes land.
 		if (
 			seg === "projects" ||
 			seg === "services" ||

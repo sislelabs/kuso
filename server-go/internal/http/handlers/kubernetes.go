@@ -30,13 +30,16 @@ func (h *KubernetesHandler) Mount(rt interface {
 	Get(string, http.HandlerFunc)
 	Post(string, http.HandlerFunc)
 	Patch(string, http.HandlerFunc)
+	Put(string, http.HandlerFunc)
 }) {
 	rt.Get("/api/kubernetes/events", h.Events)
 	rt.Get("/api/kubernetes/storageclasses", h.StorageClasses)
 	rt.Get("/api/kubernetes/domains", h.Domains)
 	rt.Get("/api/kubernetes/nodes", h.Nodes)
-	rt.Patch("/api/kubernetes/nodes/{name}/taints", h.SetNodeTaints)
-	rt.Patch("/api/kubernetes/nodes/{name}/labels", h.SetNodeLabels)
+	// Single endpoint, simple semantics: replace the kuso labels for
+	// this node with the body. Server expands kuso conventions (region
+	// → matching NoSchedule taint) under the hood.
+	rt.Put("/api/kubernetes/nodes/{name}/labels", h.PutNodeLabels)
 }
 
 func kubeCtx(r *http.Request) (context.Context, context.CancelFunc) {
@@ -116,27 +119,28 @@ func (h *KubernetesHandler) Domains(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// nodeSummary is the slim wire shape the UI needs. Drops every Node
-// field the dashboard never reads (system info, allocatable, conditions
-// detail) so the response stays small. The taint shape mirrors the
-// API exactly so a PATCH round-trips without a translation layer.
+// nodeSummary is the slim wire shape the UI needs. Only kuso-managed
+// labels are exposed — the underlying kube/k3s labels stay hidden so
+// users don't accidentally edit topology.kubernetes.io/* and break the
+// scheduler. Taints aren't surfaced at all; the labels endpoint
+// derives them from convention (region → NoSchedule).
 type nodeSummary struct {
 	Name        string            `json:"name"`
 	Ready       bool              `json:"ready"`
 	Roles       []string          `json:"roles"`
+	// Region/Zone read from the upstream topology labels for display
+	// only; not editable through the UI.
 	Region      string            `json:"region,omitempty"`
 	Zone        string            `json:"zone,omitempty"`
-	Labels      map[string]string `json:"labels"`
-	Taints      []nodeTaint       `json:"taints"`
+	// KusoLabels is the editable surface — only labels under the
+	// kuso.sislelabs.com/ namespace, with the prefix stripped on the
+	// way out and re-applied on the way in.
+	KusoLabels  map[string]string `json:"kusoLabels"`
 	Schedulable bool              `json:"schedulable"`
 	CreatedAt   string            `json:"createdAt,omitempty"`
 }
 
-type nodeTaint struct {
-	Key    string `json:"key"`
-	Value  string `json:"value,omitempty"`
-	Effect string `json:"effect"` // NoSchedule | PreferNoSchedule | NoExecute
-}
+const kusoLabelPrefix = "kuso.sislelabs.com/"
 
 // Nodes lists every cluster node with the bits the UI needs to show
 // region/zone, roles, taint markers, and Ready state.
@@ -161,10 +165,16 @@ func (h *KubernetesHandler) Nodes(w http.ResponseWriter, r *http.Request) {
 		}
 		roles := nodeRoles(n.Labels)
 		region := n.Labels["topology.kubernetes.io/region"]
+		if region == "" {
+			region = n.Labels[kusoLabelPrefix+"region"]
+		}
 		zone := n.Labels["topology.kubernetes.io/zone"]
-		taints := make([]nodeTaint, 0, len(n.Spec.Taints))
-		for _, t := range n.Spec.Taints {
-			taints = append(taints, nodeTaint{Key: t.Key, Value: t.Value, Effect: string(t.Effect)})
+		// Only kuso-namespaced labels are editable through the UI.
+		kusoLabels := map[string]string{}
+		for k, v := range n.Labels {
+			if len(k) > len(kusoLabelPrefix) && k[:len(kusoLabelPrefix)] == kusoLabelPrefix {
+				kusoLabels[k[len(kusoLabelPrefix):]] = v
+			}
 		}
 		out = append(out, nodeSummary{
 			Name:        n.Name,
@@ -172,8 +182,7 @@ func (h *KubernetesHandler) Nodes(w http.ResponseWriter, r *http.Request) {
 			Roles:       roles,
 			Region:      region,
 			Zone:        zone,
-			Labels:      n.Labels,
-			Taints:      taints,
+			KusoLabels:  kusoLabels,
 			Schedulable: !n.Spec.Unschedulable,
 			CreatedAt:   n.CreationTimestamp.Format(time.RFC3339),
 		})
@@ -200,44 +209,19 @@ func nodeRoles(labels map[string]string) []string {
 	return out
 }
 
-// SetNodeTaints replaces a node's spec.taints with the body's list.
-// Body shape mirrors nodeTaint above. A typical kuso flow drops a
-// "kuso.sislelabs.com/region=eu:NoSchedule" taint so workloads only
-// land here when they tolerate it.
-func (h *KubernetesHandler) SetNodeTaints(w http.ResponseWriter, r *http.Request) {
-	name := chiURLParam(r, "name")
-	if name == "" {
-		http.Error(w, "missing node name", http.StatusBadRequest)
-		return
-	}
-	var body struct {
-		Taints []nodeTaint `json:"taints"`
-	}
-	if err := decodeJSON(r, &body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-	ctx, cancel := kubeCtx(r)
-	defer cancel()
-	patch, err := nodeTaintsPatch(body.Taints)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if _, err := h.Kube.Clientset.CoreV1().Nodes().Patch(
-		ctx, name, "application/strategic-merge-patch+json", patch, metav1.PatchOptions{},
-	); err != nil {
-		h.Logger.Error("patch node taints", "node", name, "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-// SetNodeLabels merges the body's labels onto a node. Used to drop a
-// "kuso.sislelabs.com/region: eu" label so the dashboard's region
-// picker can group nodes without touching taints.
-func (h *KubernetesHandler) SetNodeLabels(w http.ResponseWriter, r *http.Request) {
+// PutNodeLabels replaces the kuso-managed labels for a node. Body is
+// {labels: {key: value}} — bare keys (no namespace prefix). The
+// server applies the kuso.sislelabs.com/ prefix on the way in and
+// strips it on the way out via Nodes() so the user never sees the
+// namespace mechanics.
+//
+// Convention: when the user sets `region`, the server also drops a
+// matching NoSchedule taint so workloads without a matching
+// toleration won't land here. Removing the region label removes
+// the matching taint. Other labels are pure metadata for now;
+// future placement logic can pin services to specific
+// labels via spec.placement.
+func (h *KubernetesHandler) PutNodeLabels(w http.ResponseWriter, r *http.Request) {
 	name := chiURLParam(r, "name")
 	if name == "" {
 		http.Error(w, "missing node name", http.StatusBadRequest)
@@ -250,21 +234,101 @@ func (h *KubernetesHandler) SetNodeLabels(w http.ResponseWriter, r *http.Request
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	if body.Labels == nil {
+		body.Labels = map[string]string{}
+	}
+	for k := range body.Labels {
+		if k == "" {
+			http.Error(w, "label key cannot be empty", http.StatusBadRequest)
+			return
+		}
+	}
 	ctx, cancel := kubeCtx(r)
 	defer cancel()
-	patch, err := nodeLabelsPatch(body.Labels)
+
+	// Read the live node so we can compute the diff (which kuso labels
+	// went away) and translate that into a minimal label patch +
+	// matching taint diff.
+	live, err := h.Kube.Clientset.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		h.Logger.Error("get node for label put", "node", name, "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+
+	// Step 1 — labels patch. Set every key in body; delete any kuso-
+	// namespaced label that's no longer in body. JSON merge-patch
+	// uses null to delete a key.
+	desired := map[string]any{}
+	for k, v := range body.Labels {
+		desired[kusoLabelPrefix+k] = v
+	}
+	for k := range live.Labels {
+		if len(k) > len(kusoLabelPrefix) && k[:len(kusoLabelPrefix)] == kusoLabelPrefix {
+			short := k[len(kusoLabelPrefix):]
+			if _, keep := body.Labels[short]; !keep {
+				desired[k] = nil
+			}
+		}
+	}
+	labelPatch, err := json.Marshal(map[string]any{"metadata": map[string]any{"labels": desired}})
+	if err != nil {
+		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 	if _, err := h.Kube.Clientset.CoreV1().Nodes().Patch(
-		ctx, name, "application/merge-patch+json", patch, metav1.PatchOptions{},
+		ctx, name, "application/merge-patch+json", labelPatch, metav1.PatchOptions{},
 	); err != nil {
 		h.Logger.Error("patch node labels", "node", name, "err", err)
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
+
+	// Step 2 — region-derived taint. Re-fetch so we see the new label
+	// state, then ensure spec.taints carries exactly one
+	// kuso.sislelabs.com/region=<value>:NoSchedule taint matching the
+	// current label (or none, if the label is gone).
+	if err := h.reconcileRegionTaint(ctx, name, body.Labels["region"]); err != nil {
+		h.Logger.Warn("reconcile region taint", "node", name, "err", err)
+	}
+
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// reconcileRegionTaint ensures spec.taints contains exactly one kuso
+// region taint matching desiredValue (empty string = remove the taint).
+// We send the full taint list so SMP doesn't merge — which is the
+// only way to make a kube taint go away via patch.
+func (h *KubernetesHandler) reconcileRegionTaint(ctx context.Context, name, desiredValue string) error {
+	const taintKey = kusoLabelPrefix + "region"
+	live, err := h.Kube.Clientset.CoreV1().Nodes().Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("get: %w", err)
+	}
+	out := []map[string]any{}
+	for _, t := range live.Spec.Taints {
+		if t.Key == taintKey {
+			continue
+		}
+		out = append(out, map[string]any{"key": t.Key, "value": t.Value, "effect": string(t.Effect), "timeAdded": t.TimeAdded})
+	}
+	if desiredValue != "" {
+		out = append(out, map[string]any{
+			"key":    taintKey,
+			"value":  desiredValue,
+			"effect": "NoSchedule",
+		})
+	}
+	patch, err := json.Marshal(map[string]any{
+		"spec": map[string]any{"$retainKeys": []string{"taints"}, "taints": out},
+	})
+	if err != nil {
+		return err
+	}
+	_, err = h.Kube.Clientset.CoreV1().Nodes().Patch(
+		ctx, name, "application/strategic-merge-patch+json", patch, metav1.PatchOptions{},
+	)
+	return err
 }
 
 // chiURLParam pulls a path param off the chi context. Wrapped so we
@@ -281,53 +345,12 @@ func decodeJSON(r *http.Request, out any) error {
 	return json.NewDecoder(body).Decode(out)
 }
 
-// nodeTaintsPatch builds a strategic-merge-patch payload that REPLACES
-// spec.taints with the given list. Strategic merge needs the array to
-// be tagged with the merge strategy because taints aren't a primitive
-// list — using a JSON merge would only add taints, never remove any.
-// We sidestep that by sending the explicit "$retainKeys" directive.
-func nodeTaintsPatch(taints []nodeTaint) ([]byte, error) {
-	for i, t := range taints {
-		if t.Key == "" {
-			return nil, fmt.Errorf("taint %d: key required", i)
-		}
-		switch t.Effect {
-		case "NoSchedule", "PreferNoSchedule", "NoExecute":
-		default:
-			return nil, fmt.Errorf("taint %d: effect must be NoSchedule|PreferNoSchedule|NoExecute (got %q)", i, t.Effect)
-		}
-	}
-	if taints == nil {
-		taints = []nodeTaint{}
-	}
-	patch := map[string]any{
-		"spec": map[string]any{
-			"$retainKeys": []string{"taints"},
-			"taints":      taints,
-		},
-	}
-	return json.Marshal(patch)
-}
-
-// nodeLabelsPatch builds a JSON merge-patch that adds/overwrites the
-// given labels. Setting a label's value to "" deletes it, matching
-// kubectl label foo-.
-func nodeLabelsPatch(labels map[string]string) ([]byte, error) {
-	if len(labels) == 0 {
-		return nil, errors.New("no labels to patch")
-	}
-	out := map[string]any{}
-	for k, v := range labels {
-		if v == "" {
-			out[k] = nil
-		} else {
-			out[k] = v
-		}
-	}
-	return json.Marshal(map[string]any{"metadata": map[string]any{"labels": out}})
-}
-
 // _ = networkingv1 keeps the import alive even if the reflection path
 // isn't visible to a static analyser; without it the import would look
 // unused on go vet.
 var _ = networkingv1.Ingress{}
+
+// _ = errors quiets the linter when no other site references it; it
+// stays imported for future error-wrapping handlers below.
+var _ = errors.New
+

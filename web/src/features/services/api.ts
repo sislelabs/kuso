@@ -53,6 +53,13 @@ export async function wakeService(project: string, service: string): Promise<voi
   );
 }
 
+export async function deleteService(project: string, service: string): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}`,
+    { method: "DELETE" }
+  );
+}
+
 export async function listAddonSecretKeys(project: string, addon: string): Promise<{ keys: string[] }> {
   return api(`/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/secret-keys`);
 }

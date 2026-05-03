@@ -13,8 +13,10 @@ export interface NodeSummary {
   roles: string[];
   region?: string;
   zone?: string;
-  labels: Record<string, string>;
-  taints: { key: string; value?: string; effect: string }[];
+  // kusoLabels mirrors the kuso.sislelabs.com/* labels with the
+  // namespace prefix stripped. Only this set is editable through the
+  // UI; underlying kube labels stay invisible.
+  kusoLabels: Record<string, string>;
   schedulable: boolean;
   createdAt?: string;
 }
@@ -37,11 +39,12 @@ export function ServersPopover() {
   const ready = list.filter((n) => n.ready).length;
   const total = list.length;
 
-  // Group by region (or "default" when unset). Each region's first node
-  // controls the heading.
+  // Group by region (or "default" when unset). Region comes from the
+  // upstream topology label OR our kuso/region label, whichever is
+  // present (Nodes() projects the union into n.region for us).
   const grouped = new Map<string, NodeSummary[]>();
   for (const n of list) {
-    const region = n.region || n.labels["kuso.sislelabs.com/region"] || "default";
+    const region = n.region || n.kusoLabels?.region || "default";
     const arr = grouped.get(region) ?? [];
     arr.push(n);
     grouped.set(region, arr);
@@ -109,14 +112,15 @@ export function ServersPopover() {
                               {r}
                             </span>
                           ))}
-                          {n.taints.length > 0 && (
+                          {Object.keys(n.kusoLabels ?? {}).length > 0 && (
                             <span
-                              title={n.taints
-                                .map((t) => `${t.key}=${t.value || ""}:${t.effect}`)
+                              title={Object.entries(n.kusoLabels)
+                                .map(([k, v]) => `${k}=${v}`)
                                 .join("\n")}
-                              className="rounded bg-amber-500/10 px-1 py-0.5 text-amber-400"
+                              className="rounded bg-[var(--accent-subtle)] px-1 py-0.5 text-[var(--text-secondary)]"
                             >
-                              {n.taints.length} taint{n.taints.length === 1 ? "" : "s"}
+                              {Object.keys(n.kusoLabels).length} label
+                              {Object.keys(n.kusoLabels).length === 1 ? "" : "s"}
                             </span>
                           )}
                         </span>
@@ -129,8 +133,8 @@ export function ServersPopover() {
           )}
         </div>
         <footer className="border-t border-[var(--border-subtle)] px-3 py-2 text-[10px] text-[var(--text-tertiary)]">
-          Drop a <span className="font-mono text-[var(--text-secondary)]">kuso.sislelabs.com/region</span> label to
-          group nodes; add a matching taint to pin tenants.
+          Add a <span className="font-mono text-[var(--text-secondary)]">region</span> label to
+          group nodes; projects pin to a region with their own label.
         </footer>
       </PopoverContent>
     </Popover>
