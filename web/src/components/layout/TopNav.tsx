@@ -48,6 +48,9 @@ import {
   Bell,
   Settings,
   Server,
+  Users,
+  Shield,
+  UsersRound,
 } from "lucide-react";
 import { ServersPopover } from "./ServersPopover";
 
@@ -336,6 +339,9 @@ function UserMenu() {
   const signOut = useSignOut();
   const user = session?.user;
   const initial = (user?.name?.[0] ?? user?.email?.[0] ?? "U").toUpperCase();
+  const perms = session?.session.permissions ?? [];
+  const canAdmin = perms.includes("user:write");
+  const canConfig = perms.includes("config:read");
 
   return (
     <DropdownMenu>
@@ -388,14 +394,48 @@ function UserMenu() {
             </Link>
           }
         />
-        <DropdownMenuItem
-          render={
-            <Link href="/settings/config" className="flex items-center gap-2">
-              <Settings className="h-3.5 w-3.5" />
-              Cluster config
-            </Link>
-          }
-        />
+        {canConfig && (
+          <DropdownMenuItem
+            render={
+              <Link href="/settings/config" className="flex items-center gap-2">
+                <Settings className="h-3.5 w-3.5" />
+                Cluster config
+              </Link>
+            }
+          />
+        )}
+        {canAdmin && (
+          <>
+            <DropdownMenuSeparator />
+            <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              Admin
+            </DropdownMenuLabel>
+            <DropdownMenuItem
+              render={
+                <Link href="/settings/users" className="flex items-center gap-2">
+                  <Users className="h-3.5 w-3.5" />
+                  Users
+                </Link>
+              }
+            />
+            <DropdownMenuItem
+              render={
+                <Link href="/settings/roles" className="flex items-center gap-2">
+                  <Shield className="h-3.5 w-3.5" />
+                  Roles
+                </Link>
+              }
+            />
+            <DropdownMenuItem
+              render={
+                <Link href="/settings/groups" className="flex items-center gap-2">
+                  <UsersRound className="h-3.5 w-3.5" />
+                  Groups
+                </Link>
+              }
+            />
+          </>
+        )}
         <DropdownMenuSeparator />
         <DropdownMenuItem
           onClick={() => signOut()}
