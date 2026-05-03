@@ -16,10 +16,10 @@ func TestParseVarRef(t *testing.T) {
 		{"empty", "", VarRef{}, false, nil},
 		{"plain literal", "hello", VarRef{}, false, nil},
 		{"plain literal with curlies", "{not a ref}", VarRef{}, false, nil},
-		{"pure ref", "${{ pg.DATABASE_URL }}", VarRef{Addon: "pg", Key: "DATABASE_URL"}, true, nil},
-		{"pure ref no inner spaces", "${{pg.DATABASE_URL}}", VarRef{Addon: "pg", Key: "DATABASE_URL"}, true, nil},
-		{"pure ref with hyphen addon", "${{ analiz-pg.PGHOST }}", VarRef{Addon: "analiz-pg", Key: "PGHOST"}, true, nil},
-		{"pure ref with underscore addon", "${{ my_redis.REDIS_URL }}", VarRef{Addon: "my_redis", Key: "REDIS_URL"}, true, nil},
+		{"pure ref", "${{ pg.DATABASE_URL }}", VarRef{Name: "pg", Key: "DATABASE_URL"}, true, nil},
+		{"pure ref no inner spaces", "${{pg.DATABASE_URL}}", VarRef{Name: "pg", Key: "DATABASE_URL"}, true, nil},
+		{"pure ref with hyphen name", "${{ analiz-pg.PGHOST }}", VarRef{Name: "analiz-pg", Key: "PGHOST"}, true, nil},
+		{"pure ref with underscore name", "${{ my_redis.REDIS_URL }}", VarRef{Name: "my_redis", Key: "REDIS_URL"}, true, nil},
 		{"composite prefix", "prefix-${{ pg.DATABASE_URL }}", VarRef{}, false, ErrCompositeVarRef},
 		{"composite suffix", "${{ pg.DATABASE_URL }}-suffix", VarRef{}, false, ErrCompositeVarRef},
 		{"composite both sides", "a-${{ pg.URL }}-b", VarRef{}, false, ErrCompositeVarRef},
@@ -50,14 +50,14 @@ func TestParseVarRef(t *testing.T) {
 }
 
 func TestVarRef_SecretName(t *testing.T) {
-	if got := (VarRef{Addon: "pg"}).SecretName(); got != "pg-conn" {
+	if got := (VarRef{Name: "pg"}).SecretName(); got != "pg-conn" {
 		t.Errorf("got %q, want %q", got, "pg-conn")
 	}
 }
 
 func TestRewriteEnvVar_Literal(t *testing.T) {
 	in := EnvVar{Name: "FOO", Value: "bar"}
-	got, err := RewriteEnvVar(in)
+	got, err := RewriteEnvVar(in, nil)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -66,9 +66,9 @@ func TestRewriteEnvVar_Literal(t *testing.T) {
 	}
 }
 
-func TestRewriteEnvVar_PureRef(t *testing.T) {
+func TestRewriteEnvVar_AddonRef(t *testing.T) {
 	in := EnvVar{Name: "DATABASE_URL", Value: "${{ pg.DATABASE_URL }}"}
-	got, err := RewriteEnvVar(in)
+	got, err := RewriteEnvVar(in, nil)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -90,9 +90,61 @@ func TestRewriteEnvVar_PureRef(t *testing.T) {
 	}
 }
 
+// TestRewriteEnvVar_ServiceRef covers the Railway-style reference path:
+// `${{api.HOST}}` resolves to a literal DNS string when the resolver
+// recognises "api" as a service in the project.
+func TestRewriteEnvVar_ServiceRef(t *testing.T) {
+	resolver := func(name string) (string, int32, string, bool) {
+		if name == "api" {
+			return "myproj-api", 8080, "kuso", true
+		}
+		return "", 0, "", false
+	}
+	cases := []struct {
+		key  string
+		want string
+	}{
+		{"HOST", "myproj-api.kuso.svc.cluster.local"},
+		{"PORT", "8080"},
+		{"URL", "http://myproj-api.kuso.svc.cluster.local:8080"},
+		{"INTERNAL_URL", "http://myproj-api.kuso.svc.cluster.local:8080"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			in := EnvVar{Name: "X", Value: "${{ api." + tc.key + " }}"}
+			got, err := RewriteEnvVar(in, resolver)
+			if err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			if got.ValueFrom != nil {
+				t.Errorf("got valueFrom %+v, want literal", got.ValueFrom)
+			}
+			if got.Value != tc.want {
+				t.Errorf("got %q, want %q", got.Value, tc.want)
+			}
+		})
+	}
+}
+
+// TestRewriteEnvVar_ServiceRef_FallsBackToAddon ensures that a
+// service-style key (HOST etc.) for a name that DOES NOT resolve as a
+// service falls through to the addon path. Lets users reference an
+// addon named "host" if they really want to (uncommon, but legal).
+func TestRewriteEnvVar_ServiceRef_FallsBackToAddon(t *testing.T) {
+	noServices := func(string) (string, int32, string, bool) { return "", 0, "", false }
+	in := EnvVar{Name: "X", Value: "${{ pg.HOST }}"}
+	got, err := RewriteEnvVar(in, noServices)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got.ValueFrom == nil {
+		t.Fatalf("got %+v, want secretKeyRef", got)
+	}
+}
+
 func TestRewriteEnvVar_Composite(t *testing.T) {
 	in := EnvVar{Name: "URL", Value: "https://${{ pg.HOST }}/db"}
-	_, err := RewriteEnvVar(in)
+	_, err := RewriteEnvVar(in, nil)
 	if !errors.Is(err, ErrCompositeVarRef) {
 		t.Errorf("got %v, want ErrCompositeVarRef", err)
 	}
@@ -105,7 +157,7 @@ func TestRewriteEnvVar_PassthroughValueFrom(t *testing.T) {
 			"secretKeyRef": map[string]any{"name": "other", "key": "K"},
 		},
 	}
-	got, err := RewriteEnvVar(in)
+	got, err := RewriteEnvVar(in, nil)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -120,7 +172,7 @@ func TestRewriteEnvVars_Multiple(t *testing.T) {
 		{Name: "B", Value: "${{ pg.URL }}"},
 		{Name: "C", Value: ""},
 	}
-	out, err := RewriteEnvVars(in)
+	out, err := RewriteEnvVars(in, nil)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}

@@ -93,6 +93,9 @@ export function ProjectCanvas({
 
   const initialEdges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
+    // Addon → every service: shared connection secret is mounted on
+    // each service's pod via envFrom, so every service has access to
+    // every addon's vars in the project.
     addons.forEach((a) => {
       services.forEach((s) => {
         out.push({
@@ -104,8 +107,41 @@ export function ProjectCanvas({
         });
       });
     });
+    // Service → service: derived from `${{ <other-svc>.<KEY> }}` refs
+    // in env vars. Build a short-name → service map first so we can
+    // match a ref's name against either the short form (typed by the
+    // user) or the project-prefixed FQN.
+    const prefix = project + "-";
+    const byShort = new Map<string, string>();
+    services.forEach((s) => {
+      const fqn = s.metadata.name;
+      const short = fqn.startsWith(prefix) ? fqn.slice(prefix.length) : fqn;
+      byShort.set(short, fqn);
+      byShort.set(fqn, fqn);
+    });
+    const refRe = /^\$\{\{\s*([a-zA-Z0-9_-]+)\.[A-Z_][A-Z0-9_]*\s*\}\}$/;
+    services.forEach((s) => {
+      for (const ev of s.spec.envVars ?? []) {
+        if (!ev?.value) continue;
+        const m = ev.value.match(refRe);
+        if (!m) continue;
+        const refName = m[1];
+        const targetFqn = byShort.get(refName);
+        if (!targetFqn || targetFqn === s.metadata.name) continue; // self-refs are noise
+        out.push({
+          id: `eref:${targetFqn}->${s.metadata.name}:${ev.name}`,
+          // Source is the referenced service (data flows from it).
+          source: `svc:${targetFqn}`,
+          target: `svc:${s.metadata.name}`,
+          animated: true,
+          style: { stroke: "var(--accent)", strokeWidth: 1.5, opacity: 0.7 },
+          label: ev.name,
+          labelStyle: { fontSize: 10, fontFamily: "var(--font-mono)" },
+        });
+      }
+    });
     return out;
-  }, [services, addons]);
+  }, [project, services, addons]);
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>(initialEdges);

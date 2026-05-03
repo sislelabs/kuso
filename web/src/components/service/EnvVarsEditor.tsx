@@ -3,8 +3,11 @@
 import { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Trash2, Plus, Save, Eye, EyeOff, FileText, List } from "lucide-react";
+import { Trash2, Plus, Save, Eye, EyeOff, FileText, List, Link2 } from "lucide-react";
 import { useServiceEnv, useSetServiceEnv } from "@/features/services";
+import { listAddonSecretKeys } from "@/features/services/api";
+import { useProject, useAddons } from "@/features/projects";
+import { useQuery } from "@tanstack/react-query";
 import { useCan, Perms } from "@/features/auth";
 import type { KusoEnvVar } from "@/types/projects";
 import { toast } from "sonner";
@@ -216,7 +219,7 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
           {rows.map((r, i) => (
             <div
               key={i}
-              className="grid grid-cols-[180px_1fr_auto_auto] items-center gap-1.5"
+              className="grid grid-cols-[180px_1fr_auto_auto_auto] items-center gap-1.5"
             >
               <Input
                 placeholder="KEY"
@@ -227,13 +230,19 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
                 spellCheck={false}
               />
               <Input
-                placeholder={r.fromSecret ? "(from secret)" : "value"}
+                placeholder={r.fromSecret ? "(from secret)" : "value or ${{ ref }}"}
                 type={r.visible || r.fromSecret ? "text" : "password"}
                 value={r.value}
                 onChange={(e) => update(i, { value: e.target.value })}
                 className="h-8 font-mono text-[12px]"
                 disabled={r.fromSecret}
                 spellCheck={false}
+              />
+              <ReferencePicker
+                project={project}
+                excludeService={service}
+                onPick={(ref) => update(i, { value: ref, visible: true })}
+                disabled={r.fromSecret}
               />
               <button
                 type="button"
@@ -273,6 +282,14 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
         </div>
       )}
 
+      {mode === "rows" && (
+        <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          Use <span className="text-[var(--text-secondary)]">${"${{ <name>.<KEY> }}"}</span> to
+          reference another service or addon. The icon to the right of any value picks
+          the right ref for you.
+        </p>
+      )}
+
       <div className="flex items-center gap-2">
         {mode === "rows" && (
           <Button variant="outline" size="sm" onClick={add} type="button">
@@ -302,6 +319,198 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
             unsaved changes
           </span>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ReferencePicker — dropdown that lets the user insert a `${{ x.KEY }}`
+// reference into an env-var value. Shows services in the project
+// (with HOST/PORT/URL/INTERNAL_URL synthetic keys) plus addons (with
+// the keys actually present on each conn-secret). Service refs
+// resolve to literal in-cluster DNS strings on save; addon refs
+// resolve to secretKeyRef entries — both happen server-side, the
+// picker just inserts the right ${{}} text.
+function ReferencePicker({
+  project,
+  excludeService,
+  onPick,
+  disabled,
+}: {
+  project: string;
+  excludeService: string;
+  onPick: (ref: string) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        aria-label="Insert reference"
+        title="Insert a reference to another service or addon"
+        onClick={() => setOpen((v) => !v)}
+        disabled={disabled}
+        className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--accent)] disabled:opacity-30"
+      >
+        <Link2 className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <ReferenceMenu
+          project={project}
+          excludeService={excludeService}
+          onPick={(ref) => {
+            onPick(ref);
+            setOpen(false);
+          }}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+// ReferenceMenu is the dropdown contents — kept separate so the
+// React Query hooks fire only when the menu is actually opened.
+function ReferenceMenu({
+  project,
+  excludeService,
+  onPick,
+  onClose,
+}: {
+  project: string;
+  excludeService: string;
+  onPick: (ref: string) => void;
+  onClose: () => void;
+}) {
+  const proj = useProject(project);
+  const addons = useAddons(project);
+  // Service entries with stripped project prefix so the user sees the
+  // short name in the menu — same shape they typed when running
+  // `kuso project service add`.
+  const services = useMemo(() => {
+    const list = (proj.data as { services?: { metadata: { name: string } }[] } | undefined)?.services ?? [];
+    const prefix = project + "-";
+    return list
+      .map((s) => {
+        const fqn = s.metadata.name;
+        const short = fqn.startsWith(prefix) ? fqn.slice(prefix.length) : fqn;
+        return short;
+      })
+      .filter((s) => s !== excludeService);
+  }, [proj.data, project, excludeService]);
+
+  // Auto-close on outside click + Escape.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <>
+      <div className="fixed inset-0 z-40" onClick={onClose} aria-hidden />
+      <div className="absolute right-0 top-9 z-50 w-72 max-h-[60vh] overflow-y-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1.5 shadow-[var(--shadow-lg)]">
+        <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+          Services
+        </p>
+        {services.length === 0 ? (
+          <p className="px-2 py-1.5 text-[11px] text-[var(--text-tertiary)]">
+            No other services in this project.
+          </p>
+        ) : (
+          services.map((svc) => <ServiceRefRow key={svc} service={svc} onPick={onPick} />)
+        )}
+
+        <div className="my-1.5 border-t border-[var(--border-subtle)]" />
+        <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+          Addons
+        </p>
+        {(addons.data ?? []).length === 0 ? (
+          <p className="px-2 py-1.5 text-[11px] text-[var(--text-tertiary)]">No addons.</p>
+        ) : (
+          (addons.data ?? []).map((a) => {
+            const fqn = a.metadata.name;
+            const prefix = project + "-";
+            const short = fqn.startsWith(prefix) ? fqn.slice(prefix.length) : fqn;
+            return (
+              <AddonRefRow
+                key={fqn}
+                project={project}
+                addonShort={short}
+                onPick={onPick}
+              />
+            );
+          })
+        )}
+      </div>
+    </>
+  );
+}
+
+// ServiceRefRow surfaces the four synthetic keys for a service. The
+// list is fixed (HOST / PORT / URL / INTERNAL_URL) — no fetch needed.
+function ServiceRefRow({ service, onPick }: { service: string; onPick: (ref: string) => void }) {
+  const KEYS = ["URL", "INTERNAL_URL", "HOST", "PORT"];
+  return (
+    <div className="px-2 py-1">
+      <p className="font-mono text-[11px] text-[var(--text-secondary)]">{service}</p>
+      <div className="mt-1 flex flex-wrap gap-1">
+        {KEYS.map((k) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => onPick(`\${{ ${service}.${k} }}`)}
+            className="rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--accent)]"
+            title={`Insert \${{ ${service}.${k} }}`}
+          >
+            {k}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// AddonRefRow fetches the addon's connection-secret keys and renders
+// each as a clickable chip. Lazy fetched (only when the menu opens)
+// so the editor doesn't pay the round-trips up front.
+function AddonRefRow({
+  project,
+  addonShort,
+  onPick,
+}: {
+  project: string;
+  addonShort: string;
+  onPick: (ref: string) => void;
+}) {
+  const keys = useQuery({
+    queryKey: ["addons", project, addonShort, "secret-keys"],
+    queryFn: () => listAddonSecretKeys(project, addonShort),
+    staleTime: 60_000,
+  });
+  return (
+    <div className="px-2 py-1">
+      <p className="font-mono text-[11px] text-[var(--text-secondary)]">{addonShort}</p>
+      <div className="mt-1 flex flex-wrap gap-1">
+        {keys.isPending && (
+          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">loading…</span>
+        )}
+        {keys.isError && (
+          <span className="font-mono text-[10px] text-amber-400">no keys yet</span>
+        )}
+        {(keys.data?.keys ?? []).map((k) => (
+          <button
+            key={k}
+            type="button"
+            onClick={() => onPick(`\${{ ${addonShort}.${k} }}`)}
+            className="rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] hover:border-[var(--accent)]/40 hover:text-[var(--accent)]"
+          >
+            {k}
+          </button>
+        ))}
       </div>
     </div>
   );

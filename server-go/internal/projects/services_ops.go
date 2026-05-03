@@ -383,15 +383,24 @@ func (s *Service) GetEnv(ctx context.Context, project, service string) ([]EnvVar
 // the addon's <addon>-conn secret. Composite references are rejected
 // with ErrCompositeVarRef so the caller can return 400.
 func (s *Service) SetEnv(ctx context.Context, project, service string, envVars []EnvVar) error {
-	rewritten, err := RewriteEnvVars(envVars)
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return err
+	}
+	// Build a resolver that knows the project's services so
+	// ${{otherSvc.HOST|PORT|URL|INTERNAL_URL}} expands to a literal
+	// in-cluster DNS string. Closure over ns + the project's
+	// service list — fetched once per SetEnv so a 50-var update
+	// doesn't fan out 50 list calls.
+	svcResolver, err := s.buildServiceResolver(ctx, project, ns)
+	if err != nil {
+		return fmt.Errorf("resolve services: %w", err)
+	}
+	rewritten, err := RewriteEnvVars(envVars, svcResolver)
 	if err != nil {
 		return err
 	}
 	svc, err := s.GetService(ctx, project, service)
-	if err != nil {
-		return err
-	}
-	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return err
 	}
@@ -400,6 +409,43 @@ func (s *Service) SetEnv(ctx context.Context, project, service string, envVars [
 		return fmt.Errorf("update service env: %w", err)
 	}
 	return nil
+}
+
+// buildServiceResolver lists the project's services up-front and
+// returns a closure that maps short names → (FQN, port, namespace).
+// Used by SetEnv so service refs expand to literal DNS values.
+func (s *Service) buildServiceResolver(ctx context.Context, project, ns string) (ServiceRefResolver, error) {
+	services, err := s.listServicesForProject(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	// shortName → (fqn, port). KusoService CRs are named
+	// "<project>-<short>" by AddService; both forms must resolve.
+	type entry struct {
+		fqn  string
+		port int32
+	}
+	byName := make(map[string]entry, len(services)*2)
+	prefix := project + "-"
+	for i := range services {
+		fqn := services[i].Name
+		short := fqn
+		if len(fqn) > len(prefix) && fqn[:len(prefix)] == prefix {
+			short = fqn[len(prefix):]
+		}
+		port := services[i].Spec.Port
+		if port == 0 {
+			port = 8080
+		}
+		byName[short] = entry{fqn: fqn, port: port}
+		byName[fqn] = entry{fqn: fqn, port: port}
+	}
+	return func(name string) (string, int32, string, bool) {
+		if e, ok := byName[name]; ok {
+			return e.fqn, e.port, ns, true
+		}
+		return "", 0, "", false
+	}, nil
 }
 
 // ResolvePlacement returns the effective placement for an env, given
