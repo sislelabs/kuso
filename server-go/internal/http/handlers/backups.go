@@ -21,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"kuso/server/internal/addons"
 	"kuso/server/internal/kube"
 )
 
@@ -166,7 +167,13 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	prefix := project + "/" + addon + "/"
+	// CronJob uploads to s3://bucket/<project>/<short-addon-name>/...,
+	// so we need to strip any redundant project prefix from the addon
+	// arg before joining. Without this, callers that pass the FQN
+	// (e.g. UI passing metadata.name) end up listing
+	// "<project>/<project>-<addon>/" which never matches anything.
+	addonShort := addons.ShortName(project, addon)
+	prefix := project + "/" + addonShort + "/"
 	out, err := cli.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
 		Prefix: aws.String(prefix),
@@ -210,7 +217,7 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := backupCtx(r)
 	defer cancel()
 
-	releaseName := project + "-" + addon
+	releaseName := addons.CRName(project, addon)
 	jobName := fmt.Sprintf("%s-restore-%d", releaseName, time.Now().Unix())
 
 	one := int32(1)
@@ -345,8 +352,12 @@ func envFromSecretOptional(name, secretName, key string) corev1.EnvVar {
 // must Close. Adds a 5s connect timeout so a wedged addon can't hang
 // the request.
 func (h *BackupsHandler) pgConn(ctx context.Context, project, addon string) (*sql.DB, error) {
-	releaseName := project + "-" + addon
-	connSecret := releaseName + "-conn"
+	// addon may arrive as either the short name ("pg") or the
+	// fully-qualified CR name ("e2e-test-pg"); both are valid URL
+	// args. addons.CRName collapses to the canonical form so we
+	// don't end up looking for "e2e-test-e2e-test-pg-conn".
+	releaseName := addons.CRName(project, addon)
+	connSecret := addons.ConnSecretName(releaseName)
 	sec, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Get(ctx, connSecret, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("addon %s/%s has no -conn secret", project, addon)

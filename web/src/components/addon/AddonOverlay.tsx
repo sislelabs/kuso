@@ -160,7 +160,7 @@ export function AddonOverlay({ project, addon, onClose }: Props) {
                   <Skeleton className="h-32 w-full" />
                 </div>
               ) : tab === "overview" ? (
-                <OverviewTab project={project} addon={addon!} kind={kind} />
+                <OverviewTab project={project} addon={addon!} kind={kind} cr={data} />
               ) : tab === "backups" ? (
                 <BackupsTab project={project} addon={addon!} />
               ) : tab === "sql" ? (
@@ -178,7 +178,21 @@ export function AddonOverlay({ project, addon, onClose }: Props) {
 
 // ---------- Tabs ----------
 
-function OverviewTab({ project, addon, kind }: { project: string; addon: string; kind: string }) {
+// storageSizeFromSpec mirrors the helm chart's kusoaddon.storageSize
+// helper. spec.storageSize (explicit) wins over the t-shirt size mapping.
+function storageSizeFromSpec(spec: { storageSize?: string; size?: "small" | "medium" | "large" } | undefined): string {
+  if (spec?.storageSize) return spec.storageSize;
+  switch (spec?.size) {
+    case "medium":
+      return "20Gi";
+    case "large":
+      return "100Gi";
+    default:
+      return "5Gi";
+  }
+}
+
+function OverviewTab({ project, addon, kind, cr }: { project: string; addon: string; kind: string; cr?: import("@/types/projects").KusoAddon }) {
   const canReadSecrets = useCan(Perms.SecretsRead);
   // The connection secret is provisioned async by helm-operator; it
   // can take a few seconds after the addon is created. Refetch slowly
@@ -189,12 +203,34 @@ function OverviewTab({ project, addon, kind }: { project: string; addon: string;
     enabled: canReadSecrets,
     refetchInterval: (q) => (q.state.data ? false : 5_000),
   });
+  const storageSize = storageSizeFromSpec(cr?.spec);
+  const tier = cr?.spec.size ?? "small";
   return (
     <div className="space-y-4 p-5">
       <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         <Row label="kind" value={kind || "—"} />
-        <Row label="release" value={addon} last />
+        <Row label="release" value={addon} />
+        <Row
+          label="storage"
+          value={
+            <span className="font-mono text-[12px] text-[var(--text-secondary)]">
+              {storageSize}
+              <span className="ml-2 text-[var(--text-tertiary)]">· tier {tier}</span>
+            </span>
+          }
+          last
+        />
       </section>
+
+      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+        Data persists on the cluster node&apos;s disk via a PVC. Survives pod
+        restarts, deployments, and helm upgrades. Does NOT survive
+        node failure or addon deletion. Configure scheduled backups in{" "}
+        <a href="/settings/backups" className="text-[var(--accent)] underline">
+          /settings/backups
+        </a>{" "}
+        for off-cluster snapshots.
+      </p>
 
       <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">

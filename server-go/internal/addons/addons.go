@@ -63,17 +63,40 @@ type CreateAddonRequest struct {
 	Database    string `json:"database,omitempty"`
 }
 
-// addonCRName mirrors TS addonName(): "<project>-<short>".
-func addonCRName(project, name string) string {
+// CRName builds the addon CR name from a project + a name that may
+// be either the short form ("pg") or the already-qualified form
+// ("alpha-pg"). Idempotent: passing an already-prefixed name returns
+// it unchanged. Exported because handlers outside this package
+// (backups, sql) get the addon arg from URL params and need to be
+// tolerant of either form their callers send.
+func CRName(project, name string) string {
 	if len(name) > len(project)+1 && name[:len(project)+1] == project+"-" {
 		return name
 	}
 	return project + "-" + name
 }
 
-// connSecretName mirrors the helm chart's connSecretName template.
-// Used by the env refresh + by the operator-side helm chart.
-func connSecretName(addonCR string) string { return addonCR + "-conn" }
+// addonCRName is the package-private alias kept for test back-compat
+// and existing internal callers.
+func addonCRName(project, name string) string { return CRName(project, name) }
+
+// ShortName is the inverse of CRName: strip the "<project>-" prefix
+// if it's there. Useful for paths that key on the short name (S3
+// backup prefixes, helm chart .Values.name).
+func ShortName(project, name string) string {
+	prefix := project + "-"
+	if len(name) > len(prefix) && name[:len(prefix)] == prefix {
+		return name[len(prefix):]
+	}
+	return name
+}
+
+// ConnSecretName returns the conn-secret name for an addon CR.
+// Exported for the same reason as CRName.
+func ConnSecretName(addonCR string) string { return addonCR + "-conn" }
+
+// connSecretName is the package-private alias.
+func connSecretName(addonCR string) string { return ConnSecretName(addonCR) }
 
 // List returns every KusoAddon in the project.
 func (s *Service) List(ctx context.Context, project string) ([]kube.KusoAddon, error) {
