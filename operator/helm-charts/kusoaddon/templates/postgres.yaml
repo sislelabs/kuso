@@ -113,5 +113,9 @@ stringData:
   POSTGRES_USER: kuso
   POSTGRES_PASSWORD: {{ $password | quote }}
   POSTGRES_DB: {{ $database | quote }}
-  DATABASE_URL: "postgres://kuso:{{ $password }}@{{ $name }}:5432/{{ $database }}"
+  # sslmode=disable because the in-cluster postgres image we ship doesn't
+  # serve TLS. Connections stay on the cluster-internal Service so they
+  # never leave the kube node anyway. Apps that opt into TLS via their
+  # own driver flag still work — they just have to override DATABASE_URL.
+  DATABASE_URL: "postgres://kuso:{{ $password }}@{{ $name }}:5432/{{ $database }}?sslmode=disable"
 {{- end }}
