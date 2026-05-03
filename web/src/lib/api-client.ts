@@ -14,21 +14,22 @@ export class ApiError extends Error {
 
 export function getJwt(): string | null {
   if (typeof window === "undefined") return null;
-  const ls = window.localStorage.getItem(JWT_KEY);
-  if (ls) return ls;
-  // Post-OAuth handoff: the server's /api/auth/github/callback sets a
-  // kuso.JWT_TOKEN cookie (HttpOnly=false on purpose) and 302s back to
-  // "/". The first page load after the redirect has the cookie but no
-  // localStorage entry yet — promote it so subsequent api() calls send
-  // the bearer header. Subsequent reloads skip this branch because
-  // localStorage now has it cached.
+  // Cookie wins over localStorage. Order matters because the post-
+  // OAuth handoff drops a fresh kuso.JWT_TOKEN cookie via
+  // setJWTCookie on the server, then 302s back to "/". If a stale
+  // localStorage entry was preferred, subsequent /api requests would
+  // send the old (often expired) bearer and 401, leaving the user
+  // stuck on the landing page even though OAuth succeeded. Reading
+  // the cookie first keeps the freshest token in flight.
   const m = document.cookie.match(/(?:^|; )kuso\.JWT_TOKEN=([^;]+)/);
   if (m && m[1]) {
     const token = decodeURIComponent(m[1]);
+    // Mirror to localStorage so api() can fall back to it if the
+    // cookie is later cleared (e.g. session expiry on the server).
     window.localStorage.setItem(JWT_KEY, token);
     return token;
   }
-  return null;
+  return window.localStorage.getItem(JWT_KEY);
 }
 
 export function setJwt(token: string) {
