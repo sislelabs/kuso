@@ -51,12 +51,14 @@ func (s *Service) Describe(ctx context.Context, name string) (*DescribeResponse,
 }
 
 // Create validates input, refuses duplicates, and persists a new project.
+//
+// As of v0.3.5 a project is just a container — defaultRepo is no longer
+// required. Each service brings its own repo. Old "create with repo"
+// callers still work (the field round-trips), but the bare-name path
+// is now valid for the new wizard.
 func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.KusoProject, error) {
 	if req.Name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalid)
-	}
-	if req.DefaultRepo == nil || req.DefaultRepo.URL == "" {
-		return nil, fmt.Errorf("%w: defaultRepo.url is required", ErrInvalid)
 	}
 
 	if existing, err := s.Kube.GetKusoProject(ctx, s.Namespace, req.Name); err == nil && existing != nil {
@@ -65,10 +67,6 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 		return nil, fmt.Errorf("preflight: %w", err)
 	}
 
-	defaultBranch := req.DefaultRepo.DefaultBranch
-	if defaultBranch == "" {
-		defaultBranch = "main"
-	}
 	previewsEnabled := false
 	previewsTTL := 7
 	if req.Previews != nil {
@@ -81,6 +79,19 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 	if req.GitHub != nil && req.GitHub.InstallationID != 0 {
 		ghSpec = &kube.KusoProjectGithubSpec{InstallationID: req.GitHub.InstallationID}
 	}
+	// DefaultRepo is now optional; pass nil through when omitted so
+	// the CR doesn't carry an empty repo struct.
+	var defaultRepo *kube.KusoRepoRef
+	if req.DefaultRepo != nil && req.DefaultRepo.URL != "" {
+		branch := req.DefaultRepo.DefaultBranch
+		if branch == "" {
+			branch = "main"
+		}
+		defaultRepo = &kube.KusoRepoRef{
+			URL:           req.DefaultRepo.URL,
+			DefaultBranch: branch,
+		}
+	}
 
 	p := &kube.KusoProject{
 		ObjectMeta: metav1.ObjectMeta{
@@ -91,11 +102,8 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 			Description: req.Description,
 			BaseDomain:  req.BaseDomain,
 			Namespace:   req.Namespace,
-			DefaultRepo: &kube.KusoRepoRef{
-				URL:           req.DefaultRepo.URL,
-				DefaultBranch: defaultBranch,
-			},
-			GitHub: ghSpec,
+			DefaultRepo: defaultRepo,
+			GitHub:      ghSpec,
 			Previews: &kube.KusoPreviewsSpec{
 				Enabled: previewsEnabled,
 				TTLDays: previewsTTL,
@@ -253,7 +261,27 @@ func (s *Service) listEnvsForProject(ctx context.Context, project string) ([]kub
 		if err := decodeInto(&raw.Items[i], &e); err != nil {
 			return nil, err
 		}
+		populateDerivedStatus(&e)
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+// populateDerivedStatus fills in env.status fields the UI cares about
+// from data we already have on the spec. We don't want to require a
+// reconcile-loop write to surface basic facts like the public URL —
+// the host is set by the server when the env is created, and the
+// scheme is just based on tlsEnabled. Anything actually written by a
+// status reconciler still wins.
+func populateDerivedStatus(e *kube.KusoEnvironment) {
+	if e.Status == nil {
+		e.Status = map[string]any{}
+	}
+	if _, ok := e.Status["url"]; !ok && e.Spec.Host != "" {
+		scheme := "https"
+		if !e.Spec.TLSEnabled {
+			scheme = "http"
+		}
+		e.Status["url"] = scheme + "://" + e.Spec.Host
+	}
 }

@@ -146,11 +146,24 @@ func TestCreate_RejectsDuplicate(t *testing.T) {
 func TestCreate_RejectsMissingFields(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t)
+	// Name is the only hard requirement now. Empty name → ErrInvalid.
 	if _, err := s.Create(context.Background(), CreateProjectRequest{}); !errors.Is(err, ErrInvalid) {
 		t.Errorf("missing name: got %v", err)
 	}
-	if _, err := s.Create(context.Background(), CreateProjectRequest{Name: "x"}); !errors.Is(err, ErrInvalid) {
-		t.Errorf("missing repo: got %v", err)
+}
+
+// As of v0.3.5, defaultRepo is optional — a project is just a
+// container, services bring their own repos. Verify a bare-name
+// create succeeds and produces a CR with no DefaultRepo.
+func TestCreate_NoRepo_OK(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t)
+	got, err := s.Create(context.Background(), CreateProjectRequest{Name: "empty"})
+	if err != nil {
+		t.Fatalf("Create with no repo: %v", err)
+	}
+	if got.Spec.DefaultRepo != nil {
+		t.Errorf("expected nil DefaultRepo, got %+v", got.Spec.DefaultRepo)
 	}
 }
 
@@ -241,7 +254,7 @@ func TestAddService_AutoCreatesProductionEnv(t *testing.T) {
 	if env.Spec.Kind != "production" || env.Spec.Branch != "main" {
 		t.Errorf("env spec: %+v", env.Spec)
 	}
-	if env.Spec.Host != "web-alpha.alpha.example.com" {
+	if env.Spec.Host != "web.alpha.example.com" {
 		t.Errorf("host: got %q", env.Spec.Host)
 	}
 	if env.Spec.Port != 3000 || env.Spec.ReplicaCount != 1 {

@@ -463,11 +463,26 @@ func convertEnvVars(in []EnvVar) []kube.KusoEnvVar {
 }
 
 // defaultHost computes the auto-generated hostname for a service's
-// production env: <service>-<project>.<baseDomain>, falling back to
-// kuso.sislelabs.com when no baseDomain is configured.
+// production env.
+//
+//   baseDomain unset → cluster default; we prepend project as a
+//                      grouping subdomain (and service in front when
+//                      it differs from the project, otherwise we'd
+//                      get the kuso-hello-go.kuso-hello-go dupe).
+//   baseDomain set   → user owns the domain; we just put the
+//                      service name in front, OR drop straight to
+//                      baseDomain when service == project (a single
+//                      apex-style mapping).
 func defaultHost(service, project, baseDomain string) string {
 	if baseDomain == "" {
-		baseDomain = project + ".kuso.sislelabs.com"
+		// Cluster default: project is the user-meaningful slug.
+		if service == project {
+			return fmt.Sprintf("%s.%s", project, "kuso.sislelabs.com")
+		}
+		return fmt.Sprintf("%s.%s.%s", service, project, "kuso.sislelabs.com")
 	}
-	return fmt.Sprintf("%s-%s.%s", service, project, baseDomain)
+	if service == project {
+		return baseDomain
+	}
+	return fmt.Sprintf("%s.%s", service, baseDomain)
 }
