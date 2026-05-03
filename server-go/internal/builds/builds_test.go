@@ -273,8 +273,8 @@ func TestPoller_PromotesImageOnSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get build: %v", err)
 	}
-	if got.Status["phase"] != "succeeded" {
-		t.Errorf("phase: %v", got.Status)
+	if got.Annotations[annPhase] != "succeeded" {
+		t.Errorf("phase annotation: %v", got.Annotations)
 	}
 
 	// Production env's image should have been patched.
@@ -310,11 +310,11 @@ func TestPoller_MarksFailed(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 	got, _ := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-fff")
-	if got.Status["phase"] != "failed" {
-		t.Errorf("phase: %v", got.Status)
+	if got.Annotations[annPhase] != "failed" {
+		t.Errorf("phase annotation: %v", got.Annotations)
 	}
-	if msg, _ := got.Status["message"].(string); !strings.Contains(msg, "kaniko") {
-		t.Errorf("message: %v", got.Status["message"])
+	if !strings.Contains(got.Annotations[annMessage], "kaniko") {
+		t.Errorf("message annotation: %v", got.Annotations[annMessage])
 	}
 }
 
@@ -337,8 +337,8 @@ func TestPoller_MarksRunning(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 	got, _ := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-rrr")
-	if got.Status["phase"] != "running" {
-		t.Errorf("phase: %v", got.Status)
+	if got.Annotations[annPhase] != "running" {
+		t.Errorf("phase annotation: %v", got.Annotations)
 	}
 }
 

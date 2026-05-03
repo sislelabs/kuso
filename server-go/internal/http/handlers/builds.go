@@ -55,9 +55,22 @@ func toBuildSummary(b kube.KusoBuild) buildSummary {
 	if b.Spec.Image != nil {
 		out.ImageTag = b.Spec.Image.Tag
 	}
-	// Status comes off the unstructured map. Keys mirror what the
-	// poller writes in builds.markRunning / markSucceeded / markFailed.
-	if b.Status != nil {
+	// Phase + timing live on annotations because helm-operator
+	// rewrites .status on every reconcile. The legacy .status.phase
+	// fallback covers CRs created before v0.6.3 — see builds.buildPhase
+	// for the source of truth.
+	if b.Annotations != nil {
+		if v, ok := b.Annotations["kuso.sislelabs.com/build-phase"]; ok {
+			out.Status = v
+		}
+		if v, ok := b.Annotations["kuso.sislelabs.com/build-started-at"]; ok {
+			out.StartedAt = v
+		}
+		if v, ok := b.Annotations["kuso.sislelabs.com/build-completed-at"]; ok {
+			out.FinishedAt = v
+		}
+	}
+	if out.Status == "" && b.Status != nil {
 		if s, ok := b.Status["phase"].(string); ok {
 			out.Status = s
 		}

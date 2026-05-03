@@ -43,6 +43,36 @@ type TokenMinter interface {
 // helm chart for kuso-registry exposes this as a Service.
 const RegistryHost = "kuso-registry.kuso.svc.cluster.local:5000"
 
+// Build phase + timing live on annotations because helm-operator owns
+// .status on every CR and overwrites the whole stanza on each
+// reconcile. Keys are namespaced under kuso.sislelabs.com/build-* so
+// they don't collide with anything else that ends up on the object.
+const (
+	annPhase       = "kuso.sislelabs.com/build-phase"
+	annCompletedAt = "kuso.sislelabs.com/build-completed-at"
+	annStartedAt   = "kuso.sislelabs.com/build-started-at"
+	annMessage     = "kuso.sislelabs.com/build-message"
+)
+
+// buildPhase returns the kuso-tracked phase from build annotations,
+// falling back to the legacy .status.phase for builds created before
+// v0.6.3 (their annotation slot is empty; .status.phase may still be
+// set if helm-operator hadn't re-reconciled yet).
+func buildPhase(b *kube.KusoBuild) string {
+	if b == nil {
+		return ""
+	}
+	if v, ok := b.Annotations[annPhase]; ok && v != "" {
+		return v
+	}
+	if b.Status != nil {
+		if s, ok := b.Status["phase"].(string); ok {
+			return s
+		}
+	}
+	return ""
+}
+
 // Service handles the build domain. Construct via New.
 type Service struct {
 	Kube       *kube.Client
@@ -417,7 +447,7 @@ func (p *Poller) tick(ctx context.Context) error {
 			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &b); err != nil {
 				continue
 			}
-			phase, _ := b.Status["phase"].(string)
+			phase := buildPhase(&b)
 			if phase == "succeeded" || phase == "failed" {
 				continue
 			}
@@ -462,21 +492,19 @@ func completedCondition(job *batchv1.Job) *batchv1.JobCondition {
 	return nil
 }
 
-// The KusoBuild CRD does NOT declare a /status subresource (see
-// operator/config/crd/bases/application.kuso.sislelabs.com_kusobuilds.yaml
-// — only spec/metadata properties, no `subresources: status: {}`).
-// Calling Patch with the "status" subresource path therefore returns
-// 404 "the server could not find the requested resource". The status
-// stanza lives on the main resource; merge-patch it directly.
+// Build phase + timing live on annotations, not .status. helm-operator
+// owns .status on every CR it manages (it overwrites the whole stanza
+// with conditions + deployedRelease on each reconcile, every 1m for
+// kusobuilds), so any .status.phase we write gets obliterated within
+// a minute. Annotations are part of metadata, ignored by helm-operator,
+// and we read them back the same way we used to read .status.phase.
 func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild) error {
-	patch := fmt.Sprintf(`{"status":{"phase":"succeeded","completedAt":%q}}`, time.Now().UTC().Format(time.RFC3339))
-	// Status writes MUST hit the /status subresource once the CRD has
-	// `subresources: { status: {} }` enabled — a plain Patch on the
-	// main resource silently drops the status field. The CRD shipped
-	// without the subresource for a while and this code worked
-	// "by accident"; the v0.6.1 CRD fix exposed the bug.
+	patch := fmt.Sprintf(
+		`{"metadata":{"annotations":{%q:"succeeded",%q:%q}}}`,
+		annPhase, annCompletedAt, time.Now().UTC().Format(time.RFC3339),
+	)
 	if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
-		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}, "status"); err != nil {
+		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("patch build status: %w", err)
 	}
 	if p.Notifier != nil {
@@ -497,9 +525,13 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 }
 
 func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, msg string) error {
-	patch := fmt.Sprintf(`{"status":{"phase":"failed","completedAt":%q,"message":%q}}`, time.Now().UTC().Format(time.RFC3339), msg)
+	patch := fmt.Sprintf(
+		`{"metadata":{"annotations":{%q:"failed",%q:%q,%q:%q}}}`,
+		annPhase, annCompletedAt, time.Now().UTC().Format(time.RFC3339),
+		annMessage, msg,
+	)
 	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
-		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}, "status")
+		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
 	if err != nil {
 		return fmt.Errorf("patch build failed: %w", err)
 	}
@@ -522,12 +554,12 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 }
 
 func (p *Poller) markRunning(ctx context.Context, ns string, b *kube.KusoBuild) error {
-	if phase, _ := b.Status["phase"].(string); phase == "running" {
+	if buildPhase(b) == "running" {
 		return nil
 	}
-	patch := []byte(`{"status":{"phase":"running"}}`)
+	patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":{%q:"running"}}}`, annPhase))
 	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
-		Patch(ctx, b.Name, types.MergePatchType, patch, metav1.PatchOptions{}, "status")
+		Patch(ctx, b.Name, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {
 		return fmt.Errorf("patch build running: %w", err)
 	}
