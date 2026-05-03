@@ -8,9 +8,11 @@ import {
   getServiceLogs,
   listBuilds,
   listAddonSecretKeys,
+  patchService,
   setServiceEnv,
   triggerBuild,
   wakeService,
+  type PatchServiceBody,
 } from "./api";
 import type { KusoEnvVar } from "@/types/projects";
 
@@ -83,6 +85,17 @@ export function useWakeService(project: string, service: string) {
     mutationFn: () => wakeService(project, service),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+    },
+  });
+}
+
+export function usePatchService(project: string, service: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: PatchServiceBody) => patchService(project, service, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: serviceQueryKey(project, service) });
+      qc.invalidateQueries({ queryKey: ["projects", project] });
     },
   });
 }

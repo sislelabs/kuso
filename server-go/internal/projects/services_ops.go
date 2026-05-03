@@ -276,6 +276,87 @@ func (s *Service) SetEnv(ctx context.Context, project, service string, envVars [
 	return nil
 }
 
+// PatchServiceRequest is the body for PATCH /api/projects/:p/services/:s.
+// Every field is optional — nil means "leave alone". We use pointers
+// for primitive fields too so the client can distinguish unset from
+// zero (port=0 doesn't make sense, but min=0 / sleep.afterMinutes=0
+// might).
+type PatchServiceRequest struct {
+	Port    *int32             `json:"port,omitempty"`
+	Runtime *string            `json:"runtime,omitempty"`
+	Domains *[]ServiceDomain   `json:"domains,omitempty"`
+	Scale   *PatchScaleRequest `json:"scale,omitempty"`
+	Sleep   *PatchSleepRequest `json:"sleep,omitempty"`
+}
+
+type PatchScaleRequest struct {
+	Min       *int `json:"min,omitempty"`
+	Max       *int `json:"max,omitempty"`
+	TargetCPU *int `json:"targetCPU,omitempty"`
+}
+
+type PatchSleepRequest struct {
+	Enabled      *bool `json:"enabled,omitempty"`
+	AfterMinutes *int  `json:"afterMinutes,omitempty"`
+}
+
+// PatchService applies the partial update from PatchServiceRequest to
+// the KusoService spec. Unset fields stay as they are. We re-fetch the
+// CR so the kube optimistic concurrency check protects against
+// concurrent edits (the Update call will 409 if someone else already
+// wrote between our get + put).
+func (s *Service) PatchService(ctx context.Context, project, service string, req PatchServiceRequest) (*kube.KusoService, error) {
+	svc, err := s.GetService(ctx, project, service)
+	if err != nil {
+		return nil, err
+	}
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+
+	if req.Port != nil {
+		svc.Spec.Port = *req.Port
+	}
+	if req.Runtime != nil {
+		svc.Spec.Runtime = *req.Runtime
+	}
+	if req.Domains != nil {
+		svc.Spec.Domains = convertDomains(*req.Domains)
+	}
+	if req.Scale != nil {
+		if svc.Spec.Scale == nil {
+			svc.Spec.Scale = &kube.KusoScaleSpec{}
+		}
+		if req.Scale.Min != nil {
+			svc.Spec.Scale.Min = *req.Scale.Min
+		}
+		if req.Scale.Max != nil {
+			svc.Spec.Scale.Max = *req.Scale.Max
+		}
+		if req.Scale.TargetCPU != nil {
+			svc.Spec.Scale.TargetCPU = *req.Scale.TargetCPU
+		}
+	}
+	if req.Sleep != nil {
+		if svc.Spec.Sleep == nil {
+			svc.Spec.Sleep = &kube.KusoServiceSleep{}
+		}
+		if req.Sleep.Enabled != nil {
+			svc.Spec.Sleep.Enabled = *req.Sleep.Enabled
+		}
+		if req.Sleep.AfterMinutes != nil {
+			svc.Spec.Sleep.AfterMinutes = *req.Sleep.AfterMinutes
+		}
+	}
+
+	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)
+	if err != nil {
+		return nil, fmt.Errorf("update service: %w", err)
+	}
+	return updated, nil
+}
+
 func convertDomains(in []ServiceDomain) []kube.KusoDomain {
 	if len(in) == 0 {
 		return nil

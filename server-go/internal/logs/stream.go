@@ -69,6 +69,30 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 	if !strings.HasPrefix(service, project+"-") {
 		fqn = project + "-" + service
 	}
+
+	// Build-pod stream: env="build:<KusoBuild name>". The chart names
+	// the Job + pods after the release (== the build CR name), so we
+	// look up pods labelled with that instance name. We deliberately
+	// don't try to resolve the env CR — there isn't one, this is the
+	// kaniko Job pod that ran the build.
+	if strings.HasPrefix(env, "build:") {
+		buildName := strings.TrimPrefix(env, "build:")
+		pods, err := s.Kube.Clientset.CoreV1().Pods(s.Namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: "app.kubernetes.io/instance=" + buildName,
+		})
+		if err != nil {
+			return env, fmt.Errorf("list build pods: %w", err)
+		}
+		if len(pods.Items) == 0 {
+			// Job pods get GC'd after success/failure. Return a clean
+			// info frame and let the WS close naturally instead of
+			// looping forever waiting for a pod that won't exist.
+			_ = sink.Write(Frame{Type: "log", Pod: buildName, Line: "build pod not found (likely garbage-collected)"})
+			return env, nil
+		}
+		return env, s.streamPods(ctx, pods.Items, tailLines, sink)
+	}
+
 	envName := env
 	if !strings.Contains(env, "-") {
 		envName = fqn + "-" + env

@@ -165,6 +165,10 @@ func main() {
 					WithGithubCache(ghCli, ghCache)
 				disp.NSResolver = nsResolver
 				ghDeps = &httpsrv.GithubDeps{Cfg: ghCfg, Client: ghCli, Cache: ghCache, Dispatcher: disp}
+				// Hand the github client to the build service so it can
+				// mint a fresh installation token when seeding the
+				// clone secret on every build.
+				buildSvc.Tokens = ghCli
 			}
 		}
 	}

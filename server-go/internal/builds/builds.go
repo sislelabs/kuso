@@ -19,6 +19,7 @@ import (
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -27,6 +28,16 @@ import (
 
 	"kuso/server/internal/kube"
 )
+
+// TokenMinter mints a short-lived GitHub installation token used by the
+// build's clone init container. The builds package depends on the
+// interface (not the github package directly) so the github client
+// stays optional — when it's nil, builds still go out, but with an
+// empty token (the clone will fail clearly instead of pods wedging on
+// "secret not found").
+type TokenMinter interface {
+	MintInstallationToken(ctx context.Context, installationID int64) (string, error)
+}
 
 // RegistryHost is the in-cluster registry every build pushes to. The
 // helm chart for kuso-registry exposes this as a Service.
@@ -37,6 +48,11 @@ type Service struct {
 	Kube       *kube.Client
 	Namespace  string
 	NSResolver *kube.ProjectNamespaceResolver
+	// Tokens mints fresh github installation tokens for the build's
+	// clone init container. Optional — nil means we still create the
+	// expected secret (empty value) so pods start, but private repos
+	// will fail to clone.
+	Tokens TokenMinter
 }
 
 // New constructs a builds.Service with a default namespace fallback.
@@ -200,6 +216,17 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		strategy = "dockerfile"
 	}
 
+	installationID := githubInstallationID(proj)
+
+	// The chart's clone init container reads $GITHUB_INSTALLATION_TOKEN
+	// from a secret named "<release>-token" with key "token". The
+	// release name == the KusoBuild CR name. Mint a fresh installation
+	// token and write the secret BEFORE creating the CR so the operator's
+	// helm render finds it the moment the Job pod schedules.
+	if err := s.ensureCloneTokenSecret(ctx, ns, buildName, installationID); err != nil {
+		return nil, fmt.Errorf("clone token secret: %w", err)
+	}
+
 	build := &kube.KusoBuild{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: buildName,
@@ -215,7 +242,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 			Ref:                  sha,
 			Branch:               branch,
 			Repo:                 &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
-			GithubInstallationID: githubInstallationID(proj),
+			GithubInstallationID: installationID,
 			Strategy:             strategy,
 			Image:                &kube.KusoImage{Repository: imageRepo, Tag: ImageTag(sha)},
 			// Carry strategy-specific configuration from the service
@@ -227,6 +254,43 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		},
 	}
 	return s.Kube.CreateKusoBuild(ctx, ns, build)
+}
+
+// ensureCloneTokenSecret upserts the <buildName>-token Secret used by
+// the clone init container. We mint a fresh installation token when
+// the github client is wired AND an installation id is set; otherwise
+// we still write a secret (with empty token) so pods can start and
+// surface a clean clone error instead of wedging on
+// CreateContainerConfigError.
+func (s *Service) ensureCloneTokenSecret(ctx context.Context, ns, buildName string, installationID int64) error {
+	token := ""
+	if s.Tokens != nil && installationID > 0 {
+		t, err := s.Tokens.MintInstallationToken(ctx, installationID)
+		if err != nil {
+			return fmt.Errorf("mint installation token: %w", err)
+		}
+		token = t
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      buildName + "-token",
+			Namespace: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "kuso-server",
+				"kuso.sislelabs.com/build":     buildName,
+			},
+		},
+		Type:       corev1.SecretTypeOpaque,
+		StringData: map[string]string{"token": token},
+	}
+	_, err := s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, secret, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		// Refresh in place — token is short-lived, so reusing a stale
+		// one risks a clone failure on retry.
+		_, uerr := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, secret, metav1.UpdateOptions{})
+		return uerr
+	}
+	return err
 }
 
 // ImageTag returns the canonical image tag for a ref: 12-char SHA prefix

@@ -123,10 +123,16 @@ export function ProjectCanvas({
   const onNodesChange: OnNodesChange = (changes) => {
     setNodes((prev) => {
       const next = applyNodeChanges(changes, prev);
-      const dragged = changes.some(
-        (c) => c.type === "position" && c.dragging === false
-      );
-      if (dragged) {
+      // Persist on any position change. We used to gate on
+      // `dragging === false`, but React Flow emits position changes
+      // where `dragging` is undefined (e.g. programmatic moves, drop
+      // events on some browsers), and those slipped through silently
+      // — the user moved a node, the state updated, but localStorage
+      // never got the write. Save unconditionally on type=position;
+      // the cost is one localStorage.setItem per drag tick, which is
+      // negligible for a graph of this size.
+      const positionChanged = changes.some((c) => c.type === "position");
+      if (positionChanged) {
         const layout: Record<string, { x: number; y: number }> = {};
         next.forEach((n) => {
           layout[n.id] = n.position;

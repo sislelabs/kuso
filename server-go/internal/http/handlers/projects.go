@@ -30,6 +30,7 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/services", h.ListServices)
 	r.Post("/api/projects/{project}/services", h.AddService)
 	r.Get("/api/projects/{project}/services/{service}", h.GetService)
+	r.Patch("/api/projects/{project}/services/{service}", h.PatchService)
 	r.Delete("/api/projects/{project}/services/{service}", h.DeleteService)
 	r.Get("/api/projects/{project}/services/{service}/env", h.GetEnv)
 	r.Post("/api/projects/{project}/services/{service}/env", h.SetEnv)
@@ -147,6 +148,24 @@ func (h *ProjectsHandler) GetService(w http.ResponseWriter, r *http.Request) {
 	out, err := h.Svc.GetService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"))
 	if err != nil {
 		h.fail(w, "get service", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// PatchService accepts a partial KusoService.spec update. Body shape
+// matches projects.PatchServiceRequest — every field is optional.
+func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
+	var req projects.PatchServiceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	out, err := h.Svc.PatchService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
+	if err != nil {
+		h.fail(w, "patch service", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)

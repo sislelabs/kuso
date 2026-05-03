@@ -60,6 +60,25 @@ export async function deleteService(project: string, service: string): Promise<v
   );
 }
 
+export interface PatchServiceBody {
+  port?: number;
+  runtime?: string;
+  domains?: { host: string; tls?: boolean }[];
+  scale?: { min?: number; max?: number; targetCPU?: number };
+  sleep?: { enabled?: boolean; afterMinutes?: number };
+}
+
+export async function patchService(
+  project: string,
+  service: string,
+  body: PatchServiceBody
+): Promise<KusoService> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}`,
+    { method: "PATCH", body }
+  );
+}
+
 export async function listAddonSecretKeys(project: string, addon: string): Promise<{ keys: string[] }> {
   return api(`/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/secret-keys`);
 }
