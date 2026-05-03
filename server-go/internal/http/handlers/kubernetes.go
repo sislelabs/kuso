@@ -8,11 +8,14 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/kube"
 )
@@ -40,6 +43,143 @@ func (h *KubernetesHandler) Mount(rt interface {
 	// this node with the body. Server expands kuso conventions (region
 	// → matching NoSchedule taint) under the hood.
 	rt.Put("/api/kubernetes/nodes/{name}/labels", h.PutNodeLabels)
+	// Per-env CPU + mem snapshot. Reads from the metrics.k8s.io
+	// metrics-server API. Returns one entry per pod in the env.
+	rt.Get("/api/kubernetes/envs/{env}/metrics", h.EnvMetrics)
+}
+
+// envMetricsResponse is the JSON wire shape: a list of per-pod
+// resource snapshots plus the timestamp the metrics-server emitted.
+type envMetricsResponse struct {
+	Env    string         `json:"env"`
+	Window string         `json:"window,omitempty"`
+	Pods   []podMetricRow `json:"pods"`
+}
+
+type podMetricRow struct {
+	Pod       string `json:"pod"`
+	Timestamp string `json:"timestamp,omitempty"`
+	CPUm      int64  `json:"cpuMillicores"`
+	MemBytes  int64  `json:"memBytes"`
+}
+
+// EnvMetrics returns the current CPU + memory usage for every pod in
+// the named env. Sources from metrics.k8s.io/v1beta1 PodMetrics via
+// the dynamic client (avoids pulling in k8s.io/metrics as a separate
+// module dep). Returns an empty list when metrics-server isn't
+// installed or the env has no pods yet.
+func (h *KubernetesHandler) EnvMetrics(w http.ResponseWriter, r *http.Request) {
+	envName := chi.URLParam(r, "env")
+	if envName == "" {
+		http.Error(w, "missing env", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := kubeCtx(r)
+	defer cancel()
+
+	gvr := schema.GroupVersionResource{
+		Group:    "metrics.k8s.io",
+		Version:  "v1beta1",
+		Resource: "pods",
+	}
+	list, err := h.Kube.Dynamic.Resource(gvr).Namespace(h.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/instance=" + envName,
+	})
+	if err != nil {
+		// metrics-server not installed → return empty so the UI shows
+		// a "no metrics yet" state rather than an error banner.
+		writeJSON(w, http.StatusOK, envMetricsResponse{Env: envName, Pods: []podMetricRow{}})
+		return
+	}
+	out := envMetricsResponse{Env: envName, Pods: make([]podMetricRow, 0, len(list.Items))}
+	for i := range list.Items {
+		item := list.Items[i].Object
+		row := podMetricRow{Pod: list.Items[i].GetName()}
+		if ts, ok := item["timestamp"].(string); ok {
+			row.Timestamp = ts
+		}
+		if win, ok := item["window"].(string); ok && out.Window == "" {
+			out.Window = win
+		}
+		// Sum across containers in the pod. The metrics-server
+		// emits one entry per container under .containers[].usage.
+		if containers, ok := item["containers"].([]any); ok {
+			for _, c := range containers {
+				cm, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				usage, ok := cm["usage"].(map[string]any)
+				if !ok {
+					continue
+				}
+				if cpu, ok := usage["cpu"].(string); ok {
+					row.CPUm += parseCPU(cpu)
+				}
+				if mem, ok := usage["memory"].(string); ok {
+					row.MemBytes += parseQuantity(mem)
+				}
+			}
+		}
+		out.Pods = append(out.Pods, row)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// parseCPU returns CPU in millicores. Accepts kube quantity formats
+// like "100m", "0.5", "1". Anything else returns 0 (the panel just
+// shows "—").
+func parseCPU(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	if strings.HasSuffix(s, "n") {
+		// nanocores → millicores
+		n, _ := strconv.ParseInt(strings.TrimSuffix(s, "n"), 10, 64)
+		return n / 1_000_000
+	}
+	if strings.HasSuffix(s, "u") {
+		// microcores
+		n, _ := strconv.ParseInt(strings.TrimSuffix(s, "u"), 10, 64)
+		return n / 1_000
+	}
+	if strings.HasSuffix(s, "m") {
+		n, _ := strconv.ParseInt(strings.TrimSuffix(s, "m"), 10, 64)
+		return n
+	}
+	// Treat as whole cores.
+	if f, err := strconv.ParseFloat(s, 64); err == nil {
+		return int64(f * 1000)
+	}
+	return 0
+}
+
+// parseQuantity returns bytes from a kube quantity string. Handles
+// the common Ki/Mi/Gi suffixes plus plain bytes. Anything else → 0.
+func parseQuantity(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	mults := []struct {
+		suf string
+		mul int64
+	}{
+		{"Ei", 1 << 60}, {"Pi", 1 << 50}, {"Ti", 1 << 40},
+		{"Gi", 1 << 30}, {"Mi", 1 << 20}, {"Ki", 1 << 10},
+		{"E", 1_000_000_000_000_000_000}, {"P", 1_000_000_000_000_000},
+		{"T", 1_000_000_000_000}, {"G", 1_000_000_000},
+		{"M", 1_000_000}, {"k", 1_000},
+	}
+	for _, m := range mults {
+		if strings.HasSuffix(s, m.suf) {
+			n, _ := strconv.ParseInt(strings.TrimSuffix(s, m.suf), 10, 64)
+			return n * m.mul
+		}
+	}
+	n, _ := strconv.ParseInt(s, 10, 64)
+	return n
 }
 
 func kubeCtx(r *http.Request) (context.Context, context.CancelFunc) {

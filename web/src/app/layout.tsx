@@ -25,6 +25,12 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "kuso",
   description: "Self-hosted, agent-native PaaS for indie developers.",
+  icons: {
+    icon: [
+      { url: "/favicon.svg", type: "image/svg+xml" },
+      { url: "/favicon.ico", sizes: "any" },
+    ],
+  },
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
