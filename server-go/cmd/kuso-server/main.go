@@ -30,6 +30,7 @@ import (
 	"kuso/server/internal/notify"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/spec"
+	"kuso/server/internal/updater"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/status"
 	"kuso/server/internal/version"
@@ -109,6 +110,7 @@ func main() {
 	var ghDeps *httpsrv.GithubDeps
 	var kubeClient *kube.Client
 	var specRecon *spec.Reconciler
+	var updaterSvc *updater.Service
 
 	// Notify dispatcher is independent of kube — it only needs the DB
 	// for config + an HTTP client. Constructing it outside the kube
@@ -139,6 +141,15 @@ func main() {
 		// project + addon services for create/update/delete so the
 		// validation rules stay in one place.
 		specRecon = &spec.Reconciler{Projects: projSvc, Addons: addonSvc}
+
+		// Self-updater. Polls GH releases every 6h, kicks a kube
+		// Job when /api/system/update is hit. Disabled with
+		// KUSO_UPDATER_DISABLED=true on air-gapped clusters that
+		// don't want kuso reaching api.github.com.
+		if os.Getenv("KUSO_UPDATER_DISABLED") != "true" {
+			updaterSvc = updater.New(database, kc, *namespace, version.Version(), logger)
+			go updaterSvc.Run(ctx)
+		}
 
 		// Health watcher: polls pod + node state and fires notify
 		// events on bad transitions (CrashLoopBackOff, image pull
@@ -222,6 +233,7 @@ func main() {
 		Spec:       specRecon,
 		Kube:       kubeClient,
 		Namespace:  *namespace,
+		Updater:    updaterSvc,
 		Logger:     logger,
 	})
 

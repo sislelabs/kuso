@@ -52,7 +52,38 @@ func Open(path string) (*DB, error) {
 		_ = d.Close()
 		return nil, err
 	}
+	if err := d.applyMigrations(); err != nil {
+		_ = d.Close()
+		return nil, err
+	}
 	return d, nil
+}
+
+// applyMigrations runs additive ALTER TABLE statements that aren't in
+// schema.sql (the Prisma dump). Each is wrapped in a tolerant exec —
+// SQLite ALTER TABLE ADD COLUMN errors with "duplicate column name"
+// when re-applied, which we silence so this is idempotent. New
+// migrations append to the slice; never reorder or remove (operators
+// running an old kuso instance need a stable replay sequence).
+func (d *DB) applyMigrations() error {
+	migrations := []string{
+		// v0.5: tenancy. Each Group carries an instance-wide role
+		// (admin/member/viewer/billing/pending) and a JSON list of
+		// per-project memberships [{project, role}].
+		`ALTER TABLE "UserGroup" ADD COLUMN "instanceRole" TEXT NOT NULL DEFAULT 'member'`,
+		`ALTER TABLE "UserGroup" ADD COLUMN "projectMemberships" TEXT NOT NULL DEFAULT '[]'`,
+	}
+	for _, sqlText := range migrations {
+		if _, err := d.DB.Exec(sqlText); err != nil {
+			// "duplicate column name" is the expected re-apply error;
+			// every other error is a real failure.
+			if strings.Contains(err.Error(), "duplicate column name") {
+				continue
+			}
+			return fmt.Errorf("db: migration %q: %w", sqlText, err)
+		}
+	}
+	return nil
 }
 
 // applySchema runs the embedded Prisma DDL with each CREATE TABLE switched

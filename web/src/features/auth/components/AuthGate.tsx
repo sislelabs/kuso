@@ -3,20 +3,29 @@
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useSession } from "../hooks";
+import { useSession, usePending } from "../hooks";
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { data, isPending, isError } = useSession();
+  const pending = usePending();
 
   useEffect(() => {
     if (isPending) return;
     if (data === null || isError) {
       const next = encodeURIComponent(pathname);
       router.replace(`/login?next=${next}`);
+      return;
     }
-  }, [data, isPending, isError, pathname, router]);
+    // Pending users are authenticated but have zero perms — funnel
+    // them to a single "awaiting access" page so they don't bounce
+    // off every guarded route. Skip the redirect when they're
+    // already on the page.
+    if (pending && pathname !== "/awaiting-access") {
+      router.replace("/awaiting-access");
+    }
+  }, [data, isPending, isError, pathname, router, pending]);
 
   if (isPending) {
     return (

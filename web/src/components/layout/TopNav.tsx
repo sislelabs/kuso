@@ -52,7 +52,10 @@ import {
   Shield,
   UsersRound,
   HardDrive,
+  Package,
 } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api-client";
 import { ServersPopover } from "./ServersPopover";
 
 // TopNav is the persistent shell across every authenticated page. Left
@@ -413,6 +416,7 @@ function UserMenu() {
             </Link>
           }
         />
+        <UpdatesMenuItem />
         {canAdmin && (
           <>
             <DropdownMenuSeparator />
@@ -455,5 +459,37 @@ function UserMenu() {
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
+  );
+}
+
+// UpdatesMenuItem renders the menu row + a dot when an update is
+// available. Polled with a generous staleTime — the server pulls
+// from GitHub every 6h, no point hitting it from every menu open.
+function UpdatesMenuItem() {
+  const v = useQuery<{ needsUpdate?: boolean; latest?: string }>({
+    queryKey: ["system", "version"],
+    queryFn: () => api("/api/system/version"),
+    staleTime: 5 * 60_000,
+    refetchInterval: 5 * 60_000,
+  });
+  const needs = !!v.data?.needsUpdate;
+  return (
+    <DropdownMenuItem
+      render={
+        <Link href="/settings/updates" className="flex items-center gap-2">
+          <Package className="h-3.5 w-3.5" />
+          Updates
+          {needs && (
+            <span
+              className="ml-auto inline-flex items-center gap-1 rounded-full bg-[var(--accent-subtle)] px-1.5 py-0.5 font-mono text-[9px] text-[var(--accent)]"
+              title={`Update available: ${v.data?.latest ?? ""}`}
+            >
+              <span className="h-1 w-1 rounded-full bg-[var(--accent)]" />
+              new
+            </span>
+          )}
+        </Link>
+      }
+    />
   );
 }

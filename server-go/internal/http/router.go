@@ -14,6 +14,7 @@ import (
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
 	"kuso/server/internal/spec"
+	"kuso/server/internal/updater"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
@@ -56,6 +57,9 @@ type Deps struct {
 	// duplicating them here is a small price for a clean wire.
 	Kube       *kube.Client
 	Namespace  string
+	// Updater drives /api/system/version + /update. Optional — when
+	// nil the handler returns a flat "no updates available" response.
+	Updater    *updater.Service
 	Logger     *slog.Logger
 }
 
@@ -147,6 +151,7 @@ func NewRouter(d Deps) http.Handler {
 				Kube:       d.Kube,
 				Namespace:  d.Namespace,
 				Reconciler: d.Spec,
+				DB:         d.DB,
 			}
 			projH.Mount(r)
 		}
@@ -198,6 +203,10 @@ func NewRouter(d Deps) http.Handler {
 			// secret/job writes go through one client.
 			backupsH := &httphandlers.BackupsHandler{Kube: d.Logs.Kube, Namespace: d.Logs.Namespace, Logger: d.Logger}
 			backupsH.Mount(r)
+		}
+		if d.Updater != nil {
+			upH := &httphandlers.UpdaterHandler{Svc: d.Updater, Logger: d.Logger}
+			upH.Mount(r)
 		}
 		if ghHandler != nil {
 			ghHandler.MountAuthed(r)

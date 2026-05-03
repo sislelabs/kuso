@@ -10,6 +10,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/auth"
+	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/spec"
@@ -25,6 +27,11 @@ type ProjectsHandler struct {
 	Kube       *kube.Client
 	Namespace  string
 	Reconciler *spec.Reconciler
+	// DB is used for the tenancy filter on /api/projects (admins
+	// bypass; everyone else sees only projects they belong to).
+	// Optional: when nil the filter no-ops, preserving the
+	// pre-tenancy "everyone sees everything" behaviour.
+	DB *db.DB
 }
 
 // Mount registers all /api/projects/* routes onto the given router.
@@ -66,6 +73,28 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		h.fail(w, "list projects", err)
 		return
+	}
+	// Tenancy filter: non-admins only see projects they have a
+	// ProjectMembership on. Admins (settings:admin) bypass with the
+	// full list. Pending users get an empty array — they're auth'd
+	// but invisible to the rest of the system.
+	if claims, ok := auth.ClaimsFromContext(ctx); ok && !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+		if h.DB != nil {
+			tenancy, terr := h.DB.ListUserTenancy(ctx, claims.UserID)
+			if terr == nil {
+				allowed := map[string]struct{}{}
+				for _, m := range tenancy.ProjectMemberships {
+					allowed[m.Project] = struct{}{}
+				}
+				filtered := out[:0]
+				for _, p := range out {
+					if _, ok := allowed[p.Name]; ok {
+						filtered = append(filtered, p)
+					}
+				}
+				out = filtered
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }

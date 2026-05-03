@@ -146,6 +146,7 @@ func (h *OAuthHandler) upsertAndIssue(ctx context.Context, prof *auth.OAuthProfi
 		return "", errors.New("oauth: DB not wired")
 	}
 	user, err := h.DB.FindUserByUsername(ctx, prof.Username)
+	created := false
 	if err != nil {
 		// Create a stub local user. Password hash is set to a bcrypt of
 		// a random secret so password login is impossible — the user is
@@ -162,6 +163,16 @@ func (h *OAuthHandler) upsertAndIssue(ctx context.Context, prof *auth.OAuthProfi
 		if err != nil {
 			return "", fmt.Errorf("re-read user: %w", err)
 		}
+		created = true
+	}
+	// Bootstrap: the very first user to log in (no other users in the
+	// DB except the seed admin) gets put into a "instance-admin" group
+	// automatically. Subsequent users land in pending state until an
+	// existing admin grants them a group.
+	if created {
+		if err := h.bootstrapOrPending(ctx, user.ID); err != nil {
+			h.Logger.Warn("oauth: bootstrap user", "err", err, "user", user.ID)
+		}
 	}
 	roleName, _ := h.DB.UserRoleName(ctx, user.ID)
 	if roleName == "" {
@@ -175,10 +186,84 @@ func (h *OAuthHandler) upsertAndIssue(ctx context.Context, prof *auth.OAuthProfi
 	if perms == nil {
 		perms = []string{}
 	}
+	// Union tenancy-derived perms (instanceRole + projectMemberships)
+	// with the legacy role-perms pivot, same as the password-login
+	// flow. Keeps OAuth + password identical post-bootstrap.
+	if tenancy, terr := h.DB.ListUserTenancy(ctx, user.ID); terr == nil {
+		for _, p := range auth.Compute(tenancy) {
+			if !containsStr(perms, p) {
+				perms = append(perms, p)
+			}
+		}
+	}
 	return h.Issuer.Sign(auth.Claims{
 		UserID: user.ID, Username: user.Username, Role: roleName,
 		UserGroups: groups, Permissions: perms, Strategy: strategy,
 	})
+}
+
+// bootstrapOrPending puts a freshly-created user into one of two
+// groups depending on cluster state:
+//
+//   - First user ever (or no admin group exists yet): creates a
+//     "kuso-bootstrap-admins" group with instanceRole=admin and
+//     adds the user. The seed user becomes the platform admin.
+//   - Otherwise: creates (or reuses) "kuso-pending" group with
+//     instanceRole=pending and adds them. They authenticate but
+//     hit "awaiting access" until an admin moves them.
+//
+// Idempotent: if the groups already exist we just re-attach the user.
+func (h *OAuthHandler) bootstrapOrPending(ctx context.Context, userID string) error {
+	hasAdmin, err := h.anyAdminExists(ctx)
+	if err != nil {
+		return err
+	}
+	if !hasAdmin {
+		gid := "grp-bootstrap-admins"
+		_ = h.DB.CreateGroup(ctx, gid, "kuso-bootstrap-admins", "first-login bootstrap admin group")
+		if err := h.DB.SetGroupTenancy(ctx, gid, db.GroupTenancy{
+			InstanceRole: db.InstanceRoleAdmin,
+		}); err != nil {
+			return err
+		}
+		return h.DB.AddUserToGroup(ctx, userID, gid)
+	}
+	gid := "grp-pending"
+	_ = h.DB.CreateGroup(ctx, gid, "kuso-pending", "users awaiting admin approval")
+	if err := h.DB.SetGroupTenancy(ctx, gid, db.GroupTenancy{
+		InstanceRole: db.InstanceRolePending,
+	}); err != nil {
+		return err
+	}
+	return h.DB.AddUserToGroup(ctx, userID, gid)
+}
+
+// anyAdminExists reports whether any group has instanceRole=admin
+// AND at least one user in it. The "AND at least one user" guard
+// is what stops a second user from also being bootstrapped if the
+// admins group is dangling-empty (e.g. the seed admin was deleted).
+func (h *OAuthHandler) anyAdminExists(ctx context.Context) (bool, error) {
+	row := h.DB.DB.QueryRowContext(ctx, `
+SELECT COUNT(*)
+FROM "UserGroup" g
+JOIN "_UserToUserGroup" m ON m."B" = g.id
+WHERE g."instanceRole" = ?`, string(db.InstanceRoleAdmin))
+	var n int
+	if err := row.Scan(&n); err != nil {
+		return false, err
+	}
+	return n > 0, nil
+}
+
+// containsStr is a local copy of the helper in auth.go to avoid the
+// circular tug-of-war if we hoist it into a shared util.
+func containsStr(haystack []string, s string) bool {
+	for _, h := range haystack {
+		if h == s {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *OAuthHandler) userIDForProvider(ctx context.Context, prof *auth.OAuthProfile) (string, error) {

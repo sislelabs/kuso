@@ -3,6 +3,9 @@ export {
   useAuthMethods,
   useLogin,
   useSignOut,
+  useCan,
+  usePending,
+  Perms,
   sessionQueryKey,
 } from "./hooks";
 export type { SessionShape } from "./hooks";

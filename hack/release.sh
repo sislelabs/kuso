@@ -117,6 +117,79 @@ docker buildx build \
 
 log "image pushed: ${KUSO_RELEASE_IMAGE}:${VERSION}"
 
+# ---- 4b. release.json + crds.yaml + GH release ---------------------
+#
+# The kuso self-updater (server-go/internal/updater) reads release.json
+# from the latest GitHub release to figure out what to upgrade to and
+# whether the CRD changes are auto-applyable. We emit the manifest +
+# bundle the CRD YAMLs here so a `gh release create` later (manual or
+# CI) attaches both files alongside the docker images.
+#
+# Migration classification is intentionally trivial today: all changes
+# in v0.x are "additive" (preserve-unknown-fields on every CRD).
+# When we tighten schemas the manifest can declare specific
+# migrations and pre-rewrite scripts.
+
+DIST_DIR="${REPO_ROOT}/dist"
+mkdir -p "$DIST_DIR"
+
+OPERATOR_IMAGE="${KUSO_RELEASE_OPERATOR_IMAGE:-ghcr.io/sislelabs/kuso-operator}"
+
+log "writing dist/release.json + dist/crds.yaml for GitHub release"
+
+# Bundle every CRD into a single applyable file. The updater Job's
+# entrypoint runs `kubectl apply -f /tmp/crds.yaml` and trusts that
+# all of these are safe to re-apply (additive only, today).
+{
+  for f in operator/config/crd/bases/*.yaml; do
+    if [[ -f "$f" ]]; then
+      printf -- '---\n'
+      cat "$f"
+    fi
+  done
+} > "$DIST_DIR/crds.yaml"
+
+# release.json: stable wire shape consumed by internal/updater.Manifest.
+# Keep "additive" as the default migration kind; the moment we ship
+# something destructive, this script grows a CRD-diff step.
+PUBLISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+cat > "$DIST_DIR/release.json" <<EOF
+{
+  "version": "${VERSION}",
+  "publishedAt": "${PUBLISHED_AT}",
+  "components": {
+    "server":   { "image": "${KUSO_RELEASE_IMAGE}:${VERSION}" },
+    "operator": { "image": "${OPERATOR_IMAGE}:${VERSION}" }
+  },
+  "crds": {
+    "url": "https://github.com/${KUSO_RELEASE_REPO:-sislelabs/kuso}/releases/download/${VERSION}/crds.yaml",
+    "minServer": "v0.4.0",
+    "migrations": []
+  },
+  "breaking": false
+}
+EOF
+log "wrote ${DIST_DIR}/release.json"
+
+# Optionally cut the GH release. Off by default so iteration doesn't
+# spam tags; turn on with KUSO_RELEASE_GH=1 once a tag is real.
+if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
+  if ! command -v gh >/dev/null 2>&1; then
+    warn "gh not installed — skipping GitHub release; upload dist/* manually"
+  else
+    log "creating GitHub release ${VERSION}"
+    NOTES_FILE="$(mktemp)"
+    git log --pretty=format:'- %s' "$(git describe --tags --abbrev=0 2>/dev/null || echo HEAD)..HEAD" > "$NOTES_FILE" || true
+    gh release create "$VERSION" \
+      --title "$VERSION" \
+      --notes-file "$NOTES_FILE" \
+      "$DIST_DIR/release.json" \
+      "$DIST_DIR/crds.yaml" >/dev/null
+    rm -f "$NOTES_FILE"
+    log "GitHub release ${VERSION} published with release.json + crds.yaml"
+  fi
+fi
+
 # ---- 5. optional rollout -------------------------------------------
 
 if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]]; then

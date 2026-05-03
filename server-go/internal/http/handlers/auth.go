@@ -95,6 +95,17 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if perms == nil {
 		perms = []string{}
 	}
+	// v0.5 tenancy: union the role-derived perms (legacy) with the
+	// instance + project role table from the user's group
+	// memberships. The role-perms pivot stays for backwards compat;
+	// new installs only populate UserGroup tenancy.
+	if tenancy, terr := h.DB.ListUserTenancy(ctx, user.ID); terr == nil {
+		for _, p := range auth.Compute(tenancy) {
+			if !contains(perms, p) {
+				perms = append(perms, p)
+			}
+		}
+	}
 
 	tok, err := h.Issuer.Sign(auth.Claims{
 		UserID:      user.ID,
@@ -192,4 +203,16 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// contains is the tiny linear "does this slice carry s" helper.
+// Local because the sort+binary-search overhead isn't worth it for
+// the perm slices (always < 20 entries).
+func contains(haystack []string, s string) bool {
+	for _, h := range haystack {
+		if h == s {
+			return true
+		}
+	}
+	return false
 }

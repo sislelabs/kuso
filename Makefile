@@ -68,3 +68,16 @@ backup-image:
 		-t ghcr.io/sislelabs/kuso-backup:$(BACKUP_VERSION) \
 		-t ghcr.io/sislelabs/kuso-backup:latest \
 		-f build/backup/Dockerfile build/backup
+
+# Updater image — alpine + kubectl + curl + jq. Each release ships
+# its own updater so the script that handles a v0.5.0 upgrade always
+# matches the v0.5.0 manifest's expectations. The :latest tag is
+# overwritten on every release so older instances upgrading to NEW
+# pull the right script even when the cached :latest is stale.
+.PHONY: updater-image
+UPDATER_VERSION ?= v0.4.2
+updater-image:
+	@docker buildx build --platform linux/amd64 --push \
+		-t ghcr.io/sislelabs/kuso-updater:$(UPDATER_VERSION) \
+		-t ghcr.io/sislelabs/kuso-updater:latest \
+		-f build/updater/Dockerfile build/updater

@@ -86,3 +86,51 @@ export function useSignOut() {
     router.replace("/login");
   };
 }
+
+// useCan returns true when the current session carries the
+// requested permission. Components use this to gate Save bars,
+// destructive buttons, sensitive tabs, etc. Returns false during
+// the initial session fetch so we err on the side of hiding stuff
+// (better than flashing an unauthorized control then yanking it).
+//
+// Pass an array to OR multiple perms ("settings:admin OR
+// settings:read" pattern for read-mostly UIs).
+export function useCan(perm: string | string[]): boolean {
+  const { data } = useSession();
+  if (!data) return false;
+  const have = data.session.permissions ?? [];
+  const wants = Array.isArray(perm) ? perm : [perm];
+  for (const w of wants) {
+    if (have.includes(w)) return true;
+  }
+  return false;
+}
+
+// Common permission strings — match what server/internal/auth/permissions.go
+// emits. Re-declared here so consumers don't have to memorize the
+// magic strings or chase typos.
+export const Perms = {
+  SettingsAdmin: "settings:admin",
+  SettingsRead: "settings:read",
+  AuditRead: "audit:read",
+  UserWrite: "user:write",
+  ProjectWrite: "project:write",
+  ProjectRead: "project:read",
+  ServicesWrite: "services:write",
+  ServicesRead: "services:read",
+  SecretsWrite: "secrets:write",
+  SecretsRead: "secrets:read",
+  SQLRead: "sql:read",
+  AddonsWrite: "addons:write",
+  AddonsRead: "addons:read",
+  SystemUpdate: "system:update",
+} as const;
+
+// usePending returns true when the session exists but the user has
+// no perms (pending admin approval). Drives the redirect to
+// /awaiting-access.
+export function usePending(): boolean {
+  const { data } = useSession();
+  if (!data) return false;
+  return (data.session.permissions ?? []).length === 0;
+}
