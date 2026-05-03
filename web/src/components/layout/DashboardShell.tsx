@@ -1,24 +1,19 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { Sidebar } from "@/components/layout/Sidebar";
-import { Header } from "@/components/layout/Header";
-import { MobileNav } from "@/components/layout/MobileNav";
+import { TopNav } from "@/components/layout/TopNav";
 import { CommandPalette } from "@/components/command/CommandPalette";
-import { useSession } from "@/features/auth";
 
 export function DashboardShell({ children }: { children: ReactNode }) {
-  const [mobileNavOpen, setMobileNavOpen] = useState(false);
-  const { data: session } = useSession();
-
-  const user = session?.user ?? { name: "User", email: "", image: null };
-
+  // Layout: top nav (h-12) is the persistent shell. Below it sits the
+  // sidebar rail (left) + the page main area. The Sidebar is the icon
+  // rail; project + env switching lives in the TopNav now.
   return (
-    <div className="flex h-screen overflow-hidden">
-      <Sidebar />
-      <MobileNav open={mobileNavOpen} onOpenChange={setMobileNavOpen} />
-      <div className="flex flex-1 flex-col overflow-hidden">
-        <Header user={user} onMenuClick={() => setMobileNavOpen(true)} />
+    <div className="flex h-screen flex-col overflow-hidden bg-[var(--bg-primary)]">
+      <TopNav />
+      <div className="flex flex-1 overflow-hidden">
+        <Sidebar />
         <main className="flex-1 overflow-y-auto bg-[var(--bg-primary)]">
           {children}
         </main>

@@ -1,0 +1,138 @@
+"use client";
+
+import Link from "next/link";
+import { Server } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { api } from "@/lib/api-client";
+import { cn } from "@/lib/utils";
+
+export interface NodeSummary {
+  name: string;
+  ready: boolean;
+  roles: string[];
+  region?: string;
+  zone?: string;
+  labels: Record<string, string>;
+  taints: { key: string; value?: string; effect: string }[];
+  schedulable: boolean;
+  createdAt?: string;
+}
+
+// ServersPopover renders a compact "<n> nodes" pill in the top nav.
+// Hovering it (or clicking on touch) drops a popover that lists every
+// node grouped by region. Each node shows Ready state, role, and a
+// taint badge so the operator can see at a glance which nodes carry
+// the kuso.sislelabs.com/region=eu-west tarp. The full editor lives at
+// /settings/nodes — this popover is the read-mostly summary.
+export function ServersPopover() {
+  const nodes = useQuery({
+    queryKey: ["kubernetes", "nodes"],
+    queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+  });
+
+  const list = nodes.data ?? [];
+  const ready = list.filter((n) => n.ready).length;
+  const total = list.length;
+
+  // Group by region (or "default" when unset). Each region's first node
+  // controls the heading.
+  const grouped = new Map<string, NodeSummary[]>();
+  for (const n of list) {
+    const region = n.region || n.labels["kuso.sislelabs.com/region"] || "default";
+    const arr = grouped.get(region) ?? [];
+    arr.push(n);
+    grouped.set(region, arr);
+  }
+  const regions = [...grouped.entries()].sort(([a], [b]) => a.localeCompare(b));
+
+  return (
+    <Popover>
+      <PopoverTrigger
+        aria-label="Cluster nodes"
+        className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-tertiary)]"
+      >
+        <Server className="h-3.5 w-3.5" />
+        <span className="font-mono">
+          {ready}/{total} nodes
+        </span>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-0">
+        <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
+          <p className="text-xs font-semibold tracking-tight">Cluster nodes</p>
+          <Link
+            href="/settings/nodes"
+            className="font-mono text-[10px] text-[var(--accent)] hover:underline"
+          >
+            manage →
+          </Link>
+        </header>
+        <div className="max-h-72 overflow-y-auto">
+          {nodes.isPending ? (
+            <p className="px-3 py-4 text-xs text-[var(--text-tertiary)]">Loading…</p>
+          ) : nodes.isError ? (
+            <p className="px-3 py-4 text-xs text-red-400">
+              Failed to load nodes: {nodes.error?.message}
+            </p>
+          ) : list.length === 0 ? (
+            <p className="px-3 py-4 text-xs text-[var(--text-tertiary)]">
+              No nodes returned. Check that the kuso server has cluster-read RBAC.
+            </p>
+          ) : (
+            <ul className="divide-y divide-[var(--border-subtle)]">
+              {regions.map(([region, ns]) => (
+                <li key={region}>
+                  <div className="px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                    {region}
+                  </div>
+                  <ul>
+                    {ns.map((n) => (
+                      <li
+                        key={n.name}
+                        className="flex items-center gap-2 px-3 py-1.5 text-xs"
+                      >
+                        <span
+                          className={cn(
+                            "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
+                            n.ready ? "bg-emerald-400" : "bg-red-400"
+                          )}
+                        />
+                        <span className="truncate font-mono">{n.name}</span>
+                        <span className="ml-auto flex shrink-0 items-center gap-1 text-[10px] text-[var(--text-tertiary)]">
+                          {n.roles.map((r) => (
+                            <span
+                              key={r}
+                              className="rounded bg-[var(--bg-tertiary)] px-1 py-0.5"
+                            >
+                              {r}
+                            </span>
+                          ))}
+                          {n.taints.length > 0 && (
+                            <span
+                              title={n.taints
+                                .map((t) => `${t.key}=${t.value || ""}:${t.effect}`)
+                                .join("\n")}
+                              className="rounded bg-amber-500/10 px-1 py-0.5 text-amber-400"
+                            >
+                              {n.taints.length} taint{n.taints.length === 1 ? "" : "s"}
+                            </span>
+                          )}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+        <footer className="border-t border-[var(--border-subtle)] px-3 py-2 text-[10px] text-[var(--text-tertiary)]">
+          Drop a <span className="font-mono text-[var(--text-secondary)]">kuso.sislelabs.com/region</span> label to
+          group nodes; add a matching taint to pin tenants.
+        </footer>
+      </PopoverContent>
+    </Popover>
+  );
+}

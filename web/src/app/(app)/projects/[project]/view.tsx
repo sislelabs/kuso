@@ -113,6 +113,10 @@ export function ProjectDetailView() {
   // list clicks update the URL; the URL drives the overlay state on
   // initial load. Keeps refresh + back/forward sane.
   const selectedService = search?.get("service") ?? null;
+  // ?env=<name> filters the canvas + overlay to a specific environment.
+  // "production" is the default (and is represented as the URL param
+  // being absent so a clean URL is the common case).
+  const selectedEnv = search?.get("env") ?? "production";
 
   const project = useProject(projectName);
   const addons = useAddons(projectName);
@@ -155,8 +159,18 @@ export function ProjectDetailView() {
 
   const data = project.data!;
   const services = data.services;
-  const envs = data.environments;
+  const allEnvs = data.environments;
   const addonsList = addons.data ?? [];
+
+  // Narrow envs to the one the user picked in the TopNav. "production"
+  // matches every env where spec.kind === "production"; everything else
+  // matches a preview env by short name (last "-"-segmented chunk of
+  // metadata.name, e.g. "pr-42" for hello-web-pr-42).
+  const envs = allEnvs.filter((e) => {
+    if (selectedEnv === "production") return e.spec.kind === "production";
+    const short = e.metadata.name.split("-").slice(-2).join("-");
+    return short === selectedEnv;
+  });
 
   if (services.length === 0 && addonsList.length === 0) {
     return (
@@ -180,7 +194,7 @@ export function ProjectDetailView() {
 
   return (
     <>
-      <div className="flex flex-col h-[calc(100vh-3.5rem)] overflow-hidden">
+      <div className="flex flex-col h-[calc(100vh-3rem)] overflow-hidden">
         <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 lg:px-6">
           <div className="min-w-0">
             <h1 className="truncate font-heading text-base font-semibold tracking-tight">
@@ -327,6 +341,7 @@ export function ProjectDetailView() {
       <ServiceOverlay
         project={projectName}
         service={selectedService}
+        env={selectedEnv}
         onOpenChange={(open) => {
           if (!open) setSelectedService(null);
         }}

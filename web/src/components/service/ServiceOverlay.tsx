@@ -14,6 +14,10 @@ import { ServiceSettingsPanel } from "./overlay/ServiceSettingsPanel";
 interface Props {
   project: string;
   service: string | null;
+  // env is the URL form selected in the TopNav: "production" or a
+  // short preview name (e.g. "pr-42"). The overlay uses it to pick
+  // the right environment for the URL/status header line.
+  env?: string;
   onOpenChange: (open: boolean) => void;
   initialTab?: OverlayTab;
 }
@@ -27,14 +31,18 @@ export type OverlayTab = "deployments" | "variables" | "metrics" | "settings";
 //
 // Width is wider than the default Sheet (3/4 → max sm) because the
 // deployments + settings sections are dense.
-export function ServiceOverlay({ project, service, onOpenChange, initialTab = "deployments" }: Props) {
+export function ServiceOverlay({ project, service, env: envParam = "production", onOpenChange, initialTab = "deployments" }: Props) {
   const open = service !== null && service !== "";
   const svc = useService(project, service ?? "");
   const envs = useEnvironments(project);
 
-  const env = (envs.data ?? []).find(
-    (e) => e.spec.service === project + "-" + service && e.spec.kind === "production"
-  );
+  const fqn = service ? project + "-" + service : "";
+  const env = (envs.data ?? []).find((e) => {
+    if (e.spec.service !== fqn) return false;
+    if (envParam === "production") return e.spec.kind === "production";
+    const short = e.metadata.name.split("-").slice(-2).join("-");
+    return short === envParam;
+  });
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>

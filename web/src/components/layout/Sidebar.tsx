@@ -1,30 +1,28 @@
 "use client";
 
-import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useRouteParams } from "@/lib/dynamic-params";
+import { useSession } from "@/features/auth";
 import {
   LayoutGrid,
   Settings,
-  ChevronsLeft,
-  ChevronsRight,
-  Plus,
-  User,
+  User as UserIcon,
   KeyRound,
   Users,
   Shield,
   UsersRound,
   Bell,
   Cog,
+  Server,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Logo } from "@/components/shared/Logo";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
-import { useSession } from "@/features/auth";
-import { useProjects } from "@/features/projects";
-import type { KusoProject } from "@/types/projects";
-import { ThemeToggle } from "@/components/shared/ThemeToggle";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 
 interface NavItem {
   name: string;
@@ -33,38 +31,31 @@ interface NavItem {
   requiredPermission?: string;
 }
 
-function projectHealthDot(project: KusoProject): string {
-  // Until we have services-rolled-up status from a single endpoint, use a
-  // neutral gray dot. Phase B places-holds the visual; Phase C populates.
-  // The prop is wired through so we can light it up the moment the data
-  // exists.
-  void project;
-  return "bg-[var(--text-tertiary)]/50";
-}
-
+// Sidebar is a thin icon rail pinned to the left edge. Each row is a
+// 40×40 hit target with a tooltip on hover. We don't expand to a wide
+// drawer — the project + env switching lives in the TopNav now, so the
+// sidebar's job is reduced to "jump between project sections" plus the
+// account bucket. Stays consistent across pages so muscle memory works.
 export function Sidebar() {
   const pathname = usePathname();
   const params = useRouteParams<{ project: string }>(["project"]);
   const currentProject = params.project;
-  const [collapsed, setCollapsed] = useState(false);
   const { data: session } = useSession();
-  const projects = useProjects();
-  const user = session?.user;
-  const initial = (user?.name?.[0] ?? user?.email?.[0] ?? "U").toUpperCase();
   const perms = session?.session.permissions ?? [];
 
   const projectNav: NavItem[] = currentProject
     ? [
         { name: "Canvas", href: `/projects/${currentProject}`, icon: LayoutGrid },
-        { name: "Settings", href: `/projects/${currentProject}/settings`, icon: Settings },
+        { name: "Project settings", href: `/projects/${currentProject}/settings`, icon: Settings },
       ]
     : [];
 
   const accountNav: NavItem[] = [
-    { name: "Profile", href: "/settings/profile", icon: User },
-    { name: "Tokens", href: "/settings/tokens", icon: KeyRound },
+    { name: "Profile", href: "/settings/profile", icon: UserIcon },
+    { name: "API tokens", href: "/settings/tokens", icon: KeyRound },
     { name: "Notifications", href: "/settings/notifications", icon: Bell },
-    { name: "Config", href: "/settings/config", icon: Cog, requiredPermission: "config:read" },
+    { name: "Cluster nodes", href: "/settings/nodes", icon: Server },
+    { name: "Cluster config", href: "/settings/config", icon: Cog, requiredPermission: "config:read" },
     { name: "Users", href: "/settings/users", icon: Users, requiredPermission: "user:write" },
     { name: "Roles", href: "/settings/roles", icon: Shield, requiredPermission: "user:write" },
     { name: "Groups", href: "/settings/groups", icon: UsersRound, requiredPermission: "user:write" },
@@ -75,178 +66,78 @@ export function Sidebar() {
   );
 
   return (
-    <aside
-      className={cn(
-        "hidden lg:flex lg:flex-col border-r border-[var(--border-subtle)] bg-[var(--bg-secondary)] transition-all duration-300",
-        collapsed ? "lg:w-16" : "lg:w-[260px]"
-      )}
-    >
-      <div
-        className={cn(
-          "flex h-14 items-center border-b border-[var(--border-subtle)]",
-          collapsed ? "justify-center px-2" : "px-5"
-        )}
+    <TooltipProvider>
+      <aside
+        aria-label="Primary navigation"
+        className="hidden lg:flex w-12 shrink-0 flex-col items-center gap-1 border-r border-[var(--border-subtle)] bg-[var(--bg-secondary)] py-2"
       >
-        <Link href="/projects">
-          <Logo showText={!collapsed} />
-        </Link>
-      </div>
-
-      <nav className="flex-1 overflow-y-auto p-3 space-y-6">
-        <div>
-          {!collapsed && (
-            <h3 className="mb-2 px-3 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-[0.08em]">
-              Projects
-            </h3>
-          )}
-          <ul className="space-y-0.5">
-            {(projects.data ?? []).map((p) => {
-              const name = p.metadata.name;
-              const isActive = currentProject === name;
-              return (
-                <li key={p.metadata.uid ?? name}>
-                  <Link
-                    href={`/projects/${name}`}
-                    title={collapsed ? name : undefined}
-                    className={cn(
-                      "relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all",
-                      collapsed && "justify-center px-2",
-                      isActive
-                        ? "bg-[var(--accent-subtle)] text-[var(--text-primary)] before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-full before:bg-[var(--accent)]"
-                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-                    )}
-                  >
-                    <span className={cn("h-2 w-2 shrink-0 rounded-full", projectHealthDot(p))} />
-                    {!collapsed && <span className="truncate">{name}</span>}
-                  </Link>
-                </li>
-              );
-            })}
-            <li>
-              <Link
-                href="/projects/new"
-                title={collapsed ? "New project" : undefined}
-                className={cn(
-                  "mt-1 flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]",
-                  collapsed && "justify-center px-2"
-                )}
-              >
-                <Plus className="h-[18px] w-[18px] shrink-0" />
-                {!collapsed && "New project"}
-              </Link>
-            </li>
-          </ul>
-        </div>
-
         {projectNav.length > 0 && (
-          <div>
-            {!collapsed && (
-              <h3 className="mb-2 px-3 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-[0.08em]">
-                {currentProject}
-              </h3>
-            )}
-            <ul className="space-y-0.5">
-              {projectNav.map((item) => {
-                const isActive = pathname === item.href;
-                return (
-                  <li key={item.href}>
-                    <Link
-                      href={item.href}
-                      title={collapsed ? item.name : undefined}
-                      className={cn(
-                        "relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all",
-                        collapsed && "justify-center px-2",
-                        isActive
-                          ? "bg-[var(--accent-subtle)] text-[var(--text-primary)] before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-full before:bg-[var(--accent)]"
-                          : "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-                      )}
-                    >
-                      <item.icon className="h-[18px] w-[18px] shrink-0" />
-                      {!collapsed && item.name}
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
+          <>
+            <NavSection label="Project">
+              {projectNav.map((n) => (
+                <NavRailButton key={n.href} item={n} pathname={pathname} />
+              ))}
+            </NavSection>
+            <Divider />
+          </>
         )}
 
-        <div>
-          {!collapsed && (
-            <h3 className="mb-2 px-3 text-[10px] font-semibold text-[var(--text-tertiary)] uppercase tracking-[0.08em]">
-              Account
-            </h3>
-          )}
-          <ul className="space-y-0.5">
-            {filteredAccount.map((item) => {
-              const isActive = pathname === item.href;
-              return (
-                <li key={item.href}>
-                  <Link
-                    href={item.href}
-                    title={collapsed ? item.name : undefined}
-                    className={cn(
-                      "relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all",
-                      collapsed && "justify-center px-2",
-                      isActive
-                        ? "bg-[var(--accent-subtle)] text-[var(--text-primary)] before:absolute before:left-0 before:top-1.5 before:bottom-1.5 before:w-[2px] before:rounded-full before:bg-[var(--accent)]"
-                        : "text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-                    )}
-                  >
-                    <item.icon className="h-[18px] w-[18px] shrink-0" />
-                    {!collapsed && item.name}
-                  </Link>
-                </li>
-              );
-            })}
-          </ul>
-        </div>
-      </nav>
+        <NavSection label="Account" className="mt-auto">
+          {filteredAccount.map((n) => (
+            <NavRailButton key={n.href} item={n} pathname={pathname} />
+          ))}
+        </NavSection>
+      </aside>
+    </TooltipProvider>
+  );
+}
 
-      {user && (
-        <div
-          className={cn(
-            "flex items-center gap-3 border-t border-[var(--border-subtle)] px-3 py-3",
-            collapsed && "justify-center px-2"
-          )}
-        >
+function NavSection({
+  label,
+  className,
+  children,
+}: {
+  label: string;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={cn("flex w-full flex-col items-center gap-1", className)}>
+      <span className="sr-only">{label}</span>
+      {children}
+    </div>
+  );
+}
+
+function Divider() {
+  return <span className="my-2 h-px w-6 bg-[var(--border-subtle)]" aria-hidden />;
+}
+
+function NavRailButton({ item, pathname }: { item: NavItem; pathname: string | null }) {
+  const Icon = item.icon;
+  const active = pathname === item.href || pathname?.startsWith(item.href + "/");
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
           <Link
-            href="/settings/profile"
-            className="flex items-center gap-3 min-w-0 flex-1 rounded-md px-1 py-1 hover:bg-[var(--bg-tertiary)] transition-colors"
-            title={collapsed ? user.name : undefined}
-          >
-            <Avatar className="size-8 shrink-0 border border-[var(--border-subtle)]">
-              {user.image ? <AvatarImage src={user.image} alt={user.name} /> : null}
-              <AvatarFallback className="bg-[var(--bg-tertiary)] text-xs font-medium">
-                {initial}
-              </AvatarFallback>
-            </Avatar>
-            {!collapsed && (
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-sm font-medium text-[var(--text-primary)]">
-                  {user.name || "You"}
-                </div>
-                <div className="truncate font-mono text-[11px] text-[var(--text-tertiary)]">
-                  {user.email}
-                </div>
-              </div>
+            href={item.href}
+            aria-label={item.name}
+            aria-current={active ? "page" : undefined}
+            className={cn(
+              "group inline-flex h-9 w-9 items-center justify-center rounded-md transition-colors",
+              active
+                ? "bg-[var(--accent-subtle)] text-[var(--text-primary)]"
+                : "text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
             )}
+          >
+            <Icon className="h-[15px] w-[15px]" />
           </Link>
-          {!collapsed && <ThemeToggle />}
-        </div>
-      )}
-
-      <button
-        onClick={() => setCollapsed(!collapsed)}
-        className="flex items-center justify-center h-10 border-t border-[var(--border-subtle)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] transition-colors cursor-pointer"
-        aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-      >
-        {collapsed ? (
-          <ChevronsRight className="h-4 w-4" />
-        ) : (
-          <ChevronsLeft className="h-4 w-4" />
-        )}
-      </button>
-    </aside>
+        }
+      />
+      <TooltipContent side="right" sideOffset={8} className="text-xs">
+        {item.name}
+      </TooltipContent>
+    </Tooltip>
   );
 }
