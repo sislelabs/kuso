@@ -57,4 +57,4 @@ In rough order:
 1. **Agent ergonomics.** kuso should feel like a first-class tool to drive from Claude Code. Structured outputs, idempotent ops, intent-grouped MCP tools.
 2. **Sleeping containers.** This is the killer feature. Don't break it.
 3. **Solo-dev sanity.** No abstractions for hypothetical contributors. No half-finished refactors. Three similar lines beats a premature abstraction.
-4. **Hard divergence.** Don't try to keep kuso compatible with kubero-dev/kubero. We left.
+4. **No legacy compatibility.** kuso is its own thing now. Design for the current shape; don't bend to old upstream conventions.

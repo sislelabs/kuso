@@ -5,80 +5,47 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func colorYellow(s string) string {
-	return color.New(color.FgYellow).SprintFunc()(s)
+// setUsageTemplate installs a small custom help template on a cobra
+// command. The default template is fine but a touch dense; a few
+// color hints make the section headers easier to scan in a terminal.
+//
+// We register the template func once on the root command and let
+// children inherit. Calling this on every sub-command is harmless
+// (idempotent) but unnecessary.
+func setUsageTemplate(cmd *cobra.Command) {
+	yellow := color.New(color.FgYellow).SprintFunc()
+	green := color.New(color.FgGreen).SprintFunc()
+	cyan := color.New(color.FgCyan).SprintFunc()
+
+	cobra.AddTemplateFunc("hdr", yellow)
+	cobra.AddTemplateFunc("name", green)
+	cobra.AddTemplateFunc("flags", cyan)
+
+	cmd.SetUsageTemplate(usageTemplate)
 }
 
-func colorGreen(s string) string {
-	return color.New(color.FgGreen).SprintFunc()(s)
-}
-
-func colorBlue(s string) string {
-	return color.New(color.FgBlue).SprintFunc()(s)
-}
-
-func colorRed(s string) string {
-	return color.New(color.FgRed).SprintFunc()(s)
-}
-
-func colorHelp(s string) string {
-	return color.New(color.FgCyan).SprintFunc()(s)
-}
-
-func hasServiceCommands(cmds []*cobra.Command) bool {
-	for _, cmd := range cmds {
-		if cmd.Annotations["service"] == "true" {
-			return true
-		}
-	}
-	return false
-}
-
-func hasModuleCommands(cmds []*cobra.Command) bool {
-	for _, cmd := range cmds {
-		if cmd.Annotations["service"] != "true" {
-			return true
-		}
-	}
-	return false
-}
-
-var cliUsageTemplate = `{{colorYellow "Usage:"}}{{if .Runnable}}
+// The template largely matches cobra's default but with hdr / name /
+// flags pipes for color. Whitespace + ranges follow cobra conventions
+// so the output looks familiar to anyone who's used a cobra-built CLI.
+const usageTemplate = `{{hdr "Usage:"}}{{if .Runnable}}
   {{.UseLine}}{{end}}{{if .HasAvailableSubCommands}}
-  {{.CommandPath}} [command] [args]{{end}}{{if gt (len .Aliases) 0}}
+  {{.CommandPath}} [command]{{end}}{{if gt (len .Aliases) 0}}
 
-{{colorYellow "Aliases:"}}
+{{hdr "Aliases:"}}
   {{.NameAndAliases}}{{end}}{{if .HasExample}}
 
-{{colorYellow "Example:"}}
-  {{.Example}}{{end}}{{if .HasAvailableSubCommands}}
+{{hdr "Examples:"}}
+{{.Example}}{{end}}{{if .HasAvailableSubCommands}}
 
-{{colorYellow "Available Commands:"}}
+{{hdr "Available Commands:"}}
 {{range .Commands}}{{if (or .IsAvailableCommand (eq .Name "help"))}}
-  {{colorGreen (rpad .Name .NamePadding) }} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
+  {{name (rpad .Name .NamePadding)}} {{.Short}}{{end}}{{end}}{{end}}{{if .HasAvailableLocalFlags}}
 
-{{colorYellow "Flags:"}}
-{{.LocalFlags.FlagUsages | trimTrailingWhitespaces | colorHelp}}{{end}}{{if .HasAvailableInheritedFlags}}
+{{hdr "Flags:"}}
+{{flags (.LocalFlags.FlagUsages | trimTrailingWhitespaces)}}{{end}}{{if .HasAvailableInheritedFlags}}
 
-{{colorYellow "Global Options:"}}
-  {{.InheritedFlags.FlagUsages | trimTrailingWhitespaces | colorHelp}}{{end}}{{if .HasHelpSubCommands}}
+{{hdr "Global Flags:"}}
+{{flags (.InheritedFlags.FlagUsages | trimTrailingWhitespaces)}}{{end}}{{if .HasAvailableSubCommands}}
 
-{{colorYellow "Additional help topics:"}}
-{{range .Commands}}{{if .IsHelpCommand}}
-  {{colorGreen (rpad .CommandPath .CommandPathPadding) }} {{.Short}}{{end}}{{end}}{{end}}{{if .HasSubCommands}}
-
-{{colorYellow (printf "Use \"%s [command] --help\" for more information about a command." .CommandPath)}}{{end}}
+Use "{{.CommandPath}} [command] --help" for more information about a command.{{end}}
 `
-
-func SetUsageDefinition(cmd *cobra.Command) {
-	cobra.AddTemplateFunc("colorYellow", colorYellow)
-	cobra.AddTemplateFunc("colorGreen", colorGreen)
-	cobra.AddTemplateFunc("colorRed", colorRed)
-	cobra.AddTemplateFunc("colorBlue", colorBlue)
-	cobra.AddTemplateFunc("colorHelp", colorHelp)
-	cobra.AddTemplateFunc("hasServiceCommands", hasServiceCommands)
-	cobra.AddTemplateFunc("hasModuleCommands", hasModuleCommands)
-
-	// Altera o template de uso do cobra
-	cmd.SetUsageTemplate(cliUsageTemplate)
-}

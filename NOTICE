@@ -1,16 +1,14 @@
 kuso
 Copyright (C) 2026 SisleLabs and kuso contributors
 
-This product includes software originally developed by the Kubero authors:
-  https://github.com/kubero-dev/kubero
-  https://github.com/kubero-dev/kubero-operator
-  https://github.com/kubero-dev/kubero-cli
+Licensed under the GNU Affero General Public License v3.0.
+See LICENSE for the full text.
 
-Original code: Copyright (C) Kubero authors, licensed under GPL-3.0.
+History
+-------
 
-kuso is a hard fork of the above projects. Files under server/, client/,
-operator/, and cli/ derive from the upstream Kubero codebase. Modifications
-and additions made by SisleLabs and kuso contributors are also licensed
-under GPL-3.0 per the terms of the original license.
-
-See LICENSE for the full text of the GNU General Public License version 3.
+Early versions of the kuso CLI (pre-v0.6.0) descended from
+kubero-cli (https://github.com/kubero-dev/kubero-cli), licensed
+under GPL-3.0. As of v0.6.0, all CLI source files have been
+rewritten clean-room and the operator + server + web frontend
+are independent works.

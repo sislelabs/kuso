@@ -94,16 +94,15 @@ export default function LandingPage() {
 
       <footer className="border-t border-[var(--border-subtle)] px-6 py-6 lg:px-12">
         <div className="mx-auto flex max-w-5xl flex-col items-center justify-between gap-2 text-xs text-[var(--text-tertiary)] sm:flex-row">
-          <p>© {new Date().getFullYear()} SisleLabs · GPL-3.0</p>
+          <p>© {new Date().getFullYear()} SisleLabs · AGPL-3.0</p>
           <p className="font-mono">
-            forked from{" "}
             <a
-              href="https://github.com/kubero-dev/kubero"
+              href="https://github.com/sislelabs/kuso"
               target="_blank"
               rel="noreferrer"
               className="underline hover:text-[var(--text-secondary)]"
             >
-              kubero
+              github.com/sislelabs/kuso
             </a>
           </p>
         </div>

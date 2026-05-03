@@ -1,18 +1,29 @@
+// Package kusoApi is the HTTP client the kuso CLI uses to talk to a
+// kuso server. Thin wrapper over resty: every endpoint is a one-line
+// method that returns the raw *resty.Response so callers can decide
+// how to decode (most use json.Unmarshal on resp.Body()).
+//
+// All requests carry a bearer token set by SetApiUrl. The token comes
+// from ~/.kuso/credentials.yaml after `kuso login`.
 package kusoApi
 
 import (
 	_ "embed"
-	"fmt"
+	"errors"
 	"net/url"
-	"os"
-	"regexp"
 	"strings"
-
-	"github.com/golang-jwt/jwt/v4"
 
 	"github.com/go-resty/resty/v2"
 )
 
+//go:embed VERSION
+var embeddedVersion string
+
+// KusoClient holds the resty request the CLI reuses across calls. The
+// resty.Request (rather than Client) is set up once with auth + base
+// URL so every method is just `client.Method(path)`. Shared state on
+// SetBody / SetHeader is fine because the CLI is single-shot —
+// commands run, exit; no long-lived connection pool to leak between.
 type KusoClient struct {
 	baseURL     string
 	bearerToken string
@@ -20,258 +31,99 @@ type KusoClient struct {
 	client      *resty.Request
 }
 
-type ClientNotInitializedError struct{}
-type BaseURLNotSetError struct{}
-type BearerTokenNotSetError struct{}
-type NotAuthenticatedError struct{}
+// Sentinel errors callers check via errors.Is.
+var (
+	ErrNotConfigured   = errors.New("kuso CLI not configured: run `kuso login` first")
+	ErrUnauthenticated = errors.New("not authenticated: run `kuso login`")
+)
 
-func (e *BaseURLNotSetError) Error() string {
-	return "base URL not set"
-}
-
-func (e *ClientNotInitializedError) Error() string {
-	return "client not initialized"
-}
-
-func (e *BearerTokenNotSetError) Error() string {
-	return "bearer token not set"
-}
-
-func (e *NotAuthenticatedError) Error() string {
-	return "not authenticated"
-}
-
-//go:embed VERSION
-var version string
-
-func (k *KusoClient) Init(baseURL string, bearerToken string) *resty.Request {
+// Init wires up the client with a base URL + bearer token and returns
+// the underlying resty.Request so legacy callers can chain on it.
+// Most code should pass through one of the typed methods (GetProjects,
+// CreateBuild, …) instead of touching the request directly.
+func (k *KusoClient) Init(baseURL, bearerToken string) *resty.Request {
 	k.SetApiUrl(baseURL, bearerToken)
-
 	return k.client
 }
 
-func (k *KusoClient) validateClient() error {
-	auth, _ := k.checkAuth()
-	if !auth {
-		fmt.Println("Error: Not authenticated. Run 'kuso login' to authenticate")
-		os.Exit(0)
-		return &NotAuthenticatedError{}
-	}
-
-	if k.client == nil {
-		fmt.Println("Error: Client not initialized. Run 'kuso login' to authenticate")
-		os.Exit(0)
-		return &ClientNotInitializedError{}
-	}
-
-	if k.baseURL == "" {
-		fmt.Println("Error: Base URL not set. Run 'kuso login' to authenticate")
-		os.Exit(0)
-		return &BaseURLNotSetError{}
-	}
-
-	if k.bearerToken == "" {
-		return &BearerTokenNotSetError{}
-	} else if !k.validateToken() {
-		return &NotAuthenticatedError{}
-	}
-
-	return nil
-}
-
-func (k *KusoClient) SetApiUrl(apiUrl string, bearerToken string) {
-
-	parsedUrl, err := url.Parse(apiUrl)
+// SetApiUrl reconfigures the client for a new instance. Called by
+// `kuso login` and `kuso remote select` so the user can flip between
+// kuso instances without restarting.
+//
+// Special case: localhost URLs route to localhost:<port> with a
+// "kuso.localhost" Host header. Lets developers run a local server on
+// a vhost name without reaching for /etc/hosts edits.
+func (k *KusoClient) SetApiUrl(apiURL, bearerToken string) {
+	parsed, err := url.Parse(apiURL)
 	if err != nil {
-		fmt.Println("Error parsing URL:", err)
-		return
-	}
-
-	// resty needs to resolve the url. kuso.localhost will not be resolved
-	// so we need to set the host header to the correct value
-	matched, _ := regexp.MatchString(`localhost`, parsedUrl.Host)
-	if matched {
+		// Fall back to the raw input — the user's next request will
+		// fail with a clearer error than parse-stage panic.
+		k.baseURL = apiURL
+		k.host = apiURL
+	} else if strings.Contains(parsed.Host, "localhost") {
+		k.baseURL = parsed.Scheme + "://localhost"
+		if parsed.Port() != "" {
+			k.baseURL += ":" + parsed.Port()
+		}
 		k.host = "kuso.localhost"
-		k.baseURL = parsedUrl.Scheme + "://localhost:" + parsedUrl.Port()
 	} else {
-		k.baseURL = apiUrl
-		k.host = parsedUrl.Host
+		k.baseURL = apiURL
+		k.host = parsed.Host
 	}
 
-	k.client = resty.New().SetBaseURL(k.baseURL).R().
-		EnableTrace().
+	ua := "kuso-cli/" + strings.TrimSpace(embeddedVersion)
+	k.client = resty.New().
+		SetBaseURL(k.baseURL).
+		R().
 		SetAuthScheme("Bearer").
 		SetAuthToken(bearerToken).
 		SetHeader("Host", k.host).
 		SetHeader("Accept", "application/json").
 		SetHeader("Content-Type", "application/json").
-		// version is read via //go:embed and may include a trailing
-		// newline. Strip it — invalid header values otherwise.
-		SetHeader("User-Agent", "kuso-cli/"+strings.TrimSpace(version))
-
+		SetHeader("User-Agent", ua)
 	k.bearerToken = bearerToken
-
 }
 
-func (k *KusoClient) validateToken() bool {
-	if k.bearerToken == "" {
-		return true
+// BaseURL returns the configured kuso API root. The logs --follow
+// path needs this to derive a ws:// URL from the same instance config
+// the rest of the CLI is using.
+func (k *KusoClient) BaseURL() string { return k.baseURL }
+
+// BearerToken exposes the JWT so the WebSocket dialer can pass it as
+// a Sec-WebSocket-Protocol value (browsers can't set Authorization on
+// WS upgrades; we follow the same convention).
+func (k *KusoClient) BearerToken() string { return k.bearerToken }
+
+// ensureReady returns an error if the client wasn't initialized via
+// Init/SetApiUrl. Used by methods that perform real I/O.
+func (k *KusoClient) ensureReady() error {
+	if k == nil || k.client == nil || k.baseURL == "" {
+		return ErrNotConfigured
 	}
-	token, _, err := new(jwt.Parser).ParseUnverified(k.bearerToken, jwt.MapClaims{})
-	if err != nil {
-		fmt.Println("Error parsing token:", err)
-		return false
+	return nil
+}
+
+// ---------- Auth ----------
+
+// Login posts username/password to /api/auth/login. The response body
+// carries the access_token the CLI persists into credentials.yaml.
+func (k *KusoClient) Login(username, password string) (*resty.Response, error) {
+	if err := k.ensureReady(); err != nil {
+		return nil, err
 	}
-
-	if claims, ok := token.Claims.(jwt.MapClaims); ok {
-		if exp, ok := claims["exp"].(float64); ok {
-			if exp < 0 {
-				fmt.Println("Token expired")
-				return false
-			}
-		}
-	}
-
-	return true
+	k.client.SetBody(map[string]string{"username": username, "password": password})
+	return k.client.Post("/api/auth/login")
 }
 
-func (k *KusoClient) checkAuth() (bool, error) {
-	res, err := k.client.Get("/api/auth/session")
-	if err != nil {
-		panic(err)
-	}
-	if res.StatusCode() > 299 {
-		return false, &NotAuthenticatedError{}
-	}
-	return true, nil
-}
+// ---------- Generic ----------
 
-func (k *KusoClient) DeployPipeline(pipeline PipelineCRD) (*resty.Response, error) {
-	k.client.SetBody(pipeline.Spec)
-	res, err := k.client.Post("/api/pipelines/")
-
-	return res, err
-}
-
-func (k *KusoClient) DeletePipeline(pipelineName string) (*resty.Response, error) {
-	res, err := k.client.Delete("/api/pipelines/" + pipelineName)
-
-	return res, err
-}
-
-func (k *KusoClient) GetPipeline(pipelineName string) (*resty.Response, error) {
-	res, err := k.client.Get("/api/pipelines/" + pipelineName)
-
-	return res, err
-}
-
-func (k *KusoClient) DeleteApp(pipelineName string, stageName string, appName string) (*resty.Response, error) {
-	res, err := k.client.Delete("/api/pipelines/" + pipelineName + "/" + stageName + "/" + appName)
-
-	return res, err
-}
-
-func (k *KusoClient) GetApp(pipelineName string, stageName string, appName string) (*resty.Response, error) {
-	res, err := k.client.Get("/api/pipelines/" + pipelineName + "/" + stageName + "/" + appName)
-
-	return res, err
-}
-
-func (k *KusoClient) GetApps() (*resty.Response, error) {
-	res, err := k.client.Get("/api/apps")
-
-	return res, err
-}
-
-func (k *KusoClient) GetPipelines() (*resty.Response, error) {
-	k.validateClient()
-	res, err := k.client.Get("/api/pipelines")
-
-	return res, err
-}
-
-func (k *KusoClient) DeployApp(pipelineName string, phaseName string, appName string, app AppCRD) (*resty.Response, error) {
-	k.client.SetBody(app.Spec)
-	res, err := k.client.Post("/api/apps/" + pipelineName + "/" + phaseName + "/" + appName)
-
-	return res, err
-}
-
-func (k *KusoClient) GetPipelineApps(pipelineName string) (*resty.Response, error) {
-	res, err := k.client.Get("/api/pipelines/" + pipelineName + "/apps")
-
-	return res, err
-}
-
-func (k *KusoClient) GetAddons() (*resty.Response, error) {
-	k.validateClient()
-	res, err := k.client.Get("/api/addons")
-
-	return res, err
-}
-
-func (k *KusoClient) GetRunpacks() (*resty.Response, error) {
-	k.validateClient()
-	res, err := k.client.Get("/api/config/runpacks")
-
-	return res, err
-}
-
-func (k *KusoClient) GetPodsize() (*resty.Response, error) {
-	k.validateClient()
-	res, err := k.client.Get("/api/config/podsizes")
-
-	return res, err
-}
-
-func (k *KusoClient) GetRepositories() (*resty.Response, error) {
-	res, err := k.client.Get("/api/config/repositories")
-
-	return res, err
-}
-
-func (k *KusoClient) GetContexts() (*resty.Response, error) {
-	res, err := k.client.Get("/api/kubernetes/context")
-
-	return res, err
-}
-
-func (k *KusoClient) GetEvents() (*resty.Response, error) {
-	k.client.QueryParam.Add("namespace", "")
-	res, err := k.client.Get("/api/kubernetes/namespace")
-
-	return res, err
-}
-
-func (k *KusoClient) GetLogs(pipelineName string, phaseName string, appName string, container string) (*resty.Response, error) {
-	res, err := k.client.Get("/api/logs/" + pipelineName + "/" + phaseName + "/" + appName + "/" + container + "/history")
-
-	return res, err
-}
-
-func (k *KusoClient) Login(user string, pass string) (*resty.Response, error) {
-
-	k.client.SetBody(map[string]string{"username": user, "password": pass})
-	res, err := k.client.Post("/api/auth/login")
-
-	return res, err
-}
-
-// RawGet is a generic helper for endpoints that don't have a typed
-// wrapper yet. Path should start with "/".
+// RawGet hits an arbitrary path under the configured base URL. Used
+// by the few endpoints that don't have a typed wrapper yet (system
+// version checks, etc.). Path must start with "/".
 func (k *KusoClient) RawGet(path string) (*resty.Response, error) {
+	if err := k.ensureReady(); err != nil {
+		return nil, err
+	}
 	return k.client.Get(path)
 }
 
-// BaseURL exposes the configured kuso API root so commands needing
-// to mint their own ws:// URLs (logs --follow) don't have to keep
-// their own copy.
-func (k *KusoClient) BaseURL() string {
-	return k.baseURL
-}
-
-// BearerToken exposes the JWT for the same reason — websocket
-// connect needs to set the Sec-WebSocket-Protocol header itself.
-func (k *KusoClient) BearerToken() string {
-	return k.bearerToken
-}

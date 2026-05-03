@@ -63,7 +63,7 @@ LABEL maintainer="https://kuso.sislelabs.com"
 LABEL version=$VERSION
 LABEL org.opencontainers.image.source="https://github.com/sislelabs/kuso"
 LABEL org.opencontainers.image.description="kuso control-plane — Go HTTP API + embedded Next.js SPA"
-LABEL org.opencontainers.image.licenses="GPL-3.0"
+LABEL org.opencontainers.image.licenses="AGPL-3.0"
 
 # CA bundle is needed for the GitHub client + any outbound TLS we add
 # later (kube API server hits go through client-go's transport, which
