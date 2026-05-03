@@ -38,7 +38,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: server
-          image: ghcr.io/sislelabs/kuso-server-go:v0.6.19
+          image: ghcr.io/sislelabs/kuso-server-go:v0.6.20
           imagePullPolicy: IfNotPresent
           ports:
             - { containerPort: 3000, name: http }
