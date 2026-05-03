@@ -6,8 +6,6 @@ import { usePathname } from "next/navigation";
 import { useRouteParams } from "@/lib/dynamic-params";
 import {
   LayoutGrid,
-  Activity,
-  Terminal,
   Settings,
   ChevronsLeft,
   ChevronsRight,
@@ -58,8 +56,6 @@ export function Sidebar() {
   const projectNav: NavItem[] = currentProject
     ? [
         { name: "Canvas", href: `/projects/${currentProject}`, icon: LayoutGrid },
-        { name: "Activity", href: `/projects/${currentProject}/activity`, icon: Activity },
-        { name: "Logs", href: `/projects/${currentProject}/logs`, icon: Terminal },
         { name: "Settings", href: `/projects/${currentProject}/settings`, icon: Settings },
       ]
     : [];

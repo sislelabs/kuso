@@ -85,8 +85,7 @@ function parsePathname(pathname: string | null, keys: string[]): Record<string, 
 			seg === "envs" ||
 			seg === "addons" ||
 			seg === "settings" ||
-			seg === "logs" ||
-			seg === "activity"
+			seg === "logs"
 		) {
 			continue;
 		}

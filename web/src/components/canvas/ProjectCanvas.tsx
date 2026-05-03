@@ -22,6 +22,7 @@ import {
   loadStoredLayout,
   saveStoredLayout,
 } from "./layout";
+import { serviceShortName } from "@/lib/utils";
 
 const nodeTypes = {
   service: ServiceNode,
@@ -122,7 +123,10 @@ export function ProjectCanvas({
   const onNodeClick: NodeMouseHandler = (_e, node) => {
     if (node.type === "service" && onSelectService) {
       const data = node.data as ServiceNodeData;
-      onSelectService(data.service.metadata.name);
+      // Pass the SHORT name (without the project prefix) so the URL
+      // hosting the overlay (?service=<short>) matches what the API
+      // expects for /api/projects/:p/services/:s.
+      onSelectService(serviceShortName(data.project, data.service.metadata.name));
     } else if (node.type === "addon" && onSelectAddon) {
       const data = node.data as AddonNodeData;
       onSelectAddon(data.addon.metadata.name);

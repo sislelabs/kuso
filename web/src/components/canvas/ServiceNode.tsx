@@ -1,7 +1,6 @@
 "use client";
 
 import { Handle, Position } from "@xyflow/react";
-import Link from "next/link";
 import { ExternalLink } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import { DeployStatusPill, type DeployStatus } from "@/components/service/DeployStatusPill";
@@ -48,13 +47,13 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
       <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
       <div className="flex items-center justify-between gap-2">
-        <Link
-          href={`/projects/${data.project}/services/${shortName}`}
-          className="flex items-center gap-2 truncate font-medium text-sm hover:underline"
-        >
+        {/* No nested Link/button — the parent canvas's onNodeClick
+            opens the overlay. Wrapping in a Link here would short-
+            circuit React Flow's pointer handler. */}
+        <span className="flex items-center gap-2 truncate font-medium text-sm">
           <RuntimeIcon runtime={data.service.spec.runtime} />
           <span className="truncate">{shortName}</span>
-        </Link>
+        </span>
         <DeployStatusPill status={status} />
       </div>
       <dl className="mt-3 space-y-0.5 font-mono text-[10px]">
