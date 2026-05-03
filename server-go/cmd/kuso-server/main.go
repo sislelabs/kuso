@@ -158,6 +158,11 @@ func main() {
 		projSvc = projects.New(kc, *namespace)
 		secSvc = secrets.New(kc, *namespace)
 		secSvc.NSResolver = nsResolver
+		// Wire the per-env Secret cleanup hook so DeleteEnvironment in
+		// projects can wipe orphan secrets. Set as a func to keep the
+		// projects package free of a hard dep on secrets (and to make
+		// it trivial to no-op in tests).
+		projSvc.SecretsCleanupForEnv = secSvc.DeleteForEnv
 		buildSvc = builds.New(kc, *namespace)
 		buildSvc.NSResolver = nsResolver
 		logsSvc = logs.New(kc, *namespace)
@@ -233,6 +238,10 @@ func main() {
 				disp := ghpkg.NewDispatcher(kc, buildSvc, *namespace, logger).
 					WithGithubCache(ghCli, ghCache)
 				disp.NSResolver = nsResolver
+				// Wire secrets so PR-close cleanup wipes per-env
+				// secrets along with the env CR. Without this, every
+				// closed PR leaks <project>-<service>-pr-N-secrets.
+				disp.Secrets = secSvc
 				ghDeps = &httpsrv.GithubDeps{Cfg: ghCfg, Client: ghCli, Cache: ghCache, Dispatcher: disp}
 				// Hand the github client to the build service so it can
 				// mint a fresh installation token when seeding the

@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -95,6 +96,11 @@ func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name stri
 // DeleteEnvironment removes a preview env. Production envs cannot be
 // deleted directly — service deletion handles those. Mirrors the TS
 // behaviour because preview teardown is the legitimate use case here.
+//
+// We also wipe the per-env Secret (the helm-operator's finalizer tears
+// down the helm release but leaves the underlying Secret CR), so
+// repeated PR open/close cycles don't accumulate orphan
+// <project>-<service>-<env>-secrets in the namespace.
 func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) error {
 	e, err := s.GetEnvironment(ctx, project, env)
 	if err != nil {
@@ -109,6 +115,29 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 	}
 	if err := s.Kube.DeleteKusoEnvironment(ctx, ns, env); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete env: %w", err)
+	}
+	if s.SecretsCleanupForEnv != nil {
+		// Service short name = env CR's spec.service stripped of the
+		// "<project>-" prefix. Env short name = env CR name with the
+		// service FQN prefix removed (e.g. "myproj-web-pr-7" → "pr-7").
+		svcShort := strings.TrimPrefix(e.Spec.Service, project+"-")
+		if svcShort == "" {
+			svcShort = e.Spec.Service
+		}
+		envShort := strings.TrimPrefix(env, e.Spec.Service+"-")
+		if envShort == env {
+			// env CR name didn't carry the service prefix — fall back
+			// to using the raw env name. The secrets sanitiser will
+			// produce a stable name regardless.
+			envShort = env
+		}
+		if err := s.SecretsCleanupForEnv(ctx, project, svcShort, envShort); err != nil {
+			// Log via the kube client's logger if available, otherwise
+			// swallow — the env CR is already gone, so leaving an
+			// orphan Secret is preferable to surfacing a cleanup error
+			// the user can do nothing about.
+			_ = err
+		}
 	}
 	return nil
 }

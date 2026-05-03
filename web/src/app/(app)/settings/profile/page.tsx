@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { useSession, sessionQueryKey } from "@/features/auth";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { sessionQueryKey } from "@/features/auth";
 import {
   changePassword,
+  getMyProfile,
   updateProfile,
   type UpdateProfileBody,
 } from "@/features/profile/api";
@@ -21,7 +22,13 @@ import { Save, KeyRound } from "lucide-react";
 // generic form.
 export default function ProfilePage() {
   const qc = useQueryClient();
-  const { data, refetch } = useSession();
+  // /api/users/profile is the source of truth for editable identity
+  // fields. The session payload only carries username + perms; firstName
+  // / lastName / email aren't on it, and an earlier version of this page
+  // crashed because it tried to read data.user.name (which doesn't exist
+  // on AuthSession) and split it. Fetching the proper UserProfile here
+  // makes the form match what the PUT endpoint round-trips.
+  const profile = useQuery({ queryKey: ["users", "me"], queryFn: getMyProfile });
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
   const [email, setEmail] = useState("");
@@ -33,13 +40,12 @@ export default function ProfilePage() {
   const [savingPw, setSavingPw] = useState(false);
 
   useEffect(() => {
-    if (data?.user) {
-      const parts = data.user.name.split(" ");
-      setFirstName(parts[0] ?? "");
-      setLastName(parts.slice(1).join(" "));
-      setEmail(data.user.email);
+    if (profile.data) {
+      setFirstName(profile.data.firstName ?? "");
+      setLastName(profile.data.lastName ?? "");
+      setEmail(profile.data.email ?? "");
     }
-  }, [data]);
+  }, [profile.data]);
 
   const onSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -47,8 +53,10 @@ export default function ProfilePage() {
     try {
       const body: UpdateProfileBody = { firstName, lastName, email };
       await updateProfile(body);
-      await qc.invalidateQueries({ queryKey: sessionQueryKey });
-      await refetch();
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: sessionQueryKey }),
+        qc.invalidateQueries({ queryKey: ["users", "me"] }),
+      ]);
       toast.success("Profile saved");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to save profile");
@@ -81,21 +89,23 @@ export default function ProfilePage() {
     }
   };
 
-  const user = data?.user;
-  const initial = (user?.name?.[0] ?? user?.email?.[0] ?? "U").toUpperCase();
+  const user = profile.data;
+  const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim();
+  const displayName = fullName || user?.username || "Profile";
+  const initial = (fullName?.[0] ?? user?.username?.[0] ?? user?.email?.[0] ?? "U").toUpperCase();
 
   return (
     <div className="mx-auto max-w-2xl p-6 lg:p-8">
       <header className="mb-6 flex items-center gap-4">
         <Avatar className="h-12 w-12 border border-[var(--border-subtle)]">
-          {user?.image && <AvatarImage src={user.image} alt={user.name ?? ""} />}
+          {user?.image && <AvatarImage src={user.image} alt={displayName} />}
           <AvatarFallback className="bg-[var(--bg-tertiary)] text-base font-medium">
             {initial}
           </AvatarFallback>
         </Avatar>
         <div className="min-w-0">
           <h1 className="font-heading text-xl font-semibold tracking-tight truncate">
-            {user?.name || "Profile"}
+            {displayName}
           </h1>
           <p className="font-mono text-[11px] text-[var(--text-tertiary)] truncate">
             {user?.email ?? ""}

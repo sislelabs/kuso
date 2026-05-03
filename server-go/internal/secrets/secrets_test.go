@@ -276,6 +276,68 @@ func TestSetKey_SharedSkipsPreviewEnvs(t *testing.T) {
 	}
 }
 
+// TestDetachFromAllEnvs_SkipsPreviewEnvs is the symmetric companion to
+// TestSetKey_SharedSkipsPreviewEnvs: detach must skip previews so the
+// attach/detach surface stays consistent. Today's behaviour is harmless
+// (previews never had the shared secret in their EnvFromSecrets), but
+// without the skip a future "all envs get the shared secret" tweak
+// would silently desync.
+func TestDetachFromAllEnvs_SkipsPreviewEnvs(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedEnv("alpha-web-production", "alpha", "web", "production", []string{"alpha-web-secrets"}),
+		// Preview env carries the secret in its list — we want to
+		// confirm detach LEAVES IT alone (because shared secrets are
+		// supposed to never get there in the first place; this is a
+		// defensive symmetry check, not a real-world setup).
+		seedEnv("alpha-web-pr5", "alpha", "web", "preview", []string{"alpha-web-secrets"}),
+	)
+	if _, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Create(context.Background(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-secrets", Namespace: "kuso"},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{"K": []byte("v")},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := s.UnsetKey(context.Background(), "alpha", "web", "", "K"); err != nil {
+		t.Fatalf("UnsetKey: %v", err)
+	}
+	prod, _ := s.findEnv(context.Background(), "alpha", "web", "production")
+	preview, _ := s.findEnv(context.Background(), "alpha", "web", "preview")
+	if len(prod.Spec.EnvFromSecrets) != 0 {
+		t.Errorf("production should be detached: %+v", prod.Spec.EnvFromSecrets)
+	}
+	if len(preview.Spec.EnvFromSecrets) != 1 || preview.Spec.EnvFromSecrets[0] != "alpha-web-secrets" {
+		t.Errorf("preview should NOT be touched: %+v", preview.Spec.EnvFromSecrets)
+	}
+}
+
+func TestDeleteForEnv_RemovesSecret(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t)
+	// Seed a per-env secret directly. DeleteForEnv must delete it
+	// regardless of whether anything is attached — it's the env-delete
+	// path's escape hatch for orphans.
+	name := Name("alpha", "web", "pr-7")
+	if _, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Create(context.Background(), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso"},
+		Type:       corev1.SecretTypeOpaque,
+		Data:       map[string][]byte{"K": []byte("v")},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := s.DeleteForEnv(context.Background(), "alpha", "web", "pr-7"); err != nil {
+		t.Fatalf("DeleteForEnv: %v", err)
+	}
+	if _, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Get(context.Background(), name, metav1.GetOptions{}); err == nil {
+		t.Error("secret should be gone after DeleteForEnv")
+	}
+	// Idempotent — second call is a no-op.
+	if err := s.DeleteForEnv(context.Background(), "alpha", "web", "pr-7"); err != nil {
+		t.Errorf("second DeleteForEnv should not error on missing: %v", err)
+	}
+}
+
 func TestSetKey_PerEnvAttachOnlyThatEnv(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,

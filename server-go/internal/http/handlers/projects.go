@@ -57,6 +57,10 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	// service; preview envs come from the GH PR webhook.
 	r.Post("/api/projects/{project}/services/{service}/envs", h.AddEnvironment)
 	r.Post("/api/projects/{project}/services/{service}/wake", h.Wake)
+	// Pods lookup for a service+env. Used by `kuso shell` to resolve
+	// a target pod for kubectl exec, and by future shell tab in the
+	// web UI. Slim summary — name, ready, container list.
+	r.Get("/api/projects/{project}/services/{service}/pods", h.ListPods)
 
 	r.Get("/api/projects/{project}/envs", h.ListEnvironments)
 	r.Get("/api/projects/{project}/envs/{env}", h.GetEnvironment)
@@ -310,6 +314,18 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 // Wake is POST /api/projects/{project}/services/{service}/wake. It
 // nudges the production env's replica count back up so a sleeping
 // service comes back online on the next reconcile tick.
+func (h *ProjectsHandler) ListPods(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	env := r.URL.Query().Get("env")
+	out, err := h.Svc.ListPods(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env)
+	if err != nil {
+		h.fail(w, "list pods", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 func (h *ProjectsHandler) Wake(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()

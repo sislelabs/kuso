@@ -257,6 +257,20 @@ func (s *Service) deleteSecret(ctx context.Context, ns, name string) error {
 	return nil
 }
 
+// DeleteForEnv removes the per-env secret for (project, service, env).
+// Idempotent: a missing secret returns nil. Used by env-deletion paths
+// (preview env teardown on PR close, custom env delete) so per-env
+// secrets don't accumulate as orphans after their env CR is gone.
+//
+// The shared <project>-<service>-secrets is NOT touched here — it
+// outlives any single env and is owned by the service, not the env.
+func (s *Service) DeleteForEnv(ctx context.Context, project, service, env string) error {
+	if env == "" {
+		return fmt.Errorf("%w: env is required for per-env secret cleanup", ErrInvalid)
+	}
+	return s.deleteSecret(ctx, s.nsFor(ctx, project), Name(project, service, env))
+}
+
 // jsonPointerEscape per RFC 6901: ~ → ~0, / → ~1. Order matters — encode
 // ~ first or you'd encode the escape character itself.
 func jsonPointerEscape(s string) string {
@@ -342,6 +356,13 @@ func (s *Service) attachToAllEnvs(ctx context.Context, project, service, secretN
 	return nil
 }
 
+// detachFromAllEnvs removes a shared secret from every NON-preview env
+// of a service. Symmetric with attachToAllEnvs — both paths skip
+// previews so the attach/detach surface stays consistent. In practice
+// the skip is a no-op today (previews never had the shared secret
+// attached, so the envFromSecrets diff would already be empty), but
+// keeping it explicit means future changes to the attach side can't
+// silently desync from the detach side.
 func (s *Service) detachFromAllEnvs(ctx context.Context, project, service, secretName string) error {
 	envs, err := s.envsForService(ctx, project, service)
 	if err != nil {
@@ -349,6 +370,9 @@ func (s *Service) detachFromAllEnvs(ctx context.Context, project, service, secre
 	}
 	ns := s.nsFor(ctx, project)
 	for _, e := range envs {
+		if e.Spec.Kind == "preview" {
+			continue
+		}
 		next := make([]string, 0, len(e.Spec.EnvFromSecrets))
 		for _, existing := range e.Spec.EnvFromSecrets {
 			if existing != secretName {

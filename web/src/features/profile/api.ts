@@ -1,6 +1,10 @@
 import { api } from "@/lib/api-client";
 import type { UserProfile } from "@/types/api";
 
+export async function getMyProfile(): Promise<UserProfile> {
+  return api("/api/users/profile");
+}
+
 export interface UpdateProfileBody {
   firstName?: string;
   lastName?: string;

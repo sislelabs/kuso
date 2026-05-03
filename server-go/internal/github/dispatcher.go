@@ -13,6 +13,7 @@ import (
 
 	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/secrets"
 )
 
 // Dispatcher routes verified webhook events to their handlers. Wired
@@ -22,8 +23,9 @@ import (
 type Dispatcher struct {
 	Kube       *kube.Client
 	Builds     *builds.Service
-	Client     *Client     // optional, for cache refresh
-	Cache      CacheStore  // optional, for cache writes
+	Secrets    *secrets.Service // optional, for per-env secret cleanup on PR close
+	Client     *Client          // optional, for cache refresh
+	Cache      CacheStore       // optional, for cache writes
 	Namespace  string
 	NSResolver *kube.ProjectNamespaceResolver
 	Logger     *slog.Logger
@@ -340,6 +342,23 @@ func (d *Dispatcher) deletePreviewEnv(ctx context.Context, project, serviceFQN s
 	envName := fmt.Sprintf("%s-pr-%d", serviceFQN, prNumber)
 	if err := d.Kube.DeleteKusoEnvironment(ctx, d.nsFor(ctx, project), envName); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete preview env %s: %w", envName, err)
+	}
+	// Clean up the per-env secret if the user set any vars on the
+	// preview. The helm-operator finalizer tears down the helm release
+	// (pods, deployment, ingress) but not the underlying Secret CR — so
+	// without this, every closed PR leaves an orphan
+	// <project>-<service>-pr-N-secrets behind. Best-effort: a missing
+	// dep or a Kubernetes error here shouldn't block the dispatcher's
+	// success path, since the env CR delete already succeeded.
+	if d.Secrets != nil {
+		short := strings.TrimPrefix(serviceFQN, project+"-")
+		if short == "" {
+			short = serviceFQN
+		}
+		envShort := fmt.Sprintf("pr-%d", prNumber)
+		if err := d.Secrets.DeleteForEnv(ctx, project, short, envShort); err != nil {
+			d.Logger.Warn("preview secret cleanup", "env", envName, "err", err)
+		}
 	}
 	d.Logger.Info("PR preview env deleted", "env", envName, "pr", prNumber)
 	return nil

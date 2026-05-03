@@ -24,9 +24,19 @@ import (
 // Service is the entrypoint Phase 3 handlers depend on. It holds a kube
 // client, the home namespace where every KusoProject CR lives, and a
 // small cache of project → execution-namespace lookups.
+//
+// Secrets is optional and only consulted on env-deletion paths so the
+// per-env Secret CR (kuso-managed env vars for that env) is removed
+// alongside the env. We carry it as a func to avoid an import cycle if
+// secrets ever grows a back-reference into projects.
 type Service struct {
 	Kube      *kube.Client
 	Namespace string
+
+	// SecretsCleanupForEnv removes the per-env secret for
+	// (project, service, env). nil = no-op (preserves single-tenant
+	// servers booting without the secrets package wired).
+	SecretsCleanupForEnv func(ctx context.Context, project, service, env string) error
 
 	nsMu    sync.RWMutex
 	nsCache map[string]nsCacheEntry
