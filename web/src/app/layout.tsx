@@ -26,9 +26,12 @@ export const metadata: Metadata = {
   title: "kuso",
   description: "Self-hosted, agent-native PaaS for indie developers.",
   icons: {
+    // Versioned URL so the browser drops the old (kubero) favicon
+    // from cache. Bump v= when the SVG changes; otherwise tabs
+    // pinned for weeks keep showing the stale icon.
     icon: [
-      { url: "/favicon.svg", type: "image/svg+xml" },
-      { url: "/favicon.ico", sizes: "any" },
+      { url: "/favicon.svg?v=3", type: "image/svg+xml" },
+      { url: "/favicon.ico?v=3", sizes: "any" },
     ],
   },
 };

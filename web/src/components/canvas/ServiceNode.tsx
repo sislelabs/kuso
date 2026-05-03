@@ -1,12 +1,14 @@
 "use client";
 
+import { useState } from "react";
 import { Handle, Position } from "@xyflow/react";
-import { ExternalLink } from "lucide-react";
+import { Check, Copy, ExternalLink } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import { DeployStatusPill, type DeployStatus } from "@/components/service/DeployStatusPill";
 import { SleepBadge } from "@/components/service/SleepBadge";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { cn, serviceShortName } from "@/lib/utils";
+import { toast } from "sonner";
 
 export interface ServiceNodeData extends Record<string, unknown> {
   project: string;
@@ -27,9 +29,23 @@ function statusFor(env?: KusoEnvironment): DeployStatus {
   return "unknown";
 }
 
+interface Replicas {
+  ready: number;
+  desired: number;
+}
+
+function replicasFor(env?: KusoEnvironment): Replicas | null {
+  const r = env?.status?.replicas as
+    | { ready?: number; desired?: number }
+    | undefined;
+  if (!r || (r.desired === undefined && r.ready === undefined)) return null;
+  return { ready: r.ready ?? 0, desired: r.desired ?? 0 };
+}
+
 export function ServiceNode({ data }: { data: ServiceNodeData }) {
   const status = statusFor(data.env);
   const url = data.env?.status?.url as string | undefined;
+  const replicas = replicasFor(data.env);
   const shortName = serviceShortName(data.project, data.service.metadata.name);
 
   return (
@@ -37,7 +53,7 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       data-node-context
       onContextMenu={data.__onContext}
       className={cn(
-        "group w-[260px] rounded-2xl border bg-card p-3 shadow-[var(--shadow-sm)] transition-all",
+        "group w-[280px] rounded-2xl border bg-card p-3 shadow-[var(--shadow-sm)] transition-all",
         "hover:shadow-[var(--shadow-md)]",
         (status === "building" || status === "deploying") &&
           "border-[var(--accent)]/40 animate-pulse",
@@ -50,42 +66,112 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
     >
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
       <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
+
+      {/* Header row: runtime icon + name + status pill */}
       <div className="flex items-center justify-between gap-2">
-        {/* No nested Link/button — the parent canvas's onNodeClick
-            opens the overlay. Wrapping in a Link here would short-
-            circuit React Flow's pointer handler. */}
-        <span className="flex items-center gap-2 truncate font-medium text-sm">
+        <span className="flex min-w-0 items-center gap-2 truncate text-sm font-medium">
           <RuntimeIcon runtime={data.service.spec.runtime} />
           <span className="truncate">{shortName}</span>
         </span>
         <DeployStatusPill status={status} />
       </div>
-      <dl className="mt-3 space-y-0.5 font-mono text-[10px]">
-        {data.service.spec.runtime && (
-          <div className="flex gap-1.5 text-[var(--text-tertiary)]">
-            <dt>runtime</dt>
-            <dd className="text-[var(--text-secondary)]">{data.service.spec.runtime}</dd>
-          </div>
+
+      {/* URL pill */}
+      <div className="mt-2.5">
+        {url ? (
+          <UrlPill url={url} />
+        ) : (
+          <span className="inline-block font-mono text-[10px] text-[var(--text-tertiary)]">
+            no URL yet
+          </span>
         )}
-        {data.service.spec.port !== undefined && (
-          <div className="flex gap-1.5 text-[var(--text-tertiary)]">
-            <dt>port</dt>
-            <dd className="text-[var(--text-secondary)]">{data.service.spec.port}</dd>
-          </div>
-        )}
-        {url && (
-          <div className="flex gap-1.5 text-[var(--text-tertiary)]">
-            <dt>url</dt>
-            <dd className="truncate text-[var(--accent)]">
-              <a href={url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:underline">
-                {url.replace(/^https?:\/\//, "")}
-                <ExternalLink className="h-2.5 w-2.5" />
-              </a>
-            </dd>
-          </div>
-        )}
-      </dl>
-      {status === "sleeping" && <SleepBadge className="mt-2" />}
+      </div>
+
+      {/* Footer: replicas (live/desired) + sleep badge if applicable */}
+      <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2 font-mono text-[10px]">
+        <ReplicasBadge replicas={replicas} status={status} />
+        {status === "sleeping" && <SleepBadge />}
+      </div>
     </div>
+  );
+}
+
+function ReplicasBadge({
+  replicas,
+  status,
+}: {
+  replicas: Replicas | null;
+  status: DeployStatus;
+}) {
+  if (!replicas) {
+    return (
+      <span className="text-[var(--text-tertiary)]">
+        replicas <span className="text-[var(--text-secondary)]">—</span>
+      </span>
+    );
+  }
+  const allUp = replicas.desired > 0 && replicas.ready === replicas.desired;
+  const dotCls = allUp
+    ? "bg-emerald-400"
+    : replicas.ready === 0
+      ? "bg-[var(--text-tertiary)]/40"
+      : "bg-amber-400";
+  return (
+    <span className="inline-flex items-center gap-1.5 text-[var(--text-tertiary)]">
+      <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotCls)} />
+      <span>
+        <span className="text-[var(--text-secondary)]">{replicas.ready}</span>
+        <span className="text-[var(--text-tertiary)]/60">/{replicas.desired}</span>{" "}
+        <span className="text-[var(--text-tertiary)]/80">
+          {status === "sleeping" ? "asleep" : "ready"}
+        </span>
+      </span>
+    </span>
+  );
+}
+
+function UrlPill({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  const display = url.replace(/^https?:\/\//, "");
+
+  const onCopy = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(url);
+      setCopied(true);
+      toast.success("URL copied");
+      window.setTimeout(() => setCopied(false), 1200);
+    } catch {
+      toast.error("Couldn't copy");
+    }
+  };
+
+  return (
+    <span
+      // Stop the click from bubbling up to React Flow's onNodeClick
+      // (which would open the overlay). The user explicitly clicked
+      // the URL pill — they want the URL action, not the panel.
+      onClick={(e) => e.stopPropagation()}
+      className="inline-flex max-w-full items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] pl-2 pr-1 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]"
+    >
+      <a
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+        className="inline-flex min-w-0 items-center gap-1 truncate hover:text-[var(--accent)]"
+      >
+        <span className="truncate">{display}</span>
+        <ExternalLink className="h-2.5 w-2.5 shrink-0" />
+      </a>
+      <button
+        type="button"
+        onClick={onCopy}
+        aria-label="Copy URL"
+        className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-primary)] hover:text-[var(--text-primary)]"
+      >
+        {copied ? <Check className="h-2.5 w-2.5 text-emerald-400" /> : <Copy className="h-2.5 w-2.5" />}
+      </button>
+    </span>
   );
 }

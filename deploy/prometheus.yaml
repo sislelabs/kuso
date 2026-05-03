@@ -1,0 +1,136 @@
+# Lightweight Prometheus for kuso. Scrapes:
+#   - traefik:9100/metrics → request rate, status codes, latency histograms
+#   - kubernetes pods labelled app.kubernetes.io/instance=<env> → app metrics
+#     when the user opts in via prometheus.io/scrape annotations
+#
+# Sized for a 4GB Hetzner box: 256Mi mem request, no remote_write, 7d retention.
+# Storage: emptyDir for now (loses history on pod restart). Move to a PVC
+# once the user has > 1 node / wants persistence across restarts.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kuso-prometheus-config
+  namespace: kuso
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    scrape_configs:
+      # Traefik: the per-router/service request metrics that power
+      # request rate, error rate, and response time on the kuso UI.
+      - job_name: traefik
+        static_configs:
+          - targets:
+              - traefik.traefik.svc.cluster.local:9100
+      # Pods that opt in via prometheus.io/scrape="true" + path/port
+      # annotations. Lets users expose /metrics from their own apps
+      # and have it picked up automatically.
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [kuso]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: pod
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kuso-prometheus
+rules:
+  - apiGroups: [""]
+    resources: [services, endpoints, pods, nodes, nodes/proxy, namespaces]
+    verbs: [get, list, watch]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuso-prometheus
+  namespace: kuso
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kuso-prometheus
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kuso-prometheus
+subjects:
+  - kind: ServiceAccount
+    name: kuso-prometheus
+    namespace: kuso
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kuso-prometheus
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-prometheus
+spec:
+  replicas: 1
+  strategy: { type: Recreate }   # emptyDir storage; rolling would hold two pods on the volume
+  selector:
+    matchLabels: { app.kubernetes.io/name: kuso-prometheus }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: kuso-prometheus }
+    spec:
+      serviceAccountName: kuso-prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.55.1
+          args:
+            - --config.file=/etc/prometheus/prometheus.yml
+            - --storage.tsdb.path=/prometheus
+            - --storage.tsdb.retention.time=7d
+            - --web.listen-address=:9090
+            - --web.enable-lifecycle  # POST /-/reload to hot-reload config
+          ports:
+            - { containerPort: 9090, name: http }
+          resources:
+            requests: { cpu: 50m, memory: 256Mi }
+            limits:   { cpu: 500m, memory: 512Mi }
+          volumeMounts:
+            - { name: config, mountPath: /etc/prometheus }
+            - { name: data,   mountPath: /prometheus }
+          readinessProbe:
+            httpGet: { path: /-/ready, port: 9090 }
+            initialDelaySeconds: 10
+      volumes:
+        - name: config
+          configMap: { name: kuso-prometheus-config }
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kuso-prometheus
+  namespace: kuso
+spec:
+  selector: { app.kubernetes.io/name: kuso-prometheus }
+  ports:
+    - { name: http, port: 9090, targetPort: 9090 }

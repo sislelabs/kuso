@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Cpu, MemoryStick, Activity, AlertTriangle, Timer } from "lucide-react";
 import { useService } from "@/features/services";
@@ -22,20 +22,25 @@ interface PodMetric {
   cpuMillicores: number;
   memBytes: number;
 }
-
 interface EnvMetricsResponse {
   env: string;
   window?: string;
   pods: PodMetric[];
 }
+interface TimeseriesResponse {
+  env: string;
+  range: string;
+  step: string;
+  series: {
+    requests?: [number, number][];
+    errors?: [number, number][];
+    p95ms?: [number, number][];
+  };
+}
 
 export function ServiceMetricsPanel({ project, service }: Props) {
   const [range, setRange] = useState<Range>("1h");
-  void range;
 
-  // Resolve the production env CR name for this service so we can hit
-  // the /api/kubernetes/envs/{env}/metrics endpoint. The env name
-  // pattern is <project>-<service>-production.
   const svc = useService(project, service);
   const envs = useEnvironments(project);
   void svc;
@@ -45,7 +50,7 @@ export function ServiceMetricsPanel({ project, service }: Props) {
   );
   const envName = prodEnv?.metadata.name ?? "";
 
-  const metrics = useQuery({
+  const podMetrics = useQuery({
     queryKey: ["kubernetes", "envs", envName, "metrics"],
     queryFn: () => api<EnvMetricsResponse>(`/api/kubernetes/envs/${encodeURIComponent(envName)}/metrics`),
     enabled: !!envName,
@@ -53,16 +58,25 @@ export function ServiceMetricsPanel({ project, service }: Props) {
     staleTime: 10_000,
   });
 
-  const totalCpu = (metrics.data?.pods ?? []).reduce((acc, p) => acc + p.cpuMillicores, 0);
-  const totalMem = (metrics.data?.pods ?? []).reduce((acc, p) => acc + p.memBytes, 0);
-  const podCount = (metrics.data?.pods ?? []).length;
+  const traffic = useQuery({
+    queryKey: ["kubernetes", "envs", envName, "timeseries", range],
+    queryFn: () =>
+      api<TimeseriesResponse>(
+        `/api/kubernetes/envs/${encodeURIComponent(envName)}/timeseries?range=${range}`
+      ),
+    enabled: !!envName,
+    refetchInterval: 30_000,
+    staleTime: 20_000,
+  });
+
+  const totalCpu = (podMetrics.data?.pods ?? []).reduce((acc, p) => acc + p.cpuMillicores, 0);
+  const totalMem = (podMetrics.data?.pods ?? []).reduce((acc, p) => acc + p.memBytes, 0);
+  const podCount = (podMetrics.data?.pods ?? []).length;
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h3 className="font-heading text-sm font-semibold tracking-tight">
-          Traffic & runtime
-        </h3>
+        <h3 className="font-heading text-sm font-semibold tracking-tight">Traffic & runtime</h3>
         <div className="inline-flex rounded-md border border-[var(--border-subtle)] p-0.5 text-xs">
           {RANGES.map((r) => (
             <button
@@ -83,7 +97,6 @@ export function ServiceMetricsPanel({ project, service }: Props) {
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2">
-        {/* CPU + memory: live from metrics-server. */}
         <ResourceCard
           title="CPU"
           icon={Cpu}
@@ -93,7 +106,7 @@ export function ServiceMetricsPanel({ project, service }: Props) {
               ? `across ${podCount} pod${podCount === 1 ? "" : "s"}`
               : "no pods running"
           }
-          rows={(metrics.data?.pods ?? []).map((p) => ({
+          rows={(podMetrics.data?.pods ?? []).map((p) => ({
             label: p.pod,
             value: formatCPU(p.cpuMillicores),
           }))}
@@ -107,41 +120,41 @@ export function ServiceMetricsPanel({ project, service }: Props) {
               ? `across ${podCount} pod${podCount === 1 ? "" : "s"}`
               : "no pods running"
           }
-          rows={(metrics.data?.pods ?? []).map((p) => ({
+          rows={(podMetrics.data?.pods ?? []).map((p) => ({
             label: p.pod,
             value: formatBytes(p.memBytes),
           }))}
         />
 
-        {/* Traffic metrics: not wired yet. Honest copy + a 'soon' tag
-            instead of pretending the data is missing because of
-            inactivity. Lands when we plug in a prometheus or
-            traefik-metrics source. */}
-        <PendingCard
-          icon={Activity}
+        <SeriesCard
           title="Requests"
-          note="Wire a prometheus or traefik-metrics source to populate."
+          icon={Activity}
+          unit="req/s"
+          points={traffic.data?.series.requests ?? []}
+          loading={traffic.isPending}
         />
-        <PendingCard
-          icon={AlertTriangle}
+        <SeriesCard
           title="Error rate"
-          note="Lands alongside Requests."
+          icon={AlertTriangle}
+          unit="%"
+          format={(v) => (v * 100).toFixed(2)}
+          points={traffic.data?.series.errors ?? []}
+          loading={traffic.isPending}
+          danger
         />
-        <PendingCard
+        <SeriesCard
+          title="Response time (p95)"
           icon={Timer}
-          title="Response time"
-          note="Lands alongside Requests."
+          unit="ms"
+          format={(v) => v.toFixed(0)}
+          points={traffic.data?.series.p95ms ?? []}
+          loading={traffic.isPending}
         />
       </div>
 
       {!envName && (
         <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
           No production environment yet — push to the connected branch or hit Redeploy.
-        </p>
-      )}
-      {metrics.isError && (
-        <p className="font-mono text-[10px] text-amber-400">
-          metrics-server returned an error: {metrics.error?.message}
         </p>
       )}
     </div>
@@ -168,9 +181,7 @@ function ResourceCard({
           <Icon className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
           {title}
         </h4>
-        <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          live
-        </span>
+        <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">live</span>
       </header>
       <div className="mt-3">
         <div className="font-mono text-2xl font-semibold tracking-tight">{primary}</div>
@@ -192,29 +203,91 @@ function ResourceCard({
   );
 }
 
-function PendingCard({
-  icon: Icon,
+// SeriesCard renders a tiny inline sparkline + the latest value.
+// Skips axes/grid so it stays readable at the small overlay width.
+function SeriesCard({
   title,
-  note,
+  icon: Icon,
+  unit,
+  points,
+  loading,
+  format,
+  danger,
 }: {
-  icon: React.ComponentType<{ className?: string }>;
   title: string;
-  note: string;
+  icon: React.ComponentType<{ className?: string }>;
+  unit: string;
+  points: [number, number][];
+  loading?: boolean;
+  format?: (v: number) => string;
+  danger?: boolean;
 }) {
+  const latest = points.length > 0 ? points[points.length - 1][1] : null;
+  const display = latest !== null ? (format ? format(latest) : latest.toFixed(2)) : "—";
+
+  const path = useMemo(() => buildSparklinePath(points), [points]);
+
   return (
-    <div className="rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
+    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
       <header className="flex items-center justify-between">
-        <h4 className="flex items-center gap-1.5 text-sm font-medium text-[var(--text-secondary)]">
+        <h4 className="flex items-center gap-1.5 text-sm font-medium">
           <Icon className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
           {title}
         </h4>
         <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          soon
+          {loading ? "loading" : "live"}
         </span>
       </header>
-      <p className="mt-3 text-[11px] text-[var(--text-tertiary)]">{note}</p>
+      <div className="mt-3 flex items-end justify-between gap-3">
+        <div>
+          <div className="font-mono text-2xl font-semibold tracking-tight">
+            {display}
+            {latest !== null && (
+              <span className="ml-1 font-mono text-[11px] text-[var(--text-tertiary)]">{unit}</span>
+            )}
+          </div>
+          <div className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
+            {points.length > 0 ? `${points.length} points` : "no data yet"}
+          </div>
+        </div>
+        {points.length > 1 && (
+          <svg
+            viewBox="0 0 100 30"
+            preserveAspectRatio="none"
+            className="h-10 w-32"
+            aria-hidden
+          >
+            <path
+              d={path}
+              fill="none"
+              stroke={danger ? "rgb(248,113,113)" : "var(--accent)"}
+              strokeWidth="1.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              vectorEffect="non-scaling-stroke"
+            />
+          </svg>
+        )}
+      </div>
     </div>
   );
+}
+
+function buildSparklinePath(points: [number, number][]): string {
+  if (points.length < 2) return "";
+  const ys = points.map((p) => p[1]);
+  const min = Math.min(...ys);
+  const max = Math.max(...ys);
+  const span = max - min || 1;
+  const w = 100;
+  const h = 30;
+  return points
+    .map(([_, v], i) => {
+      const x = (i / (points.length - 1)) * w;
+      const y = h - ((v - min) / span) * h;
+      return `${i === 0 ? "M" : "L"}${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
 }
 
 function formatCPU(millicores: number): string {

@@ -258,12 +258,15 @@ function NetworkingSection({ project, service, svc }: Props) {
 }
 
 function ScaleSection({ project, service, svc }: Props) {
+  // Sleep is derived: min === 0 means "scale to zero when idle".
+  // We collapsed the previous separate Sleep section because users
+  // kept asking what the difference was — there isn't one. The
+  // server still writes both spec.scale.min=0 AND spec.sleep.enabled=true
+  // for backwards compat with the operator chart that reads sleep.
   const initial = {
     min: svc?.spec.scale?.min ?? 1,
     max: svc?.spec.scale?.max ?? 5,
     targetCPU: svc?.spec.scale?.targetCPU ?? 70,
-    sleepEnabled: svc?.spec.sleep?.enabled ?? false,
-    sleepAfter: svc?.spec.sleep?.afterMinutes ?? 30,
   };
   const [s, setS] = useState(initial);
   const patch = usePatchService(project, service);
@@ -273,27 +276,28 @@ function ScaleSection({ project, service, svc }: Props) {
       min: svc?.spec.scale?.min ?? 1,
       max: svc?.spec.scale?.max ?? 5,
       targetCPU: svc?.spec.scale?.targetCPU ?? 70,
-      sleepEnabled: svc?.spec.sleep?.enabled ?? false,
-      sleepAfter: svc?.spec.sleep?.afterMinutes ?? 30,
     });
   }, [svc]);
 
   const dirty =
     s.min !== initial.min ||
     s.max !== initial.max ||
-    s.targetCPU !== initial.targetCPU ||
-    s.sleepEnabled !== initial.sleepEnabled ||
-    s.sleepAfter !== initial.sleepAfter;
+    s.targetCPU !== initial.targetCPU;
+
+  const sleepsWhenIdle = s.min === 0;
 
   const onSave = async () => {
-    if (s.min < 0 || s.max < s.min) {
-      toast.error("max must be ≥ min, both ≥ 0");
+    if (s.min < 0 || s.max < Math.max(s.min, 1)) {
+      toast.error("max must be ≥ max(min, 1) and min ≥ 0");
       return;
     }
     try {
       await patch.mutateAsync({
         scale: { min: s.min, max: s.max, targetCPU: s.targetCPU },
-        sleep: { enabled: s.sleepEnabled, afterMinutes: s.sleepAfter },
+        // Mirror min=0 onto the sleep flag so the operator chart
+        // that gates idle-scale-down on sleep.enabled keeps
+        // working.
+        sleep: { enabled: s.min === 0, afterMinutes: 5 },
       });
       toast.success("Scale saved");
     } catch (e) {
@@ -304,59 +308,59 @@ function ScaleSection({ project, service, svc }: Props) {
   return (
     <Section id="scale" title="Scale" icon={Layers3}>
       <div className="space-y-3">
-        <FieldRow label="replicas">
-          <div className="flex items-center gap-2">
-            <Input
-              type="number"
-              value={s.min}
-              onChange={(e) => setS((p) => ({ ...p, min: Number(e.target.value) }))}
-              className="h-8 w-20 font-mono text-[12px]"
-              min={0}
-            />
-            <span className="font-mono text-xs text-[var(--text-tertiary)]">→</span>
-            <Input
-              type="number"
-              value={s.max}
-              onChange={(e) => setS((p) => ({ ...p, max: Number(e.target.value) }))}
-              className="h-8 w-20 font-mono text-[12px]"
-              min={1}
-            />
-          </div>
-        </FieldRow>
-        <FieldRow label="cpu target" hint="autoscale threshold %">
+        <FieldRow label="min replicas" hint="0 = sleep when idle">
           <Input
             type="number"
-            value={s.targetCPU}
-            onChange={(e) => setS((p) => ({ ...p, targetCPU: Number(e.target.value) }))}
+            value={s.min}
+            onChange={(e) => setS((p) => ({ ...p, min: Number(e.target.value) }))}
             className="h-8 w-24 font-mono text-[12px]"
-            min={1}
-            max={100}
+            min={0}
           />
         </FieldRow>
-        <FieldRow label="sleep" hint="scale to zero when idle">
-          <label className="inline-flex items-center gap-2 text-[12px] text-[var(--text-secondary)]">
-            <input
-              type="checkbox"
-              checked={s.sleepEnabled}
-              onChange={(e) => setS((p) => ({ ...p, sleepEnabled: e.target.checked }))}
-              className="h-3.5 w-3.5"
-            />
-            Enabled
-          </label>
-          {s.sleepEnabled && (
-            <div className="mt-2 flex items-center gap-2">
-              <span className="font-mono text-[10px] text-[var(--text-tertiary)]">after</span>
-              <Input
-                type="number"
-                value={s.sleepAfter}
-                onChange={(e) => setS((p) => ({ ...p, sleepAfter: Number(e.target.value) }))}
-                className="h-8 w-20 font-mono text-[12px]"
-                min={1}
-              />
-              <span className="font-mono text-[10px] text-[var(--text-tertiary)]">min idle</span>
-            </div>
-          )}
+        <FieldRow label="max replicas" hint="ceiling for autoscale">
+          <Input
+            type="number"
+            value={s.max}
+            onChange={(e) => setS((p) => ({ ...p, max: Number(e.target.value) }))}
+            className="h-8 w-24 font-mono text-[12px]"
+            min={1}
+          />
         </FieldRow>
+        <FieldRow label="cpu threshold" hint="add a replica past this %">
+          <div className="flex items-center gap-1.5">
+            <Input
+              type="number"
+              value={s.targetCPU}
+              onChange={(e) => setS((p) => ({ ...p, targetCPU: Number(e.target.value) }))}
+              className="h-8 w-20 font-mono text-[12px]"
+              min={1}
+              max={100}
+            />
+            <span className="font-mono text-[11px] text-[var(--text-tertiary)]">%</span>
+          </div>
+        </FieldRow>
+        <p
+          className={cn(
+            "rounded-md px-2 py-1.5 font-mono text-[10px]",
+            sleepsWhenIdle
+              ? "bg-amber-500/10 text-amber-400"
+              : "bg-[var(--bg-tertiary)]/40 text-[var(--text-tertiary)]"
+          )}
+        >
+          {sleepsWhenIdle ? (
+            <>
+              <span className="font-semibold">Sleeps when idle.</span> Pods scale to zero after a
+              few minutes with no traffic; first request after wakes a fresh pod (~3s cold
+              start).
+            </>
+          ) : (
+            <>
+              Always-on: at least <span className="text-[var(--text-secondary)]">{s.min}</span>{" "}
+              {s.min === 1 ? "pod" : "pods"} kept warm. Set min to{" "}
+              <span className="text-[var(--text-secondary)]">0</span> to enable sleep.
+            </>
+          )}
+        </p>
       </div>
       <SaveBar
         dirty={dirty}

@@ -262,6 +262,7 @@ func (s *Service) listEnvsForProject(ctx context.Context, project string) ([]kub
 			return nil, err
 		}
 		populateDerivedStatus(&e)
+		s.populateLiveStatus(ctx, ns, &e)
 		out = append(out, e)
 	}
 	return out, nil
@@ -283,5 +284,54 @@ func populateDerivedStatus(e *kube.KusoEnvironment) {
 			scheme = "http"
 		}
 		e.Status["url"] = scheme + "://" + e.Spec.Host
+	}
+}
+
+// populateLiveStatus reads the Deployment that backs the env and
+// writes runtime fields (replicas ready/desired, phase, ready) onto
+// env.status. The env CR itself doesn't carry a status writer yet,
+// so without this the canvas card just shows UNKNOWN forever even
+// when pods are clearly running. Best-effort: any kube error → leave
+// the existing status alone.
+func (s *Service) populateLiveStatus(ctx context.Context, ns string, e *kube.KusoEnvironment) {
+	if e.Status == nil {
+		e.Status = map[string]any{}
+	}
+	// Tests use a fake Service with only a Dynamic client; without
+	// this guard every Describe-style test panics on the typed
+	// Clientset call. Real runtime always has both wired.
+	if s.Kube == nil || s.Kube.Clientset == nil {
+		return
+	}
+	dep, err := s.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, e.Name, metav1.GetOptions{})
+	if err != nil {
+		return
+	}
+	desired := int32(0)
+	if dep.Spec.Replicas != nil {
+		desired = *dep.Spec.Replicas
+	}
+	ready := dep.Status.ReadyReplicas
+	e.Status["replicas"] = map[string]any{
+		"ready":     ready,
+		"desired":   desired,
+		"available": dep.Status.AvailableReplicas,
+		"updated":   dep.Status.UpdatedReplicas,
+	}
+	// Phase: ready when all desired replicas are ready; otherwise
+	// deploying when an update is in flight; otherwise unknown.
+	if _, set := e.Status["phase"]; !set {
+		switch {
+		case desired > 0 && ready == desired:
+			e.Status["phase"] = "active"
+			e.Status["ready"] = true
+		case dep.Status.UpdatedReplicas < desired:
+			e.Status["phase"] = "deploying"
+		case ready == 0 && desired > 0:
+			e.Status["phase"] = "deploying"
+		default:
+			e.Status["phase"] = "active"
+			e.Status["ready"] = true
+		}
 	}
 }

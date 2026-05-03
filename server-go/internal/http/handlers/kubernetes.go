@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +21,11 @@ import (
 
 	"kuso/server/internal/kube"
 )
+
+// promHTTPClient is a small client we reuse for PromQL proxying. The
+// in-cluster prometheus is on the same network — short timeout is
+// fine and keeps misbehaving prom from wedging the kuso server.
+var promHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 // KubernetesHandler exposes /api/kubernetes/* — events, storage classes,
 // and the domains the cluster already advertises via Ingress.
@@ -46,6 +53,11 @@ func (h *KubernetesHandler) Mount(rt interface {
 	// Per-env CPU + mem snapshot. Reads from the metrics.k8s.io
 	// metrics-server API. Returns one entry per pod in the env.
 	rt.Get("/api/kubernetes/envs/{env}/metrics", h.EnvMetrics)
+	// Per-env traffic timeseries (requests/sec, error rate, p95
+	// response time). Reads from the in-cluster prometheus deployed
+	// via deploy/prometheus.yaml. The host can reach kuso-prometheus
+	// at the cluster-local DNS name.
+	rt.Get("/api/kubernetes/envs/{env}/timeseries", h.EnvTimeseries)
 }
 
 // envMetricsResponse is the JSON wire shape: a list of per-pod
@@ -153,6 +165,174 @@ func parseCPU(s string) int64 {
 		return int64(f * 1000)
 	}
 	return 0
+}
+
+// promBaseURL is the in-cluster Prometheus endpoint. Override via
+// KUSO_PROMETHEUS_URL when running outside the cluster (tests, dev).
+const promBaseURL = "http://kuso-prometheus.kuso.svc.cluster.local:9090"
+
+// timeseriesResponse mirrors the PromQL `query_range` shape, simplified
+// for the kuso UI: one series per metric, points are [unixSeconds, value].
+type timeseriesResponse struct {
+	Env    string                  `json:"env"`
+	Range  string                  `json:"range"`
+	Step   string                  `json:"step"`
+	Series map[string][][2]float64 `json:"series"` // metric name → [t, v] points
+}
+
+// EnvTimeseries returns request rate / error rate / p95 latency for
+// the env over a given range (e.g. range=1h, step=30s). Backed by
+// PromQL queries against the in-cluster prometheus.
+func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request) {
+	envName := chi.URLParam(r, "env")
+	if envName == "" {
+		http.Error(w, "missing env", http.StatusBadRequest)
+		return
+	}
+	rangeStr := r.URL.Query().Get("range")
+	if rangeStr == "" {
+		rangeStr = "1h"
+	}
+	stepStr := r.URL.Query().Get("step")
+	if stepStr == "" {
+		stepStr = pickStep(rangeStr)
+	}
+	dur, err := time.ParseDuration(rangeStr)
+	if err != nil || dur <= 0 || dur > 30*24*time.Hour {
+		http.Error(w, "bad range", http.StatusBadRequest)
+		return
+	}
+	end := time.Now().UTC()
+	start := end.Add(-dur)
+
+	// Service-name selector for traefik. Traefik labels its metrics
+	// with `service` = "<env>@kubernetescrd" by default. The env CR
+	// name is what becomes the k8s Service that the Ingress points to.
+	svcLabel := envName + "-app@kubernetescrd"
+
+	queries := map[string]string{
+		// requests/s — sum across all status codes & methods
+		"requests": fmt.Sprintf(
+			`sum(rate(traefik_service_requests_total{service=~"%s.*"}[1m]))`, escapePromLabel(svcLabel)),
+		// 5xx error rate as a fraction of all requests
+		"errors": fmt.Sprintf(
+			`(sum(rate(traefik_service_requests_total{service=~"%s.*",code=~"5.."}[1m])) or vector(0)) `+
+				`/ clamp_min(sum(rate(traefik_service_requests_total{service=~"%s.*"}[1m])), 1)`,
+			escapePromLabel(svcLabel), escapePromLabel(svcLabel)),
+		// p95 latency in ms
+		"p95ms": fmt.Sprintf(
+			`1000 * histogram_quantile(0.95, sum by (le) (rate(traefik_service_request_duration_seconds_bucket{service=~"%s.*"}[5m])))`,
+			escapePromLabel(svcLabel)),
+	}
+
+	out := timeseriesResponse{
+		Env:    envName,
+		Range:  rangeStr,
+		Step:   stepStr,
+		Series: map[string][][2]float64{},
+	}
+
+	ctx, cancel := kubeCtx(r)
+	defer cancel()
+
+	for name, q := range queries {
+		points, perr := promQueryRange(ctx, q, start, end, stepStr)
+		if perr != nil {
+			// Don't fail the whole response — return what we have and
+			// let the panel fall back to an empty series. Common case
+			// is "no data yet" which the UI renders as a flat line.
+			out.Series[name] = [][2]float64{}
+			continue
+		}
+		out.Series[name] = points
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// pickStep chooses a reasonable scrape step for the range so the
+// resulting series has roughly 60–240 points. Saves the client from
+// having to compute this and keeps PromQL responses small.
+func pickStep(rangeStr string) string {
+	d, err := time.ParseDuration(rangeStr)
+	if err != nil {
+		return "30s"
+	}
+	switch {
+	case d <= 1*time.Hour:
+		return "30s"
+	case d <= 6*time.Hour:
+		return "2m"
+	case d <= 24*time.Hour:
+		return "10m"
+	case d <= 7*24*time.Hour:
+		return "1h"
+	default:
+		return "6h"
+	}
+}
+
+// escapePromLabel escapes characters that have meaning inside a PromQL
+// label-matcher value. We only need to handle backslashes and double
+// quotes since the matcher is wrapped in `"..."`.
+func escapePromLabel(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	return s
+}
+
+// promQueryRange executes a PromQL `query_range` and returns the
+// first series' points as [unixSeconds, value] tuples. Multiple
+// series get summed by the query (we always sum() before returning).
+func promQueryRange(ctx context.Context, query string, start, end time.Time, step string) ([][2]float64, error) {
+	base := promBaseURL
+	if v := os.Getenv("KUSO_PROMETHEUS_URL"); v != "" {
+		base = v
+	}
+	q := url.Values{}
+	q.Set("query", query)
+	q.Set("start", strconv.FormatInt(start.Unix(), 10))
+	q.Set("end", strconv.FormatInt(end.Unix(), 10))
+	q.Set("step", step)
+	u := base + "/api/v1/query_range?" + q.Encode()
+	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := promHTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("prometheus: status %d", resp.StatusCode)
+	}
+	var body struct {
+		Status string `json:"status"`
+		Data   struct {
+			ResultType string `json:"resultType"`
+			Result     []struct {
+				Values [][]any `json:"values"`
+			} `json:"result"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return nil, err
+	}
+	if body.Status != "success" || len(body.Data.Result) == 0 {
+		return [][2]float64{}, nil
+	}
+	raw := body.Data.Result[0].Values
+	out := make([][2]float64, 0, len(raw))
+	for _, p := range raw {
+		if len(p) != 2 {
+			continue
+		}
+		t, _ := p[0].(float64)
+		vstr, _ := p[1].(string)
+		v, _ := strconv.ParseFloat(vstr, 64)
+		out = append(out, [2]float64{t, v})
+	}
+	return out, nil
 }
 
 // parseQuantity returns bytes from a kube quantity string. Handles
