@@ -42,10 +42,16 @@ function toRow(v: KusoEnvVar, project: string): Row {
 
 function toEnvVar(r: Row): KusoEnvVar {
   if (r.fromSecret) {
-    return { name: r.name };
+    return { name: r.name.trim() };
   }
-  return { name: r.name, value: r.value };
+  return { name: r.name.trim(), value: r.value };
 }
+
+// Valid POSIX-ish env-var name: starts with a letter or underscore,
+// rest letter/digit/underscore. Required because k8s accepts the
+// CR but the kubelet drops invalid names from the pod env silently
+// — the user types "FOO BAR" and gets nothing on the pod.
+const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 
 // literalToRef reverses the server-side service-ref resolution. When
 // a value matches the cluster-local DNS shape we recognise, render it
@@ -191,7 +197,33 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
   };
 
   const save = async () => {
-    const cleaned = rows.filter((r) => r.name.trim().length > 0).map(toEnvVar);
+    // Trim + validate before submit. Three rules:
+    //   1. Drop rows whose name is empty after trim.
+    //   2. Drop rows that have neither a value nor a fromSecret
+    //      backing — they'd round-trip as ghost entries that the
+    //      pod ignores but the editor keeps re-displaying.
+    //   3. Reject invalid env-var names (POSIX rule) and duplicate
+    //      names with explicit toasts so the user knows what got
+    //      caught.
+    const seen = new Set<string>();
+    const cleaned: KusoEnvVar[] = [];
+    for (const r of rows) {
+      const name = r.name.trim();
+      if (!name) continue;
+      if (!ENV_NAME_RE.test(name)) {
+        toast.error(`Invalid env var name "${name}" — letters, digits, underscore only`);
+        return;
+      }
+      if (seen.has(name)) {
+        toast.error(`Duplicate env var name "${name}"`);
+        return;
+      }
+      seen.add(name);
+      // Drop empty literal rows. Secret-backed rows are kept since
+      // they have a valueFrom regardless of value.
+      if (!r.fromSecret && r.value === "") continue;
+      cleaned.push(toEnvVar(r));
+    }
     try {
       await setEnv.mutateAsync(cleaned);
       toast.success("Env vars saved");

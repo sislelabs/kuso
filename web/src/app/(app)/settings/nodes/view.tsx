@@ -267,6 +267,8 @@ function NodeCard({
         </div>
       </header>
 
+      <NodeStats node={node} />
+
       {/* The chip strip is the entire label UI now. No header label,
           no separate "Labels" section — the chips ARE the labels.
           Adding/removing happens here too. */}
@@ -498,4 +500,113 @@ function DraftEditor({
       )}
     </span>
   );
+}
+
+// NodeStats renders the live capacity + usage row. cpu in milli-cores
+// (1000 = 1 core), memory + disk in bytes. metrics-server is optional
+// — when usage is unavailable we show "—" rather than 0% which would
+// be misleading.
+function NodeStats({ node }: { node: NodeSummary }) {
+  const hasUsage = (node.cpuUsageMilli ?? 0) > 0 || (node.memUsageBytes ?? 0) > 0;
+  return (
+    <div className="mt-3 grid grid-cols-3 gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 text-[10px]">
+      <Stat
+        label="CPU"
+        value={
+          hasUsage
+            ? `${formatCPU(node.cpuUsageMilli ?? 0)} / ${formatCPU(node.cpuCapacityMilli ?? 0)}`
+            : `cap ${formatCPU(node.cpuCapacityMilli ?? 0)}`
+        }
+        pct={
+          hasUsage && node.cpuCapacityMilli
+            ? Math.min(100, Math.round(((node.cpuUsageMilli ?? 0) / node.cpuCapacityMilli) * 100))
+            : null
+        }
+      />
+      <Stat
+        label="RAM"
+        value={
+          hasUsage
+            ? `${formatBytes(node.memUsageBytes ?? 0)} / ${formatBytes(node.memCapacityBytes ?? 0)}`
+            : `cap ${formatBytes(node.memCapacityBytes ?? 0)}`
+        }
+        pct={
+          hasUsage && node.memCapacityBytes
+            ? Math.min(100, Math.round(((node.memUsageBytes ?? 0) / node.memCapacityBytes) * 100))
+            : null
+        }
+      />
+      <Stat
+        label="Disk"
+        value={
+          node.diskCapacityBytes
+            ? `${formatBytes((node.diskCapacityBytes ?? 0) - (node.diskAvailableBytes ?? 0))} / ${formatBytes(node.diskCapacityBytes ?? 0)}`
+            : "—"
+        }
+        pct={
+          node.diskCapacityBytes && node.diskAvailableBytes !== undefined
+            ? Math.min(
+                100,
+                Math.round(
+                  ((node.diskCapacityBytes - node.diskAvailableBytes) / node.diskCapacityBytes) * 100
+                )
+              )
+            : null
+        }
+      />
+      {node.podsCapacity ? (
+        <p className="col-span-3 mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+          {node.pods ?? 0} / {node.podsCapacity} pods scheduled
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function Stat({ label, value, pct }: { label: string; value: string; pct: number | null }) {
+  // Color the bar by pressure level — green <60%, amber 60-85, red >85.
+  const bar =
+    pct === null
+      ? "bg-[var(--bg-tertiary)]"
+      : pct < 60
+        ? "bg-emerald-500"
+        : pct < 85
+          ? "bg-amber-500"
+          : "bg-red-500";
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between font-mono text-[var(--text-tertiary)]">
+        <span>{label}</span>
+        {pct !== null && <span className="text-[var(--text-secondary)]">{pct}%</span>}
+      </div>
+      <div className="h-1 w-full overflow-hidden rounded bg-[var(--bg-tertiary)]">
+        <div
+          className={cn("h-full transition-all", bar)}
+          style={{ width: pct === null ? "0%" : `${pct}%` }}
+        />
+      </div>
+      <div className="font-mono text-[var(--text-secondary)]">{value}</div>
+    </div>
+  );
+}
+
+// formatCPU turns milli-CPU into a human string. 1000m → "1.0",
+// 250m → "250m", 1500m → "1.5".
+function formatCPU(milli: number): string {
+  if (milli === 0) return "0";
+  if (milli < 1000) return `${milli}m`;
+  const cores = milli / 1000;
+  return cores >= 10 ? `${Math.round(cores)}` : cores.toFixed(1);
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return "0";
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  let i = 0;
+  let v = bytes;
+  while (v >= 1024 && i < units.length - 1) {
+    v /= 1024;
+    i++;
+  }
+  return v >= 100 || i === 0 ? `${Math.round(v)}${units[i]}` : `${v.toFixed(1)}${units[i]}`;
 }

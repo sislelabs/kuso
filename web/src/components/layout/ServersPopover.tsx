@@ -19,6 +19,17 @@ export interface NodeSummary {
   kusoLabels: Record<string, string>;
   schedulable: boolean;
   createdAt?: string;
+  // Live capacity + usage. cpu in milli-cores, memory + disk in
+  // bytes. Usage fields are 0 when metrics-server isn't installed —
+  // the UI falls back to "—" in that case.
+  cpuCapacityMilli?: number;
+  cpuUsageMilli?: number;
+  memCapacityBytes?: number;
+  memUsageBytes?: number;
+  diskCapacityBytes?: number;
+  diskAvailableBytes?: number;
+  pods?: number;
+  podsCapacity?: number;
 }
 
 // ServersPopover renders a compact "<n> nodes" pill in the top nav.

@@ -232,6 +232,13 @@ var envNameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$`)
 // without busting kube's 253-char limit.
 var serviceNameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$`)
 
+// envNameRE_pod is the POSIX env-var name rule the kubelet actually
+// enforces when it materializes pod env. Names that don't match are
+// silently dropped from the pod, so we refuse them up-front.
+var envNameRE_pod = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func envNameValid(name string) bool { return envNameRE_pod.MatchString(name) }
+
 // CreateEnvRequest is the body of POST /api/projects/{p}/services/{s}/envs.
 // Used to add a custom environment (e.g. "staging" tracking a branch
 // other than the default). Production envs are auto-created with the
@@ -535,6 +542,42 @@ func (s *Service) GetEnv(ctx context.Context, project, service string) ([]EnvVar
 // the addon's <addon>-conn secret. Composite references are rejected
 // with ErrCompositeVarRef so the caller can return 400.
 func (s *Service) SetEnv(ctx context.Context, project, service string, envVars []EnvVar) error {
+	// Validate + normalize before any kube round-trip. Trims names
+	// (a leading non-breaking space slipped in once and was
+	// effectively unfixable from the editor), enforces POSIX env
+	// names, and rejects duplicates. The frontend now does this
+	// too but the server is the boundary that has to be safe.
+	clean := make([]EnvVar, 0, len(envVars))
+	seen := make(map[string]struct{}, len(envVars))
+	for _, ev := range envVars {
+		name := strings.TrimSpace(ev.Name)
+		// Some browsers send U+00A0 (NBSP) instead of regular space.
+		// strings.TrimSpace catches NBSP since Go 1.x — but we also
+		// strip embedded NBSPs anywhere in the name for good
+		// measure: an env var name with a NBSP in the middle is
+		// always a copy-paste artifact, never intentional.
+		name = strings.ReplaceAll(name, " ", "")
+		if name == "" {
+			continue
+		}
+		if !envNameValid(name) {
+			return fmt.Errorf("%w: env var name %q must match [A-Za-z_][A-Za-z0-9_]*", ErrInvalid, name)
+		}
+		if _, dup := seen[name]; dup {
+			return fmt.Errorf("%w: duplicate env var name %q", ErrInvalid, name)
+		}
+		seen[name] = struct{}{}
+		// Drop literal-empty rows: no value AND no valueFrom = a
+		// ghost entry. The CR will silently pass through but the
+		// pod will see nothing. Refusing to persist them prevents
+		// the round-trip ghost rows we shipped with v0.6.x.
+		if ev.ValueFrom == nil && ev.Value == "" {
+			continue
+		}
+		clean = append(clean, EnvVar{Name: name, Value: ev.Value, ValueFrom: ev.ValueFrom})
+	}
+	envVars = clean
+
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return err
