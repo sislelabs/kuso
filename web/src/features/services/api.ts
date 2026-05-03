@@ -68,6 +68,14 @@ export interface PatchServiceBody {
   sleep?: { enabled?: boolean; afterMinutes?: number };
   volumes?: VolumePatch[];
   placement?: PlacementPatch;
+  repo?: PatchRepoBody;
+}
+
+export interface PatchRepoBody {
+  url: string;
+  branch?: string;
+  path?: string;
+  installationId?: number;
 }
 
 export interface PlacementPatch {

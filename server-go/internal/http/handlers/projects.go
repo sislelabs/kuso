@@ -52,6 +52,10 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	r.Post("/api/projects/{project}/apply", h.Apply)
 	r.Get("/api/projects/{project}/services/{service}/env", h.GetEnv)
 	r.Post("/api/projects/{project}/services/{service}/env", h.SetEnv)
+	// Custom environments: POST .../envs creates a non-prod, non-preview
+	// env (e.g. staging on a branch). Production auto-creates with the
+	// service; preview envs come from the GH PR webhook.
+	r.Post("/api/projects/{project}/services/{service}/envs", h.AddEnvironment)
 	r.Post("/api/projects/{project}/services/{service}/wake", h.Wake)
 
 	r.Get("/api/projects/{project}/envs", h.ListEnvironments)
@@ -325,6 +329,30 @@ func (h *ProjectsHandler) ListEnvironments(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// AddEnvironment creates a custom env (e.g. staging on a branch).
+// Production envs auto-create with the service; preview envs come
+// from the GH PR webhook; this is the "third kind" — long-lived,
+// branch-bound, with its own URL.
+func (h *ProjectsHandler) AddEnvironment(w http.ResponseWriter, r *http.Request) {
+	var req projects.CreateEnvRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	out, err := h.Svc.AddEnvironment(ctx,
+		chi.URLParam(r, "project"),
+		chi.URLParam(r, "service"),
+		req,
+	)
+	if err != nil {
+		h.fail(w, "add environment", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
 }
 
 func (h *ProjectsHandler) GetEnvironment(w http.ResponseWriter, r *http.Request) {

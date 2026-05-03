@@ -3,6 +3,8 @@ package projects
 import (
 	"context"
 	"fmt"
+	"regexp"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -206,6 +208,103 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	return created, nil
 }
 
+// envNameRE matches a kube-friendly env short name. Same rules
+// users get on Group/User/etc names elsewhere in the API.
+var envNameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$`)
+
+// CreateEnvRequest is the body of POST /api/projects/{p}/services/{s}/envs.
+// Used to add a custom environment (e.g. "staging" tracking a branch
+// other than the default). Production envs are auto-created with the
+// service; preview envs are PR-driven; this is the third case — a
+// long-lived branch with its own URL.
+type CreateEnvRequest struct {
+	Name         string `json:"name"`
+	Branch       string `json:"branch"`
+	HostOverride string `json:"host,omitempty"`
+}
+
+// AddEnvironment creates a custom KusoEnvironment for a service.
+func (s *Service) AddEnvironment(ctx context.Context, project, service string, req CreateEnvRequest) (*kube.KusoEnvironment, error) {
+	if req.Name == "" {
+		return nil, fmt.Errorf("%w: env name required", ErrInvalid)
+	}
+	if req.Branch == "" {
+		return nil, fmt.Errorf("%w: branch required", ErrInvalid)
+	}
+	if req.Name == "production" || strings.HasPrefix(req.Name, "pr-") {
+		return nil, fmt.Errorf("%w: name %q is reserved", ErrInvalid, req.Name)
+	}
+	if !envNameRE.MatchString(req.Name) {
+		return nil, fmt.Errorf("%w: env name must be lowercase letters/digits/dashes", ErrInvalid)
+	}
+
+	svc, err := s.GetService(ctx, project, service)
+	if err != nil {
+		return nil, err
+	}
+	proj, err := s.Kube.GetKusoProject(ctx, s.Namespace, project)
+	if err != nil {
+		return nil, fmt.Errorf("get project: %w", err)
+	}
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+
+	envCRName := fmt.Sprintf("%s-%s-%s", project, service, req.Name)
+	host := req.HostOverride
+	if host == "" {
+		base := proj.Spec.BaseDomain
+		if base == "" {
+			base = "kuso.sislelabs.com"
+		}
+		if service == project {
+			host = fmt.Sprintf("%s-%s.%s", req.Name, project, base)
+		} else {
+			host = fmt.Sprintf("%s-%s.%s.%s", service, req.Name, project, base)
+		}
+	}
+
+	port := svc.Spec.Port
+	if port == 0 {
+		port = 8080
+	}
+	scaleMin := 1
+	if svc.Spec.Scale != nil && svc.Spec.Scale.Min > 0 {
+		scaleMin = svc.Spec.Scale.Min
+	}
+
+	env := &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: envCRName,
+			Labels: map[string]string{
+				labelProject: project,
+				labelService: service,
+				labelEnv:     req.Name,
+			},
+		},
+		Spec: kube.KusoEnvironmentSpec{
+			Project:          project,
+			Service:          svc.Name,
+			Kind:             "production",
+			Branch:           req.Branch,
+			Port:             port,
+			ReplicaCount:     scaleMin,
+			Host:             host,
+			TLSEnabled:       true,
+			ClusterIssuer:    "letsencrypt-prod",
+			IngressClassName: "traefik",
+			Placement:        ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement),
+			Volumes:          svc.Spec.Volumes,
+		},
+	}
+	created, err := s.Kube.CreateKusoEnvironment(ctx, ns, env)
+	if err != nil {
+		return nil, fmt.Errorf("create env: %w", err)
+	}
+	return created, nil
+}
+
 // DeleteService cascades to the service's environments.
 func (s *Service) DeleteService(ctx context.Context, project, service string) error {
 	if _, err := s.GetService(ctx, project, service); err != nil {
@@ -309,6 +408,22 @@ type PatchServiceRequest struct {
 	// a "remove volume X" via partial diff would be ambiguous when
 	// the user also renamed Y to X.
 	Volumes *[]VolumePatch `json:"volumes,omitempty"`
+	// Repo lets a user re-point the service at a different repository
+	// (or change the path/branch). InstallationID is required when the
+	// new repo is private and behind a different GitHub App
+	// installation than the original.
+	Repo *PatchRepoRequest `json:"repo,omitempty"`
+}
+
+// PatchRepoRequest is the wire shape for changing a service's source
+// repo. Empty URL clears it (rare; usually you'd just delete the
+// service). InstallationID is read from the GitHub App + stamped on
+// spec.github so the build can mint clone tokens against it.
+type PatchRepoRequest struct {
+	URL            string `json:"url,omitempty"`
+	Branch         string `json:"branch,omitempty"`
+	Path           string `json:"path,omitempty"`
+	InstallationID int64  `json:"installationId,omitempty"`
 }
 
 // VolumePatch is the wire shape of a volume update. Mirrors
@@ -397,6 +512,26 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		}
 	}
 	volumesChanged := false
+	if req.Repo != nil {
+		// Replace (not merge) — the user's intent when editing the
+		// repo URL is "this is the new source," not "merge with the
+		// old path." Empty URL clears the repo.
+		if req.Repo.URL == "" {
+			svc.Spec.Repo = nil
+		} else {
+			svc.Spec.Repo = &kube.KusoRepoRef{
+				URL:           req.Repo.URL,
+				DefaultBranch: req.Repo.Branch,
+				Path:          req.Repo.Path,
+			}
+		}
+		// installationId is recorded so the build path can mint a
+		// fresh installation token without re-asking the user. Per-
+		// service installation, separate from the project's default.
+		if req.Repo.InstallationID > 0 {
+			svc.Spec.Github = &kube.KusoServiceGithubSpec{InstallationID: req.Repo.InstallationID}
+		}
+	}
 	if req.Volumes != nil {
 		next := make([]kube.KusoVolume, 0, len(*req.Volumes))
 		for _, v := range *req.Volumes {

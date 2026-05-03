@@ -23,6 +23,7 @@ import {
   saveStoredLayout,
 } from "./layout";
 import { CanvasContextMenu, type ContextMenuItem } from "./CanvasContextMenu";
+import { AddAddonDialog } from "@/components/addon/AddAddonDialog";
 import { serviceShortName } from "@/lib/utils";
 import { useTriggerBuild, useDeleteService } from "@/features/services";
 import {
@@ -108,6 +109,9 @@ export function ProjectCanvas({
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>(initialEdges);
   const [ctx, setCtx] = useState<ContextState>({ open: false, x: 0, y: 0, items: [] });
+  // Add-addon dialog. Lives next to ctx because both are short-lived
+  // canvas-scoped overlays — no point hoisting up to the page view.
+  const [showAddAddon, setShowAddAddon] = useState(false);
 
   const trigger = useTriggerBuild(project, "");
   const del = useDeleteService(project, "");
@@ -261,7 +265,7 @@ export function ProjectCanvas({
         id: "add-addon",
         label: "Add addon",
         icon: Plus,
-        disabled: true,
+        onSelect: () => setShowAddAddon(true),
       },
       {
         id: "reset-layout",
@@ -321,6 +325,12 @@ export function ProjectCanvas({
         y={ctx.y}
         items={ctx.items}
         onClose={() => setCtx((c) => ({ ...c, open: false }))}
+      />
+
+      <AddAddonDialog
+        project={project}
+        open={showAddAddon}
+        onClose={() => setShowAddAddon(false)}
       />
     </div>
   );

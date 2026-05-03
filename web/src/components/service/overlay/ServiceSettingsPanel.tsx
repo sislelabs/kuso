@@ -42,13 +42,23 @@ const RUNTIMES = ["dockerfile", "nixpacks", "static", "buildpacks"] as const;
 // fields at once (vs. the old per-section state). Strings for
 // numeric inputs so empty fields don't snap to 0 mid-typing.
 interface FormState {
+  // Source
+  repoURL: string;
+  repoBranch: string;
+  repoPath: string;
+  repoInstallationID: number; // 0 = unchanged / inherit
+  // Networking
   port: string;
   domains: string; // newline-separated
+  // Scale
   scaleMin: string;
   scaleMax: string;
   scaleCPU: string;
+  // Build
   runtime: string;
+  // Storage
   volumes: VolumeRow[];
+  // Placement
   placement: PlacementRow[];
   placementNodes: string[];
 }
@@ -65,7 +75,17 @@ interface VolumeRow {
 }
 
 function fromSvc(svc?: KusoService): FormState {
+  const repo = svc?.spec.repo;
+  // Service-level installationId is on spec.github.installationId; the
+  // type may not declare it yet (we ship that as a non-breaking
+  // addition), so cast through unknown to read it without forcing a
+  // type-system rev.
+  const ghSpec = (svc?.spec as { github?: { installationId?: number } } | undefined)?.github;
   return {
+    repoURL: repo?.url ?? "",
+    repoBranch: repo?.defaultBranch ?? "",
+    repoPath: repo?.path && repo.path !== "." ? repo.path : "",
+    repoInstallationID: ghSpec?.installationId ?? 0,
     port: String(svc?.spec.port ?? 8080),
     domains: (svc?.spec.domains ?? []).map((d) => d.host ?? "").filter(Boolean).join("\n"),
     scaleMin: String(svc?.spec.scale?.min ?? 1),
@@ -149,6 +169,22 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
     if (state.runtime !== baseline.runtime) {
       body.runtime = state.runtime;
     }
+    if (
+      state.repoURL !== baseline.repoURL ||
+      state.repoBranch !== baseline.repoBranch ||
+      state.repoPath !== baseline.repoPath ||
+      state.repoInstallationID !== baseline.repoInstallationID
+    ) {
+      body.repo = {
+        url: state.repoURL,
+        branch: state.repoBranch || undefined,
+        path: state.repoPath || undefined,
+        // 0 → omit so the server doesn't clobber the existing
+        // installationId with "unset"; only send when explicitly
+        // changed by the picker.
+        installationId: state.repoInstallationID || undefined,
+      };
+    }
     const pNow = JSON.stringify({ p: state.placement, n: state.placementNodes });
     const pBase = JSON.stringify({ p: baseline.placement, n: baseline.placementNodes });
     if (pNow !== pBase) {
@@ -201,7 +237,7 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
     <div className="relative">
       <div className="grid grid-cols-[1fr_180px] gap-0 pb-20">
         <div className="space-y-8 px-6 py-6">
-          <SourceSection svc={svc} />
+          <SourceSection state={state} setState={setState} />
           <NetworkingSection state={state} setState={setState} />
           <ScaleSection state={state} setState={setState} />
           <PlacementSection state={state} setState={setState} />
@@ -364,47 +400,96 @@ function Row({
 
 // ---------- Sections ----------
 
-function SourceSection({ svc }: { svc?: KusoService }) {
-  // Source has no editable fields anymore — repo is per-service and
-  // bound to its GitHub App installation. Show the URL with a copy
-  // affordance, plus a path row when the service is in a monorepo
-  // subdir.
-  const repoURL = svc?.spec.repo?.url ?? "";
-  const repoDisplay = repoURL.replace(/^https?:\/\/(www\.)?/, "");
-  const path = svc?.spec.repo?.path && svc.spec.repo.path !== "." ? svc.spec.repo.path : null;
+function SourceSection({ state, setState }: SectionProps) {
+  // Pull installations so the user can re-point to a repo behind a
+  // different GH App install. Best-effort: we don't gate the rest of
+  // the section on this query landing.
+  const installs = useQuery({
+    queryKey: ["github", "installations"],
+    queryFn: () =>
+      api<{ id: number; accountLogin: string; repositories: { fullName: string }[] }[]>(
+        "/api/github/installations"
+      ),
+    staleTime: 60_000,
+  });
+  const repoDisplay = state.repoURL.replace(/^https?:\/\/(www\.)?/, "");
+
   return (
     <Section id="source" title="Source" icon={Github}>
-      {repoURL ? (
-        <>
-          <Row
-            label="repository"
-            control={
+      <Row
+        label="repository"
+        hint="full https URL"
+        control={
+          <div className="flex w-full items-center gap-1.5">
+            <Input
+              value={state.repoURL}
+              onChange={(e) => setState((s) => ({ ...s, repoURL: e.target.value }))}
+              placeholder="https://github.com/owner/repo"
+              className="h-7 flex-1 font-mono text-[12px]"
+              spellCheck={false}
+            />
+            {state.repoURL && (
               <a
-                href={repoURL}
+                href={state.repoURL}
                 target="_blank"
                 rel="noreferrer"
-                className="inline-flex max-w-full items-center gap-1 truncate font-mono text-[12px] text-[var(--accent)] hover:underline"
+                aria-label="Open in new tab"
+                title={repoDisplay}
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
               >
-                <span className="truncate">{repoDisplay}</span>
-                <ExternalLink className="h-3 w-3 shrink-0" />
+                <ExternalLink className="h-3 w-3" />
               </a>
-            }
-            last={!path}
+            )}
+          </div>
+        }
+      />
+      <Row
+        label="branch"
+        hint="default deploy branch"
+        control={
+          <Input
+            value={state.repoBranch}
+            onChange={(e) => setState((s) => ({ ...s, repoBranch: e.target.value }))}
+            placeholder="main"
+            className="h-7 w-40 font-mono text-[12px]"
+            spellCheck={false}
           />
-          {path && (
-            <Row
-              label="path"
-              hint="monorepo subdir"
-              control={<span className="font-mono text-[12px] text-[var(--text-secondary)]">{path}</span>}
-              last
-            />
-          )}
-        </>
-      ) : (
-        <p className="px-3 py-3 text-xs text-[var(--text-tertiary)]">
-          No repo connected.
-        </p>
-      )}
+        }
+      />
+      <Row
+        label="path"
+        hint="monorepo subdir; leave blank for root"
+        control={
+          <Input
+            value={state.repoPath}
+            onChange={(e) => setState((s) => ({ ...s, repoPath: e.target.value }))}
+            placeholder="apps/api"
+            className="h-7 w-48 font-mono text-[12px]"
+            spellCheck={false}
+          />
+        }
+      />
+      <Row
+        label="installation"
+        hint="GitHub App that owns the repo"
+        control={
+          <select
+            value={state.repoInstallationID || 0}
+            onChange={(e) =>
+              setState((s) => ({ ...s, repoInstallationID: Number(e.target.value) || 0 }))
+            }
+            className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
+          >
+            <option value={0}>(unchanged)</option>
+            {(installs.data ?? []).map((inst) => (
+              <option key={inst.id} value={inst.id}>
+                {inst.accountLogin} ({inst.repositories.length} repos)
+              </option>
+            ))}
+          </select>
+        }
+        last
+      />
     </Section>
   );
 }

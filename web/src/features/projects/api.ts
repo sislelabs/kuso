@@ -28,8 +28,29 @@ export async function listEnvironments(
   return api<KusoEnvironment[]>(`/api/projects/${encodeURIComponent(project)}/envs`);
 }
 
+export async function createEnvironment(
+  project: string,
+  service: string,
+  body: { name: string; branch: string; host?: string }
+): Promise<KusoEnvironment> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/envs`,
+    { method: "POST", body }
+  );
+}
+
 export async function listAddons(project: string): Promise<KusoAddon[]> {
   return api<KusoAddon[]>(`/api/projects/${encodeURIComponent(project)}/addons`);
+}
+
+export async function addAddon(
+  project: string,
+  body: { name: string; kind: string }
+): Promise<KusoAddon> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/addons`,
+    { method: "POST", body }
+  );
 }
 
 export async function deleteAddon(project: string, addon: string): Promise<void> {

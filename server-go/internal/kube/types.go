@@ -114,6 +114,18 @@ type KusoServiceSpec struct {
 	// requested mountPath. Drives nothing on its own — the user
 	// must configure their app to write to the mountPath.
 	Volumes []KusoVolume `json:"volumes,omitempty"`
+	// Github stamps the GitHub App installation that owns this
+	// service's repo. Mirrors KusoProjectGithubSpec but per-service
+	// so different services can attach to different installations
+	// (different orgs, accounts, etc).
+	Github *KusoServiceGithubSpec `json:"github,omitempty"`
+}
+
+// KusoServiceGithubSpec is the per-service variant of the project-
+// level GH spec. Same wire shape — installationId is what the
+// builder uses to mint clone tokens.
+type KusoServiceGithubSpec struct {
+	InstallationID int64 `json:"installationId,omitempty"`
 }
 
 // KusoVolume mounts a persistent disk into the service's pods.

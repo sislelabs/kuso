@@ -57,6 +57,7 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { ServersPopover } from "./ServersPopover";
+import { NewEnvironmentDialog } from "./NewEnvironmentDialog";
 
 // TopNav is the persistent shell across every authenticated page. Left
 // side: kuso logomark, then breadcrumb-style project picker + (when on
@@ -117,6 +118,13 @@ export function TopNav() {
 
       <div className="flex-1" />
 
+      <Link
+        href="/settings/profile"
+        className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+      >
+        <Settings className="h-3.5 w-3.5" />
+        Settings
+      </Link>
       <ServersPopover />
       <ThemeToggle />
       <NotificationsButton />
@@ -247,6 +255,7 @@ function EnvironmentSwitcher({ project }: { project: string }) {
   const search = useSearchParams();
   const data = useProject(project);
   const [open, setOpen] = useState(false);
+  const [showNewEnv, setShowNewEnv] = useState(false);
 
   // Unique env names, production first, previews after sorted by PR
   // number desc.
@@ -317,9 +326,38 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                 })}
               </CommandGroup>
             )}
+            {/* Trailing "new env" row. Sits below the env list so the
+                user always sees their existing envs first; click ->
+                opens the modal, popover closes itself. */}
+            <CommandGroup className="px-0">
+              <CommandItem
+                value="__new__"
+                onSelect={() => {
+                  setOpen(false);
+                  setShowNewEnv(true);
+                }}
+                className="px-2 py-1.5 text-[12px] text-[var(--accent)]"
+              >
+                <Plus className="h-3 w-3" />
+                New environment
+              </CommandItem>
+            </CommandGroup>
           </CommandList>
         </Command>
       </PopoverContent>
+
+      <NewEnvironmentDialog
+        project={project}
+        open={showNewEnv}
+        onClose={() => setShowNewEnv(false)}
+        onCreated={(name) => {
+          // Switch into the freshly-created env so the user lands
+          // on its canvas (envs differ by ?env= search param).
+          const next = new URLSearchParams(search?.toString() ?? "");
+          next.set("env", name);
+          router.replace(`${pathname}?${next.toString()}`, { scroll: false });
+        }}
+      />
     </Popover>
   );
 }
