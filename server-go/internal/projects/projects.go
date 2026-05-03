@@ -38,6 +38,14 @@ type Service struct {
 	// servers booting without the secrets package wired).
 	SecretsCleanupForEnv func(ctx context.Context, project, service, env string) error
 
+	// AddonConnSecrets returns the project's addon connection-secret
+	// names so a freshly-created env starts with envFromSecrets
+	// already pointing at every existing addon (DATABASE_URL etc.
+	// are then auto-injected as env on the service pods). nil = the
+	// env is created with empty envFromSecrets and the user has to
+	// re-attach secrets manually after creating the addon.
+	AddonConnSecrets func(ctx context.Context, project string) ([]string, error)
+
 	nsMu    sync.RWMutex
 	nsCache map[string]nsCacheEntry
 }

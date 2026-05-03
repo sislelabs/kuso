@@ -470,8 +470,13 @@ func completedCondition(job *batchv1.Job) *batchv1.JobCondition {
 // stanza lives on the main resource; merge-patch it directly.
 func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild) error {
 	patch := fmt.Sprintf(`{"status":{"phase":"succeeded","completedAt":%q}}`, time.Now().UTC().Format(time.RFC3339))
+	// Status writes MUST hit the /status subresource once the CRD has
+	// `subresources: { status: {} }` enabled — a plain Patch on the
+	// main resource silently drops the status field. The CRD shipped
+	// without the subresource for a while and this code worked
+	// "by accident"; the v0.6.1 CRD fix exposed the bug.
 	if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
-		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}, "status"); err != nil {
 		return fmt.Errorf("patch build status: %w", err)
 	}
 	if p.Notifier != nil {
@@ -494,7 +499,7 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, msg string) error {
 	patch := fmt.Sprintf(`{"status":{"phase":"failed","completedAt":%q,"message":%q}}`, time.Now().UTC().Format(time.RFC3339), msg)
 	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
-		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}, "status")
 	if err != nil {
 		return fmt.Errorf("patch build failed: %w", err)
 	}
@@ -522,7 +527,7 @@ func (p *Poller) markRunning(ctx context.Context, ns string, b *kube.KusoBuild) 
 	}
 	patch := []byte(`{"status":{"phase":"running"}}`)
 	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
-		Patch(ctx, b.Name, types.MergePatchType, patch, metav1.PatchOptions{})
+		Patch(ctx, b.Name, types.MergePatchType, patch, metav1.PatchOptions{}, "status")
 	if err != nil {
 		return fmt.Errorf("patch build running: %w", err)
 	}

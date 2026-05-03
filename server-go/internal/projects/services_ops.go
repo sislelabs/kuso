@@ -174,6 +174,18 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	if port == 0 {
 		port = 8080
 	}
+	// Pre-populate envFromSecrets with whatever addon conn-secrets the
+	// project already has. Without this, a service added AFTER an addon
+	// boots without the addon's env vars (DATABASE_URL etc.) and the
+	// app crashloops with "DATABASE_URL not set". The addons package
+	// also fans out attach to envs on its own when an addon is added,
+	// but that path runs on the OPPOSITE order (addon before service).
+	var envFromSecrets []string
+	if s.AddonConnSecrets != nil {
+		if secs, err := s.AddonConnSecrets(ctx, project); err == nil {
+			envFromSecrets = secs
+		}
+	}
 	env := &kube.KusoEnvironment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: productionEnvName(project, req.Name),
@@ -194,6 +206,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
+			EnvFromSecrets:   envFromSecrets,
 			// Effective placement: service overrides project. Both
 			// nil = schedule anywhere (chart leaves nodeSelector
 			// blank, no affinity).
@@ -274,6 +287,15 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		scaleMin = svc.Spec.Scale.Min
 	}
 
+	// Same addon-attach as AddService — keep custom envs reachable to
+	// project addons from boot.
+	var envFromSecrets []string
+	if s.AddonConnSecrets != nil {
+		if secs, err := s.AddonConnSecrets(ctx, project); err == nil {
+			envFromSecrets = secs
+		}
+	}
+
 	env := &kube.KusoEnvironment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: envCRName,
@@ -294,6 +316,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
+			EnvFromSecrets:   envFromSecrets,
 			Placement:        ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement),
 			Volumes:          svc.Spec.Volumes,
 		},

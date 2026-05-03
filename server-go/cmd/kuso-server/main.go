@@ -169,6 +169,12 @@ func main() {
 		cfgSvc = config.New(kc, *namespace)
 		statSvc = status.New(kc, 5*time.Minute)
 		addonSvc = addons.New(kc, *namespace)
+		addonSvc.NSResolver = nsResolver
+		// Wire the addon→env auto-attach hook so a freshly-created
+		// service env starts with envFromSecrets pre-populated for
+		// every existing project addon. Without this, services added
+		// AFTER an addon boot without DATABASE_URL etc. and crashloop.
+		projSvc.AddonConnSecrets = addonSvc.ConnSecretsForProject
 		// Spec reconciler — the apply endpoint reuses the same
 		// project + addon services for create/update/delete so the
 		// validation rules stay in one place.

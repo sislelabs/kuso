@@ -48,9 +48,18 @@ var buildTriggerCmd = &cobra.Command{
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
-		var data map[string]any
+		// Server returns the BuildSummary wire shape (flat
+		// {id,serviceName,branch,commitSha,imageTag,status}), NOT the
+		// raw KusoBuild CR. Earlier versions of this command decoded it
+		// as a CR and printed an empty name; switch to the typed shape
+		// the handler actually emits.
+		var data struct {
+			ID     string `json:"id"`
+			Branch string `json:"branch"`
+			Status string `json:"status"`
+		}
 		_ = json.Unmarshal(resp.Body(), &data)
-		fmt.Printf("build %s started\n", asString(mapAt(data, "metadata")["name"]))
+		fmt.Printf("build %s started (branch=%s, status=%s)\n", data.ID, data.Branch, data.Status)
 		return nil
 	},
 }
@@ -68,35 +77,46 @@ var buildListCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("list builds: %w", err)
 		}
-		var items []map[string]any
+		// Server returns []BuildSummary (flat wire shape). The old code
+		// decoded as []KusoBuild and printed an empty table because
+		// metadata/spec/status were never populated.
+		type buildRow struct {
+			ID         string `json:"id"`
+			Branch     string `json:"branch"`
+			CommitSha  string `json:"commitSha"`
+			ImageTag   string `json:"imageTag"`
+			Status     string `json:"status"`
+			StartedAt  string `json:"startedAt"`
+			FinishedAt string `json:"finishedAt"`
+		}
+		var items []buildRow
 		if err := json.Unmarshal(resp.Body(), &items); err != nil {
 			return fmt.Errorf("decode: %w", err)
 		}
-		sort.Slice(items, func(i, j int) bool {
-			ai := asString(mapAt(items[i], "metadata")["creationTimestamp"])
-			aj := asString(mapAt(items[j], "metadata")["creationTimestamp"])
-			return aj < ai // newest first
+		// API already returns newest-first per the handler contract;
+		// re-sort defensively on startedAt so manual rows from the
+		// future-self CLI are still in the right order.
+		sort.SliceStable(items, func(i, j int) bool {
+			return items[i].StartedAt > items[j].StartedAt
 		})
 		switch outputFormat {
 		case "json":
 			return jsonOut(items)
 		case "table", "":
 			t := tablewriter.NewWriter(os.Stdout)
-			t.SetHeader([]string{"NAME", "REF", "BRANCH", "PHASE", "AGE"})
+			t.SetHeader([]string{"ID", "BRANCH", "SHA", "TAG", "STATUS", "AGE"})
 			for _, b := range items {
-				meta := mapAt(b, "metadata")
-				spec := mapAt(b, "spec")
-				st := mapAt(b, "status")
-				ref := asString(spec["ref"])
-				if len(ref) > 12 {
-					ref = ref[:12]
+				sha := b.CommitSha
+				if len(sha) > 12 {
+					sha = sha[:12]
 				}
 				t.Append([]string{
-					asString(meta["name"]),
-					ref,
-					asString(spec["branch"]),
-					asString(st["phase"]),
-					relativeAge(asString(meta["creationTimestamp"])),
+					b.ID,
+					b.Branch,
+					sha,
+					b.ImageTag,
+					b.Status,
+					relativeAge(b.StartedAt),
 				})
 			}
 			t.Render()

@@ -1,7 +1,18 @@
 {{- if eq .Values.kind "redis" -}}
 {{- $version := .Values.version | default "7" -}}
-{{- $password := .Values.password | default (randAlphaNum 24) -}}
 {{- $name := include "kusoaddon.fullname" . -}}
+{{- $secretName := include "kusoaddon.connSecretName" . -}}
+{{/*
+  Reuse the password from the live Secret if it exists. Same reason
+  as postgres.yaml: without this, every reconcile rotates the
+  password and the operator burns CPU + flips credentials forever.
+*/}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $existingPw := "" -}}
+{{- if and $existing $existing.data (index $existing.data "REDIS_PASSWORD") -}}
+  {{- $existingPw = (index $existing.data "REDIS_PASSWORD" | b64dec) -}}
+{{- end -}}
+{{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
 
 apiVersion: apps/v1
 kind: StatefulSet

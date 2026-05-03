@@ -93,6 +93,23 @@ func (s *Service) List(ctx context.Context, project string) ([]kube.KusoAddon, e
 	return out, nil
 }
 
+// ConnSecretsForProject returns the list of addon conn-secret names
+// for the project. Called by projects.Service when creating a new env
+// (production or custom) so the env starts with envFromSecrets already
+// pointing at every existing addon — without this, services added
+// after an addon would never get DATABASE_URL/REDIS_URL/etc. injected.
+func (s *Service) ConnSecretsForProject(ctx context.Context, project string) ([]string, error) {
+	addons, err := s.List(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]string, 0, len(addons))
+	for _, a := range addons {
+		out = append(out, connSecretName(a.Name))
+	}
+	return out, nil
+}
+
 // Add creates a KusoAddon CR and refreshes every env's envFromSecrets
 // list to include the new addon's connection secret.
 func (s *Service) Add(ctx context.Context, project string, req CreateAddonRequest) (*kube.KusoAddon, error) {
