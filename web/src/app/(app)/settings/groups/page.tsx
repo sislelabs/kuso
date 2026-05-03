@@ -73,8 +73,10 @@ export default function GroupsSettingsPage() {
         <div>
           <h1 className="font-heading text-xl font-semibold tracking-tight">Groups</h1>
           <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
-            Groups carry an instance role + per-project memberships. Users get the union
-            of perms across every group they&apos;re in.
+            Instance-wide groups. Each group carries a kuso-wide instance role plus
+            per-project memberships; a user&apos;s effective perms are the union across
+            every group they&apos;re in. Use this to grant access to specific projects or
+            promote someone to admin.
           </p>
         </div>
       </header>

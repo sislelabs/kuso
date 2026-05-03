@@ -58,9 +58,26 @@ func NewIssuer(secret string, ttl time.Duration) (*Issuer, error) {
 // for OAuth callback, "token" for long-lived API tokens issued through
 // the /api/tokens endpoint.
 func (i *Issuer) Sign(c Claims) (string, error) {
+	return i.signWith(c, time.Now().Add(i.ttl), false)
+}
+
+// SignWithExpiry issues a JWT with a caller-provided expiry. Pass
+// the zero time to mint a non-expiring token (what the personal
+// access token "never" option uses). Verify intentionally allows
+// claims without exp; we use it deliberately for long-lived API
+// tokens.
+func (i *Issuer) SignWithExpiry(c Claims, expiresAt time.Time) (string, error) {
+	return i.signWith(c, expiresAt, expiresAt.IsZero())
+}
+
+func (i *Issuer) signWith(c Claims, expiresAt time.Time, omitExp bool) (string, error) {
 	now := time.Now()
 	c.IssuedAt = jwt.NewNumericDate(now)
-	c.ExpiresAt = jwt.NewNumericDate(now.Add(i.ttl))
+	if omitExp {
+		c.ExpiresAt = nil
+	} else {
+		c.ExpiresAt = jwt.NewNumericDate(expiresAt)
+	}
 	c.Subject = c.UserID
 
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, c)

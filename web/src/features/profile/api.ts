@@ -38,7 +38,12 @@ export async function listMyTokens(): Promise<TokenSummary[]> {
   return api("/api/tokens/my");
 }
 
-export async function issueMyToken(name: string, expiresAt: string): Promise<IssueTokenResponse> {
+// expiresAt = "" or "never" mints a non-expiring token. Server omits
+// the JWT exp claim and stores a 100y sentinel in the DB row.
+export async function issueMyToken(
+  name: string,
+  expiresAt: string
+): Promise<IssueTokenResponse> {
   return api("/api/tokens/my", { method: "POST", body: { name, expiresAt } });
 }
 

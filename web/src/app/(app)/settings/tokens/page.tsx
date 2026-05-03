@@ -8,13 +8,25 @@ import {
   revokeMyToken,
   type IssueTokenResponse,
 } from "@/features/profile/api";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Plus, Trash2, Copy } from "lucide-react";
+import { Plus, Trash2, Copy, Check, Infinity, KeyRound } from "lucide-react";
 import { relativeTime } from "@/lib/format";
+import { cn } from "@/lib/utils";
+
+// Preset expiry choices. "Never" sends an empty expiresAt; the
+// server treats that as "infinite" (omits the JWT exp claim, stores a
+// 100y sentinel in the row). Custom keeps the numeric input around
+// for the rare "1.5 year" case without cluttering the common path.
+const PRESETS: { label: string; days: number | null }[] = [
+  { label: "30 days",  days: 30 },
+  { label: "90 days",  days: 90 },
+  { label: "1 year",   days: 365 },
+  { label: "Never",    days: null },
+  { label: "Custom",   days: 0 },
+];
 
 export default function TokensPage() {
   const qc = useQueryClient();
@@ -30,15 +42,28 @@ export default function TokensPage() {
   });
 
   const [name, setName] = useState("");
-  const [days, setDays] = useState(30);
+  const [preset, setPreset] = useState<string>("30 days");
+  const [customDays, setCustomDays] = useState(30);
   const [issued, setIssued] = useState<IssueTokenResponse | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  // Resolve the picked preset into the wire shape.
+  const expiresAtFor = (): string => {
+    const p = PRESETS.find((x) => x.label === preset);
+    if (!p) return "";
+    if (p.days === null) return ""; // never → empty → server omits exp
+    const days = p.days === 0 ? customDays : p.days;
+    return new Date(Date.now() + days * 86400_000).toISOString();
+  };
 
   const onIssue = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!name) return;
-    const expiresAt = new Date(Date.now() + days * 86400_000).toISOString();
+    if (!name.trim()) {
+      toast.error("Name your token (e.g. 'my laptop')");
+      return;
+    }
     try {
-      const r = await issue.mutateAsync({ name, expiresAt });
+      const r = await issue.mutateAsync({ name: name.trim(), expiresAt: expiresAtFor() });
       setIssued(r);
       setName("");
     } catch (err) {
@@ -48,109 +73,170 @@ export default function TokensPage() {
 
   const copy = (s: string) => {
     navigator.clipboard.writeText(s);
+    setCopied(true);
     toast.success("Copied to clipboard");
+    setTimeout(() => setCopied(false), 1200);
+  };
+
+  // A token is "infinite" when its persisted expiresAt is past the
+  // 90y mark (server uses 100y as a sentinel). Cheap probabilistic
+  // check that doesn't need the row to carry an explicit isInfinite
+  // bit through the API.
+  const isInfinite = (iso: string) => {
+    const t = new Date(iso).getTime();
+    return Number.isFinite(t) && t - Date.now() > 80 * 365 * 86400_000;
   };
 
   return (
     <div className="mx-auto max-w-2xl p-6 lg:p-8 space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">
-          Personal access tokens
-        </h1>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          Use these in <span className="font-mono">kuso login --token</span> or pass
-          as <span className="font-mono">Authorization: Bearer &lt;token&gt;</span>
-          to the API.
-        </p>
-      </div>
+      <header className="flex items-center gap-3">
+        <KeyRound className="h-5 w-5 text-[var(--text-tertiary)]" />
+        <div>
+          <h1 className="font-heading text-xl font-semibold tracking-tight">
+            Personal access tokens
+          </h1>
+          <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
+            Use in <span className="font-mono">kuso login --token</span> or pass as{" "}
+            <span className="font-mono">Authorization: Bearer &lt;token&gt;</span> to the API.
+          </p>
+        </div>
+      </header>
 
-      <form onSubmit={onIssue}>
-        <Card>
-          <CardHeader>
-            <CardTitle>Issue token</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="grid grid-cols-3 gap-3">
-              <div className="col-span-2 space-y-1.5">
-                <Label htmlFor="name">Name</Label>
+      <form
+        onSubmit={onIssue}
+        className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]"
+      >
+        <div className="space-y-3 p-4">
+          <Field label="name" hint="memo so you remember which device it lives on">
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="my laptop"
+              className="h-8 font-mono text-[12px]"
+              autoFocus
+              required
+            />
+          </Field>
+          <Field label="expires" hint="when the token stops working">
+            <div className="flex flex-wrap gap-1">
+              {PRESETS.map((p) => {
+                const active = p.label === preset;
+                return (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => setPreset(p.label)}
+                    className={cn(
+                      "inline-flex h-7 items-center gap-1 rounded-md border px-2 font-mono text-[11px] transition-colors",
+                      active
+                        ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)] text-[var(--text-primary)]"
+                        : "border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                    )}
+                  >
+                    {p.days === null && <Infinity className="h-3 w-3" />}
+                    {p.label}
+                  </button>
+                );
+              })}
+            </div>
+            {preset === "Custom" && (
+              <div className="mt-2 inline-flex items-center gap-1.5">
                 <Input
-                  id="name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="my laptop"
-                  required
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="days">Expires (days)</Label>
-                <Input
-                  id="days"
                   type="number"
                   min={1}
-                  max={365}
-                  value={days}
-                  onChange={(e) => setDays(parseInt(e.target.value, 10) || 30)}
-                  className="font-mono"
+                  max={365 * 50}
+                  value={customDays}
+                  onChange={(e) => setCustomDays(parseInt(e.target.value, 10) || 30)}
+                  className="h-7 w-24 font-mono text-[11px]"
                 />
+                <span className="font-mono text-[10px] text-[var(--text-tertiary)]">days</span>
               </div>
-            </div>
-            <div className="flex justify-end">
-              <Button type="submit" disabled={issue.isPending}>
-                <Plus className="h-4 w-4" />
-                Issue
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+            )}
+            {preset === "Never" && (
+              <p className="mt-2 text-[10px] text-amber-400">
+                ⚠ Non-expiring tokens stay valid until you manually revoke. Use sparingly —
+                rotate when a laptop is lost.
+              </p>
+            )}
+          </Field>
+        </div>
+        <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
+          <Button size="sm" type="submit" disabled={issue.isPending}>
+            <Plus className="h-3 w-3" />
+            {issue.isPending ? "Issuing…" : "Issue token"}
+          </Button>
+        </footer>
       </form>
 
       {issued && (
-        <Card className="border-[var(--accent)]/40">
-          <CardHeader>
-            <CardTitle>Token issued</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <p className="text-xs text-[var(--text-secondary)]">
-              Save this now — kuso never shows it again.
-            </p>
-            <div className="flex items-center gap-2">
-              <code className="flex-1 truncate rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 font-mono text-xs">
-                {issued.token}
-              </code>
-              <Button
-                variant="outline"
-                size="sm"
-                type="button"
-                onClick={() => copy(issued.token)}
-              >
-                <Copy className="h-3 w-3" />
-                Copy
-              </Button>
-            </div>
+        <section className="rounded-md border border-[var(--accent)]/40 bg-[var(--accent-subtle)] p-4">
+          <h2 className="text-sm font-semibold">Token issued</h2>
+          <p className="mt-1 text-xs text-[var(--text-secondary)]">
+            Save this now — kuso never shows it again.
+          </p>
+          <div className="mt-3 flex items-stretch gap-2">
+            <code className="flex-1 truncate rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1.5 font-mono text-[11px]">
+              {issued.token}
+            </code>
+            <Button variant="outline" size="sm" type="button" onClick={() => copy(issued.token)}>
+              {copied ? <Check className="h-3 w-3 text-emerald-400" /> : <Copy className="h-3 w-3" />}
+              {copied ? "Copied" : "Copy"}
+            </Button>
+          </div>
+          <div className="mt-2 flex items-center justify-between">
+            <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+              expires{" "}
+              {isInfinite(issued.expiresAt)
+                ? "never"
+                : new Date(issued.expiresAt).toLocaleDateString()}
+            </span>
             <Button variant="ghost" size="sm" type="button" onClick={() => setIssued(null)}>
               dismiss
             </Button>
-          </CardContent>
-        </Card>
+          </div>
+        </section>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Existing tokens</CardTitle>
-        </CardHeader>
-        <CardContent>
-          {tokens.isPending && <p className="text-sm text-[var(--text-tertiary)]">loading…</p>}
-          {tokens.data?.length === 0 && (
-            <p className="text-sm text-[var(--text-tertiary)]">No tokens.</p>
-          )}
-          <ul className="divide-y divide-[var(--border-subtle)]">
-            {tokens.data?.map((t) => (
-              <li key={t.id} className="flex items-center justify-between py-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">{t.name}</p>
-                  <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                    issued {relativeTime(t.createdAt)} · expires{" "}
-                    {new Date(t.expiresAt).toLocaleDateString()}
+      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+        <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-2.5">
+          <h2 className="text-sm font-semibold tracking-tight">Existing tokens</h2>
+          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+            {tokens.data?.length ?? 0} {(tokens.data?.length ?? 0) === 1 ? "token" : "tokens"}
+          </span>
+        </header>
+        {tokens.isPending ? (
+          <Skeleton className="m-3 h-16" />
+        ) : (tokens.data ?? []).length === 0 ? (
+          <p className="px-4 py-4 text-[11px] text-[var(--text-tertiary)]">
+            No tokens issued yet.
+          </p>
+        ) : (
+          <ul>
+            {tokens.data!.map((t) => (
+              <li
+                key={t.id}
+                className="flex items-center gap-3 border-b border-[var(--border-subtle)] px-4 py-2.5 last:border-b-0"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 truncate text-sm font-medium">
+                    {t.name}
+                    {isInfinite(t.expiresAt) && (
+                      <span
+                        className="inline-flex items-center gap-0.5 rounded bg-amber-500/10 px-1 py-0.5 font-mono text-[9px] uppercase tracking-widest text-amber-400"
+                        title="Never expires"
+                      >
+                        <Infinity className="h-2 w-2" />
+                        ∞
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+                    issued {relativeTime(t.createdAt)} ·{" "}
+                    {isInfinite(t.expiresAt) ? (
+                      <span>does not expire</span>
+                    ) : (
+                      <>expires {new Date(t.expiresAt).toLocaleDateString()}</>
+                    )}
                   </p>
                 </div>
                 <Button
@@ -159,14 +245,35 @@ export default function TokensPage() {
                   type="button"
                   aria-label="Revoke"
                   onClick={() => revoke.mutate(t.id)}
+                  disabled={revoke.isPending}
                 >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </li>
             ))}
           </ul>
-        </CardContent>
-      </Card>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  hint,
+  children,
+}: {
+  label: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1">
+      <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+        {label}
+      </div>
+      {children}
+      {hint && <div className="text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>}
     </div>
   );
 }

@@ -168,14 +168,26 @@ func (h *AdminHandler) CreateMyToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if req.Name == "" || req.ExpiresAt == "" {
-		http.Error(w, "name and expiresAt required", http.StatusBadRequest)
+	if req.Name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	expiresAt, err := time.Parse(time.RFC3339, req.ExpiresAt)
-	if err != nil {
-		http.Error(w, "expiresAt must be RFC3339", http.StatusBadRequest)
-		return
+	// expiresAt is optional now: empty / "never" / "null" mints an
+	// infinite token. The DB row stores a sentinel far-future time
+	// (we use 100y) so existing scans + indexes keep working without
+	// a NULL handling pass; the JWT itself omits the exp claim.
+	var expiresAt time.Time
+	infinite := false
+	if req.ExpiresAt == "" || req.ExpiresAt == "never" || req.ExpiresAt == "null" {
+		infinite = true
+		expiresAt = time.Now().UTC().AddDate(100, 0, 0)
+	} else {
+		var err error
+		expiresAt, err = time.Parse(time.RFC3339, req.ExpiresAt)
+		if err != nil {
+			http.Error(w, "expiresAt must be RFC3339 or empty for never-expires", http.StatusBadRequest)
+			return
+		}
 	}
 
 	id, err := newID()
@@ -185,18 +197,29 @@ func (h *AdminHandler) CreateMyToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	jwt, err := h.Issuer.Sign(auth.Claims{
+	tokenClaims := auth.Claims{
 		UserID:      claims.UserID,
 		Username:    claims.Username,
 		Role:        claims.Role,
 		UserGroups:  claims.UserGroups,
 		Permissions: claims.Permissions,
 		Strategy:    "token",
-	})
-	if err != nil {
-		h.Logger.Error("sign token", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
+	}
+	var jwt string
+	{
+		// Pass time.Time{} (zero) to omit the exp claim entirely;
+		// any explicit time signs with that exp.
+		signExpiry := expiresAt
+		if infinite {
+			signExpiry = time.Time{}
+		}
+		var serr error
+		jwt, serr = h.Issuer.SignWithExpiry(tokenClaims, signExpiry)
+		if serr != nil {
+			h.Logger.Error("sign token", "err", serr)
+			http.Error(w, "internal", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	row := &db.Token{

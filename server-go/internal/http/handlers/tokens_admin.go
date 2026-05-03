@@ -69,14 +69,24 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 		Name      string `json:"name"`
 		ExpiresAt string `json:"expiresAt"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" || req.ExpiresAt == "" {
-		http.Error(w, "name and expiresAt required", http.StatusBadRequest)
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	expiresAt, err := time.Parse(time.RFC3339, req.ExpiresAt)
-	if err != nil {
-		http.Error(w, "expiresAt must be RFC3339", http.StatusBadRequest)
-		return
+	// Empty / "never" / "null" → infinite token. DB row carries a
+	// 100y sentinel; the JWT itself omits the exp claim.
+	var expiresAt time.Time
+	infinite := false
+	if req.ExpiresAt == "" || req.ExpiresAt == "never" || req.ExpiresAt == "null" {
+		infinite = true
+		expiresAt = time.Now().UTC().AddDate(100, 0, 0)
+	} else {
+		var err error
+		expiresAt, err = time.Parse(time.RFC3339, req.ExpiresAt)
+		if err != nil {
+			http.Error(w, "expiresAt must be RFC3339 or empty for never-expires", http.StatusBadRequest)
+			return
+		}
 	}
 	ctx, cancel := tokAdminCtx(r)
 	defer cancel()
@@ -103,10 +113,14 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 	if perms == nil {
 		perms = []string{}
 	}
-	jwt, err := h.Issuer.Sign(auth.Claims{
+	signExpiry := expiresAt
+	if infinite {
+		signExpiry = time.Time{}
+	}
+	jwt, err := h.Issuer.SignWithExpiry(auth.Claims{
 		UserID: user.ID, Username: user.Username, Role: roleName,
 		UserGroups: groups, Permissions: perms, Strategy: "token",
-	})
+	}, signExpiry)
 	if err != nil {
 		h.Logger.Error("sign token", "err", err)
 		http.Error(w, "internal", http.StatusInternalServerError)
