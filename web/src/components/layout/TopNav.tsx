@@ -29,6 +29,7 @@ import {
   CommandInput,
   CommandItem,
   CommandList,
+  CommandSeparator,
 } from "@/components/ui/command";
 import { Logo } from "@/components/shared/Logo";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
@@ -176,39 +177,51 @@ function ProjectPicker({ currentProject }: { currentProject: string }) {
         <span className="truncate max-w-[180px]">{label}</span>
         <ChevronDown className="h-3 w-3 text-[var(--text-tertiary)]" />
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-72 p-0">
+      <PopoverContent align="start" className="w-72 gap-0 rounded-md p-0">
         <Command>
-          <CommandInput placeholder="Find a project…" className="h-9" />
-          <CommandList>
-            <CommandEmpty>No projects.</CommandEmpty>
-            <CommandGroup heading="Projects">
-              {sorted.map((p) => {
-                const name = p.metadata.name;
-                const active = name === currentProject;
-                return (
-                  <CommandItem
-                    key={name}
-                    value={name}
-                    onSelect={() => {
-                      setOpen(false);
-                      router.push(`/projects/${encodeURIComponent(name)}`);
-                    }}
-                    className="flex items-center gap-2"
-                  >
-                    <span className="truncate font-medium">{name}</span>
-                    {active && <Check className="ml-auto h-3.5 w-3.5 text-[var(--accent)]" />}
-                  </CommandItem>
-                );
-              })}
-            </CommandGroup>
-            <CommandGroup>
+          <CommandInput placeholder="Find a project…" className="h-9 text-[13px]" />
+          <CommandList className="p-1">
+            <CommandEmpty className="py-6 text-xs">No projects.</CommandEmpty>
+            {sorted.length > 0 && (
+              <CommandGroup
+                heading="Projects"
+                className="px-0 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-[var(--text-tertiary)]"
+              >
+                {sorted.map((p) => {
+                  const name = p.metadata.name;
+                  const active = name === currentProject;
+                  return (
+                    <CommandItem
+                      key={name}
+                      value={name}
+                      onSelect={() => {
+                        setOpen(false);
+                        router.push(`/projects/${encodeURIComponent(name)}`);
+                      }}
+                      className="px-2 py-1.5"
+                    >
+                      <span
+                        className={cn(
+                          "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
+                          active ? "bg-[var(--accent)]" : "bg-[var(--text-tertiary)]/30"
+                        )}
+                      />
+                      <span className="truncate text-[13px]">{name}</span>
+                      {active && <Check className="ml-auto h-3 w-3 text-[var(--accent)]" />}
+                    </CommandItem>
+                  );
+                })}
+              </CommandGroup>
+            )}
+            <CommandSeparator />
+            <CommandGroup className="px-0">
               <CommandItem
                 value="__new__"
                 onSelect={() => {
                   setOpen(false);
                   router.push("/projects/new");
                 }}
-                className="flex items-center gap-2 text-[var(--accent)]"
+                className="px-2 py-1.5 text-[13px] text-[var(--accent)]"
               >
                 <Plus className="h-3.5 w-3.5" />
                 New project
@@ -257,13 +270,16 @@ function EnvironmentSwitcher({ project }: { project: string }) {
         <span className="truncate max-w-[160px] font-mono text-xs">{currentEnv}</span>
         <ChevronDown className="h-3 w-3" />
       </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 p-0">
+      <PopoverContent align="start" className="w-64 gap-0 rounded-md p-0">
         <Command>
-          <CommandInput placeholder="Switch environment…" className="h-9" />
-          <CommandList>
-            <CommandEmpty>No environments yet.</CommandEmpty>
+          <CommandInput placeholder="Switch environment…" className="h-9 text-[13px]" />
+          <CommandList className="p-1">
+            <CommandEmpty className="py-6 text-xs">No environments yet.</CommandEmpty>
             {envs.length > 0 && (
-              <CommandGroup heading="Environments">
+              <CommandGroup
+                heading="Environments"
+                className="px-0 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-[var(--text-tertiary)]"
+              >
                 {envs.map((e) => {
                   const short = labelFor(e.metadata.name);
                   const active = (currentEnv === "production" && e.spec.kind === "production") || currentEnv === short;
@@ -272,23 +288,23 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                       key={e.metadata.uid ?? e.metadata.name}
                       value={short}
                       onSelect={() => setEnv(e.spec.kind === "production" ? "production" : short)}
-                      className="flex items-center gap-2"
+                      className="px-2 py-1.5"
                     >
                       <span
                         className={cn(
-                          "inline-block h-1.5 w-1.5 rounded-full",
+                          "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
                           e.spec.kind === "production"
                             ? "bg-emerald-400"
                             : "bg-amber-400"
                         )}
                       />
-                      <span className="truncate font-mono text-xs">{short}</span>
+                      <span className="truncate font-mono text-[12px]">{short}</span>
                       {e.spec.kind === "preview" && (
                         <span className="ml-auto rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
                           preview
                         </span>
                       )}
-                      {active && <Check className="ml-1 h-3.5 w-3.5 text-[var(--accent)]" />}
+                      {active && <Check className={cn("h-3 w-3 text-[var(--accent)]", e.spec.kind === "production" ? "ml-auto" : "ml-1")} />}
                     </CommandItem>
                   );
                 })}
@@ -357,17 +373,26 @@ function UserMenu() {
         />
         <DropdownMenuItem
           render={
-            <Link href="/settings/config" className="flex items-center gap-2">
-              <Settings className="h-3.5 w-3.5" />
-              Cluster config
+            <Link href="/settings/notifications" className="flex items-center gap-2">
+              <Bell className="h-3.5 w-3.5" />
+              Notifications
+            </Link>
+          }
+        />
+        <DropdownMenuSeparator />
+        <DropdownMenuItem
+          render={
+            <Link href="/settings/nodes" className="flex items-center gap-2">
+              <Server className="h-3.5 w-3.5" />
+              Cluster nodes
             </Link>
           }
         />
         <DropdownMenuItem
           render={
-            <Link href="/settings/nodes" className="flex items-center gap-2">
-              <Server className="h-3.5 w-3.5" />
-              Nodes
+            <Link href="/settings/config" className="flex items-center gap-2">
+              <Settings className="h-3.5 w-3.5" />
+              Cluster config
             </Link>
           }
         />

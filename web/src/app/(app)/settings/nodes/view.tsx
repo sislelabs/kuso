@@ -33,10 +33,9 @@ export function NodesView() {
         <div>
           <h1 className="font-heading text-2xl font-semibold tracking-tight">Cluster nodes</h1>
           <p className="mt-1 text-sm text-[var(--text-secondary)]">
-            Tag nodes with labels (e.g.{" "}
-            <span className="font-mono">region=eu</span>,{" "}
-            <span className="font-mono">tier=premium</span>) and projects can pin to them.
-            kuso translates the conventions into the right kube primitives behind the scenes.
+            Tag nodes with labels (e.g. <span className="font-mono">region=eu</span> or just{" "}
+            <span className="font-mono">gpu</span>) and projects can pin to them. Bare keys
+            without a value work too — useful for capability flags.
           </p>
         </div>
         <Server className="h-6 w-6 shrink-0 text-[var(--text-tertiary)]" />
@@ -136,12 +135,13 @@ function NodeCard({ node }: { node: NodeSummary }) {
         {rows.length === 0 ? (
           <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-4 text-center text-[10px] text-[var(--text-tertiary)]">
             No labels. Add <span className="font-mono">region=eu</span> to make this node available
-            to projects pinned to <span className="font-mono">eu</span>.
+            to projects pinned to <span className="font-mono">eu</span>, or a bare{" "}
+            <span className="font-mono">gpu</span> to flag a capability.
           </p>
         ) : (
           <ul className="space-y-1.5">
             {rows.map((row, i) => (
-              <li key={i} className="flex items-center gap-1.5">
+              <li key={i} className="flex items-center gap-1">
                 <Input
                   value={row.key}
                   onChange={(e) =>
@@ -150,13 +150,13 @@ function NodeCard({ node }: { node: NodeSummary }) {
                   placeholder="key"
                   className="h-7 w-32 font-mono text-[11px]"
                 />
-                <span className="font-mono text-xs text-[var(--text-tertiary)]">=</span>
+                <span className="font-mono text-xs text-[var(--text-tertiary)]/60">=</span>
                 <Input
                   value={row.value}
                   onChange={(e) =>
                     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, value: e.target.value } : r)))
                   }
-                  placeholder="value"
+                  placeholder="value (optional)"
                   className="h-7 flex-1 font-mono text-[11px]"
                 />
                 <button

@@ -7,12 +7,9 @@ import { useSession } from "@/features/auth";
 import {
   LayoutGrid,
   Settings,
-  User as UserIcon,
-  KeyRound,
   Users,
   Shield,
   UsersRound,
-  Bell,
   Cog,
   Server,
 } from "lucide-react";
@@ -50,10 +47,11 @@ export function Sidebar() {
       ]
     : [];
 
-  const accountNav: NavItem[] = [
-    { name: "Profile", href: "/settings/profile", icon: UserIcon },
-    { name: "API tokens", href: "/settings/tokens", icon: KeyRound },
-    { name: "Notifications", href: "/settings/notifications", icon: Bell },
+  // Account-scoped pages (Profile, API tokens, Notifications) live in
+  // the avatar dropdown — they don't need a permanent rail seat. The
+  // sidebar is now exclusively for things that act on infrastructure
+  // (nodes, cluster config) or admin-only tabs.
+  const adminNav: NavItem[] = [
     { name: "Cluster nodes", href: "/settings/nodes", icon: Server },
     { name: "Cluster config", href: "/settings/config", icon: Cog, requiredPermission: "config:read" },
     { name: "Users", href: "/settings/users", icon: Users, requiredPermission: "user:write" },
@@ -61,7 +59,7 @@ export function Sidebar() {
     { name: "Groups", href: "/settings/groups", icon: UsersRound, requiredPermission: "user:write" },
   ];
 
-  const filteredAccount = accountNav.filter(
+  const filteredAdmin = adminNav.filter(
     (n) => !n.requiredPermission || perms.includes(n.requiredPermission)
   );
 
@@ -82,8 +80,8 @@ export function Sidebar() {
           </>
         )}
 
-        <NavSection label="Account" className="mt-auto">
-          {filteredAccount.map((n) => (
+        <NavSection label="Cluster" className="mt-auto">
+          {filteredAdmin.map((n) => (
             <NavRailButton key={n.href} item={n} pathname={pathname} />
           ))}
         </NavSection>

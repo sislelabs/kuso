@@ -8,13 +8,17 @@ import {
   updateProfile,
   type UpdateProfileBody,
 } from "@/features/profile/api";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { toast } from "sonner";
 import { Save, KeyRound } from "lucide-react";
 
+// ProfilePage is the user's account home: identity + password. Two
+// stacked cards with a thin border, dense rows, and trailing action
+// buttons — matches the canvas/overlay aesthetic. Avatar lives in the
+// header so the page feels owned by the signed-in user rather than a
+// generic form.
 export default function ProfilePage() {
   const qc = useQueryClient();
   const { data, refetch } = useSession();
@@ -77,71 +81,144 @@ export default function ProfilePage() {
     }
   };
 
+  const user = data?.user;
+  const initial = (user?.name?.[0] ?? user?.email?.[0] ?? "U").toUpperCase();
+
   return (
-    <div className="mx-auto max-w-xl p-6 lg:p-8 space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Profile</h1>
-      </div>
+    <div className="mx-auto max-w-2xl p-6 lg:p-8">
+      <header className="mb-6 flex items-center gap-4">
+        <Avatar className="h-12 w-12 border border-[var(--border-subtle)]">
+          {user?.image && <AvatarImage src={user.image} alt={user.name ?? ""} />}
+          <AvatarFallback className="bg-[var(--bg-tertiary)] text-base font-medium">
+            {initial}
+          </AvatarFallback>
+        </Avatar>
+        <div className="min-w-0">
+          <h1 className="font-heading text-xl font-semibold tracking-tight truncate">
+            {user?.name || "Profile"}
+          </h1>
+          <p className="font-mono text-[11px] text-[var(--text-tertiary)] truncate">
+            {user?.email ?? ""}
+          </p>
+        </div>
+      </header>
 
-      <form onSubmit={onSaveProfile}>
-        <Card>
-          <CardHeader>
-            <CardTitle>Identity</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="firstName">First name</Label>
-                <Input id="firstName" value={firstName} onChange={(e) => setFirstName(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="lastName">Last name</Label>
-                <Input id="lastName" value={lastName} onChange={(e) => setLastName(e.target.value)} />
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="email">Email</Label>
-              <Input id="email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
-            </div>
-            <div className="flex justify-end">
-              <Button type="submit" disabled={savingProfile}>
-                <Save className="h-4 w-4" />
-                {savingProfile ? "Saving…" : "Save"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </form>
+      <section className="mb-4 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+        <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-2.5">
+          <h2 className="text-sm font-semibold tracking-tight">Identity</h2>
+          <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            local account
+          </span>
+        </div>
+        <form onSubmit={onSaveProfile} className="px-4 py-3">
+          <div className="grid grid-cols-2 gap-x-3 gap-y-3">
+            <Field label="First name" htmlFor="firstName">
+              <Input
+                id="firstName"
+                value={firstName}
+                onChange={(e) => setFirstName(e.target.value)}
+                className="h-8 text-[13px]"
+              />
+            </Field>
+            <Field label="Last name" htmlFor="lastName">
+              <Input
+                id="lastName"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                className="h-8 text-[13px]"
+              />
+            </Field>
+            <Field label="Email" htmlFor="email" colSpan={2}>
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                className="h-8 text-[13px]"
+              />
+            </Field>
+          </div>
+          <div className="mt-3 flex justify-end">
+            <Button type="submit" size="sm" disabled={savingProfile}>
+              <Save className="h-3.5 w-3.5" />
+              {savingProfile ? "Saving…" : "Save"}
+            </Button>
+          </div>
+        </form>
+      </section>
 
-      <form onSubmit={onChangePassword}>
-        <Card>
-          <CardHeader>
-            <CardTitle>Password</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="pwOld">Current</Label>
-              <Input id="pwOld" type="password" value={pwOld} onChange={(e) => setPwOld(e.target.value)} required />
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="pwNew">New</Label>
-                <Input id="pwNew" type="password" value={pwNew} onChange={(e) => setPwNew(e.target.value)} required />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="pwNew2">Confirm</Label>
-                <Input id="pwNew2" type="password" value={pwNew2} onChange={(e) => setPwNew2(e.target.value)} required />
-              </div>
-            </div>
-            <div className="flex justify-end">
-              <Button type="submit" disabled={savingPw}>
-                <KeyRound className="h-4 w-4" />
-                {savingPw ? "Changing…" : "Change password"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </form>
+      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+        <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-2.5">
+          <h2 className="text-sm font-semibold tracking-tight">Password</h2>
+          <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            min 8 chars
+          </span>
+        </div>
+        <form onSubmit={onChangePassword} className="px-4 py-3">
+          <Field label="Current" htmlFor="pwOld">
+            <Input
+              id="pwOld"
+              type="password"
+              value={pwOld}
+              onChange={(e) => setPwOld(e.target.value)}
+              required
+              className="h-8 text-[13px]"
+            />
+          </Field>
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <Field label="New" htmlFor="pwNew">
+              <Input
+                id="pwNew"
+                type="password"
+                value={pwNew}
+                onChange={(e) => setPwNew(e.target.value)}
+                required
+                className="h-8 text-[13px]"
+              />
+            </Field>
+            <Field label="Confirm" htmlFor="pwNew2">
+              <Input
+                id="pwNew2"
+                type="password"
+                value={pwNew2}
+                onChange={(e) => setPwNew2(e.target.value)}
+                required
+                className="h-8 text-[13px]"
+              />
+            </Field>
+          </div>
+          <div className="mt-3 flex justify-end">
+            <Button type="submit" size="sm" disabled={savingPw}>
+              <KeyRound className="h-3.5 w-3.5" />
+              {savingPw ? "Changing…" : "Change password"}
+            </Button>
+          </div>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  htmlFor,
+  colSpan,
+  children,
+}: {
+  label: string;
+  htmlFor: string;
+  colSpan?: 2;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className={colSpan === 2 ? "col-span-2 space-y-1" : "space-y-1"}>
+      <label
+        htmlFor={htmlFor}
+        className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+      >
+        {label}
+      </label>
+      {children}
     </div>
   );
 }

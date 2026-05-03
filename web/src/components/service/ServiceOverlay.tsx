@@ -99,14 +99,17 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
             transition={{ duration: 0.15 }}
             className="absolute inset-0 bg-[rgba(8,8,11,0.55)] backdrop-blur-[2px]"
           />
-          {/* Panel — slides from the right. */}
+          {/* Panel — slides from the right. `relative z-10` lifts it
+              above the absolutely-positioned backdrop, otherwise the
+              panel sits in normal flow *behind* the backdrop and gets
+              filtered by its blur. */}
           <motion.div
             ref={panelRef}
             initial={{ x: "100%" }}
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", stiffness: 320, damping: 34, mass: 0.8 }}
-            className="ml-auto flex h-full w-full max-w-3xl flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] border-l border-[var(--border-subtle)]"
+            className="relative z-10 ml-auto flex h-full w-full max-w-3xl flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] border-l border-[var(--border-subtle)]"
           >
             {/* Sticky header */}
             <header className="flex shrink-0 items-start gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-5 py-4">
