@@ -22,6 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"regexp"
@@ -161,6 +162,37 @@ func (d *Dispatcher) dispatch(ctx context.Context, e Event) {
 			secret, _ := n.Config["secret"].(string)
 			d.sendWebhook(ctx, url, secret, e)
 		}
+	}
+}
+
+// SendDirect fires a single event at exactly one notification config,
+// synchronously, bypassing the event whitelist + the async queue.
+// Used by the Test endpoint so users get an actual HTTP error back
+// when their webhook URL is wrong / their Discord channel was deleted
+// / the secret got rotated. The async path swallows those errors.
+func (d *Dispatcher) SendDirect(ctx context.Context, n *db.Notification, e Event) error {
+	if n == nil {
+		return fmt.Errorf("notification is nil")
+	}
+	if !n.Enabled {
+		return fmt.Errorf("channel %q is disabled", n.Name)
+	}
+	switch n.Type {
+	case "discord":
+		url, _ := n.Config["url"].(string)
+		if url == "" {
+			return fmt.Errorf("channel %q has no webhook URL", n.Name)
+		}
+		return d.sendDiscordSync(ctx, url, e, mentionFor(e, n.Config))
+	case "webhook":
+		url, _ := n.Config["url"].(string)
+		if url == "" {
+			return fmt.Errorf("channel %q has no webhook URL", n.Name)
+		}
+		secret, _ := n.Config["secret"].(string)
+		return d.sendWebhookSync(ctx, url, secret, e)
+	default:
+		return fmt.Errorf("unsupported notification type %q", n.Type)
 	}
 }
 
@@ -318,15 +350,24 @@ func (d *Dispatcher) sendWebhook(ctx context.Context, url, secret string, e Even
 }
 
 func (d *Dispatcher) post(ctx context.Context, url string, body any, extra http.Header) {
+	if err := d.postSync(ctx, url, body, extra); err != nil {
+		// Swallow + log: the async fire-and-forget path doesn't
+		// have a caller to surface the error to.
+		d.logger.Warn("notify: post", "url", redact(url), "err", err)
+	}
+}
+
+// postSync is post with the error returned to the caller. Used by
+// SendDirect so the Test endpoint can show "401 from Discord" or
+// similar in the UI instead of a misleading 204.
+func (d *Dispatcher) postSync(ctx context.Context, url string, body any, extra http.Header) error {
 	buf, err := json.Marshal(body)
 	if err != nil {
-		d.logger.Warn("notify: marshal", "err", err)
-		return
+		return fmt.Errorf("marshal: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewReader(buf))
 	if err != nil {
-		d.logger.Warn("notify: build request", "err", err)
-		return
+		return fmt.Errorf("build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "kuso-server")
@@ -337,13 +378,45 @@ func (d *Dispatcher) post(ctx context.Context, url string, body any, extra http.
 	}
 	resp, err := d.client.Do(req)
 	if err != nil {
-		d.logger.Warn("notify: post", "url", redact(url), "err", err)
-		return
+		return fmt.Errorf("post: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		d.logger.Warn("notify: non-2xx", "url", redact(url), "status", resp.StatusCode)
+		// Read up to 256 bytes of the response body so the user
+		// sees the actual upstream error (Discord returns useful
+		// JSON: {"message":"Invalid Webhook Token","code":50027}).
+		buf, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return fmt.Errorf("upstream %d: %s", resp.StatusCode, strings.TrimSpace(string(buf)))
 	}
+	return nil
+}
+
+// sendDiscordSync mirrors sendDiscord but returns the upstream error.
+func (d *Dispatcher) sendDiscordSync(ctx context.Context, url string, e Event, mention string) error {
+	color := discordColor(e)
+	embed := map[string]any{
+		"title":       e.Title,
+		"description": e.Body,
+		"color":       color,
+		"timestamp":   e.Timestamp.Format(time.RFC3339),
+		"fields":      discordFields(e),
+	}
+	if e.URL != "" {
+		embed["url"] = e.URL
+	}
+	body := map[string]any{"username": "kuso", "embeds": []any{embed}}
+	if mention != "" {
+		body["content"] = mention
+		body["allowed_mentions"] = allowedMentionsFor(mention)
+	}
+	return d.postSync(ctx, url, body, nil)
+}
+
+// sendWebhookSync mirrors sendWebhook with error propagation.
+func (d *Dispatcher) sendWebhookSync(ctx context.Context, url, secret string, e Event) error {
+	headers := http.Header{}
+	_ = secret
+	return d.postSync(ctx, url, e, headers)
 }
 
 // redact strips the secret token from a Discord webhook URL when

@@ -26,6 +26,7 @@ import (
 // notify dispatcher (avoids importing the full type into router/Deps).
 type notifySink interface {
 	EmitEnvelope(notify.EmitEnvelope)
+	SendDirect(ctx context.Context, n *db.Notification, e notify.Event) error
 }
 
 type NotificationsHandler struct {
@@ -61,12 +62,20 @@ func (h *NotificationsHandler) Test(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "notify dispatcher not wired", http.StatusServiceUnavailable)
 		return
 	}
-	h.Notify.EmitEnvelope(notify.EmitEnvelope{
+	// Test sends bypass the event-whitelist filter — otherwise a
+	// notification that doesn't have `test.ping` in its events list
+	// (i.e. every real-world config) would silently drop the test.
+	// SendDirect targets ONE notification, ignoring filters.
+	if err := h.Notify.SendDirect(ctx, n, notify.Event{
 		Type:     "test.ping",
 		Title:    fmt.Sprintf("Test from kuso (%s)", n.Name),
 		Body:     "If you can read this, your notification channel is wired up correctly.",
 		Severity: "info",
-	})
+	}); err != nil {
+		h.Logger.Error("notify test", "name", n.Name, "err", err)
+		http.Error(w, "test send failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

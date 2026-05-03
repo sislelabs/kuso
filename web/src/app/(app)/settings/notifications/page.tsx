@@ -364,7 +364,7 @@ function NotificationEditor({
                     // the event is picked. Without min-width on the
                     // picker column the row would shrink when the
                     // toggle was off and the layout would jump.
-                    "grid grid-cols-[28px_180px_1fr_180px] items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 text-[11px]"
+                    "grid grid-cols-[44px_180px_1fr_180px] items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-1.5 text-[11px]"
                   )}
                 >
                   <button
