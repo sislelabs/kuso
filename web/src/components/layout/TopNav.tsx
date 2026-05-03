@@ -119,7 +119,7 @@ export function TopNav() {
       <div className="flex-1" />
 
       <Link
-        href="/settings/profile"
+        href="/settings"
         className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
       >
         <Settings className="h-3.5 w-3.5" />
