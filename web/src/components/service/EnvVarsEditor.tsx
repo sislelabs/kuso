@@ -22,7 +22,44 @@ interface Row {
 
 type Mode = "rows" | "bulk";
 
-function toRow(v: KusoEnvVar, project: string): Row {
+// addonByConnSecret maps "<project>-<addon>-conn" → "<addon>" so the
+// editor can detect a secretKeyRef that originally came from an addon
+// ref like ${{ postgres.DATABASE_URL }} and render it as a ref again
+// instead of an opaque (from secret) row. Without this the round-trip
+// — type ref, save, reload — collapses to a disabled placeholder and
+// the user can't edit their own value.
+function addonShortByConnSecret(
+  addons: ReadonlyArray<{ metadata: { name: string }; status?: { connectionSecret?: string } }>,
+  project: string
+): Map<string, string> {
+  const out = new Map<string, string>();
+  const prefix = project + "-";
+  for (const a of addons) {
+    const fqn = a.metadata?.name ?? "";
+    const short = fqn.startsWith(prefix) ? fqn.slice(prefix.length) : fqn;
+    const sec = a.status?.connectionSecret;
+    if (sec) out.set(sec, short);
+    // Fallback: addons without a populated status yet still follow the
+    // canonical "<fqn>-conn" naming. Index that too so freshly-created
+    // addons round-trip before the operator backfills status.
+    if (fqn) out.set(fqn + "-conn", short);
+  }
+  return out;
+}
+
+function toRow(
+  v: KusoEnvVar,
+  project: string,
+  addonByConn: Map<string, string>
+): Row {
+  // Detect "secretKeyRef pointing at a known addon" and render it as a
+  // ${{ <addon>.<KEY> }} ref instead of treating it as opaque. Anything
+  // else with a valueFrom (manual secretKeyRef, fieldRef, etc.) stays
+  // fromSecret because we have no user-facing representation for it.
+  const ref = addonRefFromValueFrom(v.valueFrom, addonByConn);
+  if (ref) {
+    return { name: v.name ?? "", value: ref, fromSecret: false, visible: false };
+  }
   const fromSecret = !!v.valueFrom;
   const raw = fromSecret ? "" : (v.value ?? "");
   return {
@@ -38,6 +75,25 @@ function toRow(v: KusoEnvVar, project: string): Row {
     fromSecret,
     visible: false,
   };
+}
+
+// addonRefFromValueFrom picks the secretKeyRef out of a valueFrom blob
+// (server returns it as `Record<string, unknown>` to stay forward-compat
+// with future kube valueFrom variants) and, if it points at a known
+// addon's connection secret, returns the equivalent `${{ <addon>.<KEY> }}`
+// ref. Returns "" when the secretKeyRef is opaque (manually-mounted
+// secret unrelated to a kuso addon) so the caller falls back to the
+// fromSecret display path.
+function addonRefFromValueFrom(
+  vf: Record<string, unknown> | undefined,
+  addonByConn: Map<string, string>
+): string {
+  if (!vf) return "";
+  const skr = vf.secretKeyRef as { name?: string; key?: string } | undefined;
+  if (!skr || !skr.name || !skr.key) return "";
+  const short = addonByConn.get(skr.name);
+  if (!short) return "";
+  return `\${{ ${short}.${skr.key} }}`;
 }
 
 function toEnvVar(r: Row): KusoEnvVar {
@@ -149,6 +205,15 @@ function dotenvToRows(text: string, prevSecrets: Row[]): Row[] {
 export function EnvVarsEditor({ project, service }: { project: string; service: string }) {
   const env = useServiceEnv(project, service);
   const setEnv = useSetServiceEnv(project, service);
+  const addons = useAddons(project);
+  // Memoised so the toRow effect below only re-runs when the addon set
+  // (or its connectionSecret status fields) actually changes. Without
+  // memo, every re-render rebuilds the map and the effect's dep array
+  // would point at a fresh reference each time.
+  const addonByConn = useMemo(
+    () => addonShortByConnSecret(addons.data ?? [], project),
+    [addons.data, project]
+  );
   // secrets:write gates the Save + the per-row destructive
   // affordances. We intentionally KEEP the values visible (env vars
   // are already fetched here; if the user can't see them they
@@ -161,10 +226,10 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
 
   useEffect(() => {
     if (env.data) {
-      setRows((env.data.envVars ?? []).map((v) => toRow(v, project)));
+      setRows((env.data.envVars ?? []).map((v) => toRow(v, project, addonByConn)));
       setDirty(false);
     }
-  }, [env.data]);
+  }, [env.data, addonByConn, project]);
 
   // Bulk text is derived from rows when entering bulk mode and
   // committed back to rows on every keystroke. We keep them in sync
