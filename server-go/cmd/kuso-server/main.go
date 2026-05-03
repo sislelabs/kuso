@@ -28,6 +28,7 @@ import (
 	"kuso/server/internal/health"
 	"kuso/server/internal/logs"
 	"kuso/server/internal/nodemetrics"
+	"kuso/server/internal/nodewatch"
 	"kuso/server/internal/notify"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/spec"
@@ -300,6 +301,14 @@ func main() {
 	if kubeClient != nil {
 		sampler := &nodemetrics.Sampler{DB: database, Kube: kubeClient, Logger: logger.With("component", "nodemetrics")}
 		go sampler.Run(ctx)
+		// Watch for NotReady nodes; auto-cordon + fire notify event
+		// when a node has been NotReady past the threshold.
+		watcher := &nodewatch.Watcher{
+			Kube:   kubeClient,
+			Notify: notifyDisp,
+			Logger: logger.With("component", "nodewatch"),
+		}
+		go watcher.Run(ctx)
 	}
 
 	<-ctx.Done()

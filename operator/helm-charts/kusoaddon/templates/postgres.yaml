@@ -45,6 +45,7 @@ spec:
         {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
         {{- include "kusoaddon.labels" . | nindent 8 }}
     spec:
+      {{- include "kusoaddon.placement" . | nindent 6 }}
       containers:
         - name: postgres
           image: "postgres:{{ $version }}"

@@ -189,6 +189,60 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	return created, nil
 }
 
+// SetPlacement replaces the addon's placement block. Pass nil to
+// clear it (schedule anywhere). Validates that at least one cluster
+// node matches the labels — calling code translates that into a
+// 422 so the UI can refuse to save when the selector pins to nothing.
+func (s *Service) SetPlacement(ctx context.Context, project, name string, p *kube.KusoPlacement) error {
+	ns := s.nsFor(ctx, project)
+	fqn := addonCRName(project, name)
+	addon, err := s.Kube.GetKusoAddon(ctx, ns, fqn)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+		}
+		return fmt.Errorf("get addon: %w", err)
+	}
+	if p != nil && len(p.Labels) == 0 && len(p.Nodes) == 0 {
+		// Treat the empty struct the same as nil — store no placement.
+		p = nil
+	}
+	if err := s.validatePlacement(ctx, p); err != nil {
+		return err
+	}
+	addon.Spec.Placement = p
+	// Use Update via the kube wrapper. helm-operator picks up the
+	// change on its 3m reconcile (or sooner via watch) and re-renders
+	// the chart, which now includes the placement values.
+	if _, err := s.Kube.UpdateKusoAddon(ctx, ns, addon); err != nil {
+		return fmt.Errorf("update addon: %w", err)
+	}
+	return nil
+}
+
+// validatePlacement is the addon-side mirror of the projects-package
+// check. We reimplement instead of importing projects because that
+// package is a peer (and would create a chunky cycle).
+func (s *Service) validatePlacement(ctx context.Context, p *kube.KusoPlacement) error {
+	if p == nil || (len(p.Labels) == 0 && len(p.Nodes) == 0) {
+		return nil
+	}
+	if s.Kube == nil || s.Kube.Clientset == nil {
+		return nil
+	}
+	nodes, err := s.Kube.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("validate placement: list nodes: %w", err)
+	}
+	for i := range nodes.Items {
+		n := &nodes.Items[i]
+		if kube.PlacementMatchesNode(p, n.Name, n.Labels) {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: no cluster node matches placement (labels=%v nodes=%v)", ErrInvalid, p.Labels, p.Nodes)
+}
+
 // Delete removes a KusoAddon CR and refreshes every env's
 // envFromSecrets list.
 func (s *Service) Delete(ctx context.Context, project, name string) error {

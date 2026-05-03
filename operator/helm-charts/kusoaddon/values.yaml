@@ -45,3 +45,16 @@ database: ""
 backup:
   schedule: ""
   retentionDays: 14
+
+# placement: pin the addon's StatefulSet to a subset of nodes. Same
+# shape as the kusoenvironment chart's placement field. Empty =
+# schedule anywhere. The kuso server passes spec.placement through
+# verbatim; the user edits it via the addon settings drawer.
+#
+# placement:
+#   labels:
+#     region: eu        # → kuso.sislelabs.com/region=eu node label
+#     tier: db
+#   nodes:
+#     - worker-2        # match by kubernetes.io/hostname
+placement: {}

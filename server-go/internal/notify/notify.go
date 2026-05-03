@@ -45,6 +45,12 @@ const (
 	EventAlertFired     EventType = "alert.fired"
 	EventBackupOK       EventType = "backup.succeeded"
 	EventBackupFailed   EventType = "backup.failed"
+	// Node lifecycle events. Fired by the nodewatch goroutine when a
+	// kube node has been NotReady past the watcher's threshold.
+	// Recovery emits EventNodeRecovered so the operator sees both
+	// edges of the outage.
+	EventNodeUnreachable EventType = "node.unreachable"
+	EventNodeRecovered   EventType = "node.recovered"
 )
 
 // Event is the wire-stable payload domain code emits. JSON-serialised
@@ -466,6 +472,33 @@ func PodCrashed(project, service, podName, reason string) Event {
 		Service:  service,
 		Severity: "warn",
 		Extra:    map[string]string{"pod": podName},
+	}
+}
+
+// NodeUnreachable fires when a node has been NotReady past the
+// nodewatch threshold (5 min by default). The watcher cordons the
+// node before emitting so the event narrates a state change the
+// operator can act on, not a transient blip.
+func NodeUnreachable(node, reason string) Event {
+	return Event{
+		Type:     EventNodeUnreachable,
+		Title:    fmt.Sprintf("✗ Node unreachable: %s", node),
+		Body:     reason,
+		Severity: "error",
+		Extra:    map[string]string{"node": node},
+	}
+}
+
+// NodeRecovered fires when a previously-cordoned-as-unreachable node
+// transitions back to Ready. The watcher uncordons it (so workloads
+// can land again) before emitting.
+func NodeRecovered(node string) Event {
+	return Event{
+		Type:     EventNodeRecovered,
+		Title:    fmt.Sprintf("✓ Node recovered: %s", node),
+		Body:     "node is Ready again and uncordoned",
+		Severity: "info",
+		Extra:    map[string]string{"node": node},
 	}
 }
 

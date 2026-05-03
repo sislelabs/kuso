@@ -91,6 +91,19 @@ spec:
                     retentionDays:
                       type: integer
                       default: 14
+                # Hard placement: addons schedule on nodes whose labels
+                # match. Same shape as KusoService.spec.placement —
+                # operator helm chart turns this into nodeSelector +
+                # required nodeAffinity. Empty = schedule anywhere.
+                placement:
+                  type: object
+                  properties:
+                    labels:
+                      type: object
+                      additionalProperties: { type: string }
+                    nodes:
+                      type: array
+                      items: { type: string }
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

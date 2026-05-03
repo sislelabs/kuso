@@ -234,6 +234,12 @@ func (c *Client) DeleteKusoBuild(ctx context.Context, namespace, name string) er
 	return deleteCR(ctx, c, GVRBuilds, namespace, name)
 }
 
+// UpdateKusoAddon replaces an existing KusoAddon's spec. Used by the
+// addon settings flow (placement edits, future size/version updates).
+func (c *Client) UpdateKusoAddon(ctx context.Context, namespace string, a *KusoAddon) (*KusoAddon, error) {
+	return update[KusoAddon](ctx, c, GVRAddons, "KusoAddon", namespace, a)
+}
+
 // UpdateKusoEnvironment replaces an existing KusoEnvironment's spec.
 //
 // NOTE: callers that mutate envFromSecrets values must also bump

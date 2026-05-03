@@ -18,6 +18,7 @@ export interface NodeSummary {
   // UI; underlying kube labels stay invisible.
   kusoLabels: Record<string, string>;
   schedulable: boolean;
+  unreachable?: boolean;
   createdAt?: string;
   // Live capacity + usage. cpu in milli-cores, memory + disk in
   // bytes. Usage fields are 0 when metrics-server isn't installed —

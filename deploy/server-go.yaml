@@ -30,6 +30,22 @@ spec:
       labels: { app.kubernetes.io/name: kuso-server }
     spec:
       serviceAccountName: kuso-server
+      # Pin to the k3s control-plane node. Two reasons:
+      #   1. SQLite PVC is RWO local-path → must stay on its node.
+      #   2. The /var/lib/rancher/k3s/server/node-token hostPath only
+      #      exists on the control plane — kuso-server reads it to
+      #      issue agent-join commands when adding nodes.
+      # The well-known node-role.kubernetes.io/control-plane label is
+      # set by k3s on the bootstrap node automatically.
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      # tolerate the standard control-plane NoSchedule taint k3s sets
+      # so this pod is allowed to schedule on the CP node despite the
+      # taint. Without this it'd be evicted on cluster restarts.
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
       # 30s grace period: SIGTERM → preStop sleep 5s (lets in-flight
       # requests finish + ingress drain reach this pod's removal) →
       # process gets ~25s to actually quit. Without this, ingress
@@ -38,7 +54,7 @@ spec:
       terminationGracePeriodSeconds: 30
       containers:
         - name: server
-          image: ghcr.io/sislelabs/kuso-server-go:v0.6.22
+          image: ghcr.io/sislelabs/kuso-server-go:v0.6.23
           imagePullPolicy: IfNotPresent
           ports:
             - { containerPort: 3000, name: http }
@@ -73,6 +89,22 @@ spec:
             periodSeconds: 5
           volumeMounts:
             - { name: data, mountPath: /data }
+            # Read-only mount of the k3s server node-token. kuso-server
+            # reads this when issuing `K3S_TOKEN=… curl … | sh` on a
+            # remote VM during the Add Node flow. The file is
+            # 0600 root:root on the host — the kuso-server container
+            # runs as root, so the read works without extra perms.
+            - name: k3s-token
+              mountPath: /etc/kuso/k3s-token
+              readOnly: true
+              subPath: node-token
       volumes:
         - name: data
           persistentVolumeClaim: { claimName: kuso-server-go-data }
+        - name: k3s-token
+          hostPath:
+            # Mount the directory so subPath can resolve. Bare-file
+            # hostPath works in some kube versions but not all; the
+            # subPath form is portable.
+            path: /var/lib/rancher/k3s/server
+            type: Directory

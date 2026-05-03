@@ -11,6 +11,7 @@ import {
   restoreBackup,
   listSQLTables,
   runSQL,
+  setAddonPlacement,
   type BackupObject,
 } from "@/features/projects";
 import { Button } from "@/components/ui/button";
@@ -166,7 +167,7 @@ export function AddonOverlay({ project, addon, onClose }: Props) {
               ) : tab === "sql" ? (
                 <SQLTab project={project} addon={addon!} />
               ) : (
-                <SettingsTab project={project} addon={addon!} onClose={onClose} />
+                <SettingsTab project={project} addon={addon!} cr={data} onClose={onClose} />
               )}
             </div>
           </motion.div>
@@ -723,13 +724,199 @@ function SQLResults({
   );
 }
 
+// PlacementSection edits spec.placement on a KusoAddon. Same model as
+// the service settings panel: AND-of-labels (kuso.sislelabs.com/<key>=<val>
+// must all match a node) plus an optional list of explicit hostnames.
+// Server validates that at least one node matches at save time and
+// 400s with "no cluster node matches placement" if not — we surface
+// that error inline so the user sees what to fix.
+function PlacementSection({
+  project,
+  addon,
+  cr,
+}: {
+  project: string;
+  addon: string;
+  cr?: import("@/types/projects").KusoAddon;
+}) {
+  const qc = useQueryClient();
+  const initialLabels: Record<string, string> = (cr?.spec as { placement?: { labels?: Record<string, string> } })?.placement?.labels ?? {};
+  const initialNodes: string[] = (cr?.spec as { placement?: { nodes?: string[] } })?.placement?.nodes ?? [];
+  const [labels, setLabels] = useState<{ key: string; value: string }[]>(
+    Object.entries(initialLabels).map(([k, v]) => ({ key: k, value: v }))
+  );
+  const [nodes, setNodes] = useState<string[]>(initialNodes);
+  const [newKey, setNewKey] = useState("");
+  const [newVal, setNewVal] = useState("");
+  const [newNode, setNewNode] = useState("");
+
+  // Re-baseline when the CR changes (e.g. after a successful save).
+  useEffect(() => {
+    setLabels(Object.entries(initialLabels).map(([k, v]) => ({ key: k, value: v })));
+    setNodes(initialNodes);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(initialLabels), JSON.stringify(initialNodes)]);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const lbls: Record<string, string> = {};
+      for (const r of labels) {
+        if (r.key.trim() && r.value.trim()) lbls[r.key.trim()] = r.value.trim();
+      }
+      return setAddonPlacement(project, addon, { labels: lbls, nodes });
+    },
+    onSuccess: () => {
+      toast.success("Placement saved");
+      qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+  });
+
+  const dirty =
+    JSON.stringify(
+      Object.fromEntries(
+        labels.filter((r) => r.key.trim()).map((r) => [r.key.trim(), r.value.trim()])
+      )
+    ) !== JSON.stringify(initialLabels) ||
+    JSON.stringify(nodes) !== JSON.stringify(initialNodes);
+
+  return (
+    <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
+      <h4 className="text-sm font-semibold">Placement</h4>
+      <p className="mt-1 text-xs text-[var(--text-secondary)]">
+        Pin this addon&apos;s pod to nodes whose labels match every entry below. Empty = schedule
+        anywhere. Use the <span className="font-mono">/settings/nodes</span> page to manage node
+        labels first.
+      </p>
+      <div className="mt-3 space-y-1">
+        <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+          Required labels
+        </label>
+        {labels.map((row, i) => (
+          <div key={i} className="flex items-center gap-1">
+            <Input
+              value={row.key}
+              onChange={(e) =>
+                setLabels((cur) => cur.map((r, j) => (i === j ? { ...r, key: e.target.value } : r)))
+              }
+              placeholder="region"
+              className="h-7 flex-1 font-mono text-[12px]"
+            />
+            <span className="font-mono text-[var(--text-tertiary)]">=</span>
+            <Input
+              value={row.value}
+              onChange={(e) =>
+                setLabels((cur) => cur.map((r, j) => (i === j ? { ...r, value: e.target.value } : r)))
+              }
+              placeholder="eu"
+              className="h-7 flex-1 font-mono text-[12px]"
+            />
+            <button
+              type="button"
+              onClick={() => setLabels((cur) => cur.filter((_, j) => j !== i))}
+              className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+        <div className="flex items-center gap-1">
+          <Input
+            value={newKey}
+            onChange={(e) => setNewKey(e.target.value)}
+            placeholder="key"
+            className="h-7 flex-1 font-mono text-[12px]"
+          />
+          <span className="font-mono text-[var(--text-tertiary)]">=</span>
+          <Input
+            value={newVal}
+            onChange={(e) => setNewVal(e.target.value)}
+            placeholder="value"
+            className="h-7 flex-1 font-mono text-[12px]"
+          />
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!newKey.trim() || !newVal.trim()}
+            onClick={() => {
+              setLabels((cur) => [...cur, { key: newKey.trim(), value: newVal.trim() }]);
+              setNewKey("");
+              setNewVal("");
+            }}
+          >
+            add
+          </Button>
+        </div>
+      </div>
+      <div className="mt-3 space-y-1">
+        <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+          Or explicit hostnames
+        </label>
+        {nodes.map((n, i) => (
+          <div key={i} className="flex items-center gap-1">
+            <Input
+              value={n}
+              onChange={(e) => setNodes((cur) => cur.map((x, j) => (i === j ? e.target.value : x)))}
+              className="h-7 flex-1 font-mono text-[12px]"
+            />
+            <button
+              type="button"
+              onClick={() => setNodes((cur) => cur.filter((_, j) => j !== i))}
+              className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400"
+            >
+              <X className="h-3 w-3" />
+            </button>
+          </div>
+        ))}
+        <div className="flex items-center gap-1">
+          <Input
+            value={newNode}
+            onChange={(e) => setNewNode(e.target.value)}
+            placeholder="hostname"
+            className="h-7 flex-1 font-mono text-[12px]"
+          />
+          <Button
+            size="sm"
+            variant="ghost"
+            disabled={!newNode.trim()}
+            onClick={() => {
+              setNodes((cur) => [...cur, newNode.trim()]);
+              setNewNode("");
+            }}
+          >
+            add
+          </Button>
+        </div>
+      </div>
+      <div className="mt-3 flex justify-end gap-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={!dirty || save.isPending}
+          onClick={() => {
+            setLabels(Object.entries(initialLabels).map(([k, v]) => ({ key: k, value: v })));
+            setNodes(initialNodes);
+          }}
+        >
+          Reset
+        </Button>
+        <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+          {save.isPending ? "Saving…" : "Save placement"}
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 function SettingsTab({
   project,
   addon,
+  cr,
   onClose,
 }: {
   project: string;
   addon: string;
+  cr?: import("@/types/projects").KusoAddon;
   onClose: () => void;
 }) {
   const qc = useQueryClient();
@@ -747,6 +934,7 @@ function SettingsTab({
   });
   return (
     <div className="space-y-4 p-5">
+      <PlacementSection project={project} addon={addon} cr={cr} />
       <section className="rounded-md border border-red-500/30 bg-red-500/5 p-4">
         <h4 className="text-sm font-semibold">Delete addon</h4>
         <p className="mt-1 text-xs text-[var(--text-secondary)]">

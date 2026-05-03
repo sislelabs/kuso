@@ -55,6 +55,7 @@ export function NodesView() {
     queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
   });
 
+  const [addOpen, setAddOpen] = useState(false);
   // Hoist edits up here so we can render a single floating save bar
   // covering every node's pending changes — same pattern as service
   // settings. Per-node Save buttons hidden in tiny card headers were
@@ -139,8 +140,28 @@ export function NodesView() {
             <span className="font-mono">gpu</span>.
           </p>
         </div>
-        <Server className="h-6 w-6 shrink-0 text-[var(--text-tertiary)]" />
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setAddOpen(true)}
+            className="shrink-0"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            Add node
+          </Button>
+          <Server className="h-6 w-6 shrink-0 text-[var(--text-tertiary)]" />
+        </div>
       </header>
+      {addOpen && (
+        <AddNodeModal
+          onClose={() => setAddOpen(false)}
+          onJoined={() => {
+            setAddOpen(false);
+            qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
+          }}
+        />
+      )}
 
       {nodes.isPending ? (
         <div className="space-y-3">
@@ -256,9 +277,16 @@ function NodeCard({
               </span>
             ))}
             {node.zone && <span>zone {node.zone}</span>}
-            {!node.schedulable && (
+            {node.unreachable ? (
+              <span
+                className="rounded bg-red-500/10 px-1.5 py-0.5 text-red-400"
+                title="kuso has cordoned this node because it has been NotReady past the threshold. Will auto-uncordon when the node recovers."
+              >
+                unreachable
+              </span>
+            ) : !node.schedulable ? (
               <span className="rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-400">cordoned</span>
-            )}
+            ) : null}
             {isDirty && (
               <span className="ml-auto rounded bg-amber-500/10 px-1.5 py-0.5 text-amber-400">
                 unsaved
@@ -266,6 +294,9 @@ function NodeCard({
             )}
           </div>
         </div>
+        {/* Hide Remove on the control plane — the server refuses
+            anyway, no point teasing the button. */}
+        {!node.roles.includes("control-plane") && <RemoveNodeButton node={node} />}
       </header>
 
       <NodeStats node={node} />
@@ -642,6 +673,442 @@ interface HistorySample {
 interface HistoryResponse {
   node: string;
   samples: HistorySample[] | null;
+}
+
+// RemoveNodeButton ships the cordon/drain/delete flow as a single
+// confirm-then-go affordance. We skip the optional SSH uninstall
+// (no creds round-trip from the row) — the user can re-enter the VM
+// manually if they want to wipe k3s. Force=false by default so a
+// stuck-evicting pod blocks removal; the operator can re-issue with
+// force=true after diagnosing.
+function RemoveNodeButton({ node }: { node: NodeSummary }) {
+  const qc = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  const remove = useMutation({
+    mutationFn: () =>
+      api(`/api/kubernetes/nodes/${encodeURIComponent(node.name)}/remove`, {
+        method: "POST",
+        body: { force: false },
+      }),
+    onSuccess: () => {
+      toast.success(`Removed ${node.name}`);
+      qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Remove failed");
+    },
+  });
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        onClick={() => setConfirming(true)}
+        className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400"
+        aria-label={`Remove ${node.name}`}
+        title="Cordon, drain, and delete this node"
+      >
+        <X className="h-3.5 w-3.5" />
+      </button>
+    );
+  }
+  return (
+    <div className="inline-flex items-center gap-1 rounded border border-red-500/30 bg-red-500/5 px-1.5 py-0.5">
+      <span className="font-mono text-[10px] text-red-400">remove?</span>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={() => remove.mutate()}
+        disabled={remove.isPending}
+        className="h-5 px-1 text-[10px] text-red-400 hover:bg-red-500/20"
+      >
+        {remove.isPending ? "…" : "yes"}
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={() => setConfirming(false)}
+        disabled={remove.isPending}
+        className="h-5 px-1 text-[10px]"
+      >
+        no
+      </Button>
+    </div>
+  );
+}
+
+// SSHKey is the wire shape returned by /api/ssh-keys. Private bytes
+// never leave the server; we only see the public half + fingerprint.
+interface SSHKey {
+  id: string;
+  name: string;
+  publicKey: string;
+  fingerprint: string;
+  createdAt: string;
+}
+
+// AddNodeModal — Coolify-inspired two-step flow:
+//   1. Pick (or generate) an SSH key, paste its public half on the VM,
+//      enter host + user.
+//   2. Click "Validate" — server runs SSH probes, returns per-check
+//      pass/fail. The user fixes anything missing.
+//   3. Click "Join" — server runs the k3s agent install. The request
+//      blocks for the duration (30-90s typical).
+function AddNodeModal({
+  onClose,
+  onJoined,
+}: {
+  onClose: () => void;
+  onJoined: () => void;
+}) {
+  const qc = useQueryClient();
+  const keys = useQuery({
+    queryKey: ["ssh-keys"],
+    queryFn: () => api<SSHKey[]>("/api/ssh-keys"),
+  });
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("22");
+  const [user, setUser] = useState("root");
+  const [keyId, setKeyId] = useState<string>("");
+  const [region, setRegion] = useState("");
+  const [output, setOutput] = useState<string | null>(null);
+  const [validation, setValidation] = useState<{
+    ok: boolean;
+    checks: { label: string; ok: boolean; detail?: string }[];
+  } | null>(null);
+  const [showNewKey, setShowNewKey] = useState(false);
+
+  const selectedKey = (keys.data ?? []).find((k) => k.id === keyId);
+
+  const validate = useMutation({
+    mutationFn: () =>
+      api<{ ok: boolean; checks: { label: string; ok: boolean; detail?: string }[] }>(
+        "/api/kubernetes/nodes/validate",
+        {
+          method: "POST",
+          body: {
+            host: host.trim(),
+            port: Number(port) || 22,
+            user: user.trim() || "root",
+            sshKeyId: keyId,
+          },
+        }
+      ),
+    onSuccess: (res) => {
+      setValidation(res);
+      if (res.ok) toast.success("Validation passed — ready to join");
+      else toast.error("Validation has errors — see the checks below");
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Validate failed");
+    },
+  });
+
+  const join = useMutation({
+    mutationFn: () => {
+      const labels: Record<string, string> = {};
+      if (region.trim()) labels[`region`] = region.trim();
+      return api<{ output: string; nodeName: string }>("/api/kubernetes/nodes/join", {
+        method: "POST",
+        body: {
+          host: host.trim(),
+          port: Number(port) || 22,
+          user: user.trim() || "root",
+          sshKeyId: keyId,
+          labels,
+        },
+      });
+    },
+    onSuccess: (data) => {
+      setOutput(data.output);
+      toast.success(`Node ${data.nodeName || host} joined`);
+      onJoined();
+    },
+    onError: (err) => {
+      setOutput(err instanceof Error ? err.message : String(err));
+      toast.error("Join failed — see install output");
+    },
+  });
+
+  const validateDisabled = !host.trim() || !keyId || validate.isPending;
+  // Allow Join even when validation hasn't run, but encourage the
+  // happy path by enabling the button only after a successful
+  // validation. Users who insist on skipping can re-click Validate
+  // until it passes — the cheap UX safeguard, not a hard block.
+  const joinDisabled = !host.trim() || !keyId || join.isPending || !validation?.ok;
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !join.isPending && !validate.isPending) onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose, join.isPending, validate.isPending]);
+
+  const busy = join.isPending || validate.isPending;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={() => !busy && onClose()}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-xl max-h-[90vh] overflow-y-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] shadow-[var(--shadow-lg)]"
+      >
+        <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
+          <div>
+            <h2 className="font-mono text-sm font-medium">Add node</h2>
+            <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              k3s agent join · validate, then install
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-40"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+        <div className="space-y-3 p-4">
+          {/* Step 1: SSH key. Either pick from the library or
+              generate a fresh ed25519 keypair on the server. */}
+          <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3">
+            <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              SSH key
+            </p>
+            {keys.isPending ? (
+              <Skeleton className="h-8 w-full" />
+            ) : (
+              <select
+                value={keyId}
+                onChange={(e) => {
+                  setKeyId(e.target.value);
+                  setValidation(null);
+                }}
+                className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1.5 font-mono text-[12px]"
+              >
+                <option value="">— pick a key —</option>
+                {(keys.data ?? []).map((k) => (
+                  <option key={k.id} value={k.id}>
+                    {k.name} ({k.fingerprint.slice(0, 24)}…)
+                  </option>
+                ))}
+              </select>
+            )}
+            {selectedKey && (
+              <div className="mt-2 space-y-1.5">
+                <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                  Paste this public key into the new VM&apos;s{" "}
+                  <span className="font-mono">~/.ssh/authorized_keys</span>:
+                </p>
+                <code className="block max-h-24 overflow-auto rounded bg-[var(--bg-tertiary)] p-2 font-mono text-[10px] break-all">
+                  {selectedKey.publicKey}
+                </code>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(selectedKey.publicKey);
+                    toast.success("Public key copied");
+                  }}
+                >
+                  Copy public key
+                </Button>
+              </div>
+            )}
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setShowNewKey((v) => !v)}
+              className="mt-2"
+            >
+              {showNewKey ? "Cancel" : "+ Generate new key"}
+            </Button>
+            {showNewKey && (
+              <NewKeyForm
+                onCreated={(k) => {
+                  qc.invalidateQueries({ queryKey: ["ssh-keys"] });
+                  setKeyId(k.id);
+                  setShowNewKey(false);
+                  toast.success(`Key ${k.name} generated — copy the public key above`);
+                }}
+              />
+            )}
+          </section>
+
+          {/* Step 2: Host details. */}
+          <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3">
+            <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              Target VM
+            </p>
+            <div className="grid grid-cols-3 gap-2">
+              <div className="col-span-2 space-y-1">
+                <label className="font-mono text-[10px] text-[var(--text-tertiary)]">Host / IP</label>
+                <Input
+                  value={host}
+                  onChange={(e) => {
+                    setHost(e.target.value);
+                    setValidation(null);
+                  }}
+                  placeholder="10.0.0.5 or worker-1.example.com"
+                  className="h-8 text-[13px]"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-mono text-[10px] text-[var(--text-tertiary)]">Port</label>
+                <Input
+                  value={port}
+                  onChange={(e) => setPort(e.target.value)}
+                  className="h-8 text-[13px]"
+                />
+              </div>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <label className="font-mono text-[10px] text-[var(--text-tertiary)]">SSH user</label>
+                <Input
+                  value={user}
+                  onChange={(e) => setUser(e.target.value)}
+                  className="h-8 text-[13px]"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                  Region label (optional)
+                </label>
+                <Input
+                  value={region}
+                  onChange={(e) => setRegion(e.target.value)}
+                  placeholder="eu"
+                  className="h-8 text-[13px]"
+                />
+              </div>
+            </div>
+          </section>
+
+          {/* Step 3: Validation results. */}
+          {validation && (
+            <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3">
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                Validation
+              </p>
+              <ul className="space-y-1">
+                {validation.checks.map((c, i) => (
+                  <li key={i} className="flex items-start gap-2 font-mono text-[11px]">
+                    <span
+                      className={cn(
+                        "mt-0.5 inline-block h-1.5 w-1.5 shrink-0 rounded-full",
+                        c.ok ? "bg-emerald-400" : "bg-red-400"
+                      )}
+                    />
+                    <span className="w-24 shrink-0 text-[var(--text-secondary)]">{c.label}</span>
+                    <span
+                      className={cn(c.ok ? "text-[var(--text-secondary)]" : "text-red-400")}
+                    >
+                      {c.detail}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {output && (
+            <pre className="max-h-48 overflow-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[10px] text-[var(--text-secondary)]">
+              {output}
+            </pre>
+          )}
+        </div>
+        <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
+          <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>
+            Cancel
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={validateDisabled}
+            onClick={() => validate.mutate()}
+          >
+            {validate.isPending ? "Validating…" : "Validate"}
+          </Button>
+          <Button size="sm" disabled={joinDisabled} onClick={() => join.mutate()}>
+            {join.isPending ? "Joining…" : "Join"}
+          </Button>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+// NewKeyForm submits to /api/ssh-keys to generate (or paste) a new
+// keypair. Keeps the inline UX tight — one name field + a generate
+// switch. Pasting is reachable via "show advanced" if the operator
+// already has a key they want to reuse.
+function NewKeyForm({ onCreated }: { onCreated: (k: SSHKey) => void }) {
+  const [name, setName] = useState("");
+  const [advanced, setAdvanced] = useState(false);
+  const [publicKey, setPublicKey] = useState("");
+  const [privateKey, setPrivateKey] = useState("");
+  const create = useMutation({
+    mutationFn: () =>
+      api<SSHKey>("/api/ssh-keys", {
+        method: "POST",
+        body: advanced
+          ? { name, generate: false, publicKey, privateKey }
+          : { name, generate: true },
+      }),
+    onSuccess: (k) => onCreated(k),
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Key create failed"),
+  });
+  return (
+    <div className="mt-2 space-y-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2">
+      <Input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="key name (e.g. workers-eu)"
+        className="h-7 text-[12px]"
+      />
+      <button
+        type="button"
+        onClick={() => setAdvanced((v) => !v)}
+        className="font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+      >
+        {advanced ? "→ generate ed25519 instead" : "→ paste an existing key instead"}
+      </button>
+      {advanced && (
+        <>
+          <textarea
+            value={publicKey}
+            onChange={(e) => setPublicKey(e.target.value)}
+            placeholder="ssh-ed25519 AAAA… user@host"
+            spellCheck={false}
+            rows={2}
+            className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[11px]"
+          />
+          <textarea
+            value={privateKey}
+            onChange={(e) => setPrivateKey(e.target.value)}
+            placeholder="-----BEGIN OPENSSH PRIVATE KEY-----&#10;…"
+            spellCheck={false}
+            rows={4}
+            className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[11px]"
+          />
+        </>
+      )}
+      <Button
+        size="sm"
+        disabled={!name.trim() || create.isPending || (advanced && (!publicKey.trim() || !privateKey.trim()))}
+        onClick={() => create.mutate()}
+      >
+        {create.isPending ? "Creating…" : advanced ? "Save key" : "Generate"}
+      </Button>
+    </div>
+  );
 }
 
 function NodeHistoryModal({

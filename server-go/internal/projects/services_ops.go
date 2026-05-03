@@ -698,6 +698,43 @@ func ResolvePlacement(project, service *kube.KusoPlacement) *kube.KusoPlacement 
 	return project
 }
 
+// validatePlacement returns an error wrapping ErrInvalid when no
+// cluster node matches the requested placement. Nil placement and
+// empty placement always pass (schedule anywhere). The check is
+// label-AND: every requested label must match the node's labels;
+// nodes (hostnames) match any of the listed values.
+func (s *Service) validatePlacement(ctx context.Context, p *kube.KusoPlacement) error {
+	if p == nil || (len(p.Labels) == 0 && len(p.Nodes) == 0) {
+		return nil
+	}
+	if s.Kube == nil || s.Kube.Clientset == nil {
+		// Server-only test path with a stubbed kube — skip rather
+		// than synthesize a "no nodes match" error from a nil client.
+		return nil
+	}
+	nodes, err := s.Kube.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("validate placement: list nodes: %w", err)
+	}
+	for i := range nodes.Items {
+		n := &nodes.Items[i]
+		if kube.PlacementMatchesNode(p, n.Name, n.Labels) {
+			return nil
+		}
+	}
+	// Surface the requested selector verbatim so the user can fix it
+	// without round-tripping through logs.
+	return fmt.Errorf("%w: no cluster node matches placement (labels=%v nodes=%v) — add a matching node or relax the selector",
+		ErrInvalid, p.Labels, p.Nodes)
+}
+
+// ValidatePlacement is the exported entrypoint for callers outside
+// this package (addons, future per-env overrides). Same semantics as
+// the unexported method.
+func (s *Service) ValidatePlacement(ctx context.Context, p *kube.KusoPlacement) error {
+	return s.validatePlacement(ctx, p)
+}
+
 // PatchServiceRequest is the body for PATCH /api/projects/:p/services/:s.
 // Every field is optional — nil means "leave alone". We use pointers
 // for primitive fields too so the client can distinguish unset from
@@ -875,6 +912,14 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			svc.Spec.Placement = &kube.KusoPlacement{
 				Labels: req.Placement.Labels,
 				Nodes:  req.Placement.Nodes,
+			}
+			// Block the save when the requested placement matches no
+			// nodes — otherwise pods would land in Pending forever and
+			// the user would have to debug it through events. The hard
+			// requirement was the explicit ask: better to refuse than
+			// silently misbehave.
+			if err := s.validatePlacement(ctx, svc.Spec.Placement); err != nil {
+				return nil, err
 			}
 		}
 		placementChanged = true

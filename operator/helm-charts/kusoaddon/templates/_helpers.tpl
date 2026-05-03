@@ -28,6 +28,45 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 
 {{/*
+Placement renders nodeSelector + (optional) hostname-restricted
+nodeAffinity from .Values.placement. Mirrors the kusoenvironment
+chart so a service and its addon land on the same set of nodes
+when the operator pins both. region label also gets a matching
+toleration so the kuso.sislelabs.com/region NoSchedule taint
+doesn't block scheduling.
+*/}}
+{{- define "kusoaddon.placement" -}}
+{{- with .Values.placement }}
+{{- if .labels }}
+nodeSelector:
+  {{- range $k, $v := .labels }}
+  {{ printf "kuso.sislelabs.com/%s" $k }}: {{ $v | quote }}
+  {{- end }}
+{{- end }}
+{{- if .nodes }}
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values:
+                {{- range .nodes }}
+                - {{ . | quote }}
+                {{- end }}
+{{- end }}
+{{- if .labels.region }}
+tolerations:
+  - key: kuso.sislelabs.com/region
+    operator: Equal
+    value: {{ .labels.region | quote }}
+    effect: NoSchedule
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/*
 storage size by t-shirt size. Override via .Values.storageSize.
 */}}
 {{- define "kusoaddon.storageSize" -}}

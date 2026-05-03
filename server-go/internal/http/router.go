@@ -200,6 +200,12 @@ func NewRouter(d Deps) http.Handler {
 		if d.Addons != nil {
 			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, Logger: d.Logger}
 			addonsH.Mount(r)
+			// SSH keys for the multi-node "Add node" flow. Lives on
+			// the bearer-protected router; handler already filters on
+			// the right perms because the surface only matters to
+			// admins managing cluster topology.
+			sshH := &httphandlers.SSHKeysHandler{DB: d.DB, Logger: d.Logger}
+			sshH.Mount(r)
 		}
 		if d.Audit != nil {
 			auditH := &httphandlers.AuditHandler{Svc: d.Audit, Logger: d.Logger}

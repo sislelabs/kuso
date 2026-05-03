@@ -123,6 +123,19 @@ func (d *DB) applyMigrations() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS "NodeMetric_node_ts_idx" ON "NodeMetric"("node","ts")`,
 		`CREATE INDEX IF NOT EXISTS "NodeMetric_ts_idx" ON "NodeMetric"("ts")`,
+		// v0.6.23: SSH key library for the multi-node "Add node" flow.
+		// Stores ed25519/rsa keypairs so the operator can paste the
+		// public half into a new VM's authorized_keys and reuse the
+		// same key across multiple joins. Coolify-style: keys live
+		// independently of servers and are referenced by id.
+		`CREATE TABLE IF NOT EXISTS "SSHKey" (
+			"id" TEXT PRIMARY KEY,
+			"name" TEXT NOT NULL,
+			"publicKey" TEXT NOT NULL,
+			"privateKey" TEXT NOT NULL,
+			"fingerprint" TEXT NOT NULL,
+			"createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
 	for _, sqlText := range migrations {
 		if _, err := d.DB.Exec(sqlText); err != nil {

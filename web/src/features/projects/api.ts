@@ -60,6 +60,22 @@ export async function deleteAddon(project: string, addon: string): Promise<void>
   );
 }
 
+// setAddonPlacement pins the addon's StatefulSet to a subset of nodes.
+// Pass an empty body to clear (schedule anywhere). Server validates
+// that at least one cluster node matches the labels — a 400 with
+// "no cluster node matches placement" comes back when the selector
+// is unsatisfiable.
+export async function setAddonPlacement(
+  project: string,
+  addon: string,
+  body: { labels?: Record<string, string>; nodes?: string[] }
+): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/placement`,
+    { method: "PUT", body }
+  );
+}
+
 // addonSecret returns the addon's connection secret as plaintext
 // key→value pairs. Used by the overview panel so the user can copy
 // DATABASE_URL / POSTGRES_PASSWORD / etc. and connect from local

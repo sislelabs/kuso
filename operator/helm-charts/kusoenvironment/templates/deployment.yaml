@@ -55,6 +55,24 @@ spec:
           effect: NoSchedule
       {{- end }}
       {{- end }}
+      {{- /*
+        Even spread: when replicaCount > 1, prefer to land each replica
+        on a different node so a single host outage doesn't take the
+        service down. ScheduleAnyway (not DoNotSchedule) so a single-
+        node cluster still schedules everything — the constraint
+        becomes a soft preference there. When the user pins via
+        placement.nodes (specific hostnames), spread is meaningless,
+        so we skip it.
+      */}}
+      {{- if and (gt (int .Values.replicaCount) 1) (not (and .Values.placement .Values.placement.nodes)) }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "kusoenvironment.selectorLabels" . | nindent 14 }}
+      {{- end }}
       containers:
         - name: app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "latest" }}"

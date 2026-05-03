@@ -18,9 +18,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/nodejoin"
 )
 
 // promHTTPClient is a small client we reuse for PromQL proxying. The
@@ -56,6 +58,20 @@ func (h *KubernetesHandler) Mount(rt interface {
 	// this node with the body. Server expands kuso conventions (region
 	// → matching NoSchedule taint) under the hood.
 	rt.Put("/api/kubernetes/nodes/{name}/labels", h.PutNodeLabels)
+	// Add a node: SSH into a remote VM, run k3s agent install. The
+	// k3s server token is read from the hostPath mount the deploy yaml
+	// puts at /etc/kuso/k3s-token (control-plane-pinned pod).
+	rt.Post("/api/kubernetes/nodes/join", h.JoinNode)
+	// Pre-flight check before Join. Same body as join; opens an SSH
+	// session, runs a series of probes, returns per-check pass/fail.
+	// Coolify-style: the operator clicks Validate first, fixes any
+	// missing prereqs, THEN clicks Join.
+	rt.Post("/api/kubernetes/nodes/validate", h.ValidateNode)
+	// Remove: cordon → drain → kubectl delete node → optional ssh
+	// uninstall. Body carries the same Credentials shape so we can
+	// also clean up the host. Without creds we just untrack from the
+	// kube control plane (the node continues to exist as a dead VM).
+	rt.Post("/api/kubernetes/nodes/{name}/remove", h.RemoveNode)
 	// Per-env CPU + mem snapshot. Reads from the metrics.k8s.io
 	// metrics-server API. Returns one entry per pod in the env.
 	rt.Get("/api/kubernetes/envs/{env}/metrics", h.EnvMetrics)
@@ -483,7 +499,13 @@ type nodeSummary struct {
 	// way out and re-applied on the way in.
 	KusoLabels  map[string]string `json:"kusoLabels"`
 	Schedulable bool              `json:"schedulable"`
-	CreatedAt   string            `json:"createdAt,omitempty"`
+	// Unreachable is true when nodewatch cordoned this node because
+	// it has been NotReady past the threshold. Lets the UI render an
+	// "unreachable" badge instead of a generic "cordoned" one — the
+	// distinction matters because unreachable nodes auto-recover when
+	// they come back, while manually-cordoned nodes don't.
+	Unreachable bool   `json:"unreachable,omitempty"`
+	CreatedAt   string `json:"createdAt,omitempty"`
 	// Capacity + live usage. Capacity is what the kubelet reports
 	// the box can do; Usage is what's actually being consumed (from
 	// metrics-server). Disk is the ephemeral-storage axis; we don't
@@ -567,6 +589,7 @@ func (h *KubernetesHandler) Nodes(w http.ResponseWriter, r *http.Request) {
 			cpuUse = u.cpuMilli
 			memUse = u.memBytes
 		}
+		unreachable := n.Annotations["kuso.sislelabs.com/cordoned-by-nodewatch"] == "true"
 		out = append(out, nodeSummary{
 			Name:               n.Name,
 			Ready:              ready,
@@ -575,6 +598,7 @@ func (h *KubernetesHandler) Nodes(w http.ResponseWriter, r *http.Request) {
 			Zone:               zone,
 			KusoLabels:         kusoLabels,
 			Schedulable:        !n.Spec.Unschedulable,
+			Unreachable:        unreachable,
 			CreatedAt:          n.CreationTimestamp.Format(time.RFC3339),
 			CPUCapacityMilli:   cpuCap,
 			CPUUsageMilli:      cpuUse,
@@ -705,6 +729,273 @@ func nodeRoles(labels map[string]string) []string {
 //
 // Convention: when the user sets `region`, the server also drops a
 // matching NoSchedule taint so workloads without a matching
+// JoinNode runs the SSH-driven k3s agent install on a remote VM.
+// Body: {host, user, password|privateKey, port?, labels?, name?}.
+// Returns the install output verbatim so the user can debug install
+// errors in the modal. Synchronous: the request blocks for the
+// duration of the install (typically 30-90s), so the http server
+// keeps a long-poll context.
+func (h *KubernetesHandler) JoinNode(w http.ResponseWriter, r *http.Request) {
+	if h.Kube == nil {
+		http.Error(w, "kube client not wired", http.StatusServiceUnavailable)
+		return
+	}
+	var body struct {
+		nodejoin.Credentials
+		SSHKeyID string            `json:"sshKeyId,omitempty"`
+		Labels   map[string]string `json:"labels"`
+		Name     string            `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	creds, err := h.resolveCreds(r.Context(), body.Credentials, body.SSHKeyID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	body.Credentials = creds
+	token, err := nodejoin.ReadServerToken()
+	if err != nil {
+		h.Logger.Error("read k3s token", "err", err)
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	k3sURL := controlPlaneJoinURL()
+	if k3sURL == "" {
+		http.Error(w, "could not derive control-plane URL — set KUSO_K3S_URL=https://<host>:6443 on the kuso-server deployment", http.StatusServiceUnavailable)
+		return
+	}
+	// 3-minute ceiling for the whole flow. Reachability probe + apt
+	// update + k3s download + service start: 90s typical, 3 min keeps
+	// pathological cases (slow mirror) from hanging the request.
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Minute)
+	defer cancel()
+	res, err := nodejoin.Join(ctx, nodejoin.JoinSpec{
+		Credentials: body.Credentials,
+		K3sURL:      k3sURL,
+		K3sToken:    token,
+		NodeLabels:  body.Labels,
+		NodeName:    body.Name,
+	})
+	if err != nil {
+		// Return 502 so the UI distinguishes "the join failed on the
+		// remote host" from a kuso-side 500.
+		out := ""
+		if res != nil {
+			out = res.Output
+		}
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error":  err.Error(),
+			"output": out,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"output":   res.Output,
+		"nodeName": res.NodeName,
+	})
+}
+
+// ValidateNode runs the pre-flight Coolify-style check: SSH handshake,
+// root/sudo, control-plane reachability, curl available, k3s presence.
+// Returns one entry per check so the UI can render a tidy list.
+func (h *KubernetesHandler) ValidateNode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		nodejoin.Credentials
+		SSHKeyID string `json:"sshKeyId,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	creds, err := h.resolveCreds(r.Context(), body.Credentials, body.SSHKeyID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	k3sURL := controlPlaneJoinURL()
+	if k3sURL == "" {
+		http.Error(w, "could not derive control-plane URL", http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	res, err := nodejoin.Validate(ctx, creds, k3sURL)
+	if err != nil {
+		h.Logger.Error("validate node", "err", err)
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
+// resolveCreds fills in private-key bytes from the SSH key library
+// when sshKeyId is present. Falls through to whatever the caller
+// supplied directly (password / inline private key) otherwise.
+func (h *KubernetesHandler) resolveCreds(ctx context.Context, creds nodejoin.Credentials, sshKeyID string) (nodejoin.Credentials, error) {
+	if sshKeyID == "" {
+		return creds, nil
+	}
+	if h.DB == nil {
+		return creds, fmt.Errorf("ssh key library not wired")
+	}
+	key, err := h.DB.GetSSHKey(ctx, sshKeyID)
+	if err != nil {
+		return creds, fmt.Errorf("ssh key %s: %w", sshKeyID, err)
+	}
+	creds.PrivateKey = key.PrivateKey
+	// Don't clear creds.Password — the operator might prefer to use
+	// the key for the install but keep the host password set as a
+	// fallback. We just prefer the key.
+	return creds, nil
+}
+
+// RemoveNode cordons + drains + deletes the node from kube. When
+// credentials are supplied it also runs k3s-agent-uninstall.sh over
+// SSH so the host is left clean. Without creds the node is removed
+// from the control plane only — the VM continues to exist as a dead
+// agent (operator's call: maybe the VM is already gone).
+func (h *KubernetesHandler) RemoveNode(w http.ResponseWriter, r *http.Request) {
+	name := chiURLParam(r, "name")
+	if name == "" {
+		http.Error(w, "missing node name", http.StatusBadRequest)
+		return
+	}
+	if h.Kube == nil || h.Kube.Clientset == nil {
+		http.Error(w, "kube client not wired", http.StatusServiceUnavailable)
+		return
+	}
+	// Refuse to remove the control plane — we'd kill ourselves. This
+	// is the cheap version; a future "Replace control plane" flow can
+	// override.
+	live, err := h.Kube.Clientset.CoreV1().Nodes().Get(r.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		http.Error(w, "node not found: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	if _, isCP := live.Labels["node-role.kubernetes.io/control-plane"]; isCP {
+		http.Error(w, "refusing to remove the control-plane node", http.StatusForbidden)
+		return
+	}
+
+	body := struct {
+		Credentials *nodejoin.Credentials `json:"credentials"`
+		Force       bool                  `json:"force"`
+	}{}
+	_ = json.NewDecoder(r.Body).Decode(&body) // body is optional
+
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+	// Cordon first so kube stops scheduling new pods onto the node.
+	if err := cordonNode(ctx, h.Kube, name, true); err != nil {
+		h.Logger.Warn("cordon", "node", name, "err", err)
+	}
+	// Drain: evict every non-DaemonSet pod. We don't replicate
+	// kubectl-drain's full logic (PDB respect, etc.) — simple eviction
+	// loop is enough for a 2-3 node home cluster. Force=true skips
+	// pods that won't evict gracefully.
+	if err := drainNode(ctx, h.Kube, name, body.Force); err != nil && !body.Force {
+		http.Error(w, "drain failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	if err := h.Kube.Clientset.CoreV1().Nodes().Delete(ctx, name, metav1.DeleteOptions{}); err != nil {
+		http.Error(w, "delete node: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	// Best-effort: also clean up the host so the VM isn't left in a
+	// broken half-installed state.
+	uninstallOut := ""
+	if body.Credentials != nil && body.Credentials.Host != "" {
+		out, uerr := nodejoin.Uninstall(ctx, *body.Credentials)
+		uninstallOut = out
+		if uerr != nil {
+			h.Logger.Warn("uninstall ssh", "node", name, "err", uerr)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"removed":      name,
+		"uninstallOut": uninstallOut,
+	})
+}
+
+// controlPlaneJoinURL derives the URL agents should hit. Operators can
+// pin it via env (KUSO_K3S_URL) when the in-cluster apiserver IP isn't
+// the right one to advertise to remote VMs (e.g. behind NAT or split-
+// horizon DNS). Default: KUBERNETES_SERVICE_HOST + 6443. Note: that's
+// the in-cluster ClusterIP, only useful when the new node is on the
+// same network. For Hetzner-cloud-style joins the operator should set
+// KUSO_K3S_URL=https://<public-host>:6443.
+func controlPlaneJoinURL() string {
+	if v := os.Getenv("KUSO_K3S_URL"); v != "" {
+		return v
+	}
+	host := os.Getenv("KUBERNETES_SERVICE_HOST")
+	if host == "" {
+		return ""
+	}
+	// Force port 6443 — the apiserver listens there even though the
+	// in-cluster Service often advertises 443.
+	return "https://" + host + ":6443"
+}
+
+// cordonNode toggles spec.unschedulable. Same JSON-patch pattern the
+// existing PutNodeLabels handler uses.
+func cordonNode(ctx context.Context, k *kube.Client, name string, on bool) error {
+	patch := []byte(fmt.Sprintf(`{"spec":{"unschedulable":%t}}`, on))
+	_, err := k.Clientset.CoreV1().Nodes().Patch(
+		ctx, name,
+		types.MergePatchType,
+		patch,
+		metav1.PatchOptions{},
+	)
+	return err
+}
+
+// drainNode evicts all non-DaemonSet, non-mirror pods from the node.
+// Returns the first eviction error unless force=true (then we log and
+// continue). Simple sequential loop — fine for a small node.
+func drainNode(ctx context.Context, k *kube.Client, name string, force bool) error {
+	pods, err := k.Clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
+		FieldSelector: "spec.nodeName=" + name,
+	})
+	if err != nil {
+		return fmt.Errorf("list pods on node: %w", err)
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		// Skip DaemonSet-managed pods (they'll come right back) and
+		// mirror pods (static manifests on the host — kubelet owns
+		// them, control plane can't evict).
+		isDaemon := false
+		for _, owner := range p.OwnerReferences {
+			if owner.Kind == "DaemonSet" {
+				isDaemon = true
+				break
+			}
+		}
+		if isDaemon {
+			continue
+		}
+		if _, ok := p.Annotations["kubernetes.io/config.mirror"]; ok {
+			continue
+		}
+		// Use Delete with a 0 grace period when force; otherwise rely
+		// on the pod's terminationGracePeriodSeconds so workloads can
+		// shut down cleanly.
+		opts := metav1.DeleteOptions{}
+		if force {
+			zero := int64(0)
+			opts.GracePeriodSeconds = &zero
+		}
+		if err := k.Clientset.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, opts); err != nil && !force {
+			return fmt.Errorf("evict %s/%s: %w", p.Namespace, p.Name, err)
+		}
+	}
+	return nil
+}
+
 // toleration won't land here. Removing the region label removes
 // the matching taint. Other labels are pure metadata for now;
 // future placement logic can pin services to specific

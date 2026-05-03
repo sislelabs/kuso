@@ -68,6 +68,36 @@ type KusoPlacement struct {
 	Nodes  []string          `json:"nodes,omitempty"`
 }
 
+// PlacementMatchesNode is the canonical matcher: AND across labels
+// (every requested label must match the node, after applying the
+// kuso.sislelabs.com/ prefix), AND with the optional Nodes list (the
+// node's hostname must appear). Lives in the kube package so both
+// projects and addons can share it without an import cycle.
+func PlacementMatchesNode(p *KusoPlacement, nodeName string, nodeLabels map[string]string) bool {
+	if p == nil {
+		return true
+	}
+	for k, v := range p.Labels {
+		got, ok := nodeLabels["kuso.sislelabs.com/"+k]
+		if !ok || got != v {
+			return false
+		}
+	}
+	if len(p.Nodes) > 0 {
+		hit := false
+		for _, n := range p.Nodes {
+			if n == nodeName {
+				hit = true
+				break
+			}
+		}
+		if !hit {
+			return false
+		}
+	}
+	return true
+}
+
 type KusoRepoRef struct {
 	URL           string `json:"url,omitempty"`
 	DefaultBranch string `json:"defaultBranch,omitempty"`
@@ -271,6 +301,12 @@ type KusoAddonSpec struct {
 	Password    string         `json:"password,omitempty"`
 	Database    string         `json:"database,omitempty"`
 	Backup      *KusoBackup    `json:"backup,omitempty"`
+	// Placement pins the addon's StatefulSet to a subset of nodes.
+	// Same shape as KusoServiceSpec.Placement — empty = schedule
+	// anywhere. The addon helm chart reads this to render nodeSelector
+	// + required nodeAffinity; the kuso server validates that at
+	// least one cluster node matches the labels at save time.
+	Placement *KusoPlacement `json:"placement,omitempty"`
 }
 
 type KusoBackup struct {
