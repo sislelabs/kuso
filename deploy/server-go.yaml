@@ -19,6 +19,9 @@ metadata:
     app.kubernetes.io/name: kuso-server
 spec:
   replicas: 1
+  # Recreate is required because the SQLite PVC is RWO — two pods
+  # can't both mount /data simultaneously. Real HA needs a non-SQLite
+  # backing store; tracked for v0.7.
   strategy: { type: Recreate }
   selector:
     matchLabels: { app.kubernetes.io/name: kuso-server }
@@ -27,6 +30,12 @@ spec:
       labels: { app.kubernetes.io/name: kuso-server }
     spec:
       serviceAccountName: kuso-server
+      # 30s grace period: SIGTERM → preStop sleep 5s (lets in-flight
+      # requests finish + ingress drain reach this pod's removal) →
+      # process gets ~25s to actually quit. Without this, ingress
+      # routes new requests to a terminating pod for the first 1-2s
+      # of shutdown and they 502.
+      terminationGracePeriodSeconds: 30
       containers:
         - name: server
           image: ghcr.io/sislelabs/kuso-server-go:v0.6.18
@@ -44,6 +53,16 @@ spec:
           envFrom:
             - secretRef: { name: kuso-server-secrets }
             - secretRef: { name: kuso-github-app, optional: true }
+          # PreStop fires AFTER the pod is marked Terminating but
+          # BEFORE SIGTERM. Sleeping here gives the kube-proxy /
+          # ingress controller time to remove this pod from their
+          # endpoint pool — without it, a new request races the
+          # SIGTERM and arrives at a closed port. 5s is the
+          # standard recommendation for traefik+kube-proxy.
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 5"]
           livenessProbe:
             httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 5

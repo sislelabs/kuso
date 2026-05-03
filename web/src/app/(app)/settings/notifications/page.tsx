@@ -348,51 +348,83 @@ function NotificationEditor({
             spellCheck={false}
           />
         </Field>
-        <Field label="events" hint="pick events to receive; empty = all events">
+        <Field
+          label="events"
+          hint="toggle the events you want; configure per-event Discord mentions on the right"
+        >
           <div className="space-y-1.5">
             {ALL_EVENTS.map((e) => {
-              const picked = events.includes(e.id) || events.length === 0;
-              const isExplicit = events.includes(e.id);
+              const isPicked = events.includes(e.id);
               return (
                 <div
                   key={e.id}
                   className={cn(
-                    "grid grid-cols-[160px_1fr_auto] items-center gap-2 rounded-md border px-2 py-1 text-[11px] transition-colors",
-                    picked
-                      ? "border-[var(--border-subtle)] bg-[var(--bg-primary)]"
-                      : "border-transparent opacity-50"
+                    // Fixed-grid layout so the mention picker column
+                    // stays in the same x-axis spot whether or not
+                    // the event is picked. Without min-width on the
+                    // picker column the row would shrink when the
+                    // toggle was off and the layout would jump.
+                    "grid grid-cols-[28px_180px_1fr_180px] items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 text-[11px]"
                   )}
                 >
                   <button
                     type="button"
                     onClick={() =>
                       setEvents((cur) =>
-                        isExplicit ? cur.filter((x) => x !== e.id) : [...cur, e.id]
+                        isPicked ? cur.filter((x) => x !== e.id) : [...cur, e.id]
                       )
                     }
+                    aria-label={isPicked ? `Disable ${e.id}` : `Enable ${e.id}`}
                     className={cn(
-                      "inline-flex items-center gap-1.5 truncate text-left font-mono",
-                      isExplicit
-                        ? "text-[var(--accent)]"
-                        : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                      "inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors",
+                      isPicked
+                        ? "border-emerald-500/30 bg-emerald-500/20"
+                        : "border-[var(--border-subtle)] bg-[var(--bg-tertiary)]"
                     )}
                   >
-                    {isExplicit && <CheckCircle2 className="h-3 w-3 shrink-0" />}
-                    {e.id}
+                    <span
+                      className={cn(
+                        "inline-block h-3.5 w-3.5 rounded-full bg-white shadow transition-transform",
+                        isPicked ? "translate-x-4" : "translate-x-0.5"
+                      )}
+                    />
                   </button>
-                  <span className="truncate text-[var(--text-tertiary)]">{e.label}</span>
-                  {type === "discord" && picked && (
+                  <span
+                    className={cn(
+                      "truncate font-mono",
+                      isPicked ? "text-[var(--text-primary)]" : "text-[var(--text-tertiary)]"
+                    )}
+                  >
+                    {e.id}
+                  </span>
+                  <span
+                    className={cn(
+                      "truncate",
+                      isPicked ? "text-[var(--text-secondary)]" : "text-[var(--text-tertiary)]"
+                    )}
+                  >
+                    {e.label}
+                  </span>
+                  {type === "discord" ? (
                     <MentionPicker
                       value={mentions[e.id] ?? ""}
                       onChange={(v) =>
                         setMentions((cur) => ({ ...cur, [e.id]: v }))
                       }
                       defaultMention={defaultMentionFor(e.id)}
+                      disabled={!isPicked}
                     />
+                  ) : (
+                    <span />
                   )}
                 </div>
               );
             })}
+            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+              {events.length === 0
+                ? "No events selected — channel will receive nothing."
+                : `${events.length} event${events.length === 1 ? "" : "s"} selected.`}
+            </p>
           </div>
         </Field>
         <Field label="enabled">
@@ -465,10 +497,12 @@ function MentionPicker({
   value,
   onChange,
   defaultMention,
+  disabled,
 }: {
   value: string;
   onChange: (v: string) => void;
   defaultMention: string;
+  disabled?: boolean;
 }) {
   // value is one of: "" (use default), "none", "@here", "@everyone",
   // "role:<id>", or any other custom string. We map to a select on
@@ -484,7 +518,7 @@ function MentionPicker({
     { v: "role:", label: "role…" },
   ];
   return (
-    <div className="flex items-center gap-1">
+    <div className={cn("flex items-center gap-1", disabled && "pointer-events-none opacity-40")}>
       <select
         value={showRole ? "role:" : value}
         onChange={(e) => {
@@ -497,6 +531,7 @@ function MentionPicker({
             onChange(v);
           }
         }}
+        disabled={disabled}
         className="h-6 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1 font-mono text-[10px] text-[var(--text-primary)]"
       >
         {options.map((o) => (
@@ -510,6 +545,7 @@ function MentionPicker({
           value={roleID}
           onChange={(e) => onChange("role:" + e.target.value)}
           placeholder="role ID"
+          disabled={disabled}
           className="h-6 w-28 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 font-mono text-[10px]"
           spellCheck={false}
         />
