@@ -24,8 +24,9 @@ import {
 } from "./layout";
 import { CanvasContextMenu, type ContextMenuItem } from "./CanvasContextMenu";
 import { AddAddonDialog } from "@/components/addon/AddAddonDialog";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { serviceShortName } from "@/lib/utils";
-import { useTriggerBuild, useDeleteService } from "@/features/services";
+import { useTriggerBuild } from "@/features/services";
 import {
   ExternalLink,
   ScrollText,
@@ -112,9 +113,20 @@ export function ProjectCanvas({
   // Add-addon dialog. Lives next to ctx because both are short-lived
   // canvas-scoped overlays — no point hoisting up to the page view.
   const [showAddAddon, setShowAddAddon] = useState(false);
+  // Pending delete-confirm. Set when the user picks "Delete service"
+  // from the right-click menu; the ConfirmDialog renders below; on
+  // confirm we run the API + optimistically yank the node out of
+  // state so the canvas feels instant. Replaces the old window.confirm
+  // pattern which was both ugly and slow (modal-blocked event loop +
+  // wait for refetch before the node disappears).
+  const [confirmDelete, setConfirmDelete] = useState<{
+    kind: "service" | "addon";
+    short: string;
+    nodeId: string;
+  } | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const trigger = useTriggerBuild(project, "");
-  const del = useDeleteService(project, "");
 
   useEffect(() => {
     if (!project) return;
@@ -208,18 +220,15 @@ export function ProjectCanvas({
         : []),
       {
         id: "delete",
-        label: "Delete service",
+        label: "Delete service…",
         icon: Trash2,
         destructive: true,
-        onSelect: async () => {
-          if (!window.confirm(`Delete service "${short}"? This cascades to its environments.`)) return;
-          try {
-            await callDelete(data.project, short, del);
-            toast.success(`Service ${short} deleted`);
-          } catch (err) {
-            toast.error(err instanceof Error ? err.message : "Failed to delete");
-          }
-        },
+        onSelect: () =>
+          setConfirmDelete({
+            kind: "service",
+            short,
+            nodeId: `svc:${data.service.metadata.name}`,
+          }),
       },
     ];
     setCtx({ open: true, x: e.clientX, y: e.clientY, items });
@@ -243,7 +252,12 @@ export function ProjectCanvas({
         label: "Delete addon…",
         icon: Trash2,
         destructive: true,
-        onSelect: () => onSelectAddon?.(data.addon.metadata.name),
+        onSelect: () =>
+          setConfirmDelete({
+            kind: "addon",
+            short: data.addon.metadata.name,
+            nodeId: `addon:${data.addon.metadata.name}`,
+          }),
       },
     ];
     setCtx({ open: true, x: e.clientX, y: e.clientY, items });
@@ -332,14 +346,84 @@ export function ProjectCanvas({
         open={showAddAddon}
         onClose={() => setShowAddAddon(false)}
       />
+
+      <ConfirmDialog
+        open={!!confirmDelete}
+        title={
+          confirmDelete?.kind === "service"
+            ? `Delete service ${confirmDelete?.short}`
+            : `Delete addon ${confirmDelete?.short}`
+        }
+        body={
+          confirmDelete?.kind === "service" ? (
+            <>
+              This <strong>cascades</strong> to every environment of{" "}
+              <span className="font-mono text-[var(--text-primary)]">
+                {confirmDelete?.short}
+              </span>{" "}
+              and tears down running pods. The git repo is untouched.
+            </>
+          ) : (
+            <>
+              Drops the helm release for{" "}
+              <span className="font-mono text-[var(--text-primary)]">
+                {confirmDelete?.short}
+              </span>
+              . The PVC + data go with it unless your storage class retains it.
+            </>
+          )
+        }
+        typeToConfirm={confirmDelete?.short}
+        confirmLabel={
+          confirmDelete?.kind === "service" ? "Delete service" : "Delete addon"
+        }
+        pending={deleting}
+        onCancel={() => setConfirmDelete(null)}
+        onConfirm={async () => {
+          if (!confirmDelete) return;
+          const { short, nodeId, kind } = confirmDelete;
+          setDeleting(true);
+
+          // Optimistic: pull the node out of state immediately. The
+          // refetch will confirm; if the API call fails we restore.
+          // Keep a snapshot of the previous state for rollback.
+          const prevNodes = nodes;
+          setNodes((cur) => cur.filter((n) => n.id !== nodeId));
+          // Close the modal on the same tick so the canvas renders
+          // the removal without the user staring at a "Working…"
+          // button.
+          setConfirmDelete(null);
+
+          try {
+            if (kind === "service") {
+              const { deleteService } = await import("@/features/services/api");
+              await deleteService(project, short);
+            } else {
+              const { deleteAddon } = await import("@/features/projects/api");
+              await deleteAddon(project, short);
+            }
+            toast.success(
+              kind === "service"
+                ? `Service ${short} deleted`
+                : `Addon ${short} deleted`
+            );
+          } catch (err) {
+            // Restore the node so the canvas matches reality.
+            setNodes(prevNodes);
+            toast.error(err instanceof Error ? err.message : "Failed to delete");
+          } finally {
+            setDeleting(false);
+          }
+        }}
+      />
     </div>
   );
 }
 
-// callTrigger / callDelete are tiny adapters: the hooks at the top of
-// this module are bound to a placeholder service name (""), so we
-// re-bind to the actual service via the API directly using the same
-// mutation infra. Keeps the canvas from spinning up N hooks per node.
+// callTrigger adapter: the trigger hook is bound to a placeholder
+// service name (""), so the canvas re-binds to the actual service
+// via the API directly. Keeps the canvas from spinning up N hooks
+// per node.
 async function callTrigger(
   project: string,
   service: string,
@@ -348,14 +432,4 @@ async function callTrigger(
   void _hint;
   const { triggerBuild } = await import("@/features/services/api");
   await triggerBuild(project, service, {});
-}
-
-async function callDelete(
-  project: string,
-  service: string,
-  _hint: ReturnType<typeof useDeleteService>
-) {
-  void _hint;
-  const { deleteService } = await import("@/features/services/api");
-  await deleteService(project, service);
 }

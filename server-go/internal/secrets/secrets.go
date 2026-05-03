@@ -309,6 +309,11 @@ func (s *Service) detachFromEnv(ctx context.Context, project, service, env, secr
 	return s.patchEnv(ctx, s.nsFor(ctx, project), envCR.Name, patch)
 }
 
+// attachToAllEnvs attaches a shared secret to every NON-preview env of
+// a service. Previews are intentionally excluded — a PR branch should
+// boot with no inherited config so reviewers see whether the change
+// works against a fresh slate, and so production secrets never leak
+// into a throwaway URL. If a preview needs vars, they're set per-env.
 func (s *Service) attachToAllEnvs(ctx context.Context, project, service, secretName string) error {
 	envs, err := s.envsForService(ctx, project, service)
 	if err != nil {
@@ -316,6 +321,9 @@ func (s *Service) attachToAllEnvs(ctx context.Context, project, service, secretN
 	}
 	ns := s.nsFor(ctx, project)
 	for _, e := range envs {
+		if e.Spec.Kind == "preview" {
+			continue
+		}
 		alreadyAttached := false
 		for _, existing := range e.Spec.EnvFromSecrets {
 			if existing == secretName {

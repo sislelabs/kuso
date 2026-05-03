@@ -262,3 +262,16 @@ func (k *KusoClient) Login(user string, pass string) (*resty.Response, error) {
 func (k *KusoClient) RawGet(path string) (*resty.Response, error) {
 	return k.client.Get(path)
 }
+
+// BaseURL exposes the configured kuso API root so commands needing
+// to mint their own ws:// URLs (logs --follow) don't have to keep
+// their own copy.
+func (k *KusoClient) BaseURL() string {
+	return k.baseURL
+}
+
+// BearerToken exposes the JWT for the same reason — websocket
+// connect needs to set the Sec-WebSocket-Protocol header itself.
+func (k *KusoClient) BearerToken() string {
+	return k.bearerToken
+}

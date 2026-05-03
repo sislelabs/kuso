@@ -11,7 +11,6 @@ import {
   Server,
   Settings as SettingsIcon,
   Users,
-  Shield,
   UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -41,8 +40,7 @@ const CARDS: Card[] = [
   { href: "/settings/updates",       title: "Updates",        description: "Self-update the kuso server + operator + CRDs.",          icon: Package,    group: "instance" },
 
   // Admin: user/role management.
-  { href: "/settings/users",  title: "Users",  description: "Local users + roles. OAuth users land here on first login.", icon: Users,      perm: Perms.UserWrite, group: "admin" },
-  { href: "/settings/roles",  title: "Roles",  description: "Permissions matrix for legacy role-based access.",            icon: Shield,     perm: Perms.UserWrite, group: "admin" },
+  { href: "/settings/users",  title: "Users",  description: "Local users. OAuth users land here on first login.",          icon: Users,      perm: Perms.UserWrite, group: "admin" },
   { href: "/settings/groups", title: "Groups", description: "Tenancy: instance roles + project memberships.",              icon: UsersRound, perm: Perms.UserWrite, group: "admin" },
 ];
 

@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { toast } from "sonner";
-import { useDeleteProject } from "@/features/projects";
+import { useDeleteProject, useProject } from "@/features/projects";
 import { usePatchService, type PatchServiceBody } from "@/features/services";
 import { useCan, Perms } from "@/features/auth";
 import { useRouter } from "next/navigation";
@@ -243,7 +243,7 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
           <PlacementSection state={state} setState={setState} />
           <VolumesSection state={state} setState={setState} />
           <BuildSection state={state} setState={setState} />
-          <DeploySection />
+          <DeploySection project={project} />
           <DangerSection project={project} service={service} />
         </div>
 
@@ -729,22 +729,39 @@ function PlacementSection({ state, setState }: SectionProps) {
 
   const totalNodes = (nodes.data ?? []).length;
 
+  // Treat unfilled rule rows as "no rule yet" rather than letting them
+  // skew the live match count. Without this, opening "+ add label rule"
+  // and leaving the row blank reads "1/1 match" because the empty key
+  // was being skipped — so the user couldn't tell if the rule had taken
+  // effect or not. Trivially-true rows now show as "incomplete".
+  const incompleteRules = state.placement.filter((r) => !r.key.trim() || !r.value.trim()).length;
+  const hasEffectiveRules =
+    state.placement.some((r) => r.key.trim() && r.value.trim()) || state.placementNodes.length > 0;
+
   return (
     <Section
       id="placement"
       title="Placement"
       icon={MapPin}
       hint={
-        state.placement.length === 0 && state.placementNodes.length === 0
+        !hasEffectiveRules
           ? "schedules anywhere"
-          : `${matching.length}/${totalNodes} match`
+          : incompleteRules > 0
+            ? `${incompleteRules} incomplete`
+            : `${matching.length}/${totalNodes} match`
       }
     >
+      <p className="border-b border-[var(--border-subtle)] px-3 py-2 text-[11px] text-[var(--text-secondary)]">
+        Pin this service to a subset of cluster nodes. Use{" "}
+        <span className="font-mono text-[var(--text-tertiary)]">key=value</span> rules
+        (e.g. <span className="font-mono">region=eu</span> or{" "}
+        <span className="font-mono">tier=gpu</span>) to match nodes by label, or pick
+        specific hostnames below. Nodes need both — empty rules schedule anywhere.
+      </p>
       {/* Label rules */}
       {state.placement.length === 0 ? (
         <p className="px-3 py-2.5 text-[11px] text-[var(--text-tertiary)]">
-          No label rules. Add one to pin this service to nodes carrying e.g.{" "}
-          <span className="font-mono">region=eu</span>.
+          No label rules.
         </p>
       ) : (
         state.placement.map((r, i) => {
@@ -839,10 +856,17 @@ function PlacementSection({ state, setState }: SectionProps) {
         )}
       </div>
 
-      {/* Live match preview */}
-      {(state.placement.length > 0 || state.placementNodes.length > 0) && (
+      {/* Live match preview — only meaningful once there's at least
+          one fully-filled rule or a pinned hostname. Showing it for an
+          unfinished blank row was the source of the "1/1 match"
+          confusion in the screenshots. */}
+      {hasEffectiveRules && (
         <div className="border-t border-[var(--border-subtle)] px-3 py-2 text-[10px] text-[var(--text-tertiary)]">
-          {matching.length === 0 ? (
+          {incompleteRules > 0 ? (
+            <span className="text-[var(--text-tertiary)]">
+              fill in the {incompleteRules === 1 ? "empty rule" : "empty rules"} or remove {incompleteRules === 1 ? "it" : "them"} to see what matches
+            </span>
+          ) : matching.length === 0 ? (
             <span className="text-amber-400">
               ⚠ No nodes match. Pods would stay Pending.
             </span>
@@ -891,15 +915,47 @@ function BuildSection({ state, setState }: SectionProps) {
   );
 }
 
-function DeploySection() {
+function DeploySection({ project }: { project: string }) {
+  // Read the project's previews config so the user sees, in this
+  // service's settings, whether PR previews are on for the whole
+  // project + how long they live. Saves them digging through the
+  // project settings tab to answer "will my PR get its own URL?"
+  const proj = useProject(project);
+  type ProjSpec = { previews?: { enabled?: boolean; ttlDays?: number } };
+  const spec = (proj.data as { project?: { spec?: ProjSpec } } | undefined)?.project?.spec;
+  const previewsOn = !!spec?.previews?.enabled;
+  const ttlDays = spec?.previews?.ttlDays ?? 7;
+
   return (
     <Section id="deploy" title="Deploy" icon={Cloud}>
-      <p className="px-3 py-2.5 text-[12px] text-[var(--text-secondary)]">
-        kuso ships every successful build to <span className="font-mono">production</span>.
-        Open a PR for an isolated preview environment.
-      </p>
+      <div className="space-y-1 px-3 py-2.5 text-[12px] text-[var(--text-secondary)]">
+        <p>
+          Successful builds of <span className="font-mono">main</span> ship to{" "}
+          <span className="font-mono">production</span>.
+        </p>
+        {previewsOn ? (
+          <p>
+            PR previews <span className="text-emerald-400">on</span> — every PR gets a
+            throwaway env at <span className="font-mono">&lt;service&gt;-pr-N.&lt;project-domain&gt;</span>,
+            auto-deleted after the PR closes or {ttlDays} days idle. Previews boot
+            with no env vars (set per-env if needed).
+          </p>
+        ) : (
+          <p>
+            PR previews <span className="text-[var(--text-tertiary)]">off</span> for this
+            project. Enable in{" "}
+            <a
+              href={`/projects/${encodeURIComponent(project)}/settings`}
+              className="text-[var(--accent)] hover:underline"
+            >
+              project settings
+            </a>
+            {" "}to give each PR its own URL.
+          </p>
+        )}
+      </div>
       <p className="border-t border-[var(--border-subtle)] px-3 py-2 font-mono text-[10px] text-[var(--text-tertiary)]">
-        per-service auto-deploy gates land alongside the project-level deploy policy
+        per-service preview opt-out coming next; today the project toggle covers all services
       </p>
     </Section>
   );

@@ -312,8 +312,10 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		//
 		// Spec-level Update keeps the same CR alive; the operator
 		// reconciles the helm release against the new values, no
-		// finalizer drama. We carry over EnvFromSecrets so addon
-		// connections aren't dropped on resync.
+		// finalizer drama. We carry over EnvFromSecrets so per-env
+		// secrets the reviewer set on the preview survive a resync
+		// (the shared <project>-<service>-secrets is no longer
+		// auto-attached to previews; see attachToAllEnvs).
 		envFromSecrets = append([]string(nil), existing.Spec.EnvFromSecrets...)
 		env.Spec.EnvFromSecrets = envFromSecrets
 		env.ObjectMeta.ResourceVersion = existing.ResourceVersion

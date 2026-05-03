@@ -49,7 +49,6 @@ import {
   Settings,
   Server,
   Users,
-  Shield,
   UsersRound,
   HardDrive,
   Package,
@@ -148,11 +147,10 @@ function settingsBreadcrumb(pathname: string): { label: string; href?: string }[
     nodes: "Cluster nodes",
     config: "Cluster config",
     users: "Users",
-    roles: "Roles",
     groups: "Groups",
   };
   const out: { label: string; href?: string }[] = [
-    { label: "Settings", href: "/settings/profile" },
+    { label: "Settings", href: "/settings" },
   ];
   if (section && labels[section]) {
     out.push({ label: labels[section] });
@@ -466,14 +464,6 @@ function UserMenu() {
                 <Link href="/settings/users" className="flex items-center gap-2">
                   <Users className="h-3.5 w-3.5" />
                   Users
-                </Link>
-              }
-            />
-            <DropdownMenuItem
-              render={
-                <Link href="/settings/roles" className="flex items-center gap-2">
-                  <Shield className="h-3.5 w-3.5" />
-                  Roles
                 </Link>
               }
             />

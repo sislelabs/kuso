@@ -253,6 +253,29 @@ func TestListKeys_EmptySecret(t *testing.T) {
 	}
 }
 
+// TestSetKey_SharedSkipsPreviewEnvs locks in the rule that shared
+// secrets attach to non-preview envs only. Previews must boot empty
+// so reviewers don't get production credentials in a throwaway URL,
+// and so the URL itself is safe to share.
+func TestSetKey_SharedSkipsPreviewEnvs(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedEnv("alpha-web-production", "alpha", "web", "production", nil),
+		seedEnv("alpha-web-pr7", "alpha", "web", "preview", nil),
+	)
+	if err := s.SetKey(context.Background(), "alpha", "web", "", "DB_URL", "postgres://x"); err != nil {
+		t.Fatalf("SetKey: %v", err)
+	}
+	prod, _ := s.findEnv(context.Background(), "alpha", "web", "production")
+	preview, _ := s.findEnv(context.Background(), "alpha", "web", "preview")
+	if len(prod.Spec.EnvFromSecrets) != 1 || prod.Spec.EnvFromSecrets[0] != "alpha-web-secrets" {
+		t.Errorf("production should be attached: %+v", prod.Spec.EnvFromSecrets)
+	}
+	if len(preview.Spec.EnvFromSecrets) != 0 {
+		t.Errorf("preview should NOT inherit shared secret: %+v", preview.Spec.EnvFromSecrets)
+	}
+}
+
 func TestSetKey_PerEnvAttachOnlyThatEnv(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,

@@ -19,6 +19,7 @@ require (
 
 require (
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
+	github.com/gorilla/websocket v1.5.3 // indirect
 	google.golang.org/protobuf v1.36.5 // indirect
 )
 

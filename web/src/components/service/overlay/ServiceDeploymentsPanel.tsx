@@ -119,11 +119,24 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
           <Skeleton className="h-16 w-full" />
           <Skeleton className="h-16 w-full" />
         </div>
-      ) : (builds.data ?? []).length === 0 ? (
-        <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
-          No builds yet. Trigger one with the button above or push to the connected branch.
-        </p>
-      ) : (
+      ) : (() => {
+        // Filter to builds matching the active env's branch. Without
+        // this filter the deployments tab listed every build for the
+        // service across every env, so a PR-branch build would appear
+        // under production. Bug fix: each env shows only its own
+        // history.
+        const envBranch = env?.spec?.branch;
+        const visible = envBranch
+          ? (builds.data ?? []).filter((b) => (b.branch ?? "") === envBranch)
+          : (builds.data ?? []);
+        if (visible.length === 0) {
+          return (
+            <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
+              No builds for this environment yet. Trigger one with the button above or push to the connected branch.
+            </p>
+          );
+        }
+        return (
         <ul className="space-y-2">
           {(() => {
             // env.spec.image.tag is the source of truth for "what's
@@ -131,7 +144,7 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
             // imageTag; null when the env hasn't been promoted yet.
             const envImage = (env?.spec as { image?: { tag?: string } } | undefined)?.image;
             const activeTag = envImage?.tag;
-            return (builds.data ?? []).map((b) => {
+            return visible.map((b) => {
               const s = classify(b, activeTag);
               const sha = (b.commitSha ?? "").slice(0, 12);
               const branch = b.branch ?? "—";
@@ -182,7 +195,8 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
             });
           })()}
         </ul>
-      )}
+        );
+      })()}
     </div>
   );
 }
