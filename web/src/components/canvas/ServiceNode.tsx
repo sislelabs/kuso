@@ -67,9 +67,9 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
           "border-[var(--accent)]/40 animate-pulse",
         status === "active" && "border-emerald-500/30",
         status === "failed" && "border-red-500/30",
-        status === "sleeping" && "opacity-60 border-[var(--border-subtle)]",
+        status === "sleeping" && "opacity-60 border-[var(--border-strong)]",
         !["building", "deploying", "active", "failed", "sleeping"].includes(status) &&
-          "border-[var(--border-subtle)]"
+          "border-[var(--border-strong)]"
       )}
     >
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />

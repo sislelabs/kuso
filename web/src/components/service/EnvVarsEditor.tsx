@@ -332,7 +332,7 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
 
       {mode === "rows" && (
         <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-          Use <span className="text-[var(--text-secondary)]">${"${{ <name>.<KEY> }}"}</span> to
+          Use <span className="text-[var(--text-secondary)]">{"${{ <name>.<KEY> }}"}</span> to
           reference another service or addon. The icon to the right of any value picks
           the right ref for you.
         </p>

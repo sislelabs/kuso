@@ -57,7 +57,7 @@ func TestVarRef_SecretName(t *testing.T) {
 
 func TestRewriteEnvVar_Literal(t *testing.T) {
 	in := EnvVar{Name: "FOO", Value: "bar"}
-	got, err := RewriteEnvVar(in, nil)
+	got, err := RewriteEnvVar(in, nil, nil)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestRewriteEnvVar_Literal(t *testing.T) {
 
 func TestRewriteEnvVar_AddonRef(t *testing.T) {
 	in := EnvVar{Name: "DATABASE_URL", Value: "${{ pg.DATABASE_URL }}"}
-	got, err := RewriteEnvVar(in, nil)
+	got, err := RewriteEnvVar(in, nil, nil)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestRewriteEnvVar_ServiceRef(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.key, func(t *testing.T) {
 			in := EnvVar{Name: "X", Value: "${{ api." + tc.key + " }}"}
-			got, err := RewriteEnvVar(in, resolver)
+			got, err := RewriteEnvVar(in, resolver, nil)
 			if err != nil {
 				t.Fatalf("err: %v", err)
 			}
@@ -133,7 +133,7 @@ func TestRewriteEnvVar_ServiceRef(t *testing.T) {
 func TestRewriteEnvVar_ServiceRef_FallsBackToAddon(t *testing.T) {
 	noServices := func(string) (string, int32, string, bool) { return "", 0, "", false }
 	in := EnvVar{Name: "X", Value: "${{ pg.HOST }}"}
-	got, err := RewriteEnvVar(in, noServices)
+	got, err := RewriteEnvVar(in, noServices, nil)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -144,7 +144,7 @@ func TestRewriteEnvVar_ServiceRef_FallsBackToAddon(t *testing.T) {
 
 func TestRewriteEnvVar_Composite(t *testing.T) {
 	in := EnvVar{Name: "URL", Value: "https://${{ pg.HOST }}/db"}
-	_, err := RewriteEnvVar(in, nil)
+	_, err := RewriteEnvVar(in, nil, nil)
 	if !errors.Is(err, ErrCompositeVarRef) {
 		t.Errorf("got %v, want ErrCompositeVarRef", err)
 	}
@@ -157,7 +157,7 @@ func TestRewriteEnvVar_PassthroughValueFrom(t *testing.T) {
 			"secretKeyRef": map[string]any{"name": "other", "key": "K"},
 		},
 	}
-	got, err := RewriteEnvVar(in, nil)
+	got, err := RewriteEnvVar(in, nil, nil)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -172,7 +172,7 @@ func TestRewriteEnvVars_Multiple(t *testing.T) {
 		{Name: "B", Value: "${{ pg.URL }}"},
 		{Name: "C", Value: ""},
 	}
-	out, err := RewriteEnvVars(in, nil)
+	out, err := RewriteEnvVars(in, nil, nil)
 	if err != nil {
 		t.Fatalf("err: %v", err)
 	}

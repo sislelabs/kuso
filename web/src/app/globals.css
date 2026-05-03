@@ -177,3 +177,31 @@
   font-family: var(--font-dm-sans);
   font-weight: 600;
 }
+
+/* React Flow Controls — the library ships white-button CSS that
+   overrides inline classes on the buttons themselves. We re-skin
+   to match the dark canvas instead of trying to tame each button
+   individually with className= props. */
+.react-flow__controls {
+  box-shadow: none !important;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  overflow: hidden;
+}
+.react-flow__controls-button {
+  background: var(--bg-elevated) !important;
+  border-bottom: 1px solid var(--border-subtle) !important;
+  color: var(--text-secondary) !important;
+  width: 28px !important;
+  height: 28px !important;
+}
+.react-flow__controls-button:last-child {
+  border-bottom: none !important;
+}
+.react-flow__controls-button:hover {
+  background: var(--bg-tertiary) !important;
+  color: var(--text-primary) !important;
+}
+.react-flow__controls-button svg {
+  fill: currentColor !important;
+}

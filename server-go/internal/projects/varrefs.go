@@ -85,6 +85,12 @@ func ParseVarRef(value string) (VarRef, bool, error) {
 // rewriter doesn't have to import kube/projects state.
 type ServiceRefResolver func(shortName string) (fqn string, port int32, ns string, ok bool)
 
+// AddonRefResolver returns the conn-secret name for an addon (short
+// or fqn form), or ok=false when no such addon exists in the project.
+// Without this, the rewriter would happily emit a secretKeyRef for
+// a non-existent addon → pod crashloops on missing secret mount.
+type AddonRefResolver func(name string) (connSecretName string, ok bool)
+
 // ExpandServiceKey turns a (service, key) pair into the literal value
 // that goes on the pod env. Mirrors Railway's reference-variable
 // surface: HOST/PORT/URL/INTERNAL_URL.
@@ -107,19 +113,28 @@ func ExpandServiceKey(fqn string, port int32, ns, key string) string {
 	return ""
 }
 
+// ErrUnknownVarRef is returned when a ${{ name.KEY }} ref doesn't
+// match any known service or addon in the project. Without this,
+// SetEnv would silently emit a secretKeyRef pointing at a Secret
+// that doesn't exist and the pod would crashloop on mount.
+var ErrUnknownVarRef = errors.New("variable reference does not match any service or addon in this project")
+
 // RewriteEnvVar maps a wire-shape EnvVar through the var-ref parser.
 //
 // Resolution order when the value is a pure `${{ name.KEY }}` ref:
 //   1. If KEY is a service-ref key (HOST/PORT/URL/INTERNAL_URL) AND
 //      svcResolver finds <name> as a service in this project, expand
 //      to a literal Value (DNS / port / url string).
-//   2. Otherwise treat <name> as an addon and emit a secretKeyRef
-//      pointing at <name>-conn / KEY (the legacy behaviour).
+//   2. Else if addonResolver finds <name> as an addon, emit a
+//      secretKeyRef pointing at <addon>-conn / KEY.
+//   3. Else: ErrUnknownVarRef. We refuse to silently write a broken
+//      reference.
 //
-// When svcResolver is nil, every ref falls through to the addon path —
-// preserves SetEnv backwards compat for callers that haven't been
-// updated.
-func RewriteEnvVar(in EnvVar, svcResolver ServiceRefResolver) (EnvVar, error) {
+// When the resolvers are nil, all refs fall through to the legacy
+// addon path (no validation). Callers that supply both resolvers
+// get full validation; callers that supply neither preserve the
+// pre-v0.6.16 behaviour.
+func RewriteEnvVar(in EnvVar, svcResolver ServiceRefResolver, addonResolver AddonRefResolver) (EnvVar, error) {
 	// Pre-existing valueFrom entries pass through. Only literal `value`
 	// entries are candidates for rewriting.
 	if in.ValueFrom != nil || in.Value == "" {
@@ -139,7 +154,26 @@ func RewriteEnvVar(in EnvVar, svcResolver ServiceRefResolver) (EnvVar, error) {
 			return EnvVar{Name: in.Name, Value: expanded}, nil
 		}
 	}
-	// Default: secretKeyRef on the addon's conn-secret.
+	// Addon-ref path: emit a secretKeyRef IFF the addon exists.
+	if addonResolver != nil {
+		if connSecret, ok := addonResolver(ref.Name); ok {
+			return EnvVar{
+				Name: in.Name,
+				ValueFrom: map[string]any{
+					"secretKeyRef": map[string]any{
+						"name": connSecret,
+						"key":  ref.Key,
+					},
+				},
+			}, nil
+		}
+		// Resolver supplied + neither a service nor an addon matched
+		// → refuse. This is the new strictness.
+		return EnvVar{}, fmt.Errorf("env var %q: %w (looked up %q)", in.Name, ErrUnknownVarRef, ref.Name)
+	}
+	// No addonResolver wired → legacy behaviour: trust the ref name
+	// and emit a secretKeyRef. Preserves callers that haven't been
+	// updated. New code should always pass an addonResolver.
 	return EnvVar{
 		Name: in.Name,
 		ValueFrom: map[string]any{
@@ -153,10 +187,10 @@ func RewriteEnvVar(in EnvVar, svcResolver ServiceRefResolver) (EnvVar, error) {
 
 // RewriteEnvVars applies RewriteEnvVar over a slice. Returns the first
 // error encountered, or the rewritten slice.
-func RewriteEnvVars(in []EnvVar, svcResolver ServiceRefResolver) ([]EnvVar, error) {
+func RewriteEnvVars(in []EnvVar, svcResolver ServiceRefResolver, addonResolver AddonRefResolver) ([]EnvVar, error) {
 	out := make([]EnvVar, 0, len(in))
 	for _, v := range in {
-		rewritten, err := RewriteEnvVar(v, svcResolver)
+		rewritten, err := RewriteEnvVar(v, svcResolver, addonResolver)
 		if err != nil {
 			return nil, err
 		}

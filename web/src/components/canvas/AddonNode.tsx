@@ -31,7 +31,10 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
       className={cn(
         "w-[220px] rounded-2xl border bg-[var(--bg-elevated)] p-3 transition-colors",
         "hover:border-[var(--border-strong)]",
-        ready ? "border-[var(--border-subtle)]" : "border-amber-500/30 animate-pulse"
+        // border-strong instead of border-subtle so the outline
+        // actually reads against the canvas bg + the new dot grid.
+        // Subtle was nearly invisible after the v0.6.15 visual pass.
+        ready ? "border-[var(--border-strong)]" : "border-amber-500/30 animate-pulse"
       )}
     >
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />

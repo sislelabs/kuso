@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,10 +85,15 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event string, body []byte) er
 // map[string]any) keeps misuse errors out at compile time.
 type pushEvent struct {
 	Ref        string `json:"ref"`
+	After      string `json:"after"` // head SHA of the push (40-char hex)
 	Repository struct {
 		FullName      string `json:"full_name"`
 		DefaultBranch string `json:"default_branch"`
 	} `json:"repository"`
+	HeadCommit struct {
+		ID      string `json:"id"`
+		Message string `json:"message"`
+	} `json:"head_commit"`
 }
 
 type prEvent struct {
@@ -144,7 +151,18 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 			d.Logger.Error("list services for push", "project", proj.Name, "err", err)
 			continue
 		}
-		d.Logger.Info("push → trigger builds", "project", proj.Name, "branch", branch, "services", len(raw.Items))
+		// Detect PR-merge pushes so the build name reads as
+		// "pr-42-<sha>" instead of the opaque "main-<unix-ms>". GH
+		// puts either "Merge pull request #N" (merge commit) or
+		// "Title (#N)" (squash) in head_commit.message.
+		prNumber := extractMergedPR(p.HeadCommit.Message)
+		// Prefer the head_commit SHA; fall back to "after" (the
+		// post-push HEAD, present on every push event).
+		headSHA := p.HeadCommit.ID
+		if headSHA == "" {
+			headSHA = p.After
+		}
+		d.Logger.Info("push → trigger builds", "project", proj.Name, "branch", branch, "services", len(raw.Items), "pr", prNumber)
 		for i := range raw.Items {
 			fqn := raw.Items[i].GetName()
 			short := strings.TrimPrefix(fqn, proj.Name+"-")
@@ -154,7 +172,18 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 			if d.Builds == nil {
 				continue
 			}
-			if _, err := d.Builds.Create(ctx, proj.Name, short, builds.CreateBuildRequest{Branch: branch}); err != nil {
+			// For a PR-merge push, prefer the head SHA (so the build
+			// CR carries a real ref instead of the synthetic
+			// "<branch>-<unix-ms>"). For a regular push, also prefer
+			// it. The Ref field on the request becomes the build's
+			// image tag; keeping it tied to the real SHA makes
+			// rollbacks pinpoint-able.
+			req := builds.CreateBuildRequest{Branch: branch}
+			if headSHA != "" && len(headSHA) >= 7 {
+				req.Ref = headSHA
+			}
+			_ = prNumber // currently informational; future: stash on build label
+			if _, err := d.Builds.Create(ctx, proj.Name, short, req); err != nil {
 				d.Logger.Warn("build trigger", "project", proj.Name, "service", short, "err", err)
 			}
 		}
@@ -402,3 +431,34 @@ func repoMatches(configuredURL, fullName string) bool {
 	lower := strings.ToLower(strings.TrimSuffix(configuredURL, ".git"))
 	return strings.HasSuffix(lower, "/"+strings.ToLower(fullName))
 }
+
+// extractMergedPR digs the PR number out of a merge commit message.
+// GitHub uses two formats:
+//   "Merge pull request #42 from owner/branch\n\n…"     (merge commit)
+//   "Title of the PR (#42)\n\n…"                         (squash)
+// Returns 0 when no PR number is found (e.g. a direct push to main).
+func extractMergedPR(message string) int {
+	if message == "" {
+		return 0
+	}
+	// First line only — bodies can include #-references that aren't
+	// the PR number.
+	first := message
+	if i := strings.IndexByte(message, '\n'); i >= 0 {
+		first = message[:i]
+	}
+	if m := mergeCommitRE.FindStringSubmatch(first); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return n
+	}
+	if m := squashCommitRE.FindStringSubmatch(first); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return n
+	}
+	return 0
+}
+
+var (
+	mergeCommitRE  = regexp.MustCompile(`^Merge pull request #(\d+)\b`)
+	squashCommitRE = regexp.MustCompile(`\(#(\d+)\)\s*$`)
+)

@@ -548,7 +548,12 @@ func (s *Service) SetEnv(ctx context.Context, project, service string, envVars [
 	if err != nil {
 		return fmt.Errorf("resolve services: %w", err)
 	}
-	rewritten, err := RewriteEnvVars(envVars, svcResolver)
+	// Addon resolver — same pattern. Without this, a typo'd
+	// ${{ pg.URL }} when there's no `pg` addon silently emits a
+	// secretKeyRef pointing at "pg-conn", and the pod crashloops on
+	// missing-secret mount.
+	addonResolver := s.buildAddonResolver(ctx, project)
+	rewritten, err := RewriteEnvVars(envVars, svcResolver, addonResolver)
 	if err != nil {
 		return err
 	}
@@ -561,6 +566,45 @@ func (s *Service) SetEnv(ctx context.Context, project, service string, envVars [
 		return fmt.Errorf("update service env: %w", err)
 	}
 	return nil
+}
+
+// buildAddonResolver returns a closure that maps an addon ref name
+// (short or fqn form) to the corresponding -conn Secret name. Built
+// from AddonConnSecrets if wired, otherwise a no-op resolver that
+// returns ok=false for everything (which forces RewriteEnvVar to
+// reject unknown refs — desired strictness).
+func (s *Service) buildAddonResolver(ctx context.Context, project string) AddonRefResolver {
+	if s.AddonConnSecrets == nil {
+		return func(string) (string, bool) { return "", false }
+	}
+	secrets, err := s.AddonConnSecrets(ctx, project)
+	if err != nil || len(secrets) == 0 {
+		return func(string) (string, bool) { return "", false }
+	}
+	// Map both the FQN ("<project>-<addon>-conn") and the short
+	// form ("<addon>-conn") to the canonical secret name. Refs
+	// commonly use the short form.
+	prefix := project + "-"
+	byName := make(map[string]string, len(secrets)*2)
+	for _, sec := range secrets {
+		byName[sec] = sec
+		// Strip "-conn" suffix to get the addon CR name.
+		if !strings.HasSuffix(sec, "-conn") {
+			continue
+		}
+		addonCR := sec[:len(sec)-len("-conn")]
+		byName[addonCR] = sec
+		if strings.HasPrefix(addonCR, prefix) {
+			short := addonCR[len(prefix):]
+			byName[short] = sec
+		}
+	}
+	return func(name string) (string, bool) {
+		if v, ok := byName[name]; ok {
+			return v, true
+		}
+		return "", false
+	}
 }
 
 // buildServiceResolver lists the project's services up-front and
