@@ -66,6 +66,15 @@ export interface PatchServiceBody {
   domains?: { host: string; tls?: boolean }[];
   scale?: { min?: number; max?: number; targetCPU?: number };
   sleep?: { enabled?: boolean; afterMinutes?: number };
+  volumes?: VolumePatch[];
+}
+
+export interface VolumePatch {
+  name: string;
+  mountPath: string;
+  sizeGi?: number;
+  storageClass?: string;
+  accessMode?: string;
 }
 
 export async function patchService(

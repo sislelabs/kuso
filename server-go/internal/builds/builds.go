@@ -346,10 +346,34 @@ func githubInstallationID(proj *kube.KusoProject) int64 {
 // Poller watches kaniko Jobs rendered for KusoBuilds and stamps their
 // outcome onto KusoBuild.status. On success it patches the production
 // KusoEnvironment with the new image tag.
+// EventEmitter is the (notify.Dispatcher.Emit) signature the poller
+// calls when a build transitions. Kept as an interface here so the
+// builds package doesn't pull in notify (avoids an import cycle if
+// notify ever wants build types). Nil emitter = silent.
+type EventEmitter interface {
+	Emit(e EventEnvelope)
+}
+
+// EventEnvelope is the minimum payload a notify dispatcher needs.
+// Mirrors notify.Event's interesting fields without the import.
+type EventEnvelope struct {
+	Type     string
+	Title    string
+	Body     string
+	Project  string
+	Service  string
+	URL      string
+	Severity string
+	Extra    map[string]string
+}
+
 type Poller struct {
 	Svc      *Service
 	Interval time.Duration
 	Logger   *slog.Logger
+	// Notifier receives build.{started,succeeded,failed} events.
+	// Optional: nil → no notifications.
+	Notifier EventEmitter
 }
 
 // Run blocks until ctx is cancelled, ticking every Interval and updating
@@ -450,6 +474,20 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("patch build status: %w", err)
 	}
+	if p.Notifier != nil {
+		ref := b.Spec.Ref
+		if len(ref) > 12 {
+			ref = ref[:12]
+		}
+		p.Notifier.Emit(EventEnvelope{
+			Type:     "build.succeeded",
+			Title:    fmt.Sprintf("✓ Build succeeded: %s", b.Spec.Service),
+			Body:     fmt.Sprintf("ref `%s` on `%s`", ref, b.Spec.Branch),
+			Project:  b.Spec.Project,
+			Service:  b.Spec.Service,
+			Severity: "info",
+		})
+	}
 	return p.promoteImage(ctx, ns, b)
 }
 
@@ -459,6 +497,21 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
 	if err != nil {
 		return fmt.Errorf("patch build failed: %w", err)
+	}
+	if p.Notifier != nil {
+		ref := b.Spec.Ref
+		if len(ref) > 12 {
+			ref = ref[:12]
+		}
+		p.Notifier.Emit(EventEnvelope{
+			Type:     "build.failed",
+			Title:    fmt.Sprintf("✗ Build failed: %s", b.Spec.Service),
+			Body:     msg,
+			Project:  b.Spec.Project,
+			Service:  b.Spec.Service,
+			Severity: "error",
+			Extra:    map[string]string{"ref": ref, "branch": b.Spec.Branch},
+		})
 	}
 	return nil
 }

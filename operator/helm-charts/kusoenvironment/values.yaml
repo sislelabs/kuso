@@ -75,6 +75,16 @@ secretsRev: ""
 # resources: per-env CPU/mem limits and requests.
 resources: {}
 
+# volumes: persistent disks mounted into every pod. The chart renders
+# one PVC per entry plus the matching volumeMount on the app
+# container. ReadWriteOnce + cluster-default StorageClass means it
+# Just Works on k3s + local-path.
+#
+# volumes:
+#   - { name: data, mountPath: /var/lib/app, sizeGi: 5 }
+#   - { name: cache, mountPath: /var/cache, sizeGi: 1, accessMode: ReadWriteOnce }
+volumes: []
+
 # placement: pin pods to a subset of nodes. The server resolves this
 # from env > service > project precedence and stamps the result onto
 # the env CR before reconcile, so the chart only sees the effective

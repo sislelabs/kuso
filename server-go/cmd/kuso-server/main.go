@@ -25,8 +25,11 @@ import (
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	ghpkg "kuso/server/internal/github"
+	"kuso/server/internal/health"
 	"kuso/server/internal/logs"
+	"kuso/server/internal/notify"
 	"kuso/server/internal/projects"
+	"kuso/server/internal/spec"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/status"
 	"kuso/server/internal/version"
@@ -104,6 +107,16 @@ func main() {
 	var statSvc *status.Service
 	var addonSvc *addons.Service
 	var ghDeps *httpsrv.GithubDeps
+	var kubeClient *kube.Client
+	var specRecon *spec.Reconciler
+
+	// Notify dispatcher is independent of kube — it only needs the DB
+	// for config + an HTTP client. Constructing it outside the kube
+	// branch means /api/notifications/{id}/test still works on
+	// kube-less dev installs.
+	notifyDisp := notify.New(database, logger, 256)
+	go notifyDisp.Run(ctx)
+
 	if kc, err := kube.NewClient(); err != nil {
 		logger.Warn("kube: client unavailable, project + secret + build + log routes disabled", "err", err)
 	} else {
@@ -111,6 +124,7 @@ func main() {
 		// namespace lookups hit the same cache. Empty spec.namespace
 		// resolves to the home ns, preserving existing single-tenant
 		// behaviour without per-call overhead.
+		kubeClient = kc
 		nsResolver := kube.NewProjectNamespaceResolver(kc, *namespace)
 		projSvc = projects.New(kc, *namespace)
 		secSvc = secrets.New(kc, *namespace)
@@ -121,6 +135,18 @@ func main() {
 		cfgSvc = config.New(kc, *namespace)
 		statSvc = status.New(kc, 5*time.Minute)
 		addonSvc = addons.New(kc, *namespace)
+		// Spec reconciler — the apply endpoint reuses the same
+		// project + addon services for create/update/delete so the
+		// validation rules stay in one place.
+		specRecon = &spec.Reconciler{Projects: projSvc, Addons: addonSvc}
+
+		// Health watcher: polls pod + node state and fires notify
+		// events on bad transitions (CrashLoopBackOff, image pull
+		// errors, node disk pressure). Disable with
+		// KUSO_HEALTH_DISABLED=true on a noisy cluster.
+		if os.Getenv("KUSO_HEALTH_DISABLED") != "true" {
+			go health.New(kc, *namespace, notifyDisp, logger).Run(ctx)
+		}
 		addonSvc.NSResolver = nsResolver
 		// Reload the Kuso CR cache every minute so the feature-flag
 		// surface stays fresh without forcing every request to hit the
@@ -132,7 +158,12 @@ func main() {
 		// outcomes and promotes the image tag onto the production env.
 		// Disabled when KUSO_BUILD_POLLER_DISABLED=true (matches TS env).
 		if os.Getenv("KUSO_BUILD_POLLER_DISABLED") != "true" {
-			go (&builds.Poller{Svc: buildSvc, Interval: 30 * time.Second, Logger: logger}).Run(ctx)
+			go (&builds.Poller{
+				Svc:      buildSvc,
+				Interval: 30 * time.Second,
+				Logger:   logger,
+				Notifier: notifyAdapter{notifyDisp},
+			}).Run(ctx)
 		}
 		// Preview-cleanup: every 5 minutes delete preview envs whose
 		// ttl.expiresAt has passed. Disabled by
@@ -187,6 +218,10 @@ func main() {
 		Addons:     addonSvc,
 		Audit:      auditSvc,
 		Github:     ghDeps,
+		Notify:     notifyDisp,
+		Spec:       specRecon,
+		Kube:       kubeClient,
+		Namespace:  *namespace,
 		Logger:     logger,
 	})
 
@@ -316,4 +351,22 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// notifyAdapter satisfies builds.EventEmitter by forwarding to the
+// notify.Dispatcher. Lives here because builds/ shouldn't import
+// notify/ (would create a layering surprise: domain code → infra).
+type notifyAdapter struct{ d *notify.Dispatcher }
+
+func (a notifyAdapter) Emit(e builds.EventEnvelope) {
+	a.d.EmitEnvelope(notify.EmitEnvelope{
+		Type:     e.Type,
+		Title:    e.Title,
+		Body:     e.Body,
+		Project:  e.Project,
+		Service:  e.Service,
+		URL:      e.URL,
+		Severity: e.Severity,
+		Extra:    e.Extra,
+	})
 }

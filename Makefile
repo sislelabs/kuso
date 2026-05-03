@@ -39,3 +39,20 @@ typecheck:
 
 test:
 	@cd server-go && go test ./...
+
+# CLI builds — writes kuso-{darwin,linux}-{amd64,arm64} into dist/.
+# Used by the GitHub release workflow; run locally with `make cli`.
+.PHONY: cli cli-darwin-arm64 cli-darwin-amd64 cli-linux-amd64 cli-linux-arm64
+cli: cli-darwin-arm64 cli-darwin-amd64 cli-linux-amd64 cli-linux-arm64
+cli-darwin-arm64:
+	@mkdir -p dist
+	@cd cli && GOOS=darwin GOARCH=arm64 go build -o ../dist/kuso-darwin-arm64 ./cmd
+cli-darwin-amd64:
+	@mkdir -p dist
+	@cd cli && GOOS=darwin GOARCH=amd64 go build -o ../dist/kuso-darwin-amd64 ./cmd
+cli-linux-amd64:
+	@mkdir -p dist
+	@cd cli && GOOS=linux GOARCH=amd64 go build -o ../dist/kuso-linux-amd64 ./cmd
+cli-linux-arm64:
+	@mkdir -p dist
+	@cd cli && GOOS=linux GOARCH=arm64 go build -o ../dist/kuso-linux-arm64 ./cmd

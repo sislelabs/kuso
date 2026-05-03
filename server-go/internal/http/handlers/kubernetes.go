@@ -205,24 +205,28 @@ func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request
 	end := time.Now().UTC()
 	start := end.Add(-dur)
 
-	// Service-name selector for traefik. Traefik labels its metrics
-	// with `service` = "<env>@kubernetescrd" by default. The env CR
-	// name is what becomes the k8s Service that the Ingress points to.
-	svcLabel := envName + "-app@kubernetescrd"
+	// Service-name selector for traefik. Actual label format is
+	//   service="<namespace>-<envname>-http@kubernetes"
+	// (with namespace prefix and -http suffix for the typical http
+	// backend). The Ingress's underlying k8s Service is named after
+	// the env CR. We grab the namespace from h.Namespace; everything
+	// in kuso lives in one ns by default.
+	prefix := h.Namespace + "-" + envName
+	matcher := escapePromLabel(prefix) + ".*@kubernetes"
 
 	queries := map[string]string{
 		// requests/s — sum across all status codes & methods
 		"requests": fmt.Sprintf(
-			`sum(rate(traefik_service_requests_total{service=~"%s.*"}[1m]))`, escapePromLabel(svcLabel)),
+			`sum(rate(traefik_service_requests_total{service=~"%s"}[1m]))`, matcher),
 		// 5xx error rate as a fraction of all requests
 		"errors": fmt.Sprintf(
-			`(sum(rate(traefik_service_requests_total{service=~"%s.*",code=~"5.."}[1m])) or vector(0)) `+
-				`/ clamp_min(sum(rate(traefik_service_requests_total{service=~"%s.*"}[1m])), 1)`,
-			escapePromLabel(svcLabel), escapePromLabel(svcLabel)),
+			`(sum(rate(traefik_service_requests_total{service=~"%s",code=~"5.."}[1m])) or vector(0)) `+
+				`/ clamp_min(sum(rate(traefik_service_requests_total{service=~"%s"}[1m])), 1)`,
+			matcher, matcher),
 		// p95 latency in ms
 		"p95ms": fmt.Sprintf(
-			`1000 * histogram_quantile(0.95, sum by (le) (rate(traefik_service_request_duration_seconds_bucket{service=~"%s.*"}[5m])))`,
-			escapePromLabel(svcLabel)),
+			`1000 * histogram_quantile(0.95, sum by (le) (rate(traefik_service_request_duration_seconds_bucket{service=~"%s"}[5m])))`,
+			matcher),
 	}
 
 	out := timeseriesResponse{

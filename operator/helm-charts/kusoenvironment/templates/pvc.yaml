@@ -1,0 +1,26 @@
+{{- /*
+PersistentVolumeClaims for every entry in .Values.volumes. We
+deliberately use one PVC per volume rather than a single multi-claim
+template so a user can resize / delete one disk without touching the
+others. ReadWriteOnce default + cluster-default StorageClass keeps
+this working out of the box on k3s + local-path.
+*/ -}}
+{{- range .Values.volumes }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ printf "%s-%s" (include "kusoenvironment.fullname" $) .name | quote }}
+  labels:
+    {{- include "kusoenvironment.labels" $ | nindent 4 }}
+    kuso.sislelabs.com/volume: {{ .name | quote }}
+spec:
+  accessModes:
+    - {{ default "ReadWriteOnce" .accessMode | quote }}
+  resources:
+    requests:
+      storage: {{ printf "%dGi" (default 1 (int .sizeGi)) | quote }}
+  {{- if .storageClass }}
+  storageClassName: {{ .storageClass | quote }}
+  {{- end }}
+{{- end }}

@@ -47,6 +47,16 @@ export interface KusoServiceSpec {
     outputDir?: string;
   };
   buildpacks?: { builderImage?: string; lifecycleImage?: string };
+  volumes?: KusoVolume[];
+  placement?: { labels?: Record<string, string>; nodes?: string[] };
+}
+
+export interface KusoVolume {
+  name: string;
+  mountPath: string;
+  sizeGi?: number;
+  storageClass?: string;
+  accessMode?: string;
 }
 
 export interface KusoEnvVar {

@@ -10,13 +10,21 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/kube"
 	"kuso/server/internal/projects"
+	"kuso/server/internal/spec"
 )
 
-// ProjectsHandler holds the projects.Service the routes call.
+// ProjectsHandler holds the projects.Service the routes call. The
+// Kube/Namespace/Reconciler fields back the config-as-code endpoint
+// (POST /api/projects/{p}/apply); they're optional and the handler
+// returns 503 when nil.
 type ProjectsHandler struct {
-	Svc    *projects.Service
-	Logger *slog.Logger
+	Svc        *projects.Service
+	Logger     *slog.Logger
+	Kube       *kube.Client
+	Namespace  string
+	Reconciler *spec.Reconciler
 }
 
 // Mount registers all /api/projects/* routes onto the given router.
@@ -32,6 +40,9 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/services/{service}", h.GetService)
 	r.Patch("/api/projects/{project}/services/{service}", h.PatchService)
 	r.Delete("/api/projects/{project}/services/{service}", h.DeleteService)
+	// Config-as-code: plan/apply a kuso.yml against the project. Body
+	// is the raw YAML; ?dryRun=1 returns the plan without writing.
+	r.Post("/api/projects/{project}/apply", h.Apply)
 	r.Get("/api/projects/{project}/services/{service}/env", h.GetEnv)
 	r.Post("/api/projects/{project}/services/{service}/env", h.SetEnv)
 	r.Post("/api/projects/{project}/services/{service}/wake", h.Wake)
@@ -151,6 +162,62 @@ func (h *ProjectsHandler) GetService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// Apply ingests a kuso.yml body (POST /api/projects/{p}/apply), diffs
+// it against the live project, and applies the resulting plan. With
+// ?dryRun=1 we just return the plan without touching kube. The
+// project URL param must match the YAML's `project:` field — we
+// refuse cross-project applies so an accidental wrong-repo push
+// can't wipe out another project.
+func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
+	if h.Reconciler == nil {
+		http.Error(w, "config-as-code disabled (kube unavailable)", http.StatusServiceUnavailable)
+		return
+	}
+	body := make([]byte, 0, 1<<14)
+	buf := make([]byte, 4096)
+	for {
+		n, err := r.Body.Read(buf)
+		body = append(body, buf[:n]...)
+		if err != nil {
+			break
+		}
+		if len(body) > 1<<20 {
+			http.Error(w, "kuso.yml too large (>1MiB)", http.StatusRequestEntityTooLarge)
+			return
+		}
+	}
+	f, err := spec.Parse(body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if f.Project != chi.URLParam(r, "project") {
+		http.Error(w, "project name in YAML doesn't match URL", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	plan, err := spec.PlanFor(ctx, h.Kube, h.Namespace, f)
+	if err != nil {
+		h.Logger.Error("apply: plan", "err", err)
+		http.Error(w, "plan failed", http.StatusInternalServerError)
+		return
+	}
+	if r.URL.Query().Get("dryRun") == "1" {
+		writeJSON(w, http.StatusOK, plan)
+		return
+	}
+	res, err := h.Reconciler.Apply(ctx, plan, f)
+	if err != nil {
+		h.Logger.Error("apply: execute", "err", err)
+		http.Error(w, "apply failed", http.StatusInternalServerError)
+		return
+	}
+	h.Logger.Info("apply", "project", f.Project, "plan", plan.Summary(), "errs", len(res.Errors))
+	writeJSON(w, http.StatusOK, res)
 }
 
 // PatchService accepts a partial KusoService.spec update. Body shape

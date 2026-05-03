@@ -303,6 +303,23 @@ type PatchServiceRequest struct {
 	Scale     *PatchScaleRequest     `json:"scale,omitempty"`
 	Sleep     *PatchSleepRequest     `json:"sleep,omitempty"`
 	Placement *PatchPlacementRequest `json:"placement,omitempty"`
+	// Volumes replaces the entire volume list. Pass empty slice to
+	// drop all volumes; nil to leave them as-is. We don't support
+	// per-volume add/remove patches because PVC names are stable —
+	// a "remove volume X" via partial diff would be ambiguous when
+	// the user also renamed Y to X.
+	Volumes *[]VolumePatch `json:"volumes,omitempty"`
+}
+
+// VolumePatch is the wire shape of a volume update. Mirrors
+// kube.KusoVolume but in the projects package's vocabulary so the
+// HTTP layer doesn't need to import kube.
+type VolumePatch struct {
+	Name         string `json:"name"`
+	MountPath    string `json:"mountPath"`
+	SizeGi       int    `json:"sizeGi,omitempty"`
+	StorageClass string `json:"storageClass,omitempty"`
+	AccessMode   string `json:"accessMode,omitempty"`
 }
 
 // PatchPlacementRequest mirrors KusoPlacement on the wire. When the
@@ -379,6 +396,24 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			svc.Spec.Sleep.AfterMinutes = *req.Sleep.AfterMinutes
 		}
 	}
+	volumesChanged := false
+	if req.Volumes != nil {
+		next := make([]kube.KusoVolume, 0, len(*req.Volumes))
+		for _, v := range *req.Volumes {
+			if v.Name == "" || v.MountPath == "" {
+				return nil, fmt.Errorf("%w: volume name + mountPath required", ErrInvalid)
+			}
+			next = append(next, kube.KusoVolume{
+				Name:         v.Name,
+				MountPath:    v.MountPath,
+				SizeGi:       v.SizeGi,
+				StorageClass: v.StorageClass,
+				AccessMode:   v.AccessMode,
+			})
+		}
+		svc.Spec.Volumes = next
+		volumesChanged = true
+	}
 	placementChanged := false
 	if req.Placement != nil {
 		if req.Placement.Clear {
@@ -402,13 +437,39 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	// env spec was rewritten for some other reason.
 	if placementChanged {
 		if err := s.propagatePlacementToEnvs(ctx, ns, project, updated); err != nil {
-			// Don't fail the whole patch — the spec is saved. Surface
-			// the propagation error in the logs and let the next env
-			// reconcile catch up.
+			return updated, nil
+		}
+	}
+	if volumesChanged {
+		if err := s.propagateVolumesToEnvs(ctx, ns, updated); err != nil {
 			return updated, nil
 		}
 	}
 	return updated, nil
+}
+
+// propagateVolumesToEnvs copies the service's volume list onto every
+// owned env so the chart renders the matching PVCs. Mirrors the
+// placement propagation pattern; failures are best-effort (the
+// service spec already saved successfully).
+func (s *Service) propagateVolumesToEnvs(ctx context.Context, ns string, svc *kube.KusoService) error {
+	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: labelService + "=" + svc.Name,
+	})
+	if err != nil {
+		return fmt.Errorf("list envs for volume propagation: %w", err)
+	}
+	for i := range envs.Items {
+		var env kube.KusoEnvironment
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
+			continue
+		}
+		env.Spec.Volumes = svc.Spec.Volumes
+		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
+			return fmt.Errorf("update env %s: %w", env.Name, err)
+		}
+	}
+	return nil
 }
 
 // propagatePlacementToEnvs updates every KusoEnvironment owned by svc

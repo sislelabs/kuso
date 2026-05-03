@@ -77,3 +77,21 @@ spec:
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+          {{- with .Values.volumes }}
+          volumeMounts:
+            {{- range . }}
+            - name: {{ .name | quote }}
+              mountPath: {{ .mountPath | quote }}
+            {{- end }}
+          {{- end }}
+      {{- with .Values.volumes }}
+      volumes:
+        {{- range . }}
+        - name: {{ .name | quote }}
+          persistentVolumeClaim:
+            # The PVC is defined in pvc.yaml — naming is
+            # <release>-<volume name> so multi-volume services don't
+            # collide.
+            claimName: {{ printf "%s-%s" (include "kusoenvironment.fullname" $) .name | quote }}
+        {{- end }}
+      {{- end }}

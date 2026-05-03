@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/notify"
 )
 
 // NotificationsHandler handles /api/notifications full CRUD.
@@ -20,7 +22,15 @@ import (
 //	{ success: true, data: ..., message?: string }
 //
 // We keep that envelope so the Vue store doesn't need a remap.
+// notifySink is the minimal interface the handler needs from the
+// notify dispatcher (avoids importing the full type into router/Deps).
+type notifySink interface {
+	EmitEnvelope(notify.EmitEnvelope)
+}
+
 type NotificationsHandler struct {
+	Notify notifySink
+
 	DB     *db.DB
 	Logger *slog.Logger
 }
@@ -32,6 +42,32 @@ func (h *NotificationsHandler) Mount(r chi.Router) {
 	r.Post("/api/notifications", h.Create)
 	r.Put("/api/notifications/{id}", h.Update)
 	r.Delete("/api/notifications/{id}", h.Delete)
+	r.Post("/api/notifications/{id}/test", h.Test)
+}
+
+// Test sends a synthetic event to the chosen notification config so
+// the user can verify their Discord webhook URL works without having
+// to wait for a real build to fire. Read the config, push one
+// EventEnvelope onto the notify dispatcher, return 204.
+func (h *NotificationsHandler) Test(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := notifCtx(r)
+	defer cancel()
+	n, err := h.DB.FindNotification(ctx, chi.URLParam(r, "id"))
+	if err != nil {
+		h.fail(w, "find", err)
+		return
+	}
+	if h.Notify == nil {
+		http.Error(w, "notify dispatcher not wired", http.StatusServiceUnavailable)
+		return
+	}
+	h.Notify.EmitEnvelope(notify.EmitEnvelope{
+		Type:     "test.ping",
+		Title:    fmt.Sprintf("Test from kuso (%s)", n.Name),
+		Body:     "If you can read this, your notification channel is wired up correctly.",
+		Severity: "info",
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func notifCtx(r *http.Request) (context.Context, context.CancelFunc) {

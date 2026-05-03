@@ -1,0 +1,74 @@
+{{- /*
+Backup CronJob for the addon. Only emitted when:
+  - addon kind is supported (postgres for v1)
+  - .Values.backup.schedule is set (cron expression)
+
+Each run dumps the addon's database with pg_dump, gzips it, and
+uploads to s3://$KUSO_BACKUP_BUCKET/<project>/<addon>/<utc-iso>.sql.gz
+via the s3cmd container shipped with the kuso-backup image.
+
+S3 credentials live in the cluster-wide kuso-backup-s3 Secret. When
+that secret doesn't exist the CronJob still installs but every run
+fails — operators see the failure in `kubectl get jobs` and in
+notify (the Job-failed alert from the health watcher).
+*/ -}}
+{{- if and .Values.backup.schedule (eq .Values.kind "postgres") }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ printf "%s-backup" (include "kusoaddon.fullname" .) | quote }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+    kuso.sislelabs.com/role: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            kuso.sislelabs.com/role: backup
+            kuso.sislelabs.com/addon: {{ .Values.name | quote }}
+            kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: dump
+              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              imagePullPolicy: IfNotPresent
+              command: [sh, -c]
+              args:
+                - |
+                  set -e
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
+                  echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
+                  PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump \
+                    -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" \
+                    | gzip \
+                    | aws s3 cp --endpoint-url "${S3_ENDPOINT}" - "s3://${BUCKET}/${KEY}"
+                  echo "==> done"
+              env:
+                - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
+                - { name: ADDON,   value: {{ .Values.name    | quote }} }
+                - { name: POSTGRES_HOST, value: {{ printf "%s-postgresql" (include "kusoaddon.fullname" .) | quote }} }
+                - { name: POSTGRES_USER, value: {{ default "kuso" .Values.username | quote }} }
+                - { name: POSTGRES_DB,   value: {{ default "kuso" .Values.database | quote }} }
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ printf "%s-conn" (include "kusoaddon.fullname" .) | quote }}
+                      key: POSTGRES_PASSWORD
+                # S3 credentials: cluster-wide Secret managed by the
+                # kuso server's settings page.
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey } } }
+                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region }, optional: true } }
+{{- end }}

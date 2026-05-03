@@ -149,3 +149,21 @@ func (k *KusoClient) AddAddon(project string, req CreateAddonRequest) (*resty.Re
 func (k *KusoClient) DeleteAddon(project, addon string) (*resty.Response, error) {
 	return k.client.Delete("/api/projects/" + project + "/addons/" + addon)
 }
+
+// Apply posts a kuso.yml body to the server's config-as-code endpoint.
+// dryRun=true returns a Plan without writing; false applies it.
+func (k *KusoClient) Apply(project string, yamlBody []byte, dryRun bool) (*resty.Response, error) {
+	url := "/api/projects/" + project + "/apply"
+	if dryRun {
+		url += "?dryRun=1"
+	}
+	k.client.SetBody(yamlBody)
+	k.client.SetHeader("Content-Type", "application/yaml")
+	return k.client.Post(url)
+}
+
+// GetProjectFull returns the project rollup (Describe) — project +
+// services + envs in one call.
+func (k *KusoClient) GetProjectFull(project string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + project)
+}

@@ -11,6 +11,9 @@ import (
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/audit"
+	"kuso/server/internal/kube"
+	"kuso/server/internal/notify"
+	"kuso/server/internal/spec"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
@@ -44,6 +47,15 @@ type Deps struct {
 	Addons     *addons.Service
 	Audit      *audit.Service
 	Github     *GithubDeps
+	Notify     *notify.Dispatcher
+	// Spec drives POST /api/projects/{p}/apply (config-as-code).
+	// Optional: nil → endpoint returns 503.
+	Spec       *spec.Reconciler
+	// Kube + Namespace also surface to the apply handler so it can
+	// run the diff. Already implicit in the projects.Service so
+	// duplicating them here is a small price for a clean wire.
+	Kube       *kube.Client
+	Namespace  string
 	Logger     *slog.Logger
 }
 
@@ -129,7 +141,13 @@ func NewRouter(d Deps) http.Handler {
 		r.Get("/api/auth/session", authH.Session)
 
 		if d.Projects != nil {
-			projH := &httphandlers.ProjectsHandler{Svc: d.Projects, Logger: d.Logger}
+			projH := &httphandlers.ProjectsHandler{
+				Svc:        d.Projects,
+				Logger:     d.Logger,
+				Kube:       d.Kube,
+				Namespace:  d.Namespace,
+				Reconciler: d.Spec,
+			}
 			projH.Mount(r)
 		}
 		if d.Secrets != nil {
@@ -156,7 +174,7 @@ func NewRouter(d Deps) http.Handler {
 			rolesH.Mount(r)
 			groupsH := &httphandlers.GroupsHandler{DB: d.DB, Logger: d.Logger}
 			groupsH.Mount(r)
-			notifH := &httphandlers.NotificationsHandler{DB: d.DB, Logger: d.Logger}
+			notifH := &httphandlers.NotificationsHandler{DB: d.DB, Logger: d.Logger, Notify: d.Notify}
 			notifH.Mount(r)
 			tokAdminH := &httphandlers.TokensAdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			tokAdminH.Mount(r)

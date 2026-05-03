@@ -9,7 +9,7 @@ import { useDeleteProject } from "@/features/projects";
 import { usePatchService, type PatchServiceBody } from "@/features/services";
 import { useRouter } from "next/navigation";
 import type { KusoService } from "@/types/projects";
-import { Github, Trash2, Cog, Network, Layers3, Hammer, Cloud, Save } from "lucide-react";
+import { Github, Trash2, Cog, Network, Layers3, Hammer, Cloud, Save, HardDrive, Plus, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -22,6 +22,7 @@ const SECTIONS: { id: string; label: string; icon: React.ComponentType<{ classNa
   { id: "source", label: "Source", icon: Github },
   { id: "networking", label: "Networking", icon: Network },
   { id: "scale", label: "Scale", icon: Layers3 },
+  { id: "volumes", label: "Volumes", icon: HardDrive },
   { id: "build", label: "Build", icon: Hammer },
   { id: "deploy", label: "Deploy", icon: Cloud },
   { id: "danger", label: "Danger", icon: Trash2 },
@@ -41,6 +42,7 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
         <SourceSection svc={svc} />
         <NetworkingSection project={project} service={service} svc={svc} />
         <ScaleSection project={project} service={service} svc={svc} />
+        <VolumesSection project={project} service={service} svc={svc} />
         <BuildSection project={project} service={service} svc={svc} />
         <DeploySection svc={svc} />
         <DangerSection project={project} service={service} svc={svc} />
@@ -367,6 +369,142 @@ function ScaleSection({ project, service, svc }: Props) {
         pending={patch.isPending}
         onSave={onSave}
         onReset={() => setS(initial)}
+      />
+    </Section>
+  );
+}
+
+function VolumesSection({ project, service, svc }: Props) {
+  // Volumes are PVCs mounted into every pod. Each row needs a name +
+  // mountPath; size defaults to 1Gi if not given. Names are stable
+  // (used as PVC suffix), so renaming a volume == drop+recreate
+  // which would lose data — we don't expose a rename, just add/del.
+  type Row = { name: string; mountPath: string; sizeGi: number };
+  const initial: Row[] = (svc?.spec.volumes ?? []).map((v) => ({
+    name: v.name,
+    mountPath: v.mountPath,
+    sizeGi: v.sizeGi ?? 1,
+  }));
+  const [rows, setRows] = useState<Row[]>(initial);
+  const patch = usePatchService(project, service);
+
+  useEffect(() => {
+    setRows(
+      (svc?.spec.volumes ?? []).map((v) => ({
+        name: v.name,
+        mountPath: v.mountPath,
+        sizeGi: v.sizeGi ?? 1,
+      }))
+    );
+  }, [svc]);
+
+  const dirty =
+    JSON.stringify(rows.filter((r) => r.name && r.mountPath)) !==
+    JSON.stringify(initial);
+
+  const onSave = async () => {
+    const cleaned = rows.filter((r) => r.name && r.mountPath);
+    for (const r of cleaned) {
+      if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(r.name)) {
+        toast.error(`Volume name "${r.name}": lowercase, dashes, ≤32 chars`);
+        return;
+      }
+      if (!r.mountPath.startsWith("/")) {
+        toast.error(`Mount path "${r.mountPath}" must start with /`);
+        return;
+      }
+    }
+    try {
+      await patch.mutateAsync({ volumes: cleaned });
+      toast.success("Volumes saved");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save");
+    }
+  };
+
+  return (
+    <Section id="volumes" title="Volumes" icon={HardDrive}>
+      <div className="space-y-2">
+        {rows.length === 0 ? (
+          <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-4 text-center text-[10px] text-[var(--text-tertiary)]">
+            No persistent volumes. Add one for SQLite, file uploads, or any state that
+            should survive pod restarts.
+          </p>
+        ) : (
+          <ul className="space-y-1.5">
+            {rows.map((r, i) => (
+              <li key={i} className="grid grid-cols-[120px_1fr_72px_auto] items-center gap-1.5">
+                <Input
+                  value={r.name}
+                  onChange={(e) =>
+                    setRows((rs) => rs.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))
+                  }
+                  placeholder="data"
+                  className="h-7 font-mono text-[11px]"
+                />
+                <Input
+                  value={r.mountPath}
+                  onChange={(e) =>
+                    setRows((rs) => rs.map((x, j) => (j === i ? { ...x, mountPath: e.target.value } : x)))
+                  }
+                  placeholder="/var/lib/app"
+                  className="h-7 font-mono text-[11px]"
+                />
+                <div className="relative">
+                  <Input
+                    type="number"
+                    value={r.sizeGi}
+                    onChange={(e) =>
+                      setRows((rs) =>
+                        rs.map((x, j) => (j === i ? { ...x, sizeGi: Math.max(1, Number(e.target.value) || 1) } : x))
+                      )
+                    }
+                    min={1}
+                    className="h-7 pr-6 font-mono text-[11px]"
+                  />
+                  <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 font-mono text-[10px] text-[var(--text-tertiary)]">
+                    Gi
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setRows((rs) => rs.filter((_, j) => j !== i))}
+                  aria-label="Remove volume"
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <button
+          type="button"
+          onClick={() =>
+            setRows((rs) => [...rs, { name: "", mountPath: "", sizeGi: 1 }])
+          }
+          className="inline-flex items-center gap-1 text-[10px] text-[var(--accent)] hover:underline"
+        >
+          <Plus className="h-3 w-3" /> add volume
+        </button>
+        <p className="text-[10px] text-[var(--text-tertiary)]">
+          Renaming or deleting a volume drops its data. The PVC stays attached as long as
+          the name doesn't change.
+        </p>
+      </div>
+      <SaveBar
+        dirty={dirty}
+        pending={patch.isPending}
+        onSave={onSave}
+        onReset={() =>
+          setRows(
+            (svc?.spec.volumes ?? []).map((v) => ({
+              name: v.name,
+              mountPath: v.mountPath,
+              sizeGi: v.sizeGi ?? 1,
+            }))
+          )
+        }
       />
     </Section>
   );

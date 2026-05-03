@@ -109,6 +109,24 @@ type KusoServiceSpec struct {
 	// service. Nil falls through to the project's placement; empty
 	// (non-nil) explicitly clears it.
 	Placement *KusoPlacement `json:"placement,omitempty"`
+	// Volumes are the persistent disks mounted into every pod. The
+	// operator chart turns each into a PVC + a volumeMount under the
+	// requested mountPath. Drives nothing on its own — the user
+	// must configure their app to write to the mountPath.
+	Volumes []KusoVolume `json:"volumes,omitempty"`
+}
+
+// KusoVolume mounts a persistent disk into the service's pods.
+// SizeGi defaults to 1 when zero. StorageClass empty = use the
+// cluster default. ReadWriteOnce single-node access by default;
+// ReadWriteMany is opt-in for clusters that have a CSI driver
+// supporting it (k3s/Hetzner local-path doesn't).
+type KusoVolume struct {
+	Name         string `json:"name"`
+	MountPath    string `json:"mountPath"`
+	SizeGi       int    `json:"sizeGi,omitempty"`
+	StorageClass string `json:"storageClass,omitempty"`
+	AccessMode   string `json:"accessMode,omitempty"` // RWO|RWX, default RWO
 }
 
 type KusoDomain struct {
@@ -174,6 +192,10 @@ type KusoEnvironmentSpec struct {
 	// computed as: env > service > project. The operator's helm chart
 	// reads it directly to render nodeSelector/affinity/tolerations.
 	Placement *KusoPlacement `json:"placement,omitempty"`
+	// Volumes mirror KusoServiceSpec.Volumes. The server propagates
+	// them onto every env owned by the service so the chart can
+	// render PVCs without having to look up the parent service.
+	Volumes []KusoVolume `json:"volumes,omitempty"`
 }
 
 type KusoPullRequest struct {

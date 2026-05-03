@@ -20,10 +20,22 @@ data:
     scrape_configs:
       # Traefik: the per-router/service request metrics that power
       # request rate, error rate, and response time on the kuso UI.
+      # The Helm-installed traefik Service doesn't expose port 9100,
+      # so we discover the pod directly via SD and override the port.
       - job_name: traefik
-        static_configs:
-          - targets:
-              - traefik.traefik.svc.cluster.local:9100
+        kubernetes_sd_configs:
+          - role: pod
+            namespaces:
+              names: [traefik]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app_kubernetes_io_name]
+            action: keep
+            regex: traefik
+          - source_labels: [__address__]
+            action: replace
+            regex: ([^:]+)(?::\d+)?
+            replacement: $1:9100
+            target_label: __address__
       # Pods that opt in via prometheus.io/scrape="true" + path/port
       # annotations. Lets users expose /metrics from their own apps
       # and have it picked up automatically.
