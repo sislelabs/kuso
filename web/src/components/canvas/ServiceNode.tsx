@@ -61,8 +61,8 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       data-node-context
       onContextMenu={data.__onContext}
       className={cn(
-        "group w-[280px] rounded-2xl border bg-card p-3 shadow-[var(--shadow-sm)] transition-all",
-        "hover:shadow-[var(--shadow-md)]",
+        "group w-[280px] rounded-2xl border bg-[var(--bg-elevated)] p-3 transition-colors",
+        "hover:border-[var(--border-strong)]",
         (status === "building" || status === "deploying") &&
           "border-[var(--accent)]/40 animate-pulse",
         status === "active" && "border-emerald-500/30",

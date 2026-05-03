@@ -29,13 +29,10 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
       data-node-context
       onContextMenu={data.__onContext}
       className={cn(
-        "w-[220px] rounded-2xl border bg-card p-3 shadow-[var(--shadow-sm)] transition-all",
-        "hover:shadow-[var(--shadow-md)]",
+        "w-[220px] rounded-2xl border bg-[var(--bg-elevated)] p-3 transition-colors",
+        "hover:border-[var(--border-strong)]",
         ready ? "border-[var(--border-subtle)]" : "border-amber-500/30 animate-pulse"
       )}
-      style={{
-        background: "linear-gradient(135deg, var(--card), var(--bg-secondary))",
-      }}
     >
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
       <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />

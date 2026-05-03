@@ -110,7 +110,7 @@ export function LogStream({ project, service, env = "production", height = "40vh
         // ad-hoc embed with no flex parent), maxHeight caps us at the
         // requested viewport unit so we don't push the page.
         style={height === "100%" ? undefined : { maxHeight: height }}
-        className="min-h-0 flex-1 overflow-auto bg-[var(--bg-inverse)] p-3 font-mono text-[11px] leading-relaxed text-[var(--text-inverse)]"
+        className="min-h-0 flex-1 overflow-auto bg-[#0b0b0e] p-3 font-mono text-[11px] leading-relaxed text-zinc-200"
       >
         {lines.length === 0 && (
           <p className="text-[var(--text-tertiary)]">
@@ -130,7 +130,7 @@ export function LogStream({ project, service, env = "production", height = "40vh
               l.stream === "stderr" && "text-red-400"
             )}
           >
-            <span className="select-none text-[var(--text-tertiary)] mr-2">
+            <span className="select-none text-zinc-500 mr-2">
               {l.pod.length > 12 ? l.pod.slice(-12) : l.pod}
             </span>
             {l.line}

@@ -442,7 +442,10 @@ export function ProjectCanvas({
         maxZoom={1.5}
         proOptions={{ hideAttribution: true }}
       >
-        <Background gap={24} size={1} color="var(--border-subtle)" />
+        {/* Brighter dots than the default border-subtle so the
+            grid actually reads on the dark bg. zinc-500 at 40%
+            opacity-equivalent — visible without being noisy. */}
+        <Background gap={24} size={1.5} color="rgb(113 113 122 / 0.55)" />
         <Controls className="!bg-[var(--bg-elevated)] !border-[var(--border-subtle)]" />
         <EdgeFilterPanel filters={edgeFilters} setFilters={setEdgeFilters} />
       </ReactFlow>
