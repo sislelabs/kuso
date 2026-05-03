@@ -29,7 +29,7 @@ spec:
       serviceAccountName: kuso-server
       containers:
         - name: server
-          image: ghcr.io/sislelabs/kuso-server-go:v0.6.8
+          image: ghcr.io/sislelabs/kuso-server-go:v0.6.9
           imagePullPolicy: IfNotPresent
           ports:
             - { containerPort: 3000, name: http }
