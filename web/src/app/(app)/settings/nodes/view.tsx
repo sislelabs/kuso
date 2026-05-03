@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { Server, Plus, X, Save, MapPin, Tag } from "lucide-react";
+// X is already imported above; the modal close button reuses it.
 import { cn } from "@/lib/utils";
 import type { NodeSummary } from "@/components/layout/ServersPopover";
 
@@ -506,64 +507,94 @@ function DraftEditor({
 // (1000 = 1 core), memory + disk in bytes. metrics-server is optional
 // — when usage is unavailable we show "—" rather than 0% which would
 // be misleading.
+//
+// Each tile is clickable: it opens a drill-down with 7 days of
+// history (sampled every 30 min server-side) so the operator can
+// see trends instead of a single point-in-time number. The "metric"
+// param tells the modal which row to highlight.
 function NodeStats({ node }: { node: NodeSummary }) {
+  const [openMetric, setOpenMetric] = useState<NodeMetricKind | null>(null);
   const hasUsage = (node.cpuUsageMilli ?? 0) > 0 || (node.memUsageBytes ?? 0) > 0;
   return (
-    <div className="mt-3 grid grid-cols-3 gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 text-[10px]">
-      <Stat
-        label="CPU"
-        value={
-          hasUsage
-            ? `${formatCPU(node.cpuUsageMilli ?? 0)} / ${formatCPU(node.cpuCapacityMilli ?? 0)}`
-            : `cap ${formatCPU(node.cpuCapacityMilli ?? 0)}`
-        }
-        pct={
-          hasUsage && node.cpuCapacityMilli
-            ? Math.min(100, Math.round(((node.cpuUsageMilli ?? 0) / node.cpuCapacityMilli) * 100))
-            : null
-        }
-      />
-      <Stat
-        label="RAM"
-        value={
-          hasUsage
-            ? `${formatBytes(node.memUsageBytes ?? 0)} / ${formatBytes(node.memCapacityBytes ?? 0)}`
-            : `cap ${formatBytes(node.memCapacityBytes ?? 0)}`
-        }
-        pct={
-          hasUsage && node.memCapacityBytes
-            ? Math.min(100, Math.round(((node.memUsageBytes ?? 0) / node.memCapacityBytes) * 100))
-            : null
-        }
-      />
-      <Stat
-        label="Disk"
-        value={
-          node.diskCapacityBytes
-            ? `${formatBytes((node.diskCapacityBytes ?? 0) - (node.diskAvailableBytes ?? 0))} / ${formatBytes(node.diskCapacityBytes ?? 0)}`
-            : "—"
-        }
-        pct={
-          node.diskCapacityBytes && node.diskAvailableBytes !== undefined
-            ? Math.min(
-                100,
-                Math.round(
-                  ((node.diskCapacityBytes - node.diskAvailableBytes) / node.diskCapacityBytes) * 100
+    <>
+      <div className="mt-3 grid grid-cols-3 gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 text-[10px]">
+        <Stat
+          label="CPU"
+          value={
+            hasUsage
+              ? `${formatCPU(node.cpuUsageMilli ?? 0)} / ${formatCPU(node.cpuCapacityMilli ?? 0)}`
+              : `cap ${formatCPU(node.cpuCapacityMilli ?? 0)}`
+          }
+          pct={
+            hasUsage && node.cpuCapacityMilli
+              ? Math.min(100, Math.round(((node.cpuUsageMilli ?? 0) / node.cpuCapacityMilli) * 100))
+              : null
+          }
+          onClick={() => setOpenMetric("cpu")}
+        />
+        <Stat
+          label="RAM"
+          value={
+            hasUsage
+              ? `${formatBytes(node.memUsageBytes ?? 0)} / ${formatBytes(node.memCapacityBytes ?? 0)}`
+              : `cap ${formatBytes(node.memCapacityBytes ?? 0)}`
+          }
+          pct={
+            hasUsage && node.memCapacityBytes
+              ? Math.min(100, Math.round(((node.memUsageBytes ?? 0) / node.memCapacityBytes) * 100))
+              : null
+          }
+          onClick={() => setOpenMetric("mem")}
+        />
+        <Stat
+          label="Disk"
+          value={
+            node.diskCapacityBytes
+              ? `${formatBytes((node.diskCapacityBytes ?? 0) - (node.diskAvailableBytes ?? 0))} / ${formatBytes(node.diskCapacityBytes ?? 0)}`
+              : "—"
+          }
+          pct={
+            node.diskCapacityBytes && node.diskAvailableBytes !== undefined
+              ? Math.min(
+                  100,
+                  Math.round(
+                    ((node.diskCapacityBytes - node.diskAvailableBytes) / node.diskCapacityBytes) * 100
+                  )
                 )
-              )
-            : null
-        }
-      />
-      {node.podsCapacity ? (
-        <p className="col-span-3 mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
-          {node.pods ?? 0} / {node.podsCapacity} pods scheduled
-        </p>
-      ) : null}
-    </div>
+              : null
+          }
+          onClick={() => setOpenMetric("disk")}
+        />
+        {node.podsCapacity ? (
+          <p className="col-span-3 mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+            {node.pods ?? 0} / {node.podsCapacity} pods scheduled
+          </p>
+        ) : null}
+      </div>
+      {openMetric && (
+        <NodeHistoryModal
+          node={node}
+          metric={openMetric}
+          onClose={() => setOpenMetric(null)}
+        />
+      )}
+    </>
   );
 }
 
-function Stat({ label, value, pct }: { label: string; value: string; pct: number | null }) {
+type NodeMetricKind = "cpu" | "mem" | "disk";
+
+function Stat({
+  label,
+  value,
+  pct,
+  onClick,
+}: {
+  label: string;
+  value: string;
+  pct: number | null;
+  onClick?: () => void;
+}) {
   // Color the bar by pressure level — green <60%, amber 60-85, red >85.
   const bar =
     pct === null
@@ -574,7 +605,11 @@ function Stat({ label, value, pct }: { label: string; value: string; pct: number
           ? "bg-amber-500"
           : "bg-red-500";
   return (
-    <div className="space-y-1">
+    <button
+      type="button"
+      onClick={onClick}
+      className="space-y-1 rounded p-1 text-left transition-colors hover:bg-[var(--bg-tertiary)]/50 focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+    >
       <div className="flex items-center justify-between font-mono text-[var(--text-tertiary)]">
         <span>{label}</span>
         {pct !== null && <span className="text-[var(--text-secondary)]">{pct}%</span>}
@@ -586,6 +621,241 @@ function Stat({ label, value, pct }: { label: string; value: string; pct: number
         />
       </div>
       <div className="font-mono text-[var(--text-secondary)]">{value}</div>
+    </button>
+  );
+}
+
+// NodeHistoryModal renders 7 days of samples for a single metric.
+// Backed by /api/kubernetes/nodes/<name>/history which reads the
+// SQLite NodeMetric table. The chart is a hand-rolled SVG path —
+// recharts/visx would add ~100KB to the bundle for one sparkline
+// shape and we only need the line.
+interface HistorySample {
+  ts: string;
+  cpuUsedMilli: number;
+  cpuCapacityMilli: number;
+  memUsedBytes: number;
+  memCapacityBytes: number;
+  diskAvailBytes: number;
+  diskCapacityBytes: number;
+}
+interface HistoryResponse {
+  node: string;
+  samples: HistorySample[] | null;
+}
+
+function NodeHistoryModal({
+  node,
+  metric,
+  onClose,
+}: {
+  node: NodeSummary;
+  metric: NodeMetricKind;
+  onClose: () => void;
+}) {
+  const history = useQuery({
+    queryKey: ["kubernetes", "nodes", node.name, "history"],
+    queryFn: () =>
+      api<HistoryResponse>(`/api/kubernetes/nodes/${encodeURIComponent(node.name)}/history`),
+    staleTime: 60_000,
+  });
+
+  // Esc to close — same affordance as every other overlay in the app.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const samples = history.data?.samples ?? [];
+  const title = metric === "cpu" ? "CPU" : metric === "mem" ? "RAM" : "Disk";
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-6"
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-2xl rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] shadow-[var(--shadow-lg)]"
+      >
+        <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
+          <div>
+            <h2 className="font-mono text-sm font-medium">{node.name}</h2>
+            <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              {title} · last 7 days · sampled every 30 min
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </header>
+        <div className="p-4">
+          {history.isPending ? (
+            <Skeleton className="h-40 w-full" />
+          ) : history.isError ? (
+            <p className="font-mono text-[11px] text-red-400">
+              Failed to load history: {history.error?.message}
+            </p>
+          ) : samples.length === 0 ? (
+            <p className="font-mono text-[11px] text-[var(--text-tertiary)]">
+              No samples yet. The kuso server samples nodes every 30 min — check back shortly after
+              a fresh deploy.
+            </p>
+          ) : (
+            <Sparkline metric={metric} samples={samples} />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Sparkline — width 100%, height 160. Renders the metric as a filled
+// area + line on top so it reads at a glance even with a low sample
+// count. Y axis is %used (always 0-100) so all three metrics are
+// visually comparable.
+function Sparkline({
+  metric,
+  samples,
+}: {
+  metric: NodeMetricKind;
+  samples: HistorySample[];
+}) {
+  const W = 720;
+  const H = 160;
+  const pad = { left: 36, right: 12, top: 12, bottom: 24 };
+  const innerW = W - pad.left - pad.right;
+  const innerH = H - pad.top - pad.bottom;
+
+  const points = samples.map((s) => {
+    let pct = 0;
+    let used = 0;
+    let cap = 0;
+    if (metric === "cpu") {
+      used = s.cpuUsedMilli;
+      cap = s.cpuCapacityMilli;
+    } else if (metric === "mem") {
+      used = s.memUsedBytes;
+      cap = s.memCapacityBytes;
+    } else {
+      // Disk: capacity − available = used.
+      cap = s.diskCapacityBytes;
+      used = cap - s.diskAvailBytes;
+    }
+    if (cap > 0) pct = Math.min(100, (used / cap) * 100);
+    return { ts: new Date(s.ts).getTime(), pct, used, cap };
+  });
+
+  const tMin = points[0]?.ts ?? 0;
+  const tMax = points[points.length - 1]?.ts ?? tMin + 1;
+  const tSpan = Math.max(1, tMax - tMin);
+
+  const x = (t: number) => pad.left + ((t - tMin) / tSpan) * innerW;
+  const y = (pct: number) => pad.top + (1 - pct / 100) * innerH;
+
+  const linePath = points
+    .map((p, i) => `${i === 0 ? "M" : "L"} ${x(p.ts).toFixed(1)} ${y(p.pct).toFixed(1)}`)
+    .join(" ");
+  const areaPath =
+    points.length > 0
+      ? `${linePath} L ${x(points[points.length - 1].ts).toFixed(1)} ${(pad.top + innerH).toFixed(1)} L ${x(points[0].ts).toFixed(1)} ${(pad.top + innerH).toFixed(1)} Z`
+      : "";
+
+  // Grid: 0/25/50/75/100 horizontal lines.
+  const ticks = [0, 25, 50, 75, 100];
+
+  // Color the line by the LATEST value's pressure tier so the chart
+  // matches the inline tile's bar color.
+  const latestPct = points[points.length - 1]?.pct ?? 0;
+  const stroke =
+    latestPct < 60 ? "rgb(16 185 129)" : latestPct < 85 ? "rgb(245 158 11)" : "rgb(239 68 68)";
+
+  // X-axis labels: first + middle + last.
+  const fmtTs = (ms: number) => {
+    const d = new Date(ms);
+    return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${String(d.getUTCHours()).padStart(2, "0")}:${String(d.getUTCMinutes()).padStart(2, "0")}`;
+  };
+  const xLabels = points.length === 0 ? [] : [
+    points[0],
+    points[Math.floor(points.length / 2)],
+    points[points.length - 1],
+  ];
+
+  const latest = points[points.length - 1];
+  const latestUsed =
+    metric === "cpu"
+      ? formatCPU(latest?.used ?? 0)
+      : formatBytes(latest?.used ?? 0);
+  const latestCap =
+    metric === "cpu"
+      ? formatCPU(latest?.cap ?? 0)
+      : formatBytes(latest?.cap ?? 0);
+
+  return (
+    <div>
+      <div className="mb-2 flex items-baseline justify-between font-mono text-[11px]">
+        <span className="text-[var(--text-tertiary)]">latest</span>
+        <span>
+          <span className="text-[var(--text-primary)]">{latestUsed}</span>{" "}
+          <span className="text-[var(--text-tertiary)]">
+            / {latestCap} ({latest ? Math.round(latest.pct) : 0}%)
+          </span>
+        </span>
+      </div>
+      <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`${metric} history`}>
+        {ticks.map((t) => (
+          <g key={t}>
+            <line
+              x1={pad.left}
+              x2={W - pad.right}
+              y1={y(t)}
+              y2={y(t)}
+              stroke="var(--border-subtle)"
+              strokeDasharray="2 2"
+              strokeWidth={1}
+            />
+            <text
+              x={pad.left - 6}
+              y={y(t)}
+              dy="0.32em"
+              textAnchor="end"
+              className="fill-[var(--text-tertiary)] font-mono text-[9px]"
+            >
+              {t}%
+            </text>
+          </g>
+        ))}
+        {areaPath && (
+          <path d={areaPath} fill={stroke} opacity={0.12} />
+        )}
+        {linePath && (
+          <path d={linePath} fill="none" stroke={stroke} strokeWidth={1.5} strokeLinejoin="round" />
+        )}
+        {xLabels.map((p, i) => (
+          <text
+            key={`${p.ts}-${i}`}
+            x={x(p.ts)}
+            y={H - 6}
+            textAnchor={i === 0 ? "start" : i === xLabels.length - 1 ? "end" : "middle"}
+            className="fill-[var(--text-tertiary)] font-mono text-[9px]"
+          >
+            {fmtTs(p.ts)}
+          </text>
+        ))}
+      </svg>
+      <p className="mt-2 font-mono text-[10px] text-[var(--text-tertiary)]">
+        {points.length} sample{points.length === 1 ? "" : "s"}
+      </p>
     </div>
   );
 }

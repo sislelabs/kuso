@@ -150,17 +150,23 @@ function ProjectsGrid({
         const services = summary?.services ?? [];
         const envs = summary?.environments ?? [];
         const addons = summary?.addons ?? [];
-        // "Live" = a production env with at least one ready replica.
-        // env.status.replicas / readyReplicas is what the operator
-        // surfaces on the env CR.
+        // "Live" = a production env with at least one replica scheduled.
+        // We prefer replicas over readyReplicas because the canvas's
+        // ACTIVE badge uses the same threshold — a service rolling
+        // through readiness probes is still "live" to the user (the
+        // pod exists, the URL routes), it's just not 100% ready yet.
         const liveServices = services.filter((s) => {
           const fqn = s.metadata.name;
           const prod = envs.find(
             (e) => e.spec.service === fqn && e.spec.kind === "production"
           );
           if (!prod) return false;
-          const ready = (prod.status as { readyReplicas?: number } | undefined)?.readyReplicas ?? 0;
-          return ready > 0;
+          const st = prod.status as
+            | { replicas?: number; readyReplicas?: number }
+            | undefined;
+          const replicas = st?.replicas ?? 0;
+          const ready = st?.readyReplicas ?? 0;
+          return replicas > 0 || ready > 0;
         }).length;
         return (
           <li key={p.metadata.uid ?? name}>

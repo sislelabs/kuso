@@ -89,6 +89,38 @@ export default function ProfilePage() {
     }
   };
 
+  // Loading + error states are handled explicitly so a non-2xx from
+  // /api/users/profile (expired session, server hiccup, schema drift)
+  // doesn't bubble up to the Next.js runtime overlay which renders as
+  // a useless "This page couldn't load. Reload / Back" splash. With
+  // an in-page state the user sees a real, contextual message.
+  if (profile.isPending) {
+    return (
+      <div className="mx-auto max-w-2xl p-6 text-sm text-[var(--text-tertiary)] lg:p-8">
+        Loading…
+      </div>
+    );
+  }
+  if (profile.isError || !profile.data) {
+    return (
+      <div className="mx-auto max-w-2xl p-6 lg:p-8">
+        <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 text-sm">
+          <p className="font-medium text-[var(--text-primary)]">Couldn&apos;t load your profile</p>
+          <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
+            {profile.error instanceof Error
+              ? profile.error.message
+              : "The /api/users/profile request failed. Try reloading; if it keeps failing, sign out and back in."}
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => profile.refetch()}>
+              Retry
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   const user = profile.data;
   const fullName = [user?.firstName, user?.lastName].filter(Boolean).join(" ").trim();
   const displayName = fullName || user?.username || "Profile";

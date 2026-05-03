@@ -103,6 +103,26 @@ func (d *DB) applyMigrations() error {
 			FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS "InviteRedemption_inviteId_idx" ON "InviteRedemption"("inviteId")`,
+		// v0.6.22: node metrics history. The kuso server samples every
+		// kube node's CPU/RAM/disk every 30 min via metrics-server +
+		// node status (allocatable/capacity/availableBytes), drops
+		// rows older than 7 days, and renders them as sparklines on
+		// the settings/nodes drill-down. SQLite-backed because the
+		// sample volume is trivial — 1 row × 30 min × 7d × N nodes —
+		// and adding a real TSDB to a one-box install isn't worth it.
+		`CREATE TABLE IF NOT EXISTS "NodeMetric" (
+			"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+			"node" TEXT NOT NULL,
+			"ts" DATETIME NOT NULL,
+			"cpuUsedMilli" INTEGER NOT NULL DEFAULT 0,
+			"cpuCapacityMilli" INTEGER NOT NULL DEFAULT 0,
+			"memUsedBytes" INTEGER NOT NULL DEFAULT 0,
+			"memCapacityBytes" INTEGER NOT NULL DEFAULT 0,
+			"diskAvailBytes" INTEGER NOT NULL DEFAULT 0,
+			"diskCapacityBytes" INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS "NodeMetric_node_ts_idx" ON "NodeMetric"("node","ts")`,
+		`CREATE INDEX IF NOT EXISTS "NodeMetric_ts_idx" ON "NodeMetric"("ts")`,
 	}
 	for _, sqlText := range migrations {
 		if _, err := d.DB.Exec(sqlText); err != nil {

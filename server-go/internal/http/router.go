@@ -206,7 +206,7 @@ func NewRouter(d Deps) http.Handler {
 			auditH.Mount(r)
 		}
 		if d.Logs != nil { // Logs implies a kube client; reuse it for /api/kubernetes/*.
-			kubeH := &httphandlers.KubernetesHandler{Kube: d.Logs.Kube, Namespace: d.Logs.Namespace, Logger: d.Logger}
+			kubeH := &httphandlers.KubernetesHandler{Kube: d.Logs.Kube, Namespace: d.Logs.Namespace, DB: d.DB, Logger: d.Logger}
 			kubeH.Mount(r)
 			// Backups: same kube + namespace so all the in-cluster
 			// secret/job writes go through one client.

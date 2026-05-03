@@ -94,6 +94,7 @@ func (h *AdminHandler) Profile(w http.ResponseWriter, r *http.Request) {
 		"email":       u.Email,
 		"firstName":   nullStr(u.FirstName),
 		"lastName":    nullStr(u.LastName),
+		"image":       nullStr(u.Image),
 		"role":        claims.Role,
 		"userGroups":  claims.UserGroups,
 		"permissions": claims.Permissions,

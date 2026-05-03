@@ -27,6 +27,7 @@ import (
 	ghpkg "kuso/server/internal/github"
 	"kuso/server/internal/health"
 	"kuso/server/internal/logs"
+	"kuso/server/internal/nodemetrics"
 	"kuso/server/internal/notify"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/spec"
@@ -292,6 +293,14 @@ func main() {
 			stop()
 		}
 	}()
+
+	// Background: sample per-node CPU/RAM/disk every 30 min and
+	// persist to SQLite for the /settings/nodes drill-down. Gated on
+	// kube being wired (in-cluster only); local dev runs without it.
+	if kubeClient != nil {
+		sampler := &nodemetrics.Sampler{DB: database, Kube: kubeClient, Logger: logger.With("component", "nodemetrics")}
+		go sampler.Run(ctx)
+	}
 
 	<-ctx.Done()
 	logger.Info("shutdown signal received")

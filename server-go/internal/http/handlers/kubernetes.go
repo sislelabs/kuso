@@ -19,6 +19,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
 
@@ -32,6 +33,7 @@ var promHTTPClient = &http.Client{Timeout: 10 * time.Second}
 type KubernetesHandler struct {
 	Kube      *kube.Client
 	Namespace string
+	DB        *db.DB
 	Logger    *slog.Logger
 }
 
@@ -46,6 +48,10 @@ func (h *KubernetesHandler) Mount(rt interface {
 	rt.Get("/api/kubernetes/storageclasses", h.StorageClasses)
 	rt.Get("/api/kubernetes/domains", h.Domains)
 	rt.Get("/api/kubernetes/nodes", h.Nodes)
+	// 7-day history for the sparkline drill-down on /settings/nodes.
+	// Backed by the SQLite NodeMetric table populated by the sampler
+	// goroutine — point-in-time data lives on the Nodes() endpoint.
+	rt.Get("/api/kubernetes/nodes/{name}/history", h.NodeHistory)
 	// Single endpoint, simple semantics: replace the kuso labels for
 	// this node with the body. Server expands kuso conventions (region
 	// → matching NoSchedule taint) under the hood.
@@ -582,6 +588,43 @@ func (h *KubernetesHandler) Nodes(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	writeJSON(w, http.StatusOK, out)
+}
+
+// NodeHistory returns up-to-7-days of resource samples for a node so
+// the UI can render CPU/RAM/Disk sparklines on the drill-down. The
+// sampler goroutine writes one row per node per 30 min — see
+// internal/nodemetrics. Empty array is a valid response (sampler
+// hasn't ticked yet, or this node was just added).
+func (h *KubernetesHandler) NodeHistory(w http.ResponseWriter, r *http.Request) {
+	if h.DB == nil {
+		http.Error(w, "metrics history not wired", http.StatusServiceUnavailable)
+		return
+	}
+	name := chi.URLParam(r, "name")
+	if name == "" {
+		http.Error(w, "node name required", http.StatusBadRequest)
+		return
+	}
+	// `since` defaults to 7 days; cap any user-supplied window at 7d
+	// so we don't accidentally serve a denial-of-service-grade query.
+	hours := 24 * 7
+	if q := r.URL.Query().Get("hours"); q != "" {
+		if v, err := strconv.Atoi(q); err == nil && v > 0 && v <= 24*7 {
+			hours = v
+		}
+	}
+	ctx, cancel := kubeCtx(r)
+	defer cancel()
+	rows, err := h.DB.ListNodeMetrics(ctx, name, time.Now().Add(-time.Duration(hours)*time.Hour))
+	if err != nil {
+		h.Logger.Error("node history", "node", name, "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"node":    name,
+		"samples": rows,
+	})
 }
 
 // nodeUsage is the metrics-server slice we keep per node.

@@ -233,6 +233,21 @@ func (h *OAuthHandler) upsertAndIssue(ctx context.Context, prof *auth.OAuthProfi
 		}
 		created = true
 	}
+	// Sync the OAuth provider's avatar onto the kuso user row so the
+	// profile page + nav avatar render the GitHub/Google picture.
+	// Runs on every login (not just first-create) so a refreshed
+	// avatar URL or a newly-set picture lands in the DB. Empty prof
+	// images are skipped — uploaded local avatars (data: URLs) survive
+	// because we only overwrite when there's something fresh to write.
+	if prof.Image != "" && (!user.Image.Valid || user.Image.String != prof.Image) {
+		img := prof.Image
+		if err := h.DB.UpdateUser(ctx, user.ID, db.UpdateUserInput{Image: &img}); err != nil {
+			h.Logger.Warn("oauth: persist avatar", "err", err, "user", user.ID)
+		} else {
+			user.Image.String = img
+			user.Image.Valid = true
+		}
+	}
 	// Bootstrap: pick a group for this user. Runs on EVERY login, not
 	// just newly-created accounts — that catches the regression where
 	// a first-OAuth-login on a pre-tenancy build created the user

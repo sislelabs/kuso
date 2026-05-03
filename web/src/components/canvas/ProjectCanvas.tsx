@@ -447,7 +447,10 @@ export function ProjectCanvas({
             opacity-equivalent — visible without being noisy. */}
         <Background gap={24} size={1.5} color="rgb(113 113 122 / 0.55)" />
         <Controls className="!bg-[var(--bg-elevated)] !border-[var(--border-subtle)]" />
-        <EdgeFilterPanel filters={edgeFilters} setFilters={setEdgeFilters} />
+        <EdgeControlsPanel
+          filters={edgeFilters}
+          setFilters={setEdgeFilters}
+        />
       </ReactFlow>
 
       <CanvasContextMenu
@@ -551,10 +554,13 @@ async function callTrigger(
   await triggerBuild(project, service, {});
 }
 
-// EdgeFilterPanel — bottom-left chip group that toggles edge
-// categories on the canvas. Lives as a React Flow <Panel> so it
-// floats over the graph the same way Controls does.
-function EdgeFilterPanel({
+// EdgeControlsPanel — bottom-right cluster that combines a legend
+// (what each edge colour means) with the filter chips that toggle
+// them. Single React Flow <Panel> so the two pieces sit on the same
+// row and react-flow doesn't stack them. Without the legend the
+// colours feel arbitrary; without the filter chips the user can't
+// dim the noise on dependency-heavy projects.
+function EdgeControlsPanel({
   filters,
   setFilters,
 }: {
@@ -563,20 +569,40 @@ function EdgeFilterPanel({
 }) {
   return (
     <Panel position="bottom-right" className="!m-3">
-      <div className="flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1 shadow-[var(--shadow-sm)]">
-        <span className="px-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          edges
-        </span>
-        <FilterChip
-          label="addon mounts"
-          on={filters.addon}
-          onClick={() => setFilters((f) => ({ ...f, addon: !f.addon }))}
-        />
-        <FilterChip
-          label="service refs"
-          on={filters.ref}
-          onClick={() => setFilters((f) => ({ ...f, ref: !f.ref }))}
-        />
+      <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-2.5 py-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)] shadow-[var(--shadow-sm)]">
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              aria-hidden
+              className="inline-block h-[2px] w-5"
+              style={{ background: "rgb(245 158 11)" }}
+            />
+            addon mount
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span
+              aria-hidden
+              className="inline-block h-[2px] w-5"
+              style={{ background: "var(--accent)" }}
+            />
+            service ref
+          </span>
+        </div>
+        <div className="flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-1 shadow-[var(--shadow-sm)]">
+          <span className="px-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            edges
+          </span>
+          <FilterChip
+            label="addon mounts"
+            on={filters.addon}
+            onClick={() => setFilters((f) => ({ ...f, addon: !f.addon }))}
+          />
+          <FilterChip
+            label="service refs"
+            on={filters.ref}
+            onClick={() => setFilters((f) => ({ ...f, ref: !f.ref }))}
+          />
+        </div>
       </div>
     </Panel>
   );
