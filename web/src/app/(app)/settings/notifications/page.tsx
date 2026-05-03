@@ -237,6 +237,13 @@ function NotificationEditor({
     (notification?.config.url as string | undefined) ?? ""
   );
   const [events, setEvents] = useState<string[]>(notification?.events ?? []);
+  // Per-event mention rules. Special key "*" applies to events
+  // without an explicit entry. Server-side default (when nothing
+  // here matches) is @here for error-severity events, none
+  // otherwise — see notify.mentionFor.
+  const [mentions, setMentions] = useState<Record<string, string>>(
+    (notification?.config.mentions as Record<string, string> | undefined) ?? {}
+  );
 
   useEffect(() => {
     if (!notification) return;
@@ -245,17 +252,27 @@ function NotificationEditor({
     setEnabled(notification.enabled);
     setUrl((notification.config.url as string | undefined) ?? "");
     setEvents(notification.events);
+    setMentions((notification.config.mentions as Record<string, string> | undefined) ?? {});
   }, [notification]);
 
   const save = useMutation({
     mutationFn: () => {
+      // Strip empty/none mention rules before save — they're the
+      // implicit default and clutter the stored config otherwise.
+      const cleanMentions: Record<string, string> = {};
+      for (const [k, v] of Object.entries(mentions)) {
+        if (v && v !== "none") cleanMentions[k] = v;
+      }
       const body = {
         name,
         type,
         enabled,
         pipelines: [],
         events,
-        config: { url },
+        config: {
+          url,
+          ...(Object.keys(cleanMentions).length ? { mentions: cleanMentions } : {}),
+        },
       };
       if (isNew) {
         return api("/api/notifications", { method: "POST", body });
@@ -331,29 +348,49 @@ function NotificationEditor({
             spellCheck={false}
           />
         </Field>
-        <Field label="events" hint="empty = all events; pick to filter">
-          <div className="flex flex-wrap gap-1">
+        <Field label="events" hint="pick events to receive; empty = all events">
+          <div className="space-y-1.5">
             {ALL_EVENTS.map((e) => {
-              const picked = events.includes(e.id);
+              const picked = events.includes(e.id) || events.length === 0;
+              const isExplicit = events.includes(e.id);
               return (
-                <button
+                <div
                   key={e.id}
-                  type="button"
-                  onClick={() =>
-                    setEvents((cur) =>
-                      picked ? cur.filter((x) => x !== e.id) : [...cur, e.id]
-                    )
-                  }
                   className={cn(
-                    "inline-flex h-6 items-center rounded-md border px-2 font-mono text-[10px] transition-colors",
+                    "grid grid-cols-[160px_1fr_auto] items-center gap-2 rounded-md border px-2 py-1 text-[11px] transition-colors",
                     picked
-                      ? "border-[var(--accent)]/30 bg-[var(--accent-subtle)] text-[var(--accent)]"
-                      : "border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                      ? "border-[var(--border-subtle)] bg-[var(--bg-primary)]"
+                      : "border-transparent opacity-50"
                   )}
                 >
-                  {picked && <CheckCircle2 className="mr-1 h-2.5 w-2.5" />}
-                  {e.id}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setEvents((cur) =>
+                        isExplicit ? cur.filter((x) => x !== e.id) : [...cur, e.id]
+                      )
+                    }
+                    className={cn(
+                      "inline-flex items-center gap-1.5 truncate text-left font-mono",
+                      isExplicit
+                        ? "text-[var(--accent)]"
+                        : "text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                    )}
+                  >
+                    {isExplicit && <CheckCircle2 className="h-3 w-3 shrink-0" />}
+                    {e.id}
+                  </button>
+                  <span className="truncate text-[var(--text-tertiary)]">{e.label}</span>
+                  {type === "discord" && picked && (
+                    <MentionPicker
+                      value={mentions[e.id] ?? ""}
+                      onChange={(v) =>
+                        setMentions((cur) => ({ ...cur, [e.id]: v }))
+                      }
+                      defaultMention={defaultMentionFor(e.id)}
+                    />
+                  )}
+                </div>
               );
             })}
           </div>
@@ -414,4 +451,84 @@ function Field({
       <div>{children}</div>
     </div>
   );
+}
+
+// MentionPicker is the per-event Discord mention selector. Five
+// options: server default (which is @here for outage events,
+// nothing otherwise), explicit none, @here, @everyone, custom role.
+//
+// The custom-role path needs a Discord role ID — which means right-
+// clicking the role in Discord and picking "Copy Role ID" in dev
+// mode. We don't try to fetch the guild's roles because the bot
+// scope kuso uses (incoming-webhook) doesn't have permission.
+function MentionPicker({
+  value,
+  onChange,
+  defaultMention,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  defaultMention: string;
+}) {
+  // value is one of: "" (use default), "none", "@here", "@everyone",
+  // "role:<id>", or any other custom string. We map to a select on
+  // the common cases + an inline input when "role:" is picked.
+  const [showRole, setShowRole] = useState(value.startsWith("role:"));
+  const roleID = value.startsWith("role:") ? value.slice("role:".length) : "";
+
+  const options: { v: string; label: string }[] = [
+    { v: "", label: defaultMention ? `default (${defaultMention})` : "default (none)" },
+    { v: "none", label: "none" },
+    { v: "@here", label: "@here" },
+    { v: "@everyone", label: "@everyone" },
+    { v: "role:", label: "role…" },
+  ];
+  return (
+    <div className="flex items-center gap-1">
+      <select
+        value={showRole ? "role:" : value}
+        onChange={(e) => {
+          const v = e.target.value;
+          if (v === "role:") {
+            setShowRole(true);
+            onChange("role:" + roleID);
+          } else {
+            setShowRole(false);
+            onChange(v);
+          }
+        }}
+        className="h-6 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1 font-mono text-[10px] text-[var(--text-primary)]"
+      >
+        {options.map((o) => (
+          <option key={o.v} value={o.v}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      {showRole && (
+        <input
+          value={roleID}
+          onChange={(e) => onChange("role:" + e.target.value)}
+          placeholder="role ID"
+          className="h-6 w-28 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 font-mono text-[10px]"
+          spellCheck={false}
+        />
+      )}
+    </div>
+  );
+}
+
+// defaultMentionFor mirrors the server-side notify.mentionFor logic
+// so the UI's "default (...)" label tells the truth. Outage events
+// (anything error-severity in the server's view) default to @here.
+function defaultMentionFor(eventID: string): string {
+  switch (eventID) {
+    case "build.failed":
+    case "pod.crashed":
+    case "alert.fired":
+    case "backup.failed":
+      return "@here";
+    default:
+      return "";
+  }
 }

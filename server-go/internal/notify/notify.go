@@ -24,6 +24,8 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -150,7 +152,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, e Event) {
 			if url == "" {
 				continue
 			}
-			d.sendDiscord(ctx, url, e)
+			d.sendDiscord(ctx, url, e, mentionFor(e, n.Config))
 		case "webhook":
 			url, _ := n.Config["url"].(string)
 			if url == "" {
@@ -179,14 +181,18 @@ func eventMatches(event string, whitelist []string) bool {
 // sendDiscord posts a Discord-formatted embed to the webhook URL.
 // Discord rejects non-2xx silently from the sender's perspective, so
 // we log on any non-2xx for debugging.
-func (d *Dispatcher) sendDiscord(ctx context.Context, url string, e Event) {
+//
+// mention is rendered as the message content (not the embed), so
+// Discord renders @here / @everyone / <@&roleID> as actual pings
+// at the top of the card.
+func (d *Dispatcher) sendDiscord(ctx context.Context, url string, e Event, mention string) {
 	color := discordColor(e)
 	embed := map[string]any{
-		"title":     e.Title,
+		"title":       e.Title,
 		"description": e.Body,
-		"color":     color,
-		"timestamp": e.Timestamp.Format(time.RFC3339),
-		"fields":    discordFields(e),
+		"color":       color,
+		"timestamp":   e.Timestamp.Format(time.RFC3339),
+		"fields":      discordFields(e),
 	}
 	if e.URL != "" {
 		embed["url"] = e.URL
@@ -195,8 +201,75 @@ func (d *Dispatcher) sendDiscord(ctx context.Context, url string, e Event) {
 		"username": "kuso",
 		"embeds":   []any{embed},
 	}
+	if mention != "" {
+		body["content"] = mention
+		// Allowed_mentions explicitly enables the parsing — without
+		// this Discord strips @here / @everyone for hardened webhooks.
+		// Roles need explicit IDs in `roles`.
+		body["allowed_mentions"] = allowedMentionsFor(mention)
+	}
 	d.post(ctx, url, body, nil)
 }
+
+// mentionFor reads the per-event mention rule out of Config.mentions.
+// Falls back to a "*" default if set, otherwise an opinionated
+// default: any error-severity event without an explicit rule gets
+// @here so an outage isn't silent. Set "*": "none" (or any non-
+// mention string) to opt out of the default.
+func mentionFor(e Event, config map[string]any) string {
+	mentions, _ := config["mentions"].(map[string]any)
+	if v, ok := mentions[string(e.Type)].(string); ok {
+		return normalizeMention(v)
+	}
+	if v, ok := mentions["*"].(string); ok {
+		return normalizeMention(v)
+	}
+	// No explicit rule — default error-severity events to @here.
+	if e.Severity == "error" {
+		return "@here"
+	}
+	return ""
+}
+
+// normalizeMention coerces UI-friendly strings to Discord wire form.
+// "@here", "@everyone" pass through; "role:<id>" → "<@&id>"; "none"
+// or empty → "" (no mention).
+func normalizeMention(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" || v == "none" {
+		return ""
+	}
+	if strings.HasPrefix(v, "role:") {
+		return "<@&" + strings.TrimPrefix(v, "role:") + ">"
+	}
+	return v
+}
+
+// allowedMentionsFor builds the Discord allowed_mentions object that
+// matches what we put in `content`. Webhooks with default settings
+// strip @here / @everyone unless we explicitly whitelist them.
+func allowedMentionsFor(mention string) map[string]any {
+	parse := []string{}
+	roles := []string{}
+	switch {
+	case strings.Contains(mention, "@everyone"):
+		parse = append(parse, "everyone")
+	case strings.Contains(mention, "@here"):
+		parse = append(parse, "everyone") // Discord groups @here under "everyone"
+	}
+	// Role pings look like "<@&123>"; pull the IDs out for the
+	// allowed_mentions.roles whitelist.
+	for _, m := range roleMentionRE.FindAllStringSubmatch(mention, -1) {
+		roles = append(roles, m[1])
+	}
+	out := map[string]any{"parse": parse}
+	if len(roles) > 0 {
+		out["roles"] = roles
+	}
+	return out
+}
+
+var roleMentionRE = regexp.MustCompile(`<@&(\d+)>`)
 
 func discordColor(e Event) int {
 	if e.Severity == "error" {
