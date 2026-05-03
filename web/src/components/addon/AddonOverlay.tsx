@@ -355,16 +355,30 @@ function BackupsTab({ project, addon }: { project: string; addon: string }) {
   }
   if (list.isError) {
     const msg = list.error instanceof Error ? list.error.message : "load failed";
+    // 503 is the server's "S3 not configured" signal. Anything else
+    // means the bucket is reachable but something is wrong (auth,
+    // permissions, network) — those need a different message.
+    const noS3 = msg.includes("503") || /s3|bucket|credentials/i.test(msg);
     return (
       <div className="m-5 rounded-md border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-400">
-        Backups unavailable: {msg}
+        {noS3 ? "Backups not set up yet" : `Backups unavailable: ${msg}`}
         <p className="mt-2 font-mono text-[10px] text-[var(--text-tertiary)]">
-          Configure S3 credentials in{" "}
-          <a href="/settings/backups" className="text-[var(--accent)] underline">
-            /settings/backups
-          </a>{" "}
-          and add <span className="font-mono">backup.schedule</span> on the addon in{" "}
-          <span className="font-mono">kuso.yml</span>.
+          {noS3 ? (
+            <>
+              Backups need S3 (or compatible) credentials. Add them in{" "}
+              <a href="/settings/backups" className="text-[var(--accent)] underline">
+                /settings/backups
+              </a>
+              , then put <span className="font-mono">backup.schedule</span> on this
+              addon in <span className="font-mono">kuso.yml</span> to start the
+              CronJob.
+            </>
+          ) : (
+            <>
+              Detail:{" "}
+              <span className="font-mono text-[var(--text-secondary)]">{msg}</span>
+            </>
+          )}
         </p>
       </div>
     );
@@ -494,7 +508,12 @@ function SQLTab({ project, addon }: { project: string; addon: string }) {
   const tables = useQuery({
     queryKey: ["addons", project, addon, "sql", "tables"],
     queryFn: () => listSQLTables(project, addon),
-    staleTime: 60_000,
+    staleTime: 30_000,
+    // Retry transient 502/504s while the postgres pod is still
+    // booting. Without this the first failed fetch sticks around
+    // forever even after the addon comes up.
+    retry: 2,
+    retryDelay: (i) => 1000 * (i + 1),
   });
   const [query, setQuery] = useState("SELECT 1");
   const [resp, setResp] = useState<{
@@ -531,9 +550,21 @@ function SQLTab({ project, addon }: { project: string; addon: string }) {
         {tables.isPending ? (
           <Skeleton className="h-32 w-full" />
         ) : tables.isError ? (
-          <p className="text-[10px] text-amber-400">
-            {tables.error instanceof Error ? tables.error.message : "load failed"}
-          </p>
+          <div className="space-y-2 text-[10px]">
+            <p className="text-amber-400">
+              {tables.error instanceof Error ? tables.error.message : "load failed"}
+            </p>
+            <p className="text-[var(--text-tertiary)]">
+              Postgres may still be starting. Click to retry.
+            </p>
+            <button
+              type="button"
+              onClick={() => tables.refetch()}
+              className="rounded border border-[var(--border-subtle)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+            >
+              Retry
+            </button>
+          </div>
         ) : (tables.data ?? []).length === 0 ? (
           <p className="text-[10px] text-[var(--text-tertiary)]">no user tables</p>
         ) : (
