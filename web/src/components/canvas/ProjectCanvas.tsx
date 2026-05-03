@@ -94,26 +94,66 @@ export function ProjectCanvas({
 
   const initialEdges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
-    // Addon → every service: the addon's connection secret is
-    // mounted on every service in the project via envFrom, so this
-    // is a real direct connection (DATABASE_URL, etc. land as pod
-    // env). Solid stroke — these are not "indirect."
-    addons.forEach((a) => {
-      services.forEach((s) => {
-        out.push({
-          id: `e:${a.metadata.name}->${s.metadata.name}`,
-          source: `addon:${a.metadata.name}`,
-          target: `svc:${s.metadata.name}`,
-          animated: true,
-          // The `kind` field is non-standard React Flow data; we
-          // stash the edge category here so the filter chips can
-          // toggle visibility without re-deriving from the id.
-          // Colour: amber. Distinct from service refs (the accent
-          // colour) so the two categories read as separate at a
-          // glance.
-          data: { kind: "addon" },
-          style: { stroke: "rgb(245 158 11)", strokeWidth: 1.5, opacity: 0.85 },
-        });
+    // Addon → service: only when the service explicitly references
+    // the addon's conn-secret. The kuso server auto-attaches every
+    // addon's secret to every service env via envFromSecrets, but
+    // that means "secret is mounted on the pod" — NOT "service uses
+    // it." A service that never reads DATABASE_URL shouldn't have
+    // a line drawn to postgres on the canvas.
+    //
+    // We detect explicit references in two forms:
+    //   1. valueFrom.secretKeyRef.name == "<addon>-conn"
+    //      (set by the server when it resolves `${{addon.KEY}}`)
+    //   2. value contains the still-unresolved `${{addon.KEY}}` text
+    //      (rare — only on freshly typed env vars before save round-trip)
+    const usedAddons = new Set<string>(); // "<service-fqn>|<addon-fqn>"
+    services.forEach((s) => {
+      for (const ev of s.spec.envVars ?? []) {
+        // valueFrom path: server-resolved addon refs land here.
+        const skr = (ev?.valueFrom as { secretKeyRef?: { name?: string } } | undefined)?.secretKeyRef;
+        if (skr?.name && skr.name.endsWith("-conn")) {
+          // Conn-secret naming is "<addon-cr-name>-conn" — strip the
+          // suffix and match against known addons.
+          const addonFQN = skr.name.slice(0, -"-conn".length);
+          if (addons.some((a) => a.metadata.name === addonFQN)) {
+            usedAddons.add(`${s.metadata.name}|${addonFQN}`);
+          }
+        }
+        // value path: literal ${{addon.KEY}} text. Server resolves
+        // these on save, but during the brief window before the next
+        // refetch the canvas would drop the edge — so we still draw
+        // it.
+        if (ev?.value) {
+          const m = ev.value.match(/^\$\{\{\s*([a-zA-Z0-9_-]+)\.[A-Z_][A-Z0-9_]*\s*\}\}$/);
+          if (m) {
+            // Check both short + fqn names against known addons.
+            const refName = m[1];
+            const candidates = [refName, `${project}-${refName}`];
+            for (const c of candidates) {
+              if (addons.some((a) => a.metadata.name === c)) {
+                usedAddons.add(`${s.metadata.name}|${c}`);
+                break;
+              }
+            }
+          }
+        }
+      }
+    });
+    usedAddons.forEach((key) => {
+      const [svcFQN, addonFQN] = key.split("|");
+      out.push({
+        id: `e:${addonFQN}->${svcFQN}`,
+        source: `addon:${addonFQN}`,
+        target: `svc:${svcFQN}`,
+        animated: true,
+        // The `kind` field is non-standard React Flow data; we
+        // stash the edge category here so the filter chips can
+        // toggle visibility without re-deriving from the id.
+        // Colour: amber. Distinct from service refs (the accent
+        // colour) so the two categories read as separate at a
+        // glance.
+        data: { kind: "addon" },
+        style: { stroke: "rgb(245 158 11)", strokeWidth: 1.5, opacity: 0.85 },
       });
     });
     // Service → service edges from env-var refs. The server resolves
