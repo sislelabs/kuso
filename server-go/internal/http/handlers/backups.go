@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/go-chi/chi/v5"
+	_ "github.com/lib/pq" // postgres driver registers itself with database/sql
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -38,6 +40,12 @@ func (h *BackupsHandler) Mount(r chi.Router) {
 	r.Put("/api/admin/backup-settings", h.PutSettings)
 	r.Get("/api/projects/{project}/addons/{addon}/backups", h.List)
 	r.Post("/api/projects/{project}/addons/{addon}/backups/restore", h.Restore)
+	// SQL browser: list tables + run a read-only SELECT against the
+	// addon's postgres. The query is wrapped in a read-only
+	// transaction with a statement_timeout — defence in depth against
+	// a stray `; DROP TABLE` or a runaway scan.
+	r.Get("/api/projects/{project}/addons/{addon}/sql/tables", h.SQLTables)
+	r.Post("/api/projects/{project}/addons/{addon}/sql/query", h.SQLQuery)
 }
 
 // BackupSettings is the wire shape. We never echo the secret access
@@ -327,5 +335,216 @@ func envFromSecretOptional(name, secretName, key string) corev1.EnvVar {
 				Optional:             &opt,
 			},
 		},
+	}
+}
+
+// ---------- SQL browser ---------------------------------------------
+
+// pgConn dials the addon's postgres using credentials from its
+// connection Secret (<release>-conn). Returns a *sql.DB the caller
+// must Close. Adds a 5s connect timeout so a wedged addon can't hang
+// the request.
+func (h *BackupsHandler) pgConn(ctx context.Context, project, addon string) (*sql.DB, error) {
+	releaseName := project + "-" + addon
+	connSecret := releaseName + "-conn"
+	sec, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Get(ctx, connSecret, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("addon %s/%s has no -conn secret", project, addon)
+	}
+	if err != nil {
+		return nil, err
+	}
+	host := releaseName + "-postgresql"
+	port := "5432"
+	user := "kuso"
+	dbName := "kuso"
+	if v, ok := sec.Data["POSTGRES_HOST"]; ok && len(v) > 0 {
+		host = string(v)
+	}
+	if v, ok := sec.Data["POSTGRES_PORT"]; ok && len(v) > 0 {
+		port = string(v)
+	}
+	if v, ok := sec.Data["POSTGRES_USER"]; ok && len(v) > 0 {
+		user = string(v)
+	}
+	if v, ok := sec.Data["POSTGRES_DB"]; ok && len(v) > 0 {
+		dbName = string(v)
+	}
+	pass := string(sec.Data["POSTGRES_PASSWORD"])
+	if pass == "" {
+		return nil, errors.New("addon -conn secret missing POSTGRES_PASSWORD")
+	}
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable connect_timeout=5",
+		host, port, user, pass, dbName)
+	db, err := sql.Open("postgres", dsn)
+	if err != nil {
+		return nil, err
+	}
+	// One per-request connection, no pooling: the request is short
+	// and we'd rather spend a fresh handshake than risk pool reuse
+	// across users.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(0)
+	return db, nil
+}
+
+// SQLTables returns the schema → table list for the addon's
+// database. Filters out pg_catalog + information_schema; users want
+// their tables, not the postgres internals.
+func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	addon := chi.URLParam(r, "addon")
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	db, err := h.pgConn(ctx, project, addon)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer db.Close()
+
+	rows, err := db.QueryContext(ctx, `
+		SELECT table_schema, table_name
+		FROM information_schema.tables
+		WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
+		  AND table_type = 'BASE TABLE'
+		ORDER BY table_schema, table_name
+	`)
+	if err != nil {
+		http.Error(w, "query: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer rows.Close()
+	type row struct {
+		Schema string `json:"schema"`
+		Name   string `json:"name"`
+	}
+	out := make([]row, 0, 64)
+	for rows.Next() {
+		var r row
+		if err := rows.Scan(&r.Schema, &r.Name); err != nil {
+			continue
+		}
+		out = append(out, r)
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// SQLQueryRequest is the body of POST /sql/query. We accept a raw
+// SQL string but enforce read-only at runtime, not on the parsed
+// statement — that's defence in depth against drivers that quietly
+// support multi-statement strings.
+type SQLQueryRequest struct {
+	Query string `json:"query"`
+	Limit int    `json:"limit,omitempty"`
+}
+
+// SQLQueryResponse is intentionally simple: a string column header
+// list + rows of strings. We render numbers/dates as their pg
+// text representation so the client doesn't have to deal with
+// driver type ambiguity. Trade-off: bigints lose precision in JSON,
+// but the user is browsing, not aggregating.
+type SQLQueryResponse struct {
+	Columns  []string   `json:"columns"`
+	Rows     [][]string `json:"rows"`
+	Truncated bool      `json:"truncated"`
+	Elapsed  string     `json:"elapsed"`
+}
+
+func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	addon := chi.URLParam(r, "addon")
+
+	var req SQLQueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if req.Query == "" {
+		http.Error(w, "query required", http.StatusBadRequest)
+		return
+	}
+	limit := req.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	db, err := h.pgConn(ctx, project, addon)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer db.Close()
+
+	// Open a read-only transaction with a statement timeout. If
+	// anything in the user's query tries to write, postgres rejects
+	// it inside this transaction — no need to parse the SQL ourselves.
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		http.Error(w, "begin: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "SET LOCAL statement_timeout = '5s'"); err != nil {
+		http.Error(w, "set timeout: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	start := time.Now()
+	rows, err := tx.QueryContext(ctx, req.Query)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	}
+	defer rows.Close()
+
+	cols, err := rows.Columns()
+	if err != nil {
+		http.Error(w, "columns: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	out := SQLQueryResponse{Columns: cols, Rows: make([][]string, 0, limit)}
+	for rows.Next() {
+		if len(out.Rows) >= limit {
+			out.Truncated = true
+			break
+		}
+		raw := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range raw {
+			ptrs[i] = &raw[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			continue
+		}
+		row := make([]string, len(cols))
+		for i, v := range raw {
+			row[i] = stringifyCell(v)
+		}
+		out.Rows = append(out.Rows, row)
+	}
+	out.Elapsed = time.Since(start).Round(time.Millisecond).String()
+	writeJSON(w, http.StatusOK, out)
+}
+
+// stringifyCell turns whatever the pg driver returned into a JSON-
+// safe string. We don't try to preserve numeric types — the client
+// is rendering a table, not feeding the value into a calculation.
+func stringifyCell(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch x := v.(type) {
+	case []byte:
+		return string(x)
+	case string:
+		return x
+	case time.Time:
+		return x.UTC().Format(time.RFC3339)
+	default:
+		return fmt.Sprintf("%v", x)
 	}
 }

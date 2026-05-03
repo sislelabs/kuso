@@ -16,7 +16,13 @@ export {
   listServices,
   listEnvironments,
   listAddons,
+  deleteAddon,
+  listBackups,
+  restoreBackup,
+  listSQLTables,
+  runSQL,
 } from "./api";
+export type { BackupObject, SQLTable, SQLQueryResponse } from "./api";
 export {
   useUpdateProject,
   useDeleteProject,

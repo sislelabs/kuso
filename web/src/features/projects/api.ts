@@ -31,3 +31,61 @@ export async function listEnvironments(
 export async function listAddons(project: string): Promise<KusoAddon[]> {
   return api<KusoAddon[]>(`/api/projects/${encodeURIComponent(project)}/addons`);
 }
+
+export async function deleteAddon(project: string, addon: string): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}`,
+    { method: "DELETE" }
+  );
+}
+
+export interface BackupObject {
+  key: string;
+  size: number;
+  when: string;
+}
+
+export async function listBackups(project: string, addon: string): Promise<BackupObject[]> {
+  return api<BackupObject[]>(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/backups`
+  );
+}
+
+export async function restoreBackup(
+  project: string,
+  addon: string,
+  key: string
+): Promise<{ job: string }> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/backups/restore`,
+    { method: "POST", body: { key } }
+  );
+}
+
+export interface SQLTable {
+  schema: string;
+  name: string;
+}
+export async function listSQLTables(project: string, addon: string): Promise<SQLTable[]> {
+  return api<SQLTable[]>(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/tables`
+  );
+}
+
+export interface SQLQueryResponse {
+  columns: string[];
+  rows: string[][];
+  truncated: boolean;
+  elapsed: string;
+}
+export async function runSQL(
+  project: string,
+  addon: string,
+  query: string,
+  limit?: number
+): Promise<SQLQueryResponse> {
+  return api<SQLQueryResponse>(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/query`,
+    { method: "POST", body: { query, limit } }
+  );
+}

@@ -221,7 +221,10 @@ export function ProjectCanvas({
     setCtx({ open: true, x: e.clientX, y: e.clientY, items });
   };
 
-  // Right-click on an addon node — Open / Connection / Delete.
+  // Right-click on an addon node — Open / Delete. Delete sends the
+  // user into the overlay's Settings tab where the typed-name
+  // confirm gate lives; we don't trust window.confirm for a
+  // destructive op that may take a PVC with it.
   const onAddonContext = (e: React.MouseEvent, data: AddonNodeData) => {
     e.preventDefault();
     const items: ContextMenuItem[] = [
@@ -233,10 +236,10 @@ export function ProjectCanvas({
       },
       {
         id: "delete",
-        label: "Delete addon",
+        label: "Delete addon…",
         icon: Trash2,
         destructive: true,
-        disabled: true,
+        onSelect: () => onSelectAddon?.(data.addon.metadata.name),
       },
     ];
     setCtx({ open: true, x: e.clientX, y: e.clientY, items });

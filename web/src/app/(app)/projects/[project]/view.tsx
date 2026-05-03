@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ProjectCanvas } from "@/components/canvas/ProjectCanvas";
 import { ServiceOverlay } from "@/components/service/ServiceOverlay";
+import { AddonOverlay } from "@/components/addon/AddonOverlay";
 import { Package } from "lucide-react";
 
 // ProjectDetailView is canvas-only. Project name + repo live in the
@@ -23,6 +24,7 @@ export function ProjectDetailView() {
   // Overlay state — in-component, NOT in the URL. The panel is a
   // transient inspector, not a route.
   const [selectedService, setSelectedService] = useState<string | null>(null);
+  const [selectedAddon, setSelectedAddon] = useState<string | null>(null);
 
   // Env switcher legitimately changes what's on screen and survives
   // reload, so it stays in the URL as ?env=<short>.
@@ -95,6 +97,7 @@ export function ProjectDetailView() {
           addons={addonsList}
           envs={envs}
           onSelectService={(shortName) => setSelectedService(shortName)}
+          onSelectAddon={(name) => setSelectedAddon(name)}
         />
       </div>
 
@@ -103,6 +106,12 @@ export function ProjectDetailView() {
         service={selectedService}
         env={selectedEnv}
         onClose={() => setSelectedService(null)}
+      />
+
+      <AddonOverlay
+        project={projectName}
+        addon={selectedAddon}
+        onClose={() => setSelectedAddon(null)}
       />
     </>
   );
