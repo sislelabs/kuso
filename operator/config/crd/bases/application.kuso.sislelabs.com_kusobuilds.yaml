@@ -32,6 +32,8 @@ spec:
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
       schema:
         openAPIV3Schema:
           description: KusoBuild is one build attempt. The operator renders a kaniko Job that clones the repo, builds the image, and pushes it to the in-cluster registry.

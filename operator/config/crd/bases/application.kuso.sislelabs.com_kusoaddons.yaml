@@ -35,6 +35,8 @@ spec:
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
       schema:
         openAPIV3Schema:
           description: KusoAddon is a managed dependency (Postgres, Redis, ...) belonging to a KusoProject.

@@ -35,6 +35,8 @@ spec:
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
       schema:
         openAPIV3Schema:
           description: KusoEnvironment is one running instance of a KusoService — production or preview.

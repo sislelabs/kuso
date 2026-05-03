@@ -12,7 +12,15 @@ export interface AddonNodeData extends Record<string, unknown> {
 }
 
 export function AddonNode({ data }: { data: AddonNodeData }) {
-  const ready = !!data.addon.status?.ready;
+  // The helm-operator doesn't populate status.ready on KusoAddon today
+  // (it manages status.deployedRelease, which we don't model). Treat
+  // "connectionSecret exists" as the ready signal — it's accurate
+  // because our addon helm charts emit the secret only after the
+  // workload reaches Deployed, and it's what callers actually need
+  // (they connect via that secret). Without this, every addon showed
+  // a permanent amber pulse even after provisioning succeeded.
+  const ready =
+    !!data.addon.status?.ready || !!data.addon.status?.connectionSecret;
   return (
     <div
       data-node-context

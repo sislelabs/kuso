@@ -29,6 +29,8 @@ spec:
         - name: Age
           type: date
           jsonPath: .metadata.creationTimestamp
+      subresources:
+        status: {}
       schema:
         openAPIV3Schema:
           description: KusoService is one deployable process inside a KusoProject.
