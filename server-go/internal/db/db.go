@@ -72,12 +72,48 @@ func (d *DB) applyMigrations() error {
 		// per-project memberships [{project, role}].
 		`ALTER TABLE "UserGroup" ADD COLUMN "instanceRole" TEXT NOT NULL DEFAULT 'member'`,
 		`ALTER TABLE "UserGroup" ADD COLUMN "projectMemberships" TEXT NOT NULL DEFAULT '[]'`,
+		// v0.6.10: invitation links. Admin mints a token, the URL is
+		// shared, the invitee redeems it through GH OAuth or local
+		// signup. groupId is nullable so an admin can mint a generic
+		// invite that lands in the pending group; instanceRole
+		// nullable means "use the group's default."
+		`CREATE TABLE IF NOT EXISTS "Invite" (
+			"id" TEXT PRIMARY KEY,
+			"token" TEXT NOT NULL UNIQUE,
+			"groupId" TEXT,
+			"instanceRole" TEXT,
+			"createdBy" TEXT NOT NULL,
+			"createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			"expiresAt" DATETIME,
+			"maxUses" INTEGER NOT NULL DEFAULT 1,
+			"usedCount" INTEGER NOT NULL DEFAULT 0,
+			"revokedAt" DATETIME,
+			"note" TEXT
+		)`,
+		`CREATE INDEX IF NOT EXISTS "Invite_token_idx" ON "Invite"("token")`,
+		// Audit trail of who used which invite. usedAt + userId per
+		// row — keeps revoke/audit decisions easy and survives a
+		// User row delete via cascade.
+		`CREATE TABLE IF NOT EXISTS "InviteRedemption" (
+			"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+			"inviteId" TEXT NOT NULL,
+			"userId" TEXT NOT NULL,
+			"usedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			FOREIGN KEY ("inviteId") REFERENCES "Invite"("id") ON DELETE CASCADE,
+			FOREIGN KEY ("userId") REFERENCES "User"("id") ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS "InviteRedemption_inviteId_idx" ON "InviteRedemption"("inviteId")`,
 	}
 	for _, sqlText := range migrations {
 		if _, err := d.DB.Exec(sqlText); err != nil {
-			// "duplicate column name" is the expected re-apply error;
-			// every other error is a real failure.
-			if strings.Contains(err.Error(), "duplicate column name") {
+			// Idempotent re-apply: "duplicate column name" for ALTER
+			// TABLE … ADD COLUMN, "already exists" for CREATE TABLE
+			// IF NOT EXISTS guards (the IF NOT EXISTS catches most
+			// but newer SQLite versions still surface the message in
+			// some constraints). Anything else is a real failure.
+			msg := err.Error()
+			if strings.Contains(msg, "duplicate column name") ||
+				strings.Contains(msg, "already exists") {
 				continue
 			}
 			return fmt.Errorf("db: migration %q: %w", sqlText, err)

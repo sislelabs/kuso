@@ -126,6 +126,13 @@ func NewRouter(d Deps) http.Handler {
 		ghHandler.MountPublic(r)
 	}
 
+	// Invite redemption is public — the invitee has no JWT yet.
+	// Token entropy (128 bits / base64url) is the security boundary.
+	if d.DB != nil && d.Issuer != nil {
+		invitesPub := &httphandlers.InvitesHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
+		invitesPub.MountPublic(r)
+	}
+
 	// WebSocket log tail. Auth is handled inside the handler (the bearer
 	// arrives in the Sec-WebSocket-Protocol header, which middleware
 	// can't see), so this route is mounted on the public router.
@@ -179,6 +186,8 @@ func NewRouter(d Deps) http.Handler {
 			rolesH.Mount(r)
 			groupsH := &httphandlers.GroupsHandler{DB: d.DB, Logger: d.Logger}
 			groupsH.Mount(r)
+			invitesH := &httphandlers.InvitesHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
+			invitesH.Mount(r)
 			notifH := &httphandlers.NotificationsHandler{DB: d.DB, Logger: d.Logger, Notify: d.Notify}
 			notifH.Mount(r)
 			tokAdminH := &httphandlers.TokensAdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}

@@ -29,6 +29,12 @@ type OAuthHandler struct {
 // stateCookie is the short-lived cookie name for OAuth state values.
 const stateCookie = "kuso_oauth_state"
 
+// inviteOAuthCookie pins an invite token to the GH OAuth round-trip
+// so the callback knows which invite to redeem after upsert. Mirror
+// of the const in invites.go — duplicated here so the OAuth handler
+// doesn't import handlers/invites.
+const inviteOAuthCookie = "kuso_invite_token"
+
 // MountPublic registers the OAuth start + callback routes onto the
 // unauthenticated router group. The flow ends with a redirect to "/"
 // carrying the JWT in a cookie, matching the TS behaviour.
@@ -79,7 +85,27 @@ func (h *OAuthHandler) GithubCallback(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "github exchange", err)
 		return
 	}
-	jwt, err := h.upsertAndIssue(ctx, prof, "oauth2")
+	// Invite redemption: if the user came from /api/invites/redeem/oauth/start,
+	// the kuso_invite_token cookie pins the GH login to a specific
+	// invite. Try to consume it BEFORE upsertAndIssue so the
+	// bootstrap-or-pending fallback doesn't drop the user in pending.
+	// Failure to redeem is non-fatal: log and continue with the
+	// regular login flow so a stale cookie doesn't lock the user
+	// out.
+	var inviteToConsume *db.Invite
+	if c, err := r.Cookie(inviteOAuthCookie); err == nil && c.Value != "" {
+		if inv, ierr := h.DB.RedeemInvite(ctx, c.Value); ierr != nil {
+			h.Logger.Warn("oauth: invite redeem failed; continuing", "err", ierr)
+		} else {
+			inviteToConsume = inv
+		}
+		// Always clear the cookie — single use.
+		http.SetCookie(w, &http.Cookie{
+			Name: inviteOAuthCookie, Value: "", Path: "/", MaxAge: -1,
+			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil,
+		})
+	}
+	jwt, err := h.upsertAndIssueWithInvite(ctx, prof, "oauth2", inviteToConsume)
 	if err != nil {
 		h.fail(w, "issue jwt", err)
 		return
@@ -137,6 +163,48 @@ func (h *OAuthHandler) OAuth2Callback(w http.ResponseWriter, r *http.Request) {
 	}
 	setJWTCookie(w, jwt)
 	http.Redirect(w, r, "/", http.StatusFound)
+}
+
+// upsertAndIssueWithInvite is the invite-aware wrapper. When the
+// callback came from a kuso_invite_token cookie, the redemption row
+// has already been incremented; we just need to attach the user to
+// the invite's group instead of falling through to the generic
+// pending-or-admin bootstrap.
+//
+// Idempotency: a re-attempt of the OAuth callback (browser refresh)
+// gets a brand-new invite cookie or none at all, so this method only
+// runs the group-attach path when an invite was actually consumed
+// this call.
+func (h *OAuthHandler) upsertAndIssueWithInvite(ctx context.Context, prof *auth.OAuthProfile, strategy string, inv *db.Invite) (string, error) {
+	jwt, err := h.upsertAndIssue(ctx, prof, strategy)
+	if err != nil {
+		return "", err
+	}
+	if inv == nil {
+		return jwt, nil
+	}
+	uid, _ := h.userIDForProvider(ctx, prof)
+	if uid == "" {
+		return jwt, nil
+	}
+	if inv.GroupID.Valid {
+		if err := h.DB.AddUserToGroup(ctx, uid, inv.GroupID.String); err != nil {
+			h.Logger.Warn("invite oauth: add to group", "user", uid, "group", inv.GroupID.String, "err", err)
+		}
+	}
+	if err := h.DB.RecordRedemption(ctx, inv.ID, uid); err != nil {
+		h.Logger.Warn("invite oauth: record redemption", "err", err)
+	}
+	// We need to RE-ISSUE the JWT so the new group's permissions land
+	// in the claims. Otherwise the user would have to log out + in to
+	// see their new tenancy.
+	freshJWT, err := h.upsertAndIssue(ctx, prof, strategy)
+	if err != nil {
+		// If re-sign fails, return the original — the user is still
+		// logged in, they just won't see new perms until next login.
+		return jwt, nil
+	}
+	return freshJWT, nil
 }
 
 // upsertAndIssue finds-or-creates a kuso User row from the OAuth profile

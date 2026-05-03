@@ -24,6 +24,37 @@ INSERT INTO "UserGroup" (id, name, description, "createdAt", "updatedAt") VALUES
 	return nil
 }
 
+// GetGroup returns a Group by ID, or ErrNotFound. Cheap lookup used
+// by invite validation to confirm a configured groupId actually
+// exists before we mint the link. Reuses the Group struct defined
+// in queries.go.
+func (d *DB) GetGroup(ctx context.Context, id string) (*Group, error) {
+	row := d.DB.QueryRowContext(ctx,
+		`SELECT id, name, description FROM "UserGroup" WHERE id = ?`, id)
+	var g Group
+	if err := row.Scan(&g.ID, &g.Name, &g.Description); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("db: get group: %w", err)
+	}
+	return &g, nil
+}
+
+// AddUserToPendingGroup ensures a "kuso-pending" group exists with
+// instanceRole=pending and adds the user to it. Used by signup paths
+// that don't have a more specific group to attach to (e.g. an invite
+// minted without a groupId, or a fresh OAuth login). Mirrors the
+// inline helper in oauth.go.
+func (d *DB) AddUserToPendingGroup(ctx context.Context, userID string) error {
+	const gid = "grp-pending"
+	_ = d.CreateGroup(ctx, gid, "kuso-pending", "users awaiting admin approval")
+	if err := d.SetGroupTenancy(ctx, gid, GroupTenancy{InstanceRole: InstanceRolePending}); err != nil {
+		return err
+	}
+	return d.AddUserToGroup(ctx, userID, gid)
+}
+
 // UpdateGroup replaces name + description.
 func (d *DB) UpdateGroup(ctx context.Context, id, name, description string) error {
 	res, err := d.DB.ExecContext(ctx, `

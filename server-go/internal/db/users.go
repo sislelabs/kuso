@@ -76,6 +76,22 @@ func (d *DB) FindUserByUsername(ctx context.Context, username string) (*User, er
 	return u, nil
 }
 
+// FindUserByEmail returns the User with the given email, or
+// ErrNotFound. Used by signup paths to detect duplicates before
+// creating a row (and to surface a clean 409 instead of a unique
+// constraint error from the underlying DB).
+func (d *DB) FindUserByEmail(ctx context.Context, email string) (*User, error) {
+	row := d.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM "User" WHERE email = ? LIMIT 1`, email)
+	u, err := scanUser(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("db: find user by email: %w", err)
+	}
+	return u, nil
+}
+
 // FindUserByID returns the User with the given id, or ErrNotFound.
 func (d *DB) FindUserByID(ctx context.Context, id string) (*User, error) {
 	row := d.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM "User" WHERE id = ? LIMIT 1`, id)
