@@ -115,7 +115,7 @@ func (d *DB) EnsureAdminGroup(ctx context.Context, seedUsername string) error {
 	if err == sql.ErrNoRows {
 		groupID = "grp-bootstrap-admins"
 		now := prismaNow()
-		if _, err := d.DB.ExecContext(ctx, `
+		if _, err := d.ExecContext(ctx, `
 INSERT OR IGNORE INTO "UserGroup" (id, name, description, "instanceRole", "projectMemberships", "createdAt", "updatedAt")
 VALUES (?, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]', ?, ?)`,
 			groupID, now, now); err != nil {
@@ -136,7 +136,7 @@ VALUES (?, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]
 		err := d.DB.QueryRowContext(ctx,
 			`SELECT id FROM "User" WHERE username = ?`, seedUsername).Scan(&seedID)
 		if err == nil {
-			if _, err := d.DB.ExecContext(ctx,
+			if _, err := d.ExecContext(ctx,
 				`INSERT OR IGNORE INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`,
 				seedID, groupID); err != nil {
 				return fmt.Errorf("db: attach seed admin: %w", err)
@@ -243,14 +243,14 @@ func (d *DB) PromoteUsernameToAdmin(ctx context.Context, username string) error 
 		}
 		adminGroupID = "grp-bootstrap-admins"
 		now := prismaNow()
-		if _, err := d.DB.ExecContext(ctx, `
+		if _, err := d.ExecContext(ctx, `
 INSERT OR IGNORE INTO "UserGroup" (id, name, description, "instanceRole", "projectMemberships", "createdAt", "updatedAt")
 VALUES (?, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]', ?, ?)`,
 			adminGroupID, now, now); err != nil {
 			return fmt.Errorf("db: promote: create admin group: %w", err)
 		}
 	}
-	if _, err := d.DB.ExecContext(ctx,
+	if _, err := d.ExecContext(ctx,
 		`INSERT OR IGNORE INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`,
 		userID, adminGroupID); err != nil {
 		return fmt.Errorf("db: promote: attach to admin: %w", err)
@@ -259,7 +259,7 @@ VALUES (?, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]
 	// still sees a pending row in their union and the perms compute
 	// to "admin" anyway, but the awaiting-access redirect logic
 	// could confuse them. Belt-and-suspenders: drop the pending row.
-	if _, err := d.DB.ExecContext(ctx, `
+	if _, err := d.ExecContext(ctx, `
 DELETE FROM "_UserToUserGroup"
 WHERE "A" = ?
 AND "B" IN (SELECT id FROM "UserGroup" WHERE "instanceRole" = 'pending')`,
@@ -277,7 +277,7 @@ AND "B" IN (SELECT id FROM "UserGroup" WHERE "instanceRole" = 'pending')`,
 // that want to log it.
 func (d *DB) EnsureAdminPassword(ctx context.Context, username, passwordHash string) (when time.Time, err error) {
 	now := prismaNow()
-	res, err := d.DB.ExecContext(ctx, `
+	res, err := d.ExecContext(ctx, `
 UPDATE "User" SET password = ?, "updatedAt" = ? WHERE username = ?`, passwordHash, now, username)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("db: ensure admin password: %w", err)

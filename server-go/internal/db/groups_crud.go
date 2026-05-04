@@ -14,7 +14,7 @@ func (d *DB) CreateGroup(ctx context.Context, id, name, description string) erro
 		return errors.New("db: id and name required")
 	}
 	now := prismaNow()
-	_, err := d.DB.ExecContext(ctx, `
+	_, err := d.ExecContext(ctx, `
 INSERT INTO "UserGroup" (id, name, description, "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?)`,
 		id, name, sqlNullable(description), now, now,
 	)
@@ -57,7 +57,7 @@ func (d *DB) AddUserToPendingGroup(ctx context.Context, userID string) error {
 
 // UpdateGroup replaces name + description.
 func (d *DB) UpdateGroup(ctx context.Context, id, name, description string) error {
-	res, err := d.DB.ExecContext(ctx, `
+	res, err := d.ExecContext(ctx, `
 UPDATE "UserGroup" SET name = ?, description = ?, "updatedAt" = ? WHERE id = ?`,
 		name, sqlNullable(description), prismaNow(), id,
 	)
@@ -139,7 +139,7 @@ func (d *DB) SetGroupTenancy(ctx context.Context, groupID string, t GroupTenancy
 	if err != nil {
 		return fmt.Errorf("db: encode projectMemberships: %w", err)
 	}
-	res, err := d.DB.ExecContext(ctx,
+	res, err := d.ExecContext(ctx,
 		`UPDATE "UserGroup" SET "instanceRole" = ?, "projectMemberships" = ?, "updatedAt" = ? WHERE id = ?`,
 		string(t.InstanceRole), string(memBytes), prismaNow(), groupID)
 	if err != nil {
@@ -229,7 +229,7 @@ func rankProject(r ProjectRole) int {
 // OAuth bootstrap path to drop a fresh user into the admin or
 // pending group without caring whether the row already exists.
 func (d *DB) AddUserToGroup(ctx context.Context, userID, groupID string) error {
-	_, err := d.DB.ExecContext(ctx, `
+	_, err := d.ExecContext(ctx, `
 INSERT OR IGNORE INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`, userID, groupID)
 	if err != nil {
 		return fmt.Errorf("db: add user %s to group %s: %w", userID, groupID, err)
@@ -240,7 +240,7 @@ INSERT OR IGNORE INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`, userID, grou
 // RemoveUserFromGroup is the inverse — used when an admin clicks
 // "remove from group" in the UI editor.
 func (d *DB) RemoveUserFromGroup(ctx context.Context, userID, groupID string) error {
-	_, err := d.DB.ExecContext(ctx, `
+	_, err := d.ExecContext(ctx, `
 DELETE FROM "_UserToUserGroup" WHERE "A" = ? AND "B" = ?`, userID, groupID)
 	if err != nil {
 		return fmt.Errorf("db: remove user %s from group %s: %w", userID, groupID, err)

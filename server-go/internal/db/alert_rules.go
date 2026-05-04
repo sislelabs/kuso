@@ -42,7 +42,7 @@ type AlertRule struct {
 var ErrAlertNotFound = errors.New("alert rule not found")
 
 func (d *DB) CreateAlertRule(ctx context.Context, r AlertRule) error {
-	_, err := d.DB.ExecContext(ctx, `
+	_, err := d.ExecContext(ctx, `
 		INSERT INTO "AlertRule"
 		  ("id","name","enabled","kind","project","service","query","thresholdInt","thresholdFloat","windowSeconds","severity","throttleSeconds")
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
@@ -100,7 +100,7 @@ func (d *DB) ListAlertRules(ctx context.Context) ([]AlertRule, error) {
 }
 
 func (d *DB) DeleteAlertRule(ctx context.Context, id string) error {
-	res, err := d.DB.ExecContext(ctx, `DELETE FROM "AlertRule" WHERE "id" = ?`, id)
+	res, err := d.ExecContext(ctx, `DELETE FROM "AlertRule" WHERE "id" = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete alert rule: %w", err)
 	}
@@ -112,7 +112,7 @@ func (d *DB) DeleteAlertRule(ctx context.Context, id string) error {
 
 // MarkAlertFired stamps lastFiredAt for throttling.
 func (d *DB) MarkAlertFired(ctx context.Context, id string, at time.Time) error {
-	_, err := d.DB.ExecContext(ctx, `UPDATE "AlertRule" SET "lastFiredAt" = ?, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ?`, at.UTC(), id)
+	_, err := d.ExecContext(ctx, `UPDATE "AlertRule" SET "lastFiredAt" = ?, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ?`, at.UTC(), id)
 	if err != nil {
 		return fmt.Errorf("mark fired: %w", err)
 	}
@@ -121,7 +121,7 @@ func (d *DB) MarkAlertFired(ctx context.Context, id string, at time.Time) error 
 
 // SetAlertEnabled toggles without rewriting other fields.
 func (d *DB) SetAlertEnabled(ctx context.Context, id string, on bool) error {
-	res, err := d.DB.ExecContext(ctx, `UPDATE "AlertRule" SET "enabled" = ?, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ?`, on, id)
+	res, err := d.ExecContext(ctx, `UPDATE "AlertRule" SET "enabled" = ?, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ?`, on, id)
 	if err != nil {
 		return fmt.Errorf("toggle alert: %w", err)
 	}

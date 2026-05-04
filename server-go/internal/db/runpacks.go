@@ -180,11 +180,11 @@ func (d *DB) DeleteRunpack(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("db: read runpack: %w", err)
 	}
-	if _, err := d.DB.ExecContext(ctx, `DELETE FROM "Runpack" WHERE id = ?`, id); err != nil {
+	if _, err := d.ExecContext(ctx, `DELETE FROM "Runpack" WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("db: delete runpack: %w", err)
 	}
 	for _, pid := range []string{fetchID, buildID, runID} {
-		_, _ = d.DB.ExecContext(ctx, `DELETE FROM "RunpackPhase" WHERE id = ?`, pid)
+		_, _ = d.ExecContext(ctx, `DELETE FROM "RunpackPhase" WHERE id = ?`, pid)
 	}
 	return nil
 }
@@ -215,7 +215,7 @@ func (d *DB) CreatePodSize(ctx context.Context, p *PodSize) error {
 		return errors.New("db: pod size id required")
 	}
 	now := prismaNow()
-	_, err := d.DB.ExecContext(ctx, `
+	_, err := d.ExecContext(ctx, `
 INSERT INTO "PodSize" (id, name, "cpuLimit", "memoryLimit", "cpuRequest", "memoryRequest", description, "createdAt", "updatedAt")
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		p.ID, p.Name, p.CPULimit, p.MemoryLimit, p.CPURequest, p.MemoryRequest, p.Description, now, now,
@@ -229,7 +229,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 // UpdatePodSize replaces the named PodSize columns.
 func (d *DB) UpdatePodSize(ctx context.Context, p *PodSize) error {
 	now := prismaNow()
-	res, err := d.DB.ExecContext(ctx, `
+	res, err := d.ExecContext(ctx, `
 UPDATE "PodSize" SET name = ?, "cpuLimit" = ?, "memoryLimit" = ?, "cpuRequest" = ?, "memoryRequest" = ?, description = ?, "updatedAt" = ?
 WHERE id = ?`,
 		p.Name, p.CPULimit, p.MemoryLimit, p.CPURequest, p.MemoryRequest, p.Description, now, p.ID,
@@ -245,7 +245,7 @@ WHERE id = ?`,
 
 // DeletePodSize removes a PodSize.
 func (d *DB) DeletePodSize(ctx context.Context, id string) error {
-	res, err := d.DB.ExecContext(ctx, `DELETE FROM "PodSize" WHERE id = ?`, id)
+	res, err := d.ExecContext(ctx, `DELETE FROM "PodSize" WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("db: delete pod size: %w", err)
 	}

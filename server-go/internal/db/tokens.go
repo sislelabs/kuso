@@ -32,7 +32,7 @@ func (d *DB) CreateToken(ctx context.Context, t *Token) error {
 	if t.CreatedAt.IsZero() {
 		t.CreatedAt = now.Time
 	}
-	_, err := d.DB.ExecContext(ctx, `
+	_, err := d.ExecContext(ctx, `
 INSERT INTO "Token" (id, name, "userId", "expiresAt", "isActive", role, groups, "createdAt", "updatedAt")
 VALUES (?, ?, ?, ?, ?, '', '', ?, ?)`,
 		t.ID, t.Name, t.UserID, prismaAt(t.ExpiresAt), t.IsActive, prismaAt(t.CreatedAt), now,
@@ -72,7 +72,7 @@ FROM "Token" WHERE "userId" = ? ORDER BY "createdAt" DESC`, userID)
 // to delete cross-user tokens is the call site's job — for the /my/:id
 // route it's enforced by the WHERE clause itself.
 func (d *DB) DeleteUserToken(ctx context.Context, userID, tokenID string) error {
-	res, err := d.DB.ExecContext(ctx, `DELETE FROM "Token" WHERE id = ? AND "userId" = ?`, tokenID, userID)
+	res, err := d.ExecContext(ctx, `DELETE FROM "Token" WHERE id = ? AND "userId" = ?`, tokenID, userID)
 	if err != nil {
 		return fmt.Errorf("db: delete token: %w", err)
 	}
@@ -127,7 +127,7 @@ ORDER BY t."createdAt" DESC`)
 // DeleteToken removes a token by id (admin-only). Cross-user safe via
 // being a primary-key delete.
 func (d *DB) DeleteToken(ctx context.Context, id string) error {
-	res, err := d.DB.ExecContext(ctx, `DELETE FROM "Token" WHERE id = ?`, id)
+	res, err := d.ExecContext(ctx, `DELETE FROM "Token" WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("db: delete token: %w", err)
 	}

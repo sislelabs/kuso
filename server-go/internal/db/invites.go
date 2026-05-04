@@ -64,7 +64,7 @@ func (d *DB) CreateInvite(ctx context.Context, in CreateInviteInput) error {
 	if maxUses <= 0 {
 		maxUses = 1
 	}
-	_, err := d.DB.ExecContext(ctx,
+	_, err := d.ExecContext(ctx,
 		`INSERT INTO "Invite"
 			("id","token","groupId","instanceRole","createdBy","expiresAt","maxUses","note")
 		 VALUES (?,?,?,?,?,?,?,?)`,
@@ -133,7 +133,7 @@ func (d *DB) ListInvites(ctx context.Context) ([]Invite, error) {
 // the audit trail (who redeemed) survives — admins can later see
 // who joined via a since-revoked link.
 func (d *DB) RevokeInvite(ctx context.Context, id string) error {
-	res, err := d.DB.ExecContext(ctx,
+	res, err := d.ExecContext(ctx,
 		`UPDATE "Invite" SET "revokedAt" = CURRENT_TIMESTAMP WHERE id = ? AND "revokedAt" IS NULL`,
 		id)
 	if err != nil {
@@ -150,7 +150,7 @@ func (d *DB) RevokeInvite(ctx context.Context, id string) error {
 // redemption rows cascade away too. Most flows should prefer
 // RevokeInvite.
 func (d *DB) DeleteInvite(ctx context.Context, id string) error {
-	res, err := d.DB.ExecContext(ctx, `DELETE FROM "Invite" WHERE id = ?`, id)
+	res, err := d.ExecContext(ctx, `DELETE FROM "Invite" WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("db: delete invite: %w", err)
 	}
@@ -218,7 +218,7 @@ func (d *DB) RedeemInvite(ctx context.Context, token string) (*Invite, error) {
 // who joined via which link. Called by the redemption handler AFTER
 // the user row + group attachment succeeded.
 func (d *DB) RecordRedemption(ctx context.Context, inviteID, userID string) error {
-	_, err := d.DB.ExecContext(ctx,
+	_, err := d.ExecContext(ctx,
 		`INSERT INTO "InviteRedemption" ("inviteId","userId") VALUES (?, ?)`,
 		inviteID, userID)
 	if err != nil {

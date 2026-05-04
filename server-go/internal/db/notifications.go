@@ -68,7 +68,7 @@ func (d *DB) CreateNotification(ctx context.Context, n *Notification) error {
 	ej, _ := json.Marshal(coalesceStringSlice(n.Events))
 	now := prismaNow()
 	cfg := configCols(n.Type, n.Config)
-	_, err := d.DB.ExecContext(ctx, `
+	_, err := d.ExecContext(ctx, `
 INSERT INTO "Notification" (id, name, enabled, type, pipelines, events,
   "webhookUrl", "webhookSecret", "slackUrl", "slackChannel", "discordUrl",
   "createdAt", "updatedAt")
@@ -92,7 +92,7 @@ func (d *DB) UpdateNotification(ctx context.Context, n *Notification) error {
 	pj, _ := json.Marshal(coalesceStringSlice(n.Pipelines))
 	ej, _ := json.Marshal(coalesceStringSlice(n.Events))
 	cfg := configCols(n.Type, n.Config)
-	res, err := d.DB.ExecContext(ctx, `
+	res, err := d.ExecContext(ctx, `
 UPDATE "Notification" SET name = ?, enabled = ?, type = ?, pipelines = ?, events = ?,
   "webhookUrl" = ?, "webhookSecret" = ?, "slackUrl" = ?, "slackChannel" = ?, "discordUrl" = ?,
   "updatedAt" = ?
@@ -112,7 +112,7 @@ WHERE id = ?`,
 
 // DeleteNotification removes a row.
 func (d *DB) DeleteNotification(ctx context.Context, id string) error {
-	res, err := d.DB.ExecContext(ctx, `DELETE FROM "Notification" WHERE id = ?`, id)
+	res, err := d.ExecContext(ctx, `DELETE FROM "Notification" WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("db: delete notification: %w", err)
 	}

@@ -43,6 +43,21 @@ func (h *AdminHandler) Mount(r chi.Router) {
 	r.Get("/api/tokens/my", h.ListMyTokens)
 	r.Post("/api/tokens/my", h.CreateMyToken)
 	r.Delete("/api/tokens/my/{id}", h.DeleteMyToken)
+
+	// SQLite write-lock observability. Admin-only because it's a
+	// process-level diagnostic, not a per-user signal.
+	r.Get("/api/admin/db/stats", h.DBStats)
+}
+
+// DBStats returns the SQLite busy/wait counters. Each tick of busyCount
+// is a request that hit the busy_timeout ceiling — a real saturation
+// event, not a contention blip. Compare two snapshots over a window to
+// get the rate.
+func (h *AdminHandler) DBStats(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	writeJSON(w, http.StatusOK, h.DB.Stats())
 }
 
 func adminCtx(r *http.Request) (context.Context, context.CancelFunc) {

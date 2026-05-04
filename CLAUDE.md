@@ -71,28 +71,9 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 - Bump `server-go/internal/version/VERSION`, `deploy/server-go.yaml` image tag, `hack/install.sh` `KUSO_SERVER_VERSION` AND `KUSO_VERSION` defaults. Then `make ship VERSION=vX.Y.Z` (release.sh handles all four version-string rewrites + the web bundle build + docker push + GH release). Live instances pick up the new release.json on the next updater tick and roll themselves; you do NOT ssh from the laptop. CRD changes still need an explicit `kubectl apply -f operator/config/crd/bases/...yaml` via ssh — the auto-updater only flips image tags, not schemas.
 - Operator helm-operator picks up CR spec changes via watch + 3m reconcile. Schema changes to a CRD require both the YAML apply AND the operator pod to restart-or-reconnect to refresh its informer.
 
-## Active product roadmap (post-v0.6.29)
+## Scope guardrails (resist scope creep)
 
-This is the prioritized list from the PaaS competitive audit. Ship in order; each is sized realistically.
-
-1. **Cron CRD + UI** — `KusoCron` CRD in operator, helm chart that emits a kube `CronJob`. New CLI `kuso cron {create,list,delete}`. UI: a Cron tab on the service overlay with schedule picker + recent-run history. Half-week scope.
-2. **Worker service type** — `spec.runtime: "worker"` (or a separate KusoWorker CRD if cleaner; decide first). No ingress, no health probes (or a configurable command-based liveness), command override required, scale knob with default 1. Half-week.
-3. **Scheduled Postgres backups → S3 + restore-into-new-instance** — addon helm chart already has a `backup-cronjob.yaml` template; needs S3 destination wiring + retention + a Restore button on the addon Settings tab that creates a NEW addon and pipes pg_dump output. Per-addon S3 creds OR global config. 1–2 weeks.
-4. **One-click rollback** — surface `helm history` per env (server-side: kube CR has the build SHAs in spec.image.tag history; query Build CRs for the project/service ordered by createdAt). UI: Deployments tab grows a "rollback to <sha>" button with confirmation. Few days.
-5. **Per-PR preview envs with seeded DB** — GitHub App PR webhook → kuso server creates a `KusoEnvironment` with `kind=preview, pullRequest={number, headRef}` → operator helm renders an isolated deploy → seed addon DB by `pg_dump` from prod into a fresh per-PR addon (or share with a per-PR schema if cheap). Comment URL on the PR. TTL on close. Tear down on PR close. 1–2 weeks.
-6. **Searchable logs + alert rules** — pick: Loki + Promtail (heaviest, the default), OR Vector → ClickHouse (lighter, faster), OR Vector → SQLite with FTS (lightest, kuso-shaped). Rule engine evaluates "error rate > X over Y", "OOMKilled in last Z min", "deploy failed" — fans out via the existing notify dispatcher. UI: log search + alert rule editor. 2 weeks.
-7. **Email integration (Resend/Postmark) marketplace tile** — pure UX: a tile on the project Addons screen that, on click, opens a dialog asking for the API key, stores it as a kuso secret named `RESEND_API_KEY` (or `POSTMARK_*`), and updates docs. No Helm chart. Few days.
-
-Shipped through v0.6.29:
-- v0.6.23 — multi-node SSH join + node placement labels + topologySpread + nodewatch auto-cordon
-- v0.6.24 — addon green border, project-card LIVE counter shape fix, profile ErrorBoundary
-- v0.6.25 — global 401 redirect + addon Placement UI parity
-- v0.6.26 — UserMenu rewrite (Popover, drop base-ui DropdownMenu)
-- v0.6.27 — group create form polish
-- v0.6.28 — `kuso migrate coolify` CLI + 5-min sampler + live chart marker
-- v0.6.29 — addon edit (version/size/HA/storage), in-app notifications feed (bell icon popover), em-dash placeholder cleanup, ApiError prefers response body
-
-Things explicitly NOT to build (from the audit; resist scope creep):
+Things deliberately out of scope:
 - Custom DB branching (Vercel + Neon won; integrate, don't compete)
 - Bespoke Grafana clone (5-min sparkline tiles + alerts is enough)
 - Edge functions / serverless runtime (Cloudflare turf)
@@ -101,9 +82,9 @@ Things explicitly NOT to build (from the audit; resist scope creep):
 - Native error-tracker (Sentry self-hostable is one click in marketplace)
 - Vercel Next.js optimizer parity (suicide to chase)
 
-## How to add a new CRD-backed feature (cron / worker / etc)
+## How to add a new CRD-backed feature
 
-Pattern, in order — copy this for items 1 and 2:
+Pattern, in order:
 1. Define the CRD YAML at `operator/config/crd/bases/application.kuso.sislelabs.com_<plural>.yaml`. Use `x-kubernetes-preserve-unknown-fields: true` at spec level if iteration speed matters.
 2. Define the Go shape in `server-go/internal/kube/types.go` + the GVR + getters/setters in `server-go/internal/kube/crds.go`.
 3. Define the helm chart at `operator/helm-charts/<name>/` (Chart.yaml, values.yaml, templates/, _helpers.tpl mirroring `kusoaddon`).

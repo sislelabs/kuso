@@ -31,7 +31,7 @@ type SSHKey struct {
 // CreateSSHKey inserts a new key. The handler is responsible for
 // generating + fingerprinting before passing the row in.
 func (d *DB) CreateSSHKey(ctx context.Context, k SSHKey) error {
-	_, err := d.DB.ExecContext(ctx, `
+	_, err := d.ExecContext(ctx, `
 		INSERT INTO "SSHKey" ("id","name","publicKey","privateKey","fingerprint")
 		VALUES (?,?,?,?,?)`,
 		k.ID, k.Name, k.PublicKey, k.PrivateKey, k.Fingerprint,
@@ -90,7 +90,7 @@ func (d *DB) GetSSHKey(ctx context.Context, id string) (*SSHKey, error) {
 // DeleteSSHKey removes a key. Doesn't cascade — joined nodes don't
 // need the key after install (k3s agent has its own kube creds).
 func (d *DB) DeleteSSHKey(ctx context.Context, id string) error {
-	res, err := d.DB.ExecContext(ctx, `DELETE FROM "SSHKey" WHERE "id" = ?`, id)
+	res, err := d.ExecContext(ctx, `DELETE FROM "SSHKey" WHERE "id" = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete ssh key: %w", err)
 	}

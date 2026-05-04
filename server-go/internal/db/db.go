@@ -22,8 +22,14 @@ var schemaSQL string
 // DB is a thin wrapper around *sql.DB that exposes typed query helpers
 // per resource. Queries live in resource-specific files (users.go,
 // tokens.go, ...).
+//
+// stats counts SQLITE_BUSY events on the write path. SQLite + WAL +
+// max-open-conns=1 means writes serialize on a single connection;
+// a request that loses the busy_timeout race is the leading indicator
+// of saturation. See stats.go.
 type DB struct {
 	*sql.DB
+	stats Stats
 }
 
 // Open opens (or creates) the SQLite database at path and ensures the

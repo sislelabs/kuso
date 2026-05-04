@@ -37,7 +37,7 @@ type NodeMetric struct {
 // the chart doesn't have a hole — a flat-line at 0 is honest about
 // "we couldn't read this" while still showing the timestamp.
 func (d *DB) InsertNodeMetric(ctx context.Context, m NodeMetric) error {
-	_, err := d.DB.ExecContext(ctx, `
+	_, err := d.ExecContext(ctx, `
 		INSERT INTO "NodeMetric"
 		  ("node","ts","cpuUsedMilli","cpuCapacityMilli","memUsedBytes","memCapacityBytes","diskAvailBytes","diskCapacityBytes")
 		VALUES (?,?,?,?,?,?,?,?)`,
@@ -92,7 +92,7 @@ func (d *DB) ListNodeMetrics(ctx context.Context, node string, since time.Time) 
 // Called on a slow ticker (e.g. once per sample tick) so the table
 // stays around 7d × 48 samples/day × N nodes.
 func (d *DB) PruneNodeMetricsOlderThan(ctx context.Context, before time.Time) (int64, error) {
-	res, err := d.DB.ExecContext(ctx, `DELETE FROM "NodeMetric" WHERE "ts" < ?`, before.UTC())
+	res, err := d.ExecContext(ctx, `DELETE FROM "NodeMetric" WHERE "ts" < ?`, before.UTC())
 	if err != nil {
 		return 0, fmt.Errorf("prune node metrics: %w", err)
 	}

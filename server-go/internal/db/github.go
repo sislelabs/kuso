@@ -53,7 +53,7 @@ func (d *DB) UpsertGithubInstallation(ctx context.Context, in GithubInstallation
 	if in.RepositoriesJSON == "" {
 		in.RepositoriesJSON = "[]"
 	}
-	_, err := d.DB.ExecContext(ctx, `
+	_, err := d.ExecContext(ctx, `
 INSERT INTO "GithubInstallation" (id, "accountLogin", "accountType", "accountId", "repositoriesJson", "createdAt", "updatedAt")
 VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
@@ -80,7 +80,7 @@ func (d *DB) SetGithubInstallationRepos(ctx context.Context, id int64, repos []G
 	if err != nil {
 		return fmt.Errorf("db: encode repos: %w", err)
 	}
-	res, err := d.DB.ExecContext(ctx, `
+	res, err := d.ExecContext(ctx, `
 UPDATE "GithubInstallation" SET "repositoriesJson" = ?, "updatedAt" = ? WHERE id = ?`,
 		string(body), prismaNow(), id)
 	if err != nil {
@@ -94,7 +94,7 @@ UPDATE "GithubInstallation" SET "repositoriesJson" = ?, "updatedAt" = ? WHERE id
 
 // DeleteGithubInstallation removes an installation row.
 func (d *DB) DeleteGithubInstallation(ctx context.Context, id int64) error {
-	if _, err := d.DB.ExecContext(ctx, `DELETE FROM "GithubInstallation" WHERE id = ?`, id); err != nil {
+	if _, err := d.ExecContext(ctx, `DELETE FROM "GithubInstallation" WHERE id = ?`, id); err != nil {
 		return fmt.Errorf("db: delete github installation: %w", err)
 	}
 	return nil
@@ -152,7 +152,7 @@ func (d *DB) UpsertGithubUserLink(ctx context.Context, link GithubUserLink) erro
 	if link.CreatedAt.IsZero() {
 		link.CreatedAt = now.Time
 	}
-	_, err := d.DB.ExecContext(ctx, `
+	_, err := d.ExecContext(ctx, `
 INSERT INTO "GithubUserLink" (id, "userId", "githubLogin", "githubId", "accessToken", "createdAt", "updatedAt")
 VALUES (?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT("userId") DO UPDATE SET

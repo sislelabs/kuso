@@ -33,7 +33,7 @@ func (d *DB) CreateUser(ctx context.Context, in CreateUserInput) error {
 	if in.RoleID != "" {
 		roleID = in.RoleID
 	}
-	_, err := d.DB.ExecContext(ctx, `
+	_, err := d.ExecContext(ctx, `
 INSERT INTO "User" (id, username, email, "firstName", "lastName", password, "twoFaEnabled", "isActive", "roleId", provider, "createdAt", "updatedAt")
 VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 'local', ?, ?)`,
 		in.ID, in.Username, in.Email, sqlNullable(in.FirstName), sqlNullable(in.LastName),
@@ -91,7 +91,7 @@ func (d *DB) UpdateUser(ctx context.Context, id string, in UpdateUserInput) erro
 	}
 	args = append(args, id)
 	q := `UPDATE "User" SET ` + joinComma(sets) + ` WHERE id = ?`
-	res, err := d.DB.ExecContext(ctx, q, args...)
+	res, err := d.ExecContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("db: update user: %w", err)
 	}
@@ -139,7 +139,7 @@ func (d *DB) DeleteUser(ctx context.Context, id string) error {
 
 // UpdateUserPassword writes a new password hash, bumping updatedAt.
 func (d *DB) UpdateUserPassword(ctx context.Context, id, hash string) error {
-	res, err := d.DB.ExecContext(ctx, `UPDATE "User" SET password = ?, "updatedAt" = ? WHERE id = ?`,
+	res, err := d.ExecContext(ctx, `UPDATE "User" SET password = ?, "updatedAt" = ? WHERE id = ?`,
 		hash, prismaNow(), id)
 	if err != nil {
 		return fmt.Errorf("db: update password: %w", err)

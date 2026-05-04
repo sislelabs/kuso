@@ -41,7 +41,7 @@ const notificationEventCap = 200
 // icon snappy; this one keeps the table from accumulating dead
 // rows on a long-running cluster with low event volume.
 func (d *DB) PruneNotificationEvents(ctx context.Context, before time.Time) (int64, error) {
-	res, err := d.DB.ExecContext(ctx,
+	res, err := d.ExecContext(ctx,
 		`DELETE FROM "NotificationEvent" WHERE "createdAt" < ?`,
 		before.UTC().Format("2006-01-02 15:04:05"),
 	)
@@ -66,7 +66,7 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 	if e.Severity == "" {
 		e.Severity = "info"
 	}
-	if _, err := d.DB.ExecContext(ctx, `
+	if _, err := d.ExecContext(ctx, `
 		INSERT INTO "NotificationEvent" ("type","title","body","severity","project","service","url","extra")
 		VALUES (?,?,?,?,?,?,?,?)`,
 		e.Type, e.Title, e.Body, e.Severity, e.Project, e.Service, e.URL, extraJSON,
@@ -76,7 +76,7 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 	// Prune everything beyond the cap. The id is monotonically
 	// assigned by SQLite so the "newest 200" set is just the highest
 	// 200 ids; delete anything below.
-	if _, err := d.DB.ExecContext(ctx, `
+	if _, err := d.ExecContext(ctx, `
 		DELETE FROM "NotificationEvent"
 		WHERE "id" NOT IN (
 			SELECT "id" FROM "NotificationEvent" ORDER BY "id" DESC LIMIT ?
@@ -147,7 +147,7 @@ func (d *DB) CountUnreadNotificationEvents(ctx context.Context) (int, error) {
 // MarkAllNotificationEventsRead stamps readAt=now() on every unread
 // row. Called when the user opens the bell popover.
 func (d *DB) MarkAllNotificationEventsRead(ctx context.Context) error {
-	_, err := d.DB.ExecContext(ctx, `UPDATE "NotificationEvent" SET "readAt" = CURRENT_TIMESTAMP WHERE "readAt" IS NULL`)
+	_, err := d.ExecContext(ctx, `UPDATE "NotificationEvent" SET "readAt" = CURRENT_TIMESTAMP WHERE "readAt" IS NULL`)
 	if err != nil {
 		return fmt.Errorf("mark all read: %w", err)
 	}

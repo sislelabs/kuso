@@ -111,7 +111,7 @@ func (d *DB) FindUserByID(ctx context.Context, id string) (*User, error) {
 // session is already established at the call site. Callers log and move
 // on.
 func (d *DB) UpdateUserLogin(ctx context.Context, userID, ip string, when time.Time) error {
-	_, err := d.DB.ExecContext(ctx,
+	_, err := d.ExecContext(ctx,
 		`UPDATE "User" SET "lastLogin" = ?, "lastIp" = ?, "updatedAt" = ? WHERE id = ?`,
 		when, ip, when, userID,
 	)
