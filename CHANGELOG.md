@@ -5,10 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [Unreleased]
+## [0.7.12] — 2026-05-04
 
 ### Other
+- Release tooling — CI workflow, dry-run, CHANGELOG, cleaner Makefile ([a59bf1f](https://github.com/sislelabs/kuso/commit/a59bf1f12a25aa0fedb3070f732ce2b1811da247))
 - Install.sh: point users to /settings/github for App setup ([a592663](https://github.com/sislelabs/kuso/commit/a5926636fc0e0ec623f1b98abac191998161e072))
+
+### 🐛 Bug Fixes
+- Fix(release): gate /healthz check behind dry-run too ([2e25a2c](https://github.com/sislelabs/kuso/commit/2e25a2c357ca4daaa02c3a1083b7dca9dcb7a8b4))
 
 ## [0.7.11] — 2026-05-04
 
