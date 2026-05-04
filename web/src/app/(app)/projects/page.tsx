@@ -150,11 +150,14 @@ function ProjectsGrid({
         const services = summary?.services ?? [];
         const envs = summary?.environments ?? [];
         const addons = summary?.addons ?? [];
-        // "Live" = a production env with at least one replica scheduled.
-        // We prefer replicas over readyReplicas because the canvas's
-        // ACTIVE badge uses the same threshold — a service rolling
-        // through readiness probes is still "live" to the user (the
-        // pod exists, the URL routes), it's just not 100% ready yet.
+        // "Live" = a production env that's either:
+        //   - status.ready === true (helm release Deployed + pod up), or
+        //   - status.replicas.ready > 0 (any pod scheduled, even mid-roll)
+        //
+        // The earlier shape used a flat status.replicas number which
+        // the helm-operator never writes — the actual structure mirrors
+        // the canvas: status.replicas = {ready, desired, max}. Without
+        // matching that the counter always read 0.
         const liveServices = services.filter((s) => {
           const fqn = s.metadata.name;
           const prod = envs.find(
@@ -162,11 +165,16 @@ function ProjectsGrid({
           );
           if (!prod) return false;
           const st = prod.status as
-            | { replicas?: number; readyReplicas?: number }
+            | {
+                ready?: boolean;
+                phase?: string;
+                replicas?: { ready?: number; desired?: number; max?: number };
+              }
             | undefined;
-          const replicas = st?.replicas ?? 0;
-          const ready = st?.readyReplicas ?? 0;
-          return replicas > 0 || ready > 0;
+          if (st?.ready) return true;
+          const r = st?.replicas;
+          if ((r?.ready ?? 0) > 0 || (r?.desired ?? 0) > 0) return true;
+          return false;
         }).length;
         return (
           <li key={p.metadata.uid ?? name}>

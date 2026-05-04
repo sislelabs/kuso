@@ -12,6 +12,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
 import { toast } from "sonner";
 import { Save, KeyRound } from "lucide-react";
 
@@ -20,7 +21,38 @@ import { Save, KeyRound } from "lucide-react";
 // buttons — matches the canvas/overlay aesthetic. Avatar lives in the
 // header so the page feels owned by the signed-in user rather than a
 // generic form.
-export default function ProfilePage() {
+// Top-level export wraps the page in an ErrorBoundary so any
+// synchronous render-throw (a downstream component blowing up on a
+// schema mismatch, a base-ui edge case, etc.) shows our own card
+// instead of bubbling up to the Next.js runtime overlay's "This page
+// couldn't load" splash. The earlier in-page error guards only catch
+// React Query failures — they don't catch render exceptions.
+export default function ProfilePageWithBoundary() {
+  return (
+    <ErrorBoundary
+      fallback={
+        <div className="mx-auto max-w-2xl p-6 lg:p-8">
+          <div className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-sm">
+            <p className="font-medium text-[var(--text-primary)]">Something broke on the profile page</p>
+            <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
+              An unexpected error happened while rendering. Try reloading; if it keeps failing,
+              file a bug.
+            </p>
+            <div className="mt-3">
+              <Button size="sm" variant="outline" onClick={() => window.location.reload()}>
+                Reload
+              </Button>
+            </div>
+          </div>
+        </div>
+      }
+    >
+      <ProfilePage />
+    </ErrorBoundary>
+  );
+}
+
+function ProfilePage() {
   const qc = useQueryClient();
   // /api/users/profile is the source of truth for editable identity
   // fields. The session payload only carries username + perms; firstName

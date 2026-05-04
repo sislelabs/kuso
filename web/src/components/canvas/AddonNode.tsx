@@ -30,11 +30,13 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
       onContextMenu={data.__onContext}
       className={cn(
         "w-[220px] rounded-2xl border bg-[var(--bg-elevated)] p-3 transition-colors",
-        "hover:border-[var(--border-strong)]",
-        // border-strong instead of border-subtle so the outline
-        // actually reads against the canvas bg + the new dot grid.
-        // Subtle was nearly invisible after the v0.6.15 visual pass.
-        ready ? "border-[var(--border-strong)]" : "border-amber-500/30 animate-pulse"
+        // Hover wins over the green ready-border so the user gets a
+        // clear "you're targeting this" affordance. Without the
+        // explicit hover-on-ready rule the green stays put and the
+        // hover only nudges the alpha.
+        ready
+          ? "border-emerald-500/30 hover:border-[var(--border-strong)]"
+          : "border-amber-500/30 animate-pulse hover:border-[var(--border-strong)]"
       )}
     >
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
