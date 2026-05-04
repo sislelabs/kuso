@@ -41,10 +41,29 @@ type GithubOAuth struct {
 
 // NewGithubOAuth reads GITHUB_CLIENT_{ID,SECRET,CALLBACKURL,SCOPE} from
 // env and returns nil when not configured.
+//
+// Convenience: a configured kuso-github-app Secret already has the
+// same OAuth credentials kuso-server needs (every GitHub App has both
+// webhook/installation creds AND OAuth client creds). To avoid making
+// the admin paste the same client_id+secret twice, fall back to the
+// GITHUB_APP_CLIENT_{ID,SECRET} keys when the GITHUB_CLIENT_* vars are
+// blank. CALLBACKURL is also auto-derived from KUSO_DOMAIN when missing
+// — admins almost never want to override it past install time.
 func NewGithubOAuth() *GithubOAuth {
-	id := os.Getenv("GITHUB_CLIENT_ID")
-	secret := os.Getenv("GITHUB_CLIENT_SECRET")
+	id := firstNonEmpty(
+		os.Getenv("GITHUB_CLIENT_ID"),
+		os.Getenv("GITHUB_APP_CLIENT_ID"),
+	)
+	secret := firstNonEmpty(
+		os.Getenv("GITHUB_CLIENT_SECRET"),
+		os.Getenv("GITHUB_APP_CLIENT_SECRET"),
+	)
 	cb := os.Getenv("GITHUB_CLIENT_CALLBACKURL")
+	if cb == "" {
+		if domain := os.Getenv("KUSO_DOMAIN"); domain != "" {
+			cb = "https://" + domain + "/api/auth/github/callback"
+		}
+	}
 	if id == "" || secret == "" || cb == "" {
 		return nil
 	}
@@ -59,6 +78,17 @@ func NewGithubOAuth() *GithubOAuth {
 		Scopes:       scopes,
 		Endpoint:     github.Endpoint,
 	}}
+}
+
+// firstNonEmpty returns the first non-empty string from its args. Used
+// to walk a fallback chain of env vars without nesting "if x != \"\"".
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // AuthCodeURL returns the URL the browser should redirect to. state is

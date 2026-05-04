@@ -341,10 +341,14 @@ fi
 
 log "creating kuso-server-secrets"
 kubectl create namespace kuso 2>/dev/null || true
+# KUSO_DOMAIN goes in here too so the server can build OAuth callback
+# URLs without an admin re-pasting it. NewGithubOAuth() autoderives
+# https://${KUSO_DOMAIN}/api/auth/github/callback when it's set.
 kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o yaml \
   --from-literal=KUSO_SESSION_KEY="$SESSION_KEY" \
   --from-literal=JWT_SECRET="$JWT_SECRET" \
   --from-literal=KUSO_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+  --from-literal=KUSO_DOMAIN="$KUSO_DOMAIN" \
   | kubectl apply -f - >/dev/null
 
 # -------- 9b. GitHub App --------
@@ -553,6 +557,23 @@ spec:
   ports:
     - { name: http, port: 80, targetPort: 3000, protocol: TCP }
 ---
+# HTTPS redirect middleware: any plain-HTTP request hitting traefik
+# gets a 308 to the same path on https. Without this, the dashboard
+# loads over HTTP first (no warning, no redirect), users sign in over
+# plaintext until they manually retype the URL. Traefik's
+# RedirectScheme is the standard way; we attach it to the Ingress via
+# the traefik.ingress.kubernetes.io/router.middlewares annotation
+# below.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: kuso-https-redirect
+  namespace: kuso
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -560,6 +581,12 @@ metadata:
   namespace: kuso
   annotations:
     cert-manager.io/cluster-issuer: ${DEFAULT_ISSUER}
+    # Apply the redirect middleware to the HTTP-facing router only.
+    # Traefik names entrypoint-specific routers as <ns>-<ingress>-<host>-<idx>@kubernetes
+    # but the simpler form below applies to all routers backed by
+    # this ingress; the websecure (HTTPS) router won't redirect
+    # since its scheme is already correct.
+    traefik.ingress.kubernetes.io/router.middlewares: kuso-kuso-https-redirect@kubernetescrd
 spec:
   ingressClassName: traefik
   tls:
