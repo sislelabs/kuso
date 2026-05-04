@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.32] — 2026-05-04
+
+### 🐛 Bug Fixes
+- Fix(canvas): zero-replicas wins over stale phase=building (showed yellow on failed services) ([d1449f2](https://github.com/sislelabs/kuso/commit/d1449f2c0556ee206e21868ed8636a2196968c9d))
+
 ## [0.7.31] — 2026-05-04
 
 ### Other
