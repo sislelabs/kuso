@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.18] — 2026-05-04
+
+### 🐛 Bug Fixes
+- Fix(config): /api/auth/methods detects GitHub via App fallback too ([fb6e60d](https://github.com/sislelabs/kuso/commit/fb6e60def648e39e32013e2b092e8c83a44c3605))
+
 ## [0.7.17] — 2026-05-04
 
 ### Other
