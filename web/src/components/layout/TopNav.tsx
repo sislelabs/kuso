@@ -10,14 +10,6 @@ import {
   AvatarImage,
 } from "@/components/ui/avatar";
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
   Popover,
   PopoverContent,
   PopoverTrigger,
@@ -383,123 +375,93 @@ function UserMenu() {
   const canAdmin = perms.includes("user:write");
   const canConfig = perms.includes("config:read");
 
+  // Popover (not DropdownMenu) — base-ui's Menu primitive was the only
+  // thing in the app using that API surface; it had a hydration/portal
+  // edge case that rendered the Next.js "This page couldn't load"
+  // splash on first open. ServersPopover uses Popover successfully on
+  // every page so we mirror that pattern here. Each row is a plain
+  // <Link> or <button>, no special focus-trap logic — the popover
+  // closes via outside-click.
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger className="inline-flex h-8 items-center justify-center rounded-full">
+    <Popover>
+      <PopoverTrigger
+        aria-label="Account menu"
+        className="inline-flex h-8 items-center justify-center rounded-full focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--accent)]"
+      >
         <Avatar className="h-7 w-7 border border-[var(--border-subtle)]">
           {user?.image && <AvatarImage src={user.image} alt={user.name ?? ""} />}
           <AvatarFallback className="bg-[var(--bg-tertiary)] text-[10px] font-medium">
             {initial}
           </AvatarFallback>
         </Avatar>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-60">
-        <DropdownMenuLabel className="flex flex-col gap-0.5">
-          <span className="truncate text-sm font-medium">{user?.name ?? "User"}</span>
-          <span className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-60 p-1">
+        <div className="border-b border-[var(--border-subtle)] px-2 py-1.5">
+          <p className="truncate text-sm font-medium">{user?.name ?? "User"}</p>
+          <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
             {user?.email ?? ""}
-          </span>
-        </DropdownMenuLabel>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          render={
-            <Link href="/settings/profile" className="flex items-center gap-2">
-              <UserIcon className="h-3.5 w-3.5" />
-              Profile
-            </Link>
-          }
-        />
-        <DropdownMenuItem
-          render={
-            <Link href="/settings/tokens" className="flex items-center gap-2">
-              <KeyRound className="h-3.5 w-3.5" />
-              API tokens
-            </Link>
-          }
-        />
-        <DropdownMenuItem
-          render={
-            <Link href="/settings/notifications" className="flex items-center gap-2">
-              <Bell className="h-3.5 w-3.5" />
-              Notifications
-            </Link>
-          }
-        />
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
-          render={
-            <Link href="/settings/nodes" className="flex items-center gap-2">
-              <Server className="h-3.5 w-3.5" />
-              Cluster nodes
-            </Link>
-          }
-        />
-        {canConfig && (
-          <DropdownMenuItem
-            render={
-              <Link href="/settings/config" className="flex items-center gap-2">
-                <Settings className="h-3.5 w-3.5" />
-                Cluster config
-              </Link>
-            }
-          />
-        )}
-        <DropdownMenuItem
-          render={
-            <Link href="/settings/backups" className="flex items-center gap-2">
-              <HardDrive className="h-3.5 w-3.5" />
-              Backups
-            </Link>
-          }
-        />
-        <UpdatesMenuItem />
+          </p>
+        </div>
+        <MenuRow href="/settings/profile" icon={UserIcon}>Profile</MenuRow>
+        <MenuRow href="/settings/tokens" icon={KeyRound}>API tokens</MenuRow>
+        <MenuRow href="/settings/notifications" icon={Bell}>Notifications</MenuRow>
+        <div className="my-1 h-px bg-[var(--border-subtle)]" />
+        <MenuRow href="/settings/nodes" icon={Server}>Cluster nodes</MenuRow>
+        {canConfig && <MenuRow href="/settings/config" icon={Settings}>Cluster config</MenuRow>}
+        <MenuRow href="/settings/backups" icon={HardDrive}>Backups</MenuRow>
+        <UpdatesMenuRow />
         {canAdmin && (
           <>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            <div className="my-1 h-px bg-[var(--border-subtle)]" />
+            <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
               Admin
-            </DropdownMenuLabel>
-            <DropdownMenuItem
-              render={
-                <Link href="/settings/users" className="flex items-center gap-2">
-                  <Users className="h-3.5 w-3.5" />
-                  Users
-                </Link>
-              }
-            />
-            <DropdownMenuItem
-              render={
-                <Link href="/settings/groups" className="flex items-center gap-2">
-                  <UsersRound className="h-3.5 w-3.5" />
-                  Groups
-                </Link>
-              }
-            />
+            </p>
+            <MenuRow href="/settings/users" icon={Users}>Users</MenuRow>
+            <MenuRow href="/settings/groups" icon={UsersRound}>Groups</MenuRow>
           </>
         )}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem
+        <div className="my-1 h-px bg-[var(--border-subtle)]" />
+        <button
+          type="button"
           onClick={() => signOut()}
-          className="flex items-center gap-2 text-[var(--text-secondary)]"
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
         >
           <LogOut className="h-3.5 w-3.5" />
           Sign out
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        </button>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+// MenuRow is a Link with the same hover affordance as a DropdownMenuItem,
+// but it doesn't depend on base-ui's Menu primitive.
+function MenuRow({
+  href,
+  icon: Icon,
+  children,
+}: {
+  href: string;
+  icon: React.ComponentType<{ className?: string }>;
+  children: React.ReactNode;
+}) {
+  return (
+    <Link
+      href={href}
+      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {children}
+    </Link>
   );
 }
 
 // UpdatesMenuItem renders the menu row + a dot when an update is
 // available. Polled with a generous staleTime — the server pulls
 // from GitHub every 6h, no point hitting it from every menu open.
-function UpdatesMenuItem() {
+function UpdatesMenuRow() {
   const v = useQuery<{ needsUpdate?: boolean; latest?: string }>({
     queryKey: ["system", "version"],
-    // 401 here doesn't matter — the AuthGate handles session expiry
-    // separately. Without retry:false the menu would throw the
-    // ApiError into the dropdown's render tree and base-ui's portal
-    // surfaces that as the Next.js "This page couldn't load" splash.
     queryFn: () => api("/api/system/version"),
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
@@ -508,22 +470,21 @@ function UpdatesMenuItem() {
   });
   const needs = !!v.data?.needsUpdate;
   return (
-    <DropdownMenuItem
-      render={
-        <Link href="/settings/updates" className="flex items-center gap-2">
-          <Package className="h-3.5 w-3.5" />
-          Updates
-          {needs && (
-            <span
-              className="ml-auto inline-flex items-center gap-1 rounded-full bg-[var(--accent-subtle)] px-1.5 py-0.5 font-mono text-[9px] text-[var(--accent)]"
-              title={`Update available: ${v.data?.latest ?? ""}`}
-            >
-              <span className="h-1 w-1 rounded-full bg-[var(--accent)]" />
-              new
-            </span>
-          )}
-        </Link>
-      }
-    />
+    <Link
+      href="/settings/updates"
+      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+    >
+      <Package className="h-3.5 w-3.5" />
+      Updates
+      {needs && (
+        <span
+          className="ml-auto inline-flex items-center gap-1 rounded-full bg-[var(--accent-subtle)] px-1.5 py-0.5 font-mono text-[9px] text-[var(--accent)]"
+          title={`Update available: ${v.data?.latest ?? ""}`}
+        >
+          <span className="h-1 w-1 rounded-full bg-[var(--accent)]" />
+          new
+        </span>
+      )}
+    </Link>
   );
 }
