@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.19] — 2026-05-04
+
+### Other
+- Release speed + first-OAuth-admin + auto-LE-prod + aubergine palette ([78c8182](https://github.com/sislelabs/kuso/commit/78c8182914596bc63b1ef155fa6f45bfd9a1aae1))
+
+### 🧹 Chores
+- Chore: track build/{updater,backup}/ Dockerfile sources (was being swept by /build/ ignore) ([ea5e20f](https://github.com/sislelabs/kuso/commit/ea5e20f79e92c9f9199863e477eba9f9e44fc47e))
+
 ## [0.7.18] — 2026-05-04
 
 ### 🐛 Bug Fixes
