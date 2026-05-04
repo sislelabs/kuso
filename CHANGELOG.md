@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.39] — 2026-05-04
+
+### ✨ Features
+- Feat(builds): supersede in-flight builds when a new one starts ([7e03acf](https://github.com/sislelabs/kuso/commit/7e03acf442713328ddd49ae5d07354e5822c9339))
+
 ## [0.7.38] — 2026-05-04
 
 ### 🔨 Refactors
