@@ -1,34 +1,64 @@
 #!/usr/bin/env bash
 # release.sh — cut a kuso-server release.
 #
+# A release does ONE thing: produce a versioned bundle (image on ghcr +
+# CLI binaries + crds.yaml + release.json) and publish a GitHub
+# release. It does NOT roll any cluster. Live kuso instances poll the
+# GH releases endpoint and pull themselves forward through their own
+# in-cluster updater (`kuso upgrade`, the dashboard's Update button,
+# or the auto-update setting). That keeps the release flow agnostic
+# about who's running kuso and where.
+#
 # What it does (in order):
 #   1. validates VERSION (vX.Y.Z) and git working tree (clean unless
 #      KUSO_RELEASE_ALLOW_DIRTY=1).
 #   2. rewrites server-go/internal/version/VERSION,
-#      deploy/server-go.yaml, and hack/install.sh to the new tag.
-#   3. builds the web app (pnpm --dir web build) so the embedded
-#      _next bundle is up to date.
+#      deploy/server-go.yaml, hack/install.sh, cli/.../CLI_VERSION
+#      to the new tag.
+#   2b. regenerates CHANGELOG.md via git-cliff (if installed).
+#   3. builds the web app (pnpm/npm) so the embedded _next bundle
+#      is up to date.
+#   3b. syncs hack/install*.sh into the server-go embed dir.
 #   4. cross-builds the server image for linux/amd64 via
 #      `docker buildx --platform linux/amd64 --push`. The --platform
 #      flag was the historical footgun: a default `docker build` on
 #      a Mac produces arm64 and silently breaks every amd64 cluster.
-#   5. (optional, KUSO_RELEASE_ROLL=1) ssh into the configured
-#      cluster and `kubectl set image` to roll the deployment.
-#   6. (optional, KUSO_RELEASE_COMMIT=1) git commit the bumped
-#      version files.
+#   4b. emits dist/release.json + dist/crds.yaml.
+#   4c. cross-builds CLI binaries (darwin/linux × amd64/arm64).
+#   4d. (KUSO_RELEASE_GH=1) cuts the GitHub release with all assets.
+#   5. (DEV ONLY, KUSO_RELEASE_ROLL=1) ssh into the configured cluster
+#      and `kubectl set image`. Used by `make local-roll` for the dev
+#      test cluster; production clusters self-update via the updater
+#      and should NEVER be in this path.
+#   6. (KUSO_RELEASE_COMMIT=1) git commit + tag + push the version
+#      bumps so install.sh-on-main and KUSO_REF=vX.Y.Z both resolve.
 #
 # Usage:
-#   ./hack/release.sh v0.3.5
-#   KUSO_RELEASE_ROLL=1 ./hack/release.sh v0.3.5
-#   KUSO_RELEASE_ROLL=1 KUSO_RELEASE_COMMIT=1 ./hack/release.sh v0.3.5
+#   ./hack/release.sh v0.7.13
+#   KUSO_RELEASE_COMMIT=1 KUSO_RELEASE_GH=1 KUSO_RELEASE_CLI=1 ./hack/release.sh v0.7.13
+#   ./hack/release.sh --dry-run v0.7.13
 #
 # Tunables (env):
-#   KUSO_RELEASE_HOST    ssh target for rollout (default: kuso.sislelabs.com)
-#   KUSO_RELEASE_USER    ssh user (default: root)
-#   KUSO_RELEASE_KEY     ssh key path (default: ~/.ssh/keys/hetzner)
-#   KUSO_RELEASE_NS      kube namespace (default: kuso)
-#   KUSO_RELEASE_DEPLOY  deployment name (default: kuso-server)
-#   KUSO_RELEASE_IMAGE   image repo (default: ghcr.io/sislelabs/kuso-server-go)
+#   KUSO_RELEASE_GH=1         publish a GH release with all assets
+#   KUSO_RELEASE_CLI=1        cross-build the CLI binaries
+#   KUSO_RELEASE_COMMIT=1     git commit + tag + push the bumps
+#   KUSO_RELEASE_PUSH=0       skip the git push (for local testing)
+#   KUSO_RELEASE_OPERATOR=1   force operator image rebuild even if
+#                             operator/ didn't change
+#
+#   Local dev escape hatch (almost never use these):
+#   KUSO_RELEASE_ROLL=1       ssh + kubectl set image after publish.
+#                             Bypasses the self-update path; use only
+#                             when iterating on the updater itself.
+#   KUSO_RELEASE_HOST         ssh target for ROLL (default: kuso.sislelabs.com)
+#   KUSO_RELEASE_USER         ssh user (default: root)
+#   KUSO_RELEASE_KEY          ssh key (default: ~/.ssh/keys/hetzner)
+#   KUSO_RELEASE_NS           kube namespace (default: kuso)
+#   KUSO_RELEASE_DEPLOY       deployment name (default: kuso-server)
+#   KUSO_RELEASE_IMAGE        image repo (default: ghcr.io/sislelabs/kuso-server-go)
+#   KUSO_RELEASE_SKIP_BUILD=1 skip docker push (paired with ROLL when
+#                             you just want to flip a cluster to an
+#                             already-released tag)
 
 set -euo pipefail
 

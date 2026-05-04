@@ -6,12 +6,12 @@
 # code so behavior stays consistent: same image build, same CLI
 # cross-builds, same GH release shape.
 #
-# Why no rollout step? `make ship` rolls the cluster via SSH using the
-# operator's SSH key, which only lives on the developer's laptop. We
-# could give Actions an SSH secret, but pushing rollout responsibility
-# into CI couples cluster state to GitHub uptime + adds another path
-# for a stuck rollout to land. Rolling stays manual; the workflow only
-# guarantees the artifacts exist + are reachable.
+# A release publishes artifacts. It does NOT touch any kuso cluster.
+# Each kuso install pulls itself forward through its in-cluster
+# updater (`kuso upgrade`, dashboard Update button, or auto-update).
+# Release notes go on the GH release, instances watch GH releases.
+# Same path your dev test box, customer A's box, and customer B's box
+# all take.
 
 name: release
 

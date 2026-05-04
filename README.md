@@ -54,6 +54,25 @@ KUSO_INSECURE=1 kuso login --api https://kuso.example.com -u admin
 
 After flipping the instance to LE prod, drop the `KUSO_INSECURE=1`.
 
+## Self-update
+
+kuso watches its own GitHub releases. When a new tag ships, every
+running instance picks it up:
+
+```bash
+kuso upgrade                     # update to latest
+kuso upgrade --version v0.7.13   # pin to a specific tag (rollback / hotfix)
+kuso upgrade --check             # see current/latest, don't apply
+```
+
+Or click **Settings → Updates** in the dashboard. The updater is an
+in-cluster Job that swaps the kuso-server image, rolls the operator
+when applicable, and applies any new CRDs. ~2 minutes typically.
+
+There's no rollout-from-laptop step in the release flow — releasing
+publishes a GH release, and every kuso install pulls itself forward
+on its own schedule.
+
 ## Repo layout
 
 | Path         | What it is                                                                |
