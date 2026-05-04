@@ -56,8 +56,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.7.16}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.7.16}"
+KUSO_VERSION="${KUSO_VERSION:-v0.7.18}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.7.18}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-staging}"
 
@@ -341,10 +341,14 @@ fi
 
 log "creating kuso-server-secrets"
 kubectl create namespace kuso 2>/dev/null || true
+# KUSO_DOMAIN goes in here too so the server can build OAuth callback
+# URLs without an admin re-pasting it. NewGithubOAuth() autoderives
+# https://${KUSO_DOMAIN}/api/auth/github/callback when it's set.
 kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o yaml \
   --from-literal=KUSO_SESSION_KEY="$SESSION_KEY" \
   --from-literal=JWT_SECRET="$JWT_SECRET" \
   --from-literal=KUSO_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
+  --from-literal=KUSO_DOMAIN="$KUSO_DOMAIN" \
   | kubectl apply -f - >/dev/null
 
 # -------- 9b. GitHub App --------
@@ -553,6 +557,23 @@ spec:
   ports:
     - { name: http, port: 80, targetPort: 3000, protocol: TCP }
 ---
+# HTTPS redirect middleware: any plain-HTTP request hitting traefik
+# gets a 308 to the same path on https. Without this, the dashboard
+# loads over HTTP first (no warning, no redirect), users sign in over
+# plaintext until they manually retype the URL. Traefik's
+# RedirectScheme is the standard way; we attach it to the Ingress via
+# the traefik.ingress.kubernetes.io/router.middlewares annotation
+# below.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: kuso-https-redirect
+  namespace: kuso
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -560,6 +581,12 @@ metadata:
   namespace: kuso
   annotations:
     cert-manager.io/cluster-issuer: ${DEFAULT_ISSUER}
+    # Apply the redirect middleware to the HTTP-facing router only.
+    # Traefik names entrypoint-specific routers as <ns>-<ingress>-<host>-<idx>@kubernetes
+    # but the simpler form below applies to all routers backed by
+    # this ingress; the websecure (HTTPS) router won't redirect
+    # since its scheme is already correct.
+    traefik.ingress.kubernetes.io/router.middlewares: kuso-kuso-https-redirect@kubernetescrd
 spec:
   ingressClassName: traefik
   tls:
@@ -573,6 +600,57 @@ EOF
 
 kubectl wait --for=condition=Available --timeout=180s \
   deployment/kuso-server -n kuso
+
+# -------- 11b. auto-flip to LE prod --------
+#
+# We deliberately ship staging first (line 62) — staging has loose
+# rate limits, so misconfigured DNS doesn't burn your prod quota for
+# the week. But once staging issues successfully, DNS is right and
+# we should hand the user a real cert. Otherwise EVERY new install
+# starts with a browser warning, which is a paper cut every operator
+# eventually fixes manually.
+#
+# Skipped when KUSO_LE_ENV=prod (already there) or
+# KUSO_LE_AUTO_FLIP=0 (escape hatch).
+if [[ "$KUSO_LE_ENV" == "staging" && "${KUSO_LE_AUTO_FLIP:-1}" == "1" ]]; then
+  log "waiting for LE staging cert to validate before flipping to prod"
+  STAGING_OK=0
+  for i in $(seq 1 30); do
+    READY=$(kubectl get certificate -n kuso kuso-server-tls \
+      -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+    if [[ "$READY" == "True" ]]; then
+      STAGING_OK=1
+      break
+    fi
+    sleep 4
+  done
+  if [[ "$STAGING_OK" == "1" ]]; then
+    log "staging cert valid — flipping to LE prod"
+    kubectl -n kuso annotate ingress kuso-server \
+      cert-manager.io/cluster-issuer=letsencrypt-prod --overwrite >/dev/null
+    kubectl -n kuso delete secret kuso-server-tls --ignore-not-found >/dev/null
+    # Wait for the prod cert to land. ACME http-01 + http propagation
+    # is usually <30s on a healthy box; bound at 2min.
+    PROD_OK=0
+    for i in $(seq 1 30); do
+      READY=$(kubectl get certificate -n kuso kuso-server-tls \
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+      if [[ "$READY" == "True" ]]; then
+        PROD_OK=1
+        break
+      fi
+      sleep 4
+    done
+    if [[ "$PROD_OK" == "1" ]]; then
+      log "LE prod cert active"
+      KUSO_LE_ENV="prod"   # so the summary doesn't print the staging warning
+    else
+      warn "prod cert hasn't validated within 2min — leaving on prod issuer; check 'kubectl describe certificate -n kuso kuso-server-tls'"
+    fi
+  else
+    warn "staging cert didn't validate — leaving everything on staging"
+  fi
+fi
 
 # -------- 12. summary --------
 echo

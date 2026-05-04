@@ -150,12 +150,20 @@ VALUES (?, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]
 }
 
 // PromoteUserToAdminIfNoAdmin atomically checks "does the cluster
-// have ANY admin-group member?" and, if not, attaches userID to
-// the admin group. Used by the login flow as a disaster-recovery
-// path: even if the seed admin row was deleted, the next OAuth
-// login can re-establish administration.
+// have any non-seed admin-group member?" and, if not, attaches
+// userID to the admin group. Used by the login flow as a
+// disaster-recovery path AND as the first-real-human onboarding:
+// the install seeds a local admin account for password recovery,
+// but the first person who actually OAuth-logs-in should also be
+// admin — they're the operator. Subsequent OAuth users land in
+// pending until granted explicitly.
 //
-// Returns true when promotion happened, false when an admin
+// "Non-seed" means: any admin whose provider is NOT 'local', OR
+// whose email is set AND not the synthetic seed email
+// ($KUSO_ADMIN_EMAIL). Once a real human is admin, this returns
+// false and pending-onboarding takes over.
+//
+// Returns true when promotion happened, false when a real admin
 // already exists.
 func (d *DB) PromoteUserToAdminIfNoAdmin(ctx context.Context, userID string) (bool, error) {
 	tx, err := d.DB.BeginTx(ctx, nil)
@@ -164,11 +172,17 @@ func (d *DB) PromoteUserToAdminIfNoAdmin(ctx context.Context, userID string) (bo
 	}
 	defer tx.Rollback()
 
+	// Count admins that look like real humans. A seed local admin
+	// (provider='local' AND username='admin') is excluded so the
+	// first OAuth login still triggers promotion. Once any non-seed
+	// admin exists — OAuth or local — promotion stops.
 	var n int
 	if err := tx.QueryRowContext(ctx, `
 SELECT COUNT(*) FROM "_UserToUserGroup" m
 JOIN "UserGroup" g ON g.id = m."B"
-WHERE g."instanceRole" = 'admin'`).Scan(&n); err != nil {
+JOIN "User" u ON u.id = m."A"
+WHERE g."instanceRole" = 'admin'
+  AND NOT (u.provider = 'local' AND u.username = 'admin')`).Scan(&n); err != nil {
 		return false, fmt.Errorf("db: promote: count admins: %w", err)
 	}
 	if n > 0 {

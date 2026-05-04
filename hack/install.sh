@@ -601,6 +601,57 @@ EOF
 kubectl wait --for=condition=Available --timeout=180s \
   deployment/kuso-server -n kuso
 
+# -------- 11b. auto-flip to LE prod --------
+#
+# We deliberately ship staging first (line 62) — staging has loose
+# rate limits, so misconfigured DNS doesn't burn your prod quota for
+# the week. But once staging issues successfully, DNS is right and
+# we should hand the user a real cert. Otherwise EVERY new install
+# starts with a browser warning, which is a paper cut every operator
+# eventually fixes manually.
+#
+# Skipped when KUSO_LE_ENV=prod (already there) or
+# KUSO_LE_AUTO_FLIP=0 (escape hatch).
+if [[ "$KUSO_LE_ENV" == "staging" && "${KUSO_LE_AUTO_FLIP:-1}" == "1" ]]; then
+  log "waiting for LE staging cert to validate before flipping to prod"
+  STAGING_OK=0
+  for i in $(seq 1 30); do
+    READY=$(kubectl get certificate -n kuso kuso-server-tls \
+      -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+    if [[ "$READY" == "True" ]]; then
+      STAGING_OK=1
+      break
+    fi
+    sleep 4
+  done
+  if [[ "$STAGING_OK" == "1" ]]; then
+    log "staging cert valid — flipping to LE prod"
+    kubectl -n kuso annotate ingress kuso-server \
+      cert-manager.io/cluster-issuer=letsencrypt-prod --overwrite >/dev/null
+    kubectl -n kuso delete secret kuso-server-tls --ignore-not-found >/dev/null
+    # Wait for the prod cert to land. ACME http-01 + http propagation
+    # is usually <30s on a healthy box; bound at 2min.
+    PROD_OK=0
+    for i in $(seq 1 30); do
+      READY=$(kubectl get certificate -n kuso kuso-server-tls \
+        -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+      if [[ "$READY" == "True" ]]; then
+        PROD_OK=1
+        break
+      fi
+      sleep 4
+    done
+    if [[ "$PROD_OK" == "1" ]]; then
+      log "LE prod cert active"
+      KUSO_LE_ENV="prod"   # so the summary doesn't print the staging warning
+    else
+      warn "prod cert hasn't validated within 2min — leaving on prod issuer; check 'kubectl describe certificate -n kuso kuso-server-tls'"
+    fi
+  else
+    warn "staging cert didn't validate — leaving everything on staging"
+  fi
+fi
+
 # -------- 12. summary --------
 echo
 log "kuso is up"

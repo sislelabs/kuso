@@ -52,7 +52,7 @@
  *   #AFBBF2  periwinkle        — primary/accent (dark) + info
  *   #941B0C  deep red          — destructive (both modes)
  *   #5B5941  warm olive        — secondary text / borders (dark)
- *   #011502  near-black green  — dark mode base background
+ *   #271F30  aubergine         — dark mode base background
  *
  * Neutrals are warmed off-whites in light mode and a green-tinted
  * near-black ladder in dark mode so the brand colors don't feel
@@ -63,7 +63,7 @@
   --bg-secondary: #F4F3EC;
   --bg-tertiary: #ECEAE0;
   --bg-elevated: #FFFFFF;
-  --bg-inverse: #011502;
+  --bg-inverse: #271F30;
   --text-primary: #1A1D2E;
   --text-secondary: #4A4F66;
   --text-tertiary: #8A8E9F;
@@ -118,50 +118,56 @@
 }
 
 .dark {
-  --bg-primary: #011502;
-  --bg-secondary: #0A1F0C;
-  --bg-tertiary: #142A17;
-  --bg-elevated: #1B3320;
+  /* Dark-mode palette is built around #271F30 — a deep aubergine /
+     purple-grey ground rather than the original near-black green.
+     Tonal scale steps lift toward a warm midtone (~#A9A0B2) so text
+     stays comfortable on the dark base, with periwinkle (#AFBBF2)
+     kept as the accent — it pops cleanly on aubergine, same way
+     it did on green. */
+  --bg-primary: #271F30;
+  --bg-secondary: #312738;
+  --bg-tertiary: #3B3142;
+  --bg-elevated: #473C4F;
   --bg-inverse: #FBFBF7;
   --text-primary: #ECEAE0;
-  --text-secondary: #ACBEA3;
-  --text-tertiary: #6F8270;
-  --text-inverse: #011502;
+  --text-secondary: #A9A0B2;
+  --text-tertiary: #7B7283;
+  --text-inverse: #271F30;
   --accent: #AFBBF2;
   --accent-hover: #C5CDF6;
   --accent-subtle: rgba(175, 187, 242, 0.14);
-  --border-default: #1F3A24;
-  --border-subtle: #163020;
+  --border-default: #43394C;
+  --border-subtle: #352C3D;
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
 
-  --background: #011502;
+  --background: #271F30;
   --foreground: #ECEAE0;
-  --card: #1B3320;
+  --card: #473C4F;
   --card-foreground: #ECEAE0;
-  --popover: #1B3320;
+  --popover: #473C4F;
   --popover-foreground: #ECEAE0;
   --primary: #AFBBF2;
-  --primary-foreground: #011502;
-  --secondary: #0A1F0C;
+  --primary-foreground: #271F30;
+  --secondary: #312738;
   --secondary-foreground: #ECEAE0;
-  --muted: #142A17;
-  --muted-foreground: #ACBEA3;
-  --accent-ui: #142A17;
+  --muted: #3B3142;
+  --muted-foreground: #A9A0B2;
+  --accent-ui: #3B3142;
   --accent-foreground: #ECEAE0;
   --destructive: #C9382A;
-  --border: #1F3A24;
-  --input: #142A17;
+  --border: #43394C;
+  --input: #3B3142;
   --ring: #AFBBF2;
 
-  --sidebar: #0A1F0C;
+  --sidebar: #312738;
   --sidebar-foreground: #ECEAE0;
   --sidebar-primary: #AFBBF2;
-  --sidebar-primary-foreground: #011502;
-  --sidebar-accent: #142A17;
+  --sidebar-primary-foreground: #271F30;
+  --sidebar-accent: #3B3142;
   --sidebar-accent-foreground: #ECEAE0;
-  --sidebar-border: #1F3A24;
+  --sidebar-border: #43394C;
   --sidebar-ring: #AFBBF2;
 
   /* Dark-mode chart palette: same hues, lifted for legibility on

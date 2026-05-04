@@ -239,18 +239,22 @@ elif [[ -f cliff.toml ]]; then
   warn "cliff.toml present but git-cliff not on PATH — skipping CHANGELOG regen (brew install git-cliff)"
 fi
 
-# ---- 3. web build --------------------------------------------------
+# ---- 3. web build (only when local-rolling) ------------------------
+#
+# The Dockerfile's first stage runs `npm ci && next build` itself, so
+# the local web build was duplicated work for every `make ship` —
+# 30-45s extra wall time, identical bytes. We only need a local build
+# when KUSO_RELEASE_ROLL=1 wants to set the deploy/*.yaml's image tag
+# AND something embeds web from local disk (it doesn't, but keeping
+# the door open). For the standard ship path, skip entirely.
 
-if [[ -d web ]]; then
-  log "building web"
+if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]] && [[ -d web ]]; then
+  log "building web (local-roll path)"
   if [[ "$DRY_RUN" == "1" ]]; then
     dry "(cd web && (pnpm build || npm run build)) → server-go/internal/web/dist/"
   elif command -v pnpm >/dev/null 2>&1; then
     (cd web && pnpm build >/dev/null) || fail "web build failed (pnpm)"
   elif command -v npm >/dev/null 2>&1; then
-    # CI path: web/ is npm-managed (package-lock.json), so npm is what
-    # GH Actions has wired up after `npm ci`. `npm run build` calls the
-    # same `next build` script that `pnpm build` does.
     (cd web && npm run build --silent >/dev/null) || fail "web build failed (npm)"
   else
     warn "neither pnpm nor npm on PATH — assuming web/dist is already current"
@@ -446,23 +450,42 @@ log "wrote ${DIST_DIR}/release.json"
 
 KUSO_RELEASE_CLI="${KUSO_RELEASE_CLI:-1}"
 if [[ "${KUSO_RELEASE_CLI}" == "1" ]] && command -v go >/dev/null 2>&1; then
-  log "cross-building CLI binaries (darwin/linux × amd64/arm64)"
+  log "cross-building CLI binaries (darwin/linux × amd64/arm64) in parallel"
   CLI_LDFLAGS="-X kuso/cmd/kusoCli/version.ldflagsVersion=${VERSION}"
   if [[ "$DRY_RUN" == "1" ]]; then
     for target in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
       dry "(cd cli && GOOS=${target%-*} GOARCH=${target#*-} go build -ldflags='$CLI_LDFLAGS' -o ${DIST_DIR}/kuso-${target} ./cmd)"
     done
   else
-  for target in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
-    GOOS="${target%-*}"
-    GOARCH="${target#*-}"
-    out="${DIST_DIR}/kuso-${target}"
-    (cd cli && GOOS="$GOOS" GOARCH="$GOARCH" \
-        go build -ldflags="$CLI_LDFLAGS" -o "$out" ./cmd) \
-      || fail "CLI build failed for ${target}"
-  done
-  ls -lh "$DIST_DIR"/kuso-* | awk '{print "    " $5 "  " $9}'
-  fi  # close the dry-run branch
+    # Fan out the four targets concurrently. They have no shared
+    # state and Go's build cache is per-target (different GOOS+
+    # GOARCH key into different cache subtrees), so on a multi-core
+    # box wall-clock drops from ~4× to ~1.1×. PIDs collected so we
+    # can fail loudly if any single target errored.
+    declare -a build_pids=()
+    for target in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
+      GOOS="${target%-*}"
+      GOARCH="${target#*-}"
+      out="${DIST_DIR}/kuso-${target}"
+      (
+        cd cli && GOOS="$GOOS" GOARCH="$GOARCH" \
+          go build -ldflags="$CLI_LDFLAGS" -o "$out" ./cmd
+      ) &
+      build_pids+=("$!:$target")
+    done
+    fail_targets=()
+    for entry in "${build_pids[@]}"; do
+      pid="${entry%%:*}"
+      tgt="${entry##*:}"
+      if ! wait "$pid"; then
+        fail_targets+=("$tgt")
+      fi
+    done
+    if [[ ${#fail_targets[@]} -gt 0 ]]; then
+      fail "CLI build failed for: ${fail_targets[*]}"
+    fi
+    ls -lh "$DIST_DIR"/kuso-* | awk '{print "    " $5 "  " $9}'
+  fi
 else
   warn "go not on PATH (or KUSO_RELEASE_CLI=0) — skipping CLI binaries; install-cli.sh will fall back to source"
 fi
