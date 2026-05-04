@@ -100,14 +100,12 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       data-node-context
       onContextMenu={data.__onContext}
       className={cn(
-        // Fixed height (6 × 24px grid units = 144px) so the new
-        // build-state line fits without losing the URL/replicas rows.
-        // Service-vs-addon top alignment still holds since both snap
-        // to the canvas's 24px grid.
+        // Fixed height (5 × 24px grid units = 120px). Footer packs
+        // replicas + build line on one row, so we don't need the
+        // extra cell that the previous standalone build line ate.
         // border-2 (vs border-1) so status hue (green/amber/red) is
-        // unambiguously visible at canvas zoom levels — same fix as
-        // AddonNode.
-        "group flex h-[144px] w-[280px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
+        // unambiguously visible at canvas zoom levels.
+        "group flex h-[120px] w-[280px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
         "hover:border-[var(--border-strong)]",
         (status === "building" || status === "deploying") &&
           "border-[var(--building)]/70 animate-pulse",
@@ -121,11 +119,12 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
       <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
 
-      {/* Header row: runtime icon + name + uptime age. The
-          DeployStatusPill ("ACTIVE") was removed — running state is
-          already encoded by the green border + the replica dot, so
-          the pill was redundant noise. Uptime tells you something
-          new: how long this revision has been live. */}
+      {/* Header row: runtime icon + name + uptime age. Uptime sits
+          on the same row as the name for fast scanning ("how long
+          has this revision been live?" is asked at the same time as
+          "what is this service?"). One size up so it's legible at
+          canvas zoom. The build line + replicas split the footer
+          row instead. */}
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-2 truncate text-sm font-medium">
           <RuntimeIcon runtime={data.service.spec.runtime} />
@@ -145,24 +144,24 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         )}
       </div>
 
-      {/* Build line: SHA · branch · status check. Tells you what
-          code is currently running and whether the latest push
-          stuck. Only renders when we actually have a build for
-          this service — first-deploy services skip it cleanly. */}
-      <BuildLine build={data.latestBuild} />
+      {/* Spacer pushes the footer to the bottom of the fixed-height
+          card so the URL row stays glued to the header above. */}
+      <div className="flex-1" />
 
-      {/* Footer: replicas (live/desired) + sleep badge if applicable */}
-      <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2 font-mono text-[10px]">
+      {/* Footer row: replicas left, build line right (or sleep badge
+          if applicable). One row, scannable corners — left tells you
+          health, right tells you what code is running. */}
+      <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2 font-mono text-[10px]">
         <ReplicasBadge replicas={replicas} status={status} />
-        {status === "sleeping" && <SleepBadge />}
+        {status === "sleeping" ? <SleepBadge /> : <BuildLine build={data.latestBuild} />}
       </div>
     </div>
   );
 }
 
 // BuildLine renders a one-row build summary on the canvas card —
-// "main@a4b2f1c · 3h · ✓". Compact enough to live above the footer
-// without bumping the node height past one grid cell. Click on the
+// "main@a4b2f1c · ✓". Lives in the footer alongside ReplicasBadge,
+// so left = health, right = what code is running. Click on the
 // node still opens the overlay where the full Deployments tab
 // lives; this is just glance info.
 function BuildLine({ build }: { build?: BuildSummary }) {
@@ -170,9 +169,6 @@ function BuildLine({ build }: { build?: BuildSummary }) {
   const sha = (build.commitSha ?? "").slice(0, 7);
   const branch = build.branch || "main";
   const status = (build.status ?? "").toLowerCase();
-  // Most useful timestamp: when the latest build finished. Falls
-  // back to startedAt for in-flight builds, then nothing.
-  const ts = build.finishedAt || build.startedAt || "";
   // Status glyph + color via the shared token vocabulary so it
   // matches the canvas border state for the same condition.
   let glyph = "·";
@@ -188,7 +184,7 @@ function BuildLine({ build }: { build?: BuildSummary }) {
     cls = "text-[var(--building)]";
   }
   return (
-    <p className="mt-1 truncate font-mono text-[10px] text-[var(--text-tertiary)]">
+    <span className="truncate text-[var(--text-tertiary)]">
       <span className="text-[var(--text-secondary)]">{branch}</span>
       {sha && (
         <>
@@ -196,10 +192,9 @@ function BuildLine({ build }: { build?: BuildSummary }) {
           <span className="text-[var(--text-secondary)]">{sha}</span>
         </>
       )}
-      {ts && <> · {relativeAge(ts)}</>}
       {" "}
       <span className={cn("ml-0.5", cls)}>{glyph}</span>
-    </p>
+    </span>
   );
 }
 
@@ -275,7 +270,7 @@ function UptimeBadge({
   return (
     <span
       title={`Last deployed at ${ts}`}
-      className="shrink-0 font-mono text-[10px] text-[var(--text-tertiary)]"
+      className="shrink-0 font-mono text-xs text-[var(--text-secondary)]"
     >
       {relativeAge(ts)}
     </span>
