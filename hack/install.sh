@@ -492,7 +492,15 @@ elif [[ -n "${KUSO_GITHUB_APP_ENV:-}" ]]; then
   gh_seed_from_env_file "$KUSO_GITHUB_APP_ENV" "$KUSO_GITHUB_APP_PEM"
 elif [[ -r /etc/kuso/github-app.env && -r /etc/kuso/github-app.pem ]]; then
   # Re-install: pick up existing credentials saved by an earlier wizard run.
-  log "found existing /etc/kuso/github-app.{env,pem} — reseeding"
+  # We surface the App slug + ID so it's obvious *which* App is being used —
+  # otherwise a fresh install on a recycled box silently inherits whatever
+  # GitHub identity was there before, which is a surprise for both UX
+  # (wrong org listed) and security (orphan creds you forgot about).
+  EXISTING_SLUG="$(grep -E '^APP_SLUG=' /etc/kuso/github-app.env | cut -d= -f2- || true)"
+  EXISTING_ID="$(grep -E '^APP_ID=' /etc/kuso/github-app.env | cut -d= -f2- || true)"
+  warn "reusing existing GitHub App at /etc/kuso/github-app.{env,pem}"
+  warn "  slug=${EXISTING_SLUG:-?}  id=${EXISTING_ID:-?}"
+  warn "  to start fresh: rm /etc/kuso/github-app.{env,pem} and rerun with --github-wizard"
   gh_seed_from_env_file /etc/kuso/github-app.env /etc/kuso/github-app.pem
 fi
 

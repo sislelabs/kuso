@@ -8,9 +8,11 @@
 package kusoApi
 
 import (
+	"crypto/tls"
 	_ "embed"
 	"errors"
 	"net/url"
+	"os"
 	"strings"
 
 	"github.com/go-resty/resty/v2"
@@ -72,9 +74,17 @@ func (k *KusoClient) SetApiUrl(apiURL, bearerToken string) {
 	}
 
 	ua := "kuso-cli/" + strings.TrimSpace(embeddedVersion)
-	k.client = resty.New().
-		SetBaseURL(k.baseURL).
-		R().
+	rc := resty.New().SetBaseURL(k.baseURL)
+	// Fresh installs default to LE *staging* certs — the browser warns
+	// and Go's http.Client outright rejects. We honor KUSO_INSECURE=1
+	// so the same `kuso login …` shown in the install footer actually
+	// works against a brand-new box, without requiring the user to
+	// figure out cert plumbing on day one. Off by default; once the
+	// instance is flipped to LE prod, unset it.
+	if v := strings.TrimSpace(os.Getenv("KUSO_INSECURE")); v == "1" || strings.EqualFold(v, "true") {
+		rc = rc.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
+	}
+	k.client = rc.R().
 		SetAuthScheme("Bearer").
 		SetAuthToken(bearerToken).
 		SetHeader("Host", k.host).
