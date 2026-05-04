@@ -382,7 +382,8 @@ function BackupsTab({ project, addon }: { project: string; addon: string }) {
     refetchInterval: 30_000,
   });
   const restore = useMutation({
-    mutationFn: (key: string) => restoreBackup(project, addon, key),
+    mutationFn: ({ key, into }: { key: string; into?: string }) =>
+      restoreBackup(project, addon, key, into),
     onSuccess: (res) => {
       toast.success(`Restore job started: ${res.job}`);
       qc.invalidateQueries({ queryKey: ["addons", project, addon, "backups"] });
@@ -390,6 +391,13 @@ function BackupsTab({ project, addon }: { project: string; addon: string }) {
     onError: (e) => toast.error(e instanceof Error ? e.message : "Restore failed"),
   });
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
+  // Pull every postgres addon in the project so the user can pick a
+  // non-destructive restore target. Postgres-only because the
+  // existing restore Job assumes pg_dump format.
+  const allAddons = useAddons(project);
+  const siblingAddons = (allAddons.data ?? []).filter(
+    (a) => a.metadata.name !== addonCRName(project, addon) && a.spec.kind === "postgres"
+  );
 
   if (list.isPending) {
     return <Skeleton className="m-5 h-40" />;
@@ -477,9 +485,11 @@ function BackupsTab({ project, addon }: { project: string; addon: string }) {
       <ConfirmRestore
         item={sorted.find((b) => b.key === confirmKey) ?? null}
         pending={restore.isPending}
+        sourceAddon={addon}
+        siblings={siblingAddons.map((a) => addonShort(project, a.metadata.name))}
         onCancel={() => setConfirmKey(null)}
-        onConfirm={(key) => {
-          restore.mutate(key);
+        onConfirm={(key, into) => {
+          restore.mutate({ key, into });
           setConfirmKey(null);
         }}
       />
@@ -487,17 +497,38 @@ function BackupsTab({ project, addon }: { project: string; addon: string }) {
   );
 }
 
+// addonCRName + addonShort mirror the server's CRName/ShortName
+// helpers so we can map between "<project>-<addon>" CR names and the
+// short user-facing names.
+function addonCRName(project: string, addon: string): string {
+  return addon.startsWith(project + "-") ? addon : `${project}-${addon}`;
+}
+function addonShort(project: string, addonCRName: string): string {
+  const prefix = project + "-";
+  return addonCRName.startsWith(prefix) ? addonCRName.slice(prefix.length) : addonCRName;
+}
+
 function ConfirmRestore({
   item,
   pending,
+  sourceAddon,
+  siblings,
   onCancel,
   onConfirm,
 }: {
   item: BackupObject | null;
   pending: boolean;
+  sourceAddon: string;
+  siblings: string[];
   onCancel: () => void;
-  onConfirm: (key: string) => void;
+  onConfirm: (key: string, into?: string) => void;
 }) {
+  const [target, setTarget] = useState<string>("");
+  // Reset target to in-place every time a new backup gets picked so
+  // the user explicitly opts into the cross-addon path each time.
+  useEffect(() => {
+    if (item) setTarget("");
+  }, [item]);
   return (
     <AnimatePresence>
       {item && (
@@ -515,27 +546,55 @@ function ConfirmRestore({
             exit={{ scale: 0.96, y: 4 }}
             transition={{ duration: 0.12 }}
             onClick={(e) => e.stopPropagation()}
-            className="w-full max-w-md rounded-md border border-red-500/40 bg-[var(--bg-elevated)] p-5"
+            className={cn(
+              "w-full max-w-md rounded-md border bg-[var(--bg-elevated)] p-5",
+              target === "" ? "border-red-500/40" : "border-amber-500/40"
+            )}
           >
-            <h3 className="text-base font-semibold">Restore from this backup?</h3>
+            <h3 className="text-base font-semibold">Restore this backup?</h3>
             <p className="mt-2 text-xs text-[var(--text-secondary)]">
-              kuso starts a one-shot Job that pipes{" "}
-              <span className="font-mono">{tail(item.key)}</span> into the live database via
-              <span className="font-mono"> psql</span>. Existing tables will be overwritten in
-              place — there is no rollback.
+              Pipes <span className="font-mono">{tail(item.key)}</span> into the chosen target
+              database via <span className="font-mono">psql</span>.
             </p>
+            <div className="mt-4 space-y-2">
+              <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                Restore into
+              </label>
+              <select
+                value={target}
+                onChange={(e) => setTarget(e.target.value)}
+                className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-[12px]"
+              >
+                <option value="">{sourceAddon} (overwrite — destructive)</option>
+                {siblings.map((s) => (
+                  <option key={s} value={s}>
+                    {s} (non-destructive — leaves {sourceAddon} alone)
+                  </option>
+                ))}
+              </select>
+              {target === "" ? (
+                <p className="font-mono text-[10px] text-red-400">
+                  Existing tables in {sourceAddon} will be overwritten. Cannot be undone.
+                </p>
+              ) : (
+                <p className="font-mono text-[10px] text-amber-400">
+                  {sourceAddon} stays as-is; the dump goes into {target}. {target} must already
+                  exist + be a postgres addon.
+                </p>
+              )}
+            </div>
             <div className="mt-4 flex justify-end gap-2">
               <Button variant="ghost" size="sm" onClick={onCancel} disabled={pending}>
                 Cancel
               </Button>
               <Button
-                variant="destructive"
+                variant={target === "" ? "destructive" : "default"}
                 size="sm"
-                onClick={() => onConfirm(item.key)}
+                onClick={() => onConfirm(item.key, target || undefined)}
                 disabled={pending}
               >
                 <RotateCcw className="h-3 w-3" />
-                {pending ? "Starting…" : "Run restore"}
+                {pending ? "Starting…" : `Restore into ${target || sourceAddon}`}
               </Button>
             </div>
           </motion.div>

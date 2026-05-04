@@ -55,6 +55,8 @@ type CreateServiceRequest struct {
 	Name       string                 `json:"name"`
 	Repo       *CreateServiceRepo     `json:"repo,omitempty"`
 	Runtime    string                 `json:"runtime,omitempty"`
+	// Command is the argv for runtime=worker. Ignored otherwise.
+	Command    []string               `json:"command,omitempty"`
 	Port       int32                  `json:"port,omitempty"`
 	Domains    []ServiceDomain        `json:"domains,omitempty"`
 	EnvVars    []EnvVar               `json:"envVars,omitempty"`

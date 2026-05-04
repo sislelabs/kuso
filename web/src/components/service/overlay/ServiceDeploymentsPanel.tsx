@@ -1,15 +1,16 @@
 "use client";
 
 import { useState } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LogStream } from "@/components/logs/LogStream";
-import { useBuilds, useTriggerBuild } from "@/features/services";
+import { useBuilds, useTriggerBuild, rollbackBuild } from "@/features/services";
 import { useCan, Perms } from "@/features/auth";
 import type { BuildSummary } from "@/features/services/api";
 import type { KusoEnvironment } from "@/types/projects";
 import { relativeTime } from "@/lib/format";
-import { ChevronDown, ChevronRight, RotateCcw, ExternalLink } from "lucide-react";
+import { ChevronDown, ChevronRight, RotateCcw, ExternalLink, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -166,25 +167,39 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
                     !["failed", "active", "running"].includes(s) && "border-[var(--border-subtle)]"
                   )}
                 >
-                  <button
-                    type="button"
-                    onClick={() => setExpanded(isOpen ? null : b.id)}
-                    className="flex w-full items-center gap-3 px-3 py-2.5 text-left"
-                  >
-                    {statusBadge(s)}
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium">
-                        <span className="font-mono">{sha || "—"}</span>
-                        <span className="ml-2 text-xs text-[var(--text-tertiary)]">on {branch}</span>
+                  <div className="flex items-center gap-1 px-3 py-2.5">
+                    <button
+                      type="button"
+                      onClick={() => setExpanded(isOpen ? null : b.id)}
+                      className="flex flex-1 items-center gap-3 text-left"
+                    >
+                      {statusBadge(s)}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium">
+                          <span className="font-mono">{sha || "—"}</span>
+                          <span className="ml-2 text-xs text-[var(--text-tertiary)]">on {branch}</span>
+                        </div>
+                        <div className="font-mono text-[10px] text-[var(--text-tertiary)]">{created}</div>
                       </div>
-                      <div className="font-mono text-[10px] text-[var(--text-tertiary)]">{created}</div>
-                    </div>
-                    {isOpen ? (
-                      <ChevronDown className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
-                    ) : (
-                      <ChevronRight className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
+                    </button>
+                    {/* Rollback only for succeeded-but-superseded builds.
+                        Server validates phase=succeeded too; the
+                        client-side gate is just to hide the noise. */}
+                    {s === "superseded" && canDeploy && (
+                      <RollbackButton project={project} service={service} buildId={b.id} sha={sha} />
                     )}
-                  </button>
+                    <button
+                      type="button"
+                      onClick={() => setExpanded(isOpen ? null : b.id)}
+                      className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                    >
+                      {isOpen ? (
+                        <ChevronDown className="h-4 w-4 shrink-0" />
+                      ) : (
+                        <ChevronRight className="h-4 w-4 shrink-0" />
+                      )}
+                    </button>
+                  </div>
                   {isOpen && (
                     <div className="min-w-0 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]">
                       <BuildLogs project={project} service={service} buildId={b.id} />
@@ -215,6 +230,79 @@ function BuildLogs({ project, service, buildId }: { project: string; service: st
         env={`build:${buildId}`}
         height="100%"
       />
+    </div>
+  );
+}
+
+// RollbackButton — tiny inline confirm/yes/no flow that POSTs the
+// build's rollback endpoint. Server validates phase=succeeded so the
+// only client-side check is "we're on a superseded build" gate.
+function RollbackButton({
+  project,
+  service,
+  buildId,
+  sha,
+}: {
+  project: string;
+  service: string;
+  buildId: string;
+  sha: string;
+}) {
+  const qc = useQueryClient();
+  const [confirming, setConfirming] = useState(false);
+  const m = useMutation({
+    mutationFn: () => rollbackBuild(project, service, buildId),
+    onSuccess: () => {
+      toast.success(`Rolled back to ${sha || buildId}`);
+      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });
+      qc.invalidateQueries({ queryKey: ["projects", project, "environments"] });
+      setConfirming(false);
+    },
+    onError: (e) => {
+      toast.error(e instanceof Error ? e.message : "Rollback failed");
+      setConfirming(false);
+    },
+  });
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setConfirming(true);
+        }}
+        title={`Roll production back to ${sha || buildId}`}
+        className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:border-amber-500/40 hover:bg-amber-500/5 hover:text-amber-400"
+      >
+        <Undo2 className="h-3 w-3" />
+        rollback
+      </button>
+    );
+  }
+  return (
+    <div
+      onClick={(e) => e.stopPropagation()}
+      className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/5 px-1.5 py-1"
+    >
+      <span className="font-mono text-[10px] text-amber-400">rollback to {sha || buildId.slice(0, 8)}?</span>
+      <Button
+        size="sm"
+        variant="ghost"
+        disabled={m.isPending}
+        onClick={() => m.mutate()}
+        className="h-5 px-2 text-[10px] text-amber-400"
+      >
+        {m.isPending ? "…" : "yes"}
+      </Button>
+      <Button
+        size="sm"
+        variant="ghost"
+        onClick={() => setConfirming(false)}
+        disabled={m.isPending}
+        className="h-5 px-2 text-[10px]"
+      >
+        no
+      </Button>
     </div>
   );
 }

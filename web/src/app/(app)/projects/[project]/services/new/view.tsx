@@ -37,6 +37,7 @@ export function AddServiceView() {
   const [name, setName] = useState("");
   const [path, setPath] = useState("");
   const [runtime, setRuntime] = useState<string>("dockerfile");
+  const [command, setCommand] = useState<string>("");
   const [port, setPort] = useState<string>("");
   const [reason, setReason] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -100,6 +101,9 @@ export function AddServiceView() {
             ...(path.trim() ? { path: path.trim() } : {}),
           },
           runtime,
+          ...(runtime === "worker" && command.trim()
+            ? { command: command.trim().split(/\s+/).filter(Boolean) }
+            : {}),
           ...(port ? { port: parseInt(port, 10) } : {}),
           github: { installationId: picked.installationId },
         },
@@ -256,7 +260,7 @@ export function AddServiceView() {
             </Field>
             <Field label="runtime">
               <div className="inline-flex flex-wrap gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
-                {["dockerfile", "nixpacks", "static", "buildpacks"].map((r) => (
+                {["dockerfile", "nixpacks", "static", "buildpacks", "worker"].map((r) => (
                   <button
                     key={r}
                     type="button"
@@ -273,6 +277,20 @@ export function AddServiceView() {
                 ))}
               </div>
             </Field>
+            {runtime === "worker" && (
+              <Field label="command">
+                <Input
+                  value={command}
+                  onChange={(e) => setCommand(e.target.value)}
+                  placeholder="bundle exec sidekiq    OR    sh -c &quot;celery worker -A app&quot;"
+                  className="h-8 font-mono text-[12px]"
+                />
+                <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+                  Workers run the same image as a sibling web service but with this command.
+                  No HTTP port, no ingress, no health probes.
+                </p>
+              </Field>
+            )}
             {reason && (
               <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
                 detected: {reason}

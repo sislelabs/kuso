@@ -126,11 +126,15 @@ export async function listBackups(project: string, addon: string): Promise<Backu
 export async function restoreBackup(
   project: string,
   addon: string,
-  key: string
+  key: string,
+  // Optional destination addon. Empty/undefined = restore in-place
+  // (overwrites the source — destructive). Set to a sibling addon's
+  // short name to restore non-destructively into that addon.
+  into?: string
 ): Promise<{ job: string }> {
   return api(
     `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/backups/restore`,
-    { method: "POST", body: { key } }
+    { method: "POST", body: { key, into } }
   );
 }
 

@@ -138,3 +138,66 @@ export async function getServiceLogs(
     `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/logs?env=${encodeURIComponent(env)}&lines=${lines}`
   );
 }
+
+// ---- Crons ----
+
+export interface KusoCron {
+  metadata: { name: string; namespace?: string; creationTimestamp?: string };
+  spec: {
+    project: string;
+    service: string;
+    schedule: string;
+    command: string[];
+    suspend?: boolean;
+    concurrencyPolicy?: string;
+    activeDeadlineSeconds?: number;
+  };
+  status?: Record<string, unknown>;
+}
+
+export interface CreateCronBody {
+  name: string;
+  schedule: string;
+  command: string[];
+  suspend?: boolean;
+  concurrencyPolicy?: "Allow" | "Forbid" | "Replace";
+  activeDeadlineSeconds?: number;
+}
+
+export async function listServiceCrons(project: string, service: string): Promise<KusoCron[]> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/crons`
+  );
+}
+
+export async function addCron(project: string, service: string, body: CreateCronBody): Promise<KusoCron> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/crons`,
+    { method: "POST", body }
+  );
+}
+
+export async function deleteCron(project: string, service: string, name: string): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/crons/${encodeURIComponent(name)}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function syncCron(project: string, service: string, name: string): Promise<KusoCron> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/crons/${encodeURIComponent(name)}/sync`,
+    { method: "POST" }
+  );
+}
+
+export async function rollbackBuild(
+  project: string,
+  service: string,
+  build: string
+): Promise<unknown> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/builds/${encodeURIComponent(build)}/rollback`,
+    { method: "POST" }
+  );
+}

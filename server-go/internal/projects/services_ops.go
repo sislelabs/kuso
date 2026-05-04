@@ -149,6 +149,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Project:    project,
 			Repo:       &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
 			Runtime:    req.Runtime,
+			Command:    req.Command,
 			Port:       req.Port,
 			Domains:    convertDomains(req.Domains),
 			EnvVars:    convertEnvVars(req.EnvVars),
