@@ -491,17 +491,51 @@ operator_should_build() {
   return 1
 }
 
-# Bump the operator image tag using a parallel scheme to the kuso-
-# server tag. Pattern: vMAJOR.MINOR.PATCH on kuso-server →
-# vMAJOR.OPATCH on operator, where OPATCH starts at the kuso-server
-# minor and increments per release that touches operator/. We don't
-# enforce this — the operator just gets the same VERSION tag for
-# simplicity. Sub-version mismatch only breaks if someone manually
-# pins; we don't, the deploy yaml uses VERSION verbatim.
-OPERATOR_VERSION="${KUSO_RELEASE_OPERATOR_VERSION:-${VERSION}}"
+# Operator versioning. Two paths:
+#
+# 1. operator/ changed since the last tag → build + push at $VERSION.
+#    Both server-go and the operator share the version label so a
+#    single release.json entry covers both.
+#
+# 2. operator/ unchanged → reuse the most recent existing operator tag.
+#    The release.json points to it so kuso instances upgrading don't
+#    chase a phantom tag (kuso-operator:v0.7.14 when only v0.7.10 was
+#    actually built). Detected by walking git tags backwards looking
+#    for the last release where operator_should_build would have fired.
+#
+# KUSO_RELEASE_OPERATOR_VERSION overrides both heuristics.
 
-if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]] && operator_should_build; then
-  log "operator/ changed — building operator image ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
+if [[ -n "${KUSO_RELEASE_OPERATOR_VERSION:-}" ]]; then
+  OPERATOR_VERSION="$KUSO_RELEASE_OPERATOR_VERSION"
+elif operator_should_build; then
+  OPERATOR_VERSION="$VERSION"
+else
+  # Find the most recent existing operator tag on ghcr. The release
+  # before this one whose operator/ diff was non-empty won — but
+  # walking git is faster than querying ghcr. Fall back to the
+  # current `deploy/operator.yaml` image tag if the git walk fails.
+  OPERATOR_VERSION=""
+  for prev_tag in $(git tag -l 'v*' --sort=-v:refname | head -50); do
+    [[ "$prev_tag" == "$VERSION" ]] && continue
+    prev_prev_tag="$(git describe --tags --abbrev=0 "${prev_tag}^" 2>/dev/null || echo)"
+    if [[ -z "$prev_prev_tag" ]]; then continue; fi
+    if ! git diff --quiet "$prev_prev_tag".."$prev_tag" -- operator/ 2>/dev/null; then
+      OPERATOR_VERSION="$prev_tag"
+      break
+    fi
+  done
+  if [[ -z "$OPERATOR_VERSION" ]]; then
+    OPERATOR_VERSION="$(grep -oE 'kuso-operator:v[0-9]+\.[0-9]+\.[0-9]+[^"]*' deploy/operator.yaml 2>/dev/null | head -1 | cut -d: -f2 || echo "$VERSION")"
+  fi
+  log "operator/ unchanged — release.json will point at last built tag ${OPERATOR_VERSION}"
+fi
+
+# Build the operator image when (a) rolling locally with operator/
+# changes (legacy local-roll path), OR (b) operator_should_build is
+# true regardless of ROLL — so `make ship` produces a matching
+# operator image whenever operator/ moved.
+if operator_should_build; then
+  log "building operator image ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
   if [[ "$DRY_RUN" == "1" ]]; then
     dry "docker buildx build --platform linux/amd64 --push -t ${OPERATOR_IMAGE}:${OPERATOR_VERSION} -f operator/Dockerfile operator"
   else
@@ -511,8 +545,12 @@ if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]] && operator_should_build; then
       -t "${OPERATOR_IMAGE}:${OPERATOR_VERSION}" \
       -f operator/Dockerfile \
       operator >/dev/null
+    log "operator image pushed: ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
   fi
-  log "operator image pushed: ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
+fi
+
+if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]] && operator_should_build; then
+  log "operator/ changed — rolling operator on ${KUSO_RELEASE_HOST} (image already built above)"
 
   # Ship every CRD under operator/config/crd/bases/ to /tmp on the
   # cluster, kubectl apply them, then roll the operator deployment.
