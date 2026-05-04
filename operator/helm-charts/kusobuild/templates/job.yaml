@@ -109,6 +109,16 @@ spec:
               nixpacks build . --out . \
                 --env "GOTOOLCHAIN=${GOTOOLCHAIN_VAL}" \
                 --env GOFLAGS=-mod=mod
+
+              # nixpacks emits `ARG GOTOOLCHAIN` without a default, so
+              # the env vars only resolve when passed via docker
+              # --build-arg at runtime. Kaniko doesn't auto-forward our
+              # detected values, so we patch the generated Dockerfile
+              # with literal ENV statements right after the FROM. This
+              # bakes the value in regardless of build-arg plumbing.
+              # Do the patch with sed (no heredoc indentation gotchas).
+              sed -i "s|^ARG CGO_ENABLED |ENV GOTOOLCHAIN=${GOTOOLCHAIN_VAL}\nENV GOFLAGS=-mod=mod\nARG CGO_ENABLED |" .nixpacks/Dockerfile
+
               echo "--- generated Dockerfile ---"
               cat .nixpacks/Dockerfile
           volumeMounts:
