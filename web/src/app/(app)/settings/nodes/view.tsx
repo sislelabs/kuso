@@ -1078,7 +1078,7 @@ function NewKeyForm({ onCreated }: { onCreated: (k: SSHKey) => void }) {
         onClick={() => setAdvanced((v) => !v)}
         className="font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
       >
-        {advanced ? "→ generate ed25519 instead" : "→ paste an existing key instead"}
+        {advanced ? "generate ed25519 instead" : "paste an existing key instead"}
       </button>
       {advanced && (
         <>

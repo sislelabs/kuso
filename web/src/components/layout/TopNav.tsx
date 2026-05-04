@@ -496,9 +496,15 @@ function UserMenu() {
 function UpdatesMenuItem() {
   const v = useQuery<{ needsUpdate?: boolean; latest?: string }>({
     queryKey: ["system", "version"],
+    // 401 here doesn't matter — the AuthGate handles session expiry
+    // separately. Without retry:false the menu would throw the
+    // ApiError into the dropdown's render tree and base-ui's portal
+    // surfaces that as the Next.js "This page couldn't load" splash.
     queryFn: () => api("/api/system/version"),
     staleTime: 5 * 60_000,
     refetchInterval: 5 * 60_000,
+    retry: false,
+    throwOnError: false,
   });
   const needs = !!v.data?.needsUpdate;
   return (

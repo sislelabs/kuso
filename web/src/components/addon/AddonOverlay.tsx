@@ -17,9 +17,11 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { api } from "@/lib/api-client";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { useCan, Perms } from "@/features/auth";
-import { X, RotateCcw, Trash2, Database, HardDrive, Settings, Info, Play, Copy, Eye, EyeOff, Check } from "lucide-react";
+import { X, RotateCcw, Trash2, Database, HardDrive, Settings, Info, Play, Copy, Eye, EyeOff, Check, MapPin, Plus } from "lucide-react";
+import type { NodeSummary } from "@/components/layout/ServersPopover";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { relativeTime } from "@/lib/format";
@@ -724,12 +726,12 @@ function SQLResults({
   );
 }
 
-// PlacementSection edits spec.placement on a KusoAddon. Same model as
-// the service settings panel: AND-of-labels (kuso.sislelabs.com/<key>=<val>
-// must all match a node) plus an optional list of explicit hostnames.
-// Server validates that at least one node matches at save time and
-// 400s with "no cluster node matches placement" if not — we surface
-// that error inline so the user sees what to fix.
+// PlacementSection edits spec.placement on a KusoAddon. Mirrors the
+// shape of ServiceSettingsPanel's PlacementSection: a header strip
+// with a hint badge, native selects driven by what the cluster
+// actually carries, a pill-list of specific hostnames, and a live
+// match preview. Server validates the selector matches ≥1 node at
+// save time and 400s with "no cluster node matches placement" if not.
 function PlacementSection({
   project,
   addon,
@@ -742,20 +744,51 @@ function PlacementSection({
   const qc = useQueryClient();
   const initialLabels: Record<string, string> = (cr?.spec as { placement?: { labels?: Record<string, string> } })?.placement?.labels ?? {};
   const initialNodes: string[] = (cr?.spec as { placement?: { nodes?: string[] } })?.placement?.nodes ?? [];
+
+  const nodesQuery = useQuery({
+    queryKey: ["kubernetes", "nodes"],
+    queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
+    staleTime: 30_000,
+  });
+
   const [labels, setLabels] = useState<{ key: string; value: string }[]>(
     Object.entries(initialLabels).map(([k, v]) => ({ key: k, value: v }))
   );
-  const [nodes, setNodes] = useState<string[]>(initialNodes);
-  const [newKey, setNewKey] = useState("");
-  const [newVal, setNewVal] = useState("");
-  const [newNode, setNewNode] = useState("");
+  const [pickedNodes, setPickedNodes] = useState<string[]>(initialNodes);
 
-  // Re-baseline when the CR changes (e.g. after a successful save).
+  // Re-baseline when the CR changes (after a save lands).
   useEffect(() => {
     setLabels(Object.entries(initialLabels).map(([k, v]) => ({ key: k, value: v })));
-    setNodes(initialNodes);
+    setPickedNodes(initialNodes);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(initialLabels), JSON.stringify(initialNodes)]);
+
+  // Catalog of label keys + values that real cluster nodes carry, so
+  // the rule editor offers them as native selects (no typo path).
+  const allLabels = new Map<string, Set<string>>();
+  for (const n of nodesQuery.data ?? []) {
+    for (const [k, v] of Object.entries(n.kusoLabels ?? {})) {
+      if (!allLabels.has(k)) allLabels.set(k, new Set());
+      allLabels.get(k)!.add(v);
+    }
+  }
+  const allHostnames = (nodesQuery.data ?? []).map((n) => n.name);
+
+  // Live match preview — same logic as the service variant. Empty rules
+  // schedule everywhere; a partial rule (key set but no value) doesn't
+  // skew the count.
+  const matching = (nodesQuery.data ?? []).filter((n) => {
+    for (const r of labels) {
+      if (!r.key.trim()) continue;
+      if ((n.kusoLabels ?? {})[r.key.trim()] !== r.value) return false;
+    }
+    if (pickedNodes.length > 0 && !pickedNodes.includes(n.name)) return false;
+    return true;
+  });
+  const totalNodes = (nodesQuery.data ?? []).length;
+  const incompleteRules = labels.filter((r) => !r.key.trim() || !r.value.trim()).length;
+  const hasEffectiveRules =
+    labels.some((r) => r.key.trim() && r.value.trim()) || pickedNodes.length > 0;
 
   const save = useMutation({
     mutationFn: () => {
@@ -763,7 +796,7 @@ function PlacementSection({
       for (const r of labels) {
         if (r.key.trim() && r.value.trim()) lbls[r.key.trim()] = r.value.trim();
       }
-      return setAddonPlacement(project, addon, { labels: lbls, nodes });
+      return setAddonPlacement(project, addon, { labels: lbls, nodes: pickedNodes });
     },
     onSuccess: () => {
       toast.success("Placement saved");
@@ -775,127 +808,177 @@ function PlacementSection({
   const dirty =
     JSON.stringify(
       Object.fromEntries(
-        labels.filter((r) => r.key.trim()).map((r) => [r.key.trim(), r.value.trim()])
+        labels.filter((r) => r.key.trim() && r.value.trim()).map((r) => [r.key.trim(), r.value.trim()])
       )
     ) !== JSON.stringify(initialLabels) ||
-    JSON.stringify(nodes) !== JSON.stringify(initialNodes);
+    JSON.stringify(pickedNodes) !== JSON.stringify(initialNodes);
+
+  const addLabel = () =>
+    setLabels((cur) => [...cur, { key: "", value: "" }]);
+  const updLabel = (i: number, patch: Partial<{ key: string; value: string }>) =>
+    setLabels((cur) => cur.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const rmLabel = (i: number) =>
+    setLabels((cur) => cur.filter((_, j) => j !== i));
+  const toggleNode = (name: string) =>
+    setPickedNodes((cur) =>
+      cur.includes(name) ? cur.filter((n) => n !== name) : [...cur, name]
+    );
 
   return (
-    <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
-      <h4 className="text-sm font-semibold">Placement</h4>
-      <p className="mt-1 text-xs text-[var(--text-secondary)]">
-        Pin this addon&apos;s pod to nodes whose labels match every entry below. Empty = schedule
-        anywhere. Use the <span className="font-mono">/settings/nodes</span> page to manage node
-        labels first.
+    <section className="overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+      <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
+        <div className="flex items-center gap-2">
+          <MapPin className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
+          <h4 className="text-sm font-semibold">Placement</h4>
+        </div>
+        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          {!hasEffectiveRules
+            ? "schedules anywhere"
+            : incompleteRules > 0
+              ? `${incompleteRules} incomplete`
+              : `${matching.length}/${totalNodes} match`}
+        </span>
+      </header>
+      <p className="border-b border-[var(--border-subtle)] px-3 py-2 text-[11px] text-[var(--text-secondary)]">
+        Pin this addon to a subset of cluster nodes. Use{" "}
+        <span className="font-mono text-[var(--text-tertiary)]">key=value</span> rules
+        (e.g. <span className="font-mono">region=eu</span> or{" "}
+        <span className="font-mono">tier=db</span>) to match nodes by label, or pick
+        specific hostnames below. Empty rules schedule anywhere.
       </p>
-      <div className="mt-3 space-y-1">
-        <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          Required labels
-        </label>
-        {labels.map((row, i) => (
-          <div key={i} className="flex items-center gap-1">
-            <Input
-              value={row.key}
-              onChange={(e) =>
-                setLabels((cur) => cur.map((r, j) => (i === j ? { ...r, key: e.target.value } : r)))
-              }
-              placeholder="region"
-              className="h-7 flex-1 font-mono text-[12px]"
-            />
-            <span className="font-mono text-[var(--text-tertiary)]">=</span>
-            <Input
-              value={row.value}
-              onChange={(e) =>
-                setLabels((cur) => cur.map((r, j) => (i === j ? { ...r, value: e.target.value } : r)))
-              }
-              placeholder="eu"
-              className="h-7 flex-1 font-mono text-[12px]"
-            />
-            <button
-              type="button"
-              onClick={() => setLabels((cur) => cur.filter((_, j) => j !== i))}
-              className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400"
+      {labels.length === 0 ? (
+        <p className="px-3 py-2.5 text-[11px] text-[var(--text-tertiary)]">No label rules.</p>
+      ) : (
+        labels.map((r, i) => {
+          const valuesForKey = allLabels.get(r.key.trim());
+          const haveAnyLabels = allLabels.size > 0;
+          return (
+            <div
+              key={i}
+              className="grid grid-cols-[140px_1fr_28px] items-center gap-1.5 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-b-0"
             >
-              <X className="h-3 w-3" />
-            </button>
-          </div>
-        ))}
-        <div className="flex items-center gap-1">
-          <Input
-            value={newKey}
-            onChange={(e) => setNewKey(e.target.value)}
-            placeholder="key"
-            className="h-7 flex-1 font-mono text-[12px]"
-          />
-          <span className="font-mono text-[var(--text-tertiary)]">=</span>
-          <Input
-            value={newVal}
-            onChange={(e) => setNewVal(e.target.value)}
-            placeholder="value"
-            className="h-7 flex-1 font-mono text-[12px]"
-          />
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!newKey.trim() || !newVal.trim()}
-            onClick={() => {
-              setLabels((cur) => [...cur, { key: newKey.trim(), value: newVal.trim() }]);
-              setNewKey("");
-              setNewVal("");
-            }}
-          >
-            add
-          </Button>
+              {haveAnyLabels ? (
+                <select
+                  value={r.key}
+                  onChange={(e) => updLabel(i, { key: e.target.value, value: "" })}
+                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+                >
+                  <option value="">— pick label key —</option>
+                  {[...allLabels.keys()].sort().map((k) => (
+                    <option key={k} value={k}>
+                      {k}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <Input
+                  value={r.key}
+                  onChange={(e) => updLabel(i, { key: e.target.value })}
+                  placeholder="region"
+                  className="h-7 font-mono text-[11px]"
+                />
+              )}
+              {valuesForKey && valuesForKey.size > 0 ? (
+                <select
+                  value={r.value}
+                  onChange={(e) => updLabel(i, { value: e.target.value })}
+                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+                >
+                  <option value="">— pick value —</option>
+                  {[...valuesForKey].sort().map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <Input
+                  value={r.value}
+                  onChange={(e) => updLabel(i, { value: e.target.value })}
+                  placeholder={r.key.trim() ? "value" : "eu"}
+                  className="h-7 font-mono text-[11px]"
+                  disabled={haveAnyLabels && !r.key.trim()}
+                />
+              )}
+              <button
+                type="button"
+                onClick={() => rmLabel(i)}
+                aria-label="Remove rule"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+          );
+        })
+      )}
+      <button
+        type="button"
+        onClick={addLabel}
+        className="flex w-full items-center gap-1.5 border-y border-[var(--border-subtle)] px-3 py-2 text-left text-[11px] text-[var(--accent)] hover:bg-[var(--bg-tertiary)]/40"
+      >
+        <Plus className="h-3 w-3" />
+        add label rule
+      </button>
+
+      <div className="px-3 py-2">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-[12px] text-[var(--text-secondary)]">specific nodes</span>
+          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+            {pickedNodes.length === 0
+              ? "any node matching the labels"
+              : `${pickedNodes.length} pinned`}
+          </span>
         </div>
-      </div>
-      <div className="mt-3 space-y-1">
-        <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          Or explicit hostnames
-        </label>
-        {nodes.map((n, i) => (
-          <div key={i} className="flex items-center gap-1">
-            <Input
-              value={n}
-              onChange={(e) => setNodes((cur) => cur.map((x, j) => (i === j ? e.target.value : x)))}
-              className="h-7 flex-1 font-mono text-[12px]"
-            />
-            <button
-              type="button"
-              onClick={() => setNodes((cur) => cur.filter((_, j) => j !== i))}
-              className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400"
-            >
-              <X className="h-3 w-3" />
-            </button>
+        {allHostnames.length === 0 ? (
+          <p className="text-[11px] text-[var(--text-tertiary)]">No nodes visible yet.</p>
+        ) : (
+          <div className="flex flex-wrap gap-1">
+            {allHostnames.map((h) => {
+              const picked = pickedNodes.includes(h);
+              return (
+                <button
+                  key={h}
+                  type="button"
+                  onClick={() => toggleNode(h)}
+                  className={cn(
+                    "inline-flex h-6 items-center rounded-md border px-2 font-mono text-[10px] transition-colors",
+                    picked
+                      ? "border-[var(--accent)]/40 bg-[var(--accent-subtle)] text-[var(--text-primary)]"
+                      : "border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                  )}
+                >
+                  {h}
+                </button>
+              );
+            })}
           </div>
-        ))}
-        <div className="flex items-center gap-1">
-          <Input
-            value={newNode}
-            onChange={(e) => setNewNode(e.target.value)}
-            placeholder="hostname"
-            className="h-7 flex-1 font-mono text-[12px]"
-          />
-          <Button
-            size="sm"
-            variant="ghost"
-            disabled={!newNode.trim()}
-            onClick={() => {
-              setNodes((cur) => [...cur, newNode.trim()]);
-              setNewNode("");
-            }}
-          >
-            add
-          </Button>
-        </div>
+        )}
       </div>
-      <div className="mt-3 flex justify-end gap-2">
+
+      {hasEffectiveRules && (
+        <div className="border-t border-[var(--border-subtle)] px-3 py-2 text-[10px] text-[var(--text-tertiary)]">
+          {incompleteRules > 0 ? (
+            <span>
+              fill in the {incompleteRules === 1 ? "empty rule" : "empty rules"} or remove{" "}
+              {incompleteRules === 1 ? "it" : "them"} to see what matches
+            </span>
+          ) : (
+            <span>
+              {matching.length}/{totalNodes} cluster nodes match this placement
+            </span>
+          )}
+        </div>
+      )}
+
+      <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-3 py-2">
         <Button
           size="sm"
           variant="ghost"
           disabled={!dirty || save.isPending}
           onClick={() => {
             setLabels(Object.entries(initialLabels).map(([k, v]) => ({ key: k, value: v })));
-            setNodes(initialNodes);
+            setPickedNodes(initialNodes);
           }}
         >
           Reset
@@ -903,7 +986,7 @@ function PlacementSection({
         <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
           {save.isPending ? "Saving…" : "Save placement"}
         </Button>
-      </div>
+      </footer>
     </section>
   );
 }
