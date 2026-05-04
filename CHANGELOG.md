@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.14] — 2026-05-04
+
+### ✨ Features
+- Feat(updater): bake updater image into release.json + handle nil RawPost body ([80d7838](https://github.com/sislelabs/kuso/commit/80d783824f762f6e6adf24309e39a2d4c92fec04))
+
 ## [0.7.13] — 2026-05-04
 
 ### ✨ Features
