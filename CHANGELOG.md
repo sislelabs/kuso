@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.26] — 2026-05-04
+
+### Other
+- Ui: midnight-navy (#011627) surfaces + half-height addon nodes ([cd14e5e](https://github.com/sislelabs/kuso/commit/cd14e5e978a361d02f7a4c93966a5e01b3a24c8b))
+
 ## [0.7.25] — 2026-05-04
 
 ### Other
