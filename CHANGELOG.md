@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.20] — 2026-05-04
+
+### 🐛 Bug Fixes
+- Fix(auth): block app-shell render synchronously for pending users (was flashing settings/popovers) ([a82eb50](https://github.com/sislelabs/kuso/commit/a82eb50e552607c11f426e7f00f78bf5b3544928))
+
 ## [0.7.19] — 2026-05-04
 
 ### Other
