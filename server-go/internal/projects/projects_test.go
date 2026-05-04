@@ -367,6 +367,63 @@ func TestSetEnv_ReplacesAndRedacts(t *testing.T) {
 	}
 }
 
+// TestSetEnv_PropagatesToEnvironments verifies that env-var edits saved
+// on KusoService also reach owned KusoEnvironments. The kusoenvironment
+// helm chart reads only KusoEnvironment.spec.envVars (no merge step
+// for service-level vars), so without propagation a SetEnv call saves
+// to the service CR but the running pod never sees the change.
+func TestSetEnv_PropagatesToEnvironments(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedEnv("alpha", "web", "preview", "feat/x", "alpha-web-pr7"),
+	)
+	err := s.SetEnv(context.Background(), "alpha", "web", []EnvVar{
+		{Name: "API_BASE", Value: "https://api.example.com"},
+	})
+	if err != nil {
+		t.Fatalf("SetEnv: %v", err)
+	}
+	for _, envName := range []string{"alpha-web-production", "alpha-web-pr7"} {
+		env, err := s.GetEnvironment(context.Background(), "alpha", envName)
+		if err != nil {
+			t.Fatalf("GetEnvironment %s: %v", envName, err)
+		}
+		if len(env.Spec.EnvVars) != 1 || env.Spec.EnvVars[0].Name != "API_BASE" || env.Spec.EnvVars[0].Value != "https://api.example.com" {
+			t.Errorf("env %s did not receive propagated envVars: %+v", envName, env.Spec.EnvVars)
+		}
+	}
+}
+
+// TestPatchService_PortPropagatesToEnvironments verifies that a port
+// edit on KusoService also rewrites every owned env's spec.port.
+// kusoenvironment chart reads only env-CR port for containerPort +
+// Service.targetPort, so without propagation the user-visible port
+// edit appears to save but never affects the running pod (this is
+// what tripped the v0.7.39 demo deploy: PATCH /api/.../web set
+// service.port=8080 but env.port stayed at 3000 → Bad Gateway).
+func TestPatchService_PortPropagatesToEnvironments(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	newPort := int32(8080)
+	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{Port: &newPort}); err != nil {
+		t.Fatalf("PatchService: %v", err)
+	}
+	env, err := s.GetEnvironment(context.Background(), "alpha", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("GetEnvironment: %v", err)
+	}
+	if env.Spec.Port != 8080 {
+		t.Errorf("env port not propagated: got %d, want 8080", env.Spec.Port)
+	}
+}
+
 // ---- environment ops ----------------------------------------------------
 
 func TestDeleteEnvironment_RefusesProduction(t *testing.T) {

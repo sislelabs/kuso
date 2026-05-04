@@ -213,6 +213,13 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
 			EnvFromSecrets:   envFromSecrets,
+			// Per-service env vars are stamped onto the env CR
+			// directly because the kusoenvironment chart reads only
+			// .Values.envVars (no merge from KusoService at reconcile
+			// time, contrary to a stale comment in values.yaml). Any
+			// later SetEnv / PatchService call propagates updates via
+			// propagateEnvVarsToEnvs to keep them in lockstep.
+			EnvVars: created.Spec.EnvVars,
 			// Effective placement: service overrides project. Both
 			// nil = schedule anywhere (chart leaves nodeSelector
 			// blank, no affinity).
@@ -343,6 +350,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
 			EnvFromSecrets:   envFromSecrets,
+			EnvVars:          svc.Spec.EnvVars,
 			Placement:        ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement),
 			Volumes:          svc.Spec.Volumes,
 			Runtime:          svc.Spec.Runtime,
@@ -622,8 +630,18 @@ func (s *Service) SetEnv(ctx context.Context, project, service string, envVars [
 		return err
 	}
 	svc.Spec.EnvVars = convertEnvVars(rewritten)
-	if _, err := s.Kube.UpdateKusoService(ctx, ns, svc); err != nil {
+	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)
+	if err != nil {
 		return fmt.Errorf("update service env: %w", err)
+	}
+	// Propagate to envs — the chart reads from the env CR, not the
+	// service CR (see propagateEnvVarsToEnvs comment). Best-effort:
+	// the service-level save succeeded and is the source of truth, so
+	// a transient kube error here doesn't fail the request.
+	if err := s.propagateEnvVarsToEnvs(ctx, ns, project, service, updated); err != nil {
+		// Logged via the caller's wrapped error; the service spec is
+		// the durable record that next reconcile/edit will retry from.
+		return nil
 	}
 	return nil
 }
@@ -850,8 +868,10 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		return nil, err
 	}
 
+	portChanged := false
 	if req.Port != nil {
 		svc.Spec.Port = *req.Port
+		portChanged = true
 	}
 	if req.Runtime != nil {
 		svc.Spec.Runtime = *req.Runtime
@@ -959,25 +979,99 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	// would keep its old effective placement until the next time the
 	// env spec was rewritten for some other reason.
 	if placementChanged {
-		if err := s.propagatePlacementToEnvs(ctx, ns, project, updated); err != nil {
+		if err := s.propagatePlacementToEnvs(ctx, ns, project, service, updated); err != nil {
 			return updated, nil
 		}
 	}
 	if volumesChanged {
-		if err := s.propagateVolumesToEnvs(ctx, ns, updated); err != nil {
+		if err := s.propagateVolumesToEnvs(ctx, ns, project, service, updated); err != nil {
+			return updated, nil
+		}
+	}
+	if portChanged {
+		// kusoenvironment chart reads .spec.port off the env CR for
+		// containerPort + Service.targetPort, so without this every
+		// port edit appears to save but never reaches a running pod.
+		if err := s.propagatePortToEnvs(ctx, ns, project, service, updated); err != nil {
 			return updated, nil
 		}
 	}
 	return updated, nil
 }
 
+// envSelector matches every KusoEnvironment owned by (project,
+// service-short-name). Real env CRs label `kuso.sislelabs.com/service`
+// with the SHORT name (e.g. `web`), not the FQ name (`<project>-web`),
+// so propagation helpers must select by the short name. AddService
+// (line ~200) and AddEnvironment (line ~334) both stamp the short
+// name when creating envs.
+func envSelector(project, service string) string {
+	return labelSelector(map[string]string{labelProject: project, labelService: service})
+}
+
+// propagateEnvVarsToEnvs copies the service's envVars onto every owned
+// env. Without this, env-var edits saved on KusoService never reach
+// running pods — the kusoenvironment chart only reads
+// KusoEnvironment.spec.envVars, and there is no helm-operator merge
+// step that pulls service-level vars in. Best-effort: failures are
+// logged-and-returned but the service spec already saved.
+func (s *Service) propagateEnvVarsToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
+	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: envSelector(project, service),
+	})
+	if err != nil {
+		return fmt.Errorf("list envs for envVars propagation: %w", err)
+	}
+	for i := range envs.Items {
+		var env kube.KusoEnvironment
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
+			continue
+		}
+		env.Spec.EnvVars = svc.Spec.EnvVars
+		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
+			return fmt.Errorf("update env %s: %w", env.Name, err)
+		}
+	}
+	return nil
+}
+
+// propagatePortToEnvs copies the service port onto every owned env.
+// The kusoenvironment chart sets containerPort + Service.targetPort
+// from KusoEnvironment.spec.port (NOT from KusoService.spec.port), so
+// a port edit only takes effect once the env CRs follow. The
+// `0 → 8080` default mirrors the AddEnvironment fallback so an env
+// that never had a port set doesn't end up with containerPort=0.
+func (s *Service) propagatePortToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
+	port := svc.Spec.Port
+	if port == 0 {
+		port = 8080
+	}
+	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: envSelector(project, service),
+	})
+	if err != nil {
+		return fmt.Errorf("list envs for port propagation: %w", err)
+	}
+	for i := range envs.Items {
+		var env kube.KusoEnvironment
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
+			continue
+		}
+		env.Spec.Port = port
+		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
+			return fmt.Errorf("update env %s: %w", env.Name, err)
+		}
+	}
+	return nil
+}
+
 // propagateVolumesToEnvs copies the service's volume list onto every
 // owned env so the chart renders the matching PVCs. Mirrors the
 // placement propagation pattern; failures are best-effort (the
 // service spec already saved successfully).
-func (s *Service) propagateVolumesToEnvs(ctx context.Context, ns string, svc *kube.KusoService) error {
+func (s *Service) propagateVolumesToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
 	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: labelService + "=" + svc.Name,
+		LabelSelector: envSelector(project, service),
 	})
 	if err != nil {
 		return fmt.Errorf("list envs for volume propagation: %w", err)
@@ -998,7 +1092,7 @@ func (s *Service) propagateVolumesToEnvs(ctx context.Context, ns string, svc *ku
 // propagatePlacementToEnvs updates every KusoEnvironment owned by svc
 // so its spec.placement matches the resolved (project > service)
 // effective value. Called after a service-level placement edit.
-func (s *Service) propagatePlacementToEnvs(ctx context.Context, ns, project string, svc *kube.KusoService) error {
+func (s *Service) propagatePlacementToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
 	proj, err := s.Kube.GetKusoProject(ctx, s.Namespace, project)
 	if err != nil {
 		return fmt.Errorf("get project for placement propagation: %w", err)
@@ -1006,7 +1100,7 @@ func (s *Service) propagatePlacementToEnvs(ctx context.Context, ns, project stri
 	effective := ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement)
 
 	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: labelService + "=" + svc.Name,
+		LabelSelector: envSelector(project, service),
 	})
 	if err != nil {
 		return fmt.Errorf("list envs for placement propagation: %w", err)
