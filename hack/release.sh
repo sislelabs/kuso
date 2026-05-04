@@ -267,6 +267,33 @@ fi
 
 if [[ "$DRY_RUN" != "1" ]]; then log "image pushed: ${KUSO_RELEASE_IMAGE}:${VERSION}"; fi
 
+# ---- 4a2. updater image --------------------------------------------
+#
+# The in-cluster updater Job pulls
+# `ghcr.io/sislelabs/kuso-updater:${VERSION}`. Without a versioned tag
+# matching this release, every `kuso upgrade` from this version
+# forward fails with ImagePullBackOff. We rebuild + retag both
+# :${VERSION} and :latest on every release. The image rarely changes
+# (alpine + kubectl + a small entrypoint script), but tagging cheaply
+# keeps the path predictable.
+
+UPDATER_IMAGE="${KUSO_RELEASE_UPDATER_IMAGE:-ghcr.io/sislelabs/kuso-updater}"
+if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
+  log "docker buildx → ${UPDATER_IMAGE}:${VERSION} (+ :latest)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "docker buildx build --platform linux/amd64 --push -t ${UPDATER_IMAGE}:${VERSION} -t ${UPDATER_IMAGE}:latest -f build/updater/Dockerfile build/updater"
+  else
+    docker buildx build \
+      --platform linux/amd64 \
+      --push \
+      -t "${UPDATER_IMAGE}:${VERSION}" \
+      -t "${UPDATER_IMAGE}:latest" \
+      -f build/updater/Dockerfile \
+      build/updater >/dev/null
+    log "updater image pushed: ${UPDATER_IMAGE}:${VERSION}"
+  fi
+fi
+
 # ---- 4b. release.json + crds.yaml + GH release ---------------------
 #
 # The kuso self-updater (server-go/internal/updater) reads release.json
@@ -311,7 +338,8 @@ cat > "$DIST_DIR/release.json" <<EOF
   "publishedAt": "${PUBLISHED_AT}",
   "components": {
     "server":   { "image": "${KUSO_RELEASE_IMAGE}:${VERSION}" },
-    "operator": { "image": "${OPERATOR_IMAGE}:${VERSION}" }
+    "operator": { "image": "${OPERATOR_IMAGE}:${VERSION}" },
+    "updater":  { "image": "${UPDATER_IMAGE:-ghcr.io/sislelabs/kuso-updater}:${VERSION}" }
   },
   "crds": {
     "url": "https://github.com/${KUSO_RELEASE_REPO:-sislelabs/kuso}/releases/download/${VERSION}/crds.yaml",

@@ -105,10 +105,20 @@ func (k *KusoClient) UpdateProject(name string, req UpdateProjectRequest) (*rest
 }
 
 // RawPost sends a raw byte body with an explicit content-type. Used by
-// the restore flow where the body is a SQLite file, not JSON.
+// the restore flow where the body is a SQLite file, not JSON, and by
+// trigger-style endpoints that don't take a body at all.
+//
+// resty rejects SetBody(nil) for a typed-nil []byte with
+// "unsupported 'Body' type/value", so we explicitly clear the body
+// when the caller passes nil. Empty []byte{} would also work but nil
+// is what most callers reach for first.
 func (k *KusoClient) RawPost(path string, body []byte, contentType string) (*resty.Response, error) {
 	k.client.SetHeader("Content-Type", contentType)
-	k.client.SetBody(body)
+	if body == nil {
+		k.client.Body = nil
+	} else {
+		k.client.SetBody(body)
+	}
 	return k.client.Post(path)
 }
 

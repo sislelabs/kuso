@@ -54,6 +54,11 @@ type Manifest struct {
 type ManifestComponents struct {
 	Server   ComponentRef `json:"server"`
 	Operator ComponentRef `json:"operator"`
+	// Updater is the in-cluster Job image that performs the rollout
+	// (kubectl-set-image + CRD apply). Optional in old release.json
+	// payloads — when missing we fall back to
+	// ghcr.io/sislelabs/kuso-updater:<version>, then to :latest.
+	Updater ComponentRef `json:"updater,omitempty"`
 }
 
 type ComponentRef struct {
@@ -483,11 +488,20 @@ func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string
 	// The image is pinned to the same tag as the target server
 	// release so we always run the version we're upgrading TO,
 	// avoiding "old updater can't apply new manifest" surprises.
+	// Updater image resolution: prefer the manifest's value, then
+	// the version-tagged default, then :latest. Old kuso instances
+	// upgrading past this fix get the version-tagged path; if that
+	// release predates the updater publish (e.g. someone re-runs an
+	// old upgrade), :latest is still there as a safety net.
+	updaterImg := m.Components.Updater.Image
+	if updaterImg == "" {
+		updaterImg = "ghcr.io/sislelabs/kuso-updater:" + m.Version
+	}
 	jobName := fmt.Sprintf("kuso-update-%d", time.Now().Unix())
 	job := &batchv1Job{
 		Name:      jobName,
 		Namespace: s.Namespace,
-		Image:     "ghcr.io/sislelabs/kuso-updater:" + m.Version,
+		Image:     updaterImg,
 		Env: map[string]string{
 			"KUSO_TARGET_VERSION":   m.Version,
 			"KUSO_SERVER_IMAGE":     m.Components.Server.Image,
