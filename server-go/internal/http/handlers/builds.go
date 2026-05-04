@@ -30,6 +30,53 @@ func (h *BuildsHandler) Mount(r chi.Router) {
 	// successful build's image. The user picks the build by name (CR
 	// name); we patch spec.image to that build's image tag.
 	r.Post("/api/projects/{project}/services/{service}/builds/{build}/rollback", h.Rollback)
+	// Project-scoped "latest build per service" — used by the canvas
+	// to color service nodes by their pending/failed/succeeded build
+	// status without N round-trips. Returns a map keyed by short
+	// service name.
+	r.Get("/api/projects/{project}/builds/latest", h.LatestPerService)
+}
+
+// LatestPerService returns {<serviceShortName>: buildSummary} for the
+// project. Newest build wins per service; services with no builds are
+// omitted from the map.
+//
+// Why "short" name (e.g. "hello") vs the FQ "<proj>-<svc>": the canvas
+// already has the short name on each node and looking it up by the
+// fully-qualified form means stripping the project prefix client-side.
+// Doing the strip server-side keeps the consumer dumb.
+func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := buildsCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	raw, err := h.Svc.List(ctx, project, "")
+	if err != nil {
+		h.fail(w, "list project builds", err)
+		return
+	}
+	// Newest-first ordering already enforced by Service.List, so the
+	// first build we see for a given service IS the latest. Skip
+	// duplicates.
+	seen := map[string]bool{}
+	out := map[string]buildSummary{}
+	for _, b := range raw {
+		// b.Spec.Service is the FQ name "<project>-<service>". The
+		// canvas keys by short name, so strip the prefix.
+		fq := b.Spec.Service
+		short := fq
+		if prefix := project + "-"; len(fq) > len(prefix) && fq[:len(prefix)] == prefix {
+			short = fq[len(prefix):]
+		}
+		if seen[short] {
+			continue
+		}
+		seen[short] = true
+		out[short] = toBuildSummary(b)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func (h *BuildsHandler) Rollback(w http.ResponseWriter, r *http.Request) {

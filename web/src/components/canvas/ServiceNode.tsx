@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { Check, Copy, ExternalLink } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
+import type { BuildSummary } from "@/features/services/api";
 import { type DeployStatus } from "@/components/service/DeployStatusPill";
 import { SleepBadge } from "@/components/service/SleepBadge";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
@@ -14,37 +15,52 @@ export interface ServiceNodeData extends Record<string, unknown> {
   project: string;
   service: KusoService;
   env?: KusoEnvironment;
+  // Latest build for this service. Polled at the canvas level so
+  // statusFor can prefer fresh build state over a stale env phase.
+  latestBuild?: BuildSummary;
   // Injected by ProjectCanvas — fires the right-click context menu.
   __onContext?: (e: React.MouseEvent) => void;
 }
 
-function statusFor(env?: KusoEnvironment): DeployStatus {
-  if (!env) return "unknown";
-  const phase = (env.status?.phase ?? "").toString().toLowerCase();
-
-  // Source of truth ordering. The big trap is env.status.phase being
-  // *stale*: helm-operator sets it to "building" when a build kicks
-  // off, but if that build fails, no one writes the corresponding
-  // phase=failed back to the env CR. So the env reports phase=building
-  // forever (or until the next build succeeds) — UI would render
-  // pulsing-yellow on a service that's actually broken.
+function statusFor(env?: KusoEnvironment, latestBuild?: BuildSummary): DeployStatus {
+  // Source-of-truth ordering, in priority:
   //
-  // Resolve by checking the cheap-and-honest signal first: "do you
-  // have desired replicas, and are NONE ready?" That can't lie. Build
-  // states only matter when replicas tell us something is in flux.
+  // 1. Latest build is in-flight → building/deploying. Build state
+  //    is the freshest signal — the moment a user clicks Redeploy,
+  //    the build CR transitions to "pending" and the env CR is far
+  //    behind. Without checking builds first, the canvas would
+  //    keep showing the old failed/active state until the build
+  //    actually rolled.
+  //
+  // 2. env.ready = true → active. Steady-state win condition.
+  //
+  // 3. Latest build failed AND env not ready → failed. Distinct
+  //    from "0 replicas" because a brand-new service with a failed
+  //    first build has 0 desired replicas yet, so the replica
+  //    heuristic alone misses it.
+  //
+  // 4. env has desired replicas but 0 ready → failed (catches the
+  //    "stale env.phase=building" case where the operator never
+  //    wrote phase=failed back).
+  //
+  // 5. Fall through to env.status.phase as the last resort.
+  const buildStatus = (latestBuild?.status ?? "").toLowerCase();
+  if (buildStatus === "pending" || buildStatus === "running" || buildStatus === "building") {
+    return "building";
+  }
+  if (buildStatus === "deploying") return "deploying";
 
-  // 1. Active beats everything — ready=true means the deployment
-  //    rolled and at least one pod is healthy.
+  if (!env) return "unknown";
   if (env.status?.ready) return "active";
 
-  // 2. Stuck-with-no-replicas → failed. Catches the common
-  //    "build failed and env.status.phase never got cleared" case.
+  if (buildStatus === "failed" || buildStatus === "error") return "failed";
+
   const r = env.status?.replicas as { ready?: number; max?: number; desired?: number } | undefined;
   const desired = r?.max ?? r?.desired ?? 0;
   const ready = r?.ready ?? 0;
   if (desired > 0 && ready === 0) return "failed";
 
-  // 3. Fall through to the phase-driven states for in-flight ops.
+  const phase = (env.status?.phase ?? "").toString().toLowerCase();
   if (phase === "building") return "building";
   if (phase === "deploying") return "deploying";
   if (phase === "failed" || phase === "error") return "failed";
@@ -74,7 +90,7 @@ function replicasFor(env?: KusoEnvironment): Replicas | null {
 }
 
 export function ServiceNode({ data }: { data: ServiceNodeData }) {
-  const status = statusFor(data.env);
+  const status = statusFor(data.env, data.latestBuild);
   const url = data.env?.status?.url as string | undefined;
   const replicas = replicasFor(data.env);
   const shortName = serviceShortName(data.project, data.service.metadata.name);

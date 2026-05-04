@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   ReactFlow,
   Background,
@@ -15,6 +16,8 @@ import {
 import "@xyflow/react/dist/style.css";
 
 import type { KusoAddon, KusoEnvironment, KusoService } from "@/types/projects";
+import { api } from "@/lib/api-client";
+import { type BuildSummary } from "@/features/services/api";
 import { ServiceNode, type ServiceNodeData } from "./ServiceNode";
 import { AddonNode, type AddonNodeData } from "./AddonNode";
 import {
@@ -75,17 +78,35 @@ export function ProjectCanvas({
   onSelectService,
   onSelectAddon,
 }: Props) {
+  // Latest build per service in this project. Powers the service
+  // node's status — when the latest build is pending/running/failed,
+  // we color the canvas card accordingly even if env.status.phase is
+  // stale (which it routinely is — helm-operator doesn't write
+  // phase=failed back to the env CR when a build fails). 5s refetch
+  // so a "redeploy" → "pending" transition is visible quickly.
+  const latestBuilds = useQuery<Record<string, BuildSummary>>({
+    queryKey: ["projects", project, "builds", "latest"],
+    queryFn: () => api(`/api/projects/${encodeURIComponent(project)}/builds/latest`),
+    refetchInterval: 5_000,
+    staleTime: 2_000,
+  });
+
   const initialNodes: Node[] = useMemo(() => {
     const out: Node[] = [];
     services.forEach((s) => {
       const env = envs.find(
         (e) => e.spec.service === s.metadata.name && e.spec.kind === "production"
       );
+      // serviceShortName strips the "<project>-" prefix the server
+      // uses for the FQ name; the latest-builds endpoint returns the
+      // map keyed by the same short name so direct lookup works.
+      const shortName = serviceShortName(project, s.metadata.name);
+      const latestBuild = latestBuilds.data?.[shortName];
       out.push({
         id: `svc:${s.metadata.name}`,
         type: "service",
         position: { x: 0, y: 0 },
-        data: { project, service: s, env } satisfies ServiceNodeData,
+        data: { project, service: s, env, latestBuild } satisfies ServiceNodeData,
       });
     });
     addons.forEach((a) => {
@@ -97,7 +118,7 @@ export function ProjectCanvas({
       });
     });
     return out;
-  }, [project, services, addons, envs]);
+  }, [project, services, addons, envs, latestBuilds.data]);
 
   const initialEdges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
