@@ -61,6 +61,27 @@ export default function UpdatesPage() {
     onError: (e) => toast.error(e instanceof Error ? e.message : "Update failed"),
   });
 
+  // Manual GH poll. The 6h background ticker is fine for "is there
+  // a new release?" but useless when the user JUST shipped one and
+  // wants to roll the cluster now. POSTs to /version/refresh, which
+  // runs one synchronous tick + returns the fresh State.
+  const refresh = useMutation({
+    mutationFn: () => api<VersionState>("/api/system/version/refresh", { method: "POST" }),
+    onSuccess: (res) => {
+      // Replace the cached version snapshot directly so the UI reflects
+      // the new "checked just now" timestamp without an extra round-trip.
+      qc.setQueryData(["system", "version"], res);
+      if (res.lastCheckError) {
+        toast.error(`Poll failed: ${res.lastCheckError}`);
+      } else if (res.needsUpdate) {
+        toast.success(`Update available: ${res.latest}`);
+      } else {
+        toast.success(`Up to date (${res.current})`);
+      }
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Refresh failed"),
+  });
+
   if (version.isPending) {
     return (
       <div className="mx-auto max-w-2xl p-6 lg:p-8">
@@ -73,15 +94,27 @@ export default function UpdatesPage() {
 
   return (
     <div className="mx-auto max-w-2xl space-y-4 p-6 lg:p-8">
-      <header className="flex items-center gap-3">
-        <Package className="h-5 w-5 text-[var(--text-tertiary)]" />
-        <div>
+      <header className="flex items-start gap-3">
+        <Package className="h-5 w-5 shrink-0 text-[var(--text-tertiary)]" />
+        <div className="min-w-0 flex-1">
           <h1 className="font-heading text-xl font-semibold tracking-tight">Updates</h1>
           <p className="mt-0.5 text-xs text-[var(--text-secondary)]">
             Self-update the kuso server + operator. Polls{" "}
             <span className="font-mono">github.com/sislelabs/kuso/releases</span> every 6h.
           </p>
         </div>
+        {/* Manual poll trigger: bypasses the 6h ticker so an admin who
+            just shipped a new release can pull it forward immediately
+            instead of waiting (or restarting the pod). */}
+        <Button
+          variant="neutral"
+          size="sm"
+          onClick={() => refresh.mutate()}
+          disabled={refresh.isPending}
+        >
+          <RefreshCw className={cn("h-3 w-3", refresh.isPending && "animate-spin")} />
+          {refresh.isPending ? "Checking…" : "Check for updates"}
+        </Button>
       </header>
 
       {/* Status card */}

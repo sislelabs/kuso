@@ -155,6 +155,16 @@ func (s *Service) State() State {
 	return cp
 }
 
+// Refresh runs one synchronous poll against the GH releases endpoint
+// and returns the freshly-updated State. Used by the manual
+// "Check for updates" button so the user doesn't have to wait for
+// the 6h background ticker. ctx is honoured — callers should pass a
+// short-bounded context so a slow upstream doesn't pin the request.
+func (s *Service) Refresh(ctx context.Context) State {
+	s.tick(ctx)
+	return s.State()
+}
+
 func (s *Service) tick(ctx context.Context) {
 	tag, manifest, err := s.fetchLatest(ctx)
 	now := time.Now().UTC()

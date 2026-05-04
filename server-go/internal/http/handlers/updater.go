@@ -25,6 +25,7 @@ type UpdaterHandler struct {
 
 func (h *UpdaterHandler) Mount(r chi.Router) {
 	r.Get("/api/system/version", h.GetVersion)
+	r.Post("/api/system/version/refresh", h.RefreshVersion)
 	r.Post("/api/system/update", h.StartUpdate)
 	r.Get("/api/system/update/status", h.GetStatus)
 }
@@ -42,6 +43,22 @@ func (h *UpdaterHandler) GetVersion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, h.Svc.State())
+}
+
+// RefreshVersion forces a synchronous GH poll and returns the
+// fresh State. The "Check for updates" button on the Updates page
+// hits this so the user gets immediate feedback instead of waiting
+// for the 6h background ticker. Bounded at 15s so a slow upstream
+// (or a kuso-server pod under load) returns 504-ish quickly rather
+// than blocking the UI.
+func (h *UpdaterHandler) RefreshVersion(w http.ResponseWriter, r *http.Request) {
+	if h.Svc == nil {
+		http.Error(w, "updater unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	writeJSON(w, http.StatusOK, h.Svc.Refresh(ctx))
 }
 
 // StartUpdate kicks the kube Job. Returns 202 immediately —
