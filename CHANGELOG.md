@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.41] — 2026-05-04
+
+### ✨ Features
+- Feat(updates): add manual "Check for updates" button ([4ee5653](https://github.com/sislelabs/kuso/commit/4ee56539098f5c34234d73f2c1cc7b2c5fec1107))
+
 ## [0.7.40] — 2026-05-04
 
 ### 🐛 Bug Fixes
