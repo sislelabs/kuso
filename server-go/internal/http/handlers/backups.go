@@ -200,6 +200,12 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 // S3 key so the client doesn't have to reconstruct the prefix.
 type RestoreRequest struct {
 	Key string `json:"key"`
+	// Into is the destination addon. Empty = restore in-place
+	// (overwrites the source addon's data — destructive). Non-empty
+	// = restore into the addon with this name; the addon must
+	// already exist (create it via the normal addon flow first
+	// with the same kind).
+	Into string `json:"into,omitempty"`
 }
 
 // Restore creates a one-shot Job that downloads the backup and pipes
@@ -217,7 +223,16 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := backupCtx(r)
 	defer cancel()
 
-	releaseName := addons.CRName(project, addon)
+	// Destination addon — defaults to the source (in-place /
+	// destructive). When `into` is set, we restore into a sibling
+	// addon, leaving the source untouched. The new addon must
+	// already exist; we don't create it here so the flow stays
+	// auditable (you saw the addon before you ran restore).
+	destAddon := addon
+	if req.Into != "" {
+		destAddon = req.Into
+	}
+	releaseName := addons.CRName(project, destAddon)
 	jobName := fmt.Sprintf("%s-restore-%d", releaseName, time.Now().Unix())
 
 	one := int32(1)
@@ -227,10 +242,11 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 			Name:      jobName,
 			Namespace: h.Namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "kuso-server",
-				"kuso.sislelabs.com/role":      "restore",
-				"kuso.sislelabs.com/project":   project,
-				"kuso.sislelabs.com/addon":     addon,
+				"app.kubernetes.io/managed-by":      "kuso-server",
+				"kuso.sislelabs.com/role":           "restore",
+				"kuso.sislelabs.com/project":        project,
+				"kuso.sislelabs.com/addon":          destAddon,
+				"kuso.sislelabs.com/source-addon":   addon,
 			},
 		},
 		Spec: batchv1.JobSpec{

@@ -19,6 +19,12 @@ func (k *KusoClient) CreateBuild(project, service string, req CreateBuildRequest
 	return k.client.Post("/api/projects/" + project + "/services/" + service + "/builds")
 }
 
+// RollbackBuild re-points the production env at a previous build's
+// image. Server validates phase=succeeded.
+func (k *KusoClient) RollbackBuild(project, service, build string) (*resty.Response, error) {
+	return k.client.Post("/api/projects/" + project + "/services/" + service + "/builds/" + build + "/rollback")
+}
+
 // ---------- GitHub installations ----------
 
 func (k *KusoClient) GetInstallURL() (*resty.Response, error) {

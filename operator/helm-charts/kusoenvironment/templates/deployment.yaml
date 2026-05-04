@@ -77,10 +77,25 @@ spec:
         - name: app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "latest" }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          {{- /* Workers override the image's default CMD with the
+                 user-supplied command (e.g. `bundle exec sidekiq`).
+                 Web services keep the image's default. */}}
+          {{- if and (eq (default "" .Values.runtime) "worker") .Values.command }}
+          command:
+            {{- range .Values.command }}
+            - {{ . | quote }}
+            {{- end }}
+          {{- end }}
+          {{- /* Workers have no HTTP port + no probes — they're
+                 long-running queue consumers. Web services expose
+                 .Values.port and inherit standard probes (set by
+                 the kuso server when wiring the env). */}}
+          {{- if not (eq (default "" .Values.runtime) "worker") }}
           ports:
             - name: http
               containerPort: {{ .Values.port }}
               protocol: TCP
+          {{- end }}
           {{- with .Values.envVars }}
           env:
             {{- toYaml . | nindent 12 }}

@@ -240,6 +240,28 @@ func (c *Client) UpdateKusoAddon(ctx context.Context, namespace string, a *KusoA
 	return update[KusoAddon](ctx, c, GVRAddons, "KusoAddon", namespace, a)
 }
 
+// ---- KusoCron CRUD --------------------------------------------------
+
+func (c *Client) ListKusoCrons(ctx context.Context, namespace string) ([]KusoCron, error) {
+	return list[KusoCron](ctx, c, GVRCrons, namespace, metav1.ListOptions{})
+}
+
+func (c *Client) GetKusoCron(ctx context.Context, namespace, name string) (*KusoCron, error) {
+	return get[KusoCron](ctx, c, GVRCrons, namespace, name)
+}
+
+func (c *Client) CreateKusoCron(ctx context.Context, namespace string, k *KusoCron) (*KusoCron, error) {
+	return create[KusoCron](ctx, c, GVRCrons, "KusoCron", namespace, k)
+}
+
+func (c *Client) UpdateKusoCron(ctx context.Context, namespace string, k *KusoCron) (*KusoCron, error) {
+	return update[KusoCron](ctx, c, GVRCrons, "KusoCron", namespace, k)
+}
+
+func (c *Client) DeleteKusoCron(ctx context.Context, namespace, name string) error {
+	return deleteCR(ctx, c, GVRCrons, namespace, name)
+}
+
 // UpdateKusoEnvironment replaces an existing KusoEnvironment's spec.
 //
 // NOTE: callers that mutate envFromSecrets values must also bump

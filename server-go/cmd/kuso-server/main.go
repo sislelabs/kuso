@@ -21,6 +21,7 @@ import (
 	httpsrv "kuso/server/internal/http"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/addons"
+	"kuso/server/internal/crons"
 	"kuso/server/internal/audit"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
@@ -136,6 +137,7 @@ func main() {
 	var cfgSvc *config.Service
 	var statSvc *status.Service
 	var addonSvc *addons.Service
+	var cronSvc *crons.Service
 	var ghDeps *httpsrv.GithubDeps
 	var kubeClient *kube.Client
 	var specRecon *spec.Reconciler
@@ -172,6 +174,8 @@ func main() {
 		statSvc = status.New(kc, 5*time.Minute)
 		addonSvc = addons.New(kc, *namespace)
 		addonSvc.NSResolver = nsResolver
+		cronSvc = crons.New(kc, *namespace)
+		cronSvc.NSResolver = nsResolver
 		// Wire the addon→env auto-attach hook so a freshly-created
 		// service env starts with envFromSecrets pre-populated for
 		// every existing project addon. Without this, services added
@@ -271,6 +275,7 @@ func main() {
 		Config:     cfgSvc,
 		Status:     statSvc,
 		Addons:     addonSvc,
+		Crons:      cronSvc,
 		Audit:      auditSvc,
 		Github:     ghDeps,
 		Notify:     notifyDisp,

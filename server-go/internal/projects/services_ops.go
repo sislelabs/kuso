@@ -56,10 +56,10 @@ func toBuildpacksSpec(in *ServiceBuildpacksSpec) *kube.KusoBuildpacksSpec {
 // Empty string is accepted and treated as dockerfile.
 func validateRuntime(rt string) error {
 	switch rt {
-	case "", "dockerfile", "nixpacks", "buildpacks", "static":
+	case "", "dockerfile", "nixpacks", "buildpacks", "static", "worker":
 		return nil
 	default:
-		return fmt.Errorf("%w: unknown runtime %q (supported: dockerfile, nixpacks, buildpacks, static)", ErrInvalid, rt)
+		return fmt.Errorf("%w: unknown runtime %q (supported: dockerfile, nixpacks, buildpacks, static, worker)", ErrInvalid, rt)
 	}
 }
 
@@ -211,6 +211,10 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			// nil = schedule anywhere (chart leaves nodeSelector
 			// blank, no affinity).
 			Placement: ResolvePlacement(proj.Spec.Placement, created.Spec.Placement),
+			// Workers: pass through runtime+command so the env helm
+			// chart suppresses Service+Ingress and uses our argv.
+			Runtime: created.Spec.Runtime,
+			Command: created.Spec.Command,
 		},
 	}
 	if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {
@@ -333,6 +337,8 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			EnvFromSecrets:   envFromSecrets,
 			Placement:        ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement),
 			Volumes:          svc.Spec.Volumes,
+			Runtime:          svc.Spec.Runtime,
+			Command:          svc.Spec.Command,
 		},
 	}
 	created, err := s.Kube.CreateKusoEnvironment(ctx, ns, env)

@@ -286,6 +286,43 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	return s.Kube.CreateKusoBuild(ctx, ns, build)
 }
 
+// Rollback re-points the production env at a previous build's image
+// tag. The build must be in phase=succeeded — rolling to a failed
+// build would land a broken pod. Returns the patched env.
+func (s *Service) Rollback(ctx context.Context, project, service, buildName string) (*kube.KusoEnvironment, error) {
+	ns := s.nsFor(ctx, project)
+	bRaw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).Get(ctx, buildName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("get build: %w", err)
+	}
+	var b kube.KusoBuild
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(bRaw.Object, &b); err != nil {
+		return nil, fmt.Errorf("decode build: %w", err)
+	}
+	if buildPhase(&b) != "succeeded" {
+		return nil, fmt.Errorf("build %s is in phase %q, not succeeded — refuse to roll back to a non-succeeded build", buildName, buildPhase(&b))
+	}
+	if b.Spec.Image == nil {
+		return nil, fmt.Errorf("build %s has no image to roll back to", buildName)
+	}
+	// Patch the production env's image to the build's image. Same
+	// shape as the Poller's promoteImage path.
+	envName := project + "-" + service + "-production"
+	patch := fmt.Sprintf(`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}}}`,
+		b.Spec.Image.Repository, b.Spec.Image.Tag)
+	if _, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+		Patch(ctx, envName, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		return nil, fmt.Errorf("patch env %s: %w", envName, err)
+	}
+	envRaw, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).Get(ctx, envName, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("re-read env: %w", err)
+	}
+	var e kube.KusoEnvironment
+	_ = runtime.DefaultUnstructuredConverter.FromUnstructured(envRaw.Object, &e)
+	return &e, nil
+}
+
 // ensureCloneTokenSecret upserts the <buildName>-token Secret used by
 // the clone init container. We mint a fresh installation token when
 // the github client is wired AND an installation id is set; otherwise

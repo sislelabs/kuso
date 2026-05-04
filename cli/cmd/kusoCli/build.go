@@ -159,6 +159,27 @@ func init() {
 	buildCmd.AddCommand(buildListCmd)
 	buildListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 
+	rollbackCmd := &cobra.Command{
+		Use:   "rollback <project> <service> <build>",
+		Short: "Re-point production at a previous successful build's image",
+		Args:  cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if api == nil {
+				return fmt.Errorf("not logged in; run 'kuso login' first")
+			}
+			resp, err := api.RollbackBuild(args[0], args[1], args[2])
+			if err != nil {
+				return err
+			}
+			if resp.StatusCode() >= 300 {
+				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			}
+			fmt.Printf("rolled %s/%s back to build %s\n", args[0], args[1], args[2])
+			return nil
+		},
+	}
+	buildCmd.AddCommand(rollbackCmd)
+
 	// `kuso redeploy <project> <service>` shortcut at top level.
 	redeployCmd := &cobra.Command{
 		Use:     "redeploy <project> <service>",

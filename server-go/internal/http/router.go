@@ -10,6 +10,7 @@ import (
 	"os"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/crons"
 	"kuso/server/internal/audit"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
@@ -46,6 +47,7 @@ type Deps struct {
 	Config     *config.Service
 	Status     *status.Service
 	Addons     *addons.Service
+	Crons      *crons.Service
 	Audit      *audit.Service
 	Github     *GithubDeps
 	Notify     *notify.Dispatcher
@@ -200,6 +202,10 @@ func NewRouter(d Deps) http.Handler {
 		if d.Addons != nil {
 			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, Logger: d.Logger}
 			addonsH.Mount(r)
+			if d.Crons != nil {
+				cronsH := &httphandlers.CronsHandler{Svc: d.Crons, Logger: d.Logger}
+				cronsH.Mount(r)
+			}
 			// SSH keys for the multi-node "Add node" flow. Lives on
 			// the bearer-protected router; handler already filters on
 			// the right perms because the surface only matters to

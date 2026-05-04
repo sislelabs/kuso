@@ -123,6 +123,13 @@ spec:
                 resources:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
+                runtime:
+                  type: string
+                  description: Mirrors KusoService.spec.runtime so the env helm chart can specialise (e.g. workers skip Service/Ingress/probes).
+                command:
+                  type: array
+                  items: { type: string }
+                  description: argv override; only used when runtime == "worker".
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

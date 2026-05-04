@@ -55,7 +55,22 @@ spec:
                       default: "."
                 runtime:
                   type: string
-                  enum: ["", dockerfile, nixpacks, buildpacks, static]
+                  enum: ["", dockerfile, nixpacks, buildpacks, static, worker]
+                  description: |
+                    Build/runtime mode. "worker" is special — same image as
+                    a sibling web service, but no ingress and a custom
+                    command. Pair it with spec.command and spec.fromService
+                    pointing at the web sibling whose image to reuse.
+                command:
+                  type: array
+                  items: { type: string }
+                  description: argv override; only consulted for runtime=worker.
+                fromService:
+                  type: string
+                  description: |
+                    For runtime=worker: name of the sibling KusoService
+                    whose image this worker should use. Empty = build from
+                    the worker's own repo.
                 port:
                   type: integer
                   format: int32

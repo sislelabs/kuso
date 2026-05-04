@@ -1,4 +1,5 @@
-{{- if .Values.host }}
+{{- /* Workers have no HTTP surface — no ingress regardless of host. */ -}}
+{{- if and .Values.host (not (eq (default "" .Values.runtime) "worker")) }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:

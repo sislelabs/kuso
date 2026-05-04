@@ -1,3 +1,12 @@
+{{- /*
+  Worker services have no HTTP surface — they're long-running queue
+  consumers / job processors, no ingress, no port to expose. The flag
+  is set when KusoService.spec.runtime == "worker" (the kuso server
+  passes spec.runtime through to env.spec.runtime, and the env helm
+  values inherit). For non-workers we render the standard ClusterIP
+  Service + ingress.
+*/ -}}
+{{- if not (eq (default "" .Values.runtime) "worker") }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -12,3 +21,4 @@ spec:
     - name: http
       port: 80
       targetPort: http
+{{- end }}

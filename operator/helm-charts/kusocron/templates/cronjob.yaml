@@ -1,0 +1,71 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "kusocron.fullname" . }}
+  labels:
+    {{- include "kusocron.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule | quote }}
+  suspend: {{ .Values.suspend }}
+  concurrencyPolicy: {{ .Values.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      {{- if gt (int .Values.activeDeadlineSeconds) 0 }}
+      activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
+      {{- end }}
+      template:
+        metadata:
+          labels:
+            {{- include "kusocron.labels" . | nindent 12 }}
+        spec:
+          restartPolicy: OnFailure
+          {{- /* Placement — same model as services + addons. region
+                 label gets a matching toleration so the cron lands on
+                 the right node when a region taint exists. */}}
+          {{- with .Values.placement }}
+          {{- if .labels }}
+          nodeSelector:
+            {{- range $k, $v := .labels }}
+            {{ printf "kuso.sislelabs.com/%s" $k }}: {{ $v | quote }}
+            {{- end }}
+          {{- end }}
+          {{- if .nodes }}
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                  - matchExpressions:
+                      - key: kubernetes.io/hostname
+                        operator: In
+                        values:
+                          {{- range .nodes }}
+                          - {{ . | quote }}
+                          {{- end }}
+          {{- end }}
+          {{- if .labels.region }}
+          tolerations:
+            - key: kuso.sislelabs.com/region
+              operator: Equal
+              value: {{ .labels.region | quote }}
+              effect: NoSchedule
+          {{- end }}
+          {{- end }}
+          containers:
+            - name: cron
+              image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "latest" }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              command:
+                {{- range .Values.command }}
+                - {{ . | quote }}
+                {{- end }}
+              {{- with .Values.envFromSecrets }}
+              envFrom:
+                {{- range . }}
+                - secretRef:
+                    name: {{ . | quote }}
+                {{- end }}
+              {{- end }}
+              resources:
+                {{- toYaml .Values.resources | nindent 16 }}

@@ -1,0 +1,29 @@
+# Default values for KusoCron CRs. The kuso server populates these
+# fields from KusoCron.spec before passing them to helm-operator.
+project: ""
+service: ""
+# Cron expression — server validates before write so we don't have to
+# re-validate here.
+schedule: ""
+# argv for the container. First element is the binary.
+command: []
+# Image — copied from the parent service's production env so this
+# cron runs the same code as `kubectl exec` in the service pod.
+image:
+  repository: ""
+  tag: latest
+  pullPolicy: IfNotPresent
+# Envs from the same connection-secrets every service in the project
+# already picks up via envFrom.
+envFromSecrets: []
+# Knobs documented on the CRD.
+suspend: false
+concurrencyPolicy: Forbid
+successfulJobsHistoryLimit: 3
+failedJobsHistoryLimit: 3
+activeDeadlineSeconds: 0
+# Pod placement — same shape as services. region label gets a
+# matching toleration so the kuso.sislelabs.com/region NoSchedule
+# taint doesn't block scheduling.
+placement: {}
+resources: {}

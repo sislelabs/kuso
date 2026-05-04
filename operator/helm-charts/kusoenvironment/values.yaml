@@ -105,3 +105,10 @@ placement: {}
 # Used by helm release naming inside templates.
 nameOverride: ""
 fullnameOverride: ""
+
+# runtime: matches KusoService.spec.runtime. When "worker" the
+# template skips Service+Ingress+probes and applies .command as the
+# container CMD override.
+runtime: ""
+# command: argv override for worker runtimes. Ignored when runtime != "worker".
+command: []

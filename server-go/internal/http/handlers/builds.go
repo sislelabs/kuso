@@ -24,6 +24,23 @@ type BuildsHandler struct {
 func (h *BuildsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/services/{service}/builds", h.List)
 	r.Post("/api/projects/{project}/services/{service}/builds", h.Create)
+	// One-click rollback: re-point the production env at a previous
+	// successful build's image. The user picks the build by name (CR
+	// name); we patch spec.image to that build's image tag.
+	r.Post("/api/projects/{project}/services/{service}/builds/{build}/rollback", h.Rollback)
+}
+
+func (h *BuildsHandler) Rollback(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := buildsCtx(r)
+	defer cancel()
+	out, err := h.Svc.Rollback(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "build"))
+	if err != nil {
+		// Reuse the existing fail() — handles phase + missing-image
+		// errors as 400, missing build as 404.
+		h.fail(w, "rollback build", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 func buildsCtx(r *http.Request) (context.Context, context.CancelFunc) {

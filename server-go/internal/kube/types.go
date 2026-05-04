@@ -22,6 +22,7 @@ var (
 	GVREnvironments = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusoenvironments"}
 	GVRAddons       = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusoaddons"}
 	GVRBuilds       = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusobuilds"}
+	GVRCrons        = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusocrons"}
 )
 
 // ---- KusoProject ---------------------------------------------------------
@@ -128,6 +129,10 @@ type KusoServiceSpec struct {
 	Project    string              `json:"project"`
 	Repo       *KusoRepoRef        `json:"repo,omitempty"`
 	Runtime    string              `json:"runtime,omitempty"`
+	Command    []string            `json:"command,omitempty"`
+	// FromService — for runtime=worker, the sibling service whose
+	// image to reuse. Empty = the worker has its own repo + builds.
+	FromService string             `json:"fromService,omitempty"`
 	Port       int32               `json:"port,omitempty"`
 	Domains    []KusoDomain        `json:"domains,omitempty"`
 	EnvVars    []KusoEnvVar        `json:"envVars,omitempty"`
@@ -251,6 +256,13 @@ type KusoEnvironmentSpec struct {
 	// them onto every env owned by the service so the chart can
 	// render PVCs without having to look up the parent service.
 	Volumes []KusoVolume `json:"volumes,omitempty"`
+	// Runtime is mirrored from KusoServiceSpec.Runtime so the env
+	// helm chart can branch on it. "worker" skips Service+Ingress+
+	// probes; everything else is web.
+	Runtime string `json:"runtime,omitempty"`
+	// Command is the argv override for worker runtimes. Ignored
+	// when runtime != "worker".
+	Command []string `json:"command,omitempty"`
 }
 
 type KusoPullRequest struct {
@@ -352,6 +364,40 @@ type KusoStaticSpec struct {
 type KusoBuildpacksSpec struct {
 	BuilderImage   string `json:"builderImage,omitempty"`
 	LifecycleImage string `json:"lifecycleImage,omitempty"`
+}
+
+// ---- KusoCron ------------------------------------------------------------
+
+// KusoCron schedules a recurring job that runs the parent service's
+// image with a custom command. Helm chart renders to a kube CronJob
+// reusing the service's envFromSecrets so the job runs in the same
+// world as the service pod (same DATABASE_URL, same REDIS_URL, etc.).
+type KusoCron struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   KusoCronSpec   `json:"spec,omitempty"`
+	Status map[string]any `json:"status,omitempty"`
+}
+
+type KusoCronSpec struct {
+	Project                    string         `json:"project"`
+	Service                    string         `json:"service"`
+	Schedule                   string         `json:"schedule"`
+	Command                    []string       `json:"command"`
+	Suspend                    bool           `json:"suspend,omitempty"`
+	ConcurrencyPolicy          string         `json:"concurrencyPolicy,omitempty"`
+	SuccessfulJobsHistoryLimit int            `json:"successfulJobsHistoryLimit,omitempty"`
+	FailedJobsHistoryLimit     int            `json:"failedJobsHistoryLimit,omitempty"`
+	ActiveDeadlineSeconds      int            `json:"activeDeadlineSeconds,omitempty"`
+	Resources                  map[string]any `json:"resources,omitempty"`
+	// Image + envFromSecrets are populated by the kuso server at
+	// create time by reading the parent service's production env.
+	// Helm-operator is dumb and can only render what's in spec —
+	// not look up sibling CRs. SyncFromService re-resolves on demand.
+	Image          *KusoImage     `json:"image,omitempty"`
+	EnvFromSecrets []string       `json:"envFromSecrets,omitempty"`
+	Placement      *KusoPlacement `json:"placement,omitempty"`
 }
 
 // ---- Kuso (config CRD) ---------------------------------------------------

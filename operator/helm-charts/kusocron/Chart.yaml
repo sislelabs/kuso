@@ -1,0 +1,8 @@
+apiVersion: v2
+name: kusocron
+description: A scheduled job that runs a command against a kuso service's image.
+  Renders to a kube CronJob; reuses the parent service's image + envFromSecrets
+  + placement so the cron runs in the same world as the service.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
