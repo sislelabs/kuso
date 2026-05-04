@@ -81,7 +81,16 @@ spec:
               SRC="/workspace/src/{{ .Values.repo.path | default "." }}"
               cd "$SRC"
               echo "running nixpacks build --out . (writes .nixpacks/ alongside source)"
-              nixpacks build . --out .
+              # GOTOOLCHAIN=auto lets Go fetch a newer toolchain at build
+              # time when go.mod's `go 1.X` directive exceeds nixpacks'
+              # bundled go (currently 1.22). Without this, every Go-1.23+
+              # repo errored with "toolchain not available" inside kaniko.
+              # Auto-fetch needs network, which kaniko already has.
+              # NIXPACKS_NO_CACHE prevents the upstream cache layer from
+              # masking a fresh nixpkgs pin between builds.
+              nixpacks build . --out . \
+                --env GOTOOLCHAIN=auto \
+                --env GOFLAGS=-mod=mod
               echo "--- generated Dockerfile ---"
               cat .nixpacks/Dockerfile
           volumeMounts:

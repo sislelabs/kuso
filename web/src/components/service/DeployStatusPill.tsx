@@ -10,10 +10,14 @@ export type DeployStatus =
   | "unknown";
 
 const styles: Record<DeployStatus, string> = {
+  // Building/deploying ride the dedicated --building hue (yellow)
+  // so they're distinct from the orange accent used for hover and
+  // primary highlights. Same hue as the canvas service node's
+  // animated border in the same state.
   building:
-    "bg-[var(--accent-subtle)] text-[var(--accent)] border-[var(--accent)]/30 animate-pulse",
+    "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30 animate-pulse",
   deploying:
-    "bg-[var(--accent-subtle)] text-[var(--accent)] border-[var(--accent)]/30 animate-pulse",
+    "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30 animate-pulse",
   active:
     "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30",
   sleeping:

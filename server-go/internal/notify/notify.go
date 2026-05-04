@@ -524,37 +524,69 @@ func redact(url string) string {
 
 // Format helpers used by callers to keep event creation tidy.
 
+// inAppURL returns the dashboard path the bell-icon notification
+// click should land on for this kind of event. Web-side, the popover
+// renders <a href={event.url}> when populated, falling back to a
+// non-interactive row when blank. Paths use simple anchors that the
+// SPA Router resolves; no query strings so they survive the static
+// export.
+func serviceURL(project, service string) string {
+	if project == "" || service == "" {
+		return ""
+	}
+	return fmt.Sprintf("/projects/%s?service=%s", project, service)
+}
+
+func projectURL(project string) string {
+	if project == "" {
+		return ""
+	}
+	return "/projects/" + project
+}
+
 func BuildSucceeded(project, service, ref, deployURL string) Event {
+	// Builds land on the service overlay's Deployments tab so the
+	// user can see the new revision in context. deployURL came in
+	// from the build pipeline and was sometimes the deployed app's
+	// public URL (different intent), so we use the in-app link.
 	return Event{
 		Type:     EventBuildSucceeded,
 		Title:    fmt.Sprintf("✓ Build succeeded: %s", service),
 		Body:     fmt.Sprintf("ref `%s`", shortRef(ref)),
 		Project:  project,
 		Service:  service,
-		URL:      deployURL,
+		URL:      serviceURL(project, service),
 		Severity: "info",
+		Extra:    map[string]string{"deployURL": deployURL, "ref": shortRef(ref)},
 	}
 }
 
 func BuildFailed(project, service, ref, reason string) Event {
+	// Failed builds → service Deployments tab so the user sees the
+	// failed entry + can hit "view logs" / "redeploy".
 	return Event{
 		Type:     EventBuildFailed,
 		Title:    fmt.Sprintf("✗ Build failed: %s", service),
 		Body:     reason,
 		Project:  project,
 		Service:  service,
+		URL:      serviceURL(project, service),
 		Severity: "error",
 		Extra:    map[string]string{"ref": shortRef(ref)},
 	}
 }
 
 func PodCrashed(project, service, podName, reason string) Event {
+	// Crashes → service overlay (Logs tab in particular is what the
+	// user wants next, but the overlay router defaults to Logs when
+	// the service has crashed pods, so a single deep-link works).
 	return Event{
 		Type:     EventPodCrashed,
 		Title:    fmt.Sprintf("⚠ Pod crashed: %s", service),
 		Body:     reason,
 		Project:  project,
 		Service:  service,
+		URL:      serviceURL(project, service),
 		Severity: "warn",
 		Extra:    map[string]string{"pod": podName},
 	}
@@ -569,6 +601,7 @@ func NodeUnreachable(node, reason string) Event {
 		Type:     EventNodeUnreachable,
 		Title:    fmt.Sprintf("✗ Node unreachable: %s", node),
 		Body:     reason,
+		URL:      "/settings/nodes",
 		Severity: "error",
 		Extra:    map[string]string{"node": node},
 	}
@@ -582,16 +615,29 @@ func NodeRecovered(node string) Event {
 		Type:     EventNodeRecovered,
 		Title:    fmt.Sprintf("✓ Node recovered: %s", node),
 		Body:     "node is Ready again and uncordoned",
+		URL:      "/settings/nodes",
 		Severity: "info",
 		Extra:    map[string]string{"node": node},
 	}
 }
 
 func AlertFired(title, body, severity string, extra map[string]string) Event {
+	// Alert events know where to deep-link via Extra: when the rule
+	// targeted a service we can land there; otherwise fall through
+	// to the alerts page so the user sees rule context.
+	url := "/settings/alerts"
+	if extra != nil {
+		if p, s := extra["project"], extra["service"]; p != "" && s != "" {
+			url = serviceURL(p, s)
+		} else if p := extra["project"]; p != "" {
+			url = projectURL(p)
+		}
+	}
 	return Event{
 		Type:     EventAlertFired,
 		Title:    title,
 		Body:     body,
+		URL:      url,
 		Severity: severity,
 		Extra:    extra,
 	}

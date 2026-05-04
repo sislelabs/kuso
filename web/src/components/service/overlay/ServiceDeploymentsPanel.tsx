@@ -46,7 +46,7 @@ function statusBadge(s: Status) {
     active:     { label: "ACTIVE",     cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" },
     superseded: { label: "SUPERSEDED", cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
     failed:     { label: "FAILED",     cls: "bg-red-500/10 text-red-400 border-red-500/30" },
-    running:    { label: "BUILDING",   cls: "bg-amber-500/10 text-amber-400 border-amber-500/30" },
+    running:    { label: "BUILDING",   cls: "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30" },
     pending:    { label: "PENDING",    cls: "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-subtle)]" },
     unknown:    { label: "UNKNOWN",    cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
   };

@@ -26,6 +26,16 @@ function statusFor(env?: KusoEnvironment): DeployStatus {
   if (env.status?.ready) return "active";
   if (phase === "failed" || phase === "error") return "failed";
   if (phase === "sleeping") return "sleeping";
+  // Heuristic for "stuck failed": env has desired replicas but none
+  // are ready AND status hasn't reported any other phase. Catches the
+  // common case where a build failure leaves env.status.phase empty
+  // (no deploy ever happened) — without this, the canvas falls back
+  // to "unknown" and the failed service paints as a generic
+  // hover-orange border instead of red.
+  const r = env.status?.replicas as { ready?: number; max?: number; desired?: number } | undefined;
+  const desired = r?.max ?? r?.desired ?? 0;
+  const ready = r?.ready ?? 0;
+  if (desired > 0 && ready === 0) return "failed";
   return "unknown";
 }
 
@@ -71,7 +81,7 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         "group flex h-[120px] w-[280px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
         "hover:border-[var(--border-strong)]",
         (status === "building" || status === "deploying") &&
-          "border-[var(--accent)]/70 animate-pulse",
+          "border-[var(--building)]/70 animate-pulse",
         status === "active" && "border-emerald-500/60",
         status === "failed" && "border-red-500/60",
         status === "sleeping" && "opacity-60 border-[var(--border-strong)]",

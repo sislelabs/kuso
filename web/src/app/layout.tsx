@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
 import { Roboto, DM_Sans, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
-import { Toaster } from "sonner";
 import { QueryProvider } from "@/lib/query-client";
+import { ThemedToaster } from "@/components/shared/ThemedToaster";
 import "./globals.css";
 
 const roboto = Roboto({
@@ -47,7 +47,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <QueryProvider>
             {children}
-            <Toaster position="bottom-right" />
+            <ThemedToaster />
           </QueryProvider>
         </ThemeProvider>
       </body>

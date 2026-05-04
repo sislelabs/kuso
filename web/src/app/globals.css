@@ -125,6 +125,8 @@
   --success-subtle: rgba(112, 138, 107, 0.14);
   --warning: #C44C1F;             /* orange shadow side */
   --warning-subtle: rgba(196, 76, 31, 0.14);
+  --building: #B8860B;            /* yellow, shadow side */
+  --building-subtle: rgba(184, 134, 11, 0.16);
   --error: #941B0C;               /* deep red */
   --error-subtle: rgba(148, 27, 12, 0.10);
   --info: #40476D;                /* slate-blue */
@@ -262,12 +264,18 @@
   /* Status hues — used by Badge, Toast, build/env state pills, etc.
      These don't have direct CSS-var consumers in shadcn primitives;
      features import them via utility classes (text-success/etc) or
-     read the var directly. Periwinkle isn't here because it's the
-     accent, not a status. */
+     read the var directly.
+
+     building is its own hue (yellow) so "build in progress" doesn't
+     collide with the orange hover/accent — they were the same color
+     before, which made every animated-pulsing service look like it
+     was being hover-targeted. */
   --success: #ACBEA3;             /* sage */
   --success-subtle: rgba(172, 190, 163, 0.14);
   --warning: #EB6534;             /* orange */
   --warning-subtle: rgba(235, 101, 52, 0.14);
+  --building: #F0B429;            /* yellow — build in progress */
+  --building-subtle: rgba(240, 180, 41, 0.18);
   --error: #C9382A;               /* lifted error */
   --error-subtle: rgba(201, 56, 42, 0.14);
   --info: #AFBBF2;                /* periwinkle (alias for accent) */
