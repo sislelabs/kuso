@@ -59,6 +59,11 @@ spec:
         env:
         - name: REGISTRY_HTTP_ADDR
           value: 0.0.0.0:5000
+        # Enable the delete API so the registry-gc CronJob can drop
+        # untagged blobs. Without this flag, garbage-collect refuses
+        # to delete anything and the PVC grows unbounded.
+        - name: REGISTRY_STORAGE_DELETE_ENABLED
+          value: "true"
         volumeMounts:
         - name: registry-data
           mountPath: /var/lib/registry

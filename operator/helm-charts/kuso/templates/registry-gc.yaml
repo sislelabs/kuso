@@ -1,0 +1,202 @@
+{{- if and .Values.registry.enabled .Values.registry.create .Values.registry.gc.enabled -}}
+# Registry garbage collection.
+#
+# The in-cluster registry (`registry:2`) doesn't reap unreferenced
+# blobs automatically — every successful build leaves an image tag
+# plus its content-addressable layer blobs forever. On a busy cluster
+# doing 30 builds/day, the PVC grows ~150-300GB/year and eventually
+# fills the local-path volume.
+#
+# This CronJob:
+#  1. Scales the registry Deployment to 0 (registry GC must run
+#     against an offline storage; otherwise concurrent writes can
+#     corrupt the index). Waits for the pod to fully terminate so
+#     the RWO PVC is released.
+#  2. Mounts the same PVC at /var/lib/registry.
+#  3. Runs `registry garbage-collect ... --delete-untagged` to drop
+#     blobs not referenced by any tag (including `.cache/sha256:...`
+#     blobs from kaniko's layer cache).
+#  4. Scales the Deployment back to 1 — done unconditionally in the
+#     finalize step (defer-style) so a GC failure still leaves the
+#     registry running. A separate "recover" CronJob also fires
+#     periodically as belt-and-braces in case the whole Job dies.
+#
+# Default schedule is weekly on Sunday at 03:30 UTC — the safest
+# indie-friendly window (low traffic, recovers before Monday morning).
+# Whole job typically completes in 1-3 minutes; the registry is offline
+# for that window. Override .Values.registry.gc.schedule to tune.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuso-registry-gc
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kuso-registry-gc
+rules:
+  # Scale the registry Deployment around the GC run.
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["kuso-registry"]
+    verbs: ["get", "patch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale"]
+    resourceNames: ["kuso-registry"]
+    verbs: ["get", "patch", "update"]
+  # Wait for pod termination before mounting the PVC. RWO PVCs can't
+  # be mounted by the GC pod while the registry pod still holds it.
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kuso-registry-gc
+subjects:
+  - kind: ServiceAccount
+    name: kuso-registry-gc
+roleRef:
+  kind: Role
+  name: kuso-registry-gc
+  apiGroup: rbac.authorization.k8s.io
+---
+# ConfigMap holding the orchestration script. Pulled in by the gc
+# container so the Job manifest stays readable.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kuso-registry-gc-script
+data:
+  run-gc.sh: |
+    #!/bin/sh
+    set -u
+    # Always try to scale the registry back up at exit so a failed GC
+    # doesn't leave the registry offline.
+    cleanup() {
+      echo "[gc] scaling kuso-registry back to 1"
+      kubectl scale deployment/kuso-registry --replicas=1 || true
+    }
+    trap cleanup EXIT INT TERM
+
+    echo "[gc] scaling kuso-registry to 0"
+    kubectl scale deployment/kuso-registry --replicas=0
+    echo "[gc] waiting for registry pod to terminate (PVC release)"
+    for i in $(seq 1 60); do
+      n=$(kubectl get pods -l run=registry -o name 2>/dev/null | wc -l)
+      if [ "$n" = "0" ]; then
+        echo "[gc] registry pods terminated"
+        break
+      fi
+      sleep 2
+    done
+    n=$(kubectl get pods -l run=registry -o name 2>/dev/null | wc -l)
+    if [ "$n" != "0" ]; then
+      echo "[gc] timed out waiting for registry pod to terminate" >&2
+      exit 1
+    fi
+
+    echo "[gc] running garbage-collect --delete-untagged"
+    /bin/registry garbage-collect /etc/docker/registry/config.yml --delete-untagged
+    rc=$?
+    echo "[gc] garbage-collect exit code: $rc"
+    exit $rc
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kuso-registry-gc
+  labels:
+    {{- include "kuso.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.registry.gc.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: kuso-registry-gc
+          restartPolicy: OnFailure
+          # The image needs both `registry` (the GC binary) and
+          # `kubectl` for scale-up/down. We ship a small init that
+          # copies kubectl into the registry image's filesystem, then
+          # the gc container has both binaries on PATH.
+          initContainers:
+            - name: install-kubectl
+              image: bitnami/kubectl:1.30
+              command:
+                - sh
+                - -c
+                - cp /opt/bitnami/kubectl/bin/kubectl /shared/kubectl && chmod +x /shared/kubectl
+              volumeMounts:
+                - name: shared-bin
+                  mountPath: /shared
+          containers:
+            - name: gc
+              image: registry:2
+              command:
+                - sh
+                - /scripts/run-gc.sh
+              env:
+                # registry:2 ships `registry` at /bin/registry; verify
+                # via PATH in case the image layout drifts.
+                - name: PATH
+                  value: /shared:/bin:/usr/bin:/sbin:/usr/sbin
+              volumeMounts:
+                - name: registry-data
+                  mountPath: /var/lib/registry
+                  subPath: registry
+                - name: gc-script
+                  mountPath: /scripts
+                - name: shared-bin
+                  mountPath: /shared
+          volumes:
+            - name: registry-data
+              persistentVolumeClaim:
+                claimName: kuso-registry-data-pvc
+            - name: gc-script
+              configMap:
+                name: kuso-registry-gc-script
+                defaultMode: 0755
+            - name: shared-bin
+              emptyDir: {}
+---
+# Belt-and-braces: a second CronJob that fires ~5 min after the GC
+# start time and unconditionally scales the registry back up. If the
+# GC Job's pod is OOM-killed or evicted before its trap fires, this
+# recovers the registry without operator intervention. In the happy
+# path it's a no-op (kubectl scale is idempotent).
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kuso-registry-gc-recover
+  labels:
+    {{- include "kuso.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.registry.gc.recoverSchedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          serviceAccountName: kuso-registry-gc
+          restartPolicy: OnFailure
+          containers:
+            - name: scale-up
+              image: bitnami/kubectl:1.30
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  echo "[recover] ensuring kuso-registry has at least 1 replica"
+                  kubectl scale deployment/kuso-registry --replicas=1
+                  echo "[recover] done"
+{{- end }}

@@ -85,6 +85,24 @@ type Service struct {
 	// will fail to clone.
 	Tokens TokenMinter
 
+	// MaxConcurrentBuilds caps cluster-wide simultaneous kaniko Jobs.
+	// kaniko Jobs request `1.5 CPU / 2Gi` (operator/helm-charts/
+	// kusobuild/values.yaml); on a 2-core indie box, more than 2
+	// concurrent builds saturate the node and starve the kuso-server
+	// pod (control-plane-pinned). The cap protects the host without
+	// hard-rejecting webhook-triggered builds — Create blocks up to
+	// AdmitTimeout for a slot before failing with ErrConflict.
+	//
+	// 0 disables the cap (legacy behaviour pre-v0.7.17). Override per
+	// project via the kuso.sislelabs.com/build-max-concurrent
+	// annotation on the KusoProject CR.
+	MaxConcurrentBuilds int
+	// AdmitTimeout is how long Create waits for a build slot to open
+	// before returning ErrConflict. Zero defaults to 60s — long
+	// enough to absorb a monorepo push storm against a 1-min build,
+	// short enough to bound webhook retry latency.
+	AdmitTimeout time.Duration
+
 	// inFlight dedupes concurrent Create calls keyed on
 	// (project, service, sha). When a webhook retries (GitHub does so
 	// on 5xx) or two callers race the same build, the second caller
@@ -92,6 +110,14 @@ type Service struct {
 	// KusoBuild + clone-token Secret. Keys live for the duration of
 	// Create only; freed in defer regardless of outcome.
 	inFlight sync.Map
+
+	// admitOnce + admitSem lazy-init the global build-admission
+	// semaphore. Capacity is sized from MaxConcurrentBuilds the first
+	// time Create runs, so a Service constructed with the default
+	// (0) is uncapped, and tests can flip MaxConcurrentBuilds before
+	// the first Create with no construction order dependency.
+	admitOnce sync.Once
+	admitSem  chan struct{}
 }
 
 // inFlightEntry is the value side of inFlight: a channel that closes
@@ -113,11 +139,106 @@ func inFlightKey(project, service, sha string) string {
 }
 
 // New constructs a builds.Service with a default namespace fallback.
+//
+// MaxConcurrentBuilds + AdmitTimeout are zero by default (uncapped,
+// matches pre-v0.7.17 behaviour). Callers in main.go set them from
+// KUSO_BUILD_MAX_CONCURRENT and KUSO_BUILD_ADMIT_TIMEOUT env vars.
 func New(k *kube.Client, namespace string) *Service {
 	if namespace == "" {
 		namespace = "kuso"
 	}
 	return &Service{Kube: k, Namespace: namespace}
+}
+
+// admitBuild blocks until a build slot opens, ctx is cancelled, or
+// AdmitTimeout elapses. Returns nil on admission and ErrConflict on
+// timeout / cap-full. Slot is released by the caller's deferred call
+// to releaseSlot().
+//
+// Per-project override: the KusoProject CR may carry a
+// `kuso.sislelabs.com/build-max-concurrent` annotation that raises or
+// lowers the cap for builds attributed to that project. We don't
+// model this as a separate semaphore per project (would prevent
+// cross-project starvation guarantees); instead, when a project's
+// override is *lower* than the global cap, we reject earlier; when
+// *higher*, we ignore it (the host machine's cap wins).
+func (s *Service) admitBuild(ctx context.Context, project string) (release func(), err error) {
+	if s.MaxConcurrentBuilds <= 0 {
+		// Cap disabled — admit immediately.
+		return func() {}, nil
+	}
+	s.admitOnce.Do(func() {
+		// Build the semaphore once on first use. Capacity matches the
+		// configured cap; a buffered channel acts as the counting
+		// semaphore (buffer = max in-flight).
+		s.admitSem = make(chan struct{}, s.MaxConcurrentBuilds)
+	})
+	// Per-project lower bound. Reading the project CR is cheap (kube
+	// cache; one Get) and only matters when set.
+	if cap := s.projectBuildCap(ctx, project); cap > 0 && cap < s.MaxConcurrentBuilds {
+		// Per-project cap is tighter — count this project's active
+		// builds and reject if at limit. We don't take the global
+		// semaphore yet; we want to block on whichever limit binds.
+		if active := s.countActiveBuildsForProject(ctx, project); active >= cap {
+			return nil, fmt.Errorf("%w: project %s at concurrency cap (%d active)", ErrConflict, project, active)
+		}
+	}
+	timeout := s.AdmitTimeout
+	if timeout <= 0 {
+		timeout = 60 * time.Second
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	select {
+	case s.admitSem <- struct{}{}:
+		return func() { <-s.admitSem }, nil
+	case <-waitCtx.Done():
+		return nil, fmt.Errorf("%w: build slot unavailable after %s (cap %d)", ErrConflict, timeout, s.MaxConcurrentBuilds)
+	}
+}
+
+// projectBuildCap returns the per-project max-concurrent override
+// from the KusoProject CR's annotation, or 0 when unset / unparseable.
+// Best-effort: any kube error returns 0 (use the global cap).
+func (s *Service) projectBuildCap(ctx context.Context, project string) int {
+	if s.Kube == nil || project == "" {
+		return 0
+	}
+	gctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	p, err := s.Kube.GetKusoProject(gctx, s.Namespace, project)
+	if err != nil || p == nil {
+		return 0
+	}
+	v := p.Annotations["kuso.sislelabs.com/build-max-concurrent"]
+	if v == "" {
+		return 0
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return 0
+	}
+	return n
+}
+
+// countActiveBuildsForProject returns the number of in-flight (not
+// `build-state=done`) builds for a project across its execution
+// namespace. Used by per-project caps. Best-effort: kube errors
+// return 0 (don't block on transient list failures).
+func (s *Service) countActiveBuildsForProject(ctx context.Context, project string) int {
+	if s.Kube == nil || project == "" {
+		return 0
+	}
+	lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	ns := s.nsFor(lctx, project)
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
+		LabelSelector: "kuso.sislelabs.com/project=" + project + ",!kuso.sislelabs.com/build-state",
+	})
+	if err != nil {
+		return 0
+	}
+	return len(raw.Items)
 }
 
 // nsFor returns the execution namespace for project, defaulting to the
@@ -298,6 +419,18 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 			close(entry.done)
 		}()
 	}
+
+	// Admission control: cap cluster-wide simultaneous builds so a
+	// monorepo push storm doesn't OOM the single-box node. Blocks up
+	// to AdmitTimeout for a slot; ErrConflict on timeout. Released
+	// when the build CR is created (the kaniko Job pod is what
+	// actually consumes node resources, but we hold the slot until
+	// CR creation so the operator's helm render is bounded too).
+	release, err := s.admitBuild(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 
 	buildName := buildCRName(project, service, sha)
 	imageRepo := fmt.Sprintf("%s/%s/%s", RegistryHost, project, service)

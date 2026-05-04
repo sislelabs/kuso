@@ -1,33 +1,52 @@
 # helm-operator watches. v0.2 reshape — see docs/REDESIGN.md.
+#
+# maxConcurrentReconciles bumps each kind's worker pool from the
+# helm-operator default of 1. Reconcile is one-helm-render-and-apply
+# per CR, taking ~500ms-2s; with N=1 a fresh restart on a 200-service
+# cluster takes 3-7 minutes to catch up because reconciles serialise
+# per kind. Bumping to 4 cuts that to ~1-2 minutes without overwhelming
+# the kube-apiserver — each reconcile is mostly CPU-bound on rendering
+# helm templates, not API throughput. Tune up further only if reconcile
+# lag is actually visible at scale.
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: Kuso
   chart: helm-charts/kuso
+  maxConcurrentReconciles: 2
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoProject
   chart: helm-charts/kusoproject
   reconcilePeriod: 3m
+  maxConcurrentReconciles: 4
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoService
   chart: helm-charts/kusoservice
   reconcilePeriod: 3m
+  maxConcurrentReconciles: 4
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoEnvironment
   chart: helm-charts/kusoenvironment
   reconcilePeriod: 3m
+  maxConcurrentReconciles: 4
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoAddon
   chart: helm-charts/kusoaddon
   reconcilePeriod: 3m
+  maxConcurrentReconciles: 4
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoBuild
   chart: helm-charts/kusobuild
   reconcilePeriod: 1m
+  # Build CRs come in bursts (a monorepo push triggers N at once).
+  # Higher concurrency here cuts the queue-time before each kaniko
+  # Job actually starts. The cluster-wide build cap in builds.Service
+  # already caps simultaneous Job pods so we won't OOM the node.
+  maxConcurrentReconciles: 6
   # Skip completed builds. The kuso-server build poller stamps
   # `kuso.sislelabs.com/build-state=done` on succeeded/failed CRs;
   # without this selector, the operator reconciles every old
@@ -43,4 +62,5 @@
   kind: KusoCron
   chart: helm-charts/kusocron
   reconcilePeriod: 3m
+  maxConcurrentReconciles: 4
 #+kubebuilder:scaffold:watch

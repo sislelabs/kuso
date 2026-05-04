@@ -136,6 +136,11 @@ spec:
           env:
             - { name: KUSO_HTTP_ADDR, value: ":3000" }
             - { name: KUSO_DB_PATH, value: /data/kuso.sqlite }
+            # Log search storage lives in its own SQLite file so the
+            # logship goroutine's heavy FTS5 write traffic doesn't
+            # contend with the latency-sensitive control-plane writes.
+            # Same /data PVC as the main DB; just a separate file.
+            - { name: KUSO_LOG_DB_PATH, value: /data/logs.sqlite }
             - { name: KUSO_NAMESPACE, value: kuso }
             - { name: KUSO_ADMIN_USERNAME, value: admin }
             - { name: KUSO_ADMIN_EMAIL, value: admin@kuso.sislelabs.com }

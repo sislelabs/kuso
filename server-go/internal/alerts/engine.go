@@ -21,17 +21,24 @@ import (
 const tickInterval = 1 * time.Minute
 
 type Engine struct {
-	DB     *db.DB
+	// DB holds alert rules + node metrics — main kuso.db.
+	DB *db.DB
+	// LogDB holds the LogLine + LogLineFts tables — separate sqlite
+	// file as of v0.7.17 so log volume doesn't starve the control
+	// plane. Optional; when nil, log-match alert rules are skipped
+	// with a warn log instead of a hard failure (lets dev runs
+	// without log-shipping wired through).
+	LogDB  *db.LogDB
 	Kube   *kube.Client
 	Notify *notify.Dispatcher
 	Logger *slog.Logger
 }
 
-func New(d *db.DB, k *kube.Client, n *notify.Dispatcher, logger *slog.Logger) *Engine {
+func New(d *db.DB, ld *db.LogDB, k *kube.Client, n *notify.Dispatcher, logger *slog.Logger) *Engine {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Engine{DB: d, Kube: k, Notify: n, Logger: logger}
+	return &Engine{DB: d, LogDB: ld, Kube: k, Notify: n, Logger: logger}
 }
 
 func (e *Engine) Run(ctx context.Context) {
@@ -109,9 +116,16 @@ func (e *Engine) evaluate(ctx context.Context, r *db.AlertRule, now time.Time) (
 		if r.ThresholdInt != nil {
 			threshold = *r.ThresholdInt
 		}
+		if e.LogDB == nil {
+			// Log search storage isn't wired (dev run, or operator
+			// disabled the shipper). Skip rather than crash the
+			// engine on every tick.
+			e.Logger.Warn("alerts: log-match rule skipped, LogDB not wired", "rule", r.ID)
+			return false, "", nil
+		}
 		ctxQ, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		n, err := e.DB.CountLogMatches(ctxQ, r.Project, r.Service, r.Query, since)
+		n, err := e.LogDB.CountLogMatches(ctxQ, r.Project, r.Service, r.Query, since)
 		if err != nil {
 			return false, "", err
 		}

@@ -48,6 +48,12 @@ import (
 func main() {
 	addr := flag.String("addr", envOr("KUSO_HTTP_ADDR", ":3000"), "HTTP listen address")
 	dbPath := flag.String("db", envOr("KUSO_DB_PATH", "/var/lib/kuso/kuso.db"), "SQLite database path")
+	// Log-storage SQLite is a separate file from kuso.db so the noisy
+	// log-shipper write path doesn't contend with the latency-sensitive
+	// control-plane writes (audit, auth, notifications). Defaults to
+	// logs.db in the same directory as the main DB; override with
+	// KUSO_LOG_DB_PATH or the --log-db flag for non-default layouts.
+	logDBPath := flag.String("log-db", envOr("KUSO_LOG_DB_PATH", "/var/lib/kuso/logs.db"), "SQLite database path for log search storage")
 	namespace := flag.String("namespace", envOr("KUSO_NAMESPACE", "kuso"), "Kubernetes namespace for Kuso CRs")
 	flag.Parse()
 
@@ -73,6 +79,23 @@ func main() {
 			logger.Error("db: close", "err", err)
 		}
 	}()
+
+	// Log DB is best-effort. A failure here disables search + log-match
+	// alerts but keeps the rest of kuso functional. The most common
+	// failure is a stale RWO PVC mount or a permission glitch; on
+	// indie installs the logs.db lives in the same volume as kuso.db
+	// so this almost never fails when kuso.db opens cleanly.
+	logDB, err := db.OpenLog(*logDBPath)
+	if err != nil {
+		logger.Error("logdb: open (log search disabled)", "err", err, "path", *logDBPath)
+		logDB = nil
+	} else {
+		defer func() {
+			if err := logDB.Close(); err != nil {
+				logger.Error("logdb: close", "err", err)
+			}
+		}()
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -177,6 +200,14 @@ func main() {
 		projSvc.SecretsCleanupForEnv = secSvc.DeleteForEnv
 		buildSvc = builds.New(kc, *namespace)
 		buildSvc.NSResolver = nsResolver
+		// Cluster-wide concurrent-build cap. Defaults to 2 — sized
+		// for the 2-core indie box where 2 kaniko Jobs (1.5 CPU each)
+		// already saturate the node. Operators with bigger machines
+		// raise this with KUSO_BUILD_MAX_CONCURRENT. To effectively
+		// disable the cap on large clusters, set it to a high number
+		// (e.g. 999); the envInt helper rejects 0 / negative.
+		buildSvc.MaxConcurrentBuilds = envInt("KUSO_BUILD_MAX_CONCURRENT", 2)
+		buildSvc.AdmitTimeout = time.Duration(envInt("KUSO_BUILD_ADMIT_TIMEOUT_SECONDS", 60)) * time.Second
 		logsSvc = logs.New(kc, *namespace)
 		cfgSvc = config.New(kc, *namespace)
 		statSvc = status.New(kc, 5*time.Minute)
@@ -246,11 +277,12 @@ func main() {
 		if os.Getenv("KUSO_FINALIZER_SWEEP_DISABLED") != "true" {
 			go runFinalizerSweep(ctx, kc, *namespace, logger)
 		}
-		// Daily SQLite cleanup — prunes NotificationEvent + LogLine
-		// rows older than retention. Skipped by
-		// KUSO_DAILY_CLEANUP_DISABLED=true.
+		// Daily SQLite cleanup — prunes NotificationEvent (main DB)
+		// and LogLine (log DB) rows older than retention. Skipped by
+		// KUSO_DAILY_CLEANUP_DISABLED=true. Pass both DBs through;
+		// nil log DB just skips the log prune step.
 		if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
-			go runDailyCleanup(ctx, database, kc, *namespace, logger)
+			go runDailyCleanup(ctx, database, logDB, kc, *namespace, logger)
 		}
 
 		// GitHub App is opt-in; if env vars are missing the webhook +
@@ -298,6 +330,7 @@ func main() {
 
 	r := httpsrv.NewRouter(httpsrv.Deps{
 		DB:         database,
+		LogDB:      logDB,
 		DBPath:     *dbPath,
 		Issuer:     issuer,
 		SessionKey: sessionKey,
@@ -349,17 +382,20 @@ func main() {
 			Logger: logger.With("component", "nodewatch"),
 		}
 		go watcher.Run(ctx)
-		// Log shipper: streams every pod's logs into the LogLine
-		// SQLite table for full-text search. Disable with
+		// Log shipper: streams every pod's logs into the dedicated
+		// logs.db SQLite file for full-text search. Disable with
 		// KUSO_LOGSHIP_DISABLED=true on noisy clusters where the
-		// log volume swamps SQLite.
-		if os.Getenv("KUSO_LOGSHIP_DISABLED") != "true" {
-			ls := logship.New(database, kubeClient, *namespace, logger.With("component", "logship"))
+		// log volume swamps SQLite. Skip silently if the log DB
+		// failed to open (logged at startup).
+		if os.Getenv("KUSO_LOGSHIP_DISABLED") != "true" && logDB != nil {
+			ls := logship.New(logDB, kubeClient, *namespace, logger.With("component", "logship"))
 			go ls.Run(ctx)
 		}
 		// Alert engine: evaluates AlertRule rows on a 1-min ticker
-		// and fans out via the existing notify dispatcher.
-		ae := alerts.New(database, kubeClient, notifyDisp, logger.With("component", "alerts"))
+		// and fans out via the existing notify dispatcher. Reads
+		// node metrics from the main DB and log matches from the
+		// dedicated log DB; nil log DB just skips log-match rules.
+		ae := alerts.New(database, logDB, kubeClient, notifyDisp, logger.With("component", "alerts"))
 		go ae.Run(ctx)
 	}
 
@@ -441,7 +477,7 @@ func runPreviewCleanup(ctx context.Context, svc *projects.Service, logger *slog.
 //
 // Best-effort: per-step errors log a warning and the loop continues.
 // Disabled by KUSO_DAILY_CLEANUP_DISABLED=true.
-func runDailyCleanup(ctx context.Context, database *db.DB, kc *kube.Client, namespace string, logger *slog.Logger) {
+func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *kube.Client, namespace string, logger *slog.Logger) {
 	notifyDays := envInt("KUSO_NOTIFY_RETENTION_DAYS", 7)
 	logDays := envInt("KUSO_LOG_RETENTION_DAYS", 7)
 	buildHours := envInt("KUSO_BUILD_RETENTION_HOURS", 24)
@@ -456,10 +492,12 @@ func runDailyCleanup(ctx context.Context, database *db.DB, kc *kube.Client, name
 		} else if n > 0 {
 			logger.Info("daily-cleanup notify pruned", "rows", n, "days", notifyDays)
 		}
-		if n, err := database.PruneLogsOlderThan(c, now.AddDate(0, 0, -logDays)); err != nil {
-			logger.Warn("daily-cleanup logs", "err", err)
-		} else if n > 0 {
-			logger.Info("daily-cleanup logs pruned", "rows", n, "days", logDays)
+		if logDB != nil {
+			if n, err := logDB.PruneLogsOlderThan(c, now.AddDate(0, 0, -logDays)); err != nil {
+				logger.Warn("daily-cleanup logs", "err", err)
+			} else if n > 0 {
+				logger.Info("daily-cleanup logs pruned", "rows", n, "days", logDays)
+			}
 		}
 		if kc != nil {
 			if n, err := builds.SweepFinishedBuilds(c, kc, namespace, time.Duration(buildHours)*time.Hour, builds.LogAdapter(logger)); err != nil {

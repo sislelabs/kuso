@@ -83,6 +83,24 @@ registry:
     hash: $2y$05$czQZpvtDYc5OzM/1r1pH0eAplT/okohh/mXoWl/Y65ZP/8/jnSWZq
   storage: 1Gi
   storageClassName:
+  # Garbage collection. Runs `registry garbage-collect --delete-untagged`
+  # against the in-cluster registry's PVC on a cron schedule, dropping
+  # blobs no longer referenced by any tag (including kaniko's
+  # `.cache/sha256:...` layer cache). Without this, every successful
+  # build leaves blobs forever and the PVC eventually fills.
+  #
+  # The job briefly takes the registry offline (~1-3 min) because GC
+  # against a live registry can corrupt the index. A recovery CronJob
+  # fires shortly after to scale the registry back up if the GC Job
+  # crashed before completing. Default is weekly at Sunday 03:30 UTC;
+  # adjust if your traffic pattern differs.
+  gc:
+    enabled: true
+    schedule: "30 3 * * 0"
+    # Recovery scale-up runs ~10 minutes after the GC start to give a
+    # successful GC time to scale back up on its own. In the happy
+    # path this is a no-op.
+    recoverSchedule: "40 3 * * 0"
 
 ingress:
   enabled: false

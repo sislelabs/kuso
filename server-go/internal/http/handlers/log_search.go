@@ -18,7 +18,15 @@ import (
 )
 
 type LogSearchHandler struct {
-	DB     *db.DB
+	// DB is the main kuso DB — used here only for the project-access
+	// tenancy check (requireProjectAccess reads UserGroup from main).
+	DB *db.DB
+	// LogDB is the dedicated log-storage SQLite handle. As of
+	// v0.7.17 LogLine + LogLineFts live in their own file so the
+	// search read path doesn't contend with control-plane writes.
+	// When nil, /logs/search returns 503 — the operator probably
+	// disabled the shipper and the search index is empty anyway.
+	LogDB  *db.LogDB
 	Logger *slog.Logger
 }
 
@@ -47,7 +55,11 @@ func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, projec
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
-	rows, err := h.DB.SearchLogs(ctx, db.SearchLogsRequest{
+	if h.LogDB == nil {
+		http.Error(w, "log search storage not configured", http.StatusServiceUnavailable)
+		return
+	}
+	rows, err := h.LogDB.SearchLogs(ctx, db.SearchLogsRequest{
 		Project: project,
 		Service: service,
 		Env:     q.Get("env"),

@@ -219,6 +219,76 @@ func TestCreate_DedupsConcurrentSameSHA(t *testing.T) {
 	}
 }
 
+// TestCreate_ConcurrencyCapBlocksAndTimesOut exercises the build
+// admission gate: when MaxConcurrentBuilds slots are held, a new
+// Create blocks for AdmitTimeout and then returns ErrConflict. This
+// is the safety valve that prevents a monorepo push storm from
+// spawning 15 simultaneous kaniko Jobs and OOM-ing the indie box.
+func TestCreate_ConcurrencyCapBlocksAndTimesOut(t *testing.T) {
+	t.Parallel()
+	const ref = "0011223344556677889900112233445566778899"
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+	)
+	s.MaxConcurrentBuilds = 1
+	s.AdmitTimeout = 100 * time.Millisecond
+
+	// Pre-occupy the only slot so the next Create has nothing left.
+	// We trigger lazy init by running the admit path once with a
+	// throwaway context (this is a white-box test; production code
+	// goes through Create which composes admit + dedup + create).
+	ctx0 := context.Background()
+	release, err := s.admitBuild(ctx0, "alpha")
+	if err != nil {
+		t.Fatalf("first admitBuild: %v", err)
+	}
+	t.Cleanup(release)
+
+	start := time.Now()
+	_, err = s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: ref})
+	elapsed := time.Since(start)
+	if !errors.Is(err, ErrConflict) {
+		t.Errorf("expected ErrConflict, got %v", err)
+	}
+	if elapsed < s.AdmitTimeout {
+		t.Errorf("Create returned in %s, expected to wait at least %s", elapsed, s.AdmitTimeout)
+	}
+}
+
+// TestCreate_ConcurrencyCapAllowsAfterRelease shows the happy path:
+// when a slot opens, a queued Create proceeds normally instead of
+// timing out.
+func TestCreate_ConcurrencyCapAllowsAfterRelease(t *testing.T) {
+	t.Parallel()
+	const ref = "aabbccddeeff00112233445566778899aabbccdd"
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+	)
+	s.MaxConcurrentBuilds = 1
+	s.AdmitTimeout = 2 * time.Second
+
+	// Pre-occupy the slot, then release it on a delay. Create
+	// should block briefly then succeed.
+	release, err := s.admitBuild(context.Background(), "alpha")
+	if err != nil {
+		t.Fatalf("first admitBuild: %v", err)
+	}
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		release()
+	}()
+
+	got, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: ref})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got == nil || got.Spec.Ref != ref {
+		t.Errorf("expected build for %s, got %+v", ref, got)
+	}
+}
+
 func TestCreate_NoServiceErrNotFound(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t, seedProject("alpha", "main", "https://github.com/x/y", 0))

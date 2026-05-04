@@ -42,8 +42,15 @@ const (
 
 // Shipper is the goroutine. Construct via New, call Run with a
 // cancellable context.
+//
+// As of v0.7.17 the shipper writes to a dedicated *db.LogDB instead
+// of the main *db.DB. Splitting the storage decouples the heaviest
+// writer in the system (FTS5-amplified log batches every 1s) from
+// the latency-sensitive control plane (auth, audit, notifications,
+// node metrics) — they used to share the single SQLite write
+// connection.
 type Shipper struct {
-	DB        *db.DB
+	DB        *db.LogDB
 	Kube      *kube.Client
 	Namespace string
 	Logger    *slog.Logger
@@ -62,7 +69,7 @@ type Shipper struct {
 	runCtx context.Context
 }
 
-func New(d *db.DB, k *kube.Client, namespace string, logger *slog.Logger) *Shipper {
+func New(d *db.LogDB, k *kube.Client, namespace string, logger *slog.Logger) *Shipper {
 	if namespace == "" {
 		namespace = "kuso"
 	}
@@ -80,6 +87,10 @@ func New(d *db.DB, k *kube.Client, namespace string, logger *slog.Logger) *Shipp
 func (s *Shipper) Run(ctx context.Context) {
 	if s.Kube == nil || s.Kube.Clientset == nil {
 		s.Logger.Warn("logship: kube client unavailable, log shipping disabled")
+		return
+	}
+	if s.DB == nil {
+		s.Logger.Warn("logship: log DB unavailable, log shipping disabled")
 		return
 	}
 	s.runCtx = ctx

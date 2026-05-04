@@ -40,6 +40,9 @@ import (
 // Deps is the explicit dependency bundle the router needs. Wired in main.
 type Deps struct {
 	DB         *db.DB
+	// LogDB is the dedicated log-storage SQLite handle (v0.7.17 split).
+	// Nil = log search returns 503; control plane still works.
+	LogDB      *db.LogDB
 	DBPath     string // path on disk; used by /api/admin/backup + restore
 	Issuer     *auth.Issuer
 	SessionKey string
@@ -231,8 +234,9 @@ func NewRouter(d Deps) http.Handler {
 			sshH.Mount(r)
 			// Log search + alert rules. No kube dep at handler level —
 			// the LogLine table is populated by a separate logship
-			// goroutine wired in main.go.
-			logSearchH := &httphandlers.LogSearchHandler{DB: d.DB, Logger: d.Logger}
+			// goroutine wired in main.go. LogDB is a separate SQLite
+			// file; a nil here makes /logs/search return 503.
+			logSearchH := &httphandlers.LogSearchHandler{DB: d.DB, LogDB: d.LogDB, Logger: d.Logger}
 			logSearchH.Mount(r)
 			alertsH := &httphandlers.AlertsHandler{DB: d.DB, Logger: d.Logger}
 			alertsH.Mount(r)

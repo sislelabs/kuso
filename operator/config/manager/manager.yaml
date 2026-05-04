@@ -46,14 +46,18 @@ spec:
             port: 8081
           initialDelaySeconds: 5
           periodSeconds: 10
-        # TODO(user): Configure the resources accordingly based on the project requirements.
-        # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+        # 2Gi memory ceiling — the operator's informer cache holds
+        # every watched CR in memory, and with maxConcurrentReconciles
+        # bumped to 4-6 per kind (see watches.yaml) plus an indie
+        # cluster running 100-300 services, 1Gi is the next visible
+        # binding constraint. CPU at 1 core is fine; helm rendering is
+        # bursty but bounded by the per-kind worker pool.
         resources:
           limits:
             cpu: 1000m
-            memory: 1Gi
+            memory: 2Gi
           requests:
             cpu: 100m
-            memory: 64Mi
+            memory: 128Mi
       serviceAccountName: controller-manager
       terminationGracePeriodSeconds: 10
