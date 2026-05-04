@@ -8,12 +8,16 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        // `default` is the primary CTA. Uses --btn-primary-* tokens
-        // which are deep slate-blue + cream text in both themes —
-        // pale periwinkle as a solid bg looks washed out on
-        // aubergine, the cream-on-slate combo has weight.
+        // Two-tier CTA system (see globals.css for the rationale):
+        //   default   — slate-blue, calm. Use for "next/back" /
+        //               "open dialog" / nav-style buttons.
+        //   accent    — orange, high-emphasis. Use for the actual
+        //               action that finalizes work — Save, Create,
+        //               Deploy, Submit.
+        // Pale periwinkle was a no-go as a solid bg either way; it
+        // stays as the border/highlight tone.
         default:
-          "bg-[var(--btn-primary-bg)] text-[var(--btn-primary-fg)] border-[var(--btn-primary-border)] shadow-[var(--shadow-sm)] hover:bg-[var(--btn-primary-bg-hover)] hover:scale-[1.02]",
+          "bg-[var(--btn-secondary-bg)] text-[var(--btn-secondary-fg)] border-[var(--btn-secondary-border)] shadow-[var(--shadow-sm)] hover:bg-[var(--btn-secondary-bg-hover)] hover:scale-[1.02]",
         accent:
           "bg-[var(--btn-primary-bg)] text-[var(--btn-primary-fg)] border-[var(--btn-primary-border)] shadow-[var(--shadow-sm)] hover:bg-[var(--btn-primary-bg-hover)] hover:scale-[1.02]",
         outline:

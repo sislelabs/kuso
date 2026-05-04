@@ -65,12 +65,15 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         // horizontally with addon nodes — see AddonNode for the
         // matching value. Content (header/url/replicas) is given
         // breathing space inside via the existing margins.
-        "group flex h-[120px] w-[280px] flex-col rounded-2xl border bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
+        // border-2 (vs border-1) so status hue (green/amber/red) is
+        // unambiguously visible at canvas zoom levels — same fix as
+        // AddonNode.
+        "group flex h-[120px] w-[280px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
         "hover:border-[var(--border-strong)]",
         (status === "building" || status === "deploying") &&
-          "border-[var(--accent)]/40 animate-pulse",
-        status === "active" && "border-emerald-500/30",
-        status === "failed" && "border-red-500/30",
+          "border-[var(--accent)]/70 animate-pulse",
+        status === "active" && "border-emerald-500/60",
+        status === "failed" && "border-red-500/60",
         status === "sleeping" && "opacity-60 border-[var(--border-strong)]",
         !["building", "deploying", "active", "failed", "sleeping"].includes(status) &&
           "border-[var(--border-strong)]"

@@ -71,12 +71,17 @@
   --accent: #40476D;
   --accent-hover: #2F3556;
   --accent-subtle: rgba(64, 71, 109, 0.10);
-  /* Light mode CTAs: solid slate-blue with cream text — same shape as
-     dark mode's button tokens so the button class works in both. */
-  --btn-primary-bg: #40476D;
-  --btn-primary-bg-hover: #2F3556;
-  --btn-primary-fg: #FBFBF7;
-  --btn-primary-border: #2F3556;
+  /* Light mode: orange primary CTAs, slate-blue secondary CTAs.
+     Same two-tier system as dark mode — Save/Create are loud, the
+     rest stay quiet. */
+  --btn-primary-bg: #EB6534;
+  --btn-primary-bg-hover: #C44C1F;
+  --btn-primary-fg: #FFFFFF;
+  --btn-primary-border: #C44C1F;
+  --btn-secondary-bg: #40476D;
+  --btn-secondary-bg-hover: #2F3556;
+  --btn-secondary-fg: #FBFBF7;
+  --btn-secondary-border: #2F3556;
   --border-default: #DCD9CB;
   --border-subtle: #E8E5D8;
   --border-strong: #40476D;       /* slate-blue = hover/focus on light */
@@ -154,14 +159,17 @@
        #941B0C → #C9382A         — error (light variant for dark mode)
        #5B5941 → #9A9678         — secondary text (warm olive lifted) */
 
-  /* Surfaces: aubergine ground, slate-blue cards. The two hues sit
-     ~80° apart on the wheel, so eye separation is real. Card and
-     popover share a slightly lifted slate so they feel "above" the
-     ground without blending into the sidebar. */
+  /* Surfaces: aubergine ground, dark slate-blue surfaces lifting
+     toward the logo's #40476D. Earlier iterations used a brighter
+     lifted variant that read too purple/washed; pulling the surfaces
+     back to the actual brand slate-blue gives the cards weight that
+     belongs on the page. The 3-step ladder is shadow / mid / exact
+     logo color so cards/popovers (the most attention-grabbing
+     surface) match the brand identity. */
   --bg-primary: #271F30;          /* aubergine — page ground */
-  --bg-secondary: #2E3349;        /* slate, shadow side — sidebar */
-  --bg-tertiary: #3A3F5C;         /* slate, mid — hovered rows */
-  --bg-elevated: #464C6E;         /* slate, lifted — cards / popovers */
+  --bg-secondary: #2A3050;        /* logo slate, shadow side — sidebar */
+  --bg-tertiary: #353B61;         /* logo slate, mid — hovered rows */
+  --bg-elevated: #40476D;         /* logo slate-blue exact — cards / popovers */
   --bg-inverse: #FBFBF7;
 
   /* Text: cream primary, warm-olive secondary (lifted from #5B5941),
@@ -183,17 +191,21 @@
   --accent: #AFBBF2;
   --accent-hover: #C5CDF6;
   --accent-subtle: rgba(175, 187, 242, 0.14);
-  /* Solid CTAs use orange — direct complement of the aubergine
-     ground (purple sits at ~280°, orange at ~20°, ~260° apart).
-     That's what creates the "click me" pop slate-blue couldn't —
-     same hue family as the surface kills contrast. Orange is also
-     the brand's existing highlight color (in the logo), so this
-     reads as on-brand rather than out of place. White text instead
-     of cream so the punch is sharper. */
-  --btn-primary-bg: #EB6534;        /* orange — full saturation */
-  --btn-primary-bg-hover: #F27A4F;  /* orange, slight lift */
-  --btn-primary-fg: #FFFFFF;        /* pure white for max snap */
-  --btn-primary-border: #C44C1F;    /* orange shadow side */
+  /* Two-tier CTA system. We learned the hard way that one solid
+     button color can't do it all: orange has the pop required for
+     "Save / Create / Deploy" but reads aggressive on every nav
+     link, and slate-blue has the on-brand calm needed everywhere
+     else but lacks the snap for a primary submit.
+       --btn-primary-*    orange    (Save, Deploy, Create — high emphasis)
+       --btn-secondary-*  slate     (most other CTAs — secondary calm) */
+  --btn-primary-bg: #EB6534;        /* orange — high-emphasis CTAs */
+  --btn-primary-bg-hover: #F27A4F;
+  --btn-primary-fg: #FFFFFF;
+  --btn-primary-border: #C44C1F;
+  --btn-secondary-bg: #40476D;      /* logo slate — calm CTAs + pickers */
+  --btn-secondary-bg-hover: #4F5784;
+  --btn-secondary-fg: #ECEAE0;
+  --btn-secondary-border: #6E769D;
 
   /* Borders form a 3-step ladder. Subtle is the ambient border on
      resting cards/inputs, default is the section/divider weight,

@@ -35,14 +35,18 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
         // a content-shorter addon and content-longer service drift
         // apart vertically. flex column lets content breathe up to
         // the cap and stays at the top.
-        "flex h-[120px] w-[220px] flex-col rounded-2xl border bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
+        // border-2 (vs border-1) so the status color (green/amber)
+        // is unambiguously visible at canvas zoom — at 1px the
+        // ready/pending state was barely distinguishable from the
+        // surface lift.
+        "flex h-[120px] w-[220px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
         // Hover wins over the green ready-border so the user gets a
         // clear "you're targeting this" affordance. Without the
         // explicit hover-on-ready rule the green stays put and the
         // hover only nudges the alpha.
         ready
-          ? "border-emerald-500/30 hover:border-[var(--border-strong)]"
-          : "border-amber-500/30 animate-pulse hover:border-[var(--border-strong)]"
+          ? "border-emerald-500/60 hover:border-[var(--border-strong)]"
+          : "border-amber-500/60 animate-pulse hover:border-[var(--border-strong)]"
       )}
     >
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
