@@ -18,6 +18,9 @@ export interface VolumeRow {
 }
 
 export interface FormState {
+  // Display label (free-form). Empty = canvas/header falls back to
+  // the slug.
+  displayName: string;
   // Source
   repoURL: string;
   repoBranch: string;
@@ -65,6 +68,7 @@ export function fromSvc(svc?: KusoService): FormState {
   // type-system rev.
   const ghSpec = (svc?.spec as { github?: { installationId?: number } } | undefined)?.github;
   return {
+    displayName: svc?.spec.displayName ?? "",
     repoURL: repo?.url ?? "",
     repoBranch: repo?.defaultBranch ?? "",
     repoPath: repo?.path && repo.path !== "." ? repo.path : "",

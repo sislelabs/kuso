@@ -123,13 +123,23 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <h2 className="font-heading text-lg font-semibold tracking-tight truncate">
-                    {service ?? ""}
+                    {/* Show the user's display name when set; fall back
+                        to the URL slug. The slug appears below in mono
+                        next to the project label so the actual CR name
+                        + URL are still discoverable. */}
+                    {svc.data?.spec.displayName?.trim() || service || ""}
                   </h2>
                   <StatusDot status={status} />
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px]">
                   <span className="font-mono uppercase tracking-widest text-[var(--text-tertiary)]">
                     {project}
+                    {svc.data?.spec.displayName?.trim() && service ? (
+                      <>
+                        {" · "}
+                        <span className="text-[var(--text-secondary)]">{service}</span>
+                      </>
+                    ) : null}
                   </span>
                   {url ? (
                     <UrlPill url={url} />

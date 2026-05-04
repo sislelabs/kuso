@@ -301,6 +301,66 @@ func TestAddService_AutoCreatesProductionEnv(t *testing.T) {
 	}
 }
 
+// TestSlugifyServiceName covers the display-name → slug path used by
+// AddService when the user types "Todo API" in the dialog. Edge cases:
+// leading/trailing whitespace, runs of separators, diacritics dropped,
+// emoji-only input → empty.
+func TestSlugifyServiceName(t *testing.T) {
+	t.Parallel()
+	cases := map[string]string{
+		"Todo API":          "todo-api",
+		"  Auth  Service ":  "auth-service",
+		"foo--bar":          "foo-bar",
+		"foo_bar.baz":       "foo-bar-baz",
+		"FOO":               "foo",
+		"a/b":               "ab",
+		"":                  "",
+		"   ":               "",
+		"🎉":                 "",
+		"-leading":          "leading",
+		"trailing-":         "trailing",
+		"Todo API v2 Beta!": "todo-api-v2-beta",
+	}
+	for in, want := range cases {
+		if got := SlugifyServiceName(in); got != want {
+			t.Errorf("SlugifyServiceName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestAddService_DisplayNameSlugifies asserts that a free-form name
+// passed in CreateServiceRequest.Name is slugified for the CR + URL,
+// while the original input is preserved as the display name.
+func TestAddService_DisplayNameSlugifies(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/x/y", DefaultBranch: "main"},
+		BaseDomain:  "alpha.example.com",
+	}))
+	created, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{
+		Name:    "Todo API",
+		Runtime: "dockerfile",
+		Port:    8080,
+	})
+	if err != nil {
+		t.Fatalf("AddService: %v", err)
+	}
+	if created.Name != "alpha-todo-api" {
+		t.Errorf("CR name: got %q, want alpha-todo-api", created.Name)
+	}
+	if created.Spec.DisplayName != "Todo API" {
+		t.Errorf("display name: got %q, want %q", created.Spec.DisplayName, "Todo API")
+	}
+	// Production env's host should track the slug, not the display name.
+	env, err := s.GetEnvironment(context.Background(), "alpha", "alpha-todo-api-production")
+	if err != nil {
+		t.Fatalf("env not auto-created: %v", err)
+	}
+	if env.Spec.Host != "todo-api.alpha.example.com" {
+		t.Errorf("host: got %q", env.Spec.Host)
+	}
+}
+
 func TestAddService_RejectsDuplicate(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,

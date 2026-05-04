@@ -127,6 +127,12 @@ type KusoService struct {
 
 type KusoServiceSpec struct {
 	Project    string              `json:"project"`
+	// DisplayName is a free-form label shown in the UI (canvas
+	// label, overlay header). Decoupled from the CR name + URL slug
+	// so renaming the visual label is fast (one PATCH) and doesn't
+	// recreate kube resources. Empty = UI falls back to the slug.
+	// Validation: letters/numbers/spaces/hyphens, max 60 chars.
+	DisplayName string              `json:"displayName,omitempty"`
 	Repo       *KusoRepoRef        `json:"repo,omitempty"`
 	Runtime    string              `json:"runtime,omitempty"`
 	Command    []string            `json:"command,omitempty"`

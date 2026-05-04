@@ -83,10 +83,46 @@ func (s *Service) GetService(ctx context.Context, project, service string) (*kub
 
 // AddService validates + persists a new KusoService and auto-creates its
 // production KusoEnvironment, mirroring the TS addService flow.
+//
+// Name + DisplayName policy:
+//   - DisplayName (when supplied) is the canonical label and gets
+//     validated against displayNameRE.
+//   - Name is the slug. When the caller sends only Name (legacy CLI
+//     path), we slugify it; the original input becomes the display
+//     name unless DisplayName is also supplied.
+//   - When both are sent and the slug doesn't match the display name's
+//     slugified form, we trust the caller's slug. Lets advanced users
+//     pick "Todo API" + "todo-svc-v2" without us second-guessing.
 func (s *Service) AddService(ctx context.Context, project string, req CreateServiceRequest) (*kube.KusoService, error) {
-	if req.Name == "" {
+	if req.Name == "" && req.DisplayName == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalid)
 	}
+	rawInput := req.Name
+	if rawInput == "" {
+		rawInput = req.DisplayName
+	}
+	slug := SlugifyServiceName(rawInput)
+	if slug == "" {
+		return nil, fmt.Errorf("%w: name has no alphanumeric characters", ErrInvalid)
+	}
+	if !serviceNameRE.MatchString(slug) {
+		return nil, fmt.Errorf("%w: slugified name %q must match [a-z0-9-], 1-32 chars", ErrInvalid, slug)
+	}
+	displayName := strings.TrimSpace(req.DisplayName)
+	if displayName == "" {
+		// Default display name = original input minus surrounding
+		// whitespace. If the caller sent an already-slugified Name
+		// like "todo-api" we keep that as the display name; the UI
+		// can decide whether to show it as-is or title-case it.
+		displayName = strings.TrimSpace(req.Name)
+	}
+	if displayName != "" && !displayNameRE.MatchString(displayName) {
+		return nil, fmt.Errorf("%w: display name must be 1-60 letters/digits/spaces/hyphens", ErrInvalid)
+	}
+	// Hand off the slug to the rest of the flow. req.Name was the
+	// only place "service short name" came from, so we rebind it
+	// rather than threading slug everywhere.
+	req.Name = slug
 	if err := validateRuntime(req.Runtime); err != nil {
 		return nil, err
 	}
@@ -147,17 +183,18 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			},
 		},
 		Spec: kube.KusoServiceSpec{
-			Project:    project,
-			Repo:       &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
-			Runtime:    req.Runtime,
-			Command:    req.Command,
-			Port:       req.Port,
-			Domains:    convertDomains(req.Domains),
-			EnvVars:    convertEnvVars(req.EnvVars),
-			Scale:      scale,
-			Sleep:      sleep,
-			Static:     toStaticSpec(req.Static),
-			Buildpacks: toBuildpacksSpec(req.Buildpacks),
+			Project:     project,
+			DisplayName: displayName,
+			Repo:        &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
+			Runtime:     req.Runtime,
+			Command:     req.Command,
+			Port:        req.Port,
+			Domains:     convertDomains(req.Domains),
+			EnvVars:     convertEnvVars(req.EnvVars),
+			Scale:       scale,
+			Sleep:       sleep,
+			Static:      toStaticSpec(req.Static),
+			Buildpacks:  toBuildpacksSpec(req.Buildpacks),
 		},
 	}
 	created, err := s.Kube.CreateKusoService(ctx, ns, svc)
@@ -248,6 +285,46 @@ var envNameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$`)
 // is "<project>-<service>" so we leave room for a project prefix
 // without busting kube's 253-char limit.
 var serviceNameRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$`)
+
+// displayNameRE constrains the free-form service display name. We
+// allow letters/digits/spaces/hyphens — enough for "Todo API" or
+// "Auth-Service v2" — but reject the wild west (slashes, colons,
+// emojis, control chars) so the canvas + page titles don't have to
+// defend against weird inputs at every render. ≤60 chars keeps the
+// canvas label legible; longer names truncate at render anyway.
+var displayNameRE = regexp.MustCompile(`^[A-Za-z0-9 \-]{1,60}$`)
+
+// SlugifyServiceName turns a free-form display name into a kube-safe
+// slug. Lowercases, replaces runs of separators (space/_/. /-) with
+// a single dash, drops non-alphanumeric characters, trims leading +
+// trailing dashes, caps at 30 chars (room for the "<project>-" CR
+// prefix). Returns "" when the input has no alphanumerics — callers
+// reject that with a clear error rather than letting kube fail on an
+// empty Name.
+func SlugifyServiceName(in string) string {
+	in = strings.ToLower(strings.TrimSpace(in))
+	var b strings.Builder
+	prevDash := true // treat start as a dash so a leading separator is suppressed
+	for _, r := range in {
+		switch {
+		case (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9'):
+			b.WriteRune(r)
+			prevDash = false
+		case r == '-' || r == ' ' || r == '_' || r == '.':
+			if !prevDash {
+				b.WriteByte('-')
+				prevDash = true
+			}
+		default:
+			// drop anything else (diacritics, punctuation, emojis)
+		}
+	}
+	out := strings.TrimRight(b.String(), "-")
+	if len(out) > 30 {
+		out = strings.TrimRight(out[:30], "-")
+	}
+	return out
+}
 
 // envNameRE_pod is the POSIX env-var name rule the kubelet actually
 // enforces when it materializes pod env. Names that don't match are
@@ -811,6 +888,10 @@ func (s *Service) ValidatePlacement(ctx context.Context, p *kube.KusoPlacement) 
 // zero (port=0 doesn't make sense, but min=0 / sleep.afterMinutes=0
 // might).
 type PatchServiceRequest struct {
+	// DisplayName edits the visual label only — fast (one CR patch),
+	// no kube-resource churn. Empty string clears it back to the
+	// slug. Use the Rename flow for a destructive slug change.
+	DisplayName *string                `json:"displayName,omitempty"`
 	Port      *int32                 `json:"port,omitempty"`
 	Runtime   *string                `json:"runtime,omitempty"`
 	Domains   *[]ServiceDomain       `json:"domains,omitempty"`
@@ -903,6 +984,13 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		return nil, err
 	}
 
+	if req.DisplayName != nil {
+		dn := strings.TrimSpace(*req.DisplayName)
+		if dn != "" && !displayNameRE.MatchString(dn) {
+			return nil, fmt.Errorf("%w: display name must be 1-60 letters/digits/spaces/hyphens", ErrInvalid)
+		}
+		svc.Spec.DisplayName = dn
+	}
 	portChanged := false
 	if req.Port != nil {
 		svc.Spec.Port = *req.Port

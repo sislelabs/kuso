@@ -93,7 +93,11 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
   const status = statusFor(data.env, data.latestBuild);
   const url = data.env?.status?.url as string | undefined;
   const replicas = replicasFor(data.env);
+  // Display the user-supplied label when set; fall back to the slug
+  // for back-compat with services created before v0.7.43 (no
+  // displayName) or services where the user blanked it.
   const shortName = serviceShortName(data.project, data.service.metadata.name);
+  const displayName = data.service.spec.displayName?.trim() || shortName;
 
   return (
     <div
@@ -128,7 +132,7 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-2 truncate text-sm font-medium">
           <RuntimeIcon runtime={data.service.spec.runtime} />
-          <span className="truncate">{shortName}</span>
+          <span className="truncate">{displayName}</span>
         </span>
         <UptimeBadge env={data.env} status={status} />
       </div>

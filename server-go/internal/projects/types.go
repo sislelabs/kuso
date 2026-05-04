@@ -52,7 +52,14 @@ type UpdateProjectPreviewsSpec struct {
 
 // CreateServiceRequest is the body of POST /api/projects/:project/services.
 type CreateServiceRequest struct {
-	Name       string                 `json:"name"`
+	// Name is either the slug (kebab-case, ≤30 chars) OR the free-form
+	// display name. The server slugifies it via SlugifyServiceName so
+	// callers don't have to. When DisplayName is empty, Name's
+	// pre-slugify value is preserved as the display name; when both
+	// are set, DisplayName wins. This lets the AddService dialog send
+	// just one string ("Todo API") and have both fields populated.
+	Name        string                 `json:"name"`
+	DisplayName string                 `json:"displayName,omitempty"`
 	Repo       *CreateServiceRepo     `json:"repo,omitempty"`
 	Runtime    string                 `json:"runtime,omitempty"`
 	// Command is the argv for runtime=worker. Ignored otherwise.

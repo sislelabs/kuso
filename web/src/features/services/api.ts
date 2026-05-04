@@ -75,6 +75,7 @@ export async function renameService(
 }
 
 export interface PatchServiceBody {
+  displayName?: string;
   port?: number;
   runtime?: string;
   domains?: { host: string; tls?: boolean }[];

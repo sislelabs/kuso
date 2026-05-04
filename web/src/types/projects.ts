@@ -33,6 +33,11 @@ export interface KusoProject {
 
 export interface KusoServiceSpec {
   project: string;
+  // Free-form display label shown in the canvas + overlay header.
+  // Empty string falls back to the URL slug (the short name). Edit
+  // via PATCH /api/projects/.../services/.../{displayName}; renaming
+  // the slug is a separate destructive flow.
+  displayName?: string;
   repo?: KusoRepoRef;
   runtime?: "dockerfile" | "nixpacks" | "buildpacks" | "static";
   port?: number;

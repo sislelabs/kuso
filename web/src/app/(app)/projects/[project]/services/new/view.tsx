@@ -18,6 +18,7 @@ import {
 import { useRouteParams } from "@/lib/dynamic-params";
 import { api, ApiError } from "@/lib/api-client";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
+import { slugifyServiceName } from "@/features/services/slug";
 
 // AddServiceView is the per-project add-service flow. Pick a repo,
 // kuso detects the runtime + port, you confirm name + path, click
@@ -34,7 +35,14 @@ export function AddServiceView() {
   const detect = useDetectRuntime();
 
   const [picked, setPicked] = useState<{ installationId: number; repo: GithubRepo } | null>(null);
+  // Display name is the free-form label the user types (e.g. "Todo
+  // API"). It's stored as-is on the CR and shown in the canvas /
+  // overlay header. The URL slug is auto-derived via slugifyServiceName
+  // — visible in the form as a read-only preview. Renaming the slug
+  // afterwards is destructive (clones kube resources) and lives behind
+  // the Settings → Danger zone path.
   const [name, setName] = useState("");
+  const slug = useMemo(() => slugifyServiceName(name), [name]);
   const [path, setPath] = useState("");
   const [runtime, setRuntime] = useState<string>("dockerfile");
   const [command, setCommand] = useState<string>("");
@@ -58,6 +66,8 @@ export function AddServiceView() {
   // Prefill name from repo + run detect on first pick.
   useEffect(() => {
     if (!picked) return;
+    // Repo name is already kebab-case in 99% of cases, so it doubles
+    // as a sensible display-name default — slug derives back to itself.
     const repoName = picked.repo.fullName.split("/")[1] ?? "service";
     if (!name) setName(repoName);
 
@@ -89,12 +99,19 @@ export function AddServiceView() {
       toast.error("Service name required");
       return;
     }
+    if (!slug) {
+      toast.error("Service name needs at least one letter or digit");
+      return;
+    }
     setSubmitting(true);
     try {
       await api(`/api/projects/${encodeURIComponent(project)}/services`, {
         method: "POST",
         body: {
-          name: name.trim(),
+          // name = slug (server also slugifies defensively); displayName
+          // = the free-form label.
+          name: slug,
+          displayName: name.trim(),
           repo: {
             url: `https://github.com/${picked.repo.fullName}`,
             defaultBranch: picked.repo.defaultBranch,
@@ -242,11 +259,18 @@ export function AddServiceView() {
           </div>
           <div className="space-y-3 px-4 py-3">
             <div className="grid grid-cols-2 gap-3">
-              <Field label="name">
+              <Field
+                label="name"
+                hint={
+                  slug
+                    ? `url slug: ${slug}`
+                    : "letters / digits / spaces / hyphens"
+                }
+              >
                 <Input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
-                  className="h-8 font-mono text-[12px]"
+                  className="h-8 text-[12px]"
                 />
               </Field>
               <Field label="port" hint="container port">

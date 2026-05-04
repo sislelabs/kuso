@@ -33,7 +33,20 @@ export function SourceSection({
 
   return (
     <Section id="source" title="Source" icon={Github}>
-      <RenameRow project={project} service={service} />
+      <Row
+        label="display name"
+        hint="visual label only · canvas / header"
+        control={
+          <Input
+            value={state.displayName}
+            onChange={(e) => setState((s) => ({ ...s, displayName: e.target.value }))}
+            placeholder={service}
+            className="h-7 w-full text-[12px]"
+            maxLength={60}
+            spellCheck={false}
+          />
+        }
+      />
       <Row
         label="repository"
         hint="full https URL"
@@ -108,18 +121,22 @@ export function SourceSection({
         }
         last
       />
+      <RenameRow project={project} service={service} />
     </Section>
   );
 }
 
-// RenameRow surfaces the rename action at the top of Source. Rename
-// is cheap to invoke (one API call) but expensive to live with —
-// brief downtime + DNS cutover for any consumer service. We make
-// that explicit in a confirmation dialog so users opt in deliberately.
+// RenameRow gates the destructive slug-rename behind a "show" toggle.
+// Display-name edits (the common case) live on a separate row above
+// and PATCH the CR — fast, no kube churn. The slug rename is a
+// clone-then-delete that briefly drops traffic + breaks any service
+// referencing the old in-cluster DNS, so it stays one click away
+// rather than being a top-level row users can fat-finger.
 function RenameRow({ project, service }: { project: string; service: string }) {
   const router = useRouter();
   const qc = useQueryClient();
   const canWrite = useCan(Perms.ServicesWrite);
+  const [revealed, setRevealed] = useState(false);
   const [open, setOpen] = useState(false);
   const [newName, setNewName] = useState(service);
   const [pending, setPending] = useState(false);
@@ -154,9 +171,18 @@ function RenameRow({ project, service }: { project: string; service: string }) {
 
   return (
     <Row
-      label="name"
-      hint="rename = clone-then-delete; brief downtime"
+      label="url slug"
+      hint={revealed ? "destructive — clones-then-deletes kube resources" : ""}
       control={
+        !revealed ? (
+          <button
+            type="button"
+            onClick={() => setRevealed(true)}
+            className="font-mono text-[11px] text-[var(--text-tertiary)] underline hover:text-[var(--text-secondary)]"
+          >
+            change URL slug…
+          </button>
+        ) : (
         <div className="flex w-full items-center gap-1.5">
           <Input value={service} disabled className="h-7 flex-1 font-mono text-[12px]" />
           {canWrite && (
@@ -205,6 +231,7 @@ function RenameRow({ project, service }: { project: string; service: string }) {
             }}
           />
         </div>
+        )
       }
     />
   );

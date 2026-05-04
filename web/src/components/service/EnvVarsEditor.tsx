@@ -605,12 +605,14 @@ function ReferenceMenu({
   );
 }
 
-// ServiceRefRow surfaces the synthetic keys for a service. PUBLIC_URL
-// resolves to the externally-reachable URL (custom domain or auto
-// kuso domain) so a frontend pointing at an API picks the right
-// surface; URL/INTERNAL_URL stays in-cluster for backend↔backend.
+// ServiceRefRow surfaces the two canonical synthetic keys for a
+// service. INTERNAL_URL = in-cluster DNS (backend↔backend); PUBLIC_URL =
+// externally-reachable domain (frontend in a browser → backend).
+// URL/HOST/PORT still work as refs for back-compat but aren't shown
+// here — adding more buttons clutters the picker without helping the
+// 95% case.
 function ServiceRefRow({ service, onPick }: { service: string; onPick: (ref: string) => void }) {
-  const KEYS = ["URL", "INTERNAL_URL", "HOST", "PORT", "PUBLIC_URL", "PUBLIC_HOST"];
+  const KEYS = ["INTERNAL_URL", "PUBLIC_URL"];
   return (
     <div className="px-2 py-1">
       <p className="font-mono text-[11px] text-[var(--text-secondary)]">{service}</p>
