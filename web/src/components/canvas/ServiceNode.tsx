@@ -21,21 +21,34 @@ export interface ServiceNodeData extends Record<string, unknown> {
 function statusFor(env?: KusoEnvironment): DeployStatus {
   if (!env) return "unknown";
   const phase = (env.status?.phase ?? "").toString().toLowerCase();
-  if (phase === "building") return "building";
-  if (phase === "deploying") return "deploying";
+
+  // Source of truth ordering. The big trap is env.status.phase being
+  // *stale*: helm-operator sets it to "building" when a build kicks
+  // off, but if that build fails, no one writes the corresponding
+  // phase=failed back to the env CR. So the env reports phase=building
+  // forever (or until the next build succeeds) — UI would render
+  // pulsing-yellow on a service that's actually broken.
+  //
+  // Resolve by checking the cheap-and-honest signal first: "do you
+  // have desired replicas, and are NONE ready?" That can't lie. Build
+  // states only matter when replicas tell us something is in flux.
+
+  // 1. Active beats everything — ready=true means the deployment
+  //    rolled and at least one pod is healthy.
   if (env.status?.ready) return "active";
-  if (phase === "failed" || phase === "error") return "failed";
-  if (phase === "sleeping") return "sleeping";
-  // Heuristic for "stuck failed": env has desired replicas but none
-  // are ready AND status hasn't reported any other phase. Catches the
-  // common case where a build failure leaves env.status.phase empty
-  // (no deploy ever happened) — without this, the canvas falls back
-  // to "unknown" and the failed service paints as a generic
-  // hover-orange border instead of red.
+
+  // 2. Stuck-with-no-replicas → failed. Catches the common
+  //    "build failed and env.status.phase never got cleared" case.
   const r = env.status?.replicas as { ready?: number; max?: number; desired?: number } | undefined;
   const desired = r?.max ?? r?.desired ?? 0;
   const ready = r?.ready ?? 0;
   if (desired > 0 && ready === 0) return "failed";
+
+  // 3. Fall through to the phase-driven states for in-flight ops.
+  if (phase === "building") return "building";
+  if (phase === "deploying") return "deploying";
+  if (phase === "failed" || phase === "error") return "failed";
+  if (phase === "sleeping") return "sleeping";
   return "unknown";
 }
 
