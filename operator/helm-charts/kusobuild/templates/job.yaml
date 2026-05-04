@@ -81,43 +81,131 @@ spec:
               SRC="/workspace/src/{{ .Values.repo.path | default "." }}"
               cd "$SRC"
 
-              # Detect the go.mod toolchain requirement and pin
-              # GOTOOLCHAIN to the matching X.Y.0+auto so Go itself
-              # fetches the exact toolchain when nixpacks' bundled go
-              # (currently 1.22, pinned in nixpacks itself — only
-              # 1.18-1.23 are supported by the provider) is older.
+              # Detect the toolchain version a project actually
+              # requires and pin it as build-time env. Nixpacks bundles
+              # one version per language (Go 1.22, Node 18-22, Python
+              # 3.11-3.12, Ruby 3.x...) — anything newer than the
+              # bundle fails with "toolchain not available" or simply
+              # picks an old runtime that the user's lockfile rejects.
+              # We read the project's own version files BEFORE
+              # nixpacks runs and emit a list of build envs that get
+              # baked into the generated Dockerfile after the FROM.
+              # That way the user's lockfile / engines field / version
+              # file is the source of truth, and nixpacks just
+              # provides the host OS layer.
               #
-              # Bare `GOTOOLCHAIN=auto` doesn't work because go.mod's
-              # `go 1.24` line lacks a patch number, and Go's
-              # auto-fetcher tries to download literal "go1.24"
-              # which isn't a real release tag (releases are
-              # go1.24.0, go1.24.1...). Pinning go1.X.0+auto
-              # resolves to the first patch release of that line.
-              GOTOOLCHAIN_VAL="auto"
+              # Supported today (one detector per language). Adding
+              # more is mechanical — read the version, fall through
+              # to a sensible default if absent.
+              EXTRA_ENVS=""
+              add_env() {
+                # $1: VAR=VALUE pair; appended to a build-time list
+                # used by both the `nixpacks --env` flags and the
+                # post-render Dockerfile patch.
+                EXTRA_ENVS="${EXTRA_ENVS}${EXTRA_ENVS:+ }$1"
+                echo "  + $1"
+              }
+
+              echo "detecting project toolchain hints"
+
+              # ---- Go ----
+              # go.mod lacks a patch number, but Go's auto-fetcher
+              # needs one (go1.24 is not a real release; go1.24.0 is).
+              # Normalize to goX.Y.0+auto so old toolchains can fetch
+              # the right one at build time.
               if [ -f go.mod ]; then
                 MOD_GO=$(awk '/^go [0-9]/ {print $2; exit}' go.mod)
                 if [ -n "$MOD_GO" ]; then
                   case "$MOD_GO" in
-                    *.*.*) GOTOOLCHAIN_VAL="go${MOD_GO}+auto" ;;
-                    *.*)   GOTOOLCHAIN_VAL="go${MOD_GO}.0+auto" ;;
+                    *.*.*) add_env "GOTOOLCHAIN=go${MOD_GO}+auto" ;;
+                    *.*)   add_env "GOTOOLCHAIN=go${MOD_GO}.0+auto" ;;
                   esac
-                  echo "go.mod requires go ${MOD_GO} → GOTOOLCHAIN=${GOTOOLCHAIN_VAL}"
                 fi
+                add_env "GOFLAGS=-mod=mod"
               fi
 
-              echo "running nixpacks build --out . (writes .nixpacks/ alongside source)"
-              nixpacks build . --out . \
-                --env "GOTOOLCHAIN=${GOTOOLCHAIN_VAL}" \
-                --env GOFLAGS=-mod=mod
+              # ---- Node.js ----
+              # .nvmrc is the source of truth when present. Falls back
+              # to package.json's engines.node range. NODE_VERSION is
+              # what nixpacks reads to pick a Node major; we set it
+              # explicitly so the bundled 18 doesn't get used when the
+              # project asks for 22.
+              if [ -f .nvmrc ]; then
+                NODE_V=$(tr -d 'v[:space:]' < .nvmrc | head -c 16)
+                [ -n "$NODE_V" ] && add_env "NODE_VERSION=${NODE_V}"
+              elif [ -f package.json ]; then
+                # crude-but-effective: pull the major from "engines": { "node": ">=20" } / "20.x"
+                NODE_V=$(grep -oE '"node"[[:space:]]*:[[:space:]]*"[^"]*"' package.json \
+                  | head -1 \
+                  | grep -oE '[0-9]+(\.[0-9]+)*' | head -1)
+                [ -n "$NODE_V" ] && add_env "NODE_VERSION=${NODE_V}"
+              fi
 
-              # nixpacks emits `ARG GOTOOLCHAIN` without a default, so
-              # the env vars only resolve when passed via docker
-              # --build-arg at runtime. Kaniko doesn't auto-forward our
-              # detected values, so we patch the generated Dockerfile
-              # with literal ENV statements right after the FROM. This
-              # bakes the value in regardless of build-arg plumbing.
-              # Do the patch with sed (no heredoc indentation gotchas).
-              sed -i "s|^ARG CGO_ENABLED |ENV GOTOOLCHAIN=${GOTOOLCHAIN_VAL}\nENV GOFLAGS=-mod=mod\nARG CGO_ENABLED |" .nixpacks/Dockerfile
+              # ---- Python ----
+              # .python-version (pyenv standard) wins; pyproject.toml
+              # requires-python like ">=3.12" is the fallback.
+              if [ -f .python-version ]; then
+                PY_V=$(head -1 .python-version | tr -d '[:space:]')
+                [ -n "$PY_V" ] && add_env "PYTHON_VERSION=${PY_V}"
+              elif [ -f pyproject.toml ]; then
+                PY_V=$(grep -oE 'requires-python[[:space:]]*=[[:space:]]*"[^"]*"' pyproject.toml \
+                  | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+                [ -n "$PY_V" ] && add_env "PYTHON_VERSION=${PY_V}"
+              fi
+
+              # ---- Ruby ----
+              # .ruby-version trumps Gemfile's "ruby '3.x'" line.
+              if [ -f .ruby-version ]; then
+                RB_V=$(head -1 .ruby-version | tr -d '[:space:]')
+                [ -n "$RB_V" ] && add_env "RUBY_VERSION=${RB_V}"
+              elif [ -f Gemfile ]; then
+                RB_V=$(grep -oE "^[[:space:]]*ruby[[:space:]]*['\"][^'\"]*['\"]" Gemfile \
+                  | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+                [ -n "$RB_V" ] && add_env "RUBY_VERSION=${RB_V}"
+              fi
+
+              # ---- Java ----
+              # JDK version: .sdkmanrc, system.properties (Spring Boot
+              # convention), or the toolchain.jdk in build.gradle.
+              if [ -f .sdkmanrc ]; then
+                JV=$(grep -oE 'java=[0-9]+(\.[0-9]+)*' .sdkmanrc | head -1 | cut -d= -f2)
+                [ -n "$JV" ] && add_env "JDK_VERSION=${JV}"
+              fi
+
+              echo "running nixpacks build --out ."
+              # Compose --env flags from the EXTRA_ENVS list. Each
+              # detected pair becomes one --env argument, so nixpacks
+              # adds the corresponding ARG line to the generated
+              # Dockerfile. The default value comes from the patch
+              # step below — see the comment there.
+              NIXPACKS_ENV_FLAGS=""
+              for env_pair in $EXTRA_ENVS; do
+                NIXPACKS_ENV_FLAGS="$NIXPACKS_ENV_FLAGS --env $env_pair"
+              done
+              # shellcheck disable=SC2086
+              nixpacks build . --out . $NIXPACKS_ENV_FLAGS
+
+              # nixpacks emits `ARG <key>` without a default, so the
+              # env vars only resolve when passed via docker
+              # --build-arg at runtime. Kaniko doesn't auto-forward
+              # our detected values, so we prepend literal ENV
+              # statements right after the FROM line. This bakes the
+              # values in regardless of build-arg plumbing.
+              ENV_BLOCK=""
+              for env_pair in $EXTRA_ENVS; do
+                ENV_BLOCK="${ENV_BLOCK}ENV ${env_pair}\n"
+              done
+              if [ -n "$ENV_BLOCK" ]; then
+                # Insert ENV block after the first FROM line. Using
+                # awk so we don't have to escape sed regex chars
+                # that may appear in detected values.
+                awk -v block="$ENV_BLOCK" '
+                  BEGIN { inserted = 0 }
+                  /^FROM / && !inserted { print; printf "%s", block; inserted = 1; next }
+                  { print }
+                ' .nixpacks/Dockerfile > .nixpacks/Dockerfile.patched
+                mv .nixpacks/Dockerfile.patched .nixpacks/Dockerfile
+              fi
 
               echo "--- generated Dockerfile ---"
               cat .nixpacks/Dockerfile

@@ -277,8 +277,9 @@ var serviceAddCmd = &cobra.Command{
 	Use:   "add <project> <name>",
 	Short: "Add a service to a project (creates production env automatically)",
 	Args:  cobra.ExactArgs(2),
-	Example: `  kuso project service add analiz api --runtime dockerfile --port 8080
-  kuso project service add analiz web --path apps/web --runtime nixpacks --port 3000
+	Example: `  kuso project service add analiz api --port 8080
+  kuso project service add analiz web --path apps/web --port 3000
+  # Force a Dockerfile build instead of auto-detection:
   kuso service add analiz api --runtime dockerfile --port 8080`,
 	RunE: runServiceAdd,
 }
@@ -726,7 +727,7 @@ func init() {
 	projectCmd.AddCommand(projectServiceCmd)
 	projectServiceCmd.AddCommand(serviceAddCmd)
 	serviceAddCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
-	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "dockerfile", "dockerfile|nixpacks|buildpacks|static")
+	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static — nixpacks auto-detects most languages with zero config")
 	serviceAddCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	projectServiceCmd.AddCommand(serviceDeleteCmd)
 	serviceDeleteCmd.Flags().BoolVarP(&serviceDeleteYes, "yes", "y", false, "skip the confirmation prompt")
@@ -770,6 +771,6 @@ func init() {
 	rootCmd.AddCommand(serviceCmd)
 	serviceCmd.AddCommand(serviceAddTopCmd)
 	serviceAddTopCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
-	serviceAddTopCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "dockerfile", "dockerfile|nixpacks|buildpacks|static")
+	serviceAddTopCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static — nixpacks auto-detects most languages with zero config")
 	serviceAddTopCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 }

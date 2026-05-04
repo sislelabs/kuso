@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.35] — 2026-05-04
+
+### 🐛 Bug Fixes
+- Fix(builds): bake GOTOOLCHAIN into Dockerfile via sed (kaniko ignores --env at runtime) ([e473b28](https://github.com/sislelabs/kuso/commit/e473b281e76d7f5f46357d0ffae5c3ed7d12efe9))
+
 ## [0.7.34] — 2026-05-04
 
 ### 🐛 Bug Fixes
