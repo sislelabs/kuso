@@ -29,7 +29,13 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
       data-node-context
       onContextMenu={data.__onContext}
       className={cn(
-        "w-[220px] rounded-2xl border bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
+        // Fixed height (5 × 24px grid units) keeps addon nodes
+        // visually aligned with service nodes — the canvas's
+        // snapToGrid only locks corners, so without a fixed height
+        // a content-shorter addon and content-longer service drift
+        // apart vertically. flex column lets content breathe up to
+        // the cap and stays at the top.
+        "flex h-[120px] w-[220px] flex-col rounded-2xl border bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
         // Hover wins over the green ready-border so the user gets a
         // clear "you're targeting this" affordance. Without the
         // explicit hover-on-ready rule the green stays put and the

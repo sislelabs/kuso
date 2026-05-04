@@ -106,6 +106,19 @@
   --sidebar-border: #DCD9CB;
   --sidebar-ring: #40476D;
 
+  /* Status hues — same semantic vars dark mode publishes, sized for
+     a light background. Sage/orange/red retain enough saturation to
+     be obvious at small sizes; the *-subtle variants are alpha-mixed
+     so badges + toasts read as tinted, not solid. */
+  --success: #708A6B;             /* sage shadow side */
+  --success-subtle: rgba(112, 138, 107, 0.14);
+  --warning: #C44C1F;             /* orange shadow side */
+  --warning-subtle: rgba(196, 76, 31, 0.14);
+  --error: #941B0C;               /* deep red */
+  --error-subtle: rgba(148, 27, 12, 0.10);
+  --info: #40476D;                /* slate-blue */
+  --info-subtle: rgba(64, 71, 109, 0.10);
+
   /* Chart palette: every color from the logo gets a slot, ordered
      so chart-1 (the most-used series color) is the brand primary,
      and the remaining slots cycle through complementary hues that
@@ -118,67 +131,112 @@
 }
 
 .dark {
-  /* Dark-mode palette is built around #271F30 — a deep aubergine /
-     purple-grey ground rather than the original near-black green.
-     Tonal scale steps lift toward a warm midtone (~#A9A0B2) so text
-     stays comfortable on the dark base, with periwinkle (#AFBBF2)
-     kept as the accent — it pops cleanly on aubergine, same way
-     it did on green. */
-  --bg-primary: #271F30;
-  --bg-secondary: #312738;
-  --bg-tertiary: #3B3142;
-  --bg-elevated: #473C4F;
+  /* Dark-mode palette: aubergine ground (#271F30) gets distinct hues
+     for each surface tier instead of one cold tonal slide. Cards step
+     into a cool navy derived from slate-blue #40476D — that cross-hue
+     break is what stops everything from looking like a single purple
+     wash. Sidebar uses the slate variant; popovers/cards another lift.
+     Periwinkle accents pop because the surrounding fields are navy,
+     not the same purple at lower lightness.
+     Source palette (assigned roles):
+       #271F30  aubergine        — ground (bg-primary)
+       #40476D  slate-blue       — surfaces (cards, sidebar, popovers)
+       #AFBBF2  periwinkle       — interactive accent + primary actions
+       #ACBEA3  sage             — success / active / online
+       #EB6534  orange           — warning / live / building
+       #941B0C → #C9382A         — error (light variant for dark mode)
+       #5B5941 → #9A9678         — secondary text (warm olive lifted) */
+
+  /* Surfaces: aubergine ground, slate-blue cards. The two hues sit
+     ~80° apart on the wheel, so eye separation is real. Card and
+     popover share a slightly lifted slate so they feel "above" the
+     ground without blending into the sidebar. */
+  --bg-primary: #271F30;          /* aubergine — page ground */
+  --bg-secondary: #2E3349;        /* slate, shadow side — sidebar */
+  --bg-tertiary: #3A3F5C;         /* slate, mid — hovered rows */
+  --bg-elevated: #464C6E;         /* slate, lifted — cards / popovers */
   --bg-inverse: #FBFBF7;
+
+  /* Text: cream primary, warm-olive secondary (lifted from #5B5941),
+     muted tertiary. Olive against navy is legible AND warm — keeps the
+     UI from feeling clinical. */
   --text-primary: #ECEAE0;
-  --text-secondary: #A9A0B2;
-  --text-tertiary: #7B7283;
+  --text-secondary: #B5B19A;      /* warm olive, lifted */
+  --text-tertiary: #7E7B66;       /* warm olive, muted */
   --text-inverse: #271F30;
+
+  /* Accent stays periwinkle. On a slate-blue card it reads as the
+     same hue family but brighter — strong for hover/click affordance,
+     weak enough for ambient borders. */
   --accent: #AFBBF2;
   --accent-hover: #C5CDF6;
   --accent-subtle: rgba(175, 187, 242, 0.14);
-  --border-default: #43394C;
-  --border-subtle: #352C3D;
+
+  /* Borders: cool slate that's still visibly a border on navy cards. */
+  --border-default: #4F557A;
+  --border-subtle: #3A3F5C;
+
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
 
+  /* Tailwind/shadcn hookups. We map each named token to one of the
+     surface tiers above so component primitives (Card, Popover, Input)
+     get the slate-blue treatment without per-component overrides. */
   --background: #271F30;
   --foreground: #ECEAE0;
-  --card: #473C4F;
+  --card: #464C6E;                /* slate, lifted — cards */
   --card-foreground: #ECEAE0;
-  --popover: #473C4F;
+  --popover: #464C6E;             /* same slate — popovers */
   --popover-foreground: #ECEAE0;
-  --primary: #AFBBF2;
+  --primary: #AFBBF2;             /* periwinkle CTA */
   --primary-foreground: #271F30;
-  --secondary: #312738;
+  --secondary: #2E3349;           /* slate, shadow side */
   --secondary-foreground: #ECEAE0;
-  --muted: #3B3142;
-  --muted-foreground: #A9A0B2;
-  --accent-ui: #3B3142;
+  --muted: #3A3F5C;               /* slate, mid */
+  --muted-foreground: #B5B19A;    /* warm olive */
+  --accent-ui: #3A3F5C;
   --accent-foreground: #ECEAE0;
-  --destructive: #C9382A;
-  --border: #43394C;
-  --input: #3B3142;
+  --destructive: #C9382A;         /* lifted from #941B0C */
+  --border: #4F557A;
+  --input: #3A3F5C;
   --ring: #AFBBF2;
 
-  --sidebar: #312738;
+  /* Sidebar gets its own slate to feel like a distinct rail vs. the
+     ground, but lighter than #2E3349 would compete with cards. We
+     deliberately use the SAME slate as --bg-secondary so the rail
+     reads as a layer of the same family. */
+  --sidebar: #2E3349;
   --sidebar-foreground: #ECEAE0;
   --sidebar-primary: #AFBBF2;
   --sidebar-primary-foreground: #271F30;
-  --sidebar-accent: #3B3142;
+  --sidebar-accent: #3A3F5C;
   --sidebar-accent-foreground: #ECEAE0;
-  --sidebar-border: #43394C;
+  --sidebar-border: #4F557A;
   --sidebar-ring: #AFBBF2;
 
-  /* Dark-mode chart palette: same hues, lifted for legibility on
-     the near-black ground. Periwinkle leads (matches the dark
-     accent), then orange, sage, periwinkle-mute, and a lifted
-     olive. */
-  --chart-1: #AFBBF2;
-  --chart-2: #EB6534;
-  --chart-3: #ACBEA3;
-  --chart-4: #C5CDF6;
-  --chart-5: #8A8765;
+  /* Status hues — used by Badge, Toast, build/env state pills, etc.
+     These don't have direct CSS-var consumers in shadcn primitives;
+     features import them via utility classes (text-success/etc) or
+     read the var directly. Periwinkle isn't here because it's the
+     accent, not a status. */
+  --success: #ACBEA3;             /* sage */
+  --success-subtle: rgba(172, 190, 163, 0.14);
+  --warning: #EB6534;             /* orange */
+  --warning-subtle: rgba(235, 101, 52, 0.14);
+  --error: #C9382A;               /* lifted error */
+  --error-subtle: rgba(201, 56, 42, 0.14);
+  --info: #AFBBF2;                /* periwinkle (alias for accent) */
+  --info-subtle: rgba(175, 187, 242, 0.14);
+
+  /* Chart palette spans the whole brand: periwinkle → orange → sage
+     → warm olive → error red. Five hues, all from the source palette,
+     all readable on aubergine. */
+  --chart-1: #AFBBF2;             /* periwinkle */
+  --chart-2: #EB6534;             /* orange */
+  --chart-3: #ACBEA3;             /* sage */
+  --chart-4: #B5B19A;             /* warm olive */
+  --chart-5: #C9382A;             /* error red */
 }
 
 @layer base {

@@ -61,7 +61,11 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       data-node-context
       onContextMenu={data.__onContext}
       className={cn(
-        "group w-[280px] rounded-2xl border bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
+        // Fixed height (5 × 24px grid units) so service nodes line up
+        // horizontally with addon nodes — see AddonNode for the
+        // matching value. Content (header/url/replicas) is given
+        // breathing space inside via the existing margins.
+        "group flex h-[120px] w-[280px] flex-col rounded-2xl border bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
         "hover:border-[var(--border-strong)]",
         (status === "building" || status === "deploying") &&
           "border-[var(--accent)]/40 animate-pulse",
