@@ -120,13 +120,19 @@ func (s *Service) List(ctx context.Context, project string) ([]kube.KusoCron, er
 }
 
 func (s *Service) ListForService(ctx context.Context, project, service string) ([]kube.KusoCron, error) {
+	// Compare against the FQN that Spec.Service stores. Accept
+	// either the user's short name or the already-prefixed FQN.
+	serviceFQN := service
+	if !strings.HasPrefix(service, project+"-") {
+		serviceFQN = project + "-" + service
+	}
 	out, err := s.List(ctx, project)
 	if err != nil {
 		return nil, err
 	}
 	filtered := out[:0]
 	for _, c := range out {
-		if c.Spec.Service == service {
+		if c.Spec.Service == serviceFQN {
 			filtered = append(filtered, c)
 		}
 	}
@@ -174,8 +180,14 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 	}
 	// Resolve image + envFromSecrets from the parent service's
 	// production environment so the cron container runs the same
-	// code + connects to the same DBs.
-	image, envFromSecrets, placement, err := s.resolveFromProductionEnv(ctx, ns, service)
+	// code + connects to the same DBs. The handler passes the user-
+	// supplied SHORT service name; the env CR name is built from
+	// the FQN ("<project>-<short>"), so we normalize here.
+	serviceFQN := service
+	if !strings.HasPrefix(service, project+"-") {
+		serviceFQN = project + "-" + service
+	}
+	image, envFromSecrets, placement, err := s.resolveFromProductionEnv(ctx, ns, serviceFQN)
 	if err != nil {
 		return nil, err
 	}
@@ -184,13 +196,13 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 			Name: fqn,
 			Labels: map[string]string{
 				"kuso.sislelabs.com/project": project,
-				"kuso.sislelabs.com/service": service,
+				"kuso.sislelabs.com/service": serviceFQN,
 				"kuso.sislelabs.com/cron":    req.Name,
 			},
 		},
 		Spec: kube.KusoCronSpec{
 			Project:               project,
-			Service:               service,
+			Service:               serviceFQN,
 			Schedule:              req.Schedule,
 			Command:               req.Command,
 			Suspend:               req.Suspend,
@@ -268,7 +280,11 @@ func (s *Service) SyncFromService(ctx context.Context, project, service, name st
 		return nil, err
 	}
 	ns := s.nsFor(ctx, project)
-	image, envFromSecrets, placement, err := s.resolveFromProductionEnv(ctx, ns, service)
+	serviceFQN := service
+	if !strings.HasPrefix(service, project+"-") {
+		serviceFQN = project + "-" + service
+	}
+	image, envFromSecrets, placement, err := s.resolveFromProductionEnv(ctx, ns, serviceFQN)
 	if err != nil {
 		return nil, err
 	}

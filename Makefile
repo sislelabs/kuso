@@ -1,4 +1,4 @@
-.PHONY: help release release-roll release-roll-commit web typecheck test
+.PHONY: help ship release release-roll release-roll-commit web typecheck test
 
 # Repository helpers. The release flow lives in hack/release.sh — the
 # Makefile is just an ergonomic shim so common invocations are one
@@ -6,18 +6,32 @@
 
 help:
 	@echo "kuso make targets:"
+	@echo "  make ship VERSION=v0.3.5"
+	@echo "      ONE-COMMAND RELEASE — everything below in order:"
+	@echo "      bump version files, build web, push kuso-server image, roll deploy,"
+	@echo "      detect operator/ changes (auto-build operator image + apply CRDs"
+	@echo "      + roll operator), commit version-file bumps."
+	@echo ""
 	@echo "  make release VERSION=v0.3.5"
-	@echo "      bump version files, build web, cross-build amd64 image, push to GHCR"
+	@echo "      build + push the kuso-server image only (no rollout)"
 	@echo "  make release-roll VERSION=v0.3.5"
-	@echo "      everything in 'release', then ssh + kubectl rollout"
+	@echo "      build + push + roll the kuso-server (no operator)"
 	@echo "  make release-roll-commit VERSION=v0.3.5"
-	@echo "      everything in 'release-roll', then git commit the version-file changes"
+	@echo "      release-roll + git commit"
 	@echo ""
 	@echo "  make typecheck    # tsc on web/"
 	@echo "  make web          # pnpm --dir web build"
 	@echo "  make test         # go test ./... in server-go"
 
 VERSION ?=
+
+# `make ship` is the one-command release flow most callers want.
+# Auto-detects operator/ changes and rolls both images + CRDs +
+# commit in a single invocation. KUSO_RELEASE_OPERATOR=0 forces
+# skip-operator (rare); KUSO_RELEASE_OPERATOR=1 forces always-build.
+ship:
+	@if [ -z "$(VERSION)" ]; then echo "usage: make ship VERSION=vX.Y.Z" >&2; exit 2; fi
+	@KUSO_RELEASE_ROLL=1 KUSO_RELEASE_COMMIT=1 ./hack/release.sh $(VERSION)
 
 release:
 	@if [ -z "$(VERSION)" ]; then echo "usage: make release VERSION=vX.Y.Z" >&2; exit 2; fi

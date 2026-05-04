@@ -51,6 +51,12 @@ KUSO_RELEASE_KEY="${KUSO_RELEASE_KEY:-$HOME/.ssh/keys/hetzner}"
 KUSO_RELEASE_NS="${KUSO_RELEASE_NS:-kuso}"
 KUSO_RELEASE_DEPLOY="${KUSO_RELEASE_DEPLOY:-kuso-server}"
 KUSO_RELEASE_IMAGE="${KUSO_RELEASE_IMAGE:-ghcr.io/sislelabs/kuso-server-go}"
+# Operator deploy lives in its own namespace (operator-sdk default).
+# Container in the deployment is named "manager" by convention.
+KUSO_OPERATOR_NS="${KUSO_OPERATOR_NS:-kuso-operator-system}"
+KUSO_OPERATOR_DEPLOY="${KUSO_OPERATOR_DEPLOY:-kuso-operator-controller-manager}"
+KUSO_OPERATOR_CONTAINER="${KUSO_OPERATOR_CONTAINER:-manager}"
+OPERATOR_IMAGE="${KUSO_RELEASE_OPERATOR_IMAGE:-ghcr.io/sislelabs/kuso-operator}"
 
 log()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m==>\033[0m %s\n' "$*"; }
@@ -133,7 +139,9 @@ log "image pushed: ${KUSO_RELEASE_IMAGE}:${VERSION}"
 DIST_DIR="${REPO_ROOT}/dist"
 mkdir -p "$DIST_DIR"
 
-OPERATOR_IMAGE="${KUSO_RELEASE_OPERATOR_IMAGE:-ghcr.io/sislelabs/kuso-operator}"
+# OPERATOR_IMAGE is defined at the top with the other defaults so both
+# the GitHub-release writer below + the rollout step in §5b share the
+# same value.
 
 log "writing dist/release.json + dist/crds.yaml for GitHub release"
 
@@ -214,6 +222,86 @@ if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]]; then
       warn "/healthz returned: $HEALTH"
     fi
   fi
+fi
+
+# ---- 5b. operator image + CRDs (auto when operator/ changed) -----
+#
+# Detects whether operator/ changed since the last git tag. When it
+# did, rebuilds the operator image, scps the CRDs, kubectl applies
+# them, and rolls the operator deployment. Skipped when nothing
+# under operator/ has changed.
+#
+# Override: KUSO_RELEASE_OPERATOR=1 forces the operator step even
+# when git diff is empty (useful for explicit re-rolls, e.g. when
+# you pulled the chart from another branch). KUSO_RELEASE_OPERATOR=0
+# skips it explicitly.
+
+operator_should_build() {
+  if [[ "${KUSO_RELEASE_OPERATOR:-auto}" == "1" ]]; then
+    return 0
+  fi
+  if [[ "${KUSO_RELEASE_OPERATOR:-auto}" == "0" ]]; then
+    return 1
+  fi
+  # auto: did anything under operator/ change since the last tag?
+  local last
+  last="$(git describe --tags --abbrev=0 2>/dev/null || echo)"
+  if [[ -z "$last" ]]; then
+    # No previous tag — no baseline to diff against. Build to be
+    # safe; the alternative is shipping a kuso-server that depends
+    # on an operator chart the running operator doesn't have.
+    return 0
+  fi
+  if ! git diff --quiet "$last"..HEAD -- operator/; then
+    return 0
+  fi
+  return 1
+}
+
+# Bump the operator image tag using a parallel scheme to the kuso-
+# server tag. Pattern: vMAJOR.MINOR.PATCH on kuso-server →
+# vMAJOR.OPATCH on operator, where OPATCH starts at the kuso-server
+# minor and increments per release that touches operator/. We don't
+# enforce this — the operator just gets the same VERSION tag for
+# simplicity. Sub-version mismatch only breaks if someone manually
+# pins; we don't, the deploy yaml uses VERSION verbatim.
+OPERATOR_VERSION="${KUSO_RELEASE_OPERATOR_VERSION:-${VERSION}}"
+
+if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]] && operator_should_build; then
+  log "operator/ changed — building operator image ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
+  docker buildx build \
+    --platform linux/amd64 \
+    --push \
+    -t "${OPERATOR_IMAGE}:${OPERATOR_VERSION}" \
+    -f operator/Dockerfile \
+    operator >/dev/null
+  log "operator image pushed: ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
+
+  # Ship every CRD under operator/config/crd/bases/ to /tmp on the
+  # cluster, kubectl apply them, then roll the operator deployment.
+  # We don't filter to "only the changed CRD files" — applying an
+  # unchanged CRD is a no-op (`unchanged` in kubectl output), so the
+  # complexity isn't worth it.
+  log "scp + apply CRDs"
+  CRD_FILES=( operator/config/crd/bases/*.yaml )
+  scp -i "$KUSO_RELEASE_KEY" \
+    -o StrictHostKeyChecking=accept-new \
+    "${CRD_FILES[@]}" \
+    "${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}:/tmp/" >/dev/null
+
+  # Build the kubectl apply args list dynamically — one -f per CRD.
+  REMOTE_FLAGS=""
+  for f in "${CRD_FILES[@]}"; do
+    REMOTE_FLAGS="${REMOTE_FLAGS} -f /tmp/$(basename "$f")"
+  done
+
+  ssh -i "$KUSO_RELEASE_KEY" \
+    -o StrictHostKeyChecking=accept-new \
+    "${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}" \
+    "kubectl apply ${REMOTE_FLAGS} && \
+     kubectl set image -n ${KUSO_OPERATOR_NS} deploy/${KUSO_OPERATOR_DEPLOY} ${KUSO_OPERATOR_CONTAINER}=${OPERATOR_IMAGE}:${OPERATOR_VERSION} && \
+     kubectl rollout status -n ${KUSO_OPERATOR_NS} deploy/${KUSO_OPERATOR_DEPLOY} --timeout=180s"
+  log "operator rolled to ${OPERATOR_VERSION}"
 fi
 
 # ---- 6. optional commit --------------------------------------------
