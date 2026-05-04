@@ -184,13 +184,18 @@ fi
 # ---- 3. web build --------------------------------------------------
 
 if [[ -d web ]]; then
-  log "building web (pnpm --dir web build)"
+  log "building web"
   if [[ "$DRY_RUN" == "1" ]]; then
-    dry "(cd web && pnpm build) → server-go/internal/web/dist/"
+    dry "(cd web && (pnpm build || npm run build)) → server-go/internal/web/dist/"
   elif command -v pnpm >/dev/null 2>&1; then
-    (cd web && pnpm build >/dev/null) || fail "web build failed"
+    (cd web && pnpm build >/dev/null) || fail "web build failed (pnpm)"
+  elif command -v npm >/dev/null 2>&1; then
+    # CI path: web/ is npm-managed (package-lock.json), so npm is what
+    # GH Actions has wired up after `npm ci`. `npm run build` calls the
+    # same `next build` script that `pnpm build` does.
+    (cd web && npm run build --silent >/dev/null) || fail "web build failed (npm)"
   else
-    warn "pnpm not on PATH — assuming web/dist is already current"
+    warn "neither pnpm nor npm on PATH — assuming web/dist is already current"
   fi
 fi
 

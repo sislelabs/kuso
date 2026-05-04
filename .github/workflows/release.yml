@@ -58,18 +58,12 @@ jobs:
             server-go/go.sum
             cli/go.sum
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 9
-          run_install: false
-
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: 22
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+          cache: npm
+          cache-dependency-path: web/package-lock.json
 
       - name: Set up Docker buildx
         uses: docker/setup-buildx-action@v3
@@ -91,8 +85,8 @@ jobs:
       # ALLOW_DIRTY=1 because actions/checkout doesn't always produce
       # a strictly-clean tree (CRLF line-ending edge cases, etc); the
       # tag is the source of truth, not the working tree.
-      - name: Install pnpm dependencies
-        run: pnpm --dir web install --frozen-lockfile
+      - name: Install web dependencies
+        run: npm --prefix web ci
 
       - name: Run release.sh
         env:
