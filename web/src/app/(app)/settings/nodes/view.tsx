@@ -540,7 +540,7 @@ function DraftEditor({
 // be misleading.
 //
 // Each tile is clickable: it opens a drill-down with 7 days of
-// history (sampled every 30 min server-side) so the operator can
+// history (sampled every 5 min server-side) so the operator can
 // see trends instead of a single point-in-time number. The "metric"
 // param tells the modal which row to highlight.
 function NodeStats({ node }: { node: NodeSummary }) {
@@ -1154,7 +1154,7 @@ function NodeHistoryModal({
           <div>
             <h2 className="font-mono text-sm font-medium">{node.name}</h2>
             <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              {title} · last 7 days · sampled every 30 min
+              {title} · last 7 days · sampled every 5 min
             </p>
           </div>
           <button
@@ -1175,11 +1175,11 @@ function NodeHistoryModal({
             </p>
           ) : samples.length === 0 ? (
             <p className="font-mono text-[11px] text-[var(--text-tertiary)]">
-              No samples yet. The kuso server samples nodes every 30 min — check back shortly after
+              No samples yet. The kuso server samples nodes every 5 min — check back shortly after
               a fresh deploy.
             </p>
           ) : (
-            <Sparkline metric={metric} samples={samples} />
+            <Sparkline metric={metric} samples={samples} node={node} />
           )}
         </div>
       </div>
@@ -1194,9 +1194,17 @@ function NodeHistoryModal({
 function Sparkline({
   metric,
   samples,
+  node,
 }: {
   metric: NodeMetricKind;
   samples: HistorySample[];
+  // The live point-in-time numbers off /api/kubernetes/nodes. Used
+  // to render a "now" marker at the right edge of the chart so the
+  // user can see the spike that hasn't been sampled into SQLite yet.
+  // Without this, a spike at minute 0 of a 5-minute sample window
+  // shows up only after the next tick — confusing when the inline
+  // tile already reads 86%.
+  node: NodeSummary;
 }) {
   const W = 720;
   const H = 160;
@@ -1223,8 +1231,34 @@ function Sparkline({
     return { ts: new Date(s.ts).getTime(), pct, used, cap };
   });
 
+  // Live "now" point, computed off the same NodeSummary the inline
+  // tile reads. Even when the latest sample is up to 5 min stale,
+  // the marker stays in sync with what the user sees on the card.
+  const liveNow = (() => {
+    let used = 0;
+    let cap = 0;
+    if (metric === "cpu") {
+      used = node.cpuUsageMilli ?? 0;
+      cap = node.cpuCapacityMilli ?? 0;
+    } else if (metric === "mem") {
+      used = node.memUsageBytes ?? 0;
+      cap = node.memCapacityBytes ?? 0;
+    } else {
+      cap = node.diskCapacityBytes ?? 0;
+      used = cap - (node.diskAvailableBytes ?? 0);
+    }
+    if (cap <= 0 || used <= 0) return null;
+    return { ts: Date.now(), pct: Math.min(100, (used / cap) * 100), used, cap };
+  })();
+
   const tMin = points[0]?.ts ?? 0;
-  const tMax = points[points.length - 1]?.ts ?? tMin + 1;
+  // Stretch the right edge to "now" so the live marker has a place
+  // to live without falling outside the chart. When the latest
+  // sample is recent (< 1 min), tMax stays at the sample so we
+  // don't add a sliver of empty space.
+  const lastSampleTs = points[points.length - 1]?.ts ?? tMin + 1;
+  const tMax =
+    liveNow && liveNow.ts > lastSampleTs ? liveNow.ts : lastSampleTs;
   const tSpan = Math.max(1, tMax - tMin);
 
   const x = (t: number) => pad.left + ((t - tMin) / tSpan) * innerW;
@@ -1268,16 +1302,35 @@ function Sparkline({
       ? formatCPU(latest?.cap ?? 0)
       : formatBytes(latest?.cap ?? 0);
 
+  // Format helpers reused for the live row.
+  const fmtUsedCap = (p: { used: number; cap: number; pct: number }) => {
+    const u = metric === "cpu" ? formatCPU(p.used) : formatBytes(p.used);
+    const c = metric === "cpu" ? formatCPU(p.cap) : formatBytes(p.cap);
+    return `${u} / ${c} (${Math.round(p.pct)}%)`;
+  };
+
   return (
     <div>
-      <div className="mb-2 flex items-baseline justify-between font-mono text-[11px]">
-        <span className="text-[var(--text-tertiary)]">latest</span>
-        <span>
-          <span className="text-[var(--text-primary)]">{latestUsed}</span>{" "}
-          <span className="text-[var(--text-tertiary)]">
-            / {latestCap} ({latest ? Math.round(latest.pct) : 0}%)
+      <div className="mb-2 grid grid-cols-2 gap-2 font-mono text-[11px]">
+        <div className="flex items-baseline justify-between rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1">
+          <span className="text-[var(--text-tertiary)]">last sample</span>
+          <span>
+            <span className="text-[var(--text-primary)]">{latestUsed}</span>{" "}
+            <span className="text-[var(--text-tertiary)]">
+              / {latestCap} ({latest ? Math.round(latest.pct) : 0}%)
+            </span>
           </span>
-        </span>
+        </div>
+        <div className="flex items-baseline justify-between rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1">
+          <span className="text-[var(--text-tertiary)]">live now</span>
+          <span>
+            {liveNow ? (
+              <span className="text-[var(--text-primary)]">{fmtUsedCap(liveNow)}</span>
+            ) : (
+              <span className="text-[var(--text-tertiary)]">—</span>
+            )}
+          </span>
+        </div>
       </div>
       <svg viewBox={`0 0 ${W} ${H}`} className="w-full" role="img" aria-label={`${metric} history`}>
         {ticks.map((t) => (
@@ -1307,6 +1360,33 @@ function Sparkline({
         )}
         {linePath && (
           <path d={linePath} fill="none" stroke={stroke} strokeWidth={1.5} strokeLinejoin="round" />
+        )}
+        {/* Live marker — bridges the gap between the most recent
+            sample and "now" with a dotted segment, plus a filled
+            circle at the right edge. The line color stays the same
+            (matches latest pressure tier), but the dotted style + ring
+            make it obvious the right tip is live, not sampled. */}
+        {liveNow && points.length > 0 && (
+          <>
+            <line
+              x1={x(points[points.length - 1].ts)}
+              y1={y(points[points.length - 1].pct)}
+              x2={x(liveNow.ts)}
+              y2={y(liveNow.pct)}
+              stroke={stroke}
+              strokeWidth={1.5}
+              strokeDasharray="3 2"
+              opacity={0.7}
+            />
+            <circle
+              cx={x(liveNow.ts)}
+              cy={y(liveNow.pct)}
+              r={3.5}
+              fill={stroke}
+              stroke="var(--bg-secondary)"
+              strokeWidth={1.5}
+            />
+          </>
         )}
         {xLabels.map((p, i) => (
           <text

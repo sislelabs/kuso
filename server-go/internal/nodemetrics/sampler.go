@@ -1,13 +1,19 @@
-// Package nodemetrics samples per-node CPU/RAM/disk every 30 minutes
+// Package nodemetrics samples per-node CPU/RAM/disk every 5 minutes
 // and persists the result in SQLite for sparkline rendering on
 // /settings/nodes. Runs as a single goroutine started by main; cancel
 // the parent context to stop it gracefully.
+//
+// 5 min was originally 30 min but a 30-min cadence missed short
+// spikes — the inline tile would read 86% CPU live while the chart
+// showed a calm 13% latest sample because the spike happened AFTER
+// the most recent tick. 5 min × 7d × 1 node = ~2k rows, still
+// trivial for SQLite.
 //
 // Why not pull from Prometheus: kuso ships Prometheus today but it
 // only scrapes traefik + opted-in app pods, not nodes. Adding
 // node-exporter + a kubelet/cAdvisor scrape is real ops work; for
 // the few-node single-box install kuso is built for, sampling
-// metrics-server every 30 min into SQLite is enough.
+// metrics-server every 5 min into SQLite is enough.
 package nodemetrics
 
 import (
@@ -27,9 +33,10 @@ import (
 )
 
 const (
-	// SampleInterval is the sample cadence. 30 min keeps the table
-	// small (48 rows/day/node) while still showing intra-day trends.
-	SampleInterval = 30 * time.Minute
+	// SampleInterval is the sample cadence. 5 min catches short
+	// spikes that a 30-min cadence missed; 5 min × 7d × N nodes is
+	// still tiny (~2k rows for a single-node install).
+	SampleInterval = 5 * time.Minute
 	// Retention is how far back history endpoints can look. 7 days
 	// is enough to see weekly cycles without bloating SQLite.
 	Retention = 7 * 24 * time.Hour
