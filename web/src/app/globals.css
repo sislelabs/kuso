@@ -183,10 +183,17 @@
   --accent: #AFBBF2;
   --accent-hover: #C5CDF6;
   --accent-subtle: rgba(175, 187, 242, 0.14);
-  --btn-primary-bg: #40476D;        /* solid slate — has weight */
-  --btn-primary-bg-hover: #4F5784;  /* subtle lift on hover */
-  --btn-primary-fg: #ECEAE0;        /* cream text on slate */
-  --btn-primary-border: #6E769D;
+  /* Solid CTAs use orange — direct complement of the aubergine
+     ground (purple sits at ~280°, orange at ~20°, ~260° apart).
+     That's what creates the "click me" pop slate-blue couldn't —
+     same hue family as the surface kills contrast. Orange is also
+     the brand's existing highlight color (in the logo), so this
+     reads as on-brand rather than out of place. White text instead
+     of cream so the punch is sharper. */
+  --btn-primary-bg: #EB6534;        /* orange — full saturation */
+  --btn-primary-bg-hover: #F27A4F;  /* orange, slight lift */
+  --btn-primary-fg: #FFFFFF;        /* pure white for max snap */
+  --btn-primary-border: #C44C1F;    /* orange shadow side */
 
   /* Borders form a 3-step ladder. Subtle is the ambient border on
      resting cards/inputs, default is the section/divider weight,
