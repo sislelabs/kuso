@@ -330,8 +330,14 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
     # CHANGELOG.md will show); fall back to a flat `git log` between
     # tags. Either way the body is markdown gh accepts.
     if command -v git-cliff >/dev/null 2>&1 && [[ -f cliff.toml ]]; then
-      git-cliff -c cliff.toml --current --strip header --tag "$VERSION" > "$NOTES_FILE" 2>/dev/null \
-        || git log --pretty=format:'- %s' "$(git describe --tags --abbrev=0 2>/dev/null || echo HEAD)..HEAD" > "$NOTES_FILE" || true
+      # --unreleased prints commits since the most recent tag,
+      # annotated as if they're $VERSION via --tag. Works regardless
+      # of whether $VERSION's tag has been created yet (it usually
+      # hasn't at this point in the script — gh release create makes
+      # it).
+      if ! git-cliff -c cliff.toml --unreleased --strip header --tag "$VERSION" > "$NOTES_FILE" 2>/dev/null; then
+        git log --pretty=format:'- %s' "$(git describe --tags --abbrev=0 2>/dev/null || echo HEAD)..HEAD" > "$NOTES_FILE" || true
+      fi
     else
       git log --pretty=format:'- %s' "$(git describe --tags --abbrev=0 2>/dev/null || echo HEAD)..HEAD" > "$NOTES_FILE" || true
     fi
