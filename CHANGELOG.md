@@ -5,7 +5,13 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [0.7.35] — 2026-05-04
+## [0.7.36] — 2026-05-04
+
+### Other
+- Ui: notification click-through, service node build line, square inputs ([ff253e7](https://github.com/sislelabs/kuso/commit/ff253e75236a5dd92f5fd9a2c9ed49b7b05191ca))
+
+### ✨ Features
+- Feat(builds): multi-language toolchain detection + nixpacks default ([9c7d5ea](https://github.com/sislelabs/kuso/commit/9c7d5eae4cb0706aff1c9e231240b21196c53806))
 
 ### 🐛 Bug Fixes
 - Fix(builds): bake GOTOOLCHAIN into Dockerfile via sed (kaniko ignores --env at runtime) ([e473b28](https://github.com/sislelabs/kuso/commit/e473b281e76d7f5f46357d0ffae5c3ed7d12efe9))
