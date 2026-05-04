@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.44] — 2026-05-04
+
+### 🐛 Bug Fixes
+- Fix(envvars): keep PORT in the ref picker ([6234990](https://github.com/sislelabs/kuso/commit/6234990699c532b87780bd37cf970a79a4150181))
+
 ## [0.7.43] — 2026-05-04
 
 ### ✨ Features
