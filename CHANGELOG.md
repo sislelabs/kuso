@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.43] — 2026-05-04
+
+### ✨ Features
+- Feat: service display name + slim env-ref picker ([2cf631b](https://github.com/sislelabs/kuso/commit/2cf631b4fcce999309d2c5d93c758daab84f2bea))
+
 ## [0.7.42] — 2026-05-04
 
 ### ✨ Features
