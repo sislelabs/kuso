@@ -5,6 +5,23 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.17] — 2026-05-04
+
+### Other
+- Security: close cross-tenant + admin authz gaps from full-project review ([d152f47](https://github.com/sislelabs/kuso/commit/d152f47068bf6b75f15d1ed5219c480ac2eea565))
+
+### ⚡ Performance
+- Perf: tier-2 scalability fixes (logdb split, build cap, operator concurrency, registry gc) ([87c24a9](https://github.com/sislelabs/kuso/commit/87c24a9cd8ee15c74ce81bb4b7e5157818659072))
+- Perf: tier-1 scalability fixes (Describe cache, build dedup, async webhook) ([4623290](https://github.com/sislelabs/kuso/commit/46232905f65ace78563c438ed1ac1182399f347e))
+
+### ✨ Features
+- Feat(web): brand-aligned palette derived from kuso logo ([34ff1e4](https://github.com/sislelabs/kuso/commit/34ff1e494a5a26b15f68fdd889638fea7cb24439))
+
+### 🐛 Bug Fixes
+- Fix(release): retry gh release create on transient 502s ([77db565](https://github.com/sislelabs/kuso/commit/77db565262e5aa5731407d39b1c489fe83fae9cc))
+- Fix(release): two-phase GH release upload with retries (resists transient 404/422) ([1d5f3e5](https://github.com/sislelabs/kuso/commit/1d5f3e533324d7a7ddc47c0c619873a4df54eefa))
+- Fix(auth,install): GitHub sign-in works without re-pasting creds, HTTP→HTTPS redirect ([aef449f](https://github.com/sislelabs/kuso/commit/aef449fcb35a2d31a7deaf3dd0cf46c878b7a436))
+
 ## [0.7.16] — 2026-05-04
 
 ### 🐛 Bug Fixes
