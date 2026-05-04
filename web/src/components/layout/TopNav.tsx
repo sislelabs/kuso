@@ -369,6 +369,10 @@ interface FeedEvent {
 
 function NotificationsButton() {
   const qc = useQueryClient();
+  // Controlled state so a notification's <Link> click can close the
+  // popover before pushing the route — otherwise the popover stays
+  // open over the new page until the user clicks elsewhere.
+  const [open, setOpen] = useState(false);
   // Unread count drives the dot badge. Polled every 30s — same
   // cadence the project-status query uses, so we don't add a
   // chatter to the server for one icon.
@@ -397,6 +401,7 @@ function NotificationsButton() {
   });
 
   const onOpenChange = (next: boolean) => {
+    setOpen(next);
     if (next) {
       void feed.refetch();
       // Mark-read fires on open so the dot disappears the moment
@@ -408,7 +413,7 @@ function NotificationsButton() {
 
   const badge = (unread.data?.unread ?? 0) > 0;
   return (
-    <Popover onOpenChange={onOpenChange}>
+    <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger
         aria-label="Notifications"
         className="relative inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
@@ -426,6 +431,7 @@ function NotificationsButton() {
           <p className="text-xs font-semibold tracking-tight">Notifications</p>
           <Link
             href="/settings/notifications"
+            onClick={() => setOpen(false)}
             className="font-mono text-[10px] text-[var(--accent)] hover:underline"
           >
             channels →
@@ -445,36 +451,7 @@ function NotificationsButton() {
           ) : (
             <ul className="divide-y divide-[var(--border-subtle)]">
               {(feed.data ?? []).map((e) => (
-                <li key={e.id} className="px-3 py-2">
-                  <div className="flex items-start gap-2">
-                    <span
-                      aria-hidden
-                      className={cn(
-                        "mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-                        e.severity === "error"
-                          ? "bg-red-400"
-                          : e.severity === "warn"
-                            ? "bg-amber-400"
-                            : "bg-emerald-400"
-                      )}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-[12px] font-medium">{e.title}</p>
-                      {e.body && (
-                        <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--text-secondary)]">
-                          {e.body}
-                        </p>
-                      )}
-                      <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
-                        {e.type}
-                        {e.project && ` · ${e.project}`}
-                        {e.service && `/${e.service}`}
-                        {" · "}
-                        {relativeFromNow(e.createdAt)}
-                      </p>
-                    </div>
-                  </div>
-                </li>
+                <NotificationRow key={e.id} event={e} onClose={() => setOpen(false)} />
               ))}
             </ul>
           )}
@@ -482,6 +459,61 @@ function NotificationsButton() {
       </PopoverContent>
     </Popover>
   );
+}
+
+// NotificationRow is a single bell-popover entry. When the event
+// carries a URL (server populates this for build/pod/node/alert
+// events — see internal/notify/notify.go), wrap the row in a Link
+// that closes the popover before navigating. Otherwise render a
+// plain non-interactive li so events without a meaningful target
+// (e.g. low-importance generic events) don't pretend to be
+// clickable.
+function NotificationRow({ event, onClose }: { event: FeedEvent; onClose: () => void }) {
+  const body = (
+    <div className="flex items-start gap-2">
+      <span
+        aria-hidden
+        className={cn(
+          "mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full",
+          event.severity === "error"
+            ? "bg-red-400"
+            : event.severity === "warn"
+              ? "bg-amber-400"
+              : "bg-emerald-400"
+        )}
+      />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[12px] font-medium">{event.title}</p>
+        {event.body && (
+          <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--text-secondary)]">
+            {event.body}
+          </p>
+        )}
+        <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+          {event.type}
+          {event.project && ` · ${event.project}`}
+          {event.service && `/${event.service}`}
+          {" · "}
+          {relativeFromNow(event.createdAt)}
+        </p>
+      </div>
+    </div>
+  );
+
+  if (event.url) {
+    return (
+      <li className="hover:bg-[var(--bg-tertiary)]/40 transition-colors">
+        <Link
+          href={event.url}
+          onClick={onClose}
+          className="block px-3 py-2"
+        >
+          {body}
+        </Link>
+      </li>
+    );
+  }
+  return <li className="px-3 py-2">{body}</li>;
 }
 
 // relativeFromNow renders a UTC timestamp as "5m ago" / "2h ago" /

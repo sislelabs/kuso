@@ -100,14 +100,14 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       data-node-context
       onContextMenu={data.__onContext}
       className={cn(
-        // Fixed height (5 × 24px grid units) so service nodes line up
-        // horizontally with addon nodes — see AddonNode for the
-        // matching value. Content (header/url/replicas) is given
-        // breathing space inside via the existing margins.
+        // Fixed height (6 × 24px grid units = 144px) so the new
+        // build-state line fits without losing the URL/replicas rows.
+        // Service-vs-addon top alignment still holds since both snap
+        // to the canvas's 24px grid.
         // border-2 (vs border-1) so status hue (green/amber/red) is
         // unambiguously visible at canvas zoom levels — same fix as
         // AddonNode.
-        "group flex h-[120px] w-[280px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
+        "group flex h-[144px] w-[280px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
         "hover:border-[var(--border-strong)]",
         (status === "building" || status === "deploying") &&
           "border-[var(--building)]/70 animate-pulse",
@@ -135,7 +135,7 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       </div>
 
       {/* URL pill */}
-      <div className="mt-2.5">
+      <div className="mt-2">
         {url ? (
           <UrlPill url={url} />
         ) : (
@@ -145,12 +145,61 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         )}
       </div>
 
+      {/* Build line: SHA · branch · status check. Tells you what
+          code is currently running and whether the latest push
+          stuck. Only renders when we actually have a build for
+          this service — first-deploy services skip it cleanly. */}
+      <BuildLine build={data.latestBuild} />
+
       {/* Footer: replicas (live/desired) + sleep badge if applicable */}
-      <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2 font-mono text-[10px]">
+      <div className="mt-2 flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2 font-mono text-[10px]">
         <ReplicasBadge replicas={replicas} status={status} />
         {status === "sleeping" && <SleepBadge />}
       </div>
     </div>
+  );
+}
+
+// BuildLine renders a one-row build summary on the canvas card —
+// "main@a4b2f1c · 3h · ✓". Compact enough to live above the footer
+// without bumping the node height past one grid cell. Click on the
+// node still opens the overlay where the full Deployments tab
+// lives; this is just glance info.
+function BuildLine({ build }: { build?: BuildSummary }) {
+  if (!build) return null;
+  const sha = (build.commitSha ?? "").slice(0, 7);
+  const branch = build.branch || "main";
+  const status = (build.status ?? "").toLowerCase();
+  // Most useful timestamp: when the latest build finished. Falls
+  // back to startedAt for in-flight builds, then nothing.
+  const ts = build.finishedAt || build.startedAt || "";
+  // Status glyph + color via the shared token vocabulary so it
+  // matches the canvas border state for the same condition.
+  let glyph = "·";
+  let cls = "text-[var(--text-tertiary)]";
+  if (status === "succeeded") {
+    glyph = "✓";
+    cls = "text-emerald-400";
+  } else if (status === "failed" || status === "error") {
+    glyph = "✗";
+    cls = "text-red-400";
+  } else if (status === "running" || status === "pending" || status === "building") {
+    glyph = "…";
+    cls = "text-[var(--building)]";
+  }
+  return (
+    <p className="mt-1 truncate font-mono text-[10px] text-[var(--text-tertiary)]">
+      <span className="text-[var(--text-secondary)]">{branch}</span>
+      {sha && (
+        <>
+          <span className="text-[var(--text-tertiary)]/60">@</span>
+          <span className="text-[var(--text-secondary)]">{sha}</span>
+        </>
+      )}
+      {ts && <> · {relativeAge(ts)}</>}
+      {" "}
+      <span className={cn("ml-0.5", cls)}>{glyph}</span>
+    </p>
   );
 }
 

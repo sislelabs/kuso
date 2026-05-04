@@ -313,7 +313,7 @@ function CreateInviteDialog({ onClose }: { onClose: () => void }) {
           <select
             value={groupId}
             onChange={(e) => setGroupId(e.target.value)}
-            className="h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--input)] px-2 font-mono text-[12px]"
+            className="h-8 w-full rounded-sm border border-[var(--border-subtle)] bg-[var(--input)] px-2 font-mono text-[12px]"
           >
             <option value="">— pending (admin approves later) —</option>
             {(groups.data ?? []).map((g) => (
@@ -327,7 +327,7 @@ function CreateInviteDialog({ onClose }: { onClose: () => void }) {
           <select
             value={instanceRole}
             onChange={(e) => setInstanceRole(e.target.value)}
-            className="h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--input)] px-2 font-mono text-[12px]"
+            className="h-8 w-full rounded-sm border border-[var(--border-subtle)] bg-[var(--input)] px-2 font-mono text-[12px]"
           >
             <option value="">— use group default —</option>
             <option value="admin">admin</option>
