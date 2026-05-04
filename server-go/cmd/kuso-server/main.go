@@ -250,7 +250,7 @@ func main() {
 		// rows older than retention. Skipped by
 		// KUSO_DAILY_CLEANUP_DISABLED=true.
 		if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
-			go runDailyCleanup(ctx, database, logger)
+			go runDailyCleanup(ctx, database, kc, *namespace, logger)
 		}
 
 		// GitHub App is opt-in; if env vars are missing the webhook +
@@ -431,12 +431,20 @@ func runPreviewCleanup(ctx context.Context, svc *projects.Service, logger *slog.
 //   - LogLine + LogLineFts rows older than KUSO_LOG_RETENTION_DAYS
 //     (default 7). One chatty service can write hundreds of MB/day
 //     into FTS5 — without retention, SQLite swells the disk fast.
+//   - Finished KusoBuild CRs older than KUSO_BUILD_RETENTION_HOURS
+//     (default 24). Clears CRs the helm-operator's watch-selector is
+//     already skipping; keeps the etcd-equivalent kine database from
+//     accumulating dead build records over weeks.
+//   - Orphan sh.helm.release.v1.* secrets whose owning CR is gone.
+//     Same goal — kine bloat reduction. Conservative match: only
+//     names that look like kuso-shaped releases are touched.
 //
 // Best-effort: per-step errors log a warning and the loop continues.
 // Disabled by KUSO_DAILY_CLEANUP_DISABLED=true.
-func runDailyCleanup(ctx context.Context, database *db.DB, logger *slog.Logger) {
+func runDailyCleanup(ctx context.Context, database *db.DB, kc *kube.Client, namespace string, logger *slog.Logger) {
 	notifyDays := envInt("KUSO_NOTIFY_RETENTION_DAYS", 7)
 	logDays := envInt("KUSO_LOG_RETENTION_DAYS", 7)
+	buildHours := envInt("KUSO_BUILD_RETENTION_HOURS", 24)
 	t := time.NewTicker(24 * time.Hour)
 	defer t.Stop()
 	tick := func() {
@@ -452,6 +460,18 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logger *slog.Logger) 
 			logger.Warn("daily-cleanup logs", "err", err)
 		} else if n > 0 {
 			logger.Info("daily-cleanup logs pruned", "rows", n, "days", logDays)
+		}
+		if kc != nil {
+			if n, err := builds.SweepFinishedBuilds(c, kc, namespace, time.Duration(buildHours)*time.Hour, builds.LogAdapter(logger)); err != nil {
+				logger.Warn("daily-cleanup builds", "err", err)
+			} else if n > 0 {
+				logger.Info("daily-cleanup builds pruned", "count", n, "hours", buildHours)
+			}
+			if n, err := builds.SweepOrphanHelmReleases(c, kc, namespace, builds.LogAdapter(logger)); err != nil {
+				logger.Warn("daily-cleanup orphans", "err", err)
+			} else if n > 0 {
+				logger.Info("daily-cleanup orphan helm releases pruned", "count", n)
+			}
 		}
 	}
 	// Run once at startup so a fresh deploy doesn't have to wait 24h

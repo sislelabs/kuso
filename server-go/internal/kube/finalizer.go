@@ -89,6 +89,20 @@ func (c *Client) CleanupStuckHelmFinalizers(ctx context.Context, namespace strin
 	return released, inspected, nil
 }
 
+// StripHelmFinalizers is the public alias of stripFinalizer used
+// by the build cleanup sweep. The KusoBuild watch-selector
+// (operator/watches.yaml) excludes done builds, so the operator
+// never sees their delete events; without this strip, the helm-
+// uninstall finalizer hangs the CR forever.
+func StripHelmFinalizers(ctx context.Context, c *Client, gvr schema.GroupVersionResource, namespace, name string) error {
+	obj, err := c.Dynamic.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	_, err = stripFinalizer(ctx, c, gvr, namespace, name, obj.GetFinalizers())
+	return err
+}
+
 // stripFinalizer removes any helm-uninstall finalizer from finalizers
 // via a merge-patch on metadata.finalizers. Returns (patched, err) —
 // patched is false if no such finalizer was present after re-listing.

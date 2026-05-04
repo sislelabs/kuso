@@ -28,6 +28,16 @@
   kind: KusoBuild
   chart: helm-charts/kusobuild
   reconcilePeriod: 1m
+  # Skip completed builds. The kuso-server build poller stamps
+  # `kuso.sislelabs.com/build-state=done` on succeeded/failed CRs;
+  # without this selector, the operator reconciles every old
+  # KusoBuild every 60s forever — burning ~10% of one core in a
+  # cluster with even a dozen build records.
+  selector:
+    matchExpressions:
+      - key: kuso.sislelabs.com/build-state
+        operator: NotIn
+        values: ["done"]
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoCron

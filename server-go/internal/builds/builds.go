@@ -535,9 +535,15 @@ func completedCondition(job *batchv1.Job) *batchv1.JobCondition {
 // kusobuilds), so any .status.phase we write gets obliterated within
 // a minute. Annotations are part of metadata, ignored by helm-operator,
 // and we read them back the same way we used to read .status.phase.
+//
+// We also stamp a label `kuso.sislelabs.com/build-state=done` so the
+// helm-operator's watch selector (operator/watches.yaml) excludes the
+// CR from further reconciles. Without it, completed KusoBuilds get
+// reconciled every 60s forever — burning ~10% of one core in a busy
+// cluster on dead work.
 func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild) error {
 	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"succeeded",%q:%q}}}`,
+		`{"metadata":{"annotations":{%q:"succeeded",%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}}}`,
 		annPhase, annCompletedAt, time.Now().UTC().Format(time.RFC3339),
 	)
 	if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
@@ -563,7 +569,7 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 
 func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, msg string) error {
 	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"failed",%q:%q,%q:%q}}}`,
+		`{"metadata":{"annotations":{%q:"failed",%q:%q,%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}}}`,
 		annPhase, annCompletedAt, time.Now().UTC().Format(time.RFC3339),
 		annMessage, msg,
 	)
