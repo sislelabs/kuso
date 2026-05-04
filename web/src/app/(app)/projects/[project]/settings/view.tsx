@@ -3,17 +3,18 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { useRouteParams } from "@/lib/dynamic-params";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Separator } from "@/components/ui/separator";
 import { useProject, useUpdateProject, useDeleteProject } from "@/features/projects";
 import { SharedSecretsCard } from "@/components/project/SharedSecretsCard";
 import { toast } from "sonner";
-import { Trash2, Save } from "lucide-react";
+import { Trash2, Save, Settings as SettingsIcon, AlertTriangle } from "lucide-react";
 
+// Project settings — flat layout, sections separated by horizontal
+// rules + small uppercase headers. Mirrors the polish of /settings
+// instead of stacking Card components which created visual noise.
 export function ProjectSettingsView() {
   const params = useRouteParams<{ project: string }>(["project"]);
   const router = useRouter();
@@ -40,7 +41,7 @@ export function ProjectSettingsView() {
 
   if (project.isPending) {
     return (
-      <div className="p-6 lg:p-8">
+      <div className="mx-auto max-w-3xl p-6 lg:p-8">
         <Skeleton className="mb-4 h-8 w-48" />
         <Skeleton className="h-64 w-full" />
       </div>
@@ -49,8 +50,10 @@ export function ProjectSettingsView() {
 
   if (project.isError) {
     return (
-      <div className="p-6 lg:p-8">
-        <p className="text-sm text-red-500">{project.error?.message}</p>
+      <div className="mx-auto max-w-3xl p-6 lg:p-8">
+        <p className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-sm text-red-400">
+          {project.error?.message}
+        </p>
       </div>
     );
   }
@@ -83,23 +86,30 @@ export function ProjectSettingsView() {
   };
 
   return (
-    <div className="mx-auto max-w-2xl p-6 lg:p-8 space-y-6">
-      <div>
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-1 text-sm text-[var(--text-secondary)]">{projectName}</p>
-      </div>
+    <div className="mx-auto max-w-3xl space-y-10 p-6 lg:p-8">
+      <header className="flex items-start gap-3">
+        <SettingsIcon className="mt-1 h-5 w-5 text-[var(--text-tertiary)]" />
+        <div>
+          <h1 className="font-heading text-xl font-semibold tracking-tight">Project settings</h1>
+          <p className="mt-1 font-mono text-[12px] text-[var(--text-secondary)]">{projectName}</p>
+        </div>
+      </header>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>General</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      {/* General */}
+      <section className="space-y-4">
+        <header>
+          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            general
+          </h2>
+        </header>
+        <div className="space-y-4 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
           <div className="space-y-1.5">
             <Label htmlFor="description">Description</Label>
             <Input
               id="description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
+              placeholder="Short human-readable summary"
             />
           </div>
           <div className="space-y-1.5">
@@ -111,30 +121,42 @@ export function ProjectSettingsView() {
               placeholder="myproject.example.com"
               className="font-mono"
             />
-            <p className="text-xs text-[var(--text-tertiary)]">
+            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
               Services in this project default to{" "}
-              <span className="font-mono">&lt;service&gt;.{baseDomain || "<base>"}</span>
+              <code className="rounded bg-[var(--bg-tertiary)] px-1">
+                &lt;service&gt;.{baseDomain || "<base>"}
+              </code>
             </p>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Preview environments</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <label className="flex items-center gap-2 text-sm">
+      {/* Preview environments */}
+      <section className="space-y-4">
+        <header>
+          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            preview environments
+          </h2>
+        </header>
+        <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
+          <label className="flex items-start gap-2 text-sm">
             <input
               type="checkbox"
               checked={previewsEnabled}
               onChange={(e) => setPreviewsEnabled(e.target.checked)}
-              className="h-4 w-4 rounded border-[var(--border-default)]"
+              className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
             />
-            Spawn a preview env on every PR
+            <span className="flex-1">
+              <span className="text-[13px] font-medium">Spawn a preview env on every PR</span>
+              <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">
+                Requires a GitHub App install + the project repo set under Cluster config →
+                GitHub. Per-PR DB clones are off by default —{" "}
+                <code className="font-mono">KUSO_PREVIEW_DB_ENABLED=true</code> on the server to opt in.
+              </span>
+            </span>
           </label>
           {previewsEnabled && (
-            <div className="space-y-1.5">
+            <div className="space-y-1.5 pl-6">
               <Label htmlFor="previewsTtl">Auto-expire after (days)</Label>
               <Input
                 id="previewsTtl"
@@ -147,52 +169,59 @@ export function ProjectSettingsView() {
               />
             </div>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </section>
 
+      {/* Save */}
       <div className="flex justify-end">
         <Button onClick={onSave} disabled={update.isPending}>
           <Save className="h-4 w-4" />
-          {update.isPending ? "Saving…" : "Save"}
+          {update.isPending ? "Saving…" : "Save changes"}
         </Button>
       </div>
 
+      {/* Project secrets — flat now, no Card wrapper */}
       <SharedSecretsCard project={projectName} />
 
-      <Separator />
-
-      <Card className="border-red-500/30">
-        <CardHeader>
-          <CardTitle className="text-red-500">Danger zone</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-[var(--text-secondary)]">
-            Deleting this project also deletes all services, environments, addons,
-            and pods. This action cannot be undone.
+      {/* Danger zone */}
+      <section className="space-y-3">
+        <header className="flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 text-red-400" />
+          <h2 className="font-mono text-[10px] uppercase tracking-widest text-red-400">
+            danger zone
+          </h2>
+        </header>
+        <div className="space-y-3 rounded-md border border-red-500/30 bg-red-500/5 p-4">
+          <p className="text-[12px] leading-relaxed text-[var(--text-secondary)]">
+            Deleting this project also deletes all services, environments, addons, and pods. This
+            action cannot be undone.
           </p>
           <div className="space-y-1.5">
-            <Label htmlFor="confirmDelete">
+            <Label htmlFor="confirmDelete" className="text-[12px]">
               Type{" "}
-              <span className="font-mono text-[var(--text-primary)]">{projectName}</span>{" "}
-              to confirm
+              <span className="font-mono text-[var(--text-primary)]">{projectName}</span> to
+              confirm
             </Label>
             <Input
               id="confirmDelete"
               value={confirmDelete}
               onChange={(e) => setConfirmDelete(e.target.value)}
               className="font-mono"
+              spellCheck={false}
+              autoComplete="off"
             />
           </div>
           <Button
             variant="destructive"
+            size="sm"
             onClick={onDelete}
             disabled={del.isPending || confirmDelete !== projectName}
           >
             <Trash2 className="h-4 w-4" />
             Delete project
           </Button>
-        </CardContent>
-      </Card>
+        </div>
+      </section>
     </div>
   );
 }

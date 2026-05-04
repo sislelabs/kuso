@@ -2,11 +2,10 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api-client";
-import { Check, Mail, Plus, Trash2, X } from "lucide-react";
+import { Check, KeyRound, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -16,11 +15,10 @@ import { cn } from "@/lib/utils";
 // like Resend, Postmark, Stripe, OpenAI — set once, every service
 // gets it at boot.
 //
-// Server returns keys only; values are write-only. Two flows:
-//   - manual upsert: type a key + value, click +
-//   - integration tile: pre-fills the key (e.g. RESEND_API_KEY)
-//     so users get the right shape without remembering the env var
-//     name.
+// The integration tiles pre-fill the env var name (so the user
+// doesn't have to remember whether it's RESEND_API_KEY or
+// RESEND_TOKEN) but inline the value entry — no browser prompt
+// dialog. Two flows otherwise share the same submit path.
 export function SharedSecretsCard({ project }: { project: string }) {
   const qc = useQueryClient();
   const list = useQuery<{ keys: string[] }>({
@@ -50,161 +48,211 @@ export function SharedSecretsCard({ project }: { project: string }) {
     onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
   });
 
-  const [newKey, setNewKey] = useState("");
-  const [newValue, setNewValue] = useState("");
+  // editingKey is the env var name currently in the inline editor.
+  // Set when the user clicks an integration tile or expands the
+  // manual-add form. Empty = no editor open.
+  const [editingKey, setEditingKey] = useState<string>("");
+  const [editingValue, setEditingValue] = useState<string>("");
 
-  const onSubmitManual = () => {
-    if (!newKey.trim() || !newValue) return;
-    set.mutate({ key: newKey.trim(), value: newValue });
-    setNewKey("");
-    setNewValue("");
-    toast.success(`${newKey} saved to ${project}-shared`);
+  const onSave = () => {
+    const k = editingKey.trim();
+    if (!k || !editingValue) return;
+    if (!/^[A-Z][A-Z0-9_]*$/.test(k)) {
+      toast.error("Use SCREAMING_SNAKE_CASE for env var names");
+      return;
+    }
+    set.mutate(
+      { key: k, value: editingValue },
+      {
+        onSuccess: () => {
+          toast.success(`${k} saved to ${project}-shared`);
+          setEditingKey("");
+          setEditingValue("");
+        },
+      }
+    );
   };
 
-  const onIntegration = (key: string) => {
-    const value = window.prompt(`Paste your ${key} value:`);
-    if (!value) return;
-    set.mutate({ key, value });
-    toast.success(`${key} saved to ${project}-shared — every service in this project gets it at boot`);
+  const onCancel = () => {
+    setEditingKey("");
+    setEditingValue("");
   };
+
+  const stored = (list.data?.keys ?? []).slice().sort();
+  const has = (k: string) => stored.includes(k);
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Project secrets</CardTitle>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        <p className="text-xs text-[var(--text-secondary)]">
+    <section className="space-y-4">
+      <header>
+        <h3 className="font-heading text-sm font-semibold tracking-tight">Project secrets</h3>
+        <p className="mt-1 text-[12px] leading-relaxed text-[var(--text-secondary)]">
           Auto-attached to every service in this project as env vars (via{" "}
-          <span className="font-mono">{project}-shared</span> kube Secret + envFromSecrets).
-          Use for cross-service integrations like Resend, Postmark, Stripe.
+          <code className="rounded bg-[var(--bg-secondary)] px-1 font-mono text-[11px]">
+            {project}-shared
+          </code>
+          ). Use for cross-service integrations like Resend, Postmark, Stripe, OpenAI.
         </p>
+      </header>
 
-        {/* Integration tiles — one-click for the common cases */}
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+      {/* Integration tiles — one click prefills the key + opens the
+          inline value editor. Existing keys show a green checkmark. */}
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {INTEGRATIONS.map((it) => (
           <IntegrationTile
-            name="Resend"
-            envVar="RESEND_API_KEY"
-            description="Transactional email"
-            existing={(list.data?.keys ?? []).includes("RESEND_API_KEY")}
-            onAdd={() => onIntegration("RESEND_API_KEY")}
+            key={it.envVar}
+            name={it.name}
+            envVar={it.envVar}
+            description={it.description}
+            existing={has(it.envVar)}
+            onClick={() => {
+              setEditingKey(it.envVar);
+              setEditingValue("");
+            }}
           />
-          <IntegrationTile
-            name="Postmark"
-            envVar="POSTMARK_API_KEY"
-            description="Transactional email"
-            existing={(list.data?.keys ?? []).includes("POSTMARK_API_KEY")}
-            onAdd={() => onIntegration("POSTMARK_API_KEY")}
-          />
-          <IntegrationTile
-            name="Stripe"
-            envVar="STRIPE_SECRET_KEY"
-            description="Payments"
-            existing={(list.data?.keys ?? []).includes("STRIPE_SECRET_KEY")}
-            onAdd={() => onIntegration("STRIPE_SECRET_KEY")}
-          />
-          <IntegrationTile
-            name="OpenAI"
-            envVar="OPENAI_API_KEY"
-            description="LLM API"
-            existing={(list.data?.keys ?? []).includes("OPENAI_API_KEY")}
-            onAdd={() => onIntegration("OPENAI_API_KEY")}
-          />
-          <IntegrationTile
-            name="Sentry"
-            envVar="SENTRY_DSN"
-            description="Error tracking"
-            existing={(list.data?.keys ?? []).includes("SENTRY_DSN")}
-            onAdd={() => onIntegration("SENTRY_DSN")}
-          />
-        </div>
+        ))}
+      </div>
 
-        {/* Existing keys */}
-        <div className="space-y-1">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            stored ({list.data?.keys.length ?? 0})
-          </p>
-          {(list.data?.keys ?? []).length === 0 ? (
-            <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-3 text-center text-[11px] text-[var(--text-tertiary)]">
-              No project secrets yet.
-            </p>
-          ) : (
-            <ul className="divide-y divide-[var(--border-subtle)] rounded-md border border-[var(--border-subtle)]">
-              {(list.data?.keys ?? []).sort().map((k) => (
-                <li key={k} className="flex items-center gap-2 px-3 py-1.5">
-                  <span className="flex-1 truncate font-mono text-[12px]">{k}</span>
-                  <button
-                    type="button"
-                    onClick={() => unset.mutate(k)}
-                    disabled={unset.isPending}
-                    className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
-        {/* Manual upsert */}
-        <div className="space-y-1">
-          <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            add manually
-          </p>
-          <div className="flex items-center gap-1">
-            <Input
-              value={newKey}
-              onChange={(e) => setNewKey(e.target.value)}
-              placeholder="ENV_VAR_NAME"
-              className="h-8 flex-1 font-mono text-[12px]"
-            />
-            <Input
-              value={newValue}
-              onChange={(e) => setNewValue(e.target.value)}
-              type="password"
-              placeholder="value"
-              className="h-8 flex-1 font-mono text-[12px]"
-              onKeyDown={(e) => {
-                if (e.key === "Enter") onSubmitManual();
-              }}
-            />
-            <Button
-              size="sm"
-              disabled={!newKey.trim() || !newValue || set.isPending}
-              onClick={onSubmitManual}
+      {/* Inline value editor (replaces the browser window.prompt) */}
+      {editingKey && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            onSave();
+          }}
+          className="flex flex-col gap-2 rounded-md border border-[var(--border-strong)] bg-[var(--bg-secondary)]/60 p-3"
+        >
+          <div className="flex items-center gap-2">
+            <KeyRound className="h-3 w-3 text-[var(--text-tertiary)]" />
+            <span className="font-mono text-[12px] font-medium">{editingKey}</span>
+            <button
+              type="button"
+              onClick={onCancel}
+              className="ml-auto rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+              aria-label="Cancel"
             >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <Input
+            value={editingValue}
+            onChange={(e) => setEditingValue(e.target.value)}
+            type="password"
+            placeholder="paste secret value"
+            className="h-8 font-mono text-[12px]"
+            spellCheck={false}
+            autoComplete="new-password"
+            autoFocus
+          />
+          <div className="flex items-center justify-end gap-2">
+            <Button size="sm" type="submit" disabled={!editingValue || set.isPending}>
               <Plus className="h-3.5 w-3.5" />
+              {set.isPending ? "Saving…" : "Save"}
             </Button>
           </div>
-        </div>
-      </CardContent>
-    </Card>
+        </form>
+      )}
+
+      {/* Stored list */}
+      <section className="space-y-2">
+        <header>
+          <h4 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            stored ({stored.length})
+          </h4>
+        </header>
+        {stored.length === 0 ? (
+          <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
+            No project secrets yet. Pick an integration above or add manually below.
+          </p>
+        ) : (
+          <ul className="overflow-hidden rounded-md border border-[var(--border-subtle)]">
+            {stored.map((k) => (
+              <li
+                key={k}
+                className="flex items-center gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-2 last:border-b-0 hover:bg-[var(--bg-secondary)]/70"
+              >
+                <KeyRound className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+                <span className="flex-1 truncate font-mono text-[12px] text-[var(--text-secondary)]">
+                  {k}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!confirm(`Delete project secret ${k}?`)) return;
+                    unset.mutate(k);
+                  }}
+                  disabled={unset.isPending}
+                  className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+                  aria-label={`Delete ${k}`}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* Manual add */}
+      <section className="space-y-2">
+        <header>
+          <h4 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            add manually
+          </h4>
+        </header>
+        <ManualAddRow
+          onAdd={(k, v) =>
+            set.mutate(
+              { key: k, value: v },
+              {
+                onSuccess: () => {
+                  toast.success(`${k} saved to ${project}-shared`);
+                },
+              }
+            )
+          }
+          pending={set.isPending}
+        />
+      </section>
+    </section>
   );
 }
+
+interface IntegrationDef {
+  name: string;
+  envVar: string;
+  description: string;
+}
+
+const INTEGRATIONS: IntegrationDef[] = [
+  { name: "Resend",   envVar: "RESEND_API_KEY",    description: "Transactional email" },
+  { name: "Postmark", envVar: "POSTMARK_API_KEY",  description: "Transactional email" },
+  { name: "Stripe",   envVar: "STRIPE_SECRET_KEY", description: "Payments" },
+  { name: "OpenAI",   envVar: "OPENAI_API_KEY",    description: "LLM API" },
+  { name: "Sentry",   envVar: "SENTRY_DSN",        description: "Error tracking" },
+];
 
 function IntegrationTile({
   name,
   envVar,
   description,
   existing,
-  onAdd,
+  onClick,
 }: {
   name: string;
   envVar: string;
   description: string;
   existing: boolean;
-  onAdd: () => void;
+  onClick: () => void;
 }) {
   return (
     <button
       type="button"
-      onClick={onAdd}
+      onClick={onClick}
       className={cn(
         "flex flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left transition-colors",
         existing
           ? "border-emerald-500/30 bg-emerald-500/5 hover:bg-emerald-500/10"
-          : "border-[var(--border-subtle)] bg-[var(--bg-primary)] hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40"
+          : "border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40"
       )}
     >
       <div className="flex w-full items-center gap-1.5">
@@ -214,5 +262,57 @@ function IntegrationTile({
       <p className="font-mono text-[10px] text-[var(--text-tertiary)]">{envVar}</p>
       <p className="text-[10px] text-[var(--text-tertiary)]">{description}</p>
     </button>
+  );
+}
+
+function ManualAddRow({
+  onAdd,
+  pending,
+}: {
+  onAdd: (key: string, value: string) => void;
+  pending: boolean;
+}) {
+  const [k, setK] = useState("");
+  const [v, setV] = useState("");
+  const submit = () => {
+    const key = k.trim();
+    if (!key || !v) return;
+    if (!/^[A-Z][A-Z0-9_]*$/.test(key)) {
+      toast.error("Use SCREAMING_SNAKE_CASE for env var names");
+      return;
+    }
+    onAdd(key, v);
+    setK("");
+    setV("");
+  };
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+      className="flex items-center gap-2"
+    >
+      <Input
+        value={k}
+        onChange={(e) => setK(e.target.value)}
+        placeholder="ENV_VAR_NAME"
+        className="h-8 flex-1 font-mono text-[12px]"
+        spellCheck={false}
+        autoComplete="off"
+      />
+      <Input
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        type="password"
+        placeholder="value"
+        className="h-8 flex-1 font-mono text-[12px]"
+        spellCheck={false}
+        autoComplete="new-password"
+      />
+      <Button size="sm" type="submit" disabled={!k.trim() || !v || pending}>
+        <Plus className="h-3.5 w-3.5" />
+      </Button>
+    </form>
   );
 }

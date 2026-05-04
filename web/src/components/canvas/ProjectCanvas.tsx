@@ -42,6 +42,7 @@ import {
   LayoutGrid,
   Database,
   HardDrive,
+  Settings as SettingsIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -450,6 +451,14 @@ export function ProjectCanvas({
         onSelect: () => setShowAddAddon(true),
       },
       { id: "sep1", kind: "separator" },
+      {
+        id: "project-settings",
+        label: "Project settings",
+        icon: SettingsIcon,
+        onSelect: () => {
+          window.location.href = `/projects/${encodeURIComponent(project)}/settings`;
+        },
+      },
       {
         id: "reset-layout",
         label: "Reset layout",

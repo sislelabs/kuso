@@ -31,6 +31,62 @@ func (h *InstanceSecretsHandler) Mount(r chi.Router) {
 	r.Get("/api/instance-secrets", h.List)
 	r.Put("/api/instance-secrets", h.Set)
 	r.Delete("/api/instance-secrets/{key}", h.Unset)
+
+	// Instance addons sit on top of the same backing Secret. The
+	// dedicated routes return parsed connection info so the UI
+	// doesn't have to know the INSTANCE_ADDON_<UPPER>_DSN_ADMIN
+	// naming convention.
+	r.Get("/api/instance-addons", h.ListAddons)
+	r.Put("/api/instance-addons", h.RegisterAddon)
+	r.Delete("/api/instance-addons/{name}", h.UnregisterAddon)
+}
+
+// ListAddons returns every registered instance addon with the host
+// + port parsed out of the DSN. Never returns the password.
+func (h *InstanceSecretsHandler) ListAddons(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := instanceSecretsCtx(r)
+	defer cancel()
+	addons, err := h.Svc.ListInstanceAddons(ctx)
+	if err != nil {
+		h.fail(w, "list instance addons", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"addons": addons})
+}
+
+type registerInstanceAddonBody struct {
+	Name string `json:"name"`
+	DSN  string `json:"dsn"`
+}
+
+// RegisterAddon stores a superuser DSN for a named instance addon.
+// Idempotent — re-registering the same name overwrites the DSN.
+func (h *InstanceSecretsHandler) RegisterAddon(w http.ResponseWriter, r *http.Request) {
+	var body registerInstanceAddonBody
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := instanceSecretsCtx(r)
+	defer cancel()
+	if err := h.Svc.RegisterInstanceAddon(ctx, body.Name, body.DSN); err != nil {
+		h.fail(w, "register instance addon", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// UnregisterAddon removes an instance-addon registration. Doesn't
+// touch any project's KusoAddon CR — the caller is responsible for
+// preflighting.
+func (h *InstanceSecretsHandler) UnregisterAddon(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := instanceSecretsCtx(r)
+	defer cancel()
+	if err := h.Svc.UnregisterInstanceAddon(ctx, chi.URLParam(r, "name")); err != nil {
+		h.fail(w, "unregister instance addon", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func instanceSecretsCtx(r *http.Request) (context.Context, context.CancelFunc) {

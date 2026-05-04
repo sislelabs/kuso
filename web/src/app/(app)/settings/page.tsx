@@ -12,6 +12,8 @@ import {
   Settings as SettingsIcon,
   Users,
   UsersRound,
+  Globe,
+  Database,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -34,10 +36,12 @@ const CARDS: Card[] = [
   { href: "/settings/notifications", title: "Notifications", description: "Discord webhooks, generic webhook fan-out, alerts.",      icon: Bell,       group: "account" },
 
   // Instance: shows for anyone, write-gated downstream.
-  { href: "/settings/nodes",         title: "Cluster nodes",  description: "Tag nodes with labels for placement; schedulable state.", icon: Server,     group: "instance" },
-  { href: "/settings/config",        title: "Cluster config", description: "Cluster-wide knobs (cert-manager email, base domain).",  icon: SettingsIcon, perm: Perms.SettingsRead, group: "instance" },
-  { href: "/settings/backups",       title: "Backups",        description: "S3 credentials for scheduled addon dumps.",              icon: HardDrive,  perm: Perms.SettingsAdmin, group: "instance" },
-  { href: "/settings/updates",       title: "Updates",        description: "Self-update the kuso server + operator + CRDs.",          icon: Package,    group: "instance" },
+  { href: "/settings/nodes",            title: "Cluster nodes",    description: "Tag nodes with labels for placement; schedulable state.",          icon: Server,       group: "instance" },
+  { href: "/settings/config",           title: "Cluster config",   description: "Cluster-wide knobs (cert-manager email, base domain).",            icon: SettingsIcon, perm: Perms.SettingsRead,  group: "instance" },
+  { href: "/settings/instance-secrets", title: "Instance secrets", description: "Env vars auto-mounted into every service in every project.",      icon: Globe,        perm: Perms.SettingsAdmin, group: "instance" },
+  { href: "/settings/instance-addons",  title: "Instance addons",  description: "Shared databases that projects can carve per-project DBs out of.", icon: Database,     perm: Perms.SettingsAdmin, group: "instance" },
+  { href: "/settings/backups",          title: "Backups",          description: "S3 credentials for scheduled addon dumps.",                        icon: HardDrive,    perm: Perms.SettingsAdmin, group: "instance" },
+  { href: "/settings/updates",          title: "Updates",          description: "Self-update the kuso server + operator + CRDs.",                   icon: Package,      group: "instance" },
 
   // Admin: user/role management.
   { href: "/settings/users",  title: "Users",  description: "Local users. OAuth users land here on first login.",          icon: Users,      perm: Perms.UserWrite, group: "admin" },
