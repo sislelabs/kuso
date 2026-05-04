@@ -5,6 +5,15 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.13] — 2026-05-04
+
+### ✨ Features
+- Feat(updater): support pinned --version on kuso upgrade + add kuso github configure ([8c1fe3e](https://github.com/sislelabs/kuso/commit/8c1fe3ed6e4766d1959c3f5bd0c5372bd7e5e328))
+
+### 🐛 Bug Fixes
+- Fix(release): npm fallback in release.sh + npm cache in CI ([982f820](https://github.com/sislelabs/kuso/commit/982f820aca83cade170557db8f6ef9518bb206e2))
+- Fix(release): use --unreleased not --current for GH notes ([607bc15](https://github.com/sislelabs/kuso/commit/607bc159e7a84605b87aa379ae7a070aefe4ced1))
+
 ## [0.7.12] — 2026-05-04
 
 ### Other
