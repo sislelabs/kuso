@@ -12,7 +12,7 @@ that secret doesn't exist the CronJob still installs but every run
 fails — operators see the failure in `kubectl get jobs` and in
 notify (the Job-failed alert from the health watcher).
 */ -}}
-{{- if and .Values.backup.schedule (eq .Values.kind "postgres") }}
+{{- if and .Values.backup.schedule (eq .Values.kind "postgres") (not .Values.external) (not .Values.useInstanceAddon) }}
 ---
 apiVersion: batch/v1
 kind: CronJob

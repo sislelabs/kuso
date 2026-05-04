@@ -540,6 +540,7 @@ function UserMenu() {
         <MenuRow href="/settings/tokens" icon={KeyRound}>API tokens</MenuRow>
         <MenuRow href="/settings/notifications" icon={Bell}>Notifications</MenuRow>
         <MenuRow href="/settings/alerts" icon={Bell}>Alert rules</MenuRow>
+        {canAdmin && <MenuRow href="/settings/instance-secrets" icon={KeyRound}>Instance secrets</MenuRow>}
         <div className="my-1 h-px bg-[var(--border-subtle)]" />
         <MenuRow href="/settings/nodes" icon={Server}>Cluster nodes</MenuRow>
         {canConfig && <MenuRow href="/settings/config" icon={Settings}>Cluster config</MenuRow>}

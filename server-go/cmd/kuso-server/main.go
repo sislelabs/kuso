@@ -23,6 +23,7 @@ import (
 	"kuso/server/internal/addons"
 	"kuso/server/internal/alerts"
 	"kuso/server/internal/crons"
+	"kuso/server/internal/instancesecrets"
 	"kuso/server/internal/logship"
 	"kuso/server/internal/previewdb"
 	"kuso/server/internal/projectsecrets"
@@ -143,6 +144,7 @@ func main() {
 	var addonSvc *addons.Service
 	var cronSvc *crons.Service
 	var projectSecretSvc *projectsecrets.Service
+	var instanceSecretSvc *instancesecrets.Service
 	var ghDeps *httpsrv.GithubDeps
 	var kubeClient *kube.Client
 	var specRecon *spec.Reconciler
@@ -183,6 +185,7 @@ func main() {
 		cronSvc.NSResolver = nsResolver
 		projectSecretSvc = projectsecrets.New(kc, *namespace)
 		projectSecretSvc.NSResolver = nsResolver
+		instanceSecretSvc = instancesecrets.New(kc, *namespace)
 		// Wire the addon→env auto-attach hook so a freshly-created
 		// service env starts with envFromSecrets pre-populated for
 		// every existing project addon. Without this, services added
@@ -296,8 +299,9 @@ func main() {
 		Config:     cfgSvc,
 		Status:     statSvc,
 		Addons:         addonSvc,
-		Crons:          cronSvc,
-		ProjectSecrets: projectSecretSvc,
+		Crons:           cronSvc,
+		ProjectSecrets:  projectSecretSvc,
+		InstanceSecrets: instanceSecretSvc,
 		Audit:      auditSvc,
 		Github:     ghDeps,
 		Notify:     notifyDisp,

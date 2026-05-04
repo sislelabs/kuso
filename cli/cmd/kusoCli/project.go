@@ -423,6 +423,146 @@ var addonDeleteCmd = &cobra.Command{
 	},
 }
 
+// ---------------- project addon connect-external / resync-external ----------------
+
+var (
+	addonExtKind   string
+	addonExtSecret string
+	addonExtKeys   []string
+)
+
+var addonConnectExternalCmd = &cobra.Command{
+	Use:   "connect-external <project> <name>",
+	Short: "Register an external (managed) datastore as an addon — mirrors an existing kube Secret as <name>-conn",
+	Long: `connect-external lets a project use a database that kuso does NOT manage.
+
+Instead of provisioning a StatefulSet, kuso copies the keys from an existing
+kube Secret (containing DATABASE_URL / POSTGRES_PASSWORD / etc.) into the
+addon's conn secret, so every service in the project can envFrom: it
+exactly like a native addon.
+
+Use this for managed Postgres (Hetzner Cloud / Neon / RDS / Supabase) or
+managed Redis (Upstash / ElastiCache).`,
+	Args: cobra.ExactArgs(2),
+	Example: `  kuso project addon connect-external analiz pg --kind postgres --secret hetzner-pg-creds
+  kuso project addon connect-external analiz pg --kind postgres --secret hetzner-pg-creds --key DATABASE_URL --key POSTGRES_HOST`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if !contains(supportedAddonKinds, addonExtKind) {
+			return fmt.Errorf("--kind must be one of: %s", strings.Join(supportedAddonKinds, ", "))
+		}
+		req := kusoApi.CreateAddonRequest{
+			Name: args[1],
+			Kind: addonExtKind,
+			External: &kusoApi.AddonExternalRequest{
+				SecretName: addonExtSecret,
+				SecretKeys: addonExtKeys,
+			},
+		}
+		resp, err := api.AddAddon(args[0], req)
+		if err != nil {
+			return fmt.Errorf("connect external addon: %w", err)
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("addon %s/%s connected to existing secret %q\n", args[0], args[1], addonExtSecret)
+		return nil
+	},
+}
+
+var addonResyncExternalCmd = &cobra.Command{
+	Use:   "resync-external <project> <name>",
+	Short: "Re-mirror an external addon's source Secret into its <name>-conn (run after upstream credentials rotated)",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.ResyncExternalAddon(args[0], args[1])
+		if err != nil {
+			return fmt.Errorf("resync: %w", err)
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("addon %s/%s conn secret refreshed\n", args[0], args[1])
+		return nil
+	},
+}
+
+// ---------------- project addon connect-instance / resync-instance ----------------
+
+var (
+	addonInstName string
+)
+
+var addonConnectInstanceCmd = &cobra.Command{
+	Use:   "connect-instance <project> <name>",
+	Short: "Provision a per-project database on an instance-shared server (admin must register the server via instance secrets first)",
+	Long: `connect-instance creates an isolated database for this project on a
+shared database server registered cluster-wide.
+
+Setup (admin, once):
+  kuso instance-secret set INSTANCE_ADDON_<UPPER>_DSN_ADMIN \
+    'postgres://admin:pw@shared-pg.kuso.svc:5432/postgres?sslmode=disable'
+
+Then any project can:
+  kuso project addon connect-instance analiz pg --instance pg --kind postgres
+
+The kuso server creates DATABASE "<project>_<addon>" + a matching
+role on the shared server, then writes the per-project DSN into
+<name>-conn. v0.7.6 supports postgres only.`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if addonInstName == "" {
+			return fmt.Errorf("--instance is required (the registered shared-addon name)")
+		}
+		req := kusoApi.CreateAddonRequest{
+			Name:             args[1],
+			Kind:             addonExtKind,
+			UseInstanceAddon: addonInstName,
+		}
+		if req.Kind == "" {
+			req.Kind = "postgres"
+		}
+		resp, err := api.AddAddon(args[0], req)
+		if err != nil {
+			return fmt.Errorf("connect instance addon: %w", err)
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("addon %s/%s provisioned on instance addon %q\n", args[0], args[1], addonInstName)
+		return nil
+	},
+}
+
+var addonResyncInstanceCmd = &cobra.Command{
+	Use:   "resync-instance <project> <name>",
+	Short: "Re-provision the per-project DB on a shared instance addon and rotate the password",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.ResyncInstanceAddon(args[0], args[1])
+		if err != nil {
+			return fmt.Errorf("resync: %w", err)
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("addon %s/%s re-provisioned\n", args[0], args[1])
+		return nil
+	},
+}
+
 // ---------------- env subcommand ----------------
 
 var projectEnvCmd = &cobra.Command{
@@ -550,6 +690,22 @@ func init() {
 	_ = addonAddCmd.MarkFlagRequired("kind")
 	projectAddonCmd.AddCommand(addonDeleteCmd)
 	addonDeleteCmd.Flags().BoolVarP(&addonDeleteYes, "yes", "y", false, "skip the confirmation prompt")
+
+	projectAddonCmd.AddCommand(addonConnectExternalCmd)
+	addonConnectExternalCmd.Flags().StringVar(&addonExtKind, "kind", "", "addon kind (required: postgres, redis, ...)")
+	addonConnectExternalCmd.Flags().StringVar(&addonExtSecret, "secret", "", "name of an existing kube Secret to mirror as the addon's conn secret (required)")
+	addonConnectExternalCmd.Flags().StringSliceVar(&addonExtKeys, "key", nil, "optional key allowlist; repeat or comma-separate. Empty = mirror every key")
+	_ = addonConnectExternalCmd.MarkFlagRequired("kind")
+	_ = addonConnectExternalCmd.MarkFlagRequired("secret")
+
+	projectAddonCmd.AddCommand(addonResyncExternalCmd)
+
+	projectAddonCmd.AddCommand(addonConnectInstanceCmd)
+	addonConnectInstanceCmd.Flags().StringVar(&addonInstName, "instance", "", "name of the registered shared addon (required, matches INSTANCE_ADDON_<UPPER>_DSN_ADMIN)")
+	addonConnectInstanceCmd.Flags().StringVar(&addonExtKind, "kind", "postgres", "addon kind (only postgres is supported in v0.7.6)")
+	_ = addonConnectInstanceCmd.MarkFlagRequired("instance")
+
+	projectAddonCmd.AddCommand(addonResyncInstanceCmd)
 
 	projectCmd.AddCommand(projectEnvCmd)
 	projectEnvCmd.AddCommand(envDeleteCmd)

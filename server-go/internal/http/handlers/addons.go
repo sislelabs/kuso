@@ -36,6 +36,36 @@ func (h *AddonsHandler) Mount(r chi.Router) {
 	// router level so the autocomplete (keys-only) endpoint above
 	// stays open to anyone with addons:read.
 	r.Get("/api/projects/{project}/addons/{addon}/secret", h.Secret)
+	// Re-mirror the source Secret into the addon's <name>-conn for
+	// external addons. Useful after the upstream credentials rotated.
+	r.Post("/api/projects/{project}/addons/{addon}/resync-external", h.ResyncExternal)
+	// Re-provision the per-project DB on a shared instance addon
+	// (Model 2). Rotates the password and refreshes <name>-conn.
+	r.Post("/api/projects/{project}/addons/{addon}/resync-instance", h.ResyncInstance)
+}
+
+// ResyncInstance re-provisions the per-project DB on a shared
+// instance addon and rotates the password.
+func (h *AddonsHandler) ResyncInstance(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := addonsCtx(r)
+	defer cancel()
+	if err := h.Svc.ResyncInstanceAddon(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
+		h.fail(w, "resync instance addon", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ResyncExternal triggers a re-mirror of the user-provided Secret
+// for an external addon. 404 if not external.
+func (h *AddonsHandler) ResyncExternal(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := addonsCtx(r)
+	defer cancel()
+	if err := h.Svc.ResyncExternal(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
+		h.fail(w, "resync external addon", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Secret returns the addon's connection secret as a key→value map.

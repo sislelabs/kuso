@@ -353,6 +353,14 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
         </span>
       </div>
 
+      {/* Inherited env vars — keys that flow in from project-level
+          and instance-level shared secrets. Read-only display with a
+          link to the place to edit. Helps users understand WHY their
+          service has DATABASE_URL or SENTRY_DSN without having defined
+          it locally. Show even when empty so the affordance is
+          discoverable on day 1. */}
+      <InheritedSection project={project} />
+
       {mode === "rows" ? (
         <div className="space-y-1.5">
           {rows.length === 0 && (
@@ -659,4 +667,144 @@ function AddonRefRow({
       </div>
     </div>
   );
+}
+
+// InheritedSection renders the read-only "inherited from" panel
+// at the top of the env editor. Two stacked groups:
+//
+//   - From <project>-shared (links to /projects/<p>/settings)
+//   - From kuso-instance-shared (links to /settings/instance-secrets)
+//
+// Each shows the keys; values are write-only on the server and we
+// don't even ask for them — just the existence is the signal we
+// surface. Clicking the "edit →" link takes the user to the proper
+// settings page. Empty groups still render the affordance in muted
+// text so the discoverability story is "open the env editor, see
+// what's inherited" without needing to read docs.
+function InheritedSection({ project }: { project: string }) {
+  const projectKeys = useQuery<{ keys: string[] }>({
+    queryKey: ["projects", project, "shared-secrets"],
+    queryFn: () =>
+      fetch(`/api/projects/${encodeURIComponent(project)}/shared-secrets`, {
+        headers: authHeaders(),
+      }).then((r) => (r.ok ? r.json() : { keys: [] })),
+    staleTime: 60_000,
+  });
+  const instanceKeys = useQuery<{ keys: string[] }>({
+    queryKey: ["instance-secrets"],
+    queryFn: () =>
+      fetch(`/api/instance-secrets`, { headers: authHeaders() }).then((r) =>
+        // Non-admins get 403; treat as empty rather than error.
+        r.ok ? r.json() : { keys: [] }
+      ),
+    staleTime: 60_000,
+    retry: false,
+    throwOnError: false,
+  });
+  const pk = projectKeys.data?.keys ?? [];
+  const ik = instanceKeys.data?.keys ?? [];
+  if (pk.length === 0 && ik.length === 0) {
+    return (
+      <details className="group rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-1.5">
+        <summary className="cursor-pointer list-none font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]">
+          inherited env vars · 0 from project · 0 from instance
+        </summary>
+        <p className="mt-2 font-mono text-[10px] text-[var(--text-tertiary)]">
+          Project-level vars are configured in{" "}
+          <a
+            href={`/projects/${encodeURIComponent(project)}/settings`}
+            className="text-[var(--accent)] hover:underline"
+          >
+            project settings
+          </a>
+          . Instance-level vars are admin-only at{" "}
+          <a href="/settings/instance-secrets" className="text-[var(--accent)] hover:underline">
+            /settings/instance-secrets
+          </a>
+          .
+        </p>
+      </details>
+    );
+  }
+  return (
+    <details
+      open
+      className="group rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40"
+    >
+      <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+        <span>
+          inherited env vars · {pk.length} from project · {ik.length} from instance
+        </span>
+        <span className="text-[var(--text-tertiary)] group-open:rotate-90 transition-transform">
+          ›
+        </span>
+      </summary>
+      <div className="space-y-2 border-t border-[var(--border-subtle)] px-3 py-2">
+        <InheritedGroup
+          label={`from ${project}-shared`}
+          editHref={`/projects/${encodeURIComponent(project)}/settings`}
+          keys={pk}
+        />
+        <InheritedGroup
+          label="from kuso-instance-shared"
+          editHref="/settings/instance-secrets"
+          keys={ik}
+        />
+      </div>
+    </details>
+  );
+}
+
+function InheritedGroup({
+  label,
+  editHref,
+  keys,
+}: {
+  label: string;
+  editHref: string;
+  keys: string[];
+}) {
+  return (
+    <div>
+      <div className="flex items-center justify-between">
+        <p className="font-mono text-[10px] text-[var(--text-tertiary)]">{label}</p>
+        <a
+          href={editHref}
+          className="font-mono text-[10px] text-[var(--accent)] hover:underline"
+        >
+          edit →
+        </a>
+      </div>
+      {keys.length === 0 ? (
+        <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]/60">
+          (none)
+        </p>
+      ) : (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {keys.sort().map((k) => (
+            <span
+              key={k}
+              className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-0.5 font-mono text-[10px]"
+              title="read-only — edit at the source"
+            >
+              <span className="text-[var(--text-tertiary)]">🔒</span>
+              {k}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// authHeaders reads the JWT cookie/localStorage the same way the
+// api() wrapper does. Inline because this component reaches outside
+// the standard `api()` helper to gate-fail silently on 403 (when
+// the user isn't admin and asks for instance secrets) instead of
+// triggering the global 401 redirect.
+function authHeaders(): Record<string, string> {
+  if (typeof window === "undefined") return {};
+  const m = document.cookie.match(/(?:^|; )kuso\.JWT_TOKEN=([^;]+)/);
+  const tok = m ? decodeURIComponent(m[1]) : window.localStorage.getItem("kuso.jwt");
+  return tok ? { Authorization: `Bearer ${tok}` } : {};
 }

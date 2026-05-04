@@ -45,11 +45,40 @@ export async function listAddons(project: string): Promise<KusoAddon[]> {
 
 export async function addAddon(
   project: string,
-  body: { name: string; kind: string }
+  body: {
+    name: string;
+    kind: string;
+    external?: { secretName: string; secretKeys?: string[] };
+    useInstanceAddon?: string;
+  }
 ): Promise<KusoAddon> {
   return api(
     `/api/projects/${encodeURIComponent(project)}/addons`,
     { method: "POST", body }
+  );
+}
+
+// resyncExternalAddon re-mirrors the upstream Secret. Use after
+// rotating credentials on the managed datastore side.
+export async function resyncExternalAddon(
+  project: string,
+  addon: string
+): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/resync-external`,
+    { method: "POST" }
+  );
+}
+
+// resyncInstanceAddon re-provisions the per-project DB on a shared
+// instance addon and rotates the password.
+export async function resyncInstanceAddon(
+  project: string,
+  addon: string
+): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/resync-instance`,
+    { method: "POST" }
   );
 }
 

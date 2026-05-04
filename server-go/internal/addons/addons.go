@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -61,6 +62,17 @@ type CreateAddonRequest struct {
 	HA          bool   `json:"ha,omitempty"`
 	StorageSize string `json:"storageSize,omitempty"`
 	Database    string `json:"database,omitempty"`
+	// External, when set, switches the addon into connect-to-existing
+	// mode: no StatefulSet is provisioned; kuso mirrors the user-
+	// provided Secret as the addon's <name>-conn so envFromSecrets
+	// works the same way as a native addon.
+	External *kube.KusoAddonExternal `json:"external,omitempty"`
+	// UseInstanceAddon switches the addon into instance-shared mode:
+	// kuso creates a per-project database on the shared server (whose
+	// admin DSN is registered in the kuso-instance-shared Secret as
+	// INSTANCE_ADDON_<UPPER>_DSN_ADMIN) and writes the per-project
+	// DSN into <name>-conn. No StatefulSet is provisioned.
+	UseInstanceAddon string `json:"useInstanceAddon,omitempty"`
 }
 
 // CRName builds the addon CR name from a project + a name that may
@@ -168,14 +180,40 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 			},
 		},
 		Spec: kube.KusoAddonSpec{
-			Project:     project,
-			Kind:        req.Kind,
-			Version:     req.Version,
-			Size:        size,
-			HA:          req.HA,
-			StorageSize: req.StorageSize,
-			Database:    req.Database,
+			Project:          project,
+			Kind:             req.Kind,
+			Version:          req.Version,
+			Size:             size,
+			HA:               req.HA,
+			StorageSize:      req.StorageSize,
+			Database:         req.Database,
+			External:         req.External,
+			UseInstanceAddon: req.UseInstanceAddon,
 		},
+	}
+	if req.External != nil && req.External.SecretName != "" && req.UseInstanceAddon != "" {
+		return nil, fmt.Errorf("%w: external and useInstanceAddon are mutually exclusive", ErrInvalid)
+	}
+	if req.External != nil && req.External.SecretName != "" {
+		if err := s.mirrorExternalSecret(ctx, ns, fqn, req.External); err != nil {
+			return nil, fmt.Errorf("%w: mirror external secret: %v", ErrInvalid, err)
+		}
+	}
+	if req.UseInstanceAddon != "" {
+		if req.Kind != "postgres" {
+			return nil, fmt.Errorf("%w: useInstanceAddon only supports kind=postgres in v0.7.6", ErrInvalid)
+		}
+		adminDSN, err := s.instanceAdminDSN(ctx, req.UseInstanceAddon)
+		if err != nil {
+			return nil, err
+		}
+		dsn, pw, err := s.provisionInstanceAddonDB(adminDSN, project, req.Name)
+		if err != nil {
+			return nil, fmt.Errorf("%w: provision instance addon db: %v", ErrInvalid, err)
+		}
+		if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw); err != nil {
+			return nil, fmt.Errorf("%w: write conn secret: %v", ErrInvalid, err)
+		}
 	}
 	created, err := createAddon(ctx, s, ns, addon)
 	if err != nil {
@@ -374,4 +412,83 @@ func buildEnvFromSecretsPatch(secrets []string) []byte {
 	}
 	body, _ := json.Marshal(map[string]any{"spec": map[string]any{"envFromSecrets": secrets}})
 	return body
+}
+
+// mirrorExternalSecret copies the user-provided Secret's data into a
+// new <addon>-conn Secret so that envFromSecrets sees the same shape
+// as a native addon. SecretKeys is an optional allowlist; empty =
+// every key. Idempotent — reuses an existing conn secret if present.
+//
+// We mirror (rather than reference) on purpose: the conn secret name
+// is a kuso convention, while the source secret name is whatever the
+// user already had. Mirroring keeps RefreshEnvSecrets one path.
+func (s *Service) mirrorExternalSecret(ctx context.Context, ns, addonFQN string, ext *kube.KusoAddonExternal) error {
+	src, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, ext.SecretName, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("source secret %s/%s: %w", ns, ext.SecretName, err)
+	}
+	data := map[string][]byte{}
+	if len(ext.SecretKeys) == 0 {
+		for k, v := range src.Data {
+			data[k] = v
+		}
+	} else {
+		for _, k := range ext.SecretKeys {
+			if v, ok := src.Data[k]; ok {
+				data[k] = v
+			}
+		}
+	}
+	connName := connSecretName(addonFQN)
+	dst := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      connName,
+			Namespace: ns,
+			Labels: map[string]string{
+				"kuso.sislelabs.com/addon-conn":     "true",
+				"kuso.sislelabs.com/external":       "true",
+				"kuso.sislelabs.com/external-source": ext.SecretName,
+			},
+		},
+		Data: data,
+	}
+	if existing, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, connName, metav1.GetOptions{}); err == nil {
+		existing.Data = data
+		if existing.Labels == nil {
+			existing.Labels = map[string]string{}
+		}
+		for k, v := range dst.Labels {
+			existing.Labels[k] = v
+		}
+		if _, err := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update conn secret: %w", err)
+		}
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("preflight conn secret: %w", err)
+	}
+	if _, err := s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, dst, metav1.CreateOptions{}); err != nil {
+		return fmt.Errorf("create conn secret: %w", err)
+	}
+	return nil
+}
+
+// ResyncExternal re-mirrors the conn secret for an external addon.
+// Useful when the source Secret rotated (managed Postgres password
+// rotation, S3 creds rolled). Returns ErrNotFound if the addon
+// doesn't exist or isn't external.
+func (s *Service) ResyncExternal(ctx context.Context, project, name string) error {
+	ns := s.nsFor(ctx, project)
+	fqn := addonCRName(project, name)
+	addon, err := s.Kube.GetKusoAddon(ctx, ns, fqn)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+		}
+		return fmt.Errorf("get addon: %w", err)
+	}
+	if addon.Spec.External == nil || addon.Spec.External.SecretName == "" {
+		return fmt.Errorf("%w: addon %s/%s is not external", ErrInvalid, project, name)
+	}
+	return s.mirrorExternalSecret(ctx, ns, fqn, addon.Spec.External)
 }

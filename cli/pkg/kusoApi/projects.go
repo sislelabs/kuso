@@ -63,11 +63,21 @@ type CreateServiceRequest struct {
 }
 
 type CreateAddonRequest struct {
-	Name    string `json:"name"`
-	Kind    string `json:"kind"`
-	Version string `json:"version,omitempty"`
-	Size    string `json:"size,omitempty"`
-	HA      bool   `json:"ha,omitempty"`
+	Name             string                `json:"name"`
+	Kind             string                `json:"kind"`
+	Version          string                `json:"version,omitempty"`
+	Size             string                `json:"size,omitempty"`
+	HA               bool                  `json:"ha,omitempty"`
+	External         *AddonExternalRequest `json:"external,omitempty"`
+	UseInstanceAddon string                `json:"useInstanceAddon,omitempty"`
+}
+
+// AddonExternalRequest tells the server to skip provisioning and
+// mirror an existing kube Secret as the addon's <name>-conn secret.
+// SecretKeys is an optional allowlist; empty mirrors every key.
+type AddonExternalRequest struct {
+	SecretName string   `json:"secretName"`
+	SecretKeys []string `json:"secretKeys,omitempty"`
 }
 
 // Projects
@@ -148,6 +158,18 @@ func (k *KusoClient) AddAddon(project string, req CreateAddonRequest) (*resty.Re
 
 func (k *KusoClient) DeleteAddon(project, addon string) (*resty.Response, error) {
 	return k.client.Delete("/api/projects/" + project + "/addons/" + addon)
+}
+
+// ResyncExternalAddon re-mirrors an external addon's source Secret
+// into its <name>-conn. Use after the upstream credentials rotated.
+func (k *KusoClient) ResyncExternalAddon(project, addon string) (*resty.Response, error) {
+	return k.client.Post("/api/projects/" + project + "/addons/" + addon + "/resync-external")
+}
+
+// ResyncInstanceAddon re-provisions the per-project DB on a shared
+// instance addon and rotates the password.
+func (k *KusoClient) ResyncInstanceAddon(project, addon string) (*resty.Response, error) {
+	return k.client.Post("/api/projects/" + project + "/addons/" + addon + "/resync-instance")
 }
 
 // Apply posts a kuso.yml body to the server's config-as-code endpoint.

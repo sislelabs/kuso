@@ -41,17 +41,25 @@ const KINDS = [
 // click. We don't surface size / version / HA toggles yet — defaults
 // from the chart cover ~all indie use cases; advanced lives in
 // kuso.yml.
+type Mode = "managed" | "external" | "instance";
+
 export function AddAddonDialog({ project, open, onClose }: Props) {
   const [kind, setKind] = useState<string>("");
   const [name, setName] = useState<string>("");
+  const [mode, setMode] = useState<Mode>("managed");
+  const [extSecret, setExtSecret] = useState<string>("");
+  const [extKeys, setExtKeys] = useState<string>("");
+  const [instName, setInstName] = useState<string>("");
   const qc = useQueryClient();
 
-  // Reset state every open so leftover input from a cancelled run
-  // doesn't leak into the next attempt.
   useEffect(() => {
     if (open) {
       setKind("");
       setName("");
+      setMode("managed");
+      setExtSecret("");
+      setExtKeys("");
+      setInstName("");
     }
   }, [open]);
 
@@ -66,9 +74,26 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
   }, [open, onClose]);
 
   const create = useMutation({
-    mutationFn: () => addAddon(project, { name, kind }),
+    mutationFn: () => {
+      const body: Parameters<typeof addAddon>[1] = { name, kind };
+      if (mode === "external") {
+        const keys = extKeys
+          .split(/[,\s]+/)
+          .map((k) => k.trim())
+          .filter(Boolean);
+        body.external = {
+          secretName: extSecret.trim(),
+          ...(keys.length ? { secretKeys: keys } : {}),
+        };
+      } else if (mode === "instance") {
+        body.useInstanceAddon = instName.trim();
+      }
+      return addAddon(project, body);
+    },
     onSuccess: () => {
-      toast.success(`${addonLabel(kind)} addon "${name}" created`);
+      const verb =
+        mode === "external" ? "connected" : mode === "instance" ? "provisioned" : "created";
+      toast.success(`${addonLabel(kind)} addon "${name}" ${verb}`);
       qc.invalidateQueries({ queryKey: ["projects", project] });
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
       onClose();
@@ -87,6 +112,18 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
     }
     if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(name.trim())) {
       toast.error("Name: lowercase, dashes, ≤32 chars");
+      return;
+    }
+    if (mode === "external" && !extSecret.trim()) {
+      toast.error("External: name an existing kube Secret to mirror");
+      return;
+    }
+    if (mode === "instance" && !instName.trim()) {
+      toast.error("Instance: name the registered shared addon");
+      return;
+    }
+    if (mode === "instance" && kind !== "postgres") {
+      toast.error("Instance-shared mode only supports postgres in v0.7.6");
       return;
     }
     create.mutate();
@@ -183,6 +220,121 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
               </p>
             </div>
 
+            {/* Mode picker: kuso-managed / external / instance-shared.
+                Three approaches to where the actual datastore lives.
+                Managed = a fresh per-addon StatefulSet; External =
+                connect to a managed cloud DB by mirroring its Secret;
+                Instance = provision a database on an admin-registered
+                shared server (Model 2). */}
+            <div className="space-y-3 border-b border-[var(--border-subtle)] p-3">
+              <div className="grid grid-cols-3 gap-1 rounded-md bg-[var(--bg-secondary)] p-0.5">
+                {(["managed", "external", "instance"] as Mode[]).map((m) => {
+                  const active = mode === m;
+                  const labelMap: Record<Mode, string> = {
+                    managed: "Managed",
+                    external: "External",
+                    instance: "Instance",
+                  };
+                  const subMap: Record<Mode, string> = {
+                    managed: "kuso provisions",
+                    external: "mirror a Secret",
+                    instance: "shared server",
+                  };
+                  return (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => setMode(m)}
+                      className={cn(
+                        "flex flex-col items-start rounded-sm px-2 py-1.5 text-left transition-colors",
+                        active
+                          ? "bg-[var(--bg-elevated)] shadow-[var(--shadow-sm)]"
+                          : "hover:bg-[var(--bg-tertiary)]/50"
+                      )}
+                    >
+                      <span className="text-[12px] font-medium">{labelMap[m]}</span>
+                      <span className="font-mono text-[9px] text-[var(--text-tertiary)]">{subMap[m]}</span>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {mode === "external" && (
+                <div className="space-y-2">
+                  <p className="text-[11px] leading-snug text-[var(--text-tertiary)]">
+                    For managed Postgres / Redis (Hetzner Cloud, Neon, RDS,
+                    Upstash). kuso mirrors the Secret's keys into{" "}
+                    <code className="font-mono">{name || "<name>"}-conn</code>.
+                  </p>
+                  <div>
+                    <label
+                      htmlFor="addon-ext-secret"
+                      className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+                    >
+                      source secret
+                    </label>
+                    <Input
+                      id="addon-ext-secret"
+                      value={extSecret}
+                      onChange={(e) => setExtSecret(e.target.value)}
+                      placeholder="hetzner-pg-creds"
+                      className="mt-1 h-7 font-mono text-[11px]"
+                      spellCheck={false}
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="addon-ext-keys"
+                      className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+                    >
+                      keys (optional, comma-separated)
+                    </label>
+                    <Input
+                      id="addon-ext-keys"
+                      value={extKeys}
+                      onChange={(e) => setExtKeys(e.target.value)}
+                      placeholder="DATABASE_URL, POSTGRES_HOST"
+                      className="mt-1 h-7 font-mono text-[11px]"
+                      spellCheck={false}
+                    />
+                    <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+                      Empty = mirror every key from the source.
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {mode === "instance" && (
+                <div className="space-y-2">
+                  <p className="text-[11px] leading-snug text-[var(--text-tertiary)]">
+                    Provisions an isolated database on a shared server
+                    registered cluster-wide. v0.7.6: postgres only.
+                    Admin must first set{" "}
+                    <code className="font-mono">INSTANCE_ADDON_&lt;NAME&gt;_DSN_ADMIN</code> in instance secrets.
+                  </p>
+                  <div>
+                    <label
+                      htmlFor="addon-inst-name"
+                      className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+                    >
+                      instance addon name
+                    </label>
+                    <Input
+                      id="addon-inst-name"
+                      value={instName}
+                      onChange={(e) => setInstName(e.target.value)}
+                      placeholder="pg"
+                      className="mt-1 h-7 font-mono text-[11px]"
+                      spellCheck={false}
+                    />
+                    <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+                      Matches the &lt;NAME&gt; in INSTANCE_ADDON_&lt;UPPER&gt;_DSN_ADMIN.
+                    </p>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <footer className="flex items-center justify-end gap-2 px-4 py-3">
               <Button variant="ghost" size="sm" onClick={onClose} disabled={create.isPending}>
                 Cancel
@@ -193,7 +345,17 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                 disabled={create.isPending || !kind || !name.trim()}
               >
                 <Plus className="h-3 w-3" />
-                {create.isPending ? "Creating…" : "Add addon"}
+                {create.isPending
+                  ? mode === "external"
+                    ? "Connecting…"
+                    : mode === "instance"
+                      ? "Provisioning…"
+                      : "Creating…"
+                  : mode === "external"
+                    ? "Connect addon"
+                    : mode === "instance"
+                      ? "Provision DB"
+                      : "Add addon"}
               </Button>
             </footer>
           </motion.div>

@@ -319,6 +319,30 @@ type KusoAddonSpec struct {
 	// + required nodeAffinity; the kuso server validates that at
 	// least one cluster node matches the labels at save time.
 	Placement *KusoPlacement `json:"placement,omitempty"`
+	// External connects-to-existing instead of provisioning. The
+	// kuso server mirrors the user-provided Secret as the addon's
+	// <name>-conn so services see DATABASE_URL/etc. the same way
+	// they would with a native addon, but no StatefulSet/PVC is
+	// created. Set External XOR set the native fields above.
+	External *KusoAddonExternal `json:"external,omitempty"`
+	// UseInstanceAddon points at an instance-shared database server
+	// registered by an admin (Model 2). The kuso server creates an
+	// isolated database on the shared server for this project and
+	// writes the per-project DSN into <addon>-conn. No StatefulSet
+	// is rendered.
+	//
+	// The admin registers a shared server by setting an instance
+	// secret keyed INSTANCE_ADDON_<UPPER_NAME>_DSN_ADMIN whose
+	// value is a superuser DSN that can CREATE DATABASE.
+	UseInstanceAddon string `json:"useInstanceAddon,omitempty"`
+}
+
+// KusoAddonExternal points at an existing Secret in the project
+// namespace. SecretKeys is an optional allowlist; empty = mirror
+// every key.
+type KusoAddonExternal struct {
+	SecretName string   `json:"secretName,omitempty"`
+	SecretKeys []string `json:"secretKeys,omitempty"`
 }
 
 type KusoBackup struct {

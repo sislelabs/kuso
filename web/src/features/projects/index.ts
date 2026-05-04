@@ -18,6 +18,8 @@ export {
   createEnvironment,
   listAddons,
   addAddon,
+  resyncExternalAddon,
+  resyncInstanceAddon,
   deleteAddon,
   updateAddon,
   setAddonPlacement,

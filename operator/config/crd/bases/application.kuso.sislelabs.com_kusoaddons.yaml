@@ -104,6 +104,37 @@ spec:
                     nodes:
                       type: array
                       items: { type: string }
+                # external: connect-to-existing instead of provisioning.
+                # When set, kuso doesn't deploy a StatefulSet — it
+                # mirrors the user-provided Secret as the addon's
+                # conn secret so services can envFrom: it like a
+                # native addon. Use case: managed Postgres (Hetzner /
+                # Neon / RDS / Supabase) where you already pay for
+                # the database; kuso just exposes its envs.
+                external:
+                  type: object
+                  properties:
+                    secretName:
+                      type: string
+                      description: |
+                        Name of an existing kube Secret in the project
+                        namespace. Its keys are mirrored into the addon's
+                        <name>-conn secret.
+                    secretKeys:
+                      type: array
+                      items: { type: string }
+                      description: |
+                        Optional allowlist of keys to mirror. Empty =
+                        mirror every key from the source secret.
+                useInstanceAddon:
+                  type: string
+                  description: |
+                    Name of an instance-shared addon (registered by
+                    admin via instance secret keyed
+                    INSTANCE_ADDON_<UPPER>_DSN_ADMIN). The server
+                    creates a per-project database on the shared
+                    server and writes its DSN into <name>-conn. No
+                    StatefulSet is rendered.
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

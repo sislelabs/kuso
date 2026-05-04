@@ -1,4 +1,4 @@
-{{- if eq .Values.kind "postgres" -}}
+{{- if and (eq .Values.kind "postgres") (not .Values.external) (not .Values.useInstanceAddon) -}}
 {{- $version := .Values.version | default "16" -}}
 {{- $database := .Values.database | default .Values.project -}}
 {{- $name := include "kusoaddon.fullname" . -}}

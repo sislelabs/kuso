@@ -58,3 +58,20 @@ backup:
 #   nodes:
 #     - worker-2        # match by kubernetes.io/hostname
 placement: {}
+
+# external: connect-to-existing instead of provisioning. When set,
+# the chart skips StatefulSet/Service/CronJob entirely. The kuso
+# server is responsible for creating the <release>-conn Secret as
+# a copy of external.secretName. Use when you already pay for a
+# managed Postgres/Redis (Hetzner Cloud, Neon, RDS, Upstash).
+# external:
+#   secretName: my-managed-pg
+#   secretKeys: [DATABASE_URL]   # optional allowlist
+external: {}
+
+# useInstanceAddon: name of an instance-shared addon (registered by
+# admin via instance secret INSTANCE_ADDON_<UPPER>_DSN_ADMIN).
+# When set, no StatefulSet is rendered; the kuso server creates a
+# per-project database on the shared server and writes the DSN
+# into <name>-conn.
+useInstanceAddon: ""

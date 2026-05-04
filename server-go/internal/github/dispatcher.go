@@ -377,7 +377,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			d.Logger.Warn("preview db clone", "project", proj.Name, "pr", pr.Number, "err", err)
 		}
 	}
-	envFromSecrets = append(envFromSecrets, proj.Name+"-shared")
+	envFromSecrets = append(envFromSecrets, proj.Name+"-shared", "kuso-instance-shared")
 	port := int32(8080)
 	var svcRuntime string
 	var svcCommand []string
