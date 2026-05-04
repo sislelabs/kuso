@@ -73,6 +73,7 @@
   --accent-subtle: rgba(64, 71, 109, 0.10);
   --border-default: #DCD9CB;
   --border-subtle: #E8E5D8;
+  --border-strong: #40476D;       /* slate-blue = hover/focus on light */
   --shadow-sm: 0 1px 2px rgba(64, 71, 109, 0.06);
   --shadow-md: 0 4px 12px rgba(64, 71, 109, 0.08);
   --shadow-lg: 0 12px 40px rgba(64, 71, 109, 0.12);
@@ -172,9 +173,15 @@
   --accent-hover: #C5CDF6;
   --accent-subtle: rgba(175, 187, 242, 0.14);
 
-  /* Borders: cool slate that's still visibly a border on navy cards. */
-  --border-default: #4F557A;
-  --border-subtle: #3A3F5C;
+  /* Borders form a 3-step ladder. Subtle is the ambient border on
+     resting cards/inputs, default is the section/divider weight,
+     strong is the hover/focus emphasis. The previous values sat too
+     close to the card surface (#464C6E) so cards looked unbordered.
+     These are deliberately ~15-20% brighter than the underlying card
+     so they register without dominating. */
+  --border-subtle: #5B6388;       /* +25 on lightness vs card */
+  --border-default: #6E769D;      /* mid-strength dividers */
+  --border-strong: #AFBBF2;       /* periwinkle = hover/focus */
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
@@ -198,7 +205,7 @@
   --accent-ui: #3A3F5C;
   --accent-foreground: #ECEAE0;
   --destructive: #C9382A;         /* lifted from #941B0C */
-  --border: #4F557A;
+  --border: #6E769D;              /* matches --border-default */
   --input: #3A3F5C;
   --ring: #AFBBF2;
 
@@ -212,7 +219,7 @@
   --sidebar-primary-foreground: #271F30;
   --sidebar-accent: #3A3F5C;
   --sidebar-accent-foreground: #ECEAE0;
-  --sidebar-border: #4F557A;
+  --sidebar-border: #6E769D;
   --sidebar-ring: #AFBBF2;
 
   /* Status hues — used by Badge, Toast, build/env state pills, etc.
