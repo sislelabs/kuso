@@ -35,7 +35,7 @@ export default function ProjectsPage() {
         {canCreate && (
           <Link
             href="/projects/new"
-            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] transition-colors hover:bg-[var(--accent)]/90"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-xs font-medium text-[var(--btn-primary-fg)] shadow-[var(--shadow-sm)] transition-colors hover:bg-[var(--btn-primary-bg-hover)]"
           >
             <Plus className="h-3.5 w-3.5" />
             New project

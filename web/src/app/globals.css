@@ -71,6 +71,12 @@
   --accent: #40476D;
   --accent-hover: #2F3556;
   --accent-subtle: rgba(64, 71, 109, 0.10);
+  /* Light mode CTAs: solid slate-blue with cream text — same shape as
+     dark mode's button tokens so the button class works in both. */
+  --btn-primary-bg: #40476D;
+  --btn-primary-bg-hover: #2F3556;
+  --btn-primary-fg: #FBFBF7;
+  --btn-primary-border: #2F3556;
   --border-default: #DCD9CB;
   --border-subtle: #E8E5D8;
   --border-strong: #40476D;       /* slate-blue = hover/focus on light */
@@ -168,10 +174,19 @@
 
   /* Accent stays periwinkle. On a slate-blue card it reads as the
      same hue family but brighter — strong for hover/click affordance,
-     weak enough for ambient borders. */
+     weak enough for ambient borders.
+     For SOLID CTAs (filled buttons), pale periwinkle on dark mode
+     looks washed out — the button has weight when the bg is solid
+     deep slate-blue and the foreground is bright periwinkle. The
+     --btn-primary-* tokens encode that flip so buttons read clearly
+     without us hand-tweaking each one. */
   --accent: #AFBBF2;
   --accent-hover: #C5CDF6;
   --accent-subtle: rgba(175, 187, 242, 0.14);
+  --btn-primary-bg: #40476D;        /* solid slate — has weight */
+  --btn-primary-bg-hover: #4F5784;  /* subtle lift on hover */
+  --btn-primary-fg: #ECEAE0;        /* cream text on slate */
+  --btn-primary-border: #6E769D;
 
   /* Borders form a 3-step ladder. Subtle is the ambient border on
      resting cards/inputs, default is the section/divider weight,

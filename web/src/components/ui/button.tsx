@@ -8,9 +8,14 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground hover:scale-[1.02] hover:shadow-[0_0_20px_rgba(26,26,24,0.18)] [a]:hover:bg-primary/90",
+        // `default` is the primary CTA. Uses --btn-primary-* tokens
+        // which are deep slate-blue + cream text in both themes —
+        // pale periwinkle as a solid bg looks washed out on
+        // aubergine, the cream-on-slate combo has weight.
+        default:
+          "bg-[var(--btn-primary-bg)] text-[var(--btn-primary-fg)] border-[var(--btn-primary-border)] shadow-[var(--shadow-sm)] hover:bg-[var(--btn-primary-bg-hover)] hover:scale-[1.02]",
         accent:
-          "bg-[var(--accent)] text-[var(--accent-foreground)] border-[var(--accent-hover)]/40 shadow-[var(--shadow-sm)] hover:bg-[var(--accent-hover)] hover:scale-[1.02] hover:shadow-[0_0_20px_rgba(245,233,96,0.45)]",
+          "bg-[var(--btn-primary-bg)] text-[var(--btn-primary-fg)] border-[var(--btn-primary-border)] shadow-[var(--shadow-sm)] hover:bg-[var(--btn-primary-bg-hover)] hover:scale-[1.02]",
         outline:
           "border-border bg-transparent hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-transparent dark:hover:bg-input/50",
         secondary:
