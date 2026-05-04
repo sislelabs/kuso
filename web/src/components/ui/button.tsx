@@ -8,18 +8,22 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        // Two-tier CTA system (see globals.css for the rationale):
-        //   default   — slate-blue, calm. Use for "next/back" /
-        //               "open dialog" / nav-style buttons.
-        //   accent    — orange, high-emphasis. Use for the actual
-        //               action that finalizes work — Save, Create,
-        //               Deploy, Submit.
-        // Pale periwinkle was a no-go as a solid bg either way; it
-        // stays as the border/highlight tone.
+        // Default = sage (positive action). The vast majority of
+        // <Button> uses are "Save" / "Create" / "Add" / "New" — all
+        // positive, all want the same look. Making default sage
+        // means the right choice happens automatically. Explicit
+        // `neutral` opts back into slate-blue for genuinely neutral
+        // actions (Cancel, Open dialog, navigation).
+        //
+        //   default        — sage, positive action (Save/Create/Add)
+        //   neutral        — slate-blue, secondary CTA
+        //   accent         — alias of default for back-compat
         default:
-          "bg-[var(--btn-secondary-bg)] text-[var(--btn-secondary-fg)] border-[var(--btn-secondary-border)] shadow-[var(--shadow-sm)] hover:bg-[var(--btn-secondary-bg-hover)] hover:scale-[1.02]",
+          "bg-[var(--btn-primary-bg)] text-[var(--btn-primary-fg)] border-[var(--btn-primary-border)] shadow-[var(--shadow-sm)] hover:bg-[var(--btn-primary-bg-hover)] hover:scale-[1.02]",
         accent:
           "bg-[var(--btn-primary-bg)] text-[var(--btn-primary-fg)] border-[var(--btn-primary-border)] shadow-[var(--shadow-sm)] hover:bg-[var(--btn-primary-bg-hover)] hover:scale-[1.02]",
+        neutral:
+          "bg-[var(--btn-secondary-bg)] text-[var(--btn-secondary-fg)] border-[var(--btn-secondary-border)] shadow-[var(--shadow-sm)] hover:bg-[var(--btn-secondary-bg-hover)] hover:scale-[1.02]",
         outline:
           "border-border bg-transparent hover:bg-muted hover:text-foreground aria-expanded:bg-muted aria-expanded:text-foreground dark:border-input dark:bg-transparent dark:hover:bg-input/50",
         secondary:
