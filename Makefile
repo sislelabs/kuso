@@ -31,7 +31,7 @@ VERSION ?=
 # skip-operator (rare); KUSO_RELEASE_OPERATOR=1 forces always-build.
 ship:
 	@if [ -z "$(VERSION)" ]; then echo "usage: make ship VERSION=vX.Y.Z" >&2; exit 2; fi
-	@KUSO_RELEASE_ROLL=1 KUSO_RELEASE_COMMIT=1 ./hack/release.sh $(VERSION)
+	@KUSO_RELEASE_ROLL=1 KUSO_RELEASE_COMMIT=1 KUSO_RELEASE_GH=1 KUSO_RELEASE_CLI=1 ./hack/release.sh $(VERSION)
 
 release:
 	@if [ -z "$(VERSION)" ]; then echo "usage: make release VERSION=vX.Y.Z" >&2; exit 2; fi
@@ -55,21 +55,38 @@ test:
 	@cd server-go && go test ./...
 
 # CLI builds — writes kuso-{darwin,linux}-{amd64,arm64} into dist/.
-# Used by the GitHub release workflow; run locally with `make cli`.
+# Used by the release flow (hack/release.sh attaches them as GitHub
+# release assets so the install-cli.sh one-liner works); run locally
+# with `make cli`. CLI_VERSION is injected via ldflags so `kuso version`
+# reports the tag instead of v0.1.0-dev.
+CLI_VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+CLI_LDFLAGS = -X kuso/cmd/kusoCli/version.ldflagsVersion=$(CLI_VERSION)
+
 .PHONY: cli cli-darwin-arm64 cli-darwin-amd64 cli-linux-amd64 cli-linux-arm64
 cli: cli-darwin-arm64 cli-darwin-amd64 cli-linux-amd64 cli-linux-arm64
 cli-darwin-arm64:
 	@mkdir -p dist
-	@cd cli && GOOS=darwin GOARCH=arm64 go build -o ../dist/kuso-darwin-arm64 ./cmd
+	@cd cli && GOOS=darwin GOARCH=arm64 go build -ldflags="$(CLI_LDFLAGS)" -o ../dist/kuso-darwin-arm64 ./cmd
 cli-darwin-amd64:
 	@mkdir -p dist
-	@cd cli && GOOS=darwin GOARCH=amd64 go build -o ../dist/kuso-darwin-amd64 ./cmd
+	@cd cli && GOOS=darwin GOARCH=amd64 go build -ldflags="$(CLI_LDFLAGS)" -o ../dist/kuso-darwin-amd64 ./cmd
 cli-linux-amd64:
 	@mkdir -p dist
-	@cd cli && GOOS=linux GOARCH=amd64 go build -o ../dist/kuso-linux-amd64 ./cmd
+	@cd cli && GOOS=linux GOARCH=amd64 go build -ldflags="$(CLI_LDFLAGS)" -o ../dist/kuso-linux-amd64 ./cmd
 cli-linux-arm64:
 	@mkdir -p dist
-	@cd cli && GOOS=linux GOARCH=arm64 go build -o ../dist/kuso-linux-arm64 ./cmd
+	@cd cli && GOOS=linux GOARCH=arm64 go build -ldflags="$(CLI_LDFLAGS)" -o ../dist/kuso-linux-arm64 ./cmd
+
+# Sync hack/install*.sh into the embed dir consumed by server-go.
+# server-go embeds these to serve them at /install.sh + /install-cli.sh,
+# but Go's go:embed can't reach into ../../hack/. So this target keeps
+# the embed copies in lock-step with the canonical sources. release.sh
+# runs this before each server build.
+.PHONY: sync-install-scripts
+sync-install-scripts:
+	@cp hack/install.sh server-go/internal/installscripts/scripts/install.sh
+	@cp hack/install-cli.sh server-go/internal/installscripts/scripts/install-cli.sh
+	@echo "synced install scripts → server-go/internal/installscripts/scripts/"
 
 # Backup image — alpine + aws-cli + postgresql-client. Referenced by
 # the per-addon backup CronJob template. Cross-build amd64 by default

@@ -2,8 +2,10 @@
 
 import { useMutation, useQuery } from "@tanstack/react-query";
 import {
+  configureGithub,
   detectRuntime,
   getInstallURL,
+  getSetupStatus,
   listInstallationRepos,
   listInstallations,
   scanAddons,
@@ -32,4 +34,21 @@ export function useDetectRuntime() {
 
 export function useScanAddons() {
   return useMutation({ mutationFn: scanAddons });
+}
+
+// useSetupStatus polls the /api/github/setup-status endpoint to drive
+// the /settings/github wizard. 30s staleTime so the page can re-check
+// after a successful configure (it'll change from configured:false to
+// configured:true once the pod restart finishes).
+export function useSetupStatus() {
+  return useQuery({
+    queryKey: ["github", "setup-status"] as const,
+    queryFn: getSetupStatus,
+    staleTime: 30_000,
+    refetchOnWindowFocus: false,
+  });
+}
+
+export function useConfigureGithub() {
+  return useMutation({ mutationFn: configureGithub });
 }

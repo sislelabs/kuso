@@ -242,30 +242,56 @@ var projectServiceCmd = &cobra.Command{
 	Short: "Manage services within a project",
 }
 
+// serviceCmd is the top-level alias for `kuso project service ...`.
+// Lets users type `kuso service add <project> <name>` directly, mirroring
+// `kuso project create`. The subcommands themselves are shared with
+// projectServiceCmd via init() — same RunE, same flags, same examples.
+var serviceCmd = &cobra.Command{
+	Use:     "service",
+	Aliases: []string{"svc"},
+	Short:   "Manage services (alias for `kuso project service`)",
+}
+
+// runServiceAdd is shared by both `kuso project service add` and the
+// top-level `kuso service add` aliases. Same flags, same behavior.
+var runServiceAdd = func(cmd *cobra.Command, args []string) error {
+	if api == nil {
+		return fmt.Errorf("not logged in; run 'kuso login' first")
+	}
+	req := kusoApi.CreateServiceRequest{Name: args[1]}
+	req.Repo.Path = serviceAddPath
+	req.Runtime = serviceAddRuntime
+	req.Port = serviceAddPort
+	resp, err := api.AddService(args[0], req)
+	if err != nil {
+		return fmt.Errorf("add service: %w", err)
+	}
+	if resp.StatusCode() >= 300 {
+		return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+	}
+	fmt.Printf("service %s/%s added\n", args[0], args[1])
+	return nil
+}
+
 var serviceAddCmd = &cobra.Command{
 	Use:   "add <project> <name>",
 	Short: "Add a service to a project (creates production env automatically)",
 	Args:  cobra.ExactArgs(2),
 	Example: `  kuso project service add analiz api --runtime dockerfile --port 8080
-  kuso project service add analiz web --path apps/web --runtime nixpacks --port 3000`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		if api == nil {
-			return fmt.Errorf("not logged in; run 'kuso login' first")
-		}
-		req := kusoApi.CreateServiceRequest{Name: args[1]}
-		req.Repo.Path = serviceAddPath
-		req.Runtime = serviceAddRuntime
-		req.Port = serviceAddPort
-		resp, err := api.AddService(args[0], req)
-		if err != nil {
-			return fmt.Errorf("add service: %w", err)
-		}
-		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
-		}
-		fmt.Printf("service %s/%s added\n", args[0], args[1])
-		return nil
-	},
+  kuso project service add analiz web --path apps/web --runtime nixpacks --port 3000
+  kuso service add analiz api --runtime dockerfile --port 8080`,
+	RunE: runServiceAdd,
+}
+
+// Top-level alias commands. Cobra requires distinct *cobra.Command per
+// parent (it sets cmd.parent on AddCommand), so we mirror the few
+// service subcommands as thin shells that share runE closures + flag
+// vars with the project-scoped originals.
+var serviceAddTopCmd = &cobra.Command{
+	Use:   "add <project> <name>",
+	Short: "Add a service to a project (alias for `kuso project service add`)",
+	Args:  cobra.ExactArgs(2),
+	RunE:  runServiceAdd,
 }
 
 var serviceDeleteYes bool
@@ -737,4 +763,13 @@ func init() {
 	projectCmd.AddCommand(projectEnvCmd)
 	projectEnvCmd.AddCommand(envDeleteCmd)
 	envDeleteCmd.Flags().BoolVarP(&envDeleteYes, "yes", "y", false, "skip the confirmation prompt")
+
+	// Top-level alias: `kuso service add <project> <name>` → same as
+	// `kuso project service add`. Flag vars (serviceAddPath, ...) are
+	// shared globals so the same flags work on both forms.
+	rootCmd.AddCommand(serviceCmd)
+	serviceCmd.AddCommand(serviceAddTopCmd)
+	serviceAddTopCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
+	serviceAddTopCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "dockerfile", "dockerfile|nixpacks|buildpacks|static")
+	serviceAddTopCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 }

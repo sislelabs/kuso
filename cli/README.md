@@ -1,6 +1,6 @@
-# kuso-cli
+# kuso CLI
 
-A command-line client for [Kuso](https://github.com/sislelabs/kuso), a
+A command-line client for [kuso](https://github.com/sislelabs/kuso), a
 self-hosted, Kubernetes-native PaaS.
 
 The CLI talks to a running kuso server. Cluster install is a separate
@@ -10,17 +10,27 @@ one-shot — see `hack/install.sh` in the kuso repo.
 
 ## Install
 
+### One-liner (recommended)
+
+Each kuso instance serves the installer at `/install-cli.sh`. Replace
+`kuso.example.com` with your instance:
+
+```sh
+curl -fsSL https://kuso.example.com/install-cli.sh | sh
+```
+
+The script picks a prebuilt binary from GitHub releases for your OS/arch,
+or falls back to `go install` if you have Go on PATH and no asset matches.
+It writes to `~/.local/bin/kuso` (no sudo) or `/usr/local/bin/kuso`
+(when run as root).
+
 ### Build from source
 
 ```sh
+git clone https://github.com/sislelabs/kuso
+cd kuso/cli
 go build -o kuso ./cmd
 sudo mv kuso /usr/local/bin/kuso
-```
-
-### Shortcut installer (downloads a release binary)
-
-```sh
-curl -fsSL https://raw.githubusercontent.com/sislelabs/kuso-cli/main/install.sh | bash
 ```
 
 ### Supported platforms

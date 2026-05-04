@@ -23,8 +23,11 @@ pipeline.yaml
 app.*.yaml
 kind.yaml
 
-cmd/kusoCli/VERSION
-
 .kuso
-*VERSION
-*CLI_VERSION
+
+# Embedded VERSION files used to be regenerated at build time and were
+# gitignored — but the `*VERSION` glob also matched the case-insensitive
+# `version/` directory on macOS APFS, silently swallowing the entire
+# `cmd/kusoCli/version/` package from git tracking. We now commit the
+# VERSION files and let release.sh rewrite them. Anchored with a
+# leading slash so they match files only, not directories.

@@ -25,6 +25,7 @@ import (
 	"kuso/server/internal/github"
 	httphandlers "kuso/server/internal/http/handlers"
 	"kuso/server/internal/logs"
+	"kuso/server/internal/installscripts"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/spa"
@@ -251,7 +252,27 @@ func NewRouter(d Deps) http.Handler {
 		if ghHandler != nil {
 			ghHandler.MountAuthed(r)
 		}
+		// GitHub App self-service setup. Mounted unconditionally:
+		// when the App isn't configured yet, this is the ONLY way a
+		// user can configure it from the UI without reinstalling. We
+		// require a kube client (used to write the Secret + restart
+		// the deployment) — if there isn't one, the routes simply
+		// stay unmounted (admin must use --github-wizard).
+		if d.Logs != nil {
+			ghCfgH := &httphandlers.GithubConfigureHandler{
+				Kube:      d.Logs.Kube,
+				Namespace: d.Logs.Namespace,
+				Logger:    d.Logger,
+			}
+			ghCfgH.Mount(r)
+		}
 	})
+
+	// Public install scripts. Mounted before the SPA fallback so the
+	// SPA's NotFound handler doesn't catch them and serve index.html
+	// (which is what was happening on /install-cli.sh — users curl|sh'd
+	// the homepage HTML and got "syntax error near `<'").
+	installscripts.Mount(r.Get)
 
 	// SPA fallback. Anything that isn't an API or webhook route falls
 	// through to the embedded Vue bundle. The embed.FS always contains

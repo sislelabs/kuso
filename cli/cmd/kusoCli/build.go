@@ -103,6 +103,14 @@ var buildListCmd = &cobra.Command{
 		case "json":
 			return jsonOut(items)
 		case "table", "":
+			// Empty list: print a one-line "no builds" so polling scripts
+			// can grep `^no builds` to detect the empty case instead of
+			// trying to parse an empty-body table. Returning the
+			// header-only frame was scriptable but ugly.
+			if len(items) == 0 {
+				fmt.Println("no builds yet — try `kuso build trigger <project> <service>`")
+				return nil
+			}
 			t := tablewriter.NewWriter(os.Stdout)
 			t.SetHeader([]string{"ID", "BRANCH", "SHA", "TAG", "STATUS", "AGE"})
 			for _, b := range items {

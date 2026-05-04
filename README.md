@@ -28,7 +28,31 @@ The script prints the admin password at the end. Log in at `https://kuso.example
 
 By default the install uses Let's Encrypt **staging** certs (browser warns about untrusted cert) — flip to prod with one command after you've confirmed DNS works. See `--help` for all flags.
 
-For GitHub-driven deploys add `--github-wizard` to walk through the GitHub App setup interactively. Without it, services still build via `kuso build trigger` but the repo picker is empty.
+GitHub-driven deploys can be set up two ways:
+
+- (a) **Post-install** at `https://kuso.example.com/settings/github` — paste your GitHub App ID, slug, client secret, webhook secret, and private key. No reinstall needed.
+- (b) **At install time** with `--github-wizard`, which prompts on stdin for the same values.
+
+Without either, services still build via `kuso build trigger` against any public repo URL — the repo picker just stays empty.
+
+## Install the CLI
+
+On your workstation:
+
+```bash
+curl -fsSL https://kuso.example.com/install-cli.sh | sh
+```
+
+(Replace `kuso.example.com` with your instance.) The script downloads a prebuilt binary for your platform from GitHub releases — or falls back to `go install` if you have Go on PATH and no release asset matches your OS/arch. Drops `kuso` into `~/.local/bin/` (no sudo) or `/usr/local/bin/` (run as root).
+
+Then point the CLI at your instance:
+
+```bash
+# Fresh install still on Let's Encrypt staging certs?
+KUSO_INSECURE=1 kuso login --api https://kuso.example.com -u admin
+```
+
+After flipping the instance to LE prod, drop the `KUSO_INSECURE=1`.
 
 ## Repo layout
 

@@ -111,6 +111,16 @@ if [[ -d web ]]; then
   fi
 fi
 
+# ---- 3b. sync install scripts into the server-go embed -------------
+#
+# server-go embeds hack/install.sh and hack/install-cli.sh so a running
+# instance can serve them at /install.sh and /install-cli.sh — bypassing
+# the 5-minute raw.githubusercontent.com cache. Go's go:embed can't
+# reach into ../../hack/, so we copy them into the embed dir first.
+log "syncing install scripts into server-go embed"
+cp hack/install.sh server-go/internal/installscripts/scripts/install.sh
+cp hack/install-cli.sh server-go/internal/installscripts/scripts/install-cli.sh
+
 # ---- 4. cross-build amd64 + push -----------------------------------
 
 log "docker buildx --platform linux/amd64 → ${KUSO_RELEASE_IMAGE}:${VERSION}"
@@ -179,6 +189,30 @@ cat > "$DIST_DIR/release.json" <<EOF
 EOF
 log "wrote ${DIST_DIR}/release.json"
 
+# ---- 4c. CLI binaries ----------------------------------------------
+#
+# install-cli.sh tries to download these from the GitHub release. Build
+# them now (cross-compile, no docker) so they're ready for the
+# `gh release create` upload below. Skipped silently when go isn't on
+# PATH — the install-cli.sh fallback will go-install from source.
+
+KUSO_RELEASE_CLI="${KUSO_RELEASE_CLI:-1}"
+if [[ "${KUSO_RELEASE_CLI}" == "1" ]] && command -v go >/dev/null 2>&1; then
+  log "cross-building CLI binaries (darwin/linux × amd64/arm64)"
+  CLI_LDFLAGS="-X kuso/cmd/kusoCli/version.ldflagsVersion=${VERSION}"
+  for target in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
+    GOOS="${target%-*}"
+    GOARCH="${target#*-}"
+    out="${DIST_DIR}/kuso-${target}"
+    (cd cli && GOOS="$GOOS" GOARCH="$GOARCH" \
+        go build -ldflags="$CLI_LDFLAGS" -o "$out" ./cmd) \
+      || fail "CLI build failed for ${target}"
+  done
+  ls -lh "$DIST_DIR"/kuso-* | awk '{print "    " $5 "  " $9}'
+else
+  warn "go not on PATH (or KUSO_RELEASE_CLI=0) — skipping CLI binaries; install-cli.sh will fall back to source"
+fi
+
 # Optionally cut the GH release. Off by default so iteration doesn't
 # spam tags; turn on with KUSO_RELEASE_GH=1 once a tag is real.
 if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
@@ -188,13 +222,21 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
     log "creating GitHub release ${VERSION}"
     NOTES_FILE="$(mktemp)"
     git log --pretty=format:'- %s' "$(git describe --tags --abbrev=0 2>/dev/null || echo HEAD)..HEAD" > "$NOTES_FILE" || true
+    # Collect CLI assets if they exist; the * glob would fail-fast under
+    # `set -e` if dist/kuso-* is empty, so check first.
+    CLI_ASSETS=()
+    for f in "$DIST_DIR"/kuso-darwin-arm64 "$DIST_DIR"/kuso-darwin-amd64 \
+             "$DIST_DIR"/kuso-linux-amd64 "$DIST_DIR"/kuso-linux-arm64; do
+      [[ -f "$f" ]] && CLI_ASSETS+=("$f")
+    done
     gh release create "$VERSION" \
       --title "$VERSION" \
       --notes-file "$NOTES_FILE" \
       "$DIST_DIR/release.json" \
-      "$DIST_DIR/crds.yaml" >/dev/null
+      "$DIST_DIR/crds.yaml" \
+      "${CLI_ASSETS[@]}" >/dev/null
     rm -f "$NOTES_FILE"
-    log "GitHub release ${VERSION} published with release.json + crds.yaml"
+    log "GitHub release ${VERSION} published (release.json + crds.yaml + ${#CLI_ASSETS[@]} CLI assets)"
   fi
 fi
 

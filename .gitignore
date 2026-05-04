@@ -2,6 +2,10 @@
 .DS_Store
 Thumbs.db
 
+# Local agent runtime state. The .claude dir holds scheduled task
+# lockfiles + skill caches that are workstation-specific.
+.claude/scheduled_tasks.lock
+
 # Editor
 .vscode/
 .idea/

@@ -140,9 +140,18 @@ export function AddServiceView() {
           {installURL.isPending || installs.isPending ? (
             <Skeleton className="h-24 w-full" />
           ) : !installURL.data?.configured ? (
-            <p className="text-sm text-[var(--text-secondary)]">
-              GitHub App not configured on this kuso instance.
-            </p>
+            <div className="space-y-2">
+              <p className="text-sm text-[var(--text-secondary)]">
+                GitHub App not configured on this kuso instance.
+              </p>
+              <a
+                href="/settings/github"
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium hover:bg-[var(--accent-subtle)]"
+              >
+                <Github className="h-3.5 w-3.5" />
+                Configure GitHub App
+              </a>
+            </div>
           ) : (installs.data ?? []).length === 0 ? (
             <div className="space-y-2">
               <p className="text-sm text-[var(--text-secondary)]">
