@@ -178,17 +178,19 @@
   --text-tertiary: #7E7B66;       /* warm olive, muted */
   --text-inverse: #131200;
 
-  /* Accent: slate-blue (#40476D) is the primary accent for
-     borders/links/decorative use. Sage (#ACBEA3) is the secondary
-     accent for success state, ready badges, and complementary
-     callouts. Periwinkle stays as the hover/focus ring color
-     because it's a light variant of the slate that pops on a warm
-     near-black ground. */
-  --accent: #40476D;              /* slate-blue — primary accent */
-  --accent-hover: #4F5784;
-  --accent-subtle: rgba(64, 71, 109, 0.18);
-  --accent-2: #ACBEA3;            /* sage — secondary accent */
-  --accent-2-subtle: rgba(172, 190, 163, 0.14);
+  /* Accent: orange (#EB6534) is the primary accent — borders on
+     hover, link colors, focus rings, ambient highlight. Same hue
+     as the action button so the language is consistent: every
+     interactive surface speaks orange. Slate (#40476D) and sage
+     (#ACBEA3) stay as decorative accents for non-interactive
+     content (status pills, secondary callouts). */
+  --accent: #EB6534;              /* orange — primary interactive accent */
+  --accent-hover: #F27A4F;
+  --accent-subtle: rgba(235, 101, 52, 0.14);
+  --accent-2: #40476D;            /* slate-blue — decorative */
+  --accent-2-subtle: rgba(64, 71, 109, 0.14);
+  --accent-3: #ACBEA3;            /* sage — decorative / success */
+  --accent-3-subtle: rgba(172, 190, 163, 0.14);
 
   /* Action color: ORANGE only. Reserved for high-emphasis
      "do the thing" buttons — Save, Create, Deploy, Submit. Every
@@ -210,10 +212,10 @@
   /* Borders ladder against the warm-black ground. Each step lifts
      by ~12% lightness from the surface so dividers/cards register
      without flooding the page with a bright color. Strong = hover
-     uses periwinkle for snap. */
+     uses orange to match the new accent system. */
   --border-subtle: #3A3825;       /* warm olive, deep — ambient */
   --border-default: #4F4D34;      /* warm olive, mid — dividers */
-  --border-strong: #AFBBF2;       /* periwinkle — hover/focus */
+  --border-strong: #EB6534;       /* orange — hover/focus */
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
@@ -241,7 +243,7 @@
   --destructive: #C9382A;
   --border: #4F4D34;              /* matches --border-default */
   --input: #26240F;               /* matches --bg-tertiary */
-  --ring: #AFBBF2;
+  --ring: #EB6534;                /* orange — focus ring */
 
   /* Sidebar uses surface +1 so the rail is one shade darker than
      the cards above it — keeps the visual hierarchy "rail < page <
@@ -253,7 +255,7 @@
   --sidebar-accent: #26240F;
   --sidebar-accent-foreground: #ECEAE0;
   --sidebar-border: #4F4D34;
-  --sidebar-ring: #AFBBF2;
+  --sidebar-ring: #EB6534;
 
   /* Status hues — used by Badge, Toast, build/env state pills, etc.
      These don't have direct CSS-var consumers in shadcn primitives;
