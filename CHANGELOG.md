@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.27] — 2026-05-04
+
+### Other
+- Ui: warm near-black ground (#131200) + slate/sage accents + orange action ([af43acd](https://github.com/sislelabs/kuso/commit/af43acd372c57cc4d422e743a9bb28144326376e))
+
 ## [0.7.26] — 2026-05-04
 
 ### Other
