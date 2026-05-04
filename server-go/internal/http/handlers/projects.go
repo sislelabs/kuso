@@ -113,6 +113,11 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
+	// Project creation is an instance-level action — only admins (or
+	// users with project:write). Non-admins can't conjure new projects.
+	if !requirePerm(w, r, auth.PermProjectWrite) {
+		return
+	}
 	var req projects.CreateProjectRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -131,6 +136,9 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) Describe(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
 	out, err := h.Svc.Describe(ctx, chi.URLParam(r, "project"))
 	if err != nil {
 		h.fail(w, "describe project", err)
@@ -150,6 +158,9 @@ func (h *ProjectsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+		return
+	}
 	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), req)
 	if err != nil {
 		h.fail(w, "update project", err)
@@ -161,6 +172,9 @@ func (h *ProjectsHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+		return
+	}
 	if err := h.Svc.Delete(ctx, chi.URLParam(r, "project")); err != nil {
 		h.fail(w, "delete project", err)
 		return
@@ -171,6 +185,9 @@ func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) ListServices(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
 	out, err := h.Svc.ListServices(ctx, chi.URLParam(r, "project"))
 	if err != nil {
 		h.fail(w, "list services", err)
@@ -187,6 +204,9 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	out, err := h.Svc.AddService(ctx, chi.URLParam(r, "project"), req)
 	if err != nil {
 		h.fail(w, "add service", err)
@@ -198,6 +218,9 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) GetService(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
 	out, err := h.Svc.GetService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"))
 	if err != nil {
 		h.fail(w, "get service", err)
@@ -241,6 +264,9 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 
 	plan, err := spec.PlanFor(ctx, h.Kube, h.Namespace, f)
 	if err != nil {
@@ -272,6 +298,9 @@ func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	out, err := h.Svc.PatchService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
 	if err != nil {
 		h.fail(w, "patch service", err)
@@ -283,6 +312,9 @@ func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) DeleteService(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	if err := h.Svc.DeleteService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service")); err != nil {
 		h.fail(w, "delete service", err)
 		return
@@ -306,6 +338,9 @@ func (h *ProjectsHandler) RenameService(w http.ResponseWriter, r *http.Request) 
 	// it a longer budget than projectCtx default.
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	out, err := h.Svc.RenameService(ctx,
 		chi.URLParam(r, "project"),
 		chi.URLParam(r, "service"),
@@ -321,6 +356,11 @@ func (h *ProjectsHandler) RenameService(w http.ResponseWriter, r *http.Request) 
 func (h *ProjectsHandler) GetEnv(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	// Env vars are a Deployer concern (they affect runtime behaviour).
+	// Viewers shouldn't see secrets even when fully resolved.
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	out, err := h.Svc.GetEnv(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"))
 	if err != nil {
 		h.fail(w, "get env", err)
@@ -337,6 +377,9 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	if err := h.Svc.SetEnv(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req.EnvVars); err != nil {
 		h.fail(w, "set env", err)
 		return
@@ -350,6 +393,9 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) ListPods(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
 	env := r.URL.Query().Get("env")
 	out, err := h.Svc.ListPods(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env)
 	if err != nil {
@@ -362,6 +408,9 @@ func (h *ProjectsHandler) ListPods(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) Wake(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	if err := h.Svc.WakeService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service")); err != nil {
 		h.fail(w, "wake service", err)
 		return
@@ -372,6 +421,9 @@ func (h *ProjectsHandler) Wake(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) ListEnvironments(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
 	out, err := h.Svc.ListEnvironments(ctx, chi.URLParam(r, "project"))
 	if err != nil {
 		h.fail(w, "list envs", err)
@@ -392,6 +444,9 @@ func (h *ProjectsHandler) AddEnvironment(w http.ResponseWriter, r *http.Request)
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	out, err := h.Svc.AddEnvironment(ctx,
 		chi.URLParam(r, "project"),
 		chi.URLParam(r, "service"),
@@ -407,6 +462,9 @@ func (h *ProjectsHandler) AddEnvironment(w http.ResponseWriter, r *http.Request)
 func (h *ProjectsHandler) GetEnvironment(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
 	out, err := h.Svc.GetEnvironment(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "env"))
 	if err != nil {
 		h.fail(w, "get env", err)
@@ -418,6 +476,9 @@ func (h *ProjectsHandler) GetEnvironment(w http.ResponseWriter, r *http.Request)
 func (h *ProjectsHandler) DeleteEnvironment(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	if err := h.Svc.DeleteEnvironment(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "env")); err != nil {
 		h.fail(w, "delete env", err)
 		return

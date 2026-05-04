@@ -45,7 +45,7 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 - `operator/` — operator-sdk helm-operator. CRDs in `operator/config/crd/bases/`, helm charts in `operator/helm-charts/{kuso,kusoproject,kusoservice,kusoenvironment,kusoaddon,kusobuild}/`.
 - `cli/` — single binary (`./cmd`) entry point + `cmd/kusoCli/` cobra commands + `pkg/kusoApi/` resty client + `pkg/coolify/` migration importer.
 - `deploy/` — kube manifests applied during install (`server-go.yaml`, `prometheus.yaml`, `cluster-issuer.yaml`).
-- `hack/release.sh` — `make release-roll VERSION=vX.Y.Z` does version bump + web build + cross-platform docker push to ghcr + ssh `kubectl set image` rollout + `/healthz` verify.
+- `hack/release.sh` — `make ship VERSION=vX.Y.Z` does version bump + web build + cross-platform docker push to ghcr + cuts a GH release + writes `release.json`. Live instances poll the GH releases endpoint and self-update via the in-built updater (no ssh from the laptop). `make local-roll VERSION=vX.Y.Z` is the dev-only escape hatch that ssh-rolls a single test cluster — almost no one should use it. The `make release-roll` target is deprecated and exits non-zero with a helpful message; replace any reference to it with `make ship`.
 
 **CRD model:**
 - `KusoProject` — top-level grouping. `spec.{defaultRepo, baseDomain, github, previews, placement}`.
@@ -68,7 +68,7 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 - The `kuso.sislelabs.com/<key>` label prefix is the user-visible label namespace. Helm charts emit `nodeSelector: kuso.sislelabs.com/<key>: <value>`, the labels editor reconciles it. Bare keys without prefix are kuso-internal (e.g. `kuso.sislelabs.com/project`, `…/service`, `…/addon-kind`).
 
 **Release flow:**
-- Bump `server-go/internal/version/VERSION`, `deploy/server-go.yaml` image tag, `hack/install.sh` `KUSO_SERVER_VERSION` default. Then `make release-roll VERSION=vX.Y.Z`. CRD changes need an explicit `kubectl apply -f operator/config/crd/bases/...yaml` via ssh — release-roll only does `kubectl set image`.
+- Bump `server-go/internal/version/VERSION`, `deploy/server-go.yaml` image tag, `hack/install.sh` `KUSO_SERVER_VERSION` AND `KUSO_VERSION` defaults. Then `make ship VERSION=vX.Y.Z` (release.sh handles all four version-string rewrites + the web bundle build + docker push + GH release). Live instances pick up the new release.json on the next updater tick and roll themselves; you do NOT ssh from the laptop. CRD changes still need an explicit `kubectl apply -f operator/config/crd/bases/...yaml` via ssh — the auto-updater only flips image tags, not schemas.
 - Operator helm-operator picks up CR spec changes via watch + 3m reconcile. Schema changes to a CRD require both the YAML apply AND the operator pod to restart-or-reconnect to refresh its informer.
 
 ## Active product roadmap (post-v0.6.29)
@@ -114,6 +114,6 @@ Pattern, in order — copy this for items 1 and 2:
 8. Add the Go types + resty methods to `cli/pkg/kusoApi/<name>.go`. Add a cobra subcommand at `cli/cmd/kusoCli/<name>.go`.
 9. Add the API client + hooks to `web/src/features/<name>/{api,hooks}.ts`. Re-export from `web/src/features/<name>/index.ts`.
 10. Build the UI section/tab/dialog under `web/src/components/<name>/` or as a tab on the existing service overlay.
-11. Apply the new CRD to the live cluster: `scp` it then `ssh … "kubectl apply -f /tmp/<name>.yaml"`. The `make release-roll` flow only does `kubectl set image` — it does NOT apply CRD changes.
+11. Apply the new CRD to the live cluster: `scp` it then `ssh … "kubectl apply -f /tmp/<name>.yaml"`. The release auto-updater (`make ship`, then instances pull) only flips image tags — it does NOT apply CRD schema changes.
 
 When in doubt, mirror how addons or environments do it. They're the most complete examples of this pattern in the codebase.

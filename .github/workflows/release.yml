@@ -129,11 +129,16 @@ jobs:
             echo "## kuso $VERSION released"
             echo ""
             echo "- Server image: \`ghcr.io/sislelabs/kuso-server-go:$VERSION\`"
+            echo "- Operator image: \`ghcr.io/sislelabs/kuso-operator:$VERSION\`"
             echo "- GH release: https://github.com/$REPO/releases/tag/$VERSION"
             echo ""
-            echo "Roll the live cluster from your laptop:"
+            echo "Live instances poll the GH releases endpoint and self-update via the"
+            echo "in-built updater. No manual roll required."
+            echo ""
+            echo "If you must roll a dev test cluster directly (rare; production"
+            echo "should always self-update):"
             echo ""
             echo '```bash'
-            echo "make release-roll VERSION=$VERSION"
+            echo "make local-roll VERSION=$VERSION"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

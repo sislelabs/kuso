@@ -21,11 +21,13 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/db"
 	"kuso/server/internal/projectsecrets"
 )
 
 type ProjectSecretsHandler struct {
 	Svc    *projectsecrets.Service
+	DB     *db.DB
 	Logger *slog.Logger
 }
 
@@ -42,6 +44,9 @@ func projectSecretsCtx(r *http.Request) (context.Context, context.CancelFunc) {
 func (h *ProjectSecretsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectSecretsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	keys, err := h.Svc.ListKeys(ctx, chi.URLParam(r, "project"))
 	if err != nil {
 		h.fail(w, "list shared secrets", err)
@@ -67,6 +72,9 @@ func (h *ProjectSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := projectSecretsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+		return
+	}
 	if err := h.Svc.SetKey(ctx, chi.URLParam(r, "project"), body.Key, body.Value); err != nil {
 		h.fail(w, "set shared secret", err)
 		return
@@ -77,6 +85,9 @@ func (h *ProjectSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectSecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectSecretsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+		return
+	}
 	if err := h.Svc.UnsetKey(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "key")); err != nil {
 		h.fail(w, "unset shared secret", err)
 		return

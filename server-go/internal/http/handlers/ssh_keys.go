@@ -41,6 +41,9 @@ func (h *SSHKeysHandler) ctx(r *http.Request) (context.Context, context.CancelFu
 }
 
 func (h *SSHKeysHandler) List(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	keys, err := h.DB.ListSSHKeys(ctx)
@@ -58,6 +61,9 @@ func (h *SSHKeysHandler) List(w http.ResponseWriter, r *http.Request) {
 // half + fingerprint so the UI can show a copy-paste-ready
 // authorized_keys line.
 func (h *SSHKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	var body struct {
 		Name       string `json:"name"`
 		Generate   bool   `json:"generate"`
@@ -111,6 +117,9 @@ func (h *SSHKeysHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SSHKeysHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := h.ctx(r)
 	defer cancel()
 	if err := h.DB.DeleteSSHKey(ctx, chi.URLParam(r, "id")); err != nil {

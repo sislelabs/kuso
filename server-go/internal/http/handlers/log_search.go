@@ -44,6 +44,9 @@ func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, projec
 	until := parseTs(q.Get("until"))
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
 	rows, err := h.DB.SearchLogs(ctx, db.SearchLogsRequest{
 		Project: project,
 		Service: service,
@@ -54,8 +57,11 @@ func (h *LogSearchHandler) search(w http.ResponseWriter, r *http.Request, projec
 		Limit:   limit,
 	})
 	if err != nil {
+		// Don't leak FTS5 grammar errors back to the caller — those are
+		// implementation details of the search engine and a probe vector
+		// for an attacker who wants to fingerprint the server.
 		h.Logger.Error("log search", "err", err)
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "search failed", http.StatusInternalServerError)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{

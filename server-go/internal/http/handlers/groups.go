@@ -47,6 +47,9 @@ type groupRequest struct {
 }
 
 func (h *GroupsHandler) Create(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	var req groupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
@@ -64,6 +67,9 @@ func (h *GroupsHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *GroupsHandler) Update(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	var req groupRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
@@ -87,6 +93,9 @@ func (h *GroupsHandler) Update(w http.ResponseWriter, r *http.Request) {
 // GetTenancy returns the group's instanceRole + projectMemberships.
 // Used by the editor to populate the form on first render.
 func (h *GroupsHandler) GetTenancy(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	ctx, cancel := groupsCtx(r)
 	defer cancel()
 	t, err := h.DB.GetGroupTenancy(ctx, chi.URLParam(r, "id"))
@@ -105,6 +114,9 @@ func (h *GroupsHandler) GetTenancy(w http.ResponseWriter, r *http.Request) {
 // PutTenancy is the writable counterpart. Admins POST the new
 // {instanceRole, projectMemberships} shape; we replace both atomically.
 func (h *GroupsHandler) PutTenancy(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	var req db.GroupTenancy
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -127,6 +139,9 @@ func (h *GroupsHandler) PutTenancy(w http.ResponseWriter, r *http.Request) {
 // AddMember attaches a user to a group. Idempotent — re-adding a
 // member is a no-op via INSERT OR IGNORE under the hood.
 func (h *GroupsHandler) AddMember(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	ctx, cancel := groupsCtx(r)
 	defer cancel()
 	if err := h.DB.AddUserToGroup(ctx, chi.URLParam(r, "userId"), chi.URLParam(r, "id")); err != nil {
@@ -140,6 +155,9 @@ func (h *GroupsHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 // RemoveMember detaches. Idempotent — missing pivot row → no rows
 // affected → still 204 from the user's perspective.
 func (h *GroupsHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	ctx, cancel := groupsCtx(r)
 	defer cancel()
 	if err := h.DB.RemoveUserFromGroup(ctx, chi.URLParam(r, "userId"), chi.URLParam(r, "id")); err != nil {
@@ -151,6 +169,9 @@ func (h *GroupsHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *GroupsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	ctx, cancel := groupsCtx(r)
 	defer cancel()
 	if err := h.DB.DeleteGroup(ctx, chi.URLParam(r, "id")); err != nil {

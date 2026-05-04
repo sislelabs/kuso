@@ -5,7 +5,17 @@ metadata:
   labels:
     {{- include "kusoenvironment.labels" . | nindent 4 }}
 spec:
+  {{- /*
+    Replicas: only stamp spec.replicas when autoscaling is OFF. With an
+    HPA wired up, helm-operator reconciles every 3m and would otherwise
+    keep clobbering the autoscaler's chosen replica count back to
+    replicaCount, producing periodic capacity dips and 503s during
+    traffic spikes. Standard chart pattern: omit the field when the HPA
+    owns it.
+  */ -}}
+  {{- if not (and .Values.autoscaling .Values.autoscaling.enabled) }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       {{- include "kusoenvironment.selectorLabels" . | nindent 6 }}

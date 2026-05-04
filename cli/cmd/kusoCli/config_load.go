@@ -126,16 +126,32 @@ func saveInstances() error {
 
 // saveToken persists a bearer token for an instance, creating the
 // credentials.yaml file if it doesn't exist yet.
+//
+// Viper's WriteConfig honours the umask (typically 0022 → 0644 mode),
+// which is wrong for a token file: any local user could read the
+// session token. We write atomically via tmp + rename + Chmod 0o600
+// to guarantee the perms regardless of umask.
 func saveToken(instanceName, token string) error {
 	credentialsConfig.Set(instanceName, token)
-	if err := credentialsConfig.WriteConfig(); err != nil {
-		// First-time write: no file exists yet, so SafeWriteConfig.
-		path := filepath.Join(homeDir(), ".kuso", "credentials.yaml")
-		if mkErr := os.MkdirAll(filepath.Dir(path), 0o700); mkErr != nil {
-			return mkErr
+	path := credentialsConfig.ConfigFileUsed()
+	if path == "" {
+		path = filepath.Join(homeDir(), ".kuso", "credentials.yaml")
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			return err
 		}
 		credentialsConfig.SetConfigFile(path)
-		return credentialsConfig.WriteConfig()
+	}
+	tmp := path + ".tmp"
+	if err := credentialsConfig.WriteConfigAs(tmp); err != nil {
+		return fmt.Errorf("write tmp credentials: %w", err)
+	}
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("chmod credentials: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("rename credentials: %w", err)
 	}
 	return nil
 }

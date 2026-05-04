@@ -104,7 +104,10 @@ func NewRouter(d Deps) http.Handler {
 		Audit:      d.Audit,
 		Logger:     d.Logger,
 	}
-	r.Post("/api/auth/login", authH.Login)
+	// Rate-limit login at 10 attempts / 30s / IP. Bcrypt makes offline
+	// cracking expensive, but online brute-force against a known
+	// username has been unrestricted; cap that here.
+	r.Post("/api/auth/login", httphandlers.RateLimitedLogin(authH.Login))
 	r.Get("/api/auth/methods", authH.Methods)
 
 	// OAuth flows are public (no JWT yet) and end with a redirect
@@ -148,6 +151,7 @@ func NewRouter(d Deps) http.Handler {
 			Svc:        d.Logs,
 			Issuer:     d.Issuer,
 			SessionKey: d.SessionKey,
+			DB:         d.DB,
 			Logger:     d.Logger,
 		}
 		wsH.Mount(r)
@@ -170,15 +174,15 @@ func NewRouter(d Deps) http.Handler {
 			projH.Mount(r)
 		}
 		if d.Secrets != nil {
-			secH := &httphandlers.SecretsHandler{Svc: d.Secrets, Logger: d.Logger}
+			secH := &httphandlers.SecretsHandler{Svc: d.Secrets, DB: d.DB, Logger: d.Logger}
 			secH.Mount(r)
 		}
 		if d.Builds != nil {
-			buildH := &httphandlers.BuildsHandler{Svc: d.Builds, Logger: d.Logger}
+			buildH := &httphandlers.BuildsHandler{Svc: d.Builds, DB: d.DB, Logger: d.Logger}
 			buildH.Mount(r)
 		}
 		if d.Logs != nil {
-			logsH := &httphandlers.LogsHandler{Svc: d.Logs, Logger: d.Logger}
+			logsH := &httphandlers.LogsHandler{Svc: d.Logs, DB: d.DB, Logger: d.Logger}
 			logsH.Mount(r)
 		}
 		if d.DB != nil && d.Issuer != nil {
@@ -205,14 +209,14 @@ func NewRouter(d Deps) http.Handler {
 			cfgH.Mount(r)
 		}
 		if d.Addons != nil {
-			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, Logger: d.Logger}
+			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, DB: d.DB, Logger: d.Logger}
 			addonsH.Mount(r)
 			if d.Crons != nil {
-				cronsH := &httphandlers.CronsHandler{Svc: d.Crons, Logger: d.Logger}
+				cronsH := &httphandlers.CronsHandler{Svc: d.Crons, DB: d.DB, Logger: d.Logger}
 				cronsH.Mount(r)
 			}
 			if d.ProjectSecrets != nil {
-				psH := &httphandlers.ProjectSecretsHandler{Svc: d.ProjectSecrets, Logger: d.Logger}
+				psH := &httphandlers.ProjectSecretsHandler{Svc: d.ProjectSecrets, DB: d.DB, Logger: d.Logger}
 				psH.Mount(r)
 			}
 			if d.InstanceSecrets != nil {

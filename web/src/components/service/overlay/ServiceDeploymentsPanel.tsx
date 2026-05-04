@@ -255,7 +255,11 @@ function RollbackButton({
     onSuccess: () => {
       toast.success(`Rolled back to ${sha || buildId}`);
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });
-      qc.invalidateQueries({ queryKey: ["projects", project, "environments"] });
+      // The env list is keyed under "envs" everywhere else (see
+      // features/projects/hooks.ts useEnvs); this used to invalidate
+      // "environments" which never matched and left the Deployments
+      // tab showing stale ACTIVE badges after rollback.
+      qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
       setConfirming(false);
     },
     onError: (e) => {

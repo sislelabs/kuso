@@ -14,13 +14,29 @@
   produces an identical manifest and the operator detects no-op.
 
   randAlphaNum is only invoked on first install when no Secret yet
-  exists. Explicit .Values.password (set on chart values, e.g. via
-  the spec.password field on KusoAddon) wins over both.
+  exists. To bring your own password, set
+  spec.passwordSecret.{name,key} on KusoAddon and create that Secret
+  out-of-band — the legacy spec.password field has been removed
+  because it persisted plaintext credentials in etcd.
+
+  Backwards compat: if .Values.password is still set (legacy clusters
+  whose CRDs haven't been re-applied), we honour it but log a Helm
+  warning via the chart's NOTES.txt. New clusters won't see this
+  field on the CR at all.
 */}}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
 {{- $existingPw := "" -}}
 {{- if and $existing $existing.data (index $existing.data "POSTGRES_PASSWORD") -}}
   {{- $existingPw = (index $existing.data "POSTGRES_PASSWORD" | b64dec) -}}
+{{- end -}}
+{{/* Resolve passwordSecret reference if present. */}}
+{{- $providedPw := "" -}}
+{{- if .Values.passwordSecret -}}
+  {{- $key := default "password" .Values.passwordSecret.key -}}
+  {{- $src := lookup "v1" "Secret" .Release.Namespace .Values.passwordSecret.name -}}
+  {{- if and $src $src.data (index $src.data $key) -}}
+    {{- $providedPw = (index $src.data $key | b64dec) -}}
+  {{- end -}}
 {{- end -}}
 {{/*
   Drift guard: if the StatefulSet was already initialized (its data
@@ -32,10 +48,10 @@
   `kuso project addon repair-password` to recover.
 */}}
 {{- $existingSts := lookup "apps/v1" "StatefulSet" .Release.Namespace $name -}}
-{{- if and $existingSts (not $existingPw) (not .Values.password) -}}
+{{- if and $existingSts (not $existingPw) (not $providedPw) (not .Values.password) -}}
   {{- fail (printf "kusoaddon %s/%s: StatefulSet exists but conn Secret is missing — refusing to generate a fresh password. Run `kuso project addon repair-password` to recover." .Release.Namespace $name) -}}
 {{- end -}}
-{{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+{{- $password := $providedPw | default .Values.password | default $existingPw | default (randAlphaNum 24) -}}
 
 # StatefulSet running the upstream Postgres image. Plain non-HA single-node;
 # good enough for v0.2 and most indie-dev workloads. Switch to CloudNativePG
@@ -131,5 +147,10 @@ stringData:
   # serve TLS. Connections stay on the cluster-internal Service so they
   # never leave the kube node anyway. Apps that opt into TLS via their
   # own driver flag still work — they just have to override DATABASE_URL.
-  DATABASE_URL: "postgres://kuso:{{ $password }}@{{ $name }}:5432/{{ $database }}?sslmode=disable"
+  #
+  # urlquery the password so user-supplied creds with reserved chars
+  # (`@`, `:`, `/`, `?`, `#`, `%`) don't corrupt the connection string.
+  # The auto-generated password (randAlphaNum) is safe without it, but
+  # passwordSecret-supplied values can be anything.
+  DATABASE_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}:5432/{{ $database }}?sslmode=disable"
 {{- end }}

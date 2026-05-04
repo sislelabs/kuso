@@ -56,7 +56,7 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.2.6}"
+KUSO_VERSION="${KUSO_VERSION:-v0.7.16}"
 KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.7.16}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-staging}"

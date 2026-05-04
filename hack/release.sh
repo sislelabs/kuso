@@ -198,10 +198,14 @@ if [[ "$CURRENT" != "$VERSION" ]]; then
       deploy/server-go.yaml
     rm deploy/server-go.yaml.bak
 
-    # hack/install.sh: KUSO_SERVER_VERSION default + the sed line that
-    # rewrites the deploy yaml during fresh installs.
+    # hack/install.sh: KUSO_SERVER_VERSION default + KUSO_VERSION
+    # (operator pin) default + the sed line that rewrites the deploy
+    # yaml during fresh installs. The operator pin used to be left
+    # frozen across releases (was stuck at v0.2.6 through v0.7.x);
+    # the regex below catches whatever it currently is.
     sed -i.bak \
       -e "s|KUSO_SERVER_VERSION:-${CURRENT}|KUSO_SERVER_VERSION:-${VERSION}|g" \
+      -e "s|KUSO_VERSION=\"\${KUSO_VERSION:-v[0-9][0-9.]*[a-zA-Z0-9.-]*}\"|KUSO_VERSION=\"\${KUSO_VERSION:-${VERSION}}\"|g" \
       -e "s|kuso-server-go:${CURRENT}|kuso-server-go:${VERSION}|g" \
       -e "s|server image tag (default: ${CURRENT};|server image tag (default: ${VERSION};|g" \
       hack/install.sh

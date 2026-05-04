@@ -18,11 +18,13 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/gorilla/websocket"
 
 	"kuso/server/internal/auth"
+	"kuso/server/internal/db"
 	"kuso/server/internal/logs"
 )
 
@@ -31,6 +33,7 @@ type LogsWSHandler struct {
 	Svc        *logs.Service
 	Issuer     *auth.Issuer
 	SessionKey string // bcrypt-derived JWT verifying key (same as bearer middleware)
+	DB         *db.DB
 	Logger     *slog.Logger
 }
 
@@ -73,9 +76,23 @@ func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if _, err := h.Issuer.Verify(jwtTok); err != nil {
+	claims, err := h.Issuer.Verify(jwtTok)
+	if err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
+	}
+	// Project-ownership check. Auth middleware would normally do this
+	// for us, but the WS handler is mounted on the public router and
+	// has to roll its own gates. Admins (settings:admin) bypass.
+	project := chi.URLParam(r, "project")
+	if !auth.Has(claims.Permissions, auth.PermSettingsAdmin) && h.DB != nil {
+		tenancyCtx, tenancyCancel := context.WithTimeout(r.Context(), 5*time.Second)
+		tenancy, terr := h.DB.ListUserTenancy(tenancyCtx, claims.UserID)
+		tenancyCancel()
+		if terr != nil || auth.ProjectRoleFor(tenancy, project) == "" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
 	}
 
 	q := r.URL.Query()

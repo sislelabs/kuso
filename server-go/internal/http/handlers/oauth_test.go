@@ -177,8 +177,16 @@ func TestOAuth_FullCallbackHappyPath(t *testing.T) {
 	if rr.Code != http.StatusFound {
 		t.Fatalf("callback status: %d body=%q", rr.Code, rr.Body.String())
 	}
-	if got := rr.Header().Get("Location"); got != "/" {
-		t.Errorf("redirect target: %q (want \"/\")", got)
+	// The redirect target is now "/#token=<jwt>" — the URL fragment
+	// hands the JWT to the SPA without exposing it to the server logs
+	// or to any non-same-origin redirect tracker. The fragment is
+	// stripped by api-client.ts on first paint and the bearer is
+	// stored in localStorage. See setJWTCookie + redirectWithJWT
+	// for the change. Test asserts the prefix instead of equality
+	// so the JWT contents aren't pinned.
+	got := rr.Header().Get("Location")
+	if !strings.HasPrefix(got, "/#token=") {
+		t.Errorf("redirect target: %q (want prefix \"/#token=\")", got)
 	}
 	if gm.exchanges != 1 {
 		t.Errorf("exchanges: %d (want 1)", gm.exchanges)
@@ -203,8 +211,14 @@ func TestOAuth_SetsJWTCookie(t *testing.T) {
 	if jwt == nil {
 		t.Fatalf("kuso.JWT_TOKEN not set in callback response: %+v", rr.Result().Cookies())
 	}
-	if jwt.HttpOnly {
-		t.Error("kuso.JWT_TOKEN must NOT be HttpOnly — the SPA reads it from JS")
+	// The cookie is now HttpOnly. The SPA receives the JWT via the
+	// URL fragment (#token=…) and the cookie is server-only — used
+	// by the WebSocket log handler where the browser can't set
+	// Authorization. Asserting HttpOnly defends against accidental
+	// regression to the legacy JS-readable shape that made every
+	// XSS in the bundle equivalent to session theft.
+	if !jwt.HttpOnly {
+		t.Error("kuso.JWT_TOKEN must be HttpOnly to prevent XSS-driven token theft")
 	}
 	if !jwt.Secure {
 		t.Error("kuso.JWT_TOKEN must be Secure")

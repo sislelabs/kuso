@@ -130,6 +130,30 @@ spec:
                   type: array
                   items: { type: string }
                   description: argv override; only used when runtime == "worker".
+                placement:
+                  type: object
+                  description: Inherits the parent service placement so the env-helm chart can render nodeSelector + topologySpread. Pruning was the v0.7.x silent-data-loss bug — schema now covers what server-go writes.
+                  properties:
+                    labels:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    nodes:
+                      type: array
+                      items: { type: string }
+                volumes:
+                  type: array
+                  description: Persistent volumes to mount into the env's pod. Same shape as KusoService.spec.volumes; declared explicitly so the apiserver doesn't prune them.
+                  items:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      mountPath: { type: string }
+                      size: { type: string }
+                      storageClass: { type: string }
+                      accessModes:
+                        type: array
+                        items: { type: string }
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

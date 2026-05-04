@@ -89,14 +89,27 @@ var envSetCmd = &cobra.Command{
 
 		// Read current env so we can merge — set should add/update, not replace.
 		// Existing valueFrom-backed entries (secret refs) are preserved.
+		//
+		// Critical: if the read leg fails (typically 401 after a token
+		// expiry), we MUST NOT proceed to the write — silently
+		// unmarshalling an error body into `existing` produces an
+		// empty list, and the subsequent SetEnv would clobber every
+		// other env var on the service. The previous code did exactly
+		// that, with a `_ = json.Unmarshal(...)` swallowing the error.
 		current, err := api.GetEnv(project, service)
 		if err != nil {
-			return err
+			return fmt.Errorf("read current env: %w", err)
+		}
+		if current.StatusCode() >= 300 {
+			return fmt.Errorf("read current env: server returned %d: %s",
+				current.StatusCode(), string(current.Body()))
 		}
 		var existing struct {
 			EnvVars []map[string]any `json:"envVars"`
 		}
-		_ = json.Unmarshal(current.Body(), &existing)
+		if err := json.Unmarshal(current.Body(), &existing); err != nil {
+			return fmt.Errorf("decode current env: %w", err)
+		}
 
 		// Build a map for easy update. Preserve valueFrom on existing
 		// entries so secret-backed vars survive a plain-var set.
@@ -150,14 +163,23 @@ var envUnsetCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		project, service, keys := args[0], args[1], args[2:]
+		// Same precaution as set: status-check before unmarshal so a
+		// 401 doesn't silently empty the env list and the write doesn't
+		// wipe everything.
 		current, err := api.GetEnv(project, service)
 		if err != nil {
-			return err
+			return fmt.Errorf("read current env: %w", err)
+		}
+		if current.StatusCode() >= 300 {
+			return fmt.Errorf("read current env: server returned %d: %s",
+				current.StatusCode(), string(current.Body()))
 		}
 		var existing struct {
 			EnvVars []map[string]any `json:"envVars"`
 		}
-		_ = json.Unmarshal(current.Body(), &existing)
+		if err := json.Unmarshal(current.Body(), &existing); err != nil {
+			return fmt.Errorf("decode current env: %w", err)
+		}
 
 		drop := map[string]bool{}
 		for _, k := range keys {

@@ -116,6 +116,30 @@ spec:
                 buildpacks:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
+                placement:
+                  type: object
+                  description: AND-of-labels node selector + explicit node allowlist. Empty/missing means "schedule anywhere". The env helm chart fans this out to nodeSelector + topologySpreadConstraints.
+                  properties:
+                    labels:
+                      type: object
+                      additionalProperties:
+                        type: string
+                    nodes:
+                      type: array
+                      items: { type: string }
+                volumes:
+                  type: array
+                  description: Persistent volumes to mount into every env's pod. Each entry maps to a PVC + a volumeMount. Declared explicitly so the apiserver doesn't prune them on write.
+                  items:
+                    type: object
+                    properties:
+                      name: { type: string }
+                      mountPath: { type: string }
+                      size: { type: string }
+                      storageClass: { type: string }
+                      accessModes:
+                        type: array
+                        items: { type: string }
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

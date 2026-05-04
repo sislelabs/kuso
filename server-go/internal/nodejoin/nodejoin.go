@@ -18,6 +18,7 @@ package nodejoin
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net"
@@ -224,11 +225,18 @@ func Uninstall(ctx context.Context, creds Credentials) (string, error) {
 	return runCmd(ctx, cli, "/usr/local/bin/k3s-agent-uninstall.sh")
 }
 
-// dial opens an SSH client honoring ctx for cancellation. The host-key
-// callback is intentionally InsecureIgnoreHostKey: the kuso operator
-// is the one supplying both endpoints (we trust them) and any TOFU UI
-// would just be friction. If you want strict host keys, set
-// KUSO_NODEJOIN_STRICT_HOSTKEY=1 and supply known_hosts via env.
+// dial opens an SSH client honoring ctx for cancellation.
+//
+// Host-key handling: trust-on-first-use (TOFU) by default. The first
+// time we connect to a host we record its public key in
+// $KUSO_NODEJOIN_KNOWN_HOSTS (default ~/.ssh/kuso_known_hosts inside
+// the server pod). Subsequent dials to the same host MUST present the
+// same key or the dial fails — defending against MITM after the first
+// successful join.
+//
+// To disable TOFU and accept any key (the previous behaviour), set
+// KUSO_NODEJOIN_INSECURE_HOSTKEY=1. Use this only on a fully trusted
+// LAN where you can't survive a one-time bootstrap MITM check.
 func dial(ctx context.Context, c Credentials) (*ssh.Client, error) {
 	if c.Host == "" {
 		return nil, errors.New("ssh: host is required")
@@ -240,10 +248,14 @@ func dial(ctx context.Context, c Credentials) (*ssh.Client, error) {
 	if port == 0 {
 		port = 22
 	}
+	hostKeyCallback, err := buildHostKeyCallback()
+	if err != nil {
+		return nil, fmt.Errorf("ssh: host-key callback: %w", err)
+	}
 	cfg := &ssh.ClientConfig{
 		User:            c.User,
 		Auth:            []ssh.AuthMethod{},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
+		HostKeyCallback: hostKeyCallback,
 		Timeout:         15 * time.Second,
 	}
 	switch {
@@ -351,4 +363,110 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…[truncated]"
+}
+
+// buildHostKeyCallback returns an ssh.HostKeyCallback that implements
+// trust-on-first-use:
+//
+//   - On the first connection to a host, the public key fingerprint is
+//     written to the known-hosts file (default ~/.ssh/kuso_known_hosts;
+//     overridden via KUSO_NODEJOIN_KNOWN_HOSTS).
+//   - On subsequent connections to the same host, the presented key
+//     MUST match the recorded one or the dial fails.
+//   - Setting KUSO_NODEJOIN_INSECURE_HOSTKEY=1 reverts to the legacy
+//     accept-anything behaviour. Do this only on networks where you
+//     can rule out a one-time MITM during initial join.
+//
+// The file format is one record per line: "host base64(key.Marshal())".
+// Simple enough not to need a parser library, and tamper-evident enough
+// that a misbehaving operator can re-inspect it manually.
+func buildHostKeyCallback() (ssh.HostKeyCallback, error) {
+	if os.Getenv("KUSO_NODEJOIN_INSECURE_HOSTKEY") == "1" {
+		return ssh.InsecureIgnoreHostKey(), nil
+	}
+	path := os.Getenv("KUSO_NODEJOIN_KNOWN_HOSTS")
+	if path == "" {
+		home, _ := os.UserHomeDir()
+		if home == "" {
+			home = "/root"
+		}
+		path = home + "/.ssh/kuso_known_hosts"
+	}
+	return func(hostname string, _ net.Addr, key ssh.PublicKey) error {
+		expected, err := readKnownHost(path, hostname)
+		if err != nil {
+			return fmt.Errorf("read known_hosts %s: %w", path, err)
+		}
+		presented := key.Marshal()
+		if expected == nil {
+			// First time we've seen this host. Pin the key.
+			if err := appendKnownHost(path, hostname, presented); err != nil {
+				return fmt.Errorf("pin host key for %s: %w", hostname, err)
+			}
+			return nil
+		}
+		if !bytes.Equal(expected, presented) {
+			return fmt.Errorf("host key for %s does not match pinned key — possible MITM. Remove the entry from %s if you intended to rotate", hostname, path)
+		}
+		return nil
+	}, nil
+}
+
+// readKnownHost reads the marshalled public key for hostname from the
+// known-hosts file. Returns (nil, nil) when the file or host is missing.
+func readKnownHost(path, hostname string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) != 2 {
+			continue
+		}
+		if fields[0] != hostname {
+			continue
+		}
+		raw, err := decodeBase64(fields[1])
+		if err != nil {
+			continue
+		}
+		return raw, nil
+	}
+	return nil, nil
+}
+
+// appendKnownHost atomically appends a host/key pair to the known-hosts
+// file. Creates the directory + file (mode 0600 for the file, 0700 for
+// the parent dir) if missing.
+func appendKnownHost(path, hostname string, key []byte) error {
+	dir := path
+	if i := strings.LastIndex(dir, "/"); i > 0 {
+		dir = dir[:i]
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "%s %s\n", hostname, encodeBase64(key))
+	return err
+}
+
+func encodeBase64(b []byte) string {
+	return base64.StdEncoding.EncodeToString(b)
+}
+
+func decodeBase64(s string) ([]byte, error) {
+	return base64.StdEncoding.DecodeString(s)
 }

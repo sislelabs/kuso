@@ -13,6 +13,16 @@ fails — operators see the failure in `kubectl get jobs` and in
 notify (the Job-failed alert from the health watcher).
 */ -}}
 {{- if and .Values.backup.schedule (eq .Values.kind "postgres") (not .Values.external) (not .Values.useInstanceAddon) }}
+{{- /*
+  Note (v0.7.x bugfix): POSTGRES_HOST used to be "<release>-postgresql"
+  but the actual Service is just <release> (see postgres.yaml service
+  name). Backups have been silently failing on DNS resolution since
+  the chart shipped — fixed below by using kusoaddon.fullname directly.
+
+  Retention: a separate prune step lists s3://.../<project>/<addon>/
+  and deletes objects older than .Values.backup.retentionDays. Without
+  this the bucket grew unbounded.
+*/ -}}
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -33,7 +43,7 @@ spec:
         metadata:
           labels:
             kuso.sislelabs.com/role: backup
-            kuso.sislelabs.com/addon: {{ .Values.name | quote }}
+            kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
             kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
         spec:
           restartPolicy: OnFailure
@@ -44,21 +54,50 @@ spec:
               command: [sh, -c]
               args:
                 - |
-                  set -e
+                  set -eu
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
+                  PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
                   PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump \
                     -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" \
                     | gzip \
                     | aws s3 cp --endpoint-url "${S3_ENDPOINT}" - "s3://${BUCKET}/${KEY}"
+                  echo "==> upload done"
+
+                  # Retention prune. List existing dumps, drop ones
+                  # older than RETENTION_DAYS. We keep the logic in the
+                  # cronjob (rather than relying on bucket lifecycle)
+                  # because some S3-compat backends (Wasabi, B2) don't
+                  # support lifecycle rules consistently.
+                  if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
+                    CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
+                             || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
+                    echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
+                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                      | awk '{print $1, $2, $4}' \
+                      | while read date time name; do
+                          [ -z "${name}" ] && continue
+                          obj_ts=$(date -u -d "${date}T${time}Z" +%s 2>/dev/null || echo 0)
+                          if [ "${obj_ts}" -gt 0 ] && [ "${obj_ts}" -lt "${CUTOFF}" ]; then
+                            echo "    rm s3://${BUCKET}/${PREFIX}${name}"
+                            aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
+                          fi
+                        done
+                  fi
                   echo "==> done"
               env:
                 - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
-                - { name: ADDON,   value: {{ .Values.name    | quote }} }
-                - { name: POSTGRES_HOST, value: {{ printf "%s-postgresql" (include "kusoaddon.fullname" .) | quote }} }
+                - { name: ADDON,   value: {{ .Release.Name | quote }} }
+                # POSTGRES_HOST points at the in-cluster Service. The
+                # Service name is just <release> (see postgres.yaml
+                # spec.serviceName); the historical "-postgresql" suffix
+                # was wrong and caused all backups to fail with DNS
+                # resolution errors.
+                - { name: POSTGRES_HOST, value: {{ include "kusoaddon.fullname" . | quote }} }
                 - { name: POSTGRES_USER, value: {{ default "kuso" .Values.username | quote }} }
                 - { name: POSTGRES_DB,   value: {{ default "kuso" .Values.database | quote }} }
+                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
                 - name: POSTGRES_PASSWORD
                   valueFrom:
                     secretKeyRef:

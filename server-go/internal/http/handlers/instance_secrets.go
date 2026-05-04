@@ -44,6 +44,9 @@ func (h *InstanceSecretsHandler) Mount(r chi.Router) {
 // ListAddons returns every registered instance addon with the host
 // + port parsed out of the DSN. Never returns the password.
 func (h *InstanceSecretsHandler) ListAddons(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := instanceSecretsCtx(r)
 	defer cancel()
 	addons, err := h.Svc.ListInstanceAddons(ctx)
@@ -62,6 +65,9 @@ type registerInstanceAddonBody struct {
 // RegisterAddon stores a superuser DSN for a named instance addon.
 // Idempotent — re-registering the same name overwrites the DSN.
 func (h *InstanceSecretsHandler) RegisterAddon(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	var body registerInstanceAddonBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -80,6 +86,9 @@ func (h *InstanceSecretsHandler) RegisterAddon(w http.ResponseWriter, r *http.Re
 // touch any project's KusoAddon CR — the caller is responsible for
 // preflighting.
 func (h *InstanceSecretsHandler) UnregisterAddon(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := instanceSecretsCtx(r)
 	defer cancel()
 	if err := h.Svc.UnregisterInstanceAddon(ctx, chi.URLParam(r, "name")); err != nil {
@@ -94,6 +103,9 @@ func instanceSecretsCtx(r *http.Request) (context.Context, context.CancelFunc) {
 }
 
 func (h *InstanceSecretsHandler) List(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := instanceSecretsCtx(r)
 	defer cancel()
 	keys, err := h.Svc.ListKeys(ctx)
@@ -110,6 +122,9 @@ type setInstanceSecretBody struct {
 }
 
 func (h *InstanceSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	var body setInstanceSecretBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -129,6 +144,9 @@ func (h *InstanceSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *InstanceSecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := instanceSecretsCtx(r)
 	defer cancel()
 	if err := h.Svc.UnsetKey(ctx, chi.URLParam(r, "key")); err != nil {

@@ -12,12 +12,14 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
 
 // AddonsHandler exposes the /api/projects/:p/addons routes.
 type AddonsHandler struct {
 	Svc    *addons.Service
+	DB     *db.DB
 	Logger *slog.Logger
 }
 
@@ -54,6 +56,9 @@ func (h *AddonsHandler) Mount(r chi.Router) {
 func (h *AddonsHandler) RepairPassword(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+		return
+	}
 	if err := h.Svc.RepairPassword(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
 		h.fail(w, "repair addon password", err)
 		return
@@ -66,6 +71,9 @@ func (h *AddonsHandler) RepairPassword(w http.ResponseWriter, r *http.Request) {
 func (h *AddonsHandler) ResyncInstance(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+		return
+	}
 	if err := h.Svc.ResyncInstanceAddon(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
 		h.fail(w, "resync instance addon", err)
 		return
@@ -78,6 +86,9 @@ func (h *AddonsHandler) ResyncInstance(w http.ResponseWriter, r *http.Request) {
 func (h *AddonsHandler) ResyncExternal(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	if err := h.Svc.ResyncExternal(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
 		h.fail(w, "resync external addon", err)
 		return
@@ -92,6 +103,11 @@ func (h *AddonsHandler) ResyncExternal(w http.ResponseWriter, r *http.Request) {
 func (h *AddonsHandler) Secret(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
+	// Plaintext connection values — Deployer minimum so Viewers don't
+	// see DB passwords.
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	values, err := h.Svc.SecretValues(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"))
 	if err != nil {
 		h.fail(w, "addon secret", err)
@@ -106,6 +122,9 @@ func (h *AddonsHandler) Secret(w http.ResponseWriter, r *http.Request) {
 func (h *AddonsHandler) SecretKeys(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
 	keys, err := h.Svc.SecretKeys(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"))
 	if err != nil {
 		h.fail(w, "addon secret keys", err)
@@ -121,6 +140,9 @@ func addonsCtx(r *http.Request) (context.Context, context.CancelFunc) {
 func (h *AddonsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
 	out, err := h.Svc.List(ctx, chi.URLParam(r, "project"))
 	if err != nil {
 		h.fail(w, "list addons", err)
@@ -137,6 +159,9 @@ func (h *AddonsHandler) Add(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+		return
+	}
 	out, err := h.Svc.Add(ctx, chi.URLParam(r, "project"), req)
 	if err != nil {
 		h.fail(w, "add addon", err)
@@ -156,6 +181,9 @@ func (h *AddonsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+		return
+	}
 	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"), body)
 	if err != nil {
 		h.fail(w, "update addon", err)
@@ -175,6 +203,9 @@ func (h *AddonsHandler) Placement(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+		return
+	}
 	// Pass nil when both fields are empty so the server stores no
 	// placement at all (and the helm chart skips the nodeSelector
 	// block) instead of an empty struct that some clients might
@@ -193,6 +224,9 @@ func (h *AddonsHandler) Placement(w http.ResponseWriter, r *http.Request) {
 func (h *AddonsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+		return
+	}
 	if err := h.Svc.Delete(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
 		h.fail(w, "delete addon", err)
 		return

@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 
@@ -223,13 +224,24 @@ func alertToggle(id string, on bool) error {
 	if api == nil {
 		return fmt.Errorf("not logged in; run 'kuso login' first")
 	}
+	// resp() must check err BEFORE dereferencing r — when resty's
+	// transport fails (TCP refused, DNS, TLS), it returns (nil, err)
+	// and r.StatusCode() panics with a nil pointer. The previous code
+	// always dereferenced r on the same line as `return`, which made
+	// `kuso alert {enable,disable}` panic with a Go stack trace
+	// instead of printing "connection refused" cleanly.
 	var resp = func() (statusBody, error) {
+		var r *resty.Response
+		var err error
 		if on {
-			r, err := api.EnableAlert(id)
-			return statusBody{r.StatusCode(), r.Body()}, err
+			r, err = api.EnableAlert(id)
+		} else {
+			r, err = api.DisableAlert(id)
 		}
-		r, err := api.DisableAlert(id)
-		return statusBody{r.StatusCode(), r.Body()}, err
+		if err != nil {
+			return statusBody{}, err
+		}
+		return statusBody{r.StatusCode(), r.Body()}, nil
 	}
 	r, err := resp()
 	if err != nil {

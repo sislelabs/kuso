@@ -11,12 +11,14 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"kuso/server/internal/builds"
+	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
 
 // BuildsHandler exposes the build list + trigger routes for a service.
 type BuildsHandler struct {
 	Svc    *builds.Service
+	DB     *db.DB
 	Logger *slog.Logger
 }
 
@@ -33,6 +35,9 @@ func (h *BuildsHandler) Mount(r chi.Router) {
 func (h *BuildsHandler) Rollback(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := buildsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	out, err := h.Svc.Rollback(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "build"))
 	if err != nil {
 		// Reuse the existing fail() — handles phase + missing-image
@@ -108,6 +113,9 @@ func toBuildSummary(b kube.KusoBuild) buildSummary {
 func (h *BuildsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := buildsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
 	raw, err := h.Svc.List(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"))
 	if err != nil {
 		h.fail(w, "list builds", err)
@@ -133,6 +141,9 @@ func (h *BuildsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := buildsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	out, err := h.Svc.Create(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
 	if err != nil {
 		h.fail(w, "create build", err)

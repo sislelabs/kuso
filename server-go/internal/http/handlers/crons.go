@@ -17,10 +17,12 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"kuso/server/internal/crons"
+	"kuso/server/internal/db"
 )
 
 type CronsHandler struct {
 	Svc    *crons.Service
+	DB     *db.DB
 	Logger *slog.Logger
 }
 
@@ -39,6 +41,9 @@ func (h *CronsHandler) Mount(r chi.Router) {
 func (h *CronsHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	out, err := h.Svc.SyncFromService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "name"))
 	if err != nil {
 		h.fail(w, "sync cron", err)
@@ -54,6 +59,9 @@ func cronsCtx(r *http.Request) (context.Context, context.CancelFunc) {
 func (h *CronsHandler) ListForProject(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
 	out, err := h.Svc.List(ctx, chi.URLParam(r, "project"))
 	if err != nil {
 		h.fail(w, "list crons", err)
@@ -65,6 +73,9 @@ func (h *CronsHandler) ListForProject(w http.ResponseWriter, r *http.Request) {
 func (h *CronsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
 	out, err := h.Svc.ListForService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"))
 	if err != nil {
 		h.fail(w, "list crons", err)
@@ -76,6 +87,9 @@ func (h *CronsHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *CronsHandler) Get(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
 	out, err := h.Svc.Get(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "name"))
 	if err != nil {
 		h.fail(w, "get cron", err)
@@ -92,6 +106,9 @@ func (h *CronsHandler) Add(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	out, err := h.Svc.Add(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
 	if err != nil {
 		h.fail(w, "add cron", err)
@@ -108,6 +125,9 @@ func (h *CronsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "name"), req)
 	if err != nil {
 		h.fail(w, "update cron", err)
@@ -119,6 +139,9 @@ func (h *CronsHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *CronsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	if err := h.Svc.Delete(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "name")); err != nil {
 		h.fail(w, "delete cron", err)
 		return

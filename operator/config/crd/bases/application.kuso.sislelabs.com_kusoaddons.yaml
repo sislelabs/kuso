@@ -79,8 +79,24 @@ spec:
                 resources:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
-                password:
-                  type: string
+                # password: REMOVED in v0.7.x. Plaintext passwords on
+                # the CR were persisted in etcd and visible to anyone
+                # with `kubectl get kusoaddon -o yaml`. Generated
+                # passwords now live in <release>-conn (a real K8s
+                # Secret) and are never round-tripped through the CR.
+                # To bring your own password, create a Secret manually
+                # and reference it via passwordSecret below.
+                passwordSecret:
+                  type: object
+                  description: |
+                    Reference an existing Secret containing the addon
+                    password. The chart copies the value at install
+                    time into <release>-conn instead of generating
+                    a random one. Leave unset to let the chart
+                    generate a random 24-char password.
+                  properties:
+                    name: { type: string }
+                    key:  { type: string, default: password }
                 database:
                   type: string
                 backup:

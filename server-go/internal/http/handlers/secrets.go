@@ -10,12 +10,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/db"
 	"kuso/server/internal/secrets"
 )
 
 // SecretsHandler exposes per-service secret routes.
 type SecretsHandler struct {
 	Svc    *secrets.Service
+	DB     *db.DB
 	Logger *slog.Logger
 }
 
@@ -36,6 +38,9 @@ func (h *SecretsHandler) List(w http.ResponseWriter, r *http.Request) {
 	env := r.URL.Query().Get("env")
 	ctx, cancel := secretsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	keys, err := h.Svc.ListKeys(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env)
 	if err != nil {
 		h.fail(w, "list secrets", err)
@@ -69,6 +74,9 @@ func (h *SecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := secretsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	if err := h.Svc.SetKey(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req.Env, req.Key, req.Value); err != nil {
 		h.fail(w, "set secret", err)
 		return
@@ -82,6 +90,9 @@ func (h *SecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
 	env := r.URL.Query().Get("env")
 	ctx, cancel := secretsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
 	if err := h.Svc.UnsetKey(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env, chi.URLParam(r, "key")); err != nil {
 		h.fail(w, "unset secret", err)
 		return

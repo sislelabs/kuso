@@ -37,6 +37,9 @@ func alertsCtx(r *http.Request) (context.Context, context.CancelFunc) {
 }
 
 func (h *AlertsHandler) List(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := alertsCtx(r)
 	defer cancel()
 	out, err := h.DB.ListAlertRules(ctx)
@@ -61,6 +64,9 @@ type createAlertBody struct {
 }
 
 func (h *AlertsHandler) Create(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	var body createAlertBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -109,6 +115,9 @@ func (h *AlertsHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AlertsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := alertsCtx(r)
 	defer cancel()
 	if err := h.DB.DeleteAlertRule(ctx, chi.URLParam(r, "id")); err != nil {
@@ -127,6 +136,9 @@ func (h *AlertsHandler) Disable(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AlertsHandler) toggle(w http.ResponseWriter, r *http.Request, on bool) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := alertsCtx(r)
 	defer cancel()
 	if err := h.DB.SetAlertEnabled(ctx, chi.URLParam(r, "id"), on); err != nil {

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
@@ -123,8 +124,7 @@ func (h *OAuthHandler) GithubCallback(w http.ResponseWriter, r *http.Request) {
 			})
 		}
 	}
-	setJWTCookie(w, jwt)
-	http.Redirect(w, r, "/", http.StatusFound)
+	redirectWithJWT(w, r, jwt)
 }
 
 // OAuth2Start kicks off the generic OAuth2 flow.
@@ -161,8 +161,7 @@ func (h *OAuthHandler) OAuth2Callback(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "issue jwt", err)
 		return
 	}
-	setJWTCookie(w, jwt)
-	http.Redirect(w, r, "/", http.StatusFound)
+	redirectWithJWT(w, r, jwt)
 }
 
 // upsertAndIssueWithInvite is the invite-aware wrapper. When the
@@ -370,21 +369,41 @@ func verifyStateCookie(r *http.Request) bool {
 	return r.URL.Query().Get("state") == c.Value
 }
 
-// setJWTCookie writes the kuso.JWT_TOKEN cookie matching the TS server's
-// shape. SameSite=Lax + Secure so the browser only sends it over TLS.
+// setJWTCookie writes the kuso.JWT_TOKEN cookie used by the WebSocket
+// log tail (which needs the bearer in a header the SPA can't set).
 //
-// HttpOnly is intentionally false: the SPA reads this cookie from JS
-// (vue3-cookies) to attach it as an Authorization: Bearer header on
-// every /api request. Making it HttpOnly here breaks the entire SPA
-// after OAuth login — the browser holds the cookie but the SPA can't
-// see it, so every /api/* call comes back 401.
+// HttpOnly is true now — XSS in the SPA can no longer steal the
+// session token. The SPA receives the JWT via a URL fragment after
+// OAuth (see redirectWithJWT) and stores it in localStorage; api()
+// reads localStorage directly. The cookie exists only as a server-
+// readable bearer for the WS handshake, where the browser can't
+// send Authorization headers.
+//
+// Secure: true means the browser only ships the cookie over TLS.
+// SameSite=Lax keeps the OAuth-callback redirect path working while
+// blocking cross-site CSRF.
 func setJWTCookie(w http.ResponseWriter, jwt string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "kuso.JWT_TOKEN", Value: jwt, Path: "/",
-		HttpOnly: false, SameSite: http.SameSiteLaxMode,
+		HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		Secure: true,
 		MaxAge: 36000,
 	})
+}
+
+// redirectWithJWT replaces the legacy "set cookie + redirect to /"
+// pattern. Instead of writing a JS-readable cookie that an XSS could
+// exfiltrate, we put the JWT in a URL fragment (#token=…). The
+// fragment never reaches the server in subsequent requests, so it's
+// not logged or proxied; the SPA reads it once on the landing page,
+// stores in localStorage, and replaces history.state to scrub it
+// from window.location. The cookie is still set (HttpOnly) for the
+// WS log tail handshake.
+func redirectWithJWT(w http.ResponseWriter, r *http.Request, jwt string) {
+	setJWTCookie(w, jwt)
+	// URL-encode the JWT to avoid any reserved-char surprises.
+	target := "/#token=" + url.QueryEscape(jwt)
+	http.Redirect(w, r, target, http.StatusFound)
 }
 
 func randomHex(n int) string {

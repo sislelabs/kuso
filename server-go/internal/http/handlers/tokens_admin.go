@@ -38,6 +38,9 @@ func tokAdminCtx(r *http.Request) (context.Context, context.CancelFunc) {
 }
 
 func (h *TokensAdminHandler) ListAll(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	ctx, cancel := tokAdminCtx(r)
 	defer cancel()
 	rows, err := h.DB.ListAllTokens(ctx)
@@ -65,6 +68,9 @@ func (h *TokensAdminHandler) ListAll(w http.ResponseWriter, r *http.Request) {
 // IssueForUser mints a token JWT for an arbitrary user. Admin-only.
 // Body shape mirrors the user-self path: {name, expiresAt}.
 func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	var req struct {
 		Name      string `json:"name"`
 		ExpiresAt string `json:"expiresAt"`
@@ -146,6 +152,9 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 }
 
 func (h *TokensAdminHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	ctx, cancel := tokAdminCtx(r)
 	defer cancel()
 	if err := h.DB.DeleteToken(ctx, chi.URLParam(r, "id")); err != nil {

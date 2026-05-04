@@ -38,6 +38,9 @@ func rolesCtx(r *http.Request) (context.Context, context.CancelFunc) {
 // ListWithPermissions returns every role with its inlined permission
 // rows, matching the shape the role-edit page consumes.
 func (h *RolesHandler) ListWithPermissions(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	ctx, cancel := rolesCtx(r)
 	defer cancel()
 	out, err := h.DB.ListRolesWithPermissions(ctx)
@@ -65,6 +68,9 @@ type roleRequest struct {
 }
 
 func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	var req roleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
@@ -84,6 +90,9 @@ func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	var req roleRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
 		http.Error(w, "name required", http.StatusBadRequest)
@@ -105,6 +114,9 @@ func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RolesHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	ctx, cancel := rolesCtx(r)
 	defer cancel()
 	if err := h.DB.DeleteRole(ctx, chi.URLParam(r, "id")); err != nil {

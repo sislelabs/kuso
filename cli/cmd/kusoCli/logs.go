@@ -122,10 +122,18 @@ func streamLogs(project, service, env string, tail int) error {
 
 	// ^C unwinds cleanly. Without this the CLI hangs on the
 	// blocking ReadJSON loop and the user has to send SIGKILL.
+	// signaled tracks whether the close came from a signal handler
+	// vs. a remote/transport failure — only the former should exit 0.
+	// The previous code returned nil on every ReadJSON error, so a
+	// CI script piping `kuso logs -f service > log.txt` couldn't tell
+	// a clean unsubscribe from a network blip and had to scrape the
+	// output to detect failure.
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	signaled := make(chan struct{})
 	go func() {
 		<-sigCh
+		close(signaled)
 		_ = conn.Close()
 	}()
 
@@ -138,10 +146,18 @@ func streamLogs(project, service, env string, tail int) error {
 			Value  string `json:"value,omitempty"`
 		}
 		if err := conn.ReadJSON(&f); err != nil {
+			select {
+			case <-signaled:
+				// User-initiated stop. Exit clean.
+				return nil
+			default:
+			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
 				return nil
 			}
-			return nil // signal-induced close looks the same; just exit quietly
+			// Surface every other failure as a non-zero exit so CI
+			// scripts can detect a broken stream.
+			return fmt.Errorf("ws read: %w", err)
 		}
 		switch f.Type {
 		case "log":

@@ -6,9 +6,38 @@ import (
 	"os"
 	"sort"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 )
+
+// checkRespErr converts a (resty.Response, err) pair into a single
+// actionable error, treating non-2xx status codes as failures the
+// caller MUST surface. The original `get` commands fed every response
+// — including 401 error envelopes — straight into json.Unmarshal,
+// which silently produced empty result lists. CI scripts piping the
+// output through jq saw "[]" and assumed the project was empty
+// instead of "your token expired."
+func checkRespErr(resp *resty.Response, err error) error {
+	if err != nil {
+		return err
+	}
+	if resp == nil {
+		return fmt.Errorf("nil response")
+	}
+	if resp.StatusCode() >= 300 {
+		body := string(resp.Body())
+		if body == "" {
+			body = resp.Status()
+		}
+		// 401 deserves a more useful pointer than the raw "unauthorized".
+		if resp.StatusCode() == 401 {
+			return fmt.Errorf("server returned 401: %s — run `kuso login` to refresh the token", body)
+		}
+		return fmt.Errorf("server returned %d: %s", resp.StatusCode(), body)
+	}
+	return nil
+}
 
 // getCmd is the agent-friendly read entrypoint. v0.2 surfaces:
 //   kuso get projects [-o json]
@@ -38,7 +67,7 @@ var getProjectsCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.GetProjects()
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("fetch projects: %w", err)
 		}
 		var items []map[string]any
@@ -87,7 +116,7 @@ var getServicesCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.GetServices(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("fetch services: %w", err)
 		}
 		var items []map[string]any
@@ -134,7 +163,7 @@ var getEnvsCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.GetEnvironments(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("fetch environments: %w", err)
 		}
 		var items []map[string]any
@@ -180,7 +209,7 @@ var getAddonsCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.GetAddonsForProject(args[0])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("fetch addons: %w", err)
 		}
 		var items []map[string]any

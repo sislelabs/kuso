@@ -1,3 +1,78 @@
+---
+# ServiceAccount + RBAC for the kuso-server pod.
+# The previous deploy bundle relied on hack/install.sh inlining these
+# at first install — but anyone running `kubectl apply -f deploy/`
+# directly (e.g. to redeploy server-go without re-running the installer)
+# got a Deployment that hangs forever on `serviceaccount "kuso-server"
+# not found`. Including them here makes the bundle self-sufficient.
+#
+# The cluster-wide grant is tighter than the install.sh historical
+# `cluster-admin` binding: only the verbs the server actually needs,
+# scoped to the resources we manage. Tighten further once we land
+# the namespace-scoped split tracked for v0.8.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuso-server
+  namespace: kuso
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kuso-server
+rules:
+  # Kuso CRDs we own.
+  - apiGroups: [application.kuso.sislelabs.com]
+    resources:
+      [kusoprojects, kusoservices, kusoenvironments, kusoaddons,
+       kusobuilds, kusocrons]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [application.kuso.sislelabs.com]
+    resources:
+      [kusoprojects/status, kusoservices/status, kusoenvironments/status,
+       kusoaddons/status, kusobuilds/status, kusocrons/status]
+    verbs: [get, update, patch]
+  # Kube-native resources we read/write to manage tenants.
+  - apiGroups: [""]
+    resources: [namespaces, services, configmaps, secrets, pods, events,
+                persistentvolumeclaims, nodes, nodes/status]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [""]
+    resources: [pods/log, pods/exec, pods/portforward]
+    verbs: [get, list, create]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, replicasets]
+    verbs: [get, list, watch, patch, update]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch]
+  - apiGroups: [helm.cattle.io]
+    resources: [helmcharts]
+    verbs: [get, list, watch]
+  # Metrics for the per-node sparkline + alert engine.
+  - apiGroups: [metrics.k8s.io]
+    resources: [nodes, pods]
+    verbs: [get, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kuso-server
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kuso-server
+subjects:
+  - kind: ServiceAccount
+    name: kuso-server
+    namespace: kuso
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

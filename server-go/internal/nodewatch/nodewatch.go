@@ -110,6 +110,16 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 }
 
+// pendingAction is a deferred kube/notify side effect produced by the
+// state-machine pass under the lock. We collect them and dispatch
+// after releasing w.mu so a slow kube apiserver can't pin the mutex
+// for the full 15-second list-context timeout.
+type pendingAction struct {
+	kind string // "cordon" | "uncordon"
+	node *corev1.Node
+	emit notify.Event
+}
+
 func (w *Watcher) tick(ctx context.Context) {
 	listCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -119,27 +129,27 @@ func (w *Watcher) tick(ctx context.Context) {
 		return
 	}
 	now := time.Now().UTC()
+
+	// Pure state-machine pass under the lock — no kube calls, no
+	// Notify.Emit. We mutate w.notReadySince and w.alerted, recording
+	// any cordon/uncordon/notify actions to apply after unlocking.
+	var actions []pendingAction
 	w.mu.Lock()
-	defer w.mu.Unlock()
 	seen := map[string]struct{}{}
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
 		seen[n.Name] = struct{}{}
 		ready := isReady(n)
 		if ready {
-			// Healthy. If we previously marked this node as unreachable,
-			// uncordon (only if WE cordoned) + emit recovery.
 			delete(w.notReadySince, n.Name)
 			if _, was := w.alerted[n.Name]; was {
 				delete(w.alerted, n.Name)
-				if err := w.uncordonIfOurs(ctx, n); err != nil {
-					w.Logger.Warn("nodewatch uncordon", "node", n.Name, "err", err)
-				}
-				w.Notify.Emit(notify.NodeRecovered(n.Name))
+				actions = append(actions, pendingAction{
+					kind: "uncordon", node: n, emit: notify.NodeRecovered(n.Name),
+				})
 			}
 			continue
 		}
-		// NotReady. Track since-time.
 		first, ok := w.notReadySince[n.Name]
 		if !ok {
 			w.notReadySince[n.Name] = now
@@ -151,18 +161,15 @@ func (w *Watcher) tick(ctx context.Context) {
 		if now.Sub(first) < w.Config.threshold() {
 			continue
 		}
-		// Crossed the threshold. Cordon + alert (once).
-		if err := w.cordon(ctx, n); err != nil {
-			w.Logger.Warn("nodewatch cordon", "node", n.Name, "err", err)
-			// Don't mark alerted on cordon failure — try again next tick
-			// so the eventual fix surfaces.
-			continue
-		}
+		// We DO mark alerted optimistically here so subsequent ticks
+		// don't pile up redundant cordon attempts during a slow kube
+		// apiserver. The post-unlock dispatcher rolls back the alerted
+		// flag on cordon failure to keep the original retry semantics.
 		w.alerted[n.Name] = struct{}{}
-		w.Notify.Emit(notify.NodeUnreachable(n.Name, reasonFor(n)))
+		actions = append(actions, pendingAction{
+			kind: "cordon", node: n, emit: notify.NodeUnreachable(n.Name, reasonFor(n)),
+		})
 	}
-	// Clean up state for nodes that were deleted out from under us
-	// (operator hit Remove, or a controller-driven cleanup).
 	for k := range w.notReadySince {
 		if _, ok := seen[k]; !ok {
 			delete(w.notReadySince, k)
@@ -171,6 +178,31 @@ func (w *Watcher) tick(ctx context.Context) {
 	for k := range w.alerted {
 		if _, ok := seen[k]; !ok {
 			delete(w.alerted, k)
+		}
+	}
+	w.mu.Unlock()
+
+	// Dispatch deferred actions outside the lock. Any one of these can
+	// block on a slow kube apiserver — that's fine now because nothing
+	// else needs w.mu while we wait.
+	for _, a := range actions {
+		switch a.kind {
+		case "cordon":
+			if err := w.cordon(ctx, a.node); err != nil {
+				w.Logger.Warn("nodewatch cordon", "node", a.node.Name, "err", err)
+				// Roll back the optimistic alerted mark so the next
+				// tick retries.
+				w.mu.Lock()
+				delete(w.alerted, a.node.Name)
+				w.mu.Unlock()
+				continue
+			}
+			w.Notify.Emit(a.emit)
+		case "uncordon":
+			if err := w.uncordonIfOurs(ctx, a.node); err != nil {
+				w.Logger.Warn("nodewatch uncordon", "node", a.node.Name, "err", err)
+			}
+			w.Notify.Emit(a.emit)
 		}
 	}
 }

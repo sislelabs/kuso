@@ -55,6 +55,9 @@ type createUserRequest struct {
 }
 
 func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	var req createUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -90,6 +93,9 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UsersHandler) GetByUsername(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	ctx, cancel := usersCtx(r)
 	defer cancel()
 	u, err := h.DB.FindUserByUsername(ctx, chi.URLParam(r, "username"))
@@ -101,6 +107,9 @@ func (h *UsersHandler) GetByUsername(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UsersHandler) GetByID(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	ctx, cancel := usersCtx(r)
 	defer cancel()
 	u, err := h.DB.FindUserByID(ctx, chi.URLParam(r, "id"))
@@ -122,6 +131,9 @@ type updateUserRequest struct {
 }
 
 func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	var req updateUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -139,6 +151,9 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *UsersHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	ctx, cancel := usersCtx(r)
 	defer cancel()
 	if err := h.DB.DeleteUser(ctx, chi.URLParam(r, "id")); err != nil {
@@ -150,6 +165,9 @@ func (h *UsersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 
 // UpdatePassword (admin path) skips the current-password check.
 func (h *UsersHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
+	if !requireUserWrite(w, r) {
+		return
+	}
 	var body struct {
 		Password string `json:"password"`
 	}

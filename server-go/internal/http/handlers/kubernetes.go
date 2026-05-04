@@ -736,6 +736,9 @@ func nodeRoles(labels map[string]string) []string {
 // duration of the install (typically 30-90s), so the http server
 // keeps a long-poll context.
 func (h *KubernetesHandler) JoinNode(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	if h.Kube == nil {
 		http.Error(w, "kube client not wired", http.StatusServiceUnavailable)
 		return
@@ -802,6 +805,9 @@ func (h *KubernetesHandler) JoinNode(w http.ResponseWriter, r *http.Request) {
 // root/sudo, control-plane reachability, curl available, k3s presence.
 // Returns one entry per check so the UI can render a tidy list.
 func (h *KubernetesHandler) ValidateNode(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	var body struct {
 		nodejoin.Credentials
 		SSHKeyID string `json:"sshKeyId,omitempty"`
@@ -858,6 +864,9 @@ func (h *KubernetesHandler) resolveCreds(ctx context.Context, creds nodejoin.Cre
 // from the control plane only — the VM continues to exist as a dead
 // agent (operator's call: maybe the VM is already gone).
 func (h *KubernetesHandler) RemoveNode(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	name := chiURLParam(r, "name")
 	if name == "" {
 		http.Error(w, "missing node name", http.StatusBadRequest)
@@ -1001,6 +1010,9 @@ func drainNode(ctx context.Context, k *kube.Client, name string, force bool) err
 // future placement logic can pin services to specific
 // labels via spec.placement.
 func (h *KubernetesHandler) PutNodeLabels(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	name := chiURLParam(r, "name")
 	if name == "" {
 		http.Error(w, "missing node name", http.StatusBadRequest)

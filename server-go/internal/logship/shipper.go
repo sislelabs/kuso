@@ -52,6 +52,14 @@ type Shipper struct {
 	streams map[string]context.CancelFunc // podUID → cancel
 	buf     []db.LogLine
 	bufMu   sync.Mutex
+
+	// runCtx is the lifecycle context set by Run. Detached out-of-band
+	// flushes (kicked from append() when the buffer exceeds the batch
+	// threshold) use this so they get cancelled on shutdown — the
+	// previous code passed context.Background() and those goroutines
+	// kept running against a closed DB after Run returned, racing
+	// the graceful flush in the Run select loop.
+	runCtx context.Context
 }
 
 func New(d *db.DB, k *kube.Client, namespace string, logger *slog.Logger) *Shipper {
@@ -74,6 +82,7 @@ func (s *Shipper) Run(ctx context.Context) {
 		s.Logger.Warn("logship: kube client unavailable, log shipping disabled")
 		return
 	}
+	s.runCtx = ctx
 	s.Logger.Info("logship starting", "namespace", s.Namespace, "retention", Retention)
 
 	// Periodic flusher — drain the buffer every flushInterval so
@@ -193,8 +202,21 @@ func (s *Shipper) append(l db.LogLine) {
 	s.bufMu.Unlock()
 	if shouldFlush {
 		// Out-of-band flush so a single noisy pod doesn't gate the
-		// rest of the system on the timed flush.
-		go s.flush(context.Background())
+		// rest of the system on the timed flush. Use the shipper's
+		// lifecycle ctx so this goroutine cancels cleanly on shutdown
+		// and doesn't race the graceful flush in Run's select loop.
+		ctx := s.runCtx
+		if ctx == nil {
+			// append called before Run set runCtx — shouldn't happen,
+			// but fall back to a short bounded context rather than
+			// the unbounded context.Background() (which prevented
+			// shutdown from interrupting an in-flight flush).
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+			go func() { defer cancel(); s.flush(ctx) }()
+			return
+		}
+		go s.flush(ctx)
 	}
 }
 

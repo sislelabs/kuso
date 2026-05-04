@@ -10,12 +10,14 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/db"
 	"kuso/server/internal/logs"
 )
 
 // LogsHandler exposes the log tail route.
 type LogsHandler struct {
 	Svc    *logs.Service
+	DB     *db.DB
 	Logger *slog.Logger
 }
 
@@ -37,10 +39,18 @@ func (h *LogsHandler) Tail(w http.ResponseWriter, r *http.Request) {
 	env := q.Get("env")
 	lines := 200
 	if n, err := strconv.Atoi(q.Get("lines")); err == nil && n > 0 {
+		// Cap to keep an authenticated user from sending ?lines=10M
+		// and OOM-ing the server while we buffer pod logs in memory.
+		if n > 2000 {
+			n = 2000
+		}
 		lines = n
 	}
 	ctx, cancel := logsCtx(r)
 	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
 	out, envName, err := h.Svc.Tail(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env, lines)
 	if err != nil {
 		switch {
