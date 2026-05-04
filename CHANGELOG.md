@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.16] — 2026-05-04
+
+### 🐛 Bug Fixes
+- Fix(release): resolve OPERATOR_VERSION before writing release.json ([2eabe1e](https://github.com/sislelabs/kuso/commit/2eabe1ecc13c1296f753155bdb8c5fc82f86630d))
+
 ## [0.7.15] — 2026-05-04
 
 ### 🐛 Bug Fixes
