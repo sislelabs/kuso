@@ -29,17 +29,16 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
       data-node-context
       onContextMenu={data.__onContext}
       className={cn(
-        // Fixed height (5 × 24px grid units) keeps addon nodes
-        // visually aligned with service nodes — the canvas's
-        // snapToGrid only locks corners, so without a fixed height
-        // a content-shorter addon and content-longer service drift
-        // apart vertically. flex column lets content breathe up to
-        // the cap and stays at the top.
+        // Half-height of service nodes (3 × 24px grid units, vs the
+        // service's 5). Addons have less to show — kind, version,
+        // optional secret name — so we let the canvas breathe by
+        // keeping them compact. Both still snap to the same grid so
+        // their tops align at the same y.
         // border-2 (vs border-1) so the status color (green/amber)
         // is unambiguously visible at canvas zoom — at 1px the
         // ready/pending state was barely distinguishable from the
         // surface lift.
-        "flex h-[120px] w-[220px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
+        "flex h-[72px] w-[220px] flex-col justify-center rounded-2xl border-2 bg-[var(--bg-elevated)] px-3 py-2 transition-colors cursor-pointer",
         // Hover wins over the green ready-border so the user gets a
         // clear "you're targeting this" affordance. Without the
         // explicit hover-on-ready rule the green stays put and the
@@ -61,11 +60,10 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
           </p>
         </div>
       </div>
-      {data.addon.status?.connectionSecret && (
-        <p className="mt-2 truncate font-mono text-[9px] text-[var(--text-tertiary)]">
-          secret: {data.addon.status.connectionSecret}
-        </p>
-      )}
+      {/* connectionSecret name was a separate line here; we removed
+          it to halve the node height. The user can still see the
+          secret name on the addon overlay panel + via `kuso get
+          addons`, so the canvas summary stays glanceable. */}
     </div>
   );
 }

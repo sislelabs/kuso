@@ -143,33 +143,31 @@
 }
 
 .dark {
-  /* Dark-mode palette: aubergine ground (#271F30) gets distinct hues
-     for each surface tier instead of one cold tonal slide. Cards step
-     into a cool navy derived from slate-blue #40476D — that cross-hue
-     break is what stops everything from looking like a single purple
-     wash. Sidebar uses the slate variant; popovers/cards another lift.
-     Periwinkle accents pop because the surrounding fields are navy,
-     not the same purple at lower lightness.
+  /* Dark-mode palette: aubergine ground + midnight-navy surfaces.
+     Cards drop into a near-black #011627 — the dark midnight kills
+     hue conflict with the warm aubergine ground while still lifting
+     above it. Logo's slate-blue (#40476D) stays in the toolkit as
+     the secondary CTA color, but isn't a surface anymore.
      Source palette (assigned roles):
        #271F30  aubergine        — ground (bg-primary)
-       #40476D  slate-blue       — surfaces (cards, sidebar, popovers)
-       #AFBBF2  periwinkle       — interactive accent + primary actions
+       #011627  midnight-navy    — surfaces (cards, sidebar, popovers)
+       #40476D  slate-blue       — secondary CTAs (Open, Cancel, nav)
+       #EB6534  orange           — primary CTAs (Save, Create, Deploy)
+       #AFBBF2  periwinkle       — borders / hover / focus rings
        #ACBEA3  sage             — success / active / online
-       #EB6534  orange           — warning / live / building
        #941B0C → #C9382A         — error (light variant for dark mode)
        #5B5941 → #9A9678         — secondary text (warm olive lifted) */
 
-  /* Surfaces: aubergine ground, dark slate-blue surfaces lifting
-     toward the logo's #40476D. Earlier iterations used a brighter
-     lifted variant that read too purple/washed; pulling the surfaces
-     back to the actual brand slate-blue gives the cards weight that
-     belongs on the page. The 3-step ladder is shadow / mid / exact
-     logo color so cards/popovers (the most attention-grabbing
-     surface) match the brand identity. */
+  /* Surfaces: aubergine ground, near-black midnight-navy cards.
+     #011627 has almost zero blue saturation — it reads as a deep
+     dark surface against the warm aubergine ground without trying
+     to be a "color" itself. The 3-step ladder lifts incrementally
+     toward the card surface so popovers/cards have weight without
+     looking like a separate brand color. */
   --bg-primary: #271F30;          /* aubergine — page ground */
-  --bg-secondary: #2A3050;        /* logo slate, shadow side — sidebar */
-  --bg-tertiary: #353B61;         /* logo slate, mid — hovered rows */
-  --bg-elevated: #40476D;         /* logo slate-blue exact — cards / popovers */
+  --bg-secondary: #021E33;        /* midnight, mid-shadow — sidebar */
+  --bg-tertiary: #02263E;         /* midnight, mid — hovered rows */
+  --bg-elevated: #011627;         /* midnight-navy exact — cards / popovers */
   --bg-inverse: #FBFBF7;
 
   /* Text: cream primary, warm-olive secondary (lifted from #5B5941),
@@ -207,14 +205,14 @@
   --btn-secondary-fg: #ECEAE0;
   --btn-secondary-border: #6E769D;
 
-  /* Borders form a 3-step ladder. Subtle is the ambient border on
-     resting cards/inputs, default is the section/divider weight,
-     strong is the hover/focus emphasis. The previous values sat too
-     close to the card surface (#464C6E) so cards looked unbordered.
-     These are deliberately ~15-20% brighter than the underlying card
-     so they register without dominating. */
-  --border-subtle: #5B6388;       /* +25 on lightness vs card */
-  --border-default: #6E769D;      /* mid-strength dividers */
+  /* Borders form a 3-step ladder against the new midnight-navy
+     surface. Subtle = ambient resting border on cards/inputs,
+     default = section dividers, strong = hover/focus emphasis.
+     Tuned so each step is visible against #011627 without being
+     loud — the surface is so dark that even a faint slate is
+     enough to register. */
+  --border-subtle: #1F3A52;       /* faint slate — ambient */
+  --border-default: #2D4F6E;      /* stronger slate — dividers */
   --border-strong: #AFBBF2;       /* periwinkle = hover/focus */
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
@@ -226,34 +224,33 @@
      get the slate-blue treatment without per-component overrides. */
   --background: #271F30;
   --foreground: #ECEAE0;
-  --card: #464C6E;                /* slate, lifted — cards */
+  --card: #011627;                /* midnight — cards */
   --card-foreground: #ECEAE0;
-  --popover: #464C6E;             /* same slate — popovers */
+  --popover: #011627;             /* same midnight — popovers */
   --popover-foreground: #ECEAE0;
   --primary: #AFBBF2;             /* periwinkle CTA */
   --primary-foreground: #271F30;
-  --secondary: #2E3349;           /* slate, shadow side */
+  --secondary: #021E33;           /* midnight, shadow side */
   --secondary-foreground: #ECEAE0;
-  --muted: #3A3F5C;               /* slate, mid */
+  --muted: #02263E;               /* midnight, mid */
   --muted-foreground: #B5B19A;    /* warm olive */
-  --accent-ui: #3A3F5C;
+  --accent-ui: #02263E;
   --accent-foreground: #ECEAE0;
   --destructive: #C9382A;         /* lifted from #941B0C */
-  --border: #6E769D;              /* matches --border-default */
-  --input: #3A3F5C;
+  --border: #2D4F6E;              /* matches --border-default */
+  --input: #02263E;               /* matches --bg-tertiary */
   --ring: #AFBBF2;
 
-  /* Sidebar gets its own slate to feel like a distinct rail vs. the
-     ground, but lighter than #2E3349 would compete with cards. We
-     deliberately use the SAME slate as --bg-secondary so the rail
-     reads as a layer of the same family. */
-  --sidebar: #2E3349;
+  /* Sidebar shares --bg-secondary so the rail reads as a layer of
+     the same family — slightly less dark than the cards but still
+     within the midnight-navy ladder. */
+  --sidebar: #021E33;
   --sidebar-foreground: #ECEAE0;
   --sidebar-primary: #AFBBF2;
   --sidebar-primary-foreground: #271F30;
-  --sidebar-accent: #3A3F5C;
+  --sidebar-accent: #02263E;
   --sidebar-accent-foreground: #ECEAE0;
-  --sidebar-border: #6E769D;
+  --sidebar-border: #2D4F6E;
   --sidebar-ring: #AFBBF2;
 
   /* Status hues — used by Badge, Toast, build/env state pills, etc.
