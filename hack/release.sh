@@ -508,9 +508,21 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
       # binaries. Doing it incrementally lets each upload retry
       # independently and keeps a partial release around to recover.
       if ! gh release view "$VERSION" >/dev/null 2>&1; then
-        gh release create "$VERSION" \
-          --title "$VERSION" \
-          --notes-file "$NOTES_FILE" >/dev/null
+        # GitHub's release-create endpoint occasionally 502s; retry
+        # a few times with backoff before giving up.
+        ok=0
+        for try in 1 2 3; do
+          if gh release create "$VERSION" \
+              --title "$VERSION" \
+              --notes-file "$NOTES_FILE" >/dev/null 2>&1; then
+            ok=1; break
+          fi
+          warn "gh release create attempt ${try}/3 failed; retrying"
+          sleep $((try * 3))
+        done
+        if [[ "$ok" != "1" ]]; then
+          fail "couldn't create GH release after 3 tries"
+        fi
       fi
       ALL_ASSETS=( "$DIST_DIR/release.json" "$DIST_DIR/crds.yaml" "${CLI_ASSETS[@]}" )
       for asset in "${ALL_ASSETS[@]}"; do
