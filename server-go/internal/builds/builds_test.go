@@ -219,6 +219,126 @@ func TestCreate_DedupsConcurrentSameSHA(t *testing.T) {
 	}
 }
 
+// TestCreate_SupersedesPriorInFlight verifies that creating a new
+// build for (project, service) cancels any older in-flight build for
+// the same pair. On a single-box install, two concurrent builds for
+// the same service will starve the kuso-server pod for CPU and OOM
+// the host (this is what we hit on v0.7.38 — three back-to-back
+// redeploys held three kaniko Jobs simultaneously and tipped load
+// avg past 13). The fix: stamp the predecessor as cancelled +
+// build-state=done and delete its Job.
+func TestCreate_SupersedesPriorInFlight(t *testing.T) {
+	t.Parallel()
+	const newRef = "1111111111111111111111111111111111111111"
+	const oldName = "alpha-web-deadbeefcafe"
+	prior := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      oldName,
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": "alpha",
+				"kuso.sislelabs.com/service": "alpha-web",
+				// Crucially: no `kuso.sislelabs.com/build-state`
+				// label — that's what the supersede selector looks
+				// for to identify in-flight builds.
+			},
+		},
+		Spec: kube.KusoBuildSpec{
+			Project: "alpha",
+			Service: "alpha-web",
+			Ref:     "deadbeefcafe",
+			Branch:  "main",
+		},
+	}
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+		seedBuild(prior),
+	)
+	// Seed the kaniko Job that the operator would have rendered for
+	// the prior build. The supersede helper should delete it.
+	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Create(context.Background(), &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: oldName, Namespace: "kuso"},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed prior job: %v", err)
+	}
+
+	got, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: newRef})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if got.Name == oldName {
+		t.Fatalf("new build should have a different name than prior, got %q", got.Name)
+	}
+
+	// Re-fetch the prior CR; it should now be marked cancelled.
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").Get(context.Background(), oldName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get prior: %v", err)
+	}
+	annos := raw.GetAnnotations()
+	if annos[annPhase] != "cancelled" {
+		t.Errorf("prior phase: got %q, want cancelled", annos[annPhase])
+	}
+	if annos[annSupersededBy] != got.Name {
+		t.Errorf("superseded-by: got %q, want %q", annos[annSupersededBy], got.Name)
+	}
+	if !strings.Contains(annos[annMessage], got.Name) {
+		t.Errorf("message: got %q, want it to mention %q", annos[annMessage], got.Name)
+	}
+	if raw.GetLabels()["kuso.sislelabs.com/build-state"] != "done" {
+		t.Errorf("build-state label: got %q, want done",
+			raw.GetLabels()["kuso.sislelabs.com/build-state"])
+	}
+	if annos[annCompletedAt] == "" {
+		t.Errorf("completed-at should be stamped")
+	}
+
+	// Prior Job should be gone.
+	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Get(context.Background(), oldName, metav1.GetOptions{}); err == nil {
+		t.Errorf("prior job still exists after supersede")
+	}
+}
+
+// TestCreate_SupersedeIgnoresUnrelatedServices guards against the
+// supersede logic accidentally cancelling builds belonging to a
+// different service in the same project. The label selector includes
+// the FQ service name (`<project>-<service>`), so a build for `alpha-
+// api` should be untouched when a new build for `alpha-web` arrives.
+func TestCreate_SupersedeIgnoresUnrelatedServices(t *testing.T) {
+	t.Parallel()
+	const newRef = "2222222222222222222222222222222222222222"
+	otherService := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alpha-api-aaaaaaaaaaaa",
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": "alpha",
+				"kuso.sislelabs.com/service": "alpha-api", // different service
+			},
+		},
+		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-api"},
+	}
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+		seedBuild(otherService),
+	)
+	if _, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: newRef}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").Get(context.Background(), "alpha-api-aaaaaaaaaaaa", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get other-service build: %v", err)
+	}
+	if phase := raw.GetAnnotations()[annPhase]; phase == "cancelled" {
+		t.Errorf("other-service build was wrongly superseded (phase=%q)", phase)
+	}
+	if state := raw.GetLabels()["kuso.sislelabs.com/build-state"]; state != "" {
+		t.Errorf("other-service build wrongly marked done (build-state=%q)", state)
+	}
+}
+
 // TestCreate_ConcurrencyCapBlocksAndTimesOut exercises the build
 // admission gate: when MaxConcurrentBuilds slots are held, a new
 // Create blocks for AdmitTimeout and then returns ErrConflict. This

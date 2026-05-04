@@ -49,10 +49,11 @@ const RegistryHost = "kuso-registry.kuso.svc.cluster.local:5000"
 // reconcile. Keys are namespaced under kuso.sislelabs.com/build-* so
 // they don't collide with anything else that ends up on the object.
 const (
-	annPhase       = "kuso.sislelabs.com/build-phase"
-	annCompletedAt = "kuso.sislelabs.com/build-completed-at"
-	annStartedAt   = "kuso.sislelabs.com/build-started-at"
-	annMessage     = "kuso.sislelabs.com/build-message"
+	annPhase         = "kuso.sislelabs.com/build-phase"
+	annCompletedAt   = "kuso.sislelabs.com/build-completed-at"
+	annStartedAt     = "kuso.sislelabs.com/build-started-at"
+	annMessage       = "kuso.sislelabs.com/build-message"
+	annSupersededBy  = "kuso.sislelabs.com/superseded-by"
 )
 
 // buildPhase returns the kuso-tracked phase from build annotations,
@@ -118,6 +119,12 @@ type Service struct {
 	// the first Create with no construction order dependency.
 	admitOnce sync.Once
 	admitSem  chan struct{}
+
+	// Notifier receives build.superseded events when a new build for
+	// the same (project, service) cancels an in-flight predecessor.
+	// Optional: nil → silent. The Poller has its own Notifier slot
+	// for build.{succeeded,failed} events.
+	Notifier EventEmitter
 }
 
 // inFlightEntry is the value side of inFlight: a channel that closes
@@ -239,6 +246,72 @@ func (s *Service) countActiveBuildsForProject(ctx context.Context, project strin
 		return 0
 	}
 	return len(raw.Items)
+}
+
+// supersedePriorBuilds finds any in-flight KusoBuild for (project, fqn)
+// other than newName, stamps it as cancelled, and tears down its kaniko
+// Job. Best-effort: kube errors are logged at warn and swallowed —
+// the new build still goes ahead. Stamping (not deleting) the prior CR
+// keeps build history intact so the canvas + builds list show the
+// cancelled outcome instead of a hole.
+func (s *Service) supersedePriorBuilds(ctx context.Context, ns, project, fqn, newName string) {
+	if s.Kube == nil {
+		return
+	}
+	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	selector := "kuso.sislelabs.com/project=" + project +
+		",kuso.sislelabs.com/service=" + fqn +
+		",!kuso.sislelabs.com/build-state"
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
+	if err != nil {
+		slog.Default().Warn("builds: list active for supersede", "err", err, "project", project, "service", fqn)
+		return
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	for i := range raw.Items {
+		name := raw.Items[i].GetName()
+		if name == newName {
+			continue
+		}
+		// Patch: phase=cancelled, build-state=done so helm-operator's
+		// watch-selector drops the CR + cleanup poller can prune it,
+		// superseded-by + a human-readable message for the UI.
+		patch := fmt.Sprintf(
+			`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:%q,%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}}}`,
+			annPhase,
+			annCompletedAt, now,
+			annSupersededBy, newName,
+			annMessage, "superseded by "+newName,
+		)
+		if _, perr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+			Patch(lctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {
+			slog.Default().Warn("builds: patch superseded", "err", perr, "build", name)
+			continue
+		}
+		// Tear down the kaniko Job. Background propagation deletes the
+		// pod too. NotFound is fine — the Job hadn't materialised yet
+		// (CR was created but operator hadn't reconciled), or the
+		// cleanup poller already got it.
+		bg := metav1.DeletePropagationBackground
+		if jerr := s.Kube.Clientset.BatchV1().Jobs(ns).Delete(lctx, name, metav1.DeleteOptions{
+			PropagationPolicy: &bg,
+		}); jerr != nil && !apierrors.IsNotFound(jerr) {
+			slog.Default().Warn("builds: delete superseded job", "err", jerr, "build", name)
+		}
+		if s.Notifier != nil {
+			s.Notifier.Emit(EventEnvelope{
+				Type:     "build.superseded",
+				Title:    fmt.Sprintf("⊘ Build superseded: %s", strings.TrimPrefix(fqn, project+"-")),
+				Body:     fmt.Sprintf("`%s` cancelled — replaced by `%s`", name, newName),
+				Project:  project,
+				Service:  strings.TrimPrefix(fqn, project+"-"),
+				Severity: "info",
+			})
+		}
+	}
 }
 
 // nsFor returns the execution namespace for project, defaulting to the
@@ -433,6 +506,18 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	defer release()
 
 	buildName := buildCRName(project, service, sha)
+
+	// Supersede any in-flight builds for this (project, service). A new
+	// build means whatever the previous one was producing is stale —
+	// keeping the old kaniko Job around just steals CPU/RAM from the
+	// new one (on a 2-vCPU box, the redeploy storm we hit on v0.7.38
+	// drove load avg past 13). Errors are logged at warn but don't
+	// block the new build: a stale predecessor that fails to cancel
+	// will still finish on its own and produce an obsolete-but-harmless
+	// image; the new build's image will overwrite the env tag once it
+	// promotes. Skipped on synthetic-ref retries — those go through
+	// the in-flight dedup path above.
+	s.supersedePriorBuilds(ctx, ns, project, fqn, buildName)
 	imageRepo := fmt.Sprintf("%s/%s/%s", RegistryHost, project, service)
 
 	// Strategy mirrors KusoService.spec.runtime. The chart switches on

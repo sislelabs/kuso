@@ -208,6 +208,11 @@ func main() {
 		// (e.g. 999); the envInt helper rejects 0 / negative.
 		buildSvc.MaxConcurrentBuilds = envInt("KUSO_BUILD_MAX_CONCURRENT", 2)
 		buildSvc.AdmitTimeout = time.Duration(envInt("KUSO_BUILD_ADMIT_TIMEOUT_SECONDS", 60)) * time.Second
+		// Notifier on Service emits build.superseded when a new build
+		// for the same (project, service) cancels an in-flight one.
+		// The Poller has its own Notifier slot for build.{succeeded,
+		// failed} events.
+		buildSvc.Notifier = notifyAdapter{notifyDisp}
 		logsSvc = logs.New(kc, *namespace)
 		cfgSvc = config.New(kc, *namespace)
 		statSvc = status.New(kc, 5*time.Minute)

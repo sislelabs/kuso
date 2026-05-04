@@ -179,6 +179,12 @@ function BuildLine({ build }: { build?: BuildSummary }) {
   } else if (status === "failed" || status === "error") {
     glyph = "✗";
     cls = "text-red-400";
+  } else if (status === "cancelled" || status === "superseded") {
+    // Distinct from failed (red) — the build didn't break, it was
+    // replaced by a newer one. Muted gray so a feed of redeploys
+    // doesn't read as a wall of red.
+    glyph = "⊘";
+    cls = "text-[var(--text-tertiary)]";
   } else if (status === "running" || status === "pending" || status === "building") {
     glyph = "…";
     cls = "text-[var(--building)]";
