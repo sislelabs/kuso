@@ -2,8 +2,10 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -46,14 +48,28 @@ func (h *UpdaterHandler) GetVersion(w http.ResponseWriter, r *http.Request) {
 // completion is observable via GetStatus. Failures here are
 // pre-flight (manifest missing, breaking change, etc); the actual
 // rollout failures land in the status ConfigMap.
+//
+// Body (optional): {"version":"vX.Y.Z"} pins the upgrade to a
+// specific tag — useful for re-running the same release, rolling
+// back, or applying a hotfix that's not yet "latest". An empty body
+// (or no version field) defaults to the cached "latest" path.
 func (h *UpdaterHandler) StartUpdate(w http.ResponseWriter, r *http.Request) {
 	if h.Svc == nil {
 		http.Error(w, "updater unavailable", http.StatusServiceUnavailable)
 		return
 	}
+	var body struct {
+		Version string `json:"version"`
+	}
+	// Decode best-effort. An empty body is fine — we treat "" as
+	// "use latest". Unknown fields are tolerated.
+	if r.ContentLength > 0 && r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	target := strings.TrimSpace(body.Version)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	jobName, err := h.Svc.StartUpdate(ctx)
+	jobName, err := h.Svc.StartUpdate(ctx, target)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

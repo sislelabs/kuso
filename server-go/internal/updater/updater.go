@@ -255,6 +255,89 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 	return m.Version, &m, nil
 }
 
+// fetchVersion is fetchLatest's pinned cousin. Given a tag like
+// "v0.7.13", grab the GH release by name and parse its release.json.
+// Used by StartUpdate when the caller passes an explicit version.
+//
+// Why no caching: pinned upgrades are rare (probably a fix-forward or
+// rollback), so we don't bother adding state. The 1-2s round-trip is
+// fine; the caller already accepted a multi-minute job anyway.
+func (s *Service) fetchVersion(ctx context.Context, version string) (*Manifest, error) {
+	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/tags/%s", s.Repo, version)
+	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("gh release: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, fmt.Errorf("no release tagged %s", version)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("gh release: status %d", resp.StatusCode)
+	}
+	var rel struct {
+		TagName string `json:"tag_name"`
+		Body    string `json:"body"`
+		Assets  []struct {
+			Name               string `json:"name"`
+			BrowserDownloadURL string `json:"browser_download_url"`
+		} `json:"assets"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return nil, fmt.Errorf("decode release: %w", err)
+	}
+	manifestURL := ""
+	for _, a := range rel.Assets {
+		if a.Name == "release.json" {
+			manifestURL = a.BrowserDownloadURL
+			break
+		}
+	}
+	if manifestURL == "" {
+		// No release.json for that version. Synthesize a minimal one;
+		// the updater image still knows how to roll the deploy from
+		// just the version tag. Worst case we miss the migration
+		// classification — pinned upgrades trust the user.
+		return &Manifest{
+			Version: rel.TagName,
+			Notes:   rel.Body,
+			Components: ManifestComponents{
+				Server:   ComponentRef{Image: fmt.Sprintf("ghcr.io/sislelabs/kuso-server-go:%s", rel.TagName)},
+				Operator: ComponentRef{Image: fmt.Sprintf("ghcr.io/sislelabs/kuso-operator:%s", rel.TagName)},
+			},
+			CRDs: ManifestCRDs{
+				URL: fmt.Sprintf("https://github.com/%s/releases/download/%s/crds.yaml", s.Repo, rel.TagName),
+			},
+		}, nil
+	}
+	mreq, _ := http.NewRequestWithContext(ctx, "GET", manifestURL, nil)
+	mresp, err := s.client.Do(mreq)
+	if err != nil {
+		return nil, fmt.Errorf("fetch manifest: %w", err)
+	}
+	defer mresp.Body.Close()
+	if mresp.StatusCode != 200 {
+		return nil, fmt.Errorf("manifest: status %d", mresp.StatusCode)
+	}
+	body, err := io.ReadAll(io.LimitReader(mresp.Body, 1<<20))
+	if err != nil {
+		return nil, fmt.Errorf("read manifest: %w", err)
+	}
+	var m Manifest
+	if err := json.Unmarshal(body, &m); err != nil {
+		return nil, fmt.Errorf("parse manifest: %w", err)
+	}
+	if m.Version == "" {
+		m.Version = rel.TagName
+	}
+	if m.Notes == "" {
+		m.Notes = rel.Body
+	}
+	return &m, nil
+}
+
 // canAutoUpgrade returns whether the user can hit "Update" without
 // reading docs, plus a reason if not. The server is conservative —
 // any "destructive" migration in the chain forces manual.
@@ -348,23 +431,40 @@ type UpdateStatus struct {
 // the Job name; the caller polls /api/system/update/status to track
 // progress (which reads the ConfigMap the Job writes to).
 //
-// We're deliberately strict: refuse to start if the cached state
-// says canAutoUpgrade=false. The /update endpoint surfaces
-// blockedReason so the UI can explain.
-func (s *Service) StartUpdate(ctx context.Context) (string, error) {
-	st := s.State()
-	if !st.NeedsUpdate {
-		return "", errors.New("already on latest")
-	}
-	if !st.CanAutoUpgrade {
-		return "", fmt.Errorf("auto-upgrade blocked: %s", st.BlockedReason)
-	}
+// targetVersion is "" for "latest" (the cached state from the
+// background ticker) or "vX.Y.Z" to pin to a specific tag. When pinned
+// we fetch the target release's manifest fresh — the cached state
+// might be stale or pointing at a different version. We also relax the
+// canAutoUpgrade gate when pinning, since the user is explicitly
+// asking for that exact release (they've presumably read the notes).
+// "Already on latest" is still enforced when no pin is given.
+func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string, error) {
 	if s.Kube == nil {
 		return "", errors.New("kube client unavailable")
 	}
-	m := st.Manifest
-	if m == nil {
-		return "", errors.New("no manifest cached")
+
+	var m *Manifest
+	if targetVersion != "" {
+		// Pinned upgrade: download that specific release's manifest.
+		// If the user is going from v0.7.12 → v0.7.13 (or even back to
+		// v0.7.10) we trust the explicit target.
+		fetched, err := s.fetchVersion(ctx, targetVersion)
+		if err != nil {
+			return "", fmt.Errorf("fetch %s: %w", targetVersion, err)
+		}
+		m = fetched
+	} else {
+		st := s.State()
+		if !st.NeedsUpdate {
+			return "", errors.New("already on latest")
+		}
+		if !st.CanAutoUpgrade {
+			return "", fmt.Errorf("auto-upgrade blocked: %s", st.BlockedReason)
+		}
+		m = st.Manifest
+		if m == nil {
+			return "", errors.New("no manifest cached — try ?version=vX.Y.Z to pin")
+		}
 	}
 
 	// Reset / create the status ConfigMap so the UI doesn't see a

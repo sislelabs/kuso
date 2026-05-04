@@ -3,6 +3,7 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -14,9 +15,15 @@ import (
 // polls /api/system/update/status until the rollout finishes.
 
 var (
-	upgradeCheck bool
-	upgradeForce bool
+	upgradeCheck   bool
+	upgradeForce   bool
+	upgradeVersion string
 )
+
+// versionRe matches vX.Y.Z, optionally with a dash-suffix. Used to
+// fail fast when --version is malformed instead of letting the server
+// 404 from gh.
+var versionRe = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+([-A-Za-z0-9.]+)?$`)
 
 var upgradeCmd = &cobra.Command{
 	Use:   "upgrade",
@@ -25,14 +32,23 @@ var upgradeCmd = &cobra.Command{
 
 Reads /api/system/version to find the latest GitHub release, then
 launches a kube Job that swaps the server image. Without --force,
-exits early when no update is available.`,
-	Example: `  kuso upgrade --check    # just print version state
-  kuso upgrade
-  kuso upgrade --force    # re-run even if already current`,
+exits early when no update is available.
+
+Pin to a specific release with --version vX.Y.Z. Useful for
+re-running the same release, rolling back, or pulling a hotfix
+that hasn't propagated to "latest" yet. Pinned upgrades skip the
+"needsUpdate" gate (the user explicitly asked for that tag).`,
+	Example: `  kuso upgrade --check               # just print version state
+  kuso upgrade                       # update to latest
+  kuso upgrade --version v0.7.13     # pin to a specific tag
+  kuso upgrade --force               # re-run even if already current`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if upgradeVersion != "" && !versionRe.MatchString(upgradeVersion) {
+			return fmt.Errorf("--version must look like vX.Y.Z (got %q)", upgradeVersion)
 		}
 		// Step 1: read current state.
 		resp, err := api.RawGet("/api/system/version")
@@ -52,23 +68,36 @@ exits early when no update is available.`,
 			return fmt.Errorf("decode version: %w", err)
 		}
 		fmt.Printf("Current: %s\n", v.Current)
-		if v.Latest != "" {
+		if upgradeVersion != "" {
+			fmt.Printf("Target:  %s (pinned)\n", upgradeVersion)
+		} else if v.Latest != "" {
 			fmt.Printf("Latest:  %s\n", v.Latest)
 		}
-		if v.Breaking {
+		if v.Breaking && upgradeVersion == "" {
 			fmt.Println("WARNING: latest release is marked breaking — review the changelog before upgrading.")
 		}
 		if upgradeCheck {
 			return nil
 		}
-		if !v.NeedsUpdate && !upgradeForce {
+		// Pinned upgrades short-circuit the "already up to date" check
+		// — the whole point of --version is to override that.
+		if upgradeVersion == "" && !v.NeedsUpdate && !upgradeForce {
 			fmt.Println("Already up to date.")
 			return nil
 		}
+		if upgradeVersion != "" && upgradeVersion == v.Current && !upgradeForce {
+			fmt.Printf("Already on %s.\n", upgradeVersion)
+			return nil
+		}
 
-		// Step 2: kick the Job.
+		// Step 2: kick the Job. Empty version = "latest" path on the
+		// server; non-empty pins the tag.
 		fmt.Println("Starting update job…")
-		startResp, err := api.RawPost("/api/system/update", nil, "application/json")
+		var bodyBytes []byte
+		if upgradeVersion != "" {
+			bodyBytes, _ = json.Marshal(map[string]string{"version": upgradeVersion})
+		}
+		startResp, err := api.RawPost("/api/system/update", bodyBytes, "application/json")
 		if err != nil {
 			return err
 		}
@@ -125,4 +154,5 @@ func init() {
 	rootCmd.AddCommand(upgradeCmd)
 	upgradeCmd.Flags().BoolVar(&upgradeCheck, "check", false, "only print version info, don't upgrade")
 	upgradeCmd.Flags().BoolVar(&upgradeForce, "force", false, "trigger update even if already current")
+	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "pin to a specific release tag (e.g. v0.7.13)")
 }
