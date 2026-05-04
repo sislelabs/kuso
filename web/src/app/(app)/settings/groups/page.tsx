@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Users, Plus, X, Save, ShieldCheck } from "lucide-react";
+import { Users, Plus, X, Save, ShieldCheck, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface Group {
@@ -95,43 +95,52 @@ export default function GroupsSettingsPage() {
             </button>
           </div>
           {creating && (
-            <div className="border-b border-[var(--border-subtle)] p-2">
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (newName.trim()) create.mutate(newName.trim());
+              }}
+              className="flex items-center gap-1 border-b border-[var(--border-subtle)] px-2 py-1.5"
+            >
               <Input
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 placeholder="group name"
-                className="h-7 text-[12px]"
+                className="h-7 flex-1 text-[12px]"
                 autoFocus
                 onKeyDown={(e) => {
-                  if (e.key === "Enter" && newName.trim()) create.mutate(newName.trim());
                   if (e.key === "Escape") {
                     setCreating(false);
                     setNewName("");
                   }
                 }}
               />
-              <div className="mt-1 flex gap-1">
-                <Button
-                  size="sm"
-                  type="button"
-                  onClick={() => newName.trim() && create.mutate(newName.trim())}
-                  disabled={create.isPending || !newName.trim()}
-                >
-                  Create
-                </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  type="button"
-                  onClick={() => {
-                    setCreating(false);
-                    setNewName("");
-                  }}
-                >
-                  Cancel
-                </Button>
-              </div>
-            </div>
+              <button
+                type="submit"
+                disabled={create.isPending || !newName.trim()}
+                aria-label="Create group"
+                title="Create (Enter)"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--accent)] hover:bg-[var(--accent-subtle)] disabled:opacity-30 disabled:hover:bg-transparent"
+              >
+                {create.isPending ? (
+                  <span className="h-3 w-3 animate-spin rounded-full border border-[var(--accent)] border-t-transparent" />
+                ) : (
+                  <Check className="h-3.5 w-3.5" />
+                )}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setCreating(false);
+                  setNewName("");
+                }}
+                aria-label="Cancel"
+                title="Cancel (Esc)"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </form>
           )}
           {groups.isPending ? (
             <Skeleton className="m-3 h-24" />
