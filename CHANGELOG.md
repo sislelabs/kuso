@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.21] — 2026-05-04
+
+### Other
+- Ui: full-palette dark theme + fixed-height canvas nodes ([f21f2f9](https://github.com/sislelabs/kuso/commit/f21f2f93cec55c4a9e866e57c73c76648fbec9aa))
+
 ## [0.7.20] — 2026-05-04
 
 ### 🐛 Bug Fixes
