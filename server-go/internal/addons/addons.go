@@ -189,6 +189,59 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	return created, nil
 }
 
+// UpdateAddonRequest is the partial-update body. Pointer fields
+// distinguish "leave alone" (nil) from "set to zero". The kuso UI
+// uses this for the addon Settings tab — version bump, size change,
+// HA toggle, storage resize.
+type UpdateAddonRequest struct {
+	Version     *string `json:"version,omitempty"`
+	Size        *string `json:"size,omitempty"`
+	HA          *bool   `json:"ha,omitempty"`
+	StorageSize *string `json:"storageSize,omitempty"`
+	Database    *string `json:"database,omitempty"`
+}
+
+// Update applies the partial UpdateAddonRequest to a KusoAddon CR.
+// Unset fields stay as they are. Helm-operator picks up the spec
+// change on its next reconcile (or via watch) and re-renders.
+//
+// Note: changing storageSize on a running addon does NOT resize the
+// PVC — that's a kube-side limitation on local-path-provisioner +
+// most static provisioners. The user has to scale to 0 → resize PV
+// → scale back. We log a warning when we see a shrink request; we
+// don't refuse, the operator might know what they're doing.
+func (s *Service) Update(ctx context.Context, project, name string, req UpdateAddonRequest) (*kube.KusoAddon, error) {
+	ns := s.nsFor(ctx, project)
+	fqn := addonCRName(project, name)
+	addon, err := s.Kube.GetKusoAddon(ctx, ns, fqn)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+		}
+		return nil, fmt.Errorf("get addon: %w", err)
+	}
+	if req.Version != nil {
+		addon.Spec.Version = *req.Version
+	}
+	if req.Size != nil {
+		addon.Spec.Size = *req.Size
+	}
+	if req.HA != nil {
+		addon.Spec.HA = *req.HA
+	}
+	if req.StorageSize != nil {
+		addon.Spec.StorageSize = *req.StorageSize
+	}
+	if req.Database != nil {
+		addon.Spec.Database = *req.Database
+	}
+	updated, err := s.Kube.UpdateKusoAddon(ctx, ns, addon)
+	if err != nil {
+		return nil, fmt.Errorf("update addon: %w", err)
+	}
+	return updated, nil
+}
+
 // SetPlacement replaces the addon's placement block. Pass nil to
 // clear it (schedule anywhere). Validates that at least one cluster
 // node matches the labels — calling code translates that into a

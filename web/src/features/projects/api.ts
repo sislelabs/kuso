@@ -60,6 +60,28 @@ export async function deleteAddon(project: string, addon: string): Promise<void>
   );
 }
 
+// updateAddon applies a partial update to spec.{version,size,ha,
+// storageSize,database}. Pass undefined for fields you don't want
+// to change.
+export interface UpdateAddonBody {
+  version?: string;
+  size?: "small" | "medium" | "large";
+  ha?: boolean;
+  storageSize?: string;
+  database?: string;
+}
+
+export async function updateAddon(
+  project: string,
+  addon: string,
+  body: UpdateAddonBody
+): Promise<KusoAddon> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}`,
+    { method: "PATCH", body }
+  );
+}
+
 // setAddonPlacement pins the addon's StatefulSet to a subset of nodes.
 // Pass an empty body to clear (schedule anywhere). Server validates
 // that at least one cluster node matches the labels — a 400 with

@@ -19,6 +19,7 @@ export {
   listAddons,
   addAddon,
   deleteAddon,
+  updateAddon,
   setAddonPlacement,
   addonSecret,
   listBackups,
@@ -26,7 +27,7 @@ export {
   listSQLTables,
   runSQL,
 } from "./api";
-export type { BackupObject, SQLTable, SQLQueryResponse } from "./api";
+export type { BackupObject, SQLTable, SQLQueryResponse, UpdateAddonBody } from "./api";
 export {
   useUpdateProject,
   useDeleteProject,

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -44,6 +45,56 @@ func (h *NotificationsHandler) Mount(r chi.Router) {
 	r.Put("/api/notifications/{id}", h.Update)
 	r.Delete("/api/notifications/{id}", h.Delete)
 	r.Post("/api/notifications/{id}/test", h.Test)
+	// In-app feed — every dispatched event lands in NotificationEvent
+	// regardless of sink config, so the bell icon always has data
+	// even when no webhooks are wired. Limit + unread badge live here.
+	r.Get("/api/notifications/feed", h.Feed)
+	r.Get("/api/notifications/feed/unread-count", h.FeedUnread)
+	r.Post("/api/notifications/feed/read-all", h.FeedReadAll)
+}
+
+// Feed returns the most recent notification events. ?limit=N (clamp
+// to 200) and ?unread=true narrow the result.
+func (h *NotificationsHandler) Feed(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := notifCtx(r)
+	defer cancel()
+	limit := 50
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	unread := r.URL.Query().Get("unread") == "true"
+	out, err := h.DB.ListNotificationEvents(ctx, limit, unread)
+	if err != nil {
+		h.fail(w, "feed", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// FeedUnread is the cheap counter the bell badge polls.
+func (h *NotificationsHandler) FeedUnread(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := notifCtx(r)
+	defer cancel()
+	n, err := h.DB.CountUnreadNotificationEvents(ctx)
+	if err != nil {
+		h.fail(w, "unread count", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"unread": n})
+}
+
+// FeedReadAll stamps readAt on every unread event. Called when the
+// user opens the bell popover.
+func (h *NotificationsHandler) FeedReadAll(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := notifCtx(r)
+	defer cancel()
+	if err := h.DB.MarkAllNotificationEventsRead(ctx); err != nil {
+		h.fail(w, "mark read", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Test sends a synthetic event to the chosen notification config so

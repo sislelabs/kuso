@@ -12,7 +12,9 @@ import {
   listSQLTables,
   runSQL,
   setAddonPlacement,
+  updateAddon,
   type BackupObject,
+  type UpdateAddonBody,
 } from "@/features/projects";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -726,6 +728,182 @@ function SQLResults({
   );
 }
 
+// ConfigurationSection lets the operator change the addon's tier
+// (size), engine version, HA toggle, and storage size after the
+// initial create. The fields are pulled from the live CR so the
+// form always reflects current state. Save sends a PATCH.
+function ConfigurationSection({
+  project,
+  addon,
+  cr,
+}: {
+  project: string;
+  addon: string;
+  cr?: import("@/types/projects").KusoAddon;
+}) {
+  const qc = useQueryClient();
+  const initial = {
+    version: cr?.spec.version ?? "",
+    size: (cr?.spec.size ?? "small") as "small" | "medium" | "large",
+    ha: !!cr?.spec.ha,
+    storageSize: cr?.spec.storageSize ?? "",
+    database: cr?.spec.database ?? "",
+  };
+
+  const [version, setVersion] = useState(initial.version);
+  const [size, setSize] = useState<typeof initial.size>(initial.size);
+  const [ha, setHa] = useState(initial.ha);
+  const [storageSize, setStorageSize] = useState(initial.storageSize);
+  const [database, setDatabase] = useState(initial.database);
+
+  // Re-baseline whenever the CR changes (e.g. after a successful save
+  // or a parallel edit landed on the server). Without this, the form
+  // would diverge from the source of truth and the dirty indicator
+  // would lie.
+  useEffect(() => {
+    setVersion(initial.version);
+    setSize(initial.size);
+    setHa(initial.ha);
+    setStorageSize(initial.storageSize);
+    setDatabase(initial.database);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    initial.version,
+    initial.size,
+    initial.ha,
+    initial.storageSize,
+    initial.database,
+  ]);
+
+  const dirty =
+    version !== initial.version ||
+    size !== initial.size ||
+    ha !== initial.ha ||
+    storageSize !== initial.storageSize ||
+    database !== initial.database;
+
+  const save = useMutation({
+    mutationFn: () => {
+      // Only include changed fields in the patch — that way unset
+      // fields can stay unset on the CR rather than being clobbered
+      // with empty strings.
+      const body: UpdateAddonBody = {};
+      if (version !== initial.version) body.version = version.trim();
+      if (size !== initial.size) body.size = size;
+      if (ha !== initial.ha) body.ha = ha;
+      if (storageSize !== initial.storageSize) body.storageSize = storageSize.trim();
+      if (database !== initial.database) body.database = database.trim();
+      return updateAddon(project, addon, body);
+    },
+    onSuccess: () => {
+      toast.success("Configuration saved");
+      qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+  });
+
+  return (
+    <section className="overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+      <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
+        <div className="flex items-center gap-2">
+          <Settings className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
+          <h4 className="text-sm font-semibold">Configuration</h4>
+        </div>
+        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          {dirty ? "unsaved" : "in sync"}
+        </span>
+      </header>
+      <div className="space-y-3 p-3">
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              Version
+            </label>
+            <Input
+              value={version}
+              onChange={(e) => setVersion(e.target.value)}
+              placeholder="leave empty for chart default"
+              className="h-7 font-mono text-[12px]"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              Tier
+            </label>
+            <select
+              value={size}
+              onChange={(e) => setSize(e.target.value as "small" | "medium" | "large")}
+              className="h-7 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px] outline-none focus:border-[var(--border-strong)]"
+            >
+              <option value="small">small</option>
+              <option value="medium">medium</option>
+              <option value="large">large</option>
+            </select>
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              Storage size
+            </label>
+            <Input
+              value={storageSize}
+              onChange={(e) => setStorageSize(e.target.value)}
+              placeholder="e.g. 10Gi"
+              className="h-7 font-mono text-[12px]"
+            />
+            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+              Note: changing this on a running addon requires manual PVC resize.
+            </p>
+          </div>
+          <div className="space-y-1">
+            <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              Default database
+            </label>
+            <Input
+              value={database}
+              onChange={(e) => setDatabase(e.target.value)}
+              placeholder="defaults to project name"
+              className="h-7 font-mono text-[12px]"
+            />
+          </div>
+        </div>
+        <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2">
+          <input
+            type="checkbox"
+            checked={ha}
+            onChange={(e) => setHa(e.target.checked)}
+            className="h-3.5 w-3.5 accent-[var(--accent)]"
+          />
+          <span className="text-[12px] font-medium">High availability</span>
+          <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
+            multi-replica · primary/replica streaming
+          </span>
+        </label>
+      </div>
+      <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-3 py-2">
+        <Button
+          size="sm"
+          variant="ghost"
+          disabled={!dirty || save.isPending}
+          onClick={() => {
+            setVersion(initial.version);
+            setSize(initial.size);
+            setHa(initial.ha);
+            setStorageSize(initial.storageSize);
+            setDatabase(initial.database);
+          }}
+        >
+          Reset
+        </Button>
+        <Button size="sm" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>
+          {save.isPending ? "Saving…" : "Save configuration"}
+        </Button>
+      </footer>
+    </section>
+  );
+}
+
 // PlacementSection edits spec.placement on a KusoAddon. Mirrors the
 // shape of ServiceSettingsPanel's PlacementSection: a header strip
 // with a hint badge, native selects driven by what the cluster
@@ -863,7 +1041,7 @@ function PlacementSection({
                   onChange={(e) => updLabel(i, { key: e.target.value, value: "" })}
                   className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
                 >
-                  <option value="">— pick label key —</option>
+                  <option value="">pick label key</option>
                   {[...allLabels.keys()].sort().map((k) => (
                     <option key={k} value={k}>
                       {k}
@@ -884,7 +1062,7 @@ function PlacementSection({
                   onChange={(e) => updLabel(i, { value: e.target.value })}
                   className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
                 >
-                  <option value="">— pick value —</option>
+                  <option value="">pick value</option>
                   {[...valuesForKey].sort().map((v) => (
                     <option key={v} value={v}>
                       {v}
@@ -1017,6 +1195,7 @@ function SettingsTab({
   });
   return (
     <div className="space-y-4 p-5">
+      <ConfigurationSection project={project} addon={addon} cr={cr} />
       <PlacementSection project={project} addon={addon} cr={cr} />
       <section className="rounded-md border border-red-500/30 bg-red-500/5 p-4">
         <h4 className="text-sm font-semibold">Delete addon</h4>

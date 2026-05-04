@@ -6,7 +6,17 @@ export class ApiError extends Error {
   status: number;
   body: unknown;
   constructor(status: number, body: unknown, message: string) {
-    super(message);
+    // Prefer the response body when it carries a useful string —
+    // the server returns "addon foo/bar already exists" (text) on
+    // 409, and surfacing that beats a bare "409 Conflict". JSON
+    // objects with .error or .message are also unwrapped. Falls
+    // back to the raw status text when nothing better is there.
+    const friendly =
+      (typeof body === "string" && body.trim() !== "" && body.trim()) ||
+      (body && typeof body === "object" && "error" in body && typeof (body as { error: unknown }).error === "string" && (body as { error: string }).error) ||
+      (body && typeof body === "object" && "message" in body && typeof (body as { message: unknown }).message === "string" && (body as { message: string }).message) ||
+      message;
+    super(friendly as string);
     this.status = status;
     this.body = body;
   }

@@ -26,6 +26,8 @@ func (h *AddonsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/addons", h.List)
 	r.Post("/api/projects/{project}/addons", h.Add)
 	r.Delete("/api/projects/{project}/addons/{addon}", h.Delete)
+	// Edit version / size / HA / storageSize / database.
+	r.Patch("/api/projects/{project}/addons/{addon}", h.Update)
 	// Pin the addon's StatefulSet to a subset of nodes. PUT replaces
 	// the placement struct verbatim; pass empty {} to clear.
 	r.Put("/api/projects/{project}/addons/{addon}/placement", h.Placement)
@@ -96,6 +98,25 @@ func (h *AddonsHandler) Add(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, out)
 }
 
+// Update applies a partial update to the addon spec. Body shape is
+// addons.UpdateAddonRequest — pointer fields, nil means "leave
+// alone". Returns the updated CR so the UI can re-baseline.
+func (h *AddonsHandler) Update(w http.ResponseWriter, r *http.Request) {
+	var body addons.UpdateAddonRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := addonsCtx(r)
+	defer cancel()
+	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"), body)
+	if err != nil {
+		h.fail(w, "update addon", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // Placement updates spec.placement on a KusoAddon CR. Body shape
 // matches kube.KusoPlacement: {labels: {…}, nodes: […]}. An empty
 // body / null clears placement (schedule anywhere).
@@ -137,7 +158,10 @@ func (h *AddonsHandler) fail(w http.ResponseWriter, op string, err error) {
 	case errors.Is(err, addons.ErrNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.Is(err, addons.ErrConflict):
-		http.Error(w, "conflict", http.StatusConflict)
+		// Pass the wrapped error through so the UI can show
+		// "addon kuso-hello-go/postgres already exists" instead of
+		// a bare "409 Conflict" toast.
+		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, addons.ErrInvalid):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	default:

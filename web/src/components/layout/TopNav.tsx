@@ -45,7 +45,7 @@ import {
   HardDrive,
   Package,
 } from "lucide-react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import { ServersPopover } from "./ServersPopover";
 import { NewEnvironmentDialog } from "./NewEnvironmentDialog";
@@ -352,18 +352,152 @@ function EnvironmentSwitcher({ project }: { project: string }) {
   );
 }
 
+// FeedEvent matches the server's NotificationEvent wire shape. Only
+// the fields the popover renders are typed.
+interface FeedEvent {
+  id: number;
+  type: string;
+  title: string;
+  body?: string;
+  severity?: string;
+  project?: string;
+  service?: string;
+  url?: string;
+  createdAt: string;
+  readAt?: string | null;
+}
+
 function NotificationsButton() {
-  // Placeholder for the upcoming notification feed. Renders a quiet
-  // bell with no unread badge until the API lands.
+  const qc = useQueryClient();
+  // Unread count drives the dot badge. Polled every 30s — same
+  // cadence the project-status query uses, so we don't add a
+  // chatter to the server for one icon.
+  const unread = useQuery<{ unread: number }>({
+    queryKey: ["notifications", "unread-count"],
+    queryFn: () => api("/api/notifications/feed/unread-count"),
+    refetchInterval: 30_000,
+    staleTime: 15_000,
+    retry: false,
+    throwOnError: false,
+  });
+  const feed = useQuery<FeedEvent[]>({
+    queryKey: ["notifications", "feed"],
+    queryFn: () => api("/api/notifications/feed?limit=30"),
+    enabled: false, // only fetch on popover open
+    staleTime: 15_000,
+    retry: false,
+    throwOnError: false,
+  });
+  const markRead = useMutation({
+    mutationFn: () =>
+      api("/api/notifications/feed/read-all", { method: "POST" }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
+    },
+  });
+
+  const onOpenChange = (next: boolean) => {
+    if (next) {
+      void feed.refetch();
+      // Mark-read fires on open so the dot disappears the moment
+      // the popover shows. Optimistic; the server-side count
+      // refetches via invalidate in the mutation onSuccess.
+      markRead.mutate();
+    }
+  };
+
+  const badge = (unread.data?.unread ?? 0) > 0;
   return (
-    <button
-      type="button"
-      aria-label="Notifications"
-      className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-    >
-      <Bell className="h-4 w-4" />
-    </button>
+    <Popover onOpenChange={onOpenChange}>
+      <PopoverTrigger
+        aria-label="Notifications"
+        className="relative inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+      >
+        <Bell className="h-4 w-4" />
+        {badge && (
+          <span
+            aria-hidden
+            className="absolute right-1.5 top-1.5 inline-block h-1.5 w-1.5 rounded-full bg-[var(--accent)]"
+          />
+        )}
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-80 p-0">
+        <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
+          <p className="text-xs font-semibold tracking-tight">Notifications</p>
+          <Link
+            href="/settings/notifications"
+            className="font-mono text-[10px] text-[var(--accent)] hover:underline"
+          >
+            channels →
+          </Link>
+        </header>
+        <div className="max-h-96 overflow-y-auto">
+          {feed.isPending ? (
+            <p className="px-3 py-4 text-xs text-[var(--text-tertiary)]">Loading…</p>
+          ) : feed.isError ? (
+            <p className="px-3 py-4 text-xs text-red-400">
+              {feed.error instanceof Error ? feed.error.message : "Failed to load"}
+            </p>
+          ) : (feed.data ?? []).length === 0 ? (
+            <p className="px-3 py-6 text-center text-xs text-[var(--text-tertiary)]">
+              No events yet. Builds, deploys, and node alerts show up here as they happen.
+            </p>
+          ) : (
+            <ul className="divide-y divide-[var(--border-subtle)]">
+              {(feed.data ?? []).map((e) => (
+                <li key={e.id} className="px-3 py-2">
+                  <div className="flex items-start gap-2">
+                    <span
+                      aria-hidden
+                      className={cn(
+                        "mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full",
+                        e.severity === "error"
+                          ? "bg-red-400"
+                          : e.severity === "warn"
+                            ? "bg-amber-400"
+                            : "bg-emerald-400"
+                      )}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-[12px] font-medium">{e.title}</p>
+                      {e.body && (
+                        <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--text-secondary)]">
+                          {e.body}
+                        </p>
+                      )}
+                      <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+                        {e.type}
+                        {e.project && ` · ${e.project}`}
+                        {e.service && `/${e.service}`}
+                        {" · "}
+                        {relativeFromNow(e.createdAt)}
+                      </p>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      </PopoverContent>
+    </Popover>
   );
+}
+
+// relativeFromNow renders a UTC timestamp as "5m ago" / "2h ago" /
+// "3d ago" without pulling in date-fns. Good enough for a feed
+// where rough chronology beats precise.
+function relativeFromNow(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "just now";
+  const diff = Date.now() - t;
+  const m = Math.floor(diff / 60_000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h}h ago`;
+  const d = Math.floor(h / 24);
+  return `${d}d ago`;
 }
 
 function UserMenu() {

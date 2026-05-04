@@ -136,6 +136,25 @@ func (d *DB) applyMigrations() error {
 			"fingerprint" TEXT NOT NULL,
 			"createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`,
+		// v0.6.29: in-app notification feed. Every event the notify
+		// dispatcher fires also lands here so the bell icon in the
+		// navbar can render the recent N events. Retention is
+		// "last 200 entries"; older rows get pruned on insert.
+		`CREATE TABLE IF NOT EXISTS "NotificationEvent" (
+			"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+			"type" TEXT NOT NULL,
+			"title" TEXT NOT NULL,
+			"body" TEXT,
+			"severity" TEXT NOT NULL DEFAULT 'info',
+			"project" TEXT,
+			"service" TEXT,
+			"url" TEXT,
+			"extra" TEXT,
+			"createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			"readAt" DATETIME
+		)`,
+		`CREATE INDEX IF NOT EXISTS "NotificationEvent_createdAt_idx" ON "NotificationEvent"("createdAt" DESC)`,
+		`CREATE INDEX IF NOT EXISTS "NotificationEvent_readAt_idx" ON "NotificationEvent"("readAt")`,
 	}
 	for _, sqlText := range migrations {
 		if _, err := d.DB.Exec(sqlText); err != nil {

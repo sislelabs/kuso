@@ -797,7 +797,7 @@ function PlacementSection({ state, setState }: SectionProps) {
                   onChange={(e) => updLabel(i, { key: e.target.value, value: "" })}
                   className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
                 >
-                  <option value="">— pick label key —</option>
+                  <option value="">pick label key</option>
                   {[...allLabels.keys()].sort().map((k) => (
                     <option key={k} value={k}>
                       {k}
@@ -818,7 +818,7 @@ function PlacementSection({ state, setState }: SectionProps) {
                   onChange={(e) => updLabel(i, { value: e.target.value })}
                   className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
                 >
-                  <option value="">— pick value —</option>
+                  <option value="">pick value</option>
                   {[...valuesForKey].sort().map((v) => (
                     <option key={v} value={v}>
                       {v}

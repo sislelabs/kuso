@@ -892,7 +892,7 @@ function AddNodeModal({
                 }}
                 className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1.5 font-mono text-[12px]"
               >
-                <option value="">— pick a key —</option>
+                <option value="">pick a key</option>
                 {(keys.data ?? []).map((k) => (
                   <option key={k.id} value={k.id}>
                     {k.name} ({k.fingerprint.slice(0, 24)}…)

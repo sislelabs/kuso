@@ -132,6 +132,26 @@ func (d *Dispatcher) Run(ctx context.Context) {
 			d.mu.Unlock()
 			return
 		case e := <-d.ch:
+			// Persist into the in-app feed BEFORE the dispatch fan-out
+			// so the bell icon shows the event even if every external
+			// sink is disabled / misconfigured. Dispatch failures are
+			// already swallowed, no need to gate on them here.
+			if d.db != nil {
+				persistCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+				if err := d.db.InsertNotificationEvent(persistCtx, db.NotificationEvent{
+					Type:     string(e.Type),
+					Title:    e.Title,
+					Body:     e.Body,
+					Severity: e.Severity,
+					Project:  e.Project,
+					Service:  e.Service,
+					URL:      e.URL,
+					Extra:    e.Extra,
+				}); err != nil {
+					d.logger.Warn("notify: persist event", "err", err)
+				}
+				cancel()
+			}
 			d.dispatch(ctx, e)
 		}
 	}
