@@ -62,7 +62,28 @@ func New(k *kube.Client, namespace string) *Service {
 // featuresFromEnv reads the env-driven boolean flags. The Kuso-CR-driven
 // fields (sleep, banner, console.enabled, admin.disabled) are folded in
 // by Reload from the live CR.
+//
+// GithubAuth mirrors auth.NewGithubOAuth's fallback chain: when the
+// dedicated GITHUB_CLIENT_* vars aren't set, fall back to the App's
+// GITHUB_APP_CLIENT_{ID,SECRET} (every GitHub App carries OAuth client
+// credentials too) + a callback URL synthesised from KUSO_DOMAIN. The
+// /api/auth/methods endpoint reads from this so the login page only
+// shows the GitHub button when the full chain resolves.
 func featuresFromEnv() Features {
+	githubID := firstNonEmpty(
+		os.Getenv("GITHUB_CLIENT_ID"),
+		os.Getenv("GITHUB_APP_CLIENT_ID"),
+	)
+	githubSecret := firstNonEmpty(
+		os.Getenv("GITHUB_CLIENT_SECRET"),
+		os.Getenv("GITHUB_APP_CLIENT_SECRET"),
+	)
+	githubCallback := os.Getenv("GITHUB_CLIENT_CALLBACKURL")
+	if githubCallback == "" {
+		if domain := os.Getenv("KUSO_DOMAIN"); domain != "" {
+			githubCallback = "https://" + domain + "/api/auth/github/callback"
+		}
+	}
 	return Features{
 		BuildPipeline:    os.Getenv("KUSO_BUILD_REGISTRY") != "",
 		TemplatesEnabled: os.Getenv("KUSO_TEMPLATES_ENABLED") == "true",
@@ -70,16 +91,25 @@ func featuresFromEnv() Features {
 		AuditEnabled:     os.Getenv("KUSO_AUDIT_ENABLED") != "false",
 		AdminDisabled:    os.Getenv("KUSO_ADMIN_DISABLED") == "true",
 		LocalAuth:        strings.TrimSpace(os.Getenv("KUSO_SESSION_KEY")) != "",
-		GithubAuth: os.Getenv("GITHUB_CLIENT_SECRET") != "" &&
-			os.Getenv("GITHUB_CLIENT_ID") != "" &&
-			os.Getenv("GITHUB_CLIENT_CALLBACKURL") != "" &&
-			os.Getenv("GITHUB_CLIENT_ORG") != "",
+		GithubAuth:       githubID != "" && githubSecret != "" && githubCallback != "",
 		OAuth2Auth: os.Getenv("OAUTH2_CLIENT_AUTH_URL") != "" &&
 			os.Getenv("OAUTH2_CLIENT_TOKEN_URL") != "" &&
 			os.Getenv("OAUTH2_CLIENT_ID") != "" &&
 			os.Getenv("OAUTH2_CLIENT_SECRET") != "" &&
 			os.Getenv("OAUTH2_CLIENT_CALLBACKURL") != "",
 	}
+}
+
+// firstNonEmpty returns the first non-empty string from its args.
+// Local copy (auth package has the same helper); kept private so the
+// config package has no auth dependency.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // Features returns a copy of the current flag set.
