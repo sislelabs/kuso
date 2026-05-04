@@ -1,4 +1,4 @@
-.PHONY: help ship release release-roll release-roll-commit web typecheck test
+.PHONY: help ship roll dry-run web typecheck test
 
 # Repository helpers. The release flow lives in hack/release.sh — the
 # Makefile is just an ergonomic shim so common invocations are one
@@ -6,22 +6,33 @@
 
 help:
 	@echo "kuso make targets:"
-	@echo "  make ship VERSION=v0.3.5"
-	@echo "      ONE-COMMAND RELEASE — everything below in order:"
-	@echo "      bump version files, build web, push kuso-server image, roll deploy,"
-	@echo "      detect operator/ changes (auto-build operator image + apply CRDs"
-	@echo "      + roll operator), commit version-file bumps."
 	@echo ""
-	@echo "  make release VERSION=v0.3.5"
-	@echo "      build + push the kuso-server image only (no rollout)"
-	@echo "  make release-roll VERSION=v0.3.5"
-	@echo "      build + push + roll the kuso-server (no operator)"
-	@echo "  make release-roll-commit VERSION=v0.3.5"
-	@echo "      release-roll + git commit"
+	@echo "  RELEASE (use these — they're the supported entry points):"
 	@echo ""
+	@echo "  make dry-run VERSION=v0.7.12"
+	@echo "      preview what 'make ship' would do — no docker push,"
+	@echo "      no kubectl, no gh release, no git push. ALWAYS run this"
+	@echo "      first before a real release."
+	@echo ""
+	@echo "  make ship VERSION=v0.7.12"
+	@echo "      ONE-COMMAND RELEASE: bump version files, build web,"
+	@echo "      push kuso-server image, roll deploy, detect operator/"
+	@echo "      changes (auto-build operator image + apply CRDs +"
+	@echo "      roll operator), cross-build CLI binaries, cut GH"
+	@echo "      release with all assets, git commit + tag + push."
+	@echo ""
+	@echo "  make roll VERSION=v0.7.12"
+	@echo "      roll an ALREADY-RELEASED version onto the live cluster."
+	@echo "      Useful when CI built the artifacts on tag-push and you"
+	@echo "      just need to point production at them. No image rebuild."
+	@echo ""
+	@echo "  DEV:"
 	@echo "  make typecheck    # tsc on web/"
 	@echo "  make web          # pnpm --dir web build"
 	@echo "  make test         # go test ./... in server-go"
+	@echo ""
+	@echo "  Deprecated: make release, make release-roll, make release-roll-commit"
+	@echo "    All print an error pointing at ship/roll/dry-run. Removed in v0.8."
 
 VERSION ?=
 
@@ -33,17 +44,30 @@ ship:
 	@if [ -z "$(VERSION)" ]; then echo "usage: make ship VERSION=vX.Y.Z" >&2; exit 2; fi
 	@KUSO_RELEASE_ROLL=1 KUSO_RELEASE_COMMIT=1 KUSO_RELEASE_GH=1 KUSO_RELEASE_CLI=1 ./hack/release.sh $(VERSION)
 
-release:
-	@if [ -z "$(VERSION)" ]; then echo "usage: make release VERSION=vX.Y.Z" >&2; exit 2; fi
-	@./hack/release.sh $(VERSION)
+# `make roll` is the rollout-only path: image already exists at
+# ghcr.io/sislelabs/kuso-server-go:VERSION (typically because CI built
+# it on tag-push), and you just want to point the live cluster at it.
+# No image rebuild, no version-file bumps, no GH release. Faster than
+# `make ship` for that case (~30s vs ~5min).
+roll:
+	@if [ -z "$(VERSION)" ]; then echo "usage: make roll VERSION=vX.Y.Z" >&2; exit 2; fi
+	@KUSO_RELEASE_ROLL=1 KUSO_RELEASE_SKIP_BUILD=1 ./hack/release.sh $(VERSION)
 
-release-roll:
-	@if [ -z "$(VERSION)" ]; then echo "usage: make release-roll VERSION=vX.Y.Z" >&2; exit 2; fi
-	@KUSO_RELEASE_ROLL=1 ./hack/release.sh $(VERSION)
+# `make dry-run` mirrors `make ship` but with --dry-run, so you can
+# preview the side effects of a release before paying the docker-push
+# + git-push cost. Recommended before every real release.
+dry-run:
+	@if [ -z "$(VERSION)" ]; then echo "usage: make dry-run VERSION=vX.Y.Z" >&2; exit 2; fi
+	@KUSO_RELEASE_ALLOW_DIRTY=1 KUSO_RELEASE_ROLL=1 KUSO_RELEASE_COMMIT=1 KUSO_RELEASE_GH=1 KUSO_RELEASE_CLI=1 ./hack/release.sh --dry-run $(VERSION)
 
-release-roll-commit:
-	@if [ -z "$(VERSION)" ]; then echo "usage: make release-roll-commit VERSION=vX.Y.Z" >&2; exit 2; fi
-	@KUSO_RELEASE_ROLL=1 KUSO_RELEASE_COMMIT=1 ./hack/release.sh $(VERSION)
+# Deprecated targets. Kept around for muscle memory; they all redirect
+# to the new entry points + print a deprecation warning. Removing
+# these in v0.8.
+.PHONY: release release-roll release-roll-commit
+release release-roll release-roll-commit:
+	@echo "==> 'make $@' is deprecated. Use 'make ship', 'make roll', or 'make dry-run' instead. See 'make help'." >&2
+	@echo "==> Falling through to 'make ship' for now…" >&2
+	@$(MAKE) ship VERSION=$(VERSION)
 
 web:
 	@cd web && pnpm build

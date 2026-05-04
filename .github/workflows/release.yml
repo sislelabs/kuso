@@ -1,0 +1,126 @@
+# Release workflow.
+#
+# Trigger: pushing a tag matching v*.*.* (e.g. v0.7.12). The tag name
+# IS the release version — we extract it and pass it through to the
+# same release.sh that runs on a developer laptop. The two paths share
+# code so behavior stays consistent: same image build, same CLI
+# cross-builds, same GH release shape.
+#
+# Why no rollout step? `make ship` rolls the cluster via SSH using the
+# operator's SSH key, which only lives on the developer's laptop. We
+# could give Actions an SSH secret, but pushing rollout responsibility
+# into CI couples cluster state to GitHub uptime + adds another path
+# for a stuck rollout to land. Rolling stays manual; the workflow only
+# guarantees the artifacts exist + are reachable.
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write    # gh release create
+  packages: write    # ghcr push
+
+jobs:
+  release:
+    name: Build artifacts + cut GitHub release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # need history so git-cliff / release notes work
+
+      # GITHUB_REF is the only attacker-influenceable input here. We
+      # bind it to an env var so the regex check + later use happen
+      # outside ${{ }} interpolation — no shell-injection surface even
+      # if a malicious tag name slipped past git's own validation.
+      - name: Resolve version
+        id: ver
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          VERSION="${REF#refs/tags/}"
+          if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-A-Za-z0-9.]*)?$ ]]; then
+            echo "::error::Tag '$VERSION' doesn't match vX.Y.Z; refusing." >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: server-go/go.mod
+          cache-dependency-path: |
+            server-go/go.sum
+            cli/go.sum
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+          run_install: false
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+
+      - name: Set up Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # release.sh handles all the build + push + tag + GH-release
+      # plumbing. We pass the same env vars `make ship` would, minus
+      # KUSO_RELEASE_ROLL (no SSH on this runner). KUSO_RELEASE_PUSH=0
+      # because the tag triggering this workflow already exists on
+      # origin — release.sh's git push step would no-op anyway, but
+      # being explicit avoids a confusing warn line in the log.
+      #
+      # ALLOW_DIRTY=1 because actions/checkout doesn't always produce
+      # a strictly-clean tree (CRLF line-ending edge cases, etc); the
+      # tag is the source of truth, not the working tree.
+      - name: Install pnpm dependencies
+        run: pnpm --dir web install --frozen-lockfile
+
+      - name: Run release.sh
+        env:
+          KUSO_RELEASE_GH: "1"
+          KUSO_RELEASE_CLI: "1"
+          KUSO_RELEASE_COMMIT: "0"   # tag already exists; no version-bump commit needed
+          KUSO_RELEASE_PUSH: "0"     # see above
+          KUSO_RELEASE_OPERATOR: "auto"
+          KUSO_RELEASE_ALLOW_DIRTY: "1"
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          ./hack/release.sh "$VERSION"
+
+      - name: Summary
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+          REPO: ${{ github.repository }}
+        run: |
+          {
+            echo "## kuso $VERSION released"
+            echo ""
+            echo "- Server image: \`ghcr.io/sislelabs/kuso-server-go:$VERSION\`"
+            echo "- GH release: https://github.com/$REPO/releases/tag/$VERSION"
+            echo ""
+            echo "Roll the live cluster from your laptop:"
+            echo ""
+            echo '```bash'
+            echo "make release-roll VERSION=$VERSION"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

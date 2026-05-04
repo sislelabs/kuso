@@ -32,9 +32,40 @@
 
 set -euo pipefail
 
-VERSION="${1:-}"
+VERSION=""
+DRY_RUN=0
+# Parse args. Flags can come before or after VERSION; flag-style is
+# the modern convention but bare positional VERSION still works for
+# muscle memory + the Makefile shim.
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -n|--dry-run) DRY_RUN=1; shift ;;
+    -h|--help)
+      cat <<EOF
+usage: $0 [--dry-run] vX.Y.Z
+
+Cuts a kuso release.
+
+  --dry-run   don't push docker images, don't kubectl, don't gh release,
+              don't git push. Logs every side-effecting step as
+              [DRY-RUN]. Safe to run with no creds.
+
+Env knobs (see release.sh header for the full list):
+  KUSO_RELEASE_ROLL=1       roll the live cluster after build
+  KUSO_RELEASE_COMMIT=1     git commit the version bumps
+  KUSO_RELEASE_GH=1         gh release create with all artifacts
+  KUSO_RELEASE_CLI=1        cross-build CLI binaries
+  KUSO_RELEASE_PUSH=0       skip git push of commit + tag
+  KUSO_RELEASE_OPERATOR=1   force-rebuild the operator image
+EOF
+      exit 0
+      ;;
+    -*) echo "unknown flag: $1" >&2; exit 2 ;;
+    *)  if [[ -z "$VERSION" ]]; then VERSION="$1"; shift; else echo "extra arg: $1" >&2; exit 2; fi ;;
+  esac
+done
 if [[ -z "$VERSION" ]]; then
-  echo "usage: $0 vX.Y.Z" >&2
+  echo "usage: $0 [--dry-run] vX.Y.Z" >&2
   exit 2
 fi
 if ! [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
@@ -44,6 +75,12 @@ fi
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
+
+if [[ "$DRY_RUN" == "1" ]]; then
+  printf '\033[1;35m=================================================\n'
+  printf '          DRY RUN — no side effects will fire\n'
+  printf '=================================================\033[0m\n'
+fi
 
 KUSO_RELEASE_HOST="${KUSO_RELEASE_HOST:-kuso.sislelabs.com}"
 KUSO_RELEASE_USER="${KUSO_RELEASE_USER:-root}"
@@ -61,6 +98,22 @@ OPERATOR_IMAGE="${KUSO_RELEASE_OPERATOR_IMAGE:-ghcr.io/sislelabs/kuso-operator}"
 log()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m==>\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m==>\033[0m %s\n' "$*" >&2; exit 1; }
+dry()  { printf '\033[1;35m[DRY-RUN]\033[0m %s\n' "$*"; }
+
+# run executes its args unless DRY_RUN=1, in which case it just prints
+# what would have happened. Cheap argv shell-escape (printf %q so the
+# user can copy-paste the line and re-run by hand). Used to gate every
+# real side effect (docker push, kubectl, gh release, git push) behind
+# the --dry-run flag.
+run() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    local q=""
+    for a in "$@"; do q+=" $(printf '%q' "$a")"; done
+    dry "$q"
+    return 0
+  fi
+  "$@"
+}
 
 # ---- 1. preflight --------------------------------------------------
 
@@ -80,31 +133,61 @@ fi
 # ---- 2. rewrite version files --------------------------------------
 
 if [[ "$CURRENT" != "$VERSION" ]]; then
-  printf '%s\n' "$VERSION" > server-go/internal/version/VERSION
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "rewrite server-go/internal/version/VERSION + deploy/server-go.yaml + hack/install.sh + cli/{cmd/kusoCli/version/CLI_VERSION,pkg/kusoApi/VERSION}: ${CURRENT} → ${VERSION}"
+  else
+    printf '%s\n' "$VERSION" > server-go/internal/version/VERSION
 
-  # deploy/server-go.yaml: the image: line carries an explicit tag.
-  sed -i.bak \
-    "s|kuso-server-go:${CURRENT}|kuso-server-go:${VERSION}|g" \
-    deploy/server-go.yaml
-  rm deploy/server-go.yaml.bak
+    # deploy/server-go.yaml: the image: line carries an explicit tag.
+    sed -i.bak \
+      "s|kuso-server-go:${CURRENT}|kuso-server-go:${VERSION}|g" \
+      deploy/server-go.yaml
+    rm deploy/server-go.yaml.bak
 
-  # hack/install.sh: KUSO_SERVER_VERSION default + the sed line that
-  # rewrites the deploy yaml during fresh installs.
-  sed -i.bak \
-    -e "s|KUSO_SERVER_VERSION:-${CURRENT}|KUSO_SERVER_VERSION:-${VERSION}|g" \
-    -e "s|kuso-server-go:${CURRENT}|kuso-server-go:${VERSION}|g" \
-    -e "s|server image tag (default: ${CURRENT};|server image tag (default: ${VERSION};|g" \
-    hack/install.sh
-  rm hack/install.sh.bak
+    # hack/install.sh: KUSO_SERVER_VERSION default + the sed line that
+    # rewrites the deploy yaml during fresh installs.
+    sed -i.bak \
+      -e "s|KUSO_SERVER_VERSION:-${CURRENT}|KUSO_SERVER_VERSION:-${VERSION}|g" \
+      -e "s|kuso-server-go:${CURRENT}|kuso-server-go:${VERSION}|g" \
+      -e "s|server image tag (default: ${CURRENT};|server image tag (default: ${VERSION};|g" \
+      hack/install.sh
+    rm hack/install.sh.bak
 
-  log "rewrote VERSION + deploy/server-go.yaml + hack/install.sh"
+    # CLI VERSION embeds (kept in sync so dev builds without ldflags
+    # report the right version).
+    printf '%s\n' "$VERSION" > cli/cmd/kusoCli/version/CLI_VERSION
+    printf '%s\n' "$VERSION" > cli/pkg/kusoApi/VERSION
+
+    log "rewrote VERSION + deploy/server-go.yaml + hack/install.sh + CLI VERSIONs"
+  fi
+fi
+
+# ---- 2b. CHANGELOG -------------------------------------------------
+#
+# git-cliff regenerates CHANGELOG.md from commit history. We tell it
+# the in-flight version so the Unreleased section becomes [VERSION].
+# Skipped silently if git-cliff isn't on PATH — the release still ships,
+# just without an updated changelog. Install with `brew install git-cliff`
+# / `cargo install git-cliff`.
+
+if [[ -f cliff.toml ]] && command -v git-cliff >/dev/null 2>&1; then
+  log "regenerating CHANGELOG.md (git-cliff)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "git-cliff -c cliff.toml --tag $VERSION -o CHANGELOG.md"
+  else
+    git-cliff -c cliff.toml --tag "$VERSION" -o CHANGELOG.md >/dev/null
+  fi
+elif [[ -f cliff.toml ]]; then
+  warn "cliff.toml present but git-cliff not on PATH — skipping CHANGELOG regen (brew install git-cliff)"
 fi
 
 # ---- 3. web build --------------------------------------------------
 
 if [[ -d web ]]; then
   log "building web (pnpm --dir web build)"
-  if command -v pnpm >/dev/null 2>&1; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "(cd web && pnpm build) → server-go/internal/web/dist/"
+  elif command -v pnpm >/dev/null 2>&1; then
     (cd web && pnpm build >/dev/null) || fail "web build failed"
   else
     warn "pnpm not on PATH — assuming web/dist is already current"
@@ -118,20 +201,36 @@ fi
 # the 5-minute raw.githubusercontent.com cache. Go's go:embed can't
 # reach into ../../hack/, so we copy them into the embed dir first.
 log "syncing install scripts into server-go embed"
-cp hack/install.sh server-go/internal/installscripts/scripts/install.sh
-cp hack/install-cli.sh server-go/internal/installscripts/scripts/install-cli.sh
+if [[ "$DRY_RUN" == "1" ]]; then
+  dry "cp hack/install{,-cli}.sh server-go/internal/installscripts/scripts/"
+else
+  cp hack/install.sh server-go/internal/installscripts/scripts/install.sh
+  cp hack/install-cli.sh server-go/internal/installscripts/scripts/install-cli.sh
+fi
 
 # ---- 4. cross-build amd64 + push -----------------------------------
+#
+# Skipped when KUSO_RELEASE_SKIP_BUILD=1 — used by `make roll` when CI
+# already built + pushed the image and we just need to flip the live
+# cluster to it.
 
-log "docker buildx --platform linux/amd64 → ${KUSO_RELEASE_IMAGE}:${VERSION}"
-docker buildx build \
-  --platform linux/amd64 \
-  --push \
-  -t "${KUSO_RELEASE_IMAGE}:${VERSION}" \
-  -f server-go/Dockerfile \
-  . >/dev/null
+if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
+  log "docker buildx --platform linux/amd64 → ${KUSO_RELEASE_IMAGE}:${VERSION}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "docker buildx build --platform linux/amd64 --push -t ${KUSO_RELEASE_IMAGE}:${VERSION} -f server-go/Dockerfile ."
+  else
+    docker buildx build \
+      --platform linux/amd64 \
+      --push \
+      -t "${KUSO_RELEASE_IMAGE}:${VERSION}" \
+      -f server-go/Dockerfile \
+      . >/dev/null
+  fi
+else
+  log "skipping docker build (KUSO_RELEASE_SKIP_BUILD=1) — assuming ${KUSO_RELEASE_IMAGE}:${VERSION} already on registry"
+fi
 
-log "image pushed: ${KUSO_RELEASE_IMAGE}:${VERSION}"
+if [[ "$DRY_RUN" != "1" ]]; then log "image pushed: ${KUSO_RELEASE_IMAGE}:${VERSION}"; fi
 
 # ---- 4b. release.json + crds.yaml + GH release ---------------------
 #
@@ -200,6 +299,11 @@ KUSO_RELEASE_CLI="${KUSO_RELEASE_CLI:-1}"
 if [[ "${KUSO_RELEASE_CLI}" == "1" ]] && command -v go >/dev/null 2>&1; then
   log "cross-building CLI binaries (darwin/linux × amd64/arm64)"
   CLI_LDFLAGS="-X kuso/cmd/kusoCli/version.ldflagsVersion=${VERSION}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    for target in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
+      dry "(cd cli && GOOS=${target%-*} GOARCH=${target#*-} go build -ldflags='$CLI_LDFLAGS' -o ${DIST_DIR}/kuso-${target} ./cmd)"
+    done
+  else
   for target in darwin-arm64 darwin-amd64 linux-amd64 linux-arm64; do
     GOOS="${target%-*}"
     GOARCH="${target#*-}"
@@ -209,6 +313,7 @@ if [[ "${KUSO_RELEASE_CLI}" == "1" ]] && command -v go >/dev/null 2>&1; then
       || fail "CLI build failed for ${target}"
   done
   ls -lh "$DIST_DIR"/kuso-* | awk '{print "    " $5 "  " $9}'
+  fi  # close the dry-run branch
 else
   warn "go not on PATH (or KUSO_RELEASE_CLI=0) — skipping CLI binaries; install-cli.sh will fall back to source"
 fi
@@ -221,7 +326,15 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
   else
     log "creating GitHub release ${VERSION}"
     NOTES_FILE="$(mktemp)"
-    git log --pretty=format:'- %s' "$(git describe --tags --abbrev=0 2>/dev/null || echo HEAD)..HEAD" > "$NOTES_FILE" || true
+    # Prefer git-cliff's per-version slice if available (matches what
+    # CHANGELOG.md will show); fall back to a flat `git log` between
+    # tags. Either way the body is markdown gh accepts.
+    if command -v git-cliff >/dev/null 2>&1 && [[ -f cliff.toml ]]; then
+      git-cliff -c cliff.toml --current --strip header --tag "$VERSION" > "$NOTES_FILE" 2>/dev/null \
+        || git log --pretty=format:'- %s' "$(git describe --tags --abbrev=0 2>/dev/null || echo HEAD)..HEAD" > "$NOTES_FILE" || true
+    else
+      git log --pretty=format:'- %s' "$(git describe --tags --abbrev=0 2>/dev/null || echo HEAD)..HEAD" > "$NOTES_FILE" || true
+    fi
     # Collect CLI assets if they exist; the * glob would fail-fast under
     # `set -e` if dist/kuso-* is empty, so check first.
     CLI_ASSETS=()
@@ -229,12 +342,16 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
              "$DIST_DIR"/kuso-linux-amd64 "$DIST_DIR"/kuso-linux-arm64; do
       [[ -f "$f" ]] && CLI_ASSETS+=("$f")
     done
-    gh release create "$VERSION" \
-      --title "$VERSION" \
-      --notes-file "$NOTES_FILE" \
-      "$DIST_DIR/release.json" \
-      "$DIST_DIR/crds.yaml" \
-      "${CLI_ASSETS[@]}" >/dev/null
+    if [[ "$DRY_RUN" == "1" ]]; then
+      dry "gh release create $VERSION --title $VERSION --notes-file <…> $DIST_DIR/release.json $DIST_DIR/crds.yaml ${CLI_ASSETS[*]}"
+    else
+      gh release create "$VERSION" \
+        --title "$VERSION" \
+        --notes-file "$NOTES_FILE" \
+        "$DIST_DIR/release.json" \
+        "$DIST_DIR/crds.yaml" \
+        "${CLI_ASSETS[@]}" >/dev/null
+    fi
     rm -f "$NOTES_FILE"
     log "GitHub release ${VERSION} published (release.json + crds.yaml + ${#CLI_ASSETS[@]} CLI assets)"
   fi
@@ -249,10 +366,14 @@ if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]]; then
   # The known_hosts file still gets the entry — second run is fully
   # verified. Don't disable host key checking entirely; that opens us
   # up to MITM on every subsequent run.
-  ssh -i "$KUSO_RELEASE_KEY" \
-    -o StrictHostKeyChecking=accept-new \
-    "${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}" \
-    "kubectl set image -n ${KUSO_RELEASE_NS} deploy/${KUSO_RELEASE_DEPLOY} server=${KUSO_RELEASE_IMAGE}:${VERSION} && kubectl rollout status -n ${KUSO_RELEASE_NS} deploy/${KUSO_RELEASE_DEPLOY} --timeout=180s"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "ssh ${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST} 'kubectl set image -n ${KUSO_RELEASE_NS} deploy/${KUSO_RELEASE_DEPLOY} server=${KUSO_RELEASE_IMAGE}:${VERSION} && kubectl rollout status …'"
+  else
+    ssh -i "$KUSO_RELEASE_KEY" \
+      -o StrictHostKeyChecking=accept-new \
+      "${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}" \
+      "kubectl set image -n ${KUSO_RELEASE_NS} deploy/${KUSO_RELEASE_DEPLOY} server=${KUSO_RELEASE_IMAGE}:${VERSION} && kubectl rollout status -n ${KUSO_RELEASE_NS} deploy/${KUSO_RELEASE_DEPLOY} --timeout=180s"
+  fi
 
   # Verify /healthz reports the new version. Curl through the public
   # hostname so we exercise traefik + cert + the routed path.
@@ -311,12 +432,16 @@ OPERATOR_VERSION="${KUSO_RELEASE_OPERATOR_VERSION:-${VERSION}}"
 
 if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]] && operator_should_build; then
   log "operator/ changed — building operator image ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
-  docker buildx build \
-    --platform linux/amd64 \
-    --push \
-    -t "${OPERATOR_IMAGE}:${OPERATOR_VERSION}" \
-    -f operator/Dockerfile \
-    operator >/dev/null
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "docker buildx build --platform linux/amd64 --push -t ${OPERATOR_IMAGE}:${OPERATOR_VERSION} -f operator/Dockerfile operator"
+  else
+    docker buildx build \
+      --platform linux/amd64 \
+      --push \
+      -t "${OPERATOR_IMAGE}:${OPERATOR_VERSION}" \
+      -f operator/Dockerfile \
+      operator >/dev/null
+  fi
   log "operator image pushed: ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
 
   # Ship every CRD under operator/config/crd/bases/ to /tmp on the
@@ -326,10 +451,14 @@ if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]] && operator_should_build; then
   # complexity isn't worth it.
   log "scp + apply CRDs"
   CRD_FILES=( operator/config/crd/bases/*.yaml )
-  scp -i "$KUSO_RELEASE_KEY" \
-    -o StrictHostKeyChecking=accept-new \
-    "${CRD_FILES[@]}" \
-    "${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}:/tmp/" >/dev/null
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "scp ${CRD_FILES[*]} ${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}:/tmp/"
+  else
+    scp -i "$KUSO_RELEASE_KEY" \
+      -o StrictHostKeyChecking=accept-new \
+      "${CRD_FILES[@]}" \
+      "${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}:/tmp/" >/dev/null
+  fi
 
   # Build the kubectl apply args list dynamically — one -f per CRD.
   REMOTE_FLAGS=""
@@ -337,12 +466,16 @@ if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]] && operator_should_build; then
     REMOTE_FLAGS="${REMOTE_FLAGS} -f /tmp/$(basename "$f")"
   done
 
-  ssh -i "$KUSO_RELEASE_KEY" \
-    -o StrictHostKeyChecking=accept-new \
-    "${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}" \
-    "kubectl apply ${REMOTE_FLAGS} && \
-     kubectl set image -n ${KUSO_OPERATOR_NS} deploy/${KUSO_OPERATOR_DEPLOY} ${KUSO_OPERATOR_CONTAINER}=${OPERATOR_IMAGE}:${OPERATOR_VERSION} && \
-     kubectl rollout status -n ${KUSO_OPERATOR_NS} deploy/${KUSO_OPERATOR_DEPLOY} --timeout=180s"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "ssh ${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST} 'kubectl apply${REMOTE_FLAGS} && kubectl set image -n ${KUSO_OPERATOR_NS} deploy/${KUSO_OPERATOR_DEPLOY} ${KUSO_OPERATOR_CONTAINER}=${OPERATOR_IMAGE}:${OPERATOR_VERSION} && kubectl rollout status …'"
+  else
+    ssh -i "$KUSO_RELEASE_KEY" \
+      -o StrictHostKeyChecking=accept-new \
+      "${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}" \
+      "kubectl apply ${REMOTE_FLAGS} && \
+       kubectl set image -n ${KUSO_OPERATOR_NS} deploy/${KUSO_OPERATOR_DEPLOY} ${KUSO_OPERATOR_CONTAINER}=${OPERATOR_IMAGE}:${OPERATOR_VERSION} && \
+       kubectl rollout status -n ${KUSO_OPERATOR_NS} deploy/${KUSO_OPERATOR_DEPLOY} --timeout=180s"
+  fi
   log "operator rolled to ${OPERATOR_VERSION}"
 fi
 
@@ -355,24 +488,46 @@ fi
 # 404'd because tags were never pushed).
 
 if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
-  if git diff --quiet -- server-go/internal/version/VERSION deploy/server-go.yaml hack/install.sh; then
+  COMMIT_FILES=(
+    server-go/internal/version/VERSION
+    deploy/server-go.yaml
+    hack/install.sh
+    cli/cmd/kusoCli/version/CLI_VERSION
+    cli/pkg/kusoApi/VERSION
+  )
+  # Include CHANGELOG.md if git-cliff regenerated it (see step 4d).
+  [[ -f CHANGELOG.md ]] && COMMIT_FILES+=(CHANGELOG.md)
+
+  if git diff --quiet -- "${COMMIT_FILES[@]}"; then
     warn "no version-file changes to commit"
   else
-    git add server-go/internal/version/VERSION deploy/server-go.yaml hack/install.sh
-    git commit -m "release: ${VERSION}" >/dev/null
+    if [[ "$DRY_RUN" == "1" ]]; then
+      dry "git add ${COMMIT_FILES[*]} && git commit -m 'release: ${VERSION}'"
+    else
+      git add "${COMMIT_FILES[@]}"
+      git commit -m "release: ${VERSION}" >/dev/null
+    fi
     log "committed: release: ${VERSION}"
   fi
 
   if git rev-parse "${VERSION}" >/dev/null 2>&1; then
     warn "tag ${VERSION} already exists — skipping tag"
   else
-    git tag -a "${VERSION}" -m "release ${VERSION}"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      dry "git tag -a ${VERSION} -m 'release ${VERSION}'"
+    else
+      git tag -a "${VERSION}" -m "release ${VERSION}"
+    fi
     log "tagged: ${VERSION}"
   fi
 
   if [[ "${KUSO_RELEASE_PUSH:-1}" == "1" ]]; then
-    git push origin HEAD
-    git push origin "${VERSION}" || warn "tag push failed (already on remote?)"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      dry "git push origin HEAD && git push origin ${VERSION}"
+    else
+      git push origin HEAD
+      git push origin "${VERSION}" || warn "tag push failed (already on remote?)"
+    fi
     log "pushed commit + tag to origin"
   else
     warn "KUSO_RELEASE_PUSH=0 — commit + tag NOT pushed; install.sh on main will be stale"
