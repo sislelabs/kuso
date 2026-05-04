@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.24] — 2026-05-04
+
+### Other
+- Ui: solid CTAs use orange (palette complement), not slate-blue ([3b5b285](https://github.com/sislelabs/kuso/commit/3b5b2854ebb66b41d70233475e472031e7d650f6))
+
 ## [0.7.23] — 2026-05-04
 
 ### Other
