@@ -605,14 +605,15 @@ function ReferenceMenu({
   );
 }
 
-// ServiceRefRow surfaces the two canonical synthetic keys for a
-// service. INTERNAL_URL = in-cluster DNS (backend↔backend); PUBLIC_URL =
-// externally-reachable domain (frontend in a browser → backend).
-// URL/HOST/PORT still work as refs for back-compat but aren't shown
-// here — adding more buttons clutters the picker without helping the
-// 95% case.
+// ServiceRefRow surfaces the canonical synthetic keys for a service.
+// INTERNAL_URL = in-cluster DNS (backend↔backend); PUBLIC_URL =
+// externally-reachable domain (frontend in a browser → backend);
+// PORT = the bare container port for callers that already have the
+// host (sidecar configs, healthchecks, etc.). URL/HOST still work as
+// refs for back-compat but aren't surfaced here — they duplicate the
+// matched _URL pair without adding signal.
 function ServiceRefRow({ service, onPick }: { service: string; onPick: (ref: string) => void }) {
-  const KEYS = ["INTERNAL_URL", "PUBLIC_URL"];
+  const KEYS = ["INTERNAL_URL", "PUBLIC_URL", "PORT"];
   return (
     <div className="px-2 py-1">
       <p className="font-mono text-[11px] text-[var(--text-secondary)]">{service}</p>
