@@ -15,7 +15,13 @@ Thumbs.db
 # Node
 node_modules/
 dist/
-build/
+# `build/` ignores stray go/npm build outputs, but the project's
+# repo-tracked image sources live at build/{updater,backup}/Dockerfile
+# and entrypoint.sh — so we anchor the ignore at the root and re-include
+# the docker build sources explicitly.
+/build/*
+!/build/updater/
+!/build/backup/
 *.log
 npm-debug.log*
 yarn-debug.log*
