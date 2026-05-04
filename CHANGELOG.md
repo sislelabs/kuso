@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.25] — 2026-05-04
+
+### Other
+- Ui: two-tier CTA system — orange primary, slate-blue secondary, thicker canvas borders ([17e59dc](https://github.com/sislelabs/kuso/commit/17e59dc7d2b416a4b010900306946810797eaec9))
+
 ## [0.7.24] — 2026-05-04
 
 ### Other
