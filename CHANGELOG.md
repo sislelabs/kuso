@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.30] — 2026-05-04
+
+### Other
+- Ui: default Button variant is now sage (positive action) ([f0a523e](https://github.com/sislelabs/kuso/commit/f0a523e132f31b0483d0712c2421456681f4538b))
+
 ## [0.7.29] — 2026-05-04
 
 ### Other
