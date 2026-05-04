@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.28] — 2026-05-04
+
+### Other
+- Ui: orange (#EB6534) is now the universal accent ([f6c65c0](https://github.com/sislelabs/kuso/commit/f6c65c0c4723c5b9ebe5f2ba9fb7272892014226))
+
 ## [0.7.27] — 2026-05-04
 
 ### Other
