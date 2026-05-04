@@ -500,12 +500,32 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
     if [[ "$DRY_RUN" == "1" ]]; then
       dry "gh release create $VERSION --title $VERSION --notes-file <…> $DIST_DIR/release.json $DIST_DIR/crds.yaml ${CLI_ASSETS[*]}"
     else
-      gh release create "$VERSION" \
-        --title "$VERSION" \
-        --notes-file "$NOTES_FILE" \
-        "$DIST_DIR/release.json" \
-        "$DIST_DIR/crds.yaml" \
-        "${CLI_ASSETS[@]}" >/dev/null
+      # Two-phase: create the release with no assets first, then
+      # upload each asset with retries. The bundled-create form
+      # (everything in one call) was rolling back the entire release
+      # on a single asset's transient 404/422 from the GH upload API
+      # — and we hit those, repeatedly, on the cross-built CLI
+      # binaries. Doing it incrementally lets each upload retry
+      # independently and keeps a partial release around to recover.
+      if ! gh release view "$VERSION" >/dev/null 2>&1; then
+        gh release create "$VERSION" \
+          --title "$VERSION" \
+          --notes-file "$NOTES_FILE" >/dev/null
+      fi
+      ALL_ASSETS=( "$DIST_DIR/release.json" "$DIST_DIR/crds.yaml" "${CLI_ASSETS[@]}" )
+      for asset in "${ALL_ASSETS[@]}"; do
+        ok=0
+        for try in 1 2 3; do
+          if gh release upload "$VERSION" "$asset" --clobber >/dev/null 2>&1; then
+            ok=1; break
+          fi
+          warn "upload of $(basename "$asset") attempt ${try}/3 failed; retrying"
+          sleep $((try * 2))
+        done
+        if [[ "$ok" != "1" ]]; then
+          fail "couldn't upload $(basename "$asset") after 3 tries"
+        fi
+      done
     fi
     rm -f "$NOTES_FILE"
     log "GitHub release ${VERSION} published (release.json + crds.yaml + ${#CLI_ASSETS[@]} CLI assets)"
