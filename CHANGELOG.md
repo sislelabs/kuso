@@ -5,6 +5,12 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.15] — 2026-05-04
+
+### 🐛 Bug Fixes
+- Fix(release): query ghcr for latest existing operator tag (was guessing wrong) ([aff7f44](https://github.com/sislelabs/kuso/commit/aff7f44f98cb06c9a638e76686c415b9229c2fc3))
+- Fix(release): pin operator image to last actually-built tag ([569a11b](https://github.com/sislelabs/kuso/commit/569a11b2754d829f99ab9f8fb54c93acdfe5d0fc))
+
 ## [0.7.14] — 2026-05-04
 
 ### ✨ Features
