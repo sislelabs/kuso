@@ -80,16 +80,34 @@ spec:
                 | tar -xz -C /usr/local/bin nixpacks
               SRC="/workspace/src/{{ .Values.repo.path | default "." }}"
               cd "$SRC"
+
+              # Detect the go.mod toolchain requirement and pin
+              # GOTOOLCHAIN to the matching X.Y.0+auto so Go itself
+              # fetches the exact toolchain when nixpacks' bundled go
+              # (currently 1.22, pinned in nixpacks itself — only
+              # 1.18-1.23 are supported by the provider) is older.
+              #
+              # Bare `GOTOOLCHAIN=auto` doesn't work because go.mod's
+              # `go 1.24` line lacks a patch number, and Go's
+              # auto-fetcher tries to download literal "go1.24"
+              # which isn't a real release tag (releases are
+              # go1.24.0, go1.24.1...). Pinning go1.X.0+auto
+              # resolves to the first patch release of that line.
+              GOTOOLCHAIN_VAL="auto"
+              if [ -f go.mod ]; then
+                MOD_GO=$(awk '/^go [0-9]/ {print $2; exit}' go.mod)
+                if [ -n "$MOD_GO" ]; then
+                  case "$MOD_GO" in
+                    *.*.*) GOTOOLCHAIN_VAL="go${MOD_GO}+auto" ;;
+                    *.*)   GOTOOLCHAIN_VAL="go${MOD_GO}.0+auto" ;;
+                  esac
+                  echo "go.mod requires go ${MOD_GO} → GOTOOLCHAIN=${GOTOOLCHAIN_VAL}"
+                fi
+              fi
+
               echo "running nixpacks build --out . (writes .nixpacks/ alongside source)"
-              # GOTOOLCHAIN=auto lets Go fetch a newer toolchain at build
-              # time when go.mod's `go 1.X` directive exceeds nixpacks'
-              # bundled go (currently 1.22). Without this, every Go-1.23+
-              # repo errored with "toolchain not available" inside kaniko.
-              # Auto-fetch needs network, which kaniko already has.
-              # NIXPACKS_NO_CACHE prevents the upstream cache layer from
-              # masking a fresh nixpkgs pin between builds.
               nixpacks build . --out . \
-                --env GOTOOLCHAIN=auto \
+                --env "GOTOOLCHAIN=${GOTOOLCHAIN_VAL}" \
                 --env GOFLAGS=-mod=mod
               echo "--- generated Dockerfile ---"
               cat .nixpacks/Dockerfile
