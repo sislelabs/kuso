@@ -327,6 +327,18 @@ kubectl wait --for=condition=Available --timeout=180s \
 REGISTRY_IP=$(kubectl get svc kuso-registry -n kuso -o jsonpath='{.spec.clusterIP}')
 ensure_registry_hosts_entry "$REGISTRY_IP"
 
+# -------- 8b. prometheus --------
+# Lightweight prometheus that scrapes traefik:9100 + opted-in pods.
+# Required for the dashboard's Metrics tab — without it the
+# Requests / Error rate / Response time cards permanently render
+# "no data yet" because /api/kubernetes/envs/.../timeseries hits
+# kuso-prometheus.kuso.svc.cluster.local:9090. CPU + memory still
+# work without prom (they read kube metrics-server).
+log "deploying in-cluster prometheus"
+curl -sfL "${KUSO_RAW}/deploy/prometheus.yaml" | kubectl apply -f - >/dev/null
+kubectl wait --for=condition=Available --timeout=120s \
+  deployment/kuso-prometheus -n kuso || warn "kuso-prometheus not yet ready"
+
 # -------- 9. server secrets --------
 if [[ "${KUSO_INSECURE_SECRETS:-0}" == "1" ]]; then
   log "using INSECURE dev secrets (admin / kuso-admin)"
