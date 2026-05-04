@@ -52,11 +52,19 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
       <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
       <div className="flex items-center gap-2">
         <AddonIcon kind={data.addon.spec.kind} className="h-5 w-5" />
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">{data.addon.metadata.name}</p>
-          <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
+            {/* Three pieces of glance info packed onto one line:
+                 - kind + version  (Postgres · 16)
+                 - storage size    (10Gi)
+                 - HA              (ha) — only when on
+                Keeps the half-height node informative without
+                adding any server-side scraping. */}
             {addonLabel(data.addon.spec.kind)}
             {data.addon.spec.version ? ` · ${data.addon.spec.version}` : ""}
+            {data.addon.spec.storageSize ? ` · ${data.addon.spec.storageSize}` : ""}
+            {data.addon.spec.ha ? " · ha" : ""}
           </p>
         </div>
       </div>

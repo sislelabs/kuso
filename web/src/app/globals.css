@@ -71,13 +71,12 @@
   --accent: #40476D;
   --accent-hover: #2F3556;
   --accent-subtle: rgba(64, 71, 109, 0.10);
-  /* Light mode: orange primary CTAs, slate-blue secondary CTAs.
-     Same two-tier system as dark mode — Save/Create are loud, the
-     rest stay quiet. */
-  --btn-primary-bg: #EB6534;
-  --btn-primary-bg-hover: #C44C1F;
-  --btn-primary-fg: #FFFFFF;
-  --btn-primary-border: #C44C1F;
+  /* Light mode: sage primary CTAs (Save/Create/Deploy), slate-blue
+     secondary. Same two-tier shape as dark mode. */
+  --btn-primary-bg: #ACBEA3;
+  --btn-primary-bg-hover: #8DA084;
+  --btn-primary-fg: #0A0C15;
+  --btn-primary-border: #708A6B;
   --btn-secondary-bg: #40476D;
   --btn-secondary-bg-hover: #2F3556;
   --btn-secondary-fg: #FBFBF7;
@@ -144,39 +143,37 @@
 
 .dark {
   /* Dark-mode palette — three clear roles:
-       #131200  warm near-black  — main (ground + surfaces, single hue)
-       #40476D  slate-blue       — accent (borders, links, decorative)
-       #ACBEA3  sage             — accent (success state, secondary tags)
-       #EB6534  orange           — action (Save / Deploy / Create only)
-     Plus periwinkle stays as a hover/focus ring tone since it's the
-     light-variant of slate-blue and pops on the warm-black ground.
+       #0A0C15  cool near-black  — main (ground + surfaces, single hue)
+       #EB6534  orange           — accent (borders, links, focus rings)
+       #ACBEA3  sage             — action (Save / Deploy / Create)
+       #40476D  slate-blue       — decorative / secondary CTAs
+     The surface ladder (#0A0C15 → #11141F → #181C29 → #1F2333) all
+     stays within one cool-near-black hue family. Color appears
+     only through:
+       - hover/focus rings (orange)
+       - primary action buttons (sage)
+       - secondary CTAs (slate-blue)
+       - status pills (success=sage, warn=orange, error=red)
+     Periwinkle is no longer in active use as a token target. */
 
-     The previous palette piled four hues on top of each other
-     (aubergine ground, midnight cards, slate CTAs, orange CTAs)
-     which is why nothing felt cohesive — every surface was a
-     different brand color. The new system uses ONE hue family for
-     the surface ladder and reserves color for accents/actions
-     only. */
-
-  /* Surface ladder: warm near-black, single hue family. The base
-     is #131200 (almost a deep olive-black, very low saturation).
-     Steps lift by ~5% lightness, no hue shift, so cards/popovers
-     feel like the same surface at different elevations rather
-     than competing brand colors. */
-  --bg-primary: #131200;          /* warm near-black — page ground */
-  --bg-secondary: #1C1B07;        /* +1 step — sidebar */
-  --bg-tertiary: #26240F;         /* +2 step — hovered rows */
-  --bg-elevated: #2F2D14;         /* +3 step — cards / popovers */
+  /* Surface ladder: cool near-black, single hue family. The base
+     #0A0C15 has a slight blue undertone — reads as a "computer
+     screen black" rather than a brand color. Steps lift by ~5%
+     lightness, no hue shift, so cards/popovers feel like the same
+     surface at different elevations. */
+  --bg-primary: #0A0C15;          /* cool near-black — page ground */
+  --bg-secondary: #11141F;        /* +1 step — sidebar */
+  --bg-tertiary: #181C29;         /* +2 step — hovered rows */
+  --bg-elevated: #1F2333;         /* +3 step — cards / popovers */
   --bg-inverse: #FBFBF7;
 
-  /* Text: cream primary, warm-olive secondary, muted tertiary.
-     Olive sits in the same warm-temperature family as the new
-     ground (#131200), which keeps text feeling integrated rather
-     than imported from a different palette. */
+  /* Text: cream primary, cool-grey secondary, muted tertiary.
+     Greys sit in the same cool-temperature family as the new
+     ground (#0A0C15), which keeps text from feeling imported. */
   --text-primary: #ECEAE0;
-  --text-secondary: #B5B19A;      /* warm olive, lifted */
-  --text-tertiary: #7E7B66;       /* warm olive, muted */
-  --text-inverse: #131200;
+  --text-secondary: #A3A8B8;      /* cool grey, lifted */
+  --text-tertiary: #6F7383;       /* cool grey, muted */
+  --text-inverse: #0A0C15;
 
   /* Accent: orange (#EB6534) is the primary accent — borders on
      hover, link colors, focus rings, ambient highlight. Same hue
@@ -192,29 +189,34 @@
   --accent-3: #ACBEA3;            /* sage — decorative / success */
   --accent-3-subtle: rgba(172, 190, 163, 0.14);
 
-  /* Action color: ORANGE only. Reserved for high-emphasis
-     "do the thing" buttons — Save, Create, Deploy, Submit. Every
-     other interactive element reaches for slate or sage. The
-     scarcity is the point: when orange shows up the user knows
-     it's the action that matters. */
-  --btn-primary-bg: #EB6534;
-  --btn-primary-bg-hover: #F27A4F;
-  --btn-primary-fg: #FFFFFF;
-  --btn-primary-border: #C44C1F;
+  /* Action color: SAGE for high-emphasis "do the thing" buttons —
+     Save, Create, Deploy, Submit. Sage reads as positive/calm/
+     "this is the next step" rather than the loud "click me" of
+     orange. Orange stays as the universal accent for hover/focus/
+     interactive highlights, sage as the commit-the-action color.
+     Dark text on the pale sage so the button is high-contrast.
+
+     Save the rare orange highlight for when something actually
+     needs attention (warnings, builds in progress, etc) — the
+     scarcity is what makes it useful. */
+  --btn-primary-bg: #ACBEA3;
+  --btn-primary-bg-hover: #BDCCB4;
+  --btn-primary-fg: #0A0C15;
+  --btn-primary-border: #8DA084;
 
   /* Secondary CTAs (Open / Cancel / nav-style) use the slate
      accent. shadcn's `default` Button variant routes through here. */
-  --btn-secondary-bg: #2A2F47;      /* slate, deeper for solid bg legibility */
+  --btn-secondary-bg: #2A2F47;
   --btn-secondary-bg-hover: #40476D;
   --btn-secondary-fg: #ECEAE0;
   --btn-secondary-border: #4F5784;
 
-  /* Borders ladder against the warm-black ground. Each step lifts
+  /* Borders ladder against the cool-black ground. Each step lifts
      by ~12% lightness from the surface so dividers/cards register
      without flooding the page with a bright color. Strong = hover
-     uses orange to match the new accent system. */
-  --border-subtle: #3A3825;       /* warm olive, deep — ambient */
-  --border-default: #4F4D34;      /* warm olive, mid — dividers */
+     uses orange to match the accent system. */
+  --border-subtle: #2A2F40;       /* cool slate, deep — ambient */
+  --border-default: #3A3F55;      /* cool slate, mid — dividers */
   --border-strong: #EB6534;       /* orange — hover/focus */
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
@@ -222,39 +224,39 @@
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
 
   /* Tailwind/shadcn hookups. Each named token maps to the
-     warm-black surface ladder defined above — no separate "blue
+     cool-black surface ladder defined above — no separate "blue
      surface" or "navy popover" paths anymore. The surface is one
      hue family at four lightnesses; color shows up only via
      accents and the action button. */
-  --background: #131200;
+  --background: #0A0C15;
   --foreground: #ECEAE0;
-  --card: #2F2D14;                /* surface +3 — cards */
+  --card: #1F2333;                /* surface +3 — cards */
   --card-foreground: #ECEAE0;
-  --popover: #2F2D14;             /* same — popovers */
+  --popover: #1F2333;             /* same — popovers */
   --popover-foreground: #ECEAE0;
-  --primary: #40476D;             /* slate-blue accent */
-  --primary-foreground: #ECEAE0;
-  --secondary: #1C1B07;           /* surface +1 */
+  --primary: #ACBEA3;             /* sage — primary action */
+  --primary-foreground: #0A0C15;
+  --secondary: #11141F;           /* surface +1 */
   --secondary-foreground: #ECEAE0;
-  --muted: #26240F;               /* surface +2 */
-  --muted-foreground: #B5B19A;    /* warm olive */
-  --accent-ui: #26240F;
+  --muted: #181C29;               /* surface +2 */
+  --muted-foreground: #A3A8B8;    /* cool grey */
+  --accent-ui: #181C29;
   --accent-foreground: #ECEAE0;
   --destructive: #C9382A;
-  --border: #4F4D34;              /* matches --border-default */
-  --input: #26240F;               /* matches --bg-tertiary */
+  --border: #3A3F55;              /* matches --border-default */
+  --input: #181C29;               /* matches --bg-tertiary */
   --ring: #EB6534;                /* orange — focus ring */
 
   /* Sidebar uses surface +1 so the rail is one shade darker than
      the cards above it — keeps the visual hierarchy "rail < page <
-     card" and stays within the warm-black family. */
-  --sidebar: #1C1B07;
+     card" within the cool-black family. */
+  --sidebar: #11141F;
   --sidebar-foreground: #ECEAE0;
-  --sidebar-primary: #40476D;
-  --sidebar-primary-foreground: #ECEAE0;
-  --sidebar-accent: #26240F;
+  --sidebar-primary: #ACBEA3;
+  --sidebar-primary-foreground: #0A0C15;
+  --sidebar-accent: #181C29;
   --sidebar-accent-foreground: #ECEAE0;
-  --sidebar-border: #4F4D34;
+  --sidebar-border: #3A3F55;
   --sidebar-ring: #EB6534;
 
   /* Status hues — used by Badge, Toast, build/env state pills, etc.

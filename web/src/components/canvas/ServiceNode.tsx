@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { Check, Copy, ExternalLink } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
-import { DeployStatusPill, type DeployStatus } from "@/components/service/DeployStatusPill";
+import { type DeployStatus } from "@/components/service/DeployStatusPill";
 import { SleepBadge } from "@/components/service/SleepBadge";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { cn, serviceShortName } from "@/lib/utils";
@@ -82,13 +82,17 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
       <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
 
-      {/* Header row: runtime icon + name + status pill */}
+      {/* Header row: runtime icon + name + uptime age. The
+          DeployStatusPill ("ACTIVE") was removed — running state is
+          already encoded by the green border + the replica dot, so
+          the pill was redundant noise. Uptime tells you something
+          new: how long this revision has been live. */}
       <div className="flex items-center justify-between gap-2">
         <span className="flex min-w-0 items-center gap-2 truncate text-sm font-medium">
           <RuntimeIcon runtime={data.service.spec.runtime} />
           <span className="truncate">{shortName}</span>
         </span>
-        <DeployStatusPill status={status} />
+        <UptimeBadge env={data.env} status={status} />
       </div>
 
       {/* URL pill */}
@@ -125,13 +129,21 @@ function ReplicasBadge({
       </span>
     );
   }
-  const allUp = replicas.max > 0 && replicas.ready === replicas.max;
-  const someUp = replicas.ready > 0;
-  const dotCls = allUp
-    ? "bg-emerald-400"
-    : !someUp
-      ? "bg-[var(--text-tertiary)]/40"
-      : "bg-amber-400";
+  // Replicas are a load proxy: more pods running = more traffic.
+  // Color the dot by ready/max ratio so a glance tells you "comfy
+  // / busy / scaling cliff":
+  //   ratio == 0      grey   — nothing up (failed/sleeping/etc)
+  //   ratio  < 0.5    green  — comfortably under capacity
+  //   ratio  < 0.85   orange — mid-load, autoscaler probably climbing
+  //   ratio >= 0.85   red    — near max, may need more headroom
+  // Sleeping overrides everything (greys out + label changes to asleep).
+  const ratio = replicas.max > 0 ? replicas.ready / replicas.max : 0;
+  let dotCls = "bg-[var(--text-tertiary)]/40";
+  if (status !== "sleeping" && replicas.ready > 0) {
+    if (ratio >= 0.85) dotCls = "bg-red-400";
+    else if (ratio >= 0.5) dotCls = "bg-amber-400";
+    else dotCls = "bg-emerald-400";
+  }
   return (
     <span className="inline-flex items-center gap-2 text-[var(--text-tertiary)]">
       <span className="inline-flex items-center gap-1.5">
@@ -155,6 +167,45 @@ function ReplicasBadge({
       )}
     </span>
   );
+}
+
+// UptimeBadge shows how long this revision has been live ("3h",
+// "2d"). Only renders when the env is in a steady state (not
+// building/deploying — those have their own animated border, no
+// uptime to report). Reads env.status.lastDeployedAt so the value
+// resets to 0 on every redeploy, not on pod restart.
+function UptimeBadge({
+  env,
+  status,
+}: {
+  env?: KusoEnvironment;
+  status: DeployStatus;
+}) {
+  if (!env || status === "building" || status === "deploying") return null;
+  const ts = env.status?.lastDeployedAt;
+  if (!ts) return null;
+  return (
+    <span
+      title={`Last deployed at ${ts}`}
+      className="shrink-0 font-mono text-[10px] text-[var(--text-tertiary)]"
+    >
+      {relativeAge(ts)}
+    </span>
+  );
+}
+
+// relativeAge → "32s", "5m", "3h", "2d". Same renderer the build
+// list uses; inlined here so this file doesn't reach into a sibling.
+function relativeAge(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return "?";
+  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}h`;
+  return `${Math.floor(hr / 24)}d`;
 }
 
 function UrlPill({ url }: { url: string }) {
