@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.42] — 2026-05-04
+
+### ✨ Features
+- Feat(canvas): drag-to-connect + PUBLIC_URL/PUBLIC_HOST refs ([25332ed](https://github.com/sislelabs/kuso/commit/25332ed1828735bdd9f4808e5ece9358353a5d8e))
+
 ## [0.7.41] — 2026-05-04
 
 ### ✨ Features
