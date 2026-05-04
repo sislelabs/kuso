@@ -34,6 +34,24 @@ type NotificationEvent struct {
 
 const notificationEventCap = 200
 
+// PruneNotificationEvents deletes events whose createdAt is older
+// than `before`. Returns the number of rows removed. Called from
+// the daily cleanup goroutine in cmd/kuso-server. Independent of
+// the per-insert row-cap prune above — that one keeps the bell
+// icon snappy; this one keeps the table from accumulating dead
+// rows on a long-running cluster with low event volume.
+func (d *DB) PruneNotificationEvents(ctx context.Context, before time.Time) (int64, error) {
+	res, err := d.DB.ExecContext(ctx,
+		`DELETE FROM "NotificationEvent" WHERE "createdAt" < ?`,
+		before.UTC().Format("2006-01-02 15:04:05"),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("prune notification events: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
 // InsertNotificationEvent appends one row + prunes anything older
 // than the most recent `notificationEventCap` rows. Idempotent
 // pruning means the table never exceeds the cap by more than the

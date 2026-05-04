@@ -22,6 +22,19 @@
 {{- if and $existing $existing.data (index $existing.data "POSTGRES_PASSWORD") -}}
   {{- $existingPw = (index $existing.data "POSTGRES_PASSWORD" | b64dec) -}}
 {{- end -}}
+{{/*
+  Drift guard: if the StatefulSet was already initialized (its data
+  PVC has the password baked into pgdata via initdb) but our conn
+  Secret is missing or empty, we MUST NOT randAlphaNum — that would
+  silently rotate the conn-secret to a value that no longer matches
+  the on-disk pgdata, breaking auth for every client. Fail the
+  render instead so the operator surfaces it and the user can run
+  `kuso project addon repair-password` to recover.
+*/}}
+{{- $existingSts := lookup "apps/v1" "StatefulSet" .Release.Namespace $name -}}
+{{- if and $existingSts (not $existingPw) (not .Values.password) -}}
+  {{- fail (printf "kusoaddon %s/%s: StatefulSet exists but conn Secret is missing — refusing to generate a fresh password. Run `kuso project addon repair-password` to recover." .Release.Namespace $name) -}}
+{{- end -}}
 {{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
 
 # StatefulSet running the upstream Postgres image. Plain non-HA single-node;

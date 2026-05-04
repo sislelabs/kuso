@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -245,6 +246,12 @@ func main() {
 		if os.Getenv("KUSO_FINALIZER_SWEEP_DISABLED") != "true" {
 			go runFinalizerSweep(ctx, kc, *namespace, logger)
 		}
+		// Daily SQLite cleanup — prunes NotificationEvent + LogLine
+		// rows older than retention. Skipped by
+		// KUSO_DAILY_CLEANUP_DISABLED=true.
+		if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
+			go runDailyCleanup(ctx, database, logger)
+		}
 
 		// GitHub App is opt-in; if env vars are missing the webhook +
 		// install routes simply aren't registered.
@@ -271,10 +278,12 @@ func main() {
 				if addonSvc != nil {
 					disp.AddonConnSecrets = addonSvc.ConnSecretsForProject
 					// Per-PR postgres clones so reviewers don't share
-					// production data. KUSO_PREVIEW_DB_DISABLED=true
-					// reverts to the v0.7.0 shared-prod behaviour for
-					// clusters where preview clones are too costly.
-					if os.Getenv("KUSO_PREVIEW_DB_DISABLED") != "true" {
+					// production data. Default OFF since pg_dump|psql
+					// per spawn easily saturates a 2-core box; opt in
+					// with KUSO_PREVIEW_DB_ENABLED=true. The shared-
+					// prod fallback (every preview reads/writes the
+					// production DB) is the safer indie default.
+					if os.Getenv("KUSO_PREVIEW_DB_ENABLED") == "true" {
 						disp.PreviewDB = previewdb.New(kc, addonSvc, *namespace, logger.With("component", "previewdb"))
 					}
 				}
@@ -412,6 +421,65 @@ func runPreviewCleanup(ctx context.Context, svc *projects.Service, logger *slog.
 			tick()
 		}
 	}
+}
+
+// runDailyCleanup ticks every 24h and prunes long-lived data that
+// would otherwise grow without bound on a long-running cluster:
+//   - NotificationEvent rows older than KUSO_NOTIFY_RETENTION_DAYS
+//     (default 7). The bell-icon feed already row-caps at 200, but
+//     low-volume clusters keep ancient events otherwise.
+//   - LogLine + LogLineFts rows older than KUSO_LOG_RETENTION_DAYS
+//     (default 7). One chatty service can write hundreds of MB/day
+//     into FTS5 — without retention, SQLite swells the disk fast.
+//
+// Best-effort: per-step errors log a warning and the loop continues.
+// Disabled by KUSO_DAILY_CLEANUP_DISABLED=true.
+func runDailyCleanup(ctx context.Context, database *db.DB, logger *slog.Logger) {
+	notifyDays := envInt("KUSO_NOTIFY_RETENTION_DAYS", 7)
+	logDays := envInt("KUSO_LOG_RETENTION_DAYS", 7)
+	t := time.NewTicker(24 * time.Hour)
+	defer t.Stop()
+	tick := func() {
+		c, cancel := context.WithTimeout(ctx, 5*time.Minute)
+		defer cancel()
+		now := time.Now()
+		if n, err := database.PruneNotificationEvents(c, now.AddDate(0, 0, -notifyDays)); err != nil {
+			logger.Warn("daily-cleanup notify", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup notify pruned", "rows", n, "days", notifyDays)
+		}
+		if n, err := database.PruneLogsOlderThan(c, now.AddDate(0, 0, -logDays)); err != nil {
+			logger.Warn("daily-cleanup logs", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup logs pruned", "rows", n, "days", logDays)
+		}
+	}
+	// Run once at startup so a fresh deploy doesn't have to wait 24h
+	// for the first cleanup. Important on a box that's been off for
+	// weeks — first boot cleans up the backlog immediately.
+	tick()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			tick()
+		}
+	}
+}
+
+// envInt reads an env var as int with a fallback. Used for tunables
+// that are days/hours/seconds with a sane default.
+func envInt(key string, fallback int) int {
+	v := os.Getenv(key)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 {
+		return fallback
+	}
+	return n
 }
 
 // runFinalizerSweep ticks every 5 minutes and clears the

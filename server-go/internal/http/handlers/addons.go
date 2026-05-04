@@ -42,6 +42,23 @@ func (h *AddonsHandler) Mount(r chi.Router) {
 	// Re-provision the per-project DB on a shared instance addon
 	// (Model 2). Rotates the password and refreshes <name>-conn.
 	r.Post("/api/projects/{project}/addons/{addon}/resync-instance", h.ResyncInstance)
+	// Recover from the helm-chart password drift bug: ALTER USER
+	// inside the running postgres pod to match the conn secret.
+	r.Post("/api/projects/{project}/addons/{addon}/repair-password", h.RepairPassword)
+}
+
+// RepairPassword resyncs the running postgres user's password to
+// match the conn secret. Use after the chart's password-reuse
+// lookup raced and generated a fresh random while pgdata was
+// locked to the old one.
+func (h *AddonsHandler) RepairPassword(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := addonsCtx(r)
+	defer cancel()
+	if err := h.Svc.RepairPassword(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
+		h.fail(w, "repair addon password", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // ResyncInstance re-provisions the per-project DB on a shared

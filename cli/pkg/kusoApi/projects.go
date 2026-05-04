@@ -172,6 +172,13 @@ func (k *KusoClient) ResyncInstanceAddon(project, addon string) (*resty.Response
 	return k.client.Post("/api/projects/" + project + "/addons/" + addon + "/resync-instance")
 }
 
+// RepairAddonPassword fixes the helm-chart password drift bug by
+// ALTERing the postgres user inside the running pod to match the
+// current conn secret value.
+func (k *KusoClient) RepairAddonPassword(project, addon string) (*resty.Response, error) {
+	return k.client.Post("/api/projects/" + project + "/addons/" + addon + "/repair-password")
+}
+
 // Apply posts a kuso.yml body to the server's config-as-code endpoint.
 // dryRun=true returns a Plan without writing; false applies it.
 func (k *KusoClient) Apply(project string, yamlBody []byte, dryRun bool) (*resty.Response, error) {

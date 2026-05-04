@@ -20,6 +20,7 @@ export {
   addAddon,
   resyncExternalAddon,
   resyncInstanceAddon,
+  repairAddonPassword,
   deleteAddon,
   updateAddon,
   setAddonPlacement,

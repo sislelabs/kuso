@@ -563,6 +563,32 @@ var addonResyncInstanceCmd = &cobra.Command{
 	},
 }
 
+var addonRepairPasswordCmd = &cobra.Command{
+	Use:   "repair-password <project> <name>",
+	Short: "Fix postgres password drift: ALTER USER inside the pod to match the conn secret",
+	Long: `Recovers from a known race in the kusoaddon helm chart where
+the conn secret's POSTGRES_PASSWORD diverges from the actual password
+on disk in the postgres data directory. Result: the SQL console and
+any client that reads the conn secret get "password authentication
+failed". The repair re-aligns by running ALTER USER inside the pod
+via the local trust unix socket.`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.RepairAddonPassword(args[0], args[1])
+		if err != nil {
+			return fmt.Errorf("repair: %w", err)
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("addon %s/%s password resynced\n", args[0], args[1])
+		return nil
+	},
+}
+
 // ---------------- env subcommand ----------------
 
 var projectEnvCmd = &cobra.Command{
@@ -706,6 +732,7 @@ func init() {
 	_ = addonConnectInstanceCmd.MarkFlagRequired("instance")
 
 	projectAddonCmd.AddCommand(addonResyncInstanceCmd)
+	projectAddonCmd.AddCommand(addonRepairPasswordCmd)
 
 	projectCmd.AddCommand(projectEnvCmd)
 	projectEnvCmd.AddCommand(envDeleteCmd)

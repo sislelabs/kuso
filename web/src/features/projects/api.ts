@@ -82,6 +82,19 @@ export async function resyncInstanceAddon(
   );
 }
 
+// repairAddonPassword fixes the helm-chart password drift bug —
+// ALTER USER inside the running pod to match the conn secret. Use
+// when the SQL console returns "password authentication failed".
+export async function repairAddonPassword(
+  project: string,
+  addon: string
+): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/repair-password`,
+    { method: "POST" }
+  );
+}
+
 export async function deleteAddon(project: string, addon: string): Promise<void> {
   return api(
     `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}`,

@@ -11,6 +11,7 @@ import {
   restoreBackup,
   listSQLTables,
   runSQL,
+  repairAddonPassword,
   setAddonPlacement,
   updateAddon,
   type BackupObject,
@@ -609,9 +610,6 @@ function SQLTab({ project, addon }: { project: string; addon: string }) {
     queryKey: ["addons", project, addon, "sql", "tables"],
     queryFn: () => listSQLTables(project, addon),
     staleTime: 30_000,
-    // Retry transient 502/504s while the postgres pod is still
-    // booting. Without this the first failed fetch sticks around
-    // forever even after the addon comes up.
     retry: 2,
     retryDelay: (i) => 1000 * (i + 1),
   });
@@ -634,6 +632,25 @@ function SQLTab({ project, addon }: { project: string; addon: string }) {
       setResp(null);
     },
   });
+  const repair = useMutation({
+    mutationFn: () => repairAddonPassword(project, addon),
+    onSuccess: () => {
+      toast.success("password resynced — retrying");
+      tables.refetch();
+      setError(null);
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "repair failed"),
+  });
+
+  // The drift bug surfaces as Postgres SQLSTATE 28P01. Detect both
+  // the explicit code and the human-readable form.
+  const looksLikePasswordDrift = (msg: string) =>
+    /password authentication failed/i.test(msg) || /28P01/.test(msg);
+  const tablesErrMsg =
+    tables.error instanceof Error ? tables.error.message : "";
+  const queryErrMsg = error ?? "";
+  const showRepair =
+    looksLikePasswordDrift(tablesErrMsg) || looksLikePasswordDrift(queryErrMsg);
 
   const pickTable = (schema: string, name: string) => {
     const safe =
@@ -654,16 +671,36 @@ function SQLTab({ project, addon }: { project: string; addon: string }) {
             <p className="text-amber-400">
               {tables.error instanceof Error ? tables.error.message : "load failed"}
             </p>
-            <p className="text-[var(--text-tertiary)]">
-              Postgres may still be starting. Click to retry.
-            </p>
-            <button
-              type="button"
-              onClick={() => tables.refetch()}
-              className="rounded border border-[var(--border-subtle)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
-            >
-              Retry
-            </button>
+            {showRepair ? (
+              <>
+                <p className="text-[var(--text-tertiary)]">
+                  Looks like password drift — the chart's conn secret no
+                  longer matches the password baked into pgdata. Repair
+                  resyncs the user via ALTER USER inside the pod.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => repair.mutate()}
+                  disabled={repair.isPending}
+                  className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1 font-mono text-[10px] text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
+                >
+                  {repair.isPending ? "Repairing…" : "Repair password"}
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="text-[var(--text-tertiary)]">
+                  Postgres may still be starting. Click to retry.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => tables.refetch()}
+                  className="rounded border border-[var(--border-subtle)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+                >
+                  Retry
+                </button>
+              </>
+            )}
           </div>
         ) : (tables.data ?? []).length === 0 ? (
           <p className="text-[10px] text-[var(--text-tertiary)]">no user tables</p>
