@@ -44,113 +44,135 @@
   --radius-xl: calc(var(--radius) * 1.4);
 }
 
+/*
+ * Palette derived from the kuso logo. Source colors:
+ *   #40476D  slate-blue        — primary/accent (light)
+ *   #ACBEA3  sage              — success / positive accent
+ *   #EB6534  orange            — warning / live / highlight
+ *   #AFBBF2  periwinkle        — primary/accent (dark) + info
+ *   #941B0C  deep red          — destructive (both modes)
+ *   #5B5941  warm olive        — secondary text / borders (dark)
+ *   #011502  near-black green  — dark mode base background
+ *
+ * Neutrals are warmed off-whites in light mode and a green-tinted
+ * near-black ladder in dark mode so the brand colors don't feel
+ * pasted onto a sterile gray UI.
+ */
 :root {
-  --bg-primary: #FFFFFF;
-  --bg-secondary: #F7F7F8;
-  --bg-tertiary: #EFEFF1;
+  --bg-primary: #FBFBF7;
+  --bg-secondary: #F4F3EC;
+  --bg-tertiary: #ECEAE0;
   --bg-elevated: #FFFFFF;
-  --bg-inverse: #111114;
-  --text-primary: #111114;
-  --text-secondary: #555560;
-  --text-tertiary: #8A8A93;
-  --text-inverse: #FFFFFF;
-  --accent: #111114;
-  --accent-hover: #2A2A30;
-  --accent-subtle: #F4F4F5;
-  --border-default: #E4E4E7;
-  --border-subtle: #EFEFF1;
-  --shadow-sm: 0 1px 2px rgba(17, 17, 20, 0.04);
-  --shadow-md: 0 4px 12px rgba(17, 17, 20, 0.06);
-  --shadow-lg: 0 12px 40px rgba(17, 17, 20, 0.08);
+  --bg-inverse: #011502;
+  --text-primary: #1A1D2E;
+  --text-secondary: #4A4F66;
+  --text-tertiary: #8A8E9F;
+  --text-inverse: #FBFBF7;
+  --accent: #40476D;
+  --accent-hover: #2F3556;
+  --accent-subtle: rgba(64, 71, 109, 0.10);
+  --border-default: #DCD9CB;
+  --border-subtle: #E8E5D8;
+  --shadow-sm: 0 1px 2px rgba(64, 71, 109, 0.06);
+  --shadow-md: 0 4px 12px rgba(64, 71, 109, 0.08);
+  --shadow-lg: 0 12px 40px rgba(64, 71, 109, 0.12);
 
-  --background: #FFFFFF;
-  --foreground: #111114;
+  --background: #FBFBF7;
+  --foreground: #1A1D2E;
   --card: #FFFFFF;
-  --card-foreground: #111114;
+  --card-foreground: #1A1D2E;
   --popover: #FFFFFF;
-  --popover-foreground: #111114;
-  --primary: #111114;
-  --primary-foreground: #FFFFFF;
-  --secondary: #F7F7F8;
-  --secondary-foreground: #111114;
-  --muted: #EFEFF1;
-  --muted-foreground: #555560;
-  --accent-ui: #111114;
-  --accent-foreground: #FFFFFF;
-  --destructive: oklch(0.577 0.245 27.325);
-  --border: #E4E4E7;
-  --input: #EFEFF1;
-  --ring: #111114;
+  --popover-foreground: #1A1D2E;
+  --primary: #40476D;
+  --primary-foreground: #FBFBF7;
+  --secondary: #F4F3EC;
+  --secondary-foreground: #1A1D2E;
+  --muted: #ECEAE0;
+  --muted-foreground: #4A4F66;
+  --accent-ui: #40476D;
+  --accent-foreground: #FBFBF7;
+  --destructive: #941B0C;
+  --border: #DCD9CB;
+  --input: #ECEAE0;
+  --ring: #40476D;
   --radius: 0.25rem;
 
-  --sidebar: #FFFFFF;
-  --sidebar-foreground: #111114;
-  --sidebar-primary: #111114;
-  --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #F4F4F5;
-  --sidebar-accent-foreground: #111114;
-  --sidebar-border: #E4E4E7;
-  --sidebar-ring: #111114;
+  --sidebar: #F4F3EC;
+  --sidebar-foreground: #1A1D2E;
+  --sidebar-primary: #40476D;
+  --sidebar-primary-foreground: #FBFBF7;
+  --sidebar-accent: #ECEAE0;
+  --sidebar-accent-foreground: #1A1D2E;
+  --sidebar-border: #DCD9CB;
+  --sidebar-ring: #40476D;
 
-  --chart-1: #111114;
-  --chart-2: #555560;
-  --chart-3: #8A8A93;
-  --chart-4: #111114;
-  --chart-5: #E4E4E7;
+  /* Chart palette: every color from the logo gets a slot, ordered
+     so chart-1 (the most-used series color) is the brand primary,
+     and the remaining slots cycle through complementary hues that
+     stay readable at small sizes. */
+  --chart-1: #40476D;
+  --chart-2: #EB6534;
+  --chart-3: #ACBEA3;
+  --chart-4: #5B5941;
+  --chart-5: #AFBBF2;
 }
 
 .dark {
-  --bg-primary: #111110;
-  --bg-secondary: #191918;
-  --bg-tertiary: #222221;
-  --bg-elevated: #2A2A28;
-  --bg-inverse: #FAFAF9;
-  --text-primary: #EDEDEB;
-  --text-secondary: #A0A09A;
-  --text-tertiary: #6B6B63;
-  --text-inverse: #111110;
-  --accent: #7C5CFF;
-  --accent-hover: #6845F0;
-  --accent-subtle: rgba(124, 92, 255, 0.1);
-  --border-default: #2A2A28;
-  --border-subtle: #222221;
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
-  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.4);
+  --bg-primary: #011502;
+  --bg-secondary: #0A1F0C;
+  --bg-tertiary: #142A17;
+  --bg-elevated: #1B3320;
+  --bg-inverse: #FBFBF7;
+  --text-primary: #ECEAE0;
+  --text-secondary: #ACBEA3;
+  --text-tertiary: #6F8270;
+  --text-inverse: #011502;
+  --accent: #AFBBF2;
+  --accent-hover: #C5CDF6;
+  --accent-subtle: rgba(175, 187, 242, 0.14);
+  --border-default: #1F3A24;
+  --border-subtle: #163020;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
+  --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
 
-  --background: #111110;
-  --foreground: #EDEDEB;
-  --card: #2A2A28;
-  --card-foreground: #EDEDEB;
-  --popover: #2A2A28;
-  --popover-foreground: #EDEDEB;
-  --primary: #7C5CFF;
-  --primary-foreground: #FFFFFF;
-  --secondary: #191918;
-  --secondary-foreground: #EDEDEB;
-  --muted: #222221;
-  --muted-foreground: #A0A09A;
-  --accent-ui: #222221;
-  --accent-foreground: #EDEDEB;
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: #2A2A28;
-  --input: #222221;
-  --ring: #7C5CFF;
+  --background: #011502;
+  --foreground: #ECEAE0;
+  --card: #1B3320;
+  --card-foreground: #ECEAE0;
+  --popover: #1B3320;
+  --popover-foreground: #ECEAE0;
+  --primary: #AFBBF2;
+  --primary-foreground: #011502;
+  --secondary: #0A1F0C;
+  --secondary-foreground: #ECEAE0;
+  --muted: #142A17;
+  --muted-foreground: #ACBEA3;
+  --accent-ui: #142A17;
+  --accent-foreground: #ECEAE0;
+  --destructive: #C9382A;
+  --border: #1F3A24;
+  --input: #142A17;
+  --ring: #AFBBF2;
 
-  --sidebar: #191918;
-  --sidebar-foreground: #EDEDEB;
-  --sidebar-primary: #7C5CFF;
-  --sidebar-primary-foreground: #FFFFFF;
-  --sidebar-accent: #222221;
-  --sidebar-accent-foreground: #EDEDEB;
-  --sidebar-border: #2A2A28;
-  --sidebar-ring: #7C5CFF;
+  --sidebar: #0A1F0C;
+  --sidebar-foreground: #ECEAE0;
+  --sidebar-primary: #AFBBF2;
+  --sidebar-primary-foreground: #011502;
+  --sidebar-accent: #142A17;
+  --sidebar-accent-foreground: #ECEAE0;
+  --sidebar-border: #1F3A24;
+  --sidebar-ring: #AFBBF2;
 
-  --chart-1: #7C5CFF;
-  --chart-2: #A0A09A;
-  --chart-3: #6B6B63;
-  --chart-4: #6845F0;
-  --chart-5: #EDEDEB;
+  /* Dark-mode chart palette: same hues, lifted for legibility on
+     the near-black ground. Periwinkle leads (matches the dark
+     accent), then orange, sage, periwinkle-mute, and a lifted
+     olive. */
+  --chart-1: #AFBBF2;
+  --chart-2: #EB6534;
+  --chart-3: #ACBEA3;
+  --chart-4: #C5CDF6;
+  --chart-5: #8A8765;
 }
 
 @layer base {
