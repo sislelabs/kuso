@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.29] — 2026-05-04
+
+### Other
+- Ui: drop ACTIVE pill, replicas color by load, add uptime + addon info ([bc9477a](https://github.com/sislelabs/kuso/commit/bc9477a52ff37c8f279682d5e467cbe947ee560f))
+
 ## [0.7.28] — 2026-05-04
 
 ### Other
