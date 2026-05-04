@@ -128,6 +128,30 @@ OPERATOR_IMAGE="${KUSO_RELEASE_OPERATOR_IMAGE:-ghcr.io/sislelabs/kuso-operator}"
 log()  { printf '\033[1;36m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m==>\033[0m %s\n' "$*"; }
 fail() { printf '\033[1;31m==>\033[0m %s\n' "$*" >&2; exit 1; }
+
+# latest_ghcr_tag <repo> — print the most recent vX.Y.Z tag for an
+# org/repo container package on ghcr (anonymous read). Empty string
+# on any failure (no curl, network, malformed JSON, no tags).
+# Uses an external python script (hack/ghcr-latest-tag.py) so we
+# don't have to escape multi-line python through bash heredocs —
+# that's the path that broke when this was inlined.
+latest_ghcr_tag() {
+  local repo="$1"
+  local script="${REPO_ROOT}/hack/ghcr-latest-tag.py"
+  if ! command -v curl >/dev/null || ! command -v python3 >/dev/null; then
+    return 0
+  fi
+  if [[ ! -x "$script" ]]; then
+    return 0
+  fi
+  local tok
+  tok="$(curl -sf "https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io" \
+    | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))' 2>/dev/null || true)"
+  [[ -z "$tok" ]] && return 0
+  curl -sf -H "Authorization: Bearer $tok" \
+    "https://ghcr.io/v2/${repo}/tags/list" 2>/dev/null \
+    | python3 "$script" 2>/dev/null || true
+}
 dry()  { printf '\033[1;35m[DRY-RUN]\033[0m %s\n' "$*"; }
 
 # run executes its args unless DRY_RUN=1, in which case it just prints
@@ -510,24 +534,18 @@ if [[ -n "${KUSO_RELEASE_OPERATOR_VERSION:-}" ]]; then
 elif operator_should_build; then
   OPERATOR_VERSION="$VERSION"
 else
-  # Find the most recent existing operator tag on ghcr. The release
-  # before this one whose operator/ diff was non-empty won — but
-  # walking git is faster than querying ghcr. Fall back to the
-  # current `deploy/operator.yaml` image tag if the git walk fails.
-  OPERATOR_VERSION=""
-  for prev_tag in $(git tag -l 'v*' --sort=-v:refname | head -50); do
-    [[ "$prev_tag" == "$VERSION" ]] && continue
-    prev_prev_tag="$(git describe --tags --abbrev=0 "${prev_tag}^" 2>/dev/null || echo)"
-    if [[ -z "$prev_prev_tag" ]]; then continue; fi
-    if ! git diff --quiet "$prev_prev_tag".."$prev_tag" -- operator/ 2>/dev/null; then
-      OPERATOR_VERSION="$prev_tag"
-      break
-    fi
-  done
+  # operator/ unchanged → reuse the most recent operator tag that
+  # actually exists on ghcr. Querying the registry's tag list is the
+  # only source of truth (git tags / yaml pins drift). Falls back to
+  # $VERSION if the query fails — better to ship a slightly-wrong
+  # release.json than block the release on a registry hiccup.
+  OPERATOR_VERSION="$(latest_ghcr_tag sislelabs/kuso-operator)"
   if [[ -z "$OPERATOR_VERSION" ]]; then
-    OPERATOR_VERSION="$(grep -oE 'kuso-operator:v[0-9]+\.[0-9]+\.[0-9]+[^"]*' deploy/operator.yaml 2>/dev/null | head -1 | cut -d: -f2 || echo "$VERSION")"
+    warn "couldn't query ghcr for operator tags; falling back to ${VERSION}"
+    OPERATOR_VERSION="$VERSION"
+  else
+    log "operator/ unchanged — release.json will point at last built tag ${OPERATOR_VERSION}"
   fi
-  log "operator/ unchanged — release.json will point at last built tag ${OPERATOR_VERSION}"
 fi
 
 # Build the operator image when (a) rolling locally with operator/
