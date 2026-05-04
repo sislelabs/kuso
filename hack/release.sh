@@ -376,8 +376,9 @@ if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]]; then
   fi
 
   # Verify /healthz reports the new version. Curl through the public
-  # hostname so we exercise traefik + cert + the routed path.
-  if command -v curl >/dev/null 2>&1; then
+  # hostname so we exercise traefik + cert + the routed path. Skipped
+  # in dry-run since no rollout actually fired.
+  if [[ "$DRY_RUN" != "1" ]] && command -v curl >/dev/null 2>&1; then
     HEALTH="$(curl -s "https://${KUSO_RELEASE_HOST}/healthz" || true)"
     if [[ "$HEALTH" == *"\"version\":\"${VERSION}\""* ]]; then
       log "verified: /healthz reports ${VERSION}"
