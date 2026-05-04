@@ -611,10 +611,13 @@ if [[ "${KUSO_INSECURE_SECRETS:-0}" != "1" ]]; then
 EOF
   if ! kubectl get secret -n kuso kuso-github-app >/dev/null 2>&1; then
     cat <<EOF
-  GitHub App: not yet configured. Re-run with --github-wizard to set
-  it up interactively, or follow docs/GITHUB_APP_SETUP.md for the
-  full reference. Without it, services can still build via
-  'kuso build trigger' but the repo picker is empty.
+  GitHub App: not yet configured. Two ways to fix:
+    1. Open https://${KUSO_DOMAIN}/settings/github in the dashboard
+       and paste your GitHub App credentials.
+    2. Re-run install with --github-wizard for an interactive prompt.
+
+  Without it, services still build via 'kuso build trigger' but the
+  repo picker on the new-service page stays empty.
 
 EOF
   fi
