@@ -38,6 +38,19 @@ type Dispatcher struct {
 	// without DATABASE_URL etc. and crashloop. Wired in main.go from
 	// the addons service. nil = no addon attach (older behaviour).
 	AddonConnSecrets func(ctx context.Context, project string) ([]string, error)
+	// PreviewDB clones every postgres addon per-PR so reviewers don't
+	// share production data. When wired, the clone's conn secrets
+	// replace the source's in envFromSecrets. nil = previews share
+	// production addons (riskier; prefer wiring this).
+	PreviewDB PreviewDB
+}
+
+// PreviewDB is the surface dispatcher needs from previewdb.Cloner.
+// Kept as an interface so the github package doesn't import
+// previewdb directly (and so tests can stub it).
+type PreviewDB interface {
+	EnsurePRAddons(ctx context.Context, project string, prNumber int) ([]string, error)
+	DeletePRAddons(ctx context.Context, project string, prNumber int) error
 }
 
 // nsFor returns the execution namespace for project, defaulting to home.
@@ -249,6 +262,15 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 					d.Logger.Warn("delete preview env", "service", services.Items[i].GetName(), "pr", pr.Number, "err", err)
 				}
 			}
+			// Then drop every per-PR addon clone for the project.
+			// Done after preview-env cleanup so the preview pod
+			// terminates before the addon's conn secret vanishes
+			// (avoids spurious crashloops on the way down).
+			if d.PreviewDB != nil {
+				if err := d.PreviewDB.DeletePRAddons(ctx, proj.Name, pr.Number); err != nil {
+					d.Logger.Warn("delete pr addons", "project", proj.Name, "pr", pr.Number, "err", err)
+				}
+			}
 		}
 	}
 	return nil
@@ -339,6 +361,20 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	if d.AddonConnSecrets != nil {
 		if secs, err := d.AddonConnSecrets(ctx, proj.Name); err == nil {
 			envFromSecrets = secs
+		}
+	}
+	// Per-PR clones of every postgres addon. The clone's conn
+	// secrets REPLACE the source's so the preview pod talks to the
+	// fresh DB instead of production. Best-effort: a clone failure
+	// falls back to the source secret (preview pod still boots, just
+	// against shared data — same as the v0.7.0 behaviour). Non-
+	// postgres addons (Redis etc.) keep the source secret regardless;
+	// cloning Redis state is rarely useful.
+	if d.PreviewDB != nil {
+		if cloneSecrets, err := d.PreviewDB.EnsurePRAddons(ctx, proj.Name, pr.Number); err == nil {
+			envFromSecrets = swapPGCloneSecrets(envFromSecrets, cloneSecrets, pr.Number)
+		} else {
+			d.Logger.Warn("preview db clone", "project", proj.Name, "pr", pr.Number, "err", err)
 		}
 	}
 	envFromSecrets = append(envFromSecrets, proj.Name+"-shared")
@@ -488,3 +524,33 @@ var (
 	mergeCommitRE  = regexp.MustCompile(`^Merge pull request #(\d+)\b`)
 	squashCommitRE = regexp.MustCompile(`\(#(\d+)\)\s*$`)
 )
+
+// swapPGCloneSecrets replaces every "<source>-conn" entry whose
+// matching "<source>-pr-<N>-conn" exists in cloneSecrets. Source
+// secrets without a clone (Redis etc.) are kept verbatim. The
+// result preserves the source ordering of envFromSecrets.
+func swapPGCloneSecrets(source []string, cloneSecrets []string, prNumber int) []string {
+	if len(cloneSecrets) == 0 {
+		return source
+	}
+	prSuffix := fmt.Sprintf("-pr-%d-conn", prNumber)
+	cloneByOrigin := map[string]string{}
+	for _, c := range cloneSecrets {
+		// Clone secrets are named "<source>-pr-<N>-conn"; strip the
+		// "-pr-<N>-conn" suffix back to the origin to build the map.
+		if !strings.HasSuffix(c, prSuffix) {
+			continue
+		}
+		origin := strings.TrimSuffix(c, prSuffix) + "-conn"
+		cloneByOrigin[origin] = c
+	}
+	out := make([]string, len(source))
+	for i, s := range source {
+		if clone, ok := cloneByOrigin[s]; ok {
+			out[i] = clone
+		} else {
+			out[i] = s
+		}
+	}
+	return out
+}

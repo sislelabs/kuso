@@ -201,3 +201,39 @@ export async function rollbackBuild(
     { method: "POST" }
   );
 }
+
+// ---- Log search ----
+
+export interface LogLine {
+  id: number;
+  ts: string;
+  pod: string;
+  project: string;
+  service: string;
+  env: string;
+  line: string;
+}
+
+export interface LogSearchResponse {
+  project: string;
+  service: string;
+  q: string;
+  lines: LogLine[];
+}
+
+export async function searchServiceLogs(
+  project: string,
+  service: string,
+  params: { q?: string; env?: string; since?: string; until?: string; limit?: number }
+): Promise<LogSearchResponse> {
+  const sp = new URLSearchParams();
+  if (params.q) sp.set("q", params.q);
+  if (params.env) sp.set("env", params.env);
+  if (params.since) sp.set("since", params.since);
+  if (params.until) sp.set("until", params.until);
+  if (params.limit) sp.set("limit", String(params.limit));
+  const query = sp.toString();
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/logs/search${query ? "?" + query : ""}`
+  );
+}

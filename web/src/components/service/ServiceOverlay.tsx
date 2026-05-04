@@ -10,16 +10,18 @@ import { ServiceDeploymentsPanel } from "./overlay/ServiceDeploymentsPanel";
 import { ServiceVariablesPanel } from "./overlay/ServiceVariablesPanel";
 import { ServiceMetricsPanel } from "./overlay/ServiceMetricsPanel";
 import { ServiceCronsPanel } from "./overlay/ServiceCronsPanel";
+import { ServiceLogsPanel } from "./overlay/ServiceLogsPanel";
 import { ServiceSettingsPanel } from "./overlay/ServiceSettingsPanel";
 import { Check, Copy, ExternalLink, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
-type Tab = "deployments" | "variables" | "metrics" | "crons" | "settings";
+type Tab = "deployments" | "variables" | "metrics" | "logs" | "crons" | "settings";
 const TABS: { id: Tab; label: string }[] = [
   { id: "deployments", label: "Deployments" },
   { id: "variables", label: "Variables" },
   { id: "metrics", label: "Metrics" },
+  { id: "logs", label: "Logs" },
   { id: "crons", label: "Crons" },
   { id: "settings", label: "Settings" },
 ];
@@ -212,6 +214,9 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                       <div className="p-5">
                         <ServiceMetricsPanel project={project} service={service ?? ""} />
                       </div>
+                    )}
+                    {tab === "logs" && (
+                      <ServiceLogsPanel project={project} service={service ?? ""} />
                     )}
                     {tab === "crons" && (
                       <ServiceCronsPanel project={project} service={service ?? ""} />

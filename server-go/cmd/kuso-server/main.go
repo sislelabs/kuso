@@ -24,6 +24,7 @@ import (
 	"kuso/server/internal/alerts"
 	"kuso/server/internal/crons"
 	"kuso/server/internal/logship"
+	"kuso/server/internal/previewdb"
 	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/audit"
 	"kuso/server/internal/builds"
@@ -266,6 +267,13 @@ func main() {
 				// project secret is appended in dispatcher.ensurePreviewEnv.
 				if addonSvc != nil {
 					disp.AddonConnSecrets = addonSvc.ConnSecretsForProject
+					// Per-PR postgres clones so reviewers don't share
+					// production data. KUSO_PREVIEW_DB_DISABLED=true
+					// reverts to the v0.7.0 shared-prod behaviour for
+					// clusters where preview clones are too costly.
+					if os.Getenv("KUSO_PREVIEW_DB_DISABLED") != "true" {
+						disp.PreviewDB = previewdb.New(kc, addonSvc, *namespace, logger.With("component", "previewdb"))
+					}
 				}
 				ghDeps = &httpsrv.GithubDeps{Cfg: ghCfg, Client: ghCli, Cache: ghCache, Dispatcher: disp}
 				// Hand the github client to the build service so it can

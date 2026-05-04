@@ -19,5 +19,13 @@ export {
   deleteCron,
   syncCron,
   rollbackBuild,
+  searchServiceLogs,
 } from "./api";
-export type { BuildSummary, PatchServiceBody, KusoCron, CreateCronBody } from "./api";
+export type {
+  BuildSummary,
+  PatchServiceBody,
+  KusoCron,
+  CreateCronBody,
+  LogLine,
+  LogSearchResponse,
+} from "./api";
