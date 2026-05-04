@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.22] — 2026-05-04
+
+### Other
+- Ui: define --border-strong + brighten dark-mode border tokens ([61d72e2](https://github.com/sislelabs/kuso/commit/61d72e2dfa14a8756d991ae6601b240e124c9297))
+
+### 🐛 Bug Fixes
+- Fix(install): apply deploy/prometheus.yaml so the Metrics tab populates ([4846110](https://github.com/sislelabs/kuso/commit/4846110ca9a741eda23c609028167843af1b5c77))
+
 ## [0.7.21] — 2026-05-04
 
 ### Other
