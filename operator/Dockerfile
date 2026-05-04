@@ -1,5 +1,5 @@
 # Build the manager binary
-FROM quay.io/operator-framework/helm-operator:v1.26
+FROM quay.io/operator-framework/helm-operator:v1.42
 
 # Annotate the image so GitHub auto-links the published package back to
 # the source repo on the repository sidebar. Without these the package
