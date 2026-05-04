@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.31] — 2026-05-04
+
+### Other
+- Ui+build: failed canvas state, building yellow, input bg, themed toaster, nixpacks Go ([37fb249](https://github.com/sislelabs/kuso/commit/37fb249f24a822e41b897c9de72192ad12dad571))
+
 ## [0.7.30] — 2026-05-04
 
 ### Other
