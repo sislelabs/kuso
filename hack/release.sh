@@ -304,7 +304,13 @@ if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]] && operator_should_build; then
   log "operator rolled to ${OPERATOR_VERSION}"
 fi
 
-# ---- 6. optional commit --------------------------------------------
+# ---- 6. commit + tag + push ----------------------------------------
+#
+# install.sh on `main` pulls CRDs from KUSO_REF (default "main"), so the
+# manifests must actually exist on `main` after a release. We also push
+# a git tag so anyone wanting to pin can `KUSO_REF=v0.7.10` and have it
+# resolve. Skipping these is what bricked the v0.7.x installs (CRDs
+# 404'd because tags were never pushed).
 
 if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
   if git diff --quiet -- server-go/internal/version/VERSION deploy/server-go.yaml hack/install.sh; then
@@ -313,6 +319,21 @@ if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
     git add server-go/internal/version/VERSION deploy/server-go.yaml hack/install.sh
     git commit -m "release: ${VERSION}" >/dev/null
     log "committed: release: ${VERSION}"
+  fi
+
+  if git rev-parse "${VERSION}" >/dev/null 2>&1; then
+    warn "tag ${VERSION} already exists — skipping tag"
+  else
+    git tag -a "${VERSION}" -m "release ${VERSION}"
+    log "tagged: ${VERSION}"
+  fi
+
+  if [[ "${KUSO_RELEASE_PUSH:-1}" == "1" ]]; then
+    git push origin HEAD
+    git push origin "${VERSION}" || warn "tag push failed (already on remote?)"
+    log "pushed commit + tag to origin"
+  else
+    warn "KUSO_RELEASE_PUSH=0 — commit + tag NOT pushed; install.sh on main will be stale"
   fi
 fi
 

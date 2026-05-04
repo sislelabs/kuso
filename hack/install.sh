@@ -85,11 +85,11 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Pin manifests to the same ref as the server image so install is
-# reproducible. Default uses the server version tag (which has a
-# release.json + crds.yaml committed alongside). For HEAD installs
-# pass --repo and KUSO_REF=main explicitly.
-KUSO_REF="${KUSO_REF:-${KUSO_SERVER_VERSION}}"
+# Manifests (CRDs, deploy/*.yaml) are pulled from KUSO_REF on GitHub.
+# Defaults to "main" because that's the only ref guaranteed to exist:
+# `make release-roll` doesn't push git tags, only docker images. To pin
+# manifests to a specific commit, pass KUSO_REF=<sha>.
+KUSO_REF="${KUSO_REF:-main}"
 KUSO_RAW="https://raw.githubusercontent.com/${KUSO_REPO}/${KUSO_REF}"
 
 # --- styling ---
@@ -300,15 +300,23 @@ done
 DEFAULT_ISSUER="letsencrypt-${KUSO_LE_ENV}"
 
 # -------- 7. CRDs --------
-log "applying kuso CRDs"
+# Fatal: every CRD must apply. If any fails (404, network glitch, malformed
+# yaml), the operator can't reconcile and the rest of the install builds a
+# broken cluster silently. Better to die here with a clear pointer.
+log "applying kuso CRDs (from ${KUSO_REF})"
 for crd in kusoprojects kusoservices kusoenvironments kusoaddons kusobuilds; do
   url="${KUSO_RAW}/operator/config/crd/bases/application.kuso.sislelabs.com_${crd}.yaml"
-  if ! curl -sfL "$url" | kubectl apply -f - >/dev/null; then
-    warn "failed to apply CRD ${crd} from ${url}"
+  yaml="$(curl -sfL "$url" || true)"
+  if [[ -z "$yaml" ]]; then
+    die "CRD ${crd} not reachable at ${url} — is KUSO_REF=${KUSO_REF} correct?"
+  fi
+  if ! printf '%s\n' "$yaml" | kubectl apply -f - >/dev/null; then
+    die "CRD ${crd} failed to apply (kubectl error). yaml from ${url}"
   fi
 done
+# Optional legacy CRD; tolerate 404.
 curl -sfL "${KUSO_RAW}/operator/config/crd/bases/application.kuso.dev_kusoes.yaml" \
-  | kubectl apply -f - >/dev/null || true
+  | kubectl apply -f - >/dev/null 2>&1 || true
 
 # -------- 8. registry --------
 log "deploying in-cluster registry"
