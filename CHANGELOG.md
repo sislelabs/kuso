@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.37] — 2026-05-04
+
+### Other
+- Ui(canvas): uptime in header (bigger), build line in footer next to replicas ([3e5c702](https://github.com/sislelabs/kuso/commit/3e5c702eea7aa7808e81ff44d9b41828be148197))
+
 ## [0.7.36] — 2026-05-04
 
 ### Other
