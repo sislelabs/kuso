@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.34] — 2026-05-04
+
+### 🐛 Bug Fixes
+- Fix(builds): pin GOTOOLCHAIN to detected go.mod version ([187cb54](https://github.com/sislelabs/kuso/commit/187cb548504178069da323cf4e3aaf56b1decc3c))
+
 ## [0.7.33] — 2026-05-04
 
 ### Other
