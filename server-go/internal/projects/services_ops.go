@@ -187,6 +187,10 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			envFromSecrets = secs
 		}
 	}
+	// Always include the project's shared secret. The Secret may not
+	// exist yet — the env helm chart marks the entry optional:true so
+	// the pod boots cleanly even when no shared secret has been set.
+	envFromSecrets = append(envFromSecrets, project+"-shared")
 	env := &kube.KusoEnvironment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: productionEnvName(project, req.Name),
@@ -307,13 +311,14 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	}
 
 	// Same addon-attach as AddService — keep custom envs reachable to
-	// project addons from boot.
+	// project addons from boot. Plus the shared project secret.
 	var envFromSecrets []string
 	if s.AddonConnSecrets != nil {
 		if secs, err := s.AddonConnSecrets(ctx, project); err == nil {
 			envFromSecrets = secs
 		}
 	}
+	envFromSecrets = append(envFromSecrets, project+"-shared")
 
 	env := &kube.KusoEnvironment{
 		ObjectMeta: metav1.ObjectMeta{

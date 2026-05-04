@@ -11,6 +11,7 @@ import (
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/crons"
+	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/audit"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
@@ -46,8 +47,9 @@ type Deps struct {
 	Logs       *logs.Service
 	Config     *config.Service
 	Status     *status.Service
-	Addons     *addons.Service
-	Crons      *crons.Service
+	Addons         *addons.Service
+	Crons          *crons.Service
+	ProjectSecrets *projectsecrets.Service
 	Audit      *audit.Service
 	Github     *GithubDeps
 	Notify     *notify.Dispatcher
@@ -206,12 +208,23 @@ func NewRouter(d Deps) http.Handler {
 				cronsH := &httphandlers.CronsHandler{Svc: d.Crons, Logger: d.Logger}
 				cronsH.Mount(r)
 			}
+			if d.ProjectSecrets != nil {
+				psH := &httphandlers.ProjectSecretsHandler{Svc: d.ProjectSecrets, Logger: d.Logger}
+				psH.Mount(r)
+			}
 			// SSH keys for the multi-node "Add node" flow. Lives on
 			// the bearer-protected router; handler already filters on
 			// the right perms because the surface only matters to
 			// admins managing cluster topology.
 			sshH := &httphandlers.SSHKeysHandler{DB: d.DB, Logger: d.Logger}
 			sshH.Mount(r)
+			// Log search + alert rules. No kube dep at handler level —
+			// the LogLine table is populated by a separate logship
+			// goroutine wired in main.go.
+			logSearchH := &httphandlers.LogSearchHandler{DB: d.DB, Logger: d.Logger}
+			logSearchH.Mount(r)
+			alertsH := &httphandlers.AlertsHandler{DB: d.DB, Logger: d.Logger}
+			alertsH.Mount(r)
 		}
 		if d.Audit != nil {
 			auditH := &httphandlers.AuditHandler{Svc: d.Audit, Logger: d.Logger}

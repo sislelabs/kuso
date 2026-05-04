@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
 import { useProject, useUpdateProject, useDeleteProject } from "@/features/projects";
+import { SharedSecretsCard } from "@/components/project/SharedSecretsCard";
 import { toast } from "sonner";
 import { Trash2, Save } from "lucide-react";
 
@@ -155,6 +156,8 @@ export function ProjectSettingsView() {
           {update.isPending ? "Saving…" : "Save"}
         </Button>
       </div>
+
+      <SharedSecretsCard project={projectName} />
 
       <Separator />
 

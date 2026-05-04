@@ -21,7 +21,10 @@ import (
 	httpsrv "kuso/server/internal/http"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/addons"
+	"kuso/server/internal/alerts"
 	"kuso/server/internal/crons"
+	"kuso/server/internal/logship"
+	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/audit"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
@@ -138,6 +141,7 @@ func main() {
 	var statSvc *status.Service
 	var addonSvc *addons.Service
 	var cronSvc *crons.Service
+	var projectSecretSvc *projectsecrets.Service
 	var ghDeps *httpsrv.GithubDeps
 	var kubeClient *kube.Client
 	var specRecon *spec.Reconciler
@@ -176,6 +180,8 @@ func main() {
 		addonSvc.NSResolver = nsResolver
 		cronSvc = crons.New(kc, *namespace)
 		cronSvc.NSResolver = nsResolver
+		projectSecretSvc = projectsecrets.New(kc, *namespace)
+		projectSecretSvc.NSResolver = nsResolver
 		// Wire the addon→env auto-attach hook so a freshly-created
 		// service env starts with envFromSecrets pre-populated for
 		// every existing project addon. Without this, services added
@@ -254,6 +260,13 @@ func main() {
 				// secrets along with the env CR. Without this, every
 				// closed PR leaks <project>-<service>-pr-N-secrets.
 				disp.Secrets = secSvc
+				// Pre-populate preview envs with the project's addon
+				// connection secrets so the pod boots with DATABASE_URL
+				// + REDIS_URL + every other addon-conn env. The shared
+				// project secret is appended in dispatcher.ensurePreviewEnv.
+				if addonSvc != nil {
+					disp.AddonConnSecrets = addonSvc.ConnSecretsForProject
+				}
 				ghDeps = &httpsrv.GithubDeps{Cfg: ghCfg, Client: ghCli, Cache: ghCache, Dispatcher: disp}
 				// Hand the github client to the build service so it can
 				// mint a fresh installation token when seeding the
@@ -274,8 +287,9 @@ func main() {
 		Logs:       logsSvc,
 		Config:     cfgSvc,
 		Status:     statSvc,
-		Addons:     addonSvc,
-		Crons:      cronSvc,
+		Addons:         addonSvc,
+		Crons:          cronSvc,
+		ProjectSecrets: projectSecretSvc,
 		Audit:      auditSvc,
 		Github:     ghDeps,
 		Notify:     notifyDisp,
@@ -314,6 +328,18 @@ func main() {
 			Logger: logger.With("component", "nodewatch"),
 		}
 		go watcher.Run(ctx)
+		// Log shipper: streams every pod's logs into the LogLine
+		// SQLite table for full-text search. Disable with
+		// KUSO_LOGSHIP_DISABLED=true on noisy clusters where the
+		// log volume swamps SQLite.
+		if os.Getenv("KUSO_LOGSHIP_DISABLED") != "true" {
+			ls := logship.New(database, kubeClient, *namespace, logger.With("component", "logship"))
+			go ls.Run(ctx)
+		}
+		// Alert engine: evaluates AlertRule rows on a 1-min ticker
+		// and fans out via the existing notify dispatcher.
+		ae := alerts.New(database, kubeClient, notifyDisp, logger.With("component", "alerts"))
+		go ae.Run(ctx)
 	}
 
 	<-ctx.Done()

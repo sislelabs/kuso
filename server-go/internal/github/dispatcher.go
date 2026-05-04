@@ -32,6 +32,12 @@ type Dispatcher struct {
 	Namespace  string
 	NSResolver *kube.ProjectNamespaceResolver
 	Logger     *slog.Logger
+	// AddonConnSecrets returns the project's addon connection-secret
+	// names so previews start with envFromSecrets pre-populated for
+	// every existing project addon. Without this, preview pods boot
+	// without DATABASE_URL etc. and crashloop. Wired in main.go from
+	// the addons service. nil = no addon attach (older behaviour).
+	AddonConnSecrets func(ctx context.Context, project string) ([]string, error)
 }
 
 // nsFor returns the execution namespace for project, defaulting to home.
@@ -325,10 +331,26 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("get existing env: %w", err)
 	}
+	// Attach addon connection secrets + project shared secret so the
+	// preview pod has the same DATABASE_URL / REDIS_URL / RESEND_API_KEY
+	// the production env has. Previously previews booted with no envs
+	// and crashlooped on missing DATABASE_URL.
 	var envFromSecrets []string
+	if d.AddonConnSecrets != nil {
+		if secs, err := d.AddonConnSecrets(ctx, proj.Name); err == nil {
+			envFromSecrets = secs
+		}
+	}
+	envFromSecrets = append(envFromSecrets, proj.Name+"-shared")
 	port := int32(8080)
-	if svc, err := d.Kube.GetKusoService(ctx, ns, serviceFQN); err == nil && svc != nil && svc.Spec.Port > 0 {
-		port = svc.Spec.Port
+	var svcRuntime string
+	var svcCommand []string
+	if svc, err := d.Kube.GetKusoService(ctx, ns, serviceFQN); err == nil && svc != nil {
+		if svc.Spec.Port > 0 {
+			port = svc.Spec.Port
+		}
+		svcRuntime = svc.Spec.Runtime
+		svcCommand = svc.Spec.Command
 	}
 
 	env := &kube.KusoEnvironment{
@@ -357,6 +379,10 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
 			EnvFromSecrets:   envFromSecrets,
+			// Mirror the parent service's runtime+command so worker
+			// services get their proper command override on previews.
+			Runtime: svcRuntime,
+			Command: svcCommand,
 		},
 	}
 

@@ -155,6 +155,58 @@ func (d *DB) applyMigrations() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS "NotificationEvent_createdAt_idx" ON "NotificationEvent"("createdAt" DESC)`,
 		`CREATE INDEX IF NOT EXISTS "NotificationEvent_readAt_idx" ON "NotificationEvent"("readAt")`,
+		// v0.7: searchable logs. Two tables:
+		//  - LogLine: one row per pod log line, ts/pod/project/service/env metadata.
+		//  - LogLineFts: FTS5 virtual table mirroring LogLine.line for full-text search.
+		// The shipper goroutine streams every pod under the kuso ns
+		// into here. Retention is 14d (cron-style prune on the
+		// shipper's tick).
+		`CREATE TABLE IF NOT EXISTS "LogLine" (
+			"id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+			"ts" DATETIME NOT NULL,
+			"pod" TEXT NOT NULL,
+			"project" TEXT NOT NULL DEFAULT '',
+			"service" TEXT NOT NULL DEFAULT '',
+			"env" TEXT NOT NULL DEFAULT '',
+			"line" TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS "LogLine_project_service_ts_idx" ON "LogLine"("project","service","ts" DESC)`,
+		`CREATE INDEX IF NOT EXISTS "LogLine_ts_idx" ON "LogLine"("ts")`,
+		// FTS5 contentless table — much smaller on disk, but you have
+		// to JOIN back to LogLine to get the metadata. We keep both
+		// in sync with simple triggers (insert-only, no update path
+		// needed since log lines are immutable once written).
+		`CREATE VIRTUAL TABLE IF NOT EXISTS "LogLineFts" USING fts5(
+			line,
+			content='LogLine',
+			content_rowid='id',
+			tokenize='porter unicode61'
+		)`,
+		`CREATE TRIGGER IF NOT EXISTS LogLine_ai AFTER INSERT ON "LogLine" BEGIN
+			INSERT INTO LogLineFts(rowid, line) VALUES (new.id, new.line);
+		END`,
+		`CREATE TRIGGER IF NOT EXISTS LogLine_ad AFTER DELETE ON "LogLine" BEGIN
+			INSERT INTO LogLineFts(LogLineFts, rowid, line) VALUES('delete', old.id, old.line);
+		END`,
+		// v0.7: alert rules. Periodic queries over LogLine + NodeMetric
+		// that fire notify events when threshold breached.
+		`CREATE TABLE IF NOT EXISTS "AlertRule" (
+			"id" TEXT PRIMARY KEY,
+			"name" TEXT NOT NULL,
+			"enabled" BOOLEAN NOT NULL DEFAULT 1,
+			"kind" TEXT NOT NULL,
+			"project" TEXT,
+			"service" TEXT,
+			"query" TEXT NOT NULL DEFAULT '',
+			"thresholdInt" INTEGER,
+			"thresholdFloat" REAL,
+			"windowSeconds" INTEGER NOT NULL DEFAULT 300,
+			"severity" TEXT NOT NULL DEFAULT 'warn',
+			"throttleSeconds" INTEGER NOT NULL DEFAULT 600,
+			"lastFiredAt" DATETIME,
+			"createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			"updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
 	}
 	for _, sqlText := range migrations {
 		if _, err := d.DB.Exec(sqlText); err != nil {
