@@ -318,6 +318,64 @@ if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
   fi
 fi
 
+# ---- 4a3. operator image -------------------------------------------
+#
+# Decide what operator image to bake into release.json. Two paths:
+#
+#   - operator/ changed since last tag → build + push at $VERSION
+#     (so the new server has a matching operator).
+#   - operator/ unchanged → reuse the last operator tag actually
+#     present on ghcr (queried at release time so we don't chase
+#     phantom tags). KUSO_RELEASE_OPERATOR_VERSION overrides both.
+
+operator_should_build() {
+  if [[ "${KUSO_RELEASE_OPERATOR:-auto}" == "1" ]]; then
+    return 0
+  fi
+  if [[ "${KUSO_RELEASE_OPERATOR:-auto}" == "0" ]]; then
+    return 1
+  fi
+  local last
+  last="$(git describe --tags --abbrev=0 2>/dev/null || echo)"
+  if [[ -z "$last" ]]; then
+    # No previous tag → can't diff. Build to be safe.
+    return 0
+  fi
+  if ! git diff --quiet "$last"..HEAD -- operator/; then
+    return 0
+  fi
+  return 1
+}
+
+if [[ -n "${KUSO_RELEASE_OPERATOR_VERSION:-}" ]]; then
+  OPERATOR_VERSION="$KUSO_RELEASE_OPERATOR_VERSION"
+elif operator_should_build; then
+  OPERATOR_VERSION="$VERSION"
+else
+  OPERATOR_VERSION="$(latest_ghcr_tag sislelabs/kuso-operator)"
+  if [[ -z "$OPERATOR_VERSION" ]]; then
+    warn "couldn't query ghcr for operator tags; falling back to ${VERSION}"
+    OPERATOR_VERSION="$VERSION"
+  else
+    log "operator/ unchanged — release.json will pin operator to last built tag ${OPERATOR_VERSION}"
+  fi
+fi
+
+if operator_should_build && [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
+  log "building operator image ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "docker buildx build --platform linux/amd64 --push -t ${OPERATOR_IMAGE}:${OPERATOR_VERSION} -f operator/Dockerfile operator"
+  else
+    docker buildx build \
+      --platform linux/amd64 \
+      --push \
+      -t "${OPERATOR_IMAGE}:${OPERATOR_VERSION}" \
+      -f operator/Dockerfile \
+      operator >/dev/null
+    log "operator image pushed: ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
+  fi
+fi
+
 # ---- 4b. release.json + crds.yaml + GH release ---------------------
 #
 # The kuso self-updater (server-go/internal/updater) reads release.json
@@ -362,7 +420,7 @@ cat > "$DIST_DIR/release.json" <<EOF
   "publishedAt": "${PUBLISHED_AT}",
   "components": {
     "server":   { "image": "${KUSO_RELEASE_IMAGE}:${VERSION}" },
-    "operator": { "image": "${OPERATOR_IMAGE}:${VERSION}" },
+    "operator": { "image": "${OPERATOR_IMAGE}:${OPERATOR_VERSION}" },
     "updater":  { "image": "${UPDATER_IMAGE:-ghcr.io/sislelabs/kuso-updater}:${VERSION}" }
   },
   "crds": {
@@ -492,80 +550,6 @@ fi
 # when git diff is empty (useful for explicit re-rolls, e.g. when
 # you pulled the chart from another branch). KUSO_RELEASE_OPERATOR=0
 # skips it explicitly.
-
-operator_should_build() {
-  if [[ "${KUSO_RELEASE_OPERATOR:-auto}" == "1" ]]; then
-    return 0
-  fi
-  if [[ "${KUSO_RELEASE_OPERATOR:-auto}" == "0" ]]; then
-    return 1
-  fi
-  # auto: did anything under operator/ change since the last tag?
-  local last
-  last="$(git describe --tags --abbrev=0 2>/dev/null || echo)"
-  if [[ -z "$last" ]]; then
-    # No previous tag — no baseline to diff against. Build to be
-    # safe; the alternative is shipping a kuso-server that depends
-    # on an operator chart the running operator doesn't have.
-    return 0
-  fi
-  if ! git diff --quiet "$last"..HEAD -- operator/; then
-    return 0
-  fi
-  return 1
-}
-
-# Operator versioning. Two paths:
-#
-# 1. operator/ changed since the last tag → build + push at $VERSION.
-#    Both server-go and the operator share the version label so a
-#    single release.json entry covers both.
-#
-# 2. operator/ unchanged → reuse the most recent existing operator tag.
-#    The release.json points to it so kuso instances upgrading don't
-#    chase a phantom tag (kuso-operator:v0.7.14 when only v0.7.10 was
-#    actually built). Detected by walking git tags backwards looking
-#    for the last release where operator_should_build would have fired.
-#
-# KUSO_RELEASE_OPERATOR_VERSION overrides both heuristics.
-
-if [[ -n "${KUSO_RELEASE_OPERATOR_VERSION:-}" ]]; then
-  OPERATOR_VERSION="$KUSO_RELEASE_OPERATOR_VERSION"
-elif operator_should_build; then
-  OPERATOR_VERSION="$VERSION"
-else
-  # operator/ unchanged → reuse the most recent operator tag that
-  # actually exists on ghcr. Querying the registry's tag list is the
-  # only source of truth (git tags / yaml pins drift). Falls back to
-  # $VERSION if the query fails — better to ship a slightly-wrong
-  # release.json than block the release on a registry hiccup.
-  OPERATOR_VERSION="$(latest_ghcr_tag sislelabs/kuso-operator)"
-  if [[ -z "$OPERATOR_VERSION" ]]; then
-    warn "couldn't query ghcr for operator tags; falling back to ${VERSION}"
-    OPERATOR_VERSION="$VERSION"
-  else
-    log "operator/ unchanged — release.json will point at last built tag ${OPERATOR_VERSION}"
-  fi
-fi
-
-# Build the operator image when (a) rolling locally with operator/
-# changes (legacy local-roll path), OR (b) operator_should_build is
-# true regardless of ROLL — so `make ship` produces a matching
-# operator image whenever operator/ moved.
-if operator_should_build; then
-  log "building operator image ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
-  if [[ "$DRY_RUN" == "1" ]]; then
-    dry "docker buildx build --platform linux/amd64 --push -t ${OPERATOR_IMAGE}:${OPERATOR_VERSION} -f operator/Dockerfile operator"
-  else
-    docker buildx build \
-      --platform linux/amd64 \
-      --push \
-      -t "${OPERATOR_IMAGE}:${OPERATOR_VERSION}" \
-      -f operator/Dockerfile \
-      operator >/dev/null
-    log "operator image pushed: ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
-  fi
-fi
 
 if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]] && operator_should_build; then
   log "operator/ changed — rolling operator on ${KUSO_RELEASE_HOST} (image already built above)"
