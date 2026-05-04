@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.38] — 2026-05-04
+
+### 🔨 Refactors
+- Refactor: split monoliths + extract db helpers ([eed3d98](https://github.com/sislelabs/kuso/commit/eed3d981ffbe385637a050bcfa769f873a6195d2))
+
 ## [0.7.37] — 2026-05-04
 
 ### Other
