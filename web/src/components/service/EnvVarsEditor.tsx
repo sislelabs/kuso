@@ -479,11 +479,13 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
 
 // ReferencePicker — dropdown that lets the user insert a `${{ x.KEY }}`
 // reference into an env-var value. Shows services in the project
-// (with HOST/PORT/URL/INTERNAL_URL synthetic keys) plus addons (with
-// the keys actually present on each conn-secret). Service refs
-// resolve to literal in-cluster DNS strings on save; addon refs
-// resolve to secretKeyRef entries — both happen server-side, the
-// picker just inserts the right ${{}} text.
+// (with HOST/PORT/URL/INTERNAL_URL plus PUBLIC_HOST/PUBLIC_URL
+// synthetic keys) plus addons (with the keys actually present on
+// each conn-secret). Service refs resolve to literal strings on save
+// — in-cluster DNS for URL/INTERNAL_URL, the public domain for
+// PUBLIC_URL — and addon refs resolve to secretKeyRef entries.
+// All resolution happens server-side; the picker just inserts the
+// right ${{}} text.
 function ReferencePicker({
   project,
   excludeService,
@@ -603,10 +605,12 @@ function ReferenceMenu({
   );
 }
 
-// ServiceRefRow surfaces the four synthetic keys for a service. The
-// list is fixed (HOST / PORT / URL / INTERNAL_URL) — no fetch needed.
+// ServiceRefRow surfaces the synthetic keys for a service. PUBLIC_URL
+// resolves to the externally-reachable URL (custom domain or auto
+// kuso domain) so a frontend pointing at an API picks the right
+// surface; URL/INTERNAL_URL stays in-cluster for backend↔backend.
 function ServiceRefRow({ service, onPick }: { service: string; onPick: (ref: string) => void }) {
-  const KEYS = ["URL", "INTERNAL_URL", "HOST", "PORT"];
+  const KEYS = ["URL", "INTERNAL_URL", "HOST", "PORT", "PUBLIC_URL", "PUBLIC_HOST"];
   return (
     <div className="px-2 py-1">
       <p className="font-mono text-[11px] text-[var(--text-secondary)]">{service}</p>

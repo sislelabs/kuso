@@ -685,21 +685,39 @@ func (s *Service) buildAddonResolver(ctx context.Context, project string) AddonR
 	}
 }
 
-// buildServiceResolver lists the project's services up-front and
-// returns a closure that maps short names → (FQN, port, namespace).
-// Used by SetEnv so service refs expand to literal DNS values.
+// buildServiceResolver lists the project's services + their production
+// envs up-front and returns a closure that maps short / FQ names to a
+// ServiceRef. Used by SetEnv so service refs expand to literal values.
+//
+// PUBLIC_HOST resolution order, first non-empty wins:
+//  1. KusoService.spec.domains[0].host — user's own domain (deliberate
+//     choice trumps the auto-domain).
+//  2. KusoEnvironment.spec.host on the production env — auto-domain
+//     stamped at AddService time.
+//  3. Empty — service has no ingress (worker, or no env yet). The
+//     rewriter emits an empty PUBLIC_URL in that case (see
+//     ExpandServiceKey) which is the right signal vs. falling back
+//     to in-cluster DNS that a browser can't reach.
 func (s *Service) buildServiceResolver(ctx context.Context, project, ns string) (ServiceRefResolver, error) {
 	services, err := s.listServicesForProject(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-	// shortName → (fqn, port). KusoService CRs are named
-	// "<project>-<short>" by AddService; both forms must resolve.
-	type entry struct {
-		fqn  string
-		port int32
+	// Production envs carry the auto-domain Host + TLSEnabled flag. We
+	// scan once and key by service FQN so each service entry can pick
+	// up its production env in O(1). Best-effort: env list errors fall
+	// through to "no public host" rather than failing SetEnv outright.
+	prodEnvByService := make(map[string]*kube.KusoEnvironment, len(services))
+	if envs, err := s.Kube.ListKusoEnvironments(ctx, ns); err == nil {
+		for i := range envs {
+			if envs[i].Spec.Kind != "production" {
+				continue
+			}
+			prodEnvByService[envs[i].Spec.Service] = &envs[i]
+		}
 	}
-	byName := make(map[string]entry, len(services)*2)
+
+	byName := make(map[string]ServiceRef, len(services)*2)
 	prefix := project + "-"
 	for i := range services {
 		fqn := services[i].Name
@@ -711,14 +729,31 @@ func (s *Service) buildServiceResolver(ctx context.Context, project, ns string) 
 		if port == 0 {
 			port = 8080
 		}
-		byName[short] = entry{fqn: fqn, port: port}
-		byName[fqn] = entry{fqn: fqn, port: port}
-	}
-	return func(name string) (string, int32, string, bool) {
-		if e, ok := byName[name]; ok {
-			return e.fqn, e.port, ns, true
+		// Custom domain takes precedence over the auto-domain.
+		var publicHost string
+		var publicTLS bool
+		if len(services[i].Spec.Domains) > 0 && services[i].Spec.Domains[0].Host != "" {
+			publicHost = services[i].Spec.Domains[0].Host
+			publicTLS = services[i].Spec.Domains[0].TLS
+		} else if env := prodEnvByService[fqn]; env != nil && env.Spec.Host != "" {
+			publicHost = env.Spec.Host
+			publicTLS = env.Spec.TLSEnabled
 		}
-		return "", 0, "", false
+		ref := ServiceRef{
+			FQN:        fqn,
+			Port:       port,
+			NS:         ns,
+			PublicHost: publicHost,
+			PublicTLS:  publicTLS,
+		}
+		byName[short] = ref
+		byName[fqn] = ref
+	}
+	return func(name string) (ServiceRef, bool) {
+		if r, ok := byName[name]; ok {
+			return r, true
+		}
+		return ServiceRef{}, false
 	}, nil
 }
 

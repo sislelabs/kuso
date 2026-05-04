@@ -78,6 +78,12 @@ export interface KusoEnvironmentSpec {
   branch?: string;
   pullRequest?: { number?: number; headRef?: string };
   ttl?: { expiresAt?: string };
+  // host/tlsEnabled drive the public URL — the canvas reads them to
+  // detect ${{ svc.PUBLIC_URL }} edges where the resolved value
+  // contains the env's host. Optional because preview envs may lack
+  // an ingress.
+  host?: string;
+  tlsEnabled?: boolean;
 }
 
 export interface KusoEnvironment {

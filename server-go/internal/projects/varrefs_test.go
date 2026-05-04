@@ -92,13 +92,21 @@ func TestRewriteEnvVar_AddonRef(t *testing.T) {
 
 // TestRewriteEnvVar_ServiceRef covers the Railway-style reference path:
 // `${{api.HOST}}` resolves to a literal DNS string when the resolver
-// recognises "api" as a service in the project.
+// recognises "api" as a service in the project. Also exercises the
+// kuso PUBLIC_* extension (browser-reachable URL via the production
+// env's host + TLS flag).
 func TestRewriteEnvVar_ServiceRef(t *testing.T) {
-	resolver := func(name string) (string, int32, string, bool) {
+	resolver := func(name string) (ServiceRef, bool) {
 		if name == "api" {
-			return "myproj-api", 8080, "kuso", true
+			return ServiceRef{
+				FQN:        "myproj-api",
+				Port:       8080,
+				NS:         "kuso",
+				PublicHost: "api.myproj.kuso.sislelabs.com",
+				PublicTLS:  true,
+			}, true
 		}
-		return "", 0, "", false
+		return ServiceRef{}, false
 	}
 	cases := []struct {
 		key  string
@@ -108,6 +116,8 @@ func TestRewriteEnvVar_ServiceRef(t *testing.T) {
 		{"PORT", "8080"},
 		{"URL", "http://myproj-api.kuso.svc.cluster.local:8080"},
 		{"INTERNAL_URL", "http://myproj-api.kuso.svc.cluster.local:8080"},
+		{"PUBLIC_HOST", "api.myproj.kuso.sislelabs.com"},
+		{"PUBLIC_URL", "https://api.myproj.kuso.sislelabs.com"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.key, func(t *testing.T) {
@@ -126,12 +136,34 @@ func TestRewriteEnvVar_ServiceRef(t *testing.T) {
 	}
 }
 
+// TestRewriteEnvVar_ServiceRef_PublicURL_NoIngress asserts that a
+// service without a public host resolves PUBLIC_URL to empty rather
+// than falling back to the in-cluster URL. A frontend pointing at
+// `${{ worker.PUBLIC_URL }}` would silently hit a closed door — the
+// empty string makes the misconfig visible at first request.
+func TestRewriteEnvVar_ServiceRef_PublicURL_NoIngress(t *testing.T) {
+	resolver := func(name string) (ServiceRef, bool) {
+		if name == "worker" {
+			return ServiceRef{FQN: "myproj-worker", Port: 8080, NS: "kuso"}, true
+		}
+		return ServiceRef{}, false
+	}
+	in := EnvVar{Name: "X", Value: "${{ worker.PUBLIC_URL }}"}
+	got, err := RewriteEnvVar(in, resolver, nil)
+	if err != nil {
+		t.Fatalf("err: %v", err)
+	}
+	if got.Value != "" {
+		t.Errorf("got %q, want empty (worker has no ingress)", got.Value)
+	}
+}
+
 // TestRewriteEnvVar_ServiceRef_FallsBackToAddon ensures that a
 // service-style key (HOST etc.) for a name that DOES NOT resolve as a
 // service falls through to the addon path. Lets users reference an
 // addon named "host" if they really want to (uncommon, but legal).
 func TestRewriteEnvVar_ServiceRef_FallsBackToAddon(t *testing.T) {
-	noServices := func(string) (string, int32, string, bool) { return "", 0, "", false }
+	noServices := func(string) (ServiceRef, bool) { return ServiceRef{}, false }
 	in := EnvVar{Name: "X", Value: "${{ pg.HOST }}"}
 	got, err := RewriteEnvVar(in, noServices, nil)
 	if err != nil {

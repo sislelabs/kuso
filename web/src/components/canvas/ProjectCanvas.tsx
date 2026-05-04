@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ReactFlow,
   Background,
@@ -11,13 +11,18 @@ import {
   type Edge,
   type NodeMouseHandler,
   type OnNodesChange,
+  type Connection,
   applyNodeChanges,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 
 import type { KusoAddon, KusoEnvironment, KusoService } from "@/types/projects";
 import { api } from "@/lib/api-client";
-import { type BuildSummary } from "@/features/services/api";
+import {
+  type BuildSummary,
+  getServiceEnv,
+  setServiceEnv,
+} from "@/features/services/api";
 import { ServiceNode, type ServiceNodeData } from "./ServiceNode";
 import { AddonNode, type AddonNodeData } from "./AddonNode";
 import {
@@ -31,6 +36,8 @@ import {
   type ContextMenuItem,
   type ContextMenuEntry,
 } from "./CanvasContextMenu";
+import { planConnection } from "./connect";
+import { servicesQueryKey } from "@/features/projects";
 import { AddAddonDialog } from "@/components/addon/AddAddonDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { serviceShortName } from "@/lib/utils";
@@ -197,19 +204,54 @@ export function ProjectCanvas({
     // API_PORT) renders as three parallel lines + label spam. One
     // edge per (source, target) pair is the right model — the
     // "direct link" is the dependency, not each individual var.
+    // Build a host→FQN map so env-var values resolved to ${{ svc.PUBLIC_URL }}
+    // (e.g. "https://kuso-demo-todo-api.hui.kuso.sislelabs.com") still
+    // produce a service→service edge. Custom domains AND each service's
+    // production env host are candidates. Sort hosts longest-first so
+    // a longer custom-domain match wins over a sub-domain prefix of
+    // the same string.
+    const hostToFqn = new Map<string, string>();
+    services.forEach((s) => {
+      const fqn = s.metadata.name;
+      for (const d of s.spec.domains ?? []) {
+        if (d?.host) hostToFqn.set(d.host, fqn);
+      }
+    });
+    envs.forEach((e) => {
+      if (e.spec.kind !== "production") return;
+      if (!e.spec.host) return;
+      // env.spec.service is the FQ service name on the env CR.
+      hostToFqn.set(e.spec.host, e.spec.service);
+    });
+    const sortedHosts = [...hostToFqn.keys()].sort((a, b) => b.length - a.length);
+
     const seenRefEdges = new Set<string>();
     services.forEach((s) => {
       const ownFqn = s.metadata.name;
       for (const ev of s.spec.envVars ?? []) {
         if (!ev?.value) continue;
-        // Match the FQN in the value. The ref forms HOST/URL/etc.
-        // all start with "<fqn>.<ns>.svc.cluster.local" so this
-        // single regex covers all four.
-        const m = ev.value.match(/([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local/);
-        if (!m) continue;
-        const targetFqn = m[1];
+        let targetFqn: string | undefined;
+        // 1. In-cluster DNS form (HOST / URL / INTERNAL_URL):
+        //    "<fqn>.<ns>.svc.cluster.local". One regex catches all
+        //    three resolved shapes.
+        const dns = ev.value.match(/([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local/);
+        if (dns && services.some((t) => t.metadata.name === dns[1])) {
+          targetFqn = dns[1];
+        }
+        // 2. Public-URL form: any of the known public hosts appears
+        //    in the value (typically the whole value, e.g.
+        //    "https://api.proj.example.com" — but a manually-typed
+        //    health probe URL like ".../healthz" should also match).
+        if (!targetFqn) {
+          for (const h of sortedHosts) {
+            if (ev.value.includes(h)) {
+              targetFqn = hostToFqn.get(h);
+              break;
+            }
+          }
+        }
+        if (!targetFqn) continue;
         if (targetFqn === ownFqn) continue;
-        if (!services.some((t) => t.metadata.name === targetFqn)) continue;
         const edgeKey = `${targetFqn}->${ownFqn}`;
         if (seenRefEdges.has(edgeKey)) continue;
         seenRefEdges.add(edgeKey);
@@ -220,14 +262,13 @@ export function ProjectCanvas({
           animated: true,
           data: { kind: "ref" },
           // Colour: accent (purple). Service-ref edges are direct
-          // dependencies via in-cluster DNS — distinct from addon
-          // mounts (amber).
+          // dependencies — distinct from addon mounts (amber).
           style: { stroke: "var(--accent)", strokeWidth: 1.5, opacity: 0.85 },
         });
       }
     });
     return out;
-  }, [project, services, addons]);
+  }, [project, services, addons, envs]);
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>(initialEdges);
@@ -260,6 +301,7 @@ export function ProjectCanvas({
   });
 
   const trigger = useTriggerBuild(project, "");
+  const qc = useQueryClient();
 
   useEffect(() => {
     if (!project) return;
@@ -290,6 +332,57 @@ export function ProjectCanvas({
       }
       return next;
     });
+  };
+
+  // Drag a wire from one node's right-handle (source) onto another's
+  // left-handle (target). The connection is materialised as an env var
+  // on the target service — the canvas's edge-derivation auto-redraws
+  // the line on the next refetch, so we don't need to track the edge
+  // in local state.
+  const onConnect = async (c: Connection) => {
+    if (!c.source || !c.target) return;
+    const planResult = planConnection({
+      project,
+      sourceId: c.source,
+      targetId: c.target,
+      services,
+      addons,
+    });
+    if (!planResult.ok) {
+      toast.error(planResult.reason);
+      return;
+    }
+    const { plan } = planResult;
+    try {
+      // Read-modify-write the target's envVars so we don't clobber
+      // anything else. getServiceEnv returns secret-backed vars in
+      // their valueFrom form; we re-send them untouched.
+      const current = await getServiceEnv(project, plan.targetService);
+      const existing = current.envVars ?? [];
+      const sameName = existing.find((v) => v.name === plan.varName);
+      if (sameName) {
+        const sameValue = sameName.value === plan.varValue;
+        if (sameValue) {
+          toast.info(`Already connected: ${plan.summary}`);
+          return;
+        }
+        toast.error(
+          `${plan.varName} is already set on ${plan.targetService} with a different value — edit it manually.`
+        );
+        return;
+      }
+      const next = [
+        ...existing,
+        { name: plan.varName, value: plan.varValue },
+      ];
+      await setServiceEnv(project, plan.targetService, next);
+      toast.success(`Connected ${plan.summary} (${plan.varName})`);
+      // Refetch services so the new env var lands in props +
+      // edge-derivation re-runs.
+      qc.invalidateQueries({ queryKey: servicesQueryKey(project) });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Connect failed");
+    }
   };
 
   const onNodeClick: NodeMouseHandler = (_e, node) => {
@@ -530,6 +623,7 @@ export function ProjectCanvas({
         nodeTypes={nodeTypes}
         onNodesChange={onNodesChange}
         onNodeClick={onNodeClick}
+        onConnect={onConnect}
         fitView
         fitViewOptions={{ padding: 0.25, maxZoom: 1, minZoom: 0.4 }}
         minZoom={0.2}

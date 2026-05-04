@@ -19,8 +19,15 @@ import (
 // Service refs support these synthetic keys:
 //   HOST          → <service-fqn>.<namespace>.svc.cluster.local
 //   PORT          → spec.port (string)
-//   URL           → http://HOST:PORT
+//   URL           → http://HOST:PORT (in-cluster; alias INTERNAL_URL)
 //   INTERNAL_URL  → alias for URL (Railway parity)
+//   PUBLIC_HOST   → first custom domain, or the auto domain on the
+//                   production env (e.g. svc.proj.kuso.sislelabs.com).
+//                   Empty when the service has no ingress (worker
+//                   runtime, or env not provisioned yet).
+//   PUBLIC_URL    → https://PUBLIC_HOST (or http:// when TLS is off
+//                   on a custom domain). Empty when PUBLIC_HOST is
+//                   empty — never falls back to the in-cluster URL.
 //
 // The resolver decides addon-vs-service at rewrite time using the
 // project's known names. When neither matches we leave the value
@@ -48,11 +55,15 @@ func (r VarRef) SecretName() string {
 }
 
 // IsServiceKey reports whether the key is one of the synthetic
-// service-ref keys (HOST/PORT/URL/INTERNAL_URL). Used by the resolver
-// to choose between literal expansion and secretKeyRef.
+// service-ref keys. Used by the resolver to choose between literal
+// expansion and secretKeyRef. PUBLIC_* keys are included even though
+// the resolver can return an empty string for them — that's the right
+// signal for a worker / unprovisioned service, and we'd rather emit
+// "" than fall through to the addon path and emit a broken
+// secretKeyRef.
 func IsServiceKey(key string) bool {
 	switch key {
-	case "HOST", "PORT", "URL", "INTERNAL_URL":
+	case "HOST", "PORT", "URL", "INTERNAL_URL", "PUBLIC_HOST", "PUBLIC_URL":
 		return true
 	}
 	return false
@@ -79,11 +90,26 @@ func ParseVarRef(value string) (VarRef, bool, error) {
 	return VarRef{}, false, nil
 }
 
+// ServiceRef is everything the rewriter needs to expand any of the
+// synthetic service keys. FQN+Port+NS cover in-cluster (HOST/PORT/
+// URL/INTERNAL_URL); PublicHost+PublicTLS cover the public surface
+// (PUBLIC_HOST/PUBLIC_URL). PublicHost is empty for services with no
+// ingress (worker runtimes, or services whose production env hasn't
+// been created yet) — callers should treat that as "no public URL"
+// rather than falling back to the in-cluster URL.
+type ServiceRef struct {
+	FQN        string
+	Port       int32
+	NS         string
+	PublicHost string
+	PublicTLS  bool
+}
+
 // ServiceRefResolver looks up service connection details by short
-// name. Returns the FQN service name + port, or ok=false when the
-// service doesn't exist. The resolver is supplied by SetEnv so the
-// rewriter doesn't have to import kube/projects state.
-type ServiceRefResolver func(shortName string) (fqn string, port int32, ns string, ok bool)
+// (or FQ) name. ok=false when the name doesn't match a service in
+// the project. Supplied by SetEnv so the rewriter doesn't have to
+// import kube/projects state.
+type ServiceRefResolver func(name string) (ServiceRef, bool)
 
 // AddonRefResolver returns the conn-secret name for an addon (short
 // or fqn form), or ok=false when no such addon exists in the project.
@@ -91,24 +117,38 @@ type ServiceRefResolver func(shortName string) (fqn string, port int32, ns strin
 // a non-existent addon → pod crashloops on missing secret mount.
 type AddonRefResolver func(name string) (connSecretName string, ok bool)
 
-// ExpandServiceKey turns a (service, key) pair into the literal value
-// that goes on the pod env. Mirrors Railway's reference-variable
-// surface: HOST/PORT/URL/INTERNAL_URL.
-func ExpandServiceKey(fqn string, port int32, ns, key string) string {
-	host := fqn + "." + ns + ".svc.cluster.local"
+// ExpandServiceKey turns a (ServiceRef, key) pair into the literal
+// value that goes on the pod env. Mirrors Railway's reference-
+// variable surface plus the kuso PUBLIC_* extension.
+func ExpandServiceKey(ref ServiceRef, key string) string {
+	host := ref.FQN + "." + ref.NS + ".svc.cluster.local"
 	switch key {
 	case "HOST":
 		return host
 	case "PORT":
-		if port == 0 {
+		if ref.Port == 0 {
 			return ""
 		}
-		return fmt.Sprintf("%d", port)
+		return fmt.Sprintf("%d", ref.Port)
 	case "URL", "INTERNAL_URL":
-		if port == 0 {
+		if ref.Port == 0 {
 			return "http://" + host
 		}
-		return fmt.Sprintf("http://%s:%d", host, port)
+		return fmt.Sprintf("http://%s:%d", host, ref.Port)
+	case "PUBLIC_HOST":
+		return ref.PublicHost
+	case "PUBLIC_URL":
+		// Empty PublicHost = no ingress; emit empty rather than
+		// silently falling back to the in-cluster URL (which a
+		// browser-side caller cannot reach and would mask the bug).
+		if ref.PublicHost == "" {
+			return ""
+		}
+		scheme := "https"
+		if !ref.PublicTLS {
+			scheme = "http"
+		}
+		return scheme + "://" + ref.PublicHost
 	}
 	return ""
 }
@@ -149,8 +189,8 @@ func RewriteEnvVar(in EnvVar, svcResolver ServiceRefResolver, addonResolver Addo
 	}
 	// Service-ref path: synthetic key + name resolves to a service.
 	if IsServiceKey(ref.Key) && svcResolver != nil {
-		if fqn, port, ns, ok := svcResolver(ref.Name); ok {
-			expanded := ExpandServiceKey(fqn, port, ns, ref.Key)
+		if sref, ok := svcResolver(ref.Name); ok {
+			expanded := ExpandServiceKey(sref, ref.Key)
 			return EnvVar{Name: in.Name, Value: expanded}, nil
 		}
 	}
