@@ -78,7 +78,25 @@ type Dispatcher struct {
 	mu          sync.Mutex
 	closed      bool
 	dropOnFloor bool
+
+	// notifsCache is a short-lived cache of the configured notification
+	// channels. Without it, every event drained from `ch` does a fresh
+	// SQLite SELECT + JSON decode — which on a build storm + a single-
+	// connection writer pool starves every other writer (audit log,
+	// nodemetrics insert, login). Cache lives for notifsCacheTTL and
+	// is invalidated explicitly when the notifications handler does a
+	// CREATE/UPDATE/DELETE so admins see their config changes apply
+	// to the next event without waiting for the TTL.
+	notifsMu      sync.RWMutex
+	notifsCache   []db.Notification
+	notifsExpires time.Time
 }
+
+// notifsCacheTTL bounds how stale the dispatcher's view of the
+// notifications table can be. 30s matches the bell-icon polling
+// cadence and is short enough that a misconfigured channel can be
+// disabled without restarting the server.
+const notifsCacheTTL = 30 * time.Second
 
 // New returns a dispatcher bound to a DB for config lookup. queueSize
 // caps the in-memory event buffer; events past that point are dropped
@@ -161,7 +179,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, e Event) {
 	if d.db == nil {
 		return
 	}
-	notifs, err := d.db.ListNotifications(ctx)
+	notifs, err := d.cachedNotifications(ctx)
 	if err != nil {
 		d.logger.Warn("notify: list configs", "err", err)
 		return
@@ -220,6 +238,53 @@ func (d *Dispatcher) SendDirect(ctx context.Context, n *db.Notification, e Event
 	default:
 		return fmt.Errorf("unsupported notification type %q", n.Type)
 	}
+}
+
+// cachedNotifications returns the dispatcher's view of the configured
+// notification channels, refreshing from SQLite on cache miss. Cache
+// hits are read-locked so high-frequency event bursts (build storms,
+// alert flurries) all walk an in-memory slice instead of contending
+// for the single-writer DB connection.
+func (d *Dispatcher) cachedNotifications(ctx context.Context) ([]db.Notification, error) {
+	d.notifsMu.RLock()
+	if time.Now().Before(d.notifsExpires) && d.notifsCache != nil {
+		out := d.notifsCache
+		d.notifsMu.RUnlock()
+		return out, nil
+	}
+	d.notifsMu.RUnlock()
+
+	// Cache miss / expired. Take the write lock for the refresh so
+	// concurrent dispatchers don't all hit SQLite at once.
+	d.notifsMu.Lock()
+	defer d.notifsMu.Unlock()
+	// Double-check under the write lock — a sibling goroutine may have
+	// refreshed while we were waiting.
+	if time.Now().Before(d.notifsExpires) && d.notifsCache != nil {
+		return d.notifsCache, nil
+	}
+	notifs, err := d.db.ListNotifications(ctx)
+	if err != nil {
+		return nil, err
+	}
+	d.notifsCache = notifs
+	d.notifsExpires = time.Now().Add(notifsCacheTTL)
+	return notifs, nil
+}
+
+// InvalidateNotifications drops the cached config slice so the next
+// event re-reads from SQLite. Called from the notifications handler
+// on every CREATE / UPDATE / DELETE so admins don't see an apparent
+// "the channel is enabled but events aren't going through" lag while
+// the cache TTL ages out.
+func (d *Dispatcher) InvalidateNotifications() {
+	if d == nil {
+		return
+	}
+	d.notifsMu.Lock()
+	d.notifsCache = nil
+	d.notifsExpires = time.Time{}
+	d.notifsMu.Unlock()
 }
 
 // eventMatches returns true if `event` is in `whitelist`, or if the

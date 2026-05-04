@@ -48,6 +48,15 @@ type Service struct {
 
 	nsMu    sync.RWMutex
 	nsCache map[string]nsCacheEntry
+
+	// describeCache memoizes Describe responses for a short window so
+	// the projects index page (one Describe per card every 15s) doesn't
+	// fan out to ~3 + 3E kube round-trips per project on every render.
+	// Invalidated synchronously on every project / service / env
+	// mutation issued through this Service. Read-after-write within
+	// the same Service instance always sees fresh data.
+	describeMu    sync.RWMutex
+	describeCache map[string]describeCacheEntry
 }
 
 type nsCacheEntry struct {
@@ -55,14 +64,27 @@ type nsCacheEntry struct {
 	expires   time.Time
 }
 
-const nsCacheTTL = 30 * time.Second
+type describeCacheEntry struct {
+	resp    *DescribeResponse
+	expires time.Time
+}
+
+const (
+	nsCacheTTL       = 30 * time.Second
+	describeCacheTTL = 5 * time.Second
+)
 
 // New constructs a Service. namespace falls back to "kuso" when empty.
 func New(k *kube.Client, namespace string) *Service {
 	if namespace == "" {
 		namespace = "kuso"
 	}
-	return &Service{Kube: k, Namespace: namespace, nsCache: map[string]nsCacheEntry{}}
+	return &Service{
+		Kube:          k,
+		Namespace:     namespace,
+		nsCache:       map[string]nsCacheEntry{},
+		describeCache: map[string]describeCacheEntry{},
+	}
 }
 
 // namespaceFor returns the execution namespace for project. KusoProject
@@ -103,11 +125,53 @@ func (s *Service) namespaceFor(ctx context.Context, project string) (string, err
 
 // invalidateNamespace drops a project's cached namespace mapping. Called
 // on project create/update/delete so callers don't see stale routing
-// after a write.
+// after a write. Also clears the describe cache for the project so a
+// re-namespaced project isn't read from the wrong execution namespace.
 func (s *Service) invalidateNamespace(project string) {
 	s.nsMu.Lock()
 	delete(s.nsCache, project)
 	s.nsMu.Unlock()
+	s.invalidateDescribe(project)
+}
+
+// describeCacheGet returns a cached Describe response for project, or
+// nil when there's no entry / the entry has expired.
+func (s *Service) describeCacheGet(project string) *DescribeResponse {
+	if s == nil || s.describeCache == nil {
+		return nil
+	}
+	s.describeMu.RLock()
+	e, ok := s.describeCache[project]
+	s.describeMu.RUnlock()
+	if !ok || time.Now().After(e.expires) {
+		return nil
+	}
+	return e.resp
+}
+
+// describeCachePut stores resp under project with the configured TTL.
+// Cloning the slice headers keeps callers from accidentally mutating
+// shared memory (the underlying CR pointers are never modified after
+// being placed in the cache).
+func (s *Service) describeCachePut(project string, resp *DescribeResponse) {
+	if s == nil || s.describeCache == nil || resp == nil {
+		return
+	}
+	s.describeMu.Lock()
+	s.describeCache[project] = describeCacheEntry{resp: resp, expires: time.Now().Add(describeCacheTTL)}
+	s.describeMu.Unlock()
+}
+
+// invalidateDescribe drops a single project's describe cache entry.
+// Mutators (CRUD on services / envs / project itself) call this so
+// subsequent Describe calls reflect the write immediately.
+func (s *Service) invalidateDescribe(project string) {
+	if s == nil || s.describeCache == nil {
+		return
+	}
+	s.describeMu.Lock()
+	delete(s.describeCache, project)
+	s.describeMu.Unlock()
 }
 
 // ---- naming + labels -----------------------------------------------------

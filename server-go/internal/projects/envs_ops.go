@@ -87,6 +87,11 @@ func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name stri
 				}
 				continue
 			}
+			// Drop the cache for the env's project so the next
+			// Describe doesn't return a freshly-deleted preview.
+			if proj := e.Labels[labelProject]; proj != "" {
+				s.invalidateDescribe(proj)
+			}
 			deleted++
 		}
 	}
@@ -109,6 +114,7 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 	if e.Spec.Kind == "production" {
 		return fmt.Errorf("%w: cannot delete production environment %s", ErrInvalid, env)
 	}
+	defer s.invalidateDescribe(project)
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return err

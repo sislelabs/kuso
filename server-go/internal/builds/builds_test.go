@@ -70,9 +70,21 @@ func seedBuild(b *kube.KusoBuild) seed {
 }
 
 func seedProductionEnv(project, service string) seed {
+	// Real envs are always labelled with project + service + env kind
+	// (services_ops.AddService sets this when it auto-creates the
+	// production env). Mirror that here so the build poller's
+	// label-selected env list finds this fixture.
 	e := &kube.KusoEnvironment{
-		ObjectMeta: metav1.ObjectMeta{Name: project + "-" + service + "-production", Namespace: "kuso"},
-		Spec:       kube.KusoEnvironmentSpec{Project: project, Service: project + "-" + service, Kind: "production"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      project + "-" + service + "-production",
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": project,
+				"kuso.sislelabs.com/service": service,
+				"kuso.sislelabs.com/env":     "production",
+			},
+		},
+		Spec: kube.KusoEnvironmentSpec{Project: project, Service: project + "-" + service, Kind: "production"},
 	}
 	return typedSeed(kube.GVREnvironments, "KusoEnvironment", e)
 }
@@ -167,6 +179,43 @@ func TestCreate_BranchOnly_SyntheticRef(t *testing.T) {
 	}
 	if got.Spec.Image.Tag != got.Spec.Ref {
 		t.Errorf("non-SHA ref should pass through verbatim as tag: %q vs %q", got.Spec.Image.Tag, got.Spec.Ref)
+	}
+}
+
+// TestCreate_DedupsConcurrentSameSHA checks that two concurrent
+// Create calls for the same (project, service, sha) don't both spawn
+// build CRs. The second caller should get ErrConflict back. This is
+// the dedup that makes async webhook dispatch + GitHub retries safe.
+//
+// We simulate the race by pre-occupying the inFlight slot (as if a
+// leader were mid-Create) and then releasing it on a delay. The
+// follower's Create call should hit the dedup branch, wait on the
+// leader's `done` channel, then return ErrConflict.
+func TestCreate_DedupsConcurrentSameSHA(t *testing.T) {
+	t.Parallel()
+	const ref = "abcdef0123456789abcdef0123456789abcdef01"
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+	)
+
+	key := inFlightKey("alpha", "web", ref)
+	entry := &inFlightEntry{done: make(chan struct{})}
+	s.inFlight.Store(key, entry)
+
+	// Release the slot after a short delay so the follower's
+	// `<-prev.done` branch unblocks and returns ErrConflict.
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		s.inFlight.Delete(key)
+		close(entry.done)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	_, err := s.Create(ctx, "alpha", "web", CreateBuildRequest{Ref: ref})
+	if !errors.Is(err, ErrConflict) {
+		t.Errorf("expected ErrConflict, got %v", err)
 	}
 }
 

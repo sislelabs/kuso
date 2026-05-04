@@ -202,6 +202,45 @@ func TestDescribe_NotFound(t *testing.T) {
 	}
 }
 
+// TestDescribe_CachesAndInvalidates verifies that Describe memoises
+// results for the cache TTL and drops them on mutation. Without the
+// cache, every projects-index render fans out 3 + 3E kube calls per
+// project; with it, the second render of a stable project is O(1).
+func TestDescribe_CachesAndInvalidates(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+	)
+	first, err := s.Describe(context.Background(), "alpha")
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	cached, err := s.Describe(context.Background(), "alpha")
+	if err != nil {
+		t.Fatalf("Describe (cached): %v", err)
+	}
+	// Pointer-equal: the cache should return the same response struct.
+	if first != cached {
+		t.Errorf("expected cached pointer-equal response, got distinct values")
+	}
+	// Mutating a service must invalidate the cache so the next
+	// Describe re-fetches.
+	if _, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{Name: "api"}); err != nil {
+		t.Fatalf("AddService: %v", err)
+	}
+	fresh, err := s.Describe(context.Background(), "alpha")
+	if err != nil {
+		t.Fatalf("Describe (fresh): %v", err)
+	}
+	if fresh == cached {
+		t.Errorf("AddService should have invalidated the cache; got the stale entry")
+	}
+	if len(fresh.Services) != 2 {
+		t.Errorf("services after AddService: %d, want 2", len(fresh.Services))
+	}
+}
+
 func TestDelete_CascadesEnvsAndServices(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,

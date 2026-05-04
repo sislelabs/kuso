@@ -25,9 +25,16 @@ import (
 // We keep that envelope so the Vue store doesn't need a remap.
 // notifySink is the minimal interface the handler needs from the
 // notify dispatcher (avoids importing the full type into router/Deps).
+//
+// InvalidateNotifications is a hot-path optimisation: the dispatcher
+// caches its view of the notifications table for notifsCacheTTL so
+// per-event SQLite SELECTs stop contending with the single-writer
+// connection. Every CRUD on this handler calls Invalidate so admins
+// see channel changes apply immediately to subsequent events.
 type notifySink interface {
 	EmitEnvelope(notify.EmitEnvelope)
 	SendDirect(ctx context.Context, n *db.Notification, e notify.Event) error
+	InvalidateNotifications()
 }
 
 type NotificationsHandler struct {
@@ -196,6 +203,9 @@ func (h *NotificationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "create", err)
 		return
 	}
+	if h.Notify != nil {
+		h.Notify.InvalidateNotifications()
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{"success": true, "data": n, "message": "Notification created successfully"})
 }
 
@@ -243,6 +253,9 @@ func (h *NotificationsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "update", err)
 		return
 	}
+	if h.Notify != nil {
+		h.Notify.InvalidateNotifications()
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "data": existing, "message": "Notification updated successfully"})
 }
 
@@ -252,6 +265,9 @@ func (h *NotificationsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if err := h.DB.DeleteNotification(ctx, chi.URLParam(r, "id")); err != nil {
 		h.fail(w, "delete", err)
 		return
+	}
+	if h.Notify != nil {
+		h.Notify.InvalidateNotifications()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"success": true, "message": "Notification deleted successfully"})
 }

@@ -38,7 +38,21 @@ type DescribeResponse struct {
 }
 
 // Describe rolls up project + services + envs filtered by label.
+//
+// Hot path: the projects index page calls this once per card every 15s.
+// Two scalability behaviours live here:
+//
+//  1. A small in-process LRU-style cache (describeCacheTTL) skips the
+//     full kube fan-out when the same project was just described. The
+//     cache is invalidated on every project / service / env mutation
+//     issued through this Service so writers always see fresh data.
+//  2. Services are fetched once per call and threaded through the env
+//     populate loop so populateLiveStatus does NOT re-Get the service
+//     CR per env (was N×E kube calls; now N).
 func (s *Service) Describe(ctx context.Context, name string) (*DescribeResponse, error) {
+	if cached := s.describeCacheGet(name); cached != nil {
+		return cached, nil
+	}
 	p, err := s.Get(ctx, name)
 	if err != nil {
 		return nil, err
@@ -47,11 +61,20 @@ func (s *Service) Describe(ctx context.Context, name string) (*DescribeResponse,
 	if err != nil {
 		return nil, fmt.Errorf("list services: %w", err)
 	}
-	envs, err := s.listEnvsForProject(ctx, name)
+	// Index services by their canonical FQN (`<project>-<service>`) so
+	// populateLiveStatus can look up the autoscale ceiling without a
+	// fresh kube round-trip per env.
+	svcByName := make(map[string]*kube.KusoService, len(services))
+	for i := range services {
+		svcByName[services[i].Name] = &services[i]
+	}
+	envs, err := s.listEnvsForProjectWithServices(ctx, name, svcByName)
 	if err != nil {
 		return nil, fmt.Errorf("list envs: %w", err)
 	}
-	return &DescribeResponse{Project: p, Services: services, Environments: envs}, nil
+	resp := &DescribeResponse{Project: p, Services: services, Environments: envs}
+	s.describeCachePut(name, resp)
+	return resp, nil
 }
 
 // Create validates input, refuses duplicates, and persists a new project.
@@ -249,6 +272,16 @@ func (s *Service) listServicesForProject(ctx context.Context, project string) ([
 }
 
 func (s *Service) listEnvsForProject(ctx context.Context, project string) ([]kube.KusoEnvironment, error) {
+	return s.listEnvsForProjectWithServices(ctx, project, nil)
+}
+
+// listEnvsForProjectWithServices is the hot-path variant: callers that
+// already hold the project's service map (e.g. Describe) pass it in so
+// populateLiveStatus can read autoscale ceilings without a per-env
+// kube Get. nil means "fall back to a per-env GetKusoService" — kept
+// for the few callers that want envs without paying the service-list
+// cost.
+func (s *Service) listEnvsForProjectWithServices(ctx context.Context, project string, svcByName map[string]*kube.KusoService) ([]kube.KusoEnvironment, error) {
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
@@ -266,7 +299,7 @@ func (s *Service) listEnvsForProject(ctx context.Context, project string) ([]kub
 			return nil, err
 		}
 		populateDerivedStatus(&e)
-		s.populateLiveStatus(ctx, ns, &e)
+		s.populateLiveStatus(ctx, ns, &e, svcByName)
 		out = append(out, e)
 	}
 	return out, nil
@@ -396,7 +429,14 @@ func parsePodCPU(s string) int64 {
 // so without this the canvas card just shows UNKNOWN forever even
 // when pods are clearly running. Best-effort: any kube error → leave
 // the existing status alone.
-func (s *Service) populateLiveStatus(ctx context.Context, ns string, e *kube.KusoEnvironment) {
+//
+// svcByName is an optional map of FQN → service CR pre-fetched by the
+// caller. When provided, the autoscale ceiling lookup is a map read
+// instead of a per-env kube Get — that's the difference between
+// O(envs) and O(1) kube round-trips on the projects index page.
+// Pass nil when there's no map handy; populateLiveStatus falls back
+// to a fresh GetKusoService.
+func (s *Service) populateLiveStatus(ctx context.Context, ns string, e *kube.KusoEnvironment, svcByName map[string]*kube.KusoService) {
 	if e.Status == nil {
 		e.Status = map[string]any{}
 	}
@@ -420,8 +460,9 @@ func (s *Service) populateLiveStatus(ctx context.Context, ns string, e *kube.Kus
 	// currently scheduled. Fall back to desired when no autoscale
 	// is configured.
 	max := desired
-	if svc, err := s.Kube.GetKusoService(ctx, ns, e.Spec.Service); err == nil && svc.Spec.Scale != nil && svc.Spec.Scale.Max > 0 {
-		max = int32(svc.Spec.Scale.Max)
+	scaleMax := s.lookupServiceScaleMax(ctx, ns, e.Spec.Service, svcByName)
+	if scaleMax > 0 {
+		max = int32(scaleMax)
 		if max < desired {
 			max = desired
 		}
@@ -457,4 +498,34 @@ func (s *Service) populateLiveStatus(ctx context.Context, ns string, e *kube.Kus
 			e.Status["ready"] = true
 		}
 	}
+}
+
+// lookupServiceScaleMax returns the configured autoscale ceiling for
+// `<project>-<service>` (the FQN form stored in env.spec.service). When
+// the caller already pre-fetched the service map (Describe), we read
+// it directly. Otherwise, fall back to a per-env GetKusoService —
+// expensive at scale but correct. Returns 0 when no autoscale is set
+// or the service can't be found.
+func (s *Service) lookupServiceScaleMax(ctx context.Context, ns, serviceFQN string, svcByName map[string]*kube.KusoService) int {
+	if svc, ok := svcByName[serviceFQN]; ok {
+		if svc != nil && svc.Spec.Scale != nil {
+			return svc.Spec.Scale.Max
+		}
+		return 0
+	}
+	if svcByName != nil {
+		// Caller passed a map but the service isn't there — likely a
+		// stale env or a label mismatch. Don't fall back to a kube
+		// Get; the caller already paid for the list and a per-env
+		// kube round-trip would defeat the optimization.
+		return 0
+	}
+	if s.Kube == nil {
+		return 0
+	}
+	svc, err := s.Kube.GetKusoService(ctx, ns, serviceFQN)
+	if err != nil || svc.Spec.Scale == nil {
+		return 0
+	}
+	return svc.Spec.Scale.Max
 }

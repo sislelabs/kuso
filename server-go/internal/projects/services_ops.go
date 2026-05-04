@@ -90,6 +90,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	if err := validateRuntime(req.Runtime); err != nil {
 		return nil, err
 	}
+	defer s.invalidateDescribe(project)
 	proj, err := s.Get(ctx, project)
 	if err != nil {
 		return nil, err
@@ -270,6 +271,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	if req.Name == "production" || strings.HasPrefix(req.Name, "pr-") {
 		return nil, fmt.Errorf("%w: name %q is reserved", ErrInvalid, req.Name)
 	}
+	defer s.invalidateDescribe(project)
 	if !envNameRE.MatchString(req.Name) {
 		return nil, fmt.Errorf("%w: env name must be lowercase letters/digits/dashes", ErrInvalid)
 	}
@@ -380,6 +382,7 @@ func (s *Service) RenameService(ctx context.Context, project, oldName, newName s
 	if !serviceNameRE.MatchString(newName) {
 		return nil, fmt.Errorf("%w: new name must be lowercase letters/digits/dashes (≤32 chars)", ErrInvalid)
 	}
+	defer s.invalidateDescribe(project)
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
@@ -504,6 +507,7 @@ func (s *Service) DeleteService(ctx context.Context, project, service string) er
 	if _, err := s.GetService(ctx, project, service); err != nil {
 		return err
 	}
+	defer s.invalidateDescribe(project)
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return err
@@ -559,6 +563,7 @@ func (s *Service) SetEnv(ctx context.Context, project, service string, envVars [
 	// effectively unfixable from the editor), enforces POSIX env
 	// names, and rejects duplicates. The frontend now does this
 	// too but the server is the boundary that has to be safe.
+	defer s.invalidateDescribe(project)
 	clean := make([]EnvVar, 0, len(envVars))
 	seen := make(map[string]struct{}, len(envVars))
 	for _, ev := range envVars {
@@ -839,6 +844,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	if err != nil {
 		return nil, err
 	}
+	defer s.invalidateDescribe(project)
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err

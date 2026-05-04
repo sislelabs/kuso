@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -203,7 +204,17 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 			}
 			_ = prNumber // currently informational; future: stash on build label
 			if _, err := d.Builds.Create(ctx, proj.Name, short, req); err != nil {
-				d.Logger.Warn("build trigger", "project", proj.Name, "service", short, "err", err)
+				// Dedup conflict on retried deliveries is the expected
+				// path, not an error: GitHub re-fired the webhook while
+				// the previous attempt was still creating the build.
+				// Log at Debug so the operator's logs don't fill with
+				// noise on every monorepo push.
+				if errors.Is(err, builds.ErrConflict) {
+					d.Logger.Debug("build trigger deduped (already in flight)",
+						"project", proj.Name, "service", short, "ref", req.Ref)
+				} else {
+					d.Logger.Warn("build trigger", "project", proj.Name, "service", short, "err", err)
+				}
 			}
 		}
 	}
@@ -450,7 +461,12 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	}
 	if d.Builds != nil {
 		if _, err := d.Builds.Create(ctx, proj.Name, short, builds.CreateBuildRequest{Branch: pr.PullRequest.Head.Ref, Ref: pr.PullRequest.Head.SHA}); err != nil {
-			d.Logger.Warn("preview build trigger", "service", serviceFQN, "pr", pr.Number, "err", err)
+			if errors.Is(err, builds.ErrConflict) {
+				d.Logger.Debug("preview build trigger deduped (already in flight)",
+					"service", serviceFQN, "pr", pr.Number)
+			} else {
+				d.Logger.Warn("preview build trigger", "service", serviceFQN, "pr", pr.Number, "err", err)
+			}
 		}
 	}
 	d.Logger.Info("PR preview env ready", "env", envName, "pr", pr.Number)

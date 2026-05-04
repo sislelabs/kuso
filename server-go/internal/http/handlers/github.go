@@ -120,16 +120,28 @@ func (h *GithubHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
-	if err := h.Dispatcher.Dispatch(ctx, event, body); err != nil {
-		h.Logger.Error("github dispatch", "event", event, "err", err)
-		// 500 makes GitHub retry. We trust idempotency in the dispatch
-		// path (build creation is keyed by SHA, env creation by PR
-		// number, both no-op or recreate cleanly).
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
-	}
+	// Dispatch asynchronously on a detached context. A monorepo with
+	// 15+ services can take >10s to fan out (one KusoBuild create per
+	// service, each with a clone-token Secret), and GitHub's webhook
+	// timeout is 10s — synchronous dispatch turns into a retry storm
+	// of duplicate builds. The async path returns 204 immediately so
+	// GitHub treats the delivery as successful.
+	//
+	// Idempotency: build creation is deduped on (project, service,
+	// sha) via builds.Service so retries (or the rare case of two
+	// webhooks racing) don't double-fire. PR env creation is keyed
+	// by PR number so it's naturally idempotent.
+	//
+	// We capture the body + event by value because the request goroutine
+	// may unwind (and the body buffer could be reused) before our
+	// goroutine runs.
+	go func(event string, body []byte) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer cancel()
+		if err := h.Dispatcher.Dispatch(ctx, event, body); err != nil {
+			h.Logger.Error("github dispatch", "event", event, "err", err)
+		}
+	}(event, append([]byte(nil), body...))
 	w.WriteHeader(http.StatusNoContent)
 }
 

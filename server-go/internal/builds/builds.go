@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -83,6 +84,32 @@ type Service struct {
 	// expected secret (empty value) so pods start, but private repos
 	// will fail to clone.
 	Tokens TokenMinter
+
+	// inFlight dedupes concurrent Create calls keyed on
+	// (project, service, sha). When a webhook retries (GitHub does so
+	// on 5xx) or two callers race the same build, the second caller
+	// waits on the first's outcome instead of creating a duplicate
+	// KusoBuild + clone-token Secret. Keys live for the duration of
+	// Create only; freed in defer regardless of outcome.
+	inFlight sync.Map
+}
+
+// inFlightEntry is the value side of inFlight: a channel that closes
+// when the leader's Create returns, plus its result. Followers block
+// on done and read result/err. We don't bother coalescing the response
+// (returning the leader's CR pointer to followers) because Create's
+// caller treats the body as advisory — what matters is that we don't
+// spawn a second build pod for the same SHA.
+type inFlightEntry struct {
+	done chan struct{}
+}
+
+// inFlightKey produces the dedup key. SHA is the natural primary key
+// for a build (image tag derives from it); project + service prevent
+// false-positive collisions when two services in different projects
+// happen to share a SHA (rare but possible with monorepos).
+func inFlightKey(project, service, sha string) string {
+	return project + "/" + service + "/" + sha
 }
 
 // New constructs a builds.Service with a default namespace fallback.
@@ -131,6 +158,12 @@ func (s *Service) scanNamespaces(ctx context.Context) []string {
 var (
 	ErrNotFound = errors.New("builds: not found")
 	ErrInvalid  = errors.New("builds: invalid")
+	// ErrConflict is returned when an identical build (same project,
+	// service, and resolved SHA) is already being created. The HTTP
+	// layer maps this to 409; the GitHub webhook dispatcher swallows
+	// it because a retried delivery hitting an in-flight build is a
+	// success, not a failure.
+	ErrConflict = errors.New("builds: conflict")
 )
 
 // CreateBuildRequest is the body of POST /api/projects/:p/services/:s/builds.
@@ -228,11 +261,42 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	}
 
 	sha := req.Ref
-	if !shaRE.MatchString(sha) {
+	syntheticRef := !shaRE.MatchString(sha)
+	if syntheticRef {
 		// Phase 5 cannot resolve branch → SHA via GitHub yet. Synthesize
 		// a unique-ish ref. Phase 6 will replace this branch with the
 		// real github resolve.
 		sha = fmt.Sprintf("%s-%s", branch, strconv.FormatInt(time.Now().UnixMilli(), 36))
+	}
+
+	// Dedup concurrent Create calls for the same (project, service, sha).
+	// A retried GitHub webhook (or two webhooks racing the same push) used
+	// to spawn duplicate KusoBuild + clone-token secrets — kaniko would
+	// fail on the second one with "secret already exists" or worse, both
+	// would race to push the same image tag. We only dedup on real SHAs;
+	// synthetic refs already carry a unix-ms suffix so they're already
+	// unique-by-construction.
+	if !syntheticRef {
+		key := inFlightKey(project, service, sha)
+		entry := &inFlightEntry{done: make(chan struct{})}
+		if existing, loaded := s.inFlight.LoadOrStore(key, entry); loaded {
+			// Another goroutine is already creating this build. Wait for
+			// it and return Conflict so the caller treats this as "no-op,
+			// already running" — which is exactly what GitHub's retry
+			// path needs.
+			prev := existing.(*inFlightEntry)
+			select {
+			case <-prev.done:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("%w: build for %s/%s@%s already in flight",
+				ErrConflict, project, service, shortRef(sha))
+		}
+		defer func() {
+			s.inFlight.Delete(key)
+			close(entry.done)
+		}()
 	}
 
 	buildName := buildCRName(project, service, sha)
@@ -472,9 +536,18 @@ func (p *Poller) Run(ctx context.Context) error {
 func (p *Poller) tick(ctx context.Context) error {
 	// Walk every project's execution namespace, deduped + including the
 	// home namespace so single-tenant clusters keep working.
+	//
+	// We exclude builds the operator already considers terminal
+	// (build-state=done). The label is stamped by markSucceeded /
+	// markFailed below and is the same selector the helm-operator
+	// watch (operator/watches.yaml) uses to skip reconciliation. With
+	// 1000 historical builds in a busy cluster, this turns a full-table
+	// list into an indexed scan over the few in-flight rows — and
+	// matches what the operator side already does.
+	const activeBuilds = "!kuso.sislelabs.com/build-state"
 	for _, ns := range p.Svc.scanNamespaces(ctx) {
 		raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
-			List(ctx, metav1.ListOptions{})
+			List(ctx, metav1.ListOptions{LabelSelector: activeBuilds})
 		if err != nil {
 			p.Logger.Warn("build poller list", "ns", ns, "err", err)
 			continue
@@ -484,6 +557,9 @@ func (p *Poller) tick(ctx context.Context) error {
 			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &b); err != nil {
 				continue
 			}
+			// Defensive: the selector excludes done builds, but a
+			// build mid-mark could land here on a race. Keep the
+			// in-memory phase check so we skip it cleanly.
 			phase := buildPhase(&b)
 			if phase == "succeeded" || phase == "failed" {
 				continue
@@ -639,11 +715,24 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	if b.Spec.Image == nil {
 		return nil
 	}
-	// List every env in the same namespace as the build and filter on
-	// spec.service. The build CR was rendered into the project's
-	// execution namespace, so its envs live there too.
+	// List only envs that belong to this build's project + service.
+	// Without the selector, every promotion walks every env in the
+	// namespace — fine at 5 envs, painful at 50 (preview-env explosion
+	// path).
+	//
+	// Env labels carry the SHORT service name (req.Name), but
+	// b.Spec.Service is the FQN form "<project>-<service>". Strip the
+	// project prefix so the selector matches the env's labels.
+	// The in-memory `e.Spec.Service != b.Spec.Service` check below is
+	// a belt-and-braces fallback for older envs missing the label.
+	shortService := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
+	if shortService == "" {
+		shortService = b.Spec.Service
+	}
+	selector := "kuso.sislelabs.com/project=" + b.Spec.Project +
+		",kuso.sislelabs.com/service=" + shortService
 	raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
-		List(ctx, metav1.ListOptions{})
+		List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
 		return fmt.Errorf("list envs for promotion: %w", err)
 	}

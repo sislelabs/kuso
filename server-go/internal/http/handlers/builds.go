@@ -158,6 +158,10 @@ func (h *BuildsHandler) fail(w http.ResponseWriter, op string, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.Is(err, builds.ErrInvalid):
 		http.Error(w, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, builds.ErrConflict):
+		// Pass the conflict message through so the UI can show
+		// "build already in flight" instead of a bare 409.
+		http.Error(w, err.Error(), http.StatusConflict)
 	default:
 		h.Logger.Error("builds handler", "op", op, "err", err)
 		http.Error(w, "internal", http.StatusInternalServerError)
