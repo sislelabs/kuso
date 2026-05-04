@@ -29,7 +29,7 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
       data-node-context
       onContextMenu={data.__onContext}
       className={cn(
-        "w-[220px] rounded-2xl border bg-[var(--bg-elevated)] p-3 transition-colors",
+        "w-[220px] rounded-2xl border bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
         // Hover wins over the green ready-border so the user gets a
         // clear "you're targeting this" affordance. Without the
         // explicit hover-on-ready rule the green stays put and the

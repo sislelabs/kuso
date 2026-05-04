@@ -4,8 +4,19 @@ import { useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "@/lib/utils";
 
+// ContextMenuEntry covers four kinds of rows: an action button (the
+// default), a non-clickable section header, a separator line, and a
+// header with a small subtitle (used for the right-click target's
+// name/kind). The discriminator is `kind` defaulting to "action" so
+// existing callers don't need to change.
+export type ContextMenuEntry =
+  | ContextMenuItem
+  | ContextMenuSeparator
+  | ContextMenuHeader;
+
 export interface ContextMenuItem {
   id: string;
+  kind?: "action";
   label: string;
   icon?: React.ComponentType<{ className?: string }>;
   destructive?: boolean;
@@ -16,12 +27,23 @@ export interface ContextMenuItem {
   // click before invoking this anyway.
   onSelect?: () => void;
 }
+export interface ContextMenuSeparator {
+  id: string;
+  kind: "separator";
+}
+export interface ContextMenuHeader {
+  id: string;
+  kind: "header";
+  label: string;
+  subtitle?: string;
+  icon?: React.ComponentType<{ className?: string }>;
+}
 
 interface Props {
   open: boolean;
   x: number;
   y: number;
-  items: ContextMenuItem[];
+  items: ContextMenuEntry[];
   onClose: () => void;
 }
 
@@ -61,11 +83,18 @@ export function CanvasContextMenu({ open, x, y, items, onClose }: Props) {
   }, [open, onClose]);
 
   // Clamp to viewport so the menu doesn't render off-screen near the
-  // bottom-right corner of the canvas.
+  // bottom-right corner of the canvas. Width grows for richer menus;
+  // height estimate accounts for separators (8px) + headers (44px)
+  // + actions (32px) so the clamp is roughly right.
   const vw = typeof window !== "undefined" ? window.innerWidth : 1024;
   const vh = typeof window !== "undefined" ? window.innerHeight : 768;
-  const w = 220;
-  const h = items.length * 32 + 8;
+  const w = 240;
+  const h = items.reduce((acc, it) => {
+    const kind = (it as ContextMenuSeparator).kind;
+    if (kind === "separator") return acc + 9;
+    if (kind === "header") return acc + 44;
+    return acc + 32;
+  }, 8);
   const left = Math.min(x, vw - w - 8);
   const top = Math.min(y, vh - h - 8);
 
@@ -82,7 +111,38 @@ export function CanvasContextMenu({ open, x, y, items, onClose }: Props) {
           className="fixed z-[60] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] py-1 shadow-[var(--shadow-lg)]"
           role="menu"
         >
-          {items.map((item) => {
+          {items.map((entry) => {
+            const kind = (entry as ContextMenuSeparator).kind ?? "action";
+            if (kind === "separator") {
+              return (
+                <div
+                  key={entry.id}
+                  role="separator"
+                  className="my-1 h-px bg-[var(--border-subtle)]"
+                />
+              );
+            }
+            if (kind === "header") {
+              const h = entry as ContextMenuHeader;
+              const Icon = h.icon;
+              return (
+                <div
+                  key={entry.id}
+                  className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-2.5 py-1.5"
+                >
+                  {Icon && <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />}
+                  <div className="min-w-0">
+                    <p className="truncate text-[12px] font-medium">{h.label}</p>
+                    {h.subtitle && (
+                      <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
+                        {h.subtitle}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              );
+            }
+            const item = entry as ContextMenuItem;
             const Icon = item.icon;
             return (
               <button

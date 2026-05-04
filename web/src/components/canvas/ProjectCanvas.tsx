@@ -23,7 +23,11 @@ import {
   loadStoredLayout,
   saveStoredLayout,
 } from "./layout";
-import { CanvasContextMenu, type ContextMenuItem } from "./CanvasContextMenu";
+import {
+  CanvasContextMenu,
+  type ContextMenuItem,
+  type ContextMenuEntry,
+} from "./CanvasContextMenu";
 import { AddAddonDialog } from "@/components/addon/AddAddonDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { serviceShortName } from "@/lib/utils";
@@ -36,6 +40,8 @@ import {
   Eye,
   Plus,
   LayoutGrid,
+  Database,
+  HardDrive,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -57,7 +63,7 @@ interface ContextState {
   open: boolean;
   x: number;
   y: number;
-  items: ContextMenuItem[];
+  items: ContextMenuEntry[];
 }
 
 export function ProjectCanvas({
@@ -287,18 +293,45 @@ export function ProjectCanvas({
     );
     const url = env?.status?.url as string | undefined;
 
-    const items: ContextMenuItem[] = [
+    const runtime = data.service.spec.runtime || "dockerfile";
+    const items: ContextMenuEntry[] = [
+      {
+        id: "header",
+        kind: "header",
+        label: short,
+        subtitle: `service · runtime=${runtime}`,
+        icon: Eye,
+      },
       {
         id: "open",
-        label: "Open service",
+        label: "Open inspector",
         icon: Eye,
+        shortcut: "Enter",
         onSelect: () => onSelectService?.(short),
       },
+      ...(url
+        ? [
+            {
+              id: "open-url",
+              label: "Open URL ↗",
+              icon: ExternalLink,
+              onSelect: () => window.open(url, "_blank", "noopener"),
+            } as ContextMenuItem,
+          ]
+        : []),
+      { id: "sep1", kind: "separator" },
       {
         id: "logs",
         label: "View logs",
         icon: ScrollText,
-        onSelect: () => onSelectService?.(short),
+        onSelect: () => {
+          onSelectService?.(short);
+          // The overlay defaults to the Deployments tab; pick Logs
+          // via a hash so the right tab opens. Future: pass the tab
+          // explicitly; for now hash works because the overlay
+          // listens on hashchange.
+          window.location.hash = "logs";
+        },
       },
       {
         id: "trigger",
@@ -313,16 +346,7 @@ export function ProjectCanvas({
           }
         },
       },
-      ...(url
-        ? [
-            {
-              id: "open-url",
-              label: "Open URL in new tab",
-              icon: ExternalLink,
-              onSelect: () => window.open(url, "_blank", "noopener"),
-            } as ContextMenuItem,
-          ]
-        : []),
+      { id: "sep2", kind: "separator" },
       {
         id: "delete",
         label: "Delete service…",
@@ -345,13 +369,45 @@ export function ProjectCanvas({
   // destructive op that may take a PVC with it.
   const onAddonContext = (e: React.MouseEvent, data: AddonNodeData) => {
     e.preventDefault();
-    const items: ContextMenuItem[] = [
+    const addonShort = data.addon.metadata.name.replace(project + "-", "");
+    const kind = data.addon.spec.kind;
+    const items: ContextMenuEntry[] = [
+      {
+        id: "header",
+        kind: "header",
+        label: addonShort,
+        subtitle: `addon · ${kind}`,
+      },
       {
         id: "open",
-        label: "Open addon",
+        label: "Open inspector",
         icon: Eye,
+        shortcut: "Enter",
         onSelect: () => onSelectAddon?.(data.addon.metadata.name),
       },
+      ...(kind === "postgres"
+        ? [
+            {
+              id: "sql",
+              label: "SQL console",
+              icon: Database,
+              onSelect: () => {
+                onSelectAddon?.(data.addon.metadata.name);
+                window.location.hash = "sql";
+              },
+            } as ContextMenuItem,
+            {
+              id: "backups",
+              label: "Backups + restore",
+              icon: HardDrive,
+              onSelect: () => {
+                onSelectAddon?.(data.addon.metadata.name);
+                window.location.hash = "backups";
+              },
+            } as ContextMenuItem,
+          ]
+        : []),
+      { id: "sep1", kind: "separator" },
       {
         id: "delete",
         label: "Delete addon…",
@@ -371,7 +427,14 @@ export function ProjectCanvas({
   // Right-click on empty pane — Add service / Add addon / Reset layout.
   const onPaneContext = (e: React.MouseEvent) => {
     e.preventDefault();
-    const items: ContextMenuItem[] = [
+    const items: ContextMenuEntry[] = [
+      {
+        id: "header",
+        kind: "header",
+        label: project,
+        subtitle: "project canvas",
+        icon: LayoutGrid,
+      },
       {
         id: "add-service",
         label: "Add service",
@@ -386,6 +449,7 @@ export function ProjectCanvas({
         icon: Plus,
         onSelect: () => setShowAddAddon(true),
       },
+      { id: "sep1", kind: "separator" },
       {
         id: "reset-layout",
         label: "Reset layout",
@@ -441,6 +505,12 @@ export function ProjectCanvas({
         minZoom={0.2}
         maxZoom={1.5}
         proOptions={{ hideAttribution: true }}
+        // Snap to the same 24px grid the dot Background uses so
+        // dragged nodes land on dots, not between them. Visually
+        // self-explanatory — the user immediately understands
+        // the alignment they're being given.
+        snapToGrid
+        snapGrid={[24, 24]}
       >
         {/* Brighter dots than the default border-subtle so the
             grid actually reads on the dark bg. zinc-500 at 40%
