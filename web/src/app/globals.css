@@ -143,114 +143,116 @@
 }
 
 .dark {
-  /* Dark-mode palette: aubergine ground + midnight-navy surfaces.
-     Cards drop into a near-black #011627 — the dark midnight kills
-     hue conflict with the warm aubergine ground while still lifting
-     above it. Logo's slate-blue (#40476D) stays in the toolkit as
-     the secondary CTA color, but isn't a surface anymore.
-     Source palette (assigned roles):
-       #271F30  aubergine        — ground (bg-primary)
-       #011627  midnight-navy    — surfaces (cards, sidebar, popovers)
-       #40476D  slate-blue       — secondary CTAs (Open, Cancel, nav)
-       #EB6534  orange           — primary CTAs (Save, Create, Deploy)
-       #AFBBF2  periwinkle       — borders / hover / focus rings
-       #ACBEA3  sage             — success / active / online
-       #941B0C → #C9382A         — error (light variant for dark mode)
-       #5B5941 → #9A9678         — secondary text (warm olive lifted) */
+  /* Dark-mode palette — three clear roles:
+       #131200  warm near-black  — main (ground + surfaces, single hue)
+       #40476D  slate-blue       — accent (borders, links, decorative)
+       #ACBEA3  sage             — accent (success state, secondary tags)
+       #EB6534  orange           — action (Save / Deploy / Create only)
+     Plus periwinkle stays as a hover/focus ring tone since it's the
+     light-variant of slate-blue and pops on the warm-black ground.
 
-  /* Surfaces: aubergine ground, near-black midnight-navy cards.
-     #011627 has almost zero blue saturation — it reads as a deep
-     dark surface against the warm aubergine ground without trying
-     to be a "color" itself. The 3-step ladder lifts incrementally
-     toward the card surface so popovers/cards have weight without
-     looking like a separate brand color. */
-  --bg-primary: #271F30;          /* aubergine — page ground */
-  --bg-secondary: #021E33;        /* midnight, mid-shadow — sidebar */
-  --bg-tertiary: #02263E;         /* midnight, mid — hovered rows */
-  --bg-elevated: #011627;         /* midnight-navy exact — cards / popovers */
+     The previous palette piled four hues on top of each other
+     (aubergine ground, midnight cards, slate CTAs, orange CTAs)
+     which is why nothing felt cohesive — every surface was a
+     different brand color. The new system uses ONE hue family for
+     the surface ladder and reserves color for accents/actions
+     only. */
+
+  /* Surface ladder: warm near-black, single hue family. The base
+     is #131200 (almost a deep olive-black, very low saturation).
+     Steps lift by ~5% lightness, no hue shift, so cards/popovers
+     feel like the same surface at different elevations rather
+     than competing brand colors. */
+  --bg-primary: #131200;          /* warm near-black — page ground */
+  --bg-secondary: #1C1B07;        /* +1 step — sidebar */
+  --bg-tertiary: #26240F;         /* +2 step — hovered rows */
+  --bg-elevated: #2F2D14;         /* +3 step — cards / popovers */
   --bg-inverse: #FBFBF7;
 
-  /* Text: cream primary, warm-olive secondary (lifted from #5B5941),
-     muted tertiary. Olive against navy is legible AND warm — keeps the
-     UI from feeling clinical. */
+  /* Text: cream primary, warm-olive secondary, muted tertiary.
+     Olive sits in the same warm-temperature family as the new
+     ground (#131200), which keeps text feeling integrated rather
+     than imported from a different palette. */
   --text-primary: #ECEAE0;
   --text-secondary: #B5B19A;      /* warm olive, lifted */
   --text-tertiary: #7E7B66;       /* warm olive, muted */
-  --text-inverse: #271F30;
+  --text-inverse: #131200;
 
-  /* Accent stays periwinkle. On a slate-blue card it reads as the
-     same hue family but brighter — strong for hover/click affordance,
-     weak enough for ambient borders.
-     For SOLID CTAs (filled buttons), pale periwinkle on dark mode
-     looks washed out — the button has weight when the bg is solid
-     deep slate-blue and the foreground is bright periwinkle. The
-     --btn-primary-* tokens encode that flip so buttons read clearly
-     without us hand-tweaking each one. */
-  --accent: #AFBBF2;
-  --accent-hover: #C5CDF6;
-  --accent-subtle: rgba(175, 187, 242, 0.14);
-  /* Two-tier CTA system. We learned the hard way that one solid
-     button color can't do it all: orange has the pop required for
-     "Save / Create / Deploy" but reads aggressive on every nav
-     link, and slate-blue has the on-brand calm needed everywhere
-     else but lacks the snap for a primary submit.
-       --btn-primary-*    orange    (Save, Deploy, Create — high emphasis)
-       --btn-secondary-*  slate     (most other CTAs — secondary calm) */
-  --btn-primary-bg: #EB6534;        /* orange — high-emphasis CTAs */
+  /* Accent: slate-blue (#40476D) is the primary accent for
+     borders/links/decorative use. Sage (#ACBEA3) is the secondary
+     accent for success state, ready badges, and complementary
+     callouts. Periwinkle stays as the hover/focus ring color
+     because it's a light variant of the slate that pops on a warm
+     near-black ground. */
+  --accent: #40476D;              /* slate-blue — primary accent */
+  --accent-hover: #4F5784;
+  --accent-subtle: rgba(64, 71, 109, 0.18);
+  --accent-2: #ACBEA3;            /* sage — secondary accent */
+  --accent-2-subtle: rgba(172, 190, 163, 0.14);
+
+  /* Action color: ORANGE only. Reserved for high-emphasis
+     "do the thing" buttons — Save, Create, Deploy, Submit. Every
+     other interactive element reaches for slate or sage. The
+     scarcity is the point: when orange shows up the user knows
+     it's the action that matters. */
+  --btn-primary-bg: #EB6534;
   --btn-primary-bg-hover: #F27A4F;
   --btn-primary-fg: #FFFFFF;
   --btn-primary-border: #C44C1F;
-  --btn-secondary-bg: #40476D;      /* logo slate — calm CTAs + pickers */
-  --btn-secondary-bg-hover: #4F5784;
-  --btn-secondary-fg: #ECEAE0;
-  --btn-secondary-border: #6E769D;
 
-  /* Borders form a 3-step ladder against the new midnight-navy
-     surface. Subtle = ambient resting border on cards/inputs,
-     default = section dividers, strong = hover/focus emphasis.
-     Tuned so each step is visible against #011627 without being
-     loud — the surface is so dark that even a faint slate is
-     enough to register. */
-  --border-subtle: #1F3A52;       /* faint slate — ambient */
-  --border-default: #2D4F6E;      /* stronger slate — dividers */
-  --border-strong: #AFBBF2;       /* periwinkle = hover/focus */
+  /* Secondary CTAs (Open / Cancel / nav-style) use the slate
+     accent. shadcn's `default` Button variant routes through here. */
+  --btn-secondary-bg: #2A2F47;      /* slate, deeper for solid bg legibility */
+  --btn-secondary-bg-hover: #40476D;
+  --btn-secondary-fg: #ECEAE0;
+  --btn-secondary-border: #4F5784;
+
+  /* Borders ladder against the warm-black ground. Each step lifts
+     by ~12% lightness from the surface so dividers/cards register
+     without flooding the page with a bright color. Strong = hover
+     uses periwinkle for snap. */
+  --border-subtle: #3A3825;       /* warm olive, deep — ambient */
+  --border-default: #4F4D34;      /* warm olive, mid — dividers */
+  --border-strong: #AFBBF2;       /* periwinkle — hover/focus */
 
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
   --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.45);
   --shadow-lg: 0 12px 40px rgba(0, 0, 0, 0.55);
 
-  /* Tailwind/shadcn hookups. We map each named token to one of the
-     surface tiers above so component primitives (Card, Popover, Input)
-     get the slate-blue treatment without per-component overrides. */
-  --background: #271F30;
+  /* Tailwind/shadcn hookups. Each named token maps to the
+     warm-black surface ladder defined above — no separate "blue
+     surface" or "navy popover" paths anymore. The surface is one
+     hue family at four lightnesses; color shows up only via
+     accents and the action button. */
+  --background: #131200;
   --foreground: #ECEAE0;
-  --card: #011627;                /* midnight — cards */
+  --card: #2F2D14;                /* surface +3 — cards */
   --card-foreground: #ECEAE0;
-  --popover: #011627;             /* same midnight — popovers */
+  --popover: #2F2D14;             /* same — popovers */
   --popover-foreground: #ECEAE0;
-  --primary: #AFBBF2;             /* periwinkle CTA */
-  --primary-foreground: #271F30;
-  --secondary: #021E33;           /* midnight, shadow side */
+  --primary: #40476D;             /* slate-blue accent */
+  --primary-foreground: #ECEAE0;
+  --secondary: #1C1B07;           /* surface +1 */
   --secondary-foreground: #ECEAE0;
-  --muted: #02263E;               /* midnight, mid */
+  --muted: #26240F;               /* surface +2 */
   --muted-foreground: #B5B19A;    /* warm olive */
-  --accent-ui: #02263E;
+  --accent-ui: #26240F;
   --accent-foreground: #ECEAE0;
-  --destructive: #C9382A;         /* lifted from #941B0C */
-  --border: #2D4F6E;              /* matches --border-default */
-  --input: #02263E;               /* matches --bg-tertiary */
+  --destructive: #C9382A;
+  --border: #4F4D34;              /* matches --border-default */
+  --input: #26240F;               /* matches --bg-tertiary */
   --ring: #AFBBF2;
 
-  /* Sidebar shares --bg-secondary so the rail reads as a layer of
-     the same family — slightly less dark than the cards but still
-     within the midnight-navy ladder. */
-  --sidebar: #021E33;
+  /* Sidebar uses surface +1 so the rail is one shade darker than
+     the cards above it — keeps the visual hierarchy "rail < page <
+     card" and stays within the warm-black family. */
+  --sidebar: #1C1B07;
   --sidebar-foreground: #ECEAE0;
-  --sidebar-primary: #AFBBF2;
-  --sidebar-primary-foreground: #271F30;
-  --sidebar-accent: #02263E;
+  --sidebar-primary: #40476D;
+  --sidebar-primary-foreground: #ECEAE0;
+  --sidebar-accent: #26240F;
   --sidebar-accent-foreground: #ECEAE0;
-  --sidebar-border: #2D4F6E;
+  --sidebar-border: #4F4D34;
   --sidebar-ring: #AFBBF2;
 
   /* Status hues — used by Badge, Toast, build/env state pills, etc.
