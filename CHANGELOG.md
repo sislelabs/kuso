@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.51] — 2026-05-05
+
+### 🐛 Bug Fixes
+- Fix(s3-backup): three bugs found while testing against a self-hosted S3 ([15582b2](https://github.com/sislelabs/kuso/commit/15582b2384283fa8ec56813408fa6b29f78d2868))
+
 ## [0.7.50] — 2026-05-05
 
 ### ✨ Features
