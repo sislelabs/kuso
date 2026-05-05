@@ -106,16 +106,20 @@ func TestRequireProjectAccess_AdminBypasses(t *testing.T) {
 	}
 }
 
-func TestRequireProjectAccess_NilDB_LegacyPass(t *testing.T) {
+func TestRequireProjectAccess_NilDB_FailsClosed(t *testing.T) {
 	t.Parallel()
-	// Legacy fallback: nil DB ⇒ pass for any authed user. This is
-	// load-bearing — handlers wired before the tenancy table existed
-	// rely on it. The behaviour is deliberate (see authz.go comment).
+	// v0.8.13 reversed the legacy fail-open: a nil DB is now treated
+	// as a misconfigured handler and rejected with 403. Without this,
+	// any handler that pre-dated the tenancy table (or skipped wiring
+	// DB) would let any authenticated JWT bypass project membership.
 	rr := httptest.NewRecorder()
 	c := &auth.Claims{UserID: "u1", Permissions: []string{}}
 	ctx := auth.WithClaimsForTest(context.Background(), c)
-	if !requireProjectAccess(ctx, rr, nil, "p1", db.ProjectRoleOwner) {
-		t.Errorf("nil DB should permit (legacy); got %d", rr.Code)
+	if requireProjectAccess(ctx, rr, nil, "p1", db.ProjectRoleOwner) {
+		t.Errorf("nil DB should fail closed; got pass with code=%d", rr.Code)
+	}
+	if rr.Code != http.StatusForbidden {
+		t.Errorf("status=%d want 403", rr.Code)
 	}
 }
 

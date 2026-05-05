@@ -24,7 +24,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -109,13 +111,98 @@ func New(database *db.DB, logger *slog.Logger, queueSize int) *Dispatcher {
 		db:     database,
 		logger: logger,
 		ch:     make(chan Event, queueSize),
-		client: &http.Client{Timeout: 8 * time.Second},
+		client: &http.Client{
+			Timeout: 8 * time.Second,
+			// SSRF-safe transport: rejects connections to link-local,
+			// loopback, and private (RFC1918 + RFC4193) ranges. A
+			// user with notification:write could otherwise point a
+			// webhook at 169.254.169.254 (cloud metadata service)
+			// or 10.0.0.0/8 (in-cluster apiserver / addon DBs) and
+			// exfiltrate data through the redirect/error response.
+			Transport: ssrfSafeTransport(),
+		},
 	}
 }
 
-// Emit enqueues an event. Non-blocking: if the buffer is full, the
-// event is dropped and a warning is logged. Safe to call from any
-// goroutine, including before Run starts (events queue up).
+// ssrfSafeTransport returns a Transport whose dialer refuses to
+// connect to addresses in private/reserved ranges. Inspired by
+// google/safehttp's safedialer; we keep it tiny so we don't pull
+// the dep.
+func ssrfSafeTransport() *http.Transport {
+	dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
+	return &http.Transport{
+		Proxy: http.ProxyFromEnvironment,
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				return nil, err
+			}
+			ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+			if err != nil {
+				return nil, err
+			}
+			for _, ip := range ips {
+				if isReservedIP(ip) {
+					return nil, fmt.Errorf("notify: refusing to dial reserved address %s (%s)", ip, host)
+				}
+			}
+			// Re-dial against the resolved IP so we don't race a
+			// rebinding DNS attack between our check and the dial.
+			if len(ips) == 0 {
+				return nil, fmt.Errorf("notify: no IPs for %s", host)
+			}
+			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
+		},
+		TLSHandshakeTimeout:   5 * time.Second,
+		ResponseHeaderTimeout: 8 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+	}
+}
+
+// isReservedIP returns true for addresses we don't want webhook
+// targets to reach: loopback, link-local, private RFC1918, ULA
+// (RFC4193), unspecified, multicast. Public-cloud metadata services
+// live in 169.254.169.254 (link-local), GCE/AWS at the same address;
+// blocking link-local covers both.
+//
+// Operators with an internal-only install (no internet egress, all
+// notification sinks are in-cluster) can opt out by setting
+// KUSO_NOTIFY_ALLOW_PRIVATE_IPS=true. This is a foot-gun knob —
+// document it as such.
+func isReservedIP(ip net.IP) bool {
+	if isAllowPrivateIPs() {
+		// Still block obvious local-only addresses that have no
+		// reasonable webhook use.
+		return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+			ip.IsInterfaceLocalMulticast() || ip.IsUnspecified()
+	}
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	// IsPrivate covers 10/8, 172.16/12, 192.168/16, fc00::/7, fec0::/10.
+	if ip.IsPrivate() {
+		return true
+	}
+	return false
+}
+
+// isAllowPrivateIPs reads the env var on each call so a config
+// change doesn't require a server restart. Cheap (one os.Getenv).
+func isAllowPrivateIPs() bool {
+	return os.Getenv("KUSO_NOTIFY_ALLOW_PRIVATE_IPS") == "true"
+}
+
+// Emit enqueues an event AND persists it to the in-app feed
+// synchronously. The persist step makes the bell-icon feed durable
+// even when the in-memory dispatch channel overflows — at most we
+// lose webhook fan-out on a burst, never the user-visible feed.
+//
+// The dispatch channel is bounded (256 by default) and Emit is non-
+// blocking. On overflow we log a warn but the event is already in
+// SQLite. A future v0.9 will move dispatch to a DB-backed work queue
+// so even webhook fan-out is durable across restarts; this is the
+// half-step that closes the silent-drop bug today.
 func (d *Dispatcher) Emit(e Event) {
 	if d == nil {
 		return
@@ -129,11 +216,36 @@ func (d *Dispatcher) Emit(e Event) {
 	if closed {
 		return
 	}
+	// Persist first — synchronous to the caller. SQLite's
+	// busy_timeout will retry under contention; on hard failure we
+	// log and proceed (the channel send is still attempted, so a
+	// transient DB blip doesn't lose the webhook fan-out).
+	if d.db != nil {
+		persistCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		if err := d.db.InsertNotificationEvent(persistCtx, db.NotificationEvent{
+			Type:     string(e.Type),
+			Title:    e.Title,
+			Body:     e.Body,
+			Severity: e.Severity,
+			Project:  e.Project,
+			Service:  e.Service,
+			URL:      e.URL,
+			Extra:    e.Extra,
+		}); err != nil && d.logger != nil {
+			d.logger.Warn("notify: persist event", "err", err, "type", string(e.Type))
+		}
+		cancel()
+	}
 	select {
 	case d.ch <- e:
 	default:
+		// Channel full → webhook fan-out drops this event, but the
+		// bell-icon feed has it from the persist above. Operators
+		// who care about webhook reliability should bump
+		// KUSO_NOTIFY_QUEUE_SIZE.
 		if d.logger != nil {
-			d.logger.Warn("notify: queue full, dropping event", "type", string(e.Type))
+			d.logger.Warn("notify: dispatch queue full, webhook fanout skipped",
+				"type", string(e.Type), "queue_cap", cap(d.ch))
 		}
 	}
 }
@@ -150,26 +262,9 @@ func (d *Dispatcher) Run(ctx context.Context) {
 			d.mu.Unlock()
 			return
 		case e := <-d.ch:
-			// Persist into the in-app feed BEFORE the dispatch fan-out
-			// so the bell icon shows the event even if every external
-			// sink is disabled / misconfigured. Dispatch failures are
-			// already swallowed, no need to gate on them here.
-			if d.db != nil {
-				persistCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-				if err := d.db.InsertNotificationEvent(persistCtx, db.NotificationEvent{
-					Type:     string(e.Type),
-					Title:    e.Title,
-					Body:     e.Body,
-					Severity: e.Severity,
-					Project:  e.Project,
-					Service:  e.Service,
-					URL:      e.URL,
-					Extra:    e.Extra,
-				}); err != nil {
-					d.logger.Warn("notify: persist event", "err", err)
-				}
-				cancel()
-			}
+			// Persist now happens in Emit (synchronously w.r.t. the
+			// caller) so the in-app feed survives queue overflow.
+			// Run's job is purely to fan out to webhook sinks.
 			d.dispatch(ctx, e)
 		}
 	}

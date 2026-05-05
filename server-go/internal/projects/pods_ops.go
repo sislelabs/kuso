@@ -53,11 +53,24 @@ func (s *Service) ListPods(ctx context.Context, project, service, env string) (*
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.Kube.GetKusoEnvironment(ctx, ns, envName); err != nil {
+	envCR, err := s.Kube.GetKusoEnvironment(ctx, ns, envName)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, ErrNotFound
 		}
 		return nil, fmt.Errorf("get env: %w", err)
+	}
+	// Tenancy check: the resolved env must actually belong to (project,
+	// service). Without this, a viewer of project-a can list pods for
+	// project-b by passing ?env=project-b-svc-production — the env CR
+	// exists, the lookup succeeds, and the route's requireProjectAccess
+	// only verified access to project-a. The env CR's spec carries the
+	// authoritative project + service it was created for.
+	if envCR.Spec.Project != "" && envCR.Spec.Project != project {
+		return nil, ErrNotFound
+	}
+	if envCR.Spec.Service != "" && envCR.Spec.Service != fqn {
+		return nil, ErrNotFound
 	}
 
 	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{

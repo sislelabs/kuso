@@ -20,6 +20,8 @@ package updater
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -256,6 +258,21 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 	body, err := io.ReadAll(io.LimitReader(mresp.Body, 1<<20))
 	if err != nil {
 		return rel.TagName, nil, fmt.Errorf("read manifest: %w", err)
+	}
+	// Signature verification. Behind a feature flag — the keypair
+	// rollout is operator-side work (generate Ed25519 key, configure
+	// release.sh to sign release.json, distribute the public key
+	// through install.sh). When KUSO_REQUIRE_SIGNATURES=true is set,
+	// missing or invalid signatures are a hard error and the updater
+	// refuses to apply the manifest. Without the flag we log a warn
+	// (so unsigned releases are visible in monitoring) and proceed.
+	if err := s.verifyManifestSignature(ctx, rel.Assets, body); err != nil {
+		if requireSignatures() {
+			return rel.TagName, nil, fmt.Errorf("verify manifest signature: %w", err)
+		}
+		s.Logger.Warn("updater: unsigned release accepted",
+			"version", rel.TagName, "err", err,
+			"hint", "set KUSO_REQUIRE_SIGNATURES=true to enforce")
 	}
 	var m Manifest
 	if err := json.Unmarshal(body, &m); err != nil {
@@ -577,4 +594,79 @@ func envOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// requireSignatures returns true when the operator has opted into
+// strict manifest verification. Defaults to false (unsigned releases
+// pass with a warn log) so existing installs can continue to update
+// before keys are wired. Once we ship signed releases everywhere
+// this flag flips to true-by-default in a future major.
+func requireSignatures() bool {
+	return getenv("KUSO_REQUIRE_SIGNATURES") == "true"
+}
+
+// verifyManifestSignature looks for a `release.json.sig` asset on
+// the GH release and verifies it against the configured public key.
+// Returns nil when the signature checks out OR (in non-strict mode)
+// when no signature is present. Returns an error when:
+//   - signature exists but no public key configured
+//   - public key configured but signature is missing
+//   - signature exists but verification fails
+//
+// The public key lives in env var KUSO_RELEASE_PUBLIC_KEY (base64
+// Ed25519 public bytes) so it can be distributed via the install
+// script + baked into the deploy yaml. We deliberately don't fetch
+// the key from a URL — that would re-introduce the same supply-chain
+// hole we're closing.
+func (s *Service) verifyManifestSignature(ctx context.Context, assets []struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+}, manifestBody []byte) error {
+	pubB64 := getenv("KUSO_RELEASE_PUBLIC_KEY")
+	sigURL := ""
+	for _, a := range assets {
+		if a.Name == "release.json.sig" {
+			sigURL = a.BrowserDownloadURL
+			break
+		}
+	}
+	if sigURL == "" && pubB64 == "" {
+		// No signature, no key — treat as unsigned. Caller decides
+		// whether that's acceptable (requireSignatures gate).
+		return fmt.Errorf("no signature on release")
+	}
+	if sigURL != "" && pubB64 == "" {
+		return fmt.Errorf("release is signed but KUSO_RELEASE_PUBLIC_KEY is unset")
+	}
+	if sigURL == "" && pubB64 != "" {
+		return fmt.Errorf("public key configured but release.json.sig asset missing")
+	}
+	pub, err := base64.StdEncoding.DecodeString(pubB64)
+	if err != nil {
+		return fmt.Errorf("decode public key: %w", err)
+	}
+	if l := len(pub); l != ed25519.PublicKeySize {
+		return fmt.Errorf("public key wrong size: got %d want %d", l, ed25519.PublicKeySize)
+	}
+	sreq, _ := http.NewRequestWithContext(ctx, "GET", sigURL, nil)
+	sresp, err := s.client.Do(sreq)
+	if err != nil {
+		return fmt.Errorf("fetch signature: %w", err)
+	}
+	defer sresp.Body.Close()
+	if sresp.StatusCode != 200 {
+		return fmt.Errorf("signature: status %d", sresp.StatusCode)
+	}
+	sigB64, err := io.ReadAll(io.LimitReader(sresp.Body, 1024))
+	if err != nil {
+		return fmt.Errorf("read signature: %w", err)
+	}
+	sig, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(sigB64)))
+	if err != nil {
+		return fmt.Errorf("decode signature: %w", err)
+	}
+	if !ed25519.Verify(ed25519.PublicKey(pub), manifestBody, sig) {
+		return fmt.Errorf("signature does not match")
+	}
+	return nil
 }

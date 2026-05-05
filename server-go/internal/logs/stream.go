@@ -114,11 +114,21 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 		envName = fqn + "-" + env
 	}
 
-	if _, err := s.Kube.GetKusoEnvironment(ctx, s.Namespace, envName); err != nil {
+	envCR, err := s.Kube.GetKusoEnvironment(ctx, s.Namespace, envName)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return envName, ErrNotFound
 		}
 		return envName, fmt.Errorf("get env: %w", err)
+	}
+	// Tenancy check — see projects/pods_ops.go for the long form. The
+	// env CR's spec is authoritative; reject when it doesn't match the
+	// caller's project/service from the URL.
+	if envCR.Spec.Project != "" && envCR.Spec.Project != project {
+		return envName, ErrNotFound
+	}
+	if envCR.Spec.Service != "" && envCR.Spec.Service != fqn {
+		return envName, ErrNotFound
 	}
 
 	pods, err := s.Kube.Clientset.CoreV1().Pods(s.Namespace).List(ctx, metav1.ListOptions{

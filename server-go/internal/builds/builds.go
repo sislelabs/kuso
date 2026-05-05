@@ -465,6 +465,33 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 		// few more minutes producing an image nothing will use.
 		slog.Default().Warn("builds: delete cancelled job", "err", jerr, "build", buildName)
 	}
+	// Also delete the helm release secrets. Without this, the operator's
+	// next reconcile (or a watch event from a Job-deletion ripple) sees
+	// "release exists, manifest says Job should exist, Job is missing"
+	// and re-renders the kaniko Job. We hit this on 2026-05-05 — a
+	// cancelled build kept respawning every 30s until we scaled the
+	// operator to 0. The watch selector excludes state=done from
+	// future reconciles but the existing release record is the
+	// trigger source. Deleting it makes the release a no-op for the
+	// operator.
+	helmSelector := "owner=helm,name=" + buildName
+	secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: helmSelector,
+	})
+	if lerr == nil {
+		for i := range secs.Items {
+			name := secs.Items[i].Name
+			if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				slog.Default().Warn("builds: delete helm release secret",
+					"err", derr, "secret", name, "build", buildName)
+			}
+		}
+	}
+	// Wait briefly for the build pod to actually disappear so the
+	// caller (and the deployments tab refetch) sees a clean state.
+	// Best-effort, capped — don't block Cancel for more than 5s if
+	// the kubelet is slow to reap.
+	awaitPodGone(ctx, s.Kube, ns, buildName, 5*time.Second)
 	if s.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, project+"-")
 		s.Notifier.Emit(EventEnvelope{
@@ -478,6 +505,42 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 		})
 	}
 	return nil
+}
+
+// awaitPodGone polls Pods.List for build pods owned by `buildName`
+// until none remain or `timeout` elapses. Best-effort; on timeout we
+// proceed without an error since the kubelet will eventually reap.
+// The Cancel HTTP path uses this so a UI refetch after cancel sees a
+// clean state instead of a "still running" pod row that the kubelet
+// deletes 30 seconds later.
+func awaitPodGone(ctx context.Context, kc *kube.Client, ns, buildName string, timeout time.Duration) {
+	if kc == nil {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		pods, err := kc.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: "app.kubernetes.io/instance=" + buildName,
+		})
+		if err != nil {
+			return
+		}
+		alive := 0
+		for i := range pods.Items {
+			ph := pods.Items[i].Status.Phase
+			if ph == corev1.PodPending || ph == corev1.PodRunning {
+				alive++
+			}
+		}
+		if alive == 0 {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
 }
 
 // supersedePriorBuilds is retained for the cleanup path — it's no

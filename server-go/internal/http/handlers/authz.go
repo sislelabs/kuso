@@ -22,6 +22,7 @@ package handlers
 
 import (
 	"context"
+	"log/slog"
 	"net/http"
 
 	"kuso/server/internal/auth"
@@ -80,10 +81,15 @@ func requireProjectAccess(
 		return true
 	}
 	if dbConn == nil {
-		// Handler hasn't been migrated to pass DB yet. Don't block
-		// the request — that would break in-flight features. Fix by
-		// wiring DB into the handler.
-		return true
+		// Fail closed: an unwired handler is a security bug, not a
+		// feature gate. The previous fail-open behaviour let any JWT
+		// bypass project-membership checks on any handler that pre-
+		// dated the DB plumbing — exploitable today. Logging the call
+		// site so the operator notices in production.
+		slog.Default().Error("requireProjectAccess called with nil DB — failing closed",
+			"project", project, "user", claims.UserID)
+		http.Error(w, "forbidden", http.StatusForbidden)
+		return false
 	}
 	tenancy, err := dbConn.ListUserTenancy(ctx, claims.UserID)
 	if err != nil {

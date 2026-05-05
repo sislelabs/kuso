@@ -411,6 +411,11 @@ func TestCreate_CoalesceWindowExpires(t *testing.T) {
 	if _, uerr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").Update(context.Background(), raw, metav1.UpdateOptions{}); uerr != nil {
 		t.Fatalf("backdate: %v", uerr)
 	}
+	// Sleep enough that the synthetic-ref unix-ms suffix differs.
+	// Synthetic refs are "<branch>-<unix-millis-base36>" — same ms ⇒
+	// same buildName ⇒ "already exists" from the apiserver. 5ms is
+	// plenty in test environments.
+	time.Sleep(5 * time.Millisecond)
 	second, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{})
 	if err != nil {
 		t.Fatalf("second Create: %v", err)

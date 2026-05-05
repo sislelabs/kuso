@@ -79,12 +79,22 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 	}
 
 	// Verify the env exists — saves the caller a confusing empty result
-	// when they typo a name.
-	if _, err := s.Kube.GetKusoEnvironment(ctx, s.Namespace, envName); err != nil {
+	// when they typo a name. AND verify it actually belongs to the
+	// (project, service) the caller authorized against; without that
+	// check, ?env=other-project-svc-prod returns logs from a service
+	// the caller has no access to. The env CR's spec is authoritative.
+	envCR, err := s.Kube.GetKusoEnvironment(ctx, s.Namespace, envName)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, envName, ErrNotFound
 		}
 		return nil, envName, fmt.Errorf("get env: %w", err)
+	}
+	if envCR.Spec.Project != "" && envCR.Spec.Project != project {
+		return nil, envName, ErrNotFound
+	}
+	if envCR.Spec.Service != "" && envCR.Spec.Service != fqn {
+		return nil, envName, ErrNotFound
 	}
 
 	pods, err := s.Kube.Clientset.CoreV1().Pods(s.Namespace).List(ctx, metav1.ListOptions{
