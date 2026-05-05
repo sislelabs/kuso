@@ -2,8 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { addAddon } from "@/features/projects";
+import { api } from "@/lib/api-client";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -51,6 +52,23 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
   const [extKeys, setExtKeys] = useState<string>("");
   const [instName, setInstName] = useState<string>("");
   const qc = useQueryClient();
+
+  // Pull the list of admin-registered instance addons so the picker
+  // can show a dropdown instead of a free-text input. Hits the
+  // /names variant (gated by addons:write rather than settings:admin)
+  // so non-admins can still see what's available. Empty list when no
+  // shared servers are registered — UI falls back to the legacy
+  // free-text input then.
+  const instAddons = useQuery({
+    queryKey: ["instance-addons", "names"],
+    queryFn: () =>
+      api<{ addons: { name: string; kind: string }[] }>("/api/instance-addons/names"),
+    enabled: open,
+    staleTime: 30_000,
+  });
+  const availableInstanceNames = (instAddons.data?.addons ?? [])
+    .filter((a) => a.kind === kind)
+    .map((a) => a.name);
 
   useEffect(() => {
     if (open) {
@@ -317,18 +335,36 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                       htmlFor="addon-inst-name"
                       className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
                     >
-                      instance addon name
+                      instance addon
                     </label>
-                    <Input
-                      id="addon-inst-name"
-                      value={instName}
-                      onChange={(e) => setInstName(e.target.value)}
-                      placeholder="pg"
-                      className="mt-1 h-7 font-mono text-[11px]"
-                      spellCheck={false}
-                    />
+                    {availableInstanceNames.length > 0 ? (
+                      <select
+                        id="addon-inst-name"
+                        value={instName}
+                        onChange={(e) => setInstName(e.target.value)}
+                        className="mt-1 h-7 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)]"
+                      >
+                        <option value="">(pick one)</option>
+                        {availableInstanceNames.map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <Input
+                        id="addon-inst-name"
+                        value={instName}
+                        onChange={(e) => setInstName(e.target.value)}
+                        placeholder="pg"
+                        className="mt-1 h-7 font-mono text-[11px]"
+                        spellCheck={false}
+                      />
+                    )}
                     <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
-                      Matches the &lt;NAME&gt; in INSTANCE_ADDON_&lt;UPPER&gt;_DSN_ADMIN.
+                      {availableInstanceNames.length > 0
+                        ? `${availableInstanceNames.length} ${kind} server${availableInstanceNames.length === 1 ? "" : "s"} registered for this instance.`
+                        : `No ${kind} shared servers registered. Ask an admin or type the name manually.`}
                     </p>
                   </div>
                 </div>

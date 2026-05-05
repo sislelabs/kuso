@@ -19,6 +19,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/auth"
 	"kuso/server/internal/instancesecrets"
 )
 
@@ -39,6 +40,13 @@ func (h *InstanceSecretsHandler) Mount(r chi.Router) {
 	r.Get("/api/instance-addons", h.ListAddons)
 	r.Put("/api/instance-addons", h.RegisterAddon)
 	r.Delete("/api/instance-addons/{name}", h.UnregisterAddon)
+	// Names-only variant for the AddAddonDialog dropdown. Gated by
+	// addons:write (any user who can attach an addon to a project)
+	// rather than settings:admin so non-admins can pick from
+	// registered shared servers without needing to remember the
+	// exact name. No DSN, no host, no port — just the name + kind,
+	// which is what the picker needs.
+	r.Get("/api/instance-addons/names", h.ListAddonNames)
 }
 
 // ListAddons returns every registered instance addon with the host
@@ -55,6 +63,34 @@ func (h *InstanceSecretsHandler) ListAddons(w http.ResponseWriter, r *http.Reque
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"addons": addons})
+}
+
+// ListAddonNames is the picker variant of ListAddons. Returns just
+// {name, kind} pairs and gates on addons:write so non-admins can
+// see what registered shared servers exist while creating an addon.
+// Sensitive fields (host, port, user) are dropped at the response
+// layer rather than at the service layer so the privileged endpoint
+// can keep the same struct.
+func (h *InstanceSecretsHandler) ListAddonNames(w http.ResponseWriter, r *http.Request) {
+	if !requirePerm(w, r, auth.PermAddonsWrite) {
+		return
+	}
+	ctx, cancel := instanceSecretsCtx(r)
+	defer cancel()
+	addons, err := h.Svc.ListInstanceAddons(ctx)
+	if err != nil {
+		h.fail(w, "list instance addons", err)
+		return
+	}
+	type nameEntry struct {
+		Name string `json:"name"`
+		Kind string `json:"kind"`
+	}
+	out := make([]nameEntry, 0, len(addons))
+	for _, a := range addons {
+		out = append(out, nameEntry{Name: a.Name, Kind: a.Kind})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"addons": out})
 }
 
 type registerInstanceAddonBody struct {
