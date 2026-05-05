@@ -11,22 +11,11 @@
 # kuso-server at an external managed Postgres (RDS, Crunchy Bridge,
 # Supabase) — replace this manifest with a Secret named
 # kuso-postgres-conn whose `dsn` key is the libpq URI.
-
-apiVersion: v1
-kind: Secret
-metadata:
-  name: kuso-postgres-conn
-  namespace: kuso
-type: Opaque
-stringData:
-  # Default credentials for the in-cluster Postgres. install.sh
-  # rewrites this to a randomly-generated password on first install
-  # so the DSN doesn't ship with a known shared secret.
-  dsn: "postgres://kuso:kuso-default-change-me@kuso-postgres:5432/kuso?sslmode=disable"
-  user: "kuso"
-  password: "kuso-default-change-me"
-  database: "kuso"
----
+#
+# The kuso-postgres-conn Secret itself is created by hack/install.sh
+# (with a freshly generated password) before this manifest is
+# applied. Operators applying these YAMLs by hand: create the
+# Secret first, then apply this file.
 apiVersion: v1
 kind: Service
 metadata:

@@ -397,17 +397,11 @@ else
     --from-literal=dsn="$PG_DSN" \
     | kubectl apply -f - >/dev/null
 
-  # Apply the StatefulSet manifest (skipping the Secret block in
-  # postgres.yaml — we just wrote our own Secret with a real
-  # password; the manifest's stringData would silently overwrite
-  # ours otherwise).
-  curl -sfL "${KUSO_RAW}/deploy/postgres.yaml" \
-    | awk '
-        /^---$/ { sec_open=0 }
-        /^kind: Secret$/ { sec_open=1 }
-        sec_open==0 { print }
-      ' \
-    | kubectl apply -f - >/dev/null
+  # Apply the StatefulSet manifest. The Secret block was removed from
+  # postgres.yaml in v0.9.1 — we wrote our own Secret above with a
+  # real password, and a literal stringData in the YAML would have
+  # overwritten ours.
+  curl -sfL "${KUSO_RAW}/deploy/postgres.yaml" | kubectl apply -f - >/dev/null
 
   log "waiting for kuso-postgres to become ready (up to 5 min)"
   kubectl wait --for=condition=Ready --timeout=300s \

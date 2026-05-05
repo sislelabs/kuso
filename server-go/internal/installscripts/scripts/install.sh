@@ -64,8 +64,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.8.13}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.8.13}"
+KUSO_VERSION="${KUSO_VERSION:-v0.9.0}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.9.0}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 
@@ -199,7 +199,20 @@ fi
 # -------- 1. k3s --------
 if [[ "${KUSO_SKIP_K3S:-0}" != "1" ]] && ! command -v k3s >/dev/null 2>&1; then
   log "installing k3s (single-node, traefik disabled — we install our own)"
-  curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable=traefik --tls-san=${KUSO_DOMAIN} --write-kubeconfig-mode=644" sh -
+  # --secrets-encryption enables AES-CBC encryption-at-rest for kube
+  # Secrets in k3s's kine datastore. Without this, every Secret
+  # (kuso-server-secrets, kuso-postgres-conn, kuso-github-app, every
+  # addon's connection-string secret, every clone-token) sits in
+  # plaintext on disk. Disk theft → full credential compromise.
+  # The flag must be passed at install — adding it later requires
+  # an Encryption-Provider-Config rotation procedure. Disable via
+  # KUSO_SKIP_SECRETS_ENCRYPTION=1 only when integrating with an
+  # external KMS that handles encryption at the storage layer.
+  K3S_EXTRA="--disable=traefik --tls-san=${KUSO_DOMAIN} --write-kubeconfig-mode=644"
+  if [[ "${KUSO_SKIP_SECRETS_ENCRYPTION:-0}" != "1" ]]; then
+    K3S_EXTRA="${K3S_EXTRA} --secrets-encryption"
+  fi
+  curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="${K3S_EXTRA}" sh -
 else
   log "k3s already present; skipping install"
 fi
@@ -351,6 +364,56 @@ curl -sfL "${KUSO_RAW}/deploy/prometheus.yaml" | kubectl apply -f - >/dev/null
 kubectl wait --for=condition=Available --timeout=120s \
   deployment/kuso-prometheus -n kuso || warn "kuso-prometheus not yet ready"
 
+# -------- 8c. postgres --------
+#
+# v0.9 retired SQLite. Postgres is the metadata DB now. Provisions
+# a single-replica StatefulSet on the control-plane node and
+# generates a unique password on first install (existing kuso-
+# postgres-conn Secret values win on re-run, same as kuso-server-
+# secrets — see section 9). Operators with a managed Postgres
+# (RDS, Crunchy Bridge, Supabase) can pre-create kuso-postgres-conn
+# with their own DSN; the install script skips the StatefulSet
+# when KUSO_USE_EXTERNAL_POSTGRES=1 is set.
+log "provisioning kuso-postgres"
+kubectl create namespace kuso 2>/dev/null || true
+
+if [[ "${KUSO_USE_EXTERNAL_POSTGRES:-0}" == "1" ]]; then
+  if ! kubectl get secret -n kuso kuso-postgres-conn >/dev/null 2>&1; then
+    err "KUSO_USE_EXTERNAL_POSTGRES=1 set but Secret kuso-postgres-conn missing — create it before re-running install"
+    exit 1
+  fi
+  log "external Postgres mode — using existing kuso-postgres-conn Secret"
+else
+  EXISTING_PG_PASS=""
+  if kubectl get secret -n kuso kuso-postgres-conn >/dev/null 2>&1; then
+    EXISTING_PG_PASS=$(kubectl get secret -n kuso kuso-postgres-conn -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  fi
+  PG_PASS="${EXISTING_PG_PASS:-$(random_string)}"
+  PG_DSN="postgres://kuso:${PG_PASS}@kuso-postgres:5432/kuso?sslmode=disable"
+  kubectl create secret generic kuso-postgres-conn -n kuso --dry-run=client -o yaml \
+    --from-literal=user="kuso" \
+    --from-literal=password="$PG_PASS" \
+    --from-literal=database="kuso" \
+    --from-literal=dsn="$PG_DSN" \
+    | kubectl apply -f - >/dev/null
+
+  # Apply the StatefulSet manifest (skipping the Secret block in
+  # postgres.yaml — we just wrote our own Secret with a real
+  # password; the manifest's stringData would silently overwrite
+  # ours otherwise).
+  curl -sfL "${KUSO_RAW}/deploy/postgres.yaml" \
+    | awk '
+        /^---$/ { sec_open=0 }
+        /^kind: Secret$/ { sec_open=1 }
+        sec_open==0 { print }
+      ' \
+    | kubectl apply -f - >/dev/null
+
+  log "waiting for kuso-postgres to become ready (up to 5 min)"
+  kubectl wait --for=condition=Ready --timeout=300s \
+    pod/kuso-postgres-0 -n kuso || warn "kuso-postgres not yet ready"
+fi
+
 # -------- 9. server secrets --------
 #
 # Re-runs of install.sh must NOT regenerate secrets. Rerolling the
@@ -389,11 +452,25 @@ log "applying kuso-server-secrets"
 # KUSO_DOMAIN goes in here too so the server can build OAuth callback
 # URLs without an admin re-pasting it. NewGithubOAuth() autoderives
 # https://${KUSO_DOMAIN}/api/auth/github/callback when it's set.
+#
+# KUSO_RELEASE_PUBLIC_KEY is the Ed25519 public key (base64) used by
+# the updater to verify release.json signatures. Bake it in at install
+# time so a compromised GH release can't trick installs into pulling
+# a malicious update. Generated with:
+#   openssl genpkey -algorithm Ed25519 -out kuso-release.priv
+#   openssl pkey -in kuso-release.priv -pubout -outform DER \
+#     | tail -c 32 | base64
+# Empty is fine for unsigned releases — the updater logs a warn but
+# proceeds. Set KUSO_REQUIRE_SIGNATURES=true to refuse unsigned.
+KUSO_RELEASE_PUBKEY="${KUSO_RELEASE_PUBLIC_KEY:-}"
+KUSO_REQUIRE_SIGS="${KUSO_REQUIRE_SIGNATURES:-false}"
 kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o yaml \
   --from-literal=KUSO_SESSION_KEY="$SESSION_KEY" \
   --from-literal=JWT_SECRET="$JWT_SECRET" \
   --from-literal=KUSO_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
   --from-literal=KUSO_DOMAIN="$KUSO_DOMAIN" \
+  --from-literal=KUSO_RELEASE_PUBLIC_KEY="$KUSO_RELEASE_PUBKEY" \
+  --from-literal=KUSO_REQUIRE_SIGNATURES="$KUSO_REQUIRE_SIGS" \
   | kubectl apply -f - >/dev/null
 
 # -------- 9b. GitHub App --------
