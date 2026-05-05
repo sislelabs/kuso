@@ -666,28 +666,38 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	if req.CommitMessage != "" {
 		annos[annCommitMessage] = req.CommitMessage
 	}
+	spec := kube.KusoBuildSpec{
+		Project:              project,
+		Service:              fqn,
+		Ref:                  sha,
+		Branch:               branch,
+		Repo:                 &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
+		GithubInstallationID: installationID,
+		Strategy:             strategy,
+		// Carry strategy-specific configuration from the service
+		// spec onto the build CR so the helm chart can render the
+		// right command line. Empty pointers leave the chart on
+		// its defaults.
+		Static:     svcCR.Spec.Static,
+		Buildpacks: svcCR.Spec.Buildpacks,
+	}
+	if !queued {
+		spec.Image = &kube.KusoImage{Repository: imageRepo, Tag: ImageTag(sha)}
+	}
+	// Note: when queued, spec.Image is intentionally nil. The kusobuild
+	// chart's job.yaml gates Job rendering on `.Values.image.tag` —
+	// without the image set, no Job is rendered and the CR sits idle
+	// until the dispatcher patches in the image (Poller.dispatchQueued).
+	// This is what keeps queued CRs cheap (no kaniko pod, no resources)
+	// without needing operator-side changes that require an operator-
+	// image rebuild to ship.
 	build := &kube.KusoBuild{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:        buildName,
 			Labels:      labels,
 			Annotations: annos,
 		},
-		Spec: kube.KusoBuildSpec{
-			Project:              project,
-			Service:              fqn,
-			Ref:                  sha,
-			Branch:               branch,
-			Repo:                 &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
-			GithubInstallationID: installationID,
-			Strategy:             strategy,
-			Image:                &kube.KusoImage{Repository: imageRepo, Tag: ImageTag(sha)},
-			// Carry strategy-specific configuration from the service
-			// spec onto the build CR so the helm chart can render the
-			// right command line. Empty pointers leave the chart on
-			// its defaults.
-			Static:     svcCR.Spec.Static,
-			Buildpacks: svcCR.Spec.Buildpacks,
-		},
+		Spec: spec,
 	}
 	return s.Kube.CreateKusoBuild(ctx, ns, build)
 }
@@ -995,14 +1005,16 @@ func (p *Poller) dispatchQueued(ctx context.Context, ns string) {
 			return ti.Before(&tj)
 		})
 		next := list[0]
-		// Promote: remove the queued label (operator picks it up,
-		// renders the kaniko Job) and stamp phase=pending so the
-		// summary shows the right state until markRunning fires.
-		// The label removal uses a JSON merge patch with null — the
-		// canonical "delete this label" idiom.
+		// Promote: remove the queued label (operator's selector now
+		// matches it), stamp phase=pending, AND patch in spec.image
+		// (the chart's render gate). The image is computed the same
+		// way Create computes it for an immediate build — repo +
+		// service short name + the Ref's image tag.
+		shortName := strings.TrimPrefix(fqn, project+"-")
+		imageRepo := fmt.Sprintf("%s/%s/%s", RegistryHost, project, shortName)
 		patch := fmt.Sprintf(
-			`{"metadata":{"labels":{"kuso.sislelabs.com/build-state":null},"annotations":{%q:"pending"}}}`,
-			annPhase,
+			`{"metadata":{"labels":{"kuso.sislelabs.com/build-state":null},"annotations":{%q:"pending"}},"spec":{"image":{"repository":%q,"tag":%q}}}`,
+			annPhase, imageRepo, ImageTag(next.Spec.Ref),
 		)
 		if _, perr := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 			Patch(ctx, next.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {

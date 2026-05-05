@@ -395,6 +395,12 @@ func TestPoller_DispatchQueuedPromotesWhenIdle(t *testing.T) {
 	if phase := raw.GetAnnotations()[annPhase]; phase != "pending" {
 		t.Errorf("phase after promote: got %q, want pending", phase)
 	}
+	// spec.image should be patched in — that's the chart's render gate.
+	imgRepo, _, _ := unstructured.NestedString(raw.Object, "spec", "image", "repository")
+	imgTag, _, _ := unstructured.NestedString(raw.Object, "spec", "image", "tag")
+	if imgRepo == "" || imgTag == "" {
+		t.Errorf("spec.image after promote: repo=%q tag=%q, want both populated", imgRepo, imgTag)
+	}
 }
 
 // TestPoller_DispatchQueuedSkipsWhenActive covers the safety: a
