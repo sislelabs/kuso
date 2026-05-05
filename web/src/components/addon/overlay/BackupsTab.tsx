@@ -8,9 +8,12 @@ import {
   useAddons,
   listBackups,
   restoreBackup,
+  updateAddon,
   type BackupObject,
 } from "@/features/projects";
+import type { KusoAddon } from "@/types/projects";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -46,6 +49,13 @@ function formatBytes(n: number): string {
 
 export function BackupsTab({ project, addon }: { project: string; addon: string }) {
   const qc = useQueryClient();
+  // One useAddons call drives both the schedule editor (this addon's
+  // current backup config) and the cross-restore picker (sibling
+  // postgres addons). Avoid double-fetching the same query key.
+  const allAddons = useAddons(project);
+  const thisAddon = (allAddons.data ?? []).find(
+    (a) => a.metadata.name === addonCRName(project, addon),
+  );
   const list = useQuery({
     queryKey: ["addons", project, addon, "backups"],
     queryFn: () => listBackups(project, addon),
@@ -61,10 +71,9 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
     onError: (e) => toast.error(e instanceof Error ? e.message : "Restore failed"),
   });
   const [confirmKey, setConfirmKey] = useState<string | null>(null);
-  // Pull every postgres addon in the project so the user can pick a
-  // non-destructive restore target. Postgres-only because the
+  // Sibling postgres addons in the project — used as cross-restore
+  // targets (non-destructive path). Postgres-only because the
   // existing restore Job assumes pg_dump format.
-  const allAddons = useAddons(project);
   const siblingAddons = (allAddons.data ?? []).filter(
     (a) => a.metadata.name !== addonCRName(project, addon) && a.spec.kind === "postgres",
   );
@@ -79,26 +88,27 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
     // permissions, network) — those need a different message.
     const noS3 = msg.includes("503") || /s3|bucket|credentials/i.test(msg);
     return (
-      <div className="m-5 rounded-md border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-400">
-        {noS3 ? "Backups not set up yet" : `Backups unavailable: ${msg}`}
-        <p className="mt-2 font-mono text-[10px] text-[var(--text-tertiary)]">
-          {noS3 ? (
-            <>
-              Backups need S3 (or compatible) credentials. Add them in{" "}
-              <a href="/settings/backups" className="text-[var(--accent)] underline">
-                /settings/backups
-              </a>
-              , then put <span className="font-mono">backup.schedule</span> on this
-              addon in <span className="font-mono">kuso.yml</span> to start the
-              CronJob.
-            </>
-          ) : (
-            <>
-              Detail:{" "}
-              <span className="font-mono text-[var(--text-secondary)]">{msg}</span>
-            </>
-          )}
-        </p>
+      <div className="space-y-4 p-5">
+        <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} />
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-400">
+          {noS3 ? "Backups not set up yet" : `Backups unavailable: ${msg}`}
+          <p className="mt-2 font-mono text-[10px] text-[var(--text-tertiary)]">
+            {noS3 ? (
+              <>
+                Add S3 (or compatible) credentials in{" "}
+                <a href="/settings/backups" className="text-[var(--accent)] underline">
+                  /settings/backups
+                </a>
+                , then set a schedule above to start the CronJob.
+              </>
+            ) : (
+              <>
+                Detail:{" "}
+                <span className="font-mono text-[var(--text-secondary)]">{msg}</span>
+              </>
+            )}
+          </p>
+        </div>
       </div>
     );
   }
@@ -106,16 +116,20 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
   const items = list.data ?? [];
   if (items.length === 0) {
     return (
-      <p className="m-5 rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
-        No backups yet. The CronJob will drop one once its schedule fires.
-      </p>
+      <div className="space-y-4 p-5">
+        <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} />
+        <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
+          No backups yet. The CronJob will drop one once its schedule fires.
+        </p>
+      </div>
     );
   }
   // Newest first.
   const sorted = [...items].sort((a, b) => (b.when ?? "").localeCompare(a.when ?? ""));
 
   return (
-    <div className="p-5">
+    <div className="space-y-4 p-5">
+      <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} />
       <header className="mb-3 flex items-center justify-between">
         <h3 className="font-heading text-sm font-semibold tracking-tight">Backups</h3>
         <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
@@ -259,5 +273,167 @@ function ConfirmRestore({
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+// Common cron presets surfaced as quick-pick buttons. The user can
+// still type any 5-field cron expression in the input; presets are a
+// keyboard-saver for the 95% case.
+const SCHEDULE_PRESETS: { label: string; cron: string }[] = [
+  { label: "Hourly", cron: "0 * * * *" },
+  { label: "Every 6h", cron: "0 */6 * * *" },
+  { label: "Daily 03:00", cron: "0 3 * * *" },
+  { label: "Weekly (Sun 03:00)", cron: "0 3 * * 0" },
+];
+
+// 5-field cron regex mirrors the server's addons.cronExpr5. Pre-flight
+// check so a typo turns the Save button into a visible warning rather
+// than a 400 toast after the round-trip.
+const CRON_RE = /^[\d\*\/,\-?]+\s+[\d\*\/,\-?]+\s+[\d\*\/,\-?]+\s+[\d\*\/,\-?]+\s+[\d\*\/,\-?]+$/;
+
+// BackupScheduleEditor lets the user enable / change / disable the
+// per-addon backup CronJob. Schedule = cron expression; retentionDays
+// = N days after which the cronjob's prune step deletes old objects
+// (0 = keep forever). PATCHes the addon CR via /api/.../addons/{a}.
+function BackupScheduleEditor({
+  project,
+  addon,
+  thisAddon,
+}: {
+  project: string;
+  addon: string;
+  thisAddon?: KusoAddon;
+}) {
+  const qc = useQueryClient();
+  const initialSchedule = thisAddon?.spec.backup?.schedule ?? "";
+  const initialRetention = thisAddon?.spec.backup?.retentionDays ?? 14;
+  const [schedule, setSchedule] = useState(initialSchedule);
+  const [retention, setRetention] = useState(String(initialRetention));
+
+  // Re-baseline when the parent addon refetches (e.g. after a save
+  // returns and refreshes the cache). Without this the inputs would
+  // hold the user's pre-save edits forever.
+  useEffect(() => {
+    setSchedule(initialSchedule);
+    setRetention(String(initialRetention));
+  }, [initialSchedule, initialRetention]);
+
+  const trimmed = schedule.trim();
+  const scheduleValid = trimmed === "" || CRON_RE.test(trimmed);
+  const retentionNum = Number(retention);
+  const retentionValid =
+    Number.isInteger(retentionNum) && retentionNum >= 0 && retentionNum <= 3650;
+
+  const dirty =
+    trimmed !== initialSchedule.trim() || retentionNum !== initialRetention;
+  const enabled = trimmed !== "";
+
+  const save = useMutation({
+    mutationFn: () =>
+      updateAddon(project, addon, {
+        backup: { schedule: trimmed, retentionDays: retentionNum },
+      }),
+    onSuccess: () => {
+      toast.success(
+        trimmed === ""
+          ? "Backups disabled"
+          : `Schedule saved: ${trimmed} (retain ${retentionNum}d)`,
+      );
+      qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+      qc.invalidateQueries({ queryKey: ["addons", project, addon, "backups"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+  });
+
+  return (
+    <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4">
+      <header className="mb-3 flex items-center justify-between">
+        <h3 className="font-heading text-sm font-semibold tracking-tight">Schedule</h3>
+        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          {enabled ? "active" : "disabled"}
+        </span>
+      </header>
+
+      <div className="space-y-3">
+        <div className="space-y-1">
+          <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            Cron
+          </label>
+          <Input
+            value={schedule}
+            onChange={(e) => setSchedule(e.target.value)}
+            placeholder="leave empty to disable · e.g. 0 3 * * *"
+            spellCheck={false}
+            className={cn(
+              "h-8 font-mono text-[12px]",
+              !scheduleValid && "border-red-500/60",
+            )}
+          />
+          {!scheduleValid && (
+            <p className="font-mono text-[10px] text-red-400">
+              Must be a 5-field cron expression (or empty to disable).
+            </p>
+          )}
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {SCHEDULE_PRESETS.map((p) => (
+              <button
+                key={p.cron}
+                type="button"
+                onClick={() => setSchedule(p.cron)}
+                className="rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] hover:border-[var(--accent)]/50 hover:text-[var(--accent)]"
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="space-y-1">
+          <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            Retention (days)
+          </label>
+          <Input
+            type="number"
+            min={0}
+            max={3650}
+            value={retention}
+            onChange={(e) => setRetention(e.target.value)}
+            className={cn(
+              "h-8 w-24 font-mono text-[12px]",
+              !retentionValid && "border-red-500/60",
+            )}
+          />
+          <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+            {retentionNum === 0
+              ? "Keep forever (no automatic prune)."
+              : `Backups older than ${retentionNum}d are deleted from S3.`}
+          </p>
+        </div>
+
+        <div className="flex items-center justify-end gap-2 pt-1">
+          {dirty && (
+            <Button
+              variant="ghost"
+              size="sm"
+              type="button"
+              onClick={() => {
+                setSchedule(initialSchedule);
+                setRetention(String(initialRetention));
+              }}
+              disabled={save.isPending}
+            >
+              Discard
+            </Button>
+          )}
+          <Button
+            size="sm"
+            onClick={() => save.mutate()}
+            disabled={!dirty || !scheduleValid || !retentionValid || save.isPending}
+          >
+            {save.isPending ? "Saving…" : "Save"}
+          </Button>
+        </div>
+      </div>
+    </section>
   );
 }

@@ -12,6 +12,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -230,14 +232,33 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 // UpdateAddonRequest is the partial-update body. Pointer fields
 // distinguish "leave alone" (nil) from "set to zero". The kuso UI
 // uses this for the addon Settings tab — version bump, size change,
-// HA toggle, storage resize.
+// HA toggle, storage resize, backup schedule.
 type UpdateAddonRequest struct {
-	Version     *string `json:"version,omitempty"`
-	Size        *string `json:"size,omitempty"`
-	HA          *bool   `json:"ha,omitempty"`
-	StorageSize *string `json:"storageSize,omitempty"`
-	Database    *string `json:"database,omitempty"`
+	Version     *string             `json:"version,omitempty"`
+	Size        *string             `json:"size,omitempty"`
+	HA          *bool               `json:"ha,omitempty"`
+	StorageSize *string             `json:"storageSize,omitempty"`
+	Database    *string             `json:"database,omitempty"`
+	Backup      *UpdateBackupPatch  `json:"backup,omitempty"`
 }
+
+// UpdateBackupPatch carries the per-addon backup schedule + retention.
+// Pointer fields so callers can update one knob at a time. Setting
+// Schedule = "" disables the cronjob (chart drops the resource); it's
+// the canonical way to turn off scheduled backups via API.
+type UpdateBackupPatch struct {
+	Schedule      *string `json:"schedule,omitempty"`
+	RetentionDays *int    `json:"retentionDays,omitempty"`
+}
+
+// cronExpr5 matches a standard five-field cron expression. Mirrors
+// crons.cronExpr (kept private there) — duplicated rather than
+// imported to avoid a cross-package dependency just for one regex.
+// The chart's CronJob template forwards whatever string we set, so
+// the validator's only job is to refuse obvious typos at the API
+// boundary; helm-operator + kube would also reject malformed values
+// downstream, just with a worse error.
+var cronExpr5 = regexp.MustCompile(`^[\d\*\/\,\-\?]+\s+[\d\*\/\,\-\?]+\s+[\d\*\/\,\-\?]+\s+[\d\*\/\,\-\?]+\s+[\d\*\/\,\-\?]+$`)
 
 // Update applies the partial UpdateAddonRequest to a KusoAddon CR.
 // Unset fields stay as they are. Helm-operator picks up the spec
@@ -272,6 +293,37 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 	}
 	if req.Database != nil {
 		addon.Spec.Database = *req.Database
+	}
+	if req.Backup != nil {
+		// Lazy-init the spec.backup struct so we can patch a single
+		// field without overwriting the other one. The chart treats
+		// missing fields as "use default" — Schedule "" → no cronjob,
+		// RetentionDays 0 → keep forever (chart's prune step skips).
+		if addon.Spec.Backup == nil {
+			addon.Spec.Backup = &kube.KusoBackup{}
+		}
+		if req.Backup.Schedule != nil {
+			s := strings.TrimSpace(*req.Backup.Schedule)
+			// Empty disables the cronjob — that's the canonical "turn
+			// off backups" path. Non-empty must look like a five-field
+			// cron expression so the user sees the error here, not
+			// when the cronjob fails to parse hours later.
+			if s != "" && !cronExpr5.MatchString(s) {
+				return nil, fmt.Errorf("%w: backup schedule %q must be a 5-field cron expression (e.g. `0 3 * * *`)", ErrInvalid, s)
+			}
+			addon.Spec.Backup.Schedule = s
+		}
+		if req.Backup.RetentionDays != nil {
+			d := *req.Backup.RetentionDays
+			// Cap at 3650 days (10 years) — anything larger is almost
+			// certainly a typo (someone meant retention HOURS) and the
+			// prune step's date arithmetic should stay sane. Negatives
+			// are rejected; 0 means "keep forever" and is allowed.
+			if d < 0 || d > 3650 {
+				return nil, fmt.Errorf("%w: backup retentionDays %d must be 0..3650", ErrInvalid, d)
+			}
+			addon.Spec.Backup.RetentionDays = d
+		}
 	}
 	updated, err := s.Kube.UpdateKusoAddon(ctx, ns, addon)
 	if err != nil {

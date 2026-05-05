@@ -113,6 +113,14 @@ export interface KusoAddonSpec {
   ha?: boolean;
   storageSize?: string;
   database?: string;
+  backup?: {
+    // 5-field cron expression (e.g. "0 3 * * *"). Empty string =
+    // backups disabled (chart drops the CronJob entirely).
+    schedule?: string;
+    // 0 = keep forever; >0 = prune objects older than N days each
+    // backup run.
+    retentionDays?: number;
+  };
 }
 
 export interface KusoAddon {

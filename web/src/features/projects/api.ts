@@ -103,14 +103,21 @@ export async function deleteAddon(project: string, addon: string): Promise<void>
 }
 
 // updateAddon applies a partial update to spec.{version,size,ha,
-// storageSize,database}. Pass undefined for fields you don't want
-// to change.
+// storageSize,database,backup}. Pass undefined for fields you don't
+// want to change.
 export interface UpdateAddonBody {
   version?: string;
   size?: "small" | "medium" | "large";
   ha?: boolean;
   storageSize?: string;
   database?: string;
+  // backup.schedule = "" disables scheduled backups (the chart drops
+  // the CronJob). retentionDays = 0 keeps backups forever; the chart
+  // skips the prune step in that case.
+  backup?: {
+    schedule?: string;
+    retentionDays?: number;
+  };
 }
 
 export async function updateAddon(

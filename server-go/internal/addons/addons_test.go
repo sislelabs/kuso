@@ -160,3 +160,94 @@ func TestDelete_NotFound(t *testing.T) {
 		t.Errorf("got %v", err)
 	}
 }
+
+func seedAddon(project, name, kind string) seed {
+	return typedSeed(kube.GVRAddons, "KusoAddon", &kube.KusoAddon{
+		ObjectMeta: metav1.ObjectMeta{Name: project + "-" + name, Namespace: "kuso"},
+		Spec:       kube.KusoAddonSpec{Project: project, Kind: kind},
+	})
+}
+
+// TestUpdate_BackupRoundTrip covers the v0.7.53 addition: backup
+// schedule + retention are settable via UpdateAddonRequest, no longer
+// kubectl-patch-only. Three sub-cases exercise the validator + the
+// disable path.
+func TestUpdate_BackupRoundTrip(t *testing.T) {
+	t.Parallel()
+	t.Run("set schedule + retention", func(t *testing.T) {
+		s := fakeService(t,
+			seedProj("alpha"),
+			seedAddon("alpha", "pg", "postgres"),
+		)
+		sched, ret := "0 3 * * *", 14
+		got, err := s.Update(context.Background(), "alpha", "pg", UpdateAddonRequest{
+			Backup: &UpdateBackupPatch{Schedule: &sched, RetentionDays: &ret},
+		})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if got.Spec.Backup == nil || got.Spec.Backup.Schedule != "0 3 * * *" || got.Spec.Backup.RetentionDays != 14 {
+			t.Errorf("backup not persisted: %+v", got.Spec.Backup)
+		}
+	})
+
+	t.Run("empty schedule disables", func(t *testing.T) {
+		s := fakeService(t,
+			seedProj("alpha"),
+			typedSeed(kube.GVRAddons, "KusoAddon", &kube.KusoAddon{
+				ObjectMeta: metav1.ObjectMeta{Name: "alpha-pg", Namespace: "kuso"},
+				Spec: kube.KusoAddonSpec{
+					Project: "alpha",
+					Kind:    "postgres",
+					Backup:  &kube.KusoBackup{Schedule: "0 3 * * *", RetentionDays: 14},
+				},
+			}),
+		)
+		empty := ""
+		got, err := s.Update(context.Background(), "alpha", "pg", UpdateAddonRequest{
+			Backup: &UpdateBackupPatch{Schedule: &empty},
+		})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if got.Spec.Backup.Schedule != "" {
+			t.Errorf("schedule not cleared: %q", got.Spec.Backup.Schedule)
+		}
+		if got.Spec.Backup.RetentionDays != 14 {
+			t.Errorf("retention got clobbered: %d", got.Spec.Backup.RetentionDays)
+		}
+	})
+
+	t.Run("malformed schedule rejected", func(t *testing.T) {
+		s := fakeService(t,
+			seedProj("alpha"),
+			seedAddon("alpha", "pg", "postgres"),
+		)
+		bad := "every monday"
+		_, err := s.Update(context.Background(), "alpha", "pg", UpdateAddonRequest{
+			Backup: &UpdateBackupPatch{Schedule: &bad},
+		})
+		if !errors.Is(err, ErrInvalid) {
+			t.Errorf("want ErrInvalid, got %v", err)
+		}
+	})
+
+	t.Run("retention out of range", func(t *testing.T) {
+		s := fakeService(t,
+			seedProj("alpha"),
+			seedAddon("alpha", "pg", "postgres"),
+		)
+		neg := -1
+		if _, err := s.Update(context.Background(), "alpha", "pg", UpdateAddonRequest{
+			Backup: &UpdateBackupPatch{RetentionDays: &neg},
+		}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("negative: want ErrInvalid, got %v", err)
+		}
+		huge := 99999
+		if _, err := s.Update(context.Background(), "alpha", "pg", UpdateAddonRequest{
+			Backup: &UpdateBackupPatch{RetentionDays: &huge},
+		}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("huge: want ErrInvalid, got %v", err)
+		}
+	})
+}
