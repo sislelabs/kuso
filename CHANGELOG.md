@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.8.13] — 2026-05-05
+
+### Other
+- Hardening(security+resilience): authz, ssrf, cancel-respawn, sig-prep ([13703c1](https://github.com/sislelabs/kuso/commit/13703c16710517e88a1dfa02b7d1a0bb77ffccf4))
+
 ## [0.8.12] — 2026-05-05
 
 ### 🐛 Bug Fixes
