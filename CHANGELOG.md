@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.8.2] — 2026-05-05
+
+### 🐛 Bug Fixes
+- Fix(canvas+ui): cron side panel, neutral border, uptime fallback, ([6a9e912](https://github.com/sislelabs/kuso/commit/6a9e91226e8b78bfec5cf9871dd806f2f625b35a))
+
 ## [0.8.1] — 2026-05-05
 
 ### ✨ Features
