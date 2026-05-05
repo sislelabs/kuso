@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.8.7] — 2026-05-05
+
+### 🐛 Bug Fixes
+- Fix(builds): gate queued-build kaniko Job on spec.image, not operator ([ca898b7](https://github.com/sislelabs/kuso/commit/ca898b70c30c9c72b24e264bc8db3bdc27bfff93))
+
 ## [0.8.6] — 2026-05-05
 
 ### ✨ Features
