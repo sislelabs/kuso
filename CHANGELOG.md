@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.46] — 2026-05-05
+
+### 🐛 Bug Fixes
+- Fix(invite): generalize parsePathname so /invite/<token> resolves ([d646187](https://github.com/sislelabs/kuso/commit/d646187dec1c1849db265848f05179f94c044816))
+
 ## [0.7.45] — 2026-05-05
 
 ### 🐛 Bug Fixes
