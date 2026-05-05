@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.55] — 2026-05-05
+
+### ✨ Features
+- Feat: canvas custom-domain URL + project-level always-on toggle ([f226f6c](https://github.com/sislelabs/kuso/commit/f226f6c6e60daba9752366a93b813a108dc253c8))
+
 ## [0.7.54] — 2026-05-05
 
 ### ✨ Features
