@@ -33,11 +33,21 @@ export function ProjectDetailView() {
   // service overlay's Deployments tab). One-shot — we only honour
   // the param on first render so closing the overlay doesn't snap
   // back open on a re-render.
+  //
+  // Both notification storage shapes hit this entry point: the
+  // notify package writes the SHORT service name on the URL, but
+  // the legacy build poller used to write the FQ name. Strip the
+  // "<project>-" prefix here so either form opens the right
+  // overlay (the overlay queries by short name).
   useEffect(() => {
+    const stripPrefix = (s: string) => {
+      const p = projectName + "-";
+      return s.startsWith(p) ? s.slice(p.length) : s;
+    };
     const svc = search?.get("service");
     const addon = search?.get("addon");
-    if (svc) setSelectedService(svc);
-    if (addon) setSelectedAddon(addon);
+    if (svc) setSelectedService(stripPrefix(svc));
+    if (addon) setSelectedAddon(stripPrefix(addon));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

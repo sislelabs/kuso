@@ -8,7 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Server, Plus, X, Save, MapPin, Tag } from "lucide-react";
+import { Server, Plus, X, Save, MapPin, Tag, Trash2 } from "lucide-react";
 // X is already imported above; the modal close button reuses it.
 import { cn } from "@/lib/utils";
 import type { NodeSummary } from "@/components/layout/ServersPopover";
@@ -57,6 +57,29 @@ export function NodesView() {
   });
 
   const [addOpen, setAddOpen] = useState(false);
+  // Cleanup mutation — deletes finished pods + jobs across the
+  // cluster. Admin-only on the server; the UI just hides the
+  // button when the user lacks the perm.
+  const cleanup = useMutation({
+    mutationFn: () =>
+      api<{ podsDeleted: number; jobsDeleted: number; namespaces: string[]; errors?: string[] }>(
+        "/api/kubernetes/cleanup-completed",
+        { method: "POST" },
+      ),
+    onSuccess: (res) => {
+      const errs = res.errors?.length ?? 0;
+      const summary = `Cleaned up ${res.podsDeleted} pod${res.podsDeleted === 1 ? "" : "s"} + ${res.jobsDeleted} job${res.jobsDeleted === 1 ? "" : "s"}`;
+      if (errs) {
+        toast.warning(`${summary} (${errs} error${errs === 1 ? "" : "s"} — check server logs)`);
+      } else if (res.podsDeleted + res.jobsDeleted === 0) {
+        toast.success("Nothing to clean up — host is already tidy");
+      } else {
+        toast.success(summary);
+      }
+      qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Cleanup failed"),
+  });
   // Hoist edits up here so we can render a single floating save bar
   // covering every node's pending changes — same pattern as service
   // settings. Per-node Save buttons hidden in tiny card headers were
@@ -142,6 +165,17 @@ export function NodesView() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => cleanup.mutate()}
+            disabled={cleanup.isPending}
+            className="shrink-0"
+            title="Delete finished pods + jobs across the cluster. Frees up scheduling slots and cgroup state on a packed host."
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+            {cleanup.isPending ? "Cleaning…" : "Cleanup"}
+          </Button>
           <Button
             size="sm"
             variant="outline"

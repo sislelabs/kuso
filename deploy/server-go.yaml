@@ -73,6 +73,35 @@ subjects:
     name: kuso-server
     namespace: kuso
 ---
+# kuso-platform priority class — every long-lived control-plane pod
+# (kuso-server, kuso-operator, traefik, cert-manager) declares this
+# so the kubelet can never evict them in favour of a workload pod.
+# Build pods, addons, user services keep the default priority. When
+# the node runs hot, the kubelet picks the lowest-priority pod to
+# evict, which is now always something the user can tolerate losing.
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: kuso-platform
+value: 100000
+globalDefault: false
+description: "kuso control-plane pods. Survives workload eviction."
+---
+# PodDisruptionBudget keeps voluntary evictions (kubectl drain, the
+# k3s upgrade controller, cluster-autoscaler) from yanking the
+# kuso-server pod. The cost: drain on the control-plane node will
+# wait until a human moves on. The benefit: dashboards stay up
+# through routine cluster maintenance.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kuso-server
+  namespace: kuso
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: kuso-server }
+---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -105,6 +134,10 @@ spec:
       labels: { app.kubernetes.io/name: kuso-server }
     spec:
       serviceAccountName: kuso-server
+      # Highest-priority class on the cluster — see PriorityClass
+      # above. Lets the kubelet pick a workload pod to evict before
+      # it ever touches kuso-server when memory pressure hits.
+      priorityClassName: kuso-platform
       # Pin to the k3s control-plane node. Two reasons:
       #   1. SQLite PVC is RWO local-path → must stay on its node.
       #   2. The /var/lib/rancher/k3s/server/node-token hostPath only
@@ -121,16 +154,29 @@ spec:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
           effect: NoSchedule
-      # 30s grace period: SIGTERM → preStop sleep 5s (lets in-flight
-      # requests finish + ingress drain reach this pod's removal) →
-      # process gets ~25s to actually quit. Without this, ingress
-      # routes new requests to a terminating pod for the first 1-2s
-      # of shutdown and they 502.
-      terminationGracePeriodSeconds: 30
+      # Bumped from 30s to 60s: a graceful shutdown path needs to
+      # let in-flight HTTP requests finish (audit-log writes, slow
+      # SQLite writes) plus close websocket connections cleanly
+      # (logs streamer). Under load, SQLite's WAL checkpoint can
+      # take 10–20s by itself.
+      terminationGracePeriodSeconds: 60
       containers:
         - name: server
           image: ghcr.io/sislelabs/kuso-server-go:v0.8.2
           imagePullPolicy: IfNotPresent
+          # Burstable QoS. The kubelet evicts BestEffort pods first,
+          # then Burstable, never Guaranteed. Setting requests below
+          # limits puts us in Burstable — sufficient because we want
+          # to survive host pressure but don't want to pre-allocate
+          # 1 CPU we won't use 95% of the time. Limit at 1 CPU /
+          # 768Mi prevents a runaway from eating the whole node.
+          resources:
+            requests:
+              cpu: 100m
+              memory: 192Mi
+            limits:
+              cpu: 1000m
+              memory: 768Mi
           ports:
             - { containerPort: 3000, name: http }
           env:
@@ -153,20 +199,41 @@ spec:
           # BEFORE SIGTERM. Sleeping here gives the kube-proxy /
           # ingress controller time to remove this pod from their
           # endpoint pool — without it, a new request races the
-          # SIGTERM and arrives at a closed port. 5s is the
-          # standard recommendation for traefik+kube-proxy.
+          # SIGTERM and arrives at a closed port. Bumped from 5s →
+          # 15s because traefik can take up to 10s to drain endpoint
+          # state under load on a single-node cluster.
           lifecycle:
             preStop:
               exec:
-                command: ["/bin/sh", "-c", "sleep 5"]
+                command: ["/bin/sh", "-c", "sleep 15"]
+          # Probes are on /healthz (cheap; no DB hit). Tolerance
+          # bumped because a noisy-neighbor workload (kaniko build
+          # pod, postgres dump, prometheus scrape) can starve us of
+          # CPU briefly without any actual server problem. Old
+          # config killed us after 30s of slowness; new gives ~3min
+          # liveness grace and 1min readiness grace before
+          # de-registering from the kube Service.
           livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6        # 30s × 6 = 3min before kill
+          readinessProbe:
             httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 5
             periodSeconds: 10
-          readinessProbe:
+            timeoutSeconds: 5
+            failureThreshold: 6        # 10s × 6 = 1min off-rotation
+          startupProbe:
+            # Lets the pod take up to 90s to come up without the
+            # liveness probe killing it during the cold-start race
+            # we hit on a busy node. SQLite WAL recovery + opening
+            # both DBs + restoring kube informer state can stretch
+            # past the 30s default on a 2-vCPU box.
             httpGet: { path: /healthz, port: http }
-            initialDelaySeconds: 2
             periodSeconds: 5
+            failureThreshold: 18       # 5s × 18 = 90s
           volumeMounts:
             - { name: data, mountPath: /data }
             # Read-only mount of the k3s server node-token. kuso-server

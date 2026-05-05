@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -26,6 +26,54 @@ interface Props {
 // a glance. Without this, every successful build wore an ACTIVE pill
 // forever, which lied during a redeploy.
 type Status = "active" | "superseded" | "failed" | "running" | "pending" | "unknown";
+
+// formatDuration turns a millisecond span into the kind of label the
+// build CI/CDs of the world print: "12s", "1m 04s", "3m 17s",
+// "1h 02m". Sub-second spans floor to "0s" rather than disappear so
+// a freshly-clicked redeploy shows a live counter immediately.
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
+  const sec = Math.floor(ms / 1000);
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  const remSec = sec % 60;
+  if (min < 60) {
+    return remSec === 0 ? `${min}m` : `${min}m ${String(remSec).padStart(2, "0")}s`;
+  }
+  const hr = Math.floor(min / 60);
+  const remMin = min % 60;
+  return remMin === 0 ? `${hr}h` : `${hr}h ${String(remMin).padStart(2, "0")}m`;
+}
+
+// buildDuration returns the time-on-task for a build:
+//   - running:   now - startedAt (live counter)
+//   - finished:  finishedAt - startedAt
+//   - missing:   "" so the renderer skips the whole pill
+// Lives in the shared util area so the same shape is used for the
+// live + completed cases — flips between them with no layout shift.
+function buildDuration(b: BuildSummary, status: Status): string {
+  const startMs = b.startedAt ? Date.parse(b.startedAt) : NaN;
+  if (!Number.isFinite(startMs)) return "";
+  if (status === "running") {
+    return formatDuration(Date.now() - startMs);
+  }
+  const endMs = b.finishedAt ? Date.parse(b.finishedAt) : NaN;
+  if (!Number.isFinite(endMs)) return "";
+  return formatDuration(endMs - startMs);
+}
+
+// useNowTick re-renders every second while `running` is true so the
+// live duration display ticks. Returns nothing — the side effect is
+// the bumped state. Stops the interval when nothing is running so a
+// quiet panel doesn't burn cycles forcing renders.
+function useNowTick(running: boolean) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => setTick((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, [running]);
+}
 
 function classify(b: BuildSummary, activeImageTag?: string): Status {
   const s = (b.status ?? "").toLowerCase();
@@ -68,6 +116,14 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
   const trigger = useTriggerBuild(project, service);
   const [expanded, setExpanded] = useState<string | null>(null);
   const canDeploy = useCan(Perms.ServicesWrite);
+  // Re-render every second while at least one build is running so
+  // the in-flight duration display ticks visibly. The hook itself
+  // skips the interval when nothing is running so finished-only
+  // panels don't burn cycles.
+  const anyRunning = (builds.data ?? []).some(
+    (b) => (b.status ?? "").toLowerCase() === "running",
+  );
+  useNowTick(anyRunning);
 
   const onRedeploy = async () => {
     try {
@@ -151,6 +207,7 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
               const branch = b.branch ?? "—";
               const ts = b.startedAt ?? b.finishedAt;
               const created = ts ? relativeTime(ts) : "—";
+              const duration = buildDuration(b, s);
               const isOpen = expanded === b.id;
               return (
                 <li
@@ -179,7 +236,17 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
                           <span className="font-mono">{sha || "—"}</span>
                           <span className="ml-2 text-xs text-[var(--text-tertiary)]">on {branch}</span>
                         </div>
-                        <div className="font-mono text-[10px] text-[var(--text-tertiary)]">{created}</div>
+                        <div className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                          {created}
+                          {duration && (
+                            <>
+                              {" · "}
+                              <span className={cn(s === "running" && "text-[var(--building)]")}>
+                                {duration}
+                              </span>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </button>
                     {/* Rollback only for succeeded-but-superseded builds.

@@ -50,10 +50,18 @@ export function NetworkingSection({ state, setState }: SectionProps) {
         hint={
           state.internal
             ? "internal — reachable only from sibling pods via cluster DNS"
-            : "public — Ingress + auto-domain + Let's Encrypt cert"
+            : "public — Ingress + auto-domain + Let's Encrypt cert · check to flip to internal-only"
         }
         control={
-          <label className="flex cursor-pointer items-center gap-2 text-[12px]">
+          // Shrink-wrap the checkbox + short label so they stay
+          // glued together at the right edge of the row. The full
+          // explanation lives in the row's hint slot, which already
+          // wraps gracefully under the label column.
+          //
+          // Earlier version had `Internal-only (no public Ingress)`
+          // as the inline label; on the narrow control column it
+          // wrapped after "no public" and the checkbox drifted left.
+          <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-[12px]">
             <input
               type="checkbox"
               checked={state.internal}
@@ -62,7 +70,7 @@ export function NetworkingSection({ state, setState }: SectionProps) {
               }
               className="h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
             />
-            <span>Internal-only (no public Ingress)</span>
+            <span>Internal-only</span>
           </label>
         }
       />

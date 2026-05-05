@@ -556,11 +556,25 @@ function NotificationRow({ event, onClose }: { event: FeedEvent; onClose: () => 
     </div>
   );
 
-  if (event.url) {
+  // Derive a navigation target. Prefer the server-supplied url
+  // (newer events; carries event-specific deep links), fall back to
+  // a project/service-based URL so events stored before v0.8.2 (which
+  // had no url field) still navigate. Without the fallback the bell
+  // popover renders a non-clickable row for every historical event,
+  // which makes it look broken to a returning user.
+  const href =
+    event.url ||
+    (event.project && event.service
+      ? `/projects/${encodeURIComponent(event.project)}?service=${encodeURIComponent(event.service)}`
+      : event.project
+        ? `/projects/${encodeURIComponent(event.project)}`
+        : "");
+
+  if (href) {
     return (
       <li className="hover:bg-[var(--bg-tertiary)]/40 transition-colors">
         <Link
-          href={event.url}
+          href={href}
           onClick={onClose}
           className="block px-3 py-2"
         >

@@ -79,6 +79,12 @@ func (h *KubernetesHandler) Mount(rt interface {
 	// via deploy/prometheus.yaml. The host can reach kuso-prometheus
 	// at the cluster-local DNS name.
 	rt.Get("/api/kubernetes/envs/{env}/timeseries", h.EnvTimeseries)
+	// Cluster cleanup: deletes pods in Succeeded/Failed phase + Jobs
+	// past their TTL across all namespaces. Used by the "Cleanup
+	// completed pods" button on /settings/nodes when the host is
+	// drowning in stale completion artifacts. Admin-only because
+	// it's a destructive cluster-wide action.
+	rt.Post("/api/kubernetes/cleanup-completed", h.CleanupCompleted)
 }
 
 // kusoLabelPrefix is the namespace every kuso-managed node label lives
