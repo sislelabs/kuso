@@ -243,16 +243,54 @@ func (s *Service) streamPods(ctx context.Context, pods []corev1.Pod, tailLines i
 }
 
 // streamOnePod opens kube's follow stream and pumps lines onto frames.
+// For build pods (label app.kubernetes.io/instance=<KusoBuild name>)
+// it streams init containers FIRST (clone), then the main kaniko
+// container, so the deployments tab shows the full lifecycle. Without
+// this, a stuck clone container looked like "waiting for logs…"
+// forever because we never streamed the init containers' output.
+//
+// Pod-phase transitions are emitted as separate frames so the UI can
+// render "PodInitializing", "Running", "Succeeded" above the log
+// pane while logs are still flowing.
 func (s *Service) streamOnePod(ctx context.Context, pod corev1.Pod, tailLines int, frames chan<- Frame) {
+	// Phase watcher: emits a "phase" frame on start + on each
+	// transition. Independent of the log stream so users see the pod's
+	// state evolve even while the kaniko container is still init'ing.
+	go s.watchPodPhase(ctx, pod.Name, frames)
+
+	// Stream init containers serially (clone first), then the main
+	// container. Init container logs are bounded and short — we read
+	// them to completion before falling through to the main one.
+	for _, c := range pod.Spec.InitContainers {
+		s.streamOneContainer(ctx, pod.Name, c.Name, true, tailLines, frames)
+	}
+	if len(pod.Spec.Containers) == 0 {
+		return
+	}
+	primary := pod.Spec.Containers[0].Name
+	s.streamOneContainer(ctx, pod.Name, primary, false, tailLines, frames)
+}
+
+// streamOneContainer opens a kube log follow stream for a single
+// container in a pod. Init containers run to completion so we don't
+// pass Follow=true; the main container we follow until ctx cancels
+// or kaniko exits.
+func (s *Service) streamOneContainer(ctx context.Context, podName, container string, isInit bool, tailLines int, frames chan<- Frame) {
 	tail := int64(tailLines)
-	req := s.Kube.Clientset.CoreV1().Pods(s.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{
-		Follow:    true,
+	opts := &corev1.PodLogOptions{
+		Container: container,
+		Follow:    !isInit,
 		TailLines: &tail,
-	})
+	}
+	req := s.Kube.Clientset.CoreV1().Pods(s.Namespace).GetLogs(podName, opts)
 	stream, err := req.Stream(ctx)
 	if err != nil {
+		// "container is waiting" / "container ... not found" is the
+		// normal case for an init container that hasn't started yet
+		// or a main container we're racing. Don't surface as error;
+		// the phase watcher will tell the user what's going on.
 		select {
-		case frames <- Frame{Type: "error", Pod: pod.Name, Message: err.Error()}:
+		case frames <- Frame{Type: "log", Pod: podName, Stream: "stderr", Line: "── " + container + ": " + err.Error() + " ──"}:
 		case <-ctx.Done():
 		}
 		return
@@ -266,11 +304,18 @@ func (s *Service) streamOnePod(ctx context.Context, pod corev1.Pod, tailLines in
 		if text == "" {
 			continue
 		}
+		// Tag init-container lines with the container name so the UI
+		// can render a subtle prefix ("clone | ..."). Main container
+		// logs stay un-prefixed.
+		line := text
+		if isInit {
+			line = container + " | " + text
+		}
 		select {
 		case frames <- Frame{
 			Type:   "log",
-			Pod:    pod.Name,
-			Line:   text,
+			Pod:    podName,
+			Line:   line,
 			Stream: "stdout",
 			Ts:     time.Now().UTC().Format(time.RFC3339),
 		}:
@@ -278,4 +323,75 @@ func (s *Service) streamOnePod(ctx context.Context, pod corev1.Pod, tailLines in
 			return
 		}
 	}
+}
+
+// watchPodPhase polls the pod's status and emits "phase" frames on
+// transitions. We start by emitting the current phase so the UI has
+// something to show before the first log line; then re-poll every 2s
+// and emit on change. Stops when the pod reaches a terminal phase
+// (Succeeded/Failed) or ctx cancels.
+func (s *Service) watchPodPhase(ctx context.Context, podName string, frames chan<- Frame) {
+	last := ""
+	t := time.NewTicker(2 * time.Second)
+	defer t.Stop()
+	for {
+		pod, err := s.Kube.Clientset.CoreV1().Pods(s.Namespace).Get(ctx, podName, metav1.GetOptions{})
+		if err != nil {
+			return
+		}
+		phase := derivePodPhase(pod)
+		if phase != last {
+			select {
+			case frames <- Frame{Type: "phase", Pod: podName, Value: phase}:
+			case <-ctx.Done():
+				return
+			}
+			last = phase
+		}
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
+// derivePodPhase returns a more user-friendly status string than
+// pod.Status.Phase. The raw phase ("Pending") doesn't tell the user
+// whether they're waiting on the scheduler, image pull, or an init
+// container; we surface the most-informative containerStatus reason
+// when present.
+func derivePodPhase(pod *corev1.Pod) string {
+	// Init-container progress: the first one that's still running or
+	// waiting wins (that's what's blocking the main container).
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+			return "init: " + cs.Name + " (" + cs.State.Waiting.Reason + ")"
+		}
+		if cs.State.Running != nil {
+			return "init: " + cs.Name + " (running)"
+		}
+	}
+	// Main containers: same waiting-reason / running-or-terminated dance.
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+			return cs.State.Waiting.Reason
+		}
+		if cs.State.Running != nil {
+			return "Running"
+		}
+		if cs.State.Terminated != nil {
+			if cs.State.Terminated.Reason != "" {
+				return cs.State.Terminated.Reason
+			}
+			return string(pod.Status.Phase)
+		}
+	}
+	if string(pod.Status.Phase) != "" {
+		return string(pod.Status.Phase)
+	}
+	return "Pending"
 }

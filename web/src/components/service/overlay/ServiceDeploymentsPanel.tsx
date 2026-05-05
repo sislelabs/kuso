@@ -25,7 +25,7 @@ interface Props {
 // builds become SUPERSEDED so the user can tell which one's live at
 // a glance. Without this, every successful build wore an ACTIVE pill
 // forever, which lied during a redeploy.
-type Status = "active" | "superseded" | "failed" | "running" | "pending" | "cancelled" | "unknown";
+type Status = "active" | "superseded" | "failed" | "running" | "pending" | "queued" | "cancelled" | "unknown";
 
 // formatDuration turns a millisecond span into the kind of label the
 // build CI/CDs of the world print: "12s", "1m 04s", "3m 17s",
@@ -75,6 +75,29 @@ function useNowTick(running: boolean) {
   }, [running]);
 }
 
+// triggerLabel renders the "by X" suffix shown on each build row. The
+// shape is human-friendly:
+//   - source=user + user=alice  → "by alice"
+//   - source=user (no name)     → "by you" (the only logged-in user
+//                                  on a single-tenant install)
+//   - source=webhook + user=bob → "by bob (webhook)"
+//   - source=webhook (no user)  → "via webhook"
+//   - source=api / system       → "via API" / "via system"
+//   - none                      → "" (renderer skips the suffix)
+function triggerLabel(b: BuildSummary): string {
+  const src = b.triggeredBy ?? "";
+  const user = b.triggeredByUser ?? "";
+  if (src === "user") {
+    return user ? `by ${user}` : "by you";
+  }
+  if (src === "webhook") {
+    return user ? `by ${user} (webhook)` : "via webhook";
+  }
+  if (src === "api") return "via API";
+  if (src === "system") return "via system";
+  return "";
+}
+
 function classify(b: BuildSummary, activeImageTag?: string): Status {
   const s = (b.status ?? "").toLowerCase();
   if (s === "succeeded") {
@@ -86,6 +109,7 @@ function classify(b: BuildSummary, activeImageTag?: string): Status {
   if (s === "failed") return "failed";
   if (s === "running") return "running";
   if (s === "pending") return "pending";
+  if (s === "queued") return "queued";
   if (s === "cancelled") return "cancelled";
   return "unknown";
 }
@@ -97,6 +121,7 @@ function statusBadge(s: Status) {
     failed:     { label: "FAILED",     cls: "bg-red-500/10 text-red-400 border-red-500/30" },
     running:    { label: "BUILDING",   cls: "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30" },
     pending:    { label: "PENDING",    cls: "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-subtle)]" },
+    queued:     { label: "QUEUED",     cls: "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-subtle)] border-dashed" },
     cancelled:  { label: "CANCELLED",  cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
     unknown:    { label: "UNKNOWN",    cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
   };
@@ -238,6 +263,11 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
                           <span className="font-mono">{sha || "—"}</span>
                           <span className="ml-2 text-xs text-[var(--text-tertiary)]">on {branch}</span>
                         </div>
+                        {b.commitMessage && (
+                          <div className="truncate text-xs text-[var(--text-secondary)]">
+                            {b.commitMessage}
+                          </div>
+                        )}
                         <div className="font-mono text-[10px] text-[var(--text-tertiary)]">
                           {created}
                           {duration && (
@@ -246,6 +276,12 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
                               <span className={cn(s === "running" && "text-[var(--building)]")}>
                                 {duration}
                               </span>
+                            </>
+                          )}
+                          {triggerLabel(b) && (
+                            <>
+                              {" · "}
+                              <span>{triggerLabel(b)}</span>
                             </>
                           )}
                         </div>
@@ -263,7 +299,7 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
                         Job. After v0.8.5 a second redeploy 409s while
                         a build is in flight, so Cancel is the
                         designated escape hatch. */}
-                    {(s === "running" || s === "pending") && canDeploy && (
+                    {(s === "running" || s === "pending" || s === "queued") && canDeploy && (
                       <CancelButton project={project} service={service} buildId={b.id} />
                     )}
                     <button

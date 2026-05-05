@@ -3,6 +3,7 @@ package builds
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -227,12 +228,13 @@ func TestCreate_DedupsConcurrentSameSHA(t *testing.T) {
 // redeploys held three kaniko Jobs simultaneously and tipped load
 // avg past 13). The fix: stamp the predecessor as cancelled +
 // build-state=done and delete its Job.
-// TestCreate_RejectsSecondInFlight asserts the v0.8.5 behaviour:
-// a Create call lands a 409 Conflict when an in-flight build for the
-// same service already exists, instead of silently superseding it.
-// The Coolify-aligned model is "never two builds for the same app at
-// once" — the user gets an actionable error and a Cancel button.
-func TestCreate_RejectsSecondInFlight(t *testing.T) {
+// TestCreate_QueuesSecondInFlight asserts the v0.8.6 behaviour:
+// a Create call while another build for the same service is in flight
+// stamps the new CR as queued (build-state=queued + phase=queued)
+// instead of refusing it (v0.8.5) or silently superseding the prior
+// build (pre-v0.8.5). The poller's dispatchQueued promotes it once
+// the active build finishes.
+func TestCreate_QueuesSecondInFlight(t *testing.T) {
 	t.Parallel()
 	const newRef = "1111111111111111111111111111111111111111"
 	const oldName = "alpha-web-deadbeefcafe"
@@ -269,14 +271,22 @@ func TestCreate_RejectsSecondInFlight(t *testing.T) {
 	}
 
 	got, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: newRef})
-	if err == nil {
-		t.Fatalf("Create: want ErrConflict, got nil (build %q created)", got.Name)
+	if err != nil {
+		t.Fatalf("Create: want success (queued), got %v", err)
 	}
-	if !errors.Is(err, ErrConflict) {
-		t.Fatalf("Create: want ErrConflict, got %v", err)
+	if got.Name == oldName {
+		t.Fatalf("new build should differ from prior, got %q", got.Name)
 	}
-	if !strings.Contains(err.Error(), oldName) {
-		t.Errorf("Create error should mention prior build name %q, got %v", oldName, err)
+	// New build should be marked queued.
+	rawNew, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").Get(context.Background(), got.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get new: %v", err)
+	}
+	if state := rawNew.GetLabels()["kuso.sislelabs.com/build-state"]; state != "queued" {
+		t.Errorf("new build state: got %q, want queued", state)
+	}
+	if phase := rawNew.GetAnnotations()[annPhase]; phase != "queued" {
+		t.Errorf("new build phase: got %q, want queued", phase)
 	}
 
 	// Prior CR should be untouched (no phase=cancelled, no build-state).
@@ -288,7 +298,7 @@ func TestCreate_RejectsSecondInFlight(t *testing.T) {
 		t.Errorf("prior phase: should not be cancelled by Create, got %q", p)
 	}
 	if l := raw.GetLabels()["kuso.sislelabs.com/build-state"]; l != "" {
-		t.Errorf("build-state label: should be unset, got %q", l)
+		t.Errorf("prior build-state: should be unset, got %q", l)
 	}
 	// Prior Job should still exist — no supersede.
 	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Get(context.Background(), oldName, metav1.GetOptions{}); err != nil {
@@ -345,6 +355,94 @@ func TestCancel_StampsAndDeletes(t *testing.T) {
 	// Cancelling an already-cancelled build → ErrInvalid.
 	if err := s.Cancel(context.Background(), "alpha", "web", buildName); !errors.Is(err, ErrInvalid) {
 		t.Errorf("second Cancel: want ErrInvalid, got %v", err)
+	}
+}
+
+// TestPoller_DispatchQueuedPromotesWhenIdle covers the dispatcher:
+// when no active build exists for a service, the oldest queued build
+// is promoted (build-state label removed, phase=pending stamped).
+// Queued builds with an active sibling stay queued.
+func TestPoller_DispatchQueuedPromotesWhenIdle(t *testing.T) {
+	t.Parallel()
+	idle := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alpha-web-queued1",
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project":     "alpha",
+				"kuso.sislelabs.com/service":     "alpha-web",
+				"kuso.sislelabs.com/build-state": "queued",
+			},
+			Annotations: map[string]string{annPhase: "queued"},
+		},
+		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "queued1ref", Branch: "main"},
+	}
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+		seedBuild(idle),
+	)
+	p := &Poller{Svc: s, Logger: slog.Default()}
+	p.dispatchQueued(context.Background(), "kuso")
+
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").Get(context.Background(), "alpha-web-queued1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get after dispatch: %v", err)
+	}
+	if state := raw.GetLabels()["kuso.sislelabs.com/build-state"]; state != "" {
+		t.Errorf("build-state after promote: got %q, want unset", state)
+	}
+	if phase := raw.GetAnnotations()[annPhase]; phase != "pending" {
+		t.Errorf("phase after promote: got %q, want pending", phase)
+	}
+}
+
+// TestPoller_DispatchQueuedSkipsWhenActive covers the safety: a
+// queued build sitting behind an active sibling should NOT be
+// promoted on the next tick, otherwise we'd run two builds for the
+// same service simultaneously.
+func TestPoller_DispatchQueuedSkipsWhenActive(t *testing.T) {
+	t.Parallel()
+	active := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alpha-web-active",
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": "alpha",
+				"kuso.sislelabs.com/service": "alpha-web",
+			},
+			Annotations: map[string]string{annPhase: "running"},
+		},
+		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "activeref", Branch: "main"},
+	}
+	queued := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alpha-web-queued1",
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project":     "alpha",
+				"kuso.sislelabs.com/service":     "alpha-web",
+				"kuso.sislelabs.com/build-state": "queued",
+			},
+			Annotations: map[string]string{annPhase: "queued"},
+		},
+		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "queued1ref", Branch: "main"},
+	}
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+		seedBuild(active),
+		seedBuild(queued),
+	)
+	p := &Poller{Svc: s, Logger: slog.Default()}
+	p.dispatchQueued(context.Background(), "kuso")
+
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").Get(context.Background(), "alpha-web-queued1", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get after dispatch: %v", err)
+	}
+	if state := raw.GetLabels()["kuso.sislelabs.com/build-state"]; state != "queued" {
+		t.Errorf("queued build wrongly promoted while sibling active (state=%q)", state)
 	}
 }
 

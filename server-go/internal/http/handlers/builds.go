@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/auth"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
@@ -123,14 +124,17 @@ func buildsCtx(r *http.Request) (context.Context, context.CancelFunc) {
 // name) and pulls a few status fields out of the unstructured map so
 // the frontend doesn't need to know about kube internals.
 type buildSummary struct {
-	ID          string `json:"id"`
-	ServiceName string `json:"serviceName"`
-	Branch      string `json:"branch,omitempty"`
-	CommitSha   string `json:"commitSha,omitempty"`
-	ImageTag    string `json:"imageTag,omitempty"`
-	Status      string `json:"status"`
-	StartedAt   string `json:"startedAt,omitempty"`
-	FinishedAt  string `json:"finishedAt,omitempty"`
+	ID              string `json:"id"`
+	ServiceName     string `json:"serviceName"`
+	Branch          string `json:"branch,omitempty"`
+	CommitSha       string `json:"commitSha,omitempty"`
+	CommitMessage   string `json:"commitMessage,omitempty"`
+	ImageTag        string `json:"imageTag,omitempty"`
+	Status          string `json:"status"`
+	StartedAt       string `json:"startedAt,omitempty"`
+	FinishedAt      string `json:"finishedAt,omitempty"`
+	TriggeredBy     string `json:"triggeredBy,omitempty"`     // user|webhook|api|system
+	TriggeredByUser string `json:"triggeredByUser,omitempty"` // username for source=user
 }
 
 func toBuildSummary(b kube.KusoBuild) buildSummary {
@@ -156,6 +160,15 @@ func toBuildSummary(b kube.KusoBuild) buildSummary {
 		}
 		if v, ok := b.Annotations["kuso.sislelabs.com/build-completed-at"]; ok {
 			out.FinishedAt = v
+		}
+		if v, ok := b.Annotations["kuso.sislelabs.com/build-triggered-by"]; ok {
+			out.TriggeredBy = v
+		}
+		if v, ok := b.Annotations["kuso.sislelabs.com/build-triggered-by-user"]; ok {
+			out.TriggeredByUser = v
+		}
+		if v, ok := b.Annotations["kuso.sislelabs.com/build-commit-message"]; ok {
+			out.CommitMessage = v
 		}
 	}
 	if out.Status == "" && b.Status != nil {
@@ -219,6 +232,16 @@ func (h *BuildsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
 		return
+	}
+	// Stamp trigger context: who clicked Redeploy. The github webhook
+	// dispatcher fills its own (source=webhook); requests with no
+	// auth claims (shouldn't happen post-requireProjectAccess but is
+	// defensive) fall back to source=api.
+	if claims, ok := auth.ClaimsFromContext(ctx); ok && claims != nil {
+		req.TriggeredBy = "user"
+		req.TriggeredByUser = claims.Username
+	} else {
+		req.TriggeredBy = "api"
 	}
 	out, err := h.Svc.Create(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
 	if err != nil {

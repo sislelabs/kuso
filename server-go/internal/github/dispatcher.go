@@ -113,6 +113,10 @@ type pushEvent struct {
 	HeadCommit struct {
 		ID      string `json:"id"`
 		Message string `json:"message"`
+		Author  struct {
+			Username string `json:"username"`
+			Name     string `json:"name"`
+		} `json:"author"`
 	} `json:"head_commit"`
 }
 
@@ -121,7 +125,11 @@ type prEvent struct {
 	Number      int    `json:"number"`
 	PullRequest struct {
 		State string `json:"state"`
-		Head  struct {
+		Title string `json:"title"`
+		User  struct {
+			Login string `json:"login"`
+		} `json:"user"`
+		Head struct {
 			Ref string `json:"ref"`
 			SHA string `json:"sha"`
 		} `json:"head"`
@@ -198,7 +206,12 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 			// it. The Ref field on the request becomes the build's
 			// image tag; keeping it tied to the real SHA makes
 			// rollbacks pinpoint-able.
-			req := builds.CreateBuildRequest{Branch: branch}
+			req := builds.CreateBuildRequest{
+				Branch:          branch,
+				TriggeredBy:     "webhook",
+				TriggeredByUser: p.HeadCommit.Author.Username,
+				CommitMessage:   firstLine(p.HeadCommit.Message),
+			}
 			if headSHA != "" && len(headSHA) >= 7 {
 				req.Ref = headSHA
 			}
@@ -460,7 +473,13 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		}
 	}
 	if d.Builds != nil {
-		if _, err := d.Builds.Create(ctx, proj.Name, short, builds.CreateBuildRequest{Branch: pr.PullRequest.Head.Ref, Ref: pr.PullRequest.Head.SHA}); err != nil {
+		if _, err := d.Builds.Create(ctx, proj.Name, short, builds.CreateBuildRequest{
+			Branch:          pr.PullRequest.Head.Ref,
+			Ref:             pr.PullRequest.Head.SHA,
+			TriggeredBy:     "webhook",
+			TriggeredByUser: pr.PullRequest.User.Login,
+			CommitMessage:   fmt.Sprintf("PR #%d: %s", pr.Number, pr.PullRequest.Title),
+		}); err != nil {
 			if errors.Is(err, builds.ErrConflict) {
 				d.Logger.Debug("preview build trigger deduped (already in flight)",
 					"service", serviceFQN, "pr", pr.Number)
@@ -515,6 +534,17 @@ func repoMatches(configuredURL, fullName string) bool {
 //   "Merge pull request #42 from owner/branch\n\n…"     (merge commit)
 //   "Title of the PR (#42)\n\n…"                         (squash)
 // Returns 0 when no PR number is found (e.g. a direct push to main).
+// firstLine returns just the first newline-delimited line of a commit
+// message. The deployments tab UI surfaces this in a single row so a
+// multi-paragraph body would push the layout. The full message lives
+// on the build CR annotation if a future drill-down wants it.
+func firstLine(s string) string {
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
 func extractMergedPR(message string) int {
 	if message == "" {
 		return 0

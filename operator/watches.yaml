@@ -54,9 +54,14 @@
   # cluster with even a dozen build records.
   selector:
     matchExpressions:
+      # Exclude completed builds (build-state=done) AND queued builds
+      # (build-state=queued). Queued builds wait for the active build
+      # of the same service to finish; the kuso-server build poller
+      # promotes them by removing the label, at which point the
+      # operator picks them up + renders the kaniko Job.
       - key: kuso.sislelabs.com/build-state
         operator: NotIn
-        values: ["done"]
+        values: ["done", "queued"]
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoCron

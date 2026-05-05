@@ -54,6 +54,13 @@ const (
 	annStartedAt     = "kuso.sislelabs.com/build-started-at"
 	annMessage       = "kuso.sislelabs.com/build-message"
 	annSupersededBy  = "kuso.sislelabs.com/superseded-by"
+	// Trigger context — surfaces in BuildSummary so users can see who
+	// kicked off a build and why. Helps when a teammate asks "who
+	// broke prod at 3pm" — the deployments tab now answers that
+	// without git/issue archaeology.
+	annTriggerSource = "kuso.sislelabs.com/build-triggered-by"
+	annTriggerUser   = "kuso.sislelabs.com/build-triggered-by-user"
+	annCommitMessage = "kuso.sislelabs.com/build-commit-message"
 )
 
 // buildPhase returns the kuso-tracked phase from build annotations,
@@ -447,9 +454,15 @@ var (
 )
 
 // CreateBuildRequest is the body of POST /api/projects/:p/services/:s/builds.
+// Trigger context fields are populated by the handler (user from
+// session, webhook from the github controller) — they're not user-
+// supplied through the JSON body.
 type CreateBuildRequest struct {
-	Branch string `json:"branch,omitempty"`
-	Ref    string `json:"ref,omitempty"`
+	Branch          string `json:"branch,omitempty"`
+	Ref             string `json:"ref,omitempty"`
+	TriggeredBy     string `json:"-"` // user|webhook|api|system
+	TriggeredByUser string `json:"-"`
+	CommitMessage   string `json:"-"`
 }
 
 // shaRE matches a full 40-char git SHA.
@@ -593,17 +606,15 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 
 	buildName := buildCRName(project, service, sha)
 
-	// Refuse to start a second build for the same service while one is
-	// already running. Coolify's model: never run two builds for the
-	// same application simultaneously. The previous behaviour (silent
-	// supersede + cancel of the prior build) was confusing — users
-	// would click Redeploy, see the in-progress build vanish without
-	// explanation, and not know whether their new build was queued or
-	// rejected. The handler turns ErrConflict into a 409 with this
-	// message; the UI can then offer Cancel + retry.
+	// Coolify-aligned queueing: if another build is in flight for this
+	// service, mark the new CR as queued instead of refusing it. The
+	// build poller's dispatcher (see Poller.dispatchQueued) promotes
+	// the queued build once the active one terminates. The chart
+	// doesn't render a Job until the build-state=queued label is
+	// removed, so a queued CR consumes no node resources.
+	queued := false
 	if active, err := s.findActiveForService(ctx, ns, project, fqn); err == nil && active != "" && active != buildName {
-		return nil, fmt.Errorf("%w: build %s already running for %s/%s — cancel it or wait for it to finish",
-			ErrConflict, active, project, service)
+		queued = true
 	}
 	imageRepo := fmt.Sprintf("%s/%s/%s", RegistryHost, project, service)
 
@@ -626,14 +637,40 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		return nil, fmt.Errorf("clone token secret: %w", err)
 	}
 
+	labels := map[string]string{
+		"kuso.sislelabs.com/project":   project,
+		"kuso.sislelabs.com/service":   fqn,
+		"kuso.sislelabs.com/build-ref": shortRef(sha),
+	}
+	annos := map[string]string{}
+	if queued {
+		// build-state=queued tells the operator's watch selector to
+		// skip reconciling this CR — no Job rendered, no resources
+		// consumed. Poller.dispatchQueued promotes it (removes the
+		// label, stamps phase=pending) when the active build for the
+		// same service finishes.
+		labels["kuso.sislelabs.com/build-state"] = "queued"
+		annos[annPhase] = "queued"
+	}
+	// Trigger context — captured from the request handler. user/api/
+	// webhook/system distinguishes the four valid sources; the user
+	// field is the username for "user" source (otherwise the bot/
+	// webhook identity). commitMessage comes from the GitHub webhook
+	// when available.
+	if req.TriggeredBy != "" {
+		annos[annTriggerSource] = req.TriggeredBy
+	}
+	if req.TriggeredByUser != "" {
+		annos[annTriggerUser] = req.TriggeredByUser
+	}
+	if req.CommitMessage != "" {
+		annos[annCommitMessage] = req.CommitMessage
+	}
 	build := &kube.KusoBuild{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: buildName,
-			Labels: map[string]string{
-				"kuso.sislelabs.com/project":   project,
-				"kuso.sislelabs.com/service":   fqn,
-				"kuso.sislelabs.com/build-ref": shortRef(sha),
-			},
+			Name:        buildName,
+			Labels:      labels,
+			Annotations: annos,
 		},
 		Spec: kube.KusoBuildSpec{
 			Project:              project,
@@ -899,8 +936,81 @@ func (p *Poller) tick(ctx context.Context) error {
 				p.Logger.Warn("build poller checkBuild", "build", b.Name, "ns", ns, "err", err)
 			}
 		}
+		// Queue dispatcher: promote the oldest queued build per service
+		// when no active (running/pending) build exists for it. Runs
+		// after the activeBuilds sweep so a build that finished THIS
+		// tick has its queued sibling promoted on the next one — keeps
+		// the state machine simple at the cost of one tick of latency.
+		p.dispatchQueued(ctx, ns)
 	}
 	return nil
+}
+
+// dispatchQueued promotes queued builds to running when their service
+// has no active build. One queued build per service per tick to avoid
+// stampedes on a small cluster (the operator's renderer is the
+// bottleneck; bulk-promoting 10 queued builds at once would just
+// re-create the OOM-thrash scenario from v0.7.x). Best-effort: kube
+// errors are warn-logged and the next tick retries.
+func (p *Poller) dispatchQueued(ctx context.Context, ns string) {
+	raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+		List(ctx, metav1.ListOptions{LabelSelector: "kuso.sislelabs.com/build-state=queued"})
+	if err != nil {
+		p.Logger.Warn("build poller queue list", "ns", ns, "err", err)
+		return
+	}
+	if len(raw.Items) == 0 {
+		return
+	}
+	// Group queued builds by service + sort each group oldest-first so
+	// the FIFO order is preserved (the user expects "first redeploy
+	// click runs first"). creationTimestamp ties break on name lex.
+	byService := map[string][]*kube.KusoBuild{}
+	for i := range raw.Items {
+		var b kube.KusoBuild
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &b); err != nil {
+			continue
+		}
+		byService[b.Spec.Service] = append(byService[b.Spec.Service], &b)
+	}
+	for fqn, list := range byService {
+		// Active check per service. If anything's running, skip the
+		// whole queue for this service this tick.
+		project := list[0].Spec.Project
+		active, err := p.Svc.findActiveForService(ctx, ns, project, fqn)
+		if err != nil {
+			p.Logger.Warn("build poller queue active check", "ns", ns, "service", fqn, "err", err)
+			continue
+		}
+		if active != "" {
+			continue
+		}
+		// Oldest first.
+		sort.SliceStable(list, func(i, j int) bool {
+			ti := list[i].CreationTimestamp
+			tj := list[j].CreationTimestamp
+			if ti.Equal(&tj) {
+				return list[i].Name < list[j].Name
+			}
+			return ti.Before(&tj)
+		})
+		next := list[0]
+		// Promote: remove the queued label (operator picks it up,
+		// renders the kaniko Job) and stamp phase=pending so the
+		// summary shows the right state until markRunning fires.
+		// The label removal uses a JSON merge patch with null — the
+		// canonical "delete this label" idiom.
+		patch := fmt.Sprintf(
+			`{"metadata":{"labels":{"kuso.sislelabs.com/build-state":null},"annotations":{%q:"pending"}}}`,
+			annPhase,
+		)
+		if _, perr := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+			Patch(ctx, next.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {
+			p.Logger.Warn("build poller promote queued", "build", next.Name, "ns", ns, "err", perr)
+			continue
+		}
+		p.Logger.Info("build poller promoted queued build", "build", next.Name, "service", fqn)
+	}
 }
 
 // checkBuild reads the kaniko Job for one build and reconciles status.

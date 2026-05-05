@@ -25,10 +25,17 @@ export interface BuildSummary {
   serviceName: string;
   branch?: string;
   commitSha?: string;
+  commitMessage?: string;
   imageTag?: string;
+  // status ∈ queued | pending | running | succeeded | failed | cancelled
   status: string;
   startedAt?: string;
   finishedAt?: string;
+  // Trigger context: who/what kicked off the build. Surfaces in the
+  // deployments tab so users can answer "who broke prod" without git
+  // archaeology. source ∈ user | webhook | api | system.
+  triggeredBy?: string;
+  triggeredByUser?: string;
 }
 
 export async function listBuilds(project: string, service: string): Promise<BuildSummary[]> {
