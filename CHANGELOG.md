@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.53] — 2026-05-05
+
+### ✨ Features
+- Feat(addons): backup schedule + retention via API + UI ([f054ee7](https://github.com/sislelabs/kuso/commit/f054ee7988e773fef4b7569afddcc4e291079be5))
+
 ## [0.7.52] — 2026-05-05
 
 ### 🐛 Bug Fixes
