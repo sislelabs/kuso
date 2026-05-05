@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.47] — 2026-05-05
+
+### Other
+- Ui(buttons): lighten primary CTA in light mode ([71efc44](https://github.com/sislelabs/kuso/commit/71efc44002ec50a27308b204a9304e8b50a11db2))
+
 ## [0.7.46] — 2026-05-05
 
 ### 🐛 Bug Fixes
