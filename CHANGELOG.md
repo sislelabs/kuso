@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.52] — 2026-05-05
+
+### 🐛 Bug Fixes
+- Fix(s3-backup): restore reads conn from <release>-conn Secret ([d857ab3](https://github.com/sislelabs/kuso/commit/d857ab3b8f757f1fd17324e06770de488087752f))
+
 ## [0.7.51] — 2026-05-05
 
 ### 🐛 Bug Fixes
