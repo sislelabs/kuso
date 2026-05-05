@@ -100,6 +100,10 @@ spec:
                     enabled: { type: boolean, default: false }
                 host:
                   type: string
+                additionalHosts:
+                  type: array
+                  description: Extra hostnames routed to this env's pod. Server populates this from KusoService.spec.domains so custom domains attach without losing the auto-generated host.
+                  items: { type: string }
                 tlsEnabled:
                   type: boolean
                   default: true
