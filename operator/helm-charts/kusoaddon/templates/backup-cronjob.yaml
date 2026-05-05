@@ -96,7 +96,13 @@ spec:
                 # resolution errors.
                 - { name: POSTGRES_HOST, value: {{ include "kusoaddon.fullname" . | quote }} }
                 - { name: POSTGRES_USER, value: {{ default "kuso" .Values.username | quote }} }
-                - { name: POSTGRES_DB,   value: {{ default "kuso" .Values.database | quote }} }
+                # Database name MUST match what postgres.yaml created
+                # (which falls back to .Values.project, not "kuso"),
+                # otherwise pg_dump fails with `database "kuso" does
+                # not exist` and every backup pod errors. We mirror
+                # the same precedence chain:
+                #   .Values.database → .Values.project → "kuso"
+                - { name: POSTGRES_DB,   value: {{ .Values.database | default .Values.project | default "kuso" | quote }} }
                 - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
                 - name: POSTGRES_PASSWORD
                   valueFrom:

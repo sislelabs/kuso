@@ -125,7 +125,7 @@ sync-install-scripts:
 # since most kuso clusters run on amd64; tag includes the version
 # suffix so old CronJobs don't get re-pulled into a different image.
 .PHONY: backup-image
-BACKUP_VERSION ?= v0.4.0
+BACKUP_VERSION ?= v0.5.0
 backup-image:
 	@docker buildx build --platform linux/amd64 --push \
 		-t ghcr.io/sislelabs/kuso-backup:$(BACKUP_VERSION) \

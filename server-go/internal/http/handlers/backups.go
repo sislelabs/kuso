@@ -167,13 +167,15 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	// CronJob uploads to s3://bucket/<project>/<short-addon-name>/...,
-	// so we need to strip any redundant project prefix from the addon
-	// arg before joining. Without this, callers that pass the FQN
-	// (e.g. UI passing metadata.name) end up listing
-	// "<project>/<project>-<addon>/" which never matches anything.
-	addonShort := addons.ShortName(project, addon)
-	prefix := project + "/" + addonShort + "/"
+	// CronJob uploads to s3://bucket/<project>/<addon-fqn>/<ts>.sql.gz
+	// where <addon-fqn> = the helm release name = "<project>-<short>".
+	// Callers pass either the FQN (UI / canvas use metadata.name) or
+	// the short name (CLI ergonomic flow). Normalise to FQN so the
+	// prefix matches what the cronjob actually wrote — and so a
+	// caller that passes the short name doesn't list zero objects
+	// because of a project-prefix mismatch.
+	addonFQN := addons.CRName(project, addon)
+	prefix := project + "/" + addonFQN + "/"
 	out, err := cli.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket: aws.String(bucket),
 		Prefix: aws.String(prefix),

@@ -8,8 +8,16 @@
 #   - mariadb-client + mongodb-tools deferred until v2 — postgres
 #     covers the addon kinds users actually self-host today
 #
+# Pinned to alpine:3.21 because alpine:3.20 packages aws-cli 2.15.57,
+# which crashes inside its s3errormsg customisation when talking to
+# any non-AWS S3 endpoint that returns an error format aws-cli's
+# error-enhancer can't parse (Hetzner Object Storage is the case we
+# hit). The fix landed upstream in aws-cli 2.18+; alpine:3.21 ships
+# 2.22+, which works against Hetzner / Wasabi / B2 / MinIO without
+# the spurious "argument of type NoneType is not iterable" abort.
+#
 # Built + pushed by `make backup-image`.
-FROM alpine:3.20
+FROM alpine:3.21
 
 RUN apk add --no-cache \
       bash \
