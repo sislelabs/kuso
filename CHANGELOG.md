@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.54] — 2026-05-05
+
+### ✨ Features
+- Feat(addons): instance dropdown lists registered shared servers ([5274e10](https://github.com/sislelabs/kuso/commit/5274e10739beab5702faa7e838f1da888167aef6))
+
 ## [0.7.53] — 2026-05-05
 
 ### ✨ Features
