@@ -5,6 +5,18 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.0] — 2026-05-05
+
+### Other
+- Release sign + build node pool + CRD schema golden + parity check ([c129fbe](https://github.com/sislelabs/kuso/commit/c129fbe183de005ccaf94b17583d489f4ed0dff2))
+- Hygiene: R4 R5 S6 S7 S10 from the v0.8.13 audit ([5c62204](https://github.com/sislelabs/kuso/commit/5c62204f72ffe9766e008607b47cb0cb19a30b6f))
+- Deploy: postgres StatefulSet + RollingUpdate for kuso-server ([06b25a4](https://github.com/sislelabs/kuso/commit/06b25a411c443d1c85bbda77b547a81dfc480f31))
+- Db: switch from SQLite to Postgres ([b391e0b](https://github.com/sislelabs/kuso/commit/b391e0bb74a2d52ebf90e5e590864993fe6b777b))
+
+### ✨ Features
+- Feat(web): Errors tab on the service overlay ([66b7848](https://github.com/sislelabs/kuso/commit/66b78480da89800d8f22cd2d6970391fad870ccd))
+- Feat: Sentry-style error feed for deployed services ([82d51bb](https://github.com/sislelabs/kuso/commit/82d51bbb268071bd6892c0a9a6f78296bb598e4b))
+
 ## [0.8.13] — 2026-05-05
 
 ### Other
