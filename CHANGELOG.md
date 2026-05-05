@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.56] — 2026-05-05
+
+### ✨ Features
+- Feat(services): internal-only toggle skips Ingress ([c2ec390](https://github.com/sislelabs/kuso/commit/c2ec3907816393031f238c78bd8b166675b6dc2a))
+
 ## [0.7.55] — 2026-05-05
 
 ### ✨ Features
