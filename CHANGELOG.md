@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.50] — 2026-05-05
+
+### ✨ Features
+- Feat(crd): allow KusoEnvironment.spec.additionalHosts ([49fa230](https://github.com/sislelabs/kuso/commit/49fa230bae94e13e77c4b845b258ad699b7eebe2))
+
+### 🐛 Bug Fixes
+- Fix(envvars): reserve PORT / HOSTNAME / KUBERNETES_* ([61aed3e](https://github.com/sislelabs/kuso/commit/61aed3ede3fa13a48e3c1646f8d39296ecfd47e2))
+
 ## [0.7.49] — 2026-05-05
 
 ### ✨ Features
