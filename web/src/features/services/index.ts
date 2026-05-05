@@ -9,9 +9,11 @@ export {
   useDeleteService,
   usePatchService,
   useAddonSecretKeys,
+  useErrors,
   serviceQueryKey,
   serviceEnvQueryKey,
   buildsQueryKey,
+  errorsQueryKey,
 } from "./hooks";
 export {
   listServiceCrons,
@@ -21,9 +23,11 @@ export {
   rollbackBuild,
   cancelBuild,
   searchServiceLogs,
+  listErrors,
 } from "./api";
 export type {
   BuildSummary,
+  ErrorGroup,
   PatchServiceBody,
   KusoCron,
   CreateCronBody,

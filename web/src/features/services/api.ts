@@ -42,6 +42,33 @@ export async function listBuilds(project: string, service: string): Promise<Buil
   return api(`/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/builds`);
 }
 
+// ErrorGroup is one fingerprint-grouped error from /api/projects/.../errors.
+// firstSeen / lastSeen / count drive the row layout; sampleLine is the
+// raw line shown in the drill-down.
+export interface ErrorGroup {
+  fingerprint: string;
+  message: string;
+  count: number;
+  firstSeen: string;
+  lastSeen: string;
+  sampleLine: string;
+  sampleEnv?: string;
+  samplePod?: string;
+}
+
+// listErrors fetches the current error groups for a service. `since`
+// is a Go-flavoured duration string ("24h", "7d"); the server caps
+// it at 30d.
+export async function listErrors(
+  project: string,
+  service: string,
+  since = "24h",
+): Promise<ErrorGroup[]> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/errors?since=${encodeURIComponent(since)}`,
+  );
+}
+
 // cancelBuild stops an in-flight build. 204 on success; 400 if the
 // build is already in a terminal phase (succeeded/failed/cancelled);
 // 404 for an unknown build id.

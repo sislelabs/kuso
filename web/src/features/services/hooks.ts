@@ -7,6 +7,7 @@ import {
   getServiceEnv,
   getServiceLogs,
   listBuilds,
+  listErrors,
   listAddonSecretKeys,
   patchService,
   setServiceEnv,
@@ -57,6 +58,18 @@ export function useBuilds(project: string, service: string) {
     queryFn: () => listBuilds(project, service),
     enabled: !!project && !!service,
     refetchInterval: 10_000,
+  });
+}
+
+export const errorsQueryKey = (project: string, service: string, since: string) =>
+  ["projects", project, "services", service, "errors", since] as const;
+
+export function useErrors(project: string, service: string, since = "24h") {
+  return useQuery({
+    queryKey: errorsQueryKey(project, service, since),
+    queryFn: () => listErrors(project, service, since),
+    enabled: !!project && !!service,
+    refetchInterval: 30_000,
   });
 }
 
