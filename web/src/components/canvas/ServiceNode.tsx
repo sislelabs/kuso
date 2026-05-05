@@ -147,7 +147,7 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
           <RuntimeIcon runtime={data.service.spec.runtime} />
           <span className="truncate">{displayName}</span>
         </span>
-        <UptimeBadge env={data.env} status={status} />
+        <UptimeBadge env={data.env} status={status} latestBuild={data.latestBuild} />
       </div>
 
       {/* URL pill */}
@@ -279,34 +279,61 @@ function ReplicasBadge({
   );
 }
 
-// UptimeBadge shows how long this revision has been live ("3h",
+// UptimeBadge shows how long the latest deploy has been live ("3h",
 // "2d"). Only renders when the env is in a steady state (not
-// building/deploying — those have their own animated border, no
-// uptime to report). Reads env.status.lastDeployedAt so the value
-// resets to 0 on every redeploy, not on pod restart.
+// building/deploying — those have their own animated border).
+//
+// Source-of-truth priority (latest first):
+//   1. latestBuild.finishedAt  — when the most recent build landed.
+//      This is what users mean by "age of the latest build."
+//   2. env.status.lastDeployedAt — operator-stamped on each helm
+//      reconcile. Resets on redeploy.
+//   3. env.metadata.creationTimestamp — last-resort fallback for
+//      services with no build history (e.g. just-promoted via
+//      rollback). Tagged "env age" in the tooltip so the user can
+//      tell why the badge looks stale.
+//
+// Without #1 the badge showed "19h" on a service that had been
+// redeployed five times in the last hour — the env CR was 19h old
+// but each build was minutes old. The lastDeployedAt fallback only
+// kicks in for the helm-operator-managed reconcile, which doesn't
+// fire reliably on every build.
 function UptimeBadge({
   env,
   status,
+  latestBuild,
 }: {
   env?: KusoEnvironment;
   status: DeployStatus;
+  latestBuild?: BuildSummary;
 }) {
   if (!env || status === "building" || status === "deploying") return null;
-  // Prefer lastDeployedAt (resets on redeploy → "image age"), fall
-  // back to the env's creation timestamp ("env age" for envs that
-  // haven't redeployed since the operator wrote them). Without this
-  // fallback the badge stays empty on services whose helm-operator
-  // hasn't written status.lastDeployedAt yet — annoying for the
-  // user since the canvas card header looks empty for no good
-  // reason.
-  const ts =
-    (env.status?.lastDeployedAt as string | undefined) ??
-    env.metadata?.creationTimestamp;
+  let ts: string | undefined;
+  let label: "build" | "deploy" | "env" = "env";
+  if (latestBuild?.finishedAt) {
+    ts = latestBuild.finishedAt;
+    label = "build";
+  } else if (latestBuild?.startedAt && (latestBuild.status ?? "").toLowerCase() === "succeeded") {
+    // Edge case: succeeded build with finishedAt missing (stale row).
+    ts = latestBuild.startedAt;
+    label = "build";
+  } else if (env.status?.lastDeployedAt) {
+    ts = env.status.lastDeployedAt as string;
+    label = "deploy";
+  } else if (env.metadata?.creationTimestamp) {
+    ts = env.metadata.creationTimestamp;
+    label = "env";
+  }
   if (!ts) return null;
-  const isCreation = !env.status?.lastDeployedAt;
+  const tip =
+    label === "build"
+      ? `Latest build finished at ${ts}`
+      : label === "deploy"
+        ? `Last deployed at ${ts}`
+        : `Env created at ${ts}`;
   return (
     <span
-      title={isCreation ? `Env created at ${ts}` : `Last deployed at ${ts}`}
+      title={tip}
       className="shrink-0 font-mono text-xs text-[var(--text-secondary)]"
     >
       {relativeAge(ts)}
