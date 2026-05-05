@@ -26,6 +26,12 @@ type Client struct {
 	Clientset kubernetes.Interface
 	Dynamic   dynamic.Interface
 	Config    *rest.Config
+
+	// Cache is the optional shared informer over kuso CRDs. When set,
+	// list[T] reads from the local cache instead of LIST'ing the API
+	// server. Constructed and started by the server bootstrap; nil
+	// in tests and CLI flows where a single round-trip is fine.
+	Cache *Cache
 }
 
 // NewClient resolves a *rest.Config and builds typed + dynamic clients.
@@ -66,6 +72,19 @@ func newClientFromConfig(cfg *rest.Config) (*Client, error) {
 		return nil, fmt.Errorf("kube: dynamic client: %w", err)
 	}
 	return &Client{Clientset: cs, Dynamic: dyn, Config: cfg}, nil
+}
+
+// EnableCache attaches a shared informer cache to the client and
+// starts the watches. Long-lived processes (the kuso server) should
+// call this once on boot; one-shot CLI invocations should not.
+//
+// Safe to call multiple times — the second call is a no-op.
+func (c *Client) EnableCache() {
+	if c == nil || c.Cache != nil {
+		return
+	}
+	c.Cache = NewCache(c)
+	c.Cache.Start()
 }
 
 func loadConfig() (*rest.Config, error) {

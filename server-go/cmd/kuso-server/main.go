@@ -189,6 +189,12 @@ func main() {
 		// resolves to the home ns, preserving existing single-tenant
 		// behaviour without per-call overhead.
 		kubeClient = kc
+		// Shared informer cache over the six kuso CRDs. Keeps the
+		// dashboard's read paths off the API server — one WATCH per
+		// GVR instead of LIST-on-every-request. See SCALABILITY_ANALYSIS.md §3.
+		// Reads against an unsynced informer transparently fall back
+		// to the live API, so no boot-time block.
+		kc.EnableCache()
 		nsResolver := kube.NewProjectNamespaceResolver(kc, *namespace)
 		projSvc = projects.New(kc, *namespace)
 		secSvc = secrets.New(kc, *namespace)

@@ -35,7 +35,26 @@ func decodeList[T any](list *unstructured.UnstructuredList, gvr schema.GroupVers
 }
 
 // list is the generic dynamic-client → typed-slice helper.
+//
+// When c.Cache is set and synced for gvr, the list is served from the
+// local informer cache (no API round-trip). Otherwise it falls back
+// to a live LIST. Selectors in opts are NOT applied to the cache —
+// callers that need them get the live path. Today no caller passes
+// non-default opts, so the cache path is universal in practice.
 func list[T any](ctx context.Context, c *Client, gvr schema.GroupVersionResource, namespace string, opts metav1.ListOptions) ([]T, error) {
+	if c.Cache != nil && opts.LabelSelector == "" && opts.FieldSelector == "" {
+		if items, ok := c.Cache.listFromCache(gvr, namespace); ok {
+			out := make([]T, 0, len(items))
+			for _, u := range items {
+				var item T
+				if err := fromUnstructured(u, &item); err != nil {
+					return nil, fmt.Errorf("kube: decode cached %s: %w", gvr.Resource, err)
+				}
+				out = append(out, item)
+			}
+			return out, nil
+		}
+	}
 	raw, err := c.Dynamic.Resource(gvr).Namespace(namespace).List(ctx, opts)
 	if err != nil {
 		return nil, fmt.Errorf("kube: list %s in %q: %w", gvr.Resource, namespace, err)
