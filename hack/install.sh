@@ -17,8 +17,10 @@
 #   - DNS pre-flight: refuses to provision Let's Encrypt unless
 #     <domain> already resolves to this host's public IP, since
 #     ACME failures eat into the rate-limit budget
-#   - Let's Encrypt staging first, then prod after the staging cert
-#     validates. Avoids burning the prod quota on misconfigs.
+#   - Let's Encrypt PROD by default — DNS pre-flight catches most
+#     misconfigs. Pass --le-staging if you're iterating on DNS and
+#     want to avoid the 50 certs/week prod rate limit; staging
+#     certs are not browser-trusted but cost nothing.
 #   - Optional interactive GitHub App wizard for repo deploys + OAuth
 #
 # After this script finishes, https://<KUSO_DOMAIN>/ serves the kuso UI.
@@ -44,7 +46,13 @@
 #   KUSO_INSECURE_SECRETS=1     reuse the well-known dev secrets (kind/dev only)
 #   KUSO_SKIP_DNS_CHECK=1       skip the pre-flight DNS resolve
 #   KUSO_LE_ENV=staging|prod    which Let's Encrypt environment to use
-#                               (default: staging — flip to prod via UI later)
+#                               (default: prod). LE prod is rate-limited
+#                               to 50 certs/week per registered domain
+#                               (the eTLD+1, e.g. example.com), and 5
+#                               failed validations per hour. Use staging
+#                               while iterating on DNS — it has 30000
+#                               certs/week limits but is not browser-
+#                               trusted.
 #   KUSO_GITHUB_APP_ENV         path to GitHub App credentials file
 #                               (one KEY=VALUE per line — APP_ID, APP_SLUG,
 #                               CLIENT_ID, CLIENT_SECRET, WEBHOOK_SECRET, ORG)
@@ -56,10 +64,10 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.7.48}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.7.48}"
+KUSO_VERSION="${KUSO_VERSION:-v0.7.49}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.7.49}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
-KUSO_LE_ENV="${KUSO_LE_ENV:-staging}"
+KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 
 # --- arg parsing ---
 # Both flags and env vars are accepted. Flags win when both are
@@ -177,7 +185,11 @@ fail, but you'll be on your own for diagnosis)."
     fi
     if [[ "$RESOLVED" != "$PUBLIC_IP" ]]; then
       warn "DNS for ${KUSO_DOMAIN} resolves to ${RESOLVED} but this host is ${PUBLIC_IP}."
-      warn "Let's Encrypt will fail until DNS converges. Continuing anyway — staging certs will work either way."
+      warn "Let's Encrypt will fail until DNS converges."
+      if [[ "$KUSO_LE_ENV" == "prod" ]]; then
+        warn "You're on LE prod (default). Each failed validation eats your 5/hour budget."
+        warn "If DNS is still propagating, re-run with --le-staging to avoid burning prod quota."
+      fi
     else
       log "DNS check OK (${KUSO_DOMAIN} -> ${PUBLIC_IP})"
     fi
@@ -340,19 +352,40 @@ kubectl wait --for=condition=Available --timeout=120s \
   deployment/kuso-prometheus -n kuso || warn "kuso-prometheus not yet ready"
 
 # -------- 9. server secrets --------
+#
+# Re-runs of install.sh must NOT regenerate secrets. Rerolling the
+# admin password locks the operator out, and rerolling JWT_SECRET
+# invalidates every active session. So: if kuso-server-secrets
+# already exists, decode its values and reuse them. Explicit env-var
+# overrides (KUSO_ADMIN_PASSWORD=...) still win — that's the
+# documented "rotate the password" path.
+kubectl create namespace kuso 2>/dev/null || true
+
+EXISTING_ADMIN=""
+EXISTING_SESSION=""
+EXISTING_JWT=""
+if kubectl get secret -n kuso kuso-server-secrets >/dev/null 2>&1; then
+  EXISTING_ADMIN=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.KUSO_ADMIN_PASSWORD}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  EXISTING_SESSION=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.KUSO_SESSION_KEY}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  EXISTING_JWT=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.JWT_SECRET}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+fi
+
 if [[ "${KUSO_INSECURE_SECRETS:-0}" == "1" ]]; then
   log "using INSECURE dev secrets (admin / kuso-admin)"
   ADMIN_PASSWORD="${KUSO_ADMIN_PASSWORD:-kuso-admin}"
   SESSION_KEY="dev-session-key-do-not-use-in-prod-3232"
   JWT_SECRET="dev-jwt-secret-do-not-use-in-prod-32-chars"
 else
-  ADMIN_PASSWORD="${KUSO_ADMIN_PASSWORD:-$(random_string)}"
-  SESSION_KEY="$(random_string)"
-  JWT_SECRET="$(random_string)"
+  # Precedence: explicit env-var override > existing secret > fresh random.
+  ADMIN_PASSWORD="${KUSO_ADMIN_PASSWORD:-${EXISTING_ADMIN:-$(random_string)}}"
+  SESSION_KEY="${EXISTING_SESSION:-$(random_string)}"
+  JWT_SECRET="${EXISTING_JWT:-$(random_string)}"
+  if [[ -n "$EXISTING_ADMIN" ]]; then
+    log "reusing existing kuso-server-secrets (admin password unchanged)"
+  fi
 fi
 
-log "creating kuso-server-secrets"
-kubectl create namespace kuso 2>/dev/null || true
+log "applying kuso-server-secrets"
 # KUSO_DOMAIN goes in here too so the server can build OAuth callback
 # URLs without an admin re-pasting it. NewGithubOAuth() autoderives
 # https://${KUSO_DOMAIN}/api/auth/github/callback when it's set.
@@ -615,15 +648,12 @@ kubectl wait --for=condition=Available --timeout=180s \
 
 # -------- 11b. auto-flip to LE prod --------
 #
-# We deliberately ship staging first (line 62) — staging has loose
-# rate limits, so misconfigured DNS doesn't burn your prod quota for
-# the week. But once staging issues successfully, DNS is right and
-# we should hand the user a real cert. Otherwise EVERY new install
-# starts with a browser warning, which is a paper cut every operator
-# eventually fixes manually.
-#
-# Skipped when KUSO_LE_ENV=prod (already there) or
-# KUSO_LE_AUTO_FLIP=0 (escape hatch).
+# Default is prod (line 62), so this block is normally a no-op. It
+# fires only when the user explicitly passed --le-staging and didn't
+# set KUSO_LE_AUTO_FLIP=0 — i.e. "iterate on staging, then auto-
+# upgrade to a real cert once it works." Without the flip, every
+# install that started on staging would ship with a browser warning
+# until manually fixed.
 if [[ "$KUSO_LE_ENV" == "staging" && "${KUSO_LE_AUTO_FLIP:-1}" == "1" ]]; then
   log "waiting for LE staging cert to validate before flipping to prod"
   STAGING_OK=0
@@ -670,10 +700,19 @@ log "kuso is up"
 echo
 echo "  UI:        https://${KUSO_DOMAIN}/"
 echo "  Admin:     admin"
-echo "  Password:  ${ADMIN_PASSWORD}"
-echo
-echo "  CLI login from your workstation:"
-echo "    kuso login --api https://${KUSO_DOMAIN} -u admin -p '${ADMIN_PASSWORD}'"
+if [[ -n "$EXISTING_ADMIN" && "$ADMIN_PASSWORD" == "$EXISTING_ADMIN" ]]; then
+  echo "  Password:  (unchanged — reused from existing kuso-server-secrets)"
+  echo
+  echo "  Forgot the password? Reset it:"
+  echo "    kubectl -n kuso patch secret kuso-server-secrets --type=merge \\"
+  echo "      -p '{\"stringData\":{\"KUSO_ADMIN_PASSWORD\":\"<new>\"}}'"
+  echo "    kubectl -n kuso rollout restart deployment/kuso-server"
+else
+  echo "  Password:  ${ADMIN_PASSWORD}"
+  echo
+  echo "  CLI login from your workstation:"
+  echo "    kuso login --api https://${KUSO_DOMAIN} -u admin -p '${ADMIN_PASSWORD}'"
+fi
 echo
 if [[ "$KUSO_LE_ENV" == "staging" ]]; then
   cat <<EOF

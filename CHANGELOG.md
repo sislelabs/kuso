@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.49] — 2026-05-05
+
+### ✨ Features
+- Feat(domains): end-to-end custom domain support ([570037c](https://github.com/sislelabs/kuso/commit/570037ce3985f2c49dc9211984efe72204f3c06f))
+
 ## [0.7.48] — 2026-05-05
 
 ### 🐛 Bug Fixes
