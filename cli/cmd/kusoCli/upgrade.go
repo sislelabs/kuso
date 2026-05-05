@@ -16,6 +16,7 @@ import (
 
 var (
 	upgradeCheck   bool
+	upgradeRefresh bool
 	upgradeForce   bool
 	upgradeVersion string
 )
@@ -50,8 +51,21 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 		if upgradeVersion != "" && !versionRe.MatchString(upgradeVersion) {
 			return fmt.Errorf("--version must look like vX.Y.Z (got %q)", upgradeVersion)
 		}
-		// Step 1: read current state.
-		resp, err := api.RawGet("/api/system/version")
+		// Step 1: read current state. --refresh forces a synchronous
+		// GitHub poll (POST /version/refresh) instead of returning
+		// the cached value, which can be up to 6h stale on long-
+		// running instances. Useful right after `make ship` when the
+		// user wants the cluster to see the new release immediately.
+		var resp interface {
+			StatusCode() int
+			Body() []byte
+		}
+		var err error
+		if upgradeRefresh {
+			resp, err = api.RawPost("/api/system/version/refresh", nil, "application/json")
+		} else {
+			resp, err = api.RawGet("/api/system/version")
+		}
 		if err != nil {
 			return err
 		}
@@ -153,6 +167,7 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 func init() {
 	rootCmd.AddCommand(upgradeCmd)
 	upgradeCmd.Flags().BoolVar(&upgradeCheck, "check", false, "only print version info, don't upgrade")
+	upgradeCmd.Flags().BoolVar(&upgradeRefresh, "refresh", false, "force a synchronous GitHub poll instead of using the 6h-cached value")
 	upgradeCmd.Flags().BoolVar(&upgradeForce, "force", false, "trigger update even if already current")
 	upgradeCmd.Flags().StringVar(&upgradeVersion, "version", "", "pin to a specific release tag (e.g. v0.7.13)")
 }

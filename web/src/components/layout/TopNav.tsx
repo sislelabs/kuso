@@ -66,9 +66,9 @@ export function TopNav() {
   return (
     <header
       role="navigation"
-      className="sticky top-0 z-40 flex h-12 shrink-0 items-center gap-1.5 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 lg:px-4"
+      className="sticky top-0 z-40 flex h-12 shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 sm:gap-1.5 sm:px-3 lg:px-4"
     >
-      <Link href="/projects" aria-label="Home" className="mr-1.5 flex shrink-0 items-center">
+      <Link href="/projects" aria-label="Home" className="mr-1 flex shrink-0 items-center sm:mr-1.5">
         <Logo />
       </Link>
 
@@ -81,15 +81,19 @@ export function TopNav() {
         </Crumb>
       )}
 
+      {/* Env switcher is redundant on phones — the project canvas
+          already shows the env state per service node, and the
+          drawer eats too much horizontal room next to the picker.
+          Hide on small; bring back at sm. */}
       {currentProject && !settingsCrumbs && (
-        <Crumb>
+        <Crumb className="hidden sm:flex">
           <EnvironmentSwitcher project={currentProject} />
         </Crumb>
       )}
 
       {settingsCrumbs?.map((c, i) => (
         <Fragment key={c.href ?? c.label}>
-          <Crumb>
+          <Crumb className={i === 0 ? "hidden sm:flex" : undefined}>
             {c.href ? (
               <Link
                 href={c.href}
@@ -98,7 +102,7 @@ export function TopNav() {
                 {c.label}
               </Link>
             ) : (
-              <span className="inline-flex h-7 items-center px-2 text-sm font-medium text-[var(--text-primary)]">
+              <span className="inline-flex h-7 items-center px-2 text-sm font-medium text-[var(--text-primary)] truncate max-w-[180px] sm:max-w-none">
                 {c.label}
               </span>
             )}
@@ -109,14 +113,20 @@ export function TopNav() {
 
       <div className="flex-1" />
 
+      {/* Mobile: icon-only Settings to save horizontal pixels. The
+          full-text version returns at sm. ServersPopover renders an
+          icon either way; ThemeToggle is icon-only. */}
       <Link
         href="/settings"
+        aria-label="Settings"
         className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
       >
         <Settings className="h-3.5 w-3.5" />
-        Settings
+        <span className="hidden sm:inline">Settings</span>
       </Link>
-      <ServersPopover />
+      <div className="hidden sm:flex">
+        <ServersPopover />
+      </div>
       <ThemeToggle />
       <NotificationsButton />
       <UserMenu />
@@ -153,12 +163,22 @@ function settingsBreadcrumb(pathname: string): { label: string; href?: string }[
 // Crumb wraps a child with a thin chevron separator on its left.
 // Renders nothing when no children are provided so empty slots don't
 // leave dangling separators.
-function Crumb({ children }: { children: React.ReactNode }) {
+function Crumb({
+  children,
+  className,
+}: {
+  children: React.ReactNode;
+  className?: string;
+}) {
+  // The chevron + child render as a contiguous unit, so a single
+  // wrapping span is necessary when callers need to hide just this
+  // crumb (mobile responsiveness). The original fragment-only
+  // version stripped the className escape hatch.
   return (
-    <>
+    <span className={cn("flex shrink-0 items-center gap-1", className)}>
       <ChevronRight className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]/60" />
       {children}
-    </>
+    </span>
   );
 }
 
@@ -247,19 +267,49 @@ function EnvironmentSwitcher({ project }: { project: string }) {
   const [open, setOpen] = useState(false);
   const [showNewEnv, setShowNewEnv] = useState(false);
 
-  // Unique env names, production first, previews after sorted by PR
-  // number desc.
-  const envs = useMemo(() => {
+  // Dedupe by env kind/name. The env list returned by the project
+  // describe endpoint has one CR per service per env (kuso-demo-
+  // todo-api-production, kuso-demo-todo-web-production, etc.) but
+  // the user thinks of "production" as a single project-wide thing.
+  // Collapse them: one row per unique env name. Production is always
+  // collapsed to a single "production" row; previews are collapsed
+  // by PR number so an N-service preview-pr-7 shows as one row, not
+  // N rows of "kuso-demo-todo-api-pr-7", "kuso-demo-todo-web-pr-7",
+  // etc. Without this, projects with many services made the dropdown
+  // unreadable (see issue: "why 2 envs?" — bug was the picker
+  // listing every service's prod env separately).
+  type EnvRow = {
+    name: string; // "production" | "pr-7" | ...
+    kind: "production" | "preview";
+    prNumber?: number;
+  };
+  const envs = useMemo<EnvRow[]>(() => {
     const list = data.data?.environments ?? [];
-    const prod = list.filter((e) => e.spec.kind === "production");
-    const previews = list
-      .filter((e) => e.spec.kind === "preview")
-      .sort((a, b) => (b.spec.pullRequest?.number ?? 0) - (a.spec.pullRequest?.number ?? 0));
-    return [...prod, ...previews];
+    const seen = new Map<string, EnvRow>();
+    list.forEach((e) => {
+      if (e.spec.kind === "production") {
+        if (!seen.has("production")) {
+          seen.set("production", { name: "production", kind: "production" });
+        }
+        return;
+      }
+      if (e.spec.kind === "preview") {
+        const pr = e.spec.pullRequest?.number;
+        const name = pr ? `pr-${pr}` : `preview-${e.metadata.name}`;
+        if (!seen.has(name)) {
+          seen.set(name, { name, kind: "preview", prNumber: pr });
+        }
+      }
+    });
+    const rows = [...seen.values()];
+    rows.sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === "production" ? -1 : 1;
+      return (b.prNumber ?? 0) - (a.prNumber ?? 0);
+    });
+    return rows;
   }, [data.data]);
 
   const currentEnv = search?.get("env") ?? "production";
-  const labelFor = (envName: string) => envName.replace(/^.*?-/, "");
 
   const setEnv = (name: string) => {
     const next = new URLSearchParams(search?.toString() ?? "");
@@ -287,30 +337,36 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                 className="px-0 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-[var(--text-tertiary)]"
               >
                 {envs.map((e) => {
-                  const short = labelFor(e.metadata.name);
-                  const active = (currentEnv === "production" && e.spec.kind === "production") || currentEnv === short;
+                  const active = currentEnv === e.name;
                   return (
                     <CommandItem
-                      key={e.metadata.uid ?? e.metadata.name}
-                      value={short}
-                      onSelect={() => setEnv(e.spec.kind === "production" ? "production" : short)}
+                      key={e.name}
+                      value={e.name}
+                      onSelect={() => setEnv(e.name)}
                       className="px-2 py-1.5"
                     >
                       <span
                         className={cn(
                           "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-                          e.spec.kind === "production"
+                          e.kind === "production"
                             ? "bg-emerald-400"
-                            : "bg-amber-400"
+                            : "bg-amber-400",
                         )}
                       />
-                      <span className="truncate font-mono text-[12px]">{short}</span>
-                      {e.spec.kind === "preview" && (
+                      <span className="truncate font-mono text-[12px]">{e.name}</span>
+                      {e.kind === "preview" && (
                         <span className="ml-auto rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
                           preview
                         </span>
                       )}
-                      {active && <Check className={cn("h-3 w-3 text-[var(--accent)]", e.spec.kind === "production" ? "ml-auto" : "ml-1")} />}
+                      {active && (
+                        <Check
+                          className={cn(
+                            "h-3 w-3 text-[var(--accent)]",
+                            e.kind === "production" ? "ml-auto" : "ml-1",
+                          )}
+                        />
+                      )}
                     </CommandItem>
                   );
                 })}

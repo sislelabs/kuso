@@ -217,8 +217,29 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
 
   return (
     <div className="relative">
-      <div className="grid grid-cols-[1fr_180px] gap-0 pb-20">
-        <div className="space-y-8 px-6 py-6">
+      {/* On md+ the layout is a 2-col grid with a sticky sidebar
+          jump-nav. On smaller screens the sidebar would steal half
+          the width from the actual form, so we collapse to a single
+          column + a horizontal-scroll chip strip pinned to the top.
+          That keeps the section anchors discoverable on phones
+          without crowding the inputs. */}
+      <nav className="sticky top-0 z-10 -mx-px flex gap-1 overflow-x-auto border-b border-[var(--border-subtle)] bg-[var(--bg-primary)]/95 px-3 py-2 text-xs backdrop-blur md:hidden">
+        {SECTIONS.map((s) => (
+          <a
+            key={s.id}
+            href={`#${s.id}`}
+            className={cn(
+              "inline-flex shrink-0 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 text-[var(--text-tertiary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]",
+              s.id === "danger" && "text-red-400/70 hover:text-red-400",
+            )}
+          >
+            <s.icon className="h-3 w-3" />
+            {s.label}
+          </a>
+        ))}
+      </nav>
+      <div className="grid grid-cols-1 gap-0 pb-24 md:grid-cols-[1fr_180px]">
+        <div className="space-y-8 px-4 py-4 md:px-6 md:py-6">
           <SourceSection state={state} setState={setState} project={project} service={service} />
           <NetworkingSection state={state} setState={setState} />
           <ScaleSection state={state} setState={setState} />
@@ -229,7 +250,7 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
           <DangerSection project={project} service={service} />
         </div>
 
-        <nav className="sticky top-0 self-start px-4 py-6 text-sm">
+        <nav className="sticky top-0 hidden self-start px-4 py-6 text-sm md:block">
           <ul className="space-y-2">
             {SECTIONS.map((s) => (
               <li key={s.id}>

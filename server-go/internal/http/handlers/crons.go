@@ -33,6 +33,7 @@ func (h *CronsHandler) Mount(r chi.Router) {
 	// don't belong to any service. Drive from the canvas right-click
 	// "Add cron" and from the project Crons tab (also project-level).
 	r.Post("/api/projects/{project}/crons", h.AddProject)
+	r.Patch("/api/projects/{project}/crons/{name}", h.UpdateProject)
 	r.Delete("/api/projects/{project}/crons/{name}", h.DeleteProject)
 	// Per-service surface.
 	r.Get("/api/projects/{project}/services/{service}/crons", h.List)
@@ -63,6 +64,29 @@ func (h *CronsHandler) AddProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, out)
+}
+
+// UpdateProject patches a project-scoped cron. Service-attached
+// crons go through the per-service Update at the older route.
+func (h *CronsHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := cronsCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	name := chi.URLParam(r, "name")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+		return
+	}
+	var req crons.UpdateProjectCronRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	out, err := h.Svc.UpdateProject(ctx, project, name, req)
+	if err != nil {
+		h.fail(w, "update project cron", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // DeleteProject removes a project-scoped cron. Service-attached crons

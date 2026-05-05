@@ -82,6 +82,7 @@ var (
 	projectUpdateInstallReset  bool
 	projectUpdatePreviews      string // "on" | "off" | "" (leave alone)
 	projectUpdatePreviewsTTL   int
+	projectUpdateAlwaysOn      string // "on" | "off" | "" (leave alone)
 )
 
 var projectUpdateCmd = &cobra.Command{
@@ -141,6 +142,16 @@ installation use --github-installation-clear (sets installationId to 0).`,
 				pv.TTLDays = kusoApi.IntPtr(projectUpdatePreviewsTTL)
 			}
 			req.Previews = pv
+		}
+		if cmd.Flags().Changed("always-on") {
+			switch projectUpdateAlwaysOn {
+			case "on", "true", "yes":
+				req.AlwaysOn = kusoApi.BoolPtr(true)
+			case "off", "false", "no":
+				req.AlwaysOn = kusoApi.BoolPtr(false)
+			default:
+				return fmt.Errorf("--always-on must be on|off (got %q)", projectUpdateAlwaysOn)
+			}
 		}
 		resp, err := api.UpdateProject(args[0], req)
 		if err != nil {
@@ -368,6 +379,91 @@ resource names are immutable, so the operation has real cost:
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Printf("service renamed: %s/%s → %s/%s\n", project, oldName, project, newName)
+		return nil
+	},
+}
+
+// ---------------- project service set ----------------
+
+var (
+	serviceSetDisplayName string
+	serviceSetPort        int32
+	serviceSetRuntime     string
+	serviceSetDomains     string // comma- or newline-separated host list
+	serviceSetInternal    string // "on" | "off" | "" (leave alone)
+)
+
+var serviceSetCmd = &cobra.Command{
+	Use:   "set <project> <service>",
+	Short: "Edit a service's spec (display name / port / runtime / domains / visibility)",
+	Long: `Patch fields on an existing service. Only the flags you pass are
+changed; everything else is left as-is. Mirrors the UI's
+Settings → Source / Networking flow.
+
+  --display-name "Todo API"     # canvas + overlay label
+  --port 8080                   # container port
+  --runtime nixpacks            # build runtime
+  --domains api.example.com,alt.example.com  # custom domains (replaces list)
+  --internal=on                 # skip public Ingress (in-cluster only)
+  --internal=off                # re-expose publicly`,
+	Example: `  kuso project service set hui kuso-demo-todo-web --display-name "Todo Web"
+  kuso project service set hui kuso-demo-todo-api --port 8080
+  kuso project service set hui worker --internal=on
+  kuso project service set hui kuso-demo-todo-web --domains mudo.sislelabs.com`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		req := kusoApi.PatchServiceRequest{}
+		if cmd.Flags().Changed("display-name") {
+			v := serviceSetDisplayName
+			req.DisplayName = &v
+		}
+		if cmd.Flags().Changed("port") {
+			v := serviceSetPort
+			req.Port = &v
+		}
+		if cmd.Flags().Changed("runtime") {
+			v := serviceSetRuntime
+			req.Runtime = &v
+		}
+		if cmd.Flags().Changed("domains") {
+			// Split on comma OR whitespace so the user can paste either
+			// "a.com,b.com" or "a.com b.com" or a newline-separated
+			// list. Empty entries are dropped.
+			parts := strings.FieldsFunc(serviceSetDomains, func(r rune) bool {
+				return r == ',' || r == ' ' || r == '\n' || r == '\t'
+			})
+			doms := make([]kusoApi.PatchServiceDomain, 0, len(parts))
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p == "" {
+					continue
+				}
+				doms = append(doms, kusoApi.PatchServiceDomain{Host: p, TLS: true})
+			}
+			// Empty list = clear all custom domains; non-empty = replace.
+			req.Domains = &doms
+		}
+		if cmd.Flags().Changed("internal") {
+			switch serviceSetInternal {
+			case "on", "true", "yes":
+				req.Internal = kusoApi.BoolPtr(true)
+			case "off", "false", "no":
+				req.Internal = kusoApi.BoolPtr(false)
+			default:
+				return fmt.Errorf("--internal must be on|off (got %q)", serviceSetInternal)
+			}
+		}
+		resp, err := api.PatchService(args[0], args[1], req)
+		if err != nil {
+			return fmt.Errorf("patch service: %w", err)
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("service %s/%s updated\n", args[0], args[1])
 		return nil
 	},
 }
@@ -721,6 +817,7 @@ func init() {
 	projectUpdateCmd.Flags().BoolVar(&projectUpdateInstallReset, "github-installation-clear", false, "detach the project from any GitHub App installation")
 	projectUpdateCmd.Flags().StringVar(&projectUpdatePreviews, "previews", "", "enable/disable preview envs (on|off)")
 	projectUpdateCmd.Flags().IntVar(&projectUpdatePreviewsTTL, "previews-ttl", 0, "preview env TTL in days")
+	projectUpdateCmd.Flags().StringVar(&projectUpdateAlwaysOn, "always-on", "", "force every service to never scale to zero (on|off)")
 	projectCmd.AddCommand(projectDescribeCmd)
 	projectDescribeCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 
@@ -733,6 +830,12 @@ func init() {
 	serviceDeleteCmd.Flags().BoolVarP(&serviceDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	projectServiceCmd.AddCommand(serviceRenameCmd)
 	serviceRenameCmd.Flags().BoolVarP(&serviceRenameYes, "yes", "y", false, "skip the confirmation prompt")
+	projectServiceCmd.AddCommand(serviceSetCmd)
+	serviceSetCmd.Flags().StringVar(&serviceSetDisplayName, "display-name", "", "free-form label shown on the canvas + overlay header")
+	serviceSetCmd.Flags().Int32Var(&serviceSetPort, "port", 8080, "container port")
+	serviceSetCmd.Flags().StringVar(&serviceSetRuntime, "runtime", "", "build runtime (dockerfile|nixpacks|buildpacks|static|worker)")
+	serviceSetCmd.Flags().StringVar(&serviceSetDomains, "domains", "", "comma- or space-separated custom domains (replaces list; empty clears)")
+	serviceSetCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
 
 	projectCmd.AddCommand(projectAddonCmd)
 	projectAddonCmd.AddCommand(addonAddCmd)
@@ -773,4 +876,26 @@ func init() {
 	serviceAddTopCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static — nixpacks auto-detects most languages with zero config")
 	serviceAddTopCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
+	// Top-level alias `kuso service set` mirrors the long form. Cobra
+	// commands can't have two parents, so we mint a fresh shell and
+	// dispatch to the same RunE + share the flag vars (already
+	// package-level globals).
+	serviceCmd.AddCommand(serviceSetTopCmd)
+	serviceSetTopCmd.Flags().StringVar(&serviceSetDisplayName, "display-name", "", "free-form label shown on the canvas + overlay header")
+	serviceSetTopCmd.Flags().Int32Var(&serviceSetPort, "port", 8080, "container port")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetRuntime, "runtime", "", "build runtime (dockerfile|nixpacks|buildpacks|static|worker)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetDomains, "domains", "", "comma- or space-separated custom domains (replaces list; empty clears)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
+}
+
+// serviceSetTopCmd is the top-level `kuso service set` shell. Same
+// RunE as serviceSetCmd because the long form (`kuso project service
+// set`) and the short form should behave identically — defining the
+// dispatcher once in a shared closure keeps that promise enforced
+// instead of relying on us remembering to keep two RunE's in sync.
+var serviceSetTopCmd = &cobra.Command{
+	Use:   "set <project> <service>",
+	Short: "Edit a service's spec (alias for `kuso project service set`)",
+	Args:  cobra.ExactArgs(2),
+	RunE:  func(cmd *cobra.Command, args []string) error { return serviceSetCmd.RunE(cmd, args) },
 }

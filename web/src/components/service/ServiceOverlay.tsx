@@ -113,10 +113,11 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
             animate={{ x: 0 }}
             exit={{ x: "100%" }}
             transition={{ type: "spring", stiffness: 320, damping: 34, mass: 0.8 }}
-            className="relative z-10 ml-auto flex h-full w-full max-w-3xl flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] border-l border-[var(--border-subtle)]"
+            className="relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] border-l border-[var(--border-subtle)] sm:max-w-3xl"
           >
-            {/* Sticky header */}
-            <header className="flex shrink-0 items-start gap-3 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-5 py-4">
+            {/* Sticky header. Tighter padding on small screens so the
+                overlay's title row uses the full width of a phone. */}
+            <header className="flex shrink-0 items-start gap-2 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-3 sm:gap-3 sm:px-5 sm:py-4">
               <span className="mt-0.5 inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--text-primary)]">
                 <RuntimeIcon runtime={svc.data?.spec.runtime} />
               </span>
@@ -158,8 +159,11 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
               </button>
             </header>
 
-            {/* Tab strip with sliding indicator */}
-            <nav className="flex shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] px-3">
+            {/* Tab strip with sliding indicator. Horizontal scroll
+                on small screens so all tabs stay reachable on a
+                phone instead of getting cropped under the close
+                button. */}
+            <nav className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--border-subtle)] px-2 sm:px-3">
               {TABS.map((t) => {
                 const active = t.id === tab;
                 return (

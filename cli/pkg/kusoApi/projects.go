@@ -46,6 +46,9 @@ type UpdateProjectRequest struct {
 		Enabled *bool `json:"enabled,omitempty"`
 		TTLDays *int  `json:"ttlDays,omitempty"`
 	} `json:"previews,omitempty"`
+	// AlwaysOn=true overrides every per-service sleep config so all
+	// services in this project run with scale-to-zero disabled.
+	AlwaysOn *bool `json:"alwaysOn,omitempty"`
 }
 
 func BoolPtr(b bool) *bool       { return &b }
@@ -141,6 +144,34 @@ func (k *KusoClient) DeleteService(project, service string) (*resty.Response, er
 	return k.client.Delete("/api/projects/" + project + "/services/" + service)
 }
 
+// PatchServiceDomain mirrors the server's ServiceDomain shape on the
+// PATCH path. Kept inline here so the CLI doesn't have to import the
+// server types — the server is permissive about extra fields, so an
+// older CLI talking to a newer server still works.
+type PatchServiceDomain struct {
+	Host string `json:"host"`
+	TLS  bool   `json:"tls"`
+}
+
+// PatchServiceRequest is the partial-update body for PATCH /api/
+// projects/{p}/services/{s}. Pointer fields distinguish "leave alone"
+// from "set to zero". Only fields the CLI actually edits are listed
+// — placement / volumes / scale stay UI-only for now.
+type PatchServiceRequest struct {
+	DisplayName *string              `json:"displayName,omitempty"`
+	Port        *int32               `json:"port,omitempty"`
+	Runtime     *string              `json:"runtime,omitempty"`
+	Domains     *[]PatchServiceDomain `json:"domains,omitempty"`
+	Internal    *bool                `json:"internal,omitempty"`
+}
+
+// PatchService applies a partial update to a service spec. Mirrors
+// the UI's Settings → Save flow.
+func (k *KusoClient) PatchService(project, service string, req PatchServiceRequest) (*resty.Response, error) {
+	k.client.SetBody(req)
+	return k.client.Patch("/api/projects/" + project + "/services/" + service)
+}
+
 // Environments
 
 func (k *KusoClient) GetEnvironments(project string) (*resty.Response, error) {
@@ -168,6 +199,35 @@ func (k *KusoClient) AddAddon(project string, req CreateAddonRequest) (*resty.Re
 
 func (k *KusoClient) DeleteAddon(project, addon string) (*resty.Response, error) {
 	return k.client.Delete("/api/projects/" + project + "/addons/" + addon)
+}
+
+// UpdateAddonBackup is the partial-update body for an addon's backup
+// schedule. Mirrors the server's UpdateBackupPatch — pointer fields
+// distinguish "leave alone" from "set". Schedule="" disables the
+// cronjob entirely (chart drops the resource).
+type UpdateAddonBackup struct {
+	Schedule      *string `json:"schedule,omitempty"`
+	RetentionDays *int    `json:"retentionDays,omitempty"`
+}
+
+// UpdateAddonRequest mirrors the server's partial-update body. Same
+// pointer-field convention. Only the knobs the CLI actually edits
+// today (size, version, HA, storageSize, database, backup) are
+// listed; the chart accepts more fields server-side.
+type UpdateAddonRequest struct {
+	Version     *string             `json:"version,omitempty"`
+	Size        *string             `json:"size,omitempty"`
+	HA          *bool               `json:"ha,omitempty"`
+	StorageSize *string             `json:"storageSize,omitempty"`
+	Database    *string             `json:"database,omitempty"`
+	Backup      *UpdateAddonBackup  `json:"backup,omitempty"`
+}
+
+// UpdateAddon PATCHes an addon's spec. Used by `kuso addon-backup
+// schedule` to enable / change / disable the per-addon CronJob.
+func (k *KusoClient) UpdateAddon(project, addon string, req UpdateAddonRequest) (*resty.Response, error) {
+	k.client.SetBody(req)
+	return k.client.Patch("/api/projects/" + project + "/addons/" + addon)
 }
 
 // ResyncExternalAddon re-mirrors an external addon's source Secret

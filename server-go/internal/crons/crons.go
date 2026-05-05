@@ -104,6 +104,21 @@ type UpdateCronRequest struct {
 	ActiveDeadlineSeconds *int     `json:"activeDeadlineSeconds,omitempty"`
 }
 
+// UpdateProjectCronRequest covers the kind=http and kind=command
+// edit paths the canvas overlay surfaces. Service-attached crons
+// stay on the per-service Update endpoint (which knows how to
+// re-resolve image + envFromSecrets from the parent service env).
+type UpdateProjectCronRequest struct {
+	DisplayName           *string         `json:"displayName,omitempty"`
+	Schedule              *string         `json:"schedule,omitempty"`
+	Suspend               *bool           `json:"suspend,omitempty"`
+	URL                   *string         `json:"url,omitempty"`
+	Image                 *kube.KusoImage `json:"image,omitempty"`
+	Command               []string        `json:"command,omitempty"`
+	ConcurrencyPolicy     *string         `json:"concurrencyPolicy,omitempty"`
+	ActiveDeadlineSeconds *int            `json:"activeDeadlineSeconds,omitempty"`
+}
+
 // 5-field cron expression: m h dom mon dow. Plus the * / , - / ranges
 // + step syntax. We don't accept the optional seconds field or @hourly
 // macros — kube CronJob takes the standard form, anything else is a
@@ -404,6 +419,59 @@ func (s *Service) Delete(ctx context.Context, project, service, name string) err
 		return fmt.Errorf("delete cron: %w", err)
 	}
 	return nil
+}
+
+// UpdateProject patches a project-scoped (kind=http / kind=command)
+// cron. Mirrors the per-service Update flow but reads/writes the CR
+// at "<project>-<name>" (no service segment in the name) and lets
+// the caller change kind-specific fields like URL or image.
+func (s *Service) UpdateProject(ctx context.Context, project, name string, req UpdateProjectCronRequest) (*kube.KusoCron, error) {
+	ns := s.nsFor(ctx, project)
+	fqn := project + "-" + name
+	cr, err := s.Kube.GetKusoCron(ctx, ns, fqn)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
+		}
+		return nil, fmt.Errorf("get cron: %w", err)
+	}
+	if req.Schedule != nil {
+		if err := validateSchedule(*req.Schedule); err != nil {
+			return nil, err
+		}
+		cr.Spec.Schedule = *req.Schedule
+	}
+	if req.DisplayName != nil {
+		cr.Spec.DisplayName = strings.TrimSpace(*req.DisplayName)
+	}
+	if req.Suspend != nil {
+		cr.Spec.Suspend = *req.Suspend
+	}
+	if req.URL != nil {
+		cr.Spec.URL = strings.TrimSpace(*req.URL)
+	}
+	if req.Image != nil {
+		cr.Spec.Image = req.Image
+	}
+	if req.Command != nil {
+		cr.Spec.Command = req.Command
+	}
+	if req.ConcurrencyPolicy != nil {
+		switch *req.ConcurrencyPolicy {
+		case "Allow", "Forbid", "Replace":
+			cr.Spec.ConcurrencyPolicy = *req.ConcurrencyPolicy
+		default:
+			return nil, fmt.Errorf("%w: concurrencyPolicy must be Allow|Forbid|Replace", ErrInvalid)
+		}
+	}
+	if req.ActiveDeadlineSeconds != nil {
+		cr.Spec.ActiveDeadlineSeconds = *req.ActiveDeadlineSeconds
+	}
+	updated, err := s.Kube.UpdateKusoCron(ctx, ns, cr)
+	if err != nil {
+		return nil, fmt.Errorf("update project cron: %w", err)
+	}
+	return updated, nil
 }
 
 // DeleteProject removes a project-scoped cron. CR name is

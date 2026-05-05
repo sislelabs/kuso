@@ -41,6 +41,7 @@ import { planConnection } from "./connect";
 import { servicesQueryKey } from "@/features/projects";
 import { AddAddonDialog } from "@/components/addon/AddAddonDialog";
 import { AddCronDialog } from "@/components/cron/AddCronDialog";
+import { EditCronDialog } from "@/components/cron/EditCronDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { serviceShortName } from "@/lib/utils";
 import { useTriggerBuild } from "@/features/services";
@@ -301,6 +302,11 @@ export function ProjectCanvas({
   // up to the page view.
   const [showAddAddon, setShowAddAddon] = useState(false);
   const [showAddCron, setShowAddCron] = useState(false);
+  // Selected cron for the edit overlay. null = no overlay open.
+  // Stored as the FQ name + spec snapshot so the overlay survives a
+  // background refetch (we re-resolve from the live list on each
+  // render so edits show through).
+  const [editCronName, setEditCronName] = useState<string | null>(null);
   // Pending delete-confirm. Set when the user picks "Delete service"
   // from the right-click menu; the ConfirmDialog renders below; on
   // confirm we run the API + optimistically yank the node out of
@@ -417,6 +423,12 @@ export function ProjectCanvas({
     } else if (node.type === "addon" && onSelectAddon) {
       const data = node.data as AddonNodeData;
       onSelectAddon(data.addon.metadata.name);
+    } else if (node.type === "cron") {
+      // Cron click opens the inline edit overlay. We pass the CR
+      // name through state and re-resolve from allCrons on render
+      // so the overlay reflects any background refetch.
+      const data = node.data as unknown as CronNodeData;
+      setEditCronName(data.cron.metadata.name);
     }
   };
 
@@ -696,6 +708,16 @@ export function ProjectCanvas({
         project={project}
         open={showAddCron}
         onClose={() => setShowAddCron(false)}
+      />
+
+      <EditCronDialog
+        project={project}
+        cron={
+          editCronName
+            ? (allCrons.data ?? []).find((c) => c.metadata.name === editCronName) ?? null
+            : null
+        }
+        onClose={() => setEditCronName(null)}
       />
 
       <ConfirmDialog
