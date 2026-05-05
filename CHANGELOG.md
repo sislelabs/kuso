@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.8.0] — 2026-05-05
+
+### ✨ Features
+- Feat: cron canvas node + friendly schedule picker + MinIO addon ([b80665c](https://github.com/sislelabs/kuso/commit/b80665cd387f417846520f29db7ae6c5561e2df4))
+
 ## [0.7.56] — 2026-05-05
 
 ### ✨ Features
