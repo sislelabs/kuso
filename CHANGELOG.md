@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.8.4] — 2026-05-05
+
+### 🐛 Bug Fixes
+- Fix(cleanup): skip pods+jobs owned by KusoBuild CRDs ([e05c772](https://github.com/sislelabs/kuso/commit/e05c772da114835242c237494cb3624cc7b6d664))
+
 ## [0.8.3] — 2026-05-05
 
 ### ✨ Features
