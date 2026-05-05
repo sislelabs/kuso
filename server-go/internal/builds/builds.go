@@ -22,6 +22,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -755,6 +756,20 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	if err := s.ensureCloneTokenSecret(ctx, ns, buildName, installationID); err != nil {
 		return nil, fmt.Errorf("clone token secret: %w", err)
 	}
+	// Ensure the per-service build cache PVC exists. Kept best-effort:
+	// the kusobuild chart's cache mount is gated on .Values.cache.enabled
+	// (set true when the PVC name is non-empty). If the PVC create
+	// fails for any reason, we proceed without caching — the build is
+	// slower but still correct.
+	cachePVC := ""
+	if !queued && !buildCacheDisabled(proj) {
+		// Only ensure the PVC for the build that will actually run.
+		// Queued CRs don't render Jobs, and the PVC is only consumed
+		// at Job render time anyway. The dispatcher promote path
+		// re-runs ensure when it patches in spec.image (so a queued
+		// CR promoted later still gets the cache).
+		cachePVC = s.ensureBuildCachePVC(ctx, ns, fqn, svcCR, 5)
+	}
 
 	labels := map[string]string{
 		"kuso.sislelabs.com/project":   project,
@@ -802,6 +817,9 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	}
 	if !queued {
 		spec.Image = &kube.KusoImage{Repository: imageRepo, Tag: ImageTag(sha)}
+	}
+	if cachePVC != "" {
+		spec.Cache = &kube.KusoBuildCache{PVCName: cachePVC}
 	}
 	// Note: when queued, spec.Image is intentionally nil. The kusobuild
 	// chart's job.yaml gates Job rendering on `.Values.image.tag` —
@@ -915,6 +933,71 @@ func (s *Service) ensureCloneTokenSecret(ctx context.Context, ns, buildName stri
 	return err
 }
 
+// ensureBuildCachePVC upserts a PVC named <fqn>-build-cache in the
+// project's namespace. Each build mounts it at /cache and uses
+// /cache/nix as the persistent nix store + /cache/deps as the
+// per-language dep cache root. Owned by the KusoService so it
+// cascade-deletes when the service is deleted.
+//
+// Idempotent: returns nil if the PVC already exists. Size is fixed
+// at first creation; resizing later requires either kube's volume-
+// resize feature flag (which most installs don't have) or manual PV
+// recreation.
+//
+// Best-effort: on any kube error we return nil and log a warn —
+// the build still runs without the cache (just slower). The cache
+// is a perf optimisation, not a correctness requirement, so we
+// never fail the build for a PVC create issue.
+func (s *Service) ensureBuildCachePVC(ctx context.Context, ns, fqn string, svcCR *kube.KusoService, sizeGi int) string {
+	if s.Kube == nil {
+		return ""
+	}
+	pvcName := fqn + "-build-cache"
+	if sizeGi <= 0 {
+		sizeGi = 5
+	}
+	// OwnerReference back to the KusoService — cascade-delete when
+	// the user removes the service.
+	owners := []metav1.OwnerReference{}
+	if svcCR != nil && svcCR.UID != "" {
+		owners = append(owners, metav1.OwnerReference{
+			APIVersion: "application.kuso.sislelabs.com/v1alpha1",
+			Kind:       "KusoService",
+			Name:       svcCR.Name,
+			UID:        svcCR.UID,
+		})
+	}
+	pvc := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            pvcName,
+			Namespace:       ns,
+			OwnerReferences: owners,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "kuso-server",
+				"kuso.sislelabs.com/service":   fqn,
+				"kuso.sislelabs.com/role":      "build-cache",
+			},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(fmt.Sprintf("%dGi", sizeGi)),
+				},
+			},
+		},
+	}
+	_, err := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Create(ctx, pvc, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		return pvcName
+	}
+	if err != nil {
+		slog.Default().Warn("ensureBuildCachePVC", "ns", ns, "name", pvcName, "err", err)
+		return ""
+	}
+	return pvcName
+}
+
 // ImageTag returns the canonical image tag for a ref: 12-char SHA prefix
 // for full SHAs, otherwise the ref verbatim. Exported for the GitHub
 // webhook handler in Phase 6.
@@ -954,6 +1037,19 @@ func shortRef(ref string) string {
 		out = out[:max]
 	}
 	return strings.Trim(string(out), "-")
+}
+
+// buildCacheDisabled reads the per-project escape hatch annotation.
+// Set kuso.sislelabs.com/build-cache-disabled=true on a KusoProject
+// to skip the persistent build cache for every service in that
+// project. Useful when a corrupted PVC is causing build failures —
+// users can flip the annotation, the next build runs cold, and they
+// can delete the broken PVC by hand.
+func buildCacheDisabled(proj *kube.KusoProject) bool {
+	if proj == nil || proj.Annotations == nil {
+		return false
+	}
+	return proj.Annotations["kuso.sislelabs.com/build-cache-disabled"] == "true"
 }
 
 func githubInstallationID(proj *kube.KusoProject) int64 {
@@ -1151,9 +1247,31 @@ func (p *Poller) dispatchQueued(ctx context.Context, ns string) {
 		// service short name + the Ref's image tag.
 		shortName := strings.TrimPrefix(fqn, project+"-")
 		imageRepo := fmt.Sprintf("%s/%s/%s", RegistryHost, project, shortName)
+		// Ensure the build cache PVC exists at promote time too — if
+		// the queued CR was created during a window where the PVC
+		// briefly didn't exist (or the Create-time ensure failed),
+		// catch it here so the promoted build still gets the cache.
+		// Best-effort; empty pvcName means the chart skips the cache
+		// mount and runs cold.
+		var svcCR *kube.KusoService
+		if s, err := p.Svc.Kube.GetKusoService(ctx, ns, fqn); err == nil {
+			svcCR = s
+		}
+		var projCR *kube.KusoProject
+		if pp, err := p.Svc.Kube.GetKusoProject(ctx, p.Svc.Namespace, project); err == nil {
+			projCR = pp
+		}
+		cachePVC := ""
+		if !buildCacheDisabled(projCR) {
+			cachePVC = p.Svc.ensureBuildCachePVC(ctx, ns, fqn, svcCR, 5)
+		}
+		cachePatch := ""
+		if cachePVC != "" {
+			cachePatch = fmt.Sprintf(`,"cache":{"pvcName":%q}`, cachePVC)
+		}
 		patch := fmt.Sprintf(
-			`{"metadata":{"labels":{"kuso.sislelabs.com/build-state":null},"annotations":{%q:"pending"}},"spec":{"image":{"repository":%q,"tag":%q}}}`,
-			annPhase, imageRepo, ImageTag(next.Spec.Ref),
+			`{"metadata":{"labels":{"kuso.sislelabs.com/build-state":null},"annotations":{%q:"pending"}},"spec":{"image":{"repository":%q,"tag":%q}%s}}`,
+			annPhase, imageRepo, ImageTag(next.Spec.Ref), cachePatch,
 		)
 		if _, perr := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 			Patch(ctx, next.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {

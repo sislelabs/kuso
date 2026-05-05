@@ -23,10 +23,23 @@ repo:
 strategy: dockerfile
 
 nixpacks:
-  # Pin the binary version so builds are reproducible. The init
-  # container downloads this exact tag from
-  # github.com/railwayapp/nixpacks/releases and runs it under alpine.
+  # Pin the binary version so builds are reproducible. The image
+  # tag (kuso-nixpacks:<version>) carries the binary pre-installed
+  # so the init container doesn't curl|tar 30 MB on every build.
   version: "1.41.0"
+  # Override the registry/repo if mirroring kuso-nixpacks privately.
+  # The chart appends ":<version>" automatically.
+  image: "ghcr.io/sislelabs/kuso-nixpacks"
+
+# Persistent build cache. When pvcName is non-empty the chart mounts
+# that PVC at /cache and points each build container's per-language
+# cache dirs (~/.npm, ~/go/pkg/mod, ~/.cache/pip, ~/.cargo, /nix) at
+# subpaths inside /cache. Empty pvcName runs the cold path the
+# pre-v0.8.9 chart used. Server-go provisions the PVC before
+# creating the build CR; on PVC-create failure it leaves the field
+# empty and the build proceeds without caching.
+cache:
+  pvcName: ""
 
 buildpacks:
   # Cloud Native Buildpacks lifecycle image. The `creator` binary lives

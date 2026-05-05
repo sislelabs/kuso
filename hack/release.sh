@@ -326,6 +326,34 @@ if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
   fi
 fi
 
+# ---- 4a2b. nixpacks builder image ----------------------------------
+#
+# Init-container image used by kusobuild Jobs when strategy=nixpacks.
+# Bakes the nixpacks binary so each build doesn't curl|tar 30 MB from
+# GitHub Releases. Tagged with the *nixpacks version* (not the kuso
+# version) so the chart can pin to a specific nixpacks release; the
+# :latest tag is pushed in parallel so a fresh install picks the
+# current one.
+
+NIXPACKS_VERSION="${KUSO_RELEASE_NIXPACKS_VERSION:-1.41.0}"
+NIXPACKS_IMAGE="${KUSO_RELEASE_NIXPACKS_IMAGE:-ghcr.io/sislelabs/kuso-nixpacks}"
+if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
+  log "docker buildx → ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION} (+ :latest)"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "docker buildx build --platform linux/amd64 --push --build-arg NIXPACKS_VERSION=${NIXPACKS_VERSION} -t ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION} -t ${NIXPACKS_IMAGE}:latest -f build/nixpacks/Dockerfile build/nixpacks"
+  else
+    docker buildx build \
+      --platform linux/amd64 \
+      --push \
+      --build-arg "NIXPACKS_VERSION=${NIXPACKS_VERSION}" \
+      -t "${NIXPACKS_IMAGE}:${NIXPACKS_VERSION}" \
+      -t "${NIXPACKS_IMAGE}:latest" \
+      -f build/nixpacks/Dockerfile \
+      build/nixpacks >/dev/null
+    log "nixpacks image pushed: ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION}"
+  fi
+fi
+
 # ---- 4a3. operator image -------------------------------------------
 #
 # Decide what operator image to bake into release.json. Two paths:

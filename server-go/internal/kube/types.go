@@ -392,16 +392,35 @@ type KusoBuild struct {
 }
 
 type KusoBuildSpec struct {
-	Project              string            `json:"project"`
-	Service              string            `json:"service"`
-	Repo                 *KusoRepoRef      `json:"repo,omitempty"`
-	Ref                  string            `json:"ref"`
-	Branch               string            `json:"branch,omitempty"`
-	GithubInstallationID int64             `json:"githubInstallationId,omitempty"`
-	Strategy             string            `json:"strategy,omitempty"`
-	Image                *KusoImage        `json:"image,omitempty"`
-	Static               *KusoStaticSpec   `json:"static,omitempty"`
+	Project              string              `json:"project"`
+	Service              string              `json:"service"`
+	Repo                 *KusoRepoRef        `json:"repo,omitempty"`
+	Ref                  string              `json:"ref"`
+	Branch               string              `json:"branch,omitempty"`
+	GithubInstallationID int64               `json:"githubInstallationId,omitempty"`
+	Strategy             string              `json:"strategy,omitempty"`
+	Image                *KusoImage          `json:"image,omitempty"`
+	Static               *KusoStaticSpec     `json:"static,omitempty"`
 	Buildpacks           *KusoBuildpacksSpec `json:"buildpacks,omitempty"`
+	Cache                *KusoBuildCache     `json:"cache,omitempty"`
+}
+
+// KusoBuildCache toggles the persistent build cache on a per-build
+// basis. When PVCName is non-empty, the kusobuild chart mounts that
+// PVC into the build pod at /cache and the nixpacks-plan / kaniko
+// containers consume:
+//   - /cache/nix       → /nix          (persistent nix store)
+//   - /cache/deps/npm  → ~/.npm
+//   - /cache/deps/go   → ~/go/pkg/mod
+//   - /cache/deps/pip  → ~/.cache/pip
+//   - /cache/deps/cargo → ~/.cargo/registry
+//
+// First build of a service: cold cache, normal speed. Subsequent
+// builds: 2-10× faster because nix derivations + lang deps aren't
+// recomputed. The PVC is owned by the parent KusoService so it
+// cascade-deletes with the service.
+type KusoBuildCache struct {
+	PVCName string `json:"pvcName,omitempty"`
 }
 
 // KusoStaticSpec configures the static-strategy build. All fields are

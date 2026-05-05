@@ -102,6 +102,16 @@ spec:
                       type: string
                     tag:
                       type: string
+                # Persistent build cache. When pvcName is set, the
+                # chart mounts the PVC at /cache and points each
+                # container's per-language cache dirs (~/.npm, /nix,
+                # ~/go/pkg/mod, etc) at subpaths inside it. Server-go
+                # provisions the PVC on Create.
+                cache:
+                  type: object
+                  properties:
+                    pvcName:
+                      type: string
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

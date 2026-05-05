@@ -19,6 +19,27 @@ spec:
     spec:
       restartPolicy: Never
       initContainers:
+        {{- if .Values.cache.pvcName }}
+        # Cache layout. The PVC is mounted at /cache; this init seeds
+        # the subdirs so subsequent containers can mount specific
+        # paths via subPath without "no such file or directory" race.
+        # Idempotent — `mkdir -p` on an existing PVC is a no-op.
+        - name: cache-init
+          image: alpine:3.20
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+              mkdir -p /cache/nix /cache/deps/npm /cache/deps/go-mod \
+                       /cache/deps/go-build /cache/deps/pip \
+                       /cache/deps/cargo /cache/deps/gradle /cache/deps/m2
+              chmod -R 0777 /cache
+              du -sh /cache/* 2>/dev/null || true
+          volumeMounts:
+            - name: cache
+              mountPath: /cache
+        {{- end }}
         - name: clone
           image: alpine/git:2.45.2
           command: ["/bin/sh", "-c"]
@@ -68,16 +89,36 @@ spec:
         # itself so .nixpacks/ lands alongside the repo files (matches
         # `docker build src -f src/.nixpacks/Dockerfile` from upstream
         # docs).
+        #
+        # Image is kuso-nixpacks:<version> — bakes the nixpacks binary
+        # so each build skips the GitHub-Releases curl|tar (~5s + ~30 MB).
         - name: nixpacks-plan
-          image: alpine:3.20
-          command: ["/bin/sh", "-c"]
+          image: {{ printf "%s:%s" (.Values.nixpacks.image | default "ghcr.io/sislelabs/kuso-nixpacks") .Values.nixpacks.version | quote }}
+          command: ["/bin/bash", "-c"]
           args:
             - |
               set -e
-              apk add --no-cache curl tar bash >/dev/null
-              NIXPACKS_VERSION="{{ .Values.nixpacks.version | default "1.41.0" }}"
-              curl -fsSL "https://github.com/railwayapp/nixpacks/releases/download/v${NIXPACKS_VERSION}/nixpacks-v${NIXPACKS_VERSION}-x86_64-unknown-linux-musl.tar.gz" \
-                | tar -xz -C /usr/local/bin nixpacks
+              {{- if .Values.cache.pvcName }}
+              # Persistent nix store. nixpacks/nix-env writes to /nix,
+              # so we point /nix at /cache/nix via a bind-equivalent
+              # symlink. mkdir -p first so the symlink target exists.
+              # This is the single biggest perf win: a warm /nix
+              # skips re-compiling glibc/gcc/the language runtime
+              # every build.
+              mkdir -p /cache/nix
+              if [ ! -L /nix ] && [ ! -d /nix ]; then
+                ln -sf /cache/nix /nix
+              elif [ -d /nix ] && [ ! -L /nix ]; then
+                # /nix exists as a real dir from the base image; rsync
+                # any seed contents into the cache and replace with a
+                # symlink. Most kuso-nixpacks builds won't have a
+                # populated /nix in the base image — this is a safety
+                # net for downstream forks that bake a seed store.
+                cp -an /nix/. /cache/nix/ 2>/dev/null || true
+                rm -rf /nix
+                ln -sf /cache/nix /nix
+              fi
+              {{- end }}
               SRC="/workspace/src/{{ .Values.repo.path | default "." }}"
               cd "$SRC"
 
@@ -93,15 +134,8 @@ spec:
               # That way the user's lockfile / engines field / version
               # file is the source of truth, and nixpacks just
               # provides the host OS layer.
-              #
-              # Supported today (one detector per language). Adding
-              # more is mechanical — read the version, fall through
-              # to a sensible default if absent.
               EXTRA_ENVS=""
               add_env() {
-                # $1: VAR=VALUE pair; appended to a build-time list
-                # used by both the `nixpacks --env` flags and the
-                # post-render Dockerfile patch.
                 EXTRA_ENVS="${EXTRA_ENVS}${EXTRA_ENVS:+ }$1"
                 echo "  + $1"
               }
@@ -109,10 +143,6 @@ spec:
               echo "detecting project toolchain hints"
 
               # ---- Go ----
-              # go.mod lacks a patch number, but Go's auto-fetcher
-              # needs one (go1.24 is not a real release; go1.24.0 is).
-              # Normalize to goX.Y.0+auto so old toolchains can fetch
-              # the right one at build time.
               if [ -f go.mod ]; then
                 MOD_GO=$(awk '/^go [0-9]/ {print $2; exit}' go.mod)
                 if [ -n "$MOD_GO" ]; then
@@ -125,16 +155,10 @@ spec:
               fi
 
               # ---- Node.js ----
-              # .nvmrc is the source of truth when present. Falls back
-              # to package.json's engines.node range. NODE_VERSION is
-              # what nixpacks reads to pick a Node major; we set it
-              # explicitly so the bundled 18 doesn't get used when the
-              # project asks for 22.
               if [ -f .nvmrc ]; then
                 NODE_V=$(tr -d 'v[:space:]' < .nvmrc | head -c 16)
                 [ -n "$NODE_V" ] && add_env "NODE_VERSION=${NODE_V}"
               elif [ -f package.json ]; then
-                # crude-but-effective: pull the major from "engines": { "node": ">=20" } / "20.x"
                 NODE_V=$(grep -oE '"node"[[:space:]]*:[[:space:]]*"[^"]*"' package.json \
                   | head -1 \
                   | grep -oE '[0-9]+(\.[0-9]+)*' | head -1)
@@ -142,8 +166,6 @@ spec:
               fi
 
               # ---- Python ----
-              # .python-version (pyenv standard) wins; pyproject.toml
-              # requires-python like ">=3.12" is the fallback.
               if [ -f .python-version ]; then
                 PY_V=$(head -1 .python-version | tr -d '[:space:]')
                 [ -n "$PY_V" ] && add_env "PYTHON_VERSION=${PY_V}"
@@ -154,7 +176,6 @@ spec:
               fi
 
               # ---- Ruby ----
-              # .ruby-version trumps Gemfile's "ruby '3.x'" line.
               if [ -f .ruby-version ]; then
                 RB_V=$(head -1 .ruby-version | tr -d '[:space:]')
                 [ -n "$RB_V" ] && add_env "RUBY_VERSION=${RB_V}"
@@ -165,19 +186,12 @@ spec:
               fi
 
               # ---- Java ----
-              # JDK version: .sdkmanrc, system.properties (Spring Boot
-              # convention), or the toolchain.jdk in build.gradle.
               if [ -f .sdkmanrc ]; then
                 JV=$(grep -oE 'java=[0-9]+(\.[0-9]+)*' .sdkmanrc | head -1 | cut -d= -f2)
                 [ -n "$JV" ] && add_env "JDK_VERSION=${JV}"
               fi
 
               echo "running nixpacks build --out ."
-              # Compose --env flags from the EXTRA_ENVS list. Each
-              # detected pair becomes one --env argument, so nixpacks
-              # adds the corresponding ARG line to the generated
-              # Dockerfile. The default value comes from the patch
-              # step below — see the comment there.
               NIXPACKS_ENV_FLAGS=""
               for env_pair in $EXTRA_ENVS; do
                 NIXPACKS_ENV_FLAGS="$NIXPACKS_ENV_FLAGS --env $env_pair"
@@ -189,16 +203,12 @@ spec:
               # env vars only resolve when passed via docker
               # --build-arg at runtime. Kaniko doesn't auto-forward
               # our detected values, so we prepend literal ENV
-              # statements right after the FROM line. This bakes the
-              # values in regardless of build-arg plumbing.
+              # statements right after the FROM line.
               ENV_BLOCK=""
               for env_pair in $EXTRA_ENVS; do
                 ENV_BLOCK="${ENV_BLOCK}ENV ${env_pair}\n"
               done
               if [ -n "$ENV_BLOCK" ]; then
-                # Insert ENV block after the first FROM line. Using
-                # awk so we don't have to escape sed regex chars
-                # that may appear in detected values.
                 awk -v block="$ENV_BLOCK" '
                   BEGIN { inserted = 0 }
                   /^FROM / && !inserted { print; printf "%s", block; inserted = 1; next }
@@ -212,6 +222,10 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+            {{- if .Values.cache.pvcName }}
+            - name: cache
+              mountPath: /cache
+            {{- end }}
         {{- end }}
         {{- if eq .Values.strategy "static" }}
         # Static strategy: optionally run a build command, then synthesize
@@ -253,6 +267,13 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+            {{- if .Values.cache.pvcName }}
+            # static-plan benefits from the npm/yarn/pnpm cache for
+            # JS-heavy static sites (next/vite/astro).
+            - name: cache
+              mountPath: /root/.npm
+              subPath: deps/npm
+            {{- end }}
         {{- end }}
       containers:
         {{- if eq .Values.strategy "buildpacks" }}
@@ -263,23 +284,17 @@ spec:
         # contract of the lifecycle image.
         - name: buildpacks
           image: {{ .Values.buildpacks.lifecycleImage | default "buildpacksio/lifecycle:0.20.5" | quote }}
-          # creator needs writable /layers (its working area) and access
-          # to the source under /workspace.
           command:
             - /cnb/lifecycle/creator
             - -app=/workspace/src/{{ .Values.repo.path | default "." }}
             - -log-level=info
             - -no-color
-            # Skip TLS for the in-cluster registry; same trick as kaniko.
             - -skip-restore
             - {{ printf "%s:%s" .Values.image.repository .Values.image.tag | quote }}
           env:
             - name: CNB_BUILDER_IMAGE
               value: {{ .Values.buildpacks.builderImage | default "paketobuildpacks/builder-jammy-base:latest" | quote }}
             - name: CNB_REGISTRY_AUTH
-              # Empty creds + insecure HTTP via plaintext is enough for
-              # our in-cluster registry. Production registries need a
-              # docker-config Secret mounted at /home/cnb/.docker/config.json.
               value: '{"{{ index (split ":" .Values.image.repository) "_0" }}":{"username":"","password":""}}'
           securityContext:
             runAsUser: 1000
@@ -289,7 +304,7 @@ spec:
               mountPath: /workspace
             - name: layers
               mountPath: /layers
-            - name: cache
+            - name: cnb-cache
               mountPath: /cache
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
@@ -316,16 +331,67 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+            {{- if and (eq .Values.strategy "nixpacks") .Values.cache.pvcName }}
+            # Symlink /nix → /cache/nix so the kaniko snapshot of the
+            # nixpacks-generated image's RUN steps reads from the
+            # warm store. nixpacks-plan symlinked it for its own
+            # process; kaniko runs in a fresh container so we
+            # symlink again here.
+            - name: cache
+              mountPath: /cache
+            {{- end }}
+            {{- if .Values.cache.pvcName }}
+            # Per-language dep caches — exposed via subPath so each
+            # mount is a clean dir from the user's perspective. The
+            # Dockerfile RUN stages typically write to ~/.npm,
+            # ~/go/pkg/mod, etc.; with these subPaths backed by the
+            # PVC, a `npm ci` on the second build hits the local
+            # cache instead of npmjs.com.
+            - name: cache
+              mountPath: /root/.npm
+              subPath: deps/npm
+            - name: cache
+              mountPath: /root/go/pkg/mod
+              subPath: deps/go-mod
+            - name: cache
+              mountPath: /root/.cache/go-build
+              subPath: deps/go-build
+            - name: cache
+              mountPath: /root/.cache/pip
+              subPath: deps/pip
+            - name: cache
+              mountPath: /root/.cargo/registry
+              subPath: deps/cargo
+            - name: cache
+              mountPath: /root/.gradle
+              subPath: deps/gradle
+            - name: cache
+              mountPath: /root/.m2
+              subPath: deps/m2
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
         {{- end }}
       volumes:
         - name: workspace
           emptyDir: {}
+        {{- if .Values.cache.pvcName }}
+        - name: cache
+          persistentVolumeClaim:
+            claimName: {{ .Values.cache.pvcName | quote }}
+        {{- end }}
         {{- if eq .Values.strategy "buildpacks" }}
         - name: layers
           emptyDir: {}
-        - name: cache
+        - name: cnb-cache
+          {{- if .Values.cache.pvcName }}
+          # Buildpacks' lifecycle uses /cache as its layer cache, so
+          # the same PVC backs it — but with subPath so it doesn't
+          # collide with the nix store.
+          persistentVolumeClaim:
+            claimName: {{ .Values.cache.pvcName | quote }}
+          {{- else }}
           emptyDir: {}
+          {{- end }}
         {{- end }}
 {{- end }}
