@@ -44,6 +44,12 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
   const baseline = useMemo(() => fromSvc(svc), [svc]);
   const [state, setState] = useState<FormState>(baseline);
   const [pending, setPending] = useState(false);
+  // saveError surfaces the last save failure inline next to the
+  // unsaved-changes pip. Pure-toast errors disappeared too quickly
+  // and got buried during traefik flap (a Customer™ literally lost
+  // a domain edit because the toast fell off-screen behind a
+  // probe-failure stack — see /domains-add-remove-list change).
+  const [saveError, setSaveError] = useState<string | null>(null);
   const patch = usePatchService(project, service);
   // Gate the floating save bar on services:write — viewers can scroll
   // through the panel but can't edit. Inputs are still editable to
@@ -82,12 +88,22 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
       }
       body.port = portNum;
     }
-    if (state.domains !== baseline.domains) {
-      body.domains = state.domains
-        .split("\n")
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map((host) => ({ host, tls: true }));
+    {
+      // Compare normalised forms (trimmed + empty-filtered) so that
+      // adding/removing an empty editor row doesn't flip the form
+      // to "dirty" with no real change. The textarea-row UI renders
+      // an empty row at the bottom for the user to type into; we
+      // don't want that to fight the Save bar.
+      const norm = (s: string) =>
+        s.split("\n").map((x) => x.trim()).filter(Boolean).join("\n");
+      const a = norm(state.domains);
+      const b = norm(baseline.domains);
+      if (a !== b) {
+        body.domains = a
+          .split("\n")
+          .filter(Boolean)
+          .map((host) => ({ host, tls: true }));
+      }
     }
     if (
       state.scaleMin !== baseline.scaleMin ||
@@ -164,18 +180,37 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
       body.previews = state.previewsDisabled ? { disabled: true } : { clear: true };
     }
 
+    if (Object.keys(body).length === 0) {
+      // Nothing actually changed (user shuffled empty rows around or
+      // typed-then-deleted). Reset the baseline so the save bar
+      // hides without firing a no-op API call.
+      setState(baseline);
+      setSaveError(null);
+      return;
+    }
+
     setPending(true);
+    setSaveError(null);
     try {
       await patch.mutateAsync(body);
       toast.success("Changes saved");
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to save");
+      const msg = e instanceof Error ? e.message : "Failed to save";
+      // Both surfaces: toast for momentary visibility, inline
+      // saveError for "where did my changes go" recovery. The
+      // inline one stays until the next save attempt or until the
+      // user clicks Discard.
+      toast.error(msg);
+      setSaveError(msg);
     } finally {
       setPending(false);
     }
   };
 
-  const reset = () => setState(baseline);
+  const reset = () => {
+    setState(baseline);
+    setSaveError(null);
+  };
 
   return (
     <div className="relative">
@@ -216,7 +251,13 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
           stays visible while the user scrolls through sections.
           Gated by services:write — viewers can flip switches in
           their browser but can't commit. */}
-      <FloatingSaveBar dirty={dirty && canWrite} pending={pending} onSave={onSave} onReset={reset} />
+      <FloatingSaveBar
+        dirty={dirty && canWrite}
+        pending={pending}
+        error={saveError}
+        onSave={onSave}
+        onReset={reset}
+      />
       {dirty && !canWrite && (
         <div className="sticky bottom-4 z-20 mx-4 flex items-center justify-end">
           <span className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 font-mono text-[10px] text-[var(--text-tertiary)] shadow-[var(--shadow-md)]">
@@ -231,11 +272,13 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
 function FloatingSaveBar({
   dirty,
   pending,
+  error,
   onSave,
   onReset,
 }: {
   dirty: boolean;
   pending: boolean;
+  error: string | null;
   onSave: () => void;
   onReset: () => void;
 }) {
@@ -243,6 +286,10 @@ function FloatingSaveBar({
   // status first; Discard + Save on the right with Discard as a
   // proper outline button (was an underline-text affordance —
   // invisible in dark mode unless you knew where to look).
+  // Persistent error pip surfaces the last save failure inline so
+  // the user can see what blocked the save without chasing a toast
+  // that already disappeared. Dismissing = clicking Discard or
+  // saving again successfully.
   return (
     <AnimatePresence>
       {dirty && (
@@ -251,19 +298,32 @@ function FloatingSaveBar({
           animate={{ y: 0, opacity: 1 }}
           exit={{ y: 60, opacity: 0 }}
           transition={{ type: "spring", stiffness: 360, damping: 32 }}
-          className="sticky bottom-4 z-20 mx-4 flex items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]"
+          className={
+            "sticky bottom-4 z-20 mx-4 flex flex-col gap-1.5 rounded-md border bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)] " +
+            (error ? "border-red-500/50" : "border-[var(--border-subtle)]")
+          }
         >
-          <span className="mr-auto inline-flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-            <span className="inline-block h-1.5 w-1.5 rounded-full bg-amber-400" />
-            unsaved changes
-          </span>
-          <Button size="sm" variant="outline" onClick={onReset} disabled={pending}>
-            Discard
-          </Button>
-          <Button size="sm" onClick={onSave} disabled={pending}>
-            <Save className="h-3 w-3" />
-            {pending ? "Saving…" : "Save changes"}
-          </Button>
+          <div className="flex items-center gap-2">
+            <span className="mr-auto inline-flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+              <span
+                className={
+                  "inline-block h-1.5 w-1.5 rounded-full " +
+                  (error ? "bg-red-400" : "bg-amber-400")
+                }
+              />
+              {error ? "save failed" : "unsaved changes"}
+            </span>
+            <Button size="sm" variant="outline" onClick={onReset} disabled={pending}>
+              Discard
+            </Button>
+            <Button size="sm" onClick={onSave} disabled={pending}>
+              <Save className="h-3 w-3" />
+              {pending ? "Saving…" : error ? "Retry save" : "Save changes"}
+            </Button>
+          </div>
+          {error && (
+            <p className="font-mono text-[10px] text-red-400">{error}</p>
+          )}
         </motion.div>
       )}
     </AnimatePresence>
