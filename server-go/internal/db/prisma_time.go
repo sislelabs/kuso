@@ -9,31 +9,32 @@ import (
 	"time"
 )
 
-// prismaTime adapts the way Prisma's SQLite driver stores DateTime
-// columns: the value lives as INTEGER milliseconds-since-epoch, but
-// when the schema runs through `prisma migrate diff` we get a `DATETIME`
-// column type. modernc.org/sqlite reports the cell as an int64 and our
-// `time.Time` scan fails with "unsupported Scan, storing driver.Value
-// type int64 into type *time.Time".
+// prismaTime is a *historical* name from when the schema lived in
+// SQLite and Prisma's driver stored DATETIME as int64 unix-millis.
+// In v0.9 we moved to Postgres TIMESTAMPTZ; lib/pq writes / reads
+// time.Time natively, so prismaTime is now a thin time.Time wrapper.
 //
-// Wrapping the field in prismaTime gives sql.Rows.Scan an explicit
-// Scanner that handles all four shapes Prisma can emit:
-//   - int64 / int  (unix milliseconds, the default)
-//   - float64       (millis with fractional part — rare but possible)
-//   - string        (RFC3339 / RFC3339Nano — what `prisma migrate diff`
-//                    docs claim and what the kuso seed sometimes writes)
-//   - []byte        (string variant from older drivers)
+// We keep the type (and the helpers) so the existing call sites
+// don't need to be touched. Both Value and Scan deal in time.Time
+// at the driver edge; legacy unix-millis input from a serialized
+// JSON or a Prisma-era backup is still tolerated by Scan so a one-
+// off migration import doesn't blow up.
 type prismaTime struct {
 	time.Time
 }
 
-// Scan implements sql.Scanner.
+// Scan implements sql.Scanner. Postgres normally hands us time.Time;
+// the int/string branches stay so a Prisma-shaped backup file can be
+// imported via tx without a separate normalize step.
 func (p *prismaTime) Scan(value any) error {
 	if value == nil {
 		p.Time = time.Time{}
 		return nil
 	}
 	switch v := value.(type) {
+	case time.Time:
+		p.Time = v.UTC()
+		return nil
 	case int64:
 		p.Time = time.UnixMilli(v).UTC()
 		return nil
@@ -42,9 +43,6 @@ func (p *prismaTime) Scan(value any) error {
 		return nil
 	case float64:
 		p.Time = time.UnixMilli(int64(v)).UTC()
-		return nil
-	case time.Time:
-		p.Time = v.UTC()
 		return nil
 	case []byte:
 		return p.scanString(string(v))
@@ -55,16 +53,19 @@ func (p *prismaTime) Scan(value any) error {
 	}
 }
 
-// Value implements driver.Valuer so a prismaTime survives writeback
-// through ExecContext as int64 milliseconds — the shape Prisma reads.
+// Value implements driver.Valuer. Returns time.Time so lib/pq writes
+// it as a TIMESTAMPTZ. The pre-v0.9 SQLite version returned int64
+// millis — that path is gone with the migration.
 func (p prismaTime) Value() (driver.Value, error) {
 	if p.Time.IsZero() {
 		return nil, nil
 	}
-	return p.Time.UnixMilli(), nil
+	return p.Time.UTC(), nil
 }
 
-// scanString handles RFC3339 and Unix-millis-as-string.
+// scanString handles RFC3339 + unix-millis-as-string. Used when a
+// driver hands us text instead of a typed value (rare with lib/pq;
+// kept as a safety net).
 func (p *prismaTime) scanString(s string) error {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -90,8 +91,8 @@ func (p *prismaTime) scanString(s string) error {
 	return errors.New("prismaTime: cannot parse string " + s)
 }
 
-// nullPrismaTime is the NULL-aware counterpart for nullable DateTime
-// columns (e.g. lastLogin, emailVerified).
+// nullPrismaTime is the NULL-aware counterpart for nullable
+// DateTime columns (lastLogin, emailVerified, etc).
 type nullPrismaTime struct {
 	Time  time.Time
 	Valid bool
@@ -114,26 +115,23 @@ func (n nullPrismaTime) Value() (driver.Value, error) {
 	if !n.Valid {
 		return nil, nil
 	}
-	return n.Time.UnixMilli(), nil
+	return n.Time.UTC(), nil
 }
 
-// prismaNow returns the current UTC time wrapped in a prismaTime so it
-// writes through Exec as int64 milliseconds — the format Prisma reads
-// back. Use this everywhere a write previously used `time.Now().UTC()`
-// for a DateTime column on the kuso SQLite.
+// prismaNow returns the current UTC time wrapped in a prismaTime.
+// Naming is historical — kept so existing call sites compile.
 func prismaNow() prismaTime {
 	return prismaTime{Time: time.Now().UTC()}
 }
 
-// prismaAt wraps an explicit time.Time into a prismaTime for writes.
-// Pass a zero time.Time to write NULL through nullPrismaTime — this
-// helper is for non-null columns only.
+// prismaAt wraps an explicit time.Time. Pass a zero time.Time when
+// you actually want NULL — use nullPrismaAt for that.
 func prismaAt(t time.Time) prismaTime {
 	return prismaTime{Time: t.UTC()}
 }
 
 // nullPrismaAt returns a nullPrismaTime that writes NULL when t is
-// zero, otherwise the int64 millis.
+// zero.
 func nullPrismaAt(t time.Time) nullPrismaTime {
 	return nullPrismaTime{Time: t.UTC(), Valid: !t.IsZero()}
 }

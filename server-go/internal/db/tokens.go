@@ -45,7 +45,7 @@ VALUES (?, ?, ?, ?, ?, '', '', ?, ?)`,
 
 // ListTokensForUser returns the user's tokens, newest first.
 func (d *DB) ListTokensForUser(ctx context.Context, userID string) ([]Token, error) {
-	rows, err := d.DB.QueryContext(ctx, `
+	rows, err := d.QueryContext(ctx, `
 SELECT id, name, "userId", "expiresAt", "isActive", "lastUsed", "lastIp", "createdAt"
 FROM "Token" WHERE "userId" = ? ORDER BY "createdAt" DESC`, userID)
 	if err != nil {
@@ -100,7 +100,7 @@ type AdminToken struct {
 // username + email. Admin-only — the slim shape the /api/tokens
 // management page reads.
 func (d *DB) ListAllTokens(ctx context.Context) ([]AdminToken, error) {
-	rows, err := d.DB.QueryContext(ctx, `
+	rows, err := d.QueryContext(ctx, `
 SELECT t.id, t.name, t."userId", u.username, u.email, t."expiresAt", t."isActive", t."lastUsed", t."createdAt"
 FROM "Token" t JOIN "User" u ON u.id = t."userId"
 ORDER BY t."createdAt" DESC`)

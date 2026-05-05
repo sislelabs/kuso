@@ -2,28 +2,49 @@ package db
 
 import (
 	"context"
-	"path/filepath"
+	"os"
 	"testing"
 	"time"
 )
 
-// openTestDB creates a fresh on-disk SQLite under t.TempDir, applies the
-// embedded schema, and returns the open handle. We use the file driver
-// (not :memory:) because the Open helper sets a busy-timeout pragma that
-// requires a real file path.
+// openTestDB opens a connection to a test Postgres database. The DSN
+// is taken from KUSO_TEST_PG_DSN; when unset, the test is skipped so
+// `go test ./...` keeps working without a running Postgres. CI sets
+// the DSN against an ephemeral container.
+//
+// Each test gets its own schema-namespaced view by truncating every
+// table in t.Cleanup. Faster than tearing the DB down and back up.
 func openTestDB(t *testing.T) *DB {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "kuso.db")
-	d, err := Open(path)
+	dsn := os.Getenv("KUSO_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("KUSO_TEST_PG_DSN not set; skipping postgres-backed test")
+	}
+	d, err := Open(dsn)
 	if err != nil {
 		t.Fatalf("Open: %v", err)
+	}
+	// Wipe state from any previous test. ORDER matters because of FK
+	// constraints; rely on TRUNCATE … CASCADE so we don't have to
+	// list dependencies.
+	if _, err := d.DB.Exec(`
+		TRUNCATE TABLE
+			"_PermissionToToken", "_PermissionToRole", "_UserToUserGroup",
+			"InviteRedemption", "Invite",
+			"NotificationEvent", "BuildLog", "AlertRule",
+			"NodeMetric", "LogLine", "SSHKey",
+			"Audit", "Token", "Permission",
+			"Notification", "GithubInstallation", "GithubUserLink",
+			"User", "UserGroup", "Role"
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate: %v", err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
 }
 
 func TestOpen_AppliesSchemaIdempotently(t *testing.T) {
-	t.Parallel()
 	d := openTestDB(t)
 
 	// Re-applying the schema must not error — Open is idempotent.
@@ -42,7 +63,6 @@ func TestOpen_AppliesSchemaIdempotently(t *testing.T) {
 }
 
 func TestUserLookup_RoundTrip(t *testing.T) {
-	t.Parallel()
 	d := openTestDB(t)
 	ctx := context.Background()
 
@@ -54,7 +74,7 @@ VALUES ('r1', 'admin', 'admin role', ?, ?)`, now, now); err != nil {
 	}
 	if _, err := d.ExecContext(ctx, `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", "roleId", provider, "createdAt", "updatedAt")
-VALUES ('u1', 'admin', 'admin@example.com', 'hash', 0, 1, 'r1', 'local', ?, ?)`, now, now); err != nil {
+VALUES ('u1', 'admin', 'admin@example.com', 'hash', false, true, 'r1', 'local', ?, ?)`, now, now); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 	if _, err := d.ExecContext(ctx, `
@@ -62,8 +82,6 @@ INSERT INTO "Permission" (id, resource, action, namespace, "createdAt", "updated
 VALUES ('p1', 'app', 'read', NULL, ?, ?), ('p2', 'app', 'write', NULL, ?, ?)`, now, now, now, now); err != nil {
 		t.Fatalf("insert permission: %v", err)
 	}
-	// The Prisma-emitted M:N pivot is named "_PermissionToRole" with
-	// columns A=Permission.id, B=Role.id.
 	if _, err := d.ExecContext(ctx, `
 INSERT INTO "_PermissionToRole" ("A", "B") VALUES ('p1', 'r1'), ('p2', 'r1')`); err != nil {
 		t.Fatalf("insert pivot: %v", err)
@@ -92,7 +110,6 @@ INSERT INTO "_PermissionToRole" ("A", "B") VALUES ('p1', 'r1'), ('p2', 'r1')`); 
 	if len(perms) != 2 {
 		t.Fatalf("permissions: %v", perms)
 	}
-	// Permissions come back as "<resource>:<action>" — the JWT shape.
 	want := map[string]bool{"app:read": true, "app:write": true}
 	for _, p := range perms {
 		if !want[p] {
@@ -102,7 +119,6 @@ INSERT INTO "_PermissionToRole" ("A", "B") VALUES ('p1', 'r1'), ('p2', 'r1')`); 
 }
 
 func TestFindUserByUsername_NotFound(t *testing.T) {
-	t.Parallel()
 	d := openTestDB(t)
 	if _, err := d.FindUserByUsername(context.Background(), "ghost"); err == nil {
 		t.Fatal("expected ErrNotFound for missing user")
@@ -110,13 +126,12 @@ func TestFindUserByUsername_NotFound(t *testing.T) {
 }
 
 func TestUpdateUserLogin_Persists(t *testing.T) {
-	t.Parallel()
 	d := openTestDB(t)
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
 	if _, err := d.ExecContext(ctx, `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", provider, "createdAt", "updatedAt")
-VALUES ('u1', 'admin', 'a@b', 'h', 0, 1, 'local', ?, ?)`, now, now); err != nil {
+VALUES ('u1', 'admin', 'a@b', 'h', false, true, 'local', ?, ?)`, now, now); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := d.UpdateUserLogin(ctx, "u1", "10.0.0.1", now); err != nil {

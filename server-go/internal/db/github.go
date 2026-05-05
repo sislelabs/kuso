@@ -102,7 +102,7 @@ func (d *DB) DeleteGithubInstallation(ctx context.Context, id int64) error {
 
 // ListGithubInstallations returns every cached installation.
 func (d *DB) ListGithubInstallations(ctx context.Context) ([]GithubInstallation, error) {
-	rows, err := d.DB.QueryContext(ctx, `
+	rows, err := d.QueryContext(ctx, `
 SELECT id, "accountLogin", "accountType", "accountId", "repositoriesJson", "createdAt", "updatedAt"
 FROM "GithubInstallation" ORDER BY "accountLogin"`)
 	if err != nil {
@@ -126,7 +126,7 @@ FROM "GithubInstallation" ORDER BY "accountLogin"`)
 // GithubInstallationRepos returns the cached repos for one installation.
 func (d *DB) GithubInstallationRepos(ctx context.Context, id int64) ([]GithubRepo, error) {
 	var raw string
-	err := d.DB.QueryRowContext(ctx, `SELECT "repositoriesJson" FROM "GithubInstallation" WHERE id = ?`, id).Scan(&raw)
+	err := d.QueryRowContext(ctx, `SELECT "repositoriesJson" FROM "GithubInstallation" WHERE id = ?`, id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

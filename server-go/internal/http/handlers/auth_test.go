@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,11 +17,7 @@ import (
 
 func newTestServer(t *testing.T) (http.Handler, *db.DB, *auth.Issuer) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "kuso.db"))
-	if err != nil {
-		t.Fatalf("db.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
+	d := openHandlerTestDB(t)
 
 	iss, err := auth.NewIssuer("test-secret", time.Hour)
 	if err != nil {
@@ -49,7 +44,7 @@ INSERT INTO "Role" (id, name, description, "createdAt", "updatedAt") VALUES ('r1
 	}
 	if _, err := d.ExecContext(context.Background(), `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", "roleId", provider, "createdAt", "updatedAt")
-VALUES ('u1', 'admin', 'a@b', ?, 0, 1, 'r1', 'local', ?, ?)`, hash, now, now); err != nil {
+VALUES ('u1', 'admin', 'a@b', ?, false, true, 'r1', 'local', ?, ?)`, hash, now, now); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	if _, err := d.ExecContext(context.Background(), `
@@ -63,7 +58,6 @@ INSERT INTO "_PermissionToRole" ("A", "B") VALUES ('p1', 'r1')`); err != nil {
 }
 
 func TestLogin_Success(t *testing.T) {
-	t.Parallel()
 	r, d, iss := newTestServer(t)
 	seedAdmin(t, d, "hunter2")
 
@@ -99,7 +93,6 @@ func TestLogin_Success(t *testing.T) {
 }
 
 func TestLogin_BadPassword(t *testing.T) {
-	t.Parallel()
 	r, d, _ := newTestServer(t)
 	seedAdmin(t, d, "hunter2")
 
@@ -113,7 +106,6 @@ func TestLogin_BadPassword(t *testing.T) {
 }
 
 func TestLogin_UnknownUser(t *testing.T) {
-	t.Parallel()
 	r, _, _ := newTestServer(t)
 	body := strings.NewReader(`{"username":"ghost","password":"x"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", body)
@@ -125,7 +117,6 @@ func TestLogin_UnknownUser(t *testing.T) {
 }
 
 func TestLogin_BadRequestBody(t *testing.T) {
-	t.Parallel()
 	r, _, _ := newTestServer(t)
 	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", strings.NewReader("{not-json"))
 	rr := httptest.NewRecorder()
@@ -136,7 +127,6 @@ func TestLogin_BadRequestBody(t *testing.T) {
 }
 
 func TestSession_AfterLogin(t *testing.T) {
-	t.Parallel()
 	r, d, _ := newTestServer(t)
 	seedAdmin(t, d, "hunter2")
 

@@ -65,7 +65,7 @@ func scanUser(s interface {
 // ErrNotFound. Username comparison is case-sensitive, matching Prisma's
 // default and the existing TS behaviour.
 func (d *DB) FindUserByUsername(ctx context.Context, username string) (*User, error) {
-	row := d.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM "User" WHERE username = ? LIMIT 1`, username)
+	row := d.QueryRowContext(ctx, `SELECT `+userColumns+` FROM "User" WHERE username = ? LIMIT 1`, username)
 	u, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -81,7 +81,7 @@ func (d *DB) FindUserByUsername(ctx context.Context, username string) (*User, er
 // creating a row (and to surface a clean 409 instead of a unique
 // constraint error from the underlying DB).
 func (d *DB) FindUserByEmail(ctx context.Context, email string) (*User, error) {
-	row := d.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM "User" WHERE email = ? LIMIT 1`, email)
+	row := d.QueryRowContext(ctx, `SELECT `+userColumns+` FROM "User" WHERE email = ? LIMIT 1`, email)
 	u, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -94,7 +94,7 @@ func (d *DB) FindUserByEmail(ctx context.Context, email string) (*User, error) {
 
 // FindUserByID returns the User with the given id, or ErrNotFound.
 func (d *DB) FindUserByID(ctx context.Context, id string) (*User, error) {
-	row := d.DB.QueryRowContext(ctx, `SELECT `+userColumns+` FROM "User" WHERE id = ? LIMIT 1`, id)
+	row := d.QueryRowContext(ctx, `SELECT `+userColumns+` FROM "User" WHERE id = ? LIMIT 1`, id)
 	u, err := scanUser(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -132,7 +132,7 @@ JOIN "Role" r ON r.id = u."roleId"
 JOIN "_PermissionToRole" pr ON pr."B" = r.id
 JOIN "Permission" p ON p.id = pr."A"
 WHERE u.id = ?`
-	rows, err := d.DB.QueryContext(ctx, q, userID)
+	rows, err := d.QueryContext(ctx, q, userID)
 	if err != nil {
 		return nil, fmt.Errorf("db: user permissions: %w", err)
 	}
@@ -155,7 +155,7 @@ WHERE u.id = ?`
 func (d *DB) UserRoleName(ctx context.Context, userID string) (string, error) {
 	const q = `SELECT r.name FROM "User" u LEFT JOIN "Role" r ON r.id = u."roleId" WHERE u.id = ?`
 	var name sql.NullString
-	if err := d.DB.QueryRowContext(ctx, q, userID).Scan(&name); err != nil {
+	if err := d.QueryRowContext(ctx, q, userID).Scan(&name); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", ErrNotFound
 		}
@@ -175,7 +175,7 @@ FROM "_UserToUserGroup" ug
 JOIN "UserGroup" g ON g.id = ug."B"
 WHERE ug."A" = ?
 ORDER BY g.name`
-	rows, err := d.DB.QueryContext(ctx, q, userID)
+	rows, err := d.QueryContext(ctx, q, userID)
 	if err != nil {
 		return nil, fmt.Errorf("db: user groups: %w", err)
 	}

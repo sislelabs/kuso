@@ -25,7 +25,7 @@ type Notification struct {
 
 // ListNotifications returns every notification config.
 func (d *DB) ListNotifications(ctx context.Context) ([]Notification, error) {
-	rows, err := d.DB.QueryContext(ctx, `
+	rows, err := d.QueryContext(ctx, `
 SELECT id, name, enabled, type, pipelines, events,
   "webhookUrl", "webhookSecret", "slackUrl", "slackChannel", "discordUrl",
   "createdAt", "updatedAt"
@@ -47,7 +47,7 @@ FROM "Notification" ORDER BY name`)
 
 // FindNotification returns one notification by id, or ErrNotFound.
 func (d *DB) FindNotification(ctx context.Context, id string) (*Notification, error) {
-	row := d.DB.QueryRowContext(ctx, `
+	row := d.QueryRowContext(ctx, `
 SELECT id, name, enabled, type, pipelines, events,
   "webhookUrl", "webhookSecret", "slackUrl", "slackChannel", "discordUrl",
   "createdAt", "updatedAt"

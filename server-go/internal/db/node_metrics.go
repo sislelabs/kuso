@@ -58,7 +58,7 @@ func (d *DB) InsertNodeMetric(ctx context.Context, m NodeMetric) error {
 // sampler runs every 30 min, so a fresh install will be empty for
 // up to 30 minutes after first boot.
 func (d *DB) ListNodeMetrics(ctx context.Context, node string, since time.Time) ([]NodeMetric, error) {
-	rows, err := d.DB.QueryContext(ctx, `
+	rows, err := d.QueryContext(ctx, `
 		SELECT "node","ts","cpuUsedMilli","cpuCapacityMilli","memUsedBytes","memCapacityBytes","diskAvailBytes","diskCapacityBytes"
 		FROM "NodeMetric"
 		WHERE "node" = ? AND "ts" >= ?

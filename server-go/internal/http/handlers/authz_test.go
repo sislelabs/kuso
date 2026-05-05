@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
+	"os"
 	"testing"
 
 	"kuso/server/internal/auth"
@@ -15,11 +15,31 @@ import (
 // funnel through. The handlers themselves call kube and are awkward to
 // test in isolation; the gate is pure HTTP and DB.
 
+// openTestDB returns a Postgres-backed *db.DB or skips when
+// KUSO_TEST_PG_DSN isn't set. Each invocation truncates every table
+// so tests are isolated even when run in series.
 func openTestDB(t *testing.T) *db.DB {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "kuso.db"))
+	dsn := os.Getenv("KUSO_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("KUSO_TEST_PG_DSN not set; skipping postgres-backed test")
+	}
+	d, err := db.Open(dsn)
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
+	}
+	if _, err := d.DB.Exec(`
+		TRUNCATE TABLE
+			"_PermissionToToken", "_PermissionToRole", "_UserToUserGroup",
+			"InviteRedemption", "Invite",
+			"NotificationEvent", "BuildLog", "AlertRule",
+			"NodeMetric", "LogLine", "SSHKey",
+			"Audit", "Token", "Permission",
+			"Notification", "GithubInstallation", "GithubUserLink",
+			"User", "UserGroup", "Role"
+		RESTART IDENTITY CASCADE
+	`); err != nil {
+		t.Fatalf("truncate: %v", err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
 	return d
@@ -34,7 +54,6 @@ func reqWithClaims(claims *auth.Claims) *http.Request {
 }
 
 func TestRequirePerm_NoClaims_401(t *testing.T) {
-	t.Parallel()
 	rr := httptest.NewRecorder()
 	if requirePerm(rr, reqWithClaims(nil), auth.PermProjectRead) {
 		t.Fatal("expected gate to deny")
@@ -45,7 +64,6 @@ func TestRequirePerm_NoClaims_401(t *testing.T) {
 }
 
 func TestRequirePerm_MissingPerm_403(t *testing.T) {
-	t.Parallel()
 	rr := httptest.NewRecorder()
 	c := &auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermProjectRead)}}
 	if requirePerm(rr, reqWithClaims(c), auth.PermSettingsAdmin) {
@@ -57,7 +75,6 @@ func TestRequirePerm_MissingPerm_403(t *testing.T) {
 }
 
 func TestRequirePerm_Granted_PassesThrough(t *testing.T) {
-	t.Parallel()
 	rr := httptest.NewRecorder()
 	c := &auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermSettingsAdmin)}}
 	if !requirePerm(rr, reqWithClaims(c), auth.PermSettingsAdmin) {
@@ -70,7 +87,6 @@ func TestRequirePerm_Granted_PassesThrough(t *testing.T) {
 }
 
 func TestRequireAdmin_Wraps(t *testing.T) {
-	t.Parallel()
 	rr := httptest.NewRecorder()
 	c := &auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermProjectRead)}}
 	if requireAdmin(rr, reqWithClaims(c)) {
@@ -84,7 +100,6 @@ func TestRequireAdmin_Wraps(t *testing.T) {
 // requireProjectAccess: ladder of cases.
 
 func TestRequireProjectAccess_NoClaims_401(t *testing.T) {
-	t.Parallel()
 	d := openTestDB(t)
 	rr := httptest.NewRecorder()
 	if requireProjectAccess(context.Background(), rr, d, "p1", db.ProjectRoleViewer) {
@@ -96,7 +111,6 @@ func TestRequireProjectAccess_NoClaims_401(t *testing.T) {
 }
 
 func TestRequireProjectAccess_AdminBypasses(t *testing.T) {
-	t.Parallel()
 	d := openTestDB(t)
 	rr := httptest.NewRecorder()
 	c := &auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermSettingsAdmin)}}
@@ -107,7 +121,6 @@ func TestRequireProjectAccess_AdminBypasses(t *testing.T) {
 }
 
 func TestRequireProjectAccess_NilDB_FailsClosed(t *testing.T) {
-	t.Parallel()
 	// v0.8.13 reversed the legacy fail-open: a nil DB is now treated
 	// as a misconfigured handler and rejected with 403. Without this,
 	// any handler that pre-dated the tenancy table (or skipped wiring
@@ -124,7 +137,6 @@ func TestRequireProjectAccess_NilDB_FailsClosed(t *testing.T) {
 }
 
 func TestRequireProjectAccess_NoMembership_403(t *testing.T) {
-	t.Parallel()
 	d := openTestDB(t)
 	seedUserNoGroup(t, d, "u1")
 	rr := httptest.NewRecorder()
@@ -139,7 +151,6 @@ func TestRequireProjectAccess_NoMembership_403(t *testing.T) {
 }
 
 func TestRequireProjectAccess_RoleTooLow_403(t *testing.T) {
-	t.Parallel()
 	d := openTestDB(t)
 	seedUserWithProjectRole(t, d, "u1", "p1", db.ProjectRoleViewer)
 	rr := httptest.NewRecorder()
@@ -154,7 +165,6 @@ func TestRequireProjectAccess_RoleTooLow_403(t *testing.T) {
 }
 
 func TestRequireProjectAccess_RoleSufficient(t *testing.T) {
-	t.Parallel()
 	d := openTestDB(t)
 	seedUserWithProjectRole(t, d, "u1", "p1", db.ProjectRoleOwner)
 	rr := httptest.NewRecorder()
@@ -166,7 +176,6 @@ func TestRequireProjectAccess_RoleSufficient(t *testing.T) {
 }
 
 func TestRequireProjectAccess_DifferentProject_403(t *testing.T) {
-	t.Parallel()
 	d := openTestDB(t)
 	seedUserWithProjectRole(t, d, "u1", "p1", db.ProjectRoleOwner)
 	rr := httptest.NewRecorder()
@@ -181,7 +190,6 @@ func TestRequireProjectAccess_DifferentProject_403(t *testing.T) {
 }
 
 func TestRoleAtLeast(t *testing.T) {
-	t.Parallel()
 	cases := []struct {
 		name   string
 		have   db.ProjectRole
@@ -213,7 +221,7 @@ func seedUserNoGroup(t *testing.T, d *db.DB, userID string) {
 	t.Helper()
 	if _, err := d.ExecContext(context.Background(), `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", provider, "createdAt", "updatedAt")
-VALUES (?, ?, ?, 'h', 0, 1, 'local', datetime('now'), datetime('now'))`,
+VALUES (?, ?, ?, 'h', false, true, 'local', NOW(), NOW())`,
 		userID, userID, userID+"@x"); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
@@ -225,7 +233,7 @@ func seedUserWithProjectRole(t *testing.T, d *db.DB, userID, project string, rol
 	groupID := userID + "-g"
 	if _, err := d.ExecContext(context.Background(), `
 INSERT INTO "UserGroup" (id, name, description, "instanceRole", "projectMemberships", "createdAt", "updatedAt")
-VALUES (?, ?, '', 'member', ?, datetime('now'), datetime('now'))`,
+VALUES (?, ?, '', 'member', ?, NOW(), NOW())`,
 		groupID, groupID,
 		`[{"project":"`+project+`","role":"`+string(role)+`"}]`); err != nil {
 		t.Fatalf("seed group: %v", err)

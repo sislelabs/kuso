@@ -86,7 +86,7 @@ func (d *DB) CreateInvite(ctx context.Context, in CreateInviteInput) error {
 // ErrNotFound when the token is unknown — the redemption handler
 // maps that to 404, not 401, so probing tokens isn't useful.
 func (d *DB) FindInviteByToken(ctx context.Context, token string) (*Invite, error) {
-	row := d.DB.QueryRowContext(ctx,
+	row := d.QueryRowContext(ctx,
 		`SELECT id, token, "groupId", "instanceRole", "createdBy",
 		        "createdAt", "expiresAt", "maxUses", "usedCount",
 		        "revokedAt", note
@@ -107,7 +107,7 @@ func (d *DB) FindInviteByToken(ctx context.Context, token string) (*Invite, erro
 // ListInvites returns all invites newest-first. Admin-only surface;
 // the handler does the perm check.
 func (d *DB) ListInvites(ctx context.Context) ([]Invite, error) {
-	rows, err := d.DB.QueryContext(ctx,
+	rows, err := d.QueryContext(ctx,
 		`SELECT id, token, "groupId", "instanceRole", "createdBy",
 		        "createdAt", "expiresAt", "maxUses", "usedCount",
 		        "revokedAt", note
@@ -174,7 +174,7 @@ func (d *DB) DeleteInvite(ctx context.Context, id string) error {
 // (e.g. group add fails after user create) doesn't leave a phantom
 // usage count.
 func (d *DB) RedeemInvite(ctx context.Context, token string) (*Invite, error) {
-	tx, err := d.DB.BeginTx(ctx, nil)
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("db: redeem tx: %w", err)
 	}

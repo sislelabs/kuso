@@ -29,7 +29,7 @@ INSERT INTO "UserGroup" (id, name, description, "createdAt", "updatedAt") VALUES
 // exists before we mint the link. Reuses the Group struct defined
 // in queries.go.
 func (d *DB) GetGroup(ctx context.Context, id string) (*Group, error) {
-	row := d.DB.QueryRowContext(ctx,
+	row := d.QueryRowContext(ctx,
 		`SELECT id, name, description FROM "UserGroup" WHERE id = ?`, id)
 	var g Group
 	if err := row.Scan(&g.ID, &g.Name, &g.Description); err != nil {
@@ -111,7 +111,7 @@ type GroupTenancy struct {
 func (d *DB) GetGroupTenancy(ctx context.Context, groupID string) (*GroupTenancy, error) {
 	var role string
 	var memJSON string
-	err := d.DB.QueryRowContext(ctx,
+	err := d.QueryRowContext(ctx,
 		`SELECT "instanceRole", "projectMemberships" FROM "UserGroup" WHERE id = ?`, groupID).
 		Scan(&role, &memJSON)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -158,7 +158,7 @@ func (d *DB) SetGroupTenancy(ctx context.Context, groupID string, t GroupTenancy
 // Highest-wins on instance role: admin > billing > viewer > member > pending.
 // On project role: owner > deployer > viewer (per-project).
 func (d *DB) ListUserTenancy(ctx context.Context, userID string) (GroupTenancy, error) {
-	rows, err := d.DB.QueryContext(ctx, `
+	rows, err := d.QueryContext(ctx, `
 SELECT g."instanceRole", g."projectMemberships"
 FROM "UserGroup" g
 JOIN "_UserToUserGroup" m ON m."B" = g.id
@@ -250,7 +250,7 @@ DELETE FROM "_UserToUserGroup" WHERE "A" = ? AND "B" = ?`, userID, groupID)
 
 // DeleteGroup removes a group + its membership pivot rows.
 func (d *DB) DeleteGroup(ctx context.Context, id string) error {
-	tx, err := d.DB.BeginTx(ctx, nil)
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("db: begin: %w", err)
 	}

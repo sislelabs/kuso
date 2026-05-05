@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -18,11 +17,7 @@ import (
 
 func newAdminServer(t *testing.T) (http.Handler, *db.DB, *auth.Issuer) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "kuso.db"))
-	if err != nil {
-		t.Fatalf("db.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
+	d := openHandlerTestDB(t)
 
 	iss, _ := auth.NewIssuer("test-secret", time.Hour)
 	r := httpsrv.NewRouter(httpsrv.Deps{DB: d, Issuer: iss, Logger: slog.Default()})
@@ -39,7 +34,7 @@ INSERT INTO "Role" (id, name, "createdAt", "updatedAt") VALUES ('r1', 'admin', ?
 	}
 	if _, err := d.ExecContext(context.Background(), `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", "roleId", provider, "createdAt", "updatedAt")
-VALUES ('u1', 'admin', 'a@b', ?, 0, 1, 'r1', 'local', ?, ?)`, hash, now, now); err != nil {
+VALUES ('u1', 'admin', 'a@b', ?, false, true, 'r1', 'local', ?, ?)`, hash, now, now); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	return "u1"
@@ -61,7 +56,6 @@ func loginAndGetToken(t *testing.T, r http.Handler) string {
 }
 
 func TestAdmin_ListUsers(t *testing.T) {
-	t.Parallel()
 	r, d, _ := newAdminServer(t)
 	seedAdminUser(t, d)
 	tok := loginAndGetToken(t, r)
@@ -82,7 +76,6 @@ func TestAdmin_ListUsers(t *testing.T) {
 }
 
 func TestAdmin_Profile(t *testing.T) {
-	t.Parallel()
 	r, d, _ := newAdminServer(t)
 	seedAdminUser(t, d)
 	tok := loginAndGetToken(t, r)
@@ -102,7 +95,6 @@ func TestAdmin_Profile(t *testing.T) {
 }
 
 func TestAdmin_Tokens_RoundTrip(t *testing.T) {
-	t.Parallel()
 	r, d, _ := newAdminServer(t)
 	seedAdminUser(t, d)
 	tok := loginAndGetToken(t, r)
@@ -165,13 +157,12 @@ func TestAdmin_Tokens_RoundTrip(t *testing.T) {
 }
 
 func TestAdmin_Tokens_DeleteOtherUserFails(t *testing.T) {
-	t.Parallel()
 	r, d, _ := newAdminServer(t)
 	seedAdminUser(t, d)
 	// Insert a token belonging to a different user.
 	if _, err := d.ExecContext(context.Background(), `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", provider, "createdAt", "updatedAt")
-VALUES ('u2', 'other', 'o@o', 'h', 0, 1, 'local', ?, ?)`, time.Now().UTC(), time.Now().UTC()); err != nil {
+VALUES ('u2', 'other', 'o@o', 'h', false, true, 'local', ?, ?)`, time.Now().UTC(), time.Now().UTC()); err != nil {
 		t.Fatalf("seed other user: %v", err)
 	}
 	if err := d.CreateToken(context.Background(), &db.Token{

@@ -40,10 +40,10 @@ import (
 // Deps is the explicit dependency bundle the router needs. Wired in main.
 type Deps struct {
 	DB         *db.DB
-	// LogDB is the dedicated log-storage SQLite handle (v0.7.17 split).
-	// Nil = log search returns 503; control plane still works.
+	// LogDB is now an alias view of *DB (the SQLite-era split is
+	// gone). Held as a separate field so the existing
+	// log-search/alerts wiring keeps its types.
 	LogDB      *db.LogDB
-	DBPath     string // path on disk; used by /api/admin/backup + restore
 	Issuer     *auth.Issuer
 	SessionKey string
 	Projects   *projects.Service
@@ -193,7 +193,7 @@ func NewRouter(d Deps) http.Handler {
 			adminH.Mount(r)
 			// Optional: backup/restore endpoints (gated on KUSO_BACKUP_ENABLED=1).
 			// Returns nil + Mount no-ops when disabled.
-			httphandlers.NewBackupHandler(d.DB, d.DBPath, d.Logger).Mount(r)
+			httphandlers.NewBackupHandler(d.DB, "", d.Logger).Mount(r)
 			usersH := &httphandlers.UsersHandler{DB: d.DB, Logger: d.Logger}
 			usersH.Mount(r)
 			rolesH := &httphandlers.RolesHandler{DB: d.DB, Logger: d.Logger}

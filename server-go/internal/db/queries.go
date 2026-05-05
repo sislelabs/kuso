@@ -21,7 +21,7 @@ type UserSummary struct {
 
 // ListUsers returns the slim admin-list shape.
 func (d *DB) ListUsers(ctx context.Context) ([]UserSummary, error) {
-	rows, err := d.DB.QueryContext(ctx, `
+	rows, err := d.QueryContext(ctx, `
 SELECT u.id, u.username, u.email, u."firstName", u."lastName", u."isActive", r.name
 FROM "User" u LEFT JOIN "Role" r ON r.id = u."roleId"
 ORDER BY u.username`)
@@ -43,7 +43,7 @@ ORDER BY u.username`)
 // CountUsers returns the total user count. Used by the dashboard.
 func (d *DB) CountUsers(ctx context.Context) (int, error) {
 	var n int
-	if err := d.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM "User"`).Scan(&n); err != nil {
+	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM "User"`).Scan(&n); err != nil {
 		return 0, fmt.Errorf("db: count users: %w", err)
 	}
 	return n, nil
@@ -58,7 +58,7 @@ type Role struct {
 
 // ListRoles returns all roles ordered by name.
 func (d *DB) ListRoles(ctx context.Context) ([]Role, error) {
-	rows, err := d.DB.QueryContext(ctx, `SELECT id, name, description FROM "Role" ORDER BY name`)
+	rows, err := d.QueryContext(ctx, `SELECT id, name, description FROM "Role" ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("db: list roles: %w", err)
 	}
@@ -83,7 +83,7 @@ type Group struct {
 
 // ListGroups returns all groups ordered by name.
 func (d *DB) ListGroups(ctx context.Context) ([]Group, error) {
-	rows, err := d.DB.QueryContext(ctx, `SELECT id, name, description FROM "UserGroup" ORDER BY name`)
+	rows, err := d.QueryContext(ctx, `SELECT id, name, description FROM "UserGroup" ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("db: list groups: %w", err)
 	}
@@ -119,7 +119,7 @@ func (d *DB) ListAudit(ctx context.Context, limit int) ([]AuditEntry, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
-	rows, err := d.DB.QueryContext(ctx, `
+	rows, err := d.QueryContext(ctx, `
 SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, user
 FROM "Audit" ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {

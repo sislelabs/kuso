@@ -57,7 +57,7 @@ func (d *DB) CreateAlertRule(ctx context.Context, r AlertRule) error {
 }
 
 func (d *DB) ListAlertRules(ctx context.Context) ([]AlertRule, error) {
-	rows, err := d.DB.QueryContext(ctx, `
+	rows, err := d.QueryContext(ctx, `
 		SELECT "id","name","enabled","kind","project","service","query","thresholdInt","thresholdFloat","windowSeconds","severity","throttleSeconds","lastFiredAt","createdAt","updatedAt"
 		FROM "AlertRule"
 		ORDER BY "name" ASC`)

@@ -100,7 +100,7 @@ func (d *DB) ListNotificationEvents(ctx context.Context, limit int, unreadOnly b
 		q += ` WHERE "readAt" IS NULL`
 	}
 	q += ` ORDER BY "id" DESC LIMIT ?`
-	rows, err := d.DB.QueryContext(ctx, q, limit)
+	rows, err := d.QueryContext(ctx, q, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list notification events: %w", err)
 	}
@@ -136,7 +136,7 @@ func (d *DB) ListNotificationEvents(ctx context.Context, limit int, unreadOnly b
 // CountUnreadNotificationEvents is the cheap query the bell icon
 // uses to render the unread badge.
 func (d *DB) CountUnreadNotificationEvents(ctx context.Context) (int, error) {
-	row := d.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM "NotificationEvent" WHERE "readAt" IS NULL`)
+	row := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM "NotificationEvent" WHERE "readAt" IS NULL`)
 	var n int
 	if err := row.Scan(&n); err != nil {
 		return 0, fmt.Errorf("count unread: %w", err)

@@ -44,7 +44,7 @@ func (d *DB) CreateSSHKey(ctx context.Context, k SSHKey) error {
 
 // ListSSHKeys returns every stored key without the private bytes.
 func (d *DB) ListSSHKeys(ctx context.Context) ([]SSHKey, error) {
-	rows, err := d.DB.QueryContext(ctx, `
+	rows, err := d.QueryContext(ctx, `
 		SELECT "id","name","publicKey","fingerprint","createdAt"
 		FROM "SSHKey"
 		ORDER BY "createdAt" DESC`)
@@ -70,7 +70,7 @@ func (d *DB) ListSSHKeys(ctx context.Context) ([]SSHKey, error) {
 // GetSSHKey returns a key by id, including the private bytes — only
 // callers inside the server (the join flow) should use this.
 func (d *DB) GetSSHKey(ctx context.Context, id string) (*SSHKey, error) {
-	row := d.DB.QueryRowContext(ctx, `
+	row := d.QueryRowContext(ctx, `
 		SELECT "id","name","publicKey","privateKey","fingerprint","createdAt"
 		FROM "SSHKey" WHERE "id" = ?`, id)
 	var k SSHKey

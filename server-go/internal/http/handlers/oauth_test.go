@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -97,11 +96,7 @@ func newGithubMock(t *testing.T) *githubMock {
 // fresh sqlite DB and an httptest GitHub mock.
 func newOAuthHarness(t *testing.T) (*chi.Mux, *handlers.OAuthHandler, *githubMock, *db.DB) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "kuso.db"))
-	if err != nil {
-		t.Fatalf("db.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
+	d := openHandlerTestDB(t)
 
 	iss, err := auth.NewIssuer("test-secret", time.Hour)
 	if err != nil {
@@ -170,7 +165,6 @@ func drive(t *testing.T, r http.Handler, gm *githubMock) *httptest.ResponseRecor
 }
 
 func TestOAuth_FullCallbackHappyPath(t *testing.T) {
-	t.Parallel()
 	r, _, gm, _ := newOAuthHarness(t)
 
 	rr := drive(t, r, gm)
@@ -197,7 +191,6 @@ func TestOAuth_FullCallbackHappyPath(t *testing.T) {
 }
 
 func TestOAuth_SetsJWTCookie(t *testing.T) {
-	t.Parallel()
 	r, _, gm, _ := newOAuthHarness(t)
 	rr := drive(t, r, gm)
 
@@ -238,7 +231,6 @@ func TestOAuth_SetsJWTCookie(t *testing.T) {
 }
 
 func TestOAuth_UpsertsUserAndIssuesValidJWT(t *testing.T) {
-	t.Parallel()
 	r, h, gm, d := newOAuthHarness(t)
 	rr := drive(t, r, gm)
 	if rr.Code != http.StatusFound {
@@ -278,7 +270,6 @@ func TestOAuth_UpsertsUserAndIssuesValidJWT(t *testing.T) {
 }
 
 func TestOAuth_RejectsStateMismatch(t *testing.T) {
-	t.Parallel()
 	r, _, gm, _ := newOAuthHarness(t)
 
 	// Hit start to plant the state cookie, then call callback with a
@@ -301,7 +292,6 @@ func TestOAuth_RejectsStateMismatch(t *testing.T) {
 }
 
 func TestOAuth_RejectsMissingStateCookie(t *testing.T) {
-	t.Parallel()
 	r, _, gm, _ := newOAuthHarness(t)
 	cbReq := httptest.NewRequest(http.MethodGet,
 		"/api/auth/github/callback?code="+gm.wantCode+"&state=anything",
@@ -317,7 +307,6 @@ func TestOAuth_RejectsMissingStateCookie(t *testing.T) {
 }
 
 func TestOAuth_RejectsMissingCode(t *testing.T) {
-	t.Parallel()
 	r, _, _, _ := newOAuthHarness(t)
 	startRR := httptest.NewRecorder()
 	r.ServeHTTP(startRR, httptest.NewRequest(http.MethodGet, "/api/auth/github", nil))
@@ -337,7 +326,6 @@ func TestOAuth_RejectsMissingCode(t *testing.T) {
 }
 
 func TestOAuth_FallsBackToUserEmailsWhenPrimaryHidden(t *testing.T) {
-	t.Parallel()
 	r, _, gm, d := newOAuthHarness(t)
 	// GitHub returns hidden-email users with email="" on /user. The
 	// handler should follow up with /user/emails and pick the first
@@ -368,7 +356,6 @@ func TestOAuth_FallsBackToUserEmailsWhenPrimaryHidden(t *testing.T) {
 // not a hardcoded github.com URL — protects against accidental loss of
 // the test override and detects the real-vs-mock plumbing breaking.
 func TestOAuth_StartHonorsConfiguredEndpoint(t *testing.T) {
-	t.Parallel()
 	r, _, gm, _ := newOAuthHarness(t)
 	startRR := httptest.NewRecorder()
 	r.ServeHTTP(startRR, httptest.NewRequest(http.MethodGet, "/api/auth/github", nil))

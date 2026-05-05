@@ -26,7 +26,7 @@ func (d *DB) SaveBuildLog(ctx context.Context, buildName, project, service, phas
 	if buildName == "" {
 		return fmt.Errorf("SaveBuildLog: empty buildName")
 	}
-	_, err := d.DB.ExecContext(ctx, `
+	_, err := d.ExecContext(ctx, `
 		INSERT INTO "BuildLog"("buildName","project","service","phase","logs")
 		VALUES(?, ?, ?, ?, ?)
 		ON CONFLICT("buildName") DO UPDATE SET
@@ -46,7 +46,7 @@ func (d *DB) SaveBuildLog(ctx context.Context, buildName, project, service, phas
 // back to streaming).
 func (d *DB) GetBuildLog(ctx context.Context, buildName string) (string, error) {
 	var logs string
-	err := d.DB.QueryRowContext(ctx,
+	err := d.QueryRowContext(ctx,
 		`SELECT "logs" FROM "BuildLog" WHERE "buildName"=?`, buildName,
 	).Scan(&logs)
 	if err == sql.ErrNoRows {
@@ -62,7 +62,7 @@ func (d *DB) GetBuildLog(ctx context.Context, buildName string) (string, error) 
 // called when the service is deleted so we don't keep dead rows
 // pointing at a service the user has forgotten about.
 func (d *DB) DeleteBuildLogsForService(ctx context.Context, project, service string) error {
-	_, err := d.DB.ExecContext(ctx,
+	_, err := d.ExecContext(ctx,
 		`DELETE FROM "BuildLog" WHERE "project"=? AND "service"=?`,
 		project, service,
 	)
@@ -80,7 +80,7 @@ func (d *DB) DeleteBuildLogsForService(ctx context.Context, project, service str
 // usually doesn't need (failed-build logs older than the retention
 // window are not actionable).
 func (d *DB) PruneBuildLogs(ctx context.Context, before time.Time) (int, error) {
-	res, err := d.DB.ExecContext(ctx,
+	res, err := d.ExecContext(ctx,
 		`DELETE FROM "BuildLog" WHERE "createdAt" < ?`,
 		before.UTC(),
 	)

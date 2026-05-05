@@ -28,7 +28,7 @@ func (d *DB) BootstrapAdmin(ctx context.Context, username, email, passwordHash s
 
 	// Skip if any user already exists — only seed on a virgin DB.
 	var n int
-	if err := d.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM "User"`).Scan(&n); err != nil {
+	if err := d.QueryRowContext(ctx, `SELECT COUNT(*) FROM "User"`).Scan(&n); err != nil {
 		return fmt.Errorf("db: bootstrap: count users: %w", err)
 	}
 	if n > 0 {
@@ -36,7 +36,7 @@ func (d *DB) BootstrapAdmin(ctx context.Context, username, email, passwordHash s
 	}
 
 	now := prismaNow()
-	tx, err := d.DB.BeginTx(ctx, nil)
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("db: bootstrap: begin: %w", err)
 	}
@@ -86,7 +86,7 @@ INSERT INTO "_PermissionToRole" ("A", "B") VALUES (?, ?)`, permID, roleID); err 
 	userID := mustRandomID()
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", "roleId", provider, "createdAt", "updatedAt")
-VALUES (?, ?, ?, ?, 0, 1, ?, 'local', ?, ?)`,
+VALUES (?, ?, ?, ?, false, true, ?, 'local', ?, ?)`,
 		userID, username, email, passwordHash, roleID, now, now); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("db: bootstrap: insert user: %w", err)
@@ -109,7 +109,7 @@ VALUES (?, ?, ?, ?, 0, 1, ?, 'local', ?, ?)`,
 func (d *DB) EnsureAdminGroup(ctx context.Context, seedUsername string) error {
 	// 1. Find or create the admin group.
 	var groupID string
-	row := d.DB.QueryRowContext(ctx,
+	row := d.QueryRowContext(ctx,
 		`SELECT id FROM "UserGroup" WHERE "instanceRole" = 'admin' LIMIT 1`)
 	err := row.Scan(&groupID)
 	if err == sql.ErrNoRows {
@@ -127,13 +127,13 @@ VALUES (?, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]
 
 	// 2. If the group is empty AND a seed user exists, attach them.
 	var memberCount int
-	if err := d.DB.QueryRowContext(ctx,
+	if err := d.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM "_UserToUserGroup" WHERE "B" = ?`, groupID).Scan(&memberCount); err != nil {
 		return fmt.Errorf("db: count admin group members: %w", err)
 	}
 	if memberCount == 0 && seedUsername != "" {
 		var seedID string
-		err := d.DB.QueryRowContext(ctx,
+		err := d.QueryRowContext(ctx,
 			`SELECT id FROM "User" WHERE username = ?`, seedUsername).Scan(&seedID)
 		if err == nil {
 			if _, err := d.ExecContext(ctx,
@@ -166,7 +166,7 @@ VALUES (?, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]
 // Returns true when promotion happened, false when a real admin
 // already exists.
 func (d *DB) PromoteUserToAdminIfNoAdmin(ctx context.Context, userID string) (bool, error) {
-	tx, err := d.DB.BeginTx(ctx, nil)
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return false, fmt.Errorf("db: promote: begin: %w", err)
 	}
@@ -226,7 +226,7 @@ func (d *DB) PromoteUsernameToAdmin(ctx context.Context, username string) error 
 		return errors.New("db: promote: username required")
 	}
 	var userID string
-	if err := d.DB.QueryRowContext(ctx,
+	if err := d.QueryRowContext(ctx,
 		`SELECT id FROM "User" WHERE username = ?`, username).Scan(&userID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("db: promote: user %q not found", username)
@@ -236,7 +236,7 @@ func (d *DB) PromoteUsernameToAdmin(ctx context.Context, username string) error 
 
 	// Resolve / create admin group.
 	var adminGroupID string
-	if err := d.DB.QueryRowContext(ctx,
+	if err := d.QueryRowContext(ctx,
 		`SELECT id FROM "UserGroup" WHERE "instanceRole" = 'admin' LIMIT 1`).Scan(&adminGroupID); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("db: promote: find admin group: %w", err)

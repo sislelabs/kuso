@@ -2,122 +2,68 @@ package db_test
 
 import (
 	"context"
-	"errors"
-	"path/filepath"
+	"os"
 	"testing"
-	"time"
 
 	"kuso/server/internal/db"
 )
 
-// Stats is the new busy/wait counter surface; the test exercises the
-// invariants the admin endpoint depends on.
+// pgDSN is the test-only DSN. Empty → tests skip. CI sets this to an
+// ephemeral container; locally you can run a one-shot
+//
+//	docker run --rm -e POSTGRES_PASSWORD=t -p 5432:5432 -d postgres:16
+//	export KUSO_TEST_PG_DSN="postgres://postgres:t@localhost:5432/postgres?sslmode=disable"
+func pgDSN(t *testing.T) string {
+	t.Helper()
+	dsn := os.Getenv("KUSO_TEST_PG_DSN")
+	if dsn == "" {
+		t.Skip("KUSO_TEST_PG_DSN not set; skipping postgres-backed test")
+	}
+	return dsn
+}
 
-func TestStats_WriteCount_Increments(t *testing.T) {
-	t.Parallel()
-	d, err := db.Open(filepath.Join(t.TempDir(), "kuso.db"))
+func TestStats_WriteErrors_StaysZeroOnSuccess(t *testing.T) {
+	d, err := db.Open(pgDSN(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
-
-	before := d.Stats().WriteCount
 
 	if _, err := d.ExecContext(context.Background(),
-		`INSERT INTO "Role" (id, name, "createdAt", "updatedAt") VALUES ('r1','t',datetime('now'),datetime('now'))`); err != nil {
+		`INSERT INTO "Role" (id, name, "createdAt", "updatedAt") VALUES ('rstats', 'tmp', NOW(), NOW())`); err != nil {
 		t.Fatalf("insert: %v", err)
 	}
-	after := d.Stats().WriteCount
-	if after-before != 1 {
-		t.Errorf("WriteCount delta=%d want 1", after-before)
+	if got := d.GetStats().WriteErrors; got != 0 {
+		t.Errorf("WriteErrors=%d on a successful insert; want 0", got)
 	}
 }
 
-func TestStats_WriteCount_CountsErrors(t *testing.T) {
-	t.Parallel()
-	d, err := db.Open(filepath.Join(t.TempDir(), "kuso.db"))
+func TestStats_WriteErrors_IncrementsOnFailure(t *testing.T) {
+	d, err := db.Open(pgDSN(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
 
-	// Syntax error → exec returns err, but we still want to count it
-	// (the wrapper times every attempt regardless of outcome).
-	before := d.Stats().WriteCount
+	before := d.GetStats().WriteErrors
 	_, _ = d.ExecContext(context.Background(), `INSERT INTO bogus_table_xyz VALUES (1)`)
-	after := d.Stats().WriteCount
+	after := d.GetStats().WriteErrors
 	if after-before != 1 {
-		t.Errorf("WriteCount should count failed exec; delta=%d", after-before)
+		t.Errorf("WriteErrors delta=%d want 1", after-before)
 	}
 }
 
-func TestStats_BusyCount_StaysZeroWhenIdle(t *testing.T) {
-	t.Parallel()
-	d, err := db.Open(filepath.Join(t.TempDir(), "kuso.db"))
+func TestStats_PoolFields_Populated(t *testing.T) {
+	d, err := db.Open(pgDSN(t))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
 	t.Cleanup(func() { _ = d.Close() })
-
-	for i := 0; i < 10; i++ {
-		if _, err := d.ExecContext(context.Background(),
-			`INSERT INTO "Role" (id, name, "createdAt", "updatedAt") VALUES (?,?,datetime('now'),datetime('now'))`,
-			"r"+string(rune('a'+i)), "name"+string(rune('a'+i))); err != nil {
-			t.Fatalf("insert: %v", err)
-		}
-	}
-	if got := d.Stats().BusyCount; got != 0 {
-		t.Errorf("BusyCount=%d on a single-writer test; want 0", got)
-	}
-}
-
-// Snapshot must be value-copyable (the admin endpoint marshals it to
-// JSON). Spot-check the math: avg = wait / count.
-func TestStats_Snapshot_AverageMath(t *testing.T) {
-	t.Parallel()
-	d, err := db.Open(filepath.Join(t.TempDir(), "kuso.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
-
-	for i := 0; i < 5; i++ {
-		_, _ = d.ExecContext(context.Background(),
-			`INSERT INTO "Role" (id, name, "createdAt", "updatedAt") VALUES (?, 'x', datetime('now'), datetime('now'))`,
-			"row"+string(rune('a'+i)))
-	}
-	s := d.Stats()
-	if s.WriteCount < 5 {
-		t.Fatalf("WriteCount=%d want >=5", s.WriteCount)
-	}
-	// avg ≤ total wait (by construction) and >= 0.
-	if s.AvgWriteWaitMs < 0 || int64(s.WriteWaitMs) < s.AvgWriteWaitMs {
-		t.Errorf("snapshot math broken: %+v", s)
-	}
-}
-
-// Operating contract: a context-cancelled exec still counts as a
-// write. Regression: if we accidentally short-circuit the increment
-// path on cancel, busy spikes become invisible.
-func TestStats_CountsCancelledExec(t *testing.T) {
-	t.Parallel()
-	d, err := db.Open(filepath.Join(t.TempDir(), "kuso.db"))
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Nanosecond)
-	defer cancel()
-	before := d.Stats().WriteCount
-	_, err = d.ExecContext(ctx, `INSERT INTO "Role" (id,name,"createdAt","updatedAt") VALUES ('rx','x',datetime('now'),datetime('now'))`)
-	if err == nil {
-		t.Skip("exec completed before nanosecond deadline; skip — non-deterministic")
-	}
-	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
-		t.Logf("err=%v (test continues — any err means we're on the failure path)", err)
-	}
-	if d.Stats().WriteCount-before != 1 {
-		t.Errorf("WriteCount must increment even when exec is cancelled")
+	s := d.GetStats()
+	// Pool counters come from sql.DB.Stats() — we don't assert exact
+	// values (depends on the test runner's connection state), just
+	// that the fields are reachable and non-negative.
+	if s.PoolOpen < 0 || s.PoolInUse < 0 || s.PoolIdle < 0 {
+		t.Errorf("negative pool counter: %+v", s)
 	}
 }

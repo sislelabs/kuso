@@ -48,13 +48,11 @@ import (
 
 func main() {
 	addr := flag.String("addr", envOr("KUSO_HTTP_ADDR", ":3000"), "HTTP listen address")
-	dbPath := flag.String("db", envOr("KUSO_DB_PATH", "/var/lib/kuso/kuso.db"), "SQLite database path")
-	// Log-storage SQLite is a separate file from kuso.db so the noisy
-	// log-shipper write path doesn't contend with the latency-sensitive
-	// control-plane writes (audit, auth, notifications). Defaults to
-	// logs.db in the same directory as the main DB; override with
-	// KUSO_LOG_DB_PATH or the --log-db flag for non-default layouts.
-	logDBPath := flag.String("log-db", envOr("KUSO_LOG_DB_PATH", "/var/lib/kuso/logs.db"), "SQLite database path for log search storage")
+	// Postgres DSN. v0.9 retired SQLite — single backend, single
+	// connection pool, native concurrent writes. The install script
+	// provisions a kuso-postgres StatefulSet and writes the DSN into
+	// a Secret; the deploy yaml mounts it as KUSO_DB_DSN.
+	dbDSN := flag.String("db-dsn", envOr("KUSO_DB_DSN", "postgres://kuso:kuso@kuso-postgres:5432/kuso?sslmode=disable"), "Postgres DSN")
 	namespace := flag.String("namespace", envOr("KUSO_NAMESPACE", "kuso"), "Kubernetes namespace for Kuso CRs")
 	flag.Parse()
 
@@ -70,9 +68,9 @@ func main() {
 		os.Exit(2)
 	}
 
-	database, err := db.Open(*dbPath)
+	database, err := db.Open(*dbDSN)
 	if err != nil {
-		logger.Error("db: open", "err", err, "path", *dbPath)
+		logger.Error("db: open", "err", err, "dsn", redactDSN(*dbDSN))
 		os.Exit(2)
 	}
 	defer func() {
@@ -80,23 +78,10 @@ func main() {
 			logger.Error("db: close", "err", err)
 		}
 	}()
-
-	// Log DB is best-effort. A failure here disables search + log-match
-	// alerts but keeps the rest of kuso functional. The most common
-	// failure is a stale RWO PVC mount or a permission glitch; on
-	// indie installs the logs.db lives in the same volume as kuso.db
-	// so this almost never fails when kuso.db opens cleanly.
-	logDB, err := db.OpenLog(*logDBPath)
-	if err != nil {
-		logger.Error("logdb: open (log search disabled)", "err", err, "path", *logDBPath)
-		logDB = nil
-	} else {
-		defer func() {
-			if err := logDB.Close(); err != nil {
-				logger.Error("logdb: close", "err", err)
-			}
-		}()
-	}
+	// Log search/storage shares the main Postgres DB now. Keep the
+	// `*db.LogDB` shim so callers that took the log-DB type continue
+	// to compile; it's a thin alias around *db.DB.
+	logDB := database.AsLogDB()
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -371,7 +356,6 @@ func main() {
 	r := httpsrv.NewRouter(httpsrv.Deps{
 		DB:         database,
 		LogDB:      logDB,
-		DBPath:     *dbPath,
 		Issuer:     issuer,
 		SessionKey: sessionKey,
 		Projects:   projSvc,
@@ -659,6 +643,23 @@ func envOr(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// redactDSN returns the DSN with the password (between `:` and `@` in
+// the URI form) replaced by `***`. Used in error logging so a
+// boot-time failure shows enough of the DSN to diagnose without
+// leaking credentials.
+func redactDSN(dsn string) string {
+	at := strings.LastIndex(dsn, "@")
+	if at <= 0 {
+		return dsn
+	}
+	prefix := dsn[:at]
+	colon := strings.LastIndex(prefix, ":")
+	if colon <= len("postgres://") {
+		return dsn
+	}
+	return prefix[:colon] + ":***" + dsn[at:]
 }
 
 // notifyAdapter satisfies builds.EventEmitter by forwarding to the

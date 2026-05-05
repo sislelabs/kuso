@@ -57,7 +57,7 @@ type PodSize struct {
 // is intentionally chunky — runpack lookups happen rarely, the UI paints
 // the whole list in one shot.
 func (d *DB) ListRunpacks(ctx context.Context) ([]Runpack, error) {
-	rows, err := d.DB.QueryContext(ctx, `
+	rows, err := d.QueryContext(ctx, `
 SELECT r.id, r.name, r.language, r."fetchId", r."buildId", r."runId"
 FROM "Runpack" r ORDER BY r.name`)
 	if err != nil {
@@ -100,7 +100,7 @@ FROM "Runpack" r ORDER BY r.name`)
 func (d *DB) runpackPhase(ctx context.Context, id string) (*RunpackPhase, error) {
 	var p RunpackPhase
 	var secID string
-	err := d.DB.QueryRowContext(ctx, `
+	err := d.QueryRowContext(ctx, `
 SELECT id, repository, tag, command, "readOnlyAppStorage", "securityContextId"
 FROM "RunpackPhase" WHERE id = ?`, id).Scan(&p.ID, &p.Repository, &p.Tag, &p.Command, &p.ReadOnlyAppStorage, &secID)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -119,7 +119,7 @@ FROM "RunpackPhase" WHERE id = ?`, id).Scan(&p.ID, &p.Repository, &p.Tag, &p.Com
 
 func (d *DB) securityContext(ctx context.Context, id string) (*RunpackSecurityContext, error) {
 	var c RunpackSecurityContext
-	err := d.DB.QueryRowContext(ctx, `
+	err := d.QueryRowContext(ctx, `
 SELECT id, "runAsUser", "runAsGroup", "runAsNonRoot", "readOnlyRootFilesystem", "allowPrivilegeEscalation"
 FROM "SecurityContext" WHERE id = ?`, id).Scan(&c.ID, &c.RunAsUser, &c.RunAsGroup, &c.RunAsNonRoot, &c.ReadOnlyRootFilesystem, &c.AllowPrivilegeEscalation)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -132,7 +132,7 @@ FROM "SecurityContext" WHERE id = ?`, id).Scan(&c.ID, &c.RunAsUser, &c.RunAsGrou
 	// Capability. The schema models a 1:N from SecurityContext to
 	// Capability and N:1 from Capability to {Add,Drop} — we flatten
 	// the hierarchy when reading.
-	addRows, err := d.DB.QueryContext(ctx, `
+	addRows, err := d.QueryContext(ctx, `
 SELECT ca.value
 FROM "Capability" cap
 JOIN "CapabilityAdd" ca ON ca."capabilityId" = cap.id
@@ -148,7 +148,7 @@ WHERE cap."securityCtxId" = ?`, id)
 		}
 		c.CapabilitiesAdd = append(c.CapabilitiesAdd, v)
 	}
-	dropRows, err := d.DB.QueryContext(ctx, `
+	dropRows, err := d.QueryContext(ctx, `
 SELECT cd.value
 FROM "Capability" cap
 JOIN "CapabilityDrop" cd ON cd."capabilityId" = cap.id
@@ -172,7 +172,7 @@ WHERE cap."securityCtxId" = ?`, id)
 // land per-row to keep the foreign keys quiet.
 func (d *DB) DeleteRunpack(ctx context.Context, id string) error {
 	var fetchID, buildID, runID string
-	err := d.DB.QueryRowContext(ctx, `SELECT "fetchId", "buildId", "runId" FROM "Runpack" WHERE id = ?`, id).
+	err := d.QueryRowContext(ctx, `SELECT "fetchId", "buildId", "runId" FROM "Runpack" WHERE id = ?`, id).
 		Scan(&fetchID, &buildID, &runID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
@@ -191,7 +191,7 @@ func (d *DB) DeleteRunpack(ctx context.Context, id string) error {
 
 // ListPodSizes returns every PodSize ordered by name.
 func (d *DB) ListPodSizes(ctx context.Context) ([]PodSize, error) {
-	rows, err := d.DB.QueryContext(ctx, `
+	rows, err := d.QueryContext(ctx, `
 SELECT id, name, "cpuLimit", "memoryLimit", "cpuRequest", "memoryRequest", description
 FROM "PodSize" ORDER BY name`)
 	if err != nil {

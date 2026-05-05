@@ -35,7 +35,7 @@ func (d *DB) CreateUser(ctx context.Context, in CreateUserInput) error {
 	}
 	_, err := d.ExecContext(ctx, `
 INSERT INTO "User" (id, username, email, "firstName", "lastName", password, "twoFaEnabled", "isActive", "roleId", provider, "createdAt", "updatedAt")
-VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, 'local', ?, ?)`,
+VALUES (?, ?, ?, ?, ?, ?, false, ?, ?, 'local', ?, ?)`,
 		in.ID, in.Username, in.Email, sqlNullable(in.FirstName), sqlNullable(in.LastName),
 		in.PasswordHash, in.IsActive, roleID, now, now,
 	)
@@ -110,7 +110,7 @@ func (d *DB) UpdateUser(ctx context.Context, id string, in UpdateUserInput) erro
 // explicitly so the audit log shows what happened on user removal.
 // GithubUserLink is dropped along with the user.
 func (d *DB) DeleteUser(ctx context.Context, id string) error {
-	tx, err := d.DB.BeginTx(ctx, nil)
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("db: begin: %w", err)
 	}

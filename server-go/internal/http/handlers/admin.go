@@ -57,7 +57,7 @@ func (h *AdminHandler) DBStats(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
-	writeJSON(w, http.StatusOK, h.DB.Stats())
+	writeJSON(w, http.StatusOK, h.DB.GetStats())
 }
 
 func adminCtx(r *http.Request) (context.Context, context.CancelFunc) {

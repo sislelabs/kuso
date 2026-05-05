@@ -3,7 +3,6 @@ package db
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -30,7 +29,7 @@ type FullRole struct {
 // _PermissionToRole pivot. One query per role keeps the code simple;
 // the admin pages list <50 roles in practice.
 func (d *DB) ListRolesWithPermissions(ctx context.Context) ([]FullRole, error) {
-	rows, err := d.DB.QueryContext(ctx, `SELECT id, name, COALESCE(description, '') FROM "Role" ORDER BY name`)
+	rows, err := d.QueryContext(ctx, `SELECT id, name, COALESCE(description, '') FROM "Role" ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("db: list roles: %w", err)
 	}
@@ -57,7 +56,7 @@ func (d *DB) ListRolesWithPermissions(ctx context.Context) ([]FullRole, error) {
 }
 
 func (d *DB) permissionsForRole(ctx context.Context, roleID string) ([]PermissionRow, error) {
-	rows, err := d.DB.QueryContext(ctx, `
+	rows, err := d.QueryContext(ctx, `
 SELECT p.id, p.resource, p.action
 FROM "_PermissionToRole" pr
 JOIN "Permission" p ON p.id = pr."A"
@@ -95,7 +94,7 @@ func (d *DB) CreateRole(ctx context.Context, id, name, description string, perms
 		return errors.New("db: id and name required")
 	}
 	now := prismaNow()
-	tx, err := d.DB.BeginTx(ctx, nil)
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("db: begin: %w", err)
 	}
@@ -115,7 +114,7 @@ INSERT INTO "Role" (id, name, description, "createdAt", "updatedAt") VALUES (?, 
 // UpdateRole replaces a role's name + description + permissions atomically.
 func (d *DB) UpdateRole(ctx context.Context, id, name, description string, perms []PermissionInput) error {
 	now := prismaNow()
-	tx, err := d.DB.BeginTx(ctx, nil)
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("db: begin: %w", err)
 	}
@@ -145,7 +144,7 @@ UPDATE "Role" SET name = ?, description = ?, "updatedAt" = ? WHERE id = ?`,
 
 // DeleteRole removes a role and its permission pivot rows.
 func (d *DB) DeleteRole(ctx context.Context, id string) error {
-	tx, err := d.DB.BeginTx(ctx, nil)
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("db: begin: %w", err)
 	}
@@ -169,7 +168,7 @@ func (d *DB) DeleteRole(ctx context.Context, id string) error {
 // (resource, action) pair the caller supplied. Each Permission row is
 // new — Prisma schema has no uniqueness on resource+action so we
 // follow the same shape.
-func insertRolePermissions(ctx context.Context, tx *sql.Tx, roleID string, perms []PermissionInput) error {
+func insertRolePermissions(ctx context.Context, tx *Tx, roleID string, perms []PermissionInput) error {
 	now := prismaNow()
 	for _, p := range perms {
 		if p.Resource == "" || p.Action == "" {

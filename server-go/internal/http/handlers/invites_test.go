@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,11 +21,7 @@ import (
 
 func newInviteServer(t *testing.T) (http.Handler, *db.DB, *auth.Issuer) {
 	t.Helper()
-	d, err := db.Open(filepath.Join(t.TempDir(), "kuso.db"))
-	if err != nil {
-		t.Fatalf("db.Open: %v", err)
-	}
-	t.Cleanup(func() { _ = d.Close() })
+	d := openHandlerTestDB(t)
 	iss, _ := auth.NewIssuer("test-secret", time.Hour)
 	r := httpsrv.NewRouter(httpsrv.Deps{DB: d, Issuer: iss, Logger: slog.Default()})
 	return r, d, iss
@@ -56,7 +51,6 @@ func mintToken(t *testing.T, iss *auth.Issuer, userID string, perms ...auth.Perm
 // --- middleware-level checks ------------------------------------------
 
 func TestInvites_NoAuth_401(t *testing.T) {
-	t.Parallel()
 	r, _, _ := newInviteServer(t)
 	for _, route := range []struct {
 		method, path string
@@ -75,7 +69,6 @@ func TestInvites_NoAuth_401(t *testing.T) {
 }
 
 func TestInvites_BadToken_401(t *testing.T) {
-	t.Parallel()
 	r, _, _ := newInviteServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/invites", nil)
 	req.Header.Set("Authorization", "Bearer not-a-real-jwt")
@@ -89,7 +82,6 @@ func TestInvites_BadToken_401(t *testing.T) {
 // --- permission checks ------------------------------------------------
 
 func TestInvites_NonAdmin_403(t *testing.T) {
-	t.Parallel()
 	r, _, iss := newInviteServer(t)
 	// No PermUserWrite → both admin routes must 403.
 	tok := mintToken(t, iss, "bob", auth.PermProjectRead)
@@ -115,7 +107,6 @@ func TestInvites_NonAdmin_403(t *testing.T) {
 // --- happy path -------------------------------------------------------
 
 func TestInvites_Admin_CreateListRevoke(t *testing.T) {
-	t.Parallel()
 	r, _, iss := newInviteServer(t)
 	tok := mintToken(t, iss, "admin", auth.PermUserWrite)
 
@@ -168,7 +159,6 @@ func TestInvites_Admin_CreateListRevoke(t *testing.T) {
 // --- input validation gates -------------------------------------------
 
 func TestInvites_MultiUseRequiresExpiry(t *testing.T) {
-	t.Parallel()
 	r, _, iss := newInviteServer(t)
 	tok := mintToken(t, iss, "admin", auth.PermUserWrite)
 
@@ -184,7 +174,6 @@ func TestInvites_MultiUseRequiresExpiry(t *testing.T) {
 }
 
 func TestInvites_NegativeMaxUses_400(t *testing.T) {
-	t.Parallel()
 	r, _, iss := newInviteServer(t)
 	tok := mintToken(t, iss, "admin", auth.PermUserWrite)
 
@@ -202,7 +191,6 @@ func TestInvites_NegativeMaxUses_400(t *testing.T) {
 // --- public lookup is genuinely unauthenticated -----------------------
 
 func TestInvites_PublicLookup_NoAuth(t *testing.T) {
-	t.Parallel()
 	r, _, _ := newInviteServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/invites/lookup/does-not-exist", nil)
 	rr := httptest.NewRecorder()
@@ -217,7 +205,6 @@ func TestInvites_PublicLookup_NoAuth(t *testing.T) {
 // --- /api/admin/db/stats ----------------------------------------------
 
 func TestDBStats_RequiresAdmin(t *testing.T) {
-	t.Parallel()
 	r, _, iss := newInviteServer(t)
 	tok := mintToken(t, iss, "bob", auth.PermProjectRead)
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/db/stats", nil)
@@ -230,7 +217,6 @@ func TestDBStats_RequiresAdmin(t *testing.T) {
 }
 
 func TestDBStats_NoAuth_401(t *testing.T) {
-	t.Parallel()
 	r, _, _ := newInviteServer(t)
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/db/stats", nil)
 	rr := httptest.NewRecorder()
@@ -241,13 +227,12 @@ func TestDBStats_NoAuth_401(t *testing.T) {
 }
 
 func TestDBStats_Admin_ReturnsCounters(t *testing.T) {
-	t.Parallel()
 	r, d, iss := newInviteServer(t)
 	// Drive a write through the wrapper so the counter ticks. Schema
 	// migrations call d.DB.Exec (no context) and intentionally bypass
 	// the wrapper — they're rare and noisy.
 	if _, err := d.ExecContext(context.Background(),
-		`INSERT INTO "Role" (id, name, "createdAt", "updatedAt") VALUES ('r1','t',datetime('now'),datetime('now'))`); err != nil {
+		`INSERT INTO "Role" (id, name, "createdAt", "updatedAt") VALUES ('r1','t',NOW(),NOW())`); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 
@@ -260,19 +245,18 @@ func TestDBStats_Admin_ReturnsCounters(t *testing.T) {
 		t.Fatalf("status=%d body=%s", rr.Code, rr.Body.String())
 	}
 	var snap struct {
-		WriteCount     uint64 `json:"writeCount"`
-		BusyCount      uint64 `json:"busyCount"`
-		WriteWaitMs    int64  `json:"writeWaitMs"`
-		BusyWaitMs     int64  `json:"busyWaitMs"`
-		AvgWriteWaitMs int64  `json:"avgWriteWaitMs"`
+		WriteErrors uint64 `json:"writeErrors"`
+		PoolOpen    int    `json:"poolOpen"`
+		PoolInUse   int    `json:"poolInUse"`
+		PoolIdle    int    `json:"poolIdle"`
 	}
 	if err := json.NewDecoder(rr.Body).Decode(&snap); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if snap.WriteCount == 0 {
-		t.Errorf("expected writeCount>0 after seed, got %+v", snap)
-	}
-	if snap.BusyCount != 0 {
-		t.Errorf("idle DB busyCount=%d, want 0", snap.BusyCount)
+	// We don't assert exact pool values (depends on the test runner's
+	// concurrent state) — just that the endpoint round-trips cleanly
+	// and the new field shape is reachable.
+	if snap.PoolOpen < 0 {
+		t.Errorf("negative pool counter: %+v", snap)
 	}
 }
