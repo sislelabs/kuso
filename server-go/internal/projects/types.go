@@ -43,6 +43,12 @@ type UpdateProjectRequest struct {
 	DefaultRepo *CreateProjectRepoSpec     `json:"defaultRepo,omitempty"`
 	GitHub      *CreateProjectGithubSpec   `json:"github,omitempty"`
 	Previews    *UpdateProjectPreviewsSpec `json:"previews,omitempty"`
+	// AlwaysOn overrides per-service sleep config — when true, every
+	// service in the project runs without scale-to-zero regardless of
+	// its own spec.sleep block. Useful for projects where any cold-
+	// start cost is unacceptable. Pointer-typed so a request that
+	// omits the key leaves the value alone.
+	AlwaysOn *bool `json:"alwaysOn,omitempty"`
 }
 
 type UpdateProjectPreviewsSpec struct {

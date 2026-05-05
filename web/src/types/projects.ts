@@ -23,6 +23,9 @@ export interface KusoProjectSpec {
   defaultRepo?: KusoRepoRef;
   github?: { installationId?: number };
   previews?: { enabled?: boolean; ttlDays?: number };
+  // alwaysOn=true overrides every per-service sleep config so all
+  // services in this project run with scale-to-zero disabled.
+  alwaysOn?: boolean;
 }
 
 export interface KusoProject {

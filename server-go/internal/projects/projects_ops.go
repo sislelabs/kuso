@@ -199,6 +199,9 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 			cur.Spec.Previews.TTLDays = *req.Previews.TTLDays
 		}
 	}
+	if req.AlwaysOn != nil {
+		cur.Spec.AlwaysOn = *req.AlwaysOn
+	}
 	out, err := s.Kube.UpdateKusoProject(ctx, s.Namespace, cur)
 	if err != nil {
 		return nil, err

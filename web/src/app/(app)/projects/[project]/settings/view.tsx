@@ -27,6 +27,7 @@ export function ProjectSettingsView() {
   const [baseDomain, setBaseDomain] = useState("");
   const [previewsEnabled, setPreviewsEnabled] = useState(false);
   const [previewsTtl, setPreviewsTtl] = useState<number>(7);
+  const [alwaysOn, setAlwaysOn] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState("");
 
   useEffect(() => {
@@ -36,6 +37,7 @@ export function ProjectSettingsView() {
       setBaseDomain(s.baseDomain ?? "");
       setPreviewsEnabled(!!s.previews?.enabled);
       setPreviewsTtl(s.previews?.ttlDays ?? 7);
+      setAlwaysOn(!!s.alwaysOn);
     }
   }, [project.data]);
 
@@ -64,6 +66,7 @@ export function ProjectSettingsView() {
         description: description || null,
         baseDomain: baseDomain || null,
         previews: { enabled: previewsEnabled, ttlDays: previewsTtl },
+        alwaysOn,
       });
       toast.success("Saved");
     } catch (e) {
@@ -169,6 +172,35 @@ export function ProjectSettingsView() {
               />
             </div>
           )}
+        </div>
+      </section>
+
+      {/* Scaling */}
+      <section className="space-y-4">
+        <header>
+          <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+            scaling
+          </h2>
+        </header>
+        <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={alwaysOn}
+              onChange={(e) => setAlwaysOn(e.target.checked)}
+              className="mt-0.5 h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
+            />
+            <span className="flex-1">
+              <span className="text-[13px] font-medium">Always-on services (disable scale-to-zero)</span>
+              <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">
+                Overrides every service&apos;s individual{" "}
+                <code className="font-mono">spec.sleep</code> setting. With this on, services in
+                this project never scale below their <code className="font-mono">scale.min</code>{" "}
+                replica count regardless of idle time. Useful for low-traffic but cold-start-
+                sensitive workloads.
+              </span>
+            </span>
+          </label>
         </div>
       </section>
 

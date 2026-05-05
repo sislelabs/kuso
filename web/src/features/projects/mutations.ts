@@ -9,6 +9,9 @@ export interface UpdateProjectBody {
   baseDomain?: string | null;
   previews?: { enabled?: boolean; ttlDays?: number };
   defaultRepo?: { url?: string; defaultBranch?: string };
+  // alwaysOn=true overrides every per-service sleep config so all
+  // services in this project run with scale-to-zero disabled.
+  alwaysOn?: boolean;
 }
 
 async function updateProject(name: string, body: UpdateProjectBody): Promise<unknown> {

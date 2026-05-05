@@ -53,6 +53,13 @@ type KusoProjectSpec struct {
 	// derived from a service inherit the service's effective
 	// placement (with project as fallback).
 	Placement *KusoPlacement `json:"placement,omitempty"`
+	// AlwaysOn overrides per-service sleep config: when true, every
+	// service in the project runs with sleep.enabled=false regardless
+	// of what's set on KusoService.spec.sleep. Lets a project opt out
+	// of scale-to-zero globally — useful for projects where any cold-
+	// start cost is unacceptable (low-traffic but latency-sensitive,
+	// background processors, etc).
+	AlwaysOn bool `json:"alwaysOn,omitempty"`
 }
 
 // KusoPlacement pins workloads to a subset of cluster nodes. Either
