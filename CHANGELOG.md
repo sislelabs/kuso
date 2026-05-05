@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.8.6] — 2026-05-05
+
+### ✨ Features
+- Feat(builds): real queue + trigger context + pod-phase log frames ([b045a73](https://github.com/sislelabs/kuso/commit/b045a737e0fbc1000da1d214eb06c8a65b3905ed))
+
 ## [0.8.5] — 2026-05-05
 
 ### ✨ Features
