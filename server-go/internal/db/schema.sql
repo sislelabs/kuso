@@ -365,3 +365,44 @@ CREATE TABLE IF NOT EXISTS "OAuthState" (
 );
 CREATE INDEX IF NOT EXISTS "OAuthState_createdAt_idx" ON "OAuthState"("createdAt");
 
+-- v0.9: Sentry-style error event feed for deployed services.
+--
+-- The log shipper already streams every pod log line into LogLine.
+-- The error scanner (internal/errors/scanner.go) walks new lines,
+-- regex-matches lines that look like errors (ERROR, Exception,
+-- Traceback, panic:, etc), and inserts one row here per
+-- occurrence. Fingerprint is a hash of the normalized error
+-- message (numbers / IDs / timestamps stripped) so noisy variants
+-- of the same root cause group together.
+--
+-- The API endpoint /api/projects/{p}/services/{s}/errors aggregates
+-- by fingerprint; the UI shows count + first/last seen + a sample
+-- of the raw line.
+CREATE TABLE IF NOT EXISTS "ErrorEvent" (
+    "id" BIGSERIAL PRIMARY KEY,
+    "project" TEXT NOT NULL,
+    "service" TEXT NOT NULL,
+    "env" TEXT NOT NULL DEFAULT '',
+    "pod" TEXT NOT NULL DEFAULT '',
+    "fingerprint" TEXT NOT NULL,
+    "message" TEXT NOT NULL,
+    "rawLine" TEXT NOT NULL DEFAULT '',
+    "ts" TIMESTAMPTZ NOT NULL,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS "ErrorEvent_project_service_ts_idx"
+    ON "ErrorEvent"("project","service","ts" DESC);
+CREATE INDEX IF NOT EXISTS "ErrorEvent_fingerprint_idx"
+    ON "ErrorEvent"("project","service","fingerprint");
+CREATE INDEX IF NOT EXISTS "ErrorEvent_ts_idx"
+    ON "ErrorEvent"("ts");
+
+-- Watermark for the error scanner — tracks the last LogLine.id we
+-- processed so a restart doesn't re-scan the entire backlog. One
+-- row, key='lastLogLineId'.
+CREATE TABLE IF NOT EXISTS "ErrorScannerState" (
+    "key" TEXT PRIMARY KEY,
+    "value" BIGINT NOT NULL,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+

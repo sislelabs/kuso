@@ -240,6 +240,13 @@ func NewRouter(d Deps) http.Handler {
 			logSearchH.Mount(r)
 			alertsH := &httphandlers.AlertsHandler{DB: d.DB, Logger: d.Logger}
 			alertsH.Mount(r)
+			// Sentry-style error feed for deployed services. Reads
+			// the ErrorEvent table populated by the errorscan
+			// goroutine; nil DB just means the route is mounted but
+			// every call returns empty (the goroutine isn't
+			// inserting anything).
+			errH := &httphandlers.ErrorsHandler{DB: d.DB, Logger: d.Logger}
+			errH.Mount(r)
 		}
 		if d.Audit != nil {
 			auditH := &httphandlers.AuditHandler{Svc: d.Audit, Logger: d.Logger}

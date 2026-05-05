@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"kuso/server/internal/db"
+	httphandlers "kuso/server/internal/http/handlers"
 )
 
 // openTestDB returns a Postgres connection from KUSO_TEST_PG_DSN or
@@ -26,12 +27,18 @@ func openHandlerTestDB(t *testing.T) *db.DB {
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
+	// Reset the global rate limiter — without this, parallel-with-
+	// previous-test rate-limited routes (login, OAuth start) eat the
+	// 10-req/30s budget and trip a 429 unrelated to the code under
+	// test.
+	httphandlers.ResetRateLimiterForTesting()
 	if _, err := d.DB.Exec(`
 		TRUNCATE TABLE
 			"_PermissionToToken", "_PermissionToRole", "_UserToUserGroup",
 			"InviteRedemption", "Invite",
 			"NotificationEvent", "BuildLog", "AlertRule",
 			"NodeMetric", "LogLine", "SSHKey",
+			"OAuthState", "ErrorEvent", "ErrorScannerState",
 			"Audit", "Token", "Permission",
 			"Notification", "GithubInstallation", "GithubUserLink",
 			"User", "UserGroup", "Role"

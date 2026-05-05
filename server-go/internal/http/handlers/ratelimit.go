@@ -72,8 +72,22 @@ func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
 // KUSO_TRUSTED_PROXIES env so a direct caller can't spoof XFF).
 //
 // In keeping with the rest of the package we keep the limiter as a
-// process-global; tests reset it via testResetLoginLimiter.
+// process-global; tests reset it via TestResetLimiterForTesting.
 var defaultLoginLimiter = newLoginLimiter(10, 30*time.Second)
+
+// ResetRateLimiterForTesting resets the global limiter's bucket. Used
+// by handler tests that share the same Postgres-backed test process
+// — without this, the 8th OAuth-flow test in a single `go test` run
+// hits the 10-req/30s cap and fails on a 429 from the rate limiter,
+// not from the code under test.
+//
+// Public-but-unsafe for non-test callers — calling it in production
+// effectively gives one IP a "second chance" on every invocation,
+// which is precisely the behaviour the limiter is supposed to
+// prevent. Wrap in build tags if that ever becomes a real concern.
+func ResetRateLimiterForTesting() {
+	defaultLoginLimiter = newLoginLimiter(10, 30*time.Second)
+}
 
 // withRateLimit wraps the handler with the default limiter.
 func withRateLimit(next http.HandlerFunc) http.HandlerFunc {

@@ -36,6 +36,7 @@ import (
 	"kuso/server/internal/logs"
 	"kuso/server/internal/nodemetrics"
 	"kuso/server/internal/nodewatch"
+	"kuso/server/internal/errorscan"
 	"kuso/server/internal/notify"
 	"kuso/server/internal/platformharden"
 	"kuso/server/internal/projects"
@@ -335,6 +336,18 @@ func main() {
 		if os.Getenv("KUSO_PLATFORM_HARDEN_DISABLED") != "true" {
 			go platformharden.Run(ctx, kc, logger)
 		}
+		// Sentry-style error-event scanner. Walks LogLine for error
+		// patterns, writes one ErrorEvent per match, dedups by
+		// fingerprint at query time. Disabled by
+		// KUSO_ERRORSCAN_DISABLED=true.
+		if os.Getenv("KUSO_ERRORSCAN_DISABLED") != "true" {
+			go (&errorscan.Scanner{
+				DB:        database,
+				Logger:    logger,
+				Interval:  30 * time.Second,
+				BatchSize: 500,
+			}).Run(ctx)
+		}
 
 		// GitHub App is opt-in; if env vars are missing the webhook +
 		// install routes simply aren't registered.
@@ -562,6 +575,14 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 			logger.Warn("daily-cleanup oauth-state", "err", err)
 		} else if n > 0 {
 			logger.Info("daily-cleanup oauth-state pruned", "rows", n)
+		}
+		// Error events: same retention as raw logs (default 7 days).
+		// Older error groups are no longer actionable; the dashboard's
+		// default lookback is 24h anyway.
+		if n, err := database.PruneErrorEvents(c, now.AddDate(0, 0, -logDays)); err != nil {
+			logger.Warn("daily-cleanup error-events", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup error-events pruned", "rows", n, "days", logDays)
 		}
 		if logDB != nil {
 			if n, err := logDB.PruneLogsOlderThan(c, now.AddDate(0, 0, -logDays)); err != nil {
