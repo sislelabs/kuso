@@ -102,18 +102,6 @@ spec:
   selector:
     matchLabels: { app.kubernetes.io/name: kuso-server }
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: kuso-server-go-data
-  namespace: kuso
-spec:
-  accessModes: [ReadWriteOnce]
-  resources:
-    requests:
-      storage: 1Gi
-  storageClassName: local-path
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -122,11 +110,21 @@ metadata:
   labels:
     app.kubernetes.io/name: kuso-server
 spec:
+  # Single replica today (the build poller's tick still assumes
+  # singleton — see cmd/kuso-server/main.go for the leader-election
+  # TODO). Bumping to 2+ requires the leader-election wrapper but
+  # the Postgres backend is otherwise ready for it.
   replicas: 1
-  # Recreate is required because the SQLite PVC is RWO — two pods
-  # can't both mount /data simultaneously. Real HA needs a non-SQLite
-  # backing store; tracked for v0.7.
-  strategy: { type: Recreate }
+  # RollingUpdate replaces the pre-v0.9 Recreate strategy. The RWO
+  # PVC was the only reason for Recreate; with Postgres there's no
+  # shared-state file, so a new pod can come up while the old one
+  # drains. maxUnavailable=0 keeps the dashboard always reachable
+  # during a roll.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels: { app.kubernetes.io/name: kuso-server }
   template:
@@ -138,38 +136,30 @@ spec:
       # above. Lets the kubelet pick a workload pod to evict before
       # it ever touches kuso-server when memory pressure hits.
       priorityClassName: kuso-platform
-      # Pin to the k3s control-plane node. Two reasons:
-      #   1. SQLite PVC is RWO local-path → must stay on its node.
-      #   2. The /var/lib/rancher/k3s/server/node-token hostPath only
-      #      exists on the control plane — kuso-server reads it to
-      #      issue agent-join commands when adding nodes.
-      # The well-known node-role.kubernetes.io/control-plane label is
-      # set by k3s on the bootstrap node automatically.
+      # Pin to the k3s control-plane node. The reason is now ONLY
+      # the k3s node-token hostPath at /var/lib/rancher/k3s/server,
+      # which kuso-server reads when issuing agent-join commands
+      # for new VMs. Once that flow moves to a worker-node-friendly
+      # mechanism (ssh from a sidecar, or a dedicated join-token
+      # Secret), the pin can drop.
       nodeSelector:
         node-role.kubernetes.io/control-plane: "true"
-      # tolerate the standard control-plane NoSchedule taint k3s sets
-      # so this pod is allowed to schedule on the CP node despite the
-      # taint. Without this it'd be evicted on cluster restarts.
       tolerations:
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
           effect: NoSchedule
-      # Bumped from 30s to 60s: a graceful shutdown path needs to
-      # let in-flight HTTP requests finish (audit-log writes, slow
-      # SQLite writes) plus close websocket connections cleanly
-      # (logs streamer). Under load, SQLite's WAL checkpoint can
-      # take 10–20s by itself.
+      # 60s gives the graceful-shutdown path room to let in-flight
+      # requests finish + close websocket connections (logs
+      # streamer). Postgres connections close fast; the bound is
+      # the slow HTTP work, not DB.
       terminationGracePeriodSeconds: 60
       containers:
         - name: server
           image: ghcr.io/sislelabs/kuso-server-go:v0.8.13
           imagePullPolicy: IfNotPresent
-          # Burstable QoS. The kubelet evicts BestEffort pods first,
-          # then Burstable, never Guaranteed. Setting requests below
-          # limits puts us in Burstable — sufficient because we want
-          # to survive host pressure but don't want to pre-allocate
-          # 1 CPU we won't use 95% of the time. Limit at 1 CPU /
-          # 768Mi prevents a runaway from eating the whole node.
+          # Burstable QoS. Setting requests below limits puts us in
+          # Burstable — survives host pressure without pre-allocating
+          # capacity we won't use 95% of the time.
           resources:
             requests:
               cpu: 100m
@@ -181,12 +171,15 @@ spec:
             - { containerPort: 3000, name: http }
           env:
             - { name: KUSO_HTTP_ADDR, value: ":3000" }
-            - { name: KUSO_DB_PATH, value: /data/kuso.sqlite }
-            # Log search storage lives in its own SQLite file so the
-            # logship goroutine's heavy FTS5 write traffic doesn't
-            # contend with the latency-sensitive control-plane writes.
-            # Same /data PVC as the main DB; just a separate file.
-            - { name: KUSO_LOG_DB_PATH, value: /data/logs.sqlite }
+            # Postgres DSN. The install script creates a Secret
+            # `kuso-postgres-conn` with key `dsn`; deploy-only
+            # installs that bring their own Postgres can replace
+            # this with their own valueFrom.
+            - name: KUSO_DB_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-postgres-conn
+                  key: dsn
             - { name: KUSO_NAMESPACE, value: kuso }
             - { name: KUSO_ADMIN_USERNAME, value: admin }
             - { name: KUSO_ADMIN_EMAIL, value: admin@kuso.sislelabs.com }
@@ -198,60 +191,45 @@ spec:
           # PreStop fires AFTER the pod is marked Terminating but
           # BEFORE SIGTERM. Sleeping here gives the kube-proxy /
           # ingress controller time to remove this pod from their
-          # endpoint pool — without it, a new request races the
-          # SIGTERM and arrives at a closed port. Bumped from 5s →
-          # 15s because traefik can take up to 10s to drain endpoint
-          # state under load on a single-node cluster.
+          # endpoint pool. 15s — traefik can take up to 10s to
+          # drain endpoint state under load.
           lifecycle:
             preStop:
               exec:
                 command: ["/bin/sh", "-c", "sleep 15"]
-          # Probes are on /healthz (cheap; no DB hit). Tolerance
-          # bumped because a noisy-neighbor workload (kaniko build
-          # pod, postgres dump, prometheus scrape) can starve us of
-          # CPU briefly without any actual server problem. Old
-          # config killed us after 30s of slowness; new gives ~3min
-          # liveness grace and 1min readiness grace before
-          # de-registering from the kube Service.
+          # Probes hit /healthz (cheap; no DB hit). Tolerant config
+          # absorbs noisy-neighbor CPU starvation without killing
+          # the pod: 3min liveness grace, 1min readiness grace.
           livenessProbe:
             httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 15
             periodSeconds: 30
             timeoutSeconds: 5
-            failureThreshold: 6        # 30s × 6 = 3min before kill
+            failureThreshold: 6
           readinessProbe:
             httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 6        # 10s × 6 = 1min off-rotation
+            failureThreshold: 6
           startupProbe:
-            # Lets the pod take up to 90s to come up without the
-            # liveness probe killing it during the cold-start race
-            # we hit on a busy node. SQLite WAL recovery + opening
-            # both DBs + restoring kube informer state can stretch
-            # past the 30s default on a 2-vCPU box.
+            # Up to 90s for first-boot to absorb Postgres connection
+            # ping retries (the pod may start before postgres is
+            # fully up on a fresh install) plus kube informer
+            # restoration.
             httpGet: { path: /healthz, port: http }
             periodSeconds: 5
-            failureThreshold: 18       # 5s × 18 = 90s
+            failureThreshold: 18
           volumeMounts:
-            - { name: data, mountPath: /data }
             # Read-only mount of the k3s server node-token. kuso-server
             # reads this when issuing `K3S_TOKEN=… curl … | sh` on a
-            # remote VM during the Add Node flow. The file is
-            # 0600 root:root on the host — the kuso-server container
-            # runs as root, so the read works without extra perms.
+            # remote VM during the Add Node flow.
             - name: k3s-token
               mountPath: /etc/kuso/k3s-token
               readOnly: true
               subPath: node-token
       volumes:
-        - name: data
-          persistentVolumeClaim: { claimName: kuso-server-go-data }
         - name: k3s-token
           hostPath:
-            # Mount the directory so subPath can resolve. Bare-file
-            # hostPath works in some kube versions but not all; the
-            # subPath form is portable.
             path: /var/lib/rancher/k3s/server
             type: Directory

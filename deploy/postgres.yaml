@@ -1,0 +1,133 @@
+---
+# Postgres for kuso-server's metadata DB.
+#
+# Single-replica StatefulSet — the workload is unsharded and the
+# storage is local-path RWO. The earlier RWO concern from the SQLite
+# era doesn't apply: Postgres is the *only* writer and the kuso-server
+# pods are clients (multiple replicas all talk to this one Postgres).
+#
+# v0.9 ships this in-cluster pod for the indie / single-box install.
+# Production / multi-tenant kuso installs will want to point
+# kuso-server at an external managed Postgres (RDS, Crunchy Bridge,
+# Supabase) — replace this manifest with a Secret named
+# kuso-postgres-conn whose `dsn` key is the libpq URI.
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: kuso-postgres-conn
+  namespace: kuso
+type: Opaque
+stringData:
+  # Default credentials for the in-cluster Postgres. install.sh
+  # rewrites this to a randomly-generated password on first install
+  # so the DSN doesn't ship with a known shared secret.
+  dsn: "postgres://kuso:kuso-default-change-me@kuso-postgres:5432/kuso?sslmode=disable"
+  user: "kuso"
+  password: "kuso-default-change-me"
+  database: "kuso"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kuso-postgres
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-postgres
+spec:
+  clusterIP: None  # headless — StatefulSet pod gets a stable DNS name
+  ports:
+    - { port: 5432, targetPort: 5432, name: pg }
+  selector:
+    app.kubernetes.io/name: kuso-postgres
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: kuso-postgres
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-postgres
+spec:
+  serviceName: kuso-postgres
+  replicas: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: kuso-postgres }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: kuso-postgres }
+    spec:
+      # Same priorityClass as kuso-server — Postgres is the cluster's
+      # source of truth, must survive build-time CPU starvation.
+      priorityClassName: kuso-platform
+      # Co-locate with kuso-server on the control-plane node so the
+      # client connection is intra-host and the local-path PVC binds
+      # to the same node consistently.
+      nodeSelector:
+        node-role.kubernetes.io/control-plane: "true"
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { containerPort: 5432, name: pg }
+          env:
+            - name: POSTGRES_USER
+              valueFrom: { secretKeyRef: { name: kuso-postgres-conn, key: user } }
+            - name: POSTGRES_PASSWORD
+              valueFrom: { secretKeyRef: { name: kuso-postgres-conn, key: password } }
+            - name: POSTGRES_DB
+              valueFrom: { secretKeyRef: { name: kuso-postgres-conn, key: database } }
+            # Postgres data dir — under the persistent volume.
+            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 6
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: local-path
+        resources:
+          requests:
+            storage: 10Gi
+---
+# PodDisruptionBudget — same logic as kuso-server. Drain on the
+# control-plane node will wait for an admin instead of yanking the
+# DB out from under us.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kuso-postgres
+  namespace: kuso
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: kuso-postgres }

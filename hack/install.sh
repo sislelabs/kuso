@@ -351,6 +351,56 @@ curl -sfL "${KUSO_RAW}/deploy/prometheus.yaml" | kubectl apply -f - >/dev/null
 kubectl wait --for=condition=Available --timeout=120s \
   deployment/kuso-prometheus -n kuso || warn "kuso-prometheus not yet ready"
 
+# -------- 8c. postgres --------
+#
+# v0.9 retired SQLite. Postgres is the metadata DB now. Provisions
+# a single-replica StatefulSet on the control-plane node and
+# generates a unique password on first install (existing kuso-
+# postgres-conn Secret values win on re-run, same as kuso-server-
+# secrets — see section 9). Operators with a managed Postgres
+# (RDS, Crunchy Bridge, Supabase) can pre-create kuso-postgres-conn
+# with their own DSN; the install script skips the StatefulSet
+# when KUSO_USE_EXTERNAL_POSTGRES=1 is set.
+log "provisioning kuso-postgres"
+kubectl create namespace kuso 2>/dev/null || true
+
+if [[ "${KUSO_USE_EXTERNAL_POSTGRES:-0}" == "1" ]]; then
+  if ! kubectl get secret -n kuso kuso-postgres-conn >/dev/null 2>&1; then
+    err "KUSO_USE_EXTERNAL_POSTGRES=1 set but Secret kuso-postgres-conn missing — create it before re-running install"
+    exit 1
+  fi
+  log "external Postgres mode — using existing kuso-postgres-conn Secret"
+else
+  EXISTING_PG_PASS=""
+  if kubectl get secret -n kuso kuso-postgres-conn >/dev/null 2>&1; then
+    EXISTING_PG_PASS=$(kubectl get secret -n kuso kuso-postgres-conn -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  fi
+  PG_PASS="${EXISTING_PG_PASS:-$(random_string)}"
+  PG_DSN="postgres://kuso:${PG_PASS}@kuso-postgres:5432/kuso?sslmode=disable"
+  kubectl create secret generic kuso-postgres-conn -n kuso --dry-run=client -o yaml \
+    --from-literal=user="kuso" \
+    --from-literal=password="$PG_PASS" \
+    --from-literal=database="kuso" \
+    --from-literal=dsn="$PG_DSN" \
+    | kubectl apply -f - >/dev/null
+
+  # Apply the StatefulSet manifest (skipping the Secret block in
+  # postgres.yaml — we just wrote our own Secret with a real
+  # password; the manifest's stringData would silently overwrite
+  # ours otherwise).
+  curl -sfL "${KUSO_RAW}/deploy/postgres.yaml" \
+    | awk '
+        /^---$/ { sec_open=0 }
+        /^kind: Secret$/ { sec_open=1 }
+        sec_open==0 { print }
+      ' \
+    | kubectl apply -f - >/dev/null
+
+  log "waiting for kuso-postgres to become ready (up to 5 min)"
+  kubectl wait --for=condition=Ready --timeout=300s \
+    pod/kuso-postgres-0 -n kuso || warn "kuso-postgres not yet ready"
+fi
+
 # -------- 9. server secrets --------
 #
 # Re-runs of install.sh must NOT regenerate secrets. Rerolling the
