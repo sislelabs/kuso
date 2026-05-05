@@ -25,6 +25,7 @@ import {
 } from "@/features/services/api";
 import { ServiceNode, type ServiceNodeData } from "./ServiceNode";
 import { AddonNode, type AddonNodeData } from "./AddonNode";
+import { CronNode, type CronNodeData } from "./CronNode";
 import {
   applyStoredLayout,
   autoLayout,
@@ -39,6 +40,7 @@ import {
 import { planConnection } from "./connect";
 import { servicesQueryKey } from "@/features/projects";
 import { AddAddonDialog } from "@/components/addon/AddAddonDialog";
+import { AddCronDialog } from "@/components/cron/AddCronDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { serviceShortName } from "@/lib/utils";
 import { useTriggerBuild } from "@/features/services";
@@ -59,6 +61,7 @@ import { toast } from "sonner";
 const nodeTypes = {
   service: ServiceNode,
   addon: AddonNode,
+  cron: CronNode,
 };
 
 interface Props {
@@ -98,6 +101,18 @@ export function ProjectCanvas({
     staleTime: 2_000,
   });
 
+  // All KusoCrons in the project — both service-attached and project-
+  // scoped. Service-attached crons are still rendered as canvas nodes
+  // (the right-click "Add cron" only creates the project-scoped
+  // variants, but legacy ones still show up). Filter on the client to
+  // keep the rollup endpoint as a simple GET.
+  const allCrons = useQuery<{ metadata: { name: string }; spec: CronNodeData["cron"]["spec"] }[]>({
+    queryKey: ["projects", project, "crons"],
+    queryFn: () => api(`/api/projects/${encodeURIComponent(project)}/crons`),
+    refetchInterval: 30_000,
+    staleTime: 10_000,
+  });
+
   const initialNodes: Node[] = useMemo(() => {
     const out: Node[] = [];
     services.forEach((s) => {
@@ -124,8 +139,16 @@ export function ProjectCanvas({
         data: { project, addon: a } satisfies AddonNodeData,
       });
     });
+    (allCrons.data ?? []).forEach((c) => {
+      out.push({
+        id: `cron:${c.metadata.name}`,
+        type: "cron",
+        position: { x: 0, y: 0 },
+        data: { project, cron: c } satisfies CronNodeData,
+      });
+    });
     return out;
-  }, [project, services, addons, envs, latestBuilds.data]);
+  }, [project, services, addons, envs, latestBuilds.data, allCrons.data]);
 
   const initialEdges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
@@ -273,9 +296,11 @@ export function ProjectCanvas({
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>(initialEdges);
   const [ctx, setCtx] = useState<ContextState>({ open: false, x: 0, y: 0, items: [] });
-  // Add-addon dialog. Lives next to ctx because both are short-lived
-  // canvas-scoped overlays — no point hoisting up to the page view.
+  // Add-addon + Add-cron dialogs. Live next to ctx because all
+  // three are short-lived canvas-scoped overlays — no point hoisting
+  // up to the page view.
   const [showAddAddon, setShowAddAddon] = useState(false);
+  const [showAddCron, setShowAddCron] = useState(false);
   // Pending delete-confirm. Set when the user picks "Delete service"
   // from the right-click menu; the ConfirmDialog renders below; on
   // confirm we run the API + optimistically yank the node out of
@@ -564,6 +589,12 @@ export function ProjectCanvas({
         icon: Plus,
         onSelect: () => setShowAddAddon(true),
       },
+      {
+        id: "add-cron",
+        label: "Add cron",
+        icon: Plus,
+        onSelect: () => setShowAddCron(true),
+      },
       { id: "sep1", kind: "separator" },
       {
         id: "project-settings",
@@ -659,6 +690,12 @@ export function ProjectCanvas({
         project={project}
         open={showAddAddon}
         onClose={() => setShowAddAddon(false)}
+      />
+
+      <AddCronDialog
+        project={project}
+        open={showAddCron}
+        onClose={() => setShowAddCron(false)}
       />
 
       <ConfirmDialog

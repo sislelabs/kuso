@@ -24,6 +24,7 @@ interface Props {
 const KINDS = [
   "postgres",
   "redis",
+  "s3",
   "mongodb",
   "mysql",
   "rabbitmq",

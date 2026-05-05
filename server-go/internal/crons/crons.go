@@ -72,6 +72,28 @@ type CreateCronRequest struct {
 	ActiveDeadlineSeconds int `json:"activeDeadlineSeconds,omitempty"`
 }
 
+// CreateProjectCronRequest is the body of POST /api/projects/:p/crons —
+// the project-scoped variant. Kind disambiguates between the three
+// flavours; fields are validated per-kind.
+type CreateProjectCronRequest struct {
+	Name        string   `json:"name"`
+	DisplayName string   `json:"displayName,omitempty"`
+	// Kind ∈ {http, command}. Service-kind crons go through the
+	// existing per-service Add flow; the canvas right-click "Add
+	// cron" only ever produces the standalone variants.
+	Kind     string   `json:"kind"`
+	Schedule string   `json:"schedule"`
+	// URL: required when Kind=http.
+	URL string `json:"url,omitempty"`
+	// Image + Command: required when Kind=command.
+	Image   *kube.KusoImage `json:"image,omitempty"`
+	Command []string        `json:"command,omitempty"`
+	// Optional knobs — same defaults as CreateCronRequest.
+	Suspend               bool   `json:"suspend,omitempty"`
+	ConcurrencyPolicy     string `json:"concurrencyPolicy,omitempty"`
+	ActiveDeadlineSeconds int    `json:"activeDeadlineSeconds,omitempty"`
+}
+
 // UpdateCronRequest is the partial-update body. Pointer fields
 // distinguish "leave alone" from "set to zero".
 type UpdateCronRequest struct {
@@ -220,6 +242,81 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 	return created, nil
 }
 
+// AddProject creates a project-scoped (kind=http or kind=command)
+// cron. Unlike Add, no parent service is required — the cron has its
+// own image (kind=command) or runs the kuso-backup curl runtime
+// (kind=http). The CR name is "<project>-<short>" so it doesn't
+// collide with service-attached crons under "<project>-<svc>-<short>".
+func (s *Service) AddProject(ctx context.Context, project string, req CreateProjectCronRequest) (*kube.KusoCron, error) {
+	if req.Name == "" {
+		return nil, fmt.Errorf("%w: name is required", ErrInvalid)
+	}
+	if err := validateSchedule(req.Schedule); err != nil {
+		return nil, err
+	}
+	switch req.Kind {
+	case "http":
+		if strings.TrimSpace(req.URL) == "" {
+			return nil, fmt.Errorf("%w: kind=http requires url", ErrInvalid)
+		}
+	case "command":
+		if req.Image == nil || strings.TrimSpace(req.Image.Repository) == "" {
+			return nil, fmt.Errorf("%w: kind=command requires image.repository", ErrInvalid)
+		}
+		if len(req.Command) == 0 {
+			return nil, fmt.Errorf("%w: kind=command requires command", ErrInvalid)
+		}
+	default:
+		return nil, fmt.Errorf("%w: kind must be http or command", ErrInvalid)
+	}
+	policy := req.ConcurrencyPolicy
+	if policy == "" {
+		policy = "Forbid"
+	}
+	switch policy {
+	case "Allow", "Forbid", "Replace":
+	default:
+		return nil, fmt.Errorf("%w: concurrencyPolicy must be Allow|Forbid|Replace", ErrInvalid)
+	}
+	ns := s.nsFor(ctx, project)
+	// Project-scoped CR name: <project>-<short>. Distinct from
+	// service-attached crons (which use <project>-<svc>-<short>) so
+	// the two namespaces never collide.
+	fqn := project + "-" + req.Name
+	if existing, err := s.Kube.GetKusoCron(ctx, ns, fqn); err == nil && existing != nil {
+		return nil, fmt.Errorf("%w: cron %s already exists", ErrConflict, fqn)
+	} else if err != nil && !apierrors.IsNotFound(err) {
+		return nil, fmt.Errorf("preflight cron: %w", err)
+	}
+	cr := &kube.KusoCron{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: fqn,
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project":   project,
+				"kuso.sislelabs.com/cron":      req.Name,
+				"kuso.sislelabs.com/cron-kind": req.Kind,
+			},
+		},
+		Spec: kube.KusoCronSpec{
+			Project:               project,
+			Kind:                  req.Kind,
+			URL:                   req.URL,
+			Schedule:              req.Schedule,
+			Command:               req.Command,
+			Image:                 req.Image,
+			DisplayName:           req.DisplayName,
+			Suspend:               req.Suspend,
+			ConcurrencyPolicy:     policy,
+			ActiveDeadlineSeconds: req.ActiveDeadlineSeconds,
+		},
+	}
+	created, err := s.Kube.CreateKusoCron(ctx, ns, cr)
+	if err != nil {
+		return nil, fmt.Errorf("create project cron: %w", err)
+	}
+	return created, nil
+}
+
 func (s *Service) Update(ctx context.Context, project, service, name string, req UpdateCronRequest) (*kube.KusoCron, error) {
 	cr, err := s.Get(ctx, project, service, name)
 	if err != nil {
@@ -305,6 +402,20 @@ func (s *Service) Delete(ctx context.Context, project, service, name string) err
 			return fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
 		}
 		return fmt.Errorf("delete cron: %w", err)
+	}
+	return nil
+}
+
+// DeleteProject removes a project-scoped cron. CR name is
+// "<project>-<short>" (no service segment). Used by the canvas
+// "Delete cron" right-click action and by the project Crons tab.
+func (s *Service) DeleteProject(ctx context.Context, project, name string) error {
+	fqn := project + "-" + name
+	if err := s.Kube.DeleteKusoCron(ctx, s.nsFor(ctx, project), fqn); err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
+		}
+		return fmt.Errorf("delete project cron: %w", err)
 	}
 	return nil
 }

@@ -29,6 +29,11 @@ type CronsHandler struct {
 func (h *CronsHandler) Mount(r chi.Router) {
 	// Project-wide rollup.
 	r.Get("/api/projects/{project}/crons", h.ListForProject)
+	// Project-scoped create — kind=http or kind=command crons that
+	// don't belong to any service. Drive from the canvas right-click
+	// "Add cron" and from the project Crons tab (also project-level).
+	r.Post("/api/projects/{project}/crons", h.AddProject)
+	r.Delete("/api/projects/{project}/crons/{name}", h.DeleteProject)
 	// Per-service surface.
 	r.Get("/api/projects/{project}/services/{service}/crons", h.List)
 	r.Post("/api/projects/{project}/services/{service}/crons", h.Add)
@@ -36,6 +41,45 @@ func (h *CronsHandler) Mount(r chi.Router) {
 	r.Patch("/api/projects/{project}/services/{service}/crons/{name}", h.Update)
 	r.Delete("/api/projects/{project}/services/{service}/crons/{name}", h.Delete)
 	r.Post("/api/projects/{project}/services/{service}/crons/{name}/sync", h.Sync)
+}
+
+// AddProject creates a project-scoped cron (kind=http / kind=command).
+// Service-attached crons go through Add at the per-service route.
+func (h *CronsHandler) AddProject(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := cronsCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+		return
+	}
+	var req crons.CreateProjectCronRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	out, err := h.Svc.AddProject(ctx, project, req)
+	if err != nil {
+		h.fail(w, "add project cron", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+// DeleteProject removes a project-scoped cron. Service-attached crons
+// have their own delete route (different CR-name shape).
+func (h *CronsHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := cronsCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	name := chi.URLParam(r, "name")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+		return
+	}
+	if err := h.Svc.DeleteProject(ctx, project, name); err != nil {
+		h.fail(w, "delete project cron", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *CronsHandler) Sync(w http.ResponseWriter, r *http.Request) {

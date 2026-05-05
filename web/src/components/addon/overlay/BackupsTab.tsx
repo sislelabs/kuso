@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { CronPicker } from "@/components/shared/CronPicker";
 import { toast } from "sonner";
 import { relativeTime } from "@/lib/format";
 
@@ -276,19 +277,9 @@ function ConfirmRestore({
   );
 }
 
-// Common cron presets surfaced as quick-pick buttons. The user can
-// still type any 5-field cron expression in the input; presets are a
-// keyboard-saver for the 95% case.
-const SCHEDULE_PRESETS: { label: string; cron: string }[] = [
-  { label: "Hourly", cron: "0 * * * *" },
-  { label: "Every 6h", cron: "0 */6 * * *" },
-  { label: "Daily 03:00", cron: "0 3 * * *" },
-  { label: "Weekly (Sun 03:00)", cron: "0 3 * * 0" },
-];
-
 // 5-field cron regex mirrors the server's addons.cronExpr5. Pre-flight
-// check so a typo turns the Save button into a visible warning rather
-// than a 400 toast after the round-trip.
+// check so a typo (in CronPicker's Custom mode) turns the Save button
+// into a visible warning rather than a 400 toast after the round-trip.
 const CRON_RE = /^[\d\*\/,\-?]+\s+[\d\*\/,\-?]+\s+[\d\*\/,\-?]+\s+[\d\*\/,\-?]+\s+[\d\*\/,\-?]+$/;
 
 // BackupScheduleEditor lets the user enable / change / disable the
@@ -355,37 +346,33 @@ function BackupScheduleEditor({
       </header>
 
       <div className="space-y-3">
-        <div className="space-y-1">
-          <label className="block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-            Cron
+        <div className="space-y-2">
+          <label className="flex items-center gap-2 text-[12px]">
+            <input
+              type="checkbox"
+              checked={trimmed !== ""}
+              onChange={(e) => {
+                if (e.target.checked) {
+                  // Re-enabling: hand back the user's last good
+                  // schedule, or fall back to a sensible daily-3am
+                  // default if they're enabling for the first time.
+                  setSchedule(initialSchedule || "0 3 * * *");
+                } else {
+                  setSchedule("");
+                }
+              }}
+              className="h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
+            />
+            <span>Run backups on a schedule</span>
           </label>
-          <Input
-            value={schedule}
-            onChange={(e) => setSchedule(e.target.value)}
-            placeholder="leave empty to disable · e.g. 0 3 * * *"
-            spellCheck={false}
-            className={cn(
-              "h-8 font-mono text-[12px]",
-              !scheduleValid && "border-red-500/60",
-            )}
-          />
+          {trimmed !== "" && (
+            <CronPicker value={schedule} onChange={setSchedule} />
+          )}
           {!scheduleValid && (
             <p className="font-mono text-[10px] text-red-400">
-              Must be a 5-field cron expression (or empty to disable).
+              Custom cron must be 5 fields (e.g. <code>0 3 * * *</code>).
             </p>
           )}
-          <div className="flex flex-wrap gap-1.5 pt-1">
-            {SCHEDULE_PRESETS.map((p) => (
-              <button
-                key={p.cron}
-                type="button"
-                onClick={() => setSchedule(p.cron)}
-                className="rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] hover:border-[var(--accent)]/50 hover:text-[var(--accent)]"
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
         </div>
 
         <div className="space-y-1">

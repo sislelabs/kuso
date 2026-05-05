@@ -10,6 +10,7 @@ import type { KusoCron } from "@/features/services";
 import { useCan, Perms } from "@/features/auth";
 import { Clock, Plus, Trash2, RefreshCw, X } from "lucide-react";
 import { toast } from "sonner";
+import { CronPicker } from "@/components/shared/CronPicker";
 import { cn } from "@/lib/utils";
 
 interface Props {
@@ -239,20 +240,13 @@ function CronCreateForm({
           <X className="h-3 w-3" />
         </button>
       </div>
-      <div className="grid grid-cols-[1fr_180px] gap-2">
-        <Input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="cron name (e.g. nightly-cleanup)"
-          className="h-7 font-mono text-[12px]"
-        />
-        <Input
-          value={schedule}
-          onChange={(e) => setSchedule(e.target.value)}
-          placeholder="*/15 * * * *"
-          className="h-7 font-mono text-[12px]"
-        />
-      </div>
+      <Input
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="cron name (e.g. nightly-cleanup)"
+        className="h-7 font-mono text-[12px]"
+      />
+      <CronPicker value={schedule} onChange={setSchedule} />
       <Input
         value={cmd}
         onChange={(e) => setCmd(e.target.value)}

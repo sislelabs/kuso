@@ -54,12 +54,29 @@ spec:
           {{- end }}
           containers:
             - name: cron
+              {{- /* kind=http synthesises the curl runtime — image
+                     comes from kuso-backup (which has curl) and the
+                     command is auto-generated. kind=service /
+                     kind=command honour what the server stamped on
+                     the spec. */}}
+              {{- if eq (default "service" .Values.kind) "http" }}
+              image: "ghcr.io/sislelabs/kuso-backup:latest"
+              imagePullPolicy: IfNotPresent
+              command: ["sh", "-c"]
+              args:
+                - |
+                  set -e
+                  echo "==> probe {{ .Values.url }}"
+                  curl -fsS -o /dev/null -w "status=%{http_code} time=%{time_total}s\n" {{ .Values.url | quote }}
+                  echo "==> ok"
+              {{- else }}
               image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "latest" }}"
               imagePullPolicy: {{ .Values.image.pullPolicy }}
               command:
                 {{- range .Values.command }}
                 - {{ . | quote }}
                 {{- end }}
+              {{- end }}
               {{- with .Values.envFromSecrets }}
               envFrom:
                 {{- range . }}

@@ -435,23 +435,50 @@ type KusoCron struct {
 }
 
 type KusoCronSpec struct {
-	Project                    string         `json:"project"`
-	Service                    string         `json:"service"`
+	Project string `json:"project"`
+	// Kind disambiguates the three flavours a KusoCron can take:
+	//   "service"  — runs the parent Service's image with a custom
+	//                command (legacy default; Service must be set).
+	//   "http"     — curl a URL on schedule, fail on non-2xx. No
+	//                Service or image required; URL field is used.
+	//   "command"  — run a user-supplied image with a user-supplied
+	//                argv. Image must be set; Service is unused.
+	// Empty defaults to "service" for back-compat with crons created
+	// before v0.8 (they all had Service set).
+	Kind                       string         `json:"kind,omitempty"`
+	// Service is the parent service for kind=service crons. Empty for
+	// kind=http and kind=command — those run as project-scoped jobs
+	// independent of any service.
+	Service                    string         `json:"service,omitempty"`
+	// URL is the HTTP target for kind=http crons. The runtime image
+	// (kuso-backup, which has curl) hits this URL and exits non-zero
+	// on a non-2xx response. Ignored for other kinds.
+	URL                        string         `json:"url,omitempty"`
 	Schedule                   string         `json:"schedule"`
-	Command                    []string       `json:"command"`
+	// Command's interpretation depends on Kind:
+	//   service / command → argv for the container.
+	//   http              → unused; the chart synthesises curl args.
+	Command                    []string       `json:"command,omitempty"`
 	Suspend                    bool           `json:"suspend,omitempty"`
 	ConcurrencyPolicy          string         `json:"concurrencyPolicy,omitempty"`
 	SuccessfulJobsHistoryLimit int            `json:"successfulJobsHistoryLimit,omitempty"`
 	FailedJobsHistoryLimit     int            `json:"failedJobsHistoryLimit,omitempty"`
 	ActiveDeadlineSeconds      int            `json:"activeDeadlineSeconds,omitempty"`
 	Resources                  map[string]any `json:"resources,omitempty"`
-	// Image + envFromSecrets are populated by the kuso server at
-	// create time by reading the parent service's production env.
-	// Helm-operator is dumb and can only render what's in spec —
-	// not look up sibling CRs. SyncFromService re-resolves on demand.
+	// Image + envFromSecrets:
+	//   kind=service → server populates from the parent service's
+	//                  production env at create time / sync.
+	//   kind=command → user supplies the image; envFromSecrets is
+	//                  optional (project-shared secrets always
+	//                  attach via the chart anyway).
+	//   kind=http    → server uses the kuso-backup image (it has
+	//                  curl pre-installed).
 	Image          *KusoImage     `json:"image,omitempty"`
 	EnvFromSecrets []string       `json:"envFromSecrets,omitempty"`
 	Placement      *KusoPlacement `json:"placement,omitempty"`
+	// DisplayName lets the canvas show a friendly label. Optional;
+	// UI falls back to the cron's short name when empty.
+	DisplayName string `json:"displayName,omitempty"`
 }
 
 // ---- Kuso (config CRD) ---------------------------------------------------

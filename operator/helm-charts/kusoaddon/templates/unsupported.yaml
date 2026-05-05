@@ -1,4 +1,4 @@
-{{- $supported := list "postgres" "redis" -}}
+{{- $supported := list "postgres" "redis" "s3" -}}
 {{- if not (has .Values.kind $supported) }}
 
 # Skeleton for addon kinds reserved in v0.2.0 but not yet implemented:

@@ -82,6 +82,17 @@ const BRANDS: Record<
     path:
       "M19.5 14.625c0 .995-.524 1.482-1.5 1.5H6c-.976-.018-1.5-.505-1.5-1.5s.524-1.482 1.5-1.5h12c.976.018 1.5.505 1.5 1.5m-1.5 2.25H6c-.976.018-1.5.505-1.5 1.5s.524 1.482 1.5 1.5h12c.976-.018 1.5-.505 1.5-1.5s-.524-1.482-1.5-1.5m3.75-8.248v-.001c-.976.017-1.5.504-1.5 1.499v8.25c0 .995.524 1.482 1.5 1.5v-.002c1.464-.052 2.25-1.514 2.25-4.498v-3.75c0-1.99-.786-2.964-2.25-2.998m-19.5-.001C.786 8.662 0 9.637 0 11.626v3.75c0 2.984.786 4.446 2.25 4.498v.001c.976-.017 1.5-.504 1.5-1.499v-8.25c0-.995-.524-1.482-1.5-1.5m19.5-.75c0-2.486-1.31-3.705-3.75-3.748v-.002H6v.002c-2.44.043-3.75 1.262-3.75 3.748v.001c1.464.026 2.25.757 2.25 2.249s.786 2.223 2.25 2.249s.786-2.223 2.25-2.249z",
   },
+  s3: {
+    // Bucket-shaped glyph rendered in MinIO red. simpleicons does
+    // ship a MinIO icon but it's the wordmark "M" which doesn't
+    // read at 16px alongside the other addon tiles. The bucket is
+    // self-explanatory + matches what the kind represents (object
+    // storage), independent of which OSS we ship as the runtime.
+    label: "S3 (MinIO)",
+    color: "#C72E29",
+    path:
+      "M3 3h18l-1.5 16.5a2 2 0 0 1-2 1.8H6.5a2 2 0 0 1-2-1.8L3 3zm2.2 2L6.5 18.5h11L18.8 5H5.2zm3.3 3h7l-.4 8h-6.2L8.5 8z",
+  },
 };
 
 // Aliases — incoming "kind" strings vary between callers (helm chart

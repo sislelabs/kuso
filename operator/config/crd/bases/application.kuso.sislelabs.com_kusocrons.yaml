@@ -44,20 +44,31 @@ spec:
             metadata: { type: object }
             spec:
               type: object
-              required: [project, service, schedule, command]
+              required: [project, schedule]
               properties:
                 project:
                   type: string
+                kind:
+                  type: string
+                  enum: ["", service, http, command]
+                  default: ""
+                  description: Disambiguates the cron flavour. service=run a parent service's image; http=curl a URL; command=run a user-supplied image with argv. Empty defaults to service for back-compat.
                 service:
                   type: string
-                  description: KusoService name (FQN, e.g. <project>-<short>) whose image + envFromSecrets we reuse.
+                  description: For kind=service only. KusoService FQN (e.g. <project>-<short>) whose image + envFromSecrets we reuse.
+                url:
+                  type: string
+                  description: For kind=http only. Target URL — the cron fails on a non-2xx response.
+                displayName:
+                  type: string
+                  description: Free-form label shown in the UI. Optional; falls back to the cron's short name.
                 schedule:
                   type: string
                   description: Standard cron expression — `*/15 * * * *`. Validated server-side.
                 command:
                   type: array
                   items: { type: string }
-                  description: argv for the job container — first element is the binary, rest are args.
+                  description: argv for the job container. Required for kind=service and kind=command; ignored for kind=http (chart synthesises curl args).
                 suspend:
                   type: boolean
                   default: false

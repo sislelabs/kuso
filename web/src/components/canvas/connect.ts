@@ -76,6 +76,15 @@ function addonDefault(kind: string): { key: string; varName: string } {
     case "mongodb":
     case "mongo":
       return { key: "MONGODB_URL", varName: "MONGODB_URL" };
+    case "s3":
+    case "minio":
+      // S3 is multi-key — no single env variable covers it the way
+      // DATABASE_URL covers Postgres. Hand back the endpoint as the
+      // most-likely "I want this addon" hook; the user can pull
+      // S3_ACCESS_KEY_ID + _SECRET_ACCESS_KEY + _BUCKET separately
+      // from the env editor's reference picker. (Future: surface a
+      // "connect S3 addon" wizard that stamps all four at once.)
+      return { key: "S3_ENDPOINT", varName: "S3_ENDPOINT" };
     default: {
       const upper = k.replace(/[^a-z0-9]/g, "").toUpperCase() || "ADDON";
       return { key: "URL", varName: upper + "_URL" };

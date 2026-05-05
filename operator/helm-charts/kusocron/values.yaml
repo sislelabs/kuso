@@ -1,7 +1,12 @@
 # Default values for KusoCron CRs. The kuso server populates these
 # fields from KusoCron.spec before passing them to helm-operator.
 project: ""
+# kind ∈ {service, http, command}. Empty defaults to "service" for
+# back-compat with crons created before v0.8.
+kind: ""
 service: ""
+# url: target for kind=http probes. Ignored for other kinds.
+url: ""
 # Cron expression — server validates before write so we don't have to
 # re-validate here.
 schedule: ""

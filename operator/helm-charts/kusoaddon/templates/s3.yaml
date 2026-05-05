@@ -1,0 +1,187 @@
+{{- if and (eq .Values.kind "s3") (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- $version := .Values.version | default "RELEASE.2024-08-17T01-24-54Z" -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{- $secretName := include "kusoaddon.connSecretName" . -}}
+{{- $bucket := .Values.database | default $name -}}
+{{/*
+  MinIO addon — single-pod S3-compatible store. Same shape as the
+  Postgres / Redis addons: StatefulSet + headless Service + conn
+  Secret. Reads access key / secret from the live conn Secret on
+  reconcile so reconciles don't rotate credentials. The bucket is
+  auto-created on first boot via a one-shot init job that uses
+  `mc` against the local MinIO (minio image bundles mc).
+
+  Why MinIO: Apache 2 license, well-maintained image, real
+  production-quality sigv4 auth. The kuso backup pipeline already
+  uses path-style addressing + UsePathStyle:true, which is exactly
+  what MinIO wants — drop-in.
+*/}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $existingAK := "" -}}
+{{- $existingSK := "" -}}
+{{- if and $existing $existing.data (index $existing.data "S3_ACCESS_KEY_ID") -}}
+  {{- $existingAK = (index $existing.data "S3_ACCESS_KEY_ID" | b64dec) -}}
+{{- end -}}
+{{- if and $existing $existing.data (index $existing.data "S3_SECRET_ACCESS_KEY") -}}
+  {{- $existingSK = (index $existing.data "S3_SECRET_ACCESS_KEY" | b64dec) -}}
+{{- end -}}
+{{- $accessKey := $existingAK | default (randAlphaNum 20) -}}
+{{- $secretKey := .Values.password | default $existingSK | default (randAlphaNum 40) -}}
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+    spec:
+      {{- include "kusoaddon.placement" . | nindent 6 }}
+      containers:
+        - name: minio
+          image: "minio/minio:{{ $version }}"
+          args: ["server", "/data", "--console-address", ":9001"]
+          ports:
+            - name: s3
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: S3_ACCESS_KEY_ID
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: S3_SECRET_ACCESS_KEY
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: s3
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: s3
+            initialDelaySeconds: 10
+            periodSeconds: 30
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ include "kusoaddon.storageSize" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: s3
+    - name: console
+      port: 9001
+      targetPort: console
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  # Standard names so the kuso-backup CronJob env wiring works
+  # without provider-specific renames (it already keys on
+  # S3_ENDPOINT / accessKeyId / secretAccessKey).
+  S3_ENDPOINT: "http://{{ $name }}:9000"
+  S3_REGION: "us-east-1"
+  S3_BUCKET: {{ $bucket | quote }}
+  S3_ACCESS_KEY_ID: {{ $accessKey | quote }}
+  S3_SECRET_ACCESS_KEY: {{ $secretKey | quote }}
+  # Aliases for apps that read AWS_*-prefixed names directly.
+  AWS_ACCESS_KEY_ID: {{ $accessKey | quote }}
+  AWS_SECRET_ACCESS_KEY: {{ $secretKey | quote }}
+  AWS_DEFAULT_REGION: "us-east-1"
+  AWS_REGION: "us-east-1"
+---
+{{/*
+  One-shot init Job: creates the bucket on first boot. Idempotent
+  via `mb --ignore-existing`. The Job stays around (TTL 0) as a
+  marker; subsequent reconciles see it complete and skip recreating.
+*/}}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}-init
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "5"
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 4
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: init
+          image: "minio/mc:RELEASE.2024-08-17T11-33-50Z"
+          command: [sh, -c]
+          args:
+            - |
+              set -eu
+              # Wait for the StatefulSet's Service to resolve + the
+              # MinIO process to accept connections. Bounded retry so
+              # the Job fails loudly if MinIO never starts.
+              for i in 1 2 3 4 5 6 7 8 9 10; do
+                if mc alias set local "http://{{ $name }}:9000" "${ACCESS_KEY}" "${SECRET_KEY}" 2>&1; then
+                  break
+                fi
+                echo "==> waiting for MinIO ($i/10)..."
+                sleep 3
+              done
+              mc mb --ignore-existing local/{{ $bucket }}
+              echo "==> bucket {{ $bucket }} ready"
+          env:
+            - name: ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: S3_ACCESS_KEY_ID
+            - name: SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: S3_SECRET_ACCESS_KEY
+{{- end }}
