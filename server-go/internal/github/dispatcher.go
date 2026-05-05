@@ -113,11 +113,22 @@ type pushEvent struct {
 	HeadCommit struct {
 		ID      string `json:"id"`
 		Message string `json:"message"`
-		Author  struct {
+		// Author identity is git-config text — a contributor can put
+		// any string here. Do NOT use this for authorization or
+		// audit; only the Pusher block below carries an authenticated
+		// GitHub identity.
+		Author struct {
 			Username string `json:"username"`
 			Name     string `json:"name"`
 		} `json:"author"`
 	} `json:"head_commit"`
+	// Pusher is the GitHub user who pushed the ref. GitHub vouches
+	// for this — it's the OAuth identity behind the push. Use this
+	// for "triggered by" attribution, never head_commit.author.
+	Pusher struct {
+		Name  string `json:"name"`
+		Email string `json:"email"`
+	} `json:"pusher"`
 }
 
 type prEvent struct {
@@ -207,9 +218,14 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 			// image tag; keeping it tied to the real SHA makes
 			// rollbacks pinpoint-able.
 			req := builds.CreateBuildRequest{
-				Branch:          branch,
-				TriggeredBy:     "webhook",
-				TriggeredByUser: p.HeadCommit.Author.Username,
+				Branch:      branch,
+				TriggeredBy: "webhook",
+				// pusher.name is the authenticated GitHub user who
+				// pushed; head_commit.author.username is git-config
+				// text and can be spoofed by a contributor on a
+				// public repo. Never use the author field for
+				// attribution.
+				TriggeredByUser: p.Pusher.Name,
 				CommitMessage:   firstLine(p.HeadCommit.Message),
 			}
 			if headSHA != "" && len(headSHA) >= 7 {

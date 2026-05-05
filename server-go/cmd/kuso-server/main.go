@@ -272,6 +272,17 @@ func main() {
 		// outcomes and promotes the image tag onto the production env.
 		// Disabled when KUSO_BUILD_POLLER_DISABLED=true (matches TS env).
 		if os.Getenv("KUSO_BUILD_POLLER_DISABLED") != "true" {
+			// SINGLETON ASSUMPTION: the build poller's tick (status
+			// polling + dispatchQueued + log archive) is not safe for
+			// concurrent execution across multiple kuso-server pods.
+			// The deploy/server-go.yaml uses replicas=1 + Recreate
+			// strategy (forced by the RWO SQLite PVC), so today this
+			// is fine. If we ever support HA — by moving SQLite to
+			// Postgres + bumping replicas — this loop must be wrapped
+			// in a kube leader election (k8s.io/client-go/tools/
+			// leaderelection.LeaderElect) or two replicas will
+			// double-promote queued builds, double-emit notify
+			// events, and double-archive logs.
 			go (&builds.Poller{
 				Svc:        buildSvc,
 				Interval:   30 * time.Second,
@@ -300,7 +311,7 @@ func main() {
 		// KUSO_DAILY_CLEANUP_DISABLED=true. Pass both DBs through;
 		// nil log DB just skips the log prune step.
 		if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
-			go runDailyCleanup(ctx, database, logDB, kc, *namespace, logger)
+			go runDailyCleanup(ctx, database, logDB, kc, buildSvc, *namespace, logger)
 		}
 
 		// GitHub App is opt-in; if env vars are missing the webhook +
@@ -495,7 +506,7 @@ func runPreviewCleanup(ctx context.Context, svc *projects.Service, logger *slog.
 //
 // Best-effort: per-step errors log a warning and the loop continues.
 // Disabled by KUSO_DAILY_CLEANUP_DISABLED=true.
-func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *kube.Client, namespace string, logger *slog.Logger) {
+func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *kube.Client, buildSvc *builds.Service, namespace string, logger *slog.Logger) {
 	notifyDays := envInt("KUSO_NOTIFY_RETENTION_DAYS", 7)
 	logDays := envInt("KUSO_LOG_RETENTION_DAYS", 7)
 	buildHours := envInt("KUSO_BUILD_RETENTION_HOURS", 24)
@@ -518,16 +529,43 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 			}
 		}
 		if kc != nil {
-			if n, err := builds.SweepFinishedBuilds(c, kc, namespace, time.Duration(buildHours)*time.Hour, builds.LogAdapter(logger)); err != nil {
-				logger.Warn("daily-cleanup builds", "err", err)
-			} else if n > 0 {
-				logger.Info("daily-cleanup builds pruned", "count", n, "hours", buildHours)
+			// Walk every project's execution namespace so multi-tenant
+			// installs get their done builds + orphan releases swept.
+			// Without this, a project with spec.namespace="customer-x"
+			// would accumulate stale CRs forever.
+			nss := []string{namespace}
+			if buildSvc != nil {
+				nss = buildSvc.ScanNamespaces(c)
 			}
-			if n, err := builds.SweepOrphanHelmReleases(c, kc, namespace, builds.LogAdapter(logger)); err != nil {
-				logger.Warn("daily-cleanup orphans", "err", err)
-			} else if n > 0 {
-				logger.Info("daily-cleanup orphan helm releases pruned", "count", n)
+			totalBuilds, totalOrphans := 0, 0
+			for _, ns := range nss {
+				if n, err := builds.SweepFinishedBuilds(c, kc, ns, time.Duration(buildHours)*time.Hour, builds.LogAdapter(logger)); err != nil {
+					logger.Warn("daily-cleanup builds", "ns", ns, "err", err)
+				} else {
+					totalBuilds += n
+				}
+				if n, err := builds.SweepOrphanHelmReleases(c, kc, ns, builds.LogAdapter(logger)); err != nil {
+					logger.Warn("daily-cleanup orphans", "ns", ns, "err", err)
+				} else {
+					totalOrphans += n
+				}
 			}
+			if totalBuilds > 0 {
+				logger.Info("daily-cleanup builds pruned", "count", totalBuilds, "hours", buildHours, "namespaces", len(nss))
+			}
+			if totalOrphans > 0 {
+				logger.Info("daily-cleanup orphan helm releases pruned", "count", totalOrphans, "namespaces", len(nss))
+			}
+		}
+		// Build log archive prune: anything older than KUSO_BUILD_LOG_
+		// RETENTION_DAYS (default = same as KUSO_LOG_RETENTION_DAYS).
+		// The BuildLog table is keyed on build name, so DELETE-by-age
+		// uses createdAt directly.
+		buildLogDays := envInt("KUSO_BUILD_LOG_RETENTION_DAYS", logDays)
+		if n, err := database.PruneBuildLogs(c, now.AddDate(0, 0, -buildLogDays)); err != nil {
+			logger.Warn("daily-cleanup build-logs", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup build-logs pruned", "rows", n, "days", buildLogDays)
 		}
 	}
 	// Run once at startup so a fresh deploy doesn't have to wait 24h

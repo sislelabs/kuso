@@ -358,6 +358,67 @@ func TestCancel_StampsAndDeletes(t *testing.T) {
 	}
 }
 
+// TestCreate_CoalescesRapidSyntheticRedeploys asserts that two
+// back-to-back Redeploy clicks (no explicit ref) on the same service
+// + branch return the same build CR — no second CR is created. The
+// fix prevents 10 ghost rows piling up when a user spam-clicks the
+// button.
+func TestCreate_CoalescesRapidSyntheticRedeploys(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+	)
+	first, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{})
+	if err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	second, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{})
+	if err != nil {
+		t.Fatalf("second Create: %v", err)
+	}
+	if first.Name != second.Name {
+		t.Errorf("coalesce failed: first=%q second=%q (should be equal)", first.Name, second.Name)
+	}
+	// And only one build CR should exist.
+	list, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list builds: %v", err)
+	}
+	if len(list.Items) != 1 {
+		t.Errorf("want exactly 1 build, got %d", len(list.Items))
+	}
+}
+
+// TestCreate_CoalesceWindowExpires asserts that after the window
+// elapses, a fresh redeploy creates a new build (and the prior one
+// queues behind it because the active-check fires).
+func TestCreate_CoalesceWindowExpires(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+	)
+	first, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{})
+	if err != nil {
+		t.Fatalf("first Create: %v", err)
+	}
+	// Cheat: backdate the first CR's creationTimestamp past the window.
+	raw, _ := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").Get(context.Background(), first.Name, metav1.GetOptions{})
+	old := metav1.NewTime(time.Now().Add(-2 * time.Minute))
+	raw.SetCreationTimestamp(old)
+	if _, uerr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").Update(context.Background(), raw, metav1.UpdateOptions{}); uerr != nil {
+		t.Fatalf("backdate: %v", uerr)
+	}
+	second, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{})
+	if err != nil {
+		t.Fatalf("second Create: %v", err)
+	}
+	if first.Name == second.Name {
+		t.Errorf("coalesce should NOT have applied past window: both built %q", first.Name)
+	}
+}
+
 // TestPoller_DispatchQueuedPromotesWhenIdle covers the dispatcher:
 // when no active build exists for a service, the oldest queued build
 // is promoted (build-state label removed, phase=pending stamped).

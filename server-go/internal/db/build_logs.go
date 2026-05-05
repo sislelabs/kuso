@@ -17,6 +17,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 )
 
 // SaveBuildLog upserts the log tail for a build. Called from the build
@@ -69,4 +70,26 @@ func (d *DB) DeleteBuildLogsForService(ctx context.Context, project, service str
 		return fmt.Errorf("DeleteBuildLogsForService: %w", err)
 	}
 	return nil
+}
+
+// PruneBuildLogs removes archived logs whose createdAt is older than
+// `before`. Returns the number of rows removed. Called from the daily
+// cleanup goroutine. Without this, the BuildLog table grows
+// monotonically — a busy install accumulates ~25 KB per build × N
+// builds; over months that compounds into 100s of MB the user
+// usually doesn't need (failed-build logs older than the retention
+// window are not actionable).
+func (d *DB) PruneBuildLogs(ctx context.Context, before time.Time) (int, error) {
+	res, err := d.DB.ExecContext(ctx,
+		`DELETE FROM "BuildLog" WHERE "createdAt" < ?`,
+		before.UTC(),
+	)
+	if err != nil {
+		return 0, fmt.Errorf("PruneBuildLogs: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("PruneBuildLogs rows: %w", err)
+	}
+	return int(n), nil
 }

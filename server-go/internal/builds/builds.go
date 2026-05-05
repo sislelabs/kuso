@@ -119,6 +119,23 @@ type Service struct {
 	// Create only; freed in defer regardless of outcome.
 	inFlight sync.Map
 
+	// serviceLocks serializes Create calls for the same (project,
+	// service) regardless of SHA. Without this, two simultaneous
+	// pushes of different commits both see "no active build" in the
+	// active-check, both create CRs without the queued label, both
+	// render kaniko Jobs in parallel — defeating the queue. The
+	// per-service mutex closes the TOCTOU window between
+	// findActiveForService and CreateKusoBuild.
+	//
+	// We use a map of *sync.Mutex (not sync.Map of mutexes) because
+	// we need to lock for the duration of Create — sync.Map's value
+	// retrieval is not lock-friendly. The outer mutex protects the
+	// map; the per-service mutex protects the active-check + create
+	// critical section. Hot-path cost: one map lookup + one Lock()
+	// per Create, which is microseconds.
+	serviceLocksMu sync.Mutex
+	serviceLocks   map[string]*sync.Mutex
+
 	// admitOnce + admitSem lazy-init the global build-admission
 	// semaphore. Capacity is sized from MaxConcurrentBuilds the first
 	// time Create runs, so a Service constructed with the default
@@ -150,6 +167,25 @@ type inFlightEntry struct {
 // happen to share a SHA (rare but possible with monorepos).
 func inFlightKey(project, service, sha string) string {
 	return project + "/" + service + "/" + sha
+}
+
+// serviceLockFor returns the per-service mutex, creating it on first
+// access. Locks are never freed once created — the entry count is
+// bounded by the number of distinct services in the cluster, which
+// is the same set we'd already keep in memory for service CRs.
+func (s *Service) serviceLockFor(project, service string) *sync.Mutex {
+	key := project + "/" + service
+	s.serviceLocksMu.Lock()
+	defer s.serviceLocksMu.Unlock()
+	if s.serviceLocks == nil {
+		s.serviceLocks = map[string]*sync.Mutex{}
+	}
+	mu, ok := s.serviceLocks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.serviceLocks[key] = mu
+	}
+	return mu
 }
 
 // New constructs a builds.Service with a default namespace fallback.
@@ -253,6 +289,58 @@ func (s *Service) countActiveBuildsForProject(ctx context.Context, project strin
 		return 0
 	}
 	return len(raw.Items)
+}
+
+// findRecentForBranch returns the newest in-flight (running / pending
+// / queued) KusoBuild for (project, fqn, branch) created within
+// `window`, or nil if none. Used to coalesce rapid synthetic-ref
+// redeploys so spam-clicking the Redeploy button doesn't pile up
+// duplicate queue entries.
+func (s *Service) findRecentForBranch(ctx context.Context, ns, project, fqn, branch string, window time.Duration) (*kube.KusoBuild, error) {
+	if s.Kube == nil {
+		return nil, nil
+	}
+	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// We want "active OR queued" — anything whose build-state is not
+	// "done". A label-selector `!=` only matches keys that exist, so
+	// we list everything for the service and filter in code; the
+	// label cardinality is bounded (~5-50 builds per service over
+	// any short window).
+	selector := "kuso.sislelabs.com/project=" + project +
+		",kuso.sislelabs.com/service=" + fqn
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list recent builds: %w", err)
+	}
+	cutoff := time.Now().Add(-window)
+	var best *kube.KusoBuild
+	for i := range raw.Items {
+		if raw.Items[i].GetLabels()["kuso.sislelabs.com/build-state"] == "done" {
+			continue
+		}
+		var b kube.KusoBuild
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &b); err != nil {
+			continue
+		}
+		if b.Spec.Branch != branch {
+			continue
+		}
+		// Treat zero creationTimestamp as "just created" (the apiserver
+		// would have stamped it but clients/fakes might not). This
+		// keeps the coalesce window slightly more permissive — a
+		// freshly-created CR with an unstamped TS is still recent.
+		if !b.CreationTimestamp.Time.IsZero() && b.CreationTimestamp.Time.Before(cutoff) {
+			continue
+		}
+		if best == nil || b.CreationTimestamp.After(best.CreationTimestamp.Time) {
+			b := b
+			best = &b
+		}
+	}
+	return best, nil
 }
 
 // findActiveForService returns the name of an in-flight KusoBuild for
@@ -416,11 +504,11 @@ func (s *Service) nsFor(ctx context.Context, project string) string {
 	return s.NSResolver.NamespaceFor(ctx, project)
 }
 
-// scanNamespaces returns every namespace the build poller / promotion
+// ScanNamespaces returns every namespace the build poller / promotion
 // flow needs to walk: the home ns plus every distinct spec.namespace
 // declared by a KusoProject. Deduped, errors swallowed (always at
 // least the home ns is returned).
-func (s *Service) scanNamespaces(ctx context.Context) []string {
+func (s *Service) ScanNamespaces(ctx context.Context) []string {
 	out := []string{s.Namespace}
 	seen := map[string]bool{s.Namespace: true}
 	if s.Kube == nil {
@@ -606,6 +694,37 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 
 	buildName := buildCRName(project, service, sha)
 
+	// Per-service serialization. Without this, two simultaneous Create
+	// calls (different SHAs) both pass findActiveForService with no
+	// active build, both decide queued=false, both render Jobs in
+	// parallel — defeating the queue model. The mutex covers the
+	// active-check through CR creation so the queued/active decision
+	// is atomic w.r.t. the etcd state. SHA-level dedup happens above
+	// (inFlight); this is the broader serialization needed for
+	// different-SHA-same-service.
+	svcLock := s.serviceLockFor(project, service)
+	svcLock.Lock()
+	defer svcLock.Unlock()
+
+	// Coalesce rapid synthetic-ref redeploys. A user spam-clicking
+	// Redeploy generates one synthetic ref per click (each carries a
+	// unix-ms suffix → unique). Without coalescing, all 10 clicks
+	// queue and the user sees a stack of ghost rows. We treat
+	// "another build for the same (project, service, branch) created
+	// in the last 30s that's still queued/pending/running" as the
+	// same-intent retry → return that build, no new CR.
+	//
+	// Only applies when the caller did NOT specify an explicit ref —
+	// webhook-triggered builds carry a real SHA and dedup via the
+	// inFlight map above. The 30s window is roughly "two redeploy
+	// clicks within human reaction time"; longer windows risk
+	// coalescing genuinely-distinct intents.
+	if syntheticRef && req.Ref == "" {
+		if existing, err := s.findRecentForBranch(ctx, ns, project, fqn, branch, 30*time.Second); err == nil && existing != nil {
+			return existing, nil
+		}
+	}
+
 	// Coolify-aligned queueing: if another build is in flight for this
 	// service, mark the new CR as queued instead of refusing it. The
 	// build poller's dispatcher (see Poller.dispatchQueued) promotes
@@ -691,11 +810,31 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// This is what keeps queued CRs cheap (no kaniko pod, no resources)
 	// without needing operator-side changes that require an operator-
 	// image rebuild to ship.
+	// OwnerReferences: cascade-delete the build CR when its parent
+	// KusoService is deleted. Without this, deleting a service leaves
+	// orphan KusoBuild records (and any queued builds whose Job never
+	// rendered) accumulating in the namespace forever. The
+	// kusoservice CRD's helm release stays a peer of the build, so
+	// the operator's own uninstall finalizer doesn't conflict.
+	owners := []metav1.OwnerReference{}
+	if svcCR != nil && svcCR.UID != "" {
+		owners = append(owners, metav1.OwnerReference{
+			APIVersion: "application.kuso.sislelabs.com/v1alpha1",
+			Kind:       "KusoService",
+			Name:       svcCR.Name,
+			UID:        svcCR.UID,
+			// blockOwnerDeletion=false: don't block service delete on
+			// build cleanup. controller=false: build CR is not
+			// reconciled because of its owner relationship; helm-
+			// operator picks it up on its own watch.
+		})
+	}
 	build := &kube.KusoBuild{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        buildName,
-			Labels:      labels,
-			Annotations: annos,
+			Name:            buildName,
+			Labels:          labels,
+			Annotations:     annos,
+			OwnerReferences: owners,
 		},
 		Spec: spec,
 	}
@@ -923,7 +1062,7 @@ func (p *Poller) tick(ctx context.Context) error {
 	// list into an indexed scan over the few in-flight rows — and
 	// matches what the operator side already does.
 	const activeBuilds = "!kuso.sislelabs.com/build-state"
-	for _, ns := range p.Svc.scanNamespaces(ctx) {
+	for _, ns := range p.Svc.ScanNamespaces(ctx) {
 		raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 			List(ctx, metav1.ListOptions{LabelSelector: activeBuilds})
 		if err != nil {

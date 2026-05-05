@@ -185,12 +185,16 @@ func toBuildSummary(b kube.KusoBuild) buildSummary {
 	if out.Status == "" {
 		out.Status = "pending"
 	}
-	// Fallback: a running/pending build that hasn't had its
-	// build-started-at annotation stamped yet (kaniko Job hasn't gone
-	// Active) still has a CR creationTimestamp. Use that as the lower
-	// bound so the deployments panel can render an elapsed timer
-	// instead of a blank "—". Finished builds keep their real timing.
-	if out.StartedAt == "" && (out.Status == "running" || out.Status == "pending") {
+	// Fallback: a running build that hasn't had its build-started-at
+	// annotation stamped yet (kaniko Job hasn't gone Active) still
+	// has a CR creationTimestamp. Use that as the lower bound so the
+	// deployments panel can render an elapsed timer instead of "—".
+	//
+	// Scoped to running ONLY — for queued/pending we deliberately
+	// leave startedAt empty. A queued build that sat 10 minutes
+	// behind another should not display "10m duration" because it
+	// hasn't actually started any work yet.
+	if out.StartedAt == "" && out.Status == "running" {
 		if !b.CreationTimestamp.IsZero() {
 			out.StartedAt = b.CreationTimestamp.UTC().Format(time.RFC3339)
 		}
