@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.8.9] — 2026-05-05
+
+### ⚡ Performance
+- Perf(builds): persistent /nix store + lang dep cache + baked nixpacks image ([1197d84](https://github.com/sislelabs/kuso/commit/1197d8453d4e2f3e49a8e1ab468440839e64fb71))
+
 ## [0.8.8] — 2026-05-05
 
 ### Other
