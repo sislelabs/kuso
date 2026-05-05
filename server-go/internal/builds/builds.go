@@ -250,32 +250,46 @@ func (s *Service) admitBuild(ctx context.Context, project string) (release func(
 	return func() {}, nil
 }
 
-// countRunningBuildPodsCluster lists pods labelled
-// app.kubernetes.io/component=kusobuild across all namespaces and
+// countRunningBuildPodsCluster lists pods labelled as kusobuild
+// (either the v0.8.10+ component label or the legacy name label
+// every chart version has set since v0.6) across all namespaces and
 // returns the count whose phase is Pending or Running. Best-effort:
 // kube errors return 0 (admit) — we'd rather risk one extra build
 // than wedge the system on a transient apiserver hiccup.
+//
+// We accept the OR of two label selectors so a roll that mixes pre-
+// and post-v0.8.10 operator-rendered Job pods is still counted
+// correctly. Without the OR, a Job pod rendered by the old operator
+// (no component label) would slip past the cap and we'd over-admit.
 func (s *Service) countRunningBuildPodsCluster(ctx context.Context) int {
 	if s.Kube == nil {
 		return 0
 	}
 	lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	pods, err := s.Kube.Clientset.CoreV1().Pods("").List(lctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/component=kusobuild",
-	})
-	if err != nil {
-		slog.Default().Warn("countRunningBuildPodsCluster", "err", err)
-		return 0
-	}
-	n := 0
-	for i := range pods.Items {
-		p := &pods.Items[i]
-		if p.Status.Phase == corev1.PodPending || p.Status.Phase == corev1.PodRunning {
-			n++
+	// One list per selector. The two queries return disjoint sets in
+	// the steady state (post-v0.8.10 pods carry both labels); during
+	// a roll, dedup by name so we don't double-count.
+	seen := map[string]struct{}{}
+	count := func(sel string) {
+		pods, err := s.Kube.Clientset.CoreV1().Pods("").List(lctx, metav1.ListOptions{
+			LabelSelector: sel,
+		})
+		if err != nil {
+			slog.Default().Warn("countRunningBuildPodsCluster", "selector", sel, "err", err)
+			return
+		}
+		for i := range pods.Items {
+			p := &pods.Items[i]
+			if p.Status.Phase != corev1.PodPending && p.Status.Phase != corev1.PodRunning {
+				continue
+			}
+			seen[p.Namespace+"/"+p.Name] = struct{}{}
 		}
 	}
-	return n
+	count("app.kubernetes.io/component=kusobuild")
+	count("app.kubernetes.io/name=kusobuild")
+	return len(seen)
 }
 
 // projectBuildCap returns the per-project max-concurrent override
@@ -306,6 +320,9 @@ func (s *Service) projectBuildCap(ctx context.Context, project string) int {
 // build pods for a project (not CRs — queued CRs don't render pods
 // and don't consume resources). Best-effort: kube errors return 0
 // (admit) — we'd rather risk one extra build than wedge.
+//
+// Accepts either the v0.8.10+ component label or the legacy name
+// label so a roll-in-progress doesn't under-count active builds.
 func (s *Service) countActiveBuildsForProject(ctx context.Context, project string) int {
 	if s.Kube == nil || project == "" {
 		return 0
@@ -313,20 +330,23 @@ func (s *Service) countActiveBuildsForProject(ctx context.Context, project strin
 	lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	ns := s.nsFor(lctx, project)
-	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(lctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/component=kusobuild,kuso.sislelabs.com/project=" + project,
-	})
-	if err != nil {
-		return 0
-	}
-	n := 0
-	for i := range pods.Items {
-		p := &pods.Items[i]
-		if p.Status.Phase == corev1.PodPending || p.Status.Phase == corev1.PodRunning {
-			n++
+	seen := map[string]struct{}{}
+	count := func(sel string) {
+		pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(lctx, metav1.ListOptions{LabelSelector: sel})
+		if err != nil {
+			return
+		}
+		for i := range pods.Items {
+			p := &pods.Items[i]
+			if p.Status.Phase != corev1.PodPending && p.Status.Phase != corev1.PodRunning {
+				continue
+			}
+			seen[p.Name] = struct{}{}
 		}
 	}
-	return n
+	count("app.kubernetes.io/component=kusobuild,kuso.sislelabs.com/project=" + project)
+	count("app.kubernetes.io/name=kusobuild,kuso.sislelabs.com/project=" + project)
+	return len(seen)
 }
 
 // findRecentForBranch returns the newest in-flight (running / pending

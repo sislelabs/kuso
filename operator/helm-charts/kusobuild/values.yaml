@@ -78,12 +78,22 @@ image:
 # use it. When zero, the repo is assumed public and cloned anonymously.
 githubInstallationId: 0
 
-# Resources for the kaniko Job pod. Builds are CPU-heavy; defaults aim
-# at "small Hetzner box" — bigger boxes can override.
+# Resources for the kaniko Job pod. Builds are CPU-and-memory-heavy
+# (especially nixpacks: nix-env compiles glibc/gcc on cold cache).
+# Defaults aim at "small Hetzner box" (4 GB RAM); bigger boxes can
+# raise via override.
+#
+# Memory limit calibration: 1Gi × 2 concurrent builds = 2Gi for
+# build work, leaving 2Gi for k3s + kuso-server + traefik on a
+# 4Gi box. Going above 1Gi here means a single build can starve
+# the cluster — we hit exactly that on v0.8.9 with 2Gi limits and
+# 5 concurrent builds. The cluster-wide MaxConcurrentBuilds cap is
+# the second line of defence; this keeps each build's footprint
+# bounded so the cap math holds.
 resources:
   requests:
     cpu: 200m
-    memory: 512Mi
+    memory: 384Mi
   limits:
     cpu: 1500m
-    memory: 2Gi
+    memory: 1Gi
