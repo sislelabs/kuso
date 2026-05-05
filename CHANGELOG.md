@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.8.5] — 2026-05-05
+
+### ✨ Features
+- Feat(builds): coolify-style deployment lifecycle (cancel, dur, log archive) ([7f7a07c](https://github.com/sislelabs/kuso/commit/7f7a07c7073875b1e604ea843b37a04dcde35cd2))
+
 ## [0.8.4] — 2026-05-05
 
 ### 🐛 Bug Fixes
