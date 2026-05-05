@@ -30,6 +30,11 @@ func (h *BuildsHandler) Mount(r chi.Router) {
 	// successful build's image. The user picks the build by name (CR
 	// name); we patch spec.image to that build's image tag.
 	r.Post("/api/projects/{project}/services/{service}/builds/{build}/rollback", h.Rollback)
+	// Cancel an in-flight build: marks it cancelled + tears down the
+	// kaniko Job. Coolify-equivalent: lets the user unjam a wedged build
+	// without ssh. Returns 400 if the build is already in a terminal
+	// phase (succeeded/failed/cancelled) — there's nothing to stop.
+	r.Post("/api/projects/{project}/services/{service}/builds/{build}/cancel", h.Cancel)
 	// Project-scoped "latest build per service" — used by the canvas
 	// to color service nodes by their pending/failed/succeeded build
 	// status without N round-trips. Returns a map keyed by short
@@ -77,6 +82,20 @@ func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request)
 		out[short] = toBuildSummary(b)
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+func (h *BuildsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := buildsCtx(r)
+	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
+	err := h.Svc.Cancel(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "build"))
+	if err != nil {
+		h.fail(w, "cancel build", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *BuildsHandler) Rollback(w http.ResponseWriter, r *http.Request) {
@@ -152,6 +171,16 @@ func toBuildSummary(b kube.KusoBuild) buildSummary {
 	}
 	if out.Status == "" {
 		out.Status = "pending"
+	}
+	// Fallback: a running/pending build that hasn't had its
+	// build-started-at annotation stamped yet (kaniko Job hasn't gone
+	// Active) still has a CR creationTimestamp. Use that as the lower
+	// bound so the deployments panel can render an elapsed timer
+	// instead of a blank "—". Finished builds keep their real timing.
+	if out.StartedAt == "" && (out.Status == "running" || out.Status == "pending") {
+		if !b.CreationTimestamp.IsZero() {
+			out.StartedAt = b.CreationTimestamp.UTC().Format(time.RFC3339)
+		}
 	}
 	return out
 }

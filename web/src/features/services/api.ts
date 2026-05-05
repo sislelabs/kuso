@@ -35,6 +35,20 @@ export async function listBuilds(project: string, service: string): Promise<Buil
   return api(`/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/builds`);
 }
 
+// cancelBuild stops an in-flight build. 204 on success; 400 if the
+// build is already in a terminal phase (succeeded/failed/cancelled);
+// 404 for an unknown build id.
+export async function cancelBuild(
+  project: string,
+  service: string,
+  buildId: string,
+): Promise<void> {
+  await api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/builds/${encodeURIComponent(buildId)}/cancel`,
+    { method: "POST" },
+  );
+}
+
 export async function triggerBuild(
   project: string,
   service: string,

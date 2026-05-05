@@ -220,6 +220,12 @@ func main() {
 		// failed} events.
 		buildSvc.Notifier = notifyAdapter{notifyDisp}
 		logsSvc = logs.New(kc, *namespace)
+		// BuildLogs fallback: when a build:<id> stream lands but the
+		// kaniko pod has been GC'd, the stream serves the archived
+		// tail from the BuildLog table. Wired here so logs and
+		// builds packages stay decoupled (each takes a small
+		// interface, main.go is the composition root).
+		logsSvc.BuildLogs = database
 		cfgSvc = config.New(kc, *namespace)
 		statSvc = status.New(kc, 5*time.Minute)
 		addonSvc = addons.New(kc, *namespace)
@@ -267,10 +273,11 @@ func main() {
 		// Disabled when KUSO_BUILD_POLLER_DISABLED=true (matches TS env).
 		if os.Getenv("KUSO_BUILD_POLLER_DISABLED") != "true" {
 			go (&builds.Poller{
-				Svc:      buildSvc,
-				Interval: 30 * time.Second,
-				Logger:   logger,
-				Notifier: notifyAdapter{notifyDisp},
+				Svc:        buildSvc,
+				Interval:   30 * time.Second,
+				Logger:     logger,
+				Notifier:   notifyAdapter{notifyDisp},
+				LogArchive: database,
 			}).Run(ctx)
 		}
 		// Preview-cleanup: every 5 minutes delete preview envs whose

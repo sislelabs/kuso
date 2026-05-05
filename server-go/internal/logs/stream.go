@@ -84,9 +84,25 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 			return env, fmt.Errorf("list build pods: %w", err)
 		}
 		if len(pods.Items) == 0 {
-			// Job pods get GC'd after success/failure. Return a clean
-			// info frame and let the WS close naturally instead of
-			// looping forever waiting for a pod that won't exist.
+			// Job pod's been GC'd by its TTL. Fall back to the archive
+			// snapshot the build poller took at terminal-phase
+			// transition (last 200 lines × init+main containers).
+			// Without this fallback, the deployments-tab "expand a
+			// failed build" reveals nothing — see v0.8.5.
+			if s.BuildLogs != nil {
+				if archived, err := s.BuildLogs.GetBuildLog(ctx, buildName); err == nil && archived != "" {
+					_ = sink.Write(Frame{Type: "log", Pod: buildName, Line: "── archived logs (pod GC'd) ──"})
+					for _, line := range strings.Split(archived, "\n") {
+						if line == "" {
+							continue
+						}
+						if err := sink.Write(Frame{Type: "log", Pod: buildName, Line: line}); err != nil {
+							return env, nil
+						}
+					}
+					return env, nil
+				}
+			}
 			_ = sink.Write(Frame{Type: "log", Pod: buildName, Line: "build pod not found (likely garbage-collected)"})
 			return env, nil
 		}

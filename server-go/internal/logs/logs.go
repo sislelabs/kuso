@@ -20,10 +20,21 @@ import (
 	"kuso/server/internal/kube"
 )
 
+// BuildLogReader is the read-side of the BuildLog archive (db.DB).
+// Optional dependency: if non-nil, Stream will fall back to the
+// archive when a "build:<id>" stream request finds no live pod.
+type BuildLogReader interface {
+	GetBuildLog(ctx context.Context, buildName string) (string, error)
+}
+
 // Service handles log reads. Construct via New.
 type Service struct {
 	Kube      *kube.Client
 	Namespace string
+	// BuildLogs is the persisted-tail fallback for build:<id> streams
+	// after the kaniko Job pod has been TTL'd. Nil = no fallback (the
+	// stream returns the "pod not found" message as before).
+	BuildLogs BuildLogReader
 }
 
 // New constructs a logs.Service.

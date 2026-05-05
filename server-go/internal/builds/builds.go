@@ -248,7 +248,91 @@ func (s *Service) countActiveBuildsForProject(ctx context.Context, project strin
 	return len(raw.Items)
 }
 
-// supersedePriorBuilds finds any in-flight KusoBuild for (project, fqn)
+// findActiveForService returns the name of an in-flight KusoBuild for
+// (project, fqn), or "" if none. "In-flight" = no `build-state` label
+// yet (running/pending/queued). Best-effort: kube errors return "" and
+// the error is propagated for the caller to log if it cares.
+func (s *Service) findActiveForService(ctx context.Context, ns, project, fqn string) (string, error) {
+	if s.Kube == nil {
+		return "", nil
+	}
+	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	selector := "kuso.sislelabs.com/project=" + project +
+		",kuso.sislelabs.com/service=" + fqn +
+		",!kuso.sislelabs.com/build-state"
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
+	if err != nil {
+		return "", fmt.Errorf("list active builds: %w", err)
+	}
+	if len(raw.Items) == 0 {
+		return "", nil
+	}
+	return raw.Items[0].GetName(), nil
+}
+
+// Cancel marks an in-flight build as cancelled and tears down its
+// kaniko Job. The CR itself is preserved (with phase=cancelled +
+// build-state=done) so the deployments list still shows it in the
+// history rather than a hole. Cancelling a finished build is a no-op
+// 400 — the Job's already gone and the phase is fixed.
+func (s *Service) Cancel(ctx context.Context, project, service, buildName string) error {
+	if buildName == "" {
+		return fmt.Errorf("%w: empty build name", ErrInvalid)
+	}
+	ns := s.nsFor(ctx, project)
+	b, err := s.Kube.GetKusoBuild(ctx, ns, buildName)
+	if apierrors.IsNotFound(err) {
+		return fmt.Errorf("%w: build %s", ErrNotFound, buildName)
+	}
+	if err != nil {
+		return fmt.Errorf("get build: %w", err)
+	}
+	phase := buildPhase(b)
+	if phase == "succeeded" || phase == "failed" || phase == "cancelled" {
+		return fmt.Errorf("%w: build %s already in phase %q", ErrInvalid, buildName, phase)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	patch := fmt.Sprintf(
+		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:"cancelled by user"},"labels":{"kuso.sislelabs.com/build-state":"done"}}}`,
+		annPhase, annCompletedAt, now, annMessage,
+	)
+	if _, perr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+		Patch(ctx, buildName, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {
+		return fmt.Errorf("patch build cancelled: %w", perr)
+	}
+	bg := metav1.DeletePropagationBackground
+	if jerr := s.Kube.Clientset.BatchV1().Jobs(ns).Delete(ctx, buildName, metav1.DeleteOptions{
+		PropagationPolicy: &bg,
+	}); jerr != nil && !apierrors.IsNotFound(jerr) {
+		// Don't fail the whole Cancel — the CR is already stamped, the
+		// poller won't promote it. Worst case the kaniko Job runs for a
+		// few more minutes producing an image nothing will use.
+		slog.Default().Warn("builds: delete cancelled job", "err", jerr, "build", buildName)
+	}
+	if s.Notifier != nil {
+		short := strings.TrimPrefix(b.Spec.Service, project+"-")
+		s.Notifier.Emit(EventEnvelope{
+			Type:     "build.cancelled",
+			Title:    fmt.Sprintf("⊘ Build cancelled: %s", short),
+			Body:     fmt.Sprintf("`%s` cancelled by user", buildName),
+			Project:  project,
+			Service:  short,
+			URL:      buildEventURL(project, short),
+			Severity: "info",
+		})
+	}
+	return nil
+}
+
+// supersedePriorBuilds is retained for the cleanup path — it's no
+// longer called from Create (v0.8.5: same-service builds queue rather
+// than supersede). Other callers may still want the bulk-cancel
+// semantics so we leave the helper in place.
+//
+// Original doc: finds any in-flight KusoBuild for (project, fqn)
 // other than newName, stamps it as cancelled, and tears down its kaniko
 // Job. Best-effort: kube errors are logged at warn and swallowed —
 // the new build still goes ahead. Stamping (not deleting) the prior CR
@@ -509,17 +593,18 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 
 	buildName := buildCRName(project, service, sha)
 
-	// Supersede any in-flight builds for this (project, service). A new
-	// build means whatever the previous one was producing is stale —
-	// keeping the old kaniko Job around just steals CPU/RAM from the
-	// new one (on a 2-vCPU box, the redeploy storm we hit on v0.7.38
-	// drove load avg past 13). Errors are logged at warn but don't
-	// block the new build: a stale predecessor that fails to cancel
-	// will still finish on its own and produce an obsolete-but-harmless
-	// image; the new build's image will overwrite the env tag once it
-	// promotes. Skipped on synthetic-ref retries — those go through
-	// the in-flight dedup path above.
-	s.supersedePriorBuilds(ctx, ns, project, fqn, buildName)
+	// Refuse to start a second build for the same service while one is
+	// already running. Coolify's model: never run two builds for the
+	// same application simultaneously. The previous behaviour (silent
+	// supersede + cancel of the prior build) was confusing — users
+	// would click Redeploy, see the in-progress build vanish without
+	// explanation, and not know whether their new build was queued or
+	// rejected. The handler turns ErrConflict into a 409 with this
+	// message; the UI can then offer Cancel + retry.
+	if active, err := s.findActiveForService(ctx, ns, project, fqn); err == nil && active != "" && active != buildName {
+		return nil, fmt.Errorf("%w: build %s already running for %s/%s — cancel it or wait for it to finish",
+			ErrConflict, active, project, service)
+	}
 	imageRepo := fmt.Sprintf("%s/%s/%s", RegistryHost, project, service)
 
 	// Strategy mirrors KusoService.spec.runtime. The chart switches on
@@ -731,6 +816,15 @@ type EventEnvelope struct {
 	Extra    map[string]string
 }
 
+// LogArchiver persists the last N lines of a build pod's logs at
+// terminal-phase transition so the deployments-tab can show them
+// after the kaniko Job pod has been GC'd by its TTL. Implemented by
+// db.DB; kept as a small interface to avoid pulling the db package
+// into builds (which would force every test to spin up SQLite).
+type LogArchiver interface {
+	SaveBuildLog(ctx context.Context, buildName, project, service, phase, logs string) error
+}
+
 type Poller struct {
 	Svc      *Service
 	Interval time.Duration
@@ -738,6 +832,10 @@ type Poller struct {
 	// Notifier receives build.{started,succeeded,failed} events.
 	// Optional: nil → no notifications.
 	Notifier EventEmitter
+	// LogArchive snapshots the kaniko pod's tail logs into SQLite at
+	// terminal phase. Optional: nil → no archive (pod logs vanish on
+	// TTL as before).
+	LogArchive LogArchiver
 }
 
 // Run blocks until ctx is cancelled, ticking every Interval and updating
@@ -850,6 +948,91 @@ func completedCondition(job *batchv1.Job) *batchv1.JobCondition {
 // CR from further reconciles. Without it, completed KusoBuilds get
 // reconciled every 60s forever — burning ~10% of one core in a busy
 // cluster on dead work.
+// archiveLogs snapshots the last 200 lines of the kaniko pod's logs
+// into the BuildLog table. Best-effort: kube errors are logged at
+// warn and swallowed — the build's terminal phase is the load-bearing
+// patch, log archiving is a UX nice-to-have. Selects the pod by the
+// helm release-instance label the chart sets to the build CR name;
+// concatenates all pods (init container + main container split).
+func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, phase string) {
+	if p.LogArchive == nil || p.Svc == nil || p.Svc.Kube == nil {
+		return
+	}
+	const tailLines = 200
+	lctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	pods, err := p.Svc.Kube.Clientset.CoreV1().Pods(ns).List(lctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/instance=" + b.Name,
+	})
+	if err != nil {
+		slog.Default().Warn("builds: archive list pods", "err", err, "build", b.Name)
+		return
+	}
+	var combined strings.Builder
+	tail := int64(tailLines)
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		// Each pod has a clone init container + a main kaniko container.
+		// We pull from each container individually so failures in init
+		// (git clone bad ref, missing token) survive too — the operator
+		// would otherwise lose them.
+		for _, c := range append(append([]string{}, containerNames(pod.Spec.InitContainers)...), containerNames(pod.Spec.Containers)...) {
+			req := p.Svc.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
+				Container: c,
+				TailLines: &tail,
+			})
+			stream, err := req.Stream(lctx)
+			if err != nil {
+				continue
+			}
+			data := make([]byte, 0, 8192)
+			buf := make([]byte, 4096)
+			for {
+				n, rerr := stream.Read(buf)
+				if n > 0 {
+					data = append(data, buf[:n]...)
+				}
+				if rerr != nil {
+					break
+				}
+			}
+			stream.Close()
+			if len(data) == 0 {
+				continue
+			}
+			if combined.Len() > 0 {
+				combined.WriteString("\n")
+			}
+			combined.WriteString("--- container: ")
+			combined.WriteString(c)
+			combined.WriteString(" ---\n")
+			combined.Write(data)
+		}
+	}
+	logs := combined.String()
+	// Last-N-line cap. The kaniko build can spit 5k+ lines in a noisy
+	// build (apt-get progress, nix derivations); we want the tail
+	// because that's where the failure usually is.
+	if lines := strings.Split(logs, "\n"); len(lines) > tailLines {
+		logs = strings.Join(lines[len(lines)-tailLines:], "\n")
+	}
+	if err := p.LogArchive.SaveBuildLog(lctx, b.Name, b.Spec.Project,
+		strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-"), phase, logs); err != nil {
+		slog.Default().Warn("builds: archive save", "err", err, "build", b.Name)
+	}
+}
+
+// containerNames extracts pod container names. Wrapped because the
+// init+main split needs concatenating and a tiny helper makes
+// archiveLogs readable.
+func containerNames(cs []corev1.Container) []string {
+	out := make([]string, 0, len(cs))
+	for i := range cs {
+		out = append(out, cs[i].Name)
+	}
+	return out
+}
+
 func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild) error {
 	patch := fmt.Sprintf(
 		`{"metadata":{"annotations":{%q:"succeeded",%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}}}`,
@@ -859,6 +1042,12 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("patch build status: %w", err)
 	}
+	// Snapshot the pod logs BEFORE the kaniko Job's TTL reaper can
+	// delete them. 1h is the chart's default ttlSecondsAfterFinished,
+	// but a slow tick interleaved with a slow apiserver could miss
+	// the window — taking the snapshot synchronously here costs ~1s
+	// and removes that race.
+	p.archiveLogs(ctx, ns, b, "succeeded")
 	if p.Notifier != nil {
 		ref := b.Spec.Ref
 		if len(ref) > 12 {
@@ -889,6 +1078,7 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 	if err != nil {
 		return fmt.Errorf("patch build failed: %w", err)
 	}
+	p.archiveLogs(ctx, ns, b, "failed")
 	if p.Notifier != nil {
 		ref := b.Spec.Ref
 		if len(ref) > 12 {
@@ -913,7 +1103,16 @@ func (p *Poller) markRunning(ctx context.Context, ns string, b *kube.KusoBuild) 
 	if buildPhase(b) == "running" {
 		return nil
 	}
-	patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":{%q:"running"}}}`, annPhase))
+	// Stamp started-at the first time we see the kaniko Job pod active.
+	// Without this the build-summary endpoint has no startedAt for the
+	// running build, the deployments panel can't compute a live duration,
+	// and the row shows just "12s ago" with no elapsed timer. Set it
+	// once on the queued→running transition; markSucceeded/markFailed
+	// don't touch it so finished builds keep their started-at intact.
+	patch := []byte(fmt.Sprintf(
+		`{"metadata":{"annotations":{%q:"running",%q:%q}}}`,
+		annPhase, annStartedAt, time.Now().UTC().Format(time.RFC3339),
+	))
 	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 		Patch(ctx, b.Name, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil {

@@ -19,6 +19,7 @@ export {
   deleteCron,
   syncCron,
   rollbackBuild,
+  cancelBuild,
   searchServiceLogs,
 } from "./api";
 export type {

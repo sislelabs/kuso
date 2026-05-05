@@ -196,6 +196,21 @@ func (d *DB) applyMigrations() error {
 		END`,
 		// v0.7: alert rules. Periodic queries over LogLine + NodeMetric
 		// that fire notify events when threshold breached.
+		// v0.8.5: build log archive. The kaniko Job pod's logs vanish
+		// when its TTL elapses (1h after success/failure), but users
+		// still want to see why a 3-day-old build failed. The poller
+		// snapshots the last 200 lines into here at terminal-phase
+		// transition; LogStream falls back to this when the pod is
+		// gone. One row per build; logs is a newline-joined string.
+		`CREATE TABLE IF NOT EXISTS "BuildLog" (
+			"buildName" TEXT PRIMARY KEY,
+			"project" TEXT NOT NULL DEFAULT '',
+			"service" TEXT NOT NULL DEFAULT '',
+			"phase" TEXT NOT NULL DEFAULT '',
+			"logs" TEXT NOT NULL DEFAULT '',
+			"createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		)`,
+		`CREATE INDEX IF NOT EXISTS "BuildLog_project_service_idx" ON "BuildLog"("project","service")`,
 		`CREATE TABLE IF NOT EXISTS "AlertRule" (
 			"id" TEXT PRIMARY KEY,
 			"name" TEXT NOT NULL,

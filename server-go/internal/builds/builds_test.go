@@ -227,7 +227,12 @@ func TestCreate_DedupsConcurrentSameSHA(t *testing.T) {
 // redeploys held three kaniko Jobs simultaneously and tipped load
 // avg past 13). The fix: stamp the predecessor as cancelled +
 // build-state=done and delete its Job.
-func TestCreate_SupersedesPriorInFlight(t *testing.T) {
+// TestCreate_RejectsSecondInFlight asserts the v0.8.5 behaviour:
+// a Create call lands a 409 Conflict when an in-flight build for the
+// same service already exists, instead of silently superseding it.
+// The Coolify-aligned model is "never two builds for the same app at
+// once" — the user gets an actionable error and a Cancel button.
+func TestCreate_RejectsSecondInFlight(t *testing.T) {
 	t.Parallel()
 	const newRef = "1111111111111111111111111111111111111111"
 	const oldName = "alpha-web-deadbeefcafe"
@@ -264,48 +269,91 @@ func TestCreate_SupersedesPriorInFlight(t *testing.T) {
 	}
 
 	got, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: newRef})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
+	if err == nil {
+		t.Fatalf("Create: want ErrConflict, got nil (build %q created)", got.Name)
 	}
-	if got.Name == oldName {
-		t.Fatalf("new build should have a different name than prior, got %q", got.Name)
+	if !errors.Is(err, ErrConflict) {
+		t.Fatalf("Create: want ErrConflict, got %v", err)
+	}
+	if !strings.Contains(err.Error(), oldName) {
+		t.Errorf("Create error should mention prior build name %q, got %v", oldName, err)
 	}
 
-	// Re-fetch the prior CR; it should now be marked cancelled.
+	// Prior CR should be untouched (no phase=cancelled, no build-state).
 	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").Get(context.Background(), oldName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get prior: %v", err)
 	}
-	annos := raw.GetAnnotations()
-	if annos[annPhase] != "cancelled" {
-		t.Errorf("prior phase: got %q, want cancelled", annos[annPhase])
+	if p := raw.GetAnnotations()[annPhase]; p == "cancelled" {
+		t.Errorf("prior phase: should not be cancelled by Create, got %q", p)
 	}
-	if annos[annSupersededBy] != got.Name {
-		t.Errorf("superseded-by: got %q, want %q", annos[annSupersededBy], got.Name)
+	if l := raw.GetLabels()["kuso.sislelabs.com/build-state"]; l != "" {
+		t.Errorf("build-state label: should be unset, got %q", l)
 	}
-	if !strings.Contains(annos[annMessage], got.Name) {
-		t.Errorf("message: got %q, want it to mention %q", annos[annMessage], got.Name)
-	}
-	if raw.GetLabels()["kuso.sislelabs.com/build-state"] != "done" {
-		t.Errorf("build-state label: got %q, want done",
-			raw.GetLabels()["kuso.sislelabs.com/build-state"])
-	}
-	if annos[annCompletedAt] == "" {
-		t.Errorf("completed-at should be stamped")
-	}
-
-	// Prior Job should be gone.
-	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Get(context.Background(), oldName, metav1.GetOptions{}); err == nil {
-		t.Errorf("prior job still exists after supersede")
+	// Prior Job should still exist — no supersede.
+	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Get(context.Background(), oldName, metav1.GetOptions{}); err != nil {
+		t.Errorf("prior job should remain, got %v", err)
 	}
 }
 
-// TestCreate_SupersedeIgnoresUnrelatedServices guards against the
-// supersede logic accidentally cancelling builds belonging to a
-// different service in the same project. The label selector includes
-// the FQ service name (`<project>-<service>`), so a build for `alpha-
-// api` should be untouched when a new build for `alpha-web` arrives.
-func TestCreate_SupersedeIgnoresUnrelatedServices(t *testing.T) {
+// TestCancel_StampsAndDeletes asserts Cancel marks the CR as
+// phase=cancelled + build-state=done and deletes the kaniko Job.
+func TestCancel_StampsAndDeletes(t *testing.T) {
+	t.Parallel()
+	const buildName = "alpha-web-cafebabe1234"
+	prior := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      buildName,
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": "alpha",
+				"kuso.sislelabs.com/service": "alpha-web",
+			},
+			Annotations: map[string]string{
+				annPhase: "running",
+			},
+		},
+		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "cafebabe1234", Branch: "main"},
+	}
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+		seedBuild(prior),
+	)
+	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Create(context.Background(), &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: buildName, Namespace: "kuso"},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+	if err := s.Cancel(context.Background(), "alpha", "web", buildName); err != nil {
+		t.Fatalf("Cancel: %v", err)
+	}
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").Get(context.Background(), buildName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get after cancel: %v", err)
+	}
+	annos := raw.GetAnnotations()
+	if annos[annPhase] != "cancelled" {
+		t.Errorf("phase: got %q, want cancelled", annos[annPhase])
+	}
+	if raw.GetLabels()["kuso.sislelabs.com/build-state"] != "done" {
+		t.Errorf("build-state: got %q, want done", raw.GetLabels()["kuso.sislelabs.com/build-state"])
+	}
+	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Get(context.Background(), buildName, metav1.GetOptions{}); err == nil {
+		t.Errorf("job should be deleted after Cancel")
+	}
+	// Cancelling an already-cancelled build → ErrInvalid.
+	if err := s.Cancel(context.Background(), "alpha", "web", buildName); !errors.Is(err, ErrInvalid) {
+		t.Errorf("second Cancel: want ErrInvalid, got %v", err)
+	}
+}
+
+// TestCreate_DoesNotConflictAcrossServices guards against the active-
+// build check spuriously rejecting builds of a different service in
+// the same project. The label selector pins on the FQ service name
+// (`<project>-<service>`), so a build for `alpha-api` should not
+// trigger a conflict when a new build for `alpha-web` arrives.
+func TestCreate_DoesNotConflictAcrossServices(t *testing.T) {
 	t.Parallel()
 	const newRef = "2222222222222222222222222222222222222222"
 	otherService := &kube.KusoBuild{

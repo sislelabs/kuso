@@ -5,12 +5,12 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { LogStream } from "@/components/logs/LogStream";
-import { useBuilds, useTriggerBuild, rollbackBuild } from "@/features/services";
+import { useBuilds, useTriggerBuild, rollbackBuild, cancelBuild } from "@/features/services";
 import { useCan, Perms } from "@/features/auth";
 import type { BuildSummary } from "@/features/services/api";
 import type { KusoEnvironment } from "@/types/projects";
 import { relativeTime } from "@/lib/format";
-import { ChevronDown, ChevronRight, RotateCcw, ExternalLink, Undo2 } from "lucide-react";
+import { ChevronDown, ChevronRight, RotateCcw, ExternalLink, Undo2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -25,7 +25,7 @@ interface Props {
 // builds become SUPERSEDED so the user can tell which one's live at
 // a glance. Without this, every successful build wore an ACTIVE pill
 // forever, which lied during a redeploy.
-type Status = "active" | "superseded" | "failed" | "running" | "pending" | "unknown";
+type Status = "active" | "superseded" | "failed" | "running" | "pending" | "cancelled" | "unknown";
 
 // formatDuration turns a millisecond span into the kind of label the
 // build CI/CDs of the world print: "12s", "1m 04s", "3m 17s",
@@ -86,6 +86,7 @@ function classify(b: BuildSummary, activeImageTag?: string): Status {
   if (s === "failed") return "failed";
   if (s === "running") return "running";
   if (s === "pending") return "pending";
+  if (s === "cancelled") return "cancelled";
   return "unknown";
 }
 
@@ -96,6 +97,7 @@ function statusBadge(s: Status) {
     failed:     { label: "FAILED",     cls: "bg-red-500/10 text-red-400 border-red-500/30" },
     running:    { label: "BUILDING",   cls: "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30" },
     pending:    { label: "PENDING",    cls: "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-subtle)]" },
+    cancelled:  { label: "CANCELLED",  cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
     unknown:    { label: "UNKNOWN",    cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
   };
   const m = map[s];
@@ -255,6 +257,15 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
                     {s === "superseded" && canDeploy && (
                       <RollbackButton project={project} service={service} buildId={b.id} sha={sha} />
                     )}
+                    {/* Cancel only for running/pending builds. Lets the
+                        user unjam a wedged kaniko Job without ssh; the
+                        server stamps phase=cancelled + tears down the
+                        Job. After v0.8.5 a second redeploy 409s while
+                        a build is in flight, so Cancel is the
+                        designated escape hatch. */}
+                    {(s === "running" || s === "pending") && canDeploy && (
+                      <CancelButton project={project} service={service} buildId={b.id} />
+                    )}
                     <button
                       type="button"
                       onClick={() => setExpanded(isOpen ? null : b.id)}
@@ -298,6 +309,48 @@ function BuildLogs({ project, service, buildId }: { project: string; service: st
         height="100%"
       />
     </div>
+  );
+}
+
+// CancelButton — POSTs the build's cancel endpoint. No confirm step:
+// cancelling a build is reversible (the user can just trigger a new
+// one) and a confirm dialog on top of a wedged build is friction.
+// Disabled while the request is pending so a double-click doesn't
+// fire two POSTs.
+function CancelButton({
+  project,
+  service,
+  buildId,
+}: {
+  project: string;
+  service: string;
+  buildId: string;
+}) {
+  const qc = useQueryClient();
+  const m = useMutation({
+    mutationFn: () => cancelBuild(project, service, buildId),
+    onSuccess: () => {
+      toast.success("Build cancelled");
+      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });
+    },
+    onError: (e) => {
+      toast.error(e instanceof Error ? e.message : "Cancel failed");
+    },
+  });
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        m.mutate();
+      }}
+      disabled={m.isPending}
+      title="Cancel this build"
+      className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:border-red-500/40 hover:bg-red-500/5 hover:text-red-400 disabled:opacity-50"
+    >
+      <X className="h-3 w-3" />
+      {m.isPending ? "…" : "cancel"}
+    </button>
   );
 }
 
