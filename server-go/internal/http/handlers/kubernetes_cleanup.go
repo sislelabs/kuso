@@ -58,6 +58,28 @@ func (h *KubernetesHandler) CleanupCompleted(w http.ResponseWriter, r *http.Requ
 
 	bg := metav1.DeletePropagationBackground
 
+	// First pass: pre-compute the set of Jobs owned by a KusoBuild CRD.
+	// We look these up once so the pod loop can skip their child pods —
+	// otherwise deleting a finished build pod triggers the operator to
+	// reconcile the KusoBuild, recreate the Job, and respawn the pod
+	// with a fresh `nix-env -if` invocation. On a small host that's
+	// enough to OOM-thrash the box (we tripped this on 2026-05-05).
+	allJobs, err := h.Kube.Clientset.BatchV1().Jobs("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		http.Error(w, "list jobs: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	buildJobs := map[string]bool{} // ns/name → true if owned by KusoBuild
+	for i := range allJobs.Items {
+		j := &allJobs.Items[i]
+		for _, o := range j.OwnerReferences {
+			if o.Kind == "KusoBuild" {
+				buildJobs[j.Namespace+"/"+j.Name] = true
+				break
+			}
+		}
+	}
+
 	// Pods: pull the cluster-wide list once, filter client-side. Server-
 	// side fieldSelectors don't support OR (Succeeded || Failed), so
 	// the server does two list calls or filters locally. Local is
@@ -76,6 +98,19 @@ func (h *KubernetesHandler) CleanupCompleted(w http.ResponseWriter, r *http.Requ
 		if p.Status.Phase != corev1.PodSucceeded && p.Status.Phase != corev1.PodFailed {
 			continue
 		}
+		// Skip pods belonging to a KusoBuild's Job — see comment above.
+		// The right way to clear stale builds is `kubectl delete kusobuild`,
+		// not deleting the child Job/pod, which the operator just rebuilds.
+		ownedByBuildJob := false
+		for _, o := range p.OwnerReferences {
+			if o.Kind == "Job" && buildJobs[p.Namespace+"/"+o.Name] {
+				ownedByBuildJob = true
+				break
+			}
+		}
+		if ownedByBuildJob {
+			continue
+		}
 		if err := h.Kube.Clientset.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{
 			PropagationPolicy: &bg,
 		}); err != nil && !apierrors.IsNotFound(err) {
@@ -90,19 +125,29 @@ func (h *KubernetesHandler) CleanupCompleted(w http.ResponseWriter, r *http.Requ
 	// elapsed Jobs that haven't been marked Failed yet are left for
 	// the kube garbage collector — touching them mid-state risks
 	// racing with helm-operator's reconcile if a Job is parented to
-	// a Helm release.
-	jobs, err := h.Kube.Clientset.BatchV1().Jobs("").List(ctx, metav1.ListOptions{})
-	if err != nil {
-		http.Error(w, "list jobs: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-	for i := range jobs.Items {
-		j := &jobs.Items[i]
+	// a Helm release. We reuse allJobs from the pre-pass.
+	for i := range allJobs.Items {
+		j := &allJobs.Items[i]
 		if skipNS[j.Namespace] {
 			continue
 		}
 		// Skip Jobs still actively running a pod.
 		if j.Status.Active > 0 {
+			continue
+		}
+		// Skip Jobs owned by a KusoBuild CRD. The operator's reconcile
+		// will resurrect deleted Jobs from a stale KusoBuild — and on a
+		// small box, a respawn cascade can OOM-thrash the host. Stale
+		// KusoBuild CRDs themselves are the right thing to delete; this
+		// handler doesn't touch CRDs.
+		ownedByKusoBuild := false
+		for _, o := range j.OwnerReferences {
+			if o.Kind == "KusoBuild" {
+				ownedByKusoBuild = true
+				break
+			}
+		}
+		if ownedByKusoBuild {
 			continue
 		}
 		// Need either CompletionTime (success) or a "Failed" condition
