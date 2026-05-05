@@ -106,6 +106,16 @@ func RateLimitedInvite(next http.HandlerFunc) http.HandlerFunc {
 	return withRateLimit(next)
 }
 
+// RateLimitedOAuthStart caps OAuth-init requests at the same rate as
+// login. Without this, an attacker can abuse the start endpoint to
+// burn through OAuthState rows / spam the Postgres write path / hit
+// the upstream provider's rate limits with our IP. Same per-IP bucket
+// as RateLimitedLogin so /api/auth/login + /api/auth/github + /api/
+// auth/oauth2 all share the cap.
+func RateLimitedOAuthStart(next http.HandlerFunc) http.HandlerFunc {
+	return withRateLimit(next)
+}
+
 // itoaShort avoids strconv.Itoa to keep imports small. Inputs are
 // always small positive seconds.
 func itoaShort(n int) string {

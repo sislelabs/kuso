@@ -83,8 +83,34 @@ func main() {
 	// to compile; it's a thin alias around *db.DB.
 	logDB := database.AsLogDB()
 
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	// Two-tier shutdown contexts (R4 audit fix):
+	//
+	//   sigCtx     — signal-driven; cancels on SIGTERM / SIGINT
+	//   workerCtx  — long-lived background workers (build poller,
+	//                notify dispatcher, samplers, sweeps). Survives
+	//                the signal long enough to finish an in-flight
+	//                tick instead of being killed mid-write.
+	//
+	// On signal: cancel HTTP server (stop accepting new requests)
+	// → wait `workerDrain` for workers to finish a tick
+	// → cancel workerCtx (forces remaining work to abort).
+	//
+	// Without this split, a build poller that just patched a CR but
+	// hadn't finished writing the LogLine batch had its ctx cancelled
+	// mid-Postgres-Exec, leaving the kube state ahead of the audit
+	// log. Postgres rolls back the partial write, the operator sees
+	// the patched CR but kuso has no record — confusing during
+	// post-incident review.
+	sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+	workerCtx, cancelWorkers := context.WithCancel(context.Background())
+	defer cancelWorkers()
+	const workerDrain = 30 * time.Second
+	// ctx is the alias most code below uses for "the long-running
+	// context" — point it at workerCtx so existing callers extend
+	// their lifetime through drain. The HTTP server is shut down
+	// via srv.Shutdown directly off the sigCtx.Done channel below.
+	ctx := workerCtx
 
 	auditSvc := audit.New(database)
 
@@ -423,15 +449,28 @@ func main() {
 		go ae.Run(ctx)
 	}
 
-	<-ctx.Done()
+	<-sigCtx.Done()
 	logger.Info("shutdown signal received")
 
-	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Step 1: stop accepting new HTTP requests. 10s deadline lets
+	// in-flight requests finish.
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelShutdown()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "err", err)
-		os.Exit(1)
 	}
+	// Step 2: give workers `workerDrain` to finish their current
+	// tick. They share workerCtx; we cancel it after the timer.
+	logger.Info("draining background workers", "timeout", workerDrain)
+	drainTimer := time.NewTimer(workerDrain)
+	defer drainTimer.Stop()
+	<-drainTimer.C
+	cancelWorkers()
+	// Brief settle to let any goroutine that read ctx.Done() finish
+	// its return path. Doesn't need to be exact — Postgres
+	// connections close fast.
+	time.Sleep(500 * time.Millisecond)
+	logger.Info("shutdown complete")
 }
 
 // parseTTL accepts the same "<seconds>s" form the TS server's
@@ -515,6 +554,14 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 			logger.Warn("daily-cleanup notify", "err", err)
 		} else if n > 0 {
 			logger.Info("daily-cleanup notify pruned", "rows", n, "days", notifyDays)
+		}
+		// OAuth states past their TTL are dead weight; drop them
+		// daily. The window is fixed at 24h (way past any realistic
+		// callback latency) so we don't add yet another tunable.
+		if n, err := database.PruneOAuthStates(c, now.Add(-24*time.Hour)); err != nil {
+			logger.Warn("daily-cleanup oauth-state", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup oauth-state pruned", "rows", n)
 		}
 		if logDB != nil {
 			if n, err := logDB.PruneLogsOlderThan(c, now.AddDate(0, 0, -logDays)); err != nil {

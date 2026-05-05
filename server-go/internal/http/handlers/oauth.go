@@ -41,11 +41,14 @@ const inviteOAuthCookie = "kuso_invite_token"
 // carrying the JWT in a cookie, matching the TS behaviour.
 func (h *OAuthHandler) MountPublic(r mountable) {
 	if h.Github != nil {
-		r.Get("/api/auth/github", h.GithubStart)
+		// Init endpoints share the per-IP login bucket (S10 audit fix).
+		// Callbacks are not rate-limited because the upstream provider
+		// is the trigger; they're already gated by state validation.
+		r.Get("/api/auth/github", RateLimitedOAuthStart(h.GithubStart))
 		r.Get("/api/auth/github/callback", h.GithubCallback)
 	}
 	if h.OAuth2 != nil {
-		r.Get("/api/auth/oauth2", h.OAuth2Start)
+		r.Get("/api/auth/oauth2", RateLimitedOAuthStart(h.OAuth2Start))
 		r.Get("/api/auth/oauth2/callback", h.OAuth2Callback)
 	}
 }
@@ -55,13 +58,19 @@ type mountable interface {
 	Get(string, http.HandlerFunc)
 }
 
-// GithubStart writes a state cookie and redirects to GitHub's authorize
-// page.
+// GithubStart writes a state cookie + persists the state in the
+// OAuthState DB table for single-use enforcement. Redirects to GH.
 func (h *OAuthHandler) GithubStart(w http.ResponseWriter, r *http.Request) {
 	state, err := auth.NewState()
 	if err != nil {
 		h.fail(w, "state", err)
 		return
+	}
+	if h.DB != nil {
+		if err := h.DB.MintOAuthState(r.Context(), state, ""); err != nil {
+			h.fail(w, "mint state", err)
+			return
+		}
 	}
 	setStateCookie(w, state)
 	http.Redirect(w, r, h.Github.AuthCodeURL(state), http.StatusFound)
@@ -73,6 +82,17 @@ func (h *OAuthHandler) GithubCallback(w http.ResponseWriter, r *http.Request) {
 	if !verifyStateCookie(r) {
 		http.Error(w, "state mismatch", http.StatusBadRequest)
 		return
+	}
+	// Single-use enforcement — replay protection. ConsumeOAuthState
+	// is atomic in Postgres (UPDATE … WHERE consumed=false); the
+	// second callback for the same state lands here with 0 rows
+	// affected and we bail.
+	if h.DB != nil {
+		state := r.URL.Query().Get("state")
+		if err := h.DB.ConsumeOAuthState(r.Context(), state, 10*time.Minute); err != nil {
+			http.Error(w, "state already used or expired", http.StatusBadRequest)
+			return
+		}
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {
@@ -134,6 +154,12 @@ func (h *OAuthHandler) OAuth2Start(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "state", err)
 		return
 	}
+	if h.DB != nil {
+		if err := h.DB.MintOAuthState(r.Context(), state, ""); err != nil {
+			h.fail(w, "mint state", err)
+			return
+		}
+	}
 	setStateCookie(w, state)
 	http.Redirect(w, r, h.OAuth2.AuthCodeURL(state), http.StatusFound)
 }
@@ -143,6 +169,13 @@ func (h *OAuthHandler) OAuth2Callback(w http.ResponseWriter, r *http.Request) {
 	if !verifyStateCookie(r) {
 		http.Error(w, "state mismatch", http.StatusBadRequest)
 		return
+	}
+	if h.DB != nil {
+		state := r.URL.Query().Get("state")
+		if err := h.DB.ConsumeOAuthState(r.Context(), state, 10*time.Minute); err != nil {
+			http.Error(w, "state already used or expired", http.StatusBadRequest)
+			return
+		}
 	}
 	code := r.URL.Query().Get("code")
 	if code == "" {

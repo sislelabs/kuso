@@ -199,7 +199,20 @@ fi
 # -------- 1. k3s --------
 if [[ "${KUSO_SKIP_K3S:-0}" != "1" ]] && ! command -v k3s >/dev/null 2>&1; then
   log "installing k3s (single-node, traefik disabled — we install our own)"
-  curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--disable=traefik --tls-san=${KUSO_DOMAIN} --write-kubeconfig-mode=644" sh -
+  # --secrets-encryption enables AES-CBC encryption-at-rest for kube
+  # Secrets in k3s's kine datastore. Without this, every Secret
+  # (kuso-server-secrets, kuso-postgres-conn, kuso-github-app, every
+  # addon's connection-string secret, every clone-token) sits in
+  # plaintext on disk. Disk theft → full credential compromise.
+  # The flag must be passed at install — adding it later requires
+  # an Encryption-Provider-Config rotation procedure. Disable via
+  # KUSO_SKIP_SECRETS_ENCRYPTION=1 only when integrating with an
+  # external KMS that handles encryption at the storage layer.
+  K3S_EXTRA="--disable=traefik --tls-san=${KUSO_DOMAIN} --write-kubeconfig-mode=644"
+  if [[ "${KUSO_SKIP_SECRETS_ENCRYPTION:-0}" != "1" ]]; then
+    K3S_EXTRA="${K3S_EXTRA} --secrets-encryption"
+  fi
+  curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="${K3S_EXTRA}" sh -
 else
   log "k3s already present; skipping install"
 fi
