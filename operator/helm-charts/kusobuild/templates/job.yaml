@@ -18,6 +18,26 @@ spec:
         {{- include "kusobuild.labels" . | nindent 8 }}
     spec:
       restartPolicy: Never
+      # Build-node steering. When a node carries the
+      # kuso.sislelabs.com/build=true label and matching NoSchedule
+      # taint, build Jobs prefer (soft preference) to land there
+      # — keeps a kaniko Job from starving the control-plane node
+      # under a build storm. The toleration is unconditional so a
+      # tainted build node accepts these Jobs. Without a build
+      # node, the preference is a no-op and Jobs schedule normally.
+      tolerations:
+        - key: "kuso.sislelabs.com/build"
+          operator: "Exists"
+          effect: "NoSchedule"
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: "kuso.sislelabs.com/build"
+                    operator: "In"
+                    values: ["true"]
       initContainers:
         {{- if .Values.cache.pvcName }}
         # Cache layout. The PVC is mounted at /cache; this init seeds

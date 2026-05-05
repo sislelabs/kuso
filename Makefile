@@ -86,6 +86,19 @@ typecheck:
 test:
 	@cd server-go && go test ./...
 
+# verify: lightweight CI gate. Runs typechecks + tests + a CLI/API
+# parity grep that catches new HTTP routes added without a matching
+# CLI command. Not airtight — it's a heuristic — but it surfaces the
+# common "added an endpoint, forgot the CLI" mistake before review.
+.PHONY: verify verify-parity update-goldens
+verify: typecheck test verify-parity
+
+verify-parity:
+	@bash hack/verify-parity.sh
+
+update-goldens:
+	@cd server-go && KUSO_UPDATE_GOLDENS=1 go test ./internal/kube/ -run TestCRDSchema_GoldenStable
+
 # CLI builds — writes kuso-{darwin,linux}-{amd64,arm64} into dist/.
 # Used by the release flow (hack/release.sh attaches them as GitHub
 # release assets so the install-cli.sh one-liner works); run locally

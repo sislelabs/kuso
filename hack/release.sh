@@ -469,6 +469,43 @@ cat > "$DIST_DIR/release.json" <<EOF
 EOF
 log "wrote ${DIST_DIR}/release.json"
 
+# ---- 4b2. release.json signature -----------------------------------
+#
+# Ed25519 signature over the raw release.json bytes. The kuso updater
+# verifies this when KUSO_REQUIRE_SIGNATURES=true is set on a target
+# install (server-go/internal/updater/updater.go::verifyManifest
+# Signature). The public key is embedded in the install bundle (see
+# install.sh KUSO_RELEASE_PUBLIC_KEY).
+#
+# Skipped silently if KUSO_RELEASE_PRIVATE_KEY isn't set so iterations
+# without keys still produce a usable release.json (the updater logs
+# "unsigned release accepted" and proceeds with a warn). Once the
+# keypair is generated, set KUSO_RELEASE_PRIVATE_KEY to a path
+# containing the PEM-encoded Ed25519 private key.
+if [[ -n "${KUSO_RELEASE_PRIVATE_KEY:-}" ]]; then
+  if [[ ! -f "$KUSO_RELEASE_PRIVATE_KEY" ]]; then
+    fail "KUSO_RELEASE_PRIVATE_KEY=${KUSO_RELEASE_PRIVATE_KEY} does not exist"
+  fi
+  log "signing release.json with ${KUSO_RELEASE_PRIVATE_KEY}"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "openssl pkeyutl -sign -inkey \"$KUSO_RELEASE_PRIVATE_KEY\" -rawin -in \"$DIST_DIR/release.json\" | base64 > \"$DIST_DIR/release.json.sig\""
+  else
+    openssl pkeyutl -sign -inkey "$KUSO_RELEASE_PRIVATE_KEY" -rawin \
+      -in "$DIST_DIR/release.json" \
+      | openssl base64 -A \
+      > "$DIST_DIR/release.json.sig"
+    # Strip stray newline so the file is bare base64 (the verifier
+    # uses base64.StdEncoding which tolerates whitespace, but a clean
+    # file makes diffs easier).
+    if [[ "$(uname)" == "Darwin" ]]; then
+      printf '\n' >> "$DIST_DIR/release.json.sig"
+    fi
+    log "wrote ${DIST_DIR}/release.json.sig ($(wc -c < "$DIST_DIR/release.json.sig") bytes)"
+  fi
+else
+  warn "KUSO_RELEASE_PRIVATE_KEY not set — release.json will ship unsigned (set KUSO_REQUIRE_SIGNATURES on installs to enforce signatures once a keypair is wired)"
+fi
+
 # ---- 4c. CLI binaries ----------------------------------------------
 #
 # install-cli.sh tries to download these from the GitHub release. Build
@@ -576,6 +613,10 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
         fi
       fi
       ALL_ASSETS=( "$DIST_DIR/release.json" "$DIST_DIR/crds.yaml" "${CLI_ASSETS[@]}" )
+      # Upload the signature too when present.
+      if [[ -f "$DIST_DIR/release.json.sig" ]]; then
+        ALL_ASSETS+=( "$DIST_DIR/release.json.sig" )
+      fi
       for asset in "${ALL_ASSETS[@]}"; do
         ok=0
         for try in 1 2 3; do

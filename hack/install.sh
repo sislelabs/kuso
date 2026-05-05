@@ -452,11 +452,25 @@ log "applying kuso-server-secrets"
 # KUSO_DOMAIN goes in here too so the server can build OAuth callback
 # URLs without an admin re-pasting it. NewGithubOAuth() autoderives
 # https://${KUSO_DOMAIN}/api/auth/github/callback when it's set.
+#
+# KUSO_RELEASE_PUBLIC_KEY is the Ed25519 public key (base64) used by
+# the updater to verify release.json signatures. Bake it in at install
+# time so a compromised GH release can't trick installs into pulling
+# a malicious update. Generated with:
+#   openssl genpkey -algorithm Ed25519 -out kuso-release.priv
+#   openssl pkey -in kuso-release.priv -pubout -outform DER \
+#     | tail -c 32 | base64
+# Empty is fine for unsigned releases — the updater logs a warn but
+# proceeds. Set KUSO_REQUIRE_SIGNATURES=true to refuse unsigned.
+KUSO_RELEASE_PUBKEY="${KUSO_RELEASE_PUBLIC_KEY:-}"
+KUSO_REQUIRE_SIGS="${KUSO_REQUIRE_SIGNATURES:-false}"
 kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o yaml \
   --from-literal=KUSO_SESSION_KEY="$SESSION_KEY" \
   --from-literal=JWT_SECRET="$JWT_SECRET" \
   --from-literal=KUSO_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
   --from-literal=KUSO_DOMAIN="$KUSO_DOMAIN" \
+  --from-literal=KUSO_RELEASE_PUBLIC_KEY="$KUSO_RELEASE_PUBKEY" \
+  --from-literal=KUSO_REQUIRE_SIGNATURES="$KUSO_REQUIRE_SIGS" \
   | kubectl apply -f - >/dev/null
 
 # -------- 9b. GitHub App --------

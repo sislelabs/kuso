@@ -1,0 +1,96 @@
+{
+  "v1alpha1": {
+    "description": "KusoBuild is one build attempt. The operator renders a kaniko Job that clones the repo, builds the image, and pushes it to the in-cluster registry.",
+    "properties": {
+      "apiVersion": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "metadata": {
+        "type": "object"
+      },
+      "spec": {
+        "properties": {
+          "branch": {
+            "type": "string"
+          },
+          "buildpacks": {
+            "type": "object",
+            "x-kubernetes-preserve-unknown-fields": true
+          },
+          "cache": {
+            "properties": {
+              "pvcName": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "githubInstallationId": {
+            "format": "int64",
+            "type": "integer"
+          },
+          "image": {
+            "properties": {
+              "repository": {
+                "type": "string"
+              },
+              "tag": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "project": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "repo": {
+            "properties": {
+              "path": {
+                "default": ".",
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "service": {
+            "type": "string"
+          },
+          "static": {
+            "type": "object",
+            "x-kubernetes-preserve-unknown-fields": true
+          },
+          "strategy": {
+            "default": "dockerfile",
+            "enum": [
+              "dockerfile",
+              "nixpacks",
+              "buildpacks",
+              "static"
+            ],
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "service",
+          "ref"
+        ],
+        "type": "object"
+      },
+      "status": {
+        "type": "object",
+        "x-kubernetes-preserve-unknown-fields": true
+      }
+    },
+    "type": "object"
+  }
+}

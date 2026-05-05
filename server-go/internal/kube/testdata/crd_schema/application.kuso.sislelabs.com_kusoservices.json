@@ -1,0 +1,176 @@
+{
+  "v1alpha1": {
+    "description": "KusoService is one deployable process inside a KusoProject.",
+    "properties": {
+      "apiVersion": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "metadata": {
+        "type": "object"
+      },
+      "spec": {
+        "properties": {
+          "buildpacks": {
+            "type": "object",
+            "x-kubernetes-preserve-unknown-fields": true
+          },
+          "command": {
+            "description": "argv override; only consulted for runtime=worker.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "domains": {
+            "items": {
+              "properties": {
+                "host": {
+                  "type": "string"
+                },
+                "tls": {
+                  "default": true,
+                  "type": "boolean"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "envVars": {
+            "items": {
+              "type": "object",
+              "x-kubernetes-preserve-unknown-fields": true
+            },
+            "type": "array"
+          },
+          "fromService": {
+            "description": "For runtime=worker: name of the sibling KusoService\nwhose image this worker should use. Empty = build from\nthe worker's own repo.\n",
+            "type": "string"
+          },
+          "placement": {
+            "description": "AND-of-labels node selector + explicit node allowlist. Empty/missing means \"schedule anywhere\". The env helm chart fans this out to nodeSelector + topologySpreadConstraints.",
+            "properties": {
+              "labels": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "nodes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "port": {
+            "format": "int32",
+            "type": "integer"
+          },
+          "project": {
+            "type": "string"
+          },
+          "repo": {
+            "properties": {
+              "path": {
+                "default": ".",
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "runtime": {
+            "description": "Build/runtime mode. \"worker\" is special — same image as\na sibling web service, but no ingress and a custom\ncommand. Pair it with spec.command and spec.fromService\npointing at the web sibling whose image to reuse.\n",
+            "enum": [
+              "",
+              "dockerfile",
+              "nixpacks",
+              "buildpacks",
+              "static",
+              "worker"
+            ],
+            "type": "string"
+          },
+          "scale": {
+            "properties": {
+              "max": {
+                "default": 5,
+                "type": "integer"
+              },
+              "min": {
+                "default": 1,
+                "type": "integer"
+              },
+              "targetCPU": {
+                "default": 70,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "sleep": {
+            "properties": {
+              "afterMinutes": {
+                "default": 30,
+                "type": "integer"
+              },
+              "enabled": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "static": {
+            "type": "object",
+            "x-kubernetes-preserve-unknown-fields": true
+          },
+          "volumes": {
+            "description": "Persistent volumes to mount into every env's pod. Each entry maps to a PVC + a volumeMount. Declared explicitly so the apiserver doesn't prune them on write.",
+            "items": {
+              "properties": {
+                "accessModes": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "mountPath": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "string"
+                },
+                "storageClass": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "project"
+        ],
+        "type": "object"
+      },
+      "status": {
+        "type": "object",
+        "x-kubernetes-preserve-unknown-fields": true
+      }
+    },
+    "type": "object"
+  }
+}

@@ -1,0 +1,137 @@
+{
+  "v1alpha1": {
+    "description": "KusoAddon is a managed dependency (Postgres, Redis, ...) belonging to a KusoProject.",
+    "properties": {
+      "apiVersion": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "metadata": {
+        "type": "object"
+      },
+      "spec": {
+        "properties": {
+          "backup": {
+            "properties": {
+              "retentionDays": {
+                "default": 14,
+                "type": "integer"
+              },
+              "schedule": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "database": {
+            "type": "string"
+          },
+          "external": {
+            "properties": {
+              "secretKeys": {
+                "description": "Optional allowlist of keys to mirror. Empty =\nmirror every key from the source secret.\n",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "secretName": {
+                "description": "Name of an existing kube Secret in the project\nnamespace. Its keys are mirrored into the addon's\n\u003cname\u003e-conn secret.\n",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "ha": {
+            "default": false,
+            "type": "boolean"
+          },
+          "kind": {
+            "enum": [
+              "postgres",
+              "redis",
+              "mongodb",
+              "mysql",
+              "rabbitmq",
+              "memcached",
+              "clickhouse",
+              "elasticsearch",
+              "kafka",
+              "cockroachdb",
+              "couchdb"
+            ],
+            "type": "string"
+          },
+          "passwordSecret": {
+            "description": "Reference an existing Secret containing the addon\npassword. The chart copies the value at install\ntime into \u003crelease\u003e-conn instead of generating\na random one. Leave unset to let the chart\ngenerate a random 24-char password.\n",
+            "properties": {
+              "key": {
+                "default": "password",
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "placement": {
+            "properties": {
+              "labels": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "nodes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "project": {
+            "type": "string"
+          },
+          "resources": {
+            "type": "object",
+            "x-kubernetes-preserve-unknown-fields": true
+          },
+          "size": {
+            "default": "small",
+            "enum": [
+              "small",
+              "medium",
+              "large"
+            ],
+            "type": "string"
+          },
+          "storageSize": {
+            "type": "string"
+          },
+          "useInstanceAddon": {
+            "description": "Name of an instance-shared addon (registered by\nadmin via instance secret keyed\nINSTANCE_ADDON_\u003cUPPER\u003e_DSN_ADMIN). The server\ncreates a per-project database on the shared\nserver and writes its DSN into \u003cname\u003e-conn. No\nStatefulSet is rendered.\n",
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "status": {
+        "type": "object",
+        "x-kubernetes-preserve-unknown-fields": true
+      }
+    },
+    "type": "object"
+  }
+}

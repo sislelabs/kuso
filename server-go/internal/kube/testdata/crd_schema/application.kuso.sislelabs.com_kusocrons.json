@@ -1,0 +1,134 @@
+{
+  "v1alpha1": {
+    "description": "KusoCron schedules a recurring job — typically `rails runner …` / `manage.py …` against a service's image.",
+    "properties": {
+      "apiVersion": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "metadata": {
+        "type": "object"
+      },
+      "spec": {
+        "properties": {
+          "activeDeadlineSeconds": {
+            "description": "Hard kill after N seconds. 0 = no limit.",
+            "type": "integer"
+          },
+          "command": {
+            "description": "argv for the job container. Required for kind=service and kind=command; ignored for kind=http (chart synthesises curl args).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "concurrencyPolicy": {
+            "default": "Forbid",
+            "enum": [
+              "Allow",
+              "Forbid",
+              "Replace"
+            ],
+            "type": "string"
+          },
+          "displayName": {
+            "description": "Free-form label shown in the UI. Optional; falls back to the cron's short name.",
+            "type": "string"
+          },
+          "envFromSecrets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "failedJobsHistoryLimit": {
+            "default": 3,
+            "type": "integer"
+          },
+          "image": {
+            "properties": {
+              "pullPolicy": {
+                "default": "IfNotPresent",
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              },
+              "tag": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "kind": {
+            "default": "",
+            "description": "Disambiguates the cron flavour. service=run a parent service's image; http=curl a URL; command=run a user-supplied image with argv. Empty defaults to service for back-compat.",
+            "enum": [
+              "",
+              "service",
+              "http",
+              "command"
+            ],
+            "type": "string"
+          },
+          "placement": {
+            "properties": {
+              "labels": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "nodes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "project": {
+            "type": "string"
+          },
+          "resources": {
+            "type": "object",
+            "x-kubernetes-preserve-unknown-fields": true
+          },
+          "schedule": {
+            "description": "Standard cron expression — `*/15 * * * *`. Validated server-side.",
+            "type": "string"
+          },
+          "service": {
+            "description": "For kind=service only. KusoService FQN (e.g. \u003cproject\u003e-\u003cshort\u003e) whose image + envFromSecrets we reuse.",
+            "type": "string"
+          },
+          "successfulJobsHistoryLimit": {
+            "default": 3,
+            "type": "integer"
+          },
+          "suspend": {
+            "default": false,
+            "type": "boolean"
+          },
+          "url": {
+            "description": "For kind=http only. Target URL — the cron fails on a non-2xx response.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "schedule"
+        ],
+        "type": "object"
+      },
+      "status": {
+        "type": "object",
+        "x-kubernetes-preserve-unknown-fields": true
+      }
+    },
+    "type": "object"
+  }
+}

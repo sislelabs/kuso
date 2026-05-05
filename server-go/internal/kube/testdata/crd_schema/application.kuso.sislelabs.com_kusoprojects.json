@@ -1,0 +1,71 @@
+{
+  "v1alpha1": {
+    "description": "KusoProject is the top-level grouping for one product.",
+    "properties": {
+      "apiVersion": {
+        "type": "string"
+      },
+      "kind": {
+        "type": "string"
+      },
+      "metadata": {
+        "type": "object"
+      },
+      "spec": {
+        "properties": {
+          "baseDomain": {
+            "description": "Domain under which auto-generated service hostnames are emitted.",
+            "type": "string"
+          },
+          "defaultRepo": {
+            "properties": {
+              "defaultBranch": {
+                "default": "main",
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "description": {
+            "type": "string"
+          },
+          "github": {
+            "properties": {
+              "installationId": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "namespace": {
+            "description": "Optional execution namespace for this project's child\nresources (services, environments, addons, builds,\nplus their per-service Secrets). The KusoProject CR\nitself always lives in the server's home namespace;\nthis field controls only child routing. Empty = home.\n",
+            "type": "string"
+          },
+          "previews": {
+            "properties": {
+              "enabled": {
+                "default": false,
+                "type": "boolean"
+              },
+              "ttlDays": {
+                "default": 7,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "status": {
+        "type": "object",
+        "x-kubernetes-preserve-unknown-fields": true
+      }
+    },
+    "type": "object"
+  }
+}
