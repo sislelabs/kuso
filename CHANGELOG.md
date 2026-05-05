@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.8.3] — 2026-05-05
+
+### ✨ Features
+- Feat: kuso-server resilience pack + cluster cleanup endpoint ([1a3333f](https://github.com/sislelabs/kuso/commit/1a3333f16b2a72724a8bdfdbfe6bfab638a0b18a))
+
+### 🧹 Chores
+- Chore: post-review batch 2 — backup default, golden tests, delta ops, shared-addons doc ([cc7111f](https://github.com/sislelabs/kuso/commit/cc7111f3ed180b0d94e9a99c94bf3919ed059393))
+
 ## [0.8.2] — 2026-05-05
 
 ### 🐛 Bug Fixes
