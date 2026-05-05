@@ -105,6 +105,9 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
           .map((host) => ({ host, tls: true }));
       }
     }
+    if (state.internal !== baseline.internal) {
+      body.internal = state.internal;
+    }
     if (
       state.scaleMin !== baseline.scaleMin ||
       state.scaleMax !== baseline.scaleMax ||

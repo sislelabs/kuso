@@ -77,6 +77,9 @@ export async function renameService(
 export interface PatchServiceBody {
   displayName?: string;
   port?: number;
+  // internal=true skips the public Ingress; service still has its
+  // in-cluster Service so siblings can reach it via cluster DNS.
+  internal?: boolean;
   runtime?: string;
   domains?: { host: string; tls?: boolean }[];
   scale?: { min?: number; max?: number; targetCPU?: number };

@@ -29,6 +29,7 @@ export interface FormState {
   // Networking
   port: string;
   domains: string; // newline-separated
+  internal: boolean;
   // Scale
   scaleMin: string;
   scaleMax: string;
@@ -75,6 +76,7 @@ export function fromSvc(svc?: KusoService): FormState {
     repoInstallationID: ghSpec?.installationId ?? 0,
     port: String(svc?.spec.port ?? 8080),
     domains: (svc?.spec.domains ?? []).map((d) => d.host ?? "").filter(Boolean).join("\n"),
+    internal: !!(svc?.spec as { internal?: boolean } | undefined)?.internal,
     scaleMin: String(svc?.spec.scale?.min ?? 1),
     scaleMax: String(svc?.spec.scale?.max ?? 5),
     scaleCPU: String(svc?.spec.scale?.targetCPU ?? 70),

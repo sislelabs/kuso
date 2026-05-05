@@ -140,6 +140,13 @@ type KusoServiceSpec struct {
 	// recreate kube resources. Empty = UI falls back to the slug.
 	// Validation: letters/numbers/spaces/hyphens, max 60 chars.
 	DisplayName string              `json:"displayName,omitempty"`
+	// Internal=true skips the Ingress + TLS for this service. The
+	// in-cluster Service still exists, so other pods can reach it
+	// via ${{ svc.URL }}, but no Ingress rule is rendered + no
+	// public DNS / cert is provisioned. Useful for backend
+	// services consumed only by sibling pods. Workers (runtime=
+	// worker) implicitly have no Ingress regardless of this flag.
+	Internal   bool                `json:"internal,omitempty"`
 	Repo       *KusoRepoRef        `json:"repo,omitempty"`
 	Runtime    string              `json:"runtime,omitempty"`
 	Command    []string            `json:"command,omitempty"`
@@ -260,6 +267,10 @@ type KusoEnvironmentSpec struct {
 	// merge step that pulls service-level domains in). Server-managed
 	// via propagateDomainsToEnvs; user edits flow through PatchService.
 	AdditionalHosts  []string                `json:"additionalHosts,omitempty"`
+	// Internal=true mirrors KusoService.spec.internal so the chart can
+	// gate Ingress emission off the env CR alone (chart never reads
+	// the service spec). Propagated via propagateInternalToEnvs.
+	Internal         bool                    `json:"internal,omitempty"`
 	TLSEnabled       bool                    `json:"tlsEnabled,omitempty"`
 	ClusterIssuer    string                  `json:"clusterIssuer,omitempty"`
 	IngressClassName string                  `json:"ingressClassName,omitempty"`

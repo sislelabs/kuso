@@ -247,6 +247,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			ReplicaCount:     scale.Min,
 			Host:             defaultHost(req.Name, project, proj.Spec.BaseDomain),
 			AdditionalHosts:  domainHosts(created.Spec.Domains),
+			Internal:         created.Spec.Internal,
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
@@ -465,6 +466,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			ReplicaCount:     scaleMin,
 			Host:             host,
 			AdditionalHosts:  domainHosts(svc.Spec.Domains),
+			Internal:         svc.Spec.Internal,
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
@@ -940,6 +942,11 @@ type PatchServiceRequest struct {
 	Port      *int32                 `json:"port,omitempty"`
 	Runtime   *string                `json:"runtime,omitempty"`
 	Domains   *[]ServiceDomain       `json:"domains,omitempty"`
+	// Internal toggles the public-Ingress gate. true skips the
+	// Ingress entirely (service still has its in-cluster Service so
+	// sibling pods can reach it via ${{ svc.URL }}). Pointer-typed
+	// so a request that omits the key leaves it alone.
+	Internal  *bool                  `json:"internal,omitempty"`
 	Scale     *PatchScaleRequest     `json:"scale,omitempty"`
 	Sleep     *PatchSleepRequest     `json:"sleep,omitempty"`
 	Placement *PatchPlacementRequest `json:"placement,omitempty"`
@@ -1048,6 +1055,11 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	if req.Domains != nil {
 		svc.Spec.Domains = convertDomains(*req.Domains)
 		domainsChanged = true
+	}
+	internalChanged := false
+	if req.Internal != nil {
+		svc.Spec.Internal = *req.Internal
+		internalChanged = true
 	}
 	if req.Scale != nil {
 		if svc.Spec.Scale == nil {
@@ -1177,6 +1189,14 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			return updated, nil
 		}
 	}
+	if internalChanged {
+		// internal toggles the chart's Ingress gate. Same propagation
+		// shape as port/domains — chart reads the env CR only, no
+		// service-spec merge step exists.
+		if err := s.propagateInternalToEnvs(ctx, ns, project, service, updated); err != nil {
+			return updated, nil
+		}
+	}
 	return updated, nil
 }
 
@@ -1259,6 +1279,31 @@ func (s *Service) propagateDomainsToEnvs(ctx context.Context, ns, project, servi
 			continue
 		}
 		env.Spec.AdditionalHosts = hosts
+		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
+			return fmt.Errorf("update env %s: %w", env.Name, err)
+		}
+	}
+	return nil
+}
+
+// propagateInternalToEnvs mirrors KusoService.spec.internal onto every
+// owned env. The chart's Ingress template reads only the env CR's
+// internal flag, so without this a toggle saves to the service spec
+// but the public Ingress hangs around. Best-effort: failures are
+// returned; the service spec is the durable record either way.
+func (s *Service) propagateInternalToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
+	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: envSelector(project, service),
+	})
+	if err != nil {
+		return fmt.Errorf("list envs for internal propagation: %w", err)
+	}
+	for i := range envs.Items {
+		var env kube.KusoEnvironment
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
+			continue
+		}
+		env.Spec.Internal = svc.Spec.Internal
 		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
 			return fmt.Errorf("update env %s: %w", env.Name, err)
 		}

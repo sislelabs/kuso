@@ -46,6 +46,27 @@ export function NetworkingSection({ state, setState }: SectionProps) {
   return (
     <Section id="networking" title="Networking" icon={Network}>
       <Row
+        label="visibility"
+        hint={
+          state.internal
+            ? "internal — reachable only from sibling pods via cluster DNS"
+            : "public — Ingress + auto-domain + Let's Encrypt cert"
+        }
+        control={
+          <label className="flex cursor-pointer items-center gap-2 text-[12px]">
+            <input
+              type="checkbox"
+              checked={state.internal}
+              onChange={(e) =>
+                setState((s) => ({ ...s, internal: e.target.checked }))
+              }
+              className="h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
+            />
+            <span>Internal-only (no public Ingress)</span>
+          </label>
+        }
+      />
+      <Row
         label="port"
         hint="container port"
         control={

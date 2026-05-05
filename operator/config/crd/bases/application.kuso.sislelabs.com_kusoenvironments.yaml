@@ -104,6 +104,10 @@ spec:
                   type: array
                   description: Extra hostnames routed to this env's pod. Server populates this from KusoService.spec.domains so custom domains attach without losing the auto-generated host.
                   items: { type: string }
+                internal:
+                  type: boolean
+                  description: When true, skip the Ingress entirely. Service still exists for in-cluster DNS access; no public domain or TLS. Mirrors KusoService.spec.internal.
+                  default: false
                 tlsEnabled:
                   type: boolean
                   default: true

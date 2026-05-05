@@ -49,6 +49,11 @@ host: ""
 # domains; cleared via SetEnv / PatchService propagation.
 additionalHosts: []
 
+# internal: when true, skip the Ingress entirely. The Service still
+# exists so sibling pods can reach this env via in-cluster DNS, but
+# nothing is exposed to traefik. Mirrors KusoService.spec.internal.
+internal: false
+
 # tlsEnabled: when true, attach cert-manager.io/cluster-issuer annotation and
 # request a per-host cert via Ingress.spec.tls. Defaults to true; override to
 # false on bare-IP installs without cert-manager.

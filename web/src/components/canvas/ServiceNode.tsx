@@ -91,18 +91,20 @@ function replicasFor(env?: KusoEnvironment): Replicas | null {
 
 export function ServiceNode({ data }: { data: ServiceNodeData }) {
   const status = statusFor(data.env, data.latestBuild);
-  // Prefer a custom domain when one's set on the service spec, falling
-  // back to the env's auto-domain. The custom domain is the user's
-  // deliberate choice (Settings → Networking → Domains); the auto one
-  // is the kuso.sislelabs.com fallback. If a service is internal-only
-  // (no Ingress at all), env.status.url is empty too — the pill below
-  // renders "internal only" in that case.
+  // Visibility:
+  //   internal=true → no Ingress; show "internal only" chip.
+  //   custom domain set → use it (with the user's tls flag).
+  //   else → env.status.url, the auto-domain.
+  const internal =
+    !!(data.service.spec as { internal?: boolean } | undefined)?.internal;
   const customDomain = data.service.spec.domains?.find((d) => d?.host)?.host;
   const customTLS =
     data.service.spec.domains?.find((d) => d?.host)?.tls ?? true;
-  const url = customDomain
-    ? `${customTLS ? "https" : "http"}://${customDomain}`
-    : (data.env?.status?.url as string | undefined);
+  const url = internal
+    ? undefined
+    : customDomain
+      ? `${customTLS ? "https" : "http"}://${customDomain}`
+      : (data.env?.status?.url as string | undefined);
   const replicas = replicasFor(data.env);
   // Display the user-supplied label when set; fall back to the slug
   // for back-compat with services created before v0.7.43 (no
@@ -152,6 +154,10 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       <div className="mt-2">
         {url ? (
           <UrlPill url={url} />
+        ) : internal ? (
+          <span className="inline-block font-mono text-[10px] text-[var(--text-tertiary)]">
+            internal only
+          </span>
         ) : (
           <span className="inline-block font-mono text-[10px] text-[var(--text-tertiary)]">
             no URL yet

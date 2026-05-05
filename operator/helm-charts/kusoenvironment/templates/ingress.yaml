@@ -1,5 +1,12 @@
-{{- /* Workers have no HTTP surface — no ingress regardless of host. */ -}}
-{{- if and (not (eq (default "" .Values.runtime) "worker")) -}}
+{{- /* Workers have no HTTP surface — no ingress regardless of host.
+       Internal=true services keep their kube Service (so other pods
+       can reach them via in-cluster DNS) but skip the Ingress
+       entirely — no public domain, no Let's Encrypt cert, no
+       traefik route. The user opts into this in Settings →
+       Networking → Internal-only. */ -}}
+{{- if and
+      (not (eq (default "" .Values.runtime) "worker"))
+      (not .Values.internal) -}}
 {{- $primary := .Values.host -}}
 {{- $extra := default (list) .Values.additionalHosts -}}
 {{- $hosts := list -}}
