@@ -246,6 +246,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Port:             port,
 			ReplicaCount:     scale.Min,
 			Host:             defaultHost(req.Name, project, proj.Spec.BaseDomain),
+			AdditionalHosts:  domainHosts(created.Spec.Domains),
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
@@ -423,6 +424,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			Port:             port,
 			ReplicaCount:     scaleMin,
 			Host:             host,
+			AdditionalHosts:  domainHosts(svc.Spec.Domains),
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
@@ -999,8 +1001,10 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	if req.Runtime != nil {
 		svc.Spec.Runtime = *req.Runtime
 	}
+	domainsChanged := false
 	if req.Domains != nil {
 		svc.Spec.Domains = convertDomains(*req.Domains)
+		domainsChanged = true
 	}
 	if req.Scale != nil {
 		if svc.Spec.Scale == nil {
@@ -1119,6 +1123,17 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			return updated, nil
 		}
 	}
+	if domainsChanged {
+		// Custom domains live on the service spec but the chart's
+		// Ingress template reads only the env CR's host +
+		// additionalHosts. Without this propagation, the user adds
+		// "api.example.com" → spec.domains saves → no Ingress rule
+		// → Bad Gateway. Best-effort: if the propagation fails the
+		// service spec is still durable + the next save will retry.
+		if err := s.propagateDomainsToEnvs(ctx, ns, project, service, updated); err != nil {
+			return updated, nil
+		}
+	}
 	return updated, nil
 }
 
@@ -1151,6 +1166,56 @@ func (s *Service) propagateEnvVarsToEnvs(ctx context.Context, ns, project, servi
 			continue
 		}
 		env.Spec.EnvVars = svc.Spec.EnvVars
+		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
+			return fmt.Errorf("update env %s: %w", env.Name, err)
+		}
+	}
+	return nil
+}
+
+// domainHosts pulls the host strings out of a KusoDomain slice,
+// dropping any empty entries. Used at env-creation time + by
+// propagateDomainsToEnvs. Returns nil for an empty input so the
+// JSON serialiser drops the field entirely (matches the omitempty
+// tag — same wire shape as services with no custom domains).
+func domainHosts(domains []kube.KusoDomain) []string {
+	if len(domains) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(domains))
+	for _, d := range domains {
+		h := strings.TrimSpace(d.Host)
+		if h != "" {
+			out = append(out, h)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// propagateDomainsToEnvs copies the service's custom domains onto
+// every owned env. Without this, a domain edit lands on the service
+// CR but the kusoenvironment chart (which reads only env-CR fields)
+// never emits an Ingress rule for it — exactly the silent-no-op a
+// user hit on v0.7.42 trying to attach mudo.sislelabs.com. The
+// chart wraps each host in its own TLS entry so cert-manager mints
+// per-host certs.
+func (s *Service) propagateDomainsToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
+	hosts := domainHosts(svc.Spec.Domains)
+	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: envSelector(project, service),
+	})
+	if err != nil {
+		return fmt.Errorf("list envs for domains propagation: %w", err)
+	}
+	for i := range envs.Items {
+		var env kube.KusoEnvironment
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
+			continue
+		}
+		env.Spec.AdditionalHosts = hosts
 		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
 			return fmt.Errorf("update env %s: %w", env.Name, err)
 		}

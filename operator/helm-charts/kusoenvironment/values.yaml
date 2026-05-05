@@ -36,11 +36,18 @@ autoscaling:
 sleep:
   enabled: false
 
-# host: ingress hostname. Auto-emitted by the server as
+# host: primary ingress hostname. Auto-emitted by the server as
 # <service>.<project>.<baseDomain> for production or
 # <service>-pr-<n>.<project>.<baseDomain> for previews.
-# Per-service domain overrides from KusoService.spec.domains can replace this.
 host: ""
+
+# additionalHosts: extra hosts that should route to the same pod.
+# Server populates this from KusoService.spec.domains so users can
+# attach custom domains without losing the auto-generated hostname.
+# Each entry generates its own Ingress rule + (when tlsEnabled) its
+# own cert-manager-managed cert. Empty for services without custom
+# domains; cleared via SetEnv / PatchService propagation.
+additionalHosts: []
 
 # tlsEnabled: when true, attach cert-manager.io/cluster-issuer annotation and
 # request a per-host cert via Ingress.spec.tls. Defaults to true; override to

@@ -1,5 +1,15 @@
 {{- /* Workers have no HTTP surface — no ingress regardless of host. */ -}}
-{{- if and .Values.host (not (eq (default "" .Values.runtime) "worker")) }}
+{{- if and (not (eq (default "" .Values.runtime) "worker")) -}}
+{{- $primary := .Values.host -}}
+{{- $extra := default (list) .Values.additionalHosts -}}
+{{- $hosts := list -}}
+{{- if $primary -}}
+  {{- $hosts = append $hosts $primary -}}
+{{- end -}}
+{{- range $extra -}}
+  {{- if . -}}{{- $hosts = append $hosts . -}}{{- end -}}
+{{- end -}}
+{{- if $hosts }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
@@ -14,19 +24,42 @@ spec:
   ingressClassName: {{ .Values.ingressClassName | quote }}
   {{- if .Values.tlsEnabled }}
   tls:
+    {{- /* One TLS entry per host so cert-manager mints + maintains
+           a per-host certificate. Bundling all hosts under a single
+           secret would cap us at 100 SANs per cert and force a re-
+           issue on every domain edit; per-host certs roll
+           independently.
+
+           Primary host keeps the legacy secretName "<fqn>-tls" so
+           the cert minted before custom-domain support shipped
+           survives the chart upgrade — re-issuing it would burn the
+           Let's Encrypt prod rate limit on a no-op (5 failed
+           validations/hour, 50 certs/week per registered domain).
+           Additional hosts get "<fqn>-tls-extra-<host>" with the
+           host pinned into the secret name so adding/removing one
+           never re-orders the others' secrets. */ -}}
+    {{- range $i, $h := $hosts }}
     - hosts:
-        - {{ .Values.host | quote }}
-      secretName: {{ include "kusoenvironment.fullname" . }}-tls
+        - {{ $h | quote }}
+      {{- if eq $i 0 }}
+      secretName: {{ printf "%s-tls" (include "kusoenvironment.fullname" $) | quote }}
+      {{- else }}
+      secretName: {{ printf "%s-tls-extra-%s" (include "kusoenvironment.fullname" $) (regexReplaceAll "[^a-z0-9-]" (lower $h) "-") | quote }}
+      {{- end }}
+    {{- end }}
   {{- end }}
   rules:
-    - host: {{ .Values.host | quote }}
+    {{- range $hosts }}
+    - host: {{ . | quote }}
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
-                name: {{ include "kusoenvironment.fullname" . }}
+                name: {{ include "kusoenvironment.fullname" $ }}
                 port:
                   name: http
+    {{- end }}
+{{- end }}
 {{- end }}

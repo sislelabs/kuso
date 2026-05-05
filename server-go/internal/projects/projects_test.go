@@ -484,6 +484,51 @@ func TestPatchService_PortPropagatesToEnvironments(t *testing.T) {
 	}
 }
 
+// TestPatchService_DomainsPropagateToEnvironments asserts that a
+// domains edit on KusoService rewrites each owned env's
+// spec.additionalHosts. The kusoenvironment chart reads only the
+// env CR for ingress hosts, so without propagation a user adds
+// "api.example.com" → service spec saves → no Ingress rule for it
+// → Bad Gateway. Empty domains list clears AdditionalHosts so
+// removing a custom domain actually removes the route.
+func TestPatchService_DomainsPropagateToEnvironments(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	add := []ServiceDomain{
+		{Host: "api.example.com", TLS: true},
+		{Host: "alt.example.com", TLS: true},
+	}
+	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{Domains: &add}); err != nil {
+		t.Fatalf("PatchService add domains: %v", err)
+	}
+	env, err := s.GetEnvironment(context.Background(), "alpha", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("GetEnvironment: %v", err)
+	}
+	if len(env.Spec.AdditionalHosts) != 2 ||
+		env.Spec.AdditionalHosts[0] != "api.example.com" ||
+		env.Spec.AdditionalHosts[1] != "alt.example.com" {
+		t.Errorf("after add: %+v, want [api.example.com alt.example.com]", env.Spec.AdditionalHosts)
+	}
+
+	// Now clear: empty slice means "drop all custom domains."
+	clear := []ServiceDomain{}
+	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{Domains: &clear}); err != nil {
+		t.Fatalf("PatchService clear domains: %v", err)
+	}
+	env2, err := s.GetEnvironment(context.Background(), "alpha", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("GetEnvironment 2: %v", err)
+	}
+	if len(env2.Spec.AdditionalHosts) != 0 {
+		t.Errorf("after clear: %+v, want empty", env2.Spec.AdditionalHosts)
+	}
+}
+
 // ---- environment ops ----------------------------------------------------
 
 func TestDeleteEnvironment_RefusesProduction(t *testing.T) {

@@ -247,6 +247,12 @@ type KusoEnvironmentSpec struct {
 	Autoscaling      *KusoAutoscaling        `json:"autoscaling,omitempty"`
 	Sleep            *KusoEnvSleep           `json:"sleep,omitempty"`
 	Host             string                  `json:"host,omitempty"`
+	// AdditionalHosts mirrors KusoService.spec.domains[].host onto the
+	// env CR so the kusoenvironment chart's Ingress template can emit
+	// one rule per host (the chart reads ONLY the env CR — there's no
+	// merge step that pulls service-level domains in). Server-managed
+	// via propagateDomainsToEnvs; user edits flow through PatchService.
+	AdditionalHosts  []string                `json:"additionalHosts,omitempty"`
 	TLSEnabled       bool                    `json:"tlsEnabled,omitempty"`
 	ClusterIssuer    string                  `json:"clusterIssuer,omitempty"`
 	IngressClassName string                  `json:"ingressClassName,omitempty"`
