@@ -56,44 +56,50 @@ export function useRouteParams<T extends Record<string, string>>(
 }
 
 // parsePathname extracts dynamic segment values from a concrete
-// pathname given the ordered list of dynamic keys. The mapping
-// assumes dynamic segments are interleaved with static literals in
-// the same order kuso uses today: /projects/[project] →
-// ["project"]; /projects/[project]/services/[service] →
-// ["project", "service"]. Any segment that's a known literal
-// (matching the keys' positional context) is skipped.
+// pathname given the ordered list of dynamic keys. We skip known
+// static segments — the leading route group + any literal segment
+// that's interleaved with a dynamic one in our route table — and
+// return the remaining segments in order.
+//
+// Routes covered:
+//   /projects/<project>                                   → [project]
+//   /projects/<project>/services/<service>                → [project, service]
+//   /projects/<project>/{settings,logs,envs,addons}/...   → [project]
+//   /invite/<token>                                       → [token]
+//
+// We deliberately keep the static-prefix list small + explicit
+// instead of a route-table lookup; routes that need more dynamic
+// segments down the line (e.g. /preview/<env>/<sub>) just append
+// to STATIC_SEGMENTS or get their own helper.
+const STATIC_SEGMENTS = new Set([
+	"projects",
+	"services",
+	"envs",
+	"addons",
+	"settings",
+	"logs",
+	"invite",
+]);
+
 function parsePathname(pathname: string | null, keys: string[]): Record<string, string> {
 	if (!pathname) return {};
 	const segments = pathname.replace(/^\/+|\/+$/g, "").split("/");
 	const out: Record<string, string> = {};
-	if (keys.length === 0) return out;
+	if (keys.length === 0 || segments.length === 0) return out;
 
-	// We only ever want to extract a "project" / "service" param from
-	// the canonical project route shape. Everything else (e.g.
-	// /settings/nodes, /login) shouldn't yield a dynamic value, even
-	// though textually "nodes" looks like one. Without this gate the
-	// TopNav saw "nodes" as the current project and the project view
-	// fired useProject("nodes") → 404 banner.
-	if (segments[0] !== "projects" || segments.length < 2) {
+	// Top-level static routes (e.g. /settings/nodes, /login) shouldn't
+	// hand back a dynamic value. Without this gate the TopNav once
+	// saw "nodes" as the current project and the project view fired
+	// useProject("nodes") → 404 banner. Allow only the known dynamic
+	// route prefixes through.
+	const head = segments[0];
+	if (head !== "projects" && head !== "invite") {
 		return out;
 	}
 
-	// /projects/<project>(/services/<service>)?(/...) — segments at
-	// odd positions are static (services/, envs/, addons/, settings/,
-	// logs/) and segments at even positions are dynamic.
 	const dynamicValues: string[] = [];
-	for (let i = 0; i < segments.length; i++) {
-		const seg = segments[i];
-		if (
-			seg === "projects" ||
-			seg === "services" ||
-			seg === "envs" ||
-			seg === "addons" ||
-			seg === "settings" ||
-			seg === "logs"
-		) {
-			continue;
-		}
+	for (const seg of segments) {
+		if (STATIC_SEGMENTS.has(seg)) continue;
 		dynamicValues.push(seg);
 	}
 	for (let i = 0; i < keys.length && i < dynamicValues.length; i++) {
