@@ -292,11 +292,21 @@ function UptimeBadge({
   status: DeployStatus;
 }) {
   if (!env || status === "building" || status === "deploying") return null;
-  const ts = env.status?.lastDeployedAt;
+  // Prefer lastDeployedAt (resets on redeploy → "image age"), fall
+  // back to the env's creation timestamp ("env age" for envs that
+  // haven't redeployed since the operator wrote them). Without this
+  // fallback the badge stays empty on services whose helm-operator
+  // hasn't written status.lastDeployedAt yet — annoying for the
+  // user since the canvas card header looks empty for no good
+  // reason.
+  const ts =
+    (env.status?.lastDeployedAt as string | undefined) ??
+    env.metadata?.creationTimestamp;
   if (!ts) return null;
+  const isCreation = !env.status?.lastDeployedAt;
   return (
     <span
-      title={`Last deployed at ${ts}`}
+      title={isCreation ? `Env created at ${ts}` : `Last deployed at ${ts}`}
       className="shrink-0 font-mono text-xs text-[var(--text-secondary)]"
     >
       {relativeAge(ts)}

@@ -129,10 +129,18 @@ export function CronNode({ data }: { data: CronNodeData }) {
         // 220×96 — bumped from 200×72 to fit a target/command preview
         // line under the schedule. Still visibly smaller than the
         // 280×120 service tiles so the visual hierarchy stays.
+        //
+        // Border: --border-strong is orange in dark mode (the accent
+        // hover color the canvas uses for service/addon cards on
+        // hover). For crons we want a neutral resting state — they
+        // don't have a "live status" the way services do, so keying
+        // them at the same intensity as a service's hover state is
+        // misleading. Use --border-subtle as the default + only flip
+        // to amber when suspended.
         "group flex h-[96px] w-[220px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-2.5 transition-colors cursor-pointer",
         suspended
-          ? "opacity-50 border-[var(--border-strong)]"
-          : "border-[var(--border-strong)] hover:border-[var(--accent)]/60",
+          ? "opacity-60 border-amber-500/50"
+          : "border-[var(--border-subtle)] hover:border-[var(--accent)]/60",
       )}
     >
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />

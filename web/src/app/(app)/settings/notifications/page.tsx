@@ -50,7 +50,7 @@ export default function NotificationsPage() {
   const [editing, setEditing] = useState<string | null>(null);
 
   return (
-    <div className="mx-auto max-w-3xl p-6 lg:p-8">
+    <div className="mx-auto max-w-3xl p-4 sm:p-6 lg:p-8">
       <header className="mb-6 flex items-center gap-3">
         <Bell className="h-5 w-5 text-[var(--text-tertiary)]" />
         <div>
@@ -361,10 +361,10 @@ function NotificationEditor({
                   className={cn(
                     // Fixed-grid layout so the mention picker column
                     // stays in the same x-axis spot whether or not
-                    // the event is picked. Without min-width on the
-                    // picker column the row would shrink when the
-                    // toggle was off and the layout would jump.
-                    "grid grid-cols-[44px_180px_1fr_180px] items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-1.5 text-[11px]"
+                    // the event is picked. On phones the picker
+                    // column wraps below the rest (the 180px column
+                    // would force a ~640px-wide row otherwise).
+                    "grid grid-cols-[44px_1fr] items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-1.5 text-[11px] sm:grid-cols-[44px_180px_1fr_180px]"
                   )}
                 >
                   <button
@@ -473,14 +473,19 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <div className="grid grid-cols-[140px_1fr] items-start gap-3">
+    // Stack label-then-control on phones (the 140px label column was
+    // clipping the controls to ~150px wide on a 320–360px viewport,
+    // which is why the channel form looked broken on mobile). Side-
+    // by-side returns at sm where there's room for the legend
+    // column without crushing the input.
+    <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-[140px_1fr] sm:gap-3">
       <div>
         <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
           {label}
         </div>
         {hint && <div className="mt-0.5 text-[10px] text-[var(--text-tertiary)]/70">{hint}</div>}
       </div>
-      <div>{children}</div>
+      <div className="min-w-0">{children}</div>
     </div>
   );
 }

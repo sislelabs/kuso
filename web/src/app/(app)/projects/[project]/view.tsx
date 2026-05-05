@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { useProject, useAddons } from "@/features/projects";
@@ -25,6 +25,21 @@ export function ProjectDetailView() {
   // transient inspector, not a route.
   const [selectedService, setSelectedService] = useState<string | null>(null);
   const [selectedAddon, setSelectedAddon] = useState<string | null>(null);
+
+  // Notification-link entry point: when the URL carries ?service= /
+  // ?addon=, open the matching overlay on mount. Lets bell-icon
+  // notifications navigate straight to the relevant resource (e.g.
+  // build.succeeded → /projects/<p>?service=<s> → opens the
+  // service overlay's Deployments tab). One-shot — we only honour
+  // the param on first render so closing the overlay doesn't snap
+  // back open on a re-render.
+  useEffect(() => {
+    const svc = search?.get("service");
+    const addon = search?.get("addon");
+    if (svc) setSelectedService(svc);
+    if (addon) setSelectedAddon(addon);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Env switcher legitimately changes what's on screen and survives
   // reload, so it stays in the URL as ?env=<short>.

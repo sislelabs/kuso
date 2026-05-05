@@ -555,7 +555,11 @@ function NodeStats({ node }: { node: NodeSummary }) {
   const hasUsage = (node.cpuUsageMilli ?? 0) > 0 || (node.memUsageBytes ?? 0) > 0;
   return (
     <>
-      <div className="mt-3 grid grid-cols-3 gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 text-[10px]">
+      {/* gap-4 (vs gap-2) puts a clean visual gutter between the three
+          stats so CPU/RAM/Disk read as separate metrics, not a single
+          smashed strip. p-3 also bumps the inner padding by one
+          step. */}
+      <div className="mt-3 grid grid-cols-1 gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 text-[10px] sm:grid-cols-3 sm:gap-4">
         <Stat
           label="CPU"
           value={

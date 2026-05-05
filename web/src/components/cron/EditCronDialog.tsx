@@ -185,20 +185,27 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
   return (
     <AnimatePresence>
       {cron && (
-        <motion.div
-          className="fixed inset-0 z-[55] flex items-center justify-center bg-[rgba(8,8,11,0.6)] p-4"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-          onClick={onClose}
-        >
+        <div className="fixed inset-0 z-[55] flex" role="dialog" aria-modal="true">
+          {/* Backdrop — same shape as ServiceOverlay so the cron
+              edit feels like the same kind of object the user is
+              editing as a service: a slide-from-right side panel,
+              not a centred modal. */}
+          <motion.button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.15 }}
+            className="absolute inset-0 bg-[rgba(8,8,11,0.55)] backdrop-blur-[2px]"
+          />
           <motion.div
-            initial={{ scale: 0.96, y: 4 }}
-            animate={{ scale: 1, y: 0 }}
-            exit={{ scale: 0.96, y: 4 }}
-            transition={{ duration: 0.12 }}
-            onClick={(e) => e.stopPropagation()}
-            className="flex max-h-[92vh] w-full max-w-lg flex-col overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)]"
+            initial={{ x: "100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "100%" }}
+            transition={{ type: "spring", stiffness: 320, damping: 34, mass: 0.8 }}
+            className="relative z-10 ml-auto flex h-full w-full flex-col bg-[var(--bg-primary)] shadow-[var(--shadow-lg)] border-l border-[var(--border-subtle)] sm:max-w-lg"
           >
             <header className="flex items-start justify-between gap-3 border-b border-[var(--border-subtle)] px-4 py-3">
               <div className="flex min-w-0 items-start gap-2">
@@ -391,7 +398,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
               if (!del.isPending) setConfirmDelete(false);
             }}
           />
-        </motion.div>
+        </div>
       )}
     </AnimatePresence>
   );

@@ -302,12 +302,14 @@ func (s *Service) supersedePriorBuilds(ctx context.Context, ns, project, fqn, ne
 			slog.Default().Warn("builds: delete superseded job", "err", jerr, "build", name)
 		}
 		if s.Notifier != nil {
+			short := strings.TrimPrefix(fqn, project+"-")
 			s.Notifier.Emit(EventEnvelope{
 				Type:     "build.superseded",
-				Title:    fmt.Sprintf("⊘ Build superseded: %s", strings.TrimPrefix(fqn, project+"-")),
+				Title:    fmt.Sprintf("⊘ Build superseded: %s", short),
 				Body:     fmt.Sprintf("`%s` cancelled — replaced by `%s`", name, newName),
 				Project:  project,
-				Service:  strings.TrimPrefix(fqn, project+"-"),
+				Service:  short,
+				URL:      buildEventURL(project, short),
 				Severity: "info",
 			})
 		}
@@ -703,6 +705,19 @@ type EventEmitter interface {
 	Emit(e EventEnvelope)
 }
 
+// buildEventURL composes the dashboard path that build.* events
+// link to. Mirrors notify.serviceURL but kept local because the
+// builds package can't import notify (would create a layering
+// inversion: domain code → infra). Empty when project or service
+// is missing — the popover renders a non-clickable row in that
+// case.
+func buildEventURL(project, service string) string {
+	if project == "" || service == "" {
+		return ""
+	}
+	return fmt.Sprintf("/projects/%s?service=%s", project, service)
+}
+
 // EventEnvelope is the minimum payload a notify dispatcher needs.
 // Mirrors notify.Event's interesting fields without the import.
 type EventEnvelope struct {
@@ -849,12 +864,14 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 		if len(ref) > 12 {
 			ref = ref[:12]
 		}
+		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
 		p.Notifier.Emit(EventEnvelope{
 			Type:     "build.succeeded",
-			Title:    fmt.Sprintf("✓ Build succeeded: %s", b.Spec.Service),
+			Title:    fmt.Sprintf("✓ Build succeeded: %s", short),
 			Body:     fmt.Sprintf("ref `%s` on `%s`", ref, b.Spec.Branch),
 			Project:  b.Spec.Project,
-			Service:  b.Spec.Service,
+			Service:  short,
+			URL:      buildEventURL(b.Spec.Project, short),
 			Severity: "info",
 		})
 	}
@@ -877,12 +894,14 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 		if len(ref) > 12 {
 			ref = ref[:12]
 		}
+		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
 		p.Notifier.Emit(EventEnvelope{
 			Type:     "build.failed",
-			Title:    fmt.Sprintf("✗ Build failed: %s", b.Spec.Service),
+			Title:    fmt.Sprintf("✗ Build failed: %s", short),
 			Body:     msg,
 			Project:  b.Spec.Project,
-			Service:  b.Spec.Service,
+			Service:  short,
+			URL:      buildEventURL(b.Spec.Project, short),
 			Severity: "error",
 			Extra:    map[string]string{"ref": ref, "branch": b.Spec.Branch},
 		})
