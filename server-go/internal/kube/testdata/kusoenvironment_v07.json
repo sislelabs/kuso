@@ -1,0 +1,56 @@
+{
+  "apiVersion": "application.kuso.sislelabs.com/v1alpha1",
+  "kind": "KusoEnvironment",
+  "metadata": {
+    "name": "alpha-web-prod",
+    "namespace": "alpha-prod"
+  },
+  "spec": {
+    "project": "alpha",
+    "service": "alpha-web",
+    "kind": "production",
+    "branch": "main",
+    "image": {
+      "repository": "kuso-registry.kuso.svc.cluster.local:5000/alpha-web",
+      "tag": "abc123def4567890",
+      "pullPolicy": "IfNotPresent"
+    },
+    "port": 3000,
+    "replicaCount": 2,
+    "autoscaling": {
+      "enabled": true,
+      "minReplicas": 2,
+      "maxReplicas": 5,
+      "targetCPUUtilizationPercentage": 70
+    },
+    "sleep": {
+      "enabled": false
+    },
+    "host": "alpha.example.com",
+    "additionalHosts": ["www.alpha.example.com"],
+    "tlsEnabled": true,
+    "clusterIssuer": "letsencrypt-prod",
+    "ingressClassName": "traefik",
+    "internal": false,
+    "envVars": [
+      { "name": "NODE_ENV", "value": "production" }
+    ],
+    "envFromSecrets": ["alpha-web-prod-env", "alpha-postgres-conn"],
+    "secretsRev": "rev-7",
+    "resources": {
+      "requests": { "cpu": "100m", "memory": "128Mi" },
+      "limits":   { "cpu": "1000m", "memory": "1Gi" }
+    },
+    "placement": {
+      "labels": { "tier": "web" }
+    },
+    "volumes": [
+      { "name": "uploads", "mountPath": "/var/uploads", "sizeGi": 10, "accessMode": "ReadWriteOnce" }
+    ],
+    "runtime": "dockerfile",
+    "command": []
+  },
+  "status": {
+    "phase": "Running"
+  }
+}

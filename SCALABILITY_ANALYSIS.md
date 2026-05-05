@@ -1,411 +1,209 @@
 # Kuso Scalability & Bottleneck Analysis
 
-## Executive Summary
+**Last reviewed:** v0.8.3 · **Target profile:** single-box PaaS, 1–3 nodes, 10–100 projects, < 1000 pods.
 
-**Scaling Target:** Kuso is architecturally designed for **single-box PaaS** (1–3 node clusters, 10–100 projects, <1000 pods). Current limitations are intentional constraints, not bugs—the system trades breadth for simplicity and operational burden.
+This is not a roadmap to make kuso scale to thousands of projects — that's deliberately out of scope (see `CLAUDE.md` "Scope guardrails"). It's a reference for what limits the current architecture hits, what's already been done about them, and what the next reasonable mitigation would be if a user genuinely outgrows the design.
 
-**Primary Bottlenecks (by risk):**
-1. **SQLite single-writer concurrency** — blocks parallel webhook+UI+API mutations
-2. **Synchronous k8s watches in hot paths** — API latency scales with list depth
-3. **Kube informer cache polling** — no local cache, every handler queries the full CR list
-4. **Horizontal scaling impossible** — all state (SQLite, auth tokens, cached passwords) is instance-bound
-5. **Node watch + metrics collection (per-node O(n) sampling)** — acceptable up to ~10 nodes, painful at 50+
+If you're considering kuso for a workload past the target profile, the answer is "use Render / Railway / Heroku / Fly." We say this in writing rather than bend the architecture.
 
 ---
 
-## Architecture Overview
+## Architecture overview (current)
 
 ```
 ┌─────────────────────────────────────────┐
-│   Next.js 16 Static SPA (embedded)       │  api() calls via JWT auth cookie
+│   Next.js 16 Static SPA (embedded)      │  api() calls via JWT bearer
 ├─────────────────────────────────────────┤
-│        Go HTTP Server (:3000)            │  chi router, middleware stack
-├──────────────────────────────────────────┤
-│  ┌──────────────────────────────────┐  │
-│  │ Domain Services Layer            │  │  projects, services, envs,
-│  │ • projects.Service               │  │  addons, builds, crons,
-│  │ • builds.Service                 │  │  secrets, notifications,
-│  │ • addons.Service                 │  │  nodewatch, nodemetrics
-│  │ • notify.Dispatcher (async)      │  │
-│  └──────────────────────────────────┘  │
-├──────────────────────────────────────────┤
-│  ┌──────────────────────────────────┐  │
-│  │ Persistence Layer                │  │
-│  ├──────────────────────────────────┤  │
-│  │ SQLite (/var/lib/kuso/kuso.db)   │  │  tenancy, auth, webhooks,
-│  │ WAL mode, 1 max-open-conn        │  │  metrics, notifications,
-│  │ foreign-key + busy-timeout       │  │  invites, SSH keys, audit log
-│  └──────────────────────────────────┘  │
-├──────────────────────────────────────────┤
-│  ┌──────────────────────────────────┐  │
-│  │ Kubernetes Client                │  │
-│  ├──────────────────────────────────┤  │
-│  │ • Dynamic client (6 CRDs)        │  │  Projects, Services, Envs,
-│  │ • Typed client (core resources)  │  │  Addons, Builds, Crons
-│  │ • No informer cache (direct GETs) │ │
-│  └──────────────────────────────────┘  │
-├──────────────────────────────────────────┤
-│  Background Goroutines:                  │
-│  • nodemetrics.Sampler (5 min tick)      │  polls metrics-server for all nodes
-│  • nodewatch.Watcher (30 sec tick)       │  checks node NotReady status
-│  • github.Dispatcher (webhooks)          │  consumes webhook events
-│  • notify.Dispatcher (event fan-out)     │  sends to Discord/Slack/generic webhooks
-│  • builds, crons, alerts (polling loops) │
-└──────────────────────────────────────────┘
+│        Go HTTP Server (:3000)           │  chi router, JWT middleware
+├─────────────────────────────────────────┤
+│  Domain services                        │  projects, services, envs,
+│  • projects.Service                     │  addons, builds, crons,
+│  • builds.Service                       │  secrets, notifications,
+│  • addons.Service                       │  nodewatch, nodemetrics,
+│  • notify.Dispatcher (async, buffered)  │  github dispatcher
+├─────────────────────────────────────────┤
+│  Persistence                            │
+│  ├ SQLite (/var/lib/kuso/kuso.db)       │  WAL mode, max-open-conns=1,
+│  │   tenancy, auth, webhooks, audit,    │  busy-timeout 5s
+│  │   metrics, notifications, invites    │
+│  └ Kubernetes etcd (via k3s)            │  6 CRDs: Project, Service, Env,
+│                                         │  Addon, Build, Cron
+├─────────────────────────────────────────┤
+│  Kube client                            │
+│  • dynamic.Interface (CRDs)             │
+│  • kubernetes.Interface (core)          │
+│  • SHARED INFORMER CACHE over 6 CRDs ── │── reads served from local
+│    (added v0.8.1, opt-in via            │   cache, watches keep it
+│     EnableCache; server boots with it)  │   warm; writes go through
+│                                         │   dynamic client unchanged
+├─────────────────────────────────────────┤
+│  Background goroutines                  │
+│  • nodemetrics.Sampler (5 min tick)     │  metrics-server poll
+│  • nodewatch.Watcher (30 sec tick)      │  NotReady cordon
+│  • github.Dispatcher (webhooks + poll)  │
+│  • notify.Dispatcher (256-buf chan)     │
+│  • builds, crons, alerts (poll loops)   │
+└─────────────────────────────────────────┘
 ```
 
 ---
 
-## Bottleneck Analysis
+## What's been mitigated since the original analysis
 
-### 1. **SQLite Single-Writer Serialization** (CRITICAL)
-**Impact:** API mutations block on DB write locks.
-
-**Current State:**
-- `db.SetMaxOpenConns(1)` — intentional, WAL mode doesn't help with write serialization
-- WAL pragma is set but kuso opens a single connection pool so concurrent writes to different tables still queue at the lock level
-- Busy-timeout is 5 seconds — requests that hit the lock wait 5s, then 409 Conflict
-
-**Symptoms:**
-- Simultaneous webhook processing + UI form submit → one stalls up to 5 seconds
-- Bulk user invite minting blocks build notifications
-- Project creation during a node-metrics flush → latency spike
-
-**Data Volume (7-day snapshot):**
-```
-NodeMetric:           ~2,100 rows (5 min sample × 7d × 1 node)
-NotificationEvent:    ~200 rows (retention: last 200, pruned on insert)
-User + Group:         <10 rows typical
-Webhook configs:      <50 rows typical
-Audit log:            grows unbounded (~1-10 rows/sec in active clusters)
-```
-
-**Why Not Postgres/MySQL:**
-- Adds operational burden (separate container, backup strategy, upgrade path)
-- Kuso's target is indie devops teams running on a single VPS
-- SQLite's single-writer model is acceptable for a few concurrent users
-
-**When It Breaks:**
-- Multi-team usage (10+ concurrent admins)
-- High-frequency GitHub webhooks (200+ pushes/min)
-- Automated deploys + log export in parallel
+| Bottleneck | Status | Where |
+| --- | --- | --- |
+| No informer cache; every handler `List`s the API server | **Fixed in v0.8.1.** Shared informer over the 6 CRDs, falls back to live API on cache miss. | `server-go/internal/kube/cache.go` |
+| Backup endpoint required `KUSO_BACKUP_ENABLED=1` to be flipped manually | **Fixed in v0.8.3.** Enabled by default; `KUSO_BACKUP_DISABLED=1` to opt out. | `server-go/internal/http/handlers/backup.go` |
+| Install script regenerated admin password / JWT secret on re-run | **Fixed in v0.7.49.** Re-run reuses existing `kuso-server-secrets` values unless explicit env var overrides. | `hack/install.sh` |
+| Edits to running CRs had no documented blast-radius contract | **Documented in v0.7.49.** UI enforcement is still TODO. | `docs/EDIT_SAFETY.md` |
 
 ---
 
-### 2. **Synchronous Kubernetes Watches (No Informer Cache)**
-**Impact:** API response latency scales with the number of CRs.
+## Active bottlenecks (in order of risk for a target-profile install)
 
-**Current State:**
-- Every GET endpoint calls `kube.List<CRD>(ctx, namespace)` directly
-- No informer cache — raw dynamicClient `List()` over the network
-- Example: `GET /api/projects` → `kubectl get kusoprojects --all-namespaces` → 150ms–2s depending on server load and network round-trip
+### 1. SQLite single-writer concurrency (CRITICAL, by design)
 
-**Affected Paths:**
+**Why:** `db.SetMaxOpenConns(1)` is intentional — WAL doesn't help with write serialization at the application level, and the alternative (managing pool deadlocks across 30+ tables) is worse. Busy-timeout is 5s; requests that hit the lock wait then 409.
+
+**When it bites:**
+- Concurrent UI form submit + GitHub webhook on a busy project.
+- Bulk invite mint + simultaneous build notification fan-out.
+- Node-metrics flush coinciding with audit log write storm.
+
+**Volume reference (single-node, 30-day window):**
 ```
-GET /api/projects             → List KusoProject CRs (10–100s)
-GET /api/projects/{p}/services → List KusoService CRs (100–1000s)
-GET /api/projects/{p}/addons   → List KusoAddon CRs (10–100s)
-GET /api/kubernetes/nodes      → List all Node CRs
+NodeMetric             ~9k rows (5-min × 30d × 1 node)
+NotificationEvent      capped at 200 rows (rolling)
+Audit                  unbounded (~1–10 rows/sec under load)
+log_lines              unbounded ← see #4 below
+User + Group           < 50 rows typical
 ```
 
-**Volume at Scaling Edges:**
-- 100 projects × 5 services each = 500 KusoService CRs
-- Each List → etcd query → network round-trip
+**Why we don't run Postgres:** Operational burden (separate container, backup story, dev/CI parity, schema migrations across two engines). For the target profile, SQLite + WAL + a 5s busy-timeout is enough — and we don't pretend otherwise.
 
-**Why Not Informer Cache:**
-- Adds watch lifecycle complexity (connection drops, resyncs, informer crashes)
-- Single-box kuso doesn't justify the operational surface
-- For 100 services, the ~150ms overhead is acceptable
+**Cheap mitigations still on the table:**
+- Index `Notification(type, ts DESC)` — speeds bell-icon fetch.
+- Batch `NodeMetric` inserts — single multi-row INSERT instead of N.
+- 30-day rolling-window audit log retention — bounds growth.
 
-**When It Breaks:**
-- 500+ services in a single namespace
-- Unstable kube-apiserver (network jitter makes each call 5+ seconds)
-- Clients polling every 5 seconds (multiplies N × pollers × latency)
+**When it's no longer enough:** > 10 concurrent admins, > 200 webhooks/min sustained, or audit-log scans crossing the 100-MB mark. Past that point Postgres is the answer; that also unlocks horizontal scaling, but neither is on the v0.x roadmap.
 
 ---
 
-### 3. **Node Metrics & Watch Polling (Per-Node O(n))**
-**Impact:** Background goroutine CPU and latency scale with node count.
+### 2. Horizontal scaling impossible (architectural, by design)
 
-**Current State:**
-- `nodemetrics.Sampler` runs every 5 minutes:
-  ```
-  1. Query metrics-server for ALL nodes (list Pod CRs in kube-system, parse metrics)
-  2. Write 1 row per node to SQLite
-  3. Prune rows older than 7 days
-  ```
-- `nodewatch.Watcher` runs every 30 seconds:
-  ```
-  1. List all Node CRs
-  2. Check each for NotReady status
-  3. Auto-cordon if NotReady > 5 min
-  4. Emit notify.Event
-  ```
+All durable state is instance-bound:
+- SQLite is a local file.
+- JWT_SECRET / KUSO_SESSION_KEY are pod env vars; tokens minted on pod-1 fail on pod-2.
+- The `ProjectNamespaceResolver`'s 30 s TTL cache is in-memory.
+- Build + cron pollers run independently; two replicas would both pick up the same job.
 
-**Measurement:**
-- 1 node: ~50ms per tick
-- 10 nodes: ~150ms per tick (minimal, metrics-server caches locally)
-- 50 nodes: ~500ms–1s per tick (etcd load, network overhead, memory footprint of parsed JSON)
+**The contract:** `replicas: 1` for `kuso-server`. The `Recreate` strategy on the deployment ensures no overlap during rolls.
 
-**Why It's OK at Small Scale:**
-- 5-min sample interval means even 1-second ticks don't block the server
-- 10 nodes = <1 sample per second sustained load
-
-**When It Breaks:**
-- 50+ nodes, 30-sec watch → constant 1–2 sec goroutine lock contention
-- Customer clusters: kubelet scrape rate is higher, metrics-server lags
-- Node churn (spot instances, periodic drains) → rapid cordon/uncordon → 10× notify.Event queue flush
+**If the user needs HA, it's the wrong tool.** This is documented in the README.
 
 ---
 
-### 4. **No Horizontal Scaling** (Architectural Constraint)
-**Impact:** Can't run multiple kuso-server replicas.
+### 3. Notification dispatcher queue overflow (silent data loss)
 
-**Reasons:**
-1. **SQLite is local-only**
-   - No shared state backend
-   - Each replica would have its own DB copy
-   - Simultaneous writes → divergent state
+`notify.Dispatcher` is a 256-event buffered channel; if the buffer fills, `Emit` drops on the floor with a warn-level log.
 
-2. **Session & Auth Token Storage**
-   - JWT secret is pod-local env var
-   - Each pod signs JWTs with a different secret
-   - Token from pod-1 fails on pod-2
+**Trigger:** GitHub webhook burst (100+ pushes/min) plus a slow webhook sink (e.g. Slack on a flaky connection — 8 s timeouts).
 
-3. **Cached Project Namespace Mapping** (`projects.nsCache`)
-   - 30-second TTL in-memory cache
-   - Replicas don't share: pod-1 sees a stale mapping, pod-2 has the fresh one
-   - Consistency problems on frequent project mutations
+**Symptom:** Bell-icon feed sparse, operator doesn't notice.
 
-4. **Build + Cron Polling Loops**
-   - Each replica would poll independently
-   - Simultaneous builds on different pods for the same service
-   - Duplicate notifications
-
-**Workaround Used in Practice:**
-- Single kuso-server Deployment with `replicas: 1`
-- Operator ensures only one pod is scheduled at a time (no rolling restarts while builds are in flight)
+**Mitigation worth doing:** Async pool of 10 workers with retry + a small `failed_notifications` table for the queue tail. ~200 LOC. Bumps the dispatcher from "fire-and-forget" to "fire-then-eventually-deliver-or-give-up-loudly."
 
 ---
 
-### 5. **Notification Dispatcher Queue Overflow**
-**Impact:** High-frequency events drop silently.
+### 4. `log_lines` table growth (disk fills if not externally shipped)
 
-**Current State:**
-```go
-ch: make(chan Event, 256)  // 256-event buffer
+All pod logs are persisted to a SQLite table with no retention. A 10-line/sec app fills ~8.6 M rows/day; 100 such apps would push 100 GB/month into the same file the rest of kuso writes to.
+
+**Workaround in place:** `/api/log-export` for manual ship; logship config can route to external sinks (Loki / generic webhook).
+
+**Mitigation worth doing:** Default 7-day rolling retention on `log_lines`, with a "logs older than 7 days are exported or gone" banner in the UI. Operators who want long retention can configure logship.
+
+---
+
+### 5. Node sampler / watcher scale (acceptable up to ~10 nodes)
+
+`nodemetrics.Sampler` (5-min tick) and `nodewatch.Watcher` (30-sec tick) both `List` all Node CRs and walk the result. Per-tick cost:
+
+- 1 node: ~50 ms
+- 10 nodes: ~150 ms
+- 50 nodes: 500 ms – 1 s
+
+**Why it's OK at small scale:** Sampler is 5 min interval; even a 1 s tick is ~0.3% utilization. Watcher's 30 s tick × 1 s is 3% utilization — borderline.
+
+**When it bites:** 50+ nodes, especially with kubelet scrape jitter or node churn (spot instances cordoning/uncordoning rapidly → rapid `notify.Event` flush → see #3).
+
+**For the target profile this is a non-issue.** If a user really wants to run kuso on 50+ nodes, batch the inserts and switch the watcher to a Node informer. That's a half-day refactor when the time comes.
+
+---
+
+## Hottest paths (in order of frequency)
+
+| Path | Frequency | What it does | Pre-cache | Post-cache |
+| --- | --- | --- | --- | --- |
+| `GET /api/projects` | every dashboard load + UI poll | List KusoProject CRs | live `List` 50–500 ms | cache hit < 5 ms |
+| `GET /api/projects/{p}/services` | every overlay open + UI poll | List KusoService CRs filtered by project | live `List` 50–500 ms × N projects | cache hit, filter in memory |
+| `GET /api/projects/{p}/services/{s}` (overlay) | every 5 sec while overlay open | List Service + Addon + Env CRs | 3× live `List` per tick | 3× cache hit |
+| Build status poll | every 2 sec during active build | Get KusoBuild + Pod | live Get | live Get (intentional — needs current rv) |
+| Webhook → notify → SQLite insert | per push / PR | DB write + dispatcher emit | DB-bound | DB-bound |
+| `nodemetrics.Sampler` tick | every 5 min | metrics-server poll + N inserts | DB-bound | DB-bound |
+
+The cache moved the read path from "every request hits the API server" to "every request hits an in-process map + the API server only on cache miss." For the target profile this is the difference between a snappy dashboard and one that feels like it's polling over 3G.
+
+---
+
+## Mitigations still worth doing (ranked by leverage)
+
+### Cheap (hours)
+
+1. **SQLite indices** — `Notification(type, ts DESC)`, `UserGroup(userId, groupId)`. 2–5× speedup, zero ops change.
+2. **Batch `NodeMetric` inserts** — multi-row INSERT. Frees write lock sooner.
+3. **30-day audit log retention** — bounded growth, faster scans.
+4. **CRD round-trip golden-file test** — protects schema against silent break on upgrade. (Added in v0.8.3 — see `internal/kube/crds_test.go`.)
+
+### Medium (days)
+
+5. **Async notification delivery** — 10-worker goroutine pool + retry table. Closes data-loss gap from #3.
+6. **`log_lines` 7-day retention by default** — bounds disk growth, keeps the SQLite file small. Closes #4.
+7. **WebSocket build status** — replaces 2-sec polling with event-driven push. Eliminates a hot path entirely.
+8. **Cache warm-up on boot (optional)** — `WaitForSync(ctx)` before serving the first request, gated on a flag. Marginal benefit; mostly a "first-request feels instant" polish.
+
+### Out of scope for v0.x
+
+9. **Postgres migration.** Unblocks horizontal scaling and removes the single-writer ceiling. Big lift; explicitly out of scope for the indie/single-box target.
+10. **Multi-region / HA.** Off-roadmap. Documented in the scope guardrails.
+
+---
+
+## Measurement gaps
+
+The right next step before adding more mitigations is **measuring what's actually slow**. Currently:
+
+- No HTTP request latency histogram (chi middleware + `prometheus/client_golang` would do it in 30 LOC).
+- No SQLite query timing wrapper.
+- No kube-apiserver call latency tracking.
+
+**Recommended metrics to add (when someone gets to it):**
+
+```
+kuso_http_request_duration_seconds{path, method, status}   histogram
+kuso_db_query_duration_seconds{table, op}                  histogram
+kuso_kube_list_duration_seconds{resource, cache_hit}       histogram
+kuso_notification_queue_depth                              gauge
+kuso_informer_synced{gvr}                                  gauge (0/1)
 ```
 
-- Emit is non-blocking: if buffer full, event drops
-- Warning logged but no retry
-
-**Trigger:** High-frequency GitHub webhooks + slow webhook sink
-- 100 pushes/min → ~1.6 events/sec
-- Slack webhook on a bad network → 8 sec timeout per send
-- Queue fills faster than dispatcher drains
-
-**Data Loss:** Silent, operator won't notice until the bell icon feed is sparse
+The kuso-prometheus deployment already runs in-cluster (see `deploy/prometheus.yaml`), so the scrape side is solved.
 
 ---
 
-### 6. **Log Streaming (Unbounded Retention)**
-**Impact:** Disk fills if logs aren't externally shipped.
+## Bottom line
 
-**Current State:**
-- All pod logs live in `log_lines` SQLite table
-- No retention policy (unfixed TODO in codebase)
-- Per-pod, per-line metadata stored: pod name, namespace, level, message, ts
+Kuso is **well-designed for its narrow scope**. The remaining bottlenecks are either (a) intentional architectural trade-offs that match the target user, or (b) cheap-to-fix items waiting on someone hitting them. The shared informer cache (v0.8.1) was the biggest win on the read path; everything else on the list is incremental.
 
-**Volume:**
-- Typical app: 10 lines/sec → ~8.6M rows/day
-- 100 apps × 10 lines/sec = 100GB/month in the default SQLite
-
-**When It Breaks:**
-- Single large-log app (Java, Nginx, verbose logging)
-- SQLite file bloats to 50GB+
-- Query latency on old logs becomes 30+ seconds
-- Backup + restore times spike
-
-**Workaround:** Manual log export via `/api/log-export`, or ship to external (Loki, ClickHouse)
-
----
-
-### 7. **GitHub Webhook Polling Fallback**
-**Impact:** Missed webhooks if webhook delivery is flaky.
-
-**Current State:**
-- Webhook delivery is NOT reliable (GitHub rate-limit edge cases, network retry)
-- Fallback: `github.Dispatcher` polls every 60 seconds for new GitHub events
-- If poll misses an event, it's gone (no retry)
-
----
-
-## Scaling Profiles
-
-### Profile A: Single-Box Indie (Kuso's Design Target)
-- **Nodes:** 1–3
-- **Projects:** 10–50
-- **Services:** 50–200
-- **Scale Up Effort:** None, works out of the box
-- **Bottleneck Hit:** Rarely
-
-### Profile B: Small Team
-- **Nodes:** 3–10
-- **Projects:** 50–200
-- **Services:** 200–1000
-- **Scale Up Effort:** Medium
-  - Monitor: SQLite query latency, `kube.List()` response times
-  - Action 1: Reduce polling intervals (UI refresh rate, build status checks)
-  - Action 2: Shard projects into separate kuso-server instances (no HA, ops burden)
-  - Action 3: Ship logs to external TSDB (Loki/ClickHouse)
-- **Bottleneck Hit:** SQLite write lock contention, node metrics polling
-
-### Profile C: Platform Team (Out of Scope)
-- **Nodes:** 10–100+
-- **Projects:** 1000+
-- **Services:** 5000+
-- **Scale Up Effort:** High (abandon SQLite, run on Postgres, add informer caches, horizontal scaling)
-- **Not Recommended:** Use Heroku, Render, or Vercel instead
-
----
-
-## Hottest Paths (in order)
-
-1. **`/api/projects/{p}/services/{s}` (GET)**
-   - Lists KusoService, KusoAddon, KusoEnvironment
-   - Every 5 sec from UI (live status)
-   - Direct `kube.List()` × 3 each time
-   - **Fix:** Informer cache or server-side aggregation endpoint
-
-2. **Build Status Polling**
-   - `/api/projects/{p}/builds/{b}` every 2 sec during active build
-   - Query Pod CR + KusoBuild CR for logs
-   - **Fix:** WebSocket push instead of polling
-
-3. **Webhook → SQLite Notification Insert**
-   - GitHub webhook → domain handler → DB insert → notify.Emit
-   - SQLite write lock acquired
-   - If concurrent webhook + metrics flush, one blocks 5 sec
-   - **Fix:** Async notification queue (separate thread pool)
-
-4. **Node Metrics Sampler**
-   - Every 5 min, serializes all node metrics
-   - If 10 nodes, ~150–500ms of CPU
-   - If concurrent with webhook burst, competes for SQLite write lock
-   - **Fix:** Batch inserts, write per-node metric async
-
-5. **Admin User List (Settings)**
-   - Full-table scan of User + UserGroup (SQLite does OK, but no index on invitedBy)
-   - **Fix:** Add index on UserGroup(userId, groupId)
-
----
-
-## Mitigations (Ranked by Effort / Benefit)
-
-### Quick Wins (Days)
-1. **Add SQLite Indices**
-   - `CREATE INDEX ON Notification(type, ts DESC)` — speeds bell-icon fetch
-   - `CREATE INDEX ON UserGroup(userId, groupId)` — speeds user-list rendering
-   - **Impact:** 2–5x speedup on those queries, zero operational change
-
-2. **Batch Node Metrics Inserts**
-   - Instead of `INSERT INTO NodeMetric VALUES(...)` × N, use multi-row insert
-   - **Impact:** Reduces sampler tick from 500ms to 100ms, frees SQLite lock sooner
-
-3. **Reduce Polling Intervals**
-   - Build status poll: 2 sec → 5 sec (slightly stale UI, huge lock reduction)
-   - UI refresh: 5 sec → 10 sec (noticeable lag, but acceptable for home page)
-   - **Impact:** Proportional reduction in DB contention
-
-4. **Prune Audit Log**
-   - Current: unbounded growth
-   - Add retention: 30-day rolling window
-   - **Impact:** Keep DB size stable, speed up full-table scans
-
-### Medium Effort (Weeks)
-5. **Informer Cache for Hot CRDs**
-   - Add `client-go` SharedIndexInformer for KusoProject, KusoService, KusoAddon
-   - Cache lives in memory, watch resync every 10 min
-   - **Impact:** `/api/projects` latency: 500ms → 50ms, UI feels snappy
-   - **Cost:** Code complexity +500 LOC, memory +10–50 MB
-
-6. **Async Notification Delivery**
-   - Move webhook sends off the critical path
-   - Separate goroutine pool, 10 workers, retries
-   - **Impact:** Webhook delivery no longer blocks DB writes
-   - **Cost:** ~200 LOC, adds failure queue table
-
-7. **WebSocket Build Status (Instead of Polling)**
-   - Emit build-status events on kube watch, client subscribes
-   - **Impact:** Eliminates 2-sec polling, down to event-driven latency <100ms
-   - **Cost:** ~300 LOC, new websocket handler, client-side JS rewrite
-
-### High Effort (Months)
-8. **Postgres Migration**
-   - Swap SQLite for managed Postgres (RDS, Managed Databases)
-   - Multi-writer consistency, better concurrency
-   - **Impact:** Enables horizontal scaling, write lock contention gone
-   - **Cost:** Migration path, schema versioning, dev/test DB setup, 1000+ LOC
-
-9. **Horizontal Scaling**
-   - Requires Postgres + token signing per-replica
-   - Load balancer in front, session stickiness off
-   - **Impact:** Can run 3–5 replicas, 20x throughput
-   - **Cost:** Devops overhead, HA testing, rollback procedures
-
-10. **External Log Ship (Loki/ClickHouse)**
-    - Send pod logs stream to external TSDB
-    - Keep last 7 days in SQLite for quick access
-    - **Impact:** Disk bounded, log queries faster (<1s)
-    - **Cost:** Ops burden of running Loki, ingestion tuning
-
----
-
-## Recommendations by Stage
-
-### Stage 1 (Next Month)
-- [ ] Add SQLite indices (impact: high, effort: trivial)
-- [ ] Batch node-metrics inserts (impact: medium, effort: low)
-- [ ] Profile live requests with `pprof`, identify true slowest paths
-- [ ] Document the scaling limits in README
-
-### Stage 2 (Next Quarter)
-- [ ] Informer cache for projects + services (impact: high, effort: medium)
-- [ ] Async webhook delivery (impact: medium, effort: low)
-- [ ] 30-day audit log retention (impact: low, effort: trivial)
-
-### Stage 3 (Before Multi-Team Roll-Out)
-- [ ] Decide: Postgres migration vs. horizontal replicas with load balancer
-- [ ] If Postgres: plan schema versioning + migration testing
-- [ ] If horizontal: implement JWT signing per-replica + session-free auth
-
----
-
-## Measurement & Monitoring
-
-**Current Gaps:**
-- No request latency histogram exported (add `chi` middleware with `github.com/prometheus/client_golang`)
-- No SQLite query timing (wrap `db.QueryRow()` with timing)
-- No kube-apiserver latency visibility
-
-**To Add:**
-1. `kuso_http_request_duration_seconds{path, method, status}` histogram
-2. `kuso_db_query_duration_seconds{query, table}` histogram
-3. `kuso_kube_list_duration_seconds{resource}` histogram
-4. `kuso_sqlite_connections` gauge (should stay at 1)
-5. `kuso_notification_queue_depth` gauge
-
-**Dashboard to Build:**
-- SQLite query latency p50/p99
-- Kube List latency per resource type
-- Build status poll latency
-- Webhook delivery latency (fan-out to all sinks)
-- Notification queue depth
-
----
-
-## Conclusion
-
-Kuso is **well-designed for its narrow scope** (single-box PaaS, <10 nodes, <100 projects). The scaling bottlenecks are **intentional trade-offs**, not bugs. At the design boundaries (500+ services, 50+ nodes, multi-team), the system requires architectural changes (Postgres, horizontal scaling, caching).
-
-**Immediate action:** Add monitoring, index SQLite, batch inserts. **Medium-term:** Informer cache, async webhooks. **Long-term:** Postgres + horizontal scaling only if the product needs to serve thousands of projects.
+If you're a user reading this trying to decide whether kuso fits: 100 projects on 1–3 nodes is fine. 1000 projects is the wrong tool. The middle is where we'd want telemetry before guessing.

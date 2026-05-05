@@ -32,6 +32,7 @@ func fakeClient(t *testing.T, seeds ...seedObj) *Client {
 		GVREnvironments: "KusoEnvironmentList",
 		GVRAddons:       "KusoAddonList",
 		GVRBuilds:       "KusoBuildList",
+		GVRCrons:        "KusoCronList",
 	}
 	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
 	for _, s := range seeds {

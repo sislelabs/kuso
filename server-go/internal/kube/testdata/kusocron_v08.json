@@ -1,0 +1,32 @@
+{
+  "apiVersion": "application.kuso.sislelabs.com/v1alpha1",
+  "kind": "KusoCron",
+  "metadata": {
+    "name": "alpha-nightly-report",
+    "namespace": "alpha-prod"
+  },
+  "spec": {
+    "project": "alpha",
+    "kind": "service",
+    "service": "alpha-web",
+    "schedule": "0 2 * * *",
+    "command": ["node", "scripts/report.js"],
+    "suspend": false,
+    "concurrencyPolicy": "Forbid",
+    "successfulJobsHistoryLimit": 3,
+    "failedJobsHistoryLimit": 3,
+    "activeDeadlineSeconds": 600,
+    "displayName": "Nightly Report",
+    "envFromSecrets": ["alpha-web-prod-env", "alpha-postgres-conn"],
+    "image": {
+      "repository": "kuso-registry.kuso.svc.cluster.local:5000/alpha-web",
+      "tag": "abc123def4567890"
+    },
+    "placement": {
+      "labels": { "tier": "data" }
+    }
+  },
+  "status": {
+    "lastSuccessfulRun": "2026-05-04T02:00:00Z"
+  }
+}

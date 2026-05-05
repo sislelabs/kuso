@@ -1,0 +1,41 @@
+{
+  "apiVersion": "application.kuso.sislelabs.com/v1alpha1",
+  "kind": "KusoProject",
+  "metadata": {
+    "name": "alpha",
+    "namespace": "kuso",
+    "labels": {
+      "app.kubernetes.io/managed-by": "kuso"
+    },
+    "annotations": {
+      "kuso.sislelabs.com/created-by": "admin"
+    }
+  },
+  "spec": {
+    "description": "Customer-facing alpha portfolio",
+    "baseDomain": "alpha.example.com",
+    "namespace": "alpha-prod",
+    "defaultRepo": {
+      "url": "https://github.com/example/alpha",
+      "defaultBranch": "main"
+    },
+    "github": {
+      "installationId": 12345678
+    },
+    "previews": {
+      "enabled": true,
+      "ttlDays": 7
+    },
+    "placement": {
+      "labels": {
+        "tier": "production"
+      },
+      "nodes": ["node-1", "node-2"]
+    },
+    "alwaysOn": true
+  },
+  "status": {
+    "phase": "Ready",
+    "observedGeneration": 3
+  }
+}

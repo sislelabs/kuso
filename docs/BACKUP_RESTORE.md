@@ -16,17 +16,17 @@ kuso has two distinct kinds of state. They have different recovery stories.
 
 ## Daily: snapshot the SQLite DB
 
-The `kuso` CLI ships with `backup` and `restore` verbs that pull / push the SQLite file via an admin-only HTTP endpoint. To enable, set on the server:
-
-```bash
-kubectl -n kuso set env deployment/kuso-server KUSO_BACKUP_ENABLED=1
-kubectl -n kuso rollout status deployment/kuso-server
-```
-
-Then from your workstation:
+The `kuso` CLI ships with `backup` and `restore` verbs that pull / push the SQLite file via an admin-only HTTP endpoint. **Backup is enabled by default** since v0.8.3 — no extra config step. From your workstation:
 
 ```bash
 kuso backup -o /backups/kuso-$(date -u +%Y%m%d).sqlite
+```
+
+If you have a compliance reason to lock it down (multi-tenant kuso-as-a-service, regulated environment), set `KUSO_BACKUP_DISABLED=1` on the server deployment to remove the routes entirely:
+
+```bash
+kubectl -n kuso set env deployment/kuso-server KUSO_BACKUP_DISABLED=1
+kubectl -n kuso rollout status deployment/kuso-server
 ```
 
 Pipe it into whatever you already use — `restic`, `borg`, S3, `cron + scp`. Concrete cron example:

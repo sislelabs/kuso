@@ -1,0 +1,28 @@
+{
+  "apiVersion": "application.kuso.sislelabs.com/v1alpha1",
+  "kind": "KusoBuild",
+  "metadata": {
+    "name": "alpha-web-build-abc123",
+    "namespace": "alpha-prod"
+  },
+  "spec": {
+    "project": "alpha",
+    "service": "alpha-web",
+    "ref": "abc123def4567890",
+    "branch": "main",
+    "githubInstallationId": 12345678,
+    "strategy": "dockerfile",
+    "repo": {
+      "url": "https://github.com/example/alpha",
+      "defaultBranch": "main",
+      "path": "apps/web"
+    },
+    "image": {
+      "repository": "kuso-registry.kuso.svc.cluster.local:5000/alpha-web",
+      "tag": "abc123def4567890"
+    }
+  },
+  "status": {
+    "phase": "Succeeded"
+  }
+}

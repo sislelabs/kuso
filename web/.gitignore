@@ -4,3 +4,10 @@ out
 .env*.local
 *.tsbuildinfo
 next-env.d.ts
+
+# Playwright — browsers + per-run artifacts. Browsers are downloaded
+# via `npx playwright install`; reports/traces are generated per run.
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/

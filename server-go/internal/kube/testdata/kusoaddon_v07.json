@@ -1,0 +1,32 @@
+{
+  "apiVersion": "application.kuso.sislelabs.com/v1alpha1",
+  "kind": "KusoAddon",
+  "metadata": {
+    "name": "alpha-postgres",
+    "namespace": "alpha-prod"
+  },
+  "spec": {
+    "project": "alpha",
+    "kind": "postgres",
+    "version": "16",
+    "size": "small",
+    "ha": false,
+    "storageSize": "10Gi",
+    "resources": {
+      "requests": { "cpu": "100m", "memory": "256Mi" },
+      "limits":   { "cpu": "1000m", "memory": "1Gi" }
+    },
+    "password": "REDACTED",
+    "database": "alpha",
+    "backup": {
+      "schedule": "0 4 * * *",
+      "retentionDays": 30
+    },
+    "placement": {
+      "labels": { "tier": "data" }
+    }
+  },
+  "status": {
+    "phase": "Ready"
+  }
+}

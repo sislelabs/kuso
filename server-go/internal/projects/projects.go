@@ -57,6 +57,34 @@ type Service struct {
 	// the same Service instance always sees fresh data.
 	describeMu    sync.RWMutex
 	describeCache map[string]describeCacheEntry
+
+	// svcMutexes guards delta-style mutations on a single
+	// (project, service) pair. Operations like AddDomain and
+	// SetEnvVar fetch the current spec, apply a delta, and write it
+	// back; without serialisation, two concurrent AddDomain calls
+	// would both read the pre-edit spec and one would stomp the
+	// other's domain. The mutex is per-service so unrelated services
+	// never block each other. sync.Map is the right shape because
+	// the key set is unbounded but each key is hit infrequently.
+	svcMutexes sync.Map // map[string]*sync.Mutex, key = project + "/" + service
+}
+
+// lockService returns the (project, service) mutex, creating it on
+// first use. The caller is responsible for Unlock.
+func (s *Service) lockService(project, service string) *sync.Mutex {
+	key := project + "/" + service
+	if m, ok := s.svcMutexes.Load(key); ok {
+		mu := m.(*sync.Mutex)
+		mu.Lock()
+		return mu
+	}
+	mu := &sync.Mutex{}
+	actual, loaded := s.svcMutexes.LoadOrStore(key, mu)
+	if loaded {
+		mu = actual.(*sync.Mutex)
+	}
+	mu.Lock()
+	return mu
 }
 
 type nsCacheEntry struct {

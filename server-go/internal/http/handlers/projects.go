@@ -47,6 +47,15 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/services/{service}", h.GetService)
 	r.Patch("/api/projects/{project}/services/{service}", h.PatchService)
 	r.Delete("/api/projects/{project}/services/{service}", h.DeleteService)
+	// Delta operations on the most-edited fields. PatchService takes a
+	// whole-list replacement which last-write-wins under concurrent
+	// edits; these endpoints serialise per (project, service) so two
+	// simultaneous "add this domain" / "set this env var" calls both
+	// land. See server-go/internal/projects/services_deltas.go.
+	r.Post("/api/projects/{project}/services/{service}/domains", h.AddDomain)
+	r.Delete("/api/projects/{project}/services/{service}/domains/{host}", h.RemoveDomain)
+	r.Put("/api/projects/{project}/services/{service}/env-vars/{name}", h.SetEnvVar)
+	r.Delete("/api/projects/{project}/services/{service}/env-vars/{name}", h.UnsetEnvVar)
 	// Rename is a separate endpoint because it's clone-then-delete
 	// rather than a normal patch — the URL the new resource lives
 	// at is different from the one the request came in on, and
@@ -304,6 +313,91 @@ func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 	out, err := h.Svc.PatchService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
 	if err != nil {
 		h.fail(w, "patch service", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// AddDomain appends a single domain to a service's spec.domains. Body
+// is projects.AddDomainRequest. The mutation is per-service serialised
+// so two concurrent adds don't race.
+func (h *ProjectsHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
+	var req projects.AddDomainRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
+	out, err := h.Svc.AddDomain(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
+	if err != nil {
+		h.fail(w, "add domain", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// RemoveDomain drops a single host from spec.domains. ErrNotFound on
+// an unknown host so an idempotent retry surfaces clearly.
+func (h *ProjectsHandler) RemoveDomain(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
+	out, err := h.Svc.RemoveDomain(ctx,
+		chi.URLParam(r, "project"),
+		chi.URLParam(r, "service"),
+		chi.URLParam(r, "host"))
+	if err != nil {
+		h.fail(w, "remove domain", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// SetEnvVar adds or overwrites a single env var by name. Body is
+// projects.SetEnvVarRequest — exactly one of `value` / `secretRef`.
+func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
+	var req projects.SetEnvVarRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
+	out, err := h.Svc.SetEnvVar(ctx,
+		chi.URLParam(r, "project"),
+		chi.URLParam(r, "service"),
+		chi.URLParam(r, "name"),
+		req)
+	if err != nil {
+		h.fail(w, "set env var", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// UnsetEnvVar removes a single env var by name. ErrNotFound on
+// unknown name.
+func (h *ProjectsHandler) UnsetEnvVar(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+		return
+	}
+	out, err := h.Svc.UnsetEnvVar(ctx,
+		chi.URLParam(r, "project"),
+		chi.URLParam(r, "service"),
+		chi.URLParam(r, "name"))
+	if err != nil {
+		h.fail(w, "unset env var", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, out)

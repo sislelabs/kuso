@@ -36,6 +36,7 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 - Confirm `dist/kuso-darwin-arm64` is up to date before driving it. After server-go changes that affect the API surface, also rebuild the CLI: `cd cli && go build -o /tmp/kuso ./cmd`.
 - Don't mix CLI invocations with raw kubectl in the same diagnostic — pick one and stay there. Mixing buries the actual signal in tooling noise.
 - For e2e validation, the CLI is the contract. If it lies (wrong status, missing fields, decode error), that's a real bug to fix — not something to work around with a kubectl one-liner.
+- **Before editing a running CR's spec, consult `docs/EDIT_SAFETY.md`.** It's the per-field contract for which fields are live-editable, which trigger rolling restarts, which hit Let's Encrypt rate limits, and which orphan data on removal. Use it to reason about blast radius before suggesting destructive edits to the user.
 
 ## Architecture cheatsheet (read this before reasoning about the codebase)
 

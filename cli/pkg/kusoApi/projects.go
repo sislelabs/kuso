@@ -167,9 +167,55 @@ type PatchServiceRequest struct {
 
 // PatchService applies a partial update to a service spec. Mirrors
 // the UI's Settings → Save flow.
+//
+// For per-row edits (add one domain, set one env var), prefer the
+// delta methods below — PatchService is whole-list replacement and
+// races under concurrent edits.
 func (k *KusoClient) PatchService(project, service string, req PatchServiceRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
 	return k.client.Patch("/api/projects/" + project + "/services/" + service)
+}
+
+// AddDomainRequest mirrors the server-side projects.AddDomainRequest.
+type AddDomainRequest struct {
+	Host string `json:"host"`
+	TLS  bool   `json:"tls"`
+}
+
+// AddDomain appends a single domain to a service. The server applies
+// the change under a per-service lock so concurrent adds don't race.
+// 409 on a duplicate host with the same TLS flag.
+func (k *KusoClient) AddDomain(project, service string, req AddDomainRequest) (*resty.Response, error) {
+	k.client.SetBody(req)
+	return k.client.Post("/api/projects/" + project + "/services/" + service + "/domains")
+}
+
+// RemoveDomain drops a single host. 404 when the host wasn't there.
+func (k *KusoClient) RemoveDomain(project, service, host string) (*resty.Response, error) {
+	return k.client.Delete("/api/projects/" + project + "/services/" + service + "/domains/" + host)
+}
+
+// SetEnvVarRequest mirrors the server-side projects.SetEnvVarRequest.
+// Exactly one of Value or SecretRef must be set.
+type SetEnvVarRequest struct {
+	Value     string                  `json:"value,omitempty"`
+	SecretRef *SetEnvVarSecretRefBody `json:"secretRef,omitempty"`
+}
+
+type SetEnvVarSecretRefBody struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
+// SetEnvVar adds or overwrites a single env var by name. Idempotent.
+func (k *KusoClient) SetEnvVar(project, service, name string, req SetEnvVarRequest) (*resty.Response, error) {
+	k.client.SetBody(req)
+	return k.client.Put("/api/projects/" + project + "/services/" + service + "/env-vars/" + name)
+}
+
+// UnsetEnvVar removes a single env var by name. 404 when absent.
+func (k *KusoClient) UnsetEnvVar(project, service, name string) (*resty.Response, error) {
+	return k.client.Delete("/api/projects/" + project + "/services/" + service + "/env-vars/" + name)
 }
 
 // Environments

@@ -19,21 +19,29 @@ import (
 	"kuso/server/internal/http/handlers"
 )
 
-// withBackupEnv sets KUSO_BACKUP_ENABLED=1 for the test and unsets it
-// on cleanup. Tests are not parallel because env mutation is global.
+// withBackupEnv toggles the backup feature for a test.
+//
+// Post-v0.8.3 the handler is enabled by default; "off" is expressed by
+// setting KUSO_BACKUP_DISABLED=1. Tests are not parallel because env
+// mutation is global.
 func withBackupEnv(t *testing.T, on bool) {
 	t.Helper()
-	prev, had := os.LookupEnv("KUSO_BACKUP_ENABLED")
-	if on {
-		_ = os.Setenv("KUSO_BACKUP_ENABLED", "1")
-	} else {
-		_ = os.Unsetenv("KUSO_BACKUP_ENABLED")
+	prevEnabled, hadEnabled := os.LookupEnv("KUSO_BACKUP_ENABLED")
+	prevDisabled, hadDisabled := os.LookupEnv("KUSO_BACKUP_DISABLED")
+	// Clear both so we control the resolved state precisely.
+	_ = os.Unsetenv("KUSO_BACKUP_ENABLED")
+	_ = os.Unsetenv("KUSO_BACKUP_DISABLED")
+	if !on {
+		_ = os.Setenv("KUSO_BACKUP_DISABLED", "1")
 	}
 	t.Cleanup(func() {
-		if had {
-			_ = os.Setenv("KUSO_BACKUP_ENABLED", prev)
-		} else {
-			_ = os.Unsetenv("KUSO_BACKUP_ENABLED")
+		_ = os.Unsetenv("KUSO_BACKUP_ENABLED")
+		_ = os.Unsetenv("KUSO_BACKUP_DISABLED")
+		if hadEnabled {
+			_ = os.Setenv("KUSO_BACKUP_ENABLED", prevEnabled)
+		}
+		if hadDisabled {
+			_ = os.Setenv("KUSO_BACKUP_DISABLED", prevDisabled)
 		}
 	})
 }
@@ -63,7 +71,37 @@ func adminAuthHarness(t *testing.T, role string) (*chi.Mux, *db.DB, string) {
 	return r, d, dbPath
 }
 
-func TestBackup_DisabledByDefault(t *testing.T) {
+// Backup is enabled by default post-v0.8.3 — the BACKUP_RESTORE doc's
+// daily-snapshot pattern Just Works without an explicit env flip.
+func TestBackup_EnabledByDefault(t *testing.T) {
+	t.Helper()
+	// Force-clear both env vars so we observe the bare-default state
+	// regardless of how the surrounding harness was configured.
+	prevEnabled, hadEnabled := os.LookupEnv("KUSO_BACKUP_ENABLED")
+	prevDisabled, hadDisabled := os.LookupEnv("KUSO_BACKUP_DISABLED")
+	_ = os.Unsetenv("KUSO_BACKUP_ENABLED")
+	_ = os.Unsetenv("KUSO_BACKUP_DISABLED")
+	t.Cleanup(func() {
+		if hadEnabled {
+			_ = os.Setenv("KUSO_BACKUP_ENABLED", prevEnabled)
+		}
+		if hadDisabled {
+			_ = os.Setenv("KUSO_BACKUP_DISABLED", prevDisabled)
+		}
+	})
+
+	r, _, _ := adminAuthHarness(t, "admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/backup", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200 with no env vars set (default-on), got %d body=%q", rr.Code, rr.Body.String())
+	}
+}
+
+// Explicit opt-out via KUSO_BACKUP_DISABLED=1 keeps the routes off the
+// router entirely (404, not 403) so the surface is invisible.
+func TestBackup_ExplicitlyDisabled(t *testing.T) {
 	withBackupEnv(t, false)
 	r, _, _ := adminAuthHarness(t, "admin")
 
@@ -71,7 +109,34 @@ func TestBackup_DisabledByDefault(t *testing.T) {
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
 	if rr.Code != http.StatusNotFound {
-		t.Fatalf("want 404 when KUSO_BACKUP_ENABLED is unset, got %d", rr.Code)
+		t.Fatalf("want 404 when KUSO_BACKUP_DISABLED=1, got %d", rr.Code)
+	}
+}
+
+// Legacy KUSO_BACKUP_ENABLED=0 must still disable, so anyone who
+// explicitly turned it off pre-v0.8.3 keeps that behaviour.
+func TestBackup_LegacyEnabledZeroDisables(t *testing.T) {
+	prevEnabled, hadEnabled := os.LookupEnv("KUSO_BACKUP_ENABLED")
+	prevDisabled, hadDisabled := os.LookupEnv("KUSO_BACKUP_DISABLED")
+	_ = os.Unsetenv("KUSO_BACKUP_DISABLED")
+	_ = os.Setenv("KUSO_BACKUP_ENABLED", "0")
+	t.Cleanup(func() {
+		_ = os.Unsetenv("KUSO_BACKUP_ENABLED")
+		_ = os.Unsetenv("KUSO_BACKUP_DISABLED")
+		if hadEnabled {
+			_ = os.Setenv("KUSO_BACKUP_ENABLED", prevEnabled)
+		}
+		if hadDisabled {
+			_ = os.Setenv("KUSO_BACKUP_DISABLED", prevDisabled)
+		}
+	})
+
+	r, _, _ := adminAuthHarness(t, "admin")
+	req := httptest.NewRequest(http.MethodGet, "/api/admin/backup", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("want 404 when KUSO_BACKUP_ENABLED=0, got %d", rr.Code)
 	}
 }
 

@@ -20,15 +20,18 @@ import (
 
 // BackupHandler exposes /api/admin/backup + /api/admin/restore.
 //
-// The endpoints are gated on KUSO_BACKUP_ENABLED=1 because the backup
-// dumps every kuso user (with bcrypt hashes), every API token (signed
-// JWTs), and audit log — material that should not leave the cluster
-// casually. With the env unset, both routes return 404 so an attacker
-// scanning the surface can't tell whether the feature exists.
+// The endpoints are admin-only behind JWT auth; the role check lives
+// in router.go (Mount sits inside the JWT-protected group), and we
+// additionally require role=admin here as defence-in-depth.
 //
-// The role admin-only middleware lives in router.go (Mount sits inside
-// the JWT-protected group); we additionally require role=admin here as
-// defence-in-depth.
+// Backup is enabled by default — the whole point of the BACKUP_RESTORE
+// doc is that the daily snapshot path Just Works without an extra
+// flag. Operators with a compliance reason to lock it down (multi-
+// tenant kuso-as-a-service, regulated environment) can set
+// KUSO_BACKUP_DISABLED=1 to remove the routes entirely; the legacy
+// KUSO_BACKUP_ENABLED=0 is also honoured for symmetry. With either
+// disable flag set, both routes return 404 so an attacker scanning
+// the surface can't tell whether the feature exists.
 type BackupHandler struct {
 	DB      *db.DB
 	DBPath  string // absolute path of the live SQLite file
@@ -36,13 +39,32 @@ type BackupHandler struct {
 	enabled bool
 }
 
-// NewBackupHandler returns nil when KUSO_BACKUP_ENABLED is not "1".
-// Returning nil keeps the routes off the router entirely.
+// NewBackupHandler returns a configured handler unless an operator has
+// explicitly disabled backups. Returning nil keeps the routes off the
+// router entirely (Mount is a no-op).
 func NewBackupHandler(database *db.DB, dbPath string, logger *slog.Logger) *BackupHandler {
-	if os.Getenv("KUSO_BACKUP_ENABLED") != "1" {
+	if backupDisabled() {
 		return nil
 	}
 	return &BackupHandler{DB: database, DBPath: dbPath, Logger: logger, enabled: true}
+}
+
+// backupDisabled returns true when the operator has explicitly opted
+// out of the backup endpoints. Two ways to opt out:
+//
+//   - KUSO_BACKUP_DISABLED=1 — the canonical disable flag (post-v0.8.3)
+//   - KUSO_BACKUP_ENABLED=0 — the inverse of the legacy enable flag,
+//     kept so anyone who explicitly set ENABLED=0 keeps that behaviour.
+//
+// Bare unset / any other value = enabled.
+func backupDisabled() bool {
+	if os.Getenv("KUSO_BACKUP_DISABLED") == "1" {
+		return true
+	}
+	if v, ok := os.LookupEnv("KUSO_BACKUP_ENABLED"); ok && v == "0" {
+		return true
+	}
+	return false
 }
 
 // Mount registers /api/admin/backup + /api/admin/restore. Caller must

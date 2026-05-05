@@ -1,0 +1,64 @@
+{
+  "apiVersion": "application.kuso.sislelabs.com/v1alpha1",
+  "kind": "KusoService",
+  "metadata": {
+    "name": "alpha-web",
+    "namespace": "alpha-prod"
+  },
+  "spec": {
+    "project": "alpha",
+    "displayName": "Alpha Web",
+    "repo": {
+      "url": "https://github.com/example/alpha",
+      "defaultBranch": "main",
+      "path": "apps/web"
+    },
+    "runtime": "dockerfile",
+    "command": ["node", "server.js"],
+    "fromService": "",
+    "port": 3000,
+    "internal": false,
+    "domains": [
+      { "host": "alpha.example.com", "tls": true },
+      { "host": "www.alpha.example.com", "tls": true }
+    ],
+    "envVars": [
+      { "name": "NODE_ENV", "value": "production" },
+      {
+        "name": "DATABASE_URL",
+        "valueFrom": {
+          "secretKeyRef": {
+            "name": "alpha-postgres-conn",
+            "key": "DATABASE_URL"
+          }
+        }
+      }
+    ],
+    "scale": {
+      "min": 1,
+      "max": 5,
+      "targetCPU": 70
+    },
+    "sleep": {
+      "enabled": false,
+      "afterMinutes": 30
+    },
+    "static": null,
+    "buildpacks": null,
+    "placement": {
+      "labels": { "tier": "web" }
+    },
+    "volumes": [
+      { "name": "uploads", "mountPath": "/var/uploads", "sizeGi": 10, "accessMode": "ReadWriteOnce" }
+    ],
+    "github": {
+      "installationId": 12345678
+    },
+    "previews": {
+      "disabled": false
+    }
+  },
+  "status": {
+    "phase": "Ready"
+  }
+}
