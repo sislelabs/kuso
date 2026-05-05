@@ -37,6 +37,7 @@ import (
 	"kuso/server/internal/nodemetrics"
 	"kuso/server/internal/nodewatch"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/platformharden"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/spec"
 	"kuso/server/internal/updater"
@@ -312,6 +313,16 @@ func main() {
 		// nil log DB just skips the log prune step.
 		if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
 			go runDailyCleanup(ctx, database, logDB, kc, buildSvc, *namespace, logger)
+		}
+		// Platform hardening — once at boot, idempotent. Patches
+		// traefik / cert-manager / kuso-operator deployments to
+		// match kuso-server's tolerant probes + Burstable QoS so a
+		// build-time CPU spike doesn't murder traefik and turn the
+		// dashboard into ERR_CONNECTION_REFUSED. Skipped by
+		// KUSO_PLATFORM_HARDEN_DISABLED=true on installs that
+		// custom-tune their own platform pods.
+		if os.Getenv("KUSO_PLATFORM_HARDEN_DISABLED") != "true" {
+			go platformharden.Run(ctx, kc, logger)
 		}
 
 		// GitHub App is opt-in; if env vars are missing the webhook +

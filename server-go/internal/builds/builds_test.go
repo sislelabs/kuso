@@ -9,6 +9,7 @@ import (
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -552,47 +553,48 @@ func TestCreate_DoesNotConflictAcrossServices(t *testing.T) {
 	}
 }
 
-// TestCreate_ConcurrencyCapBlocksAndTimesOut exercises the build
-// admission gate: when MaxConcurrentBuilds slots are held, a new
-// Create blocks for AdmitTimeout and then returns ErrConflict. This
-// is the safety valve that prevents a monorepo push storm from
-// spawning 15 simultaneous kaniko Jobs and OOM-ing the indie box.
-func TestCreate_ConcurrencyCapBlocksAndTimesOut(t *testing.T) {
+// TestCreate_ConcurrencyCapClusterReality exercises the v0.8.10
+// admission gate: Create rejects with ErrConflict when the cluster
+// already has MaxConcurrentBuilds running build pods. The gate
+// counts pods (real cluster state) rather than an in-memory
+// semaphore — survives kuso-server restart, catches operator-
+// rendered Job pods, and reflects actual node load.
+func TestCreate_ConcurrencyCapClusterReality(t *testing.T) {
 	t.Parallel()
 	const ref = "0011223344556677889900112233445566778899"
 	s := fakeService(t,
 		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "api"),
 		seedService("alpha", "web"),
 	)
 	s.MaxConcurrentBuilds = 1
-	s.AdmitTimeout = 100 * time.Millisecond
-
-	// Pre-occupy the only slot so the next Create has nothing left.
-	// We trigger lazy init by running the admit path once with a
-	// throwaway context (this is a white-box test; production code
-	// goes through Create which composes admit + dedup + create).
-	ctx0 := context.Background()
-	release, err := s.admitBuild(ctx0, "alpha")
-	if err != nil {
-		t.Fatalf("first admitBuild: %v", err)
+	// Seed an existing running build pod for some other service. The
+	// new admission gate sees this via pods.List(component=kusobuild)
+	// and refuses to admit a second build cluster-wide.
+	if _, err := s.Kube.Clientset.CoreV1().Pods("kuso").Create(context.Background(), &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alpha-api-existing-buildpod",
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"app.kubernetes.io/component": "kusobuild",
+				"kuso.sislelabs.com/project":  "alpha",
+				"kuso.sislelabs.com/service":  "alpha-api",
+			},
+		},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed running pod: %v", err)
 	}
-	t.Cleanup(release)
 
-	start := time.Now()
-	_, err = s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: ref})
-	elapsed := time.Since(start)
+	_, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: ref})
 	if !errors.Is(err, ErrConflict) {
-		t.Errorf("expected ErrConflict, got %v", err)
-	}
-	if elapsed < s.AdmitTimeout {
-		t.Errorf("Create returned in %s, expected to wait at least %s", elapsed, s.AdmitTimeout)
+		t.Errorf("expected ErrConflict (cap held by existing pod), got %v", err)
 	}
 }
 
-// TestCreate_ConcurrencyCapAllowsAfterRelease shows the happy path:
-// when a slot opens, a queued Create proceeds normally instead of
-// timing out.
-func TestCreate_ConcurrencyCapAllowsAfterRelease(t *testing.T) {
+// TestCreate_ConcurrencyCapAllowsWhenIdle: with no running build
+// pods cluster-wide, Create proceeds normally even at MaxConcurrent=1.
+func TestCreate_ConcurrencyCapAllowsWhenIdle(t *testing.T) {
 	t.Parallel()
 	const ref = "aabbccddeeff00112233445566778899aabbccdd"
 	s := fakeService(t,
@@ -600,18 +602,6 @@ func TestCreate_ConcurrencyCapAllowsAfterRelease(t *testing.T) {
 		seedService("alpha", "web"),
 	)
 	s.MaxConcurrentBuilds = 1
-	s.AdmitTimeout = 2 * time.Second
-
-	// Pre-occupy the slot, then release it on a delay. Create
-	// should block briefly then succeed.
-	release, err := s.admitBuild(context.Background(), "alpha")
-	if err != nil {
-		t.Fatalf("first admitBuild: %v", err)
-	}
-	go func() {
-		time.Sleep(50 * time.Millisecond)
-		release()
-	}()
 
 	got, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: ref})
 	if err != nil {
