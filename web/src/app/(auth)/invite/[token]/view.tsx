@@ -10,7 +10,8 @@
 //      creates the User row, attaches to the group, returns a JWT.
 
 import { useEffect, useState } from "react";
-import { useParams, useRouter } from "next/navigation";
+import { useRouter } from "next/navigation";
+import { useRouteParams } from "@/lib/dynamic-params";
 import { api, ApiError } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -34,9 +35,14 @@ interface AuthMethods {
 }
 
 export function InviteRedeemView() {
-  const params = useParams<{ token: string }>();
+  // useRouteParams reads from window.location.pathname, bypassing
+  // Next's static-export "_" placeholder that useParams() would
+  // otherwise hand back. Without this, /invite/<real-token> renders
+  // the build-time placeholder render forever and never advances
+  // past "Loading…".
+  const params = useRouteParams<{ token: string }>(["token"]);
   const router = useRouter();
-  const token = params?.token ?? "";
+  const token = params.token ?? "";
 
   const [summary, setSummary] = useState<InviteSummary | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +58,7 @@ export function InviteRedeemView() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    if (!token || token === "_") return;
+    if (!token) return;
     let cancelled = false;
     api<InviteSummary>(`/api/invites/lookup/${encodeURIComponent(token)}`)
       .then((s) => {
@@ -100,7 +106,10 @@ export function InviteRedeemView() {
     }
   };
 
-  if (!token || token === "_") {
+  // Empty token: pre-hydration render. useRouteParams returns {}
+  // until window is available, so we show the spinner once and let
+  // the next render kick off the lookup.
+  if (!token) {
     return <p className="text-sm text-[var(--text-tertiary)]">Loading…</p>;
   }
 
