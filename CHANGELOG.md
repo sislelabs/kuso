@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.7.45] — 2026-05-05
+
+### 🐛 Bug Fixes
+- Fix(invite): read token from URL pathname, not Next's build placeholder ([dbf716b](https://github.com/sislelabs/kuso/commit/dbf716b3ae284ea75c1ca8798269f6935b97bcb7))
+
 ## [0.7.44] — 2026-05-04
 
 ### 🐛 Bug Fixes
