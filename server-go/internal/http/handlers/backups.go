@@ -274,9 +274,20 @@ echo "==> done"
 `},
 						Env: []corev1.EnvVar{
 							{Name: "KEY", Value: req.Key},
-							{Name: "POSTGRES_HOST", Value: releaseName + "-postgresql"},
-							{Name: "POSTGRES_USER", Value: "kuso"},
-							{Name: "POSTGRES_DB", Value: "kuso"},
+							// Source ALL connection parameters from the
+							// addon's <release>-conn Secret. Hard-coding
+							// host/user/db here was the v0.7.51 bug:
+							// host had a stale "-postgresql" suffix
+							// (left over from when the chart used the
+							// bitnami subchart's naming) and db
+							// defaulted to "kuso" but the chart actually
+							// uses "<project>". Reading from the conn
+							// secret means the restore Job tracks
+							// whatever the chart wrote — same source of
+							// truth as the application pods.
+							envFromSecret("POSTGRES_HOST", releaseName+"-conn", "POSTGRES_HOST"),
+							envFromSecret("POSTGRES_USER", releaseName+"-conn", "POSTGRES_USER"),
+							envFromSecret("POSTGRES_DB", releaseName+"-conn", "POSTGRES_DB"),
 							envFromSecret("POSTGRES_PASSWORD", releaseName+"-conn", "POSTGRES_PASSWORD"),
 							envFromSecret("BUCKET", backupSecretName, "bucket"),
 							envFromSecret("S3_ENDPOINT", backupSecretName, "endpoint"),
