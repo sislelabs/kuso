@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.8.10] — 2026-05-05
+
+### Other
+- Resilience(builds+platform): cluster-truth admission + auto-harden ([e349d73](https://github.com/sislelabs/kuso/commit/e349d73d6b0a2241184914c36eab3231afccb6bd))
+
 ## [0.8.9] — 2026-05-05
 
 ### ⚡ Performance
