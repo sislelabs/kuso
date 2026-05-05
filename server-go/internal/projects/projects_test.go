@@ -408,8 +408,11 @@ func TestSetEnv_ReplacesAndRedacts(t *testing.T) {
 			EnvVars: []kube.KusoEnvVar{{Name: "OLD", Value: "old"}},
 		}),
 	)
+	// API_BASE chosen because PORT is now reserved (see
+	// TestSetEnv_RejectsReservedNames). Behaviour under test is the
+	// same: a plain var round-trips with its value visible.
 	err := s.SetEnv(context.Background(), "alpha", "web", []EnvVar{
-		{Name: "PORT", Value: "3000"},
+		{Name: "API_BASE", Value: "https://api.example.com"},
 		{Name: "DB_URL", ValueFrom: map[string]any{"secretKeyRef": map[string]any{"name": "alpha-web-secrets", "key": "DB_URL"}}},
 	})
 	if err != nil {
@@ -419,11 +422,67 @@ func TestSetEnv_ReplacesAndRedacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEnv: %v", err)
 	}
-	if len(got) != 2 || got[0].Name != "PORT" || got[0].Value != "3000" {
+	if len(got) != 2 || got[0].Name != "API_BASE" || got[0].Value != "https://api.example.com" {
 		t.Errorf("plain var: %+v", got)
 	}
 	if got[1].Name != "DB_URL" || got[1].Value != "" || got[1].ValueFrom == nil {
 		t.Errorf("secret-backed var should be redacted: %+v", got[1])
+	}
+}
+
+// TestSetEnv_RejectsReservedNames asserts that PORT / HOSTNAME /
+// KUBERNETES_* fail validation rather than silently overriding the
+// runtime's port and hostname. PORT was the v0.7.49 demo's cause of
+// 502: a postgres POSTGRES_PORT got plumbed into a variable named
+// PORT, the API listened on 5432, and the kube Service kept routing
+// to 8080. Server-side gate prevents that class of misconfig at the
+// boundary regardless of how the var got typed (UI, CLI, API, drag-
+// to-connect).
+func TestSetEnv_RejectsReservedNames(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+	}{
+		{"PORT"},
+		{"HOSTNAME"},
+		{"KUBERNETES_SERVICE_HOST"},
+		{"KUBERNETES_PORT_443_TCP"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := fakeService(t,
+				seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+				seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+			)
+			err := s.SetEnv(context.Background(), "alpha", "web", []EnvVar{
+				{Name: tc.name, Value: "anything"},
+			})
+			if !errors.Is(err, ErrInvalid) {
+				t.Errorf("expected ErrInvalid for %q, got %v", tc.name, err)
+			}
+		})
+	}
+}
+
+// TestSetEnv_AllowsLookalikes ensures the reserved-name check is
+// exact (not a prefix match for the canonical names) — variables
+// like PORT_PUBLIC, HOSTNAME_OVERRIDE, KUBERNETES_VERSION (different
+// project entirely) should pass through. KUBERNETES_* is the
+// intentional prefix; PORT and HOSTNAME are exact-match only.
+func TestSetEnv_AllowsLookalikes(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+	)
+	allowed := []string{"PORT_PUBLIC", "HOSTNAME_OVERRIDE", "MY_PORT", "PORT2"}
+	for _, name := range allowed {
+		err := s.SetEnv(context.Background(), "alpha", "web", []EnvVar{
+			{Name: name, Value: "ok"},
+		})
+		if err != nil {
+			t.Errorf("expected %q to pass, got %v", name, err)
+		}
 	}
 }
 

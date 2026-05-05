@@ -334,6 +334,46 @@ var envNameRE_pod = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 func envNameValid(name string) bool { return envNameRE_pod.MatchString(name) }
 
+// reservedEnvNames are env-var names the kuso runtime owns.
+//
+// PORT is the canonical footgun. The runtime container port comes
+// from KusoService.spec.port — the chart wires that into the kube
+// Service's targetPort + the Deployment's containerPort. If a user
+// also sets PORT=<something else> via env vars (e.g. by accidentally
+// connecting an addon's POSTGRES_PORT to a variable named PORT in
+// the canvas), the app boots listening on the addon port, the kube
+// Service forwards traffic to the configured port, and every
+// request 502s. We hit this on the v0.7.49 demo: PORT got set to
+// 5432 from a postgres conn-secret reference and the API silently
+// listened on the database port.
+//
+// HOSTNAME is set by the kubelet to the pod name; user override is
+// always wrong (breaks distributed tracing, in-cluster service
+// discovery, etc).
+//
+// KUBERNETES_* are reserved by the kubelet for the in-cluster
+// service-account ambient env. Overriding them breaks API access
+// from the pod.
+var reservedEnvNames = map[string]string{
+	"PORT":     "kuso owns the pod's HTTP port — set it via Settings → Networking → Port",
+	"HOSTNAME": "kubelet stamps HOSTNAME from the pod name; overriding breaks service discovery",
+}
+
+// envNameReserved reports whether the env-var name conflicts with a
+// kuso-managed or kube-managed name. Returns the human-readable
+// reason on conflict; empty string when allowed. Names matching
+// `KUBERNETES_*` are also rejected (catch-all for the in-cluster
+// service-account env).
+func envNameReserved(name string) string {
+	if msg, ok := reservedEnvNames[name]; ok {
+		return msg
+	}
+	if strings.HasPrefix(name, "KUBERNETES_") {
+		return "KUBERNETES_* is reserved by the kubelet for in-cluster API access"
+	}
+	return ""
+}
+
 // CreateEnvRequest is the body of POST /api/projects/{p}/services/{s}/envs.
 // Used to add a custom environment (e.g. "staging" tracking a branch
 // other than the default). Production envs are auto-created with the
@@ -666,6 +706,9 @@ func (s *Service) SetEnv(ctx context.Context, project, service string, envVars [
 		}
 		if !envNameValid(name) {
 			return fmt.Errorf("%w: env var name %q must match [A-Za-z_][A-Za-z0-9_]*", ErrInvalid, name)
+		}
+		if reason := envNameReserved(name); reason != "" {
+			return fmt.Errorf("%w: %q is reserved — %s", ErrInvalid, name, reason)
 		}
 		if _, dup := seen[name]; dup {
 			return fmt.Errorf("%w: duplicate env var name %q", ErrInvalid, name)

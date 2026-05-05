@@ -20,6 +20,24 @@ interface Row {
   visible: boolean;
 }
 
+// reservedEnvWarning mirrors server-go's projects.envNameReserved
+// rules so the user sees the conflict at typing time, not at save
+// time. Server is still authoritative — these are nudges. Returns
+// the reason string when the name is reserved; empty string otherwise.
+function reservedEnvWarning(name: string): string {
+  if (!name) return "";
+  if (name === "PORT") {
+    return "PORT is set by kuso from Settings → Networking → Port";
+  }
+  if (name === "HOSTNAME") {
+    return "HOSTNAME is reserved by the kubelet";
+  }
+  if (name.startsWith("KUBERNETES_")) {
+    return "KUBERNETES_* is reserved for in-cluster API access";
+  }
+  return "";
+}
+
 type Mode = "rows" | "bulk";
 
 // addonByConnSecret maps "<project>-<addon>-conn" → "<addon>" so the
@@ -374,14 +392,24 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
               key={i}
               className="grid grid-cols-[180px_1fr_auto_auto_auto] items-center gap-1.5"
             >
-              <Input
-                placeholder="KEY"
-                value={r.name}
-                onChange={(e) => update(i, { name: e.target.value })}
-                className="h-8 font-mono text-[12px]"
-                disabled={r.fromSecret}
-                spellCheck={false}
-              />
+              <div className="flex flex-col gap-0.5">
+                <Input
+                  placeholder="KEY"
+                  value={r.name}
+                  onChange={(e) => update(i, { name: e.target.value })}
+                  className={cn(
+                    "h-8 font-mono text-[12px]",
+                    reservedEnvWarning(r.name) && "border-amber-500/60",
+                  )}
+                  disabled={r.fromSecret}
+                  spellCheck={false}
+                />
+                {reservedEnvWarning(r.name) && (
+                  <span className="font-mono text-[10px] text-amber-400">
+                    {reservedEnvWarning(r.name)}
+                  </span>
+                )}
+              </div>
               <Input
                 placeholder={r.fromSecret ? "(from secret)" : "value or ${{ ref }}"}
                 type={r.visible || r.fromSecret ? "text" : "password"}
