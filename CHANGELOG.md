@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.8.1] — 2026-05-05
+
+### ✨ Features
+- Feat: mobile UX + cron edit overlay + CLI parity for v0.8 ([d264704](https://github.com/sislelabs/kuso/commit/d264704baec7aceb8ffede29744fe4c3ae00e958))
+
+### 🧹 Chores
+- Chore: import other-agent changes — informer cache + docs + LE-prod default ([738bd74](https://github.com/sislelabs/kuso/commit/738bd74781140c26e59bf7e598b782ea6351bf8d))
+
 ## [0.8.0] — 2026-05-05
 
 ### ✨ Features
