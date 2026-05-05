@@ -72,11 +72,18 @@
   --accent-hover: #2F3556;
   --accent-subtle: rgba(64, 71, 109, 0.10);
   /* Light mode: sage primary CTAs (Save/Create/Deploy), slate-blue
-     secondary. Same two-tier shape as dark mode. */
-  --btn-primary-bg: #ACBEA3;
-  --btn-primary-bg-hover: #8DA084;
-  --btn-primary-fg: #0A0C15;
-  --btn-primary-border: #708A6B;
+     secondary. The dark-mode bg #ACBEA3 reads as muddy on the warm
+     cream background — too close to the surrounding cards in
+     lightness, and the dark sage border (#708A6B) wraps it like a
+     bezel. Lift to a brighter mint-leaning sage and use a same-hue
+     border one step darker than the fill so the button reads as a
+     single chip rather than fill+border arguing. Hover deepens
+     slightly (vs. lighter) so the press direction matches what your
+     eye expects on a light surface. */
+  --btn-primary-bg: #C7D8C0;
+  --btn-primary-bg-hover: #B5C9AD;
+  --btn-primary-fg: #1F2E1A;
+  --btn-primary-border: #B5C9AD;
   --btn-secondary-bg: #40476D;
   --btn-secondary-bg-hover: #2F3556;
   --btn-secondary-fg: #FBFBF7;
