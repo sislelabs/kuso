@@ -15,6 +15,7 @@ import {
   Globe,
   Database,
   Github,
+  Cpu,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -42,6 +43,7 @@ const CARDS: Card[] = [
   { href: "/settings/instance-secrets", title: "Instance secrets", description: "Env vars auto-mounted into every service in every project.",      icon: Globe,        perm: Perms.SettingsAdmin, group: "instance" },
   { href: "/settings/github",           title: "GitHub App",       description: "Connect a GitHub App so kuso can monitor repos and trigger builds.", icon: Github,        perm: Perms.SettingsAdmin, group: "instance" },
   { href: "/settings/instance-addons",  title: "Instance addons",  description: "Shared databases that projects can carve per-project DBs out of.", icon: Database,     perm: Perms.SettingsAdmin, group: "instance" },
+  { href: "/settings/builds",           title: "Build resources",  description: "Concurrency cap + per-build memory/CPU limits. Tune to your VM size.", icon: Cpu,         perm: Perms.SettingsAdmin, group: "instance" },
   { href: "/settings/backups",          title: "Backups",          description: "S3 credentials for scheduled addon dumps.",                        icon: HardDrive,    perm: Perms.SettingsAdmin, group: "instance" },
   { href: "/settings/updates",          title: "Updates",          description: "Self-update the kuso server + operator + CRDs.",                   icon: Package,      group: "instance" },
 

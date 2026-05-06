@@ -94,16 +94,14 @@ type Service struct {
 	// will fail to clone.
 	Tokens TokenMinter
 
-	// MaxConcurrentBuilds caps cluster-wide simultaneous kaniko Jobs.
-	// kaniko Jobs request `1.5 CPU / 2Gi` (operator/helm-charts/
-	// kusobuild/values.yaml); on a 2-core indie box, more than 2
-	// concurrent builds saturate the node and starve the kuso-server
-	// pod (control-plane-pinned). The cap protects the host without
-	// hard-rejecting webhook-triggered builds — Create blocks up to
-	// AdmitTimeout for a slot before failing with ErrConflict.
+	// MaxConcurrentBuilds is the fallback cap when no Settings
+	// provider is wired (CLI tests, legacy main.go). Production
+	// reads the live value from Settings.GetBuildSettings on each
+	// admission, so the admin's /settings change takes effect on
+	// the next build without a server restart.
 	//
-	// 0 disables the cap (legacy behaviour pre-v0.7.17). Override per
-	// project via the kuso.sislelabs.com/build-max-concurrent
+	// 0 disables the cap (matches pre-v0.7.17 behaviour). Override
+	// per project via the kuso.sislelabs.com/build-max-concurrent
 	// annotation on the KusoProject CR.
 	MaxConcurrentBuilds int
 	// AdmitTimeout is how long Create waits for a build slot to open
@@ -111,6 +109,19 @@ type Service struct {
 	// enough to absorb a monorepo push storm against a 1-min build,
 	// short enough to bound webhook retry latency.
 	AdmitTimeout time.Duration
+
+	// Settings reads admin-tunable knobs from the DB. When non-nil,
+	// build resource limits + the cluster-wide concurrent cap come
+	// from here instead of the static MaxConcurrentBuilds field.
+	// Cached for 30s per process so admin saves propagate quickly
+	// without burning DB reads on every Create.
+	Settings SettingsProvider
+
+	// settingsCache memoizes the last read so per-Create reads
+	// don't hit Postgres on every webhook tick.
+	settingsMu       sync.Mutex
+	settingsCache    *cachedBuildSettings
+	settingsCacheTTL time.Duration
 
 	// inFlight dedupes concurrent Create calls keyed on
 	// (project, service, sha). When a webhook retries (GitHub does so
@@ -158,6 +169,62 @@ type Service struct {
 // spawn a second build pod for the same SHA.
 type inFlightEntry struct {
 	done chan struct{}
+}
+
+// SettingsProvider is the read-side of the admin-tunable build
+// settings (db.DB satisfies it). Held as an interface so the builds
+// package doesn't pull in db, which would force every test to spin
+// up Postgres just to construct a Service.
+type SettingsProvider interface {
+	GetBuildSettings(ctx context.Context) (BuildSettingsView, error)
+}
+
+// BuildSettingsView mirrors db.BuildSettings without importing db.
+// Carried through this package as the hot-path config used by
+// admitBuild + the chart-render path that overrides spec.resources.
+type BuildSettingsView struct {
+	MaxConcurrent int
+	MemoryLimit   string
+	MemoryRequest string
+	CPULimit      string
+	CPURequest    string
+}
+
+type cachedBuildSettings struct {
+	view    BuildSettingsView
+	expires time.Time
+}
+
+// loadSettings returns the live build settings, hitting the DB at
+// most once per settingsCacheTTL (default 30s). When no Settings
+// provider is wired the static MaxConcurrentBuilds + chart defaults
+// are returned so the legacy code path keeps working.
+func (s *Service) loadSettings(ctx context.Context) BuildSettingsView {
+	if s.Settings == nil {
+		return BuildSettingsView{MaxConcurrent: s.MaxConcurrentBuilds}
+	}
+	ttl := s.settingsCacheTTL
+	if ttl <= 0 {
+		ttl = 30 * time.Second
+	}
+	s.settingsMu.Lock()
+	if s.settingsCache != nil && time.Now().Before(s.settingsCache.expires) {
+		out := s.settingsCache.view
+		s.settingsMu.Unlock()
+		return out
+	}
+	s.settingsMu.Unlock()
+	v, err := s.Settings.GetBuildSettings(ctx)
+	if err != nil {
+		// Fall back to static config; never fail a build because
+		// we couldn't reach Postgres. The cache stays empty so the
+		// next call retries.
+		return BuildSettingsView{MaxConcurrent: s.MaxConcurrentBuilds}
+	}
+	s.settingsMu.Lock()
+	s.settingsCache = &cachedBuildSettings{view: v, expires: time.Now().Add(ttl)}
+	s.settingsMu.Unlock()
+	return v
 }
 
 // inFlightKey produces the dedup key. SHA is the natural primary key
@@ -228,7 +295,8 @@ func New(k *kube.Client, namespace string) *Service {
 // pod the chart renders; one apiserver list per Create is cheap
 // (~5ms on a small cluster) and is always correct.
 func (s *Service) admitBuild(ctx context.Context, project string) (release func(), err error) {
-	if s.MaxConcurrentBuilds <= 0 {
+	cfg := s.loadSettings(ctx)
+	if cfg.MaxConcurrent <= 0 {
 		return func() {}, nil
 	}
 	// Per-project lower bound. Cheap CR read; only matters when set.
@@ -243,9 +311,9 @@ func (s *Service) admitBuild(ctx context.Context, project string) (release func(
 	// across every namespace, which catches builds rendered by the
 	// operator from queued CRs, builds left over from a previous
 	// kuso-server replica, and builds re-spawned by a Job retry.
-	if active := s.countRunningBuildPodsCluster(ctx); active >= s.MaxConcurrentBuilds {
+	if active := s.countRunningBuildPodsCluster(ctx); active >= cfg.MaxConcurrent {
 		return nil, fmt.Errorf("%w: cluster at build concurrency cap (%d active, cap %d)",
-			ErrConflict, active, s.MaxConcurrentBuilds)
+			ErrConflict, active, cfg.MaxConcurrent)
 	}
 	return func() {}, nil
 }
@@ -940,6 +1008,25 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	}
 	if cachePVC != "" {
 		spec.Cache = &kube.KusoBuildCache{PVCName: cachePVC}
+	}
+	// Admin-tunable build resources. When the operator has saved
+	// non-default values via the Settings UI we stamp them onto the
+	// CR so the chart's `.Values.resources` picks them up; missing
+	// fields fall through to the chart's values.yaml defaults.
+	settings := s.loadSettings(ctx)
+	if settings.MemoryLimit != "" || settings.MemoryRequest != "" ||
+		settings.CPULimit != "" || settings.CPURequest != "" {
+		spec.Resources = &kube.KusoBuildResources{}
+		if settings.MemoryRequest != "" || settings.CPURequest != "" {
+			spec.Resources.Requests = &kube.KusoResourceQty{
+				CPU: settings.CPURequest, Memory: settings.MemoryRequest,
+			}
+		}
+		if settings.MemoryLimit != "" || settings.CPULimit != "" {
+			spec.Resources.Limits = &kube.KusoResourceQty{
+				CPU: settings.CPULimit, Memory: settings.MemoryLimit,
+			}
+		}
 	}
 	// Note: when queued, spec.Image is intentionally nil. The kusobuild
 	// chart's job.yaml gates Job rendering on `.Values.image.tag` —

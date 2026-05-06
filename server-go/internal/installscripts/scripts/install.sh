@@ -64,8 +64,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.9.0}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.9.0}"
+KUSO_VERSION="${KUSO_VERSION:-v0.9.1}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.9.1}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 
@@ -329,7 +329,7 @@ DEFAULT_ISSUER="letsencrypt-${KUSO_LE_ENV}"
 # yaml), the operator can't reconcile and the rest of the install builds a
 # broken cluster silently. Better to die here with a clear pointer.
 log "applying kuso CRDs (from ${KUSO_REF})"
-for crd in kusoprojects kusoservices kusoenvironments kusoaddons kusobuilds; do
+for crd in kusoprojects kusoservices kusoenvironments kusoaddons kusobuilds kusocrons; do
   url="${KUSO_RAW}/operator/config/crd/bases/application.kuso.sislelabs.com_${crd}.yaml"
   yaml="$(curl -sfL "$url" || true)"
   if [[ -z "$yaml" ]]; then
@@ -377,6 +377,23 @@ kubectl wait --for=condition=Available --timeout=120s \
 log "provisioning kuso-postgres"
 kubectl create namespace kuso 2>/dev/null || true
 
+# kuso-platform PriorityClass — both kuso-postgres and kuso-server
+# reference it in their pod specs. The full definition lives in
+# deploy/server-go.yaml's bundle, but that gets applied later in
+# the script — and a missing PriorityClass at StatefulSet-create
+# time produces "no PriorityClass with name kuso-platform was
+# found" with no useful retry. Eagerly create it here so subsequent
+# applies are clean.
+kubectl apply -f - <<'EOF' >/dev/null
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: kuso-platform
+value: 100000
+globalDefault: false
+description: "kuso control-plane pods. Survives workload eviction."
+EOF
+
 if [[ "${KUSO_USE_EXTERNAL_POSTGRES:-0}" == "1" ]]; then
   if ! kubectl get secret -n kuso kuso-postgres-conn >/dev/null 2>&1; then
     err "KUSO_USE_EXTERNAL_POSTGRES=1 set but Secret kuso-postgres-conn missing — create it before re-running install"
@@ -397,18 +414,22 @@ else
     --from-literal=dsn="$PG_DSN" \
     | kubectl apply -f - >/dev/null
 
-  # Apply the StatefulSet manifest (skipping the Secret block in
-  # postgres.yaml — we just wrote our own Secret with a real
-  # password; the manifest's stringData would silently overwrite
-  # ours otherwise).
-  curl -sfL "${KUSO_RAW}/deploy/postgres.yaml" \
-    | awk '
-        /^---$/ { sec_open=0 }
-        /^kind: Secret$/ { sec_open=1 }
-        sec_open==0 { print }
-      ' \
-    | kubectl apply -f - >/dev/null
+  # Apply the StatefulSet manifest. The Secret block was removed from
+  # postgres.yaml in v0.9.1 — we wrote our own Secret above with a
+  # real password, and a literal stringData in the YAML would have
+  # overwritten ours.
+  curl -sfL "${KUSO_RAW}/deploy/postgres.yaml" | kubectl apply -f - >/dev/null
 
+  # The StatefulSet creates the pod asynchronously; kubectl wait
+  # races the create on a fresh install. Poll for the pod's
+  # existence first, THEN wait for it to be Ready.
+  log "waiting for kuso-postgres pod to be created (up to 60s)"
+  for i in $(seq 1 60); do
+    if kubectl -n kuso get pod kuso-postgres-0 >/dev/null 2>&1; then
+      break
+    fi
+    sleep 1
+  done
   log "waiting for kuso-postgres to become ready (up to 5 min)"
   kubectl wait --for=condition=Ready --timeout=300s \
     pod/kuso-postgres-0 -n kuso || warn "kuso-postgres not yet ready"

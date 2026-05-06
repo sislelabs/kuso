@@ -191,6 +191,10 @@ func NewRouter(d Deps) http.Handler {
 		if d.DB != nil && d.Issuer != nil {
 			adminH := &httphandlers.AdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			adminH.Mount(r)
+			// Admin-tunable platform settings (build resources +
+			// concurrency cap today; future toggles join here).
+			settingsH := &httphandlers.SettingsHandler{DB: d.DB, Logger: d.Logger}
+			settingsH.Mount(r)
 			// Optional: backup/restore endpoints (gated on KUSO_BACKUP_ENABLED=1).
 			// Returns nil + Mount no-ops when disabled.
 			httphandlers.NewBackupHandler(d.DB, "", d.Logger).Mount(r)

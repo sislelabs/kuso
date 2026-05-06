@@ -112,6 +112,23 @@ spec:
                   properties:
                     pvcName:
                       type: string
+                # Per-build resource overrides. When set, the chart
+                # uses these in place of values.yaml's defaults.
+                # Server-go fills them from the live admin Settings
+                # at CR-create time. Quantity strings ("1500m", "2Gi").
+                resources:
+                  type: object
+                  properties:
+                    requests:
+                      type: object
+                      properties:
+                        cpu:    { type: string }
+                        memory: { type: string }
+                    limits:
+                      type: object
+                      properties:
+                        cpu:    { type: string }
+                        memory: { type: string }
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

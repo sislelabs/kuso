@@ -225,8 +225,12 @@ func main() {
 		// raise this with KUSO_BUILD_MAX_CONCURRENT. To effectively
 		// disable the cap on large clusters, set it to a high number
 		// (e.g. 999); the envInt helper rejects 0 / negative.
+		// MaxConcurrentBuilds is the static fallback. The live value
+		// comes from the Settings table (admin-tunable via /settings)
+		// — see buildsSettingsAdapter below.
 		buildSvc.MaxConcurrentBuilds = envInt("KUSO_BUILD_MAX_CONCURRENT", 2)
 		buildSvc.AdmitTimeout = time.Duration(envInt("KUSO_BUILD_ADMIT_TIMEOUT_SECONDS", 60)) * time.Second
+		buildSvc.Settings = buildsSettingsAdapter{db: database}
 		// Notifier on Service emits build.superseded when a new build
 		// for the same (project, service) cancels an in-flight one.
 		// The Poller has its own Notifier slot for build.{succeeded,
@@ -746,4 +750,23 @@ func (a notifyAdapter) Emit(e builds.EventEnvelope) {
 		Severity: e.Severity,
 		Extra:    e.Extra,
 	})
+}
+
+// buildsSettingsAdapter satisfies builds.SettingsProvider against the
+// db.DB. Same layering rationale as notifyAdapter — the builds/
+// package shouldn't import db/.
+type buildsSettingsAdapter struct{ db *db.DB }
+
+func (a buildsSettingsAdapter) GetBuildSettings(ctx context.Context) (builds.BuildSettingsView, error) {
+	v, err := a.db.GetBuildSettings(ctx)
+	if err != nil {
+		return builds.BuildSettingsView{}, err
+	}
+	return builds.BuildSettingsView{
+		MaxConcurrent: v.MaxConcurrent,
+		MemoryLimit:   v.MemoryLimit,
+		MemoryRequest: v.MemoryRequest,
+		CPULimit:      v.CPULimit,
+		CPURequest:    v.CPURequest,
+	}, nil
 }

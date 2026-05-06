@@ -403,6 +403,26 @@ type KusoBuildSpec struct {
 	Static               *KusoStaticSpec     `json:"static,omitempty"`
 	Buildpacks           *KusoBuildpacksSpec `json:"buildpacks,omitempty"`
 	Cache                *KusoBuildCache     `json:"cache,omitempty"`
+	Resources            *KusoBuildResources `json:"resources,omitempty"`
+}
+
+// KusoBuildResources mirrors the Kubernetes ResourceRequirements
+// shape so the kusobuild chart can read .Values.resources from the
+// build CR. Server-go fills these from the live admin Settings on
+// CR create, falling back to the chart's default values.yaml when
+// unset. The fields are quantity strings (e.g. "1500m", "2Gi") so
+// the chart can splat them into the Job pod spec without further
+// validation.
+type KusoBuildResources struct {
+	Requests *KusoResourceQty `json:"requests,omitempty"`
+	Limits   *KusoResourceQty `json:"limits,omitempty"`
+}
+
+// KusoResourceQty is the cpu+memory pair for a request or limit
+// stanza on a build pod.
+type KusoResourceQty struct {
+	CPU    string `json:"cpu,omitempty"`
+	Memory string `json:"memory,omitempty"`
 }
 
 // KusoBuildCache toggles the persistent build cache on a per-build

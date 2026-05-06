@@ -406,3 +406,18 @@ CREATE TABLE IF NOT EXISTS "ErrorScannerState" (
     "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Generic key/value settings store for admin-tunable platform knobs
+-- that don't deserve their own table. Used today for build resource
+-- limits (buildMaxConcurrent, buildMemoryLimit, etc); future toggles
+-- (preview-env retention, log-shipping cadence) land here too.
+--
+-- Wire shape: value is a TEXT-encoded JSON scalar so the same column
+-- carries int, string, bool. Schema migrations don't fire when a
+-- new key is added — we just write to / read from the row by key.
+CREATE TABLE IF NOT EXISTS "Setting" (
+    "key" TEXT PRIMARY KEY,
+    "value" TEXT NOT NULL,
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedBy" TEXT
+);
+
