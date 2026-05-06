@@ -24,7 +24,7 @@ type Service struct {
 	Enabled      bool
 	MaxBackups   int
 
-	mu sync.Mutex // guards the periodic limit() call
+	mu sync.Mutex // guards the periodic trim() call
 }
 
 // New constructs a Service. KUSO_AUDIT=true enables, KUSO_AUDIT_LIMIT

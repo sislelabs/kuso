@@ -426,20 +426,23 @@ interface FeedEvent {
 function NotificationsButton() {
   // The feed is admin-only on the server. Hide the bell entirely
   // for non-admins so they don't see a control that always reads
-  // empty + 401s the popover.
+  // empty + 401s the popover. Hooks run unconditionally above the
+  // gate so a logout / demote (canSee flipping true→false) doesn't
+  // change hook count between renders.
   const canSee = useCan(Perms.SettingsAdmin);
   const qc = useQueryClient();
-  if (!canSee) return null;
   // Controlled state so a notification's <Link> click can close the
   // popover before pushing the route — otherwise the popover stays
   // open over the new page until the user clicks elsewhere.
   const [open, setOpen] = useState(false);
   // Unread count drives the dot badge. Polled every 30s — same
   // cadence the project-status query uses, so we don't add a
-  // chatter to the server for one icon.
+  // chatter to the server for one icon. enabled: canSee saves the
+  // wasted poll for non-admins (they'd 401 anyway).
   const unread = useQuery<{ unread: number }>({
     queryKey: ["notifications", "unread-count"],
     queryFn: () => api("/api/notifications/feed/unread-count"),
+    enabled: canSee,
     refetchInterval: 30_000,
     staleTime: 15_000,
     retry: false,
@@ -460,6 +463,10 @@ function NotificationsButton() {
       qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
     },
   });
+
+  // Gate goes here, AFTER every hook, so a canSee transition doesn't
+  // change the hook count between renders.
+  if (!canSee) return null;
 
   const onOpenChange = (next: boolean) => {
     setOpen(next);
