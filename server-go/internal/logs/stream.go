@@ -121,13 +121,11 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 		}
 		return envName, fmt.Errorf("get env: %w", err)
 	}
-	// Tenancy check — see projects/pods_ops.go for the long form. The
-	// env CR's spec is authoritative; reject when it doesn't match the
-	// caller's project/service from the URL.
-	if envCR.Spec.Project != "" && envCR.Spec.Project != project {
-		return envName, ErrNotFound
-	}
-	if envCR.Spec.Service != "" && envCR.Spec.Service != fqn {
+	// Tenancy check — env CR's spec is authoritative. Pre-v0.9.x the
+	// `!= ""` form let zero-valued specs (legacy CRs / decode errors)
+	// short-circuit the check and return logs from any env in the
+	// namespace. Reject missing or mismatched fields outright.
+	if envCR.Spec.Project != project || envCR.Spec.Service != fqn {
 		return envName, ErrNotFound
 	}
 

@@ -96,8 +96,12 @@ export async function repairAddonPassword(
 }
 
 export async function deleteAddon(project: string, addon: string): Promise<void> {
+  // ?confirm=<addon> is required server-side to acknowledge data
+  // loss. The UI's confirm dialog already has the user type the
+  // addon name; we pass that value verbatim. The server compares
+  // it against the path param and rejects on mismatch.
   return api(
-    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}`,
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}?confirm=${encodeURIComponent(addon)}`,
     { method: "DELETE" }
   );
 }

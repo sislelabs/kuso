@@ -12,6 +12,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/audit"
+	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
@@ -20,6 +22,7 @@ import (
 type AddonsHandler struct {
 	Svc    *addons.Service
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -224,12 +227,39 @@ func (h *AddonsHandler) Placement(w http.ResponseWriter, r *http.Request) {
 func (h *AddonsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+	project := chi.URLParam(r, "project")
+	addon := chi.URLParam(r, "addon")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
 		return
 	}
-	if err := h.Svc.Delete(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
+	// Typed-confirmation guard: caller must echo the addon name in
+	// ?confirm=<addon>. The PVC's reclaim policy is the cluster
+	// default (Delete on a stock k3s install) — without this gate a
+	// stray DELETE wipes the customer DB with no recovery. The UI
+	// makes the user type the addon name into a confirm field;
+	// CLI / API callers pass it explicitly.
+	if r.URL.Query().Get("confirm") != addon {
+		http.Error(w, "addon delete requires ?confirm=<addon-name> to acknowledge data loss", http.StatusBadRequest)
+		return
+	}
+	if err := h.Svc.Delete(ctx, project, addon); err != nil {
 		h.fail(w, "delete addon", err)
 		return
+	}
+	if h.Audit != nil {
+		uid := ""
+		if c, ok := auth.ClaimsFromContext(ctx); ok && c != nil {
+			uid = c.UserID
+		}
+		h.Audit.Log(ctx, audit.Entry{
+			User:     uid,
+			Severity: "warn",
+			Action:   "addon.delete",
+			Pipeline: project,
+			App:      addon,
+			Resource: "kusoaddon",
+			Message:  "addon deleted (data PVC reclaim depends on StorageClass)",
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

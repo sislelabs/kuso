@@ -259,6 +259,12 @@ func (c *Client) UpdateKusoAddon(ctx context.Context, namespace string, a *KusoA
 	return update[KusoAddon](ctx, c, GVRAddons, "KusoAddon", namespace, a)
 }
 
+// DeleteKusoAddon removes the CR. Helm-operator's release uninstall
+// cascades the StatefulSet, the data PVC, and the <addon>-conn Secret.
+func (c *Client) DeleteKusoAddon(ctx context.Context, namespace, name string) error {
+	return deleteCR(ctx, c, GVRAddons, namespace, name)
+}
+
 // ---- KusoCron CRUD --------------------------------------------------
 
 func (c *Client) ListKusoCrons(ctx context.Context, namespace string) ([]KusoCron, error) {

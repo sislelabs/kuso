@@ -242,11 +242,14 @@ func (s *Service) persistDomains(ctx context.Context, ns, project, service strin
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
 	}
-	// Best-effort env propagation — kusoenvironment chart reads only
-	// the env CR, so without this the new domain doesn't reach the
-	// Ingress until the next env-touching write.
+	// Surface env-CR propagation failures so the UI can show
+	// "saved but not rolled out" instead of pretending it landed.
+	// The drift indicator (GET /drift) will catch it on the next
+	// poll either way; surfacing here is the loud path. Service
+	// CR is durable; the caller can retry or pick up the drift
+	// banner.
 	if err := s.propagateDomainsToEnvs(ctx, ns, project, service, updated); err != nil {
-		return updated, nil //nolint:nilerr // intentional: spec is durable, env retry on next write
+		return updated, fmt.Errorf("propagate domains to envs: %w", err)
 	}
 	return updated, nil
 }

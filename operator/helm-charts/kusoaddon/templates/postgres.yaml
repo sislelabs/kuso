@@ -106,6 +106,17 @@ spec:
   volumeClaimTemplates:
     - metadata:
         name: data
+        annotations:
+          # `helm.sh/resource-policy: keep` tells the helm-operator to
+          # leave the PVC behind on uninstall. Without this, deleting
+          # a KusoAddon CR cascades the StatefulSet AND the PVC; with
+          # the cluster's default reclaim policy (Delete on stock k3s)
+          # the underlying PV + the customer's data go with it. The
+          # PVC sticks around as orphan storage the operator can
+          # manually kubectl-delete to actually free the space —
+          # accidental kubectl-delete-addon stops being a 500GB
+          # data-loss event.
+          "helm.sh/resource-policy": keep
       spec:
         accessModes: [ReadWriteOnce]
         resources:

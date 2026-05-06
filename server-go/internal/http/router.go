@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/crons"
@@ -95,6 +96,15 @@ func NewRouter(d Deps) http.Handler {
 	// into json.NewDecoder(r.Body).Decode, which would otherwise
 	// happily consume the whole stream into memory.
 	r.Use(maxBodyBytes(1 << 20))
+	// Global in-flight cap. Without this a slow Postgres or kube
+	// list under burst load can pin every goroutine on the 25-conn
+	// DB pool and the next legitimate request hangs. 100 in flight
+	// is well above steady-state for an indie box (one user, dozens
+	// of pollers); past it we 503-fast so callers retry or the LB
+	// sees the failure. SSE / WS log streams are excluded — they
+	// hold a request for minutes by design and would saturate the
+	// semaphore.
+	r.Use(inFlightLimit(100))
 	if os.Getenv("KUSO_DEV_CORS") == "1" {
 		r.Use(devCORS)
 	}
@@ -223,7 +233,7 @@ func NewRouter(d Deps) http.Handler {
 			cfgH.Mount(r)
 		}
 		if d.Addons != nil {
-			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, DB: d.DB, Logger: d.Logger}
+			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			addonsH.Mount(r)
 			if d.Crons != nil {
 				cronsH := &httphandlers.CronsHandler{Svc: d.Crons, DB: d.DB, Logger: d.Logger}
@@ -330,6 +340,34 @@ func maxBodyBytes(n int64) func(http.Handler) http.Handler {
 				r.Body = http.MaxBytesReader(w, r.Body, n)
 			}
 			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// inFlightLimit caps concurrent in-flight requests via a buffered
+// channel semaphore. SSE/WS endpoints are excluded — they hold the
+// connection for minutes and would otherwise eat every slot.
+// Returns 503 with Retry-After when full.
+func inFlightLimit(n int) func(http.Handler) http.Handler {
+	sem := make(chan struct{}, n)
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Long-lived streams bypass the limiter entirely.
+			path := r.URL.Path
+			if strings.HasPrefix(path, "/ws/") ||
+				strings.Contains(path, "/logs/stream") ||
+				strings.Contains(path, "/events/stream") {
+				next.ServeHTTP(w, r)
+				return
+			}
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+				next.ServeHTTP(w, r)
+			default:
+				w.Header().Set("Retry-After", "1")
+				http.Error(w, "server busy", http.StatusServiceUnavailable)
+			}
 		})
 	}
 }

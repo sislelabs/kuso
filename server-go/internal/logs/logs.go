@@ -90,10 +90,9 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 		}
 		return nil, envName, fmt.Errorf("get env: %w", err)
 	}
-	if envCR.Spec.Project != "" && envCR.Spec.Project != project {
-		return nil, envName, ErrNotFound
-	}
-	if envCR.Spec.Service != "" && envCR.Spec.Service != fqn {
+	// Tenancy gate. The previous `!= ""` shape let a zero-valued env
+	// (legacy CR / decode failure) bypass the check entirely.
+	if envCR.Spec.Project != project || envCR.Spec.Service != fqn {
 		return nil, envName, ErrNotFound
 	}
 

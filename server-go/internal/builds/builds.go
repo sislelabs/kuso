@@ -1093,11 +1093,20 @@ func (s *Service) Rollback(ctx context.Context, project, service, buildName stri
 	if b.Spec.Image == nil {
 		return nil, fmt.Errorf("build %s has no image to roll back to", buildName)
 	}
-	// Patch the production env's image to the build's image. Same
-	// shape as the Poller's promoteImage path.
+	// Patch the production env's image to the build's image. Stamp
+	// promotedAt to *now* (not the build's createdAt) so a stray
+	// concurrent auto-promote of an older build can't silently
+	// overwrite the user's rollback decision — last-trigger-wins
+	// would otherwise let a stale auto-promote shadow the manual
+	// rollback if its build CR happened to have a newer createdAt.
 	envName := project + "-" + service + "-production"
-	patch := fmt.Sprintf(`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}}}`,
-		b.Spec.Image.Repository, b.Spec.Image.Tag)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	patch := fmt.Sprintf(
+		`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}},"metadata":{"annotations":{%q:%q,%q:%q}}}`,
+		b.Spec.Image.Repository, b.Spec.Image.Tag,
+		annPromotedBuild, b.Name,
+		annPromotedAt, now,
+	)
 	if _, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
 		Patch(ctx, envName, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 		return nil, fmt.Errorf("patch env %s: %w", envName, err)
@@ -1698,6 +1707,18 @@ func containerNames(cs []corev1.Container) []string {
 }
 
 func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild) error {
+	// Re-read the CR right before stamping. A user Cancel between
+	// "kaniko exited 0" and this patch would otherwise be undone:
+	// we'd flip phase=cancelled back to succeeded and the promote
+	// path further down would push the cancelled image to prod.
+	// Cancel writes phase=cancelled atomically; the lookup here
+	// turns "user hit stop" into a no-op in this code path.
+	if cur, gerr := p.Svc.Kube.GetKusoBuild(ctx, ns, b.Name); gerr == nil {
+		if buildPhase(cur) == "cancelled" {
+			p.logger().Info("build cancelled mid-flight; skipping promote", "build", b.Name)
+			return nil
+		}
+	}
 	patch := fmt.Sprintf(
 		`{"metadata":{"annotations":{%q:"succeeded",%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}}}`,
 		annPhase, annCompletedAt, time.Now().UTC().Format(time.RFC3339),
@@ -1795,6 +1816,30 @@ func (p *Poller) logger() *slog.Logger {
 	return slog.Default()
 }
 
+// annPromotedBuild + annPromotedAt stamp on the env CR record which
+// build last won the promote race. A staler concurrent promote
+// (Build A finished after Build B, but B was triggered later)
+// otherwise silently shadows the newer image — under back-to-back
+// pushes, production runs the older code. Compare-and-set on these
+// annotations gives last-trigger-wins semantics regardless of which
+// finishes first.
+const (
+	annPromotedBuild = "kuso.sislelabs.com/promoted-build"
+	annPromotedAt    = "kuso.sislelabs.com/promoted-at"
+)
+
+// buildTriggerTimestamp returns the wall-clock the build was created
+// at, fallback to "" if unset (older CRs). Used as the comparator for
+// the promote-CAS check. CR creationTimestamp is monotonic per build
+// pod within a single apiserver, which is good enough — we only need
+// to order builds for the same service against each other.
+func buildTriggerTimestamp(b *kube.KusoBuild) string {
+	if !b.CreationTimestamp.IsZero() {
+		return b.CreationTimestamp.UTC().Format(time.RFC3339Nano)
+	}
+	return ""
+}
+
 // promoteImage patches the new image tag onto every KusoEnvironment
 // whose branch matches the build's branch. That's:
 //
@@ -1836,8 +1881,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	if err != nil {
 		return fmt.Errorf("list envs for promotion: %w", err)
 	}
-	patch := fmt.Sprintf(`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}}}`,
-		b.Spec.Image.Repository, b.Spec.Image.Tag)
+	bTrigger := buildTriggerTimestamp(b)
 	matched := 0
 	for i := range raw.Items {
 		var e kube.KusoEnvironment
@@ -1850,6 +1894,20 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		if b.Spec.Branch != "" && e.Spec.Branch != "" && e.Spec.Branch != b.Spec.Branch {
 			continue
 		}
+		// Last-trigger-wins guard against back-to-back finishes.
+		// If a younger build already promoted, skip — this build
+		// would otherwise overwrite production with older code.
+		if prev := e.Annotations[annPromotedAt]; prev != "" && bTrigger != "" && prev > bTrigger {
+			p.logger().Info("build promote skipped (older trigger than current)",
+				"env", e.Name, "build", b.Name, "buildTrigger", bTrigger, "envPromotedAt", prev)
+			continue
+		}
+		patch := fmt.Sprintf(
+			`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}},"metadata":{"annotations":{%q:%q,%q:%q}}}`,
+			b.Spec.Image.Repository, b.Spec.Image.Tag,
+			annPromotedBuild, b.Name,
+			annPromotedAt, bTrigger,
+		)
 		if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
 			Patch(ctx, e.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -1858,7 +1916,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 			return fmt.Errorf("patch env %s: %w", e.Name, err)
 		}
 		matched++
-		p.logger().Info("build promoted", "env", e.Name, "ns", ns, "tag", b.Spec.Image.Tag)
+		p.logger().Info("build promoted", "env", e.Name, "ns", ns, "tag", b.Spec.Image.Tag, "build", b.Name)
 	}
 	if matched == 0 {
 		p.logger().Warn("build succeeded but no env matched for promotion",

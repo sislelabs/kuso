@@ -105,6 +105,13 @@ func (h *BackupsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bucket, endpoint, accessKeyId required", http.StatusBadRequest)
 		return
 	}
+	// Endpoint goes verbatim into the backup Job's S3 client. Same
+	// SSRF surface as the notification webhook URL — IMDS, RFC1918,
+	// .svc DNS would all succeed against an admin-set endpoint.
+	if err := validateWebhookURL(req.Endpoint); err != nil {
+		http.Error(w, "endpoint: "+err.Error(), http.StatusBadRequest)
+		return
+	}
 	ctx, cancel := backupCtx(r)
 	defer cancel()
 

@@ -422,9 +422,18 @@ func main() {
 	})
 
 	srv := &http.Server{
-		Addr:              *addr,
-		Handler:           r,
+		Addr:    *addr,
+		Handler: r,
+		// ReadHeaderTimeout caps the slowloris-style header-trickle
+		// vector; ReadTimeout caps the body. WriteTimeout stays 0 so
+		// the SSE log streamer + WS log tail aren't capped — each
+		// has its own per-request timeout via context.WithTimeout in
+		// the handler. IdleTimeout closes idle keep-alive sockets so
+		// they don't pin memory forever.
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20, // 1 MiB; chimw.RequestID + auth fit in well under
 	}
 
 	go func() {

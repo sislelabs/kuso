@@ -24,20 +24,30 @@ type ConfigHandler struct {
 	Logger *slog.Logger
 }
 
-// Mount registers the config routes onto the given chi router.
+// Mount registers the config routes. Reads (banner, listings, the
+// cached Kuso CR view) are fine for any authenticated user — the UI
+// reads these on every page. Mutations (UpdateSettings,
+// CreatePodSize/UpdatePodSize/DeletePodSize, DeleteRunpack) gate on
+// settings:admin via a chi.Group middleware so a future addition
+// can't accidentally bypass the check (the bug class that produced
+// the BackupsHandler / NotificationsHandler / ConfigHandler
+// regressions).
 func (h *ConfigHandler) Mount(r chi.Router) {
 	r.Get("/api/config", h.GetSettings)
-	r.Post("/api/config", h.UpdateSettings)
 	r.Get("/api/config/banner", h.Banner)
 	r.Get("/api/config/registry", h.Registry)
 	r.Get("/api/config/clusterissuer", h.ClusterIssuer)
 	r.Get("/api/config/runpacks", h.ListRunpacks)
-	r.Delete("/api/config/runpacks/{id}", h.DeleteRunpack)
 	r.Get("/api/config/podsizes", h.ListPodSizes)
-	r.Post("/api/config/podsizes", h.CreatePodSize)
-	r.Put("/api/config/podsizes/{id}", h.UpdatePodSize)
-	r.Delete("/api/config/podsizes/{id}", h.DeletePodSize)
 	r.Get("/api/config/templates", h.Templates)
+	r.Group(func(r chi.Router) {
+		r.Use(adminOnly)
+		r.Post("/api/config", h.UpdateSettings)
+		r.Delete("/api/config/runpacks/{id}", h.DeleteRunpack)
+		r.Post("/api/config/podsizes", h.CreatePodSize)
+		r.Put("/api/config/podsizes/{id}", h.UpdatePodSize)
+		r.Delete("/api/config/podsizes/{id}", h.DeletePodSize)
+	})
 }
 
 func cfgCtx(r *http.Request) (context.Context, context.CancelFunc) {

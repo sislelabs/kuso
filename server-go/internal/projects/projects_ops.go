@@ -270,12 +270,17 @@ func (s *Service) propagateBaseDomain(ctx context.Context, project, oldBase, new
 	return nil
 }
 
-// Delete cascades: every env, service, and the project itself. Addon
-// cleanup lands in Phase 5; for now we delete what Phase 3 owns.
+// Delete cascades every owned CR: envs, services, addons, builds, and
+// finally the project itself. Without enumerating addons + builds the
+// helm-operator-owned StatefulSets and PVCs would survive the project
+// delete and a same-named project recreated later would collide with
+// stranded `<addon>-conn` Secrets / data PVCs holding the previous
+// tenant's bytes. ownerReferences would be the right structural fix;
+// until those land, hand-rolled enumeration is the gate.
 //
 // Child resources may live in a different namespace than the project
-// CR (KusoProject.spec.namespace) so we resolve once and route both
-// the listing and the per-resource Delete through that.
+// CR (KusoProject.spec.namespace) so we resolve once and route every
+// listing + delete through that.
 func (s *Service) Delete(ctx context.Context, name string) error {
 	if _, err := s.Get(ctx, name); err != nil {
 		return err
@@ -301,6 +306,40 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	for _, svc := range services {
 		if err := s.Kube.DeleteKusoService(ctx, ns, svc.Name); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete service %s: %w", svc.Name, err)
+		}
+	}
+	// Addons — operator owns the StatefulSet + PVC + connection Secret
+	// behind each KusoAddon CR; deleting the CR triggers the helm
+	// release uninstall which cascades all three. Without this, a
+	// project delete leaves zombie postgres/redis pods + their PVCs.
+	if addonsList, lerr := s.Kube.ListKusoAddons(ctx, ns); lerr != nil {
+		return fmt.Errorf("list addons: %w", lerr)
+	} else {
+		for _, a := range addonsList {
+			if a.Labels["kuso.sislelabs.com/project"] != name {
+				continue
+			}
+			if derr := s.Kube.DeleteKusoAddon(ctx, ns, a.Name); derr != nil && !apierrors.IsNotFound(derr) {
+				return fmt.Errorf("delete addon %s: %w", a.Name, derr)
+			}
+		}
+	}
+	// Builds — every KusoBuild for any service in this project. The
+	// helm-operator's release Secret survives the Job's TTL reaper,
+	// so without this delete the next reconcile re-renders the build
+	// pod and the project-delete cleanup races against a half-built
+	// image push.
+	if buildsList, lerr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "kuso.sislelabs.com/project=" + name,
+	}); lerr != nil {
+		return fmt.Errorf("list builds: %w", lerr)
+	} else {
+		for i := range buildsList.Items {
+			bn := buildsList.Items[i].GetName()
+			if derr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+				Delete(ctx, bn, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				return fmt.Errorf("delete build %s: %w", bn, derr)
+			}
 		}
 	}
 	if err := s.Kube.DeleteKusoProject(ctx, s.Namespace, name); err != nil && !apierrors.IsNotFound(err) {

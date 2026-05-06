@@ -255,7 +255,9 @@ func (k *KusoClient) AddAddon(project string, req CreateAddonRequest) (*resty.Re
 }
 
 func (k *KusoClient) DeleteAddon(project, addon string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + esc(project) + "/addons/" + esc(addon))
+	// ?confirm=<addon> is required server-side. Always pass it; the
+	// CLI gets its own typed-confirm prompt one layer up.
+	return k.client.Delete("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "?confirm=" + esc(addon))
 }
 
 // UpdateAddonBackup is the partial-update body for an addon's backup
