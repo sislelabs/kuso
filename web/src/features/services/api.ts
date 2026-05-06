@@ -20,6 +20,25 @@ export async function setServiceEnv(
   );
 }
 
+export interface DetectedEnv {
+  // Names surfaced by the build-time env-detect init container
+  // (.env.example + source grep). Empty until the next build runs.
+  names: string[];
+  // RFC3339 of the build that produced `names`. Empty when no
+  // detection has been emitted yet (older build pod, never built).
+  detectedAt?: string;
+  // Runtime crash hints from the log shipper's missing-env regex
+  // matcher. Each entry pins the var name + the log line that
+  // triggered the match. Newest first.
+  hints?: { project: string; service: string; name: string; lastLine: string; lastSeen: string }[];
+}
+
+export async function getDetectedEnv(project: string, service: string): Promise<DetectedEnv> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/env/detected`,
+  );
+}
+
 export interface BuildSummary {
   id: string;
   serviceName: string;

@@ -9,6 +9,7 @@ package builds
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -55,6 +56,13 @@ const (
 	annStartedAt     = "kuso.sislelabs.com/build-started-at"
 	annMessage       = "kuso.sislelabs.com/build-message"
 	annSupersededBy  = "kuso.sislelabs.com/superseded-by"
+	// detectedEnv carries a JSON-encoded []string of env-var names
+	// the build-time scanner surfaced from the source repo. UI uses
+	// this to flag "you reference X but it isn't set" at the
+	// EnvVarsEditor level. Stored at the build CR (not the service)
+	// so re-builds refresh the list and we keep an audit trail.
+	annDetectedEnv   = "kuso.sislelabs.com/detected-env"
+	annDetectedEnvAt = "kuso.sislelabs.com/detected-env-at"
 	// Trigger context — surfaces in BuildSummary so users can see who
 	// kicked off a build and why. Helps when a teammate asks "who
 	// broke prod at 3pm" — the deployments tab now answers that
@@ -1596,6 +1604,17 @@ func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, 
 		}
 	}
 	logs := combined.String()
+	// Extract detected-env BEFORE the tail truncation: the env-detect
+	// init container emits its sentinel block early in the build, so
+	// it'd get cut off when a long kaniko stage drowns the tail.
+	if detected := parseDetectedEnv(logs); detected != nil {
+		// Stash on the build CR's status. Best-effort; a failure here
+		// just means the UI won't see the suggestion list — the build
+		// itself is unaffected.
+		if err := p.persistDetectedEnv(lctx, ns, b, detected); err != nil {
+			slog.Default().Warn("builds: persist detectedEnv", "err", err, "build", b.Name)
+		}
+	}
 	// Last-N-line cap. The kaniko build can spit 5k+ lines in a noisy
 	// build (apt-get progress, nix derivations); we want the tail
 	// because that's where the failure usually is.
@@ -1606,6 +1625,65 @@ func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, 
 		strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-"), phase, logs); err != nil {
 		slog.Default().Warn("builds: archive save", "err", err, "build", b.Name)
 	}
+}
+
+// detectedEnvRe matches the env-detect init container's sentinel-fenced
+// JSON block. The init writes the block in one go so we don't need to
+// reassemble across ANSI/timestamp prefixes.
+var detectedEnvRe = regexp.MustCompile(`(?s)KUSO_ENV_DETECT_BEGIN\s*\n(\[.*?\])\s*\nKUSO_ENV_DETECT_END`)
+
+// parseDetectedEnv extracts the var-name list from build logs. Returns
+// nil when the sentinel isn't present (e.g. older build pod, build
+// failed before env-detect ran). The list is JSON-decoded so a malformed
+// block is just dropped rather than corrupting the build status.
+func parseDetectedEnv(logs string) []string {
+	m := detectedEnvRe.FindStringSubmatch(logs)
+	if len(m) < 2 {
+		return nil
+	}
+	var names []string
+	if err := json.Unmarshal([]byte(m[1]), &names); err != nil {
+		return nil
+	}
+	// Empty list is meaningful (= scan ran, found nothing); preserve it.
+	if names == nil {
+		names = []string{}
+	}
+	return names
+}
+
+// persistDetectedEnv stamps the parsed list onto KusoBuild's
+// annotations. Annotations (not .status) because helm-operator owns
+// the status subresource on these CRs and would clobber a write race.
+// Same pattern used by the build-phase tracker (annPhase). The chart
+// doesn't read this — it's purely consumed by the API surface for the
+// EnvVarsEditor's "missing vars" suggestion.
+//
+// Encoding: JSON-serialised array under
+// `kuso.sislelabs.com/detected-env`, plus a sibling timestamp at
+// `kuso.sislelabs.com/detected-env-at` so the UI can show "detected
+// at <build trigger time>".
+func (p *Poller) persistDetectedEnv(ctx context.Context, ns string, b *kube.KusoBuild, names []string) error {
+	if p.Svc == nil || p.Svc.Kube == nil {
+		return nil
+	}
+	if names == nil {
+		names = []string{}
+	}
+	encoded, err := json.Marshal(names)
+	if err != nil {
+		return err
+	}
+	patch := []byte(fmt.Sprintf(
+		`{"metadata":{"annotations":{%q:%q,%q:%q}}}`,
+		annDetectedEnv, string(encoded),
+		annDetectedEnvAt, time.Now().UTC().Format(time.RFC3339),
+	))
+	_, err = p.Svc.Kube.Dynamic.
+		Resource(kube.GVRBuilds).
+		Namespace(ns).
+		Patch(ctx, b.Name, types.MergePatchType, patch, metav1.PatchOptions{})
+	return err
 }
 
 // containerNames extracts pod container names. Wrapped because the

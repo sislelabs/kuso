@@ -16,6 +16,7 @@ import (
 	"bufio"
 	"context"
 	"log/slog"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -59,6 +60,14 @@ type Shipper struct {
 	streams map[string]context.CancelFunc // podUID → cancel
 	buf     []db.LogLine
 	bufMu   sync.Mutex
+
+	// envHints accumulates "missing env var" hits parsed out of pod
+	// stdout. Keyed by "project/service/name" for natural dedupe
+	// against a hot crash-loop. Drained by the same flusher that
+	// writes log lines, so the persistence latency is bounded by
+	// flushInterval.
+	envHintsMu sync.Mutex
+	envHints   map[string]envHint
 
 	// runCtx is the lifecycle context set by Run. Detached out-of-band
 	// flushes (kicked from append() when the buffer exceeds the batch
@@ -203,6 +212,107 @@ func (s *Shipper) streamPod(ctx context.Context, pod corev1.Pod) {
 			Project: project, Service: service, Env: env,
 			Line: line,
 		})
+		// Pattern-match for missing-env-var crashes. Cheap regex
+		// per line; on hit we record the var name + log line so the
+		// UI can surface "your last crash mentioned $X — set it?"
+		// next to the EnvVarsEditor. Async via the shipper's existing
+		// goroutine so we don't block the log path.
+		if name := matchMissingEnv(line); name != "" && project != "" && service != "" {
+			s.recordEnvHint(project, service, name, line)
+		}
+	}
+}
+
+// missingEnvPatterns capture the most common framework messages for
+// "this env var is unset". Each must yield the var name in capture
+// group 1. Keep the list short — one bad regex burns a per-line CPU
+// cost on every pod's stdout.
+var missingEnvPatterns = []*regexp.Regexp{
+	// Python: KeyError: 'FOO'  /  KeyError: "FOO"
+	regexp.MustCompile(`KeyError: ['"]([A-Z][A-Z0-9_]+)['"]`),
+	// Node: ReferenceError: FOO is not defined  (rare but real)
+	regexp.MustCompile(`ReferenceError: ([A-Z][A-Z0-9_]+) is not defined`),
+	// dotenv-style: Missing env var FOO / Missing env: FOO / Required env var FOO
+	regexp.MustCompile(`(?:Missing|Required) env(?:\s*var)?[:\s]+([A-Z][A-Z0-9_]+)`),
+	// Go: panic: missing FOO env var
+	regexp.MustCompile(`(?:panic|fatal):.*missing\s+([A-Z][A-Z0-9_]+)\s+env`),
+	// envconfig (Go): required key FOO missing value
+	regexp.MustCompile(`required key ([A-Z][A-Z0-9_]+) missing value`),
+	// generic: Environment variable FOO is not set / FOO is required but not set
+	regexp.MustCompile(`(?:Environment variable\s+)?([A-Z][A-Z0-9_]+)\s+is (?:required|not set)`),
+}
+
+// matchMissingEnv tries every pattern, returns the first var name
+// captured or "" when nothing matches.
+func matchMissingEnv(line string) string {
+	if len(line) < 8 {
+		return ""
+	}
+	for _, re := range missingEnvPatterns {
+		m := re.FindStringSubmatch(line)
+		if len(m) >= 2 {
+			return m[1]
+		}
+	}
+	return ""
+}
+
+// recordEnvHint stamps the (project, service, var-name) tuple onto an
+// in-memory map. The shipper's flusher persists it to the DB along
+// with the other log lines. Dedupe by (proj/svc/name) so a hot crash-
+// loop that emits the same line 1000×/sec doesn't pile up rows.
+func (s *Shipper) recordEnvHint(project, service, name, line string) {
+	s.envHintsMu.Lock()
+	defer s.envHintsMu.Unlock()
+	if s.envHints == nil {
+		s.envHints = map[string]envHint{}
+	}
+	key := project + "/" + service + "/" + name
+	s.envHints[key] = envHint{
+		Project:  project,
+		Service:  service,
+		Name:     name,
+		LastLine: line,
+		LastSeen: time.Now().UTC(),
+	}
+}
+
+// envHint is the in-memory shape of a missing-env detection. Persisted
+// by the flusher (see runFlusher) into the EnvHint table.
+type envHint struct {
+	Project  string
+	Service  string
+	Name     string
+	LastLine string
+	LastSeen time.Time
+}
+
+// flushEnvHints drains the in-memory map into the EnvHint table.
+// Cheap upsert (UNIQUE constraint on project/service/name); a hot
+// crashloop emitting the same line repeatedly produces O(1) DB writes
+// per flush window per (proj, svc, name) tuple.
+func (s *Shipper) flushEnvHints(ctx context.Context) {
+	s.envHintsMu.Lock()
+	if len(s.envHints) == 0 {
+		s.envHintsMu.Unlock()
+		return
+	}
+	hints := make([]db.EnvHint, 0, len(s.envHints))
+	for _, h := range s.envHints {
+		hints = append(hints, db.EnvHint{
+			Project:  h.Project,
+			Service:  h.Service,
+			Name:     h.Name,
+			LastLine: h.LastLine,
+			LastSeen: h.LastSeen,
+		})
+	}
+	s.envHints = nil
+	s.envHintsMu.Unlock()
+	hctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := s.DB.UpsertEnvHints(hctx, hints); err != nil {
+		s.Logger.Warn("logship env hints upsert", "n", len(hints), "err", err)
 	}
 }
 
@@ -245,6 +355,9 @@ func (s *Shipper) runFlusher(ctx context.Context) {
 }
 
 func (s *Shipper) flush(ctx context.Context) {
+	// Drain env hints first; the path is fast and lets the UI surface
+	// a crash hint before the bulk log batch lands.
+	s.flushEnvHints(ctx)
 	s.bufMu.Lock()
 	if len(s.buf) == 0 {
 		s.bufMu.Unlock()

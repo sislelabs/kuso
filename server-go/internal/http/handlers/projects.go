@@ -66,6 +66,11 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	r.Post("/api/projects/{project}/apply", h.Apply)
 	r.Get("/api/projects/{project}/services/{service}/env", h.GetEnv)
 	r.Post("/api/projects/{project}/services/{service}/env", h.SetEnv)
+	// Env-var detection from the most recent build's source-scan
+	// (env-detect init container). Returns the names + the timestamp
+	// of the build that produced them — UI flags any name that's
+	// referenced in source but missing from the saved env.
+	r.Get("/api/projects/{project}/services/{service}/env/detected", h.GetDetectedEnv)
 	// Custom environments: POST .../envs creates a non-prod, non-preview
 	// env (e.g. staging on a branch). Production auto-creates with the
 	// service; preview envs come from the GH PR webhook.
@@ -372,15 +377,18 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
 		return
 	}
-	out, err := h.Svc.SetEnvVar(ctx,
-		chi.URLParam(r, "project"),
-		chi.URLParam(r, "service"),
-		chi.URLParam(r, "name"),
-		req)
+	project := chi.URLParam(r, "project")
+	service := chi.URLParam(r, "service")
+	name := chi.URLParam(r, "name")
+	out, err := h.Svc.SetEnvVar(ctx, project, service, name, req)
 	if err != nil {
 		h.fail(w, "set env var", err)
 		return
 	}
+	// Clear any pending crash hint for this var: the user just set
+	// it, so the "your last crash mentioned X" pip should disappear
+	// without waiting for the next crash to confirm. Best-effort.
+	_ = h.DB.DeleteEnvHint(ctx, project, service, name)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -461,6 +469,41 @@ func (h *ProjectsHandler) GetEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"envVars": out})
+}
+
+// GetDetectedEnv returns env-var names kuso detected as referenced
+// but possibly missing. Two sources, merged into one response:
+//
+//   1. Build-time scan: names surfaced from .env.example + source
+//      grep by the env-detect init container on the most recent
+//      build. High signal but stale until the next build.
+//   2. Runtime crash hints: names extracted from the log shipper's
+//      regex match on common "missing env" error messages
+//      (KeyError, panic: missing X env, etc). Real-time.
+//
+// UI flags any name (from either source) that isn't in the saved
+// env list, with a "Add" button to seed it. Returns:
+//   { names: ["DATABASE_URL", ...], detectedAt: "2026-...",
+//     hints: [{name, lastLine, lastSeen}, ...] }
+func (h *ProjectsHandler) GetDetectedEnv(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	service := chi.URLParam(r, "service")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+		return
+	}
+	names, ts, err := h.Svc.GetDetectedEnv(ctx, project, service)
+	if err != nil {
+		h.fail(w, "get detected env", err)
+		return
+	}
+	hints, _ := h.DB.ListEnvHints(ctx, project, service)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"names":      names,
+		"detectedAt": ts,
+		"hints":      hints,
+	})
 }
 
 func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {

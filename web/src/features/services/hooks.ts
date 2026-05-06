@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   deleteService,
+  getDetectedEnv,
   getService,
   getServiceEnv,
   getServiceLogs,
@@ -39,6 +40,21 @@ export function useServiceEnv(project: string, service: string) {
     queryKey: serviceEnvQueryKey(project, service),
     queryFn: () => getServiceEnv(project, service),
     enabled: !!project && !!service,
+  });
+}
+
+// useDetectedEnv polls the build-time + crash-time env-var detection
+// surface every 30s — runtime crash hints land on flushInterval (1s)
+// in the shipper but the UI doesn't need sub-second refresh, the
+// banner just has to appear within "minute or so" of a crash for the
+// user to make the connection.
+export function useDetectedEnv(project: string, service: string) {
+  return useQuery({
+    queryKey: ["projects", project, "services", service, "env", "detected"] as const,
+    queryFn: () => getDetectedEnv(project, service),
+    enabled: !!project && !!service,
+    refetchInterval: 30_000,
+    staleTime: 15_000,
   });
 }
 

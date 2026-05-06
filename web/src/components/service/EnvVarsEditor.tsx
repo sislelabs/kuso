@@ -3,8 +3,9 @@
 import { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Trash2, Plus, Save, Eye, EyeOff, FileText, List, Link2 } from "lucide-react";
-import { useServiceEnv, useSetServiceEnv } from "@/features/services";
+import { Trash2, Plus, Save, Eye, EyeOff, FileText, List, Link2, AlertCircle, Wand2 } from "lucide-react";
+import { useServiceEnv, useSetServiceEnv, useDetectedEnv } from "@/features/services";
+import type { DetectedEnv } from "@/features/services/api";
 import { listAddonSecretKeys } from "@/features/services/api";
 import { useProject, useAddons } from "@/features/projects";
 import { useQuery } from "@tanstack/react-query";
@@ -224,6 +225,7 @@ function dotenvToRows(text: string, prevSecrets: Row[]): Row[] {
 export function EnvVarsEditor({ project, service }: { project: string; service: string }) {
   const env = useServiceEnv(project, service);
   const setEnv = useSetServiceEnv(project, service);
+  const detected = useDetectedEnv(project, service);
   const addons = useAddons(project);
   // Memoised so the toRow effect below only re-runs when the addon set
   // (or its connectionSecret status fields) actually changes. Without
@@ -379,6 +381,34 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
           it locally. Show even when empty so the affordance is
           discoverable on day 1. */}
       <InheritedSection project={project} />
+
+      {/* Detected env vars — names kuso noticed are referenced by
+          the source repo (build-time scan) or that crashed the pod
+          at runtime (log shipper hints), but aren't set here yet.
+          One-click add seeds an empty row the user fills with the
+          actual value. The banner stays out of the way unless we
+          have something to suggest. */}
+      <DetectedEnvBanner
+        detected={detected.data}
+        rows={rows}
+        onAdd={(names) => {
+          // Append empty rows for each missing name. dedupe against
+          // existing entries (case-insensitive — env vars are
+          // canonically uppercase but humans type sloppily).
+          const existing = new Set(rows.map((r) => r.name.toUpperCase()));
+          const adds: Row[] = [];
+          for (const n of names) {
+            if (!existing.has(n.toUpperCase())) {
+              adds.push({ name: n, value: "", fromSecret: false, visible: false });
+              existing.add(n.toUpperCase());
+            }
+          }
+          if (adds.length) {
+            setRows((prev) => [...prev, ...adds]);
+            setDirty(true);
+          }
+        }}
+      />
 
       {mode === "rows" ? (
         <div className="space-y-1.5">
@@ -717,6 +747,116 @@ function AddonRefRow({
 // settings page. Empty groups still render the affordance in muted
 // text so the discoverability story is "open the env editor, see
 // what's inherited" without needing to read docs.
+// DetectedEnvBanner shows the merged build-scan + crash-hint set,
+// minus anything already in the editor's rows. Two visual states:
+//
+//   - Crash-hint present (a recent pod log matched the missing-env
+//     regex): orange-bordered alert with the var name + the log line
+//     that triggered, plus "Add" to seed an empty row.
+//   - Build-scan only (.env.example or source grep referenced X but
+//     it isn't set): muted suggestion strip with all candidates as
+//     chips and a single "Add all missing" affordance.
+//
+// Hidden when both lists are empty or every detected name is already
+// in the rows. Clicking Add doesn't save — the row is added in
+// dirty state, the user fills the value, then hits the existing Save.
+function DetectedEnvBanner({
+  detected,
+  rows,
+  onAdd,
+}: {
+  detected: DetectedEnv | undefined;
+  rows: Row[];
+  onAdd: (names: string[]) => void;
+}) {
+  if (!detected) return null;
+  const haveSet = new Set(rows.map((r) => r.name.toUpperCase()).filter(Boolean));
+  const missing = (detected.names ?? []).filter(
+    (n) => n && !haveSet.has(n.toUpperCase()),
+  );
+  const hints = (detected.hints ?? []).filter(
+    (h) => h.name && !haveSet.has(h.name.toUpperCase()),
+  );
+  if (missing.length === 0 && hints.length === 0) return null;
+
+  return (
+    <div className="space-y-2">
+      {hints.length > 0 && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[12px]">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+            <div className="flex-1 space-y-1.5">
+              <div className="text-amber-200">
+                Recent crash mentions{" "}
+                {hints.length === 1 ? "an env var" : `${hints.length} env vars`} that
+                {hints.length === 1 ? " isn't" : " aren't"} set:
+              </div>
+              <div className="space-y-1">
+                {hints.slice(0, 5).map((h) => (
+                  <div
+                    key={h.name}
+                    className="flex items-center justify-between gap-2 rounded bg-[var(--bg-tertiary)]/40 px-2 py-1"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="font-mono text-[11px] text-amber-300">{h.name}</div>
+                      <div className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
+                        {h.lastLine}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => onAdd([h.name])}
+                      className="inline-flex shrink-0 items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200 hover:bg-amber-500/20"
+                    >
+                      <Plus className="h-3 w-3" />
+                      Add
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {missing.length > 0 && (
+        <div className="rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-[12px]">
+          <div className="flex items-start gap-2">
+            <Wand2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
+            <div className="flex-1">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="text-[var(--text-secondary)]">
+                  {missing.length} env{" "}
+                  {missing.length === 1 ? "var" : "vars"} referenced in source but not set
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onAdd(missing)}
+                  className="inline-flex shrink-0 items-center gap-1 rounded border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-0.5 text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)]"
+                >
+                  <Plus className="h-3 w-3" />
+                  Add all
+                </button>
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {missing.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() => onAdd([n])}
+                    className="rounded bg-[var(--bg-tertiary)]/60 px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function InheritedSection({ project }: { project: string }) {
   const projectKeys = useQuery<{ keys: string[] }>({
     queryKey: ["projects", project, "shared-secrets"],

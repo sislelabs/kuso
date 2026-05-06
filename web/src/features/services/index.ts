@@ -2,6 +2,7 @@ export {
   useService,
   useServiceEnv,
   useSetServiceEnv,
+  useDetectedEnv,
   useBuilds,
   useTriggerBuild,
   useLogsTail,

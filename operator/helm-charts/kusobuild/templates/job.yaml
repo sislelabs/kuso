@@ -107,6 +107,95 @@ spec:
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+        # env-detect runs after clone, before any toolchain step. It
+        # scans the source tree for likely env-var references and
+        # writes a sentinel-fenced JSON block to stdout — the server's
+        # build poller picks that up from the pod logs and stamps it
+        # onto KusoBuild.status.detectedEnv. Two signals:
+        #
+        #   1. .env.example / .env.template / .env.sample / .env.dist
+        #      → high signal, the project author *documented* the vars.
+        #   2. Source grep for runtime accessors (process.env.X,
+        #      os.getenv("X"), os.environ["X"], os.Getenv("X"),
+        #      ENV["X"], System.getenv("X")). Catches projects that
+        #      don't ship a .env example.
+        #
+        # Filters out kuso-managed names (PORT, HOSTNAME, HOME, PATH,
+        # NODE_ENV, NODE_OPTIONS, KUBERNETES_*) and common framework
+        # noise so the result is the user-actionable set. Output:
+        # one JSON line bracketed by KUSO_ENV_DETECT_BEGIN/END so the
+        # log parser can extract it without false positives from app
+        # output that happens to look JSON-shaped.
+        - name: env-detect
+          image: alpine:3.20
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              SRC="/workspace/src/{{ .Values.repo.path | default "." }}"
+              cd "$SRC"
+              apk add --no-cache --quiet ripgrep jq >/dev/null 2>&1 || apk add --no-cache ripgrep jq
+
+              FROM_DOTENV=""
+              for f in .env.example .env.template .env.sample .env.dist; do
+                if [ -f "$f" ]; then
+                  while IFS= read -r line; do
+                    case "$line" in
+                      \#*|"") continue ;;
+                    esac
+                    name="${line%%=*}"
+                    name="${name## }"; name="${name%% }"
+                    if echo "$name" | grep -qE '^[A-Z][A-Z0-9_]*$'; then
+                      FROM_DOTENV="${FROM_DOTENV}${name}\n"
+                    fi
+                  done < "$f"
+                  echo "env-detect: read $f"
+                fi
+              done
+
+              # Grep for runtime accessors. Skip vendored / build dirs
+              # so node_modules's bundled libs don't drown out the
+              # user's own references.
+              GREP_GLOBS="-g !node_modules -g !vendor -g !.git -g !dist -g !build -g !.next -g !target -g !.venv -g !__pycache__"
+              {
+                rg -oN --no-heading $GREP_GLOBS 'process\.env\.[A-Z][A-Z0-9_]*' 2>/dev/null | sed -E 's/.*process\.env\.([A-Z][A-Z0-9_]*).*/\1/'
+                rg -oN --no-heading $GREP_GLOBS 'import\.meta\.env\.[A-Z][A-Z0-9_]*' 2>/dev/null | sed -E 's/.*import\.meta\.env\.([A-Z][A-Z0-9_]*).*/\1/'
+                rg -oN --no-heading $GREP_GLOBS 'os\.getenv\(["A-Z_0-9]+' 2>/dev/null | grep -oE '[A-Z][A-Z0-9_]+'
+                rg -oN --no-heading $GREP_GLOBS 'os\.environ\[' 2>/dev/null | grep -oE '[A-Z][A-Z0-9_]{2,}' | sort -u
+                rg -oN --no-heading $GREP_GLOBS 'os\.Getenv\("[A-Z][A-Z0-9_]*"' 2>/dev/null | grep -oE '"[A-Z][A-Z0-9_]+"' | tr -d '"'
+                rg -oN --no-heading $GREP_GLOBS 'ENV\[' 2>/dev/null | grep -oE '[A-Z][A-Z0-9_]{2,}' | sort -u
+                rg -oN --no-heading $GREP_GLOBS 'System\.getenv\("[A-Z][A-Z0-9_]*"' 2>/dev/null | grep -oE '"[A-Z][A-Z0-9_]+"' | tr -d '"'
+              } > /tmp/grep-raw 2>/dev/null || true
+
+              # Reserved/noise names: kubelet-managed, kuso-managed,
+              # ubiquitous framework bookkeeping that's never user-set.
+              RESERVED="PORT HOSTNAME HOME PATH USER PWD SHELL TERM LANG LC_ALL LC_CTYPE NODE_ENV NODE_OPTIONS NODE_VERSION NPM_CONFIG_LOGLEVEL DEBIAN_FRONTEND DEBUG CI VERCEL_ENV NEXT_RUNTIME RAILS_ENV"
+
+              {
+                printf '%b' "$FROM_DOTENV"
+                cat /tmp/grep-raw 2>/dev/null
+              } | sort -u | while read -r v; do
+                [ -z "$v" ] && continue
+                case " $RESERVED " in
+                  *" $v "*) continue ;;
+                esac
+                case "$v" in
+                  KUBERNETES_*) continue ;;
+                esac
+                echo "$v"
+              done > /tmp/detected.txt
+
+              mkdir -p /workspace/.kuso
+              jq -R -s -c 'split("\n") | map(select(length > 0))' < /tmp/detected.txt > /workspace/.kuso/detected-env.json
+
+              echo "KUSO_ENV_DETECT_BEGIN"
+              cat /workspace/.kuso/detected-env.json
+              echo
+              echo "KUSO_ENV_DETECT_END"
+              echo "env-detect: $(jq -r 'length' /workspace/.kuso/detected-env.json) candidate vars"
+          volumeMounts:
+            - name: workspace
+              mountPath: /workspace
         {{- if eq .Values.strategy "nixpacks" }}
         # Nixpacks generates a Dockerfile + build context (.nixpacks/) so
         # kaniko can build daemonless. We point --out at the source dir

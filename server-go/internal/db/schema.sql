@@ -324,6 +324,22 @@ CREATE TABLE IF NOT EXISTS "LogLine" (
 CREATE INDEX IF NOT EXISTS "LogLine_project_service_ts_idx" ON "LogLine"("project","service","ts" DESC);
 CREATE INDEX IF NOT EXISTS "LogLine_ts_idx" ON "LogLine"("ts");
 
+-- v0.9.7: missing-env-var hints scraped from runtime crash logs by the
+-- log shipper. One row per (project, service, name); upsert on hit so
+-- a crashloop emitting the same line 1000×/sec doesn't blow up storage.
+-- The UI cross-references against the saved env list and surfaces an
+-- inline "your last crash mentioned $X — set it?" affordance.
+CREATE TABLE IF NOT EXISTS "EnvHint" (
+    "id" BIGSERIAL PRIMARY KEY,
+    "project" TEXT NOT NULL,
+    "service" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "lastLine" TEXT NOT NULL DEFAULT '',
+    "lastSeen" TIMESTAMPTZ NOT NULL,
+    UNIQUE ("project", "service", "name")
+);
+CREATE INDEX IF NOT EXISTS "EnvHint_project_service_idx" ON "EnvHint"("project","service");
+
 -- v0.8.5: build log archive.
 CREATE TABLE IF NOT EXISTS "BuildLog" (
     "buildName" TEXT PRIMARY KEY,

@@ -2,6 +2,7 @@ package projects
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -678,6 +679,64 @@ func (s *Service) GetEnv(ctx context.Context, project, service string) ([]EnvVar
 		out = append(out, ev)
 	}
 	return out, nil
+}
+
+// GetDetectedEnv returns the env-var names that the most recent build's
+// env-detect init container surfaced from the source repo, plus the
+// timestamp of that scan. Empty names + zero time when no build has
+// emitted a detection (older builds, never-built service, build that
+// failed before env-detect ran).
+//
+// Reads from build CR annotations (`kuso.sislelabs.com/detected-env`,
+// `…/detected-env-at`) — the build poller persists them there after
+// archiveLogs runs. We pick the build with the most recent
+// detectedEnvAt timestamp, not most recent overall, so a stale build
+// without the annotation doesn't shadow an older one that did scan.
+func (s *Service) GetDetectedEnv(ctx context.Context, project, service string) ([]string, string, error) {
+	if _, err := s.GetService(ctx, project, service); err != nil {
+		return nil, "", err
+	}
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, "", err
+	}
+	// Builds carry both labels project+service. Service label uses
+	// the FQ form (project-service) on the CR, matching how the
+	// build poller writes them.
+	fqService := service
+	if !strings.HasPrefix(service, project+"-") {
+		fqService = project + "-" + service
+	}
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("kuso.sislelabs.com/project=%s,kuso.sislelabs.com/service=%s", project, fqService),
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("list builds for detected env: %w", err)
+	}
+	var bestNames []string
+	var bestAt string
+	for i := range raw.Items {
+		anns := raw.Items[i].GetAnnotations()
+		if anns == nil {
+			continue
+		}
+		envJSON := anns["kuso.sislelabs.com/detected-env"]
+		if envJSON == "" {
+			continue
+		}
+		at := anns["kuso.sislelabs.com/detected-env-at"]
+		if bestAt == "" || at > bestAt {
+			var names []string
+			if err := json.Unmarshal([]byte(envJSON), &names); err == nil {
+				bestNames = names
+				bestAt = at
+			}
+		}
+	}
+	if bestNames == nil {
+		bestNames = []string{}
+	}
+	return bestNames, bestAt, nil
 }
 
 // SetEnv replaces the env list on a service. Concurrent writes carry the
