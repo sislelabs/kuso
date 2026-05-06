@@ -132,8 +132,14 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
+	id, err := randomID()
+	if err != nil {
+		h.Logger.Error("token id", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
 	row := &db.Token{
-		ID:        randomID(),
+		ID:        id,
 		UserID:    user.ID,
 		ExpiresAt: expiresAt,
 		IsActive:  true,

@@ -75,19 +75,10 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
   // re-baseline so the dirty flag clears. We only do this when the
   // user has no in-flight edits — otherwise their typing would get
   // clobbered by a refetch.
+  // Ref carries the previous baseline across renders so we can ask
+  // "has the user edited yet" without putting `state` in the deps.
   const prevBaselineRef = useRef<FormState>(baseline);
   useEffect(() => {
-    // Functional updater: compare prev (current state) against the
-    // previous baseline. If the user hasn't edited anything since
-    // the last refetch, snap to the new baseline; otherwise keep
-    // their in-flight edits intact.
-    //
-    // Pre-v0.9.9 we read `state` from the closure and stored it
-    // outside the effect's deps. The closure is captured at the
-    // first render, so the inner `isEqual(state, prev)` always
-    // compared an old snapshot against itself, returned true, and
-    // wiped the user's typing on every refetch. The reported
-    // "I changed the domain and nothing happened" bug.
     setState((prev) => (isEqual(prev, prevBaselineRef.current) ? baseline : prev));
     prevBaselineRef.current = baseline;
   }, [baseline]);

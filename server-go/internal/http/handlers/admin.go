@@ -9,7 +9,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -37,13 +36,6 @@ func (h *AdminHandler) Mount(r chi.Router) {
 
 	r.Get("/api/roles", h.ListRoles)
 	r.Get("/api/groups", h.ListGroups)
-
-	// /api/audit is owned by AuditHandler. Both handlers tried to
-	// register it; chi's last-write-wins meant AuditHandler.List was
-	// the live route while AdminHandler.Audit's requireAdmin gate was
-	// dead code — every authenticated user could read the audit log.
-	// AuditHandler now carries its own gate; this route stays here
-	// only as a no-op to keep the diff small.
 
 	r.Get("/api/tokens/my", h.ListMyTokens)
 	r.Post("/api/tokens/my", h.CreateMyToken)
@@ -163,21 +155,6 @@ func (h *AdminHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
 		gs = append(gs, map[string]any{"id": group.ID, "name": group.Name, "description": nullStr(group.Description)})
 	}
 	writeJSON(w, http.StatusOK, gs)
-}
-
-func (h *AdminHandler) Audit(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
-	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	ctx, cancel := adminCtx(r)
-	defer cancel()
-	out, err := h.DB.ListAudit(ctx, limit)
-	if err != nil {
-		h.fail(w, "list audit", err)
-		return
-	}
-	writeJSON(w, http.StatusOK, out)
 }
 
 // ---- tokens (current user) -----------------------------------------------

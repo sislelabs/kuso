@@ -206,12 +206,9 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", s.Repo)
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	// etag is shared between the periodic ticker and any user-
-	// triggered Refresh() — both call fetchLatest. Pre-v0.9.9 the
-	// etag read+write lived outside the mutex; concurrent calls
-	// raced on the string assignment (Go strings are pointer+len,
-	// non-atomic on 32-bit, torn reads possible) and burned the
-	// 5000/h GH rate limit when the ETag flopped.
+	// etag is shared between the periodic ticker and Refresh().
+	// Read/write under mu so concurrent callers don't tear the
+	// string and burn the GH rate limit on a flopped ETag.
 	s.mu.RLock()
 	cachedETag := s.etag
 	s.mu.RUnlock()
@@ -642,9 +639,8 @@ func (s *Service) watchOperatorHealth(jobName, priorImg, newImg string) {
 		return
 	}
 	// Derive from the server's lifecycle context so a graceful
-	// shutdown cancels the watchdog instead of letting it run
-	// against a closed kube client (and possibly issuing a
-	// spurious rollback). Pre-v0.9.9 used context.Background().
+	// shutdown cancels the watchdog instead of running against a
+	// closed kube client and possibly firing a spurious rollback.
 	s.mu.RLock()
 	parent := s.runCtx
 	s.mu.RUnlock()

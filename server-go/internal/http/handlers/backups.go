@@ -248,23 +248,21 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
 		return
 	}
-	// Cross-tenant key guard: req.Key arrives from the client and
-	// is splatted into the restore Job's KEY env var. Without this
-	// check, an Owner of project A could POST {"key":"B/pg/X.gz"}
-	// and pipe project B's snapshot into A's addon. List scopes by
+	// Cross-tenant key guard: req.Key arrives from the client and is
+	// splatted into the restore Job's KEY env var. List scopes by
 	// prefix (project + "/" + addonFQN + "/"); Restore must enforce
-	// the same. Note we intentionally check the project prefix
-	// only — restoring across addons within the same project is
-	// fine (e.g. restore-into a sibling addon for verification).
-	if !strings.HasPrefix(req.Key, project+"/") {
+	// the same — restoring across addons within the same project is
+	// fine, across projects is not. The explicit empty-project check
+	// keeps the gate sound if a future refactor makes the URL param
+	// optional (HasPrefix("foo", "/") is true for any leading slash).
+	if project == "" || !strings.HasPrefix(req.Key, project+"/") {
 		http.Error(w, "key must live under this project's prefix", http.StatusBadRequest)
 		return
 	}
-	// Belt-and-suspenders against ../ traversal in the key. The S3
-	// SDK normalises paths but the raw value lands as a Job env var
-	// and gets handed to a shell `aws s3 cp`. A leading slash or
-	// backslash also escapes the prefix anchor.
-	if strings.Contains(req.Key, "..") || strings.ContainsAny(req.Key, "\x00\\") {
+	// `..` traversal escapes the project prefix. The S3 SDK doesn't
+	// decode percent-encoding and neither does `aws s3 cp` in the
+	// Job, so a literal `..` is the only shape we need to reject.
+	if strings.Contains(req.Key, "..") || strings.ContainsRune(req.Key, '\x00') {
 		http.Error(w, "invalid key", http.StatusBadRequest)
 		return
 	}
@@ -308,7 +306,7 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						Command:         []string{"sh", "-c"},
 						Args: []string{`
-set -e
+set -eo pipefail
 echo "==> downloading s3://${BUCKET}/${KEY}"
 aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}" /tmp/dump.sql.gz
 echo "==> piping into psql"

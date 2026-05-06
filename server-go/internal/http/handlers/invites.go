@@ -164,7 +164,12 @@ func (h *InvitesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		note = &n
 	}
 
-	id := randomID()
+	id, err := randomID()
+	if err != nil {
+		h.Logger.Error("invite: id", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
 	token, err := generateInviteToken()
 	if err != nil {
 		h.Logger.Error("invite: token", "err", err)

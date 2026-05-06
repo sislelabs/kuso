@@ -113,7 +113,7 @@ func main() {
 	// via srv.Shutdown directly off the sigCtx.Done channel below.
 	ctx := workerCtx
 
-	auditSvc := audit.New(database)
+	auditSvc := audit.New(ctx, database)
 
 	// First-boot bootstrap: seed admin role + user from
 	// KUSO_ADMIN_USERNAME / KUSO_ADMIN_PASSWORD when the DB is virgin.

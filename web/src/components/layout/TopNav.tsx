@@ -25,7 +25,7 @@ import {
 } from "@/components/ui/command";
 import { Logo } from "@/components/shared/Logo";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
-import { useSession, useSignOut } from "@/features/auth";
+import { useSession, useSignOut, useCan, Perms } from "@/features/auth";
 import { useProjects, useProject } from "@/features/projects";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { cn } from "@/lib/utils";
@@ -424,7 +424,12 @@ interface FeedEvent {
 }
 
 function NotificationsButton() {
+  // The feed is admin-only on the server. Hide the bell entirely
+  // for non-admins so they don't see a control that always reads
+  // empty + 401s the popover.
+  const canSee = useCan(Perms.SettingsAdmin);
   const qc = useQueryClient();
+  if (!canSee) return null;
   // Controlled state so a notification's <Link> click can close the
   // popover before pushing the route — otherwise the popover stays
   // open over the new page until the user clicks elsewhere.

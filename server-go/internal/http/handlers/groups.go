@@ -55,7 +55,12 @@ func (h *GroupsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	id := randomID()
+	id, err := randomID()
+	if err != nil {
+		h.Logger.Error("create group: id", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
 	ctx, cancel := groupsCtx(r)
 	defer cancel()
 	if err := h.DB.CreateGroup(ctx, id, req.Name, req.Description); err != nil {

@@ -16,24 +16,26 @@ import (
 )
 
 // Service is the entrypoint for write+read of audit entries. Construct
-// with New; safe for concurrent use.
+// with New; safe for concurrent use. New starts one trim goroutine
+// per Service — call sites that re-construct (tests) should pass a
+// derivable ctx so the loop unwinds with the caller's lifetime.
 type Service struct {
-	DB         *db.DB
-	Enabled    bool
-	MaxBackups int
+	DB           *db.DB
+	Enabled      bool
+	MaxBackups   int
 
-	mu sync.Mutex // guards the periodic trim() call
+	mu sync.Mutex // guards the periodic limit() call
 }
 
 // New constructs a Service. KUSO_AUDIT=true enables, KUSO_AUDIT_LIMIT
-// sets the row cap (default 1000).
+// sets the row cap (default 1000), KUSO_AUDIT_TRIM_TIMEOUT overrides
+// the per-tick context bound (default 60s — long enough for Postgres
+// trim during an autovacuum pause on a 1M-row table).
 //
-// When enabled, New also starts a single trim ticker. Pre-v0.9.9 every
-// audit Log spawned `go s.trim(context.Background())` — under a build
-// storm (1k events/s) we'd leak 1k goroutines all racing the TryLock,
-// each pinning a Background ctx forever. One ticker is enough; the
-// table cap is a coarse signal anyway.
-func New(d *db.DB) *Service {
+// When enabled, New also starts the singleton trim ticker bound to
+// ctx. Pass context.Background() in tests where you don't need
+// shutdown semantics.
+func New(ctx context.Context, d *db.DB) *Service {
 	enabled := os.Getenv("KUSO_AUDIT") == "true"
 	limit := 1000
 	if v := os.Getenv("KUSO_AUDIT_LIMIT"); v != "" {
@@ -41,22 +43,36 @@ func New(d *db.DB) *Service {
 			limit = n
 		}
 	}
+	trimTimeout := 60 * time.Second
+	if v := os.Getenv("KUSO_AUDIT_TRIM_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			trimTimeout = d
+		}
+	}
 	s := &Service{DB: d, Enabled: enabled, MaxBackups: limit}
 	if enabled && d != nil {
-		go s.runTrimLoop()
+		go s.runTrimLoop(ctx, trimTimeout)
 	}
 	return s
 }
 
-// runTrimLoop is the singleton trim ticker — fires every 5 minutes.
-// Called once at construction; not exposed for re-entry.
-func (s *Service) runTrimLoop() {
+// runTrimLoop fires every 5 minutes until ctx is done. Errors log
+// instead of swallowing — silent failure was the cause of the
+// SQLite-only-LIMIT-syntax regression that grew Audit unbounded.
+func (s *Service) runTrimLoop(ctx context.Context, perTickTimeout time.Duration) {
 	t := time.NewTicker(5 * time.Minute)
 	defer t.Stop()
-	for range t.C {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		s.trim(ctx)
-		cancel()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			tickCtx, cancel := context.WithTimeout(ctx, perTickTimeout)
+			if err := s.trim(tickCtx); err != nil {
+				fmt.Fprintf(os.Stderr, "audit: trim failed: %v\n", err)
+			}
+			cancel()
+		}
 	}
 }
 
@@ -89,10 +105,8 @@ func (s *Service) Log(ctx context.Context, e Entry) {
 		e.Resource = "unknown"
 	}
 	now := time.Now().UTC()
-	// `user` is reserved on Postgres — unquoted it resolves to
-	// current_user() and the INSERT silently fails the FK check.
-	// camelCase column names also need quoting on Postgres. Same
-	// fix as queries.go ListAudit.
+	// `user` is a Postgres reserved word; camelCase columns also
+	// need quoting. Unquoted, the INSERT silently fails the FK.
 	if _, err := s.DB.ExecContext(ctx, `
 INSERT INTO "Audit" (timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user", "createdAt", "updatedAt")
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -103,8 +117,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		fmt.Fprintf(os.Stderr, "audit: log failed: %v\n", err)
 		return
 	}
-	// Trim is on a singleton ticker — see runTrimLoop in New. The
-	// pre-v0.9.9 per-write goroutine spawn pattern is gone.
+	// Trim runs on the singleton ticker started by New.
 }
 
 // Get returns the newest `limit` rows.
@@ -224,19 +237,26 @@ ORDER BY id DESC LIMIT ?`, pipeline, phase, app, limit)
 	return out, total, nil
 }
 
-// trim caps the table at MaxBackups rows, deleting oldest. Best-effort;
-// happens off the request path.
+// trim caps the table at MaxBackups rows. Returns nil when another
+// trim is already in flight (TryLock miss). Errors propagate so the
+// caller can log — silent failure was how the SQLite-only LIMIT
+// syntax let the table grow unbounded.
 //
-// Pre-v0.9.9 used `LIMIT -1 OFFSET ?` — SQLite-only syntax that
-// Postgres rejects with a parse error, so trim was a silent no-op and
-// the table grew unbounded. NOT IN against the keep-set is portable.
-func (s *Service) trim(ctx context.Context) {
+// Perf note: on a 100k-row table the NOT IN subquery full-scans
+// Audit. If that becomes a problem switch to a keyset
+// `DELETE WHERE id < (SELECT MIN(id) FROM (… LIMIT N) t)` — also
+// portable, faster on indexed id.
+func (s *Service) trim(ctx context.Context) error {
 	if !s.mu.TryLock() {
-		return
+		return nil
 	}
 	defer s.mu.Unlock()
-	_, _ = s.DB.ExecContext(ctx, `
+	_, err := s.DB.ExecContext(ctx, `
 DELETE FROM "Audit" WHERE id NOT IN (
   SELECT id FROM "Audit" ORDER BY id DESC LIMIT ?
 )`, s.MaxBackups)
+	if err != nil {
+		return fmt.Errorf("audit: trim: %w", err)
+	}
+	return nil
 }

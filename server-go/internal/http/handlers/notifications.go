@@ -48,33 +48,40 @@ type NotificationsHandler struct {
 }
 
 // Mount registers the routes onto the bearer-protected router.
+// Every notification endpoint is admin-only — gated once via a
+// chi.Group middleware so a future addition can't accidentally
+// bypass the check.
 func (h *NotificationsHandler) Mount(r chi.Router) {
-	r.Get("/api/notifications", h.List)
-	r.Get("/api/notifications/{id}", h.Get)
-	r.Post("/api/notifications", h.Create)
-	r.Put("/api/notifications/{id}", h.Update)
-	r.Delete("/api/notifications/{id}", h.Delete)
-	r.Post("/api/notifications/{id}/test", h.Test)
-	// In-app feed — every dispatched event lands in NotificationEvent
-	// regardless of sink config, so the bell icon always has data
-	// even when no webhooks are wired. Limit + unread badge live here.
-	r.Get("/api/notifications/feed", h.Feed)
-	r.Get("/api/notifications/feed/unread-count", h.FeedUnread)
-	r.Post("/api/notifications/feed/read-all", h.FeedReadAll)
+	r.Group(func(r chi.Router) {
+		r.Use(adminOnly)
+		r.Get("/api/notifications", h.List)
+		r.Get("/api/notifications/{id}", h.Get)
+		r.Post("/api/notifications", h.Create)
+		r.Put("/api/notifications/{id}", h.Update)
+		r.Delete("/api/notifications/{id}", h.Delete)
+		r.Post("/api/notifications/{id}/test", h.Test)
+		// In-app feed — every dispatched event lands in NotificationEvent
+		// regardless of sink config, so the bell has data even when no
+		// webhooks are wired.
+		r.Get("/api/notifications/feed", h.Feed)
+		r.Get("/api/notifications/feed/unread-count", h.FeedUnread)
+		r.Post("/api/notifications/feed/read-all", h.FeedReadAll)
+	})
 }
 
 // Feed returns the most recent notification events. ?limit=N (clamp
 // to 200) and ?unread=true narrow the result.
 //
-// Admin-only for now. The feed contains cross-project events (deploy
-// outcomes, node alerts, build failures) and we don't yet filter
-// by per-user tenancy. Pre-v0.9.x any authenticated user could read
-// every other project's deploys + node-down alerts; gate-then-
-// per-tenant-filter is the v0.10 work.
+// Admin-only by design. The feed surfaces instance-wide events
+// (deploy outcomes across every project, node health, backup
+// failures) — it's the operator's pager view, not a per-user inbox.
+// Per-event ACLs would need a different table shape (per-user
+// readAt instead of the global readAt the schema carries today),
+// so a future "scoped feed for project members" is a new endpoint,
+// not a relaxation of this gate. The UI hides the bell when the
+// caller doesn't have settings:admin so non-admins don't see a
+// dead control.
 func (h *NotificationsHandler) Feed(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	limit := 50
@@ -94,9 +101,6 @@ func (h *NotificationsHandler) Feed(w http.ResponseWriter, r *http.Request) {
 
 // FeedUnread is the cheap counter the bell badge polls.
 func (h *NotificationsHandler) FeedUnread(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	n, err := h.DB.CountUnreadNotificationEvents(ctx)
@@ -110,9 +114,6 @@ func (h *NotificationsHandler) FeedUnread(w http.ResponseWriter, r *http.Request
 // FeedReadAll stamps readAt on every unread event. Called when the
 // user opens the bell popover.
 func (h *NotificationsHandler) FeedReadAll(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	if err := h.DB.MarkAllNotificationEventsRead(ctx); err != nil {
@@ -127,9 +128,6 @@ func (h *NotificationsHandler) FeedReadAll(w http.ResponseWriter, r *http.Reques
 // to wait for a real build to fire. Read the config, push one
 // EventEnvelope onto the notify dispatcher, return 204.
 func (h *NotificationsHandler) Test(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	n, err := h.DB.FindNotification(ctx, chi.URLParam(r, "id"))
@@ -163,9 +161,6 @@ func notifCtx(r *http.Request) (context.Context, context.CancelFunc) {
 }
 
 func (h *NotificationsHandler) List(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	out, err := h.DB.ListNotifications(ctx)
@@ -180,9 +175,6 @@ func (h *NotificationsHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *NotificationsHandler) Get(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	out, err := h.DB.FindNotification(ctx, chi.URLParam(r, "id"))
@@ -203,9 +195,6 @@ type notifBody struct {
 }
 
 func (h *NotificationsHandler) Create(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
 	var body notifBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -223,8 +212,13 @@ func (h *NotificationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	id, err := randomID()
+	if err != nil {
+		h.fail(w, "id", err)
+		return
+	}
 	n := &db.Notification{
-		ID: randomID(), Name: body.Name, Enabled: body.Enabled, Type: body.Type,
+		ID: id, Name: body.Name, Enabled: body.Enabled, Type: body.Type,
 		Pipelines: body.Pipelines, Events: body.Events, Config: body.Config,
 	}
 	ctx, cancel := notifCtx(r)
@@ -240,9 +234,6 @@ func (h *NotificationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *NotificationsHandler) Update(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
 	var body notifBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -293,9 +284,6 @@ func (h *NotificationsHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *NotificationsHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	if !requireAdmin(w, r) {
-		return
-	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	if err := h.DB.DeleteNotification(ctx, chi.URLParam(r, "id")); err != nil {

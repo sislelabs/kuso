@@ -260,7 +260,7 @@ func NewRouter(d Deps) http.Handler {
 			errH.Mount(r)
 		}
 		if d.Audit != nil {
-			auditH := &httphandlers.AuditHandler{Svc: d.Audit, Logger: d.Logger}
+			auditH := &httphandlers.AuditHandler{Svc: d.Audit, DB: d.DB, Logger: d.Logger}
 			auditH.Mount(r)
 		}
 		if d.Logs != nil { // Logs implies a kube client; reuse it for /api/kubernetes/*.

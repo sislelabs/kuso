@@ -51,6 +51,19 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return requirePerm(w, r, auth.PermSettingsAdmin)
 }
 
+// adminOnly is the middleware form of requireAdmin — wrap a chi.Group
+// with it to gate every route inside in one place. Cuts the
+// "did I forget the gate on this method" footgun that produced the
+// audit-handler / notifications-feed regressions.
+func adminOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !requireAdmin(w, r) {
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // requireUserWrite gates user/group/role/token mutations. user:write is
 // granted to instance admins. Kept separate from settings:admin so the
 // matrix can later split (e.g. a "user manager" role that doesn't see

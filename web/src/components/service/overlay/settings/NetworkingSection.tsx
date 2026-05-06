@@ -115,14 +115,9 @@ export function NetworkingSection({ state, setState, autoHost }: SectionProps) {
         control={
           <div className="flex w-full max-w-[420px] flex-col gap-1.5">
             {rows.map((host, i) => (
-              // Key on host text + position-after-last-non-empty so
-              // removing a non-last row doesn't make React match the
-              // surviving row to the deleted row's controlled-input
-              // DOM. Pre-v0.9.9 used `key={i}`, which left siblings
-              // showing the wrong host text after a delete (the
-              // half-of-the-domain-bug the user reported: editing
-              // a service after a project edit didn't persist what
-              // was on screen).
+              // Key on host text so removing a non-last row doesn't
+              // make React match siblings to the deleted row's
+              // controlled-input DOM. Empty rows fall back to index.
               <div key={host ? `h:${host}` : `empty:${i}`} className="flex items-center gap-1.5">
                 <Globe className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
                 <Input

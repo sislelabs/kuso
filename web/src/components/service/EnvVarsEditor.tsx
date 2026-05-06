@@ -862,12 +862,9 @@ function DetectedEnvBanner({
 
 function InheritedSection({ project }: { project: string }) {
   // Use the shared api() wrapper for the 401 path so an expired
-  // session bounces to /login. Pre-v0.9.9 used raw fetch and mapped
-  // any non-200 to {keys:[]}, including 401 — meaning a stale-JWT
-  // user saw "no inherited vars" and was stuck on a page that
-  // wouldn't update no matter what they did. We still soft-fall on
-  // 403 (admin-only endpoints) below: api() throws ApiError(403),
-  // we catch it and return the empty shape.
+  // session bounces to /login. 403 (admin-only endpoints) still
+  // soft-falls to the empty shape since non-admins legitimately
+  // see no instance-level inherited vars.
   const projectKeys = useQuery<{ keys: string[] }>({
     queryKey: ["projects", project, "shared-secrets"],
     queryFn: () =>

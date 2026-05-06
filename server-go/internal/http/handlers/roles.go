@@ -76,7 +76,12 @@ func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	id := randomID()
+	id, err := randomID()
+	if err != nil {
+		h.Logger.Error("create role: id", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
 	ctx, cancel := rolesCtx(r)
 	defer cancel()
 	if err := h.DB.CreateRole(ctx, id, req.Name, req.Description, req.Permissions); err != nil {

@@ -188,7 +188,13 @@ func (h *ConfigHandler) CreatePodSize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if p.ID == "" {
-		p.ID = randomID()
+		id, err := randomID()
+		if err != nil {
+			h.Logger.Error("create pod size: id", "err", err)
+			http.Error(w, "internal", http.StatusInternalServerError)
+			return
+		}
+		p.ID = id
 	}
 	ctx, cancel := cfgCtx(r)
 	defer cancel()
@@ -238,21 +244,13 @@ func (h *ConfigHandler) DeletePodSize(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// randomID returns a fresh hex-encoded 128-bit identifier. Panics on
-// CSPRNG failure rather than returning "" — pre-v0.9.9 the zero-string
-// fallback meant the caller would happily insert a row with id="" and
-// the next caller would either collide on a UNIQUE constraint or
-// overwrite the previous row. crypto/rand.Read on Linux only fails
-// on an unrecoverable kernel state (getrandom returning EINTR forever
-// under signal storm, or a closed /dev/urandom on a misconfigured
-// chroot); in that scenario a panic is the correct response — we
-// should fail closed, not mint id="" rows. Callers run inside HTTP
-// handlers so chimw.Recoverer turns the panic into a 500 with the
-// stack logged, which is exactly the operator-visible signal we want.
-func randomID() string {
+// randomID returns a fresh hex-encoded 128-bit identifier or the
+// CSPRNG error. Callers must propagate; an empty id silently
+// inserted would collide on UNIQUE or overwrite the previous row.
+func randomID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		panic(fmt.Sprintf("randomID: crypto/rand failed (cannot mint stable IDs without entropy): %v", err))
+		return "", fmt.Errorf("randomID: crypto/rand: %w", err)
 	}
-	return hex.EncodeToString(b[:])
+	return hex.EncodeToString(b[:]), nil
 }

@@ -115,7 +115,7 @@ func (d *DB) DeleteUser(ctx context.Context, id string) error {
 		return fmt.Errorf("db: begin: %w", err)
 	}
 	for _, q := range []string{
-		`DELETE FROM "Audit" WHERE user = ?`,
+		`DELETE FROM "Audit" WHERE "user" = ?`,
 		`DELETE FROM "Token" WHERE "userId" = ?`,
 		`DELETE FROM "_UserToUserGroup" WHERE "A" = ?`,
 		`DELETE FROM "GithubUserLink" WHERE "userId" = ?`,

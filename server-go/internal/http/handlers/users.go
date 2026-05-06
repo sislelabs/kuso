@@ -73,7 +73,11 @@ func (h *UsersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "hash password", err)
 		return
 	}
-	id := randomID()
+	id, err := randomID()
+	if err != nil {
+		h.fail(w, "id", err)
+		return
+	}
 	active := true
 	if req.IsActive != nil {
 		active = *req.IsActive

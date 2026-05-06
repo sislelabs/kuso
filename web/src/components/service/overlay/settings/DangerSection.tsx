@@ -9,13 +9,9 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useDeleteService } from "@/features/services";
 
-// DangerSection lives on the service overlay and deletes ONLY the
-// service. Pre-v0.9.8 the section confusingly imported
-// useDeleteProject and the confirm-text matched the service name —
-// typing the service name and clicking "Delete" would delete the
-// whole project (every other service, every preview env, every
-// addon's data). The hook now points at the right resource and the
-// copy is unambiguous.
+// DangerSection deletes the service (and only the service) — copy
+// and the underlying hook must agree to avoid the user confirming
+// "service" and getting a project-wide cascade.
 export function DangerSection({
   project,
   service,
