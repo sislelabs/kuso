@@ -19,3 +19,66 @@ github:
 previews:
   enabled: false
   ttlDays: 7
+
+# Per-project network isolation. The defaults are the safe envelope for
+# a multi-tenant box: pods in this project's namespace can only be
+# reached from cluster ingress + sibling pods within the same project,
+# and they can only egress to DNS, the in-cluster registry, sibling
+# pods, and the public internet. The cloud-metadata service
+# (169.254.169.254 / fd00:ec2::254) is explicitly blocked — a malicious
+# Dockerfile or runtime escape can't pull EC2 instance creds.
+#
+# Operators who run kuso on a single-tenant cluster (own dogfood, no
+# untrusted user code) can flip enabled=false to skip the policies.
+networkPolicy:
+  enabled: true
+  # When the project namespace differs from the kuso control-plane
+  # namespace (multi-namespace mode), set the platform namespace here
+  # so kuso-server's log-streaming and exec calls are still allowed
+  # to reach pods in this namespace.
+  platformNamespace: kuso
+  # Extra CIDRs to block from public-egress pods. The default block
+  # list covers RFC1918 + link-local; on cloud installs the kube
+  # apiserver lives at a public node IP that bypasses the RFC1918
+  # block, so opt-in pods could still reach the apiserver if the
+  # operator doesn't pin the node IP here. Set when running on
+  # Hetzner / DO / Linode / EC2 with a public-IP'd control plane:
+  #
+  #   networkPolicy:
+  #     extraBlockCIDRs:
+  #       - 5.75.123.45/32   # control-plane node public IP
+  #
+  # Empty by default — single-node k3s installs that bind the
+  # apiserver to 127.0.0.1 don't need it.
+  extraBlockCIDRs: []
+
+# Per-project resource ceiling. ResourceQuota caps CPU/memory/object
+# counts so one tenant can't starve the cluster. LimitRange supplies
+# defaults so user pods that don't set requests/limits still get them
+# (and respect the quota). Aimed at a small Hetzner box; raise on
+# bigger clusters.
+quota:
+  enabled: true
+  cpu: "8"
+  memory: "16Gi"
+  pods: "30"
+  pvcs: "10"
+  services: "20"
+  defaultPodCPURequest: "50m"
+  defaultPodMemoryRequest: "128Mi"
+  defaultPodCPULimit: "1"
+  defaultPodMemoryLimit: "1Gi"
+
+# Pod Security Standards are enforced server-side, not via this chart.
+# kuso-server stamps `pod-security.kubernetes.io/{enforce,audit,warn}=
+# restricted` labels on every project namespace at create time
+# (server-go/internal/kube/namespaces.go::pssLabels). Operators who
+# need a relaxed tier should re-label the namespace manually after
+# create:
+#
+#   kubectl label namespace <ns> pod-security.kubernetes.io/enforce=baseline --overwrite
+#
+# We don't expose a helm value here because the helm-operator runs
+# AFTER the namespace is already labelled, so a chart-driven label
+# would arrive too late to affect the first pod admission and might
+# get overwritten on the next EnsureNamespace tick.

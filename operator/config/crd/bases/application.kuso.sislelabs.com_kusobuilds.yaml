@@ -129,6 +129,22 @@ spec:
                       properties:
                         cpu:    { type: string }
                         memory: { type: string }
+                # Registry auth. Names a Secret with .dockerconfigjson
+                # (kaniko) and cnb_registry_auth (CNB lifecycle) keys.
+                # Empty = anonymous push to in-cluster registry.
+                auth:
+                  type: object
+                  properties:
+                    secretName: { type: string }
+                    registry:   { type: string }
+                # Registry transport tuning. allowInsecure flips kaniko's
+                # --insecure flag for plain-HTTP in-cluster registries;
+                # external registries (HTTPS) must set this false.
+                registry:
+                  type: object
+                  properties:
+                    allowInsecure: { type: boolean }
+                    cacheRepo:     { type: string }
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

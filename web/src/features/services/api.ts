@@ -14,9 +14,15 @@ export async function setServiceEnv(
   service: string,
   envVars: KusoEnvVar[]
 ): Promise<void> {
+  // allowPending=true lets the user save a `${{ addon.KEY }}` ref
+  // before the addon's connection Secret has been created. The pod
+  // sits in CreateContainerConfigError until the secret materialises,
+  // and the deployments tab shows it as "addon pending" instead of a
+  // hard error on save. Mirrors how Vercel/Heroku let you wire env
+  // vars to integrations that aren't fully provisioned yet.
   return api(
     `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/env`,
-    { method: "POST", body: { envVars } }
+    { method: "POST", body: { envVars, allowPending: true } }
   );
 }
 

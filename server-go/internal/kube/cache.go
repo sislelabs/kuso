@@ -125,6 +125,21 @@ func (c *Cache) Stop() {
 	c.stopped = true
 }
 
+// AllSynced returns true once every informer has finished its initial
+// list. Cheap to call repeatedly — backs the readiness probe so the
+// kube-LB doesn't send traffic before the cache is warm.
+func (c *Cache) AllSynced() bool {
+	if c == nil {
+		return true
+	}
+	for _, e := range c.informers {
+		if !e.synced() {
+			return false
+		}
+	}
+	return true
+}
+
 // WaitForSync blocks until every informer has done its initial list,
 // or ctx is canceled. Use only on boot if you really need a warm
 // cache before serving — the read path doesn't require it.

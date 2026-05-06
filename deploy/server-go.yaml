@@ -46,6 +46,14 @@ rules:
   - apiGroups: [batch]
     resources: [jobs, cronjobs]
     verbs: [get, list, watch, create, update, patch, delete]
+  # Leader election. Singleton background workers (build poller,
+  # alert engine, nodewatch, daily cleanup) contest a Lease lock so
+  # exactly one kuso-server pod runs them at a time. Without these
+  # verbs the leader-election helper falls back to "always run" and
+  # multi-replica deploys double-promote builds + double-fire alerts.
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [networking.k8s.io]
     resources: [ingresses]
     verbs: [get, list, watch]
@@ -136,6 +144,16 @@ spec:
   template:
     metadata:
       labels: { app.kubernetes.io/name: kuso-server }
+      # Opt in to the in-cluster Prometheus's pod-discovery scrape.
+      # Picked up by the `kubernetes-pods` job in deploy/prometheus.yaml
+      # via the prometheus.io/scrape="true" relabel rule. /metrics is
+      # mounted by the chi router on port 8080 (the same port the
+      # service listens on); no extra Service needed because the
+      # scrape goes pod-to-pod.
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8080"
+        prometheus.io/path: "/metrics"
     spec:
       serviceAccountName: kuso-server
       # Highest-priority class on the cluster — see PriorityClass
@@ -203,9 +221,13 @@ spec:
             preStop:
               exec:
                 command: ["/bin/sh", "-c", "sleep 15"]
-          # Probes hit /healthz (cheap; no DB hit). Tolerant config
-          # absorbs noisy-neighbor CPU starvation without killing
-          # the pod: 3min liveness grace, 1min readiness grace.
+          # Liveness checks the process is up — /healthz is cheap and
+          # never touches DB. Readiness checks dependencies via /readyz
+          # (Postgres ping + kube informer cache synced) so the LB
+          # drains a pod whose DB connection is broken instead of
+          # silently 5xx-ing every request. Tolerant config absorbs
+          # noisy-neighbor CPU starvation without killing the pod:
+          # 3min liveness grace, 1min readiness grace.
           livenessProbe:
             httpGet: { path: /healthz, port: http }
             initialDelaySeconds: 15
@@ -213,7 +235,7 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 6
           readinessProbe:
-            httpGet: { path: /healthz, port: http }
+            httpGet: { path: /readyz, port: http }
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 5
@@ -222,8 +244,9 @@ spec:
             # Up to 90s for first-boot to absorb Postgres connection
             # ping retries (the pod may start before postgres is
             # fully up on a fresh install) plus kube informer
-            # restoration.
-            httpGet: { path: /healthz, port: http }
+            # restoration. Uses /readyz so we wait for cache sync
+            # before serving any traffic.
+            httpGet: { path: /readyz, port: http }
             periodSeconds: 5
             failureThreshold: 18
           volumeMounts:

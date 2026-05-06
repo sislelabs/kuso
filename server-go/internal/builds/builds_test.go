@@ -804,3 +804,49 @@ func TestPoller_SkipsTerminal(t *testing.T) {
 		t.Fatalf("tick: %v", err)
 	}
 }
+
+// TestCursor_RoundRobin verifies that the fairness cursor advances
+// across ticks so two projects get equal shares of the schedule
+// even when one has many more queued services. Uses the cursor
+// helpers directly — the kube-touching path is exercised in the
+// dispatchQueued integration tests above.
+func TestCursor_RoundRobin(t *testing.T) {
+	p := &Poller{}
+	projects := []string{"alpha", "beta", "gamma"}
+
+	// First tick: cursor unset → start at index 0.
+	if got := p.nextCursorIndex("kuso", projects); got != 0 {
+		t.Errorf("first call: got %d want 0", got)
+	}
+	p.setCursor("kuso", "alpha")
+
+	// Second tick: last was alpha → start at beta (index 1).
+	if got := p.nextCursorIndex("kuso", projects); got != 1 {
+		t.Errorf("after alpha: got %d want 1", got)
+	}
+	p.setCursor("kuso", "beta")
+
+	// Third tick: last was beta → start at gamma (index 2).
+	if got := p.nextCursorIndex("kuso", projects); got != 2 {
+		t.Errorf("after beta: got %d want 2", got)
+	}
+	p.setCursor("kuso", "gamma")
+
+	// Fourth tick: last was gamma → wrap to alpha (index 0).
+	if got := p.nextCursorIndex("kuso", projects); got != 0 {
+		t.Errorf("after gamma (wrap): got %d want 0", got)
+	}
+
+	// Cursor is namespace-scoped. A fresh namespace starts fresh.
+	if got := p.nextCursorIndex("other-ns", projects); got != 0 {
+		t.Errorf("fresh ns: got %d want 0", got)
+	}
+
+	// If the last-promoted project is no longer in the queue (queue
+	// drained), the next tick falls back to 0 instead of trying to
+	// resume from a project that's no longer present.
+	p.setCursor("kuso", "deleted-project")
+	if got := p.nextCursorIndex("kuso", projects); got != 0 {
+		t.Errorf("missing cursor target: got %d want 0", got)
+	}
+}

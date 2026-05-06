@@ -89,6 +89,17 @@ on its own schedule.
 
 The control-plane SQLite DB at `/var/lib/kuso/kuso.db` holds users, sessions, audit logs, GitHub App config, and instance secrets. Backup is enabled by default — `kuso backup` pulls a consistent snapshot from your workstation. See **[docs/BACKUP_RESTORE.md](./docs/BACKUP_RESTORE.md)** for the daily-snapshot pattern, recovery paths (rollback, corruption, host loss), and addon data backups. Read this once before putting anything important on the box.
 
+## Adding a node
+
+Open `Settings → Nodes → Add node` to mint a single-use bootstrap
+token. You'll get a `curl … | sudo sh` one-liner; paste it on the new
+VM and the agent registers itself. The standard k3s install runs on
+the VM, region/tier labels are applied at boot, and the new node
+shows up in the UI within ~30 seconds. Works behind NAT — no SSH
+config from kuso. The legacy SSH-driven path is still available
+under the SSH tab. Full details (security model, API, troubleshooting)
+in **[docs/NODE_BOOTSTRAP.md](./docs/NODE_BOOTSTRAP.md)**.
+
 ## Editing live deployments safely
 
 Some spec edits on a running service are free (env vars, scale), some trigger a rolling restart (port, image), some hit Let's Encrypt rate limits (TLS hosts), and a few will orphan data if you're not careful (volumes). The contract is in **[docs/EDIT_SAFETY.md](./docs/EDIT_SAFETY.md)** — per-field, with the blast radius spelled out. Worth a read before mass-editing live envs from a script or the CLI.

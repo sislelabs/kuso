@@ -41,8 +41,39 @@
           },
           "envVars": {
             "items": {
-              "type": "object",
-              "x-kubernetes-preserve-unknown-fields": true
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                },
+                "valueFrom": {
+                  "properties": {
+                    "secretKeyRef": {
+                      "properties": {
+                        "key": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "pattern": "^[a-z0-9][a-z0-9-]*-conn$",
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "key"
+                      ],
+                      "type": "object"
+                    }
+                  },
+                  "type": "object"
+                }
+              },
+              "required": [
+                "name"
+              ],
+              "type": "object"
             },
             "type": "array"
           },

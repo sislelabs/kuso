@@ -37,7 +37,20 @@ type LogsWSHandler struct {
 	SessionKey string // bcrypt-derived JWT verifying key (same as bearer middleware)
 	DB         *db.DB
 	Logger     *slog.Logger
+
+	// Per-user connection accounting. wsActive caps the number of
+	// concurrent log streams a single principal can hold open. Without
+	// it, a misbehaving SPA (or a malicious client) opens 100 tabs and
+	// each one tails every pod in an env — 100 × 50 pods = 5000 kube
+	// log streams against the apiserver.
+	wsMu     sync.Mutex
+	wsActive map[string]int
 }
+
+// maxWSPerUser bounds simultaneous WS log connections per JWT subject.
+// 8 covers the realistic case (one tab per env across a couple of
+// services) without leaving room for an accidental fork-bomb.
+const maxWSPerUser = 8
 
 // Mount registers the WS log routes onto the public (un-bearer-gated)
 // router. We auth ourselves against the subprotocol header rather than
@@ -76,8 +89,22 @@ var upgrader = websocket.Upgrader{
 func wsOriginAllowed(r *http.Request) bool {
 	origin := r.Header.Get("Origin")
 	if origin == "" {
-		// Non-browser caller. The bearer token in
-		// Sec-WebSocket-Protocol is the load-bearing auth here.
+		// Non-browser caller (curl, kuso CLI, server-to-server). The
+		// bearer token in Sec-WebSocket-Protocol is the load-bearing
+		// auth here. Browsers ALWAYS send Origin on WS handshakes,
+		// so an empty value can only come from a non-browser client;
+		// a malicious page can't strip Origin from its own fetch.
+		//
+		// Default: allow. The kuso CLI's `shell` and `logs -f`
+		// commands depend on this path. Production deploys that
+		// don't expect any non-browser WS traffic should set
+		// KUSO_BLOCK_ANON_WS=true to slam the door — operators
+		// running the CLI from outside the cluster will lose
+		// access if they flip it.
+		v := strings.ToLower(os.Getenv("KUSO_BLOCK_ANON_WS"))
+		if v == "true" || v == "1" || v == "yes" {
+			return false
+		}
 		return true
 	}
 	o, err := url.Parse(origin)
@@ -134,6 +161,16 @@ func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	// Per-user concurrency cap. We charge against the JWT subject so
+	// a single user-account can't open enough streams to bury the
+	// kube apiserver under log requests. Admins also pay the cost —
+	// otherwise an admin tab-storm produces the same outage.
+	if !h.acquireWSSlot(claims.UserID) {
+		http.Error(w, "too many concurrent log streams", http.StatusTooManyRequests)
+		return
+	}
+	defer h.releaseWSSlot(claims.UserID)
 
 	q := r.URL.Query()
 	env := q.Get("env")
@@ -200,6 +237,47 @@ func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 		default:
 			h.Logger.Error("ws logs", "err", err, "env", envName)
 		}
+	}
+}
+
+// acquireWSSlot reserves a per-user WS slot if the user is under the
+// cap. Returns false when the user already holds maxWSPerUser
+// connections — caller must short-circuit with 429.
+func (h *LogsWSHandler) acquireWSSlot(userID string) bool {
+	if userID == "" {
+		// Anonymous (shouldn't happen at this point — we already
+		// verified the JWT) — count against a shared bucket so an
+		// auth bug doesn't open the floodgates.
+		userID = "_anon"
+	}
+	h.wsMu.Lock()
+	defer h.wsMu.Unlock()
+	if h.wsActive == nil {
+		h.wsActive = map[string]int{}
+	}
+	if h.wsActive[userID] >= maxWSPerUser {
+		return false
+	}
+	h.wsActive[userID]++
+	return true
+}
+
+// releaseWSSlot frees a slot. Always paired with acquireWSSlot via
+// defer in the handler.
+func (h *LogsWSHandler) releaseWSSlot(userID string) {
+	if userID == "" {
+		userID = "_anon"
+	}
+	h.wsMu.Lock()
+	defer h.wsMu.Unlock()
+	if h.wsActive == nil {
+		return
+	}
+	if h.wsActive[userID] > 0 {
+		h.wsActive[userID]--
+	}
+	if h.wsActive[userID] == 0 {
+		delete(h.wsActive, userID)
 	}
 }
 

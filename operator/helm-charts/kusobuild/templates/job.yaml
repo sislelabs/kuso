@@ -425,8 +425,32 @@ spec:
           env:
             - name: CNB_BUILDER_IMAGE
               value: {{ .Values.buildpacks.builderImage | default "paketobuildpacks/builder-jammy-base:latest" | quote }}
+            # Registry auth. The CNB lifecycle reads CNB_REGISTRY_AUTH
+            # as a JSON env: {"<registry>":{"username":"...","password":"..."}}.
+            # We pull it whole from a Secret key the server mints alongside
+            # the build CR — keeps creds out of the manifest and lets us
+            # rotate without re-rendering. When auth.secretName is empty
+            # we assume the in-cluster anonymous registry and omit the env
+            # entirely (lifecycle pushes anonymously).
+            {{- if .Values.auth.secretName }}
             - name: CNB_REGISTRY_AUTH
-              value: '{"{{ index (split ":" .Values.image.repository) "_0" }}":{"username":"","password":""}}'
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.secretName | quote }}
+                  key: cnb_registry_auth
+            {{- end }}
+            # Buildpacks frequently need a GitHub token for private
+            # buildpacks or to clone Git-hosted dependencies referenced
+            # from package.json/Gemfile. Mount the same installation
+            # token the clone init container uses; lifecycle picks it
+            # up via the standard GIT_ASKPASS env.
+            {{- if gt (int .Values.githubInstallationId) 0 }}
+            - name: GITHUB_INSTALLATION_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kusobuild.fullname" . }}-token
+                  key: token
+            {{- end }}
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
@@ -454,14 +478,26 @@ spec:
             - --context=dir:///workspace/src/{{ .Values.repo.path | default "." }}
             {{- end }}
             - --destination={{ .Values.image.repository }}:{{ .Values.image.tag }}
+            {{- if .Values.registry.allowInsecure }}
             - --insecure
             - --skip-tls-verify
+            {{- end }}
             - --cache=true
-            - --cache-repo={{ .Values.image.repository }}/.cache
+            - --cache-repo={{ .Values.registry.cacheRepo | default (printf "%s/.cache" .Values.image.repository) }}
             - --cleanup
+          {{- if .Values.auth.secretName }}
+          env:
+            - name: DOCKER_CONFIG
+              value: /kaniko/.docker
+          {{- end }}
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+            {{- if .Values.auth.secretName }}
+            - name: docker-config
+              mountPath: /kaniko/.docker
+              readOnly: true
+            {{- end }}
             {{- if and (eq .Values.strategy "nixpacks") .Values.cache.pvcName }}
             # Symlink /nix → /cache/nix so the kaniko snapshot of the
             # nixpacks-generated image's RUN steps reads from the
@@ -510,6 +546,14 @@ spec:
         - name: cache
           persistentVolumeClaim:
             claimName: {{ .Values.cache.pvcName | quote }}
+        {{- end }}
+        {{- if and (.Values.auth.secretName) (ne .Values.strategy "buildpacks") }}
+        - name: docker-config
+          secret:
+            secretName: {{ .Values.auth.secretName | quote }}
+            items:
+              - key: .dockerconfigjson
+                path: config.json
         {{- end }}
         {{- if eq .Values.strategy "buildpacks" }}
         - name: layers

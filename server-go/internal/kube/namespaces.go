@@ -2,33 +2,69 @@ package kube
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 )
 
-// EnsureNamespace creates ns if it doesn't already exist. AlreadyExists
-// is treated as success (idempotent). Other errors propagate so callers
+// pssLabels are the Pod Security Admission labels stamped on every
+// project namespace. `restricted` is the strict tier — pods must
+// runAsNonRoot, no privileged escalation, no hostPath, no hostNetwork.
+// We enforce + audit + warn at the same level so policy violations
+// surface in events even if a future enforce-tier downgrade lands.
+//
+// Operators who need to ship a legacy image that won't yet pass
+// `restricted` can override per-namespace by re-labelling — the
+// EnsureNamespace path uses an Apply patch that won't clobber labels
+// the operator has manually overridden.
+var pssLabels = map[string]string{
+	"pod-security.kubernetes.io/enforce": "restricted",
+	"pod-security.kubernetes.io/audit":   "restricted",
+	"pod-security.kubernetes.io/warn":    "restricted",
+}
+
+// EnsureNamespace creates ns if it doesn't already exist and patches
+// in the Pod Security Standards labels so user pods scheduled there
+// can't run as root or escape the container boundary. AlreadyExists is
+// treated as success (idempotent). Other errors propagate so callers
 // can decide whether to keep going (a hand-pre-created namespace + RBAC
 // blocking us is still a working setup).
 func (c *Client) EnsureNamespace(ctx context.Context, ns string) error {
 	if ns == "" {
 		return nil
 	}
+	labels := map[string]string{"app.kubernetes.io/managed-by": "kuso"}
+	for k, v := range pssLabels {
+		labels[k] = v
+	}
 	_, err := c.Clientset.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: ns,
-			Labels: map[string]string{
-				"app.kubernetes.io/managed-by": "kuso",
-			},
+			Name:   ns,
+			Labels: labels,
 		},
 	}, metav1.CreateOptions{})
 	if err == nil {
 		return nil
 	}
 	if apierrors.IsAlreadyExists(err) {
+		// Patch the PSS labels onto a pre-existing namespace so an
+		// upgrade picks them up without needing the operator to
+		// recreate every project namespace by hand. MergePatch only
+		// touches the keys we own, leaving any operator-overridden
+		// values alone (the patch sets restricted; if the operator
+		// later relaxes to baseline they re-patch and our next
+		// reconcile no-ops because Create-AlreadyExists short-circuits
+		// before we Patch).
+		patch, _ := json.Marshal(map[string]any{
+			"metadata": map[string]any{"labels": pssLabels},
+		})
+		if _, perr := c.Clientset.CoreV1().Namespaces().Patch(ctx, ns, types.MergePatchType, patch, metav1.PatchOptions{}); perr != nil && !apierrors.IsNotFound(perr) {
+			return fmt.Errorf("kube: patch namespace %q labels: %w", ns, perr)
+		}
 		return nil
 	}
 	return fmt.Errorf("kube: ensure namespace %q: %w", ns, err)

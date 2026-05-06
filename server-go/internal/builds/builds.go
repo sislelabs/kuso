@@ -196,6 +196,14 @@ type BuildSettingsView struct {
 	MemoryRequest string
 	CPULimit      string
 	CPURequest    string
+	// External registry overrides. When RegistryAuthSecret is set,
+	// builds push to RegistryHost using credentials from the named
+	// Secret instead of the in-cluster anonymous kuso-registry. The
+	// Secret must contain `.dockerconfigjson` (kaniko) AND
+	// `cnb_registry_auth` (CNB lifecycle JSON env). Empty values
+	// keep the in-cluster default.
+	RegistryAuthSecret string
+	RegistryHost       string
 }
 
 type cachedBuildSettings struct {
@@ -1022,6 +1030,20 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// CR so the chart's `.Values.resources` picks them up; missing
 	// fields fall through to the chart's values.yaml defaults.
 	settings := s.loadSettings(ctx)
+	// Registry transport. The default in-cluster kuso-registry runs
+	// plain HTTP on the cluster Service network, so kaniko needs
+	// --insecure to push there. External registries (set via
+	// settings.RegistryAuthSecret) MUST be HTTPS — flip allowInsecure
+	// off in that case.
+	spec.Registry = &kube.KusoBuildRegistry{
+		AllowInsecure: settings.RegistryAuthSecret == "",
+	}
+	if settings.RegistryAuthSecret != "" {
+		spec.Auth = &kube.KusoBuildAuth{
+			SecretName: settings.RegistryAuthSecret,
+			Registry:   settings.RegistryHost,
+		}
+	}
 	if settings.MemoryLimit != "" || settings.MemoryRequest != "" ||
 		settings.CPULimit != "" || settings.CPURequest != "" {
 		spec.Resources = &kube.KusoBuildResources{}
@@ -1342,6 +1364,16 @@ type Poller struct {
 	// terminal phase. Optional: nil → no archive (pod logs vanish on
 	// TTL as before).
 	LogArchive LogArchiver
+
+	// fairnessCursor remembers, per namespace, the last project we
+	// promoted from. Next tick, dispatchQueued starts the round at
+	// the *next* project in alphabetical order. Without this, Go's
+	// random map iteration produces local fairness over many ticks
+	// but lets a single project win several ticks in a row when the
+	// global cap is tight. A stable cursor turns "fair on average"
+	// into "fair every tick".
+	cursorMu       sync.Mutex
+	fairnessCursor map[string]string // ns → last-promoted project
 }
 
 // Run blocks until ctx is cancelled, ticking every Interval and updating
@@ -1415,12 +1447,32 @@ func (p *Poller) tick(ctx context.Context) error {
 	return nil
 }
 
-// dispatchQueued promotes queued builds to running when their service
-// has no active build. One queued build per service per tick to avoid
-// stampedes on a small cluster (the operator's renderer is the
-// bottleneck; bulk-promoting 10 queued builds at once would just
-// re-create the OOM-thrash scenario from v0.7.x). Best-effort: kube
-// errors are warn-logged and the next tick retries.
+// dispatchQueued promotes queued builds to running, in round-robin
+// order across projects, when their service has no active build.
+//
+// Why round-robin (not the simpler per-service fan-out we had before):
+//
+//   - The cluster-wide cap is enforced at admission, but the queue
+//     dispatcher decides which queued CR gets promoted first. Without
+//     project-level fairness, a single project pushing 20 services in
+//     a monorepo storm wins every tick over a project pushing 1
+//     service. With round-robin, project A's first promote, then
+//     project B's first, then A's second, etc.
+//   - The cursor is namespace-scoped: each project's execution
+//     namespace gets its own ordering. This matters because
+//     ScanNamespaces calls dispatchQueued once per namespace; the
+//     namespace IS the project for multi-namespace deployments.
+//   - Within a project we still pick the oldest queued build first
+//     (FIFO per service), so the user-visible "first click runs
+//     first" invariant is preserved.
+//
+// Concurrency safety: at most one queued build is promoted per
+// (project, service) per tick. The operator's renderer is what
+// actually allocates the kaniko Job pod, and the cluster-wide
+// admitBuild cap is a final safety belt; this method's job is just
+// to keep the promote ordering fair.
+//
+// Best-effort: kube errors are warn-logged and the next tick retries.
 func (p *Poller) dispatchQueued(ctx context.Context, ns string) {
 	raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 		List(ctx, metav1.ListOptions{LabelSelector: "kuso.sislelabs.com/build-state=queued"})
@@ -1431,79 +1483,204 @@ func (p *Poller) dispatchQueued(ctx context.Context, ns string) {
 	if len(raw.Items) == 0 {
 		return
 	}
-	// Group queued builds by service + sort each group oldest-first so
-	// the FIFO order is preserved (the user expects "first redeploy
-	// click runs first"). creationTimestamp ties break on name lex.
-	byService := map[string][]*kube.KusoBuild{}
+	// Group queued builds by (project, service). Sorting keys makes
+	// the iteration deterministic so the cursor advances predictably.
+	type svcQueue struct {
+		project string
+		fqn     string
+		list    []*kube.KusoBuild
+	}
+	byKey := map[string]*svcQueue{}
 	for i := range raw.Items {
 		var b kube.KusoBuild
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &b); err != nil {
 			continue
 		}
-		byService[b.Spec.Service] = append(byService[b.Spec.Service], &b)
+		key := b.Spec.Project + "/" + b.Spec.Service
+		q, ok := byKey[key]
+		if !ok {
+			q = &svcQueue{project: b.Spec.Project, fqn: b.Spec.Service}
+			byKey[key] = q
+		}
+		q.list = append(q.list, &b)
 	}
-	for fqn, list := range byService {
-		// Active check per service. If anything's running, skip the
-		// whole queue for this service this tick.
-		project := list[0].Spec.Project
-		active, err := p.Svc.findActiveForService(ctx, ns, project, fqn)
-		if err != nil {
-			p.Logger.Warn("build poller queue active check", "ns", ns, "service", fqn, "err", err)
-			continue
+	// Group services by project so we can round-robin at the project
+	// level (not the service level).
+	byProject := map[string][]*svcQueue{}
+	for _, q := range byKey {
+		byProject[q.project] = append(byProject[q.project], q)
+	}
+	if len(byProject) == 0 {
+		return
+	}
+	// Stable project order so the cursor advances predictably.
+	projects := make([]string, 0, len(byProject))
+	for proj := range byProject {
+		projects = append(projects, proj)
+	}
+	sort.Strings(projects)
+
+	// Rotate the project list so the project AFTER the last one we
+	// promoted comes first this tick. This is what makes the schedule
+	// fair across ticks (not just within a tick).
+	startIdx := p.nextCursorIndex(ns, projects)
+	rotated := make([]string, 0, len(projects))
+	rotated = append(rotated, projects[startIdx:]...)
+	rotated = append(rotated, projects[:startIdx]...)
+
+	// Cap promotions per tick at the cluster build cap. Stops a
+	// dispatcher tick from promoting 100 queued builds simultaneously
+	// on a fresh, empty cluster — the cluster-wide admitBuild cap
+	// would refuse most of them anyway, but limiting here saves the
+	// apiserver patch-storm and keeps the promote rate predictable.
+	cfg := p.Svc.loadSettings(ctx)
+	maxPerTick := cfg.MaxConcurrent
+	if maxPerTick <= 0 {
+		maxPerTick = 8 // uncapped clusters: still a sane upper bound
+	}
+	promoted := 0
+	lastPromotedProject := ""
+
+	// One project per outer iteration; one (oldest queued, no active)
+	// build per service within. The two-level loop achieves "round-robin
+	// across projects, FIFO within a project" in a single pass.
+	for _, proj := range rotated {
+		if promoted >= maxPerTick {
+			break
 		}
-		if active != "" {
-			continue
-		}
-		// Oldest first.
-		sort.SliceStable(list, func(i, j int) bool {
-			ti := list[i].CreationTimestamp
-			tj := list[j].CreationTimestamp
-			if ti.Equal(&tj) {
-				return list[i].Name < list[j].Name
+		queues := byProject[proj]
+		// Stable service order within a project too.
+		sort.SliceStable(queues, func(i, j int) bool { return queues[i].fqn < queues[j].fqn })
+	innerLoop:
+		for _, q := range queues {
+			if promoted >= maxPerTick {
+				break innerLoop
 			}
-			return ti.Before(&tj)
-		})
-		next := list[0]
-		// Promote: remove the queued label (operator's selector now
-		// matches it), stamp phase=pending, AND patch in spec.image
-		// (the chart's render gate). The image is computed the same
-		// way Create computes it for an immediate build — repo +
-		// service short name + the Ref's image tag.
-		shortName := strings.TrimPrefix(fqn, project+"-")
-		imageRepo := fmt.Sprintf("%s/%s/%s", RegistryHost, project, shortName)
-		// Ensure the build cache PVC exists at promote time too — if
-		// the queued CR was created during a window where the PVC
-		// briefly didn't exist (or the Create-time ensure failed),
-		// catch it here so the promoted build still gets the cache.
-		// Best-effort; empty pvcName means the chart skips the cache
-		// mount and runs cold.
-		var svcCR *kube.KusoService
-		if s, err := p.Svc.Kube.GetKusoService(ctx, ns, fqn); err == nil {
-			svcCR = s
+			// Active check per service. If anything's running, skip
+			// this service this tick.
+			active, err := p.Svc.findActiveForService(ctx, ns, q.project, q.fqn)
+			if err != nil {
+				p.Logger.Warn("build poller queue active check",
+					"ns", ns, "service", q.fqn, "err", err)
+				continue
+			}
+			if active != "" {
+				continue
+			}
+			// Oldest first.
+			sort.SliceStable(q.list, func(i, j int) bool {
+				ti := q.list[i].CreationTimestamp
+				tj := q.list[j].CreationTimestamp
+				if ti.Equal(&tj) {
+					return q.list[i].Name < q.list[j].Name
+				}
+				return ti.Before(&tj)
+			})
+			next := q.list[0]
+			project := q.project
+			fqn := q.fqn
+			if p.promoteOne(ctx, ns, project, fqn, next) {
+				promoted++
+				lastPromotedProject = proj
+				// Move on to the NEXT project — fair round-robin
+				// means each project gets ONE promote slot per pass.
+				break innerLoop
+			}
 		}
-		var projCR *kube.KusoProject
-		if pp, err := p.Svc.Kube.GetKusoProject(ctx, p.Svc.Namespace, project); err == nil {
-			projCR = pp
-		}
-		cachePVC := ""
-		if !buildCacheDisabled(projCR) {
-			cachePVC = p.Svc.ensureBuildCachePVC(ctx, ns, fqn, svcCR, 5)
-		}
-		cachePatch := ""
-		if cachePVC != "" {
-			cachePatch = fmt.Sprintf(`,"cache":{"pvcName":%q}`, cachePVC)
-		}
-		patch := fmt.Sprintf(
-			`{"metadata":{"labels":{"kuso.sislelabs.com/build-state":null},"annotations":{%q:"pending"}},"spec":{"image":{"repository":%q,"tag":%q}%s}}`,
-			annPhase, imageRepo, ImageTag(next.Spec.Ref), cachePatch,
-		)
-		if _, perr := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
-			Patch(ctx, next.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {
-			p.Logger.Warn("build poller promote queued", "build", next.Name, "ns", ns, "err", perr)
-			continue
-		}
-		p.Logger.Info("build poller promoted queued build", "build", next.Name, "service", fqn)
 	}
+	if lastPromotedProject != "" {
+		p.setCursor(ns, lastPromotedProject)
+	}
+	if promoted > 0 {
+		queueDepth := 0
+		for _, q := range byKey {
+			queueDepth += len(q.list)
+		}
+		p.Logger.Debug("dispatchQueued",
+			"ns", ns, "promoted", promoted, "remainingQueued", queueDepth-promoted)
+	}
+}
+
+// nextCursorIndex returns the index in `projects` where this tick's
+// scheduling should start. If we've never promoted in this namespace,
+// start at 0. Otherwise start one past the last project we promoted
+// (wrapping). When the last-promoted project is no longer in the
+// list (queue drained), fall back to 0.
+func (p *Poller) nextCursorIndex(ns string, projects []string) int {
+	p.cursorMu.Lock()
+	defer p.cursorMu.Unlock()
+	if p.fairnessCursor == nil {
+		return 0
+	}
+	last, ok := p.fairnessCursor[ns]
+	if !ok {
+		return 0
+	}
+	for i, proj := range projects {
+		if proj == last {
+			return (i + 1) % len(projects)
+		}
+	}
+	return 0
+}
+
+// setCursor records the project we just promoted from so the next
+// tick advances past it. The cursor map grows by at most one entry
+// per execution namespace; bounded by the project count.
+func (p *Poller) setCursor(ns, project string) {
+	p.cursorMu.Lock()
+	defer p.cursorMu.Unlock()
+	if p.fairnessCursor == nil {
+		p.fairnessCursor = map[string]string{}
+	}
+	p.fairnessCursor[ns] = project
+}
+
+// promoteOne is the meat of what was inline in the old dispatchQueued
+// loop. Returns true on a successful patch (caller advances the
+// cursor); false on any kube error (caller logs and tries the next
+// service).
+func (p *Poller) promoteOne(ctx context.Context, ns, project, fqn string, next *kube.KusoBuild) bool {
+	// Promote: remove the queued label (operator's selector now
+	// matches it), stamp phase=pending, AND patch in spec.image
+	// (the chart's render gate). The image is computed the same
+	// way Create computes it for an immediate build — repo +
+	// service short name + the Ref's image tag.
+	shortName := strings.TrimPrefix(fqn, project+"-")
+	imageRepo := fmt.Sprintf("%s/%s/%s", RegistryHost, project, shortName)
+	// Ensure the build cache PVC exists at promote time too — if
+	// the queued CR was created during a window where the PVC
+	// briefly didn't exist (or the Create-time ensure failed),
+	// catch it here so the promoted build still gets the cache.
+	// Best-effort; empty pvcName means the chart skips the cache
+	// mount and runs cold.
+	var svcCR *kube.KusoService
+	if s, err := p.Svc.Kube.GetKusoService(ctx, ns, fqn); err == nil {
+		svcCR = s
+	}
+	var projCR *kube.KusoProject
+	if pp, err := p.Svc.Kube.GetKusoProject(ctx, p.Svc.Namespace, project); err == nil {
+		projCR = pp
+	}
+	cachePVC := ""
+	if !buildCacheDisabled(projCR) {
+		cachePVC = p.Svc.ensureBuildCachePVC(ctx, ns, fqn, svcCR, 5)
+	}
+	cachePatch := ""
+	if cachePVC != "" {
+		cachePatch = fmt.Sprintf(`,"cache":{"pvcName":%q}`, cachePVC)
+	}
+	patch := fmt.Sprintf(
+		`{"metadata":{"labels":{"kuso.sislelabs.com/build-state":null},"annotations":{%q:"pending"}},"spec":{"image":{"repository":%q,"tag":%q}%s}}`,
+		annPhase, imageRepo, ImageTag(next.Spec.Ref), cachePatch,
+	)
+	if _, perr := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+		Patch(ctx, next.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {
+		p.Logger.Warn("build poller promote queued", "build", next.Name, "ns", ns, "err", perr)
+		return false
+	}
+	p.Logger.Info("build poller promoted queued build", "build", next.Name, "service", fqn)
+	return true
 }
 
 // checkBuild reads the kaniko Job for one build and reconciles status.

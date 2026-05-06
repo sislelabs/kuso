@@ -27,7 +27,9 @@ import (
 	"kuso/server/internal/alerts"
 	"kuso/server/internal/crons"
 	"kuso/server/internal/instancesecrets"
+	"kuso/server/internal/leader"
 	"kuso/server/internal/logship"
+	"kuso/server/internal/metrics"
 	"kuso/server/internal/previewdb"
 	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/audit"
@@ -204,6 +206,12 @@ func main() {
 		// resolves to the home ns, preserving existing single-tenant
 		// behaviour without per-call overhead.
 		kubeClient = kc
+		// Runtime gauges for /metrics: DB pool in-use/idle/open and
+		// build queue depth + running pods. Pool stats are free
+		// (sql.DB.Stats); build stats come from a cluster-wide list
+		// cached for 10s so each Prometheus scrape doesn't issue two
+		// list calls. Idempotent — registers once per process.
+		metrics.Register(database.DB, kc, 10*time.Second)
 		// CRD preflight: if any of the six kuso CRDs is missing the
 		// helm-operator silently no-ops on every reconcile and
 		// rendered Ingress / Service / StatefulSet never appears.
@@ -240,7 +248,19 @@ func main() {
 		// MaxConcurrentBuilds is the static fallback. The live value
 		// comes from the Settings table (admin-tunable via /settings)
 		// — see buildsSettingsAdapter below.
-		buildSvc.MaxConcurrentBuilds = envInt("KUSO_BUILD_MAX_CONCURRENT", 2)
+		// Adaptive default: when the operator hasn't pinned the env
+		// var, size the static fallback to the cluster's allocatable
+		// CPU. The live value still wins (Settings.GetBuildSettings),
+		// so an admin who tuned /settings stays tuned; this only
+		// changes what a fresh install sees on first boot.
+		//
+		// Heuristic: max(2, allocatableCPU / 4). Each kaniko build
+		// requests 200m + bursts to 1500m (operator/helm-charts/
+		// kusobuild/values.yaml). Dividing allocatable by 4 leaves
+		// half the cluster for user workloads even if every build
+		// hits its limit.
+		defaultBuildCap := adaptiveBuildCap(ctx, kc, logger)
+		buildSvc.MaxConcurrentBuilds = envInt("KUSO_BUILD_MAX_CONCURRENT", defaultBuildCap)
 		buildSvc.AdmitTimeout = time.Duration(envInt("KUSO_BUILD_ADMIT_TIMEOUT_SECONDS", 60)) * time.Second
 		buildSvc.Settings = buildsSettingsAdapter{db: database}
 		// Notifier on Service emits build.superseded when a new build
@@ -274,95 +294,85 @@ func main() {
 		// validation rules stay in one place.
 		specRecon = &spec.Reconciler{Projects: projSvc, Addons: addonSvc}
 
-		// Self-updater. Polls GH releases every 6h, kicks a kube
-		// Job when /api/system/update is hit. Disabled with
-		// KUSO_UPDATER_DISABLED=true on air-gapped clusters that
-		// don't want kuso reaching api.github.com.
+		// Per-replica workers. These are safe to run on every pod —
+		// they don't mutate cluster state or write the same DB rows
+		// from multiple replicas.
+		//
+		// - The updater service still polls GH releases on every pod
+		//   so /api/system/version returns fresh data from any
+		//   replica, but the actual rollout (StartUpdate) creates
+		//   a kube Job and is idempotent enough that a duplicate
+		//   request from a second pod no-ops.
+		// - cfgSvc (Kuso CR cache) is per-pod state.
 		if os.Getenv("KUSO_UPDATER_DISABLED") != "true" {
 			updaterSvc = updater.New(database, kc, *namespace, version.Version(), logger)
 			go updaterSvc.Run(ctx)
 		}
-
-		// Health watcher: polls pod + node state and fires notify
-		// events on bad transitions (CrashLoopBackOff, image pull
-		// errors, node disk pressure). Disable with
-		// KUSO_HEALTH_DISABLED=true on a noisy cluster.
-		if os.Getenv("KUSO_HEALTH_DISABLED") != "true" {
-			go health.New(kc, *namespace, notifyDisp, logger).Run(ctx)
-		}
-		addonSvc.NSResolver = nsResolver
-		// Reload the Kuso CR cache every minute so the feature-flag
-		// surface stays fresh without forcing every request to hit the
-		// API server.
 		go cfgSvc.Run(ctx, 60*time.Second, func(err error) {
 			logger.Warn("config: reload", "err", err)
 		})
-		// Background poller: stamps KusoBuild status from kaniko Job
-		// outcomes and promotes the image tag onto the production env.
-		// Disabled when KUSO_BUILD_POLLER_DISABLED=true (matches TS env).
-		if os.Getenv("KUSO_BUILD_POLLER_DISABLED") != "true" {
-			// SINGLETON ASSUMPTION: the build poller's tick (status
-			// polling + dispatchQueued + log archive) is not safe for
-			// concurrent execution across multiple kuso-server pods.
-			// The deploy/server-go.yaml uses replicas=1 + Recreate
-			// strategy (forced by the RWO SQLite PVC), so today this
-			// is fine. If we ever support HA — by moving SQLite to
-			// Postgres + bumping replicas — this loop must be wrapped
-			// in a kube leader election (k8s.io/client-go/tools/
-			// leaderelection.LeaderElect) or two replicas will
-			// double-promote queued builds, double-emit notify
-			// events, and double-archive logs.
-			go (&builds.Poller{
-				Svc:        buildSvc,
-				Interval:   30 * time.Second,
-				Logger:     logger,
-				Notifier:   notifyAdapter{notifyDisp},
-				LogArchive: database,
-			}).Run(ctx)
+		addonSvc.NSResolver = nsResolver
+
+		// Singleton workers. The build poller, daily cleanup, finalizer
+		// sweep, preview cleanup, error scanner, health watcher, and
+		// platform-harden one-shot all mutate cluster state in ways
+		// that aren't safe to run from multiple replicas (double-
+		// promote builds, double-emit notify events, double-archive
+		// logs, race on cleanup deletes). They live behind a kube
+		// Lease lock so exactly one pod runs them at a time. Set
+		// KUSO_DISABLE_LEADER_ELECTION=true on single-replica
+		// installs that want the legacy "always run" behaviour;
+		// the new readyz probe still serves traffic during election
+		// contests so requests aren't blocked on lease acquisition.
+		startSingletons := func(workCtx context.Context) {
+			if os.Getenv("KUSO_BUILD_POLLER_DISABLED") != "true" {
+				go (&builds.Poller{
+					Svc:        buildSvc,
+					Interval:   30 * time.Second,
+					Logger:     logger,
+					Notifier:   notifyAdapter{notifyDisp},
+					LogArchive: database,
+				}).Run(workCtx)
+			}
+			if os.Getenv("KUSO_HEALTH_DISABLED") != "true" {
+				go health.New(kc, *namespace, notifyDisp, logger).Run(workCtx)
+			}
+			if os.Getenv("KUSO_PREVIEW_CLEANUP_DISABLED") != "true" {
+				go runPreviewCleanup(workCtx, projSvc, logger)
+			}
+			if os.Getenv("KUSO_FINALIZER_SWEEP_DISABLED") != "true" {
+				go runFinalizerSweep(workCtx, kc, *namespace, logger)
+			}
+			if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
+				go runDailyCleanup(workCtx, database, logDB, kc, buildSvc, *namespace, logger)
+			}
+			if os.Getenv("KUSO_PLATFORM_HARDEN_DISABLED") != "true" {
+				go platformharden.Run(workCtx, kc, logger)
+			}
+			if os.Getenv("KUSO_ERRORSCAN_DISABLED") != "true" {
+				go (&errorscan.Scanner{
+					DB:        database,
+					Logger:    logger,
+					Interval:  30 * time.Second,
+					BatchSize: 500,
+				}).Run(workCtx)
+			}
 		}
-		// Preview-cleanup: every 5 minutes delete preview envs whose
-		// ttl.expiresAt has passed. Disabled by
-		// KUSO_PREVIEW_CLEANUP_DISABLED=true.
-		if os.Getenv("KUSO_PREVIEW_CLEANUP_DISABLED") != "true" {
-			go runPreviewCleanup(ctx, projSvc, logger)
-		}
-		// Helm-finalizer sweep (§6.5): every 5 minutes, strip the
-		// uninstall-helm-release finalizer from any KusoEnvironment /
-		// KusoService / KusoAddon stuck with a deletionTimestamp but
-		// no helm release Secret. Without this, a CR whose chart
-		// failed to render is wedged forever and blocks subsequent
-		// applies on the same name.
-		if os.Getenv("KUSO_FINALIZER_SWEEP_DISABLED") != "true" {
-			go runFinalizerSweep(ctx, kc, *namespace, logger)
-		}
-		// Daily SQLite cleanup — prunes NotificationEvent (main DB)
-		// and LogLine (log DB) rows older than retention. Skipped by
-		// KUSO_DAILY_CLEANUP_DISABLED=true. Pass both DBs through;
-		// nil log DB just skips the log prune step.
-		if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
-			go runDailyCleanup(ctx, database, logDB, kc, buildSvc, *namespace, logger)
-		}
-		// Platform hardening — once at boot, idempotent. Patches
-		// traefik / cert-manager / kuso-operator deployments to
-		// match kuso-server's tolerant probes + Burstable QoS so a
-		// build-time CPU spike doesn't murder traefik and turn the
-		// dashboard into ERR_CONNECTION_REFUSED. Skipped by
-		// KUSO_PLATFORM_HARDEN_DISABLED=true on installs that
-		// custom-tune their own platform pods.
-		if os.Getenv("KUSO_PLATFORM_HARDEN_DISABLED") != "true" {
-			go platformharden.Run(ctx, kc, logger)
-		}
-		// Sentry-style error-event scanner. Walks LogLine for error
-		// patterns, writes one ErrorEvent per match, dedups by
-		// fingerprint at query time. Disabled by
-		// KUSO_ERRORSCAN_DISABLED=true.
-		if os.Getenv("KUSO_ERRORSCAN_DISABLED") != "true" {
-			go (&errorscan.Scanner{
-				DB:        database,
+		if os.Getenv("KUSO_DISABLE_LEADER_ELECTION") == "true" {
+			// Legacy single-replica path. Skip the lease lock and start
+			// every singleton against the parent ctx. Recommended only
+			// for replicas=1 deploys that don't want a Lease object
+			// in their kube namespace.
+			startSingletons(ctx)
+		} else {
+			go leader.RunWhenLeader(ctx, leader.Config{
+				Namespace: *namespace,
+				LockName:  "kuso-server-singletons",
+				Identity:  os.Getenv("HOSTNAME"),
+				Client:    kc.Clientset,
 				Logger:    logger,
-				Interval:  30 * time.Second,
-				BatchSize: 500,
-			}).Run(ctx)
+				Run:       startSingletons,
+			})
 		}
 
 		// GitHub App is opt-in; if env vars are missing the webhook +
@@ -457,35 +467,42 @@ func main() {
 		}
 	}()
 
-	// Background: sample per-node CPU/RAM/disk every 30 min and
-	// persist to SQLite for the /settings/nodes drill-down. Gated on
-	// kube being wired (in-cluster only); local dev runs without it.
+	// nodemetrics, nodewatch, logship, and the alerts engine are all
+	// singletons — they sample/scan cluster-wide state and write rows
+	// keyed by (nodeName, ts). Two replicas would emit duplicate rows
+	// (and double-fire alerts). They live under the leader lease too.
+	// Wired here rather than in the earlier startSingletons closure
+	// because they need kubeClient, which is initialised in a sibling
+	// branch above.
 	if kubeClient != nil {
-		sampler := &nodemetrics.Sampler{DB: database, Kube: kubeClient, Logger: logger.With("component", "nodemetrics")}
-		go sampler.Run(ctx)
-		// Watch for NotReady nodes; auto-cordon + fire notify event
-		// when a node has been NotReady past the threshold.
-		watcher := &nodewatch.Watcher{
-			Kube:   kubeClient,
-			Notify: notifyDisp,
-			Logger: logger.With("component", "nodewatch"),
+		startKubeSingletons := func(workCtx context.Context) {
+			sampler := &nodemetrics.Sampler{DB: database, Kube: kubeClient, Logger: logger.With("component", "nodemetrics")}
+			go sampler.Run(workCtx)
+			watcher := &nodewatch.Watcher{
+				Kube:   kubeClient,
+				Notify: notifyDisp,
+				Logger: logger.With("component", "nodewatch"),
+			}
+			go watcher.Run(workCtx)
+			if os.Getenv("KUSO_LOGSHIP_DISABLED") != "true" && logDB != nil {
+				ls := logship.New(logDB, kubeClient, *namespace, logger.With("component", "logship"))
+				go ls.Run(workCtx)
+			}
+			ae := alerts.New(database, logDB, kubeClient, notifyDisp, logger.With("component", "alerts"))
+			go ae.Run(workCtx)
 		}
-		go watcher.Run(ctx)
-		// Log shipper: streams every pod's logs into the dedicated
-		// logs.db SQLite file for full-text search. Disable with
-		// KUSO_LOGSHIP_DISABLED=true on noisy clusters where the
-		// log volume swamps SQLite. Skip silently if the log DB
-		// failed to open (logged at startup).
-		if os.Getenv("KUSO_LOGSHIP_DISABLED") != "true" && logDB != nil {
-			ls := logship.New(logDB, kubeClient, *namespace, logger.With("component", "logship"))
-			go ls.Run(ctx)
+		if os.Getenv("KUSO_DISABLE_LEADER_ELECTION") == "true" {
+			startKubeSingletons(ctx)
+		} else {
+			go leader.RunWhenLeader(ctx, leader.Config{
+				Namespace: *namespace,
+				LockName:  "kuso-server-cluster-singletons",
+				Identity:  os.Getenv("HOSTNAME"),
+				Client:    kubeClient.Clientset,
+				Logger:    logger,
+				Run:       startKubeSingletons,
+			})
 		}
-		// Alert engine: evaluates AlertRule rows on a 1-min ticker
-		// and fans out via the existing notify dispatcher. Reads
-		// node metrics from the main DB and log matches from the
-		// dedicated log DB; nil log DB just skips log-match rules.
-		ae := alerts.New(database, logDB, kubeClient, notifyDisp, logger.With("component", "alerts"))
-		go ae.Run(ctx)
 	}
 
 	<-sigCtx.Done()
@@ -602,6 +619,15 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 		} else if n > 0 {
 			logger.Info("daily-cleanup oauth-state pruned", "rows", n)
 		}
+		// Bootstrap tokens: drop rows whose expiresAt is more than
+		// 7 days behind us. Consumed/revoked rows stay in the audit
+		// trail until then. This ALSO clears the hashed-jti rows so
+		// even a long-term DB leak doesn't ship live join handles.
+		if n, err := database.PruneNodeBootstrapTokens(c, now.AddDate(0, 0, -7)); err != nil {
+			logger.Warn("daily-cleanup bootstrap-tokens", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup bootstrap-tokens pruned", "rows", n)
+		}
 		// Error events: same retention as raw logs (default 7 days).
 		// Older error groups are no longer actionable; the dashboard's
 		// default lookback is 24h anyway.
@@ -673,6 +699,74 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 
 // envInt reads an env var as int with a fallback. Used for tunables
 // that are days/hours/seconds with a sane default.
+// adaptiveBuildCap returns a sensible default for the cluster-wide
+// concurrent-build cap based on the sum of allocatable CPU across
+// Ready nodes. Heuristic: max(2, totalAllocatableMillicores / 4000).
+//
+//	2-core box  →  cap = 2  (matches the legacy default)
+//	4-core box  →  cap = 2
+//	8-core box  →  cap = 2  (still 2 — buildpacks can use the bigger box per build)
+//	16-core box →  cap = 4
+//	32-core box →  cap = 8
+//	3 × 8-core  →  cap = 6
+//
+// We divide by 4 (not 1 or 2) because a single kaniko build bursts
+// to 1500m and we want the cluster to stay responsive for user
+// workloads even when every build is at its limit. Operators who
+// want more aggressive parallelism set KUSO_BUILD_MAX_CONCURRENT or
+// raise build.maxConcurrent in /settings.
+//
+// Best-effort: kube list errors → fall back to 2 (the historical
+// hard-coded default). Logs the chosen value so operators can audit.
+func adaptiveBuildCap(ctx context.Context, kc *kube.Client, logger *slog.Logger) int {
+	const safeDefault = 2
+	if kc == nil || kc.Clientset == nil {
+		return safeDefault
+	}
+	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	nodes, err := kc.Clientset.CoreV1().Nodes().List(lctx, metav1.ListOptions{})
+	if err != nil {
+		logger.Warn("adaptive build cap: list nodes", "err", err, "fallback", safeDefault)
+		return safeDefault
+	}
+	totalMilli := int64(0)
+	readyCount := 0
+	for i := range nodes.Items {
+		n := &nodes.Items[i]
+		// Skip NotReady nodes — counting them inflates the cap when
+		// the cluster is degraded, which is exactly when we want to
+		// be conservative.
+		ready := false
+		for _, c := range n.Status.Conditions {
+			if c.Type == "Ready" && string(c.Status) == "True" {
+				ready = true
+				break
+			}
+		}
+		if !ready {
+			continue
+		}
+		readyCount++
+		if cpu, ok := n.Status.Allocatable["cpu"]; ok {
+			totalMilli += cpu.MilliValue()
+		}
+	}
+	if readyCount == 0 || totalMilli == 0 {
+		logger.Warn("adaptive build cap: no Ready nodes / no CPU info", "fallback", safeDefault)
+		return safeDefault
+	}
+	chosen := int(totalMilli / 4000)
+	if chosen < safeDefault {
+		chosen = safeDefault
+	}
+	logger.Info("adaptive build cap",
+		"readyNodes", readyCount,
+		"allocatableMilliCPU", totalMilli,
+		"cap", chosen)
+	return chosen
+}
+
 func envInt(key string, fallback int) int {
 	v := os.Getenv(key)
 	if v == "" {
@@ -816,10 +910,12 @@ func (a buildsSettingsAdapter) GetBuildSettings(ctx context.Context) (builds.Bui
 		return builds.BuildSettingsView{}, err
 	}
 	return builds.BuildSettingsView{
-		MaxConcurrent: v.MaxConcurrent,
-		MemoryLimit:   v.MemoryLimit,
-		MemoryRequest: v.MemoryRequest,
-		CPULimit:      v.CPULimit,
-		CPURequest:    v.CPURequest,
+		MaxConcurrent:      v.MaxConcurrent,
+		MemoryLimit:        v.MemoryLimit,
+		MemoryRequest:      v.MemoryRequest,
+		CPULimit:           v.CPULimit,
+		CPURequest:         v.CPURequest,
+		RegistryAuthSecret: v.RegistryAuthSecret,
+		RegistryHost:       v.RegistryHost,
 	}, nil
 }

@@ -12,7 +12,12 @@ that secret doesn't exist the CronJob still installs but every run
 fails — operators see the failure in `kubectl get jobs` and in
 notify (the Job-failed alert from the health watcher).
 */ -}}
-{{- if and .Values.backup.schedule (eq .Values.kind "postgres") (not .Values.external) (not .Values.useInstanceAddon) }}
+{{- /* Suppressed in HA mode — CNPG ships its own barman-cloud backup
+       scheduling and our pg_dump cronjob would conflict with the
+       managed backups. Configure CNPG-native backups via
+       spec.backup.barmanObjectStore on the Cluster CR (out-of-band
+       for now; native plumbing in a future kuso version). */}}
+{{- if and .Values.backup.schedule (eq .Values.kind "postgres") (not .Values.ha) (not .Values.external) (not .Values.useInstanceAddon) }}
 {{- /*
   Note (v0.7.x bugfix): POSTGRES_HOST used to be "<release>-postgresql"
   but the actual Service is just <release> (see postgres.yaml service

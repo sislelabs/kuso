@@ -128,6 +128,15 @@ type ServiceSleep struct {
 }
 
 // SetEnvRequest is the body of POST /api/projects/:p/services/:s/env.
+//
+// AllowPending lets the caller persist `${{ addon.KEY }}` references
+// to addons that don't exist yet — useful when the user is wiring
+// up a service while the addon is still mid-provisioning. The pod
+// will sit in CreateContainerConfigError until the addon's conn
+// Secret materialises, then start cleanly. Without AllowPending,
+// strict validation rejects the unknown ref so a typo can't reach
+// the cluster.
 type SetEnvRequest struct {
-	EnvVars []EnvVar `json:"envVars"`
+	EnvVars      []EnvVar `json:"envVars"`
+	AllowPending bool     `json:"allowPending,omitempty"`
 }

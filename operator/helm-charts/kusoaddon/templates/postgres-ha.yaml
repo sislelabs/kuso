@@ -1,0 +1,152 @@
+{{- /*
+HA Postgres via CloudNativePG. Rendered when:
+  - kind = postgres
+  - ha    = true
+  - external/useInstanceAddon are both unset (those paths bypass
+    provisioning entirely)
+
+CNPG must be installed cluster-wide for this to work — the operator
+ships its own CRDs and reconciles `postgresql.cnpg.io/v1/Cluster`
+into a 3-node Postgres with synchronous replication, automated
+failover, and pgbouncer-style read pools. We don't manage the CNPG
+operator itself; the kuso install docs flag it as a one-shot
+prerequisite for HA addons.
+
+The `<name>-conn` Secret keeps the SAME shape as the single-node
+chart so consumer KusoEnvironments don't need a code change to
+follow an addon from non-HA → HA. We do this by:
+
+  1. Creating `<name>-app` upfront with a known password (lookup-
+     reused on reconcile, same drift-guard trick as the bare chart).
+  2. Pointing CNPG at that Secret via spec.bootstrap.initdb.secret.
+  3. Writing `<name>-conn` ourselves, identical key set, hostname
+     pointed at CNPG's `<cluster-name>-rw` Service which fronts the
+     primary and follows failovers automatically.
+
+Limitations the user should know about:
+  - First boot creates 3 pods + 3 PVCs (one per replica). On a
+    single-node cluster CNPG will refuse with "anti-affinity";
+    set spec.affinity.enablePodAntiAffinity=false in the chart
+    override to allow co-located replicas (ack the SPOF).
+  - Failover on primary loss takes ~30s. Apps that don't reconnect
+    cleanly should pin a connection-retry policy.
+  - Backups are CNPG's barman backup, not our pg_dump cronjob.
+    The legacy backup-cronjob.yaml is suppressed in HA mode.
+*/}}
+{{- if and (eq .Values.kind "postgres") .Values.ha (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- $version := .Values.version | default "16" -}}
+{{- $database := .Values.database | default .Values.project -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{- $secretName := include "kusoaddon.connSecretName" . -}}
+{{- $appSecret := printf "%s-app" $name -}}
+
+{{- /* Password reuse — same lookup-or-generate dance as the
+       single-node chart. The CNPG Cluster reads from $appSecret;
+       we own that Secret so we control rotation lifecycle. */ -}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $appSecret -}}
+{{- $existingPw := "" -}}
+{{- if and $existing $existing.data (index $existing.data "password") -}}
+  {{- $existingPw = (index $existing.data "password" | b64dec) -}}
+{{- end -}}
+{{- $providedPw := "" -}}
+{{- if .Values.passwordSecret -}}
+  {{- $key := default "password" .Values.passwordSecret.key -}}
+  {{- $src := lookup "v1" "Secret" .Release.Namespace .Values.passwordSecret.name -}}
+  {{- if and $src $src.data (index $src.data $key) -}}
+    {{- $providedPw = (index $src.data $key | b64dec) -}}
+  {{- end -}}
+{{- end -}}
+{{- $existingCluster := lookup "postgresql.cnpg.io/v1" "Cluster" .Release.Namespace $name -}}
+{{- if and $existingCluster (not $existingPw) (not $providedPw) (not .Values.password) -}}
+  {{- fail (printf "kusoaddon %s/%s: HA Cluster exists but app Secret is missing — refusing to generate a fresh password. Run `kuso project addon repair-password` to recover." .Release.Namespace $name) -}}
+{{- end -}}
+{{- $password := $providedPw | default .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+
+{{- /* CNPG-format app Secret. Keys: username, password, database,
+       host, port, uri — the shape CNPG expects from a "basicAuth"
+       style userSecret. CNPG won't overwrite our values; we own
+       the Secret. */ -}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $appSecret }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: kubernetes.io/basic-auth
+stringData:
+  username: kuso
+  password: {{ $password | quote }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  imageName: "ghcr.io/cloudnative-pg/postgresql:{{ $version }}"
+  instances: 3
+  primaryUpdateStrategy: unsupervised
+  storage:
+    size: {{ include "kusoaddon.storageSize" . }}
+  bootstrap:
+    initdb:
+      database: {{ $database | quote }}
+      owner: kuso
+      secret:
+        name: {{ $appSecret }}
+  {{- /* Resource shape mirrors the single-node chart so the user's
+         spec.size selection is honoured for both modes. */}}
+  resources:
+    {{- toYaml (default dict .Values.resources) | nindent 4 }}
+  affinity:
+    {{- /* Pod anti-affinity by default so the 3 replicas land on
+           different nodes. Override with .Values.singleNode=true
+           when the cluster only has one node and the user
+           accepts the SPOF for dev. */}}
+    enablePodAntiAffinity: {{ ne (default false .Values.singleNode) true }}
+    topologyKey: kubernetes.io/hostname
+  {{- /* Placement = nodeSelector. Same shape the bare chart uses. */}}
+  {{- with (include "kusoaddon.placement" . | trim) }}
+  # Note: CNPG accepts spec.affinity.nodeSelector OR spec.nodeSelector;
+  # we render via the helper so spec.placement.{labels,nodes} maps the
+  # same way it does for the single-node chart.
+  nodeSelector:
+    {{- $sel := fromYaml (include "kusoaddon.placement" .) -}}
+    {{- if $sel }}
+    {{- with $sel.nodeSelector }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+---
+{{- /* Conn Secret: same key set as the single-node chart so consumer
+       envs round-trip unchanged. POSTGRES_HOST points at the
+       <name>-rw Service CNPG creates — that Service follows the
+       primary across failovers. */}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+  annotations:
+    # Same retain-on-uninstall trick as the single-node chart's PVC.
+    "helm.sh/resource-policy": keep
+type: Opaque
+stringData:
+  POSTGRES_HOST: {{ printf "%s-rw" $name | quote }}
+  POSTGRES_PORT: "5432"
+  POSTGRES_USER: kuso
+  POSTGRES_PASSWORD: {{ $password | quote }}
+  POSTGRES_DB: {{ $database | quote }}
+  # CNPG serves TLS by default but we connect via the in-cluster
+  # Service ClusterIP, so plaintext is fine and avoids cert-handshake
+  # latency on every connect. Apps that want TLS-in-cluster override
+  # DATABASE_URL with sslmode=require.
+  DATABASE_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}-rw:5432/{{ $database }}?sslmode=disable"
+  # Read-only fanout. Apps that want to send read traffic to a
+  # replica wire READONLY_DATABASE_URL into their pool. Optional —
+  # apps that don't care just use DATABASE_URL.
+  READONLY_DATABASE_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}-ro:5432/{{ $database }}?sslmode=disable"
+{{- end }}

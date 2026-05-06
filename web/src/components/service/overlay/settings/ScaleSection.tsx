@@ -6,14 +6,16 @@ import { Section, Row, type SectionProps } from "./_primitives";
 
 export function ScaleSection({ state, setState }: SectionProps) {
   const min = Number(state.scaleMin);
+  const max = Number(state.scaleMax);
   const sleeps = min === 0;
+  const autoscales = max > Math.max(min, 1);
+  const hint = sleeps
+    ? "sleeps when idle"
+    : autoscales
+      ? `autoscales ${min} → ${max} on CPU`
+      : `keeps ${min} pod${min === 1 ? "" : "s"} warm`;
   return (
-    <Section
-      id="scale"
-      title="Scale"
-      icon={Layers3}
-      hint={sleeps ? "sleeps when idle" : `keeps ${min} pod${min === 1 ? "" : "s"} warm`}
-    >
+    <Section id="scale" title="Scale" icon={Layers3} hint={hint}>
       <Row
         label="min replicas"
         hint="0 = sleep when idle"
@@ -29,7 +31,7 @@ export function ScaleSection({ state, setState }: SectionProps) {
       />
       <Row
         label="max replicas"
-        hint="autoscale ceiling"
+        hint={autoscales ? "HPA ceiling — set > min to autoscale" : "set this above min to enable autoscaling"}
         control={
           <Input
             type="number"

@@ -1,0 +1,172 @@
+---
+# Off-cluster backup of kuso-postgres (the control-plane DB).
+#
+# Why this is critical: the in-cluster kuso-postgres StatefulSet is the
+# single source of truth for users, audit logs, notification configs,
+# build metadata, the github-app installation map, addon connection
+# secrets, and node-bootstrap tokens. Lose its PVC and every project
+# in the cluster orphans. Addon backups (handlers/backups.go) only
+# cover user databases — the kuso DB itself was never being backed up
+# until this CronJob.
+#
+# Strategy: pg_dump every hour to S3-compatible object storage. Keeps
+# 24 hourly + 7 daily + 12 monthly snapshots. The schedule is opt-in
+# via the kuso-postgres-backup Secret — operators who haven't set up
+# S3 see the CronJob suspend itself on first run rather than failing
+# loudly.
+#
+# Restore is documented in docs/runbooks/restore-postgres.md and is
+# manual: pause kuso-server, exec into postgres pod, psql < dump.sql.
+# A future v0.10 will add a /api/admin/restore endpoint.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kuso-postgres-backup
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-postgres-backup
+spec:
+  # Hourly. Cheap (a single pg_dump of the kuso DB is < 50 MB
+  # compressed even at 10k services) and gives an RPO of an hour.
+  schedule: "0 * * * *"
+  # Don't pile up Jobs if a previous one is still running (e.g. slow
+  # S3 upload during a network blip).
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 600
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      ttlSecondsAfterFinished: 3600
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: kuso-postgres-backup
+        spec:
+          restartPolicy: OnFailure
+          # Pin to the same node as Postgres — the dump streams over
+          # localhost between containers but kube-scheduling still
+          # decides the node, so this keeps egress local on a single-
+          # box install.
+          nodeSelector:
+            node-role.kubernetes.io/control-plane: "true"
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+          containers:
+            - name: pg-backup
+              # postgres image carries pg_dump; awscli adds aws s3 cp.
+              # Pinned to a Debian-based postgres for apt access.
+              image: postgres:16-bookworm
+              command: ["/bin/bash", "-eu", "-c"]
+              args:
+                - |
+                  apt-get update -qq
+                  apt-get install -qq -y --no-install-recommends curl unzip ca-certificates
+                  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
+                  unzip -q /tmp/awscliv2.zip -d /tmp
+                  /tmp/aws/install -i /usr/local/aws-cli -b /usr/local/bin > /dev/null
+
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  HOUR=$(date -u +%H)
+                  DOW=$(date -u +%u)
+                  DOM=$(date -u +%d)
+                  DEST_PREFIX="${KUSO_BACKUP_PREFIX:-kuso-postgres}"
+                  DUMP="/tmp/kuso-${TS}.sql.gz"
+
+                  echo "dumping kuso DB → $DUMP"
+                  pg_dump --format=plain --no-owner --no-privileges \
+                    --quote-all-identifiers \
+                    "$KUSO_DB_DSN" | gzip -9 > "$DUMP"
+
+                  SIZE=$(stat -c%s "$DUMP")
+                  echo "dump size: $SIZE bytes"
+
+                  # Hourly retention: 24 slots, keyed by UTC hour.
+                  HOURLY="${DEST_PREFIX}/hourly/${HOUR}.sql.gz"
+                  aws s3 cp "$DUMP" "s3://${KUSO_BACKUP_BUCKET}/${HOURLY}" \
+                    --endpoint-url "$KUSO_BACKUP_ENDPOINT" \
+                    --metadata "kuso-ts=$TS,kuso-size=$SIZE"
+
+                  # Daily retention: 7 slots, keyed by UTC weekday.
+                  if [ "$HOUR" = "00" ]; then
+                    DAILY="${DEST_PREFIX}/daily/${DOW}.sql.gz"
+                    aws s3 cp "$DUMP" "s3://${KUSO_BACKUP_BUCKET}/${DAILY}" \
+                      --endpoint-url "$KUSO_BACKUP_ENDPOINT" \
+                      --metadata "kuso-ts=$TS,kuso-size=$SIZE"
+                  fi
+
+                  # Monthly retention: 12 slots, keyed by day-of-month.
+                  if [ "$HOUR" = "00" ] && [ "$DOM" = "01" ]; then
+                    MONTH=$(date -u +%m)
+                    MONTHLY="${DEST_PREFIX}/monthly/${MONTH}.sql.gz"
+                    aws s3 cp "$DUMP" "s3://${KUSO_BACKUP_BUCKET}/${MONTHLY}" \
+                      --endpoint-url "$KUSO_BACKUP_ENDPOINT" \
+                      --metadata "kuso-ts=$TS,kuso-size=$SIZE"
+                  fi
+
+                  echo "backup complete"
+              env:
+                # DSN of the kuso DB — same Secret kuso-server consumes,
+                # so credential rotation flows through automatically.
+                - name: KUSO_DB_DSN
+                  valueFrom:
+                    secretKeyRef:
+                      name: kuso-postgres-conn
+                      key: dsn
+                # S3-compatible target. The kuso-postgres-backup Secret
+                # is operator-supplied; without it the CronJob aborts
+                # on first run. Set up via:
+                #
+                #   kubectl create secret generic kuso-postgres-backup \
+                #     -n kuso \
+                #     --from-literal=AWS_ACCESS_KEY_ID=... \
+                #     --from-literal=AWS_SECRET_ACCESS_KEY=... \
+                #     --from-literal=KUSO_BACKUP_BUCKET=kuso-backups \
+                #     --from-literal=KUSO_BACKUP_ENDPOINT=https://s3.eu-central-1.amazonaws.com \
+                #     --from-literal=KUSO_BACKUP_PREFIX=hetzner-prod
+                #
+                # Works with AWS S3, Backblaze B2, Cloudflare R2,
+                # Hetzner Object Storage, MinIO — anything with the
+                # AWS S3 API.
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef: { name: kuso-postgres-backup, key: AWS_ACCESS_KEY_ID }
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef: { name: kuso-postgres-backup, key: AWS_SECRET_ACCESS_KEY }
+                - name: KUSO_BACKUP_BUCKET
+                  valueFrom:
+                    secretKeyRef: { name: kuso-postgres-backup, key: KUSO_BACKUP_BUCKET }
+                - name: KUSO_BACKUP_ENDPOINT
+                  valueFrom:
+                    secretKeyRef: { name: kuso-postgres-backup, key: KUSO_BACKUP_ENDPOINT }
+                - name: KUSO_BACKUP_PREFIX
+                  valueFrom:
+                    secretKeyRef:
+                      name: kuso-postgres-backup
+                      key: KUSO_BACKUP_PREFIX
+                      optional: true
+                - name: AWS_DEFAULT_REGION
+                  valueFrom:
+                    secretKeyRef:
+                      name: kuso-postgres-backup
+                      key: AWS_DEFAULT_REGION
+                      optional: true
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 999
+                runAsGroup: 999
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: false
+                capabilities:
+                  drop: [ALL]

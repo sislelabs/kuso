@@ -1,4 +1,9 @@
-{{- if and (eq .Values.kind "postgres") (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- /* Single-node Postgres. Rendered only when ha=false. The HA branch
+       lives in postgres-ha.yaml and uses CloudNativePG to render a
+       3-replica Cluster with synchronous replication + automated
+       failover. Both branches emit the same `<name>-conn` Secret
+       shape so consumer apps round-trip unchanged. */}}
+{{- if and (eq .Values.kind "postgres") (not .Values.ha) (not .Values.external) (not .Values.useInstanceAddon) -}}
 {{- $version := .Values.version | default "16" -}}
 {{- $database := .Values.database | default .Values.project -}}
 {{- $name := include "kusoaddon.fullname" . -}}

@@ -1,0 +1,139 @@
+{{- if .Values.networkPolicy.enabled }}
+# Default-deny ingress and egress for every pod in the project
+# namespace. The companion allow-policies below open just enough holes
+# to keep the platform working: DNS, the in-cluster image registry,
+# sibling pods (same project), and ingress from the kuso ingress
+# controller.
+#
+# Pod-level overrides: a user can label their pod
+# `kuso.sislelabs.com/network-egress-public=true` to allow internet
+# egress (covered by the allow-public-egress rule below). Without that
+# label, pods are namespace-internal only — which is what most user
+# workloads (DB-backed APIs) actually want.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-default-deny
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+# DNS to kube-dns / coredns. Without this every pod's first DNS lookup
+# hangs and the workload looks broken. We don't filter destination
+# pods — DNS is a system-level service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-dns
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+---
+# Sibling-pod traffic. Pods within the same project can talk to each
+# other freely on any port (web → addon DB, web → worker, etc).
+# Cross-project traffic is denied by the default-deny above.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-intra-project
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector: {}
+  egress:
+    - to:
+        - podSelector: {}
+---
+# Ingress from the kuso platform namespace — kuso-server streams logs,
+# performs exec, scrapes metrics, and traefik forwards user HTTP
+# traffic. Without this rule the dashboard's "Logs" tab returns 0 lines
+# the moment default-deny is enabled.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-platform
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
+---
+# Egress to the in-cluster image registry. The build pods need this
+# to push, the runtime pods need it to pull (when imagePullPolicy is
+# Always or the kubelet's cache misses). Selecting by namespace +
+# pod label keeps the rule narrow.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-registry-egress
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kuso-registry
+      ports:
+        - port: 5000
+          protocol: TCP
+---
+# Public internet egress for opted-in pods. The block-list excludes
+# RFC1918 private ranges + the AWS/Azure/GCP cloud-metadata service
+# (169.254.169.254) so a workload pod can reach github.com and the
+# public NPM registry without being able to reach the kube-apiserver
+# or sibling tenants over IP. Pods opt in via:
+#   metadata.labels: kuso.sislelabs.com/network-egress-public: "true"
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-public-egress
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      kuso.sislelabs.com/network-egress-public: "true"
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8
+              - 172.16.0.0/12
+              - 192.168.0.0/16
+              - 169.254.0.0/16   # link-local + cloud metadata
+              - 127.0.0.0/8
+              - 100.64.0.0/10    # CGNAT / k3s pod CIDR on some installs
+              {{- range .Values.networkPolicy.extraBlockCIDRs }}
+              - {{ . | quote }}
+              {{- end }}
+{{- end }}

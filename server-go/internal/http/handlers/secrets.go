@@ -4,20 +4,27 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/db"
 	"kuso/server/internal/secrets"
 )
 
 // SecretsHandler exposes per-service secret routes.
+//
+// Mutations (Set / Unset) audit-log the *key* but never the value.
+// Reads (List) are not logged — they're high-frequency and only
+// return key names, which the writer already saw.
 type SecretsHandler struct {
 	Svc    *secrets.Service
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -77,9 +84,22 @@ func (h *SecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
 		return
 	}
-	if err := h.Svc.SetKey(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req.Env, req.Key, req.Value); err != nil {
+	project := chi.URLParam(r, "project")
+	service := chi.URLParam(r, "service")
+	if err := h.Svc.SetKey(ctx, project, service, req.Env, req.Key, req.Value); err != nil {
 		h.fail(w, "set secret", err)
 		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "info",
+			Action:   "secret.set",
+			Pipeline: project,
+			App:      service,
+			Resource: "secret",
+			Message:  fmt.Sprintf("set key=%q env=%q (value redacted)", req.Key, req.Env),
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -90,12 +110,26 @@ func (h *SecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
 	env := r.URL.Query().Get("env")
 	ctx, cancel := secretsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	project := chi.URLParam(r, "project")
+	service := chi.URLParam(r, "service")
+	key := chi.URLParam(r, "key")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
 		return
 	}
-	if err := h.Svc.UnsetKey(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env, chi.URLParam(r, "key")); err != nil {
+	if err := h.Svc.UnsetKey(ctx, project, service, env, key); err != nil {
 		h.fail(w, "unset secret", err)
 		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "info",
+			Action:   "secret.unset",
+			Pipeline: project,
+			App:      service,
+			Resource: "secret",
+			Message:  fmt.Sprintf("unset key=%q env=%q", key, env),
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }

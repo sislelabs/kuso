@@ -78,6 +78,29 @@ image:
 # use it. When zero, the repo is assumed public and cloned anonymously.
 githubInstallationId: 0
 
+# Target image registry credentials. The server stamps these onto the
+# CR when the registry requires auth (any non-anonymous push target).
+# Both kaniko and buildpacks consume them — kaniko via /kaniko/.docker/
+# config.json (mounted from `auth.secretName`), buildpacks via the
+# CNB_REGISTRY_AUTH env (rendered inline from username/password).
+#
+# When auth.secretName is empty we assume a private in-cluster
+# registry that doesn't require auth; both runtimes still push but
+# kaniko gets --insecure (plain HTTP allowed for the in-cluster
+# registry's Service DNS only — see registry.allowInsecure below).
+auth:
+  secretName: ""   # Secret with key .dockerconfigjson (kaniko) or username+password (buildpacks)
+  registry: ""     # registry hostname for buildpacks env JSON
+
+# Registry transport. The default in-cluster kuso-registry runs plain
+# HTTP, so kaniko needs --insecure for it. External registries (GHCR,
+# Docker Hub, ECR) MUST be HTTPS — set allowInsecure=false in production
+# overrides. The server flips this based on which registry the project
+# pushes to.
+registry:
+  allowInsecure: true   # kaniko --insecure + --skip-tls-verify
+  cacheRepo: ""         # explicit cache repo override; defaults to <repository>/.cache
+
 # Resources for the kaniko Job pod. Builds are CPU-and-memory-heavy
 # (especially nixpacks: nix-env compiles glibc/gcc on cold cache,
 # AND kaniko has to tar the full /nix store at snapshot time).

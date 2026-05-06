@@ -24,9 +24,22 @@ version: ""
 # size: small | medium | large; maps to default cpu/mem/storage requests.
 size: small
 
-# ha: when true, switch to clustered chart variant where supported. v0.2.0
-# only honours this for redis (sentinel mode); other kinds ignore it.
+# ha: when true, render a clustered/replicated variant of the engine.
+#   postgres → CloudNativePG Cluster with 3 replicas, synchronous
+#              replication, automated failover, and a -rw / -ro
+#              Service pair. Requires the CNPG operator pre-installed
+#              cluster-wide (one-shot, not managed by kuso). See
+#              docs/ADDON_HA.md for the install command.
+#   redis    → sentinel mode (3-pod replicated, automatic failover)
+#   others   → ignored (single-node fallback)
 ha: false
+
+# singleNode: only honoured when ha=true on a Postgres addon. Allows
+# the 3 CNPG replicas to colocate on one kube node — accepts the
+# SPOF in exchange for HA-shaped replication on a single-node
+# cluster (useful for dev / staging). Default false: pods land on
+# different nodes via anti-affinity.
+singleNode: false
 
 # storageSize: PVC size override; defaults derived from size.
 storageSize: ""

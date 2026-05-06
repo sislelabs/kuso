@@ -43,7 +43,10 @@ context for the same cluster the kuso server is talking to.`,
 		}
 		// We piggyback on the same /pods endpoint the web UI's
 		// service detail panel uses. Returns {namespace, pods:[{name,…}]}.
-		path := fmt.Sprintf("/api/projects/%s/services/%s/pods?env=%s",
+		// reason=shell tells the server to audit-log this call —
+		// the actual kubectl exec runs locally so this is the
+		// closest hook for server-side audit of shell sessions.
+		path := fmt.Sprintf("/api/projects/%s/services/%s/pods?env=%s&reason=shell",
 			args[0], args[1], shellEnv)
 		resp, err := api.RawGet(path)
 		if err != nil {

@@ -249,11 +249,15 @@ func (d *Dispatcher) Emit(e Event) {
 	}
 	select {
 	case d.ch <- e:
+		metricsDispatched.WithLabelValues(string(e.Type)).Inc()
+		metricsQueueDepth.Set(float64(len(d.ch)))
 	default:
 		// Channel full → webhook fan-out drops this event, but the
 		// bell-icon feed has it from the persist above. Operators
 		// who care about webhook reliability should bump
-		// KUSO_NOTIFY_QUEUE_SIZE.
+		// KUSO_NOTIFY_QUEUE_SIZE and alert on
+		// rate(kuso_notify_dropped_total[5m]) > 0.
+		metricsDropped.Inc()
 		if d.logger != nil {
 			d.logger.Warn("notify: dispatch queue full, webhook fanout skipped",
 				"type", string(e.Type), "queue_cap", cap(d.ch))

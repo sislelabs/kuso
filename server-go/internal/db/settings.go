@@ -36,6 +36,13 @@ type BuildSettings struct {
 	MemoryRequest string `json:"memoryRequest"`
 	CPULimit      string `json:"cpuLimit"`
 	CPURequest    string `json:"cpuRequest"`
+	// External registry override. When RegistryAuthSecret is set, every
+	// build pushes to RegistryHost using credentials from the named
+	// Secret (must contain `.dockerconfigjson` for kaniko AND
+	// `cnb_registry_auth` for the CNB lifecycle). Empty values keep
+	// the in-cluster anonymous kuso-registry default.
+	RegistryAuthSecret string `json:"registryAuthSecret"`
+	RegistryHost       string `json:"registryHost"`
 }
 
 // DefaultBuildSettings returns the baseline values for a fresh
@@ -83,6 +90,10 @@ func (d *DB) GetBuildSettings(ctx context.Context) (BuildSettings, error) {
 			out.CPULimit = unquote(v)
 		case "build.cpuRequest":
 			out.CPURequest = unquote(v)
+		case "build.registryAuthSecret":
+			out.RegistryAuthSecret = unquote(v)
+		case "build.registryHost":
+			out.RegistryHost = unquote(v)
 		}
 	}
 	return out, rows.Err()
@@ -101,6 +112,8 @@ func (d *DB) SetBuildSettings(ctx context.Context, in BuildSettings, updatedBy s
 		{"build.memoryRequest", quote(in.MemoryRequest)},
 		{"build.cpuLimit", quote(in.CPULimit)},
 		{"build.cpuRequest", quote(in.CPURequest)},
+		{"build.registryAuthSecret", quote(in.RegistryAuthSecret)},
+		{"build.registryHost", quote(in.RegistryHost)},
 	}
 	now := time.Now().UTC()
 	for _, p := range pairs {

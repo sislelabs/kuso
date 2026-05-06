@@ -29,6 +29,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// Caps. maxTailLinesPerPod bounds the historical tail kube returns
+// for any one pod; maxAggregateTailFrames bounds the total backlog
+// across every pod in a single stream session before we drop with
+// a warning. Tuned for a 768 MiB pod and a 50-pod env: 50 × 1000 ×
+// ~4 KB ≈ 200 MB worst-case, which fits even with the sink stalled.
+const (
+	maxTailLinesPerPod     = 1000
+	maxAggregateTailFrames = 25000
+)
+
 // Frame is the JSON-serialised envelope written to the WS connection.
 type Frame struct {
 	Type    string `json:"type"`
@@ -55,12 +65,21 @@ type Sink interface {
 // follow=true uses kube's Follow streaming; tailLines pre-loads the
 // last N lines per pod from before the follow began (mirrors `kubectl
 // logs -f --tail`).
+//
+// Caps:
+//   - per-pod: 1000 lines (was 5000). 5000 × 50 pods × ~4 KB/line was
+//     ~1 GB buffered before the first frame shipped — enough to OOM
+//     a 768 MiB pod with one greedy client.
+//   - aggregate: streamPods enforces a maxAggregateTailFrames ceiling
+//     across all pod goroutines combined so 100 pods × 1000 doesn't
+//     blow memory either. New frames after the cap is reached drop
+//     with a one-shot warning frame instead of silently truncating.
 func (s *Service) Stream(ctx context.Context, project, service, env string, tailLines int, sink Sink) (string, error) {
 	if tailLines <= 0 {
 		tailLines = 100
 	}
-	if tailLines > 5000 {
-		tailLines = 5000
+	if tailLines > maxTailLinesPerPod {
+		tailLines = maxTailLinesPerPod
 	}
 	if env == "" {
 		env = "production"
@@ -183,6 +202,11 @@ func (s *Service) streamPods(ctx context.Context, pods []corev1.Pod, tailLines i
 	streamCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	// Aggregate cap. Counted at sink-write time below so a misbehaving
+	// pod can't burn through the whole budget by itself — the reader
+	// loop is the choke point, applying back-pressure naturally.
+	var totalEmitted int
+
 	for i := range pods {
 		pod := pods[i]
 		wg.Add(1)
@@ -227,17 +251,43 @@ func (s *Service) streamPods(ctx context.Context, pods []corev1.Pod, tailLines i
 			if !ok {
 				return nil
 			}
+			// Drop log frames once the aggregate cap is hit. The first
+			// drop emits a one-shot notice frame so the user knows
+			// further history was truncated; pings still flow so the
+			// connection stays warm.
+			if f.Type == "log" && totalEmitted >= maxAggregateTailFrames {
+				if totalEmitted == maxAggregateTailFrames {
+					_ = sink.Write(Frame{
+						Type:    "error",
+						Message: fmt.Sprintf("log buffer cap reached (%d frames); reduce tail or filter pods", maxAggregateTailFrames),
+					})
+					totalEmitted++
+				}
+				continue
+			}
 			if err := sink.Write(f); err != nil {
 				cancel()
 				return err
 			}
+			if f.Type == "log" {
+				totalEmitted++
+			}
 		case <-done:
-			// Drain remaining buffered frames before returning.
+			// Drain remaining buffered frames before returning. The
+			// aggregate cap still applies — a 50-pod env that flushed
+			// late could otherwise emit a second burst here that
+			// blew past the budget the main arm is enforcing.
 			for {
 				select {
 				case f := <-frames:
+					if f.Type == "log" && totalEmitted >= maxAggregateTailFrames {
+						continue
+					}
 					if err := sink.Write(f); err != nil {
 						return err
+					}
+					if f.Type == "log" {
+						totalEmitted++
 					}
 				default:
 					return nil

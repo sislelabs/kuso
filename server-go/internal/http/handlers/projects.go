@@ -4,12 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
@@ -32,6 +34,10 @@ type ProjectsHandler struct {
 	// Optional: when nil the filter no-ops, preserving the
 	// pre-tenancy "everyone sees everything" behaviour.
 	DB *db.DB
+	// Audit logs sensitive mutations (env-var writes, secret writes,
+	// service deletes, role grants). Optional — when nil the audit
+	// calls no-op so an audit-disabled deploy still works.
+	Audit *audit.Service
 }
 
 // Mount registers all /api/projects/* routes onto the given router.
@@ -540,27 +546,80 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
 		return
 	}
-	if err := h.Svc.SetEnv(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req.EnvVars); err != nil {
+	project := chi.URLParam(r, "project")
+	service := chi.URLParam(r, "service")
+	if err := h.Svc.SetEnvWithOpts(ctx,
+		project,
+		service,
+		req.EnvVars,
+		projects.SetEnvOpts{AllowPending: req.AllowPending},
+	); err != nil {
 		h.fail(w, "set env", err)
 		return
+	}
+	if h.Audit != nil {
+		// Log the names only — never the values. An env-var write is
+		// a privilege event (the user can swap DATABASE_URL or wire
+		// in a webhook secret), but the value itself is sensitive
+		// and shouldn't sit in the audit table.
+		names := make([]string, 0, len(req.EnvVars))
+		for _, v := range req.EnvVars {
+			names = append(names, v.Name)
+		}
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "info",
+			Action:   "service.setEnv",
+			Pipeline: project,
+			App:      service,
+			Resource: "kusoservice",
+			Message:  fmt.Sprintf("set %d env vars: %v (allowPending=%v)", len(names), names, req.AllowPending),
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Wake is POST /api/projects/{project}/services/{service}/wake. It
-// nudges the production env's replica count back up so a sleeping
-// service comes back online on the next reconcile tick.
+// ListPods returns the running pods for a service env. The kuso CLI
+// uses this to discover the pod name before shelling in via local
+// kubectl. We audit-log calls with ?reason=shell so an admin can
+// reconstruct who exec'd into which pod even though the actual
+// kubectl exec session never touches kuso-server.
 func (h *ProjectsHandler) ListPods(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+	project := chi.URLParam(r, "project")
+	service := chi.URLParam(r, "service")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
 	env := r.URL.Query().Get("env")
-	out, err := h.Svc.ListPods(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env)
+	reason := r.URL.Query().Get("reason")
+	out, err := h.Svc.ListPods(ctx, project, service, env)
 	if err != nil {
 		h.fail(w, "list pods", err)
 		return
+	}
+	if h.Audit != nil && reason == "shell" {
+		// Reason=shell tells us this is the CLI's `kuso shell`
+		// pod-discovery call. The exec itself runs locally on the
+		// caller's machine via kubectl, so this is the closest we
+		// can get to a server-side audit trail without a fully
+		// proxied exec endpoint.
+		podNames := make([]string, 0)
+		if out != nil {
+			for _, p := range out.Pods {
+				podNames = append(podNames, p.Name)
+			}
+		}
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "service.shell",
+			Pipeline: project,
+			App:      service,
+			Resource: "kuspod",
+			Message:  fmt.Sprintf("shell session opened against env=%q pods=%v", env, podNames),
+		})
 	}
 	writeJSON(w, http.StatusOK, out)
 }

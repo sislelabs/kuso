@@ -413,6 +413,32 @@ type KusoBuildSpec struct {
 	Buildpacks           *KusoBuildpacksSpec `json:"buildpacks,omitempty"`
 	Cache                *KusoBuildCache     `json:"cache,omitempty"`
 	Resources            *KusoBuildResources `json:"resources,omitempty"`
+	Auth                 *KusoBuildAuth      `json:"auth,omitempty"`
+	Registry             *KusoBuildRegistry  `json:"registry,omitempty"`
+}
+
+// KusoBuildAuth points the build pod at registry credentials. The
+// referenced Secret must contain:
+//   - `.dockerconfigjson` (kaniko mounts it at /kaniko/.docker/)
+//   - `cnb_registry_auth` (CNB lifecycle reads it as the
+//     CNB_REGISTRY_AUTH env JSON).
+//
+// When SecretName is empty, the build pushes anonymously — the only
+// supported case is the in-cluster kuso-registry which doesn't require
+// auth. External registries (GHCR, Docker Hub) MUST set SecretName.
+type KusoBuildAuth struct {
+	SecretName string `json:"secretName,omitempty"`
+	Registry   string `json:"registry,omitempty"`
+}
+
+// KusoBuildRegistry tunes the registry transport. AllowInsecure=true
+// lets kaniko push over plain HTTP (the in-cluster registry default);
+// MUST be false for external registries. CacheRepo overrides the
+// default `<repository>/.cache` cache target — useful when the
+// registry doesn't allow nested paths.
+type KusoBuildRegistry struct {
+	AllowInsecure bool   `json:"allowInsecure,omitempty"`
+	CacheRepo     string `json:"cacheRepo,omitempty"`
 }
 
 // KusoBuildResources mirrors the Kubernetes ResourceRequirements

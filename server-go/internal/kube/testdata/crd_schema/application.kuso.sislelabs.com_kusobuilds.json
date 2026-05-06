@@ -13,6 +13,17 @@
       },
       "spec": {
         "properties": {
+          "auth": {
+            "properties": {
+              "registry": {
+                "type": "string"
+              },
+              "secretName": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "branch": {
             "type": "string"
           },
@@ -48,6 +59,17 @@
           },
           "ref": {
             "type": "string"
+          },
+          "registry": {
+            "properties": {
+              "allowInsecure": {
+                "type": "boolean"
+              },
+              "cacheRepo": {
+                "type": "string"
+              }
+            },
+            "type": "object"
           },
           "repo": {
             "properties": {

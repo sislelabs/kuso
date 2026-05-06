@@ -122,6 +122,15 @@ func NewRouter(d Deps) http.Handler {
 
 	// Unauthenticated routes.
 	r.Get("/healthz", healthz)
+	// /readyz is the LB-facing readiness probe. healthz is liveness
+	// (process up); readyz is "ready to serve traffic" (DB reachable,
+	// kube cache synced). Splitting them lets the kubelet restart a
+	// hung server (livenessProbe → /healthz fail) while the kube-LB
+	// drains a pod that's still warming up (readinessProbe → /readyz
+	// fail). Without this split, a Postgres outage either takes the
+	// pod offline (if /healthz checked DB) or silently 5xxs every
+	// request (if it didn't).
+	r.Get("/readyz", readyz(d))
 	// Prometheus scrape endpoint. Open (no auth) so it works with
 	// the in-cluster prometheus-server's default ServiceMonitor —
 	// the scrape goes through the cluster network, not the public
@@ -183,6 +192,16 @@ func NewRouter(d Deps) http.Handler {
 		invitesPub.MountPublic(r)
 	}
 
+	// Node-bootstrap endpoints — pull-mode join. /bootstrap and
+	// /bootstrap/register-node are public (the single-use token IS
+	// the credential); the admin token-management endpoints below
+	// live on the bearer-protected router.
+	var bootstrapH *httphandlers.NodeBootstrapHandler
+	if d.DB != nil {
+		bootstrapH = &httphandlers.NodeBootstrapHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}
+		bootstrapH.MountPublic(r)
+	}
+
 	// WebSocket log tail. Auth is handled inside the handler (the bearer
 	// arrives in the Sec-WebSocket-Protocol header, which middleware
 	// can't see), so this route is mounted on the public router.
@@ -210,11 +229,12 @@ func NewRouter(d Deps) http.Handler {
 				Namespace:  d.Namespace,
 				Reconciler: d.Spec,
 				DB:         d.DB,
+				Audit:      d.Audit,
 			}
 			projH.Mount(r)
 		}
 		if d.Secrets != nil {
-			secH := &httphandlers.SecretsHandler{Svc: d.Secrets, DB: d.DB, Logger: d.Logger}
+			secH := &httphandlers.SecretsHandler{Svc: d.Secrets, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			secH.Mount(r)
 		}
 		if d.Builds != nil {
@@ -237,7 +257,7 @@ func NewRouter(d Deps) http.Handler {
 			httphandlers.NewBackupHandler(d.DB, "", d.Logger).Mount(r)
 			usersH := &httphandlers.UsersHandler{DB: d.DB, Logger: d.Logger}
 			usersH.Mount(r)
-			rolesH := &httphandlers.RolesHandler{DB: d.DB, Logger: d.Logger}
+			rolesH := &httphandlers.RolesHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			rolesH.Mount(r)
 			groupsH := &httphandlers.GroupsHandler{DB: d.DB, Logger: d.Logger}
 			groupsH.Mount(r)
@@ -293,6 +313,11 @@ func NewRouter(d Deps) http.Handler {
 			auditH := &httphandlers.AuditHandler{Svc: d.Audit, DB: d.DB, Logger: d.Logger}
 			auditH.Mount(r)
 		}
+		// Admin-gated node bootstrap-token surface (mint / list / revoke).
+		// The public /bootstrap endpoints are mounted above.
+		if bootstrapH != nil {
+			bootstrapH.MountAdmin(r)
+		}
 		if d.Logs != nil { // Logs implies a kube client; reuse it for /api/kubernetes/*.
 			kubeH := &httphandlers.KubernetesHandler{Kube: d.Logs.Kube, Namespace: d.Logs.Namespace, DB: d.DB, Logger: d.Logger}
 			kubeH.Mount(r)
@@ -334,7 +359,7 @@ func NewRouter(d Deps) http.Handler {
 	// through to the embedded Vue bundle. The embed.FS always contains
 	// at least a placeholder index.html so this never panics.
 	if spaFS, err := web.Dist(); err == nil {
-		if spaH, err := spa.Handler(spaFS, "/api/", "/ws/", "/healthz"); err == nil {
+		if spaH, err := spa.Handler(spaFS, "/api/", "/ws/", "/healthz", "/readyz"); err == nil {
 			r.NotFound(spaH.ServeHTTP)
 		} else {
 			d.Logger.Warn("spa: handler unavailable", "err", err)
@@ -490,6 +515,67 @@ func healthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+// readyz returns 200 only when the dependencies kuso-server actually
+// needs to serve traffic are healthy: DB reachable + kube informer
+// cache synced (when the cache is enabled). Each check has a 1s
+// budget — readiness probes run every few seconds and a slow probe
+// pins the kube control plane.
+//
+// Response shape:
+//
+//	{"status":"ok"|"unready", "checks":{"db":"ok","kube":"ok"|"syncing"|"err: ..."}}
+func readyz(d Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		checks := map[string]string{}
+		ready := true
+
+		if d.DB != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+			defer cancel()
+			if err := d.DB.PingContext(ctx); err != nil {
+				// Generic body — readyz is on the public router and
+				// raw Postgres errors leak the DSN host/user. Real
+				// detail goes to slog where it stays inside the pod.
+				checks["db"] = "unavailable"
+				ready = false
+				if d.Logger != nil {
+					d.Logger.Warn("readyz: db ping failed", "err", err)
+				}
+			} else {
+				checks["db"] = "ok"
+			}
+		}
+
+		// Cache is optional — one-shot CLI runs disable it. When wired,
+		// we require AllSynced before declaring ready so the LB doesn't
+		// route to a pod whose informer hasn't done its initial list
+		// (cold reads would fall back to the live API and amplify the
+		// boot-time apiserver hit).
+		if d.Kube != nil && d.Kube.Cache != nil {
+			if d.Kube.Cache.AllSynced() {
+				checks["kube"] = "ok"
+			} else {
+				checks["kube"] = "syncing"
+				ready = false
+			}
+		}
+
+		status := "ok"
+		code := http.StatusOK
+		if !ready {
+			status = "unready"
+			code = http.StatusServiceUnavailable
+		}
+		body, _ := json.Marshal(map[string]any{
+			"status": status,
+			"checks": checks,
+		})
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(code)
+		_, _ = w.Write(body)
+	}
 }
 
 // slogRequest is a thin access-log middleware backed by slog. We don't

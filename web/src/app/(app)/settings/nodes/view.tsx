@@ -192,11 +192,19 @@ export function NodesView() {
         <AddNodeModal
           onClose={() => setAddOpen(false)}
           onJoined={() => {
-            setAddOpen(false);
+            // Don't auto-close here — bootstrap flow shows a Done
+            // button so the operator can confirm the install scrolled
+            // on the VM. Just refresh the node list in the background.
             qc.invalidateQueries({ queryKey: ["kubernetes", "nodes"] });
+            qc.invalidateQueries({ queryKey: ["node-bootstrap", "pending"] });
           }}
         />
       )}
+
+      {/* Pending bootstrap tokens — shows tokens the operator minted
+          that the new VM hasn't redeemed yet. Empty state collapses
+          the card so it doesn't clutter the page. */}
+      <PendingBootstrapTokensCard />
 
       {nodes.isPending ? (
         <div className="space-y-3">
@@ -791,13 +799,22 @@ interface SSHKey {
   createdAt: string;
 }
 
-// AddNodeModal — Coolify-inspired two-step flow:
-//   1. Pick (or generate) an SSH key, paste its public half on the VM,
-//      enter host + user.
-//   2. Click "Validate" — server runs SSH probes, returns per-check
-//      pass/fail. The user fixes anything missing.
-//   3. Click "Join" — server runs the k3s agent install. The request
-//      blocks for the duration (30-90s typical).
+// AddNodeModal — two paths to add a worker node:
+//
+//   Bootstrap (default, v0.10+):  the operator copies a curl one-liner and
+//     pastes it on the new VM. Single-use 15-min token; the VM detects
+//     facts (arch, cloud, instance-type), redeems the token, runs the
+//     standard k3s install. Works behind NAT, no SSH config from kuso.
+//
+//   SSH (legacy):  the operator pastes their SSH public key on the VM,
+//     kuso opens an SSH session and runs the install. Still useful when
+//     the VM can't reach kuso outbound but kuso can reach it inbound
+//     (e.g. office LAN with firewall asymmetry).
+//
+// The Bootstrap path is the default because it requires zero VM
+// preparation past `curl + sh`. SSH stays available behind a tab.
+type AddNodeMode = "bootstrap" | "ssh";
+
 function AddNodeModal({
   onClose,
   onJoined,
@@ -805,6 +822,7 @@ function AddNodeModal({
   onClose: () => void;
   onJoined: () => void;
 }) {
+  const [mode, setMode] = useState<AddNodeMode>("bootstrap");
   const qc = useQueryClient();
   const keys = useQuery({
     queryKey: ["ssh-keys"],
@@ -906,7 +924,9 @@ function AddNodeModal({
           <div>
             <h2 className="font-mono text-sm font-medium">Add node</h2>
             <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              k3s agent join · validate, then install
+              {mode === "bootstrap"
+                ? "paste one command on the new VM"
+                : "k3s agent join · validate, then install"}
             </p>
           </div>
           <button
@@ -919,6 +939,38 @@ function AddNodeModal({
             <X className="h-4 w-4" />
           </button>
         </header>
+        {/* Tab strip — Bootstrap is the recommended path; SSH is
+            kept for legacy / firewall-asymmetric environments. */}
+        <div className="flex border-b border-[var(--border-subtle)] px-4 pt-3">
+          {[
+            { id: "bootstrap" as const, label: "Bootstrap", subtitle: "recommended" },
+            { id: "ssh" as const, label: "SSH", subtitle: "legacy" },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              disabled={busy}
+              onClick={() => setMode(tab.id)}
+              className={cn(
+                "mr-1 -mb-px border-b-2 px-3 py-1.5 font-mono text-[12px] transition disabled:opacity-40",
+                mode === tab.id
+                  ? "border-[var(--accent-primary)] text-[var(--text-primary)]"
+                  : "border-transparent text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]",
+              )}
+            >
+              {tab.label}{" "}
+              <span className="text-[10px] text-[var(--text-tertiary)]">· {tab.subtitle}</span>
+            </button>
+          ))}
+        </div>
+        {mode === "bootstrap" && (
+          <BootstrapBody
+            onClose={onClose}
+            onJoined={onJoined}
+            busy={busy}
+          />
+        )}
+        {mode === "ssh" && (
         <div className="space-y-3 p-4">
           {/* Step 1: SSH key. Either pick from the library or
               generate a fresh ed25519 keypair on the server. */}
@@ -1069,6 +1121,8 @@ function AddNodeModal({
             </pre>
           )}
         </div>
+        )}
+        {mode === "ssh" && (
         <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
           <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>
             Cancel
@@ -1085,10 +1139,269 @@ function AddNodeModal({
             {join.isPending ? "Joining…" : "Join"}
           </Button>
         </footer>
+        )}
       </div>
     </div>
   );
 }
+
+// BootstrapBody — pull-mode add-node UX. Default tab in AddNodeModal.
+//
+// UX, top to bottom:
+//
+//   1. Optional region/labels/name input. None of it is required;
+//      everything has sensible defaults so a fresh user can press
+//      "Generate command" without thinking.
+//   2. The curl one-liner with a Copy button + a tooltip showing the
+//      token's TTL. The same one-liner runs on every distro.
+//   3. A live status line that flips from "waiting for the node to
+//      call home…" to "joined as <name>" once the agent registers,
+//      backed by the pending-tokens poll.
+function BootstrapBody({
+  onClose,
+  onJoined,
+  busy,
+}: {
+  onClose: () => void;
+  onJoined: () => void;
+  busy: boolean;
+}) {
+  const qc = useQueryClient();
+  const [region, setRegion] = useState("");
+  const [tier, setTier] = useState("");
+  const [nodeName, setNodeName] = useState("");
+  const [minted, setMinted] = useState<MintedTokenLite | null>(null);
+
+  // Pending-tokens poll. We only enable it once a token has been
+  // minted; before that, the poll would just hammer the API for an
+  // empty list. 5s is fast enough that the operator sees the status
+  // flip almost in real time, slow enough that 10 admins minting in
+  // parallel still produces under 1 RPS to the endpoint.
+  const pending = useQuery({
+    queryKey: ["node-bootstrap", "pending"],
+    queryFn: () =>
+      api<{ tokens: PendingTokenLite[] }>("/api/kubernetes/nodes/bootstrap-tokens"),
+    enabled: !!minted,
+    refetchInterval: 5_000,
+    refetchIntervalInBackground: false,
+  });
+
+  // Watch the pending list — if our prefix drops out of it, the token
+  // was consumed (the new VM phoned home). Match by jtiPrefix because
+  // the cleartext jti is one-shot and the server only returns hash
+  // prefixes in the list response from now on.
+  const stillPending = useMemo(
+    () => (minted ? pending.data?.tokens.some((t) => t.jtiPrefix === minted.jtiPrefix) : false),
+    [minted, pending.data],
+  );
+  useEffect(() => {
+    if (minted && pending.isSuccess && !stillPending) {
+      // Token consumed — the agent on the new VM redeemed it.
+      toast.success("Node phoned home — appearing in the list now");
+      onJoined();
+      // Don't auto-close; the operator may want to verify the install
+      // log scrolled successfully on the VM. They click Done.
+    }
+  }, [minted, pending.isSuccess, stillPending, onJoined]);
+
+  const mint = useMutation({
+    mutationFn: () => {
+      const labels: Record<string, string> = {};
+      if (region.trim()) labels["region"] = region.trim();
+      if (tier.trim()) labels["tier"] = tier.trim();
+      return api<MintedTokenLite>("/api/kubernetes/nodes/bootstrap-tokens", {
+        method: "POST",
+        body: {
+          labels,
+          nodeName: nodeName.trim() || undefined,
+        },
+      });
+    },
+    onSuccess: (data) => {
+      setMinted(data);
+      void qc.invalidateQueries({ queryKey: ["node-bootstrap", "pending"] });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Mint failed");
+    },
+  });
+
+  const revoke = useMutation({
+    mutationFn: (jti: string) =>
+      api<void>(`/api/kubernetes/nodes/bootstrap-tokens/${encodeURIComponent(jti)}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      setMinted(null);
+      void qc.invalidateQueries({ queryKey: ["node-bootstrap", "pending"] });
+      toast.success("Token revoked");
+    },
+  });
+
+  return (
+    <>
+      <div className="space-y-3 p-4">
+        {!minted && (
+          <>
+            <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3">
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                Optional metadata
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <label className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                    Region
+                  </label>
+                  <Input
+                    value={region}
+                    onChange={(e) => setRegion(e.target.value)}
+                    placeholder="eu"
+                    className="h-8 text-[13px]"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                    Tier
+                  </label>
+                  <Input
+                    value={tier}
+                    onChange={(e) => setTier(e.target.value)}
+                    placeholder="premium"
+                    className="h-8 text-[13px]"
+                  />
+                </div>
+              </div>
+              <div className="mt-2 space-y-1">
+                <label className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                  Node name override (optional)
+                </label>
+                <Input
+                  value={nodeName}
+                  onChange={(e) => setNodeName(e.target.value)}
+                  placeholder="defaults to VM hostname"
+                  className="h-8 text-[13px]"
+                />
+              </div>
+            </section>
+            <p className="font-mono text-[11px] text-[var(--text-secondary)]">
+              You&apos;ll get a one-line curl command. Paste it as root on the new VM —
+              it detects facts (arch, cloud, instance type), redeems a single-use
+              token, and runs the standard k3s agent install. Token expires in 15
+              minutes.
+            </p>
+          </>
+        )}
+
+        {minted && (
+          <>
+            <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3">
+              <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                Run this on the new VM
+              </p>
+              <code className="block max-h-32 overflow-auto rounded bg-[var(--bg-tertiary)] p-2 font-mono text-[11px] break-all text-[var(--text-primary)]">
+                {minted.oneLiner}
+              </code>
+              <div className="mt-2 flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    void navigator.clipboard.writeText(minted.oneLiner);
+                    toast.success("Command copied");
+                  }}
+                >
+                  Copy command
+                </Button>
+                <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                  expires {new Date(minted.expiresAt).toLocaleTimeString()}
+                </span>
+              </div>
+            </section>
+            <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3">
+              <p className="mb-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                Status
+              </p>
+              <div className="flex items-center gap-2 font-mono text-[12px]">
+                {stillPending ? (
+                  <>
+                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+                    <span className="text-[var(--text-secondary)]">
+                      waiting for the new VM to call home…
+                    </span>
+                  </>
+                ) : pending.isSuccess ? (
+                  <>
+                    <span className="inline-block h-2 w-2 rounded-full bg-emerald-400" />
+                    <span className="text-[var(--text-secondary)]">
+                      node phoned home — joining the cluster
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-[var(--text-tertiary)]">checking…</span>
+                )}
+              </div>
+            </section>
+          </>
+        )}
+      </div>
+      <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
+        {!minted && (
+          <>
+            <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              disabled={mint.isPending}
+              onClick={() => mint.mutate()}
+            >
+              {mint.isPending ? "Minting…" : "Generate command"}
+            </Button>
+          </>
+        )}
+        {minted && (
+          <>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={revoke.isPending}
+              onClick={() => revoke.mutate(minted.jtiPrefix)}
+            >
+              {revoke.isPending ? "Revoking…" : "Revoke token"}
+            </Button>
+            <Button size="sm" onClick={onClose}>
+              Done
+            </Button>
+          </>
+        )}
+      </footer>
+    </>
+  );
+}
+
+// Local types for the bootstrap response shape. Mirrors the server's
+// JSON. We re-declare here rather than importing to keep this file
+// self-contained for the existing-code edit; the canonical types live
+// in features/node-bootstrap/api.ts.
+type MintedTokenLite = {
+  jti: string;
+  jtiPrefix: string;
+  expiresAt: string;
+  oneLiner: string;
+  labels?: Record<string, string>;
+  nodeName?: string;
+};
+
+type PendingTokenLite = {
+  jtiPrefix: string;
+  jtiHash: string;
+  createdAt: string;
+  expiresAt: string;
+  labels?: Record<string, string>;
+  nodeName?: string;
+  createdBy?: string;
+  oneLiner: string;
+};
 
 // NewKeyForm submits to /api/ssh-keys to generate (or paste) a new
 // keypair. Keeps the inline UX tight — one name field + a generate
@@ -1472,3 +1785,94 @@ function formatBytes(bytes: number): string {
   }
   return v >= 100 || i === 0 ? `${Math.round(v)}${units[i]}` : `${v.toFixed(1)}${units[i]}`;
 }
+
+// PendingBootstrapTokensCard surfaces minted-but-unredeemed bootstrap
+// tokens. Hidden when empty so the page stays tidy on a healthy
+// install. Each row carries a Revoke button that flips the token's
+// revokedAt — operators use this when they pasted the wrong command
+// into the wrong VM, or just decided not to add the node after all.
+function PendingBootstrapTokensCard() {
+  const qc = useQueryClient();
+  const pending = useQuery({
+    queryKey: ["node-bootstrap", "pending"],
+    queryFn: () =>
+      api<{ tokens: PendingTokenRow[] }>("/api/kubernetes/nodes/bootstrap-tokens"),
+    refetchInterval: 10_000,
+    refetchIntervalInBackground: false,
+  });
+  const revoke = useMutation({
+    mutationFn: (jti: string) =>
+      api<void>(`/api/kubernetes/nodes/bootstrap-tokens/${encodeURIComponent(jti)}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["node-bootstrap", "pending"] });
+      toast.success("Token revoked");
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Revoke failed"),
+  });
+  const tokens = pending.data?.tokens ?? [];
+  if (tokens.length === 0) return null;
+  return (
+    <section className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
+      <p className="mb-2 font-mono text-[10px] uppercase tracking-widest text-amber-400">
+        Pending bootstrap tokens · {tokens.length}
+      </p>
+      <ul className="space-y-1.5">
+        {tokens.map((t) => (
+          <li
+            key={t.jtiHash}
+            className="flex flex-wrap items-center justify-between gap-2 rounded bg-[var(--bg-primary)] p-2 font-mono text-[11px]"
+          >
+            <div className="min-w-0 flex-1 space-y-0.5">
+              <div className="truncate text-[var(--text-secondary)]">
+                <span className="text-[var(--text-tertiary)]">prefix:</span>{" "}
+                <span>{t.jtiPrefix}…</span>
+                {t.nodeName && (
+                  <>
+                    <span className="ml-3 text-[var(--text-tertiary)]">name:</span>{" "}
+                    <span>{t.nodeName}</span>
+                  </>
+                )}
+              </div>
+              <div className="text-[10px] text-[var(--text-tertiary)]">
+                expires {new Date(t.expiresAt).toLocaleTimeString()}
+                {t.labels && Object.keys(t.labels).length > 0 && (
+                  <>
+                    {" · "}
+                    {Object.entries(t.labels)
+                      .map(([k, v]) => `${k}=${v}`)
+                      .join(", ")}
+                  </>
+                )}
+              </div>
+            </div>
+            <div className="flex shrink-0 items-center gap-1.5">
+              {/* No "Copy" button: the cleartext token is one-shot at
+                  mint and the server only returns hash prefixes here.
+                  An operator who lost the one-liner must revoke + re-mint. */}
+              <Button
+                size="sm"
+                variant="ghost"
+                disabled={revoke.isPending}
+                onClick={() => revoke.mutate(t.jtiHash)}
+              >
+                Revoke
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+type PendingTokenRow = {
+  jtiPrefix: string;
+  jtiHash: string;
+  createdAt: string;
+  expiresAt: string;
+  labels?: Record<string, string>;
+  nodeName?: string;
+  createdBy?: string;
+};

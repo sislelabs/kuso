@@ -4,19 +4,39 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
+	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 )
 
 // RolesHandler handles /api/roles full CRUD.
+//
+// Every mutation (create / update / delete role) audit-logs at warn
+// severity because role changes are privilege escalation and we need
+// the trail for incident response. Reads (ListWithPermissions) are
+// not logged — they're high-frequency and the contents already leak
+// to anyone with user:write so logging them adds noise without value.
 type RolesHandler struct {
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
+}
+
+// auditUser pulls the calling user-id out of the request context for
+// audit-entry tagging. Returns "" when no claims are present (pre-auth
+// path; shouldn't happen here but the audit shouldn't break startup).
+func auditUser(ctx context.Context) string {
+	if c, ok := auth.ClaimsFromContext(ctx); ok && c != nil {
+		return c.UserID
+	}
+	return ""
 }
 
 // Mount registers the role routes onto the bearer-protected router.
@@ -89,6 +109,15 @@ func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "role.create",
+			Resource: "role",
+			Message:  fmt.Sprintf("created role id=%s name=%q permissions=%d", id, req.Name, len(req.Permissions)),
+		})
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id": id, "name": req.Name, "description": req.Description, "permissions": req.Permissions,
 	})
@@ -105,7 +134,8 @@ func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := rolesCtx(r)
 	defer cancel()
-	if err := h.DB.UpdateRole(ctx, chi.URLParam(r, "id"), req.Name, req.Description, req.Permissions); err != nil {
+	id := chi.URLParam(r, "id")
+	if err := h.DB.UpdateRole(ctx, id, req.Name, req.Description, req.Permissions); err != nil {
 		switch {
 		case errors.Is(err, db.ErrNotFound):
 			http.Error(w, "not found", http.StatusNotFound)
@@ -114,6 +144,15 @@ func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal", http.StatusInternalServerError)
 		}
 		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "role.update",
+			Resource: "role",
+			Message:  fmt.Sprintf("updated role id=%s name=%q permissions=%d", id, req.Name, len(req.Permissions)),
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -124,7 +163,8 @@ func (h *RolesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := rolesCtx(r)
 	defer cancel()
-	if err := h.DB.DeleteRole(ctx, chi.URLParam(r, "id")); err != nil {
+	id := chi.URLParam(r, "id")
+	if err := h.DB.DeleteRole(ctx, id); err != nil {
 		switch {
 		case errors.Is(err, db.ErrNotFound):
 			http.Error(w, "not found", http.StatusNotFound)
@@ -133,6 +173,15 @@ func (h *RolesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "internal", http.StatusInternalServerError)
 		}
 		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "role.delete",
+			Resource: "role",
+			Message:  fmt.Sprintf("deleted role id=%s", id),
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

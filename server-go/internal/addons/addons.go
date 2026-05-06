@@ -159,8 +159,15 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	if req.Name == "" || req.Kind == "" {
 		return nil, fmt.Errorf("%w: name and kind are required", ErrInvalid)
 	}
-	// Project CR always lives in the home namespace.
-	if _, err := s.Kube.GetKusoProject(ctx, s.Namespace, project); err != nil {
+	// Project CR always lives in the home namespace. We also need its
+	// UID for the ownerReferences cascade below — so kube garbage-
+	// collects the addon CR (and the helm release that owns the
+	// StatefulSet + connection Secret) when the project is deleted.
+	// Without this, Project.Delete had to enumerate-and-cascade
+	// addons by hand (T1-C in de74a24); the manual sweep is fragile
+	// across operator versions.
+	projectCR, err := s.Kube.GetKusoProject(ctx, s.Namespace, project)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, fmt.Errorf("%w: project %s", ErrNotFound, project)
 		}
@@ -186,10 +193,31 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	for k, v := range req.ExtraLabels {
 		labels[k] = v
 	}
+	owners := []metav1.OwnerReference{}
+	if projectCR != nil && projectCR.UID != "" {
+		// BlockOwnerDeletion=false: project deletion shouldn't wait
+		// for addon GC. Must be a non-nil pointer — kube-GC treats a
+		// nil pointer as "true" during foreground cascades, which
+		// would deadlock the project's terminating state behind every
+		// addon's helm-uninstall finalizer.
+		// Controller=false: helm-operator owns the reconcile loop;
+		// this ref is purely for cascade-delete.
+		blockFalse := false
+		controllerFalse := false
+		owners = append(owners, metav1.OwnerReference{
+			APIVersion:         "application.kuso.sislelabs.com/v1alpha1",
+			Kind:               "KusoProject",
+			Name:               projectCR.Name,
+			UID:                projectCR.UID,
+			BlockOwnerDeletion: &blockFalse,
+			Controller:         &controllerFalse,
+		})
+	}
 	addon := &kube.KusoAddon{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:   fqn,
-			Labels: labels,
+			Name:            fqn,
+			Labels:          labels,
+			OwnerReferences: owners,
 		},
 		Spec: kube.KusoAddonSpec{
 			Project:          project,

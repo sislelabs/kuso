@@ -419,6 +419,14 @@ func (s *Service) fetchVersion(ctx context.Context, version string) (*Manifest, 
 // canAutoUpgrade returns whether the user can hit "Update" without
 // reading docs, plus a reason if not. The server is conservative —
 // any "destructive" migration in the chain forces manual.
+//
+// Canary gate: KUSO_UPDATE_MIN_AGE_HOURS (default 24) requires a
+// release to have been published at least that long ago before we
+// surface it as auto-upgradable. This is the staged-rollout primitive
+// — early adopters set the env to 0 (or run --version pin), and most
+// installs pick up the upgrade only after canary clusters have soaked
+// it for a day. Set KUSO_UPDATE_CHANNEL=canary to bypass the gate
+// entirely.
 func canAutoUpgrade(m *Manifest) (bool, string) {
 	if m == nil {
 		return false, "no manifest published for this release"
@@ -436,7 +444,58 @@ func canAutoUpgrade(m *Manifest) (bool, string) {
 			return false, fmt.Sprintf("unknown migration kind %q in %s", mg.Change, mg.ID)
 		}
 	}
+	if reason := canaryGateReason(m); reason != "" {
+		return false, reason
+	}
 	return true, ""
+}
+
+// canaryGateReason returns "" when the release is old enough to roll
+// out automatically, or a human-readable reason when the canary
+// window hasn't elapsed yet. KUSO_UPDATE_CHANNEL=canary opts into
+// pre-soak rollouts (early-adopter clusters, the operator's own
+// dogfood box). The default channel waits soakHours.
+func canaryGateReason(m *Manifest) string {
+	if getenv("KUSO_UPDATE_CHANNEL") == "canary" {
+		return ""
+	}
+	if m.PublishedAt.IsZero() {
+		// No timestamp on the manifest — old release.json shape.
+		// Don't block (older auto-upgrades shouldn't suddenly hang
+		// because we can't tell their age).
+		return ""
+	}
+	soakHours := 24
+	if v := getenv("KUSO_UPDATE_MIN_AGE_HOURS"); v != "" {
+		if n := parseIntDefault(v, soakHours); n >= 0 {
+			soakHours = n
+		}
+	}
+	if soakHours == 0 {
+		return ""
+	}
+	soak := time.Duration(soakHours) * time.Hour
+	age := time.Since(m.PublishedAt)
+	if age < soak {
+		remaining := soak - age
+		return fmt.Sprintf("canary window: release is %s old, need %s — set KUSO_UPDATE_CHANNEL=canary to bypass",
+			age.Round(time.Minute), remaining.Round(time.Minute))
+	}
+	return ""
+}
+
+// parseIntDefault parses s as an int, returning fallback when s
+// doesn't parse cleanly. Avoids pulling strconv just for this one
+// call site.
+func parseIntDefault(s string, fallback int) int {
+	n := 0
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return fallback
+		}
+		n = n*10 + int(c-'0')
+	}
+	return n
 }
 
 // compareTags returns -1, 0, 1 for vA<B, ==, >. Tolerates the v
@@ -519,6 +578,14 @@ type UpdateStatus struct {
 func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string, error) {
 	if s.Kube == nil {
 		return "", errors.New("kube client unavailable")
+	}
+	// Hard kill switch. Set when an operator wants to freeze every
+	// kuso instance in the org against a known-bad release. Beats
+	// the canary gate (which is time-based) because it stops both
+	// `latest` and pinned upgrades. Lifts the moment the env flips
+	// back — the next manual /api/system/update call goes through.
+	if killSwitchEngaged() {
+		return "", errors.New("auto-update disabled (KUSO_UPDATE_KILL_SWITCH=true)")
 	}
 
 	var m *Manifest
@@ -717,7 +784,19 @@ const (
 	operatorNamespace  = "kuso-operator-system"
 	operatorDeployment = "kuso-operator-controller-manager"
 	operatorContainer  = "manager"
+	serverDeployment   = "kuso-server"
+	serverContainer    = "server"
 )
+
+// killSwitchEngaged returns true when the operator has set a hard
+// stop on auto-updates. Reads on every gate check so flipping the
+// switch takes effect on the next attempt without restarting the
+// server. Operators flip this when they suspect a bad release is in
+// the wild but don't want every cluster racing to apply it.
+func killSwitchEngaged() bool {
+	v := strings.ToLower(getenv("KUSO_UPDATE_KILL_SWITCH"))
+	return v == "true" || v == "1" || v == "yes"
+}
 
 // Status reads the ConfigMap the updater Job is writing to. Returns
 // (zero, false) when no update has ever run on this instance.

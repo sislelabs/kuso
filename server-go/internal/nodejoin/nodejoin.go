@@ -99,23 +99,12 @@ func Join(ctx context.Context, spec JoinSpec) (*JoinResult, error) {
 			spec.K3sURL, spec.Credentials.Host, controlPlanePort(spec.K3sURL))
 	}
 
-	// Build the install command. K3S_URL+K3S_TOKEN make the script
-	// pick the agent code path; INSTALL_K3S_EXEC carries flags. The
-	// label flag attaches kuso labels at boot so a freshly-joined
-	// node lands in the right region/tier without a separate
-	// label-update round-trip.
-	flags := []string{}
-	for k, v := range spec.NodeLabels {
-		flags = append(flags, fmt.Sprintf("--node-label %s=%s", shEscape(k), shEscape(v)))
-	}
-	if spec.NodeName != "" {
-		flags = append(flags, "--node-name "+shEscape(spec.NodeName))
-	}
-	execEnv := strings.Join(flags, " ")
-	install := fmt.Sprintf(
-		`curl -sfL https://get.k3s.io | K3S_URL=%s K3S_TOKEN=%s INSTALL_K3S_EXEC=%s sh -`,
-		shEscape(spec.K3sURL), shEscape(spec.K3sToken), shEscape("agent "+execEnv),
-	)
+	// Build the install command via the shared helper so the SSH path
+	// and the bootstrap-script path stay in lock-step. INSTALL_K3S_EXEC
+	// carries the agent flags; node labels are baked at boot so a
+	// freshly-joined node lands in the right region/tier without a
+	// separate label-update round-trip.
+	install := BuildInstallCommand(spec.K3sURL, spec.K3sToken, spec.NodeLabels, spec.NodeName)
 	out, err := runCmd(ctx, cli, install)
 	if err != nil {
 		return &JoinResult{Output: out}, fmt.Errorf("k3s agent install: %w", err)

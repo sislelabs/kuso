@@ -422,6 +422,27 @@ CREATE TABLE IF NOT EXISTS "ErrorScannerState" (
     "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
+-- v0.10: bootstrap-token-driven node join. The new VM reaches OUT to
+-- kuso (curl one-liner) instead of kuso reaching IN over SSH. One
+-- row per minted token. consumedAt flips when the agent on the new VM
+-- redeems the token at /bootstrap/register-node; subsequent uses
+-- return 410 Gone. revokedAt is operator-driven cancellation.
+CREATE TABLE IF NOT EXISTS "NodeBootstrapToken" (
+    "jti" TEXT PRIMARY KEY,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expiresAt" TIMESTAMPTZ NOT NULL,
+    "consumedAt" TIMESTAMPTZ,
+    "consumedFromIp" TEXT,
+    "revokedAt" TIMESTAMPTZ,
+    "labelsJson" TEXT NOT NULL DEFAULT '{}',
+    "nodeName" TEXT,
+    "createdBy" TEXT,
+    "joinedNodeName" TEXT,
+    "joinedAt" TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS "NodeBootstrapToken_expiresAt_idx" ON "NodeBootstrapToken"("expiresAt");
+CREATE INDEX IF NOT EXISTS "NodeBootstrapToken_pending_idx" ON "NodeBootstrapToken"("createdAt" DESC) WHERE "consumedAt" IS NULL AND "revokedAt" IS NULL;
+
 -- Generic key/value settings store for admin-tunable platform knobs
 -- that don't deserve their own table. Used today for build resource
 -- limits (buildMaxConcurrent, buildMemoryLimit, etc); future toggles

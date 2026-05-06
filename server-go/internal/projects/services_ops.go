@@ -176,6 +176,28 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		}
 	}
 
+	owners := []metav1.OwnerReference{}
+	if proj != nil && proj.UID != "" {
+		// Cascade-delete the service CR (and the KusoEnvironment +
+		// KusoBuild + KusoCron CRs that depend on it via their own
+		// ownerReferences) when the project is deleted.
+		// BlockOwnerDeletion is an explicit *false — a nil pointer
+		// would be treated as "true" by kube-GC during foreground
+		// cascades, deadlocking the project terminating phase behind
+		// every service's helm-uninstall finalizer.
+		// Controller=false because helm-operator owns reconciliation.
+		blockFalse := false
+		controllerFalse := false
+		owners = append(owners, metav1.OwnerReference{
+			APIVersion:         "application.kuso.sislelabs.com/v1alpha1",
+			Kind:               "KusoProject",
+			Name:               proj.Name,
+			UID:                proj.UID,
+			BlockOwnerDeletion: &blockFalse,
+			Controller:         &controllerFalse,
+		})
+	}
+
 	svc := &kube.KusoService{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: fqn,
@@ -183,6 +205,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 				labelProject: project,
 				labelService: req.Name,
 			},
+			OwnerReferences: owners,
 		},
 		Spec: kube.KusoServiceSpec{
 			Project:     project,
@@ -247,6 +270,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Branch:           defaultBranch,
 			Port:             port,
 			ReplicaCount:     scale.Min,
+			Autoscaling:      autoscalingFromScale(scale),
 			Host:             defaultHost(req.Name, project, proj.Spec.BaseDomain),
 			AdditionalHosts:  domainHosts(created.Spec.Domains),
 			TLSHosts:         computeTLSHosts(defaultHost(req.Name, project, proj.Spec.BaseDomain), domainHosts(created.Spec.Domains)),
@@ -467,6 +491,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			Branch:           req.Branch,
 			Port:             port,
 			ReplicaCount:     scaleMin,
+			Autoscaling:      autoscalingFromScale(svc.Spec.Scale),
 			Host:             host,
 			AdditionalHosts:  domainHosts(svc.Spec.Domains),
 			TLSHosts:         computeTLSHosts(host, domainHosts(svc.Spec.Domains)),
@@ -748,7 +773,23 @@ func (s *Service) GetDetectedEnv(ctx context.Context, project, service string) (
 // only) are rewritten into valueFrom.secretKeyRef entries pointing at
 // the addon's <addon>-conn secret. Composite references are rejected
 // with ErrCompositeVarRef so the caller can return 400.
+// SetEnvOpts mirrors RewriteOpts at the SetEnv layer so handlers can
+// opt into pending-addon tolerance without flipping the strictness
+// for every caller.
+type SetEnvOpts struct {
+	AllowPending bool
+}
+
+// SetEnv preserves the strict-validation default behaviour. New
+// callers that want to permit refs to addons mid-provisioning
+// should call SetEnvWithOpts({AllowPending: true}).
 func (s *Service) SetEnv(ctx context.Context, project, service string, envVars []EnvVar) error {
+	return s.SetEnvWithOpts(ctx, project, service, envVars, SetEnvOpts{})
+}
+
+// SetEnvWithOpts is the variant that threads strictness through to
+// the var-ref rewriter.
+func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, envVars []EnvVar, opts SetEnvOpts) error {
 	// Validate + normalize before any kube round-trip. Trims names
 	// (a leading non-breaking space slipped in once and was
 	// effectively unfixable from the editor), enforces POSIX env
@@ -807,7 +848,9 @@ func (s *Service) SetEnv(ctx context.Context, project, service string, envVars [
 	// secretKeyRef pointing at "pg-conn", and the pod crashloops on
 	// missing-secret mount.
 	addonResolver := s.buildAddonResolver(ctx, project)
-	rewritten, err := RewriteEnvVars(envVars, svcResolver, addonResolver)
+	rewritten, err := RewriteEnvVarsWithOpts(envVars, svcResolver, addonResolver, RewriteOpts{
+		AllowPending: opts.AllowPending,
+	})
 	if err != nil {
 		return err
 	}
@@ -941,6 +984,44 @@ func (s *Service) buildServiceResolver(ctx context.Context, project, ns string) 
 		}
 		return ServiceRef{}, false
 	}, nil
+}
+
+// autoscalingFromScale derives the env-CR autoscaling block from the
+// service-level KusoScaleSpec. The chart's HPA template renders an
+// HPA only when .Values.autoscaling.enabled — we set Enabled=true
+// only when the user has asked for room (scale.Max > scale.Min).
+// Otherwise we leave it nil and the chart falls back to a static
+// replicaCount=scale.Min Deployment, which is what an indie box
+// running one app expects.
+//
+// The hardcoded chart default (maxReplicas: 5) used to be invisible
+// to users — they couldn't ask kuso to scale beyond 5 without
+// editing helm values. By honoring scale.Max here, an admin can set
+// scale: {min: 1, max: 20, targetCPU: 70} on a KusoService and get
+// an HPA that actually scales to 20.
+func autoscalingFromScale(scale *kube.KusoScaleSpec) *kube.KusoAutoscaling {
+	if scale == nil {
+		return nil
+	}
+	if scale.Max <= scale.Min {
+		// No headroom requested. Leave HPA off; the chart renders a
+		// static-replica Deployment.
+		return nil
+	}
+	target := scale.TargetCPU
+	if target <= 0 {
+		target = 70
+	}
+	min := scale.Min
+	if min <= 0 {
+		min = 1
+	}
+	return &kube.KusoAutoscaling{
+		Enabled:                        true,
+		MinReplicas:                    min,
+		MaxReplicas:                    scale.Max,
+		TargetCPUUtilizationPercentage: target,
+	}
 }
 
 // ResolvePlacement returns the effective placement for an env, given
@@ -1130,6 +1211,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		svc.Spec.Internal = *req.Internal
 		internalChanged = true
 	}
+	scaleChanged := false
 	if req.Scale != nil {
 		if svc.Spec.Scale == nil {
 			svc.Spec.Scale = &kube.KusoScaleSpec{}
@@ -1143,6 +1225,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		if req.Scale.TargetCPU != nil {
 			svc.Spec.Scale.TargetCPU = *req.Scale.TargetCPU
 		}
+		scaleChanged = true
 	}
 	if req.Sleep != nil {
 		if svc.Spec.Sleep == nil {
@@ -1244,6 +1327,16 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		// containerPort + Service.targetPort, so without this every
 		// port edit appears to save but never reaches a running pod.
 		if err := s.propagatePortToEnvs(ctx, ns, project, service, updated); err != nil {
+			return updated, nil
+		}
+	}
+	if scaleChanged {
+		// HPA settings live on the env CR (chart reads
+		// .Values.autoscaling.{enabled,minReplicas,maxReplicas,...}).
+		// Without this, raising scale.max from 5 → 20 would save the
+		// service spec but the existing HPA would keep its old cap
+		// until the env CR was rewritten for some other reason.
+		if err := s.propagateScaleToEnvs(ctx, ns, project, service, updated); err != nil {
 			return updated, nil
 		}
 	}
@@ -1428,6 +1521,38 @@ func (s *Service) propagateVolumesToEnvs(ctx context.Context, ns, project, servi
 			continue
 		}
 		env.Spec.Volumes = svc.Spec.Volumes
+		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
+			return fmt.Errorf("update env %s: %w", env.Name, err)
+		}
+	}
+	return nil
+}
+
+// propagateScaleToEnvs copies the service-level scale (replicaCount +
+// HPA) onto every env owned by the service. Without this, an admin
+// who raised scale.max from 5 to 20 would see the service spec save
+// but the running deployment keep its old HPA cap. Mirrors the same
+// shape autoscalingFromScale derives at create time so a Patch and
+// a fresh Add land at the same env CR.
+func (s *Service) propagateScaleToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
+	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: envSelector(project, service),
+	})
+	if err != nil {
+		return fmt.Errorf("list envs for scale propagation: %w", err)
+	}
+	auto := autoscalingFromScale(svc.Spec.Scale)
+	replicaCount := 1
+	if svc.Spec.Scale != nil && svc.Spec.Scale.Min > 0 {
+		replicaCount = svc.Spec.Scale.Min
+	}
+	for i := range envs.Items {
+		var env kube.KusoEnvironment
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
+			continue
+		}
+		env.Spec.ReplicaCount = replicaCount
+		env.Spec.Autoscaling = auto
 		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
 			return fmt.Errorf("update env %s: %w", env.Name, err)
 		}

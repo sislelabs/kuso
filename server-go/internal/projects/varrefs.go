@@ -159,6 +159,24 @@ func ExpandServiceKey(ref ServiceRef, key string) string {
 // that doesn't exist and the pod would crashloop on mount.
 var ErrUnknownVarRef = errors.New("variable reference does not match any service or addon in this project")
 
+// RewriteOpts controls how RewriteEnvVar handles refs that don't yet
+// resolve to a known addon. The default (zero value) keeps the
+// pre-v0.10 strict behaviour: unknown ref → ErrUnknownVarRef. The
+// SPA's env editor sets AllowPending=true so a user can save an env
+// var that references an addon still mid-provisioning; the secret
+// mount resolves itself once the addon's `<addon>-conn` Secret
+// materialises and the pod restarts.
+type RewriteOpts struct {
+	// AllowPending lets unknown addon refs through with a speculative
+	// secretKeyRef pointing at <name>-conn (or <project>-<name>-conn
+	// for short refs). The kube secret-mount machinery handles
+	// eventual consistency: when the secret appears, the next pod
+	// restart picks up the new value. Until then the pod stays in
+	// CreateContainerConfigError, which the UI surfaces as
+	// "addon pending."
+	AllowPending bool
+}
+
 // RewriteEnvVar maps a wire-shape EnvVar through the var-ref parser.
 //
 // Resolution order when the value is a pure `${{ name.KEY }}` ref:
@@ -167,7 +185,9 @@ var ErrUnknownVarRef = errors.New("variable reference does not match any service
 //      to a literal Value (DNS / port / url string).
 //   2. Else if addonResolver finds <name> as an addon, emit a
 //      secretKeyRef pointing at <addon>-conn / KEY.
-//   3. Else: ErrUnknownVarRef. We refuse to silently write a broken
+//   3. Else if opts.AllowPending: emit a speculative secretKeyRef
+//      that resolves once the addon's conn Secret exists.
+//   4. Else: ErrUnknownVarRef. We refuse to silently write a broken
 //      reference.
 //
 // When the resolvers are nil, all refs fall through to the legacy
@@ -175,6 +195,13 @@ var ErrUnknownVarRef = errors.New("variable reference does not match any service
 // get full validation; callers that supply neither preserve the
 // pre-v0.6.16 behaviour.
 func RewriteEnvVar(in EnvVar, svcResolver ServiceRefResolver, addonResolver AddonRefResolver) (EnvVar, error) {
+	return RewriteEnvVarWithOpts(in, svcResolver, addonResolver, RewriteOpts{})
+}
+
+// RewriteEnvVarWithOpts is the variant with explicit options. New
+// callers should pass through user intent (allowPending=true for
+// interactive editor saves; false for kuso.yml apply).
+func RewriteEnvVarWithOpts(in EnvVar, svcResolver ServiceRefResolver, addonResolver AddonRefResolver, opts RewriteOpts) (EnvVar, error) {
 	// Pre-existing valueFrom entries pass through. Only literal `value`
 	// entries are candidates for rewriting.
 	if in.ValueFrom != nil || in.Value == "" {
@@ -207,8 +234,34 @@ func RewriteEnvVar(in EnvVar, svcResolver ServiceRefResolver, addonResolver Addo
 				},
 			}, nil
 		}
-		// Resolver supplied + neither a service nor an addon matched
-		// → refuse. This is the new strictness.
+		// Resolver supplied + neither a service nor an addon matched.
+		// In strict mode we refuse; in pending mode we emit a
+		// speculative secretKeyRef using the canonical naming so the
+		// pod resolves the value once the addon's conn Secret lands.
+		// Kube's CreateContainerConfigError surfaces the missing
+		// secret in the UI as "addon pending" until then.
+		if opts.AllowPending {
+			// The KusoService / KusoEnvironment CRDs lock
+			// secretKeyRef.name to ^[a-z0-9][a-z0-9-]*-conn$ — kube
+			// admission rejects anything else outright. The
+			// var-ref parser accepts [A-Za-z0-9_-] for backwards
+			// compat, so an uppercase or underscore name would
+			// reach this branch and then get bounced by kube. Catch
+			// it here with a clearer error so the user fixes the
+			// ref instead of seeing an opaque admission failure.
+			if !addonRefDNSSafe(ref.Name) {
+				return EnvVar{}, fmt.Errorf("env var %q: addon ref %q must be lowercase letters/digits/dashes for pending-mode resolution", in.Name, ref.Name)
+			}
+			return EnvVar{
+				Name: in.Name,
+				ValueFrom: map[string]any{
+					"secretKeyRef": map[string]any{
+						"name": ref.SecretName(),
+						"key":  ref.Key,
+					},
+				},
+			}, nil
+		}
 		return EnvVar{}, fmt.Errorf("env var %q: %w (looked up %q)", in.Name, ErrUnknownVarRef, ref.Name)
 	}
 	// No addonResolver wired → legacy behaviour: trust the ref name
@@ -228,9 +281,16 @@ func RewriteEnvVar(in EnvVar, svcResolver ServiceRefResolver, addonResolver Addo
 // RewriteEnvVars applies RewriteEnvVar over a slice. Returns the first
 // error encountered, or the rewritten slice.
 func RewriteEnvVars(in []EnvVar, svcResolver ServiceRefResolver, addonResolver AddonRefResolver) ([]EnvVar, error) {
+	return RewriteEnvVarsWithOpts(in, svcResolver, addonResolver, RewriteOpts{})
+}
+
+// RewriteEnvVarsWithOpts is the variant that threads RewriteOpts
+// through to each var so the caller (interactive editor vs. yaml
+// apply) can pick the strictness.
+func RewriteEnvVarsWithOpts(in []EnvVar, svcResolver ServiceRefResolver, addonResolver AddonRefResolver, opts RewriteOpts) ([]EnvVar, error) {
 	out := make([]EnvVar, 0, len(in))
 	for _, v := range in {
-		rewritten, err := RewriteEnvVar(v, svcResolver, addonResolver)
+		rewritten, err := RewriteEnvVarWithOpts(v, svcResolver, addonResolver, opts)
 		if err != nil {
 			return nil, err
 		}
@@ -243,4 +303,14 @@ func RewriteEnvVars(in []EnvVar, svcResolver ServiceRefResolver, addonResolver A
 // Used by the frontend autocomplete to insert the right syntax.
 func FormatVarRef(name, key string) string {
 	return "${{ " + strings.TrimSpace(name) + "." + strings.TrimSpace(key) + " }}"
+}
+
+// addonRefDNSSafe matches the CRD pattern enforced on
+// secretKeyRef.name (^[a-z0-9][a-z0-9-]*-conn$) ignoring the trailing
+// `-conn` suffix that SecretName() appends. Used by the AllowPending
+// path to reject refs the CRD admission would bounce.
+var addonRefDNSSafeRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+func addonRefDNSSafe(name string) bool {
+	return addonRefDNSSafeRE.MatchString(name)
 }
