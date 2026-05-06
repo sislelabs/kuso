@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.3] — 2026-05-06
+
+### 🐛 Bug Fixes
+- Fix(projects): live-services count was inflated by desired>0 ([a901500](https://github.com/sislelabs/kuso/commit/a9015008be1c591d09ae94de1d5f4e241d2db682))
+
 ## [0.9.2] — 2026-05-06
 
 ### ✨ Features
