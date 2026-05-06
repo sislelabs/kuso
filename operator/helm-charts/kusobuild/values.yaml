@@ -79,21 +79,30 @@ image:
 githubInstallationId: 0
 
 # Resources for the kaniko Job pod. Builds are CPU-and-memory-heavy
-# (especially nixpacks: nix-env compiles glibc/gcc on cold cache).
+# (especially nixpacks: nix-env compiles glibc/gcc on cold cache,
+# AND kaniko has to tar the full /nix store at snapshot time).
 # Defaults aim at "small Hetzner box" (4 GB RAM); bigger boxes can
 # raise via override.
 #
-# Memory limit calibration: 1Gi × 2 concurrent builds = 2Gi for
-# build work, leaving 2Gi for k3s + kuso-server + traefik on a
-# 4Gi box. Going above 1Gi here means a single build can starve
-# the cluster — we hit exactly that on v0.8.9 with 2Gi limits and
-# 5 concurrent builds. The cluster-wide MaxConcurrentBuilds cap is
-# the second line of defence; this keeps each build's footprint
-# bounded so the cap math holds.
+# Memory limit calibration (v0.9.1): 2Gi limit × KUSO_BUILD_MAX_
+# CONCURRENT=1 = 2Gi for the active build, leaving 2Gi for k3s +
+# postgres + kuso-server + traefik + cert-manager on a 4Gi box.
+#
+# Why 2Gi (was 1Gi in v0.8.12): kaniko's "Taking snapshot of full
+# filesystem" step builds an in-memory tar of /nix + nixpacks
+# layers. With a populated /nix store (Go 1.22 toolchain ~700 MB),
+# the tar peaks above 1Gi and OOM-kills the container at exit 137.
+# Verified live: builds for kuso-demo-todo-api and -web both
+# OOMKilled at snapshot under 1Gi.
+#
+# The cluster-wide MaxConcurrentBuilds cap (set to 1 via
+# KUSO_BUILD_MAX_CONCURRENT) is the second line of defence — even
+# if a build briefly peaks past the limit, only one build can be
+# active so the box never sees 2× the resident set.
 resources:
   requests:
     cpu: 200m
-    memory: 384Mi
+    memory: 512Mi
   limits:
     cpu: 1500m
-    memory: 1Gi
+    memory: 2Gi
