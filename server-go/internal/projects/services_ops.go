@@ -1440,3 +1440,48 @@ func defaultHost(service, project, baseDomain string) string {
 	}
 	return fmt.Sprintf("%s.%s", service, baseDomain)
 }
+
+// reservedHostSuffixes are TLDs/suffixes that Let's Encrypt cannot
+// issue certs for: .local (mDNS), .internal (private), .test/.example/
+// .invalid (RFC 2606 reserved), .arpa (reverse DNS), .localhost (loopback).
+var reservedHostSuffixes = map[string]struct{}{
+	"local":     {},
+	"internal":  {},
+	"localhost": {},
+	"test":      {},
+	"example":   {},
+	"invalid":   {},
+	"arpa":      {},
+}
+
+// isPublicFQDN reports whether host is plausibly a public-internet
+// fully-qualified domain name eligible for a Let's Encrypt cert.
+//
+// Heuristics (all must hold):
+//   - at least one dot (so single-label names like "hui" or "intranet"
+//     are rejected — they can't have public TLS);
+//   - the final label is ≥ 2 chars (rules out "x.a", "x.b" style typos);
+//   - the final label isn't a reserved suffix (.local etc).
+//
+// We deliberately don't validate against the actual public-suffix list
+// (the publicsuffix package adds 80kB of trie data for marginal benefit).
+// The point is to catch the "I typed my project name as the baseDomain"
+// class of error at edit time, not to validate every conceivable TLD.
+func isPublicFQDN(host string) bool {
+	host = strings.TrimSpace(strings.ToLower(host))
+	if host == "" {
+		return false
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) < 2 {
+		return false
+	}
+	tld := parts[len(parts)-1]
+	if len(tld) < 2 {
+		return false
+	}
+	if _, reserved := reservedHostSuffixes[tld]; reserved {
+		return false
+	}
+	return true
+}

@@ -87,6 +87,10 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 	if req.Name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalid)
 	}
+	req.BaseDomain = strings.TrimSpace(req.BaseDomain)
+	if req.BaseDomain != "" && !isPublicFQDN(req.BaseDomain) {
+		return nil, fmt.Errorf("%w: baseDomain %q is not a public FQDN — needs at least one dot and a real TLD (e.g. example.com), Let's Encrypt can't issue certs for it otherwise", ErrInvalid, req.BaseDomain)
+	}
 
 	if existing, err := s.Kube.GetKusoProject(ctx, s.Namespace, req.Name); err == nil && existing != nil {
 		return nil, fmt.Errorf("%w: project %q already exists", ErrConflict, req.Name)
@@ -168,7 +172,11 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 	}
 	prevBaseDomain := cur.Spec.BaseDomain
 	if req.BaseDomain != nil {
-		cur.Spec.BaseDomain = *req.BaseDomain
+		v := strings.TrimSpace(*req.BaseDomain)
+		if v != "" && !isPublicFQDN(v) {
+			return nil, fmt.Errorf("%w: baseDomain %q is not a public FQDN — needs at least one dot and a real TLD (e.g. example.com), Let's Encrypt can't issue certs for it otherwise", ErrInvalid, v)
+		}
+		cur.Spec.BaseDomain = v
 	}
 	if req.DefaultRepo != nil {
 		if cur.Spec.DefaultRepo == nil {

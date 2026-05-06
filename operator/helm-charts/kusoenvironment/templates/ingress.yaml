@@ -16,6 +16,44 @@
 {{- range $extra -}}
   {{- if . -}}{{- $hosts = append $hosts . -}}{{- end -}}
 {{- end -}}
+{{- /* Filter hosts to only those eligible for a public Let's
+       Encrypt cert. A host is eligible if:
+         - it contains at least one dot (so single-label hosts
+           like "demo.hui" with a fake last-label TLD aren't
+           eligible — but real domains like "api.example.com" are);
+         - the final label is at least 2 chars AND is not a
+           reserved/test/private suffix (.local, .internal,
+           .localhost, .test, .example, .invalid, .arpa).
+       If the primary host fails these checks the entire TLS
+       block is suppressed. Pre-v0.9.5 we'd happily ask LE to mint
+       a cert for "<service>.<project>" when the user set their
+       project baseDomain to something like just "hui" (or had no
+       baseDomain at all on a non-FQDN cluster default). LE rejects
+       the order with "DNS problem", the primary cert sits in
+       False forever, AND because traefik's ingress-tls config is
+       all-or-nothing, every OTHER host on the same ingress —
+       including custom domains the user added later that DO have
+       valid certs — falls back to TRAEFIK DEFAULT CERT and breaks
+       HTTPS. The fix here is upstream: don't put non-LE-eligible
+       hosts in the tls block at all; HTTPS for them just won't
+       work, but valid hosts on the same Ingress keep working.
+
+       The matching server-side validation in projects.Update
+       catches the typo at edit time so the user gets a clear
+       error before save instead of a quiet broken state.
+     */ -}}
+{{- $tlsHosts := list -}}
+{{- $reservedSuffix := list "local" "internal" "localhost" "test" "example" "invalid" "arpa" -}}
+{{- range $hosts -}}
+  {{- $h := . -}}
+  {{- $parts := splitList "." $h -}}
+  {{- if gt (len $parts) 1 -}}
+    {{- $tld := lower (index $parts (sub (len $parts) 1)) -}}
+    {{- if and (ge (len $tld) 2) (not (has $tld $reservedSuffix)) -}}
+      {{- $tlsHosts = append $tlsHosts $h -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
 {{- if $hosts }}
 apiVersion: networking.k8s.io/v1
 kind: Ingress
@@ -23,13 +61,18 @@ metadata:
   name: {{ include "kusoenvironment.fullname" . }}
   labels:
     {{- include "kusoenvironment.labels" . | nindent 4 }}
-  {{- if .Values.tlsEnabled }}
+  {{- if and .Values.tlsEnabled $tlsHosts }}
   annotations:
     cert-manager.io/cluster-issuer: {{ .Values.clusterIssuer | quote }}
   {{- end }}
 spec:
   ingressClassName: {{ .Values.ingressClassName | quote }}
-  {{- if .Values.tlsEnabled }}
+  {{- /* Skip the tls block entirely if no host qualifies — the
+         Ingress still serves HTTP traffic on every host, just no
+         HTTPS. cert-manager.io/cluster-issuer annotation is also
+         dropped in that case so cert-manager doesn't issue empty
+         orders. */ -}}
+  {{- if and .Values.tlsEnabled $tlsHosts }}
   tls:
     {{- /* One TLS entry per host so cert-manager mints + maintains
            a per-host certificate. Bundling all hosts under a single
@@ -45,10 +88,15 @@ spec:
            Additional hosts get "<fqn>-tls-extra-<host>" with the
            host pinned into the secret name so adding/removing one
            never re-orders the others' secrets. */ -}}
-    {{- range $i, $h := $hosts }}
+    {{- range $i, $h := $tlsHosts }}
     - hosts:
         - {{ $h | quote }}
-      {{- if eq $i 0 }}
+      {{- /* Match the original "primary" naming when this is the
+             KusoEnvironment primary host (Values.host), regardless
+             of the position in the TLS-eligible list. Otherwise
+             the primary's secretName flips to a non-primary one
+             whenever the primary itself is filtered out. */}}
+      {{- if eq $h $.Values.host }}
       secretName: {{ printf "%s-tls" (include "kusoenvironment.fullname" $) | quote }}
       {{- else }}
       secretName: {{ printf "%s-tls-extra-%s" (include "kusoenvironment.fullname" $) (regexReplaceAll "[^a-z0-9-]" (lower $h) "-") | quote }}

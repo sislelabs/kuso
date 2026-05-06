@@ -53,6 +53,14 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 	if !validHostname(host) {
 		return nil, fmt.Errorf("%w: %q is not a valid hostname", ErrInvalid, host)
 	}
+	if req.TLS && !isPublicFQDN(host) {
+		// Reject TLS-on-non-public-FQDN at edit time. A reserved-suffix
+		// or single-label host would silently break HTTPS for every
+		// other host on the same Ingress (the all-or-nothing tls block
+		// in traefik). User can still bind the host with --no-tls / TLS
+		// off if they want HTTP-only routing.
+		return nil, fmt.Errorf("%w: %q can't get a Let's Encrypt cert (not a public FQDN — single-label or reserved TLD); add it with TLS off if you only need HTTP routing", ErrInvalid, host)
+	}
 
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
