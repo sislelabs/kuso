@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.4] — 2026-05-06
+
+### 🐛 Bug Fixes
+- Fix(networking): auto-inject PORT, propagate baseDomain, audit cleanup ([552076b](https://github.com/sislelabs/kuso/commit/552076bb35e19089fb0d234b5f3617189619d33f))
+
 ## [0.9.3] — 2026-05-06
 
 ### 🐛 Bug Fixes
