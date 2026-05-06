@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.5] — 2026-05-06
+
+### 🐛 Bug Fixes
+- Fix(domains): reject non-public FQDNs at edit + filter from ingress TLS ([f6fbe68](https://github.com/sislelabs/kuso/commit/f6fbe6854d15d47f5af2714b1a33af5f8b92049b))
+
 ## [0.9.4] — 2026-05-06
 
 ### 🐛 Bug Fixes
