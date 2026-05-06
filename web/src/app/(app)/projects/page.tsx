@@ -150,14 +150,18 @@ function ProjectsGrid({
         const services = summary?.services ?? [];
         const envs = summary?.environments ?? [];
         const addons = summary?.addons ?? [];
-        // "Live" = a production env that's either:
-        //   - status.ready === true (helm release Deployed + pod up), or
-        //   - status.replicas.ready > 0 (any pod scheduled, even mid-roll)
+        // "Live" = a production env with at least one pod actually
+        // serving traffic. Sources of truth (in order):
+        //   1. status.replicas.ready > 0  — the canvas's own check.
+        //   2. status.ready === true      — helm release Deployed AND
+        //                                    the operator marked the
+        //                                    env Ready.
         //
-        // The earlier shape used a flat status.replicas number which
-        // the helm-operator never writes — the actual structure mirrors
-        // the canvas: status.replicas = {ready, desired, max}. Without
-        // matching that the counter always read 0.
+        // We deliberately do NOT count `desired > 0` as live — every
+        // scaled service has desired > 0 the moment it's created, but
+        // before its first build lands there are zero ready pods.
+        // The canvas shows `0/5 ready` in that state; the project
+        // card here used to read it as "5/5 LIVE", which lied.
         const liveServices = services.filter((s) => {
           const fqn = s.metadata.name;
           const prod = envs.find(
@@ -171,9 +175,8 @@ function ProjectsGrid({
                 replicas?: { ready?: number; desired?: number; max?: number };
               }
             | undefined;
-          if (st?.ready) return true;
-          const r = st?.replicas;
-          if ((r?.ready ?? 0) > 0 || (r?.desired ?? 0) > 0) return true;
+          if ((st?.replicas?.ready ?? 0) > 0) return true;
+          if (st?.ready === true) return true;
           return false;
         }).length;
         return (
