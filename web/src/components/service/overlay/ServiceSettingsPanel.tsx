@@ -136,7 +136,11 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
         return;
       }
       body.scale = { min, max, targetCPU: cpu };
-      body.sleep = { enabled: min === 0, afterMinutes: 5 };
+      // Only flip the sleep enabled flag — keep the user's existing
+      // afterMinutes value. Pre-v0.10 we hardcoded afterMinutes: 5
+      // on every scale save, silently resetting any custom idle
+      // timeout the user had configured elsewhere.
+      body.sleep = { enabled: min === 0 };
     }
     if (state.runtime !== baseline.runtime) {
       body.runtime = state.runtime;

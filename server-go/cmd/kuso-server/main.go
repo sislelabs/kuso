@@ -15,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/auth"
@@ -202,6 +204,16 @@ func main() {
 		// resolves to the home ns, preserving existing single-tenant
 		// behaviour without per-call overhead.
 		kubeClient = kc
+		// CRD preflight: if any of the six kuso CRDs is missing the
+		// helm-operator silently no-ops on every reconcile and
+		// rendered Ingress / Service / StatefulSet never appears.
+		// Log a loud warning at startup so the operator notices
+		// before they hit the dashboard. We don't fail boot — the
+		// auto-updater's CRD flow may still be in progress.
+		if missing := preflightCRDs(ctx, kc); len(missing) > 0 {
+			logger.Warn("CRDs missing from cluster — operator will silently no-op", "missing", missing,
+				"hint", "kubectl apply -f https://github.com/sislelabs/kuso/releases/download/<version>/crds.yaml")
+		}
 		// Shared informer cache over the six kuso CRDs. Keeps the
 		// dashboard's read paths off the API server — one WATCH per
 		// GVR instead of LIST-on-every-request. See SCALABILITY_ANALYSIS.md §3.
@@ -384,7 +396,7 @@ func main() {
 					// prod fallback (every preview reads/writes the
 					// production DB) is the safer indie default.
 					if os.Getenv("KUSO_PREVIEW_DB_ENABLED") == "true" {
-						disp.PreviewDB = previewdb.New(kc, addonSvc, *namespace, logger.With("component", "previewdb"))
+						disp.PreviewDB = previewdb.New(ctx, kc, addonSvc, *namespace, logger.With("component", "previewdb"))
 					}
 				}
 				ghDeps = &httpsrv.GithubDeps{Cfg: ghCfg, Client: ghCli, Cache: ghCache, Dispatcher: disp}
@@ -419,6 +431,7 @@ func main() {
 		Namespace:  *namespace,
 		Updater:    updaterSvc,
 		Logger:     logger,
+		BaseCtx:    ctx,
 	})
 
 	srv := &http.Server{
@@ -759,6 +772,37 @@ func (a notifyAdapter) Emit(e builds.EventEnvelope) {
 		Severity: e.Severity,
 		Extra:    e.Extra,
 	})
+}
+
+// preflightCRDs returns the kuso CRDs that DON'T exist on the cluster.
+// Empty slice = all good. Errors during the lookup are treated as
+// "present" — we don't want a transient apiserver hiccup to spam
+// false alarms in the boot log.
+func preflightCRDs(ctx context.Context, kc *kube.Client) []string {
+	want := []string{
+		"kusoprojects.application.kuso.sislelabs.com",
+		"kusoservices.application.kuso.sislelabs.com",
+		"kusoenvironments.application.kuso.sislelabs.com",
+		"kusoaddons.application.kuso.sislelabs.com",
+		"kusobuilds.application.kuso.sislelabs.com",
+		"kusocrons.application.kuso.sislelabs.com",
+	}
+	missing := []string{}
+	gvr := schema.GroupVersionResource{
+		Group:    "apiextensions.k8s.io",
+		Version:  "v1",
+		Resource: "customresourcedefinitions",
+	}
+	for _, name := range want {
+		if _, err := kc.Dynamic.Resource(gvr).Get(ctx, name, metav1.GetOptions{}); err != nil {
+			if apierrors.IsNotFound(err) {
+				missing = append(missing, name)
+			}
+			// non-NotFound errors get treated as "present" — we
+			// don't want a transient apiserver hiccup to spam.
+		}
+	}
+	return missing
 }
 
 // buildsSettingsAdapter satisfies builds.SettingsProvider against the

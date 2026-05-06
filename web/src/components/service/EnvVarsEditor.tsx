@@ -10,7 +10,7 @@ import { listAddonSecretKeys } from "@/features/services/api";
 import { useProject, useAddons } from "@/features/projects";
 import { useQuery } from "@tanstack/react-query";
 import { useCan, Perms } from "@/features/auth";
-import { api, ApiError, getJwt } from "@/lib/api-client";
+import { api, ApiError } from "@/lib/api-client";
 import type { KusoEnvVar } from "@/types/projects";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -982,12 +982,3 @@ function InheritedGroup({
   );
 }
 
-// authHeaders reuses api-client's getJwt() so the cookie / localStorage
-// lookup stays in one place. Inline because this component bypasses
-// the api() wrapper itself: api() unconditionally redirects on 403
-// (admin-only flows like instance-secret listing), but the editor
-// needs to gate-fail silently when the viewer isn't admin instead.
-function authHeaders(): Record<string, string> {
-  const tok = getJwt();
-  return tok ? { Authorization: `Bearer ${tok}` } : {};
-}

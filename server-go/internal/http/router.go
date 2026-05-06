@@ -4,11 +4,17 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/crons"
@@ -72,6 +78,10 @@ type Deps struct {
 	// nil the handler returns a flat "no updates available" response.
 	Updater    *updater.Service
 	Logger     *slog.Logger
+	// BaseCtx is the server's lifecycle context. Background work
+	// kicked off from request handlers (webhook dispatch, preview-DB
+	// seeds) derives from this so graceful shutdown cancels them.
+	BaseCtx    context.Context
 }
 
 // GithubDeps bundles the optional GitHub-app surface. Nil when the App
@@ -96,6 +106,7 @@ func NewRouter(d Deps) http.Handler {
 	// into json.NewDecoder(r.Body).Decode, which would otherwise
 	// happily consume the whole stream into memory.
 	r.Use(maxBodyBytes(1 << 20))
+	r.Use(metricsMW)
 	// Global in-flight cap. Without this a slow Postgres or kube
 	// list under burst load can pin every goroutine on the 25-conn
 	// DB pool and the next legitimate request hangs. 100 in flight
@@ -111,6 +122,13 @@ func NewRouter(d Deps) http.Handler {
 
 	// Unauthenticated routes.
 	r.Get("/healthz", healthz)
+	// Prometheus scrape endpoint. Open (no auth) so it works with
+	// the in-cluster prometheus-server's default ServiceMonitor —
+	// the scrape goes through the cluster network, not the public
+	// ingress. If the operator wants to expose /metrics publicly
+	// they should put a scrape-only auth proxy in front; the kuso
+	// installer doesn't expose this externally by default.
+	r.Get("/metrics", promhttp.Handler().ServeHTTP)
 	if d.Status != nil {
 		statusH := &httphandlers.StatusHandler{Status: d.Status, Logger: d.Logger}
 		r.Get("/api/status", statusH.Handler())
@@ -128,6 +146,7 @@ func NewRouter(d Deps) http.Handler {
 	// cracking expensive, but online brute-force against a known
 	// username has been unrestricted; cap that here.
 	r.Post("/api/auth/login", httphandlers.RateLimitedLogin(authH.Login))
+	r.Post("/api/auth/logout", authH.Logout)
 	r.Get("/api/auth/methods", authH.Methods)
 
 	// OAuth flows are public (no JWT yet) and end with a redirect
@@ -152,6 +171,7 @@ func NewRouter(d Deps) http.Handler {
 			Cache:      d.Github.Cache,
 			Dispatcher: d.Github.Dispatcher,
 			Logger:     d.Logger,
+			BaseCtx:    d.BaseCtx,
 		}
 		ghHandler.MountPublic(r)
 	}
@@ -333,6 +353,79 @@ func NewRouter(d Deps) http.Handler {
 // at us and exhaust memory. MaxBytesReader caps the read; the decoder
 // errors out with "http: request body too large" once the limit is
 // hit, which our handlers map to 400.
+// metricsRequests counts HTTP requests by status class. Cardinality
+// stays low (one bucket per HTTP class × method) so the histogram
+// doesn't explode at high traffic. promhttp's default handler
+// auto-exposes go_*, process_*, and these.
+var metricsRequests = promauto.NewCounterVec(prometheus.CounterOpts{
+	Namespace: "kuso",
+	Subsystem: "http",
+	Name:      "requests_total",
+	Help:      "HTTP requests handled by kuso-server, partitioned by method and status class.",
+}, []string{"method", "status_class"})
+
+var metricsRequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
+	Namespace: "kuso",
+	Subsystem: "http",
+	Name:      "request_duration_seconds",
+	Help:      "HTTP request latency in seconds.",
+	Buckets:   prometheus.DefBuckets,
+}, []string{"method"})
+
+// metricsMW records request count + duration. Wrap before maxBody so
+// we count the bytes-rejected 413s, after Recoverer so we don't lose
+// the metric on panic recovery.
+func metricsMW(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		ww := &statusRecorder{ResponseWriter: w, status: 200}
+		next.ServeHTTP(ww, r)
+		statusClass := "5xx"
+		switch {
+		case ww.status < 200:
+			statusClass = "1xx"
+		case ww.status < 300:
+			statusClass = "2xx"
+		case ww.status < 400:
+			statusClass = "3xx"
+		case ww.status < 500:
+			statusClass = "4xx"
+		}
+		metricsRequests.WithLabelValues(r.Method, statusClass).Inc()
+		metricsRequestDuration.WithLabelValues(r.Method).Observe(time.Since(start).Seconds())
+	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+	wrote  bool
+}
+
+func (s *statusRecorder) WriteHeader(code int) {
+	if s.wrote {
+		return
+	}
+	s.status = code
+	s.wrote = true
+	s.ResponseWriter.WriteHeader(code)
+}
+
+func (s *statusRecorder) Write(b []byte) (int, error) {
+	if !s.wrote {
+		s.wrote = true
+	}
+	return s.ResponseWriter.Write(b)
+}
+
+// Flush proxies to the underlying writer so SSE / streaming handlers
+// keep working through the recorder.
+func (s *statusRecorder) Flush() {
+	if f, ok := s.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
 func maxBodyBytes(n int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

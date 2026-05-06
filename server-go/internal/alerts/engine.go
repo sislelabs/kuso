@@ -125,7 +125,15 @@ func (e *Engine) evaluate(ctx context.Context, r *db.AlertRule, now time.Time) (
 		}
 		ctxQ, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		n, err := e.LogDB.CountLogMatches(ctxQ, r.Project, r.Service, r.Query, since)
+		// LogLine.service stores the FQ form (logship reads the
+		// pod label which the chart stamps as `<project>-<service>`).
+		// Rule rows carry the short form; prefix it before the
+		// query lands so the WHERE matches.
+		svc := r.Service
+		if svc != "" && !strings.HasPrefix(svc, r.Project+"-") {
+			svc = r.Project + "-" + svc
+		}
+		n, err := e.LogDB.CountLogMatches(ctxQ, r.Project, svc, r.Query, since)
 		if err != nil {
 			return false, "", err
 		}

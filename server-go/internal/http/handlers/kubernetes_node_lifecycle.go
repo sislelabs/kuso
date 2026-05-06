@@ -177,8 +177,21 @@ func (h *KubernetesHandler) RemoveNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if _, isCP := live.Labels["node-role.kubernetes.io/control-plane"]; isCP {
-		http.Error(w, "refusing to remove the control-plane node", http.StatusForbidden)
-		return
+		// Only refuse when this would leave the cluster with zero
+		// control-plane nodes. Multi-master users replacing a master
+		// (e.g. host failure, hardware refresh) need this path; the
+		// blanket refuse-control-plane gate locked them out.
+		nodes, lerr := h.Kube.Clientset.CoreV1().Nodes().List(r.Context(), metav1.ListOptions{
+			LabelSelector: "node-role.kubernetes.io/control-plane",
+		})
+		if lerr != nil {
+			http.Error(w, "preflight: "+lerr.Error(), http.StatusBadGateway)
+			return
+		}
+		if len(nodes.Items) <= 1 {
+			http.Error(w, "refusing to remove the last control-plane node — would leave the cluster headless", http.StatusForbidden)
+			return
+		}
 	}
 
 	body := struct {

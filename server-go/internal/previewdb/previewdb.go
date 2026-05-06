@@ -40,16 +40,25 @@ type Cloner struct {
 	Addons    *addons.Service
 	Namespace string
 	Logger    *slog.Logger
+	// BaseCtx is the server's lifecycle context. Background seed
+	// jobs derive from this (with a 30-min timeout) so a graceful
+	// shutdown cancels in-flight pg_dump pipes instead of leaving
+	// detached goroutines and zombie psql processes against a
+	// half-torn-down kube client.
+	BaseCtx context.Context
 }
 
-func New(k *kube.Client, addonSvc *addons.Service, namespace string, logger *slog.Logger) *Cloner {
+func New(ctx context.Context, k *kube.Client, addonSvc *addons.Service, namespace string, logger *slog.Logger) *Cloner {
 	if namespace == "" {
 		namespace = "kuso"
 	}
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Cloner{Kube: k, Addons: addonSvc, Namespace: namespace, Logger: logger}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return &Cloner{Kube: k, Addons: addonSvc, Namespace: namespace, Logger: logger, BaseCtx: ctx}
 }
 
 // EnsurePRAddons creates per-PR clones for every postgres addon in
@@ -94,6 +103,13 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 				HA:          false,
 				StorageSize: s.Spec.StorageSize,
 				Database:    s.Spec.Database,
+				ExtraLabels: map[string]string{
+					// Stamp the PR ref so the env-delete sweep can find
+					// every clone owned by the closing preview without
+					// guessing names.
+					"kuso.sislelabs.com/preview-pr":     fmt.Sprintf("%d", prNumber),
+					"kuso.sislelabs.com/preview-source": shortSrc,
+				},
 			}); err != nil {
 				c.Logger.Warn("preview db clone create", "addon", cloneShort, "err", err)
 				continue
@@ -105,7 +121,13 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 		// returns when the CR lands, but the StatefulSet takes a
 		// few seconds to come up. We poll for the pod-ready state
 		// inside seedAsync.
-		go c.seedAsync(context.Background(), ns, project, addons.CRName(project, s.Name), cloneFQN)
+		// 30-min cap is plenty for any production-sized DB clone;
+		// past that the operator probably wants to know.
+		seedCtx, cancel := context.WithTimeout(c.BaseCtx, 30*time.Minute)
+		go func(src, clone string) {
+			defer cancel()
+			c.seedAsync(seedCtx, ns, project, src, clone)
+		}(addons.CRName(project, s.Name), cloneFQN)
 	}
 	return connSecrets, nil
 }

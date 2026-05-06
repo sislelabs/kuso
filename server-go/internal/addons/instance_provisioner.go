@@ -22,6 +22,7 @@ package addons
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -174,16 +175,24 @@ func (s *Service) writeInstanceAddonConnSecret(ctx context.Context, ns, addonFQN
 	return nil
 }
 
-// pgIdentifier builds a Postgres-safe DB / role name. Both project
-// and addon names are already constrained to [a-z0-9-]+ at the API
-// level, so we just join with an underscore and replace dashes with
-// underscores. Bounded to 63 chars.
+// pgIdentifier builds a Postgres-safe DB / role name. Bounded to 63
+// chars (Postgres NAMEDATALEN-1).
+//
+// On truncation we hash-disambiguate. Two addons in a long-named
+// project that share a 63-char prefix would otherwise collapse to
+// the same DB+role and the second addon's <addon>-conn would point
+// at the first addon's data. Suffix is the first 8 hex chars of
+// sha256(project_addon) so collision risk drops to ~1 in 2^32 even
+// after truncation.
 func pgIdentifier(project, addon string) string {
 	id := strings.ReplaceAll(project+"_"+addon, "-", "_")
-	if len(id) > 63 {
-		id = id[:63]
+	if len(id) <= 63 {
+		return id
 	}
-	return id
+	sum := sha256.Sum256([]byte(id))
+	hashSuffix := hex.EncodeToString(sum[:])[:8]
+	// 63 = prefix + "_" + 8-char hash. Reserve 9 chars for the suffix.
+	return id[:63-9] + "_" + hashSuffix
 }
 
 // randPassword returns 24 random hex chars (96 bits of entropy).

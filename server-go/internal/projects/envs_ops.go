@@ -7,6 +7,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/kube"
 )
@@ -122,6 +123,27 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 	if err := s.Kube.DeleteKusoEnvironment(ctx, ns, env); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete env: %w", err)
 	}
+	// Delete any preview-DB clones tied to this PR. Without this,
+	// 100 PRs/day × occasional missed close-webhook = compounding
+	// orphan StatefulSets + PVCs forever. The clone addons get the
+	// `kuso.sislelabs.com/preview-pr=<N>` label at create-time so
+	// we can enumerate without relying on naming conventions.
+	if pr := previewPRNumber(env, e.Spec.Service); pr != "" {
+		selector := fmt.Sprintf("kuso.sislelabs.com/project=%s,kuso.sislelabs.com/preview-pr=%s", project, pr)
+		if addonList, lerr := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: selector,
+		}); lerr == nil {
+			for i := range addonList.Items {
+				name := addonList.Items[i].GetName()
+				if derr := s.Kube.DeleteKusoAddon(ctx, ns, name); derr != nil && !apierrors.IsNotFound(derr) {
+					// Don't fail the env delete on addon-cleanup
+					// errors — the env is gone, the addon will get
+					// reconciled on the next sweep tick.
+					_ = derr
+				}
+			}
+		}
+	}
 	if s.SecretsCleanupForEnv != nil {
 		// Service short name = env CR's spec.service stripped of the
 		// "<project>-" prefix. Env short name = env CR name with the
@@ -146,4 +168,19 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 		}
 	}
 	return nil
+}
+
+// previewPRNumber extracts the PR number from a preview env CR name.
+// Convention: env name = "<service-fqn>-pr-<N>". Returns "" when
+// the env isn't a preview (production envs end in "-production").
+func previewPRNumber(env, serviceFQN string) string {
+	suffix := strings.TrimPrefix(env, serviceFQN+"-")
+	if suffix == env {
+		// no service prefix on the env name; can't tell.
+		return ""
+	}
+	if !strings.HasPrefix(suffix, "pr-") {
+		return ""
+	}
+	return strings.TrimPrefix(suffix, "pr-")
 }

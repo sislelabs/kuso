@@ -1083,11 +1083,18 @@ type PatchSleepRequest struct {
 }
 
 // PatchService applies the partial update from PatchServiceRequest to
-// the KusoService spec. Unset fields stay as they are. We re-fetch the
-// CR so the kube optimistic concurrency check protects against
-// concurrent edits (the Update call will 409 if someone else already
-// wrote between our get + put).
+// the KusoService spec. Unset fields stay as they are.
+//
+// Acquires the per-service mutex so a multi-tab user submitting the
+// settings form (whole-list replace) can't race a delta call like
+// AddDomain — without the lock, Tab A's AddDomain("x.com") landed,
+// Tab B submitted the form mid-edit with domains=[], and A's domain
+// vanished silently. The kube optimistic-concurrency 409 caught some
+// of these but not the read-then-write window the form spans.
 func (s *Service) PatchService(ctx context.Context, project, service string, req PatchServiceRequest) (*kube.KusoService, error) {
+	mu := s.lockService(project, service)
+	defer mu.Unlock()
+
 	svc, err := s.GetService(ctx, project, service)
 	if err != nil {
 		return nil, err

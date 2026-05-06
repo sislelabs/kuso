@@ -1,4 +1,18 @@
 {{- if and .Values.image.repository .Values.image.tag .Values.repo.url }}
+# Per-build ServiceAccount with NO bindings. Even with
+# automountServiceAccountToken: false, the pod still gets the SA
+# *identity* — admission webhooks (Kyverno / OPA / Pod Security)
+# evaluate against it and a node-escaping kaniko exploit could
+# borrow whatever the namespace's `default` SA had been granted.
+# Fresh SA per build means there's nothing to inherit.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "kusobuild.fullname" . }}-runner
+  labels:
+    {{- include "kusobuild.labels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -18,9 +32,13 @@ spec:
         {{- include "kusobuild.labels" . | nindent 8 }}
     spec:
       restartPolicy: Never
+      # Pin to the dedicated SA above. Without this the pod runs as
+      # the namespace `default` SA — fine in a vanilla install, but a
+      # downstream operator who grants their default SA any permission
+      # leaks it to every build pod.
+      serviceAccountName: {{ include "kusobuild.fullname" . }}-runner
       # Build pods have zero reason to talk to the kube apiserver.
-      # The default-mounted SA token is a lateral-movement primitive
-      # waiting to be exercised by a malicious Dockerfile.
+      # Belt-and-suspenders with the SA's own automount=false above.
       automountServiceAccountToken: false
       # Build-node steering. When a node carries the
       # kuso.sislelabs.com/build=true label and matching NoSchedule

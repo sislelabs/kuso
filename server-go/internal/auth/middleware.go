@@ -61,20 +61,21 @@ func WithClaimsForTest(ctx context.Context, c *Claims) context.Context {
 	return context.WithValue(ctx, claimsCtxKey, c)
 }
 
-// bearerToken pulls a token out of "Authorization: Bearer <token>".
-// Falls back to false when the header is missing or malformed.
+// bearerToken pulls a token out of "Authorization: Bearer <token>"
+// or, failing that, the kuso.JWT_TOKEN HttpOnly cookie. Both forms
+// must hit the same verify path so the SPA (cookie) and the CLI
+// (Bearer header) share state.
 func bearerToken(r *http.Request) (string, bool) {
-	h := r.Header.Get("Authorization")
-	if h == "" {
-		return "", false
+	if h := r.Header.Get("Authorization"); h != "" {
+		const prefix = "Bearer "
+		if strings.HasPrefix(h, prefix) {
+			if t := strings.TrimSpace(h[len(prefix):]); t != "" {
+				return t, true
+			}
+		}
 	}
-	const prefix = "Bearer "
-	if !strings.HasPrefix(h, prefix) {
-		return "", false
+	if c, err := r.Cookie("kuso.JWT_TOKEN"); err == nil && c.Value != "" {
+		return c.Value, true
 	}
-	t := strings.TrimSpace(h[len(prefix):])
-	if t == "" {
-		return "", false
-	}
-	return t, true
+	return "", false
 }

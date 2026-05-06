@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -38,7 +39,19 @@ func (h *LogSearchHandler) Mount(r chi.Router) {
 }
 
 func (h *LogSearchHandler) Search(w http.ResponseWriter, r *http.Request) {
-	h.search(w, r, chi.URLParam(r, "project"), chi.URLParam(r, "service"))
+	project := chi.URLParam(r, "project")
+	service := chi.URLParam(r, "service")
+	// LogLine.service carries the FQ form (`<project>-<service>`) —
+	// the log shipper reads the pod's `kuso.sislelabs.com/service`
+	// label which the helm chart stamps with the FQ name. The URL
+	// param is the short form. Without this prefix dance, the
+	// `WHERE service = ?` matched zero rows on every search and the
+	// UI showed "No log lines from this service in the last 1h"
+	// even when 400k rows existed.
+	if !strings.HasPrefix(service, project+"-") {
+		service = project + "-" + service
+	}
+	h.search(w, r, project, service)
 }
 
 func (h *LogSearchHandler) SearchProject(w http.ResponseWriter, r *http.Request) {

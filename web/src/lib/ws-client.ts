@@ -3,7 +3,6 @@
 // callbacks; the wrapper handles auto-reconnect with capped exponential
 // backoff and surfaces transient errors as "disconnected" status.
 
-import { getJwt } from "./api-client";
 
 export type WSStatus = "connecting" | "open" | "closed" | "error";
 
@@ -31,9 +30,11 @@ export class ReconnectingWS<F = unknown> {
     if (this.closed) return;
     this.opts.onStatus?.("connecting");
     const url = wsUrl(this.opts.path);
-    const jwt = getJwt();
-    const protocols = jwt ? ["kuso.bearer", jwt] : undefined;
-    const ws = new WebSocket(url, protocols);
+    // Cookie-mode auth: the browser carries kuso.JWT_TOKEN on the
+    // upgrade request automatically. The server's logs_ws handler
+    // falls through from Sec-WebSocket-Protocol to the cookie when
+    // the protocol slot is empty.
+    const ws = new WebSocket(url);
     this.ws = ws;
     ws.onopen = () => {
       this.attempt = 0;

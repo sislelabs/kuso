@@ -1,7 +1,5 @@
 import { env } from "./env";
 
-const JWT_KEY = "kuso.jwt";
-
 export class ApiError extends Error {
   status: number;
   body: unknown;
@@ -23,62 +21,58 @@ export class ApiError extends Error {
 }
 
 // captureJwtFromFragment runs once on first load. The OAuth callback
-// redirects to "/#token=<jwt>"; we lift the token into localStorage
-// and scrub the fragment from the URL so it doesn't linger in
-// browser history or get copied into a chat. The HttpOnly cookie
-// the server set in the same response stays put for the WebSocket
-// log-tail handshake (where the SPA can't set Authorization).
+// redirects to "/#token=<jwt>"; we drop it on the floor — the
+// HttpOnly cookie the server set in the same response carries the
+// session. We just scrub the fragment so the token doesn't linger
+// in browser history or get copied into a chat.
 function captureJwtFromFragment() {
   if (typeof window === "undefined") return;
   const hash = window.location.hash;
   if (!hash || !hash.startsWith("#")) return;
   const params = new URLSearchParams(hash.slice(1));
-  const tok = params.get("token");
-  if (!tok) return;
-  try {
-    window.localStorage.setItem(JWT_KEY, tok);
-  } catch {
-    /* private mode / quota */
-  }
-  // Replace location to wipe the fragment without triggering a reload.
+  if (!params.has("token")) return;
   const clean = window.location.pathname + window.location.search;
   window.history.replaceState(null, "", clean);
 }
 
+// getJwt is a no-op for the SPA — sessions live in the HttpOnly
+// cookie, JS can't read them. Kept on the API surface only because
+// the WebSocket log-tail handshake needs to pass the token in
+// Sec-WebSocket-Protocol (browsers can't set Authorization on the
+// upgrade); that path now reads document.cookie's non-HttpOnly
+// fallback. New installs return "" here and the WS path falls
+// through to cookie-mode auth.
 export function getJwt(): string | null {
   if (typeof window === "undefined") return null;
   captureJwtFromFragment();
-  return window.localStorage.getItem(JWT_KEY);
+  return null;
 }
 
-export function setJwt(token: string) {
+// clearJwt asks the server to drop the session cookie. POST /auth/logout
+// sets Max-Age=-1 so the browser evicts it. The previous local-storage
+// path is gone.
+export async function clearJwt() {
   if (typeof window === "undefined") return;
-  window.localStorage.setItem(JWT_KEY, token);
-  // The HttpOnly cookie is owned by the server; we no longer write it
-  // from JS. The login handler returns the JWT in the response body,
-  // we store it in localStorage, and api() attaches it as a Bearer.
-  // For the WS log-tail handshake the cookie is still set server-side
-  // when the JWT arrives via OAuth — there's no equivalent for local
-  // login, but logs_ws also accepts the bearer in Sec-WebSocket-Protocol
-  // (see extractWSBearer in logs_ws.go).
+  try {
+    await fetch(`${env.apiBase}/api/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+    });
+  } catch {
+    /* network — UI clears state regardless */
+  }
 }
 
-export function clearJwt() {
-  if (typeof window === "undefined") return;
-  window.localStorage.removeItem(JWT_KEY);
-  // Best-effort cookie clear. The HttpOnly attribute means we can
-  // overwrite but not read; the browser still sends the empty value
-  // until expiry. Server-side, /api/auth/logout (TODO) should clear
-  // the cookie authoritatively.
-  document.cookie = "kuso.JWT_TOKEN=; path=/; max-age=0; SameSite=Lax; Secure";
-}
+// setJwt is a kept-name shim for the local-login flow. The server
+// also sets the HttpOnly cookie in the same response; this function
+// exists only so the auth hook's onSuccess can call it without a
+// conditional. No-op in v0.10.
+export function setJwt(_token: string) { /* cookie-managed */ }
 
 type Options = Omit<RequestInit, "body"> & { body?: unknown };
 
 export async function api<T>(path: string, opts: Options = {}): Promise<T> {
   const headers = new Headers(opts.headers);
-  const jwt = getJwt();
-  if (jwt) headers.set("Authorization", `Bearer ${jwt}`);
   if (opts.body !== undefined && !(opts.body instanceof FormData)) {
     headers.set("Content-Type", "application/json");
   }
@@ -91,6 +85,8 @@ export async function api<T>(path: string, opts: Options = {}): Promise<T> {
         : opts.body instanceof FormData
           ? opts.body
           : JSON.stringify(opts.body),
+    // Cookie-only session: every API call rides the kuso.JWT_TOKEN
+    // cookie via credentials:include. No Authorization header.
     credentials: "include",
   });
   if (res.status === 204) return undefined as T;

@@ -64,6 +64,12 @@ type CreateAddonRequest struct {
 	HA          bool   `json:"ha,omitempty"`
 	StorageSize string `json:"storageSize,omitempty"`
 	Database    string `json:"database,omitempty"`
+	// ExtraLabels merge into the CR's metadata.labels at creation
+	// time. The preview-DB clone path uses this to stamp
+	// `kuso.sislelabs.com/preview-pr=<N>` so the env-delete sweep
+	// can enumerate the clones it owns. Not exposed to the JSON API
+	// (the field is `-`); only internal callers populate it.
+	ExtraLabels map[string]string `json:"-"`
 	// External, when set, switches the addon into connect-to-existing
 	// mode: no StatefulSet is provisioned; kuso mirrors the user-
 	// provided Secret as the addon's <name>-conn so envFromSecrets
@@ -172,14 +178,18 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	if size == "" {
 		size = "small"
 	}
+	labels := map[string]string{
+		"kuso.sislelabs.com/project":    project,
+		"kuso.sislelabs.com/addon":      req.Name,
+		"kuso.sislelabs.com/addon-kind": req.Kind,
+	}
+	for k, v := range req.ExtraLabels {
+		labels[k] = v
+	}
 	addon := &kube.KusoAddon{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: fqn,
-			Labels: map[string]string{
-				"kuso.sislelabs.com/project":    project,
-				"kuso.sislelabs.com/addon":      req.Name,
-				"kuso.sislelabs.com/addon-kind": req.Kind,
-			},
+			Name:   fqn,
+			Labels: labels,
 		},
 		Spec: kube.KusoAddonSpec{
 			Project:          project,

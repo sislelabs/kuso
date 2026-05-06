@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/util/retry"
 )
 
 
@@ -174,18 +175,36 @@ func create[T any](ctx context.Context, c *Client, gvr schema.GroupVersionResour
 	return &out, nil
 }
 
-// update is the generic typed → dynamic update helper. Uses Update (PUT)
-// rather than Patch — for spec-level edits where the caller has just
-// fetched the object, this is fine. Secret/secretsRev writes use Patch
-// directly elsewhere because they need merge-patch semantics (§6.4).
+// update is the generic typed → dynamic update helper. Uses Update
+// (PUT) and bumps resourceVersion to whatever the apiserver currently
+// has on conflict, then retries. helm-operator continuously patches
+// .status; without retry, a Spec write that arrives during a status
+// reconcile silently 409s and the caller sees a generic 500. The
+// caller's mutation is already baked into `obj` so we can't re-run
+// it — instead we bump rv and retry the same shape, which is correct
+// for spec-only edits because helm-operator only writes status.
 func update[T any](ctx context.Context, c *Client, gvr schema.GroupVersionResource, kind, namespace string, obj *T) (*T, error) {
 	u, err := toUnstructured(obj, gvr, kind)
 	if err != nil {
 		return nil, err
 	}
-	updated, err := c.Dynamic.Resource(gvr).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("kube: update %s in %q: %w", gvr.Resource, namespace, err)
+	var updated *unstructured.Unstructured
+	rerr := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		var uerr error
+		updated, uerr = c.Dynamic.Resource(gvr).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{})
+		if uerr == nil {
+			return nil
+		}
+		// On conflict, pick up the live resourceVersion and retry.
+		latest, gerr := c.Dynamic.Resource(gvr).Namespace(namespace).Get(ctx, u.GetName(), metav1.GetOptions{})
+		if gerr != nil {
+			return gerr
+		}
+		u.SetResourceVersion(latest.GetResourceVersion())
+		return uerr
+	})
+	if rerr != nil {
+		return nil, fmt.Errorf("kube: update %s in %q: %w", gvr.Resource, namespace, rerr)
 	}
 	var out T
 	if err := fromUnstructured(updated, &out); err != nil {
@@ -199,6 +218,46 @@ func deleteCR(ctx context.Context, c *Client, gvr schema.GroupVersionResource, n
 		return fmt.Errorf("kube: delete %s/%s in %q: %w", gvr.Resource, name, namespace, err)
 	}
 	return nil
+}
+
+// updateWithRetry runs `mutate` against a freshly-fetched copy of the
+// CR and retries the cycle on conflict. helm-operator continuously
+// patches .status; without retry, a Spec write that arrives during a
+// status reconcile silently 409s and the caller sees a generic 500.
+//
+// `mutate` should ONLY touch the object; persistence happens here.
+// On conflict the helper re-reads the latest version, re-runs the
+// callback, and tries the Update again — bounded backoff (5 tries).
+func updateWithRetry[T any](
+	ctx context.Context,
+	c *Client,
+	gvr schema.GroupVersionResource,
+	kind, namespace, name string,
+	mutate func(*T) error,
+) (*T, error) {
+	var out T
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		latest, gerr := get[T](ctx, c, gvr, namespace, name)
+		if gerr != nil {
+			return gerr
+		}
+		if merr := mutate(latest); merr != nil {
+			return merr
+		}
+		u, terr := toUnstructured(latest, gvr, kind)
+		if terr != nil {
+			return terr
+		}
+		updated, uerr := c.Dynamic.Resource(gvr).Namespace(namespace).Update(ctx, u, metav1.UpdateOptions{})
+		if uerr != nil {
+			return uerr
+		}
+		return fromUnstructured(updated, &out)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("kube: update with retry %s/%s in %q: %w", gvr.Resource, name, namespace, err)
+	}
+	return &out, nil
 }
 
 // CreateKusoProject creates a new KusoProject CR.

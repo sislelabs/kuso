@@ -133,7 +133,27 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// HttpOnly session cookie. Pre-v0.10 the SPA stashed the JWT in
+	// localStorage, where any XSS could lift the session. Cookie is
+	// HttpOnly + Secure + SameSite=Lax + Path=/ so cross-site
+	// requests don't carry it; same-site GETs (the SPA's own fetch
+	// calls) do. Insecure-cookie fallback for plain-HTTP dev only —
+	// production runs behind traefik+TLS so r.TLS != nil.
+	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	http.SetCookie(w, &http.Cookie{
+		Name:     "kuso.JWT_TOKEN",
+		Value:    tok,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		// 12h matches the JWT TTL.
+		MaxAge: 12 * 60 * 60,
+	})
 	w.Header().Set("Content-Type", "application/json")
+	// Body still carries the access_token for the CLI / API token
+	// flow (kuso login --api ...). The SPA reads the cookie via
+	// document.cookie — no JS-reachable token.
 	if err := json.NewEncoder(w).Encode(loginResponse{AccessToken: tok}); err != nil {
 		h.Logger.Error("auth: write response", "err", err)
 	}
@@ -171,6 +191,24 @@ func (h *AuthHandler) Session(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// Logout clears the kuso.JWT_TOKEN cookie. Bearer tokens used by
+// the CLI/API are still valid until expiry — kuso doesn't keep a
+// revocation list (see the long-token todo); UI Logout is purely
+// "drop the browser's session cookie".
+func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	http.SetCookie(w, &http.Cookie{
+		Name:     "kuso.JWT_TOKEN",
+		Value:    "",
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   -1,
+	})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Methods returns {local, github, oauth2} matching /api/auth/methods.

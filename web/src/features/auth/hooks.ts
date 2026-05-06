@@ -103,7 +103,7 @@ export function useSignOut() {
   const qc = useQueryClient();
   const router = useRouter();
   return () => {
-    clearJwt();
+    void clearJwt();
     qc.removeQueries({ queryKey: sessionQueryKey });
     router.replace("/login");
   };

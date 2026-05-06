@@ -26,6 +26,11 @@ type GithubHandler struct {
 	Cache      github.CacheStore
 	Dispatcher *github.Dispatcher
 	Logger     *slog.Logger
+	// BaseCtx is the server's lifecycle context. Webhook dispatches
+	// derive from this so a graceful shutdown cancels in-flight
+	// preview-env creates / build triggers instead of leaving them
+	// running against a closing kube client.
+	BaseCtx context.Context
 }
 
 // MountPublic registers webhook (no JWT) + setup-callback routes onto
@@ -135,8 +140,12 @@ func (h *GithubHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 	// We capture the body + event by value because the request goroutine
 	// may unwind (and the body buffer could be reused) before our
 	// goroutine runs.
+	parent := h.BaseCtx
+	if parent == nil {
+		parent = context.Background()
+	}
 	go func(event string, body []byte) {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
 		defer cancel()
 		if err := h.Dispatcher.Dispatch(ctx, event, body); err != nil {
 			h.Logger.Error("github dispatch", "event", event, "err", err)

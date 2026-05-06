@@ -2,7 +2,9 @@ package handlers
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -283,6 +285,25 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	if req.Into != "" {
 		destAddon = req.Into
 	}
+	// Kind compatibility — refuse to point a postgres dump at a
+	// redis addon (the seed Job would only fail mid-restore with
+	// an opaque psql error after the dump's already partially
+	// streamed). Both addons must exist for List to have shown
+	// them; we just compare kinds.
+	if req.Into != "" {
+		ns := h.Namespace
+		srcCR, sErr := h.Kube.GetKusoAddon(ctx, ns, addons.CRName(project, addon))
+		dstCR, dErr := h.Kube.GetKusoAddon(ctx, ns, addons.CRName(project, destAddon))
+		if sErr == nil && dErr == nil && srcCR != nil && dstCR != nil &&
+			srcCR.Spec.Kind != "" && dstCR.Spec.Kind != "" &&
+			srcCR.Spec.Kind != dstCR.Spec.Kind {
+			http.Error(w,
+				fmt.Sprintf("kind mismatch: source addon %q is %s, destination %q is %s",
+					addon, srcCR.Spec.Kind, destAddon, dstCR.Spec.Kind),
+				http.StatusBadRequest)
+			return
+		}
+	}
 	releaseName := addons.CRName(project, destAddon)
 	jobName := fmt.Sprintf("%s-restore-%d", releaseName, time.Now().Unix())
 
@@ -542,6 +563,37 @@ func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// blockedSQLBuiltin rejects queries that call Postgres functions
+// outside the data-browse use case the SQL browser exists for.
+// Read-only TX already blocks writes, but a SELECT pg_read_file(...)
+// isn't a write — it's a privileged read of /etc/passwd. The
+// allowlist would be too restrictive (every WHERE clause uses
+// builtins); a denylist of the high-blast-radius primitives is
+// enough.
+func blockedSQLBuiltin(q string) string {
+	lower := strings.ToLower(q)
+	for _, pat := range []struct {
+		match  string
+		reason string
+	}{
+		{"pg_read_file", "filesystem access (pg_read_file)"},
+		{"pg_read_binary_file", "filesystem access (pg_read_binary_file)"},
+		{"pg_ls_dir", "filesystem access (pg_ls_dir)"},
+		{"pg_stat_file", "filesystem access (pg_stat_file)"},
+		{"lo_import", "large-object filesystem import"},
+		{"lo_export", "large-object filesystem export"},
+		{"dblink", "outbound network (dblink)"},
+		{"copy ", "COPY (filesystem / outbound)"},
+		{"pg_logfile_rotate", "server-control function"},
+		{"pg_reload_conf", "server-control function"},
+	} {
+		if strings.Contains(lower, pat.match) {
+			return pat.reason
+		}
+	}
+	return ""
+}
+
 // SQLQueryRequest is the body of POST /sql/query. We accept a raw
 // SQL string but enforce read-only at runtime, not on the parsed
 // statement — that's defence in depth against drivers that quietly
@@ -588,6 +640,15 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
 		return
 	}
+	// Reject queries that hit Postgres' file/network/process built-ins.
+	// Read-only TX prevents writes but pg_read_file / pg_ls_dir /
+	// dblink / lo_import etc. are all SELECT-shaped on a misconfigured
+	// server (superuser DB user, or grants the operator forgot). Cheap
+	// substring scan; defence-in-depth on top of role privileges.
+	if reason := blockedSQLBuiltin(req.Query); reason != "" {
+		http.Error(w, "query rejected: "+reason, http.StatusForbidden)
+		return
+	}
 	conn, err := h.pgConn(ctx, project, addon)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
@@ -622,8 +683,12 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 		// Truncate so a multi-MB user-pasted query doesn't blow up
 		// the audit row. 4 KiB is plenty for forensics; the full
 		// query lives in the (ephemeral) postgres pgaudit log if
-		// the operator turned it on.
+		// the operator turned it on. Append sha256(full) so
+		// "did this exact query run twice" stays answerable even
+		// after truncation.
 		q := req.Query
+		sum := sha256.Sum256([]byte(q))
+		hash := hex.EncodeToString(sum[:])[:16]
 		if len(q) > 4096 {
 			q = q[:4096] + "…[truncated]"
 		}
@@ -634,7 +699,7 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 			Pipeline: project,
 			App:      addon,
 			Resource: "kusoaddon",
-			Message:  q,
+			Message:  fmt.Sprintf("[sha256:%s] %s", hash, q),
 		})
 	}
 	rows, err := tx.QueryContext(ctx, req.Query)
