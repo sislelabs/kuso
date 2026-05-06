@@ -5,6 +5,20 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.9] — 2026-05-06
+
+### ✨ Features
+- Feat: parallel-run sweep — leader election, ha addon, node bootstrap, metrics, network policies ([c6921b9](https://github.com/sislelabs/kuso/commit/c6921b97c37d6ac6d34045a845e0b8aa1508ab06))
+
+### 🐛 Bug Fixes
+- Fix: T1-E + T2-A + T2-C + T2-D + T2-F + T2-H + T2-K + T2-J + S-8 + log search bug + perf hardening ([f323140](https://github.com/sislelabs/kuso/commit/f323140b970b116b7fac5dcd753bae95e3cef08f))
+- Fix: triage T1 (concurrent builds, RBAC gap, project cascade, addon retain) + perf hardening ([de74a24](https://github.com/sislelabs/kuso/commit/de74a24281d89e67d43e9513528f20f6471a34cd))
+- Fix: NotificationsButton conditional-hook bug + stale audit comment ([4dc1de2](https://github.com/sislelabs/kuso/commit/4dc1de2337435fd714195a51fb74a6e1d52db38e))
+- Fix(security): rework after audit re-review ([4b997a2](https://github.com/sislelabs/kuso/commit/4b997a233aef90c90648efe2e02c42873888c8d2))
+- Fix(security): triage audit's P0 + P1 findings ([e41723b](https://github.com/sislelabs/kuso/commit/e41723bf2312c6ed6520d6b727d698b5778afb69))
+- Fix(env): per-var edits now propagate to env CR + drift indicator ([dbe23ff](https://github.com/sislelabs/kuso/commit/dbe23ffc902df023c3a46c5a9c439e10666a4610))
+- Fix(security): P0-1 BackupsHandler — gate all six methods ([bf0d72a](https://github.com/sislelabs/kuso/commit/bf0d72a5bf28b893d1e6d725d3a91b8c2bc20027))
+
 ## [0.9.8] — 2026-05-06
 
 ### 🐛 Bug Fixes
