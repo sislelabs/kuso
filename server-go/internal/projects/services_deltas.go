@@ -262,6 +262,17 @@ func (s *Service) persistEnvVars(ctx context.Context, ns, project, service strin
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
 	}
+	// Propagate to every owned env. Without this the per-var edit
+	// path (SetEnvVar / UnsetEnvVar — used by the env-vars/{name}
+	// REST endpoint AND the `kuso env set` CLI verb) wrote to the
+	// service CR but never reached the env CR — so the running pod
+	// kept the stale value forever. The bulk replacement path
+	// (SetEnv) goes through a different code path (services_ops)
+	// that already does this; we forgot the same on the per-var
+	// path. Mirrors propagateDomainsToEnvs / propagateInternalToEnvs.
+	if err := s.propagateEnvVarsToEnvs(ctx, ns, project, service, updated); err != nil {
+		return nil, fmt.Errorf("propagate envVars to envs: %w", err)
+	}
 	return updated, nil
 }
 

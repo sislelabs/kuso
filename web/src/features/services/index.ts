@@ -3,6 +3,7 @@ export {
   useServiceEnv,
   useSetServiceEnv,
   useDetectedEnv,
+  useDrift,
   useBuilds,
   useTriggerBuild,
   useLogsTail,

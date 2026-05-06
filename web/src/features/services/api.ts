@@ -39,6 +39,28 @@ export async function getDetectedEnv(project: string, service: string): Promise<
   );
 }
 
+// DriftReport mirrors projects.DriftReport on the server. Empty
+// SpecPending + false RolloutPending means the running pod is in
+// sync with the saved spec.
+export interface DriftReport {
+  // Field names that differ between service spec and the running
+  // env CR (e.g. "envVars", "domains", "internal", "port"). Empty
+  // when in sync.
+  specPending: string[];
+  // helm-operator hasn't reconciled the latest spec edit yet
+  // (env.metadata.generation > status.observedGeneration). The
+  // user's edit is on disk; the deployment will roll within a
+  // few seconds.
+  rolloutPending: boolean;
+  envName?: string;
+}
+
+export async function getDrift(project: string, service: string): Promise<DriftReport> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/drift`,
+  );
+}
+
 export interface BuildSummary {
   id: string;
   serviceName: string;

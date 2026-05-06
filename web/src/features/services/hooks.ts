@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   deleteService,
   getDetectedEnv,
+  getDrift,
   getService,
   getServiceEnv,
   getServiceLogs,
@@ -48,6 +49,20 @@ export function useServiceEnv(project: string, service: string) {
 // in the shipper but the UI doesn't need sub-second refresh, the
 // banner just has to appear within "minute or so" of a crash for the
 // user to make the connection.
+// useDrift polls the spec-vs-running drift report. Short refetch
+// interval (10s) so a save on the settings panel surfaces the
+// rolling-out indicator within one tick — slower would feel like
+// the UI ate the save.
+export function useDrift(project: string, service: string) {
+  return useQuery({
+    queryKey: ["projects", project, "services", service, "drift"] as const,
+    queryFn: () => getDrift(project, service),
+    enabled: !!project && !!service,
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+  });
+}
+
 export function useDetectedEnv(project: string, service: string) {
   return useQuery({
     queryKey: ["projects", project, "services", service, "env", "detected"] as const,

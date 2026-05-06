@@ -71,6 +71,11 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	// of the build that produced them — UI flags any name that's
 	// referenced in source but missing from the saved env.
 	r.Get("/api/projects/{project}/services/{service}/env/detected", h.GetDetectedEnv)
+	// Drift report — pending-changes surface for the service overlay.
+	// Returns the list of fields that differ between the saved
+	// service spec and the running env CR, plus a boolean for
+	// helm-operator's reconcile lag.
+	r.Get("/api/projects/{project}/services/{service}/drift", h.GetDrift)
 	// Custom environments: POST .../envs creates a non-prod, non-preview
 	// env (e.g. staging on a branch). Production auto-creates with the
 	// service; preview envs come from the GH PR webhook.
@@ -469,6 +474,24 @@ func (h *ProjectsHandler) GetEnv(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"envVars": out})
+}
+
+// GetDrift returns the pending-changes summary for a service. Used
+// by the overlay header to show "spec edited but not rolled out".
+// Viewer-level access is enough — the response is just metadata
+// about the spec (no secret values, no env values).
+func (h *ProjectsHandler) GetDrift(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+		return
+	}
+	out, err := h.Svc.GetDrift(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"))
+	if err != nil {
+		h.fail(w, "drift", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // GetDetectedEnv returns env-var names kuso detected as referenced

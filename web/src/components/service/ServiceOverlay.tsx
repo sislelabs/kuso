@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { useService } from "@/features/services";
+import { useService, useDrift } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
@@ -67,6 +67,7 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
   }, [open, onClose]);
 
   const svc = useService(project, service ?? "");
+  const drift = useDrift(project, service ?? "");
   const envs = useEnvironments(project);
   const fqn = service ? project + "-" + service : "";
   const env = (envs.data ?? []).find((e) => {
@@ -148,6 +149,34 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                     <UrlPill url={url} />
                   ) : (
                     <span className="font-mono text-[10px] text-[var(--text-tertiary)]">no URL yet</span>
+                  )}
+                  {/* Drift indicator: surfaces "you saved an edit but
+                      the running pod still has the old value" so
+                      users don't refresh the app expecting their env
+                      change to be live. Two states:
+                        - rolloutPending → operator is reconciling,
+                          show "rolling out…" with a soft spinner.
+                        - specPending non-empty + !rolloutPending →
+                          edit is saved on the service CR but the env
+                          CR hasn't picked it up. Either a
+                          propagation bug (we keep finding these) or
+                          the operator is wedged.
+                      Hidden when in sync. */}
+                  {drift.data && (drift.data.rolloutPending || drift.data.specPending.length > 0) && (
+                    <span
+                      className={
+                        drift.data.rolloutPending
+                          ? "inline-flex items-center gap-1 rounded-md border border-blue-500/40 bg-blue-500/10 px-2 py-0.5 font-mono text-[10px] text-blue-200"
+                          : "inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] text-amber-200"
+                      }
+                      title={
+                        drift.data.rolloutPending
+                          ? "kuso is reconciling — pods will roll within a few seconds"
+                          : `pending changes on: ${drift.data.specPending.join(", ")}`
+                      }
+                    >
+                      {drift.data.rolloutPending ? "rolling out…" : "pending changes"}
+                    </span>
                   )}
                 </div>
               </div>
