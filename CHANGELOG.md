@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.2] — 2026-05-06
+
+### ✨ Features
+- Feat(settings): admin-tunable build resources + concurrency cap ([39d1456](https://github.com/sislelabs/kuso/commit/39d14566387df43336d7b002fb9c99c45d1d9dbf))
+
 ## [0.9.1] — 2026-05-06
 
 ### 🐛 Bug Fixes
