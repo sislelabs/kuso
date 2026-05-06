@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.6] — 2026-05-06
+
+### 🐛 Bug Fixes
+- Fix(domains): use Mozilla public-suffix list for FQDN check + skip stable nixpacks ship ([3655e78](https://github.com/sislelabs/kuso/commit/3655e780ffbaeddfee47286f67ffd8b5288f208c))
+
 ## [0.9.5] — 2026-05-06
 
 ### 🐛 Bug Fixes
