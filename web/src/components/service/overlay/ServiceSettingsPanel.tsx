@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { usePatchService, type PatchServiceBody } from "@/features/services";
 import { useCan, Perms } from "@/features/auth";
+import { useEnvironments } from "@/features/projects";
 import type { KusoService } from "@/types/projects";
 import { Github, Trash2, Network, Layers3, Hammer, Cloud, Save, HardDrive, MapPin } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -51,6 +52,20 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
   // probe-failure stack — see /domains-add-remove-list change).
   const [saveError, setSaveError] = useState<string | null>(null);
   const patch = usePatchService(project, service);
+  // Pull the production env's host so the Networking section can
+  // surface the auto-domain inline (read-only). The KusoService spec
+  // doesn't carry the rendered hostname — that's stamped on the
+  // KusoEnvironment at create time — so we have to reach over here.
+  const envs = useEnvironments(project);
+  const autoHost = useMemo(() => {
+    const list = envs.data ?? [];
+    const prod = list.find(
+      (e) =>
+        e.spec.service === service ||
+        e.spec.service === `${project}-${service}`,
+    );
+    return prod?.spec.host;
+  }, [envs.data, project, service]);
   // Gate the floating save bar on services:write — viewers can scroll
   // through the panel but can't edit. Inputs are still editable to
   // preserve copy/paste affordance, just not committable.
@@ -241,7 +256,7 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
       <div className="grid grid-cols-1 gap-0 pb-24 md:grid-cols-[1fr_180px]">
         <div className="space-y-8 px-4 py-4 md:px-6 md:py-6">
           <SourceSection state={state} setState={setState} project={project} service={service} />
-          <NetworkingSection state={state} setState={setState} />
+          <NetworkingSection state={state} setState={setState} autoHost={autoHost} />
           <ScaleSection state={state} setState={setState} />
           <PlacementSection state={state} setState={setState} />
           <VolumesSection state={state} setState={setState} />

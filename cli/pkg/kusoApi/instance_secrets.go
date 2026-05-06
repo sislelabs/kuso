@@ -15,7 +15,7 @@ func (k *KusoClient) SetInstanceSecret(req SetSharedSecretRequest) (*resty.Respo
 }
 
 func (k *KusoClient) UnsetInstanceSecret(key string) (*resty.Response, error) {
-	return k.client.Delete("/api/instance-secrets/" + key)
+	return k.client.Delete("/api/instance-secrets/" + esc(key))
 }
 
 // Instance addons — Model 2 shared DB servers. Built on top of
@@ -38,5 +38,5 @@ func (k *KusoClient) RegisterInstanceAddon(req RegisterInstanceAddonRequest) (*r
 }
 
 func (k *KusoClient) UnregisterInstanceAddon(name string) (*resty.Response, error) {
-	return k.client.Delete("/api/instance-addons/" + name)
+	return k.client.Delete("/api/instance-addons/" + esc(name))
 }

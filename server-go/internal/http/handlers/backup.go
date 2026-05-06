@@ -6,7 +6,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 )
 
@@ -65,11 +64,13 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, backupDeprecationMsg, http.StatusNotImplemented)
 }
 
+// requireAdmin gates on the settings:admin permission instead of the
+// raw `claims.Role == "admin"` string match the pre-v0.9.4 path used.
+// The string match blocked group-based admins (whose role is the
+// group's slug, not literally "admin") and accepted any user whose
+// instance role had been renamed to "admin" without granting
+// settings perms. Going through the permission system makes both
+// behaviours consistent with the rest of the API surface.
 func (h *BackupHandler) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	claims, ok := auth.ClaimsFromContext(r.Context())
-	if !ok || claims == nil || claims.Role != "admin" {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return false
-	}
-	return true
+	return requireAdmin(w, r)
 }

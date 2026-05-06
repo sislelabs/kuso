@@ -23,7 +23,7 @@ func (k *KusoClient) ListNotifications() (*resty.Response, error) {
 }
 
 func (k *KusoClient) GetNotification(id string) (*resty.Response, error) {
-	return k.client.Get("/api/notifications/" + id)
+	return k.client.Get("/api/notifications/" + esc(id))
 }
 
 func (k *KusoClient) CreateNotification(body NotificationBody) (*resty.Response, error) {
@@ -33,13 +33,13 @@ func (k *KusoClient) CreateNotification(body NotificationBody) (*resty.Response,
 
 func (k *KusoClient) UpdateNotification(id string, body NotificationBody) (*resty.Response, error) {
 	k.client.SetBody(body)
-	return k.client.Put("/api/notifications/" + id)
+	return k.client.Put("/api/notifications/" + esc(id))
 }
 
 func (k *KusoClient) DeleteNotification(id string) (*resty.Response, error) {
-	return k.client.Delete("/api/notifications/" + id)
+	return k.client.Delete("/api/notifications/" + esc(id))
 }
 
 func (k *KusoClient) TestNotification(id string) (*resty.Response, error) {
-	return k.client.Post("/api/notifications/" + id + "/test")
+	return k.client.Post("/api/notifications/" + esc(id) + "/test")
 }

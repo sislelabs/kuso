@@ -110,10 +110,16 @@ metadata:
   labels:
     app.kubernetes.io/name: kuso-server
 spec:
-  # Single replica today (the build poller's tick still assumes
-  # singleton — see cmd/kuso-server/main.go for the leader-election
-  # TODO). Bumping to 2+ requires the leader-election wrapper but
-  # the Postgres backend is otherwise ready for it.
+  # Single replica. Two constraints keep us here:
+  #   1. The build poller assumes singleton (cmd/kuso-server/main.go
+  #      has the leader-election TODO). Two pollers double-promote
+  #      queued builds.
+  #   2. deploy/postgres.yaml is itself a single-instance node-
+  #      pinned StatefulSet — kuso-server replicas wouldn't add
+  #      availability since the DB is the single point of failure.
+  # Real HA requires both the leader-election wrapper AND an
+  # external managed Postgres (RDS / Crunchy / Supabase). Until
+  # then this is intentional, not aspirational.
   replicas: 1
   # RollingUpdate replaces the pre-v0.9 Recreate strategy. The RWO
   # PVC was the only reason for Recreate; with Postgres there's no

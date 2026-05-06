@@ -166,6 +166,7 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 	if req.Description != nil {
 		cur.Spec.Description = *req.Description
 	}
+	prevBaseDomain := cur.Spec.BaseDomain
 	if req.BaseDomain != nil {
 		cur.Spec.BaseDomain = *req.BaseDomain
 	}
@@ -207,7 +208,57 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 		return nil, err
 	}
 	s.invalidateNamespace(name)
+	// Propagate a baseDomain change to every owned env. Without this
+	// the user changes the project setting, the project CR happily
+	// updates, and every existing service keeps the OLD host on its
+	// ingress — the most common confusion ("I changed it but nothing
+	// happened"). Only auto-rewrite hosts that match the OLD default
+	// pattern; user-customised hosts (added via the Networking tab
+	// or via `kuso domains add`) stay put. Best-effort: a partial
+	// failure logs but doesn't fail the project update.
+	if req.BaseDomain != nil && prevBaseDomain != cur.Spec.BaseDomain {
+		if perr := s.propagateBaseDomain(ctx, name, prevBaseDomain, cur.Spec.BaseDomain); perr != nil {
+			fmt.Printf("warn: propagate baseDomain project=%s: %v\n", name, perr)
+		}
+	}
 	return out, nil
+}
+
+// propagateBaseDomain rewrites the Host on every owned env that still
+// holds the OLD default-shape host (i.e. the auto-generated domain we
+// stamped at create time). Hosts that don't match the old pattern were
+// customised by the user and are left alone — overwriting them would
+// silently destroy the operator's custom DNS work.
+//
+// AdditionalHosts (manually-added domains in the Networking tab) are
+// untouched. Only the primary Host moves.
+func (s *Service) propagateBaseDomain(ctx context.Context, project, oldBase, newBase string) error {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return err
+	}
+	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "kuso.sislelabs.com/project=" + project,
+	})
+	if err != nil {
+		return fmt.Errorf("list envs: %w", err)
+	}
+	for i := range envs.Items {
+		var env kube.KusoEnvironment
+		if cerr := decodeInto(&envs.Items[i], &env); cerr != nil {
+			continue
+		}
+		expected := defaultHost(env.Spec.Service, project, oldBase)
+		if env.Spec.Host != expected {
+			// User-customised host — leave it.
+			continue
+		}
+		env.Spec.Host = defaultHost(env.Spec.Service, project, newBase)
+		if _, uerr := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); uerr != nil {
+			return fmt.Errorf("update env %s: %w", env.Name, uerr)
+		}
+	}
+	return nil
 }
 
 // Delete cascades: every env, service, and the project itself. Addon

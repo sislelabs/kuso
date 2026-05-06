@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/go-resty/resty/v2"
 )
@@ -74,7 +75,18 @@ func (k *KusoClient) SetApiUrl(apiURL, bearerToken string) {
 	}
 
 	ua := "kuso-cli/" + strings.TrimSpace(embeddedVersion)
-	rc := resty.New().SetBaseURL(k.baseURL)
+	// Per-request timeout. Long enough to absorb a slow build-poller
+	// tick on a busy cluster; short enough that a wedged server
+	// doesn't hang `kuso ...` indefinitely. The previous (no-timeout)
+	// default meant CI runs would block forever on a stalled API.
+	// Override with KUSO_CLI_TIMEOUT=<go-duration> (e.g. "30s", "5m").
+	timeout := 60 * time.Second
+	if v := strings.TrimSpace(os.Getenv("KUSO_CLI_TIMEOUT")); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			timeout = d
+		}
+	}
+	rc := resty.New().SetBaseURL(k.baseURL).SetTimeout(timeout)
 	// Fresh installs default to LE *staging* certs — the browser warns
 	// and Go's http.Client outright rejects. We honor KUSO_INSECURE=1
 	// so the same `kuso login …` shown in the install footer actually

@@ -249,17 +249,29 @@ function ReplicasBadge({
   // Sleeping overrides everything (greys out + label changes to asleep).
   const ratio = replicas.max > 0 ? replicas.ready / replicas.max : 0;
   let dotCls = "bg-[var(--text-tertiary)]/40";
+  // Color the ready-count number too — same color the dot uses, so
+  // "1/5 ready" reads as a unit. The pre-v0.9.4 layout left the
+  // number grey even when the dot was green, which made a healthy
+  // 1/5 look the same as a 0/5.
+  let countCls = "text-[var(--text-secondary)]";
   if (status !== "sleeping" && replicas.ready > 0) {
-    if (ratio >= 0.85) dotCls = "bg-red-400";
-    else if (ratio >= 0.5) dotCls = "bg-amber-400";
-    else dotCls = "bg-emerald-400";
+    if (ratio >= 0.85) {
+      dotCls = "bg-red-400";
+      countCls = "text-red-400";
+    } else if (ratio >= 0.5) {
+      dotCls = "bg-amber-400";
+      countCls = "text-amber-400";
+    } else {
+      dotCls = "bg-emerald-400";
+      countCls = "text-emerald-400";
+    }
   }
   return (
     <span className="inline-flex items-center gap-2 text-[var(--text-tertiary)]">
       <span className="inline-flex items-center gap-1.5">
         <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", dotCls)} />
         <span>
-          <span className="text-[var(--text-secondary)]">{replicas.ready}</span>
+          <span className={countCls}>{replicas.ready}</span>
           <span className="text-[var(--text-tertiary)]/60">/{replicas.max}</span>{" "}
           <span className="text-[var(--text-tertiary)]/80">
             {status === "sleeping" ? "asleep" : "ready"}

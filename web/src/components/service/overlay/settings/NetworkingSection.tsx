@@ -1,18 +1,30 @@
 "use client";
 
-import { Network, Plus, X } from "lucide-react";
+import { Network, Plus, X, Globe, Lock } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Section, Row, type SectionProps } from "./_primitives";
 
-// NetworkingSection — port + custom domains. Domains are per-host
-// rows with explicit delete buttons (vs. the older free-text
-// textarea) so a user can't accidentally clear the entire list by
-// blur-then-save while traefik is flaky. Each row also has its own
-// remove control so the intent is unambiguous: typing in a row
-// edits ONE host; clicking + adds a new one; clicking ✕ removes
-// just that host.
-export function NetworkingSection({ state, setState }: SectionProps) {
+// NetworkingSection — the single source of truth for "where does
+// this service answer HTTP". Three blocks, in order:
+//
+//   1. visibility   — public Ingress vs. internal-only ClusterIP
+//   2. port         — container port; we auto-inject PORT into the
+//                     pod env so apps that read $PORT (Express,
+//                     Flask, Rails, FastAPI, Spring Boot) bind here
+//                     without the user having to add the var.
+//   3. auto-domain  — read-only line showing the project's
+//                     baseDomain-derived hostname. Lives next to
+//                     custom-domains so the user sees both at once
+//                     and stops asking "where does my service live"
+//                     in the support channel.
+//   4. custom domains — per-host rows, explicit add/remove.
+//
+// Pre-v0.9.5 this section showed only port + custom-domains, leaving
+// users to guess the auto-domain from the canvas tooltip. The
+// 502-Bad-Gateway / "I changed it but nothing happened" support
+// volume came from this gap; the auto-domain row closes it.
+export function NetworkingSection({ state, setState, autoHost }: SectionProps) {
   const lines = state.domains.split("\n").map((s) => s.trim());
   const hosts = lines.filter((s) => s.length > 0);
 
@@ -20,9 +32,6 @@ export function NetworkingSection({ state, setState }: SectionProps) {
     setState((s) => ({ ...s, domains: next.join("\n") }));
   };
   const updateAt = (i: number, value: string) => {
-    // We keep empty rows in the editor while the user is typing
-    // (so the input doesn't unmount under their cursor), but the
-    // saved value drops them — see ServiceSettingsPanel.onSave.
     const next = [...lines];
     next[i] = value;
     setState((s) => ({ ...s, domains: next.join("\n") }));
@@ -39,8 +48,6 @@ export function NetworkingSection({ state, setState }: SectionProps) {
     }));
   };
 
-  // Render at least one row even when the list is empty so the user
-  // has somewhere to type. Save logic strips empties.
   const rows = lines.length === 0 ? [""] : lines;
 
   return (
@@ -53,14 +60,6 @@ export function NetworkingSection({ state, setState }: SectionProps) {
             : "public — Ingress + auto-domain + Let's Encrypt cert · check to flip to internal-only"
         }
         control={
-          // Shrink-wrap the checkbox + short label so they stay
-          // glued together at the right edge of the row. The full
-          // explanation lives in the row's hint slot, which already
-          // wraps gracefully under the label column.
-          //
-          // Earlier version had `Internal-only (no public Ingress)`
-          // as the inline label; on the narrow control column it
-          // wrapped after "no public" and the checkbox drifted left.
           <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-[12px]">
             <input
               type="checkbox"
@@ -76,7 +75,7 @@ export function NetworkingSection({ state, setState }: SectionProps) {
       />
       <Row
         label="port"
-        hint="container port"
+        hint="container port · kuso auto-sets $PORT for you"
         control={
           <Input
             type="number"
@@ -88,13 +87,36 @@ export function NetworkingSection({ state, setState }: SectionProps) {
           />
         }
       />
+      {!state.internal && autoHost && (
+        <Row
+          label="auto-domain"
+          hint="set by project baseDomain · change in Project Settings to rename for every service"
+          control={
+            <a
+              href={`https://${autoHost}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex max-w-[420px] items-center gap-1.5 truncate rounded-md bg-[var(--bg-tertiary)] px-2 py-1 font-mono text-[12px] text-[var(--text-secondary)] hover:text-[var(--accent)]"
+              title={`Open https://${autoHost}`}
+            >
+              <Lock className="h-3 w-3 shrink-0" />
+              <span className="truncate">{autoHost}</span>
+            </a>
+          }
+        />
+      )}
       <Row
-        label="domains"
-        hint={`${hosts.length} custom · auto-TLS via Let's Encrypt`}
+        label="custom domains"
+        hint={
+          hosts.length === 0
+            ? "point a DNS A-record at the cluster IP, then add the host below · auto-TLS via Let's Encrypt"
+            : `${hosts.length} bound · DNS must point at the cluster IP for cert minting`
+        }
         control={
           <div className="flex w-full max-w-[420px] flex-col gap-1.5">
             {rows.map((host, i) => (
               <div key={i} className="flex items-center gap-1.5">
+                <Globe className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
                 <Input
                   value={host}
                   onChange={(e) => updateAt(i, e.target.value)}

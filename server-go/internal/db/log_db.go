@@ -82,8 +82,12 @@ func (d *LogDB) SearchLogs(ctx context.Context, req SearchLogsRequest) ([]LogLin
 	if q != "" {
 		// Case-insensitive LIKE. Postgres ILIKE is the cheap path; if
 		// the working set ever needs ranked match, swap for tsvector.
-		sqlStr.WriteString(` AND line ILIKE ?`)
-		args = append(args, "%"+q+"%")
+		// Escape user-supplied %, _, and \ — without this a search for
+		// "100%" matches every line containing "100" (the % becomes
+		// the wildcard) and "user_id" wildcards every char between
+		// "user" and "id".
+		sqlStr.WriteString(` AND line ILIKE ? ESCAPE '\'`)
+		args = append(args, "%"+escapeLike(q)+"%")
 	}
 	if req.Project != "" {
 		sqlStr.WriteString(` AND project = ?`)
@@ -136,8 +140,8 @@ func (d *LogDB) CountLogMatches(ctx context.Context, project, service, query str
 	var sqlStr strings.Builder
 	sqlStr.WriteString(`SELECT COUNT(*) FROM "LogLine" WHERE 1=1`)
 	if q != "" {
-		sqlStr.WriteString(` AND line ILIKE ?`)
-		args = append(args, "%"+q+"%")
+		sqlStr.WriteString(` AND line ILIKE ? ESCAPE '\'`)
+		args = append(args, "%"+escapeLike(q)+"%")
 	}
 	if project != "" {
 		sqlStr.WriteString(` AND project = ?`)
@@ -168,4 +172,13 @@ func (d *LogDB) PruneLogsOlderThan(ctx context.Context, before time.Time) (int64
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
+}
+
+// escapeLike escapes the SQL LIKE / ILIKE wildcards `%`, `_`, and the
+// escape char `\` itself. Pair with `ESCAPE '\'` on the query — without
+// that clause Postgres falls back to the empty escape char and ignores
+// any backslashes we put in here.
+func escapeLike(s string) string {
+	r := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+	return r.Replace(s)
 }

@@ -20,7 +20,7 @@ import (
 func TestBackup_DownloadReturns501ForAdmin(t *testing.T) {
 	t.Parallel()
 	r := chi.NewRouter()
-	r.Use(injectClaims(&auth.Claims{UserID: "u1", Role: "admin"}))
+	r.Use(injectClaims(&auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermSettingsAdmin)}}))
 	(&httphandlers.BackupHandler{}).Mount(r)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/backup", nil)
@@ -34,7 +34,7 @@ func TestBackup_DownloadReturns501ForAdmin(t *testing.T) {
 func TestBackup_DownloadRejectsNonAdmin(t *testing.T) {
 	t.Parallel()
 	r := chi.NewRouter()
-	r.Use(injectClaims(&auth.Claims{UserID: "u1", Role: "viewer"}))
+	r.Use(injectClaims(&auth.Claims{UserID: "u1", Permissions: []string{}}))
 	(&httphandlers.BackupHandler{}).Mount(r)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/admin/backup", nil)
@@ -48,7 +48,7 @@ func TestBackup_DownloadRejectsNonAdmin(t *testing.T) {
 func TestBackup_RestoreReturns501ForAdmin(t *testing.T) {
 	t.Parallel()
 	r := chi.NewRouter()
-	r.Use(injectClaims(&auth.Claims{UserID: "u1", Role: "admin"}))
+	r.Use(injectClaims(&auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermSettingsAdmin)}}))
 	(&httphandlers.BackupHandler{}).Mount(r)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/admin/restore", nil)

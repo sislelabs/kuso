@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -121,6 +122,16 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 		var startBody struct {
 			Job string `json:"job"`
 		}
+		// Reject HTML responses up front. A misconfigured ingress
+		// (e.g. cert-manager not yet ready, traefik 503 page) returns
+		// a styled HTML response which json.Unmarshal silently
+		// accepts as `{Job:""}`. The poll loop then runs the full
+		// 15 minutes against the same broken endpoint. Detecting
+		// it here makes the failure mode "Upgrade refused" instead
+		// of "kuso hung."
+		if ct := startResp.Header().Get("Content-Type"); strings.HasPrefix(ct, "text/html") {
+			return fmt.Errorf("start update: server returned HTML — is the API URL correct? (got %s)", ct)
+		}
 		_ = json.Unmarshal(startResp.Body(), &startBody)
 		if startBody.Job != "" {
 			fmt.Printf("Job: %s\n", startBody.Job)
@@ -138,6 +149,13 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 			sResp, err := api.RawGet("/api/system/update/status")
 			if err != nil {
 				return err
+			}
+			// Same HTML-page-on-poll guard as the start step. Without
+			// this, an ingress hiccup mid-upgrade silently keeps the
+			// loop running for the full 15 min and the operator has
+			// to ^C with no useful output.
+			if ct := sResp.Header().Get("Content-Type"); strings.HasPrefix(ct, "text/html") {
+				return fmt.Errorf("update status: server returned HTML (Content-Type=%s) — bailing", ct)
 			}
 			var s struct {
 				Phase   string `json:"phase"`

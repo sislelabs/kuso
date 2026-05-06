@@ -60,40 +60,40 @@ type UpdateCronRequest struct {
 }
 
 func (k *KusoClient) ListCrons(project string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/crons")
+	return k.client.Get("/api/projects/" + esc(project) + "/crons")
 }
 
 func (k *KusoClient) ListCronsForService(project, service string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/services/" + service + "/crons")
+	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/crons")
 }
 
 func (k *KusoClient) GetCron(project, service, name string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/services/" + service + "/crons/" + name)
+	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/crons/" + esc(name))
 }
 
 func (k *KusoClient) AddCron(project, service string, req CreateCronRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Post("/api/projects/" + project + "/services/" + service + "/crons")
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/crons")
 }
 
 func (k *KusoClient) UpdateCron(project, service, name string, req UpdateCronRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Patch("/api/projects/" + project + "/services/" + service + "/crons/" + name)
+	return k.client.Patch("/api/projects/" + esc(project) + "/services/" + esc(service) + "/crons/" + esc(name))
 }
 
 func (k *KusoClient) DeleteCron(project, service, name string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + project + "/services/" + service + "/crons/" + name)
+	return k.client.Delete("/api/projects/" + esc(project) + "/services/" + esc(service) + "/crons/" + esc(name))
 }
 
 func (k *KusoClient) SyncCron(project, service, name string) (*resty.Response, error) {
-	return k.client.Post("/api/projects/" + project + "/services/" + service + "/crons/" + name + "/sync")
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/crons/" + esc(name) + "/sync")
 }
 
 // AddProjectCron creates a kind=http or kind=command cron at the
 // project level (no parent service required).
 func (k *KusoClient) AddProjectCron(project string, req CreateProjectCronRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Post("/api/projects/" + project + "/crons")
+	return k.client.Post("/api/projects/" + esc(project) + "/crons")
 }
 
 // UpdateProjectCron PATCHes a project-scoped cron in place — same
@@ -101,11 +101,11 @@ func (k *KusoClient) AddProjectCron(project string, req CreateProjectCronRequest
 // doesn't briefly disappear.
 func (k *KusoClient) UpdateProjectCron(project, name string, req UpdateProjectCronRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Patch("/api/projects/" + project + "/crons/" + name)
+	return k.client.Patch("/api/projects/" + esc(project) + "/crons/" + esc(name))
 }
 
 // DeleteProjectCron removes a project-scoped cron. Service-attached
 // crons go through DeleteCron (different CR-name shape).
 func (k *KusoClient) DeleteProjectCron(project, name string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + project + "/crons/" + name)
+	return k.client.Delete("/api/projects/" + esc(project) + "/crons/" + esc(name))
 }

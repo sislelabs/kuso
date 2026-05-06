@@ -8,11 +8,11 @@ import "github.com/go-resty/resty/v2"
 // service. Empty `q` returns every line (newest first) in the
 // optional time range.
 func (k *KusoClient) SearchLogs(project, service string, q map[string]string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/services/" + service + "/logs/search" + buildLogQuery(q))
+	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/logs/search" + buildLogQuery(q))
 }
 
 func (k *KusoClient) SearchProjectLogs(project string, q map[string]string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/logs/search" + buildLogQuery(q))
+	return k.client.Get("/api/projects/" + esc(project) + "/logs/search" + buildLogQuery(q))
 }
 
 func buildLogQuery(q map[string]string) string {
@@ -73,13 +73,13 @@ func (k *KusoClient) CreateAlert(req CreateAlertRequest) (*resty.Response, error
 }
 
 func (k *KusoClient) DeleteAlert(id string) (*resty.Response, error) {
-	return k.client.Delete("/api/alerts/" + id)
+	return k.client.Delete("/api/alerts/" + esc(id))
 }
 
 func (k *KusoClient) EnableAlert(id string) (*resty.Response, error) {
-	return k.client.Post("/api/alerts/" + id + "/enable")
+	return k.client.Post("/api/alerts/" + esc(id) + "/enable")
 }
 
 func (k *KusoClient) DisableAlert(id string) (*resty.Response, error) {
-	return k.client.Post("/api/alerts/" + id + "/disable")
+	return k.client.Post("/api/alerts/" + esc(id) + "/disable")
 }

@@ -18,6 +18,10 @@ spec:
         {{- include "kusobuild.labels" . | nindent 8 }}
     spec:
       restartPolicy: Never
+      # Build pods have zero reason to talk to the kube apiserver.
+      # The default-mounted SA token is a lateral-movement primitive
+      # waiting to be exercised by a malicious Dockerfile.
+      automountServiceAccountToken: false
       # Build-node steering. When a node carries the
       # kuso.sislelabs.com/build=true label and matching NoSchedule
       # taint, build Jobs prefer (soft preference) to land there

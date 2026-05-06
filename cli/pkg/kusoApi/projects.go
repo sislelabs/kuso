@@ -7,8 +7,19 @@
 package kusoApi
 
 import (
+	"net/url"
+
 	"github.com/go-resty/resty/v2"
 )
+
+// esc escapes a single URL path segment. Project/service identifiers
+// are kuso-validated DNS labels so they're effectively safe, but
+// host names (with `:`, `.`), env var names, secret keys, and addon
+// names are user-controlled — an unescaped `/` or `?` would either
+// pierce the next path segment or graft a phantom query string onto
+// the request. PathEscape leaves `:` alone (legal in a path segment
+// per RFC 3986 §3.3), so a `host:port` domain still round-trips.
+func esc(s string) string { return url.PathEscape(s) }
 
 type CreateProjectRequest struct {
 	Name        string `json:"name"`
@@ -90,7 +101,7 @@ func (k *KusoClient) GetProjects() (*resty.Response, error) {
 }
 
 func (k *KusoClient) GetProject(name string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + name)
+	return k.client.Get("/api/projects/" + esc(name))
 }
 
 func (k *KusoClient) CreateProject(req CreateProjectRequest) (*resty.Response, error) {
@@ -99,12 +110,12 @@ func (k *KusoClient) CreateProject(req CreateProjectRequest) (*resty.Response, e
 }
 
 func (k *KusoClient) DeleteProject(name string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + name)
+	return k.client.Delete("/api/projects/" + esc(name))
 }
 
 func (k *KusoClient) UpdateProject(name string, req UpdateProjectRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Patch("/api/projects/" + name)
+	return k.client.Patch("/api/projects/" + esc(name))
 }
 
 // RawPost sends a raw byte body with an explicit content-type. Used by
@@ -128,20 +139,20 @@ func (k *KusoClient) RawPost(path string, body []byte, contentType string) (*res
 // Services
 
 func (k *KusoClient) GetServices(project string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/services")
+	return k.client.Get("/api/projects/" + esc(project) + "/services")
 }
 
 func (k *KusoClient) GetService(project, service string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/services/" + service)
+	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service))
 }
 
 func (k *KusoClient) AddService(project string, req CreateServiceRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Post("/api/projects/" + project + "/services")
+	return k.client.Post("/api/projects/" + esc(project) + "/services")
 }
 
 func (k *KusoClient) DeleteService(project, service string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + project + "/services/" + service)
+	return k.client.Delete("/api/projects/" + esc(project) + "/services/" + esc(service))
 }
 
 // PatchServiceDomain mirrors the server's ServiceDomain shape on the
@@ -173,7 +184,7 @@ type PatchServiceRequest struct {
 // races under concurrent edits.
 func (k *KusoClient) PatchService(project, service string, req PatchServiceRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Patch("/api/projects/" + project + "/services/" + service)
+	return k.client.Patch("/api/projects/" + esc(project) + "/services/" + esc(service))
 }
 
 // AddDomainRequest mirrors the server-side projects.AddDomainRequest.
@@ -187,12 +198,12 @@ type AddDomainRequest struct {
 // 409 on a duplicate host with the same TLS flag.
 func (k *KusoClient) AddDomain(project, service string, req AddDomainRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Post("/api/projects/" + project + "/services/" + service + "/domains")
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/domains")
 }
 
 // RemoveDomain drops a single host. 404 when the host wasn't there.
 func (k *KusoClient) RemoveDomain(project, service, host string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + project + "/services/" + service + "/domains/" + host)
+	return k.client.Delete("/api/projects/" + esc(project) + "/services/" + esc(service) + "/domains/" + esc(host))
 }
 
 // SetEnvVarRequest mirrors the server-side projects.SetEnvVarRequest.
@@ -210,41 +221,41 @@ type SetEnvVarSecretRefBody struct {
 // SetEnvVar adds or overwrites a single env var by name. Idempotent.
 func (k *KusoClient) SetEnvVar(project, service, name string, req SetEnvVarRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Put("/api/projects/" + project + "/services/" + service + "/env-vars/" + name)
+	return k.client.Put("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env-vars/" + esc(name))
 }
 
 // UnsetEnvVar removes a single env var by name. 404 when absent.
 func (k *KusoClient) UnsetEnvVar(project, service, name string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + project + "/services/" + service + "/env-vars/" + name)
+	return k.client.Delete("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env-vars/" + esc(name))
 }
 
 // Environments
 
 func (k *KusoClient) GetEnvironments(project string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/envs")
+	return k.client.Get("/api/projects/" + esc(project) + "/envs")
 }
 
 func (k *KusoClient) GetEnvironment(project, env string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/envs/" + env)
+	return k.client.Get("/api/projects/" + esc(project) + "/envs/" + env)
 }
 
 func (k *KusoClient) DeleteEnvironment(project, env string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + project + "/envs/" + env)
+	return k.client.Delete("/api/projects/" + esc(project) + "/envs/" + env)
 }
 
 // Addons
 
 func (k *KusoClient) GetAddonsForProject(project string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/addons")
+	return k.client.Get("/api/projects/" + esc(project) + "/addons")
 }
 
 func (k *KusoClient) AddAddon(project string, req CreateAddonRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Post("/api/projects/" + project + "/addons")
+	return k.client.Post("/api/projects/" + esc(project) + "/addons")
 }
 
 func (k *KusoClient) DeleteAddon(project, addon string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + project + "/addons/" + addon)
+	return k.client.Delete("/api/projects/" + esc(project) + "/addons/" + esc(addon))
 }
 
 // UpdateAddonBackup is the partial-update body for an addon's backup
@@ -273,32 +284,32 @@ type UpdateAddonRequest struct {
 // schedule` to enable / change / disable the per-addon CronJob.
 func (k *KusoClient) UpdateAddon(project, addon string, req UpdateAddonRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Patch("/api/projects/" + project + "/addons/" + addon)
+	return k.client.Patch("/api/projects/" + esc(project) + "/addons/" + esc(addon))
 }
 
 // ResyncExternalAddon re-mirrors an external addon's source Secret
 // into its <name>-conn. Use after the upstream credentials rotated.
 func (k *KusoClient) ResyncExternalAddon(project, addon string) (*resty.Response, error) {
-	return k.client.Post("/api/projects/" + project + "/addons/" + addon + "/resync-external")
+	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/resync-external")
 }
 
 // ResyncInstanceAddon re-provisions the per-project DB on a shared
 // instance addon and rotates the password.
 func (k *KusoClient) ResyncInstanceAddon(project, addon string) (*resty.Response, error) {
-	return k.client.Post("/api/projects/" + project + "/addons/" + addon + "/resync-instance")
+	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/resync-instance")
 }
 
 // RepairAddonPassword fixes the helm-chart password drift bug by
 // ALTERing the postgres user inside the running pod to match the
 // current conn secret value.
 func (k *KusoClient) RepairAddonPassword(project, addon string) (*resty.Response, error) {
-	return k.client.Post("/api/projects/" + project + "/addons/" + addon + "/repair-password")
+	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/repair-password")
 }
 
 // Apply posts a kuso.yml body to the server's config-as-code endpoint.
 // dryRun=true returns a Plan without writing; false applies it.
 func (k *KusoClient) Apply(project string, yamlBody []byte, dryRun bool) (*resty.Response, error) {
-	url := "/api/projects/" + project + "/apply"
+	url := "/api/projects/" + esc(project) + "/apply"
 	if dryRun {
 		url += "?dryRun=1"
 	}
@@ -310,5 +321,5 @@ func (k *KusoClient) Apply(project string, yamlBody []byte, dryRun bool) (*resty
 // GetProjectFull returns the project rollup (Describe) — project +
 // services + envs in one call.
 func (k *KusoClient) GetProjectFull(project string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project)
+	return k.client.Get("/api/projects/" + esc(project))
 }

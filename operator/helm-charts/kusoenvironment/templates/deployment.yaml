@@ -29,6 +29,13 @@ spec:
         kuso.sislelabs.com/secrets-rev: {{ . | quote }}
       {{- end }}
     spec:
+      # User pods don't need to talk to the kube apiserver. Disable
+      # the default SA token mount so a compromised app container
+      # can't list secrets / impersonate ServiceAccounts. Apps that
+      # genuinely need kube access can opt back in via a custom
+      # serviceAccountName + automountServiceAccountToken: true on
+      # the parent KusoService spec (future work).
+      automountServiceAccountToken: false
       {{- /*
         Placement — pin to a subset of nodes by label and/or hostname.
         labels become a nodeSelector; nodes become a required
@@ -106,9 +113,28 @@ spec:
               containerPort: {{ .Values.port }}
               protocol: TCP
           {{- end }}
-          {{- with .Values.envVars }}
+          {{- /*
+            Auto-inject PORT for web services. Most app frameworks
+            (Express, Flask, FastAPI, Rails, Spring Boot) read $PORT
+            and bind there; if we don't set it the app falls back to
+            its built-in default (3000, 5000, 8080), the kube Service
+            forwards to the wrong containerPort, and traefik returns
+            502 — the most common newcomer footgun. PORT is on the
+            kuso reservedEnvNames list so users can't override (the
+            value would silently desync from spec.port). Workers
+            don't bind a port so we skip the injection there; their
+            envVars (if any) still render below.
+          */}}
+          {{- $isWeb := not (eq (default "" .Values.runtime) "worker") }}
+          {{- if or $isWeb .Values.envVars }}
           env:
+            {{- if $isWeb }}
+            - name: PORT
+              value: {{ .Values.port | quote }}
+            {{- end }}
+            {{- with .Values.envVars }}
             {{- toYaml . | nindent 12 }}
+            {{- end }}
           {{- end }}
           {{- with .Values.envFromSecrets }}
           envFrom:

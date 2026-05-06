@@ -14,14 +14,14 @@ type SetSharedSecretRequest struct {
 }
 
 func (k *KusoClient) ListSharedSecrets(project string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/shared-secrets")
+	return k.client.Get("/api/projects/" + esc(project) + "/shared-secrets")
 }
 
 func (k *KusoClient) SetSharedSecret(project string, req SetSharedSecretRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Put("/api/projects/" + project + "/shared-secrets")
+	return k.client.Put("/api/projects/" + esc(project) + "/shared-secrets")
 }
 
 func (k *KusoClient) UnsetSharedSecret(project, key string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + project + "/shared-secrets/" + key)
+	return k.client.Delete("/api/projects/" + esc(project) + "/shared-secrets/" + esc(key))
 }

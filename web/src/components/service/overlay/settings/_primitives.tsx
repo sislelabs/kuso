@@ -48,6 +48,13 @@ export interface FormState {
 export interface SectionProps {
   state: FormState;
   setState: React.Dispatch<React.SetStateAction<FormState>>;
+  // The auto-domain (project.baseDomain or cluster default) that
+  // kuso stamped on the production env. Read-only — surfaced in the
+  // Networking section so users see what hostname their service
+  // already serves on without having to dig through the canvas.
+  // Empty when env data hasn't loaded yet; the section just hides
+  // the auto-domain row in that case.
+  autoHost?: string;
 }
 
 export interface NodeSummary {

@@ -20,5 +20,5 @@ func (k *KusoClient) CreateToken(req CreateTokenRequest) (*resty.Response, error
 }
 
 func (k *KusoClient) DeleteToken(id string) (*resty.Response, error) {
-	return k.client.Delete("/api/tokens/my/" + id)
+	return k.client.Delete("/api/tokens/my/" + esc(id))
 }

@@ -1,16 +1,28 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import dynamic from "next/dynamic";
 import { useSearchParams } from "next/navigation";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { useProject, useAddons } from "@/features/projects";
 import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { ProjectCanvas } from "@/components/canvas/ProjectCanvas";
 import { ServiceOverlay } from "@/components/service/ServiceOverlay";
 import { AddonOverlay } from "@/components/addon/AddonOverlay";
 import { Package } from "lucide-react";
+
+// ReactFlow touches `window` and `ResizeObserver` at module scope, which
+// blew up the static export build. ssr:false skips the prerender pass
+// and only mounts the canvas on the client. The skeleton fills the same
+// box during the first paint so the layout doesn't jump.
+const ProjectCanvas = dynamic(
+  () => import("@/components/canvas/ProjectCanvas").then((m) => m.ProjectCanvas),
+  {
+    ssr: false,
+    loading: () => <Skeleton className="h-[600px] w-full" />,
+  },
+);
 
 // ProjectDetailView is canvas-only. Project name + repo live in the
 // TopNav breadcrumb; service interactions happen via right-click on

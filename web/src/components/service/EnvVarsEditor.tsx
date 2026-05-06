@@ -9,6 +9,7 @@ import { listAddonSecretKeys } from "@/features/services/api";
 import { useProject, useAddons } from "@/features/projects";
 import { useQuery } from "@tanstack/react-query";
 import { useCan, Perms } from "@/features/auth";
+import { getJwt } from "@/lib/api-client";
 import type { KusoEnvVar } from "@/types/projects";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -832,14 +833,12 @@ function InheritedGroup({
   );
 }
 
-// authHeaders reads the JWT cookie/localStorage the same way the
-// api() wrapper does. Inline because this component reaches outside
-// the standard `api()` helper to gate-fail silently on 403 (when
-// the user isn't admin and asks for instance secrets) instead of
-// triggering the global 401 redirect.
+// authHeaders reuses api-client's getJwt() so the cookie / localStorage
+// lookup stays in one place. Inline because this component bypasses
+// the api() wrapper itself: api() unconditionally redirects on 403
+// (admin-only flows like instance-secret listing), but the editor
+// needs to gate-fail silently when the viewer isn't admin instead.
 function authHeaders(): Record<string, string> {
-  if (typeof window === "undefined") return {};
-  const m = document.cookie.match(/(?:^|; )kuso\.JWT_TOKEN=([^;]+)/);
-  const tok = m ? decodeURIComponent(m[1]) : window.localStorage.getItem("kuso.jwt");
+  const tok = getJwt();
   return tok ? { Authorization: `Bearer ${tok}` } : {};
 }

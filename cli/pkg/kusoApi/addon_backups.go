@@ -14,10 +14,10 @@ type RestoreBackupRequest struct {
 }
 
 func (k *KusoClient) ListAddonBackups(project, addon string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/addons/" + addon + "/backups")
+	return k.client.Get("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/backups")
 }
 
 func (k *KusoClient) RestoreAddonBackup(project, addon string, req RestoreBackupRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Post("/api/projects/" + project + "/addons/" + addon + "/backups/restore")
+	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/backups/restore")
 }

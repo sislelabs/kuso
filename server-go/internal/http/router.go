@@ -88,6 +88,13 @@ func NewRouter(d Deps) http.Handler {
 	r.Use(chimw.RequestID)
 	r.Use(chimw.Recoverer)
 	r.Use(slogRequest(d.Logger))
+	// Cap request bodies at 1 MiB. Every JSON handler in this app
+	// is small (project / service / addon specs are kilobytes); the
+	// log-shipper / WS endpoints don't go through this router. A
+	// 1 MiB ceiling stops a malicious client from streaming gigabytes
+	// into json.NewDecoder(r.Body).Decode, which would otherwise
+	// happily consume the whole stream into memory.
+	r.Use(maxBodyBytes(1 << 20))
 	if os.Getenv("KUSO_DEV_CORS") == "1" {
 		r.Use(devCORS)
 	}
@@ -310,6 +317,23 @@ func NewRouter(d Deps) http.Handler {
 }
 
 // devCORS adds permissive CORS headers. Only mounted when
+// maxBodyBytes wraps every request body in http.MaxBytesReader. The
+// JSON handlers used to call json.NewDecoder(r.Body).Decode(...) on
+// the raw, unbounded body — a malicious client could stream gigabytes
+// at us and exhaust memory. MaxBytesReader caps the read; the decoder
+// errors out with "http: request body too large" once the limit is
+// hit, which our handlers map to 400.
+func maxBodyBytes(n int64) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Body != nil {
+				r.Body = http.MaxBytesReader(w, r.Body, n)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
 // KUSO_DEV_CORS=1 — production same-origin must NOT enable this (§6.7
 // landmine).
 func devCORS(next http.Handler) http.Handler {

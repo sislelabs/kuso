@@ -20,6 +20,9 @@ package notify
 import (
 	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -28,6 +31,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -221,20 +225,27 @@ func (d *Dispatcher) Emit(e Event) {
 	// log and proceed (the channel send is still attempted, so a
 	// transient DB blip doesn't lose the webhook fan-out).
 	if d.db != nil {
-		persistCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		if err := d.db.InsertNotificationEvent(persistCtx, db.NotificationEvent{
-			Type:     string(e.Type),
-			Title:    e.Title,
-			Body:     e.Body,
-			Severity: e.Severity,
-			Project:  e.Project,
-			Service:  e.Service,
-			URL:      e.URL,
-			Extra:    e.Extra,
-		}); err != nil && d.logger != nil {
-			d.logger.Warn("notify: persist event", "err", err, "type", string(e.Type))
-		}
-		cancel()
+		// Wrap the timeout-context dance in a closure so cancel() is
+		// deferred — a panic between WithTimeout and the explicit
+		// cancel() (e.g. from the DB driver) would otherwise leak the
+		// context goroutine until the parent (Background) is collected,
+		// i.e. forever.
+		func() {
+			persistCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			if err := d.db.InsertNotificationEvent(persistCtx, db.NotificationEvent{
+				Type:     string(e.Type),
+				Title:    e.Title,
+				Body:     e.Body,
+				Severity: e.Severity,
+				Project:  e.Project,
+				Service:  e.Service,
+				URL:      e.URL,
+				Extra:    e.Extra,
+			}); err != nil && d.logger != nil {
+				d.logger.Warn("notify: persist event", "err", err, "type", string(e.Type))
+			}
+		}()
 	}
 	select {
 	case d.ch <- e:
@@ -521,18 +532,49 @@ func discordFields(e Event) []map[string]any {
 }
 
 // sendWebhook POSTs the raw event JSON to a generic URL. When secret
-// is set we include an X-Kuso-Signature header (HMAC-SHA256 of the
-// body) so receivers can verify origin. Receivers ignoring auth get
-// the raw event either way.
+// is set we sign the body and include the signature in three headers
+// receivers expect:
+//
+//   X-Hub-Signature-256: sha256=<hex>   — GitHub-shaped, the most
+//                                          widely-supported format.
+//   X-Kuso-Signature:    <hex>           — kuso-native, easier to
+//                                          parse for hand-rolled
+//                                          consumers.
+//   X-Kuso-Timestamp:    <unix-seconds>  — replay-window enforcement
+//                                          for receivers that care.
+//
+// Pre-v0.9.4 the secret was read from the DB and immediately
+// `_ = secret`'d — receivers configured a secret expecting
+// X-Hub-Signature-256 and got nothing. This was a real functional
+// gap, flagged in the v0.9.3 audit.
 func (d *Dispatcher) sendWebhook(ctx context.Context, url, secret string, e Event) {
-	headers := http.Header{}
-	if secret != "" {
-		// Signature implementation deferred — leave the header
-		// missing until the receiver actually needs verification.
-		// Keeps the wire shape small for the common case.
-		_ = secret
+	d.post(ctx, url, e, signatureHeaders(secret, e))
+}
+
+// signatureHeaders computes the X-Hub-Signature-256 / X-Kuso-* HMAC
+// headers for a webhook. Returns an empty Header when secret is
+// empty (skips signing entirely — receivers without a configured
+// secret don't expect a signature).
+//
+// The body is the same JSON marshal postSync produces. Marshaling
+// twice (here + in postSync) is the cost; keeps this function
+// stateless.
+func signatureHeaders(secret string, body any) http.Header {
+	out := http.Header{}
+	if secret == "" {
+		return out
 	}
-	d.post(ctx, url, e, headers)
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return out
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(raw)
+	sig := hex.EncodeToString(mac.Sum(nil))
+	out.Set("X-Hub-Signature-256", "sha256="+sig)
+	out.Set("X-Kuso-Signature", sig)
+	out.Set("X-Kuso-Timestamp", strconv.FormatInt(time.Now().Unix(), 10))
+	return out
 }
 
 func (d *Dispatcher) post(ctx context.Context, url string, body any, extra http.Header) {
@@ -600,9 +642,7 @@ func (d *Dispatcher) sendDiscordSync(ctx context.Context, url string, e Event, m
 
 // sendWebhookSync mirrors sendWebhook with error propagation.
 func (d *Dispatcher) sendWebhookSync(ctx context.Context, url, secret string, e Event) error {
-	headers := http.Header{}
-	_ = secret
-	return d.postSync(ctx, url, e, headers)
+	return d.postSync(ctx, url, e, signatureHeaders(secret, e))
 }
 
 // redact strips the secret token from a Discord webhook URL when

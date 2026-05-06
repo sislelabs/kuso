@@ -198,6 +198,14 @@ if [[ "$CURRENT" != "$VERSION" ]]; then
       deploy/server-go.yaml
     rm deploy/server-go.yaml.bak
 
+    # deploy/operator.yaml: same shape — the image: line is the
+    # source of truth for `kubectl apply -f deploy/` direct users.
+    # Pre-v0.9.4 this was frozen at v0.1.0-dev for releases on end.
+    sed -i.bak \
+      -E "s|kuso-operator:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-operator:${VERSION}|g" \
+      deploy/operator.yaml
+    rm deploy/operator.yaml.bak
+
     # hack/install.sh: KUSO_SERVER_VERSION default + KUSO_VERSION
     # (operator pin) default + the sed line that rewrites the deploy
     # yaml during fresh installs. The operator pin used to be left

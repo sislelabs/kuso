@@ -15,6 +15,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,14 +48,52 @@ func (h *LogsWSHandler) Mount(r chi.Router) {
 }
 
 // upgrader is package-level so the handler reuses connection settings.
-// CheckOrigin returns true for now — same-origin requests are allowed
-// because the SPA is served from the same Go process; Phase F's
-// production smoke checks origin enforcement.
+//
+// CheckOrigin enforces same-host: a logged-in user's browser visiting
+// a malicious page would otherwise leak live log lines via a WS
+// upgrade against the kuso domain (the Sec-WebSocket-Protocol bearer
+// pinned in localStorage rides along on cross-site requests). Pre-
+// v0.9.4 the check returned true unconditionally, flagged as
+// HIGH in the audit.
+//
+// Allowed origins:
+//   - Empty Origin header (curl, kuso CLI, server-to-server).
+//   - Origin host == request Host (same-origin SPA).
+//   - Any host listed in KUSO_TRUSTED_ORIGINS (comma-separated),
+//     for installs that serve the SPA from a different host than
+//     the API (rare; documented escape hatch).
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  1024,
 	WriteBufferSize: 4096,
-	CheckOrigin:     func(*http.Request) bool { return true },
+	CheckOrigin:     wsOriginAllowed,
 	Subprotocols:    []string{"kuso.bearer"},
+}
+
+// wsOriginAllowed implements the CheckOrigin policy described above.
+// Read the env var on each call so a config change doesn't require
+// a restart (the cost is one os.Getenv per upgrade, which is
+// rate-limited by browser ws-handshake throughput).
+func wsOriginAllowed(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		// Non-browser caller. The bearer token in
+		// Sec-WebSocket-Protocol is the load-bearing auth here.
+		return true
+	}
+	o, err := url.Parse(origin)
+	if err != nil || o.Host == "" {
+		return false
+	}
+	if strings.EqualFold(o.Host, r.Host) {
+		return true
+	}
+	for _, allowed := range strings.Split(os.Getenv("KUSO_TRUSTED_ORIGINS"), ",") {
+		allowed = strings.TrimSpace(allowed)
+		if allowed != "" && strings.EqualFold(allowed, o.Host) {
+			return true
+		}
+	}
+	return false
 }
 
 // wsSink adapts *websocket.Conn to logs.Sink. WriteJSON is goroutine

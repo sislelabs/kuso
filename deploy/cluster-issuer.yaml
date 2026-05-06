@@ -1,5 +1,13 @@
 # Let's Encrypt ClusterIssuer for kuso TLS certs.
-# Adjust the email below to your address before applying.
+#
+# Direct-apply users: replace EXAMPLE@example.com below with the email
+# Let's Encrypt should send expiry warnings to. Required by the ACME
+# spec; submitting a malformed address fails the order.
+#
+# The official install path (hack/install.sh) generates this file at
+# install time with KUSO_EMAIL filled in, so this static copy is only
+# for `kubectl apply -f deploy/` — it'll fail-loop in cert-manager
+# until the placeholder is overwritten.
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
 metadata:
@@ -7,7 +15,7 @@ metadata:
 spec:
   acme:
     server: https://acme-v02.api.letsencrypt.org/directory
-    email: ivilthe69@gmail.com
+    email: EXAMPLE@example.com
     privateKeySecretRef:
       name: letsencrypt-prod-key
     solvers:

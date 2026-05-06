@@ -230,8 +230,23 @@ func (w *Watcher) cordon(ctx context.Context, n *corev1.Node) error {
 // uncordonIfOurs only flips spec.unschedulable=false when we have our
 // annotation on the node. If a human cordoned it for some other
 // reason, we leave it alone.
+//
+// We re-fetch the node fresh (not the informer-cached `n`) before
+// reading the annotation. The cache lags; under unlucky timing — a
+// human running `kubectl annotate node X kuso.sislelabs.com/cordoned-
+// by-nodewatch-` to claim ownership of a manual cordon, immediately
+// followed by our recovery tick — the cached object would still show
+// our annotation and we'd happily uncordon a node the operator
+// expected to stay drained.
 func (w *Watcher) uncordonIfOurs(ctx context.Context, n *corev1.Node) error {
-	if n.Annotations[CordonAnnotation] != "true" {
+	live, err := w.Kube.Clientset.CoreV1().Nodes().Get(ctx, n.Name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	if live.Annotations[CordonAnnotation] != "true" {
 		return nil
 	}
 	// Patch removes the annotation by setting it to null in JSON
@@ -239,7 +254,7 @@ func (w *Watcher) uncordonIfOurs(ctx context.Context, n *corev1.Node) error {
 	patch := []byte(fmt.Sprintf(
 		`{"spec":{"unschedulable":false},"metadata":{"annotations":{%q:null}}}`,
 		CordonAnnotation))
-	_, err := w.Kube.Clientset.CoreV1().Nodes().Patch(
+	_, err = w.Kube.Clientset.CoreV1().Nodes().Patch(
 		ctx, n.Name, types.MergePatchType, patch, metav1.PatchOptions{},
 	)
 	if err != nil && !apierrors.IsNotFound(err) {

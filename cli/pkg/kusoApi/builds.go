@@ -11,18 +11,18 @@ type CreateBuildRequest struct {
 }
 
 func (k *KusoClient) ListBuilds(project, service string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/services/" + service + "/builds")
+	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/builds")
 }
 
 func (k *KusoClient) CreateBuild(project, service string, req CreateBuildRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Post("/api/projects/" + project + "/services/" + service + "/builds")
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/builds")
 }
 
 // RollbackBuild re-points the production env at a previous build's
 // image. Server validates phase=succeeded.
 func (k *KusoClient) RollbackBuild(project, service, build string) (*resty.Response, error) {
-	return k.client.Post("/api/projects/" + project + "/services/" + service + "/builds/" + build + "/rollback")
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/builds/" + esc(build) + "/rollback")
 }
 
 // ---------- GitHub installations ----------

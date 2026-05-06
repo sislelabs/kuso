@@ -82,10 +82,40 @@ spec:
                       host: { type: string }
                       tls: { type: boolean, default: true }
                 envVars:
+                  # Closed schema — preserve-unknown-fields would let a
+                  # tenant slip valueFrom.secretKeyRef in and exfiltrate
+                  # arbitrary cluster secrets (e.g. kuso-postgres-conn)
+                  # into their pod's env. The server-side envVar
+                  # rewriter only emits these exact keys; if we ever
+                  # need richer expressions, extend the schema
+                  # explicitly rather than re-opening the door.
                   type: array
                   items:
                     type: object
-                    x-kubernetes-preserve-unknown-fields: true
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                      value:
+                        type: string
+                      valueFrom:
+                        type: object
+                        properties:
+                          secretKeyRef:
+                            type: object
+                            required: [name, key]
+                            properties:
+                              name:
+                                type: string
+                                # The `<addon>-conn` suffix is the
+                                # convention every kuso-managed addon
+                                # secret follows. Tenants who try to
+                                # reference cluster-wide secrets
+                                # (kuso-server-secrets, kuso-postgres-
+                                # conn) get rejected at admission.
+                                pattern: "^[a-z0-9][a-z0-9-]*-conn$"
+                              key:
+                                type: string
                 scale:
                   type: object
                   properties:

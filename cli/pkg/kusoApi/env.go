@@ -22,12 +22,12 @@ type SetSecretRequest struct {
 }
 
 func (k *KusoClient) GetEnv(project, service string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/services/" + service + "/env")
+	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env")
 }
 
 func (k *KusoClient) SetEnv(project, service string, req SetEnvRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Post("/api/projects/" + project + "/services/" + service + "/env")
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env")
 }
 
 // envQuery returns "?env=<name>" or "" — kept inline rather than using
@@ -41,14 +41,14 @@ func envQuery(env string) string {
 }
 
 func (k *KusoClient) ListSecrets(project, service, env string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + project + "/services/" + service + "/secrets" + envQuery(env))
+	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/secrets" + envQuery(env))
 }
 
 func (k *KusoClient) SetSecret(project, service string, req SetSecretRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Post("/api/projects/" + project + "/services/" + service + "/secrets")
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/secrets")
 }
 
 func (k *KusoClient) UnsetSecret(project, service, key, env string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + project + "/services/" + service + "/secrets/" + key + envQuery(env))
+	return k.client.Delete("/api/projects/" + esc(project) + "/services/" + esc(service) + "/secrets/" + esc(key) + envQuery(env))
 }

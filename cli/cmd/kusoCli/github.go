@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -103,8 +104,10 @@ var githubReposCmd = &cobra.Command{
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		var id int64
-		_, _ = fmt.Sscanf(args[0], "%d", &id)
+		id, perr := strconv.ParseInt(args[0], 10, 64)
+		if perr != nil || id <= 0 {
+			return fmt.Errorf("installation id must be a positive integer, got %q", args[0])
+		}
 		resp, err := api.ListInstallationRepos(id)
 		if err != nil {
 			return err

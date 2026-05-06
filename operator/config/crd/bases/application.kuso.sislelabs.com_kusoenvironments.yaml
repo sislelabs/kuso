@@ -118,10 +118,32 @@ spec:
                   type: string
                   default: traefik
                 envVars:
+                  # See KusoService CRD comment — closed schema to
+                  # block valueFrom.secretKeyRef smuggling. Mirror any
+                  # changes to the KusoService copy or the rewriter
+                  # output (server-go internal/projects/services_ops.go)
+                  # will fail admission.
                   type: array
                   items:
                     type: object
-                    x-kubernetes-preserve-unknown-fields: true
+                    required: [name]
+                    properties:
+                      name:
+                        type: string
+                      value:
+                        type: string
+                      valueFrom:
+                        type: object
+                        properties:
+                          secretKeyRef:
+                            type: object
+                            required: [name, key]
+                            properties:
+                              name:
+                                type: string
+                                pattern: "^[a-z0-9][a-z0-9-]*-conn$"
+                              key:
+                                type: string
                 envFromSecrets:
                   type: array
                   items:

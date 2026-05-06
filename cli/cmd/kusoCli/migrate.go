@@ -339,7 +339,12 @@ func writeDataMigrationScripts(items []coolify.Item, outDir string) int {
 		name := slugifyName(it.Database.Name)
 		path := filepath.Join(outDir, "migrate-data-"+name+".sh")
 		body := buildDataMigrationScript(it)
-		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
+		// 0o700: data-migration scripts contain DATABASE_URL with
+		// the source addon's password embedded inline. World-readable
+		// would leak the password to any other user on the dev box;
+		// world-executable serves no purpose since the user runs them
+		// from their own shell. Owner-only rwx is the right call.
+		if err := os.WriteFile(path, []byte(body), 0o700); err != nil {
 			fmt.Fprintf(os.Stderr, "    ⚠ write %s: %v\n", path, err)
 			continue
 		}

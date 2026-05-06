@@ -119,8 +119,13 @@ func (d *DB) ListAudit(ctx context.Context, limit int) ([]AuditEntry, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 200
 	}
+	// `user` is a reserved word in Postgres — unquoted, it resolves
+	// to the current_user() function and every audit row's user
+	// column comes back as the DB role. The pre-Postgres SQLite
+	// path tolerated the bare identifier; lib/pq does not.
+	// Quoted ("user") references the column.
 	rows, err := d.QueryContext(ctx, `
-SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, user
+SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
 FROM "Audit" ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("db: list audit: %w", err)
