@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.7] — 2026-05-06
+
+### ✨ Features
+- Feat(env): auto-detect missing env vars at build + crash time ([169a845](https://github.com/sislelabs/kuso/commit/169a845b0a5b52a4e9fca27cc7645e364ef7910c))
+
 ## [0.9.6] — 2026-05-06
 
 ### 🐛 Bug Fixes
