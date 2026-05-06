@@ -6,8 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -62,7 +65,16 @@ func (h *NotificationsHandler) Mount(r chi.Router) {
 
 // Feed returns the most recent notification events. ?limit=N (clamp
 // to 200) and ?unread=true narrow the result.
+//
+// Admin-only for now. The feed contains cross-project events (deploy
+// outcomes, node alerts, build failures) and we don't yet filter
+// by per-user tenancy. Pre-v0.9.x any authenticated user could read
+// every other project's deploys + node-down alerts; gate-then-
+// per-tenant-filter is the v0.10 work.
 func (h *NotificationsHandler) Feed(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	limit := 50
@@ -82,6 +94,9 @@ func (h *NotificationsHandler) Feed(w http.ResponseWriter, r *http.Request) {
 
 // FeedUnread is the cheap counter the bell badge polls.
 func (h *NotificationsHandler) FeedUnread(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	n, err := h.DB.CountUnreadNotificationEvents(ctx)
@@ -95,6 +110,9 @@ func (h *NotificationsHandler) FeedUnread(w http.ResponseWriter, r *http.Request
 // FeedReadAll stamps readAt on every unread event. Called when the
 // user opens the bell popover.
 func (h *NotificationsHandler) FeedReadAll(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	if err := h.DB.MarkAllNotificationEventsRead(ctx); err != nil {
@@ -312,13 +330,61 @@ func validateNotificationConfig(typ string, cfg map[string]any) error {
 	if cfg == nil {
 		return errors.New("config required")
 	}
-	url, _ := cfg["url"].(string)
-	if url == "" {
+	rawURL, _ := cfg["url"].(string)
+	if rawURL == "" {
 		return errors.New("config.url required")
+	}
+	if err := validateWebhookURL(rawURL); err != nil {
+		return fmt.Errorf("config.url: %w", err)
 	}
 	if typ == "slack" {
 		if ch, _ := cfg["channel"].(string); ch == "" {
 			return errors.New("slack notifications require config.channel")
+		}
+	}
+	return nil
+}
+
+// validateWebhookURL guards against SSRF-via-notification: an
+// admin-only flow, but Test sends straight from the kuso server
+// at-will, so a URL pointing at 169.254.169.254 (cloud IMDS),
+// 10.x cluster internals, or http://kuso-postgres-conn-thing.kuso.svc
+// would let an admin who *should* only have HTTP-out reach kube
+// internals. Cheap allowlist:
+//   - scheme must be http or https
+//   - host must parse as a non-empty hostname
+//   - host must not be an IP literal in a private/loopback/link-
+//     local range, or a *.svc / *.cluster.local DNS suffix.
+//
+// We deliberately don't resolve DNS at validation time (race with
+// "DNS rebinding" + the lookup happens later anyway when notify
+// dispatches). The dispatcher should also enforce an SSRF-safe
+// dialer in a follow-up.
+func validateWebhookURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return errors.New("scheme must be http or https")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return errors.New("missing host")
+	}
+	hostLower := strings.ToLower(host)
+	if hostLower == "localhost" {
+		return errors.New("localhost is not allowed")
+	}
+	for _, suf := range []string{".svc", ".svc.cluster.local", ".cluster.local", ".internal", ".local"} {
+		if strings.HasSuffix(hostLower, suf) {
+			return fmt.Errorf("cluster-internal hostnames (%s) are not allowed", suf)
+		}
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+			ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+			return fmt.Errorf("IP %s is in a reserved/private range", ip)
 		}
 	}
 	return nil

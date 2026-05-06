@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -22,6 +23,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/audit"
+	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
@@ -32,6 +35,7 @@ import (
 type BackupsHandler struct {
 	Kube      *kube.Client
 	DB        *db.DB
+	Audit     *audit.Service
 	Namespace string
 	Logger    *slog.Logger
 }
@@ -244,6 +248,26 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
 		return
 	}
+	// Cross-tenant key guard: req.Key arrives from the client and
+	// is splatted into the restore Job's KEY env var. Without this
+	// check, an Owner of project A could POST {"key":"B/pg/X.gz"}
+	// and pipe project B's snapshot into A's addon. List scopes by
+	// prefix (project + "/" + addonFQN + "/"); Restore must enforce
+	// the same. Note we intentionally check the project prefix
+	// only — restoring across addons within the same project is
+	// fine (e.g. restore-into a sibling addon for verification).
+	if !strings.HasPrefix(req.Key, project+"/") {
+		http.Error(w, "key must live under this project's prefix", http.StatusBadRequest)
+		return
+	}
+	// Belt-and-suspenders against ../ traversal in the key. The S3
+	// SDK normalises paths but the raw value lands as a Job env var
+	// and gets handed to a shell `aws s3 cp`. A leading slash or
+	// backslash also escapes the prefix anchor.
+	if strings.Contains(req.Key, "..") || strings.ContainsAny(req.Key, "\x00\\") {
+		http.Error(w, "invalid key", http.StatusBadRequest)
+		return
+	}
 
 	// Destination addon — defaults to the source (in-place /
 	// destructive). When `into` is set, we restore into a sibling
@@ -325,6 +349,24 @@ echo "==> done"
 		h.Logger.Error("backup: create restore job", "err", err)
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
+	}
+	// Audit: destructive cross-DB write. Logged regardless of
+	// outcome so a half-completed restore (Job created but pod
+	// crashed) still leaves a trail.
+	if h.Audit != nil {
+		uid := ""
+		if c, ok := auth.ClaimsFromContext(ctx); ok && c != nil {
+			uid = c.UserID
+		}
+		h.Audit.Log(ctx, audit.Entry{
+			User:     uid,
+			Severity: "warn",
+			Action:   "addon.restore",
+			Pipeline: project,
+			App:      destAddon,
+			Resource: "kusoaddon",
+			Message:  fmt.Sprintf("restore from key=%s into project=%s addon=%s job=%s", req.Key, project, destAddon, created.Name),
+		})
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"job": created.Name})
 }
@@ -563,6 +605,33 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
+	// Audit the query before running it. SQL browser is the
+	// highest-blast-radius read endpoint we expose — Owner role
+	// gates access but a single compromised owner credential
+	// reading every row of `users` should leave a trail.
+	if h.Audit != nil {
+		uid := ""
+		if c, ok := auth.ClaimsFromContext(ctx); ok && c != nil {
+			uid = c.UserID
+		}
+		// Truncate so a multi-MB user-pasted query doesn't blow up
+		// the audit row. 4 KiB is plenty for forensics; the full
+		// query lives in the (ephemeral) postgres pgaudit log if
+		// the operator turned it on.
+		q := req.Query
+		if len(q) > 4096 {
+			q = q[:4096] + "…[truncated]"
+		}
+		h.Audit.Log(ctx, audit.Entry{
+			User:     uid,
+			Severity: "info",
+			Action:   "addon.sql_query",
+			Pipeline: project,
+			App:      addon,
+			Resource: "kusoaddon",
+			Message:  q,
+		})
+	}
 	rows, err := tx.QueryContext(ctx, req.Query)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)

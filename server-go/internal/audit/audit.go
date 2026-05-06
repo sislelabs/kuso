@@ -18,15 +18,21 @@ import (
 // Service is the entrypoint for write+read of audit entries. Construct
 // with New; safe for concurrent use.
 type Service struct {
-	DB           *db.DB
-	Enabled      bool
-	MaxBackups   int
+	DB         *db.DB
+	Enabled    bool
+	MaxBackups int
 
-	mu sync.Mutex // guards the periodic limit() call
+	mu sync.Mutex // guards the periodic trim() call
 }
 
 // New constructs a Service. KUSO_AUDIT=true enables, KUSO_AUDIT_LIMIT
 // sets the row cap (default 1000).
+//
+// When enabled, New also starts a single trim ticker. Pre-v0.9.9 every
+// audit Log spawned `go s.trim(context.Background())` — under a build
+// storm (1k events/s) we'd leak 1k goroutines all racing the TryLock,
+// each pinning a Background ctx forever. One ticker is enough; the
+// table cap is a coarse signal anyway.
 func New(d *db.DB) *Service {
 	enabled := os.Getenv("KUSO_AUDIT") == "true"
 	limit := 1000
@@ -35,7 +41,23 @@ func New(d *db.DB) *Service {
 			limit = n
 		}
 	}
-	return &Service{DB: d, Enabled: enabled, MaxBackups: limit}
+	s := &Service{DB: d, Enabled: enabled, MaxBackups: limit}
+	if enabled && d != nil {
+		go s.runTrimLoop()
+	}
+	return s
+}
+
+// runTrimLoop is the singleton trim ticker — fires every 5 minutes.
+// Called once at construction; not exposed for re-entry.
+func (s *Service) runTrimLoop() {
+	t := time.NewTicker(5 * time.Minute)
+	defer t.Stop()
+	for range t.C {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		s.trim(ctx)
+		cancel()
+	}
 }
 
 // Entry is one audit record. Fields default to empty strings so callers
@@ -67,8 +89,12 @@ func (s *Service) Log(ctx context.Context, e Entry) {
 		e.Resource = "unknown"
 	}
 	now := time.Now().UTC()
+	// `user` is reserved on Postgres — unquoted it resolves to
+	// current_user() and the INSERT silently fails the FK check.
+	// camelCase column names also need quoting on Postgres. Same
+	// fix as queries.go ListAudit.
 	if _, err := s.DB.ExecContext(ctx, `
-INSERT INTO "Audit" (timestamp, severity, action, namespace, phase, app, pipeline, resource, message, user, "createdAt", "updatedAt")
+INSERT INTO "Audit" (timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user", "createdAt", "updatedAt")
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		now, e.Severity, e.Action, e.Namespace, e.Phase, e.App, e.Pipeline, e.Resource, e.Message, e.User, now, now,
 	); err != nil {
@@ -77,7 +103,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		fmt.Fprintf(os.Stderr, "audit: log failed: %v\n", err)
 		return
 	}
-	go s.trim(context.Background())
+	// Trim is on a singleton ticker — see runTrimLoop in New. The
+	// pre-v0.9.9 per-write goroutine spawn pattern is gone.
 }
 
 // Get returns the newest `limit` rows.
@@ -89,7 +116,7 @@ func (s *Service) Get(ctx context.Context, limit int) ([]Entry, int, error) {
 		limit = 100
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-SELECT timestamp, severity, action, namespace, phase, app, pipeline, resource, message, user
+SELECT timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
 FROM "Audit" ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, 0, fmt.Errorf("audit: get: %w", err)
@@ -127,7 +154,7 @@ func (s *Service) GetForProject(ctx context.Context, project string, after int64
 		limit = 100
 	}
 	q := `
-SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, user
+SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
 FROM "Audit" WHERE pipeline = ?`
 	args := []any{project}
 	if after > 0 {
@@ -171,7 +198,7 @@ func (s *Service) GetForApp(ctx context.Context, pipeline, phase, app string, li
 		limit = 100
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-SELECT timestamp, severity, action, namespace, phase, app, pipeline, resource, message, user
+SELECT timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
 FROM "Audit" WHERE pipeline = ? AND phase = ? AND app = ?
 ORDER BY id DESC LIMIT ?`, pipeline, phase, app, limit)
 	if err != nil {
@@ -199,13 +226,17 @@ ORDER BY id DESC LIMIT ?`, pipeline, phase, app, limit)
 
 // trim caps the table at MaxBackups rows, deleting oldest. Best-effort;
 // happens off the request path.
+//
+// Pre-v0.9.9 used `LIMIT -1 OFFSET ?` — SQLite-only syntax that
+// Postgres rejects with a parse error, so trim was a silent no-op and
+// the table grew unbounded. NOT IN against the keep-set is portable.
 func (s *Service) trim(ctx context.Context) {
 	if !s.mu.TryLock() {
 		return
 	}
 	defer s.mu.Unlock()
 	_, _ = s.DB.ExecContext(ctx, `
-DELETE FROM "Audit" WHERE id IN (
-  SELECT id FROM "Audit" ORDER BY id DESC LIMIT -1 OFFSET ?
+DELETE FROM "Audit" WHERE id NOT IN (
+  SELECT id FROM "Audit" ORDER BY id DESC LIMIT ?
 )`, s.MaxBackups)
 }

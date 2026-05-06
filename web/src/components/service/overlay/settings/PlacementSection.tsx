@@ -106,8 +106,12 @@ export function PlacementSection({ state, setState }: SectionProps) {
           const valuesForKey = allLabels.get(r.key.trim());
           const haveAnyLabels = allLabels.size > 0;
           return (
+            // Key on (key, value) so removing a non-last placement
+            // rule doesn't leave the survivor's controlled select
+            // displaying the deleted row's value. Index keys broke
+            // this — same class as the F-2 audit finding.
             <div
-              key={i}
+              key={r.key ? `k:${r.key}=${r.value}` : `empty:${i}`}
               className="grid grid-cols-[140px_1fr_28px] items-center gap-1.5 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-b-0"
             >
               {haveAnyLabels ? (

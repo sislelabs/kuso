@@ -112,6 +112,14 @@ type Service struct {
 	state   State
 	etag    string // for If-None-Match on the GH releases endpoint
 	client  *http.Client
+
+	// runCtx is the lifecycle context set by Run. Background watchers
+	// (e.g. watchOperatorHealth) derive from this so a graceful
+	// shutdown cancels in-flight rollbacks instead of leaving them
+	// running against a closed kube client. nil before Run starts —
+	// callers fall back to context.Background() in that case (only
+	// happens in tests).
+	runCtx context.Context
 }
 
 // New builds a Service with sensible defaults. Repo overridable for
@@ -136,6 +144,9 @@ func New(database *db.DB, kc *kube.Client, namespace, current string, logger *sl
 // Run polls the GH releases endpoint forever. First tick is
 // immediate so the UI has a real "latest" within 30s of boot.
 func (s *Service) Run(ctx context.Context) {
+	s.mu.Lock()
+	s.runCtx = ctx
+	s.mu.Unlock()
 	t := time.NewTicker(s.Interval)
 	defer t.Stop()
 	s.tick(ctx)
@@ -195,8 +206,17 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 	url := fmt.Sprintf("https://api.github.com/repos/%s/releases/latest", s.Repo)
 	req, _ := http.NewRequestWithContext(ctx, "GET", url, nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
-	if s.etag != "" {
-		req.Header.Set("If-None-Match", s.etag)
+	// etag is shared between the periodic ticker and any user-
+	// triggered Refresh() — both call fetchLatest. Pre-v0.9.9 the
+	// etag read+write lived outside the mutex; concurrent calls
+	// raced on the string assignment (Go strings are pointer+len,
+	// non-atomic on 32-bit, torn reads possible) and burned the
+	// 5000/h GH rate limit when the ETag flopped.
+	s.mu.RLock()
+	cachedETag := s.etag
+	s.mu.RUnlock()
+	if cachedETag != "" {
+		req.Header.Set("If-None-Match", cachedETag)
 	}
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -215,7 +235,11 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 	if resp.StatusCode != 200 {
 		return "", nil, fmt.Errorf("gh releases: status %d", resp.StatusCode)
 	}
-	s.etag = resp.Header.Get("ETag")
+	if newETag := resp.Header.Get("ETag"); newETag != "" {
+		s.mu.Lock()
+		s.etag = newETag
+		s.mu.Unlock()
+	}
 	var rel struct {
 		TagName string `json:"tag_name"`
 		Body    string `json:"body"`
@@ -377,7 +401,10 @@ func (s *Service) fetchVersion(ctx context.Context, version string) (*Manifest, 
 			return nil, fmt.Errorf("verify manifest signature: %w", err)
 		}
 		// soft-fail: log + proceed.
-		fmt.Printf("warn: updater: manifest signature check failed for %s: %v\n", rel.TagName, err)
+		if s.Logger != nil {
+			s.Logger.Warn("updater: manifest signature check failed",
+				"version", rel.TagName, "err", err)
+		}
 	}
 	var m Manifest
 	if err := json.Unmarshal(body, &m); err != nil {
@@ -614,7 +641,17 @@ func (s *Service) watchOperatorHealth(jobName, priorImg, newImg string) {
 		// skip.
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), healthGate+30*time.Second)
+	// Derive from the server's lifecycle context so a graceful
+	// shutdown cancels the watchdog instead of letting it run
+	// against a closed kube client (and possibly issuing a
+	// spurious rollback). Pre-v0.9.9 used context.Background().
+	s.mu.RLock()
+	parent := s.runCtx
+	s.mu.RUnlock()
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, healthGate+30*time.Second)
 	defer cancel()
 	deadline := time.Now().Add(healthGate)
 	t := time.NewTicker(10 * time.Second)

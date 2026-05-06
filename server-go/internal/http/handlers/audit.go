@@ -29,6 +29,9 @@ func auditCtx(r *http.Request) (context.Context, context.CancelFunc) {
 }
 
 func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	project := r.URL.Query().Get("project")
 	after, _ := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
@@ -56,6 +59,9 @@ func (h *AuditHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuditHandler) ListForApp(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	ctx, cancel := auditCtx(r)
 	defer cancel()

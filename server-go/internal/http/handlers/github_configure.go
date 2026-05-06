@@ -219,20 +219,22 @@ func (h *GithubConfigureHandler) namespace() string {
 }
 
 func (h *GithubConfigureHandler) requireAdmin(w http.ResponseWriter, r *http.Request) bool {
-	claims, ok := auth.ClaimsFromContext(r.Context())
-	if !ok || claims == nil || claims.Role != "admin" {
-		http.Error(w, "forbidden", http.StatusForbidden)
-		return false
-	}
-	return true
+	// Use the canonical permission check, not claims.Role == "admin".
+	// The string match locked out OAuth-bootstrapped admins (whose
+	// role is the group slug, not literally "admin") and let in
+	// users with a stale "admin" Role row that no longer carries
+	// settings:admin permission. Mirrors the BackupHandler v0.9.4
+	// fix.
+	return requireAdmin(w, r)
 }
 
 func (h *GithubConfigureHandler) fail(w http.ResponseWriter, op string, err error) {
 	h.Logger.Error("github configure", "op", op, "err", err)
-	// Surface the error message — it's an admin-only endpoint and the
-	// caller wants to know what went wrong (kube perms, parse error,
-	// etc) rather than a generic 500.
-	http.Error(w, "internal: "+err.Error(), http.StatusInternalServerError)
+	// Don't leak raw kube error strings (which expose namespace,
+	// SA names, RBAC structure) to the client. Admin-only endpoint
+	// but the principle of least exposure stands. Operators read
+	// the structured slog above.
+	http.Error(w, "internal", http.StatusInternalServerError)
 }
 
 func actorName(ctx context.Context) string {

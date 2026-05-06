@@ -268,7 +268,7 @@ func NewRouter(d Deps) http.Handler {
 			kubeH.Mount(r)
 			// Backups: same kube + namespace so all the in-cluster
 			// secret/job writes go through one client.
-			backupsH := &httphandlers.BackupsHandler{Kube: d.Logs.Kube, DB: d.DB, Namespace: d.Logs.Namespace, Logger: d.Logger}
+			backupsH := &httphandlers.BackupsHandler{Kube: d.Logs.Kube, DB: d.DB, Audit: d.Audit, Namespace: d.Logs.Namespace, Logger: d.Logger}
 			backupsH.Mount(r)
 		}
 		if d.Updater != nil {

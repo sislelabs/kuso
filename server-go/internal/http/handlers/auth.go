@@ -10,6 +10,8 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"time"
 
 	"kuso/server/internal/audit"
@@ -184,25 +186,79 @@ func (h *AuthHandler) Methods(w http.ResponseWriter, _ *http.Request) {
 	_ = json.NewEncoder(w).Encode(out)
 }
 
-// clientIP best-effort extracts the requesting IP for audit fields.
-// Honours X-Forwarded-For when present (the kuso ingress prepends it),
-// falls back to the raw RemoteAddr.
+// clientIP best-effort extracts the requesting IP for audit fields
+// AND the rate limiter key. Pre-v0.9.9 it trusted X-Forwarded-For
+// unconditionally — anyone could spoof XFF and rotate through fake
+// IPs to bypass the login brute-force limiter. The KUSO_TRUSTED_PROXIES
+// env var that the doc mentioned was never actually read.
+//
+// Now: only honour XFF when r.RemoteAddr falls inside one of the
+// CIDRs in KUSO_TRUSTED_PROXIES (comma-separated). Otherwise return
+// the raw RemoteAddr — a direct caller can't spoof its own peer
+// address. Default (env unset) is "trust nothing", which is safe for
+// localhost dev (RemoteAddr already reflects the real client).
 func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" && peerIsTrustedProxy(host) {
 		// X-Forwarded-For is a comma-separated list; the leftmost is the
 		// original client.
 		for i := 0; i < len(xff); i++ {
 			if xff[i] == ',' {
-				return xff[:i]
+				return strings.TrimSpace(xff[:i])
 			}
 		}
-		return xff
+		return strings.TrimSpace(xff)
 	}
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
 	}
 	return host
+}
+
+// peerIsTrustedProxy reports whether the connection peer (raw
+// RemoteAddr host) sits inside one of the CIDRs listed in
+// KUSO_TRUSTED_PROXIES. Empty env = no proxy trusted = XFF ignored.
+//
+// Read on every call: configuration drift (operator widens the list
+// to add a new ingress IP) shouldn't require a restart. The cost is
+// one os.Getenv + N CIDR parses per request; both are cheap and the
+// list is short (one or two entries in practice).
+func peerIsTrustedProxy(host string) bool {
+	if host == "" {
+		return false
+	}
+	raw := strings.TrimSpace(os.Getenv("KUSO_TRUSTED_PROXIES"))
+	if raw == "" {
+		return false
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return false
+	}
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		if !strings.Contains(entry, "/") {
+			// Bare IP — exact match.
+			if ip.Equal(net.ParseIP(entry)) {
+				return true
+			}
+			continue
+		}
+		_, cidr, err := net.ParseCIDR(entry)
+		if err != nil {
+			continue
+		}
+		if cidr.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // contains is the tiny linear "does this slice carry s" helper.

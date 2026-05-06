@@ -77,9 +77,18 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
   // clobbered by a refetch.
   const prevBaselineRef = useRef<FormState>(baseline);
   useEffect(() => {
-    if (isEqual(state, prevBaselineRef.current)) {
-      setState(baseline);
-    }
+    // Functional updater: compare prev (current state) against the
+    // previous baseline. If the user hasn't edited anything since
+    // the last refetch, snap to the new baseline; otherwise keep
+    // their in-flight edits intact.
+    //
+    // Pre-v0.9.9 we read `state` from the closure and stored it
+    // outside the effect's deps. The closure is captured at the
+    // first render, so the inner `isEqual(state, prev)` always
+    // compared an old snapshot against itself, returned true, and
+    // wiped the user's typing on every refetch. The reported
+    // "I changed the domain and nothing happened" bug.
+    setState((prev) => (isEqual(prev, prevBaselineRef.current) ? baseline : prev));
     prevBaselineRef.current = baseline;
   }, [baseline]);
 

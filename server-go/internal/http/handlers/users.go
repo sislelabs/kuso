@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -270,7 +271,7 @@ func (h *UsersHandler) UpdateMyAvatar(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
-	file, hdr, err := r.FormFile("avatar")
+	file, _, err := r.FormFile("avatar")
 	if err != nil {
 		http.Error(w, "missing avatar field", http.StatusBadRequest)
 		return
@@ -281,9 +282,16 @@ func (h *UsersHandler) UpdateMyAvatar(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "read avatar", err)
 		return
 	}
-	mime := hdr.Header.Get("Content-Type")
-	if mime == "" {
-		mime = "image/png"
+	// Sniff the actual content type, don't trust the multipart header.
+	// A client claiming Content-Type: image/png while uploading
+	// `<script>alert(1)</script>` would otherwise round-trip as a
+	// data:image/png URL but render as HTML in any view that ever
+	// dropped it into innerHTML or src="" on a permissive browser
+	// quirk. http.DetectContentType reads the first 512 bytes.
+	mime := http.DetectContentType(data)
+	if !isAllowedAvatarMIME(mime) {
+		http.Error(w, "avatar must be PNG, JPEG, GIF, or WEBP", http.StatusUnsupportedMediaType)
+		return
 	}
 	dataURL := "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
 	ctx, cancel := usersCtx(r)
@@ -293,6 +301,22 @@ func (h *UsersHandler) UpdateMyAvatar(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// isAllowedAvatarMIME gates the data:URL we mint from the upload.
+// Limited to image/* formats every browser handles natively.
+// http.DetectContentType returns the MIME with optional charset
+// trailer (e.g. "image/png; charset=utf-8" — won't happen for an
+// image, but be defensive against future stdlib changes).
+func isAllowedAvatarMIME(m string) bool {
+	if i := strings.IndexByte(m, ';'); i >= 0 {
+		m = m[:i]
+	}
+	switch strings.TrimSpace(m) {
+	case "image/png", "image/jpeg", "image/gif", "image/webp":
+		return true
+	}
+	return false
 }
 
 // userResponse formats a *db.User into the JSON shape the UI expects.

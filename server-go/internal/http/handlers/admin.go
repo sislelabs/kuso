@@ -38,7 +38,12 @@ func (h *AdminHandler) Mount(r chi.Router) {
 	r.Get("/api/roles", h.ListRoles)
 	r.Get("/api/groups", h.ListGroups)
 
-	r.Get("/api/audit", h.Audit)
+	// /api/audit is owned by AuditHandler. Both handlers tried to
+	// register it; chi's last-write-wins meant AuditHandler.List was
+	// the live route while AdminHandler.Audit's requireAdmin gate was
+	// dead code — every authenticated user could read the audit log.
+	// AuditHandler now carries its own gate; this route stays here
+	// only as a no-op to keep the diff small.
 
 	r.Get("/api/tokens/my", h.ListMyTokens)
 	r.Post("/api/tokens/my", h.CreateMyToken)

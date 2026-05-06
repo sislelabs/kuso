@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -237,12 +238,21 @@ func (h *ConfigHandler) DeletePodSize(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// randomID is a small helper for routes that mint UUID-ish ids when the
-// body doesn't provide one.
+// randomID returns a fresh hex-encoded 128-bit identifier. Panics on
+// CSPRNG failure rather than returning "" — pre-v0.9.9 the zero-string
+// fallback meant the caller would happily insert a row with id="" and
+// the next caller would either collide on a UNIQUE constraint or
+// overwrite the previous row. crypto/rand.Read on Linux only fails
+// on an unrecoverable kernel state (getrandom returning EINTR forever
+// under signal storm, or a closed /dev/urandom on a misconfigured
+// chroot); in that scenario a panic is the correct response — we
+// should fail closed, not mint id="" rows. Callers run inside HTTP
+// handlers so chimw.Recoverer turns the panic into a 500 with the
+// stack logged, which is exactly the operator-visible signal we want.
 func randomID() string {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		return ""
+		panic(fmt.Sprintf("randomID: crypto/rand failed (cannot mint stable IDs without entropy): %v", err))
 	}
 	return hex.EncodeToString(b[:])
 }
