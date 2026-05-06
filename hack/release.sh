@@ -737,7 +737,9 @@ if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
   COMMIT_FILES=(
     server-go/internal/version/VERSION
     deploy/server-go.yaml
+    deploy/operator.yaml
     hack/install.sh
+    server-go/internal/installscripts/scripts/install.sh
     cli/cmd/kusoCli/version/CLI_VERSION
     cli/pkg/kusoApi/VERSION
   )

@@ -64,8 +64,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.9.3}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.9.3}"
+KUSO_VERSION="${KUSO_VERSION:-v0.9.4}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.9.4}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 
@@ -664,6 +664,13 @@ kubectl wait --for=condition=Available --timeout=180s \
 
 # -------- 11. server --------
 log "applying kuso server (host ${KUSO_DOMAIN}, image tag ${KUSO_SERVER_VERSION})"
+# Clean up the pre-v0.9.4 cluster-admin binding if present. The
+# narrow RBAC declared in deploy/server-go.yaml is the authoritative
+# grant; the legacy `kuso-server-cluster-admin` ClusterRoleBinding
+# was silently overriding that with full cluster-admin. Idempotent
+# on fresh installs (NotFound is fine).
+kubectl delete clusterrolebinding kuso-server-cluster-admin --ignore-not-found 2>/dev/null || true
+
 # The fetched manifest pins a specific tag at the install ref; we
 # rewrite to whatever the user requested via --server-version. The
 # regex matches `kuso-server-go:vX.Y.Z` regardless of the embedded
@@ -673,22 +680,13 @@ curl -sfL "${KUSO_RAW}/deploy/server-go.yaml" \
   | kubectl apply -f - >/dev/null
 
 kubectl apply -f - <<EOF >/dev/null
-apiVersion: v1
-kind: ServiceAccount
-metadata: { name: kuso-server, namespace: kuso }
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata: { name: kuso-server-cluster-admin }
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: cluster-admin
-subjects:
-  - kind: ServiceAccount
-    name: kuso-server
-    namespace: kuso
----
+# kuso-server's ServiceAccount + RBAC are owned by deploy/server-go.yaml
+# (the narrow ClusterRole + ClusterRoleBinding declared at the top of
+# the bundle). Pre-v0.9.4 this section silently layered a cluster-
+# admin ClusterRoleBinding on top, which let any kuso-server bug
+# delete arbitrary cluster resources. We delete that binding here on
+# upgrade for installs that ran the pre-v0.9.4 path; new installs
+# never get it.
 apiVersion: v1
 kind: Service
 metadata:
