@@ -5,6 +5,13 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.1] — 2026-05-06
+
+### 🐛 Bug Fixes
+- Fix(builds): bump kaniko memory limit 1Gi → 2Gi for nixpacks snapshots ([0257cc1](https://github.com/sislelabs/kuso/commit/0257cc1b4983eab8f9a240cd2101cc5c3ab8f6df))
+- Fix(install): kusocrons CRD + eager PriorityClass + pod-create race ([7f82f73](https://github.com/sislelabs/kuso/commit/7f82f7308fcaa9d226ac418563475fe21a61ab68))
+- Fix(install): drop Secret block from postgres.yaml ([6abc8ea](https://github.com/sislelabs/kuso/commit/6abc8eae60c3e2d06c9d4e55a2b010bd051223fc))
+
 ## [0.9.0] — 2026-05-05
 
 ### Other
