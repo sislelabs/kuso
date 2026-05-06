@@ -81,7 +81,7 @@ spec:
           # at apply-time; the literal here is the source of truth
           # for `kubectl apply -f deploy/` direct users — who pulled
           # the long-stale v0.1.0-dev tag pre-v0.9.4.
-          image: ghcr.io/sislelabs/kuso-operator:v0.9.7
+          image: ghcr.io/sislelabs/kuso-operator:v0.9.8
           imagePullPolicy: Always
           args:
             - "--leader-election-id=kuso-operator"

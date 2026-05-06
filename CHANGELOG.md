@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.8] — 2026-05-06
+
+### 🐛 Bug Fixes
+- Fix(security): plug audit P0s — auth gates, redirect, signing, broken delete ([bc35380](https://github.com/sislelabs/kuso/commit/bc353808ff2f5f8a9247e40acc8bb860d2224af0))
+
 ## [0.9.7] — 2026-05-06
 
 ### ✨ Features
