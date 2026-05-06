@@ -49,6 +49,16 @@ host: ""
 # domains; cleared via SetEnv / PatchService propagation.
 additionalHosts: []
 
+# tlsHosts: explicit allowlist of hosts that should get a TLS entry
+# in the Ingress (and therefore a cert-manager-issued LE cert).
+# Server populates from {host, additionalHosts...} after running the
+# Mozilla public-suffix check; non-public-FQDN hosts (e.g. a project
+# baseDomain accidentally set to a single label like "hui") are
+# filtered out so they don't poison the ingress's tls block.
+# Unset/empty in legacy CRs → chart falls back to a coarser
+# multi-label / non-reserved-suffix check.
+tlsHosts: []
+
 # internal: when true, skip the Ingress entirely. The Service still
 # exists so sibling pods can reach this env via in-cluster DNS, but
 # nothing is exposed to traefik. Mirrors KusoService.spec.internal.

@@ -262,6 +262,7 @@ func (s *Service) propagateBaseDomain(ctx context.Context, project, oldBase, new
 			continue
 		}
 		env.Spec.Host = defaultHost(env.Spec.Service, project, newBase)
+		env.Spec.TLSHosts = computeTLSHosts(env.Spec.Host, env.Spec.AdditionalHosts)
 		if _, uerr := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); uerr != nil {
 			return fmt.Errorf("update env %s: %w", env.Name, uerr)
 		}

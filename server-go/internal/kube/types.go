@@ -267,6 +267,15 @@ type KusoEnvironmentSpec struct {
 	// merge step that pulls service-level domains in). Server-managed
 	// via propagateDomainsToEnvs; user edits flow through PatchService.
 	AdditionalHosts  []string                `json:"additionalHosts,omitempty"`
+	// TLSHosts is the subset of {Host, AdditionalHosts...} that the
+	// server has flagged as eligible for a Let's Encrypt cert (real
+	// FQDN, not a reserved suffix, optionally DNS-resolves to the
+	// cluster). The chart's Ingress template reads ONLY this — hosts
+	// that aren't listed here get an HTTP-only rule. Empty = no tls
+	// block at all. Unset/legacy CRs (pre-v0.9.5) fall back to the
+	// chart's own check on Host+AdditionalHosts so an older operator
+	// continues to render usable ingresses.
+	TLSHosts         []string                `json:"tlsHosts,omitempty"`
 	// Internal=true mirrors KusoService.spec.internal so the chart can
 	// gate Ingress emission off the env CR alone (chart never reads
 	// the service spec). Propagated via propagateInternalToEnvs.

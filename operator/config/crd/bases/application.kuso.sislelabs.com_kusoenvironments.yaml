@@ -104,6 +104,10 @@ spec:
                   type: array
                   description: Extra hostnames routed to this env's pod. Server populates this from KusoService.spec.domains so custom domains attach without losing the auto-generated host.
                   items: { type: string }
+                tlsHosts:
+                  type: array
+                  description: Subset of {host, additionalHosts...} eligible for a Let's Encrypt cert. Server populates this using the Mozilla public-suffix list — hosts that aren't public FQDNs (e.g. single-label or reserved suffixes like .local) are filtered out so they don't poison the Ingress's all-or-nothing tls block. Unset on legacy CRs falls back to a coarser chart-level check.
+                  items: { type: string }
                 internal:
                   type: boolean
                   description: When true, skip the Ingress entirely. Service still exists for in-cluster DNS access; no public domain or TLS. Mirrors KusoService.spec.internal.

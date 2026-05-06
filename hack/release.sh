@@ -346,19 +346,32 @@ fi
 NIXPACKS_VERSION="${KUSO_RELEASE_NIXPACKS_VERSION:-1.41.0}"
 NIXPACKS_IMAGE="${KUSO_RELEASE_NIXPACKS_IMAGE:-ghcr.io/sislelabs/kuso-nixpacks}"
 if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
-  log "docker buildx → ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION} (+ :latest)"
-  if [[ "$DRY_RUN" == "1" ]]; then
-    dry "docker buildx build --platform linux/amd64 --push --build-arg NIXPACKS_VERSION=${NIXPACKS_VERSION} -t ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION} -t ${NIXPACKS_IMAGE}:latest -f build/nixpacks/Dockerfile build/nixpacks"
+  # The nixpacks image is tagged by the *nixpacks* version, not the
+  # kuso release version — so it's stable across kuso ships unless
+  # NIXPACKS_VERSION bumps. Cheap probe via docker buildx imagetools
+  # against the registry tag; on hit we skip the whole 30 MB push.
+  # That makes flaky-ghcr re-shipping idempotent (the previous push
+  # of v0.9.5 timed out at this step after 10000s on layer push).
+  # Override with KUSO_RELEASE_FORCE_NIXPACKS=1 when changing the
+  # nixpacks Dockerfile without bumping NIXPACKS_VERSION.
+  if [[ "${KUSO_RELEASE_FORCE_NIXPACKS:-0}" != "1" ]] \
+      && docker buildx imagetools inspect "${NIXPACKS_IMAGE}:${NIXPACKS_VERSION}" >/dev/null 2>&1; then
+    log "nixpacks image ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION} already on ghcr — skipping rebuild"
   else
-    docker buildx build \
-      --platform linux/amd64 \
-      --push \
-      --build-arg "NIXPACKS_VERSION=${NIXPACKS_VERSION}" \
-      -t "${NIXPACKS_IMAGE}:${NIXPACKS_VERSION}" \
-      -t "${NIXPACKS_IMAGE}:latest" \
-      -f build/nixpacks/Dockerfile \
-      build/nixpacks >/dev/null
-    log "nixpacks image pushed: ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION}"
+    log "docker buildx → ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION} (+ :latest)"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      dry "docker buildx build --platform linux/amd64 --push --build-arg NIXPACKS_VERSION=${NIXPACKS_VERSION} -t ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION} -t ${NIXPACKS_IMAGE}:latest -f build/nixpacks/Dockerfile build/nixpacks"
+    else
+      docker buildx build \
+        --platform linux/amd64 \
+        --push \
+        --build-arg "NIXPACKS_VERSION=${NIXPACKS_VERSION}" \
+        -t "${NIXPACKS_IMAGE}:${NIXPACKS_VERSION}" \
+        -t "${NIXPACKS_IMAGE}:latest" \
+        -f build/nixpacks/Dockerfile \
+        build/nixpacks >/dev/null
+      log "nixpacks image pushed: ${NIXPACKS_IMAGE}:${NIXPACKS_VERSION}"
+    fi
   fi
 fi
 

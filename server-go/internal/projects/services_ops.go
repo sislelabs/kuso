@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 
+	"golang.org/x/net/publicsuffix"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -247,6 +248,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			ReplicaCount:     scale.Min,
 			Host:             defaultHost(req.Name, project, proj.Spec.BaseDomain),
 			AdditionalHosts:  domainHosts(created.Spec.Domains),
+			TLSHosts:         computeTLSHosts(defaultHost(req.Name, project, proj.Spec.BaseDomain), domainHosts(created.Spec.Domains)),
 			Internal:         created.Spec.Internal,
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
@@ -466,6 +468,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			ReplicaCount:     scaleMin,
 			Host:             host,
 			AdditionalHosts:  domainHosts(svc.Spec.Domains),
+			TLSHosts:         computeTLSHosts(host, domainHosts(svc.Spec.Domains)),
 			Internal:         svc.Spec.Internal,
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
@@ -1279,6 +1282,7 @@ func (s *Service) propagateDomainsToEnvs(ctx context.Context, ns, project, servi
 			continue
 		}
 		env.Spec.AdditionalHosts = hosts
+		env.Spec.TLSHosts = computeTLSHosts(env.Spec.Host, hosts)
 		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
 			return fmt.Errorf("update env %s: %w", env.Name, err)
 		}
@@ -1441,46 +1445,64 @@ func defaultHost(service, project, baseDomain string) string {
 	return fmt.Sprintf("%s.%s", service, baseDomain)
 }
 
-// reservedHostSuffixes are TLDs/suffixes that Let's Encrypt cannot
-// issue certs for: .local (mDNS), .internal (private), .test/.example/
-// .invalid (RFC 2606 reserved), .arpa (reverse DNS), .localhost (loopback).
-var reservedHostSuffixes = map[string]struct{}{
-	"local":     {},
-	"internal":  {},
-	"localhost": {},
-	"test":      {},
-	"example":   {},
-	"invalid":   {},
-	"arpa":      {},
+// computeTLSHosts returns the subset of [primary, extras...] that's
+// eligible for a Let's Encrypt cert. Used to populate
+// KusoEnvironment.spec.tlsHosts so the chart's Ingress template only
+// references TLS secrets for hosts we know LE can issue. Empty primary
+// is dropped; duplicates are de-duped (preserving order).
+func computeTLSHosts(primary string, extras []string) []string {
+	all := make([]string, 0, 1+len(extras))
+	if h := strings.TrimSpace(primary); h != "" {
+		all = append(all, h)
+	}
+	all = append(all, extras...)
+	out := make([]string, 0, len(all))
+	seen := map[string]struct{}{}
+	for _, h := range all {
+		h = strings.ToLower(strings.TrimSpace(h))
+		if h == "" {
+			continue
+		}
+		if _, dup := seen[h]; dup {
+			continue
+		}
+		if !isPublicFQDN(h) {
+			continue
+		}
+		seen[h] = struct{}{}
+		out = append(out, h)
+	}
+	return out
 }
 
 // isPublicFQDN reports whether host is plausibly a public-internet
 // fully-qualified domain name eligible for a Let's Encrypt cert.
 //
-// Heuristics (all must hold):
-//   - at least one dot (so single-label names like "hui" or "intranet"
-//     are rejected — they can't have public TLS);
-//   - the final label is ≥ 2 chars (rules out "x.a", "x.b" style typos);
-//   - the final label isn't a reserved suffix (.local etc).
+// Backed by golang.org/x/net/publicsuffix — the IANA root zone +
+// Mozilla's effective-TLD list. publicsuffix.PublicSuffix returns
+// the registered suffix and whether it's an ICANN-managed real TLD.
+// We accept only ICANN-managed suffixes; private suffixes (e.g.
+// "blogspot.com" — registered through publicsuffix.org but not real
+// TLDs) are still fine because those have a real TLD up the chain.
 //
-// We deliberately don't validate against the actual public-suffix list
-// (the publicsuffix package adds 80kB of trie data for marginal benefit).
-// The point is to catch the "I typed my project name as the baseDomain"
-// class of error at edit time, not to validate every conceivable TLD.
+// Catches the v0.9.5 footgun where a user types their project name
+// as the baseDomain (e.g. "hui") and kuso happily generates
+// "<service>.hui" hostnames that LE then rejects with "DNS problem".
 func isPublicFQDN(host string) bool {
 	host = strings.TrimSpace(strings.ToLower(host))
 	if host == "" {
 		return false
 	}
-	parts := strings.Split(host, ".")
-	if len(parts) < 2 {
+	if !strings.Contains(host, ".") {
 		return false
 	}
-	tld := parts[len(parts)-1]
-	if len(tld) < 2 {
+	suffix, icann := publicsuffix.PublicSuffix(host)
+	if !icann {
 		return false
 	}
-	if _, reserved := reservedHostSuffixes[tld]; reserved {
+	// Host must be more specific than the suffix itself — i.e. you
+	// can't get a cert for "com" or "co.uk" alone.
+	if host == suffix {
 		return false
 	}
 	return true

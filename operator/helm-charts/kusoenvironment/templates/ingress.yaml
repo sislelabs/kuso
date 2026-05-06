@@ -17,40 +17,41 @@
   {{- if . -}}{{- $hosts = append $hosts . -}}{{- end -}}
 {{- end -}}
 {{- /* Filter hosts to only those eligible for a public Let's
-       Encrypt cert. A host is eligible if:
-         - it contains at least one dot (so single-label hosts
-           like "demo.hui" with a fake last-label TLD aren't
-           eligible — but real domains like "api.example.com" are);
-         - the final label is at least 2 chars AND is not a
-           reserved/test/private suffix (.local, .internal,
-           .localhost, .test, .example, .invalid, .arpa).
-       If the primary host fails these checks the entire TLS
-       block is suppressed. Pre-v0.9.5 we'd happily ask LE to mint
-       a cert for "<service>.<project>" when the user set their
-       project baseDomain to something like just "hui" (or had no
-       baseDomain at all on a non-FQDN cluster default). LE rejects
-       the order with "DNS problem", the primary cert sits in
-       False forever, AND because traefik's ingress-tls config is
-       all-or-nothing, every OTHER host on the same ingress —
-       including custom domains the user added later that DO have
-       valid certs — falls back to TRAEFIK DEFAULT CERT and breaks
-       HTTPS. The fix here is upstream: don't put non-LE-eligible
-       hosts in the tls block at all; HTTPS for them just won't
-       work, but valid hosts on the same Ingress keep working.
+       Encrypt cert. The server pre-computes this list (using the
+       Mozilla public-suffix database, which catches "hui.com" as
+       valid AND "service.hui" as not — a fake-TLD test that the
+       chart can't replicate without shipping the 80kB suffix list).
+       It writes the result onto KusoEnvironment.spec.tlsHosts.
 
-       The matching server-side validation in projects.Update
-       catches the typo at edit time so the user gets a clear
-       error before save instead of a quiet broken state.
+       Why this matters: traefik's ingress tls block is all-or-
+       nothing — one missing primary secret on the Ingress means
+       traefik falls back to TRAEFIK DEFAULT CERT for *every* host
+       on the same Ingress, including custom domains the user added
+       later that DO have valid LE certs. Pre-v0.9.5 a user typing
+       "hui" as their baseDomain bricked HTTPS for the whole
+       service even after they added a real custom domain; the user
+       saw "I added a custom domain, the cert minted, the URL still
+       serves a self-signed cert" with no obvious cause.
+
+       Fallback: when tlsHosts is nil/empty (legacy CRs from a
+       pre-v0.9.5 server, or charts rendered offline without the
+       server in the loop), apply a chart-level minimum filter
+       (multi-label, non-reserved-suffix) so legacy data still
+       produces a usable Ingress.
      */ -}}
 {{- $tlsHosts := list -}}
-{{- $reservedSuffix := list "local" "internal" "localhost" "test" "example" "invalid" "arpa" -}}
-{{- range $hosts -}}
-  {{- $h := . -}}
-  {{- $parts := splitList "." $h -}}
-  {{- if gt (len $parts) 1 -}}
-    {{- $tld := lower (index $parts (sub (len $parts) 1)) -}}
-    {{- if and (ge (len $tld) 2) (not (has $tld $reservedSuffix)) -}}
-      {{- $tlsHosts = append $tlsHosts $h -}}
+{{- if .Values.tlsHosts -}}
+  {{- $tlsHosts = .Values.tlsHosts -}}
+{{- else -}}
+  {{- $reservedSuffix := list "local" "internal" "localhost" "test" "example" "invalid" "arpa" -}}
+  {{- range $hosts -}}
+    {{- $h := . -}}
+    {{- $parts := splitList "." $h -}}
+    {{- if gt (len $parts) 1 -}}
+      {{- $tld := lower (index $parts (sub (len $parts) 1)) -}}
+      {{- if and (ge (len $tld) 2) (not (has $tld $reservedSuffix)) -}}
+        {{- $tlsHosts = append $tlsHosts $h -}}
+      {{- end -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}
