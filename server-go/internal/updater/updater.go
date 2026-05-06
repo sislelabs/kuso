@@ -358,6 +358,27 @@ func (s *Service) fetchVersion(ctx context.Context, version string) (*Manifest, 
 	if err != nil {
 		return nil, fmt.Errorf("read manifest: %w", err)
 	}
+	// Signature verification — same gate as fetchLatest. Pinned
+	// upgrades shouldn't bypass signing because that's exactly the
+	// path an attacker would prefer (server picks an old, unsigned
+	// tag). KUSO_REQUIRE_SIGNATURES=true makes a missing signature
+	// a hard error; otherwise we warn and proceed for compat with
+	// pre-signing releases.
+	relAssets := make([]struct {
+		Name               string `json:"name"`
+		BrowserDownloadURL string `json:"browser_download_url"`
+	}, len(rel.Assets))
+	for i, a := range rel.Assets {
+		relAssets[i].Name = a.Name
+		relAssets[i].BrowserDownloadURL = a.BrowserDownloadURL
+	}
+	if err := s.verifyManifestSignature(ctx, relAssets, body); err != nil {
+		if requireSignatures() {
+			return nil, fmt.Errorf("verify manifest signature: %w", err)
+		}
+		// soft-fail: log + proceed.
+		fmt.Printf("warn: updater: manifest signature check failed for %s: %v\n", rel.TagName, err)
+	}
 	var m Manifest
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil, fmt.Errorf("parse manifest: %w", err)

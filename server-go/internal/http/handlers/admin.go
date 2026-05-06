@@ -66,6 +66,9 @@ func adminCtx(r *http.Request) (context.Context, context.CancelFunc) {
 
 // ListUsers returns the slim user-list shape.
 func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := adminCtx(r)
 	defer cancel()
 	out, err := h.DB.ListUsers(ctx)
@@ -76,8 +79,13 @@ func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, summariseUsers(out))
 }
 
-// CountUsers returns {count: N}.
+// CountUsers returns {count: N}. Admin-only — the count itself isn't
+// sensitive but the endpoint sits next to ListUsers + we don't want
+// drive-by enumeration probes confusing the audit story.
 func (h *AdminHandler) CountUsers(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := adminCtx(r)
 	defer cancel()
 	n, err := h.DB.CountUsers(ctx)
@@ -117,6 +125,9 @@ func (h *AdminHandler) Profile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := adminCtx(r)
 	defer cancel()
 	out, err := h.DB.ListRoles(ctx)
@@ -132,6 +143,9 @@ func (h *AdminHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := adminCtx(r)
 	defer cancel()
 	out, err := h.DB.ListGroups(ctx)
@@ -147,6 +161,9 @@ func (h *AdminHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminHandler) Audit(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	ctx, cancel := adminCtx(r)
 	defer cancel()

@@ -46,6 +46,14 @@ rules:
     - kusobuilds
     - kusobuilds/status
     - kusobuilds/finalizers
+    # Cron CRD landed in v0.7.x; the role.yaml was missed at the time
+    # so the operator couldn't watch/reconcile cron CRs on installs
+    # that bound this manifest (the env-var watches.yaml entry was
+    # there, but RBAC blocked the actual API calls). Symptom: schedule
+    # changes save to the spec but no CronJob ever appears.
+    - kusocrons
+    - kusocrons/status
+    - kusocrons/finalizers
   verbs: ["create", "delete", "get", "list", "patch", "update", "watch"]
 
 ##

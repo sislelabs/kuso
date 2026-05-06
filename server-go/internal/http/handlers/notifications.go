@@ -109,6 +109,9 @@ func (h *NotificationsHandler) FeedReadAll(w http.ResponseWriter, r *http.Reques
 // to wait for a real build to fire. Read the config, push one
 // EventEnvelope onto the notify dispatcher, return 204.
 func (h *NotificationsHandler) Test(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	n, err := h.DB.FindNotification(ctx, chi.URLParam(r, "id"))
@@ -142,6 +145,9 @@ func notifCtx(r *http.Request) (context.Context, context.CancelFunc) {
 }
 
 func (h *NotificationsHandler) List(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	out, err := h.DB.ListNotifications(ctx)
@@ -156,6 +162,9 @@ func (h *NotificationsHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *NotificationsHandler) Get(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	out, err := h.DB.FindNotification(ctx, chi.URLParam(r, "id"))
@@ -176,6 +185,9 @@ type notifBody struct {
 }
 
 func (h *NotificationsHandler) Create(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	var body notifBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -210,6 +222,9 @@ func (h *NotificationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *NotificationsHandler) Update(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	var body notifBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -260,6 +275,9 @@ func (h *NotificationsHandler) Update(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *NotificationsHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := notifCtx(r)
 	defer cancel()
 	if err := h.DB.DeleteNotification(ctx, chi.URLParam(r, "id")); err != nil {

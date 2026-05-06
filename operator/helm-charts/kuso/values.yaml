@@ -75,12 +75,22 @@ registry:
   protocol: http
   port: 5000
   account:
-    # create account with:
-    # docker run --entrypoint htpasswd httpd:2 -Bbn [username] [password]
-    # http://aspirine.org/htpasswd_en.html (use bcrypt)
-    username: kuso
-    password: kuso
-    hash: $2y$05$czQZpvtDYc5OzM/1r1pH0eAplT/okohh/mXoWl/Y65ZP/8/jnSWZq
+    # MUST OVERRIDE — these placeholders intentionally render a broken
+    # registry config so an operator who forgets to set credentials
+    # gets an immediate 401 instead of a public-write registry.
+    # Pre-v0.9.8 the defaults were username=kuso / password=kuso plus
+    # the matching bcrypt hash, all committed in this file. Anyone who
+    # rendered this chart unchanged exposed an unauthenticated push
+    # surface to whoever could reach the cluster IP.
+    #
+    # Generate replacements with:
+    #   docker run --entrypoint htpasswd httpd:2 -Bbn USERNAME PASSWORD
+    # then set --set registry.account.{username,password,hash} on
+    # `helm install`, OR write your own values.yaml that overrides
+    # all three fields.
+    username: ""
+    password: ""
+    hash: ""
   storage: 1Gi
   storageClassName:
   # Garbage collection. Runs `registry garbage-collect --delete-untagged`

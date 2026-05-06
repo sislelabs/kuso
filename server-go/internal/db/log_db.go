@@ -112,7 +112,7 @@ func (d *LogDB) SearchLogs(ctx context.Context, req SearchLogsRequest) ([]LogLin
 	sqlStr.WriteString(` ORDER BY id DESC LIMIT ?`)
 	args = append(args, limit)
 
-	rows, err := d.DB.QueryContext(ctx, sqlStr.String(), args...)
+	rows, err := d.QueryContext(ctx, sqlStr.String(), args...)
 	if err != nil {
 		return nil, fmt.Errorf("search logs: %w", err)
 	}
@@ -155,7 +155,7 @@ func (d *LogDB) CountLogMatches(ctx context.Context, project, service, query str
 		sqlStr.WriteString(` AND ts >= ?`)
 		args = append(args, since.UTC())
 	}
-	row := d.DB.QueryRowContext(ctx, sqlStr.String(), args...)
+	row := d.QueryRowContext(ctx, sqlStr.String(), args...)
 	var n int
 	if err := row.Scan(&n); err != nil {
 		return 0, fmt.Errorf("count log matches: %w", err)
@@ -166,7 +166,7 @@ func (d *LogDB) CountLogMatches(ctx context.Context, project, service, query str
 // PruneLogsOlderThan deletes rows older than `before`. Returns the
 // number of rows removed.
 func (d *LogDB) PruneLogsOlderThan(ctx context.Context, before time.Time) (int64, error) {
-	res, err := d.DB.ExecContext(ctx, `DELETE FROM "LogLine" WHERE ts < ?`, before.UTC())
+	res, err := d.ExecContext(ctx, `DELETE FROM "LogLine" WHERE ts < ?`, before.UTC())
 	if err != nil {
 		return 0, fmt.Errorf("prune logs: %w", err)
 	}

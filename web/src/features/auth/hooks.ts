@@ -62,6 +62,21 @@ export function useAuthMethods() {
   });
 }
 
+// isSafeRedirect returns true for same-origin relative paths only.
+// Rejects:
+//   - empty / non-string
+//   - protocol-relative ("//evil.com/x") — browsers treat as off-host
+//   - absolute URLs (http://, https://, javascript:, data:, etc.)
+//   - anything missing a leading "/"
+// Used by the login flow to gate the ?next= bounce target.
+function isSafeRedirect(s: unknown): s is string {
+  if (typeof s !== "string" || s.length === 0) return false;
+  if (s[0] !== "/") return false;
+  if (s.length >= 2 && s[1] === "/") return false; // "//host" is off-origin
+  if (s.includes("\\")) return false; // some browsers normalise \\ to //
+  return true;
+}
+
 export function useLogin() {
   const qc = useQueryClient();
   const router = useRouter();
@@ -71,7 +86,14 @@ export function useLogin() {
       setJwt(data.access_token);
       await qc.invalidateQueries({ queryKey: sessionQueryKey });
       const url = new URL(window.location.href);
-      const next = url.searchParams.get("next") ?? "/projects";
+      const raw = url.searchParams.get("next") ?? "/projects";
+      // Open-redirect guard: only honour same-origin relative paths.
+      // A bare `?next=https://attacker.example.com/phish` would
+      // otherwise bounce a freshly-authenticated user off-domain
+      // with their JWT in localStorage. Accept only paths that start
+      // with a single "/" and don't open a protocol-relative URL via
+      // "//host". Anything else collapses back to the safe default.
+      const next = isSafeRedirect(raw) ? raw : "/projects";
       router.replace(next);
     },
   });
