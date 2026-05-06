@@ -22,6 +22,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
 
@@ -30,6 +31,7 @@ import (
 // (list + restore, gated on the same Secret existing).
 type BackupsHandler struct {
 	Kube      *kube.Client
+	DB        *db.DB
 	Namespace string
 	Logger    *slog.Logger
 }
@@ -61,6 +63,9 @@ type BackupSettings struct {
 }
 
 func (h *BackupsHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := backupCtx(r)
 	defer cancel()
 	sec, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Get(ctx, backupSecretName, metav1.GetOptions{})
@@ -84,6 +89,9 @@ func (h *BackupsHandler) GetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *BackupsHandler) PutSettings(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	var req BackupSettings
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -161,6 +169,12 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	addon := chi.URLParam(r, "addon")
 	ctx, cancel := backupCtx(r)
 	defer cancel()
+	// Restoring/listing/querying an addon's data needs project Owner —
+	// not Deployer, since SQL access can read passwords / PII / billing
+	// records that even a deploy-permissioned teammate shouldn't see.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+		return
+	}
 
 	cli, bucket, err := h.s3Client(ctx)
 	if err != nil {
@@ -224,6 +238,12 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := backupCtx(r)
 	defer cancel()
+	// Owner-only — Restore overwrites the live DB with a snapshot
+	// (destructive) and a Deployer-level user shouldn't be able to
+	// roll back data without the project owner signing off.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+		return
+	}
 
 	// Destination addon — defaults to the source (in-place /
 	// destructive). When `into` is set, we restore into a sibling
@@ -436,15 +456,19 @@ func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
 	addon := chi.URLParam(r, "addon")
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
+	// SQL browser reaches the user's data — Owner-only.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+		return
+	}
 
-	db, err := h.pgConn(ctx, project, addon)
+	conn, err := h.pgConn(ctx, project, addon)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	defer db.Close()
+	defer conn.Close()
 
-	rows, err := db.QueryContext(ctx, `
+	rows, err := conn.QueryContext(ctx, `
 		SELECT table_schema, table_name
 		FROM information_schema.tables
 		WHERE table_schema NOT IN ('pg_catalog', 'information_schema')
@@ -512,17 +536,22 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	db, err := h.pgConn(ctx, project, addon)
+	// Owner-only — read-only is enforced inside the tx, but a
+	// SELECT on `users.password_hash` is plenty bad on its own.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+		return
+	}
+	conn, err := h.pgConn(ctx, project, addon)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-	defer db.Close()
+	defer conn.Close()
 
 	// Open a read-only transaction with a statement timeout. If
 	// anything in the user's query tries to write, postgres rejects
 	// it inside this transaction — no need to parse the SQL ourselves.
-	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	tx, err := conn.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		http.Error(w, "begin: "+err.Error(), http.StatusBadGateway)
 		return
