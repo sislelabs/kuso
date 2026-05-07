@@ -431,7 +431,7 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                       // (sticky sidebar nav + sectioned form). Wrapping
                       // in p-5 here would double-pad and break the
                       // sticky-positioning math.
-                      <ServiceSettingsPanel project={project} service={service ?? ""} svc={svc.data} />
+                      <ServiceSettingsPanel project={project} service={service ?? ""} svc={svc.data} env={envParam} />
                     )}
                   </motion.div>
                 </AnimatePresence>

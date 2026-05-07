@@ -142,6 +142,24 @@ export function ProjectSettingsView() {
           </h2>
         </header>
         <div className="space-y-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4">
+          {/* Recommendation banner — copy explicitly calls out the use
+              cases this feature was built for, so users don't enable it
+              for a single-service Express backend and then wonder why
+              their cluster is full of 1-pod previews. */}
+          <div className="rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 text-[11px] text-[var(--text-secondary)]">
+            <p className="font-medium text-[var(--text-primary)]">
+              Recommended for monorepos and full-stack apps
+            </p>
+            <p className="mt-1">
+              Per-PR previews shine when a single PR can change the frontend, the API, and a
+              shared DB schema — kuso spins up a complete environment on every PR so reviewers
+              can click through the full app, not just CI logs. Examples:
+              Next.js fullstack apps, monorepos with API + worker + web, Rails+Inertia. For a
+              single-service backend, &ldquo;+ New environment&rdquo; in the env switcher
+              (mirror once, share the URL) is usually a better fit than spinning up an env on
+              every PR.
+            </p>
+          </div>
           <label className="flex items-start gap-2 text-sm">
             <input
               type="checkbox"
@@ -153,8 +171,12 @@ export function ProjectSettingsView() {
               <span className="text-[13px] font-medium">Spawn a preview env on every PR</span>
               <span className="mt-0.5 block text-[11px] text-[var(--text-tertiary)]">
                 Requires a GitHub App install + the project repo set under Cluster config →
-                GitHub. Per-PR DB clones are off by default —{" "}
-                <code className="font-mono">KUSO_PREVIEW_DB_ENABLED=true</code> on the server to opt in.
+                GitHub. Each preview clones every service and runs them at{" "}
+                <span className="font-mono">
+                  &lt;svc&gt;-pr-&lt;N&gt;.{baseDomain || "<base>"}
+                </span>
+                . The env tears down automatically when the PR merges or closes; the auto-
+                expire below is the safety net for missed close webhooks.
               </span>
             </span>
           </label>
@@ -170,6 +192,11 @@ export function ProjectSettingsView() {
                 onChange={(e) => setPreviewsTtl(parseInt(e.target.value, 10) || 7)}
                 className="w-32 font-mono"
               />
+              <p className="text-[10px] text-[var(--text-tertiary)]">
+                Per-PR DB clones are off by default to save disk —{" "}
+                <code className="font-mono">KUSO_PREVIEW_DB_ENABLED=true</code> on the server
+                to opt in (otherwise PR previews share the production DB).
+              </p>
             </div>
           )}
         </div>

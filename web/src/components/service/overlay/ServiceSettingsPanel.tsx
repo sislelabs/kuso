@@ -6,7 +6,8 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { usePatchService, type PatchServiceBody } from "@/features/services";
 import { useCan, Perms } from "@/features/auth";
-import { useEnvironments } from "@/features/projects";
+import { useEnvironments, setEnvGroupServiceBranch } from "@/features/projects";
+import { useQueryClient } from "@tanstack/react-query";
 import type { KusoService } from "@/types/projects";
 import { Github, Trash2, Network, Layers3, Hammer, Cloud, Save, HardDrive, MapPin } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -26,6 +27,12 @@ interface Props {
   project: string;
   service: string;
   svc?: KusoService;
+  // env-group name from the URL ?env= search param. "production" =
+  // hide the env-scoped Branch section (the production branch is set
+  // via the regular Source section). Anything else surfaces an inline
+  // env-branch control that PATCHes the env CR's spec.branch and lets
+  // the user point one service at a different branch within this env.
+  env?: string;
 }
 
 const SECTIONS = [
@@ -42,7 +49,8 @@ const SECTIONS = [
 // ServiceSettingsPanel orchestrates the per-service settings overlay.
 // Each section lives in ./settings/<Name>Section.tsx; this file owns
 // the form state, the dirty/save bar, and the section-anchor nav.
-export function ServiceSettingsPanel({ project, service, svc }: Props) {
+export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
+  const onProduction = !env || env === "production";
   const baseline = useMemo(() => fromSvc(svc), [svc]);
   const [state, setState] = useState<FormState>(baseline);
   const [pending, setPending] = useState(false);
@@ -261,6 +269,9 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
       </nav>
       <div className="grid grid-cols-1 gap-0 pb-24 md:grid-cols-[1fr_180px]">
         <div className="space-y-8 px-4 py-4 md:px-6 md:py-6">
+          {!onProduction && env && (
+            <EnvBranchSection project={project} env={env} service={service} svc={svc} />
+          )}
           <SourceSection state={state} setState={setState} project={project} service={service} />
           <NetworkingSection state={state} setState={setState} autoHost={autoHost} />
           <ScaleSection state={state} setState={setState} />
@@ -378,5 +389,103 @@ function FloatingSaveBar({
         </motion.div>
       )}
     </AnimatePresence>
+  );
+}
+
+// EnvBranchSection is the per-(env, service) branch override surface.
+// Only rendered for non-production envs; the production branch is set
+// via the regular Source section below (which writes to the
+// KusoService spec). For env-cloned services, branch is on the env CR
+// — kuso patches it via PATCH /api/projects/{p}/env-groups/{env}/
+// services/{service}/branch and the build poller picks up new pushes
+// to that branch as redeploys.
+function EnvBranchSection({
+  project,
+  env,
+  service,
+  svc,
+}: {
+  project: string;
+  env: string;
+  service: string;
+  svc?: KusoService;
+}) {
+  // Pull the current branch from the env CR (production's env CR for
+  // this service, narrowed by env-name label). Falls back to the
+  // service's repo default branch as a hint.
+  const envs = useEnvironments(project);
+  const fqn = `${project}-${service}`;
+  const envRow = (envs.data ?? []).find(
+    (e) =>
+      e.spec.service === fqn &&
+      (e.metadata.labels?.["kuso.sislelabs.com/env"] ?? "") === env,
+  );
+  const currentBranch =
+    envRow?.spec.branch ??
+    svc?.spec?.repo?.defaultBranch ??
+    "";
+  const repoLabel = (() => {
+    const url = svc?.spec?.repo?.url ?? "";
+    if (!url) return "";
+    const m = url.match(/github\.com[/:]([^/]+\/[^/.]+)/i);
+    return m ? m[1] : url;
+  })();
+  const [branch, setBranch] = useState(currentBranch);
+  useEffect(() => {
+    setBranch(currentBranch);
+  }, [currentBranch]);
+  const dirty = branch.trim() !== "" && branch !== currentBranch;
+  const [saving, setSaving] = useState(false);
+  const qc = useQueryClient();
+  const save = async () => {
+    setSaving(true);
+    try {
+      await setEnvGroupServiceBranch(project, env, service, branch.trim());
+      toast.success(
+        `${service} in ${env} now tracks ${branch.trim()} — push to that branch to redeploy.`,
+      );
+      qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+      qc.invalidateQueries({ queryKey: ["projects", project, "env-groups"] });
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+  return (
+    <section className="rounded-md border border-blue-500/30 bg-blue-500/5">
+      <header className="border-b border-blue-500/20 px-3 py-2">
+        <h3 className="text-sm font-medium">
+          Branch in <span className="font-mono text-blue-200">{env}</span>
+        </h3>
+        <p className="mt-0.5 text-[11px] text-[var(--text-secondary)]">
+          {repoLabel ? (
+            <>
+              Branch of <span className="font-mono">{repoLabel}</span> that this service tracks
+              within <span className="font-mono">{env}</span>. Production keeps using its own
+              default-branch setting; this override is env-scoped.
+            </>
+          ) : (
+            <>
+              Branch this service tracks within{" "}
+              <span className="font-mono">{env}</span>. Doesn&apos;t affect production.
+            </>
+          )}
+        </p>
+      </header>
+      <div className="flex items-center gap-2 p-3">
+        <input
+          type="text"
+          value={branch}
+          onChange={(e) => setBranch(e.target.value)}
+          placeholder={svc?.spec?.repo?.defaultBranch || "main"}
+          spellCheck={false}
+          className="h-8 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px] outline-none focus:border-[var(--accent)]"
+        />
+        <Button size="sm" disabled={!dirty || saving} onClick={save}>
+          {saving ? "Saving…" : "Save branch"}
+        </Button>
+      </div>
+    </section>
   );
 }

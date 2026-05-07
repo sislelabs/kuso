@@ -94,18 +94,25 @@ export function ProjectDetailView() {
   }
 
   const data = project.data!;
-  const services = data.services;
+  const allServices = data.services;
   const allEnvs = data.environments;
-  const addonsList = addons.data ?? [];
+  const allAddons = addons.data ?? [];
 
-  // Narrow envs to the one the user picked in the TopNav. "production"
-  // matches every env where spec.kind === "production"; everything else
-  // matches a preview env by short name.
-  const envs = allEnvs.filter((e) => {
-    if (selectedEnv === "production") return e.spec.kind === "production";
-    const short = e.metadata.name.split("-").slice(-2).join("-");
-    return short === selectedEnv;
-  });
+  // Narrow services + envs + addons to the picked env-group. Group
+  // membership lives on the kuso.sislelabs.com/env label —
+  // "production" matches services/addons with no label OR
+  // label=production; any other value (staging, client-demo,
+  // preview-pr-N) matches an exact label.
+  const envLabel = "kuso.sislelabs.com/env";
+  const inGroup = (labels: Record<string, string> | undefined) => {
+    const v = labels?.[envLabel];
+    if (selectedEnv === "production") return !v || v === "production";
+    return v === selectedEnv;
+  };
+  const services = allServices.filter((s) => inGroup(s.metadata.labels));
+  const envs = allEnvs.filter((e) => inGroup(e.metadata.labels));
+  const addonsList = allAddons.filter((a) => inGroup(a.metadata.labels));
+  const onProduction = selectedEnv === "production";
 
   if (services.length === 0 && addonsList.length === 0) {
     return (
@@ -130,6 +137,15 @@ export function ProjectDetailView() {
   return (
     <>
       <div className="flex h-[calc(100vh-3rem)] flex-col overflow-hidden">
+        {!onProduction && (
+          // Sticky banner above the canvas. Reminds the user that the
+          // env they're looking at started as a clone — env vars copied
+          // verbatim, addon refs rewritten only for "fresh" addons.
+          // Click "Variables" on any service to review. Custom envs
+          // get amber; preview-pr envs get blue so the user can tell
+          // them apart at a glance.
+          <NonProdBanner project={projectName} env={selectedEnv} />
+        )}
         <ProjectCanvas
           project={projectName}
           services={services}
@@ -167,5 +183,44 @@ export function ProjectDetailView() {
         }}
       />
     </>
+  );
+}
+
+// NonProdBanner is shown above the canvas when the user is viewing a
+// non-production env. The use case (per design): "I cloned production
+// to send a client a review URL — but env vars carried over and
+// secret-ref rewrites only apply to addons I picked 'fresh' for."
+// The banner is the gentle reminder. Click-through scrolls the user
+// to the env switcher if they wanted to switch back, or they can
+// dismiss it for the rest of the session via sessionStorage.
+function NonProdBanner({ project, env }: { project: string; env: string }) {
+  const isPreview = env.startsWith("pr-") || env.startsWith("preview-");
+  const cls = isPreview
+    ? "border-blue-500/30 bg-blue-500/5 text-blue-200"
+    : "border-amber-500/30 bg-amber-500/5 text-amber-200";
+  const label = isPreview ? "preview env" : "non-production env";
+  return (
+    <div className={`shrink-0 border-b ${cls}`}>
+      <div className="flex items-start gap-3 px-4 py-2 text-[12px]">
+        <span className="mt-0.5 inline-flex h-4 items-center rounded border border-current px-1.5 font-mono text-[9px] uppercase tracking-widest">
+          {label}
+        </span>
+        <p className="flex-1 leading-snug text-[var(--text-secondary)]">
+          You&apos;re viewing{" "}
+          <span className="font-mono text-[var(--text-primary)]">{env}</span> in{" "}
+          <span className="font-mono">{project}</span>.{" "}
+          {isPreview ? (
+            <>This is a PR-driven preview env. Closes automatically when the PR is merged or closed.</>
+          ) : (
+            <>
+              This env was cloned from production. Env vars were copied verbatim;{" "}
+              <span className="font-medium">addon refs were rewritten only for &quot;fresh&quot; addons</span>.
+              Open each service&apos;s <span className="font-mono">Variables</span> tab and confirm
+              they point at the right secrets before sharing the URL.
+            </>
+          )}
+        </p>
+      </div>
+    </div>
   );
 }

@@ -864,7 +864,10 @@ func (h *ProjectsHandler) fail(w http.ResponseWriter, op string, err error) {
 	case errors.Is(err, projects.ErrNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
 	case errors.Is(err, projects.ErrConflict):
-		http.Error(w, "conflict", http.StatusConflict)
+		// Pass the wrapped message through so the UI shows
+		// "env "staging" already exists" instead of bare "conflict".
+		// Same pattern addons.fail uses.
+		http.Error(w, err.Error(), http.StatusConflict)
 	case errors.Is(err, projects.ErrInvalid):
 		http.Error(w, err.Error(), http.StatusBadRequest)
 	case errors.Is(err, projects.ErrCompositeVarRef):
