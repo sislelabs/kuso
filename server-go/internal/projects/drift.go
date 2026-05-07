@@ -140,28 +140,112 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 }
 
 // compareDeploymentToEnv returns a list of field names that differ
-// between the env CR's spec and the running Deployment's pod template.
-// Empty slice when in sync. Missing Deployment (helm-operator hasn't
-// rendered yet) returns empty — caller already surfaces that via
-// RolloutPending.
+// between the env CR's spec and the actual running pods. Empty slice
+// when in sync — i.e. every Running pod's container[0] env + image
+// matches the env CR.
+//
+// We compare against pods, NOT the Deployment's pod template, because
+// the template is updated synchronously when helm-operator reconciles
+// (within seconds), but the running pod doesn't carry the new value
+// until kube finishes a rolling update. The user's mental model is
+// "I edited the var, is the running app seeing it yet?" — that's a
+// per-pod question. Comparing against the template flagged drift only
+// during the brief reconcile window and missed the entire pod-roll
+// window, which is when the chip is supposed to say "out of date —
+// restart needed".
 func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube.KusoEnvironment) []string {
 	out := []string{}
 	if s.Kube == nil || s.Kube.Clientset == nil {
 		return out
 	}
+	// Live pods first. If at least one Running pod's env doesn't match
+	// spec we surface drift; transient mismatch during a roll is
+	// exactly what the badge is for. Missing pods (helm-operator
+	// hasn't rendered yet) → don't flag drift, RolloutPending covers
+	// that.
+	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app.kubernetes.io/instance=%s", env.Name),
+	})
+	if err != nil || len(pods.Items) == 0 {
+		// Fall through to deployment-template compare so a freshly
+		// rendered env without pods yet doesn't false-negative. (Same
+		// semantics as before.)
+		return compareDeploymentTemplateToEnv(ctx, s, ns, env)
+	}
+	specEnv := map[string]string{}
+	for _, e := range env.Spec.EnvVars {
+		if e.ValueFrom != nil {
+			specEnv[e.Name] = "<from>"
+		} else {
+			specEnv[e.Name] = e.Value
+		}
+	}
+	envMismatch := false
+	imageMismatch := false
+	wantImage := ""
+	if env.Spec.Image != nil && env.Spec.Image.Repository != "" && env.Spec.Image.Tag != "" {
+		wantImage = env.Spec.Image.Repository + ":" + env.Spec.Image.Tag
+	}
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		// Skip pods that are terminating — they're the OLD generation
+		// being killed, including them would make drift flap during
+		// rollouts. Phase==Running + DeletionTimestamp==nil = current.
+		if p.DeletionTimestamp != nil {
+			continue
+		}
+		if len(p.Spec.Containers) == 0 {
+			continue
+		}
+		c := p.Spec.Containers[0]
+		podEnv := map[string]string{}
+		for _, e := range c.Env {
+			if e.Name == "PORT" || e.Name == "HOSTNAME" {
+				continue
+			}
+			if e.ValueFrom != nil {
+				podEnv[e.Name] = "<from>"
+			} else {
+				podEnv[e.Name] = e.Value
+			}
+		}
+		if !reflect.DeepEqual(podEnv, specEnv) {
+			envMismatch = true
+		}
+		if wantImage != "" && c.Image != wantImage {
+			imageMismatch = true
+		}
+	}
+	if envMismatch {
+		out = append(out, "envVars")
+	}
+	if imageMismatch {
+		out = append(out, "image")
+	}
+	// replicaCount drift comes off the Deployment, not pods (HPA can
+	// scale outside spec; we already exempt that case).
+	dep, derr := s.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, env.Name, metav1.GetOptions{})
+	if derr == nil && env.Spec.ReplicaCount > 0 && dep.Spec.Replicas != nil &&
+		int32(env.Spec.ReplicaCount) != *dep.Spec.Replicas {
+		if dep.Annotations["autoscaling.alpha.kubernetes.io/conditions"] == "" {
+			out = append(out, "replicas")
+		}
+	}
+	return out
+}
+
+// compareDeploymentTemplateToEnv is the no-pods fallback for
+// compareDeploymentToEnv. Same checks against the Deployment's pod
+// template — used only when no pods exist yet.
+func compareDeploymentTemplateToEnv(ctx context.Context, s *Service, ns string, env kube.KusoEnvironment) []string {
+	out := []string{}
 	dep, err := s.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, env.Name, metav1.GetOptions{})
 	if err != nil {
 		return out
 	}
-	// envVars: chart renders spec.envVars verbatim onto the
-	// container's env list. Only compare entries that the chart
-	// would have stamped — kuso auto-injects PORT, kubelet adds
-	// HOSTNAME etc., so an exact slice diff would always say drift.
 	depEnv := map[string]string{}
 	for _, c := range dep.Spec.Template.Spec.Containers {
 		for _, e := range c.Env {
-			// Skip kuso-managed names; they're set by the chart even
-			// when the user didn't list them in spec.envVars.
 			if e.Name == "PORT" || e.Name == "HOSTNAME" {
 				continue
 			}
@@ -171,7 +255,7 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 				depEnv[e.Name] = e.Value
 			}
 		}
-		break // single-container per service in kuso's chart
+		break
 	}
 	specEnv := map[string]string{}
 	for _, e := range env.Spec.EnvVars {
@@ -184,20 +268,14 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 	if !reflect.DeepEqual(depEnv, specEnv) {
 		out = append(out, "envVars")
 	}
-	// image: chart renders {repo}:{tag} onto containers[0].image.
 	if env.Spec.Image != nil && env.Spec.Image.Repository != "" && env.Spec.Image.Tag != "" {
 		want := env.Spec.Image.Repository + ":" + env.Spec.Image.Tag
 		if len(dep.Spec.Template.Spec.Containers) > 0 && dep.Spec.Template.Spec.Containers[0].Image != want {
 			out = append(out, "image")
 		}
 	}
-	// replicaCount: spec → deployment.spec.replicas. HPA-managed
-	// envs override this, so skip if the deployment carries the
-	// HPA's annotation.
 	if env.Spec.ReplicaCount > 0 && dep.Spec.Replicas != nil &&
 		int32(env.Spec.ReplicaCount) != *dep.Spec.Replicas {
-		// Skip HPA-managed services — autoscaler legitimately
-		// adjusts replicas outside spec.
 		if dep.Annotations["autoscaling.alpha.kubernetes.io/conditions"] == "" {
 			out = append(out, "replicas")
 		}
