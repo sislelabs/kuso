@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.24] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(env-editor): banner only fires from local save, never from server-side lastRolloutAt ([0133194](https://github.com/sislelabs/kuso/commit/01331940150b25bb054d8ff1edc1dc052427bae4))
+
 ## [0.9.23] — 2026-05-07
 
 ### 🐛 Bug Fixes
