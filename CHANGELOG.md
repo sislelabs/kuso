@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.13] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix: tab padding, settings-row hint overlap, drift label-selector miss ([43c5846](https://github.com/sislelabs/kuso/commit/43c5846b860783eb028da3ebba7096254d7d8163))
+
 ## [0.9.12] — 2026-05-07
 
 ### 🐛 Bug Fixes
