@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.35] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(builds): chart-level no-op gate stops resurrection of done builds ([255961a](https://github.com/sislelabs/kuso/commit/255961a5be6636058d3da56fdb0e9335386b5de2))
+
 ## [0.9.34] — 2026-05-07
 
 ### 🐛 Bug Fixes
