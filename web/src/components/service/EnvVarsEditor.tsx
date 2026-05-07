@@ -252,6 +252,23 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
   const [dirty, setDirty] = useState(false);
   const [mode, setMode] = useState<Mode>("rows");
   const [bulkText, setBulkText] = useState("");
+  // savedAt is the wall-clock time of the most recent successful save.
+  // We use it to keep the "rolling out" banner visible for a minimum
+  // 60s window after save, even if drift's podsStale flips clean a
+  // second or two later. On a small cluster the helm reconcile + pod
+  // roll can finish faster than the 10s drift refetch — without the
+  // sticky window the banner flashed for one paint and disappeared,
+  // making users think the save didn't take.
+  const [savedAt, setSavedAt] = useState<number | null>(null);
+  // Re-render after 60s so the sticky window expires without the user
+  // having to interact with the page. We re-arm whenever savedAt
+  // changes (i.e. every successful save).
+  useEffect(() => {
+    if (savedAt == null) return;
+    const t = setTimeout(() => setSavedAt(null), 60_000);
+    return () => clearTimeout(t);
+  }, [savedAt]);
+  const stickySaved = savedAt != null;
 
   useEffect(() => {
     if (env.data) {
@@ -322,6 +339,7 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
       await setEnv.mutateAsync(cleaned);
       toast.success("Env vars saved");
       setDirty(false);
+      setSavedAt(Date.now());
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save env vars");
     }
@@ -390,26 +408,42 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
           discoverable on day 1. */}
       <InheritedSection project={project} />
 
-      {/* "Out of date" banner — visible right below the var editor
-          when the user just saved an env edit but the running pod
-          still serves the old values. The chip in the overlay
-          header repeats the same signal for users who navigate
-          away. Includes a one-click "Restart" affordance so the
-          user can roll the pod without leaving the tab. */}
-      {drift.data && drift.data.podsStale && drift.data.podsStale.length > 0 && (
+      {/* Status banner — has two states:
+            (1) just saved, drift hasn't caught up or pod is rolling
+                → "rolling out" (sticky for 60s after save)
+            (2) drift confirms the pod is genuinely stale (rare but
+                real for fields kube doesn't auto-roll on)
+                → "out of date — Redeploy to roll"
+          On a healthy small cluster the rollout finishes in a few
+          seconds and (1) covers the whole window; (2) only shows up
+          if something blocked the rollout. */}
+      {(stickySaved || (drift.data && drift.data.podsStale && drift.data.podsStale.length > 0)) && (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[12px]">
           <div className="flex items-start gap-2">
             <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
             <div className="flex-1">
-              <div className="text-amber-200">
-                Running pod is out of date. The new {drift.data.podsStale.join(", ")}
-                {" "}
-                won't take effect until the deployment rolls.
-              </div>
-              <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
-                kube auto-rolls on most spec changes, but env-var-only edits don't always
-                trigger a rollout. Open the Deployments tab and click Redeploy to force one.
-              </div>
+              {drift.data && drift.data.podsStale && drift.data.podsStale.length > 0 ? (
+                <>
+                  <div className="text-amber-200">
+                    Running pod is out of date. The new {drift.data.podsStale.join(", ")}
+                    {" "}won't take effect until the deployment rolls.
+                  </div>
+                  <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
+                    kube auto-rolls on most spec changes, but env-var-only edits don't always
+                    trigger a rollout. Open the Deployments tab and click Redeploy to force one.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-amber-200">
+                    Saved. Rolling out the new env to the running pod…
+                  </div>
+                  <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
+                    The deployment is being updated. New pods replace the old ones over the
+                    next ~30s.
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
