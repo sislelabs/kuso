@@ -252,36 +252,31 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
   const [dirty, setDirty] = useState(false);
   const [mode, setMode] = useState<Mode>("rows");
   const [bulkText, setBulkText] = useState("");
-  // Sticky "rolled out N seconds ago" window. Two sources combined:
-  //   1. savedAt — local timestamp set in save(); covers the gap
-  //      between the save POST returning and drift.lastRolloutAt
-  //      catching up to the new pod (1-2 polls = up to 10s).
-  //   2. drift.data.lastRolloutAt — server-side pod creationTimestamp
-  //      that survives a page refresh, so a refresh during the
-  //      rollout window keeps showing confirmation.
-  // Banner is visible when EITHER signal is within 60s of now.
+  // Sticky "rolled out" window. Tied ONLY to the local savedAt set
+  // in this session's save() — refresh wipes it deliberately.
+  // Showing a banner from server-side lastRolloutAt would lie when
+  // someone else's save (or a build promote, or any pod restart)
+  // happened recently — the user opening the page fresh has no
+  // context for "change is live", they didn't change anything.
+  // Server-side drift.podsStale is the honest signal for that case.
   const [savedAt, setSavedAt] = useState<number | null>(null);
   // Re-render every 5s while the sticky banner is visible so the
-  // "Ns ago" text ticks and the banner expires when the window
-  // elapses without requiring user interaction.
+  // "Ns ago" text ticks and the banner clears 60s after save without
+  // requiring user interaction.
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    const lastRoll = drift.data?.lastRolloutAt
-      ? new Date(drift.data.lastRolloutAt).getTime()
-      : 0;
-    const newest = Math.max(savedAt ?? 0, lastRoll);
-    if (!newest) return;
-    const remaining = 60_000 - (Date.now() - newest);
+    if (savedAt == null) return;
+    const remaining = 60_000 - (Date.now() - savedAt);
     if (remaining <= 0) return;
     const t = setInterval(() => setNow(Date.now()), 5_000);
-    return () => clearInterval(t);
-  }, [savedAt, drift.data?.lastRolloutAt]);
-  const lastRollMs = drift.data?.lastRolloutAt
-    ? new Date(drift.data.lastRolloutAt).getTime()
-    : 0;
-  const newestEvent = Math.max(savedAt ?? 0, lastRollMs);
-  const stickySaved = newestEvent > 0 && now - newestEvent < 60_000;
-  const ageSec = Math.max(0, Math.floor((now - newestEvent) / 1000));
+    const clear = setTimeout(() => setSavedAt(null), remaining);
+    return () => {
+      clearInterval(t);
+      clearTimeout(clear);
+    };
+  }, [savedAt]);
+  const stickySaved = savedAt != null && now - savedAt < 60_000;
+  const ageSec = savedAt != null ? Math.max(0, Math.floor((now - savedAt) / 1000)) : 0;
 
   useEffect(() => {
     if (env.data) {
