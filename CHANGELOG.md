@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.18] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(drift): derive RolloutPending from Deployment, not env-CR observedGeneration ([185f1d1](https://github.com/sislelabs/kuso/commit/185f1d1f60c3bf724bc2b70ade1baaa86bdfcba4))
+
 ## [0.9.17] — 2026-05-07
 
 ### 🐛 Bug Fixes
