@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.15] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(logs): clean WS close + suppress reconnect after end-of-stream ([398b44b](https://github.com/sislelabs/kuso/commit/398b44b87dd2090acfa8cddebd4859da6ededf51))
+
 ## [0.9.14] — 2026-05-07
 
 ### 🐛 Bug Fixes
