@@ -137,10 +137,19 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	// rolled" — exactly the signal the user reaches for after a
 	// quick env-var edit.
 	out.PodsStale = compareDeploymentToEnv(ctx, s, ns, env)
-	// Surface when the newest live pod was born so the UI can render
-	// "Saved & rolled out Ns ago" without holding client-side state.
-	if t := newestPodCreatedAt(ctx, s, ns, env.Name); !t.IsZero() {
-		out.LastRolloutAt = t.UTC().Format(time.RFC3339)
+	// Only surface LastRolloutAt when there was an actual recent edit
+	// AND the newest pod was born after that edit. Without the
+	// "recent edit" gate the field always carried the youngest pod's
+	// creation time and the UI banner showed up on every refresh of
+	// a service whose pod happened to be young — even when the user
+	// hadn't saved anything. With both gates we only emit the
+	// timestamp when there's a causal link between a save and a
+	// rolled-out pod within the last 5 minutes.
+	lastEdit := lastSpecMutation(env)
+	if !lastEdit.IsZero() && time.Since(lastEdit) < 5*time.Minute {
+		if t := newestPodCreatedAt(ctx, s, ns, env.Name); !t.IsZero() && !t.Before(lastEdit) {
+			out.LastRolloutAt = t.UTC().Format(time.RFC3339)
+		}
 	}
 	// RolloutPending now means "Deployment exists but hasn't rolled
 	// out the latest pod template yet". A non-empty PodsStale list
