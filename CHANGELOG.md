@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.16] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(http): make statusRecorder a Hijacker so WS upgrades work ([d0cd35f](https://github.com/sislelabs/kuso/commit/d0cd35f2c039cd01409595651ed095bf5181ed47))
+
 ## [0.9.15] — 2026-05-07
 
 ### 🐛 Bug Fixes
