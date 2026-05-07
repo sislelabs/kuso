@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.44] — 2026-05-07
+
+### ✨ Features
+- Feat(envs): non-prod banner + per-env branch input + previews copy ([c0d9912](https://github.com/sislelabs/kuso/commit/c0d9912ab820f239322a583a9f3402e33bbce229))
+
 ## [0.9.43] — 2026-05-07
 
 ### ✨ Features
