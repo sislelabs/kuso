@@ -115,23 +115,27 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 		out.SpecPending = append(out.SpecPending, "port")
 	}
 
-	// helm-operator generation tracking: when ObservedGeneration
-	// lags Generation, the chart hasn't re-rendered for the latest
-	// spec edit yet. Empty status (== 0) on a freshly-created env
-	// is normal so we only count it as pending if Generation > 1.
-	if env.Generation > 1 {
-		obs := observedGeneration(env.Status)
-		if obs < env.Generation {
-			out.RolloutPending = true
-		}
-	}
-
+	// helm-operator quirk: it writes status.conditions[type=Deployed]
+	// and status.deployedRelease but NEVER status.observedGeneration.
+	// We used to count `obs < generation` as RolloutPending; that was
+	// permanently true for any env that had ever been edited, so the
+	// "rolling out…" chip stuck forever even after the new pod was
+	// healthy. We now derive RolloutPending from the same signal the
+	// user feels: pod template diff. PodsStale already covers it.
+	//
 	// Deployment compare. The env CR's spec.envVars + image are the
 	// source of truth; check the live Deployment's pod template
 	// against them. Mismatch means "spec landed, kube hasn't
 	// rolled" — exactly the signal the user reaches for after a
 	// quick env-var edit.
 	out.PodsStale = compareDeploymentToEnv(ctx, s, ns, env)
+	// RolloutPending now means "Deployment exists but hasn't rolled
+	// out the latest pod template yet". A non-empty PodsStale list
+	// covers the spec→running gap; we surface RolloutPending=true
+	// only while the Deployment's status reports unavailable replicas
+	// for the current generation, so the chip clears the moment kube
+	// finishes the rollout.
+	out.RolloutPending = deploymentRolling(ctx, s, ns, env)
 	return out, nil
 }
 
@@ -218,27 +222,42 @@ func envVarsForCompare(in []kube.KusoEnvVar) []kube.KusoEnvVar {
 	return out
 }
 
-// observedGeneration extracts status.observedGeneration from the env
-// status map. helm-operator stamps this; missing or unparseable
-// values return 0 (i.e. "no observation yet" — caller treats this
-// as pending if generation > 1).
-func observedGeneration(status map[string]any) int64 {
-	if status == nil {
-		return 0
+// deploymentRolling reports whether kube is mid-rollout for the env's
+// Deployment. True only while .status.observedGeneration lags
+// .metadata.generation OR there are unavailable / unupdated replicas
+// against the current generation. False on missing Deployment
+// (operator may not have rendered yet — that's surfaced elsewhere).
+//
+// Why this and not helm-operator's status.observedGeneration: the
+// helm-operator never sets observedGeneration on the CR itself, so
+// the previous check stuck "rolling out…" on permanently for any
+// edited env. The Deployment IS standard kube and DOES carry
+// observedGeneration, so we get an authoritative rollout signal
+// straight from the source.
+func deploymentRolling(ctx context.Context, s *Service, ns string, env kube.KusoEnvironment) bool {
+	if s.Kube == nil || s.Kube.Clientset == nil {
+		return false
 	}
-	v, ok := status["observedGeneration"]
-	if !ok {
-		return 0
+	dep, err := s.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, env.Name, metav1.GetOptions{})
+	if err != nil {
+		return false
 	}
-	switch n := v.(type) {
-	case int64:
-		return n
-	case int:
-		return int64(n)
-	case float64:
-		return int64(n)
+	if dep.Status.ObservedGeneration < dep.Generation {
+		return true
 	}
-	return 0
+	// UpdatedReplicas == replicas means the new ReplicaSet is fully
+	// rolled out. Anything less = old pods still around.
+	want := int32(1)
+	if dep.Spec.Replicas != nil {
+		want = *dep.Spec.Replicas
+	}
+	if dep.Status.UpdatedReplicas < want {
+		return true
+	}
+	if dep.Status.AvailableReplicas < want {
+		return true
+	}
+	return false
 }
 
 // fqService returns the FQ form of a service name (project-prefixed).
