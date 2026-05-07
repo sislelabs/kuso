@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.20] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(env-editor): sticky 60s banner after save so users see rollout signal ([fd4cee8](https://github.com/sislelabs/kuso/commit/fd4cee8ad2a3101482ca6952531f149e73e3729f))
+
 ## [0.9.19] — 2026-05-07
 
 ### 🐛 Bug Fixes
