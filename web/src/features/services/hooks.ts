@@ -79,6 +79,12 @@ export function useSetServiceEnv(project: string, service: string) {
     mutationFn: (envVars: KusoEnvVar[]) => setServiceEnv(project, service, envVars),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: serviceEnvQueryKey(project, service) });
+      // Drift report compares env CR ↔ live Deployment; the save
+      // we just made invalidates that comparison. Force a refetch
+      // so the "out of date — restart needed" banner appears
+      // within the cycle the user just clicked Save in, not 10s
+      // later when the periodic poll fires.
+      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] });
     },
   });
 }

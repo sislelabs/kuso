@@ -16,10 +16,21 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 interface Row {
+  // Stable per-row id assigned at row-creation time. React's `key`
+  // attribute reads this so renaming the var (which mutates `name`
+  // on every keystroke) doesn't unmount the row + steal focus from
+  // the input. Generated client-side; never persisted.
+  id: string;
   name: string;
   value: string;
   fromSecret: boolean;
   visible: boolean;
+}
+
+// rid mints a fresh id for a Row. Math.random is fine — these
+// only need to be unique within the current editor session.
+function rid(): string {
+  return Math.random().toString(36).slice(2, 10);
 }
 
 // reservedEnvWarning mirrors server-go's projects.envNameReserved
@@ -78,19 +89,15 @@ function toRow(
   // fromSecret because we have no user-facing representation for it.
   const ref = addonRefFromValueFrom(v.valueFrom, addonByConn);
   if (ref) {
-    return { name: v.name ?? "", value: ref, fromSecret: false, visible: false };
+    return { id: rid(), name: v.name ?? "", value: ref, fromSecret: false, visible: false };
   }
   const fromSecret = !!v.valueFrom;
   const raw = fromSecret ? "" : (v.value ?? "");
   return {
+    id: rid(),
     name: v.name ?? "",
     // Reverse server-resolved literals back to ${{ x.KEY }} form so
-    // the editor shows the original ref the user wrote. Without this
-    // round-trip, every reload turns "${{api.URL}}" into the
-    // expanded "http://e2e-test-api.kuso.svc.cluster.local:8080",
-    // which is correct on the wire but ugly in the UI and wrong-ish
-    // on save (the server would re-resolve and we'd lose the
-    // refactor-friendly form).
+    // the editor shows the original ref the user wrote.
     value: fromSecret ? "" : literalToRef(raw, project),
     fromSecret,
     visible: false,
@@ -211,7 +218,7 @@ function dotenvToRows(text: string, prevSecrets: Row[]): Row[] {
         .replace(/\\"/g, '"')
         .replace(/\\\\/g, "\\");
     }
-    out.push({ name, value, fromSecret: false, visible: false });
+    out.push({ id: rid(), name, value, fromSecret: false, visible: false });
   }
   // Preserve any secret-backed entries — they aren't representable in
   // the bulk textarea, so we re-attach them after parsing so the user
@@ -279,7 +286,7 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
     setDirty(true);
   };
   const add = () => {
-    setRows((prev) => [...prev, { name: "", value: "", fromSecret: false, visible: true }]);
+    setRows((prev) => [...prev, { id: rid(), name: "", value: "", fromSecret: false, visible: true }]);
     setDirty(true);
   };
 
@@ -425,7 +432,7 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
           const adds: Row[] = [];
           for (const n of names) {
             if (!existing.has(n.toUpperCase())) {
-              adds.push({ name: n, value: "", fromSecret: false, visible: false });
+              adds.push({ id: rid(), name: n, value: "", fromSecret: false, visible: false });
               existing.add(n.toUpperCase());
             }
           }
@@ -445,11 +452,13 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
             </p>
           )}
           {rows.map((r, i) => (
-            // Key on the var name when present so removing a non-last
-            // row doesn't make React reuse the surviving row's
-            // controlled input DOM with the deleted row's value.
+            // Stable per-row id so typing into the name field doesn't
+            // change the key (which would unmount the row and steal
+            // focus from the input — every keystroke blurred). Also
+            // keeps deletes from the middle correct since the survivor
+            // keeps its id.
             <div
-              key={r.name ? `n:${r.name}` : `empty:${i}`}
+              key={r.id}
               className="grid grid-cols-[180px_1fr_auto_auto_auto] items-center gap-1.5"
             >
               <div className="flex flex-col gap-0.5">

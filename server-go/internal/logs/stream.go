@@ -96,6 +96,35 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 	// kaniko Job pod that ran the build.
 	if strings.HasPrefix(env, "build:") {
 		buildName := strings.TrimPrefix(env, "build:")
+		// First-look: if the build is already terminal, skip the
+		// live-stream path entirely and ship the archived snapshot.
+		// This avoids the "tail a Completed pod and close the WS
+		// the moment it returns EOF" UX that surfaced as "connection
+		// lost" in the deployments tab — kaniko's main container
+		// exits on success, kubectl-logs follow returns immediately,
+		// and the WS closes before the user sees the result.
+		alreadyTerminal := false
+		if s.Kube != nil && s.Kube.Clientset != nil {
+			if jb, jerr := s.Kube.Clientset.BatchV1().Jobs(s.Namespace).Get(ctx, buildName, metav1.GetOptions{}); jerr == nil {
+				if jb.Status.Succeeded > 0 || jb.Status.Failed > 0 {
+					alreadyTerminal = true
+				}
+			}
+		}
+		if alreadyTerminal && s.BuildLogs != nil {
+			if archived, err := s.BuildLogs.GetBuildLog(ctx, buildName); err == nil && archived != "" {
+				for _, line := range strings.Split(archived, "\n") {
+					if line == "" {
+						continue
+					}
+					if err := sink.Write(Frame{Type: "log", Pod: buildName, Line: line}); err != nil {
+						return env, nil
+					}
+				}
+				_ = sink.Write(Frame{Type: "phase", Value: "completed"})
+				return env, nil
+			}
+		}
 		pods, err := s.Kube.Clientset.CoreV1().Pods(s.Namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: "app.kubernetes.io/instance=" + buildName,
 		})
@@ -106,8 +135,6 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 			// Job pod's been GC'd by its TTL. Fall back to the archive
 			// snapshot the build poller took at terminal-phase
 			// transition (last 200 lines × init+main containers).
-			// Without this fallback, the deployments-tab "expand a
-			// failed build" reveals nothing — see v0.8.5.
 			if s.BuildLogs != nil {
 				if archived, err := s.BuildLogs.GetBuildLog(ctx, buildName); err == nil && archived != "" {
 					_ = sink.Write(Frame{Type: "log", Pod: buildName, Line: "── archived logs (pod GC'd) ──"})
@@ -119,13 +146,21 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 							return env, nil
 						}
 					}
+					_ = sink.Write(Frame{Type: "phase", Value: "completed"})
 					return env, nil
 				}
 			}
 			_ = sink.Write(Frame{Type: "log", Pod: buildName, Line: "build pod not found (likely garbage-collected)"})
+			_ = sink.Write(Frame{Type: "phase", Value: "completed"})
 			return env, nil
 		}
-		return env, s.streamPods(ctx, pods.Items, tailLines, sink)
+		// Pod still alive. streamPods follows it; on EOF (pod
+		// completes mid-stream), send a phase=completed frame so the
+		// client closes the WS cleanly instead of showing
+		// "connection lost".
+		err = s.streamPods(ctx, pods.Items, tailLines, sink)
+		_ = sink.Write(Frame{Type: "phase", Value: "completed"})
+		return env, err
 	}
 
 	envName := env
