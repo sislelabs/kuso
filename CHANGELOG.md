@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.29] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(builds): queue at cap-hit instead of returning 409 ([148c9f8](https://github.com/sislelabs/kuso/commit/148c9f8dc7cd36f4062b493de87edc978c39a3f3))
+
 ## [0.9.28] — 2026-05-07
 
 ### 🐛 Bug Fixes
