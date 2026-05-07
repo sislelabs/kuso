@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.38] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(addons): unbreak helm parse — \${{ }} in comments tripped Go templates ([e45eb61](https://github.com/sislelabs/kuso/commit/e45eb61a48bf176d826a47f67595f5991c9e904f))
+
 ## [0.9.37] — 2026-05-07
 
 ### ✨ Features
