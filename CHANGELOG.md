@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.28] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(builds): orphaned cancelled-build pods don't block the cap ([c491067](https://github.com/sislelabs/kuso/commit/c49106721b9ee2a3f5dd2192ea26a7e82efb3e8e))
+
 ## [0.9.27] — 2026-05-07
 
 ### 🐛 Bug Fixes
