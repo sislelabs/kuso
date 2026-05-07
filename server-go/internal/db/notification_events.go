@@ -161,3 +161,17 @@ func (d *DB) MarkAllNotificationEventsRead(ctx context.Context) error {
 	}
 	return nil
 }
+
+// ClearAllNotificationEvents wipes the entire feed. Called from the
+// "Clear" button in the bell popover. The next event the dispatcher
+// emits will land cleanly into an empty table — no race with the
+// per-insert prune since that prune only looks at id-cap, not by
+// timestamp.
+func (d *DB) ClearAllNotificationEvents(ctx context.Context) (int64, error) {
+	res, err := d.ExecContext(ctx, `DELETE FROM "NotificationEvent"`)
+	if err != nil {
+		return 0, fmt.Errorf("clear all notification events: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}

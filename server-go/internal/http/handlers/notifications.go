@@ -66,6 +66,7 @@ func (h *NotificationsHandler) Mount(r chi.Router) {
 		r.Get("/api/notifications/feed", h.Feed)
 		r.Get("/api/notifications/feed/unread-count", h.FeedUnread)
 		r.Post("/api/notifications/feed/read-all", h.FeedReadAll)
+		r.Delete("/api/notifications/feed", h.FeedClear)
 	})
 }
 
@@ -119,6 +120,24 @@ func (h *NotificationsHandler) FeedReadAll(w http.ResponseWriter, r *http.Reques
 	if err := h.DB.MarkAllNotificationEventsRead(ctx); err != nil {
 		h.fail(w, "mark read", err)
 		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// FeedClear deletes every event in the in-app feed. Backs the
+// "Clear" button in the bell popover. The notify.Dispatcher's
+// in-memory channel is independent of this table — webhook
+// fan-out for in-flight events is unaffected.
+func (h *NotificationsHandler) FeedClear(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := notifCtx(r)
+	defer cancel()
+	n, err := h.DB.ClearAllNotificationEvents(ctx)
+	if err != nil {
+		h.fail(w, "clear feed", err)
+		return
+	}
+	if h.Logger != nil {
+		h.Logger.Info("notifications feed cleared", "rows", n, "user", auditUser(ctx))
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

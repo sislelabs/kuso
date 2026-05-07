@@ -44,6 +44,7 @@ import {
   UsersRound,
   HardDrive,
   Package,
+  Trash2,
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
@@ -463,6 +464,24 @@ function NotificationsButton() {
       qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
     },
   });
+  // Clear-all wipes the entire feed server-side. Called from the
+  // trash button in the popover header. We optimistically blank the
+  // local feed cache so the empty-state appears immediately, then
+  // refetch on success to confirm — and on error roll back via
+  // invalidate so the previous events come back.
+  const clearAll = useMutation({
+    mutationFn: () => api("/api/notifications/feed", { method: "DELETE" }),
+    onMutate: () => {
+      qc.setQueryData(["notifications", "feed"], [] as FeedEvent[]);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
+      qc.invalidateQueries({ queryKey: ["notifications", "feed"] });
+    },
+    onError: () => {
+      qc.invalidateQueries({ queryKey: ["notifications", "feed"] });
+    },
+  });
 
   // Gate goes here, AFTER every hook, so a canSee transition doesn't
   // change the hook count between renders.
@@ -497,13 +516,32 @@ function NotificationsButton() {
       <PopoverContent align="end" className="w-80 p-0">
         <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
           <p className="text-xs font-semibold tracking-tight">Notifications</p>
-          <Link
-            href="/settings/notifications"
-            onClick={() => setOpen(false)}
-            className="font-mono text-[10px] text-[var(--accent)] hover:underline"
-          >
-            channels →
-          </Link>
+          <div className="flex items-center gap-3">
+            {/* Clear-all: wipes every event from the in-app feed.
+                Hidden when the feed is already empty so the button
+                doesn't beg to be clicked on a fresh install. Disabled
+                while the mutation is in flight. */}
+            {(feed.data ?? []).length > 0 && (
+              <button
+                type="button"
+                onClick={() => clearAll.mutate()}
+                disabled={clearAll.isPending}
+                title="Clear all notifications"
+                aria-label="Clear all notifications"
+                className="inline-flex items-center gap-1 font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-50"
+              >
+                <Trash2 className="h-3 w-3" aria-hidden />
+                clear
+              </button>
+            )}
+            <Link
+              href="/settings/notifications"
+              onClick={() => setOpen(false)}
+              className="font-mono text-[10px] text-[var(--accent)] hover:underline"
+            >
+              channels →
+            </Link>
+          </div>
         </header>
         <div className="max-h-96 overflow-y-auto">
           {feed.isPending ? (
