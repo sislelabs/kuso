@@ -1,14 +1,34 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
-import { useConfigureGithub, useSetupStatus } from "@/features/github";
-import type { ConfigureBody } from "@/features/github";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import {
+  useConfigureGithub,
+  useSetupStatus,
+  useInstallations,
+} from "@/features/github";
+import type { ConfigureBody, GithubInstallation } from "@/features/github";
+import { api } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ErrorBoundary } from "@/components/shared/ErrorBoundary";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import { Github, RotateCw, ExternalLink, ShieldCheck } from "lucide-react";
+import {
+  Github,
+  RotateCw,
+  ExternalLink,
+  ShieldCheck,
+  ChevronDown,
+  ChevronRight,
+  Copy,
+  Check,
+  RefreshCw,
+  Lock,
+  Globe,
+  Building2,
+  User as UserIcon,
+} from "lucide-react";
 
 // /settings/github — paste GitHub App credentials so kuso can monitor
 // repos and trigger builds. The wizard targets the case of an admin who
@@ -192,55 +212,296 @@ function ConfiguredPanel({
   appSlug?: string;
   onReconfigure: () => void;
 }) {
+  const qc = useQueryClient();
+  const installs = useInstallations();
+  const [openInstall, setOpenInstall] = useState<number | null>(null);
+  const refresh = useMutation({
+    mutationFn: () => api("/api/github/installations/refresh", { method: "POST" }),
+    onSuccess: () => {
+      toast.success("Installations refreshed");
+      qc.invalidateQueries({ queryKey: ["github", "installations"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Refresh failed"),
+  });
+
   const installURL = appSlug ? `https://github.com/apps/${appSlug}/installations/new` : null;
+  const adminURL = appSlug ? `https://github.com/settings/apps/${appSlug}` : null;
+  const installations = installs.data ?? [];
+  const totalRepos = installations.reduce((sum, i) => sum + (i.repositories?.length ?? 0), 0);
+  const totalPrivate = installations.reduce(
+    (sum, i) => sum + (i.repositories ?? []).filter((r) => r.private).length,
+    0,
+  );
+
   return (
     <section className="space-y-4">
+      {/* Top status banner — keep the green-checkmark frame from before
+          but pack the identity row tighter and put the action chips
+          inline with it so the eye lands on "what is this" + "what
+          can I do" without scrolling. */}
       <div className="rounded-md border border-emerald-500/30 bg-emerald-500/5 p-4">
-        <div className="flex items-start gap-3">
-          <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-500" />
-          <div className="flex-1">
-            <p className="text-sm font-medium text-[var(--text-primary)]">
-              GitHub App is configured
-            </p>
-            <dl className="mt-2 space-y-1 font-mono text-[12px] text-[var(--text-secondary)]">
-              {appSlug && (
-                <div className="flex gap-2">
-                  <dt className="w-16 text-[var(--text-tertiary)]">slug</dt>
-                  <dd className="text-[var(--text-primary)]">{appSlug}</dd>
-                </div>
-              )}
-              {appId && (
-                <div className="flex gap-2">
-                  <dt className="w-16 text-[var(--text-tertiary)]">id</dt>
-                  <dd className="text-[var(--text-primary)]">{appId}</dd>
-                </div>
-              )}
-            </dl>
-            <div className="mt-3 flex flex-wrap gap-2">
-              {installURL && (
-                <a
-                  href={installURL}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium hover:bg-[var(--accent-subtle)]"
-                >
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  Install on a repo
-                </a>
-              )}
-              <Button size="sm" variant="outline" onClick={onReconfigure}>
-                Reconfigure
-              </Button>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <ShieldCheck className="mt-0.5 h-4 w-4 flex-shrink-0 text-emerald-500" />
+            <div className="flex-1">
+              <p className="text-sm font-medium text-[var(--text-primary)]">
+                GitHub App is configured
+              </p>
+              <dl className="mt-2 grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 font-mono text-[12px] text-[var(--text-secondary)]">
+                {appSlug && (
+                  <>
+                    <dt className="text-[var(--text-tertiary)]">slug</dt>
+                    <dd className="flex items-center gap-1.5">
+                      <a
+                        href={`https://github.com/apps/${appSlug}`}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-[var(--accent)] hover:underline"
+                      >
+                        {appSlug}
+                      </a>
+                      <CopyChip value={appSlug} />
+                    </dd>
+                  </>
+                )}
+                {appId && (
+                  <>
+                    <dt className="text-[var(--text-tertiary)]">id</dt>
+                    <dd className="flex items-center gap-1.5 text-[var(--text-primary)]">
+                      {appId}
+                      <CopyChip value={appId} />
+                    </dd>
+                  </>
+                )}
+                <dt className="text-[var(--text-tertiary)]">webhook</dt>
+                <dd className="flex items-center gap-1.5 text-[var(--text-primary)]">
+                  <span className="truncate">{webhookURL()}</span>
+                  <CopyChip value={webhookURL()} />
+                </dd>
+              </dl>
             </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {installURL && (
+              <a
+                href={installURL}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium hover:bg-[var(--accent-subtle)]"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Install on a repo
+              </a>
+            )}
+            {adminURL && (
+              <a
+                href={adminURL}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium hover:bg-[var(--accent-subtle)]"
+              >
+                <ExternalLink className="h-3.5 w-3.5" />
+                Manage on GitHub
+              </a>
+            )}
+            <Button size="sm" variant="outline" onClick={onReconfigure}>
+              Reconfigure
+            </Button>
           </div>
         </div>
       </div>
-      <p className="text-[12px] text-[var(--text-tertiary)]">
-        To use the App on a repo, click <strong>Install on a repo</strong> above and pick the
-        repos you want kuso to access. After GitHub redirects back, the repo picker on the new-service
-        page will show them.
-      </p>
+
+      {/* Installations / repo coverage. The previous page showed
+          nothing here; users had no way to see which orgs/repos kuso
+          actually has access to without leaving for github.com. The
+          per-installation list mirrors the new-service repo picker
+          so the source of truth is visible in settings too. */}
+      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+        <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-2.5">
+          <div>
+            <h2 className="text-sm font-semibold tracking-tight">Installations</h2>
+            <p className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
+              {installs.isPending
+                ? "loading…"
+                : installations.length === 0
+                  ? "No installations yet — click Install on a repo above to add one."
+                  : `${installations.length} ${installations.length === 1 ? "installation" : "installations"} · ${totalRepos} ${totalRepos === 1 ? "repo" : "repos"} accessible (${totalPrivate} private)`}
+            </p>
+          </div>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => refresh.mutate()}
+            disabled={refresh.isPending}
+          >
+            <RefreshCw className={cn("h-3.5 w-3.5", refresh.isPending && "animate-spin")} />
+            Refresh
+          </Button>
+        </div>
+        {installations.length === 0 && !installs.isPending ? (
+          <div className="px-4 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
+            kuso can&apos;t see any repos yet. Click{" "}
+            <strong className="text-[var(--text-secondary)]">Install on a repo</strong> to grant
+            access to a user account or organization. Refresh after installing if the row
+            doesn&apos;t appear within ~10s.
+          </div>
+        ) : (
+          <ul className="divide-y divide-[var(--border-subtle)]">
+            {installations.map((inst) => (
+              <InstallationRow
+                key={inst.id}
+                inst={inst}
+                expanded={openInstall === inst.id}
+                onToggle={() =>
+                  setOpenInstall((cur) => (cur === inst.id ? null : inst.id))
+                }
+              />
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* Webhook health hint. We don't have a "last received at" feed
+          yet (would need a notify event mirror), so for now point
+          users at the GitHub App's recent deliveries page so they
+          can verify webhook traffic from the source of truth. */}
+      {appSlug && (
+        <p className="text-[12px] text-[var(--text-tertiary)]">
+          To verify webhooks are reaching kuso, check the{" "}
+          <a
+            href={`https://github.com/settings/apps/${appSlug}/advanced`}
+            target="_blank"
+            rel="noreferrer"
+            className="text-[var(--accent)] hover:underline"
+          >
+            Recent Deliveries
+          </a>{" "}
+          tab on the App&apos;s GitHub admin page. Failed deliveries (red) usually mean kuso&apos;s
+          public URL is unreachable from GitHub or the webhook secret drifted.
+        </p>
+      )}
     </section>
+  );
+}
+
+function InstallationRow({
+  inst,
+  expanded,
+  onToggle,
+}: {
+  inst: GithubInstallation;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const repos = inst.repositories ?? [];
+  const privateCount = repos.filter((r) => r.private).length;
+  const isOrg = inst.accountType?.toLowerCase() === "organization";
+  const ownerURL = `https://github.com/${inst.accountLogin}`;
+  return (
+    <li className="px-4 py-2.5">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center justify-between gap-3 text-left hover:bg-[var(--bg-tertiary)]/30 -mx-4 px-4 py-1 rounded"
+      >
+        <div className="flex min-w-0 items-center gap-3">
+          {isOrg ? (
+            <Building2 className="h-4 w-4 flex-shrink-0 text-[var(--text-tertiary)]" />
+          ) : (
+            <UserIcon className="h-4 w-4 flex-shrink-0 text-[var(--text-tertiary)]" />
+          )}
+          <div className="min-w-0">
+            <a
+              href={ownerURL}
+              target="_blank"
+              rel="noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              className="text-sm font-medium hover:underline"
+            >
+              {inst.accountLogin}
+            </a>
+            <span className="ml-2 text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              {inst.accountType}
+            </span>
+            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+              installation #{inst.id} · {repos.length} {repos.length === 1 ? "repo" : "repos"}
+              {privateCount > 0 ? ` · ${privateCount} private` : ""}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <a
+            href={`https://github.com/settings/installations/${inst.id}`}
+            target="_blank"
+            rel="noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="inline-flex h-7 items-center gap-1 rounded border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 text-[11px] hover:bg-[var(--accent-subtle)]"
+          >
+            <ExternalLink className="h-3 w-3" />
+            Configure
+          </a>
+          {expanded ? (
+            <ChevronDown className="h-4 w-4 text-[var(--text-tertiary)]" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-[var(--text-tertiary)]" />
+          )}
+        </div>
+      </button>
+      {expanded && (
+        <ul className="mt-2 ml-7 space-y-1">
+          {repos.length === 0 ? (
+            <li className="text-[11px] text-[var(--text-tertiary)]">
+              No repos selected. Use{" "}
+              <strong>Configure</strong> on the right to grant access.
+            </li>
+          ) : (
+            repos.map((r) => (
+              <li
+                key={r.id}
+                className="flex items-center justify-between gap-2 rounded px-2 py-1 hover:bg-[var(--bg-tertiary)]/30"
+              >
+                <a
+                  href={`https://github.com/${r.fullName}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex min-w-0 items-center gap-1.5 font-mono text-[11px] hover:underline"
+                >
+                  {r.private ? (
+                    <Lock className="h-3 w-3 flex-shrink-0 text-[var(--text-tertiary)]" />
+                  ) : (
+                    <Globe className="h-3 w-3 flex-shrink-0 text-[var(--text-tertiary)]" />
+                  )}
+                  <span className="truncate">{r.fullName}</span>
+                  <span className="text-[10px] text-[var(--text-tertiary)]">@{r.defaultBranch}</span>
+                </a>
+              </li>
+            ))
+          )}
+        </ul>
+      )}
+    </li>
+  );
+}
+
+function CopyChip({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        } catch {
+          /* ignore */
+        }
+      }}
+      className="inline-flex h-4 w-4 items-center justify-center rounded text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+      aria-label="Copy"
+    >
+      {copied ? <Check className="h-2.5 w-2.5 text-emerald-400" /> : <Copy className="h-2.5 w-2.5" />}
+    </button>
   );
 }
 
