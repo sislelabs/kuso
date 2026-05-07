@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.26] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(drift): flag rolloutPending during helm-operator reconcile lag ([7502832](https://github.com/sislelabs/kuso/commit/750283243eed46414c6c971e10ff015af12ffdc9))
+
 ## [0.9.25] — 2026-05-07
 
 ### ✨ Features
