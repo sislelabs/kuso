@@ -31,6 +31,27 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
   const [branch, setBranch] = useState("");
   const qc = useQueryClient();
 
+  // Resolve the picked service's KusoService → spec.repo so we can
+  // show the user WHICH repo + default branch this env will track.
+  // Without this context the branch input was a free-text field with
+  // no link back to the service's actual GitHub repo, which made the
+  // dialog feel like the env was tied to a branch in the abstract.
+  // Envs are service-scoped; the branch is "of THIS service's repo".
+  const pickedService = services.find((s) => {
+    const full = s.metadata.name;
+    const prefix = project + "-";
+    const short = full.startsWith(prefix) ? full.slice(prefix.length) : full;
+    return short === serviceName;
+  });
+  const repoURL = pickedService?.spec?.repo?.url ?? "";
+  const repoDefaultBranch = pickedService?.spec?.repo?.defaultBranch ?? "";
+  // Compact "owner/repo" rendering — full URL is noisy in a dialog.
+  const repoLabel = (() => {
+    if (!repoURL) return "";
+    const m = repoURL.match(/github\.com[/:]([^/]+\/[^/.]+)/i);
+    return m ? m[1] : repoURL;
+  })();
+
   useEffect(() => {
     if (open) {
       setName("");
@@ -46,6 +67,16 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
       }
     }
   }, [open, project, services]);
+
+  // Auto-fill branch with the picked service's defaultBranch on
+  // service-pick, but only when the user hasn't typed a branch yet.
+  // Keeps the form smart without clobbering an in-progress edit.
+  useEffect(() => {
+    if (!open) return;
+    if (!repoDefaultBranch) return;
+    if (branch.trim() !== "") return;
+    setBranch(repoDefaultBranch);
+  }, [open, serviceName, repoDefaultBranch, branch]);
 
   useEffect(() => {
     if (!open) return;
@@ -113,7 +144,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
                   New environment
                 </h2>
                 <p className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
-                  Long-lived branch env with its own URL.
+                  A second instance of one service, deployed from a different branch.
                 </p>
               </div>
               <button
@@ -127,7 +158,14 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
             </header>
 
             <div className="space-y-3 border-b border-[var(--border-subtle)] p-4">
-              <Field label="service" hint="which service this env runs">
+              <Field
+                label="service"
+                hint={
+                  repoLabel
+                    ? `repo: ${repoLabel}`
+                    : "envs are scoped to a single service; pick which one this env runs"
+                }
+              >
                 <select
                   value={serviceName}
                   onChange={(e) => setServiceName(e.target.value)}
@@ -164,15 +202,22 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
 
               <Field
                 label="branch"
-                hint="the env redeploys when this branch is updated"
+                hint={
+                  repoLabel
+                    ? `branch of ${repoLabel} — env redeploys when this branch is updated`
+                    : pickedService
+                      ? "this service has no repo wired up; connect one in service settings before creating an env"
+                      : "the env redeploys when this branch is updated"
+                }
                 icon={GitBranch}
               >
                 <Input
                   value={branch}
                   onChange={(e) => setBranch(e.target.value)}
-                  placeholder="staging"
+                  placeholder={repoDefaultBranch || "staging"}
                   className="h-8 font-mono text-[12px]"
                   spellCheck={false}
+                  disabled={!repoURL}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") submit();
                   }}
