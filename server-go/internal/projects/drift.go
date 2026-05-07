@@ -74,8 +74,12 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	if shortSvc == "" {
 		shortSvc = service
 	}
+	// The env CR itself carries `kuso.sislelabs.com/env=production`
+	// in metadata.labels (set by the server at create time). The
+	// `env-kind` label only lives on chart-rendered children
+	// (Deployment, Service, etc.) — wrong key for the CR list.
 	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("kuso.sislelabs.com/project=%s,kuso.sislelabs.com/service=%s,kuso.sislelabs.com/env-kind=production",
+		LabelSelector: fmt.Sprintf("kuso.sislelabs.com/project=%s,kuso.sislelabs.com/service=%s,kuso.sislelabs.com/env=production",
 			project, shortSvc),
 	})
 	if err != nil {
