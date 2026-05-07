@@ -50,6 +50,11 @@ export class ReconnectingWS<F = unknown> {
     };
     ws.onclose = (e) => {
       this.opts.onStatus?.("closed", { code: e.code, reason: e.reason });
+      // 1000 (Normal) + 1001 (Going Away) are clean shutdowns; the
+      // server explicitly signalled end-of-stream. Don't reconnect —
+      // build streams end, that's the point. Auto-retry would re-ship
+      // the archive and re-trigger phase=completed forever.
+      if (e.code === 1000 || e.code === 1001) return;
       this.scheduleReconnect();
     };
     ws.onerror = () => {

@@ -238,6 +238,18 @@ func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 			h.Logger.Error("ws logs", "err", err, "env", envName)
 		}
 	}
+	// Send an explicit Close frame so the browser surfaces a clean
+	// 1000 (Normal) onclose instead of 1006 (abnormal). Without this,
+	// build:<id> streams that ship the archived tail and return cleanly
+	// would still flip the UI to "connection lost" because gorilla's
+	// defer Close() just shuts the socket without a WS Close frame.
+	sink.mu.Lock()
+	_ = conn.WriteControl(
+		websocket.CloseMessage,
+		websocket.FormatCloseMessage(websocket.CloseNormalClosure, "stream complete"),
+		time.Now().Add(2*time.Second),
+	)
+	sink.mu.Unlock()
 }
 
 // acquireWSSlot reserves a per-user WS slot if the user is under the
