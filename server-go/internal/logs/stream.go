@@ -150,7 +150,31 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 					return env, nil
 				}
 			}
-			_ = sink.Write(Frame{Type: "log", Pod: buildName, Line: "build pod not found (likely garbage-collected)"})
+			// Distinguish "operator hasn't rendered yet" from "Job ran
+			// and was GC'd". The KusoBuild CR exists either way, but a
+			// brand-new build with no Job means the helm-operator hasn't
+			// caught up to the watch event — a few seconds for the
+			// reconcile to fire. We poll briefly so the deployments tab
+			// transitions cleanly into live tail instead of flashing
+			// "build pod not found" on every redeploy.
+			waitDeadline := time.Now().Add(20 * time.Second)
+			for time.Now().Before(waitDeadline) {
+				select {
+				case <-ctx.Done():
+					return env, nil
+				case <-time.After(2 * time.Second):
+				}
+				pods2, err := s.Kube.Clientset.CoreV1().Pods(s.Namespace).List(ctx, metav1.ListOptions{
+					LabelSelector: "app.kubernetes.io/instance=" + buildName,
+				})
+				if err == nil && len(pods2.Items) > 0 {
+					_ = sink.Write(Frame{Type: "phase", Value: "starting"})
+					err = s.streamPods(ctx, pods2.Items, tailLines, sink)
+					_ = sink.Write(Frame{Type: "phase", Value: "completed"})
+					return env, err
+				}
+			}
+			_ = sink.Write(Frame{Type: "log", Pod: buildName, Line: "build pod hasn't started yet — operator may be reconciling. Try again in a few seconds."})
 			_ = sink.Write(Frame{Type: "phase", Value: "completed"})
 			return env, nil
 		}

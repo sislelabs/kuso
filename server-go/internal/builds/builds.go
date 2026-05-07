@@ -532,8 +532,22 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 		return fmt.Errorf("%w: build %s already in phase %q", ErrInvalid, buildName, phase)
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
+	// Stamp metadata AND blank spec.image.tag so the helm chart's
+	// `if and .Values.image.tag ...` guard short-circuits — the
+	// chart renders zero objects, no Job, no ServiceAccount, no
+	// helm-managed children.
+	//
+	// Why this matters: cancel deletes the Job + helm release secrets
+	// directly, but if the operator is offline at cancel time (or
+	// restarts later), its initial cache sync ignores the watch
+	// selector and reconciles every CR — re-installing the helm
+	// release and re-creating the Job. Defanging the chart at the
+	// values level is the only way to make cancel idempotent against
+	// future operator catch-ups. Saw this on 2026-05-07 when an
+	// operator pod stuck in ImagePullBackOff was rolled back: every
+	// cancelled CR sprouted a new Job within seconds.
 	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:"cancelled by user"},"labels":{"kuso.sislelabs.com/build-state":"done"}}}`,
+		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:"cancelled by user"},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"image":{"tag":""}}}`,
 		annPhase, annCompletedAt, now, annMessage,
 	)
 	if _, perr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
