@@ -150,17 +150,23 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                   ) : (
                     <span className="font-mono text-[10px] text-[var(--text-tertiary)]">no URL yet</span>
                   )}
-                  {/* Drift chip. Three priorities:
-                        - podsStale: env CR saved + chart rendered,
-                          but the running Deployment still serves the
-                          old envVars/image. This is what the user
-                          *feels* after a save — amber + "out of date".
-                        - rolloutPending: helm-operator is mid-reconcile
-                          (a few seconds). Blue + "rolling out…".
-                        - specPending: service spec ↔ env CR mismatch
-                          (a propagation bug — should never appear in
-                          steady state). Amber + "pending changes".
-                      Hidden when all three are clear. */}
+                  {/* Drift chip. Priority order matters:
+                        1. rolloutPending — kube has a new ReplicaSet
+                           in flight. Even if podsStale is also true
+                           (it always is during the rollout window),
+                           the right copy is "rolling out…", not
+                           "restart needed" — kube IS auto-rolling.
+                           Blue.
+                        2. specPending — service spec ↔ env CR
+                           mismatch. Propagation bug; shouldn't appear
+                           in steady state. Amber + "pending changes".
+                        3. podsStale w/o rolloutPending — pod env
+                           differs from spec AND no rollout in
+                           progress, which means kube isn't going to
+                           roll on its own (rare; only happens for
+                           non-template fields). Amber + "restart
+                           needed". User must click Redeploy.
+                      Hidden when nothing's pending. */}
                   {(() => {
                     const d = drift.data;
                     if (!d) return null;
@@ -168,21 +174,24 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                     const rolling = d.rolloutPending;
                     const specOff = d.specPending && d.specPending.length > 0;
                     if (!stale && !rolling && !specOff) return null;
-                    let label = "out of date";
-                    let title = "";
-                    let cls = "border-amber-500/40 bg-amber-500/10 text-amber-200";
-                    if (stale) {
+                    let label: string;
+                    let title: string;
+                    let cls: string;
+                    if (rolling) {
+                      label = "rolling out…";
+                      cls = "border-blue-500/40 bg-blue-500/10 text-blue-200";
+                      title = "kube is rolling new pods with the latest spec";
+                    } else if (specOff) {
+                      label = "pending changes";
+                      cls = "border-amber-500/40 bg-amber-500/10 text-amber-200";
+                      title = `Spec out of sync on: ${d.specPending.join(", ")}`;
+                    } else {
+                      // stale && !rolling: kube isn't going to roll.
                       label = "out of date — restart needed";
+                      cls = "border-amber-500/40 bg-amber-500/10 text-amber-200";
                       title =
                         `Pod still running old ${d.podsStale.join(", ")}. ` +
                         `Click Deployments → Redeploy or trigger a new build to roll.`;
-                    } else if (rolling) {
-                      label = "rolling out…";
-                      cls = "border-blue-500/40 bg-blue-500/10 text-blue-200";
-                      title = "kuso is reconciling — pods will roll within a few seconds";
-                    } else {
-                      label = "pending changes";
-                      title = `Spec out of sync on: ${d.specPending.join(", ")}`;
                     }
                     return (
                       <span

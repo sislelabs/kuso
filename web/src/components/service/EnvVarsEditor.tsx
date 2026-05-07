@@ -416,55 +416,70 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
           discoverable on day 1. */}
       <InheritedSection project={project} />
 
-      {/* Status banner — has two states:
-            (1) just saved, drift hasn't caught up or pod is rolling
-                → "rolling out" (sticky for 60s after save)
-            (2) drift confirms the pod is genuinely stale (rare but
-                real for fields kube doesn't auto-roll on)
-                → "out of date — Redeploy to roll"
-          On a healthy small cluster the rollout finishes in a few
-          seconds and (1) covers the whole window; (2) only shows up
-          if something blocked the rollout. */}
-      {(stickySaved || (drift.data && drift.data.podsStale && drift.data.podsStale.length > 0)) && (
-        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[12px]">
-          <div className="flex items-start gap-2">
-            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-            <div className="flex-1">
-              {drift.data && drift.data.podsStale && drift.data.podsStale.length > 0 ? (
-                <>
+      {/* Status banner. Two real states (drift-derived, refresh-safe):
+            (a) rollout in progress — kube has a new ReplicaSet
+                spinning up. Blue "rolling out…".
+            (b) pod stale w/o rollout — kube didn't auto-roll (rare
+                for env edits; happens for non-template fields).
+                Amber "Redeploy to roll".
+          Plus an optional client-side ack for the user's own save:
+            (c) just-saved sticky for 5s — covers the gap before
+                drift's next 10s poll. Just a "Saved" toast-style
+                inline note, NOT a sky-is-falling warning. */}
+      {(() => {
+        const stale = drift.data?.podsStale && drift.data.podsStale.length > 0;
+        const rolling = drift.data?.rolloutPending;
+        if (rolling) {
+          return (
+            <div className="rounded-md border border-blue-500/40 bg-blue-500/5 px-3 py-2 text-[12px]">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-400" />
+                <div className="flex-1">
+                  <div className="text-blue-200">
+                    Rolling out the new env to a fresh pod…
+                  </div>
+                  <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
+                    kube is creating a new ReplicaSet. The old pod stays
+                    up until the new one is Ready.
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+        if (stale) {
+          return (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[12px]">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+                <div className="flex-1">
                   <div className="text-amber-200">
-                    Running pod is out of date. The new {drift.data.podsStale.join(", ")}
+                    Running pod is out of date. The new {drift.data!.podsStale.join(", ")}
                     {" "}won't take effect until the deployment rolls.
                   </div>
                   <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
-                    kube auto-rolls on most spec changes, but env-var-only edits don't always
-                    trigger a rollout. Open the Deployments tab and click Redeploy to force one.
+                    kube didn't auto-roll on this change. Open the Deployments tab
+                    and click Redeploy to force one.
                   </div>
-                </>
-              ) : ageSec < 5 ? (
-                <>
-                  <div className="text-amber-200">
-                    Saved. Rolling out the new env to the running pod…
-                  </div>
-                  <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
-                    The deployment is being updated. New pods replace the old ones over the
-                    next ~30s.
-                  </div>
-                </>
-              ) : (
-                <>
-                  <div className="text-amber-200">
-                    Saved. New pod has been running for {ageSec}s — change is live.
-                  </div>
-                  <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
-                    This banner clears automatically a minute after the rollout.
-                  </div>
-                </>
-              )}
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          );
+        }
+        if (stickySaved && ageSec < 5) {
+          return (
+            <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 px-3 py-2 text-[12px]">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
+                <div className="text-emerald-200">
+                  Saved. Waiting for the rollout to start…
+                </div>
+              </div>
+            </div>
+          );
+        }
+        return null;
+      })()}
 
       {/* Detected env vars — names kuso noticed are referenced by
           the source repo (build-time scan) or that crashed the pod
