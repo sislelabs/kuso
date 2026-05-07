@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.25] — 2026-05-07
+
+### ✨ Features
+- Feat(chart): zero-downtime env rollouts with readinessProbe + maxSurge=1 ([81f9b4b](https://github.com/sislelabs/kuso/commit/81f9b4b4b3c007a87c7eb533ae52231b8ed27cdc))
+
+### 🐛 Bug Fixes
+- Fix(drift-banner): rolling-out beats out-of-date; honest copy ([b5a5f3d](https://github.com/sislelabs/kuso/commit/b5a5f3de5d164889f01012f1ccb49008b2d3e505))
+
 ## [0.9.24] — 2026-05-07
 
 ### 🐛 Bug Fixes
