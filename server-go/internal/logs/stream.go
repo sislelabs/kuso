@@ -20,6 +20,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 	"time"
@@ -399,18 +400,44 @@ func (s *Service) streamOneContainer(ctx context.Context, podName, container str
 		Follow:    !isInit,
 		TailLines: &tail,
 	}
-	req := s.Kube.Clientset.CoreV1().Pods(s.Namespace).GetLogs(podName, opts)
-	stream, err := req.Stream(ctx)
-	if err != nil {
-		// "container is waiting" / "container ... not found" is the
-		// normal case for an init container that hasn't started yet
-		// or a main container we're racing. Don't surface as error;
-		// the phase watcher will tell the user what's going on.
-		select {
-		case frames <- Frame{Type: "log", Pod: podName, Stream: "stderr", Line: "── " + container + ": " + err.Error() + " ──"}:
-		case <-ctx.Done():
+	// Retry briefly for "container is waiting" / "container not found"
+	// — those are the *normal* lifecycle states for an init container
+	// that hasn't started yet or a main container we're racing into.
+	// Pre-fix we surfaced these as red stderr lines, which made every
+	// fresh build look like it was already failing. Now we silently
+	// poll for up to 60s; if the container still isn't startable
+	// after that, drop the attempt (the phase watcher carries the
+	// real status to the UI).
+	var stream io.ReadCloser
+	var err error
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		req := s.Kube.Clientset.CoreV1().Pods(s.Namespace).GetLogs(podName, opts)
+		stream, err = req.Stream(ctx)
+		if err == nil {
+			break
 		}
-		return
+		msg := err.Error()
+		transient := strings.Contains(msg, "is waiting") ||
+			strings.Contains(msg, "ContainerCreating") ||
+			strings.Contains(msg, "PodInitializing") ||
+			strings.Contains(msg, "not found")
+		if !transient || time.Now().After(deadline) {
+			// Genuine error (auth, network, container truly gone)
+			// OR we've waited long enough that this is no longer a
+			// transient-state error. Surface it but keep the styling
+			// soft — most failures here are still recoverable.
+			select {
+			case frames <- Frame{Type: "log", Pod: podName, Stream: "stderr", Line: "── " + container + ": " + msg + " ──"}:
+			case <-ctx.Done():
+			}
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(2 * time.Second):
+		}
 	}
 	defer stream.Close()
 
