@@ -1013,7 +1013,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		strategy = "dockerfile"
 	}
 
-	installationID := githubInstallationID(proj)
+	installationID := githubInstallationID(proj, svcCR)
 
 	// The chart's clone init container reads $GITHUB_INSTALLATION_TOKEN
 	// from a secret named "<release>-token" with key "token". The
@@ -1361,7 +1361,22 @@ func buildCacheDisabled(proj *kube.KusoProject) bool {
 	return proj.Annotations["kuso.sislelabs.com/build-cache-disabled"] == "true"
 }
 
-func githubInstallationID(proj *kube.KusoProject) int64 {
+// githubInstallationID resolves the GitHub App installation ID to use
+// for cloning a service's repo. Service-level wins over project-level
+// so a project linked to org A can host a service whose repo lives
+// in org B (different installations). Falls back to project-level
+// when the service didn't override (the common case), then 0 for
+// fully public repos.
+//
+// Pre-fix this only checked project-level, so a service whose repo
+// was in a different org than the project's defaultRepo cloned
+// unauthenticated and hit `fatal: could not read Username for
+// 'https://github.com'` — the user reported this on a businessguys
+// org repo configured against a different installation.
+func githubInstallationID(proj *kube.KusoProject, svc *kube.KusoService) int64 {
+	if svc != nil && svc.Spec.Github != nil && svc.Spec.Github.InstallationID > 0 {
+		return svc.Spec.Github.InstallationID
+	}
 	if proj == nil || proj.Spec.GitHub == nil {
 		return 0
 	}
