@@ -45,19 +45,22 @@ export async function getDetectedEnv(project: string, service: string): Promise<
   );
 }
 
-// DriftReport mirrors projects.DriftReport on the server. Empty
-// SpecPending + false RolloutPending means the running pod is in
-// sync with the saved spec.
+// DriftReport mirrors projects.DriftReport on the server. All three
+// arrays empty + rolloutPending=false means the running pods match
+// the saved spec.
 export interface DriftReport {
-  // Field names that differ between service spec and the running
-  // env CR (e.g. "envVars", "domains", "internal", "port"). Empty
-  // when in sync.
+  // Service spec ↔ env CR: propagated fields out of sync. Should
+  // always be empty in steady state.
   specPending: string[];
-  // helm-operator hasn't reconciled the latest spec edit yet
-  // (env.metadata.generation > status.observedGeneration). The
-  // user's edit is on disk; the deployment will roll within a
-  // few seconds.
+  // helm-operator hasn't observed the latest env CR generation yet
+  // (brief window after a save).
   rolloutPending: boolean;
+  // Env CR ↔ live Deployment pod template. Non-empty means the
+  // user's edit reached the spec but kube hasn't rolled the new
+  // pods yet — common after an env-var edit while a CrashLoop or
+  // image-pull failure blocks the rollout. This is the surface
+  // users actually feel.
+  podsStale: string[];
   envName?: string;
 }
 

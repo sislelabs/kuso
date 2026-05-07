@@ -4,7 +4,7 @@ import { useState, useEffect, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Trash2, Plus, Save, Eye, EyeOff, FileText, List, Link2, AlertCircle, Wand2 } from "lucide-react";
-import { useServiceEnv, useSetServiceEnv, useDetectedEnv } from "@/features/services";
+import { useServiceEnv, useSetServiceEnv, useDetectedEnv, useDrift } from "@/features/services";
 import type { DetectedEnv } from "@/features/services/api";
 import { listAddonSecretKeys } from "@/features/services/api";
 import { useProject, useAddons } from "@/features/projects";
@@ -226,6 +226,7 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
   const env = useServiceEnv(project, service);
   const setEnv = useSetServiceEnv(project, service);
   const detected = useDetectedEnv(project, service);
+  const drift = useDrift(project, service);
   const addons = useAddons(project);
   // Memoised so the toRow effect below only re-runs when the addon set
   // (or its connectionSecret status fields) actually changes. Without
@@ -381,6 +382,31 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
           it locally. Show even when empty so the affordance is
           discoverable on day 1. */}
       <InheritedSection project={project} />
+
+      {/* "Out of date" banner — visible right below the var editor
+          when the user just saved an env edit but the running pod
+          still serves the old values. The chip in the overlay
+          header repeats the same signal for users who navigate
+          away. Includes a one-click "Restart" affordance so the
+          user can roll the pod without leaving the tab. */}
+      {drift.data && drift.data.podsStale && drift.data.podsStale.length > 0 && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[12px]">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
+            <div className="flex-1">
+              <div className="text-amber-200">
+                Running pod is out of date. The new {drift.data.podsStale.join(", ")}
+                {" "}
+                won't take effect until the deployment rolls.
+              </div>
+              <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
+                kube auto-rolls on most spec changes, but env-var-only edits don't always
+                trigger a rollout. Open the Deployments tab and click Redeploy to force one.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Detected env vars — names kuso noticed are referenced by
           the source repo (build-time scan) or that crashed the pod
