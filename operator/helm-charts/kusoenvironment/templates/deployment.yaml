@@ -16,6 +16,21 @@ spec:
   {{- if not (and .Values.autoscaling .Values.autoscaling.enabled) }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
+  {{- /*
+    Zero-downtime rolling update. maxSurge=1 + maxUnavailable=0 means
+    kube ALWAYS brings up a new pod and waits for it to be Ready
+    before killing any old pod, even at replicas=1. Combined with the
+    HTTP readinessProbe below this is what makes env-var edits roll
+    without dropping requests — the new pod has to actually answer on
+    its port before traffic shifts. Without these two, the default
+    25%/25% strategy on a single-replica deployment briefly runs zero
+    Ready pods and clients see connection-refused / 503.
+  */}}
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       {{- include "kusoenvironment.selectorLabels" . | nindent 6 }}
@@ -143,6 +158,40 @@ spec:
                 name: {{ . | quote }}
                 optional: true
             {{- end }}
+          {{- end }}
+          {{- /*
+            Web services get a TCP readinessProbe on the user's port
+            so the rollout strategy actually waits for the new pod to
+            bind before shifting traffic. Workers have no port and
+            skip probes entirely.
+
+            We use TCP (not HTTP) on purpose — apps may not expose a
+            healthz route, may use non-standard frameworks, or may
+            return non-2xx on /. TCP just checks "is the socket
+            accepting connections?" which is the minimum signal that
+            the process is past startup. initialDelaySeconds=2 gives
+            the runtime a beat to bind; failureThreshold=30 with
+            periodSeconds=2 means a slow Rails/Spring boot has a full
+            minute before being declared unready.
+
+            startupProbe carries slow-boot apps for up to 5 min so
+            the readinessProbe doesn't false-fail during cold starts.
+          */}}
+          {{- if not (eq (default "" .Values.runtime) "worker") }}
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.port }}
+            initialDelaySeconds: 2
+            periodSeconds: 2
+            timeoutSeconds: 2
+            failureThreshold: 30
+            successThreshold: 1
+          startupProbe:
+            tcpSocket:
+              port: {{ .Values.port }}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60
           {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
