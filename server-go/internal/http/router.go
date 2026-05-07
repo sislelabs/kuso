@@ -4,9 +4,11 @@
 package http
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -467,6 +469,24 @@ func (s *statusRecorder) Flush() {
 	if f, ok := s.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// Hijack proxies to the underlying writer so WebSocket upgrades work
+// through the recorder. gorilla/websocket's Upgrade does
+// `w.(http.Hijacker)`; without this the assertion fails on the
+// recorder (which wraps but doesn't pass through the Hijacker
+// interface) and Upgrade writes a 500 — every /ws/.../logs request
+// dropped 22-byte 500s in the deployments tab.
+func (s *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if h, ok := s.ResponseWriter.(http.Hijacker); ok {
+		// Mark the response as written so a later WriteHeader (gorilla
+		// won't call one but the metric middleware shouldn't second-
+		// guess) doesn't double-write.
+		s.wrote = true
+		s.status = 101
+		return h.Hijack()
+	}
+	return nil, nil, http.ErrNotSupported
 }
 
 func maxBodyBytes(n int64) func(http.Handler) http.Handler {
