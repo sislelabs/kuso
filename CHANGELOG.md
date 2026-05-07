@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.30] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(settings/builds): preset cards show real headroom math ([70581ac](https://github.com/sislelabs/kuso/commit/70581ac275066fb452c64b51724977deef496823))
+
 ## [0.9.29] — 2026-05-07
 
 ### 🐛 Bug Fixes
