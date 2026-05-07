@@ -1,4 +1,17 @@
-{{- if and .Values.image.repository .Values.image.tag .Values.repo.url }}
+{{- /*
+  Top-level no-op gate. Renders ZERO objects when the build is
+  terminal (succeeded / failed / cancelled). Without this, an
+  operator restart's initial cache sync — which ignores the
+  build-state=done watch selector — would helm-install a fresh
+  release for every old KusoBuild, recreating Jobs we'd already
+  cleaned up. Caught after a real outage where two resurrected
+  nixpacks builds OOMKilled a 4 GB host.
+
+  The image.repository/image.tag/repo.url checks below are kept
+  as a belt-and-braces defense for partial CRs (e.g. a malformed
+  spec the chart can't render anyway).
+*/ -}}
+{{- if and (not .Values.done) .Values.image.repository .Values.image.tag .Values.repo.url }}
 # Per-build ServiceAccount with NO bindings. Even with
 # automountServiceAccountToken: false, the pod still gets the SA
 # *identity* — admission webhooks (Kyverno / OPA / Pod Security)

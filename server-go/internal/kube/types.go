@@ -415,6 +415,15 @@ type KusoBuildSpec struct {
 	Resources            *KusoBuildResources `json:"resources,omitempty"`
 	Auth                 *KusoBuildAuth      `json:"auth,omitempty"`
 	Registry             *KusoBuildRegistry  `json:"registry,omitempty"`
+	// Done is the chart's no-op gate. When true, the kusobuild chart
+	// renders zero objects — even if helm-operator's initial cache
+	// sync (which ignores the build-state=done watch selector) tries
+	// to reinstall the release. Server stamps it true on every
+	// terminal transition (succeeded / failed / cancelled). Required
+	// after the operator was observed resurrecting cancelled builds
+	// post-restart and OOMKilling the host with two parallel nixpacks
+	// rebuilds.
+	Done bool `json:"done,omitempty"`
 }
 
 // KusoBuildAuth points the build pod at registry credentials. The

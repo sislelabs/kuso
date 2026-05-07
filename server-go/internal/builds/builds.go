@@ -593,7 +593,7 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 	// operator pod stuck in ImagePullBackOff was rolled back: every
 	// cancelled CR sprouted a new Job within seconds.
 	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:"cancelled by user"},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"image":{"tag":""}}}`,
+		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:"cancelled by user"},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true,"image":{"tag":""}}}`,
 		annPhase, annCompletedAt, now, annMessage,
 	)
 	if _, perr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
@@ -723,8 +723,10 @@ func (s *Service) supersedePriorBuilds(ctx context.Context, ns, project, fqn, ne
 		// Patch: phase=cancelled, build-state=done so helm-operator's
 		// watch-selector drops the CR + cleanup poller can prune it,
 		// superseded-by + a human-readable message for the UI.
+		// spec.done=true is the chart's hard no-op gate (see
+		// markSucceeded for why this is needed even with the label).
 		patch := fmt.Sprintf(
-			`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:%q,%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}}}`,
+			`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:%q,%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
 			annPhase,
 			annCompletedAt, now,
 			annSupersededBy, newName,
@@ -1982,8 +1984,15 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 			return nil
 		}
 	}
+	// spec.done=true gates the kusobuild chart to render zero objects
+	// from this point forward. Without it, an operator restart's
+	// initial cache sync would helm-install a fresh release for this
+	// CR (the build-state=done watch selector skips events but not
+	// the startup re-sync) and resurrect the Job we already cleaned
+	// up. We OOMKilled a 4 GB host once on this — two nixpacks
+	// builds resurrected on top of each other.
 	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"succeeded",%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}}}`,
+		`{"metadata":{"annotations":{%q:"succeeded",%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
 		annPhase, annCompletedAt, time.Now().UTC().Format(time.RFC3339),
 	)
 	if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
@@ -2016,8 +2025,10 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 }
 
 func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, msg string) error {
+	// See markSucceeded for why spec.done=true is set — same operator
+	// initial-cache-sync resurrection bug.
 	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"failed",%q:%q,%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}}}`,
+		`{"metadata":{"annotations":{%q:"failed",%q:%q,%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
 		annPhase, annCompletedAt, time.Now().UTC().Format(time.RFC3339),
 		annMessage, msg,
 	)

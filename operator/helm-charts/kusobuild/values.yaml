@@ -6,6 +6,11 @@ service: ""
 ref: ""        # commit SHA — used as image tag
 branch: main
 
+# done=true short-circuits the chart to render zero objects. Server
+# stamps spec.done=true on succeeded / failed / cancelled transitions.
+# See top-level guard in templates/job.yaml for the full reason.
+done: false
+
 repo:
   url: ""
   path: "."

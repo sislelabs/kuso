@@ -84,6 +84,26 @@ spec:
                   type: string
                   enum: [dockerfile, nixpacks, buildpacks, static]
                   default: dockerfile
+                # done=true means the build reached a terminal state
+                # (succeeded / failed / cancelled). The kusobuild chart
+                # treats this as a hard no-op gate: when true, the
+                # chart renders ZERO objects, so even if helm-operator
+                # picks up the CR on its initial cache sync (which
+                # ignores the build-state=done watch selector) and
+                # runs `helm install`, the rendered manifest is empty
+                # and no Job is created.
+                #
+                # Why this and not the existing build-state=done label:
+                # the watch selector skips reconcile EVENTS for done
+                # builds, but operator-sdk's startup re-syncs every
+                # CR of the watched kind regardless of selectors. Pre-
+                # this field, that initial sync resurrected stuck
+                # cancelled/done builds on every operator restart;
+                # we OOMKilled the host once because two resurrected
+                # nixpacks builds piled on top of each other.
+                done:
+                  type: boolean
+                  default: false
                 # Strategy-specific configuration. Both blocks are
                 # preserve-unknown-fields-friendly since the chart
                 # interprets them; the server only needs to round-trip.
