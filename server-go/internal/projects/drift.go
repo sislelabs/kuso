@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -186,6 +187,15 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 	if env.Spec.Image != nil && env.Spec.Image.Repository != "" && env.Spec.Image.Tag != "" {
 		wantImage = env.Spec.Image.Repository + ":" + env.Spec.Image.Tag
 	}
+	// lastSpecEdit is when kuso-server last wrote to this env CR. Any
+	// pod created before this time is by definition serving an older
+	// spec, even if its env-var name happens to match (e.g. user
+	// renamed VAR to VAR2 then back to VAR — pod env says "VAR=x"
+	// matching spec, but the pod predates the rename so the user
+	// expects to see "out of date"). Sourced from managedFields where
+	// helm-operator hasn't overwritten it. Falls back to env CR's
+	// metadata.creationTimestamp when no kuso-server entry exists.
+	lastSpecEdit := lastSpecMutation(env)
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		// Skip pods that are terminating — they're the OLD generation
@@ -195,6 +205,18 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 			continue
 		}
 		if len(p.Spec.Containers) == 0 {
+			continue
+		}
+		// Pod created before the latest spec edit → serving the old
+		// generation regardless of what its env vars look like. This
+		// makes the badge survive a page refresh: drift state is
+		// derived from kube timestamps + spec, no client-side memory
+		// of "I just saved" required.
+		if !lastSpecEdit.IsZero() && p.CreationTimestamp.Time.Before(lastSpecEdit) {
+			envMismatch = true
+			if wantImage != "" {
+				imageMismatch = imageMismatch || p.Spec.Containers[0].Image != wantImage
+			}
 			continue
 		}
 		c := p.Spec.Containers[0]
@@ -336,6 +358,34 @@ func deploymentRolling(ctx context.Context, s *Service, ns string, env kube.Kuso
 		return true
 	}
 	return false
+}
+
+// lastSpecMutation returns when kuso-server last wrote to the env CR's
+// spec, sourced from metadata.managedFields. Falls back to
+// metadata.creationTimestamp when no kuso-server entry exists (fresh
+// CR before any edit). Used to detect pods that were born before the
+// latest spec edit and are therefore stale by definition — even if
+// their env-var contents happen to match the current spec (e.g. the
+// user renamed a var twice and the second rename matches the first).
+//
+// We filter on manager == "kuso-server" so helm-operator's status
+// updates don't bump the timestamp; only OUR edits to spec count.
+// External `kubectl edit` won't show drift either, which matches user
+// intent — they didn't save in the UI, they shouldn't see a UI badge.
+func lastSpecMutation(env kube.KusoEnvironment) time.Time {
+	var latest time.Time
+	for _, mf := range env.ManagedFields {
+		if mf.Manager != "kuso-server" {
+			continue
+		}
+		if mf.Time != nil && mf.Time.Time.After(latest) {
+			latest = mf.Time.Time
+		}
+	}
+	if latest.IsZero() {
+		latest = env.CreationTimestamp.Time
+	}
+	return latest
 }
 
 // fqService returns the FQ form of a service name (project-prefixed).
