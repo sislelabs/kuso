@@ -118,16 +118,32 @@ metadata:
   labels:
     app.kubernetes.io/name: kuso-server
 spec:
-  # Single replica. Two constraints keep us here:
-  #   1. The build poller assumes singleton (cmd/kuso-server/main.go
-  #      has the leader-election TODO). Two pollers double-promote
-  #      queued builds.
-  #   2. deploy/postgres.yaml is itself a single-instance node-
-  #      pinned StatefulSet — kuso-server replicas wouldn't add
-  #      availability since the DB is the single point of failure.
-  # Real HA requires both the leader-election wrapper AND an
-  # external managed Postgres (RDS / Crunchy / Supabase). Until
-  # then this is intentional, not aspirational.
+  # Default 1 replica for indie installs. HA is supported — bump
+  # this to 2+ on multi-node clusters by running:
+  #
+  #   kubectl scale deployment kuso-server -n kuso --replicas=2
+  #
+  # What's already HA-safe:
+  #   - Postgres backend (deploy/postgres.yaml or external managed DB)
+  #   - JWT signing key in kube Secret kuso-server-secrets
+  #   - Leader-elected singletons (build poller, alert engine,
+  #     nodewatch, nodemetrics, audit trim) on Lease objects
+  #     kuso-server-singletons + kuso-server-cluster-singletons
+  #   - Stateless HTTP handlers (JWT auth, no server-side session)
+  #
+  # Caveats at >1 replica:
+  #   - In-process query caches are per-pod (5-10s stale window
+  #     after a write hits pod A but pod B serves the next read —
+  #     correctness preserved, just briefly stale UI)
+  #   - Per-user WebSocket slot caps are per-pod, so a single user
+  #     can hit maxWSPerUser × N pods worth of streams
+  #   - WebSocket reconnects on pod failover (acceptable for log
+  #     tails; the next frame is the current tail anyway)
+  #
+  # The DB still needs to be HA on its own — point KUSO_DB_DSN at a
+  # managed Postgres (RDS / Crunchy / Supabase) when running >1
+  # kuso-server pod, since deploy/postgres.yaml is a single-instance
+  # StatefulSet pinned to the control-plane node.
   replicas: 1
   # RollingUpdate replaces the pre-v0.9 Recreate strategy. The RWO
   # PVC was the only reason for Recreate; with Postgres there's no
@@ -160,18 +176,32 @@ spec:
       # above. Lets the kubelet pick a workload pod to evict before
       # it ever touches kuso-server when memory pressure hits.
       priorityClassName: kuso-platform
-      # Pin to the k3s control-plane node. The reason is now ONLY
-      # the k3s node-token hostPath at /var/lib/rancher/k3s/server,
-      # which kuso-server reads when issuing agent-join commands
-      # for new VMs. Once that flow moves to a worker-node-friendly
-      # mechanism (ssh from a sidecar, or a dedicated join-token
-      # Secret), the pin can drop.
-      nodeSelector:
-        node-role.kubernetes.io/control-plane: "true"
+      # No nodeSelector — kuso-server is now schedulable on worker
+      # nodes. The k3s node-token used to require a hostPath mount on
+      # the control-plane, but install.sh now writes the token to a
+      # kube Secret (kuso-k3s-token) and mounts it via envFrom on
+      # every replica. Single-node installs land on whatever node is
+      # available; multi-replica installs spread across the cluster.
       tolerations:
+        # Keep this so the pod CAN land on the control-plane node in
+        # single-node installs (k3s control-plane has the
+        # NoSchedule taint applied by default).
         - key: node-role.kubernetes.io/control-plane
           operator: Exists
           effect: NoSchedule
+      # Anti-affinity: when running multi-replica, prefer to spread
+      # across nodes. Soft preference (ScheduleAnyway via
+      # preferredDuringScheduling) so single-node clusters still
+      # schedule both pods on the same host.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: kuso-server
       # 60s gives the graceful-shutdown path room to let in-flight
       # requests finish + close websocket connections (logs
       # streamer). Postgres connections close fast; the bound is
@@ -212,6 +242,13 @@ spec:
           envFrom:
             - secretRef: { name: kuso-server-secrets }
             - secretRef: { name: kuso-github-app, optional: true }
+            # k3s server node-token, required to issue agent-join
+            # commands. install.sh writes this Secret on initial
+            # install (key: token); kuso-server reads
+            # KUSO_K3S_TOKEN before falling back to the hostPath
+            # mount below. optional=true so existing installs that
+            # haven't been re-installed since v0.9.36 keep working.
+            - secretRef: { name: kuso-k3s-token, optional: true }
           # PreStop fires AFTER the pod is marked Terminating but
           # BEFORE SIGTERM. Sleeping here gives the kube-proxy /
           # ingress controller time to remove this pod from their
@@ -249,16 +286,12 @@ spec:
             httpGet: { path: /readyz, port: http }
             periodSeconds: 5
             failureThreshold: 18
-          volumeMounts:
-            # Read-only mount of the k3s server node-token. kuso-server
-            # reads this when issuing `K3S_TOKEN=… curl … | sh` on a
-            # remote VM during the Add Node flow.
-            - name: k3s-token
-              mountPath: /etc/kuso/k3s-token
-              readOnly: true
-              subPath: node-token
-      volumes:
-        - name: k3s-token
-          hostPath:
-            path: /var/lib/rancher/k3s/server
-            type: Directory
+      # No volume mounts — the k3s node-token used to be a hostPath
+      # of /var/lib/rancher/k3s/server/node-token, which pinned the
+      # pod to the control-plane node. Now KUSO_K3S_TOKEN is sourced
+      # from the kuso-k3s-token Secret (envFrom above), so the pod
+      # can run anywhere. install.sh creates that Secret at install
+      # time by reading the node-token from the host. Existing
+      # installs that haven't been re-installed since v0.9.36 keep
+      # working via the hostPath fallback in nodejoin.ReadServerToken
+      # — but only on the control-plane node.

@@ -60,17 +60,28 @@ type JoinResult struct {
 	NodeName string `json:"nodeName"`
 }
 
-// TokenFile is the standard hostPath location the deploy yaml mounts.
-// Exposed as a var so tests can swap it.
+// TokenFile is the standard hostPath location the deploy yaml mounts
+// when running pinned to the k3s control-plane node. Exposed as a var
+// so tests can swap it.
 var TokenFile = "/etc/kuso/k3s-token"
 
-// ReadServerToken returns the k3s server token from the hostPath mount.
-// Returns a friendly error when the mount isn't present (i.e. kuso is
-// running outside cluster, or the deploy yaml wasn't updated).
+// ReadServerToken returns the k3s server token. Three sources, in
+// order of preference:
+//   1. KUSO_K3S_TOKEN env var (set when the install script copies the
+//      node-token into a kube Secret and mounts it via envFrom). Lets
+//      kuso-server run on a worker node — required for HA installs
+//      where kuso-server replicates and isn't pinned to control-plane.
+//   2. /etc/kuso/k3s-token file (the historical hostPath mount, only
+//      works when the pod is on the control-plane node). Kept as a
+//      fallback so existing deploys keep working without a re-install.
+//   3. Friendly error pointing at the install script.
 func ReadServerToken() (string, error) {
+	if v := strings.TrimSpace(os.Getenv("KUSO_K3S_TOKEN")); v != "" {
+		return v, nil
+	}
 	b, err := os.ReadFile(TokenFile)
 	if err != nil {
-		return "", fmt.Errorf("read k3s token (%s): %w — is the kuso-server pod scheduled on the control-plane node with the node-token hostPath mount?", TokenFile, err)
+		return "", fmt.Errorf("read k3s token (%s): %w — is the kuso-server pod scheduled on the control-plane node with the node-token hostPath mount, or set KUSO_K3S_TOKEN via the kuso-k3s-token Secret?", TokenFile, err)
 	}
 	return strings.TrimSpace(string(b)), nil
 }

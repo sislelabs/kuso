@@ -494,6 +494,26 @@ kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o ya
   --from-literal=KUSO_REQUIRE_SIGNATURES="$KUSO_REQUIRE_SIGS" \
   | kubectl apply -f - >/dev/null
 
+# k3s node-token Secret — see hack/install.sh for the why. Lets
+# kuso-server run on worker nodes (HA-friendly) instead of being
+# pinned to the control-plane via hostPath.
+log "applying kuso-k3s-token (Secret)"
+if kubectl get secret -n kuso kuso-k3s-token >/dev/null 2>&1; then
+  log "  reusing existing kuso-k3s-token (token unchanged)"
+else
+  K3S_NODE_TOKEN=""
+  if [[ -r /var/lib/rancher/k3s/server/node-token ]]; then
+    K3S_NODE_TOKEN="$(tr -d '\n' < /var/lib/rancher/k3s/server/node-token)"
+  fi
+  if [[ -z "$K3S_NODE_TOKEN" ]]; then
+    log "  WARNING: /var/lib/rancher/k3s/server/node-token not readable — skipping kuso-k3s-token Secret. Add Node flow will fall back to the hostPath mount on the control-plane node only."
+  else
+    kubectl create secret generic kuso-k3s-token -n kuso --dry-run=client -o yaml \
+      --from-literal=KUSO_K3S_TOKEN="$K3S_NODE_TOKEN" \
+      | kubectl apply -f - >/dev/null
+  fi
+fi
+
 # -------- 9b. GitHub App --------
 # Three paths in priority order:
 #   1. KUSO_GITHUB_WIZARD=1: interactive prompts. The user runs
