@@ -310,17 +310,24 @@ func New(k *kube.Client, namespace string) *Service {
 // label app.kubernetes.io/component=kusobuild tags every kaniko Job
 // pod the chart renders; one apiserver list per Create is cheap
 // (~5ms on a small cluster) and is always correct.
-func (s *Service) admitBuild(ctx context.Context, project string) (release func(), err error) {
+// admitBuild reports whether the cluster is currently at its
+// build-concurrency ceiling. Returns capHit=true when full so the
+// caller can stamp the new CR as queued; the dispatcher promotes it
+// later. Pre-fix this returned ErrConflict on cap-hit, which made
+// Redeploy fail with 409 instead of queueing — the user saw "cluster
+// at build concurrency cap (1 active, cap 1)" toasts and had to wait
+// + retry manually. Now we always admit and let the queue absorb the
+// burst.
+func (s *Service) admitBuild(ctx context.Context, project string) (release func(), capHit bool, err error) {
 	cfg := s.loadSettings(ctx)
 	if cfg.MaxConcurrent <= 0 {
-		return func() {}, nil
+		return func() {}, false, nil
 	}
 	// Per-project lower bound. Cheap CR read; only matters when set.
 	projectCap := s.projectBuildCap(ctx, project)
 	if projectCap > 0 {
 		if active := s.countActiveBuildsForProject(ctx, project); active >= projectCap {
-			return nil, fmt.Errorf("%w: project %s at concurrency cap (%d active, cap %d)",
-				ErrConflict, project, active, projectCap)
+			return func() {}, true, nil
 		}
 	}
 	// Cluster-wide cap based on reality. Counts running build pods
@@ -328,10 +335,9 @@ func (s *Service) admitBuild(ctx context.Context, project string) (release func(
 	// operator from queued CRs, builds left over from a previous
 	// kuso-server replica, and builds re-spawned by a Job retry.
 	if active := s.countRunningBuildPodsCluster(ctx); active >= cfg.MaxConcurrent {
-		return nil, fmt.Errorf("%w: cluster at build concurrency cap (%d active, cap %d)",
-			ErrConflict, active, cfg.MaxConcurrent)
+		return func() {}, true, nil
 	}
-	return func() {}, nil
+	return func() {}, false, nil
 }
 
 // countRunningBuildPodsCluster lists pods labelled as kusobuild
@@ -945,7 +951,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// when the build CR is created (the kaniko Job pod is what
 	// actually consumes node resources, but we hold the slot until
 	// CR creation so the operator's helm render is bounded too).
-	release, err := s.admitBuild(ctx, project)
+	release, capHit, err := s.admitBuild(ctx, project)
 	if err != nil {
 		return nil, err
 	}
@@ -985,14 +991,17 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	}
 
 	// Coolify-aligned queueing: if another build is in flight for this
-	// service, mark the new CR as queued instead of refusing it. The
-	// build poller's dispatcher (see Poller.dispatchQueued) promotes
-	// the queued build once the active one terminates. The chart
-	// doesn't render a Job until the build-state=queued label is
-	// removed, so a queued CR consumes no node resources.
-	queued := false
-	if active, err := s.findActiveForService(ctx, ns, project, fqn); err == nil && active != "" && active != buildName {
-		queued = true
+	// service OR the cluster/project cap is full, mark the new CR as
+	// queued instead of refusing it. The build poller's dispatcher
+	// (see Poller.dispatchQueued) promotes the queued build once an
+	// active slot frees up. The chart doesn't render a Job until the
+	// build-state=queued label is removed, so a queued CR consumes
+	// no node resources.
+	queued := capHit
+	if !queued {
+		if active, err := s.findActiveForService(ctx, ns, project, fqn); err == nil && active != "" && active != buildName {
+			queued = true
+		}
 	}
 	imageRepo := fmt.Sprintf("%s/%s/%s", RegistryHost, project, service)
 

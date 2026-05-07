@@ -558,12 +558,13 @@ func TestCreate_DoesNotConflictAcrossServices(t *testing.T) {
 	}
 }
 
-// TestCreate_ConcurrencyCapClusterReality exercises the v0.8.10
-// admission gate: Create rejects with ErrConflict when the cluster
-// already has MaxConcurrentBuilds running build pods. The gate
-// counts pods (real cluster state) rather than an in-memory
-// semaphore — survives kuso-server restart, catches operator-
-// rendered Job pods, and reflects actual node load.
+// TestCreate_ConcurrencyCapClusterReality exercises the v0.9.28+
+// admission policy: Create stamps the new CR as queued (state=queued)
+// when the cluster is at MaxConcurrentBuilds, instead of returning
+// ErrConflict. The dispatcher promotes queued builds when an active
+// slot frees up. The gate counts pods (real cluster state) so it
+// survives kuso-server restart, catches operator-rendered Job pods,
+// and reflects actual node load.
 func TestCreate_ConcurrencyCapClusterReality(t *testing.T) {
 	t.Parallel()
 	const ref = "0011223344556677889900112233445566778899"
@@ -574,8 +575,8 @@ func TestCreate_ConcurrencyCapClusterReality(t *testing.T) {
 	)
 	s.MaxConcurrentBuilds = 1
 	// Seed an existing running build pod for some other service. The
-	// new admission gate sees this via pods.List(component=kusobuild)
-	// and refuses to admit a second build cluster-wide.
+	// admission gate sees this via pods.List(component=kusobuild)
+	// and queues the second build cluster-wide.
 	if _, err := s.Kube.Clientset.CoreV1().Pods("kuso").Create(context.Background(), &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "alpha-api-existing-buildpod",
@@ -591,9 +592,19 @@ func TestCreate_ConcurrencyCapClusterReality(t *testing.T) {
 		t.Fatalf("seed running pod: %v", err)
 	}
 
-	_, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: ref})
-	if !errors.Is(err, ErrConflict) {
-		t.Errorf("expected ErrConflict (cap held by existing pod), got %v", err)
+	got, err := s.Create(context.Background(), "alpha", "web", CreateBuildRequest{Ref: ref})
+	if err != nil {
+		t.Fatalf("Create at cap should queue, got error: %v", err)
+	}
+	if got == nil {
+		t.Fatalf("Create at cap returned nil build")
+	}
+	raw, gerr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").Get(context.Background(), got.Name, metav1.GetOptions{})
+	if gerr != nil {
+		t.Fatalf("get created build: %v", gerr)
+	}
+	if state := raw.GetLabels()["kuso.sislelabs.com/build-state"]; state != "queued" {
+		t.Errorf("expected build-state=queued (cap full), got %q", state)
 	}
 }
 
