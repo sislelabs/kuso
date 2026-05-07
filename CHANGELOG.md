@@ -5,6 +5,21 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.39] — 2026-05-07
+
+### ✨ Features
+- Feat(notifications): clear-all button in the bell dropdown ([8208913](https://github.com/sislelabs/kuso/commit/820891342fdc92b595f015f6c31b34cbc83a7532))
+
+### 🐛 Bug Fixes
+- Fix(metrics-scrape): rotate kuso-server too; clamp Prometheus secret mount ([762184d](https://github.com/sislelabs/kuso/commit/762184d9cfbc4d5595e2243f70122d706e1f6cd9))
+- Fix(deep-review-4): close trailing items from the deep-review batch ([28c1ea5](https://github.com/sislelabs/kuso/commit/28c1ea5d5d344a65fc92d02e7632c58172941ada))
+- Fix(deep-review-3): close audit findings from post-batch review ([ebb4b0d](https://github.com/sislelabs/kuso/commit/ebb4b0d920b79d21375e935357c84ed8878600fd))
+- Fix(deep-review-2): CNPG default, real backup/restore, token invalidation, settings UX ([4a6a5ef](https://github.com/sislelabs/kuso/commit/4a6a5efc2c97f785f0d0988a10c194bfeea6cf82))
+- Fix(deep-review): close ~30 audit findings across data, kube, security, UX ([b92cd20](https://github.com/sislelabs/kuso/commit/b92cd207fa81cd9402be554e50c3a16403b1df7f))
+
+### 🧪 Tests
+- Test(kube): refresh CRD golden snapshots for v0.9.39 ([7098b46](https://github.com/sislelabs/kuso/commit/7098b467639a2356091f2e92dcc2289817fdb244))
+
 ## [0.9.38] — 2026-05-07
 
 ### 🐛 Bug Fixes
