@@ -5,6 +5,8 @@
 package auth
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"time"
@@ -33,8 +35,9 @@ type Claims struct {
 // the TS server (process.env.JWT_SECRET) so tokens round-trip between
 // implementations during the staged cutover.
 type Issuer struct {
-	secret []byte
-	ttl    time.Duration
+	secret  []byte
+	ttl     time.Duration
+	revoked RevocationChecker // optional; set via SetRevocationChecker
 }
 
 // NewIssuer constructs an Issuer with the given HMAC secret and TTL.
@@ -79,6 +82,18 @@ func (i *Issuer) signWith(c Claims, expiresAt time.Time, omitExp bool) (string, 
 		c.ExpiresAt = jwt.NewNumericDate(expiresAt)
 	}
 	c.Subject = c.UserID
+	// Always emit a JTI (JWT ID). Revocation lives keyed on this in
+	// the RevokedToken table; without one, logout / role-demotion /
+	// leaked-CLI-token can't invalidate a specific bearer. 16 random
+	// bytes hex-encoded is plenty of entropy and stays small on the
+	// wire.
+	if c.ID == "" {
+		var buf [16]byte
+		if _, err := rand.Read(buf[:]); err != nil {
+			return "", fmt.Errorf("auth: jti rand: %w", err)
+		}
+		c.ID = hex.EncodeToString(buf[:])
+	}
 
 	tok := jwt.NewWithClaims(jwt.SigningMethodHS256, c)
 	signed, err := tok.SignedString(i.secret)

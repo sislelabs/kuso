@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -165,10 +166,25 @@ func (h *AddonsHandler) Add(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
 		return
 	}
-	out, err := h.Svc.Add(ctx, chi.URLParam(r, "project"), req)
+	project := chi.URLParam(r, "project")
+	out, err := h.Svc.Add(ctx, project, req)
 	if err != nil {
 		h.fail(w, "add addon", err)
 		return
+	}
+	if h.Audit != nil {
+		// Addon provisioning is privileged: it allocates persistent
+		// storage and (for Postgres/Redis/etc) generates credentials
+		// auto-injected into every service env in the project.
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "info",
+			Action:   "addon.create",
+			Pipeline: project,
+			App:      req.Name,
+			Resource: "kusoaddon",
+			Message:  fmt.Sprintf("created addon %q (%s) in project %q", req.Name, req.Kind, project),
+		})
 	}
 	writeJSON(w, http.StatusCreated, out)
 }

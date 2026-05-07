@@ -74,12 +74,20 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 		return fmt.Errorf("insert notification event: %w", err)
 	}
 	// Prune everything beyond the cap. The id is monotonically
-	// assigned by SQLite so the "newest 200" set is just the highest
-	// 200 ids; delete anything below.
+	// assigned so the "newest N" set is just the highest N ids; delete
+	// anything strictly below the cap-th id from the top.
+	//
+	// The earlier shape was `WHERE id NOT IN (SELECT ... LIMIT N)` —
+	// O(n log n), and Postgres can't push the LIMIT into the NOT IN
+	// (it has to materialise the inner set), so the table got locked
+	// during build storms. The OFFSET form lets the planner stop after
+	// scanning N rows of the descending PK b-tree.
 	if _, err := d.ExecContext(ctx, `
 		DELETE FROM "NotificationEvent"
-		WHERE "id" NOT IN (
-			SELECT "id" FROM "NotificationEvent" ORDER BY "id" DESC LIMIT ?
+		WHERE "id" < (
+			SELECT "id" FROM "NotificationEvent"
+			ORDER BY "id" DESC
+			LIMIT 1 OFFSET ?
 		)`, notificationEventCap); err != nil {
 		// Pruning failure is non-fatal — the row is in.
 		return nil

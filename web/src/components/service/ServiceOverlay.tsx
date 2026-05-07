@@ -173,6 +173,20 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                     const stale = d.podsStale && d.podsStale.length > 0;
                     const rolling = d.rolloutPending;
                     const specOff = d.specPending && d.specPending.length > 0;
+                    // Helm-operator failure chip wins over rolling/stale —
+                    // it's the actual root cause when the spec edit isn't
+                    // taking, and "rolling out" is misleading if the
+                    // chart never rendered.
+                    if (d.helmError && d.helmError.length > 0) {
+                      return (
+                        <span
+                          className="inline-flex max-w-[40ch] items-center gap-1 truncate rounded-md border border-red-500/40 bg-red-500/10 px-2 py-0.5 font-mono text-[10px] text-red-200"
+                          title={d.helmError}
+                        >
+                          helm: {d.helmError}
+                        </span>
+                      );
+                    }
                     if (!stale && !rolling && !specOff) return null;
                     let label: string;
                     let title: string;

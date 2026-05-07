@@ -57,6 +57,68 @@ type DriftReport struct {
 	LastRolloutAt string `json:"lastRolloutAt,omitempty"`
 	// EnvName is the production env CR name we compared against.
 	EnvName string `json:"envName,omitempty"`
+
+	// HelmError carries the helm-operator's last release error, if
+	// any. Helm-operator writes its release-status conditions onto
+	// the env CR's .status; we surface the failure reason verbatim
+	// so the user sees "Failed to render template: …" or "image
+	// pull error: …" in the UI instead of a silent
+	// RolloutPending=true with no explanation. Empty when the last
+	// reconcile succeeded.
+	HelmError string `json:"helmError,omitempty"`
+	// HelmReleasePhase is the helm-operator's view of the release
+	// (Deployed, Failed, Pending, Uninstalling). Mostly informational;
+	// the UI badges anything other than Deployed.
+	HelmReleasePhase string `json:"helmReleasePhase,omitempty"`
+}
+
+// extractHelmStatus walks the operator-sdk helm-operator status
+// shape and pulls out (phase, lastError). The shape is:
+//   status:
+//     conditions:
+//       - type: Initialized | Deployed | ReleaseFailed | Irreconcilable
+//         status: "True" | "False"
+//         reason: ...
+//         message: ...
+//     deployedRelease: { name, manifest }
+// We pick the most-recent Failed/Irreconcilable condition's message
+// for HelmError; phase derives from whichever Deployed/ReleaseFailed
+// is True.
+//
+// Defensive throughout — operator versions and chart shapes vary,
+// and a missing key just means "no data" rather than an error.
+func extractHelmStatus(status map[string]any) (phase, lastError string) {
+	if status == nil {
+		return "", ""
+	}
+	condsRaw, _ := status["conditions"].([]any)
+	for _, c := range condsRaw {
+		cm, _ := c.(map[string]any)
+		if cm == nil {
+			continue
+		}
+		ctype, _ := cm["type"].(string)
+		cstatus, _ := cm["status"].(string)
+		msg, _ := cm["message"].(string)
+		switch ctype {
+		case "Deployed":
+			if cstatus == "True" && phase == "" {
+				phase = "Deployed"
+			}
+		case "ReleaseFailed", "Irreconcilable":
+			if cstatus == "True" {
+				phase = "Failed"
+				if msg != "" {
+					lastError = msg
+				}
+			}
+		case "Initialized":
+			if cstatus == "True" && phase == "" {
+				phase = "Pending"
+			}
+		}
+	}
+	return phase, lastError
 }
 
 // GetDrift returns the drift summary for (project, service)'s
@@ -158,6 +220,14 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	// for the current generation, so the chip clears the moment kube
 	// finishes the rollout.
 	out.RolloutPending = deploymentRolling(ctx, s, ns, env)
+	// Surface helm-operator failures from the env CR's status. Pre-
+	// v0.9.38 a helm release stuck in pending-upgrade or a chart
+	// render error left the env CR with RolloutPending=true and no
+	// other signal — users had to `kubectl logs -n kuso-operator …`
+	// to find out why their service won't update. Now the failure
+	// reason rides back on the same drift response the UI already
+	// polls.
+	out.HelmReleasePhase, out.HelmError = extractHelmStatus(env.Status)
 	return out, nil
 }
 

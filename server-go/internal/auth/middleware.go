@@ -11,6 +11,19 @@ type ctxKey int
 
 const claimsCtxKey ctxKey = 0
 
+// RevocationChecker, when set on an Issuer, is consulted on every
+// successful Verify in the middleware. If it returns true the token is
+// rejected as if signature verification had failed. Used to wire the
+// RevokedToken DB lookup without making the auth package depend on db.
+type RevocationChecker func(ctx context.Context, jti string) bool
+
+// SetRevocationChecker installs the per-request revocation hook. Pass
+// nil to disable. Safe to call once at startup; not safe to mutate
+// concurrently with in-flight requests.
+func (i *Issuer) SetRevocationChecker(fn RevocationChecker) {
+	i.revoked = fn
+}
+
 // Middleware returns an http.Handler middleware that pulls the bearer
 // token from Authorization, verifies it, and stuffs the *Claims into the
 // request context. Requests without a token, or with an invalid token,
@@ -39,6 +52,17 @@ func (i *Issuer) Middleware(skip ...string) func(http.Handler) http.Handler {
 			if err != nil {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
+			}
+			// Revocation check after signature/expiry. Cheap PK probe
+			// against the RevokedToken table — sub-millisecond hot
+			// path with a hot pgx pool. Fail-open on checker error
+			// (treat as not-revoked) so a transient DB outage doesn't
+			// log every user out.
+			if i.revoked != nil && claims.ID != "" {
+				if i.revoked(r.Context(), claims.ID) {
+					http.Error(w, "unauthorized", http.StatusUnauthorized)
+					return
+				}
 			}
 			ctx := context.WithValue(r.Context(), claimsCtxKey, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))

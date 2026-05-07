@@ -85,3 +85,97 @@ spec:
     - name: registry
       port: 5000
       targetPort: registry
+---
+# v0.9.38: weekly registry GC. The registry binary supports DELETE
+# (REGISTRY_STORAGE_DELETE_ENABLED=true above), but every push leaves
+# orphan blobs that the registry's own `garbage-collect` subcommand
+# has to compact. Without this CronJob, a busy build cluster fills the
+# 20Gi PVC silently and kaniko push starts failing with opaque "no
+# space left on device" errors that point nowhere obvious.
+#
+# `--delete-untagged=true` removes blobs no tag references — needed
+# because deleting a manifest without this flag leaves the layer
+# blobs orphaned forever. We pause the registry first because GC
+# isn't safe under concurrent writes (the registry README is explicit
+# about this); the build admission cap means a few-minute downtime
+# at midnight is harmless.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kuso-registry-gc
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-registry-gc
+spec:
+  schedule: "17 3 * * 0"  # 03:17 every Sunday
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        spec:
+          restartPolicy: OnFailure
+          serviceAccountName: kuso-registry-gc
+          containers:
+            - name: gc
+              image: bitnami/kubectl:1.30
+              command: [/bin/sh, -ec]
+              args:
+                - |
+                  set -e
+                  echo "[gc] scaling registry down (GC is not safe under concurrent writes)"
+                  kubectl -n kuso scale deployment kuso-registry --replicas=0
+                  kubectl -n kuso wait --for=delete pod -l app.kubernetes.io/name=kuso-registry --timeout=120s || true
+                  echo "[gc] running garbage-collect"
+                  kubectl -n kuso run kuso-registry-gc-runner --rm -i --restart=Never \
+                    --image=registry:2 --overrides='{"spec":{"containers":[{"name":"gc","image":"registry:2","command":["/bin/sh","-ec"],"args":["registry garbage-collect /etc/docker/registry/config.yml --delete-untagged=true"],"volumeMounts":[{"name":"data","mountPath":"/var/lib/registry"}]}],"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"kuso-registry-data"}}]}}' \
+                    --command -- /bin/sh -ec 'registry garbage-collect /etc/docker/registry/config.yml --delete-untagged=true'
+                  echo "[gc] scaling registry back up"
+                  kubectl -n kuso scale deployment kuso-registry --replicas=1
+                  kubectl -n kuso rollout status deployment kuso-registry --timeout=120s
+                  echo "[gc] done"
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuso-registry-gc
+  namespace: kuso
+---
+# Tightly-scoped — only what the GC job needs to scale the registry
+# Deployment and run an ephemeral pod against the data PVC.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kuso-registry-gc
+  namespace: kuso
+rules:
+  - apiGroups: [apps]
+    resources: [deployments, deployments/scale]
+    resourceNames: [kuso-registry]
+    verbs: [get, patch, update]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [list, watch]
+  - apiGroups: [""]
+    resources: [pods, pods/log]
+    verbs: [get, list, watch, create, delete]
+  - apiGroups: [""]
+    resources: [persistentvolumeclaims]
+    resourceNames: [kuso-registry-data]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kuso-registry-gc
+  namespace: kuso
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kuso-registry-gc
+subjects:
+  - kind: ServiceAccount
+    name: kuso-registry-gc
+    namespace: kuso

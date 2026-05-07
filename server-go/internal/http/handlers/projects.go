@@ -197,12 +197,27 @@ func (h *ProjectsHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
 		return
 	}
-	if err := h.Svc.Delete(ctx, chi.URLParam(r, "project")); err != nil {
+	if err := h.Svc.Delete(ctx, project); err != nil {
 		h.fail(w, "delete project", err)
 		return
+	}
+	if h.Audit != nil {
+		// Project delete is the most destructive single op — it
+		// fans out to every service, env, addon, build, and secret.
+		// Critical-severity so an alert wired to high-severity audit
+		// pages someone immediately.
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "critical",
+			Action:   "project.delete",
+			Pipeline: project,
+			Resource: "kusoproject",
+			Message:  fmt.Sprintf("deleted project %q", project),
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -425,12 +440,25 @@ func (h *ProjectsHandler) UnsetEnvVar(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) DeleteService(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	project := chi.URLParam(r, "project")
+	service := chi.URLParam(r, "service")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
 		return
 	}
-	if err := h.Svc.DeleteService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service")); err != nil {
+	if err := h.Svc.DeleteService(ctx, project, service); err != nil {
 		h.fail(w, "delete service", err)
 		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "service.delete",
+			Pipeline: project,
+			App:      service,
+			Resource: "kusoservice",
+			Message:  fmt.Sprintf("deleted service %q in project %q", service, project),
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

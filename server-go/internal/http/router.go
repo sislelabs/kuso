@@ -143,20 +143,27 @@ func NewRouter(d Deps) http.Handler {
 	// pod offline (if /healthz checked DB) or silently 5xxs every
 	// request (if it didn't).
 	r.Get("/readyz", readyz(d))
-	// Prometheus scrape endpoint. The kuso ingress doesn't route
-	// /metrics publicly (only /api/* + the SPA), and the in-cluster
-	// prometheus-server scrapes via Service, so cluster-internal is
-	// the safe default. Operators exposing kuso behind a non-kuso
-	// ingress controller MUST keep /metrics off the public surface
-	// or set KUSO_METRICS_REQUIRE_AUTH=true to force admin-only.
-	if os.Getenv("KUSO_METRICS_REQUIRE_AUTH") == "true" {
+	// Prometheus scrape endpoint. Default-gated to admin-only since
+	// v0.9.38 — service names, request rates, build counts, leader-
+	// election state are all reconnaissance signal for an attacker.
+	// The in-cluster prometheus-server's scrape config has the admin
+	// bearer wired in; operators running an external Prometheus must
+	// either inject the bearer or set KUSO_METRICS_PUBLIC=true to
+	// restore the old open behaviour.
+	//
+	// Pre-v0.9.38 the flag was KUSO_METRICS_REQUIRE_AUTH=true (opt-in
+	// gating); we honour both shapes for one release so config baked
+	// into operator scripts doesn't break on upgrade.
+	metricsPublic := os.Getenv("KUSO_METRICS_PUBLIC") == "true" ||
+		os.Getenv("KUSO_METRICS_REQUIRE_AUTH") == "false"
+	if metricsPublic {
+		r.Get("/metrics", promhttp.Handler().ServeHTTP)
+	} else {
 		r.Group(func(r chi.Router) {
 			r.Use(d.Issuer.Middleware())
 			r.Use(httphandlers.AdminOnly)
 			r.Get("/metrics", promhttp.Handler().ServeHTTP)
 		})
-	} else {
-		r.Get("/metrics", promhttp.Handler().ServeHTTP)
 	}
 	if d.Status != nil {
 		statusH := &httphandlers.StatusHandler{Status: d.Status, Logger: d.Logger}
@@ -200,6 +207,7 @@ func NewRouter(d Deps) http.Handler {
 			Cache:      d.Github.Cache,
 			Dispatcher: d.Github.Dispatcher,
 			Logger:     d.Logger,
+			DB:         d.DB,
 			BaseCtx:    d.BaseCtx,
 		}
 		ghHandler.MountPublic(r)
@@ -271,6 +279,12 @@ func NewRouter(d Deps) http.Handler {
 			// Admin-tunable platform settings (build resources +
 			// concurrency cap today; future toggles join here).
 			settingsH := &httphandlers.SettingsHandler{DB: d.DB, Logger: d.Logger}
+			if d.Builds != nil {
+				// Drop the in-memory build-settings cache on every
+				// admin write so the next Create picks up the new
+				// limits immediately.
+				settingsH.OnBuildSettingsChange = d.Builds.InvalidateSettingsCache
+			}
 			settingsH.Mount(r)
 			// Optional: backup/restore endpoints (gated on KUSO_BACKUP_ENABLED=1).
 			// Returns nil + Mount no-ops when disabled.

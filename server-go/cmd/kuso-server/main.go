@@ -89,6 +89,14 @@ func main() {
 	// to compile; it's a thin alias around *db.DB.
 	logDB := database.AsLogDB()
 
+	// Wire token-revocation lookups into the auth middleware. Every
+	// authenticated request fires IsTokenRevoked (PK probe, sub-ms);
+	// the middleware fails open on DB error so a transient outage
+	// doesn't 401 every user.
+	issuer.SetRevocationChecker(func(ctx context.Context, jti string) bool {
+		return database.IsTokenRevoked(ctx, jti)
+	})
+
 	// Two-tier shutdown contexts (R4 audit fix):
 	//
 	//   sigCtx     — signal-driven; cancels on SIGTERM / SIGINT
@@ -222,6 +230,17 @@ func main() {
 		if missing := preflightCRDs(ctx, kc); len(missing) > 0 {
 			logger.Warn("CRDs missing from cluster — operator will silently no-op", "missing", missing,
 				"hint", "kubectl apply -f https://github.com/sislelabs/kuso/releases/download/<version>/crds.yaml")
+			// Fail-closed mode for production / strict installs:
+			// KUSO_REQUIRE_CRDS=true makes the server refuse to
+			// start when any CRD is missing. Off by default so
+			// the auto-updater's CRD apply (which lags the image
+			// flip by seconds) doesn't crash-loop the pod through
+			// a perfectly recoverable transient.
+			if os.Getenv("KUSO_REQUIRE_CRDS") == "true" {
+				logger.Error("KUSO_REQUIRE_CRDS=true and CRDs are missing — refusing to start",
+					"missing", missing)
+				os.Exit(2)
+			}
 		}
 		// Shared informer cache over the six kuso CRDs. Keeps the
 		// dashboard's read paths off the API server — one WATCH per
@@ -269,6 +288,11 @@ func main() {
 		// The Poller has its own Notifier slot for build.{succeeded,
 		// failed} events.
 		buildSvc.Notifier = notifyAdapter{notifyDisp}
+		// GC the per-(project,service) lock map every 15min. Without
+		// this, ephemeral preview-env services (created/torn down on
+		// every PR) leave one mutex pointer behind forever — slow
+		// memory growth on churn-heavy clusters.
+		buildSvc.RunServiceLockGC(ctx)
 		logsSvc = logs.New(kc, *namespace)
 		// BuildLogs fallback: when a build:<id> stream lands but the
 		// kaniko pod has been GC'd, the stream serves the archived

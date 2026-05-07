@@ -20,6 +20,15 @@ import (
 type SettingsHandler struct {
 	DB     *db.DB
 	Logger *slog.Logger
+
+	// OnBuildSettingsChange, when non-nil, is invoked after a
+	// successful PutBuild. main.go wires it to
+	// builds.Service.InvalidateSettingsCache so the next build picks
+	// up the new memory/concurrency knobs immediately instead of
+	// waiting for the 30s in-process cache to expire. Without this,
+	// an admin who raises a too-low memory limit watches the next
+	// 10 builds OOM with the old value.
+	OnBuildSettingsChange func()
 }
 
 // Mount wires the routes. Read is gated on settings-read perms,
@@ -92,6 +101,9 @@ func (h *SettingsHandler) PutBuild(w http.ResponseWriter, r *http.Request) {
 		h.Logger.Error("settings: put build", "err", err)
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
+	}
+	if h.OnBuildSettingsChange != nil {
+		h.OnBuildSettingsChange()
 	}
 	writeJSON(w, http.StatusOK, in)
 }

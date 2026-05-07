@@ -65,7 +65,13 @@ func Open(dsn string) (*DB, error) {
 	sqldb.SetMaxOpenConns(25)
 	sqldb.SetMaxIdleConns(5)
 	sqldb.SetConnMaxIdleTime(5 * time.Minute)
-	sqldb.SetConnMaxLifetime(30 * time.Minute)
+	// 5min lifetime cycles connections aggressively enough that a
+	// Postgres rollout's stale connections get reaped in tens of
+	// seconds rather than tens of minutes — old "30m" meant the
+	// post-rollout error wave (driver retries handle most of it but
+	// some surface as 5xx) lasted for a long tail. Trade-off: more
+	// reconnect handshakes; negligible at our request rate.
+	sqldb.SetConnMaxLifetime(5 * time.Minute)
 
 	// Boot ping with retry — Postgres pod might still be starting on
 	// a fresh install. 10 second total budget; readiness probe wins

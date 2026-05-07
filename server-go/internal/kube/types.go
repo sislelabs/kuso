@@ -106,6 +106,37 @@ func PlacementMatchesNode(p *KusoPlacement, nodeName string, nodeLabels map[stri
 	return true
 }
 
+// CountPlacementMatches returns how many of the supplied (name,
+// labels) pairs satisfy `p`. 0 means the placement is unsatisfiable
+// against the cluster snapshot — every workload pod created with it
+// will sit Pending. Callers should fail validation in that case so
+// users see "no node matches" at save time rather than discovering
+// an indefinitely-pending pod the next day.
+//
+// Pass a node snapshot from the kube informer cache (cheap; already
+// kept warm). Empty / nil placement matches every node by definition.
+func CountPlacementMatches(p *KusoPlacement, nodes []NodeIdentity) int {
+	if p == nil {
+		return len(nodes)
+	}
+	n := 0
+	for _, nd := range nodes {
+		if PlacementMatchesNode(p, nd.Name, nd.Labels) {
+			n++
+		}
+	}
+	return n
+}
+
+// NodeIdentity is the minimum projection of a Node we need for
+// placement matching — name + the kuso label subset already filtered
+// at the source. Defined here (rather than inside placement validators)
+// so multiple callers can share the snapshot shape.
+type NodeIdentity struct {
+	Name   string
+	Labels map[string]string
+}
+
 type KusoRepoRef struct {
 	URL           string `json:"url,omitempty"`
 	DefaultBranch string `json:"defaultBranch,omitempty"`

@@ -67,6 +67,16 @@ export interface DriftReport {
   // purely client-side state that was wiped on refresh.
   lastRolloutAt?: string;
   envName?: string;
+  // helm-operator's last release error (chart render failure, image
+  // pull failure, helm release stuck in pending-upgrade, etc).
+  // Empty when the last reconcile succeeded. Surface this in the
+  // service overlay near the rolloutPending chip so users don't have
+  // to kubectl-spelunk the operator pod logs to find out why their
+  // edit didn't take.
+  helmError?: string;
+  // helm-operator phase: Deployed | Failed | Pending. The UI badges
+  // anything other than Deployed.
+  helmReleasePhase?: string;
 }
 
 export async function getDrift(project: string, service: string): Promise<DriftReport> {

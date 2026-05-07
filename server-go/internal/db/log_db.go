@@ -163,15 +163,47 @@ func (d *LogDB) CountLogMatches(ctx context.Context, project, service, query str
 	return n, nil
 }
 
-// PruneLogsOlderThan deletes rows older than `before`. Returns the
-// number of rows removed.
+// PruneLogsOlderThan deletes rows older than `before` in chunks of
+// at most 50k per statement. Returns the total rows removed.
+//
+// One unbounded `DELETE ... WHERE ts < ?` on a 200GB LogLine takes a
+// table-locking write that blocks the logship inserter for seconds —
+// at 50 lines/pod/min × hundreds of pods, the buffer fills, the
+// flusher starts dropping, and ingest gaps appear in the UI right
+// when an operator is most likely to be looking. Bounded chunks keep
+// each transaction short so the LogLine_project_service_ts_idx
+// b-tree stays available to concurrent readers.
+//
+// Iterates until a chunk deletes fewer than the chunk size, signal-
+// ling we've drained everything older than `before`. Caller can call
+// us with a context deadline to bound total work; we honour
+// ctx.Done() between chunks.
 func (d *LogDB) PruneLogsOlderThan(ctx context.Context, before time.Time) (int64, error) {
-	res, err := d.ExecContext(ctx, `DELETE FROM "LogLine" WHERE ts < ?`, before.UTC())
-	if err != nil {
-		return 0, fmt.Errorf("prune logs: %w", err)
+	const chunk = 50000
+	var total int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return total, err
+		}
+		// Postgres lacks DELETE ... LIMIT, so we use the
+		// `WHERE ctid IN (SELECT ctid ... LIMIT N)` keyset trick.
+		// ctid is the physical row pointer — fastest possible probe.
+		res, err := d.ExecContext(ctx, `
+DELETE FROM "LogLine"
+WHERE ctid IN (
+  SELECT ctid FROM "LogLine"
+  WHERE ts < ?
+  LIMIT ?
+)`, before.UTC(), chunk)
+		if err != nil {
+			return total, fmt.Errorf("prune logs: %w", err)
+		}
+		n, _ := res.RowsAffected()
+		total += n
+		if n < chunk {
+			return total, nil
+		}
 	}
-	n, _ := res.RowsAffected()
-	return n, nil
 }
 
 // escapeLike escapes the SQL LIKE / ILIKE wildcards `%`, `_`, and the

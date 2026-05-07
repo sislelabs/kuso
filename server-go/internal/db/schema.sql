@@ -458,3 +458,56 @@ CREATE TABLE IF NOT EXISTS "Setting" (
     "updatedBy" TEXT
 );
 
+-- v0.9.38: deep-review batch — close the cheapest, highest-leverage gaps
+-- found in the architectural audit. Index the left-hand side of the m:n
+-- join tables (right-hand was already indexed pre-Postgres). "what
+-- groups is this user in?" hits this on every authz check.
+CREATE INDEX IF NOT EXISTS "_UserToUserGroup_A_index" ON "_UserToUserGroup"("A");
+CREATE INDEX IF NOT EXISTS "_PermissionToRole_A_index" ON "_PermissionToRole"("A");
+CREATE INDEX IF NOT EXISTS "_PermissionToToken_A_index" ON "_PermissionToToken"("A");
+
+-- Audit trim runs DELETE WHERE id < (SELECT id ... ORDER BY id DESC
+-- LIMIT 1 OFFSET N). With BIGSERIAL id (already PK so b-tree backed)
+-- the subquery is fast; the bounded-window scan around the delete
+-- target is what we want to keep tight.
+CREATE INDEX IF NOT EXISTS "Audit_timestamp_idx" ON "Audit"("timestamp" DESC);
+
+-- Length CHECKs on user-controlled TEXT columns. Disk-fill footgun:
+-- a misconfigured webhook with a 100MB secret, a crashlooping pod
+-- emitting 10MB stack traces, etc. Conservative caps; can be relaxed
+-- if a real workload bumps into them. applySchema() in db.go swallows
+-- "already exists" / "duplicate" errors from the per-statement Exec,
+-- so a re-run of these ALTERs on a cluster that already has the
+-- constraints is a no-op rather than a failure.
+ALTER TABLE "LogLine" ADD CONSTRAINT "LogLine_line_len_chk" CHECK (length("line") <= 16384);
+ALTER TABLE "ErrorEvent" ADD CONSTRAINT "ErrorEvent_rawLine_len_chk" CHECK (length("rawLine") <= 65536);
+ALTER TABLE "ErrorEvent" ADD CONSTRAINT "ErrorEvent_message_len_chk" CHECK (length("message") <= 8192);
+ALTER TABLE "User" ADD CONSTRAINT "User_providerData_len_chk" CHECK (length(coalesce("providerData", '')) <= 16384);
+
+-- v0.9.38: revoked-token blacklist. JWT auth is otherwise unrevocable
+-- until the 10h TTL expires; logout / role demotion / leaked CLI token
+-- all need a way to invalidate a specific token immediately. Lookup is
+-- on every authenticated request, so the PK gives us O(1) probe; the
+-- expiresAt index supports the periodic prune loop.
+CREATE TABLE IF NOT EXISTS "RevokedToken" (
+    "jti" TEXT PRIMARY KEY,
+    "userId" TEXT,
+    "revokedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "expiresAt" TIMESTAMPTZ NOT NULL,
+    "reason" TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS "RevokedToken_expiresAt_idx" ON "RevokedToken"("expiresAt");
+
+-- v0.9.38: GitHub webhook delivery seen-set. X-GitHub-Delivery is a
+-- UUID per dispatch; GitHub retries (15min, 1h, 6h, 24h) reuse the
+-- same id. Storing it for ~24h gives us replay protection without
+-- unbounded growth.
+CREATE TABLE IF NOT EXISTS "GithubWebhookDelivery" (
+    "deliveryId" TEXT PRIMARY KEY,
+    "installationId" BIGINT,
+    "event" TEXT NOT NULL DEFAULT '',
+    "receivedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS "GithubWebhookDelivery_receivedAt_idx"
+    ON "GithubWebhookDelivery"("receivedAt");
+

@@ -193,11 +193,42 @@ func (h *AuthHandler) Session(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(resp)
 }
 
-// Logout clears the kuso.JWT_TOKEN cookie. Bearer tokens used by
-// the CLI/API are still valid until expiry — kuso doesn't keep a
-// revocation list (see the long-token todo); UI Logout is purely
-// "drop the browser's session cookie".
+// Logout clears the kuso.JWT_TOKEN cookie AND, if the request carries
+// a verified bearer, persists a RevokedToken row keyed on the JWT's
+// jti. The auth middleware's per-request check rejects revoked tokens
+// on the next call. Pre-v0.9.38 logout was a UI gesture only — bearer
+// tokens stayed valid until natural expiry, leaked CLI tokens were
+// uncontainable.
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
+	// Logout is mounted public (no middleware) so users with an
+	// already-expired token can still clear their cookie. We do a
+	// best-effort Verify here ourselves to extract the jti for
+	// revocation; verification failure just means we skip the
+	// revocation row — the cookie clear below still happens.
+	if h.DB != nil && h.Issuer != nil {
+		var bearer string
+		if hdr := r.Header.Get("Authorization"); strings.HasPrefix(hdr, "Bearer ") {
+			bearer = strings.TrimSpace(hdr[len("Bearer "):])
+		}
+		if bearer == "" {
+			if c, err := r.Cookie("kuso.JWT_TOKEN"); err == nil {
+				bearer = c.Value
+			}
+		}
+		if bearer != "" {
+			if claims, err := h.Issuer.Verify(bearer); err == nil && claims != nil && claims.ID != "" {
+				exp := time.Now().Add(24 * time.Hour) // fallback if no exp claim
+				if claims.ExpiresAt != nil {
+					exp = claims.ExpiresAt.Time
+				}
+				revokeCtx, revokeCancel := context.WithTimeout(r.Context(), 2*time.Second)
+				if err := h.DB.RevokeToken(revokeCtx, claims.ID, claims.UserID, "logout", exp); err != nil && h.Logger != nil {
+					h.Logger.Warn("auth: revoke on logout", "err", err, "jti", claims.ID)
+				}
+				revokeCancel()
+			}
+		}
+	}
 	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 	http.SetCookie(w, &http.Cookie{
 		Name:     "kuso.JWT_TOKEN",

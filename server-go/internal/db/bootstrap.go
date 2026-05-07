@@ -172,6 +172,16 @@ func (d *DB) PromoteUserToAdminIfNoAdmin(ctx context.Context, userID string) (bo
 	}
 	defer tx.Rollback()
 
+	// Serialise concurrent first-boot logins on a transaction-scoped
+	// advisory lock. Without it, two parallel OAuth callbacks could
+	// both pass the COUNT(*)=0 check and both think they got
+	// promoted, leaving an inconsistent membership snapshot. The
+	// lock is auto-released on commit/rollback. Key (0xKUS0,0xADM1N)
+	// is arbitrary — just needs to be unique to this code path.
+	if _, err := tx.ExecContext(ctx, `SELECT pg_advisory_xact_lock($1, $2)`, 0x4B55_5330, 0x41444D31); err != nil {
+		return false, fmt.Errorf("db: promote: advisory lock: %w", err)
+	}
+
 	// Count admins that look like real humans. A seed local admin
 	// (provider='local' AND username='admin') is excluded so the
 	// first OAuth login still triggers promotion. Once any non-seed

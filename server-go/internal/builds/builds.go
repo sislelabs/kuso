@@ -154,7 +154,7 @@ type Service struct {
 	// critical section. Hot-path cost: one map lookup + one Lock()
 	// per Create, which is microseconds.
 	serviceLocksMu sync.Mutex
-	serviceLocks   map[string]*sync.Mutex
+	serviceLocks   map[string]*serviceLockEntry
 
 	// (Removed in v0.8.10) admitOnce + admitSem — the in-memory
 	// semaphore was replaced with a kube-list-based admission gate
@@ -243,6 +243,21 @@ func (s *Service) loadSettings(ctx context.Context) BuildSettingsView {
 	return v
 }
 
+// InvalidateSettingsCache drops the in-memory build-settings cache.
+// Call from the settings handler after a successful write so the next
+// build picks up the new memory limit / concurrency cap on the next
+// Create instead of waiting up to 30s for the TTL. The settings
+// admin who just bumped the limit shouldn't watch the next 10 builds
+// OOM with the old value.
+func (s *Service) InvalidateSettingsCache() {
+	if s == nil {
+		return
+	}
+	s.settingsMu.Lock()
+	s.settingsCache = nil
+	s.settingsMu.Unlock()
+}
+
 // inFlightKey produces the dedup key. SHA is the natural primary key
 // for a build (image tag derives from it); project + service prevent
 // false-positive collisions when two services in different projects
@@ -251,23 +266,79 @@ func inFlightKey(project, service, sha string) string {
 	return project + "/" + service + "/" + sha
 }
 
+// serviceLockEntry pairs the per-service mutex with a last-access
+// timestamp so the periodic GC can drop entries for services that
+// haven't built in a long time. Without GC, the map grows by one
+// entry per (project, service) ever seen — including ephemeral
+// preview envs — and becomes a slow memory leak on churn-heavy
+// clusters.
+type serviceLockEntry struct {
+	mu         *sync.Mutex
+	lastAccess time.Time
+}
+
 // serviceLockFor returns the per-service mutex, creating it on first
-// access. Locks are never freed once created — the entry count is
-// bounded by the number of distinct services in the cluster, which
-// is the same set we'd already keep in memory for service CRs.
+// access. Stamps lastAccess so the GC can find idle entries. The
+// returned mutex is safe to lock outside the map mutex; we only
+// guard the map shape here.
 func (s *Service) serviceLockFor(project, service string) *sync.Mutex {
 	key := project + "/" + service
 	s.serviceLocksMu.Lock()
 	defer s.serviceLocksMu.Unlock()
 	if s.serviceLocks == nil {
-		s.serviceLocks = map[string]*sync.Mutex{}
+		s.serviceLocks = map[string]*serviceLockEntry{}
 	}
-	mu, ok := s.serviceLocks[key]
+	e, ok := s.serviceLocks[key]
 	if !ok {
-		mu = &sync.Mutex{}
-		s.serviceLocks[key] = mu
+		e = &serviceLockEntry{mu: &sync.Mutex{}}
+		s.serviceLocks[key] = e
 	}
-	return mu
+	e.lastAccess = time.Now()
+	return e.mu
+}
+
+// gcServiceLocks drops lock entries older than `maxAge` whose mutex
+// can be acquired in non-blocking mode (i.e. nobody is currently
+// using it). Safe to call on a timer; cheap (one TryLock per entry).
+func (s *Service) gcServiceLocks(maxAge time.Duration) int {
+	now := time.Now()
+	s.serviceLocksMu.Lock()
+	defer s.serviceLocksMu.Unlock()
+	var dropped int
+	for key, e := range s.serviceLocks {
+		if now.Sub(e.lastAccess) < maxAge {
+			continue
+		}
+		// Only drop if currently unlocked — TryLock returns true
+		// when it acquires; we drop the entry while holding it,
+		// which is fine because no other path can grab the same
+		// pointer (the map mutex is held).
+		if !e.mu.TryLock() {
+			continue
+		}
+		e.mu.Unlock()
+		delete(s.serviceLocks, key)
+		dropped++
+	}
+	return dropped
+}
+
+// RunServiceLockGC starts a goroutine that periodically GCs idle
+// service-lock entries. Call once in main.go after constructing the
+// builds.Service. Exits cleanly when ctx is canceled.
+func (s *Service) RunServiceLockGC(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(15 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				s.gcServiceLocks(2 * time.Hour)
+			}
+		}
+	}()
 }
 
 // New constructs a builds.Service with a default namespace fallback.

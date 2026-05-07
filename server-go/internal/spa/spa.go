@@ -172,9 +172,49 @@ func dynamicFallback(dist fs.FS, urlPath string) string {
 	return ""
 }
 
+// htmlSecurityHeaders are applied to every HTML response served by
+// the SPA handler. Static assets (JS/CSS/fonts/images) inherit the
+// caller's defaults — they don't need framing/clickjack guards
+// because they're not the entry point for a user session.
+//
+// CSP is intentionally permissive on script-src ('self' + 'unsafe-inline'
+// + 'unsafe-eval') because Next's static export inlines a runtime
+// hydration shim and uses eval-like patterns in dev. The realistic
+// threat we close is "XSS in a third-party script-injection point" —
+// frame-ancestors + X-Frame-Options + nosniff are the load-bearing
+// pieces. HSTS lets browsers keep the connection HTTPS even if the
+// user types `http://`. base-uri 'self' blocks <base> rewrites.
+//
+// connect-src is open ('self' + websocket schemes for log streaming);
+// img-src + style-src 'unsafe-inline' covers the design system.
+var htmlSecurityHeaders = map[string]string{
+	"Content-Security-Policy": "default-src 'self'; " +
+		"script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+		"style-src 'self' 'unsafe-inline'; " +
+		"img-src 'self' data: blob: https:; " +
+		"font-src 'self' data:; " +
+		"connect-src 'self' ws: wss:; " +
+		"frame-ancestors 'none'; " +
+		"base-uri 'self'; " +
+		"form-action 'self'",
+	"X-Frame-Options":           "DENY",
+	"X-Content-Type-Options":    "nosniff",
+	"Referrer-Policy":           "strict-origin-when-cross-origin",
+	"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+	"Permissions-Policy":        "geolocation=(), microphone=(), camera=()",
+}
+
+func applyHTMLSecurityHeaders(w http.ResponseWriter) {
+	h := w.Header()
+	for k, v := range htmlSecurityHeaders {
+		h.Set(k, v)
+	}
+}
+
 func serveIndex(w http.ResponseWriter, b []byte) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache")
+	applyHTMLSecurityHeaders(w)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(b)
 }
@@ -188,6 +228,7 @@ func serveStaticFile(w http.ResponseWriter, dist fs.FS, name string) {
 	if strings.HasSuffix(name, ".html") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-cache")
+		applyHTMLSecurityHeaders(w)
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(b)

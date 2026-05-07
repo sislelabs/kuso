@@ -23,10 +23,89 @@ metadata:
   name: kuso-operator
   namespace: kuso-operator-system
 ---
-# v0.2 simplification: grant cluster-admin to the operator. The operator
-# reconciles helm charts that emit Deployments, Services, Ingresses,
-# StatefulSets, PVCs, Secrets, ConfigMaps, HPAs across multiple namespaces.
-# Tighten in v0.3 with explicit Roles per namespace.
+# v0.9.38: explicit operator ClusterRole replaces the old
+# cluster-admin grant. Audited from operator/helm-charts/* — these
+# are the verbs/resources the rendered helm releases actually emit
+# across the kuso-app-* namespaces. Tighter than cluster-admin (no
+# cluster-scoped writes other than the few CRDs we own + the
+# CertManager glue + the leader Lease + helm-release Secrets), so a
+# compromised operator pod can't pivot to ClusterRoles, RBAC,
+# kube-system, or arbitrary CRDs it doesn't manage.
+#
+# If a chart needs a verb missing here, the helm release fails with
+# a clear "forbidden" message — far better than silently allowing it
+# to do anything. Add the new verb here and re-apply.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kuso-operator
+rules:
+  # CRDs we own — read+write for both the resource and its status.
+  - apiGroups: [application.kuso.sislelabs.com]
+    resources:
+      [kusoprojects, kusoservices, kusoenvironments, kusoaddons,
+       kusobuilds, kusocrons]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [application.kuso.sislelabs.com]
+    resources:
+      [kusoprojects/status, kusoservices/status, kusoenvironments/status,
+       kusoaddons/status, kusobuilds/status, kusocrons/status,
+       kusoprojects/finalizers, kusoservices/finalizers,
+       kusoenvironments/finalizers, kusoaddons/finalizers,
+       kusobuilds/finalizers, kusocrons/finalizers]
+    verbs: [get, update, patch]
+  # Core kube objects helm charts emit per env namespace.
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, list, watch, create, update, patch]
+  - apiGroups: [""]
+    resources:
+      [services, endpoints, configmaps, secrets, serviceaccounts,
+       persistentvolumeclaims, pods, events]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments, statefulsets, replicasets, daemonsets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses, networkpolicies]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [autoscaling]
+    resources: [horizontalpodautoscalers]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, rolebindings]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Cert-manager glue (per-service custom-domain Certificates).
+  - apiGroups: [cert-manager.io]
+    resources: [certificates, certificaterequests, issuers, clusterissuers]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # CloudNativePG glue for HA Postgres addons (kept here so a fresh
+  # install isn't surprised when ha:true fails). If CNPG isn't
+  # installed, these resources don't exist; the verb is harmless.
+  - apiGroups: [postgresql.cnpg.io]
+    resources: [clusters, scheduledbackups, backups, poolers]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Leader election (helm-operator's manager.go uses a Lease).
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # k3s native helm shim — used by some bundled addon charts.
+  - apiGroups: [helm.cattle.io]
+    resources: [helmcharts, helmchartconfigs]
+    verbs: [get, list, watch, create, update, patch, delete]
+  # Read-only on Nodes so the placement matcher in helm templates
+  # can render nodeSelector blocks. No write — placement is decided
+  # at the kuso-server side.
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, list, watch]
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
@@ -34,7 +113,7 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: cluster-admin
+  name: kuso-operator
 subjects:
   - kind: ServiceAccount
     name: kuso-operator

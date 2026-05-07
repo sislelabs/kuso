@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -26,11 +27,75 @@ type GithubHandler struct {
 	Cache      github.CacheStore
 	Dispatcher *github.Dispatcher
 	Logger     *slog.Logger
+	// DB is used for X-GitHub-Delivery replay protection — records
+	// the delivery id on first sight; subsequent receipts of the
+	// same id 200-no-op. Optional; when nil the dedup is skipped
+	// (signature verification still applies).
+	DB *db.DB
 	// BaseCtx is the server's lifecycle context. Webhook dispatches
 	// derive from this so a graceful shutdown cancels in-flight
 	// preview-env creates / build triggers instead of leaving them
 	// running against a closing kube client.
 	BaseCtx context.Context
+
+	// installationLimiter token-buckets webhook accepts per
+	// installation id so a leaked secret can't trigger unbounded
+	// preview-env spam. Lazy-init on first webhook.
+	limiterMu        sync.Mutex
+	installLimiters  map[int64]*ghTokenBucket
+}
+
+// ghTokenBucket is a tiny per-installation token bucket. 60 tokens,
+// refilled 1/sec → 60 webhooks per minute steady-state, 60 burst.
+// GitHub's normal cadence (push, PR open, PR sync) is well under this;
+// crossing it usually means a CI loop or a leaked secret.
+type ghTokenBucket struct {
+	mu         sync.Mutex
+	tokens     float64
+	lastRefill time.Time
+}
+
+func (b *ghTokenBucket) take() bool {
+	const cap = 60.0
+	const refillPerSec = 1.0
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	if !b.lastRefill.IsZero() {
+		elapsed := now.Sub(b.lastRefill).Seconds()
+		b.tokens += elapsed * refillPerSec
+		if b.tokens > cap {
+			b.tokens = cap
+		}
+	} else {
+		b.tokens = cap
+	}
+	b.lastRefill = now
+	if b.tokens < 1 {
+		return false
+	}
+	b.tokens--
+	return true
+}
+
+func (h *GithubHandler) allowInstallation(id int64) bool {
+	if id == 0 {
+		// No installation id — fall through to allow. Setup-related
+		// webhooks (`installation`, `installation_repositories`)
+		// don't always carry one in the same shape.
+		return true
+	}
+	h.limiterMu.Lock()
+	defer h.limiterMu.Unlock()
+	if h.installLimiters == nil {
+		h.installLimiters = map[int64]*ghTokenBucket{}
+	}
+	b, ok := h.installLimiters[id]
+	if !ok {
+		b = &ghTokenBucket{}
+		h.installLimiters[id] = b
+	}
+	return b.take()
 }
 
 // MountPublic registers webhook (no JWT) + setup-callback routes onto
@@ -117,6 +182,47 @@ func (h *GithubHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 	if event == "" {
 		http.Error(w, "missing event", http.StatusBadRequest)
 		return
+	}
+	deliveryID := r.Header.Get("X-GitHub-Delivery")
+	// Cheap installation-id sniff. We don't unmarshal the full body
+	// twice — the dispatcher will do its own decode. We just want the
+	// number for the rate limiter / dedup row.
+	var installID int64
+	if peek := struct {
+		Installation struct {
+			ID int64 `json:"id"`
+		} `json:"installation"`
+	}{}; json.Unmarshal(body, &peek) == nil {
+		installID = peek.Installation.ID
+	}
+	// Per-installation token bucket. Cheap (in-memory, microseconds).
+	// 60-burst / 60-per-min steady-state; well above GitHub's normal
+	// cadence, well below "leaked secret" levels. Returning 429 is
+	// safe — GitHub treats it as a soft fail and retries with backoff,
+	// so legitimate bursts catch up after the bucket refills.
+	if !h.allowInstallation(installID) {
+		h.Logger.Warn("github webhook rate limited", "installation", installID, "event", event)
+		http.Error(w, "rate limit", http.StatusTooManyRequests)
+		return
+	}
+	// Replay-protection. GitHub retries failed deliveries reusing
+	// the same UUID; recording it on first sight + 200-no-op on
+	// repeat keeps a single bad downstream from triggering N
+	// duplicate dispatches over 24h.
+	if h.DB != nil && deliveryID != "" {
+		dedupCtx, dedupCancel := context.WithTimeout(r.Context(), 2*time.Second)
+		seen, err := h.DB.SeenGithubDelivery(dedupCtx, deliveryID, event, installID)
+		dedupCancel()
+		if err != nil {
+			// Dedup failure is non-fatal — we'd rather double-fire
+			// than drop a webhook on a transient DB hiccup. Log and
+			// continue.
+			h.Logger.Warn("github delivery dedup", "err", err, "delivery", deliveryID)
+		} else if seen {
+			h.Logger.Info("github webhook replay (dedup)", "delivery", deliveryID, "event", event)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
 	}
 	if h.Dispatcher == nil {
 		// Verified but nowhere to dispatch — just 204 so GitHub stops

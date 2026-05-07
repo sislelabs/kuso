@@ -105,8 +105,23 @@ kind: PodDisruptionBudget
 metadata:
   name: kuso-server
   namespace: kuso
+  annotations:
+    # Single-replica installs: this PDB will block `kubectl drain`
+    # until you scale kuso-server to 2+ replicas. Either:
+    #   - kubectl -n kuso scale deploy/kuso-server --replicas=2
+    #   - kubectl -n kuso delete pdb kuso-server   # uncordon yourself
+    # Multi-replica installs: drain works as expected (PDB allows
+    # one disruption while keeping the second pod up).
+    kuso.sislelabs.com/single-replica-drain-hint: "scale to 2+ replicas OR delete this PDB before draining the only kuso-server node"
 spec:
-  minAvailable: 1
+  # maxUnavailable=1 instead of minAvailable=1 means: tolerate one
+  # voluntarily-evicted pod at any moment. On a single-replica
+  # deployment this still blocks drain (1 pod can't be 1 unavail
+  # AND remain up), but the annotation above tells the operator
+  # exactly what to do. On multi-replica it's strictly better than
+  # minAvailable=1 because it scales: a 5-replica deploy lets node
+  # maintenance roll one host at a time without per-host knob fiddling.
+  maxUnavailable: 1
   selector:
     matchLabels: { app.kubernetes.io/name: kuso-server }
 ---

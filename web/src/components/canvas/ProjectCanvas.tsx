@@ -98,8 +98,16 @@ export function ProjectCanvas({
   const latestBuilds = useQuery<Record<string, BuildSummary>>({
     queryKey: ["projects", project, "builds", "latest"],
     queryFn: () => api(`/api/projects/${encodeURIComponent(project)}/builds/latest`),
+    // Pre-v0.9.38 had refetchInterval=5s and staleTime=2s, which on
+    // a busy multi-user dashboard meant 12 fetches/min/project of a
+    // payload that rarely changes. Match staleTime to interval so a
+    // refocus doesn't fire a redundant fetch when one is about to
+    // run anyway. Pause polling while the tab is hidden — the user
+    // isn't watching, kube isn't telling us anything new, and a
+    // 30-tab browser shouldn't burn N×Q pollers in the background.
     refetchInterval: 5_000,
-    staleTime: 2_000,
+    refetchIntervalInBackground: false,
+    staleTime: 5_000,
   });
 
   // All KusoCrons in the project — both service-attached and project-

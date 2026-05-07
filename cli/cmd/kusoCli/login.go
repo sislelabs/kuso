@@ -143,6 +143,15 @@ func runUsernamePasswordLogin() error {
 
 	resp, err := api.Login(user, pass)
 	if err != nil {
+		// Promote the most common day-1 error — TLS unknown-CA from a
+		// fresh install on Let's Encrypt staging — into a usable hint.
+		// Without this, the user sees Go's terse default and has no
+		// way to know KUSO_INSECURE=1 is the escape hatch.
+		msg := err.Error()
+		if strings.Contains(msg, "x509") || strings.Contains(msg, "certificate") || strings.Contains(msg, "unknown authority") {
+			return fmt.Errorf("login: %w\n\nhint: this looks like a TLS-trust failure (likely Let's Encrypt staging on a fresh install). Try:\n  KUSO_INSECURE=1 kuso login --api %s -u %s\nOnce you flip the instance to LE prod, drop the env var.",
+				err, api.BaseURL(), user)
+		}
 		return fmt.Errorf("login: %w", err)
 	}
 	if resp.StatusCode() < 200 || resp.StatusCode() >= 300 {
