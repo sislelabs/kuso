@@ -61,6 +61,11 @@ export interface DriftReport {
   // image-pull failure blocks the rollout. This is the surface
   // users actually feel.
   podsStale: string[];
+  // RFC3339 timestamp of the youngest non-terminating pod. Used by
+  // the editor to render a "Saved & rolled out Ns ago" banner that
+  // survives a page refresh — without this, post-save feedback was
+  // purely client-side state that was wiped on refresh.
+  lastRolloutAt?: string;
   envName?: string;
 }
 

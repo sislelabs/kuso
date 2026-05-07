@@ -43,6 +43,13 @@ export function useEnvironments(project: string) {
     queryKey: envsQueryKey(project),
     queryFn: () => listEnvironments(project),
     enabled: !!project,
+    // Poll on the same cadence as useBuilds so the deployments tab's
+    // ACTIVE/SUPERSEDED badges flip the moment the build poller
+    // promotes a new image tag onto the env CR. Without this, a
+    // newly-succeeded build sat as SUPERSEDED in the UI and the
+    // older one kept its ACTIVE badge until the user hard-refreshed.
+    refetchInterval: 10_000,
+    staleTime: 5_000,
   });
 }
 

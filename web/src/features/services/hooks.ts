@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   deleteService,
@@ -90,12 +91,34 @@ export function useSetServiceEnv(project: string, service: string) {
 }
 
 export function useBuilds(project: string, service: string) {
-  return useQuery({
+  const qc = useQueryClient();
+  const buildsQ = useQuery({
     queryKey: buildsQueryKey(project, service),
     queryFn: () => listBuilds(project, service),
     enabled: !!project && !!service,
     refetchInterval: 10_000,
   });
+  // When the latest build flips to "succeeded", invalidate envs +
+  // drift right away so ACTIVE/SUPERSEDED chips flip without waiting
+  // for the next 10s envs poll. We dedupe by (project, service,
+  // newest-id+status) — only fire when *that pair* changes.
+  const lastSeenRef = useRef<string>("");
+  useEffect(() => {
+    const list = buildsQ.data ?? [];
+    if (list.length === 0) return;
+    const newest = list[0];
+    const key = `${newest.id}:${(newest.status ?? "").toLowerCase()}`;
+    if (key === lastSeenRef.current) return;
+    const prevKey = lastSeenRef.current;
+    lastSeenRef.current = key;
+    // Only invalidate on a transition INTO succeeded — first mount
+    // shouldn't trigger an unnecessary refetch storm.
+    if (prevKey && (newest.status ?? "").toLowerCase() === "succeeded") {
+      qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "drift"] });
+    }
+  }, [buildsQ.data, project, service, qc]);
+  return buildsQ;
 }
 
 export const errorsQueryKey = (project: string, service: string, since: string) =>

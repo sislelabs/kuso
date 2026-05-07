@@ -252,23 +252,36 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
   const [dirty, setDirty] = useState(false);
   const [mode, setMode] = useState<Mode>("rows");
   const [bulkText, setBulkText] = useState("");
-  // savedAt is the wall-clock time of the most recent successful save.
-  // We use it to keep the "rolling out" banner visible for a minimum
-  // 60s window after save, even if drift's podsStale flips clean a
-  // second or two later. On a small cluster the helm reconcile + pod
-  // roll can finish faster than the 10s drift refetch — without the
-  // sticky window the banner flashed for one paint and disappeared,
-  // making users think the save didn't take.
+  // Sticky "rolled out N seconds ago" window. Two sources combined:
+  //   1. savedAt — local timestamp set in save(); covers the gap
+  //      between the save POST returning and drift.lastRolloutAt
+  //      catching up to the new pod (1-2 polls = up to 10s).
+  //   2. drift.data.lastRolloutAt — server-side pod creationTimestamp
+  //      that survives a page refresh, so a refresh during the
+  //      rollout window keeps showing confirmation.
+  // Banner is visible when EITHER signal is within 60s of now.
   const [savedAt, setSavedAt] = useState<number | null>(null);
-  // Re-render after 60s so the sticky window expires without the user
-  // having to interact with the page. We re-arm whenever savedAt
-  // changes (i.e. every successful save).
+  // Re-render every 5s while the sticky banner is visible so the
+  // "Ns ago" text ticks and the banner expires when the window
+  // elapses without requiring user interaction.
+  const [now, setNow] = useState(Date.now());
   useEffect(() => {
-    if (savedAt == null) return;
-    const t = setTimeout(() => setSavedAt(null), 60_000);
-    return () => clearTimeout(t);
-  }, [savedAt]);
-  const stickySaved = savedAt != null;
+    const lastRoll = drift.data?.lastRolloutAt
+      ? new Date(drift.data.lastRolloutAt).getTime()
+      : 0;
+    const newest = Math.max(savedAt ?? 0, lastRoll);
+    if (!newest) return;
+    const remaining = 60_000 - (Date.now() - newest);
+    if (remaining <= 0) return;
+    const t = setInterval(() => setNow(Date.now()), 5_000);
+    return () => clearInterval(t);
+  }, [savedAt, drift.data?.lastRolloutAt]);
+  const lastRollMs = drift.data?.lastRolloutAt
+    ? new Date(drift.data.lastRolloutAt).getTime()
+    : 0;
+  const newestEvent = Math.max(savedAt ?? 0, lastRollMs);
+  const stickySaved = newestEvent > 0 && now - newestEvent < 60_000;
+  const ageSec = Math.max(0, Math.floor((now - newestEvent) / 1000));
 
   useEffect(() => {
     if (env.data) {
@@ -433,7 +446,7 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
                     trigger a rollout. Open the Deployments tab and click Redeploy to force one.
                   </div>
                 </>
-              ) : (
+              ) : ageSec < 5 ? (
                 <>
                   <div className="text-amber-200">
                     Saved. Rolling out the new env to the running pod…
@@ -441,6 +454,15 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
                   <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
                     The deployment is being updated. New pods replace the old ones over the
                     next ~30s.
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div className="text-amber-200">
+                    Saved. New pod has been running for {ageSec}s — change is live.
+                  </div>
+                  <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
+                    This banner clears automatically a minute after the rollout.
                   </div>
                 </>
               )}

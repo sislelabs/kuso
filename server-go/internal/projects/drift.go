@@ -48,6 +48,13 @@ type DriftReport struct {
 	// loop) is keeping the old pods alive. Empty when every pod
 	// matches the latest spec.
 	PodsStale []string `json:"podsStale"`
+	// LastRolloutAt is when the newest non-terminating pod was
+	// created (RFC3339, omitted when no pods exist). The UI uses this
+	// to show a "Saved & rolled out N seconds ago" confirmation
+	// banner that survives a page refresh — without server-side
+	// state, a refresh wipes the post-save banner and the user
+	// loses the visual confirmation that their edit took effect.
+	LastRolloutAt string `json:"lastRolloutAt,omitempty"`
 	// EnvName is the production env CR name we compared against.
 	EnvName string `json:"envName,omitempty"`
 }
@@ -130,6 +137,11 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	// rolled" — exactly the signal the user reaches for after a
 	// quick env-var edit.
 	out.PodsStale = compareDeploymentToEnv(ctx, s, ns, env)
+	// Surface when the newest live pod was born so the UI can render
+	// "Saved & rolled out Ns ago" without holding client-side state.
+	if t := newestPodCreatedAt(ctx, s, ns, env.Name); !t.IsZero() {
+		out.LastRolloutAt = t.UTC().Format(time.RFC3339)
+	}
 	// RolloutPending now means "Deployment exists but hasn't rolled
 	// out the latest pod template yet". A non-empty PodsStale list
 	// covers the spec→running gap; we surface RolloutPending=true
@@ -386,6 +398,37 @@ func lastSpecMutation(env kube.KusoEnvironment) time.Time {
 		latest = env.CreationTimestamp.Time
 	}
 	return latest
+}
+
+// newestPodCreatedAt returns the creationTimestamp of the youngest
+// non-terminating pod in the env. Used to populate
+// DriftReport.LastRolloutAt so the UI can show a confirmation banner
+// for the first ~60s after a new pod started — that's the window
+// where a user who just hit Save and refreshed the page would
+// otherwise lose all visual feedback.
+//
+// Returns zero time when the env has no pods yet.
+func newestPodCreatedAt(ctx context.Context, s *Service, ns, envName string) time.Time {
+	if s.Kube == nil || s.Kube.Clientset == nil {
+		return time.Time{}
+	}
+	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("app.kubernetes.io/instance=%s", envName),
+	})
+	if err != nil {
+		return time.Time{}
+	}
+	var newest time.Time
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		if p.DeletionTimestamp != nil {
+			continue
+		}
+		if p.CreationTimestamp.Time.After(newest) {
+			newest = p.CreationTimestamp.Time
+		}
+	}
+	return newest
 }
 
 // fqService returns the FQ form of a service name (project-prefixed).
