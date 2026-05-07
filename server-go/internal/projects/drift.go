@@ -359,6 +359,20 @@ func deploymentRolling(ctx context.Context, s *Service, ns string, env kube.Kuso
 	if s.Kube == nil || s.Kube.Clientset == nil {
 		return false
 	}
+	// helm-operator-reconcile-pending check: if kuso-server wrote to
+	// the env CR more recently than helm-operator's last managed
+	// fields entry, the chart hasn't re-rendered yet and the
+	// Deployment still has the old pod template. The rollout will
+	// happen as soon as helm-operator catches up (within 1-3s in
+	// steady state) — until then, surface RolloutPending so the UI
+	// shows "rolling out…" rather than the scary "restart needed"
+	// chip. Without this gate the moment between save and
+	// reconcile-fire produced a fake "stale && !rolling" window.
+	lastEdit := lastSpecMutation(env)
+	lastReconcile := lastHelmOperatorMutation(env)
+	if !lastEdit.IsZero() && lastEdit.After(lastReconcile) {
+		return true
+	}
 	dep, err := s.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, env.Name, metav1.GetOptions{})
 	if err != nil {
 		return false
@@ -379,6 +393,24 @@ func deploymentRolling(ctx context.Context, s *Service, ns string, env kube.Kuso
 		return true
 	}
 	return false
+}
+
+// lastHelmOperatorMutation returns when helm-operator last wrote to
+// the env CR (any field — spec via reconcile, status via observation).
+// Used by deploymentRolling to detect "kuso-server wrote since last
+// reconcile" so we can flag rolloutPending during the 1-3s helm-op
+// reconcile lag.
+func lastHelmOperatorMutation(env kube.KusoEnvironment) time.Time {
+	var latest time.Time
+	for _, mf := range env.ManagedFields {
+		if mf.Manager != "helm-operator" {
+			continue
+		}
+		if mf.Time != nil && mf.Time.Time.After(latest) {
+			latest = mf.Time.Time
+		}
+	}
+	return latest
 }
 
 // lastSpecMutation returns when kuso-server last wrote to the env CR's
