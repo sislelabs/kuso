@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.12] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix: env editor focus loss, build-log "connection lost", drift invalidate-on-save ([99ec110](https://github.com/sislelabs/kuso/commit/99ec11004616e9fe1b9e8066a54567f566f0e834))
+
 ## [0.9.11] — 2026-05-07
 
 ### ✨ Features
