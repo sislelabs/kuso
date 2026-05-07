@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.41] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(canvas): status border honors prod pod, not pending/queued builds ([3d4f34c](https://github.com/sislelabs/kuso/commit/3d4f34c372686bae84d582c4ed5d646a20b6be14))
+
 ## [0.9.40] — 2026-05-07
 
 ### 🐛 Bug Fixes
