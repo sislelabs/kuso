@@ -160,6 +160,14 @@ spec:
             # install completes, prometheus reloads via /-/reload or
             # the next pod restart picks it up.
             optional: true
+            # Explicit items clamp: only the `token` key shows up in
+            # the mount, even if the Secret grows new keys later
+            # (cert, client-key, etc). Keeps
+            # /etc/prometheus/secrets/scrape-token/ as a single-file
+            # directory matching the credentials_file path above.
+            items:
+              - key: token
+                path: token
 ---
 apiVersion: v1
 kind: Service

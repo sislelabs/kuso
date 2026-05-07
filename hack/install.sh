@@ -622,6 +622,21 @@ if kubectl -n kuso get deployment kuso-prometheus >/dev/null 2>&1; then
   fi
 fi
 
+# Same logic for kuso-server: env vars are read at process start, so
+# a Secret patch alone doesn't propagate to running replicas. If
+# kuso-server was already running AND the scrape token changed (or
+# didn't exist before), bounce the deployment so the new token
+# lands in os.Getenv before the next /metrics scrape comes in.
+# Skipped on brand-new installs where the deployment doesn't exist
+# yet — server-go.yaml is applied later in this script and starts
+# fresh with the right env.
+if kubectl -n kuso get deployment kuso-server >/dev/null 2>&1; then
+  if [[ -z "$EXISTING_METRICS_SCRAPE" ]] || [[ "$EXISTING_METRICS_SCRAPE" != "$METRICS_SCRAPE_TOKEN" ]]; then
+    log "kicking kuso-server to pick up the rotated KUSO_METRICS_SCRAPE_TOKEN"
+    kubectl -n kuso rollout restart deployment kuso-server >/dev/null 2>&1 || true
+  fi
+fi
+
 # k3s node-token Secret. Required so kuso-server can issue agent-join
 # commands without being pinned to the control-plane node — pre-this,
 # the deploy yaml mounted /var/lib/rancher/k3s/server/node-token via
