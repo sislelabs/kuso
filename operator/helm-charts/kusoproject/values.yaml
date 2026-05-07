@@ -62,10 +62,12 @@ networkPolicy:
 # Per-project resource ceiling. ResourceQuota caps CPU/memory/object
 # counts so one tenant can't starve the cluster. LimitRange supplies
 # defaults so user pods that don't set requests/limits still get them
-# (and respect the quota). Aimed at a small Hetzner box; raise on
-# bigger clusters.
+# (and respect the quota). Default off because v0.9.10's "8 cpu cap"
+# starves a 4-core Hetzner box once kuso-postgres + an addon + a
+# concurrent build are running; multi-tenant operators with bigger
+# nodes flip it on and tune cpu/memory to their rented capacity.
 quota:
-  enabled: true
+  enabled: false
   cpu: "8"
   memory: "16Gi"
   pods: "30"
