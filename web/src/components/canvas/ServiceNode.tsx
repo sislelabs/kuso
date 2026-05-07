@@ -25,33 +25,34 @@ export interface ServiceNodeData extends Record<string, unknown> {
 function statusFor(env?: KusoEnvironment, latestBuild?: BuildSummary): DeployStatus {
   // Source-of-truth ordering, in priority:
   //
-  // 1. Latest build is in-flight → building/deploying. Build state
-  //    is the freshest signal — the moment a user clicks Redeploy,
-  //    the build CR transitions to "pending" and the env CR is far
-  //    behind. Without checking builds first, the canvas would
-  //    keep showing the old failed/active state until the build
-  //    actually rolled.
+  // 1. env.ready = true → active. The running production pod is
+  //    serving traffic; the canvas border should reflect the live
+  //    user-facing state. A queued or pending build doesn't change
+  //    this — the old pod is still healthy until the new one rolls.
   //
-  // 2. env.ready = true → active. Steady-state win condition.
+  // 2. Latest build is RUNNING (kaniko actually executing) → building.
+  //    Pulse the border so the user sees activity. We deliberately
+  //    don't pulse on `pending`/`queued`/`building`-phase status:
+  //    those mean "CR exists, no pod yet" or "queued behind another
+  //    build". The production pod is unaffected; flipping the canvas
+  //    to amber while it serves traffic is misleading. (The
+  //    deployments tab still shows the queued/pending row.)
   //
-  // 3. Latest build failed AND env not ready → failed. Distinct
-  //    from "0 replicas" because a brand-new service with a failed
-  //    first build has 0 desired replicas yet, so the replica
-  //    heuristic alone misses it.
+  // 3. env never came up + latest build failed → failed. Brand-new
+  //    service whose first build crashed has no env.ready yet.
   //
-  // 4. env has desired replicas but 0 ready → failed (catches the
-  //    "stale env.phase=building" case where the operator never
-  //    wrote phase=failed back).
+  // 4. env has desired replicas but 0 ready → failed. Catches
+  //    "stale env.phase=building" where helm-operator never wrote
+  //    phase=failed back.
   //
   // 5. Fall through to env.status.phase as the last resort.
+  if (env?.status?.ready) return "active";
+
   const buildStatus = (latestBuild?.status ?? "").toLowerCase();
-  if (buildStatus === "pending" || buildStatus === "running" || buildStatus === "building") {
-    return "building";
-  }
+  if (buildStatus === "running") return "building";
   if (buildStatus === "deploying") return "deploying";
 
   if (!env) return "unknown";
-  if (env.status?.ready) return "active";
 
   if (buildStatus === "failed" || buildStatus === "error") return "failed";
 
