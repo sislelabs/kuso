@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.45] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(envs): clone sibling URLs + image, dedupe env CR name + host ([7568864](https://github.com/sislelabs/kuso/commit/7568864ad6cfb976d312b95065c7d2d4d7e8363a))
+
 ## [0.9.44] — 2026-05-07
 
 ### ✨ Features
