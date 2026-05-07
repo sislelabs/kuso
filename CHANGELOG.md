@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.23] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(drift): only emit lastRolloutAt when there's a recent actual edit ([550716e](https://github.com/sislelabs/kuso/commit/550716ee94579ad5ac8728ee0ee510883fbfda60))
+
 ## [0.9.22] — 2026-05-07
 
 ### 🐛 Bug Fixes
