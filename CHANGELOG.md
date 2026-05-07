@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.36] — 2026-05-07
+
+### ✨ Features
+- Feat(ha): kuso-server runs on worker nodes via kuso-k3s-token Secret ([2f793a6](https://github.com/sislelabs/kuso/commit/2f793a68e7262b98fa777002da59a04bc37fbec4))
+
 ## [0.9.35] — 2026-05-07
 
 ### 🐛 Bug Fixes

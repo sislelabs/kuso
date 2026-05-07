@@ -64,8 +64,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.9.35}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.9.35}"
+KUSO_VERSION="${KUSO_VERSION:-v0.9.36}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.9.36}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 
@@ -494,9 +494,17 @@ kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o ya
   --from-literal=KUSO_REQUIRE_SIGNATURES="$KUSO_REQUIRE_SIGS" \
   | kubectl apply -f - >/dev/null
 
-# k3s node-token Secret — see hack/install.sh for the why. Lets
-# kuso-server run on worker nodes (HA-friendly) instead of being
-# pinned to the control-plane via hostPath.
+# k3s node-token Secret. Required so kuso-server can issue agent-join
+# commands without being pinned to the control-plane node — pre-this,
+# the deploy yaml mounted /var/lib/rancher/k3s/server/node-token via
+# hostPath, which broke multi-replica HA. Now the token lives in a
+# kube Secret (envFrom: kuso-k3s-token) so any node's kuso-server pod
+# can read it.
+#
+# We read the token at install time on the control-plane host where
+# this script runs, write it into the Secret. Re-installs reuse the
+# existing Secret if present (rotating the token would invalidate
+# every joined node's k3s-agent kubelet auth).
 log "applying kuso-k3s-token (Secret)"
 if kubectl get secret -n kuso kuso-k3s-token >/dev/null 2>&1; then
   log "  reusing existing kuso-k3s-token (token unchanged)"
