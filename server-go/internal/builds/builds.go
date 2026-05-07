@@ -351,6 +351,22 @@ func (s *Service) countRunningBuildPodsCluster(ctx context.Context) int {
 	}
 	lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
+	// First: build a set of build-CR names whose state is "done"
+	// (succeeded / failed / cancelled). Pods owned by these CRs
+	// shouldn't count toward the active cap — they're orphans the
+	// operator failed to clean up (we've seen this happen after
+	// operator restarts, where the initial-cache-sync ignores the
+	// state=done watch selector and re-renders cancelled builds).
+	// Without filtering, a single stuck cancelled-build Job pegged
+	// the cluster cap at 1 and wedged every Redeploy.
+	doneNames := map[string]struct{}{}
+	if blist, berr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("").List(lctx, metav1.ListOptions{
+		LabelSelector: "kuso.sislelabs.com/build-state=done",
+	}); berr == nil {
+		for i := range blist.Items {
+			doneNames[blist.Items[i].GetName()] = struct{}{}
+		}
+	}
 	// One list per selector. The two queries return disjoint sets in
 	// the steady state (post-v0.8.10 pods carry both labels); during
 	// a roll, dedup by name so we don't double-count.
@@ -366,6 +382,16 @@ func (s *Service) countRunningBuildPodsCluster(ctx context.Context) int {
 		for i := range pods.Items {
 			p := &pods.Items[i]
 			if p.Status.Phase != corev1.PodPending && p.Status.Phase != corev1.PodRunning {
+				continue
+			}
+			// Pod's instance label == the KusoBuild CR's name (chart
+			// emits app.kubernetes.io/instance=<release>). If that
+			// CR is in the done set, treat the pod as orphan and
+			// skip it. We're not nuking it here — that's a separate
+			// reconcile concern — just refusing to let it block
+			// admission.
+			inst := p.Labels["app.kubernetes.io/instance"]
+			if _, isDone := doneNames[inst]; isDone {
 				continue
 			}
 			seen[p.Namespace+"/"+p.Name] = struct{}{}
@@ -414,6 +440,17 @@ func (s *Service) countActiveBuildsForProject(ctx context.Context, project strin
 	lctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 	ns := s.nsFor(lctx, project)
+	// Same orphan-pod filter as countRunningBuildPodsCluster: skip
+	// pods owned by build CRs labelled state=done. See that function
+	// for the why.
+	doneNames := map[string]struct{}{}
+	if blist, berr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
+		LabelSelector: "kuso.sislelabs.com/project=" + project + ",kuso.sislelabs.com/build-state=done",
+	}); berr == nil {
+		for i := range blist.Items {
+			doneNames[blist.Items[i].GetName()] = struct{}{}
+		}
+	}
 	seen := map[string]struct{}{}
 	count := func(sel string) {
 		pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(lctx, metav1.ListOptions{LabelSelector: sel})
@@ -423,6 +460,9 @@ func (s *Service) countActiveBuildsForProject(ctx context.Context, project strin
 		for i := range pods.Items {
 			p := &pods.Items[i]
 			if p.Status.Phase != corev1.PodPending && p.Status.Phase != corev1.PodRunning {
+				continue
+			}
+			if _, isDone := doneNames[p.Labels["app.kubernetes.io/instance"]]; isDone {
 				continue
 			}
 			seen[p.Name] = struct{}{}
