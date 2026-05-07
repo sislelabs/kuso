@@ -173,7 +173,8 @@ stringData:
   NATS_PORT: "4222"
   NATS_TOKEN: {{ $token | quote }}
   # Most NATS client libs accept a single URL with the token inline,
-  # which is the easiest thing to wire into ${{ <addon>.NATS_URL }}.
+  # which is the easiest thing to wire into the dollar-brace addon
+  # reference syntax (NATS_URL surfaces as the canonical client DSN).
   NATS_URL: "nats://:{{ $token }}@{{ $name }}:4222"
   # Monitor URL — nats-top, the web monitor at /varz, etc.
   NATS_MONITOR_URL: "http://{{ $name }}:8222"

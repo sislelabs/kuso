@@ -25,7 +25,7 @@
 {{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
 {{- $database := .Values.database | default "kuso" -}}
 {{/*
-  Default user config baked into a secret so we can ${{ }} the
+  Default user config baked into a secret so we can interpolate the
   password into it. Mounting the secret as a file into ClickHouse's
   /etc/clickhouse-server/users.d/ overrides the built-in defaults.
 */}}
