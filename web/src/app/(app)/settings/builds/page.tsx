@@ -15,18 +15,36 @@ interface BuildSettings {
   cpuRequest: string;
 }
 
-// Sizing presets matched against typical Hetzner CCX boxes (the
-// install path most users follow). Click to fill in the form. Each
-// preset assumes one parallel build per ~3 GB of headroom + a
-// kaniko ceiling that survives nixpacks /nix snapshots.
-const PRESETS: { label: string; size: string; values: BuildSettings }[] = [
+// Sizing presets. Two invariants every preset must satisfy on the
+// stated VM:
+//   1. cap × memLimit ≤ vmRAM − 1 Gi      (1 Gi reserved for
+//      kuso-server, traefik, cert-manager, addons overhead)
+//   2. cap × cpuLimit ≤ vmCPU − 500m       (500m reserved so
+//      kuso-server's API + the operator's reconcile loop don't
+//      starve under build pressure)
+// If you change these, re-derive the headroom calc in the card copy
+// (the cards display the math so users can see why cap=N).
+//
+// nixpacks builds peak around 1.5 GB during the kaniko /nix
+// snapshot, so we never go below memLimit=2Gi. Single-build
+// presets prefer larger limits over parallelism — queueing is free,
+// OOMKills aren't.
+type VMSpec = { ramGi: number; vCPU: number };
+const SMALL: VMSpec = { ramGi: 4, vCPU: 2 };
+const MEDIUM: VMSpec = { ramGi: 8, vCPU: 4 };
+const LARGE: VMSpec = { ramGi: 16, vCPU: 8 };
+
+const PRESETS: { label: string; size: string; vm: VMSpec; values: BuildSettings }[] = [
   {
     label: "Small (4 GB / 2 vCPU)",
     size: "CCX13 / e2-small / t3.medium",
+    vm: SMALL,
+    // cap=1: 1 × 2.5Gi = 2.5 Gi ≤ 3 Gi ✓, 1 × 1500m = 1500m ≤ 1500m ✓
+    // cap=2 with 1.5Gi each is fragile (nixpacks peak 1.5Gi, no margin).
     values: {
       maxConcurrent: 1,
       memoryRequest: "512Mi",
-      memoryLimit:   "2Gi",
+      memoryLimit:   "2500Mi",
       cpuRequest:    "200m",
       cpuLimit:      "1500m",
     },
@@ -34,26 +52,56 @@ const PRESETS: { label: string; size: string; values: BuildSettings }[] = [
   {
     label: "Medium (8 GB / 4 vCPU)",
     size: "CCX23 / e2-standard-2",
+    vm: MEDIUM,
+    // cap=2: 2 × 2.5Gi = 5 Gi ≤ 7 Gi ✓, 2 × 1500m = 3000m ≤ 3500m ✓
     values: {
       maxConcurrent: 2,
       memoryRequest: "768Mi",
-      memoryLimit:   "3Gi",
-      cpuRequest:    "500m",
-      cpuLimit:      "2000m",
+      memoryLimit:   "2500Mi",
+      cpuRequest:    "300m",
+      cpuLimit:      "1500m",
     },
   },
   {
     label: "Large (16 GB / 8 vCPU)",
     size: "CCX33 / e2-standard-4",
+    vm: LARGE,
+    // cap=4: 4 × 3Gi = 12 Gi ≤ 14 Gi ✓, 4 × 1500m = 6000m ≤ 7000m ✓
     values: {
       maxConcurrent: 4,
       memoryRequest: "1Gi",
-      memoryLimit:   "4Gi",
-      cpuRequest:    "1000m",
-      cpuLimit:      "4000m",
+      memoryLimit:   "3Gi",
+      cpuRequest:    "500m",
+      cpuLimit:      "1500m",
     },
   },
 ];
+
+// parseQty is a forgiving numeric extraction from kube quantity
+// strings — "2Gi" → 2, "1500m" → 1500, "1G" → 1 (treated as Gi here
+// because we only round to display the math, not allocate). Returns
+// 0 for empty / unparseable input.
+function parseQtyRaw(v: string): number {
+  const m = v.trim().match(/^([0-9]*\.?[0-9]+)/);
+  return m ? parseFloat(m[1]) : 0;
+}
+// memGi: convert a quantity string to Gi for headroom math.
+function memGi(v: string): number {
+  const n = parseQtyRaw(v);
+  if (!n) return 0;
+  if (/Gi$/i.test(v)) return n;
+  if (/G$/i.test(v))  return n * 1.073741824 / 1.073741824; // ~Gi
+  if (/Mi$/i.test(v)) return n / 1024;
+  if (/M$/i.test(v))  return n / 1024;
+  return n / (1024 * 1024 * 1024);
+}
+// cpuM: convert a quantity string to millicores.
+function cpuM(v: string): number {
+  const n = parseQtyRaw(v);
+  if (!n) return 0;
+  if (/m$/.test(v)) return n;
+  return n * 1000;
+}
 
 export default function BuildSettingsPage() {
   const [loaded, setLoaded] = useState(false);
@@ -121,28 +169,49 @@ export default function BuildSettingsPage() {
           undersizing leaves capacity on the table.
         </p>
         <div className="grid gap-2 sm:grid-cols-3">
-          {PRESETS.map((p) => (
-            <button
-              key={p.label}
-              type="button"
-              onClick={() => setS(p.values)}
-              className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 text-left hover:border-[var(--accent)]/40 hover:bg-[var(--accent)]/5"
-            >
-              <div className="text-sm font-medium">{p.label}</div>
-              <div className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">{p.size}</div>
-              <div className="mt-2 font-mono text-[10px] text-[var(--text-secondary)]">
-                cap {p.values.maxConcurrent} · {p.values.memoryLimit} mem · {p.values.cpuLimit} cpu
-              </div>
-            </button>
-          ))}
+          {PRESETS.map((p) => {
+            // Show the math so the user can SEE why cap=N is what it
+            // is for this VM size — pre-fix the cards just said
+            // "cap 1 · 2Gi mem" with no explanation, and I'd been
+            // burned by the apparent mismatch between the stored cap
+            // and what felt right for a 2-vCPU box.
+            const memUsedGi = memGi(p.values.memoryLimit) * p.values.maxConcurrent;
+            const cpuUsedM = cpuM(p.values.cpuLimit) * p.values.maxConcurrent;
+            const memReservedGi = 1; // for kuso-server + addons + traefik
+            const cpuReservedM = 500;
+            const memBudgetGi = p.vm.ramGi - memReservedGi;
+            const cpuBudgetM = p.vm.vCPU * 1000 - cpuReservedM;
+            return (
+              <button
+                key={p.label}
+                type="button"
+                onClick={() => setS(p.values)}
+                className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-3 text-left hover:border-[var(--accent)]/40 hover:bg-[var(--accent)]/5"
+              >
+                <div className="text-sm font-medium">{p.label}</div>
+                <div className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">{p.size}</div>
+                <div className="mt-2 font-mono text-[10px] text-[var(--text-secondary)]">
+                  cap {p.values.maxConcurrent} · {p.values.memoryLimit} mem · {p.values.cpuLimit} cpu
+                </div>
+                <div className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+                  uses {memUsedGi.toFixed(1)}/{memBudgetGi}Gi · {cpuUsedM}/{cpuBudgetM}m cpu
+                </div>
+              </button>
+            );
+          })}
         </div>
+        <p className="mt-3 text-[11px] text-[var(--text-tertiary)]">
+          Budget = VM size − 1 Gi − 500m reserved for kuso-server, traefik,
+          cert-manager, and addons. Going over is allowed but risks OOMKills
+          and CPU starvation under load.
+        </p>
       </section>
 
       <section className="space-y-6">
         <FieldRow
           icon={Cpu}
           label="Concurrent builds"
-          hint="Cluster-wide cap on simultaneous build pods. 0 disables the cap (not recommended on a single-VM install)."
+          hint={`Cluster-wide cap on simultaneous build pods. Total budget consumed = cap × per-build limits below — currently ${(memGi(s.memoryLimit) * s.maxConcurrent).toFixed(1)} Gi RAM + ${cpuM(s.cpuLimit) * s.maxConcurrent}m CPU. 0 disables the cap (not recommended on a single-VM install).`}
         >
           <input
             type="number"
