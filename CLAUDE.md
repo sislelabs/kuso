@@ -59,7 +59,7 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 - API endpoints under `/api/...`. The web client uses `lib/api-client.ts`'s `api()` wrapper which auto-injects the JWT bearer + handles 401 (clears jwt + bounces to `/login` via the global QueryClient onError).
 - Server-side errors: wrap with `fmt.Errorf("%w: …", ErrConflict)` so HTTP handlers can map via `errors.Is` to the right status code. `addons.fail` is the canonical handler (passes `err.Error()` through on conflict so the UI sees "addon X/Y already exists" instead of bare "409").
 - Server-side env-var rewriting: `${{ <addon>.KEY }}` resolves to `valueFrom.secretKeyRef` against `<addon>-conn`; `${{ <svc>.URL/HOST/PORT }}` resolves to in-cluster DNS. The web `EnvVarsEditor.tsx` reverses the secretKeyRef → ref form on read so the round-trip is lossless.
-- Notification dispatcher (`notify.Dispatcher`) emits events that fan out to webhooks AND mirror into a `NotificationEvent` SQLite table for the bell-icon feed.
+- Notification dispatcher (`notify.Dispatcher`) emits events that fan out to webhooks AND mirror into a `NotificationEvent` Postgres table for the bell-icon feed.
 - Node sampler (`nodemetrics.Sampler`) writes one row per node every 5 min into `NodeMetric` (7-day retention, prune on tick). Read by the per-node history endpoint + sparkline modal.
 - Node failure detection (`nodewatch.Watcher`) auto-cordons nodes that have been NotReady > 5 min, fires `node.unreachable` notify event, auto-uncordons + fires `node.recovered` on recovery (only uncordons if WE cordoned, marker = `kuso.sislelabs.com/cordoned-by-nodewatch` annotation).
 
@@ -74,12 +74,13 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 
 ## Scope guardrails (resist scope creep)
 
-Things deliberately out of scope:
+kuso is a serious in-cluster PaaS — multi-node, multi-replica, Postgres-backed, HA-capable addons. We scale up inside one Kubernetes cluster. Things deliberately out of scope:
+
 - Custom DB branching (Vercel + Neon won; integrate, don't compete)
-- Bespoke Grafana clone (5-min sparkline tiles + alerts is enough)
+- Bespoke Grafana clone (5-min sparkline tiles + alerts is enough; ship metrics to real Grafana if you need more)
 - Edge functions / serverless runtime (Cloudflare turf)
 - WAF (Cloudflare-in-front does it for $0)
-- Multi-region failover (single-box indies need backups, not failover)
+- Multi-region active/active (different product; integrate Cloudflare + managed multi-region Postgres if you need it)
 - Native error-tracker (Sentry self-hostable is one click in marketplace)
 - Vercel Next.js optimizer parity (suicide to chase)
 

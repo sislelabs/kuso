@@ -5,7 +5,7 @@ description: Use when you (the agent) are about to make changes to kuso. Sets gr
 
 # How agents should work in kuso
 
-kuso is built **for** AI agents and **with** AI agents. The maintainer (Ivo) expects to drive most operational and development work through a Claude Code session. That changes the rules in a few ways.
+kuso is built **for** AI agents and **with** AI agents. Most operational and development work flows through Claude Code sessions — humans drive intent, agents drive implementation. That changes the rules in a few ways.
 
 ## What you can do without asking
 
@@ -56,5 +56,5 @@ In rough order:
 
 1. **Agent ergonomics.** kuso should feel like a first-class tool to drive from Claude Code. Structured outputs, idempotent ops, intent-grouped MCP tools.
 2. **Sleeping containers.** This is the killer feature. Don't break it.
-3. **Solo-dev sanity.** No abstractions for hypothetical contributors. No half-finished refactors. Three similar lines beats a premature abstraction.
-4. **No legacy compatibility.** kuso is its own thing now. Design for the current shape; don't bend to old upstream conventions.
+3. **YAGNI discipline.** No abstractions for hypothetical future requirements. No half-finished refactors. Three similar lines beats a premature abstraction.
+4. **No legacy compatibility.** kuso is its own thing. Design for the current shape; don't bend to old upstream conventions.

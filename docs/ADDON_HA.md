@@ -134,6 +134,8 @@ choice as install-time.
 - Cost-sensitive deployments (3 PVCs, 3 pod-CPUs, full sync
   replication overhead).
 
-For most indie installs the default `ha: false` is the right call.
-HA is for the long-tail of users who'd otherwise leave kuso for a
-managed Postgres and want one less reason to.
+For low-traffic projects the default `ha: false` is the right call —
+one StatefulSet, one PVC, one process. HA is for production
+workloads where a 30-second failover is the difference between
+"users noticed" and "they didn't" — and for anyone who'd otherwise
+leave kuso for a managed Postgres and wants one less reason to.

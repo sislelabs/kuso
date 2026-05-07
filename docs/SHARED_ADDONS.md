@@ -37,7 +37,7 @@ The developer's services see `DATABASE_URL` exactly as if they had a native Post
 
 ### Why this exists
 
-Native addons are great for isolation but expensive: every project that wants Postgres burns a StatefulSet, a PVC, and a long-lived process. For an indie operator running 10 small side-projects, "10 Postgres instances on one node" is wasteful — they fit in one Postgres with 10 databases.
+Native addons are great for isolation but expensive: every project that wants Postgres burns a StatefulSet, a PVC, and a long-lived process. For an operator running 10 small side-projects (or 50 internal tools), "50 Postgres instances on one cluster" is wasteful — they fit in one Postgres with 50 databases.
 
 `useInstanceAddon` keeps the kuso programming model intact (services attach to an "addon" by name; conn-secret pattern works) while letting the operator amortise one shared instance across many projects.
 
@@ -84,7 +84,7 @@ The per-project Secret is just like the native-addon conn-secret. Services that 
 - Only `kind: postgres`. MySQL/Mongo/Redis instance-sharing would each need their own `provisionInstanceAddonDB` implementation.
 - No automatic `DROP DATABASE` on addon delete. Deliberate.
 - No backup schedule per project — the shared server's backup is the admin's responsibility, not kuso's. Per-project pg_dump-shaped backup is on the table for a future release.
-- No connection pooling layer (PgBouncer / RDS Proxy) — every per-project role connects directly. Fine at the indie scale; would be the next bottleneck if a shared server fans out to dozens of projects.
+- No connection pooling layer (PgBouncer / RDS Proxy) — every per-project role connects directly. Fine up to a few dozen projects; PgBouncer in front is the next mitigation when you fan out further.
 
 ## When to pick which
 
@@ -92,7 +92,7 @@ The per-project Secret is just like the native-addon conn-secret. Services that 
 | --- | --- |
 | One project, want isolation, accept the resource cost | **Native** |
 | Already have a Postgres you trust (RDS, managed, on-prem) | **External** |
-| Many small kuso projects on one box, want to share one Postgres | **Instance-shared** |
+| Many small kuso projects on one cluster, want to share one Postgres | **Instance-shared** |
 | Compliance / multi-tenant — projects must not share infra | **Native**, never instance-shared |
 | Project is critical and shared server's blast radius is unacceptable | **Native** |
 

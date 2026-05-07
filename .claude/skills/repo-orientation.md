@@ -5,13 +5,13 @@ description: Use at the start of any kuso work session. Tells you where things l
 
 # kuso repo orientation
 
-kuso is a self-hosted, agent-native PaaS for indie developers. AGPL-3.0. Solo maintainer (Ivo Sabev / SisleLabs).
+kuso is a self-hosted, agent-native PaaS on real Kubernetes. Multi-node, multi-replica, Postgres-backed control plane, HA addons. AGPL-3.0. Maintained by SisleLabs.
 
 ## Layout
 
 | Path         | Stack                                  | What it does                                                                                |
 | ------------ | -------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `server-go/` | Go + chi + client-go                   | REST API, auth, orchestrates k8s via dynamic client. SQLite via modernc.org/sqlite (no CGO). Embeds the Next.js SPA via //go:embed. |
+| `server-go/` | Go + chi + client-go                   | REST API, auth, orchestrates k8s via dynamic client. Postgres-backed (lib/pq). Embeds the Next.js SPA via //go:embed. |
 | `web/`       | Next.js 16 (App Router, static export) | Web UI. Built into `server-go/internal/web/dist`; the Go binary serves it.                  |
 | `operator/`  | Go + Operator-SDK (helm-based)         | Reconciles `KusoProject`, `KusoService`, `KusoEnvironment`, `KusoBuild`, `KusoAddon` CRs.   |
 | `cli/`       | Go + Cobra                             | `kuso` command-line tool. Talks to the server REST API.                                     |

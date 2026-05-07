@@ -4,22 +4,22 @@ This is the canonical day-2 doc for protecting the kuso control-plane DB. If you
 
 ## What lives where
 
-kuso has two distinct kinds of state. They have different recovery stories.
+kuso has three distinct kinds of state. They have different recovery stories.
 
 | State | Lives in | Lost if you lose it |
 | --- | --- | --- |
-| Control-plane data | SQLite at `/var/lib/kuso/kuso.db` inside the `kuso-server` pod, backed by the `kuso-server-go-data` PVC (RWO, local-path) | Users, sessions, audit log, webhooks, invites, SSH keys, node metrics, notifications, GitHub App config, instance secrets |
+| Control-plane data | Postgres (`kuso-postgres` StatefulSet, or external managed Postgres pointed at by `kuso-postgres-conn`) | Users, sessions, audit log, webhooks, invites, SSH keys, node metrics, notifications, GitHub App config, instance secrets, log_lines |
 | Kubernetes-native state | etcd / k3s | All `KusoProject` / `KusoService` / `KusoEnvironment` / `KusoAddon` / `KusoBuild` / `KusoCron` CRs, plus every Deployment / Service / Ingress / Secret kuso ever created |
-| Addon data | Per-addon PVC inside the addon's own StatefulSet | Postgres / MySQL / Redis / Mongo data |
+| Addon data | Per-addon PVC inside the addon's own StatefulSet (or CNPG cluster volumes for HA Postgres) | Postgres / MySQL / Redis / Mongo data |
 
-**The SQLite DB is the highest-leverage thing to back up.** The CRDs are recreatable from your repo + GitHub App config (which itself is in SQLite). The addon PVCs need their own backup story (see `kuso addon backup` below).
+**The Postgres metadata DB is the highest-leverage thing to back up.** The CRDs are recreatable from your repo + GitHub App config (which itself is in Postgres). The addon PVCs need their own backup story (see `kuso addon backup` below).
 
-## Daily: snapshot the SQLite DB
+## Daily: snapshot the metadata DB
 
-The `kuso` CLI ships with `backup` and `restore` verbs that pull / push the SQLite file via an admin-only HTTP endpoint. **Backup is enabled by default** since v0.8.3 — no extra config step. From your workstation:
+The `kuso` CLI ships with `backup` and `restore` verbs that pull / push a `pg_dump` snapshot via an admin-only HTTP endpoint. **Backup is enabled by default** since v0.8.3 — no extra config step. From your workstation:
 
 ```bash
-kuso backup -o /backups/kuso-$(date -u +%Y%m%d).sqlite
+kuso backup -o /backups/kuso-$(date -u +%Y%m%d).sql.gz
 ```
 
 If you have a compliance reason to lock it down (multi-tenant kuso-as-a-service, regulated environment), set `KUSO_BACKUP_DISABLED=1` on the server deployment to remove the routes entirely:
@@ -33,7 +33,7 @@ Pipe it into whatever you already use — `restic`, `borg`, S3, `cron + scp`. Co
 
 ```cron
 # /etc/cron.d/kuso-backup — runs daily at 04:00 UTC
-0 4 * * * root kuso backup -o /var/backups/kuso/kuso-$(date -u +\%Y\%m\%d).sqlite \
+0 4 * * * root kuso backup -o /var/backups/kuso/kuso-$(date -u +\%Y\%m\%d).sql.gz \
   && find /var/backups/kuso -mtime +30 -delete
 ```
 
@@ -44,55 +44,50 @@ The backup file contains **JWT secrets, hashed passwords, GitHub App private key
 A backup on the same disk as the server doesn't survive a disk failure. Bare minimum: `rsync` / `aws s3 cp` / `restic backup` the snapshot to a different machine.
 
 ```bash
-kuso backup -o /tmp/kuso.sqlite
-aws s3 cp /tmp/kuso.sqlite s3://your-backups/kuso/$(date -u +%Y%m%dT%H%M).sqlite
-shred -u /tmp/kuso.sqlite
+kuso backup -o /tmp/kuso.sql.gz
+aws s3 cp /tmp/kuso.sql.gz s3://your-backups/kuso/$(date -u +%Y%m%dT%H%M).sql.gz
+shred -u /tmp/kuso.sql.gz
 ```
 
-### Why not `sqlite3 .backup`?
+### Why go through the CLI instead of `pg_dump`?
 
-You can — see "manual fallback" below. The CLI path is preferred because it goes through the running server, which holds a write lock on the WAL and knows how to take a consistent snapshot. Direct file copies of an active SQLite DB can race with WAL checkpoint and produce a torn snapshot.
+You can run `pg_dump` directly — see "manual fallback" below. The CLI path is preferred because it goes through the running server, which knows the canonical DSN and applies the right flags for a logically-consistent dump (`--no-owner --no-privileges --clean --if-exists`).
 
 ## Recovery paths
 
 ### Path A — the DB is fine, you just want to roll back to yesterday
 
 ```bash
-kuso restore /backups/kuso-20260504.sqlite
-kubectl -n kuso rollout restart deployment/kuso-server
+kuso restore /backups/kuso-20260504.sql.gz
 ```
 
-The pod restart is **required** — the running server holds an open `*sql.DB` against the pre-swap file, and `restore` swaps the file on disk without touching the live process.
+`kuso restore` streams the dump to the server which applies it inside a single Postgres connection. Existing connections from `kuso-server` replicas survive — the schema's `--clean --if-exists` shape drops + recreates tables; the next request hits fresh data.
+
+A `kubectl -n kuso rollout restart deployment/kuso-server` afterwards is a good belt-and-braces step if you want to drop any in-memory caches that pre-date the restore.
 
 ### Path B — the DB is corrupted
 
-Symptom: `kuso-server` pod CrashLoopBackOff with `database disk image is malformed` or similar in logs. SQLite WAL corruption is rare on a kernel that doesn't lose power, but it happens.
+Symptom: `kuso-server` pod failing with Postgres errors that don't match the schema, `kuso-postgres` pod CrashLoopBackOff, or a Postgres `data corruption` log line. Rare on a kernel that doesn't lose power, but it happens.
 
-1. Drain the server so nothing is writing while you work:
+1. Stop `kuso-server` so nothing is writing while you work:
    ```bash
    kubectl -n kuso scale deployment kuso-server --replicas=0
    ```
-2. From a one-shot pod with the PVC mounted, try the SQLite recovery dance:
+2. Investigate the Postgres pod:
    ```bash
-   kubectl -n kuso run sqlite-rescue --rm -it --restart=Never \
-     --image=alpine \
-     --overrides='{"spec":{"containers":[{"name":"sqlite-rescue","image":"alpine","stdin":true,"tty":true,"volumeMounts":[{"mountPath":"/data","name":"data"}]}],"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"kuso-server-go-data"}}]}}' \
-     -- sh
-   # inside the pod:
-   apk add --no-cache sqlite
-   cd /data
-   sqlite3 kuso.db ".recover" | sqlite3 kuso.db.recovered
-   mv kuso.db kuso.db.broken
-   mv kuso.db.recovered kuso.db
-   exit
+   kubectl -n kuso logs sts/kuso-postgres
+   kubectl -n kuso exec -it sts/kuso-postgres -- psql -U kuso -d kuso \
+     -c "SELECT datname, pg_database_size(datname) FROM pg_database;"
    ```
-3. Bring the server back:
+   If it's a recoverable error (e.g. a single index needs `REINDEX`), do that. If the data files are bad, restore.
+3. Restore from the latest dump:
    ```bash
    kubectl -n kuso scale deployment kuso-server --replicas=1
    kubectl -n kuso rollout status deployment/kuso-server
+   kuso restore /backups/last-good.sql.gz
    ```
 
-If `.recover` doesn't produce a usable DB, restore from the most recent snapshot (Path A). This is why the daily snapshot exists.
+If you're using external managed Postgres, point-in-time recovery from the provider is faster than a `kuso restore` — restore the cluster, then `kubectl rollout restart deployment/kuso-server`.
 
 ### Path C — the box is gone (disk failure, host loss)
 
@@ -103,37 +98,33 @@ You need a fresh `install.sh` run on a new box, then a `kuso restore` of the las
 3. Before letting any user log in, restore the snapshot:
    ```bash
    kuso login --api https://kuso.example.com -u admin -p '<password from install summary>'
-   kuso restore /backups/last-good.sqlite
-   kubectl -n kuso rollout restart deployment/kuso-server
+   kuso restore /backups/last-good.sql.gz
    ```
-4. Wait for kuso to reconcile. The CRDs in your old cluster are gone; they need to be recreated. The fastest path is to re-import each project — `kuso` doesn't yet have a "rebuild CRs from SQLite" command, so this is partly manual:
-   - Recreate each project (`kuso project create ...`).
-   - Recreate each service (`kuso service create ...` or via the UI).
-   - Trigger builds.
-   - Restore addon data from your addon backups (see below).
+4. Wait for kuso to reconcile. The CRDs in your old cluster are gone; they need to be recreated. The fastest path is to re-import each project from its repo via the UI / CLI, then restore addon data from your addon backups (see below).
 
-This path is **slow** and reflects the single-box design. If you need warm-spare DR, kuso is the wrong tool.
+For warm-spare DR (faster than re-running install), point `kuso-postgres-conn` at managed Postgres with cross-region replication and snapshot the etcd / k3s state separately. Out of the box this isn't a one-button thing — you wire it up.
 
 ## Addon data
 
-`kuso addon backup` triggers an addon-specific backup job (Postgres → `pg_dump`, Redis → `BGSAVE` + RDB copy, etc.) and uploads to whatever object store the addon is configured against. See `kuso addon backup --help`. Snapshot the SQLite DB **and** the addons on the same schedule — restoring one without the other is a guaranteed bad time.
+`kuso addon backup` triggers an addon-specific backup job (Postgres → `pg_dump`, Redis → `BGSAVE` + RDB copy, etc.) and uploads to whatever object store the addon is configured against. See `kuso addon backup --help`. Snapshot the metadata DB **and** the addons on the same schedule — restoring one without the other is a guaranteed bad time.
+
+For HA Postgres addons (CNPG-backed `KusoAddon.spec.ha = true`), CNPG-native backups are the right path — see `docs/ADDON_HA.md`. The `pg_dump` cron is suppressed in HA mode.
 
 ## Manual fallback (no CLI access)
 
-If `kuso` itself is broken and you need to grab the DB by hand:
+If `kuso` itself is broken and you need to grab the metadata DB by hand:
 
 ```bash
-# On the host running k3s:
-POD=$(kubectl -n kuso get pod -l app.kubernetes.io/name=kuso-server -o jsonpath='{.items[0].metadata.name}')
-kubectl -n kuso exec "$POD" -- sqlite3 /var/lib/kuso/kuso.db \
-  ".backup /tmp/kuso-snapshot.sqlite"
-kubectl -n kuso cp "$POD:/tmp/kuso-snapshot.sqlite" ./kuso-snapshot.sqlite
+# On any host with kubectl + the kuso kubeconfig:
+kubectl -n kuso exec sts/kuso-postgres -- \
+  pg_dump -U kuso --no-owner --no-privileges --clean --if-exists kuso \
+  | gzip > kuso-snapshot.sql.gz
 ```
 
-`sqlite3 .backup` is online-safe and produces a consistent snapshot.
+`pg_dump` is online-safe and produces a logically consistent snapshot.
 
 ## What we don't do (and probably won't)
 
-- **Multi-instance HA / replication.** SQLite is single-writer by design; running two `kuso-server` pods is not supported and will corrupt state. If you need this, you've outgrown kuso.
-- **Continuous WAL streaming (Litestream-style).** Plausible future work; not built. Daily snapshots + 30-day retention is the recommended baseline.
+- **Continuous WAL streaming.** Plausible future work — `wal-g` or managed-Postgres point-in-time recovery is the right shape. Not bundled today; daily snapshots + 30-day retention is the recommended baseline.
 - **Automatic restore.** Every restore is a destructive operation; we want the human in the loop.
+- **Cross-region active/active control plane.** Out of scope — point at a managed Postgres with cross-region replication if you need it; for k8s state you're on etcd snapshots + a runbook.
