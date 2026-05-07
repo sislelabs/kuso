@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.37] — 2026-05-07
+
+### ✨ Features
+- Feat(addons): ship Mailpit + NATS + MeiliSearch + ClickHouse ([a040e58](https://github.com/sislelabs/kuso/commit/a040e584fefd452208e8a3018472200384d0542b))
+
+### 📝 Docs
+- Docs: reposition kuso as multi-node, Postgres-backed, HA-capable ([6a8a44b](https://github.com/sislelabs/kuso/commit/6a8a44b4ad2a2e0205a34fb13e2470fa39f61de1))
+
 ## [0.9.36] — 2026-05-07
 
 ### ✨ Features
