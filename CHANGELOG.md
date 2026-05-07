@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.17] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(logs/builds): cancel survives operator restart, friendlier pod-not-found ([d5c741c](https://github.com/sislelabs/kuso/commit/d5c741c76fa412e221ba73f4c0d83e8dcf152896))
+
 ## [0.9.16] — 2026-05-07
 
 ### 🐛 Bug Fixes
