@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.22] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(drift): banner survives refresh + ACTIVE chip flips on build success ([2085aaf](https://github.com/sislelabs/kuso/commit/2085aaf0872d0ca0c49c4654f9826d3d5e3ae3aa))
+
 ## [0.9.21] — 2026-05-07
 
 ### 🐛 Bug Fixes
