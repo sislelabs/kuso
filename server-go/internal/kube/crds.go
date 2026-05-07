@@ -220,14 +220,23 @@ func deleteCR(ctx context.Context, c *Client, gvr schema.GroupVersionResource, n
 	return nil
 }
 
+// ErrAbortRetry signals updateWithRetry to bail out cleanly without
+// writing — for the "the desired state is already present" / "the
+// mutation discovered a conflict on its own terms" path. The caller
+// sees a nil object back and decides what HTTP status to map.
+var ErrAbortRetry = fmt.Errorf("kube: abort retry")
+
 // updateWithRetry runs `mutate` against a freshly-fetched copy of the
-// CR and retries the cycle on conflict. helm-operator continuously
-// patches .status; without retry, a Spec write that arrives during a
-// status reconcile silently 409s and the caller sees a generic 500.
+// CR and retries on conflict. helm-operator continuously patches
+// .status; without retry, a Spec write that arrives during a status
+// reconcile silently 409s. The mutate callback re-runs against the
+// fresh object on every retry, so multi-step ops (read latest, check
+// invariants, mutate) get correct read-modify-write semantics across
+// kube optimistic concurrency.
 //
-// `mutate` should ONLY touch the object; persistence happens here.
-// On conflict the helper re-reads the latest version, re-runs the
-// callback, and tries the Update again — bounded backoff (5 tries).
+// Returns ErrAbortRetry when the callback explicitly aborts (no write
+// performed, error wrapped). Anything else goes through standard
+// RetryOnConflict.
 func updateWithRetry[T any](
 	ctx context.Context,
 	c *Client,
@@ -242,6 +251,7 @@ func updateWithRetry[T any](
 			return gerr
 		}
 		if merr := mutate(latest); merr != nil {
+			// Don't retry — the callback decided this op is done.
 			return merr
 		}
 		u, terr := toUnstructured(latest, gvr, kind)
@@ -258,6 +268,15 @@ func updateWithRetry[T any](
 		return nil, fmt.Errorf("kube: update with retry %s/%s in %q: %w", gvr.Resource, name, namespace, err)
 	}
 	return &out, nil
+}
+
+// UpdateKusoServiceWithRetry is the read-modify-write entry point for
+// concurrent service-spec edits. mutate runs against the freshly-
+// fetched CR and is re-run on every conflict, so a stale-rv check
+// inside the callback survives mid-flight helm-operator status
+// patches.
+func (c *Client) UpdateKusoServiceWithRetry(ctx context.Context, namespace, name string, mutate func(*KusoService) error) (*KusoService, error) {
+	return updateWithRetry[KusoService](ctx, c, GVRServices, "KusoService", namespace, name, mutate)
 }
 
 // CreateKusoProject creates a new KusoProject CR.

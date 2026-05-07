@@ -22,8 +22,13 @@ func BuildInstallCommand(k3sURL, k3sToken string, labels map[string]string, node
 	if flags != "" {
 		execArg = "agent " + flags
 	}
+	// `unset HISTFILE` + leading-space prefix on the actual command
+	// keeps the K3S_TOKEN out of bash/zsh history. Operators who paste
+	// this into a terminal won't leak the bootstrap token through
+	// their shell scrollback file. The `set +o history` covers shells
+	// that don't honour HISTCONTROL=ignorespace.
 	return fmt.Sprintf(
-		`curl -sfL https://get.k3s.io | K3S_URL=%s K3S_TOKEN=%s INSTALL_K3S_EXEC=%s sh -`,
+		`unset HISTFILE; set +o history 2>/dev/null; curl -sfL https://get.k3s.io | K3S_URL=%s K3S_TOKEN=%s INSTALL_K3S_EXEC=%s sh -`,
 		shEscape(k3sURL), shEscape(k3sToken), shEscape(execArg),
 	)
 }

@@ -1,7 +1,20 @@
 {{- if .Values.networkPolicy.enabled }}
-# Default-deny ingress and egress for every pod in the project
-# namespace. The companion allow-policies below open just enough holes
-# to keep the platform working: DNS, the in-cluster image registry,
+{{- /*
+  podSelector scopes every rule to pods labelled
+  `kuso.sislelabs.com/project=<release>`. The chart used to use
+  `podSelector: {}` (every pod in the namespace) — that broke kuso
+  itself the moment a project NetworkPolicy landed in the same
+  namespace, because the default-deny caught kuso-server, traefik
+  → kuso-server stopped reaching, and the dashboard 502'd. With
+  single-namespace tenancy (kuso lives in `kuso`, projects' pods
+  also live in `kuso`) we MUST scope by label or our own platform
+  pods get caught in the deny.
+*/ -}}
+{{- $projectSelector := dict "matchLabels" (dict "kuso.sislelabs.com/project" .Release.Name) -}}
+# Default-deny ingress and egress for every pod owned by THIS project.
+# Sibling projects + platform pods are unaffected (their labels don't
+# match). Companion allow-policies below open just enough holes to
+# keep the platform working: DNS, the in-cluster image registry,
 # sibling pods (same project), and ingress from the kuso ingress
 # controller.
 #
@@ -17,7 +30,8 @@ metadata:
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
 spec:
-  podSelector: {}
+  podSelector:
+    {{- toYaml $projectSelector | nindent 4 }}
   policyTypes: [Ingress, Egress]
 ---
 # DNS to kube-dns / coredns. Without this every pod's first DNS lookup
@@ -30,7 +44,8 @@ metadata:
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
 spec:
-  podSelector: {}
+  podSelector:
+    {{- toYaml $projectSelector | nindent 4 }}
   policyTypes: [Egress]
   egress:
     - to:
@@ -52,14 +67,17 @@ metadata:
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
 spec:
-  podSelector: {}
+  podSelector:
+    {{- toYaml $projectSelector | nindent 4 }}
   policyTypes: [Ingress, Egress]
   ingress:
     - from:
-        - podSelector: {}
+        - podSelector:
+            {{- toYaml $projectSelector | nindent 12 }}
   egress:
     - to:
-        - podSelector: {}
+        - podSelector:
+            {{- toYaml $projectSelector | nindent 12 }}
 ---
 # Ingress from the kuso platform namespace — kuso-server streams logs,
 # performs exec, scrapes metrics, and traefik forwards user HTTP
@@ -72,13 +90,23 @@ metadata:
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
 spec:
-  podSelector: {}
+  podSelector:
+    {{- toYaml $projectSelector | nindent 4 }}
   policyTypes: [Ingress]
   ingress:
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
+        # Single-namespace tenancy: when kuso shares a ns with the
+        # project, traefik / kuso-server come from the same ns, not
+        # a labelled neighbour. Allow same-ns pods carrying the
+        # kuso-platform label too.
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: ["traefik", "kuso-server", "kuso-prometheus"]
 ---
 # Egress to the in-cluster image registry. The build pods need this
 # to push, the runtime pods need it to pull (when imagePullPolicy is
@@ -91,7 +119,8 @@ metadata:
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
 spec:
-  podSelector: {}
+  podSelector:
+    {{- toYaml $projectSelector | nindent 4 }}
   policyTypes: [Egress]
   egress:
     - to:
@@ -99,6 +128,10 @@ spec:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
           podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kuso-registry
+        # Same-ns fallback for single-namespace installs.
+        - podSelector:
             matchLabels:
               app.kubernetes.io/name: kuso-registry
       ports:
@@ -120,6 +153,7 @@ metadata:
 spec:
   podSelector:
     matchLabels:
+      kuso.sislelabs.com/project: {{ .Release.Name }}
       kuso.sislelabs.com/network-egress-public: "true"
   policyTypes: [Egress]
   egress:

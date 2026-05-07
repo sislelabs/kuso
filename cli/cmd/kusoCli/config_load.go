@@ -141,13 +141,16 @@ func saveToken(instanceName, token string) error {
 		}
 		credentialsConfig.SetConfigFile(path)
 	}
-	tmp := path + ".tmp"
-	if err := credentialsConfig.WriteConfigAs(tmp); err != nil {
-		return fmt.Errorf("write tmp credentials: %w", err)
+	// Marshal viper's view to YAML by hand so we can write to a
+	// `.tmp` extension without viper's WriteConfigAs choking on
+	// the unknown config type. Atomic rename + 0600 perms.
+	body, err := yaml.Marshal(credentialsConfig.AllSettings())
+	if err != nil {
+		return fmt.Errorf("marshal credentials: %w", err)
 	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("chmod credentials: %w", err)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		return fmt.Errorf("write tmp credentials: %w", err)
 	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)

@@ -32,10 +32,13 @@ import (
 )
 
 // DefaultTokenTTL is the lifetime of a freshly-minted bootstrap token.
-// 15 minutes is enough to: paste the curl one-liner, ssh to the new
-// VM, paste it, and watch it run. Long enough that operators don't
-// rage-mint, short enough that a leaked token is mostly harmless.
-const DefaultTokenTTL = 15 * time.Minute
+// 5 minutes — short enough that a token pasted into .bash_history
+// (the shell-aware hardening below tries to avoid this but the token
+// can leak through other vectors: terminal scrollback, tmux logging,
+// shell hooks) expires before an attacker can replay it. Operators
+// have to mint-and-paste promptly; the dashboard's UX makes that the
+// expected flow anyway.
+const DefaultTokenTTL = 5 * time.Minute
 
 // MintTokenRequest is what the handler hands the helper to mint a
 // bootstrap token. Labels are the kuso-namespaced keys (without the

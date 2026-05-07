@@ -7,6 +7,7 @@ import (
 	"errors"
 	"flag"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -457,6 +458,15 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 		MaxHeaderBytes:    1 << 20, // 1 MiB; chimw.RequestID + auth fit in well under
+		// BaseContext gives every request a context that derives from
+		// the server's lifecycle. On graceful Shutdown, the handler
+		// goroutines still in flight see ctx.Done() and unwind — in
+		// particular the long-lived log-tail WS goroutines, which
+		// would otherwise hang the rolling update past srv.Shutdown's
+		// timeout. sigCtx is the right parent: it cancels on
+		// SIGTERM/SIGINT, which is exactly when we want WSes to
+		// close.
+		BaseContext: func(_ net.Listener) context.Context { return sigCtx },
 	}
 
 	go func() {
@@ -508,9 +518,12 @@ func main() {
 	<-sigCtx.Done()
 	logger.Info("shutdown signal received")
 
-	// Step 1: stop accepting new HTTP requests. 10s deadline lets
-	// in-flight requests finish.
-	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
+	// Step 1: stop accepting new HTTP requests. 30s deadline gives
+	// in-flight WS log-tails room to close their conn frame after
+	// their BaseContext (sigCtx) cancels — pre-bump 10s wasn't
+	// enough and rolling updates left orphan WS readers on the
+	// outgoing pod.
+	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancelShutdown()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		logger.Error("graceful shutdown failed", "err", err)

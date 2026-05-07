@@ -51,11 +51,12 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return requirePerm(w, r, auth.PermSettingsAdmin)
 }
 
-// adminOnly is the middleware form of requireAdmin — wrap a chi.Group
+// AdminOnly is the middleware form of requireAdmin — wrap a chi.Group
 // with it to gate every route inside in one place. Cuts the
 // "did I forget the gate on this method" footgun that produced the
-// audit-handler / notifications-feed regressions.
-func adminOnly(next http.Handler) http.Handler {
+// audit-handler / notifications-feed regressions. Exported so
+// router.go (different package) can reuse the same middleware.
+func AdminOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !requireAdmin(w, r) {
 			return

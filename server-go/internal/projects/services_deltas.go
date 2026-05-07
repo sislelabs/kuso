@@ -54,36 +54,54 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 		return nil, fmt.Errorf("%w: %q is not a valid hostname", ErrInvalid, host)
 	}
 	if req.TLS && !isPublicFQDN(host) {
-		// Reject TLS-on-non-public-FQDN at edit time. A reserved-suffix
-		// or single-label host would silently break HTTPS for every
-		// other host on the same Ingress (the all-or-nothing tls block
-		// in traefik). User can still bind the host with --no-tls / TLS
-		// off if they want HTTP-only routing.
 		return nil, fmt.Errorf("%w: %q can't get a Let's Encrypt cert (not a public FQDN — single-label or reserved TLD); add it with TLS off if you only need HTTP routing", ErrInvalid, host)
 	}
 
+	// In-process mutex guards same-replica races. Multi-replica
+	// races land on the kube optimistic-concurrency check below:
+	// updateWithRetry re-runs the duplicate scan against the live
+	// resourceVersion on conflict, so the second write doesn't
+	// silently overwrite the first.
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
-	svc, ns, err := s.fetchServiceForDelta(ctx, project, service)
+	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-
-	for i := range svc.Spec.Domains {
-		if strings.EqualFold(svc.Spec.Domains[i].Host, host) {
-			if svc.Spec.Domains[i].TLS == req.TLS {
-				return svc, fmt.Errorf("%w: domain %q already configured", ErrConflict, host)
-			}
-			// Existing host with different TLS — flip the flag.
-			svc.Spec.Domains[i].TLS = req.TLS
-			return s.persistDomains(ctx, ns, project, service, svc)
-		}
+	fqn := service
+	if !strings.HasPrefix(service, project+"-") {
+		fqn = project + "-" + service
 	}
-
-	svc.Spec.Domains = append(svc.Spec.Domains, kube.KusoDomain{Host: host, TLS: req.TLS})
-	return s.persistDomains(ctx, ns, project, service, svc)
+	var dupConflict bool
+	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, fqn, func(svc *kube.KusoService) error {
+		dupConflict = false
+		for i := range svc.Spec.Domains {
+			if strings.EqualFold(svc.Spec.Domains[i].Host, host) {
+				if svc.Spec.Domains[i].TLS == req.TLS {
+					dupConflict = true
+					return kube.ErrAbortRetry
+				}
+				svc.Spec.Domains[i].TLS = req.TLS
+				return nil
+			}
+		}
+		svc.Spec.Domains = append(svc.Spec.Domains, kube.KusoDomain{Host: host, TLS: req.TLS})
+		return nil
+	})
+	if dupConflict {
+		return nil, fmt.Errorf("%w: domain %q already configured", ErrConflict, host)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("update service: %w", err)
+	}
+	defer s.invalidateDescribe(project)
+	if perr := s.propagateDomainsToEnvs(ctx, ns, project, service, updated); perr != nil {
+		return updated, fmt.Errorf("propagate domains to envs: %w", perr)
+	}
+	return updated, nil
 }
+
 
 // RemoveDomain drops a domain from spec.domains by host. ErrNotFound
 // when the host isn't present — distinguishes "I deleted it from the

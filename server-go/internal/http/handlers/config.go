@@ -41,7 +41,7 @@ func (h *ConfigHandler) Mount(r chi.Router) {
 	r.Get("/api/config/podsizes", h.ListPodSizes)
 	r.Get("/api/config/templates", h.Templates)
 	r.Group(func(r chi.Router) {
-		r.Use(adminOnly)
+		r.Use(AdminOnly)
 		r.Post("/api/config", h.UpdateSettings)
 		r.Delete("/api/config/runpacks/{id}", h.DeleteRunpack)
 		r.Post("/api/config/podsizes", h.CreatePodSize)

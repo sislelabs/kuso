@@ -31,7 +31,14 @@ previews:
 # Operators who run kuso on a single-tenant cluster (own dogfood, no
 # untrusted user code) can flip enabled=false to skip the policies.
 networkPolicy:
-  enabled: true
+  # Default off because v0.9.9 shipped with podSelector:{} which
+  # caught every pod in the (single-namespace) install — including
+  # kuso-server, traefik routes failed, dashboard 502'd. v0.9.10
+  # rewrites the selector to scope by project label so multi-tenant
+  # installs can flip back to enabled: true safely. Single-tenant
+  # self-host installs probably don't need NPs at all; opt in when
+  # you start renting projects to others.
+  enabled: false
   # When the project namespace differs from the kuso control-plane
   # namespace (multi-namespace mode), set the platform namespace here
   # so kuso-server's log-streaming and exec calls are still allowed

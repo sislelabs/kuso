@@ -53,7 +53,7 @@ type NotificationsHandler struct {
 // bypass the check.
 func (h *NotificationsHandler) Mount(r chi.Router) {
 	r.Group(func(r chi.Router) {
-		r.Use(adminOnly)
+		r.Use(AdminOnly)
 		r.Get("/api/notifications", h.List)
 		r.Get("/api/notifications/{id}", h.Get)
 		r.Post("/api/notifications", h.Create)

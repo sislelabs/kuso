@@ -117,6 +117,16 @@ func NewRouter(d Deps) http.Handler {
 	// semaphore.
 	r.Use(inFlightLimit(100))
 	if os.Getenv("KUSO_DEV_CORS") == "1" {
+		// Loud warning if this leaked into a production env: the
+		// header `Access-Control-Allow-Origin: *` lets any origin
+		// read the SPA's JSON, defeating same-origin protections.
+		// Acceptable for `npm run dev` against a remote API; not
+		// for an installed kuso-server. Reuse the kube namespace
+		// shape as a heuristic — production runs in `kuso`.
+		if d.Logger != nil {
+			d.Logger.Warn("KUSO_DEV_CORS=1 — Access-Control-Allow-Origin: * is enabled. " +
+				"This MUST NOT be set in a production deploy; remove from env before shipping.")
+		}
 		r.Use(devCORS)
 	}
 
@@ -131,13 +141,21 @@ func NewRouter(d Deps) http.Handler {
 	// pod offline (if /healthz checked DB) or silently 5xxs every
 	// request (if it didn't).
 	r.Get("/readyz", readyz(d))
-	// Prometheus scrape endpoint. Open (no auth) so it works with
-	// the in-cluster prometheus-server's default ServiceMonitor —
-	// the scrape goes through the cluster network, not the public
-	// ingress. If the operator wants to expose /metrics publicly
-	// they should put a scrape-only auth proxy in front; the kuso
-	// installer doesn't expose this externally by default.
-	r.Get("/metrics", promhttp.Handler().ServeHTTP)
+	// Prometheus scrape endpoint. The kuso ingress doesn't route
+	// /metrics publicly (only /api/* + the SPA), and the in-cluster
+	// prometheus-server scrapes via Service, so cluster-internal is
+	// the safe default. Operators exposing kuso behind a non-kuso
+	// ingress controller MUST keep /metrics off the public surface
+	// or set KUSO_METRICS_REQUIRE_AUTH=true to force admin-only.
+	if os.Getenv("KUSO_METRICS_REQUIRE_AUTH") == "true" {
+		r.Group(func(r chi.Router) {
+			r.Use(d.Issuer.Middleware())
+			r.Use(httphandlers.AdminOnly)
+			r.Get("/metrics", promhttp.Handler().ServeHTTP)
+		})
+	} else {
+		r.Get("/metrics", promhttp.Handler().ServeHTTP)
+	}
 	if d.Status != nil {
 		statusH := &httphandlers.StatusHandler{Status: d.Status, Logger: d.Logger}
 		r.Get("/api/status", statusH.Handler())
