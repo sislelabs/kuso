@@ -3,8 +3,9 @@
 import { useEffect, useRef, useState } from "react";
 import { useLogStream } from "@/features/logs";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, RotateCcw, X } from "lucide-react";
+import { ChevronDown, Copy, RotateCcw, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 interface Props {
   project: string;
@@ -85,6 +86,27 @@ export function LogStream({ project, service, env = "production", height = "40vh
             type="button"
             variant="ghost"
             size="icon-xs"
+            aria-label="Copy all"
+            onClick={async () => {
+              // Clean copy: strip the per-line pod prefix entirely so
+              // pasting into a chat or issue tracker doesn't drag along
+              // 12-char pod hashes on every line. User just sees the
+              // app's own log lines, joined with newlines.
+              const text = lines.map((l) => l.line).join("\n");
+              try {
+                await navigator.clipboard.writeText(text);
+                toast.success(`Copied ${lines.length} lines`);
+              } catch {
+                toast.error("Copy failed (clipboard API unavailable)");
+              }
+            }}
+          >
+            <Copy className="h-3 w-3" />
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
             aria-label="Clear"
             onClick={clear}
           >
@@ -121,21 +143,33 @@ export function LogStream({ project, service, env = "production", height = "40vh
                 : "disconnected"}
           </p>
         )}
-        {lines.map((l, i) => (
-          <div
-            key={i}
-            className={cn(
-              "py-px",
-              wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre",
-              l.stream === "stderr" && "text-red-400"
-            )}
-          >
-            <span className="select-none text-zinc-500 mr-2">
-              {l.pod.length > 12 ? l.pod.slice(-12) : l.pod}
-            </span>
-            {l.line}
-          </div>
-        ))}
+        {lines.map((l, i) => {
+          const podShort = l.pod.length > 12 ? l.pod.slice(-12) : l.pod;
+          return (
+            <div
+              key={i}
+              className={cn(
+                "py-px",
+                wrap ? "whitespace-pre-wrap break-all" : "whitespace-pre",
+                l.stream === "stderr" && "text-red-400"
+              )}
+            >
+              {/* Pod prefix as a CSS ::before-style decoration: the
+                  user sees it, but the value isn't a child text node
+                  of the line wrapper, so a drag-select copy + paste
+                  carries only `l.line`. select-none is a belt for
+                  browsers that still drag the inline span on copy. */}
+              <span
+                aria-hidden="true"
+                className="select-none text-zinc-500 mr-2 inline-block"
+                style={{ userSelect: "none", WebkitUserSelect: "none" }}
+              >
+                {podShort}
+              </span>
+              <span className="select-text">{l.line}</span>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
