@@ -96,7 +96,19 @@ export function useBuilds(project: string, service: string) {
     queryKey: buildsQueryKey(project, service),
     queryFn: () => listBuilds(project, service),
     enabled: !!project && !!service,
-    refetchInterval: 10_000,
+    // 5s while a build is in flight (pending/running) so chip
+    // transitions catch up fast; back to 10s when everything is
+    // settled. We sniff the latest build's status from the cached
+    // data — undefined on first load so the first refetch is at 5s
+    // (cheap), and any user opening the panel gets snappy updates
+    // through the build lifecycle.
+    refetchInterval: (q) => {
+      const list = q.state.data ?? [];
+      const newest = list[0];
+      const s = (newest?.status ?? "").toLowerCase();
+      if (s === "pending" || s === "running" || s === "queued") return 3_000;
+      return 10_000;
+    },
   });
   // When the latest build flips to "succeeded", invalidate envs +
   // drift right away so ACTIVE/SUPERSEDED chips flip without waiting

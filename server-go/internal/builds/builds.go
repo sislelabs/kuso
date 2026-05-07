@@ -1461,7 +1461,15 @@ type Poller struct {
 // real bug for an entire test cycle.
 func (p *Poller) Run(ctx context.Context) error {
 	if p.Interval <= 0 {
-		p.Interval = 30 * time.Second
+		// 5s default: the poller filters by !build-state=done, so each
+		// tick only touches in-flight builds (single-digit count even
+		// on busy clusters) — cost is negligible. The previous 30s
+		// default meant pending → running transitions surfaced ~30s
+		// after the kaniko Job actually started, leaving the
+		// deployments tab showing PENDING while the WS already
+		// streamed "Building stage..." kaniko output. With 5s ticks
+		// the chip flips within one UI poll of reality.
+		p.Interval = 5 * time.Second
 	}
 	if p.Logger == nil {
 		p.Logger = slog.Default()
