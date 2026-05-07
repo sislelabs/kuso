@@ -346,6 +346,15 @@ func (c *Client) DeleteKusoBuild(ctx context.Context, namespace, name string) er
 	return deleteCR(ctx, c, GVRBuilds, namespace, name)
 }
 
+// CreateKusoAddon creates a new KusoAddon CR. Used by the env-group
+// clone flow when the user picks "fresh" for an addon — the existing
+// addons.Service.Add path goes through HTTP-handler validation that
+// over-restricts the allowed kinds; here we just need to mirror an
+// already-validated production addon's spec into a new env's namespace.
+func (c *Client) CreateKusoAddon(ctx context.Context, namespace string, a *KusoAddon) (*KusoAddon, error) {
+	return create[KusoAddon](ctx, c, GVRAddons, "KusoAddon", namespace, a)
+}
+
 // UpdateKusoAddon replaces an existing KusoAddon's spec. Used by the
 // addon settings flow (placement edits, future size/version updates).
 func (c *Client) UpdateKusoAddon(ctx context.Context, namespace string, a *KusoAddon) (*KusoAddon, error) {

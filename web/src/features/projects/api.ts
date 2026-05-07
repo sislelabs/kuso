@@ -39,6 +39,63 @@ export async function createEnvironment(
   );
 }
 
+// EnvGroupSummary mirrors projects.EnvGroupSummary on the server. An
+// "env group" is the project-level environment concept (production /
+// staging / client-demo) that spans every service + addon. The group
+// is grouped-by-label, not its own CRD — see env_groups.go.
+export interface EnvGroupSummary {
+  name: string;
+  project: string;
+  // "production" | "preview" | "custom"
+  kind: string;
+  services: string[];
+  addons: string[];
+  addonPolicy?: Record<string, "fresh" | "shared">;
+  createdAt?: string;
+}
+
+export async function listEnvGroups(project: string): Promise<EnvGroupSummary[]> {
+  return api(`/api/projects/${encodeURIComponent(project)}/env-groups`);
+}
+
+export async function getEnvGroup(
+  project: string,
+  name: string,
+): Promise<EnvGroupSummary> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/env-groups/${encodeURIComponent(name)}`,
+  );
+}
+
+export async function createEnvGroup(
+  project: string,
+  body: { name: string; addonPolicy?: Record<string, "fresh" | "shared"> },
+): Promise<EnvGroupSummary> {
+  return api(`/api/projects/${encodeURIComponent(project)}/env-groups`, {
+    method: "POST",
+    body,
+  });
+}
+
+export async function deleteEnvGroup(project: string, name: string): Promise<void> {
+  await api(
+    `/api/projects/${encodeURIComponent(project)}/env-groups/${encodeURIComponent(name)}?confirm=${encodeURIComponent(name)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function setEnvGroupServiceBranch(
+  project: string,
+  envName: string,
+  serviceShort: string,
+  branch: string,
+): Promise<void> {
+  await api(
+    `/api/projects/${encodeURIComponent(project)}/env-groups/${encodeURIComponent(envName)}/services/${encodeURIComponent(serviceShort)}/branch`,
+    { method: "PATCH", body: { branch } },
+  );
+}
+
 export async function listAddons(project: string): Promise<KusoAddon[]> {
   return api<KusoAddon[]>(`/api/projects/${encodeURIComponent(project)}/addons`);
 }

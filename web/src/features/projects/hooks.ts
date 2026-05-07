@@ -5,6 +5,7 @@ import {
   getProject,
   listAddons,
   listEnvironments,
+  listEnvGroups,
   listProjects,
   listServices,
 } from "./api";
@@ -15,8 +16,29 @@ export const servicesQueryKey = (project: string) =>
   ["projects", project, "services"] as const;
 export const envsQueryKey = (project: string) =>
   ["projects", project, "envs"] as const;
+export const envGroupsQueryKey = (project: string) =>
+  ["projects", project, "env-groups"] as const;
 export const addonsQueryKey = (project: string) =>
   ["projects", project, "addons"] as const;
+
+// useEnvGroups reads the project-level environment groupings —
+// "production", "staging", "client-demo", plus any preview-pr-N envs.
+// Each group spans every cloned service + (per-policy) addon. Used by
+// the env switcher in TopNav.
+export function useEnvGroups(project: string) {
+  return useQuery({
+    queryKey: envGroupsQueryKey(project),
+    queryFn: () => listEnvGroups(project),
+    enabled: !!project,
+    // Refetch on the same cadence as the env switcher's parent — fast
+    // enough that creating a new env shows up in the dropdown within
+    // one paint, slow enough that idle dashboards aren't burning
+    // cycles. The list is small (one row per env-group); cost is
+    // negligible.
+    refetchInterval: 10_000,
+    staleTime: 5_000,
+  });
+}
 
 export function useProjects() {
   return useQuery({ queryKey: projectsQueryKey, queryFn: listProjects });

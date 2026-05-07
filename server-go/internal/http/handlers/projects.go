@@ -96,6 +96,23 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}/envs", h.ListEnvironments)
 	r.Get("/api/projects/{project}/envs/{env}", h.GetEnvironment)
 	r.Delete("/api/projects/{project}/envs/{env}", h.DeleteEnvironment)
+
+	// Project-level env groups. An "env group" is the user-facing
+	// "production" / "staging" / "client-demo" concept — a name that
+	// spans every service + (optionally fresh) addon in the project.
+	// Backed by per-service KusoEnvironment CRs labelled with
+	// kuso.sislelabs.com/env=<group-name>; production is the default.
+	r.Get("/api/projects/{project}/env-groups", h.ListEnvGroups)
+	r.Post("/api/projects/{project}/env-groups", h.CreateEnvGroup)
+	r.Get("/api/projects/{project}/env-groups/{name}", h.GetEnvGroup)
+	r.Delete("/api/projects/{project}/env-groups/{name}", h.DeleteEnvGroup)
+	// Per-service branch override inside a non-production env. Lets
+	// the user point one service at a different branch in their
+	// staging env without affecting production.
+	r.Patch(
+		"/api/projects/{project}/env-groups/{name}/services/{service}/branch",
+		h.SetEnvGroupServiceBranch,
+	)
 }
 
 // projectCtx pulls a 5-second timeout context from the request. Same
@@ -728,6 +745,113 @@ func (h *ProjectsHandler) DeleteEnvironment(w http.ResponseWriter, r *http.Reque
 	}
 	if err := h.Svc.DeleteEnvironment(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "env")); err != nil {
 		h.fail(w, "delete env", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// ListEnvGroups returns every env-group in the project.
+func (h *ProjectsHandler) ListEnvGroups(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	out, err := h.Svc.ListEnvGroups(ctx, project)
+	if err != nil {
+		h.fail(w, "list env-groups", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// GetEnvGroup returns one env-group's summary by name.
+func (h *ProjectsHandler) GetEnvGroup(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	out, err := h.Svc.GetEnvGroup(ctx, project, chi.URLParam(r, "name"))
+	if err != nil {
+		h.fail(w, "get env-group", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// CreateEnvGroup mirrors every service + (per-policy) addon into a new
+// env-group. Body: {name, addonPolicy: {<addon-short>: "fresh"|"shared"}}.
+func (h *ProjectsHandler) CreateEnvGroup(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	// Cloning every service + addon is a structural project mutation;
+	// require admin rather than viewer/deployer.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+		return
+	}
+	var body projects.CreateEnvGroupRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	out, err := h.Svc.CreateEnvGroup(ctx, project, body)
+	if err != nil {
+		h.fail(w, "create env-group", err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, out)
+}
+
+// DeleteEnvGroup tears down a non-production env. Production is
+// refused; preview teardown still goes through DeleteEnvironment.
+// ?confirm=<name> required to acknowledge data loss (matches the addon
+// delete pattern).
+func (h *ProjectsHandler) DeleteEnvGroup(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+		return
+	}
+	name := chi.URLParam(r, "name")
+	if r.URL.Query().Get("confirm") != name {
+		http.Error(w, "env-group delete requires ?confirm=<name> to acknowledge data loss", http.StatusBadRequest)
+		return
+	}
+	if err := h.Svc.DeleteEnvGroup(ctx, project, name); err != nil {
+		h.fail(w, "delete env-group", err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// SetEnvGroupServiceBranch updates the branch tracked by one service
+// in a non-production env. Body: {branch: "<branch-name>"}.
+func (h *ProjectsHandler) SetEnvGroupServiceBranch(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+		return
+	}
+	var body struct {
+		Branch string `json:"branch"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := h.Svc.SetServiceBranchInEnv(ctx,
+		project,
+		chi.URLParam(r, "name"),
+		chi.URLParam(r, "service"),
+		body.Branch,
+	); err != nil {
+		h.fail(w, "set env-group service branch", err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

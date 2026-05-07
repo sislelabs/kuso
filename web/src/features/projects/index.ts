@@ -3,11 +3,13 @@ export {
   useProject,
   useServices,
   useEnvironments,
+  useEnvGroups,
   useAddons,
   projectsQueryKey,
   projectQueryKey,
   servicesQueryKey,
   envsQueryKey,
+  envGroupsQueryKey,
   addonsQueryKey,
 } from "./hooks";
 export {
@@ -29,8 +31,19 @@ export {
   restoreBackup,
   listSQLTables,
   runSQL,
+  listEnvGroups,
+  getEnvGroup,
+  createEnvGroup,
+  deleteEnvGroup,
+  setEnvGroupServiceBranch,
 } from "./api";
-export type { BackupObject, SQLTable, SQLQueryResponse, UpdateAddonBody } from "./api";
+export type {
+  BackupObject,
+  SQLTable,
+  SQLQueryResponse,
+  UpdateAddonBody,
+  EnvGroupSummary,
+} from "./api";
 export {
   useUpdateProject,
   useDeleteProject,

@@ -1,13 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useProject, createEnvironment } from "@/features/projects";
+import { useProject, useAddons, createEnvGroup } from "@/features/projects";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { X, Plus, GitBranch } from "lucide-react";
+import { X, Plus, Database, Share2, Sparkles } from "lucide-react";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
 
 interface Props {
   project: string;
@@ -16,67 +17,61 @@ interface Props {
   onCreated?: (envShortName: string) => void;
 }
 
-// NewEnvironmentDialog opens from the env switcher's "+ new" row.
-// Lets the user create a long-lived branch env (think "staging" or
-// "qa") with its own URL. Production envs auto-create with the
-// service; preview envs are PR-driven; this is the third case.
+type AddonPolicy = "fresh" | "shared";
+
+// NewEnvironmentDialog spawns a new project-level environment that
+// mirrors every service in the project. Use case: client-review
+// links — "I want to send this URL to a client and they can poke it
+// without touching production." Each cloned service gets its own
+// hostname (<svc>-<env>.project.basedomain) and its own KusoBuild
+// lineage; addon data isolation is per-addon-policy.
+//
+// Model:
+//   - Name only. No branch field. Branches are configured per-service
+//     after the env exists, in the service settings panel.
+//   - Per-addon policy picker:
+//       fresh  = new addon pod, fresh PVC, new password (isolated data)
+//       shared = cloned services point at production's addon (same data)
+//     Default per kind: stateful stores (postgres, mongodb, mysql,
+//     clickhouse, meilisearch) → fresh; caches/messaging (redis, nats,
+//     memcached) → shared by default since cache contention isn't
+//     usually a correctness concern. User overrides any of them.
+//
+// On success: toast + tip banner ("review env vars in [Variables]").
 export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Props) {
   const proj = useProject(project);
   const services = proj.data?.services ?? [];
-  // Default to the first service so the picker isn't empty on first
-  // render. Multi-service projects let the user choose; we don't
-  // create one env per service in a single click — too magic.
-  const [serviceName, setServiceName] = useState<string>("");
-  const [name, setName] = useState("");
-  const [branch, setBranch] = useState("");
+  const addons = useAddons(project);
   const qc = useQueryClient();
 
-  // Resolve the picked service's KusoService → spec.repo so we can
-  // show the user WHICH repo + default branch this env will track.
-  // Without this context the branch input was a free-text field with
-  // no link back to the service's actual GitHub repo, which made the
-  // dialog feel like the env was tied to a branch in the abstract.
-  // Envs are service-scoped; the branch is "of THIS service's repo".
-  const pickedService = services.find((s) => {
-    const full = s.metadata.name;
-    const prefix = project + "-";
-    const short = full.startsWith(prefix) ? full.slice(prefix.length) : full;
-    return short === serviceName;
-  });
-  const repoURL = pickedService?.spec?.repo?.url ?? "";
-  const repoDefaultBranch = pickedService?.spec?.repo?.defaultBranch ?? "";
-  // Compact "owner/repo" rendering — full URL is noisy in a dialog.
-  const repoLabel = (() => {
-    if (!repoURL) return "";
-    const m = repoURL.match(/github\.com[/:]([^/]+\/[^/.]+)/i);
-    return m ? m[1] : repoURL;
-  })();
+  const [name, setName] = useState("");
+  const [policy, setPolicy] = useState<Record<string, AddonPolicy>>({});
 
-  useEffect(() => {
-    if (open) {
-      setName("");
-      setBranch("");
-      const first = services[0];
-      if (first) {
-        // Service CR names are "<project>-<short>"; the API takes
-        // the short form. Strip the project prefix here so the
-        // user-visible name matches the rest of the UI.
-        const full = first.metadata.name;
-        const prefix = project + "-";
-        setServiceName(full.startsWith(prefix) ? full.slice(prefix.length) : full);
-      }
+  // Default the addon-policy map whenever the addon list loads.
+  const addonShorts = useMemo(() => {
+    const list = addons.data ?? [];
+    const out: { short: string; kind: string }[] = [];
+    for (const a of list) {
+      const fqn = a.metadata.name;
+      const prefix = project + "-";
+      const short = fqn.startsWith(prefix) ? fqn.slice(prefix.length) : fqn;
+      out.push({ short, kind: a.spec?.kind ?? "" });
     }
-  }, [open, project, services]);
+    out.sort((a, b) => a.short.localeCompare(b.short));
+    return out;
+  }, [addons.data, project]);
 
-  // Auto-fill branch with the picked service's defaultBranch on
-  // service-pick, but only when the user hasn't typed a branch yet.
-  // Keeps the form smart without clobbering an in-progress edit.
   useEffect(() => {
     if (!open) return;
-    if (!repoDefaultBranch) return;
-    if (branch.trim() !== "") return;
-    setBranch(repoDefaultBranch);
-  }, [open, serviceName, repoDefaultBranch, branch]);
+    setName("");
+    // Seed defaults on each open. Stateful kinds default to fresh,
+    // others to shared. Users can flip any of them inline.
+    const def: Record<string, AddonPolicy> = {};
+    for (const a of addonShorts) {
+      def[a.short] = defaultPolicyForKind(a.kind);
+    }
+    setPolicy(def);
+  }, [open, addonShorts]);
 
   useEffect(() => {
     if (!open) return;
@@ -88,11 +83,15 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
   }, [open, onClose]);
 
   const create = useMutation({
-    mutationFn: () => createEnvironment(project, serviceName, { name, branch }),
+    mutationFn: () => createEnvGroup(project, { name, addonPolicy: policy }),
     onSuccess: () => {
-      toast.success(`Environment "${name}" created`);
+      toast.success(
+        `Environment "${name}" created. Review variables in each service — addon refs were rewritten where you picked "fresh".`,
+        { duration: 8000 },
+      );
       qc.invalidateQueries({ queryKey: ["projects", project] });
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+      qc.invalidateQueries({ queryKey: ["projects", project, "env-groups"] });
       onCreated?.(name);
       onClose();
     },
@@ -100,12 +99,8 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
   });
 
   const submit = () => {
-    if (!serviceName) {
-      toast.error("Pick a service first");
-      return;
-    }
-    if (!name.trim() || !branch.trim()) {
-      toast.error("Name + branch required");
+    if (!name.trim()) {
+      toast.error("Name required");
       return;
     }
     if (name === "production" || name.startsWith("pr-")) {
@@ -114,6 +109,10 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
     }
     if (!/^[a-z0-9](?:[a-z0-9-]{0,30}[a-z0-9])?$/.test(name)) {
       toast.error("Name: lowercase, dashes, ≤32 chars");
+      return;
+    }
+    if (services.length === 0) {
+      toast.error("Add a service to the project first");
       return;
     }
     create.mutate();
@@ -135,7 +134,7 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
             animate={{ scale: 1, y: 0 }}
             exit={{ scale: 0.96, y: 6 }}
             transition={{ type: "spring", stiffness: 360, damping: 32 }}
-            className="w-full max-w-md rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-[var(--shadow-lg)]"
+            className="flex max-h-[85vh] w-full max-w-lg flex-col rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-[var(--shadow-lg)]"
             onClick={(e) => e.stopPropagation()}
           >
             <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-4 py-3">
@@ -144,7 +143,8 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
                   New environment
                 </h2>
                 <p className="mt-0.5 text-[11px] text-[var(--text-tertiary)]">
-                  A second instance of one service, deployed from a different branch.
+                  Mirror every service + (optionally) addon under a new name. Send the URL to a
+                  client for review without touching production.
                 </p>
               </div>
               <button
@@ -157,86 +157,138 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
               </button>
             </header>
 
-            <div className="space-y-3 border-b border-[var(--border-subtle)] p-4">
-              <Field
-                label="service"
-                hint={
-                  repoLabel
-                    ? `repo: ${repoLabel}`
-                    : "envs are scoped to a single service; pick which one this env runs"
-                }
-              >
-                <select
-                  value={serviceName}
-                  onChange={(e) => setServiceName(e.target.value)}
-                  className="h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px]"
-                >
-                  {services.length === 0 && <option value="">(no services in project)</option>}
-                  {services.map((s) => {
-                    const full = s.metadata.name;
-                    const short = full.startsWith(project + "-")
-                      ? full.slice(project.length + 1)
-                      : full;
-                    return (
-                      <option key={full} value={short}>
-                        {short}
-                      </option>
-                    );
-                  })}
-                </select>
-              </Field>
+            <div className="flex-1 overflow-y-auto">
+              <div className="space-y-3 border-b border-[var(--border-subtle)] p-4">
+                <Field label="name" hint="becomes part of every cloned service's URL">
+                  <Input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="staging"
+                    className="h-8 font-mono text-[12px]"
+                    spellCheck={false}
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") submit();
+                    }}
+                  />
+                </Field>
 
-              <Field label="name" hint="becomes part of the URL">
-                <Input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="staging"
-                  className="h-8 font-mono text-[12px]"
-                  spellCheck={false}
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") submit();
-                  }}
-                />
-              </Field>
+                <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 text-[11px] text-[var(--text-secondary)]">
+                  <p className="flex items-center gap-1.5 font-medium text-[var(--text-primary)]">
+                    <Sparkles className="h-3 w-3 text-[var(--accent)]" />
+                    What gets mirrored
+                  </p>
+                  <ul className="mt-1.5 space-y-0.5 pl-4 text-[var(--text-secondary)]">
+                    <li className="list-disc">
+                      <span className="font-medium">{services.length}</span>{" "}
+                      service{services.length === 1 ? "" : "s"} cloned with all env vars copied
+                    </li>
+                    <li className="list-disc">
+                      Branch defaults to production&apos;s; change per-service in{" "}
+                      <span className="font-mono">Settings</span> after create
+                    </li>
+                    <li className="list-disc">
+                      URLs follow{" "}
+                      <span className="font-mono text-[10px]">
+                        &lt;service&gt;-{name || "<env>"}.{project}.&lt;basedomain&gt;
+                      </span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
 
-              <Field
-                label="branch"
-                hint={
-                  repoLabel
-                    ? `branch of ${repoLabel} — env redeploys when this branch is updated`
-                    : pickedService
-                      ? "this service has no repo wired up; connect one in service settings before creating an env"
-                      : "the env redeploys when this branch is updated"
-                }
-                icon={GitBranch}
-              >
-                <Input
-                  value={branch}
-                  onChange={(e) => setBranch(e.target.value)}
-                  placeholder={repoDefaultBranch || "staging"}
-                  className="h-8 font-mono text-[12px]"
-                  spellCheck={false}
-                  disabled={!repoURL}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") submit();
-                  }}
-                />
-              </Field>
+              {addonShorts.length > 0 && (
+                <div className="space-y-3 border-b border-[var(--border-subtle)] p-4">
+                  <div>
+                    <p className="text-[11px] font-mono uppercase tracking-widest text-[var(--text-tertiary)]">
+                      addons — pick fresh or shared
+                    </p>
+                    <p className="mt-1 text-[11px] text-[var(--text-secondary)]">
+                      <strong>Fresh</strong> spins up a new pod with its own data. Cloned services
+                      get their env-var refs rewritten to point at it.{" "}
+                      <strong>Shared</strong> reuses production&apos;s pod — staging writes
+                      affect production data.
+                    </p>
+                  </div>
+                  <ul className="space-y-1.5">
+                    {addonShorts.map((a) => (
+                      <li
+                        key={a.short}
+                        className="flex items-center justify-between gap-2 rounded border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1.5"
+                      >
+                        <div className="flex min-w-0 items-center gap-2">
+                          <Database className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
+                          <div className="min-w-0">
+                            <div className="truncate font-mono text-[12px] text-[var(--text-primary)]">
+                              {a.short}
+                            </div>
+                            <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                              {a.kind}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5 text-[11px]">
+                          <PolicyBtn
+                            label="fresh"
+                            active={policy[a.short] === "fresh"}
+                            onClick={() =>
+                              setPolicy((p) => ({ ...p, [a.short]: "fresh" }))
+                            }
+                          />
+                          <PolicyBtn
+                            label="shared"
+                            active={policy[a.short] === "shared"}
+                            onClick={() =>
+                              setPolicy((p) => ({ ...p, [a.short]: "shared" }))
+                            }
+                          />
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="flex items-start gap-1.5 text-[10px] text-[var(--text-tertiary)]">
+                    <Share2 className="mt-0.5 h-3 w-3 shrink-0" />
+                    Tip: caches (redis, nats, memcached) are typically safe to share. Stateful
+                    stores (postgres, mongodb, mysql) usually want{" "}
+                    <span className="font-medium">fresh</span> so a staging migration doesn&apos;t
+                    corrupt production.
+                  </p>
+                </div>
+              )}
             </div>
 
-            <footer className="flex items-center justify-end gap-2 px-4 py-3">
-              <Button variant="ghost" size="sm" onClick={onClose} disabled={create.isPending}>
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={submit}
-                disabled={create.isPending || !serviceName || !name.trim() || !branch.trim()}
-              >
-                <Plus className="h-3 w-3" />
-                {create.isPending ? "Creating…" : "Create environment"}
-              </Button>
+            <footer className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] px-4 py-3">
+              <p className="text-[10px] text-[var(--text-tertiary)]">
+                {services.length === 0 ? (
+                  "Add a service first"
+                ) : (
+                  <>
+                    Will create {services.length} services
+                    {addonShorts.filter((a) => policy[a.short] === "fresh").length > 0 && (
+                      <>
+                        {" "}+ {addonShorts.filter((a) => policy[a.short] === "fresh").length}{" "}
+                        fresh addon
+                        {addonShorts.filter((a) => policy[a.short] === "fresh").length === 1
+                          ? ""
+                          : "s"}
+                      </>
+                    )}
+                  </>
+                )}
+              </p>
+              <div className="flex items-center gap-2">
+                <Button variant="ghost" size="sm" onClick={onClose} disabled={create.isPending}>
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  onClick={submit}
+                  disabled={create.isPending || !name.trim() || services.length === 0}
+                >
+                  <Plus className="h-3 w-3" />
+                  {create.isPending ? "Mirroring…" : "Create environment"}
+                </Button>
+              </div>
             </footer>
           </motion.div>
         </motion.div>
@@ -245,21 +297,69 @@ export function NewEnvironmentDialog({ project, open, onClose, onCreated }: Prop
   );
 }
 
+function PolicyBtn({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "rounded px-2 py-1 transition-colors",
+        active
+          ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+          : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]",
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+function defaultPolicyForKind(kind: string): AddonPolicy {
+  // Stateful stores → fresh by default. Caches / message brokers
+  // → shared by default. Users can always override per-addon.
+  switch (kind.toLowerCase()) {
+    case "postgres":
+    case "mysql":
+    case "mongodb":
+    case "clickhouse":
+    case "meilisearch":
+    case "elasticsearch":
+    case "cockroachdb":
+    case "couchdb":
+    case "s3":
+      return "fresh";
+    case "redis":
+    case "memcached":
+    case "nats":
+    case "rabbitmq":
+    case "kafka":
+    case "mailpit":
+      return "shared";
+    default:
+      return "fresh";
+  }
+}
+
 function Field({
   label,
   hint,
-  icon: Icon,
   children,
 }: {
   label: string;
   hint?: string;
-  icon?: React.ComponentType<{ className?: string }>;
   children: React.ReactNode;
 }) {
   return (
     <div className="space-y-1">
-      <div className="flex items-center gap-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-        {Icon && <Icon className="h-2.5 w-2.5" />}
+      <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
         {label}
       </div>
       {children}

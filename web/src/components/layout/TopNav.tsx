@@ -26,7 +26,7 @@ import {
 import { Logo } from "@/components/shared/Logo";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
 import { useSession, useSignOut, useCan, Perms } from "@/features/auth";
-import { useProjects, useProject } from "@/features/projects";
+import { useProjects, useProject, useEnvGroups } from "@/features/projects";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { cn } from "@/lib/utils";
 import {
@@ -264,51 +264,31 @@ function EnvironmentSwitcher({ project }: { project: string }) {
   const router = useRouter();
   const pathname = usePathname();
   const search = useSearchParams();
-  const data = useProject(project);
+  const groups = useEnvGroups(project);
   const [open, setOpen] = useState(false);
   const [showNewEnv, setShowNewEnv] = useState(false);
 
-  // Dedupe by env kind/name. The env list returned by the project
-  // describe endpoint has one CR per service per env (kuso-demo-
-  // todo-api-production, kuso-demo-todo-web-production, etc.) but
-  // the user thinks of "production" as a single project-wide thing.
-  // Collapse them: one row per unique env name. Production is always
-  // collapsed to a single "production" row; previews are collapsed
-  // by PR number so an N-service preview-pr-7 shows as one row, not
-  // N rows of "kuso-demo-todo-api-pr-7", "kuso-demo-todo-web-pr-7",
-  // etc. Without this, projects with many services made the dropdown
-  // unreadable (see issue: "why 2 envs?" — bug was the picker
-  // listing every service's prod env separately).
+  // The project-level env-groups endpoint returns one row per env
+  // (production / staging / preview-pr-N / custom). Each row already
+  // collapses across services; we just present + sort.
   type EnvRow = {
-    name: string; // "production" | "pr-7" | ...
-    kind: "production" | "preview";
-    prNumber?: number;
+    name: string;
+    kind: "production" | "preview" | "custom";
+    services: number;
   };
   const envs = useMemo<EnvRow[]>(() => {
-    const list = data.data?.environments ?? [];
-    const seen = new Map<string, EnvRow>();
-    list.forEach((e) => {
-      if (e.spec.kind === "production") {
-        if (!seen.has("production")) {
-          seen.set("production", { name: "production", kind: "production" });
-        }
-        return;
-      }
-      if (e.spec.kind === "preview") {
-        const pr = e.spec.pullRequest?.number;
-        const name = pr ? `pr-${pr}` : `preview-${e.metadata.name}`;
-        if (!seen.has(name)) {
-          seen.set(name, { name, kind: "preview", prNumber: pr });
-        }
-      }
-    });
-    const rows = [...seen.values()];
-    rows.sort((a, b) => {
-      if (a.kind !== b.kind) return a.kind === "production" ? -1 : 1;
-      return (b.prNumber ?? 0) - (a.prNumber ?? 0);
-    });
-    return rows;
-  }, [data.data]);
+    const list = groups.data ?? [];
+    return list.map((g) => ({
+      name: g.name,
+      kind:
+        g.kind === "production"
+          ? "production"
+          : g.kind === "preview"
+            ? "preview"
+            : "custom",
+      services: g.services?.length ?? 0,
+    }));
+  }, [groups.data]);
 
   const currentEnv = search?.get("env") ?? "production";
 
@@ -351,36 +331,31 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                           "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
                           e.kind === "production"
                             ? "bg-emerald-400"
-                            : "bg-amber-400",
+                            : e.kind === "preview"
+                              ? "bg-amber-400"
+                              : "bg-blue-400",
                         )}
                       />
                       <span className="truncate font-mono text-[12px]">{e.name}</span>
+                      <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
+                        {e.services} svc
+                      </span>
                       {e.kind === "preview" && (
-                        <span className="ml-auto rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                          preview
+                        <span className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                          PR
                         </span>
                       )}
-                      {active && (
-                        <Check
-                          className={cn(
-                            "h-3 w-3 text-[var(--accent)]",
-                            e.kind === "production" ? "ml-auto" : "ml-1",
-                          )}
-                        />
-                      )}
+                      {active && <Check className="h-3 w-3 text-[var(--accent)]" />}
                     </CommandItem>
                   );
                 })}
               </CommandGroup>
             )}
-            {/* Trailing "new manual preview" row. Previews are normally
-                spawned by GitHub PR webhooks (open PR → preview-pr-N
-                env appears, close PR → it's torn down). This affordance
-                exists for the rare case where you want to spin up a
-                preview from a branch without an open PR. NOT for
-                "staging" or other long-lived envs — those don't fit
-                the preview-or-prod model and the operator won't
-                maintain them. */}
+            {/* Trailing "new environment" row. Spawns a project-level
+                env that mirrors every service + (per-policy) addons.
+                Use case: "send this URL to a client for review". PR
+                previews are still webhook-driven and opt-in — see
+                project settings → Previews. */}
             <CommandGroup className="px-0">
               <CommandItem
                 value="__new__"
@@ -388,11 +363,11 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                   setOpen(false);
                   setShowNewEnv(true);
                 }}
-                title="Spawn a preview env from a branch. Production + PR-driven previews are the supported lifecycle."
+                title="Mirror every service + addon under a new env name. Each cloned service gets its own URL."
                 className="px-2 py-1.5 text-[12px] text-[var(--accent)]"
               >
                 <Plus className="h-3 w-3" />
-                Manual preview
+                New environment
               </CommandItem>
             </CommandGroup>
           </CommandList>
