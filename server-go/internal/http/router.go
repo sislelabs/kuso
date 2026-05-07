@@ -286,9 +286,11 @@ func NewRouter(d Deps) http.Handler {
 				settingsH.OnBuildSettingsChange = d.Builds.InvalidateSettingsCache
 			}
 			settingsH.Mount(r)
-			// Optional: backup/restore endpoints (gated on KUSO_BACKUP_ENABLED=1).
-			// Returns nil + Mount no-ops when disabled.
-			httphandlers.NewBackupHandler(d.DB, "", d.Logger).Mount(r)
+			// Backup: in-process pg_dump streamed back as gzipped
+			// SQL. Restore: spawns a Job that pipes the dump through
+			// psql, then auto-rolls kuso-server so every replica
+			// drops its stale connection state.
+			httphandlers.NewBackupHandler(d.DB, d.Kube, "", d.Logger).Mount(r)
 			usersH := &httphandlers.UsersHandler{DB: d.DB, Logger: d.Logger}
 			usersH.Mount(r)
 			rolesH := &httphandlers.RolesHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}

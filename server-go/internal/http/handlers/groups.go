@@ -138,6 +138,14 @@ func (h *GroupsHandler) PutTenancy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
+	// Tenancy edit changes effective permissions for every member of
+	// the group. Bump their watermarks so the new shape takes effect
+	// immediately instead of waiting for token expiry.
+	if n, err := h.DB.InvalidateUsersByGroup(ctx, chi.URLParam(r, "id"), "group.tenancy.update"); err != nil {
+		h.Logger.Warn("put tenancy: invalidate user tokens", "group", chi.URLParam(r, "id"), "err", err)
+	} else if n > 0 {
+		h.Logger.Info("put tenancy: invalidated user tokens", "group", chi.URLParam(r, "id"), "users", n)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -165,10 +173,18 @@ func (h *GroupsHandler) RemoveMember(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := groupsCtx(r)
 	defer cancel()
-	if err := h.DB.RemoveUserFromGroup(ctx, chi.URLParam(r, "userId"), chi.URLParam(r, "id")); err != nil {
+	userID := chi.URLParam(r, "userId")
+	groupID := chi.URLParam(r, "id")
+	if err := h.DB.RemoveUserFromGroup(ctx, userID, groupID); err != nil {
 		h.Logger.Error("remove group member", "err", err)
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
+	}
+	// User just lost whatever access this group conferred — kill
+	// their existing tokens so the next request reissues with the
+	// reduced permission set.
+	if err := h.DB.InvalidateUserTokens(r.Context(), userID, "group.member.remove", time.Now()); err != nil {
+		h.Logger.Warn("remove member: invalidate user tokens", "user", userID, "group", groupID, "err", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -179,7 +195,16 @@ func (h *GroupsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := groupsCtx(r)
 	defer cancel()
-	if err := h.DB.DeleteGroup(ctx, chi.URLParam(r, "id")); err != nil {
+	groupID := chi.URLParam(r, "id")
+	// Bump every member's watermark BEFORE the cascade DELETE wipes
+	// the pivot rows — InvalidateUsersByGroup wouldn't find them
+	// after.
+	if n, err := h.DB.InvalidateUsersByGroup(ctx, groupID, "group.delete"); err != nil {
+		h.Logger.Warn("delete group: invalidate user tokens", "group", groupID, "err", err)
+	} else if n > 0 {
+		h.Logger.Info("delete group: invalidated user tokens", "group", groupID, "users", n)
+	}
+	if err := h.DB.DeleteGroup(ctx, groupID); err != nil {
 		switch {
 		case errors.Is(err, db.ErrNotFound):
 			http.Error(w, "not found", http.StatusNotFound)

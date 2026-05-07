@@ -1,38 +1,48 @@
-// Token revocation. JWTs are signature-verified and otherwise valid
-// until they expire (default 10h); without a revocation list, logout
-// is a UI gesture only and a leaked CLI token lives until the natural
-// TTL. RevokedToken stores the JTI of every explicitly-revoked token
-// so the auth middleware can reject it on the next request.
+// Token revocation has two layers, both queried by the auth
+// middleware on every authenticated request:
 //
-// Hot path: every authenticated request fires SeenRevoked. The
-// "RevokedToken" PK is text (the jti) and the lookup is a single
-// b-tree probe; on a typical pgx hot pool the round-trip is sub-ms.
-// Worth it: the alternative is "leaked tokens are valid for 10h".
+//   RevokedToken           — kill ONE specific jti (explicit logout,
+//                            user clicked "revoke" on a personal
+//                            access token). PK on jti, exact-match
+//                            probe.
 //
-// Retention: rows are pruned once the token's expiresAt has passed
-// — beyond that point the JWT itself is rejected by the signature
-// layer, so storing the revocation row is wasted space.
+//   UserTokenInvalidation  — kill EVERY token currently issued to a
+//                            user (role demotion, group removal,
+//                            deactivation, password reset). One row
+//                            per user; we compare iat to the
+//                            watermark — any JWT older than the
+//                            watermark is treated as revoked.
+//
+// Both probes are sub-millisecond on a hot pool. Worth it: without
+// either one, leaked tokens or stale-claim tokens stay valid for
+// the full 10h TTL.
+//
+// Retention:
+//   RevokedToken — pruned once expiresAt has passed; the signature
+//                  layer rejects expired tokens on its own.
+//   UserTokenInvalidation — never pruned; a tombstone is cheap, and
+//                  removing one would re-validate older tokens for
+//                  that user.
 
 package db
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
 
-// RevokeToken persists a revocation row. Idempotent: re-revoking a
-// jti updates expiresAt + reason so a later prune still picks it up.
-// expiresAt should be the JWT's own exp claim — once past, the
-// signature layer alone catches it and we can drop the row.
+// RevokeToken persists a revocation row for a single jti. Idempotent:
+// re-revoking updates expiresAt + reason.
 func (d *DB) RevokeToken(ctx context.Context, jti, userID, reason string, expiresAt time.Time) error {
 	if jti == "" {
 		return fmt.Errorf("db: revoke: empty jti")
 	}
 	if expiresAt.IsZero() {
-		// Never-expiring token (kuso PAT "no expiry"). Pick a far-
-		// future bound so the prune loop doesn't drop it until
-		// 100y from now.
+		// Never-expiring token (kuso PAT "no expiry") — pick a far-
+		// future bound so the prune loop doesn't drop the row.
 		expiresAt = time.Now().Add(100 * 365 * 24 * time.Hour)
 	}
 	_, err := d.ExecContext(ctx, `
@@ -49,10 +59,10 @@ ON CONFLICT ("jti") DO UPDATE SET
 	return nil
 }
 
-// IsTokenRevoked is the auth middleware's hot-path probe. Returns
-// true if the jti is present in RevokedToken; false otherwise (or
-// on DB error — the middleware fail-opens so a transient outage
-// doesn't 401 every request).
+// IsTokenRevoked is the per-jti probe. Hot path on every
+// authenticated request. Fails-open on DB error (treats as
+// not-revoked) — the middleware would otherwise 401 every user
+// during a transient outage.
 func (d *DB) IsTokenRevoked(ctx context.Context, jti string) bool {
 	if jti == "" {
 		return false
@@ -62,36 +72,129 @@ func (d *DB) IsTokenRevoked(ctx context.Context, jti string) bool {
 		`SELECT 1 FROM "RevokedToken" WHERE "jti" = ? LIMIT 1`, jti,
 	).Scan(&present)
 	if err != nil {
-		// sql.ErrNoRows is the happy "not revoked" path; any other
-		// error is treated the same way (fail-open) — see comment
-		// above.
 		return false
 	}
 	return present == 1
 }
 
-// RevokeAllUserTokens revokes every JTI we know about for a user.
-// Today the JTI universe is "rows in RevokedToken" — we don't track
-// every issued JWT — so this is mostly useful when paired with the
-// future ActiveToken table. Kept here as the obvious extension
-// point so role-demotion handlers have a single function to call.
+// InvalidateUserTokens bumps the per-user "valid-from" watermark to
+// `at` (typically time.Now()). Every JWT issued before that moment
+// is rejected by the auth middleware on next use, regardless of jti.
 //
-// Returns the number of rows touched.
-func (d *DB) RevokeAllUserTokens(ctx context.Context, userID, reason string) (int64, error) {
-	res, err := d.ExecContext(ctx, `
-UPDATE "RevokedToken"
-   SET "reason" = ?
- WHERE "userId" = ?`, reason, userID)
+// Use cases:
+//   - role demotion: user was admin, now viewer; their old admin-
+//     claim JWT must die immediately.
+//   - group removal: same logic at the group layer.
+//   - user deactivation / deletion: kill everything.
+//   - password change: belt-and-braces — old token survives a
+//     password change in JWT-only auth, this closes that window.
+func (d *DB) InvalidateUserTokens(ctx context.Context, userID, reason string, at time.Time) error {
+	if userID == "" {
+		return fmt.Errorf("db: invalidate user tokens: empty userId")
+	}
+	if at.IsZero() {
+		at = time.Now()
+	}
+	_, err := d.ExecContext(ctx, `
+INSERT INTO "UserTokenInvalidation" ("userId", "invalidatedBefore", "reason", "updatedAt")
+VALUES (?, ?, ?, ?)
+ON CONFLICT ("userId") DO UPDATE SET
+  "invalidatedBefore" = excluded."invalidatedBefore",
+  "reason" = excluded."reason",
+  "updatedAt" = excluded."updatedAt"`,
+		userID, at.UTC(), reason, at.UTC(),
+	)
 	if err != nil {
-		return 0, fmt.Errorf("db: revoke all user tokens: %w", err)
+		return fmt.Errorf("db: invalidate user tokens: %w", err)
+	}
+	return nil
+}
+
+// UserTokenWatermark returns the time before which all tokens for
+// `userID` are considered revoked. Zero time means no watermark set
+// (i.e. all tokens valid as far as this layer is concerned). Hot
+// path on every authenticated request — the auth middleware compares
+// the JWT's iat to this value.
+//
+// Fails-open on DB error: returns zero time so the middleware
+// proceeds with the signature/jti checks.
+func (d *DB) UserTokenWatermark(ctx context.Context, userID string) time.Time {
+	if userID == "" {
+		return time.Time{}
+	}
+	var t sql.NullTime
+	err := d.QueryRowContext(ctx,
+		`SELECT "invalidatedBefore" FROM "UserTokenInvalidation" WHERE "userId" = ?`,
+		userID,
+	).Scan(&t)
+	if err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			// Non-not-found: treat as no watermark, log nothing —
+			// caller is in a hot path.
+		}
+		return time.Time{}
+	}
+	if !t.Valid {
+		return time.Time{}
+	}
+	return t.Time
+}
+
+// InvalidateUsersByRole bumps the watermark for every user assigned
+// to `roleID`, with a single round-trip. Used when a Role's
+// permission set is edited or the Role itself is deleted — every
+// JWT that hard-coded the old permissions list must die.
+func (d *DB) InvalidateUsersByRole(ctx context.Context, roleID, reason string) (int64, error) {
+	if roleID == "" {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+	res, err := d.ExecContext(ctx, `
+INSERT INTO "UserTokenInvalidation" ("userId", "invalidatedBefore", "reason", "updatedAt")
+SELECT u."id", ?, ?, ?
+FROM "User" u
+WHERE u."roleId" = ?
+ON CONFLICT ("userId") DO UPDATE SET
+  "invalidatedBefore" = excluded."invalidatedBefore",
+  "reason" = excluded."reason",
+  "updatedAt" = excluded."updatedAt"`,
+		now, reason, now, roleID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("db: invalidate users by role: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	return n, nil
 }
 
-// PruneRevokedTokens removes rows whose tokens have expired (and
-// would therefore be rejected by the signature layer alone). Called
-// from the daily cleanup goroutine.
+// InvalidateUsersByGroup is the group-membership analogue. Called
+// when a UserGroup's projectMemberships JSON is edited or the group
+// itself is deleted.
+func (d *DB) InvalidateUsersByGroup(ctx context.Context, groupID, reason string) (int64, error) {
+	if groupID == "" {
+		return 0, nil
+	}
+	now := time.Now().UTC()
+	res, err := d.ExecContext(ctx, `
+INSERT INTO "UserTokenInvalidation" ("userId", "invalidatedBefore", "reason", "updatedAt")
+SELECT m."A", ?, ?, ?
+FROM "_UserToUserGroup" m
+WHERE m."B" = ?
+ON CONFLICT ("userId") DO UPDATE SET
+  "invalidatedBefore" = excluded."invalidatedBefore",
+  "reason" = excluded."reason",
+  "updatedAt" = excluded."updatedAt"`,
+		now, reason, now, groupID,
+	)
+	if err != nil {
+		return 0, fmt.Errorf("db: invalidate users by group: %w", err)
+	}
+	n, _ := res.RowsAffected()
+	return n, nil
+}
+
+// PruneRevokedTokens removes per-jti rows whose tokens have expired.
+// Called from the daily cleanup goroutine.
 func (d *DB) PruneRevokedTokens(ctx context.Context) (int64, error) {
 	res, err := d.ExecContext(ctx,
 		`DELETE FROM "RevokedToken" WHERE "expiresAt" < ?`, time.Now().UTC(),

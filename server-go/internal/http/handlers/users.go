@@ -146,11 +146,27 @@ func (h *UsersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := usersCtx(r)
 	defer cancel()
-	if err := h.DB.UpdateUser(ctx, chi.URLParam(r, "id"), db.UpdateUserInput{
+	userID := chi.URLParam(r, "id")
+	if err := h.DB.UpdateUser(ctx, userID, db.UpdateUserInput{
 		FirstName: req.FirstName, LastName: req.LastName, Email: req.Email, RoleID: req.RoleID, IsActive: req.IsActive,
 	}); err != nil {
 		h.fail(w, "update user", err)
 		return
+	}
+	// Token invalidation only on permission-shrinking changes:
+	// role swap (could shrink), deactivation (always shrinks). A
+	// pure first-name edit doesn't warrant logging the user out.
+	shrinks := req.RoleID != nil || (req.IsActive != nil && !*req.IsActive)
+	if shrinks {
+		reason := "user.update"
+		if req.IsActive != nil && !*req.IsActive {
+			reason = "user.deactivate"
+		} else if req.RoleID != nil {
+			reason = "user.role.change"
+		}
+		if err := h.DB.InvalidateUserTokens(r.Context(), userID, reason, time.Now()); err != nil {
+			h.Logger.Warn("update user: invalidate tokens", "user", userID, "err", err)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -161,7 +177,15 @@ func (h *UsersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := usersCtx(r)
 	defer cancel()
-	if err := h.DB.DeleteUser(ctx, chi.URLParam(r, "id")); err != nil {
+	userID := chi.URLParam(r, "id")
+	// Bump the watermark before deletion — once the User row is
+	// gone the FK on UserTokenInvalidation has nothing to point at,
+	// but the row itself is keyed by userID (text PK, no FK), so
+	// it survives and keeps any leftover JWT for that userID dead.
+	if err := h.DB.InvalidateUserTokens(r.Context(), userID, "user.delete", time.Now()); err != nil {
+		h.Logger.Warn("delete user: invalidate tokens", "user", userID, "err", err)
+	}
+	if err := h.DB.DeleteUser(ctx, userID); err != nil {
 		h.fail(w, "delete user", err)
 		return
 	}
@@ -187,9 +211,17 @@ func (h *UsersHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := usersCtx(r)
 	defer cancel()
-	if err := h.DB.UpdateUserPassword(ctx, chi.URLParam(r, "id"), hash); err != nil {
+	userID := chi.URLParam(r, "id")
+	if err := h.DB.UpdateUserPassword(ctx, userID, hash); err != nil {
 		h.fail(w, "update password", err)
 		return
+	}
+	// Password change kills all existing sessions — anyone who
+	// stole/borrowed the user's token before the rotation must lose
+	// access immediately. The user themselves will be bounced to
+	// /login on next request, which is exactly the expected UX.
+	if err := h.DB.InvalidateUserTokens(r.Context(), userID, "user.password.change", time.Now()); err != nil {
+		h.Logger.Warn("update password: invalidate tokens", "user", userID, "err", err)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

@@ -498,6 +498,23 @@ CREATE TABLE IF NOT EXISTS "RevokedToken" (
 );
 CREATE INDEX IF NOT EXISTS "RevokedToken_expiresAt_idx" ON "RevokedToken"("expiresAt");
 
+-- v0.9.38: per-user token-invalidation watermark. The RevokedToken
+-- table works for "kill THIS specific jti" (logout, manual revoke);
+-- this table works for "kill EVERY token currently issued to user U"
+-- (role demotion, group removal, deactivation). Auth middleware
+-- compares iat to invalidatedBefore — any JWT issued earlier is
+-- treated as revoked.
+--
+-- Single row per user (userId is PK); UPSERT moves the watermark
+-- forward on each demotion. Never deleted — a tombstone is cheap
+-- and removing it would re-validate old tokens.
+CREATE TABLE IF NOT EXISTS "UserTokenInvalidation" (
+    "userId" TEXT PRIMARY KEY,
+    "invalidatedBefore" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "reason" TEXT NOT NULL DEFAULT '',
+    "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
 -- v0.9.38: GitHub webhook delivery seen-set. X-GitHub-Delivery is a
 -- UUID per dispatch; GitHub retries (15min, 1h, 6h, 24h) reuse the
 -- same id. Storing it for ~24h gives us replay protection without

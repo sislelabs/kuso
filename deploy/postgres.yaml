@@ -1,122 +1,197 @@
 ---
-# Postgres for kuso-server's metadata DB.
+# Metadata Postgres for kuso-server.
 #
-# Single-replica StatefulSet — the workload is unsharded and the
-# storage is local-path RWO. The earlier RWO concern from the SQLite
-# era doesn't apply: Postgres is the *only* writer and the kuso-server
-# pods are clients (multiple replicas all talk to this one Postgres).
+# v0.9.38: switched from a single-replica StatefulSet on local-path
+# RWO to a CloudNativePG-managed Cluster. The old setup pinned
+# Postgres to the control-plane node, with a local-path PVC that
+# couldn't reschedule — control-plane node failure took the entire
+# control plane (auth, audit, env vars, build state, addon secrets)
+# offline until manual PVC rescue. The same SPOF the README
+# explicitly told users to avoid for HA addons was sitting under
+# kuso itself.
 #
-# v0.9 ships this in-cluster pod for the indie / single-box install.
-# Production / multi-tenant kuso installs will want to point
-# kuso-server at an external managed Postgres (RDS, Crunchy Bridge,
-# Supabase) — replace this manifest with a Secret named
-# kuso-postgres-conn whose `dsn` key is the libpq URI.
+# CNPG gives us:
+#   - 3-instance cluster with continuous WAL streaming between them
+#   - Automatic failover (~30s on primary loss) — kuso-server
+#     reconnects through the kuso-postgres-rw Service which CNPG
+#     points at the current primary
+#   - Pod anti-affinity so the 3 instances land on different nodes
+#   - Optional WAL-archive backup when the operator wires
+#     spec.backup.barmanObjectStore (post-install via kubectl edit)
 #
-# The kuso-postgres-conn Secret itself is created by hack/install.sh
-# (with a freshly generated password) before this manifest is
-# applied. Operators applying these YAMLs by hand: create the
-# Secret first, then apply this file.
-apiVersion: v1
-kind: Service
+# CNPG operator must be installed first (hack/install.sh handles it,
+# or `kubectl apply -f https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-1.24/releases/cnpg-1.24.0.yaml`).
+#
+# Bootstrap order:
+#   1. Install CNPG operator
+#   2. Create kuso namespace
+#   3. Create kuso-postgres-conn Secret with {user, password, database}
+#      keys (install.sh does this with a freshly-generated password)
+#   4. Apply this manifest — CNPG bootstraps using the credentials
+#      from the Secret, then the dsn-stamp Job patches the same
+#      Secret with the {dsn, host, port} composed-field shape
+#      kuso-server reads.
+#
+# Single-node dev clusters (1 worker): set
+# KUSO_POSTGRES_SINGLE_NODE=true on the install command, which
+# patches `instances: 1` and disables anti-affinity. Default install
+# assumes ≥3 nodes.
+
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
 metadata:
   name: kuso-postgres
   namespace: kuso
   labels:
     app.kubernetes.io/name: kuso-postgres
+    app.kubernetes.io/component: control-plane-db
 spec:
-  clusterIP: None  # headless — StatefulSet pod gets a stable DNS name
-  ports:
-    - { port: 5432, targetPort: 5432, name: pg }
-  selector:
-    app.kubernetes.io/name: kuso-postgres
+  # Pin a known-good Postgres minor; CNPG ships images at this tag.
+  # Bump deliberately on major upgrades; CNPG handles in-place minor
+  # upgrades via rolling restart of the standbys then a switchover.
+  imageName: "ghcr.io/cloudnative-pg/postgresql:16.4"
+
+  # 3 instances = 1 primary + 2 streaming standbys. Tolerates one
+  # node failure without quorum loss; a second failure during
+  # recovery degrades to read-only (correct behaviour). Tune to 5
+  # for stricter availability targets at the cost of write latency.
+  instances: 3
+
+  # Unsupervised: CNPG drives the failover automatically. The
+  # alternative ("supervised") requires an operator to bless every
+  # promotion, which is wrong for a control-plane DB whose downtime
+  # is the actual incident.
+  primaryUpdateStrategy: unsupervised
+
+  bootstrap:
+    initdb:
+      database: kuso
+      owner: kuso
+      # CNPG reads the {username, password} keys from this Secret
+      # on bootstrap. install.sh creates kuso-postgres-conn with
+      # those keys before applying this manifest.
+      secret:
+        name: kuso-postgres-conn
+
+  storage:
+    size: 10Gi
+    # CNPG falls back to the cluster-default StorageClass when
+    # storageClass is unset. On vanilla k3s that's local-path; on a
+    # real cluster you'd override at install time with
+    # KUSO_POSTGRES_STORAGE_CLASS=longhorn (or similar) — install.sh
+    # passes that into the Cluster spec.
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+
+  # Pod anti-affinity: the 3 instances must land on different nodes.
+  # Single-node dev clusters: install.sh kustomize-patches this off.
+  affinity:
+    enablePodAntiAffinity: true
+    topologyKey: kubernetes.io/hostname
+    # Schedulable on control-plane nodes; we tolerate the standard
+    # taint so a 1-node "test cluster" can still schedule (with the
+    # single-node patch above).
+    tolerations:
+      - key: node-role.kubernetes.io/control-plane
+        operator: Exists
+        effect: NoSchedule
+
+  # Same priority class as kuso-server — DB must survive workload
+  # eviction on a hot node.
+  priorityClassName: kuso-platform
+
+  # CNPG ships a default PodDisruptionBudget (minAvailable=1). Drains
+  # roll one instance at a time, with the primary protected until a
+  # standby has caught up. We don't override.
 ---
-apiVersion: apps/v1
-kind: StatefulSet
+# v0.9.38: Job that augments kuso-postgres-conn with the dsn key
+# kuso-server reads. CNPG's bootstrap creates {clustername}-app with
+# {username, password, dbname}; we compose the libpq URI from those
+# and write it back to kuso-postgres-conn. install.sh seeded
+# kuso-postgres-conn with the bootstrap user/password — this Job
+# completes the shape.
+#
+# Idempotent: re-running replaces the dsn/host/port keys without
+# touching the bootstrap user/password (CNPG reads those back from
+# kuso-postgres-conn on every reconcile).
+apiVersion: batch/v1
+kind: Job
 metadata:
-  name: kuso-postgres
+  name: kuso-postgres-dsn-stamp
   namespace: kuso
   labels:
-    app.kubernetes.io/name: kuso-postgres
+    app.kubernetes.io/name: kuso-postgres-dsn-stamp
 spec:
-  serviceName: kuso-postgres
-  replicas: 1
-  selector:
-    matchLabels: { app.kubernetes.io/name: kuso-postgres }
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 86400
   template:
-    metadata:
-      labels: { app.kubernetes.io/name: kuso-postgres }
     spec:
-      # Same priorityClass as kuso-server — Postgres is the cluster's
-      # source of truth, must survive build-time CPU starvation.
-      priorityClassName: kuso-platform
-      # Co-locate with kuso-server on the control-plane node so the
-      # client connection is intra-host and the local-path PVC binds
-      # to the same node consistently.
-      nodeSelector:
-        node-role.kubernetes.io/control-plane: "true"
-      tolerations:
-        - key: node-role.kubernetes.io/control-plane
-          operator: Exists
-          effect: NoSchedule
-      terminationGracePeriodSeconds: 30
+      restartPolicy: OnFailure
+      serviceAccountName: kuso-postgres-dsn
       containers:
-        - name: postgres
-          image: postgres:16-alpine
-          imagePullPolicy: IfNotPresent
-          ports:
-            - { containerPort: 5432, name: pg }
-          env:
-            - name: POSTGRES_USER
-              valueFrom: { secretKeyRef: { name: kuso-postgres-conn, key: user } }
-            - name: POSTGRES_PASSWORD
-              valueFrom: { secretKeyRef: { name: kuso-postgres-conn, key: password } }
-            - name: POSTGRES_DB
-              valueFrom: { secretKeyRef: { name: kuso-postgres-conn, key: database } }
-            # Postgres data dir — under the persistent volume.
-            - { name: PGDATA, value: /var/lib/postgresql/data/pgdata }
-          resources:
-            requests:
-              cpu: 100m
-              memory: 256Mi
-            limits:
-              cpu: 1000m
-              memory: 1Gi
-          volumeMounts:
-            - name: data
-              mountPath: /var/lib/postgresql/data
-          readinessProbe:
-            exec:
-              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
-            initialDelaySeconds: 5
-            periodSeconds: 5
-            timeoutSeconds: 3
-            failureThreshold: 6
-          livenessProbe:
-            exec:
-              command: ["sh", "-c", "pg_isready -U $POSTGRES_USER -d $POSTGRES_DB"]
-            initialDelaySeconds: 30
-            periodSeconds: 30
-            timeoutSeconds: 5
-            failureThreshold: 6
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes: [ReadWriteOnce]
-        storageClassName: local-path
-        resources:
-          requests:
-            storage: 10Gi
+        - name: stamp
+          image: bitnami/kubectl:1.30
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              set -e
+              # Wait for CNPG to publish the -app Secret (means the
+              # primary is up + initdb is done). 5 min budget.
+              for i in $(seq 1 60); do
+                if kubectl -n kuso get secret kuso-postgres-app >/dev/null 2>&1; then
+                  break
+                fi
+                echo "[stamp] waiting for kuso-postgres-app Secret ($i/60)…"
+                sleep 5
+              done
+              user=$(kubectl -n kuso get secret kuso-postgres-app -o jsonpath='{.data.username}' | base64 -d)
+              pass=$(kubectl -n kuso get secret kuso-postgres-app -o jsonpath='{.data.password}' | base64 -d)
+              dbname=$(kubectl -n kuso get secret kuso-postgres-app -o jsonpath='{.data.dbname}' | base64 -d)
+              host="kuso-postgres-rw"
+              port="5432"
+              dsn="postgres://${user}:${pass}@${host}:${port}/${dbname}?sslmode=disable"
+              kubectl -n kuso patch secret kuso-postgres-conn --type=merge \
+                -p "$(printf '{"stringData":{"dsn":"%s","host":"%s","port":"%s","user":"%s","password":"%s","database":"%s"}}' \
+                  "$dsn" "$host" "$port" "$user" "$pass" "$dbname")"
+              echo "[stamp] kuso-postgres-conn updated; kuso-server can now connect"
 ---
-# PodDisruptionBudget — same logic as kuso-server. Drain on the
-# control-plane node will wait for an admin instead of yanking the
-# DB out from under us.
-apiVersion: policy/v1
-kind: PodDisruptionBudget
+apiVersion: v1
+kind: ServiceAccount
 metadata:
-  name: kuso-postgres
+  name: kuso-postgres-dsn
   namespace: kuso
-spec:
-  minAvailable: 1
-  selector:
-    matchLabels: { app.kubernetes.io/name: kuso-postgres }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kuso-postgres-dsn
+  namespace: kuso
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [kuso-postgres-app]
+    verbs: [get]
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [kuso-postgres-conn]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kuso-postgres-dsn
+  namespace: kuso
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kuso-postgres-dsn
+subjects:
+  - kind: ServiceAccount
+    name: kuso-postgres-dsn
+    namespace: kuso

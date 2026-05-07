@@ -89,12 +89,23 @@ func main() {
 	// to compile; it's a thin alias around *db.DB.
 	logDB := database.AsLogDB()
 
-	// Wire token-revocation lookups into the auth middleware. Every
-	// authenticated request fires IsTokenRevoked (PK probe, sub-ms);
-	// the middleware fails open on DB error so a transient outage
-	// doesn't 401 every user.
-	issuer.SetRevocationChecker(func(ctx context.Context, jti string) bool {
-		return database.IsTokenRevoked(ctx, jti)
+	// Wire token-revocation lookups into the auth middleware. Two
+	// layers: (1) per-jti RevokedToken (logout, manual revoke);
+	// (2) per-user UserTokenInvalidation watermark (role demotion,
+	// group removal, deactivation, password reset). Both are sub-ms
+	// PK probes; the middleware fails open on DB error so a transient
+	// outage doesn't 401 every active user.
+	issuer.SetRevocationChecker(func(ctx context.Context, jti, userID string, iat time.Time) bool {
+		if jti != "" && database.IsTokenRevoked(ctx, jti) {
+			return true
+		}
+		if userID != "" && !iat.IsZero() {
+			watermark := database.UserTokenWatermark(ctx, userID)
+			if !watermark.IsZero() && iat.Before(watermark) {
+				return true
+			}
+		}
+		return false
 	})
 
 	// Two-tier shutdown contexts (R4 audit fix):

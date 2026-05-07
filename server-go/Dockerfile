@@ -74,9 +74,16 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # scratch image — scratch has no shell to mkdir at runtime.
 RUN mkdir -p /tmp/kuso-data && chmod 777 /tmp/kuso-data
 
-# ---- 3. scratch image ----------------------------------------------------
+# ---- 3. runtime image ----------------------------------------------------
+#
+# v0.9.38: switched from `scratch` to `alpine` so the runtime image
+# carries postgresql-client. /api/admin/backup invokes pg_dump
+# in-process to stream the metadata DB out to the CLI; without the
+# binary on $PATH the endpoint 500s. Image grows by ~25 MB. Worth it
+# for a working backup story; the alternatives (sidecar, separate
+# Job) all add operational complexity.
 
-FROM scratch
+FROM alpine:3.20
 ARG VERSION=v0.2.0-dev
 
 LABEL maintainer="https://kuso.sislelabs.com"
@@ -85,17 +92,21 @@ LABEL org.opencontainers.image.source="https://github.com/sislelabs/kuso"
 LABEL org.opencontainers.image.description="kuso control-plane — Go HTTP API + embedded Next.js SPA"
 LABEL org.opencontainers.image.licenses="AGPL-3.0"
 
-# CA bundle is needed for the GitHub client + any outbound TLS we add
-# later (kube API server hits go through client-go's transport, which
-# uses this bundle by default).
-COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=build /out/kuso-server /kuso-server
+# postgresql16-client carries pg_dump + psql at the version that
+# matches the bundled Postgres pod. ca-certificates is needed for
+# any outbound TLS (GitHub client + kube apiserver). tzdata is so
+# log timestamps render with the operator's TZ if KUSO_TZ is set.
+RUN apk add --no-cache postgresql16-client ca-certificates tzdata && \
+    addgroup -S kuso && adduser -S -G kuso kuso
 
-# Pre-create the data directory so the SQLite file can land somewhere
-# writable. In a deployment this is typically a PVC mount, but the
-# default lets the image run end-to-end without one.
-COPY --from=build /tmp/kuso-data /var/lib/kuso
+COPY --from=build /out/kuso-server /usr/local/bin/kuso-server
 
+# Pre-create the data directory writable by the kuso user. In a
+# deployment this is typically a PVC mount; the default lets the
+# image run end-to-end without one.
+RUN mkdir -p /var/lib/kuso && chown -R kuso:kuso /var/lib/kuso
+
+USER kuso
 ENV KUSO_DB_PATH=/var/lib/kuso/kuso.db
 EXPOSE 3000
-ENTRYPOINT ["/kuso-server"]
+ENTRYPOINT ["/usr/local/bin/kuso-server"]

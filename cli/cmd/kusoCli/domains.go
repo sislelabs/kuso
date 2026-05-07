@@ -30,6 +30,8 @@ Use 'kuso project update <project> --domain <baseDomain>' to change
 the auto-domain for every service in the project at once.`,
 }
 
+var domainsListOutput string
+
 var domainsListCmd = &cobra.Command{
 	Use:   "list <project> <service>",
 	Short: "List custom domains on a service",
@@ -56,6 +58,17 @@ var domainsListCmd = &cobra.Command{
 		if err := json.Unmarshal(resp.Body(), &svc); err != nil {
 			return fmt.Errorf("decode service: %w", err)
 		}
+		// JSON output: round-trip the parsed shape so scripts get a
+		// stable schema (no auto-domain — that comes from project
+		// settings, list separately if needed).
+		if domainsListOutput == "json" {
+			b, err := json.MarshalIndent(svc.Spec.Domains, "", "  ")
+			if err != nil {
+				return fmt.Errorf("encode domains: %w", err)
+			}
+			fmt.Println(string(b))
+			return nil
+		}
 		if len(svc.Spec.Domains) == 0 {
 			fmt.Printf("no custom domains on %s/%s — only the auto-domain is bound\n", args[0], args[1])
 			return nil
@@ -69,6 +82,10 @@ var domainsListCmd = &cobra.Command{
 		}
 		return nil
 	},
+}
+
+func init() {
+	domainsListCmd.Flags().StringVarP(&domainsListOutput, "output", "o", "table", "output format: table | json")
 }
 
 var (

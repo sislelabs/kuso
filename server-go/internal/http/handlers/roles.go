@@ -145,6 +145,18 @@ func (h *RolesHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	// Permission set may have shrunk — kill every JWT that was
+	// issued for users with this role so the new permissions take
+	// effect on the next request instead of waiting up to 10h for
+	// the old token to expire. We bump the watermark unconditionally
+	// (we don't know if the change was a shrink or a grow); a grow
+	// would just make users re-auth, which is acceptable given how
+	// rarely role permissions change.
+	if n, err := h.DB.InvalidateUsersByRole(ctx, id, "role.update"); err != nil {
+		h.Logger.Warn("update role: invalidate user tokens", "role", id, "err", err)
+	} else if n > 0 {
+		h.Logger.Info("update role: invalidated user tokens", "role", id, "users", n)
+	}
 	if h.Audit != nil {
 		h.Audit.Log(ctx, audit.Entry{
 			User:     auditUser(ctx),
@@ -164,6 +176,14 @@ func (h *RolesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := rolesCtx(r)
 	defer cancel()
 	id := chi.URLParam(r, "id")
+	// Snapshot affected users BEFORE delete so we can invalidate
+	// their tokens — the FK ON DELETE SET NULL will null out
+	// User.roleId, after which InvalidateUsersByRole would return 0.
+	if n, err := h.DB.InvalidateUsersByRole(ctx, id, "role.delete"); err != nil {
+		h.Logger.Warn("delete role: invalidate user tokens", "role", id, "err", err)
+	} else if n > 0 {
+		h.Logger.Info("delete role: invalidated user tokens", "role", id, "users", n)
+	}
 	if err := h.DB.DeleteRole(ctx, id); err != nil {
 		switch {
 		case errors.Is(err, db.ErrNotFound):

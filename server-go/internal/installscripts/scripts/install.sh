@@ -380,10 +380,10 @@ kubectl create namespace kuso 2>/dev/null || true
 # kuso-platform PriorityClass — both kuso-postgres and kuso-server
 # reference it in their pod specs. The full definition lives in
 # deploy/server-go.yaml's bundle, but that gets applied later in
-# the script — and a missing PriorityClass at StatefulSet-create
-# time produces "no PriorityClass with name kuso-platform was
-# found" with no useful retry. Eagerly create it here so subsequent
-# applies are clean.
+# the script — and a missing PriorityClass at create time produces
+# "no PriorityClass with name kuso-platform was found" with no
+# useful retry. Eagerly create it here so subsequent applies are
+# clean.
 kubectl apply -f - <<'EOF' >/dev/null
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
@@ -394,6 +394,32 @@ globalDefault: false
 description: "kuso control-plane pods. Survives workload eviction."
 EOF
 
+# v0.9.38: install CloudNativePG operator. The bundled Postgres is now
+# a CNPG-managed Cluster (3 instances, automatic failover, anti-
+# affinity) instead of a single-replica StatefulSet pinned to the
+# control-plane node. CNPG is also already required by the HA-Postgres
+# *addon* path (docs/ADDON_HA.md) — we just install it eagerly now
+# instead of waiting for the user to read the docs.
+#
+# ~150 MB image, ~64 MiB steady-state. Idempotent — re-applying the
+# CNPG release manifest is a no-op when CRDs already exist.
+CNPG_VERSION="${KUSO_CNPG_VERSION:-1.24.0}"
+CNPG_RELEASE_BRANCH="${KUSO_CNPG_BRANCH:-release-1.24}"
+if kubectl get crd clusters.postgresql.cnpg.io >/dev/null 2>&1; then
+  log "CloudNativePG already installed; skipping operator install"
+else
+  log "installing CloudNativePG operator (v${CNPG_VERSION})"
+  if ! kubectl apply --server-side -f \
+    "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/${CNPG_RELEASE_BRANCH}/releases/cnpg-${CNPG_VERSION}.yaml" \
+    >/dev/null; then
+    err "CNPG install failed — check network access to raw.githubusercontent.com"
+    exit 1
+  fi
+  log "waiting for CNPG operator to become ready (up to 5 min)"
+  kubectl -n cnpg-system wait --for=condition=Available deploy/cnpg-controller-manager --timeout=300s \
+    || warn "CNPG operator not yet Available — proceeding (Cluster create may retry)"
+fi
+
 if [[ "${KUSO_USE_EXTERNAL_POSTGRES:-0}" == "1" ]]; then
   if ! kubectl get secret -n kuso kuso-postgres-conn >/dev/null 2>&1; then
     err "KUSO_USE_EXTERNAL_POSTGRES=1 set but Secret kuso-postgres-conn missing — create it before re-running install"
@@ -401,38 +427,71 @@ if [[ "${KUSO_USE_EXTERNAL_POSTGRES:-0}" == "1" ]]; then
   fi
   log "external Postgres mode — using existing kuso-postgres-conn Secret"
 else
+  # Reuse an existing password if one's already in the cluster (re-
+  # run safety). Otherwise mint a fresh one. CNPG bootstrap also
+  # reads {username, password} from kuso-postgres-conn — same Secret
+  # serves both bootstrap-input + composed-output roles.
   EXISTING_PG_PASS=""
   if kubectl get secret -n kuso kuso-postgres-conn >/dev/null 2>&1; then
     EXISTING_PG_PASS=$(kubectl get secret -n kuso kuso-postgres-conn -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   fi
   PG_PASS="${EXISTING_PG_PASS:-$(random_string)}"
-  PG_DSN="postgres://kuso:${PG_PASS}@kuso-postgres:5432/kuso?sslmode=disable"
+
+  # Bootstrap shape — CNPG initdb reads {username, password} from
+  # this Secret and creates the role + database. The dsn-stamp Job
+  # in deploy/postgres.yaml patches the same Secret with the
+  # composed {dsn, host, port, database} fields kuso-server reads.
+  #
+  # IMPORTANT: CNPG also expects the keys named {username, password}
+  # (not {user, password}) per its docs. We provide BOTH name shapes
+  # so kuso-server's existing reads of 'user' keep working alongside
+  # CNPG's reads of 'username'.
   kubectl create secret generic kuso-postgres-conn -n kuso --dry-run=client -o yaml \
+    --type=kubernetes.io/basic-auth \
+    --from-literal=username="kuso" \
     --from-literal=user="kuso" \
     --from-literal=password="$PG_PASS" \
     --from-literal=database="kuso" \
-    --from-literal=dsn="$PG_DSN" \
     | kubectl apply -f - >/dev/null
 
-  # Apply the StatefulSet manifest. The Secret block was removed from
-  # postgres.yaml in v0.9.1 — we wrote our own Secret above with a
-  # real password, and a literal stringData in the YAML would have
-  # overwritten ours.
-  curl -sfL "${KUSO_RAW}/deploy/postgres.yaml" | kubectl apply -f - >/dev/null
+  # Single-node mode: kustomize the manifest before applying so the
+  # 3-instance default doesn't peg a 1-node test cluster as
+  # "schedulable=0/3". Operators with 1 worker pass
+  # KUSO_POSTGRES_SINGLE_NODE=true and accept the SPOF for dev.
+  PG_MANIFEST=$(curl -sfL "${KUSO_RAW}/deploy/postgres.yaml")
+  if [[ "${KUSO_POSTGRES_SINGLE_NODE:-0}" == "1" || "${KUSO_POSTGRES_SINGLE_NODE:-false}" == "true" ]]; then
+    warn "KUSO_POSTGRES_SINGLE_NODE: scaling kuso-postgres Cluster to 1 instance (SPOF for dev only)"
+    PG_MANIFEST=$(echo "$PG_MANIFEST" | sed 's/^  instances: 3$/  instances: 1/' \
+      | sed 's/    enablePodAntiAffinity: true/    enablePodAntiAffinity: false/')
+  fi
+  echo "$PG_MANIFEST" | kubectl apply -f - >/dev/null
 
-  # The StatefulSet creates the pod asynchronously; kubectl wait
-  # races the create on a fresh install. Poll for the pod's
-  # existence first, THEN wait for it to be Ready.
-  log "waiting for kuso-postgres pod to be created (up to 60s)"
+  log "waiting for kuso-postgres Cluster primary to come up (up to 5 min)"
+  # CNPG creates the primary pod with a -1 suffix; wait for it to
+  # exist first, then for Ready.
   for i in $(seq 1 60); do
-    if kubectl -n kuso get pod kuso-postgres-0 >/dev/null 2>&1; then
+    if kubectl -n kuso get pod kuso-postgres-1 >/dev/null 2>&1; then
       break
     fi
-    sleep 1
+    sleep 5
   done
-  log "waiting for kuso-postgres to become ready (up to 5 min)"
-  kubectl wait --for=condition=Ready --timeout=300s \
-    pod/kuso-postgres-0 -n kuso || warn "kuso-postgres not yet ready"
+  kubectl -n kuso wait --for=condition=Ready --timeout=300s \
+    pod/kuso-postgres-1 || warn "kuso-postgres-1 not yet Ready"
+
+  # Wait for the dsn-stamp Job to complete so kuso-server can find
+  # the dsn key in kuso-postgres-conn. The Job is part of the
+  # manifest we applied above; if it fails the Cluster bootstrap
+  # never produced kuso-postgres-app, which is its own issue.
+  log "waiting for kuso-postgres-conn dsn key (up to 5 min)"
+  for i in $(seq 1 60); do
+    if kubectl -n kuso get secret kuso-postgres-conn -o jsonpath='{.data.dsn}' 2>/dev/null | grep -q .; then
+      break
+    fi
+    sleep 5
+  done
+  if ! kubectl -n kuso get secret kuso-postgres-conn -o jsonpath='{.data.dsn}' 2>/dev/null | grep -q .; then
+    warn "dsn key not yet present in kuso-postgres-conn — kuso-server may need a restart after the Job lands"
+  fi
 fi
 
 # -------- 9. server secrets --------

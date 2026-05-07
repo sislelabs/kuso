@@ -8,8 +8,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var statusOutput string
+
 func init() {
 	rootCmd.AddCommand(statusCmd)
+	statusCmd.Flags().StringVarP(&statusOutput, "output", "o", "table", "output format: table | json")
 }
 
 // statusCmd prints a one-screen view of the project + every service +
@@ -82,6 +85,20 @@ var statusCmd = &cobra.Command{
 		if err := json.Unmarshal(resp.Body(), &rollup); err != nil {
 			fmt.Fprintln(os.Stderr, "decode:", err)
 			os.Exit(1)
+		}
+
+		if statusOutput == "json" {
+			// Re-emit the parsed shape so scripts get a stable schema
+			// even if the server adds fields later. The full rollup
+			// response is also available via `kuso get projects -o
+			// json` if a caller needs more detail.
+			out, err := json.MarshalIndent(rollup, "", "  ")
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "encode:", err)
+				os.Exit(1)
+			}
+			fmt.Println(string(out))
+			return
 		}
 
 		fmt.Printf("project %s\n", rollup.Project.Metadata.Name)

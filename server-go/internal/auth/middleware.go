@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // ctxKey is unexported so callers must go through ClaimsFromContext.
@@ -12,10 +13,15 @@ type ctxKey int
 const claimsCtxKey ctxKey = 0
 
 // RevocationChecker, when set on an Issuer, is consulted on every
-// successful Verify in the middleware. If it returns true the token is
-// rejected as if signature verification had failed. Used to wire the
-// RevokedToken DB lookup without making the auth package depend on db.
-type RevocationChecker func(ctx context.Context, jti string) bool
+// successful Verify in the middleware. Used to wire the RevokedToken
+// DB lookups without making the auth package depend on db. The
+// implementation should fail-open (return false) on DB errors so a
+// transient outage doesn't 401 every active user.
+//
+// The checker receives both the jti AND the userID/iat so it can
+// query both the per-jti RevokedToken table and the per-user
+// UserTokenInvalidation watermark in a single hop.
+type RevocationChecker func(ctx context.Context, jti, userID string, iat time.Time) bool
 
 // SetRevocationChecker installs the per-request revocation hook. Pass
 // nil to disable. Safe to call once at startup; not safe to mutate
@@ -53,13 +59,17 @@ func (i *Issuer) Middleware(skip ...string) func(http.Handler) http.Handler {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			// Revocation check after signature/expiry. Cheap PK probe
-			// against the RevokedToken table — sub-millisecond hot
-			// path with a hot pgx pool. Fail-open on checker error
-			// (treat as not-revoked) so a transient DB outage doesn't
-			// log every user out.
-			if i.revoked != nil && claims.ID != "" {
-				if i.revoked(r.Context(), claims.ID) {
+			// Revocation check after signature/expiry. Two probes
+			// (per-jti RevokedToken + per-user invalidation
+			// watermark) folded into one hook so the middleware
+			// doesn't grow a DB pool reference. Fail-open on checker
+			// error so a transient DB outage doesn't 401 every user.
+			if i.revoked != nil {
+				var iat time.Time
+				if claims.IssuedAt != nil {
+					iat = claims.IssuedAt.Time
+				}
+				if i.revoked(r.Context(), claims.ID, claims.UserID, iat) {
 					http.Error(w, "unauthorized", http.StatusUnauthorized)
 					return
 				}
