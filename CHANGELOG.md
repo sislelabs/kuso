@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.10] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix: NetworkPolicy podSelector cluster wipe + audit follow-ups ([108a5a5](https://github.com/sislelabs/kuso/commit/108a5a50e4f4b5b374bd351544ea8aa9a44210b6))
+
 ## [0.9.9] — 2026-05-06
 
 ### ✨ Features
