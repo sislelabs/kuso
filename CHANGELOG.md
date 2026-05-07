@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.42] — 2026-05-07
+
+### ✨ Features
+- Feat(settings/github): rich App status with installations + repo coverage ([7aaa5b3](https://github.com/sislelabs/kuso/commit/7aaa5b39c7b43822d16157600ebe3e55aa355bb9))
+
 ## [0.9.41] — 2026-05-07
 
 ### 🐛 Bug Fixes
