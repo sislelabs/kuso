@@ -1,4 +1,10 @@
 ---
+# DO NOT apply this file when KUSO_USE_EXTERNAL_POSTGRES=1.
+# hack/install.sh skips it in that mode. If you're doing
+# `kubectl apply -f deploy/` against an external Postgres install,
+# delete this file from the bundle first OR the dsn-stamp Job will
+# fail trying to find a CNPG-managed cluster that doesn't exist.
+#
 # Metadata Postgres for kuso-server.
 #
 # v0.9.38: switched from a single-replica StatefulSet on local-path
@@ -114,12 +120,17 @@ spec:
 # kuso-server reads. CNPG's bootstrap creates {clustername}-app with
 # {username, password, dbname}; we compose the libpq URI from those
 # and write it back to kuso-postgres-conn. install.sh seeded
-# kuso-postgres-conn with the bootstrap user/password — this Job
-# completes the shape.
+# kuso-postgres-conn with bootstrap-shape user/password keys; this
+# Job adds the composed {dsn, host, port, database} keys kuso-server
+# reads.
 #
-# Idempotent: re-running replaces the dsn/host/port keys without
-# touching the bootstrap user/password (CNPG reads those back from
-# kuso-postgres-conn on every reconcile).
+# Idempotent: re-running replaces the dsn/host/port keys. The user/
+# password keys are also overwritten on each run with the values
+# CNPG actually used during bootstrap — this is the correct
+# behaviour because if install.sh re-ran with a stale password (e.g.
+# secret was deleted between runs and CNPG bootstrapped against the
+# fresh one), kuso-server should connect with what CNPG actually
+# minted, not with what install.sh thought it minted.
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -150,15 +161,33 @@ spec:
                 echo "[stamp] waiting for kuso-postgres-app Secret ($i/60)…"
                 sleep 5
               done
+              if ! kubectl -n kuso get secret kuso-postgres-app >/dev/null 2>&1; then
+                echo "[stamp] FATAL: kuso-postgres-app Secret never appeared. Check the CNPG operator + Cluster status:" >&2
+                echo "  kubectl -n kuso describe cluster kuso-postgres" >&2
+                echo "  kubectl -n cnpg-system logs deploy/cnpg-controller-manager --tail=200" >&2
+                exit 1
+              fi
               user=$(kubectl -n kuso get secret kuso-postgres-app -o jsonpath='{.data.username}' | base64 -d)
               pass=$(kubectl -n kuso get secret kuso-postgres-app -o jsonpath='{.data.password}' | base64 -d)
               dbname=$(kubectl -n kuso get secret kuso-postgres-app -o jsonpath='{.data.dbname}' | base64 -d)
+              if [ -z "$user" ] || [ -z "$pass" ] || [ -z "$dbname" ]; then
+                echo "[stamp] FATAL: kuso-postgres-app Secret has empty username/password/dbname — CNPG bootstrap likely failed." >&2
+                kubectl -n kuso get secret kuso-postgres-app -o yaml >&2
+                exit 1
+              fi
+              # Verify the rw Service exists before composing the DSN —
+              # CNPG creates it once the primary is healthy. If it's
+              # missing the operator hasn't finished promotion yet.
+              if ! kubectl -n kuso get service kuso-postgres-rw >/dev/null 2>&1; then
+                echo "[stamp] FATAL: Service kuso-postgres-rw doesn't exist yet — CNPG primary not promoted." >&2
+                exit 1
+              fi
               host="kuso-postgres-rw"
               port="5432"
               dsn="postgres://${user}:${pass}@${host}:${port}/${dbname}?sslmode=disable"
               kubectl -n kuso patch secret kuso-postgres-conn --type=merge \
-                -p "$(printf '{"stringData":{"dsn":"%s","host":"%s","port":"%s","user":"%s","password":"%s","database":"%s"}}' \
-                  "$dsn" "$host" "$port" "$user" "$pass" "$dbname")"
+                -p "$(printf '{"stringData":{"dsn":"%s","host":"%s","port":"%s","username":"%s","user":"%s","password":"%s","database":"%s"}}' \
+                  "$dsn" "$host" "$port" "$user" "$user" "$pass" "$dbname")"
               echo "[stamp] kuso-postgres-conn updated; kuso-server can now connect"
 ---
 apiVersion: v1

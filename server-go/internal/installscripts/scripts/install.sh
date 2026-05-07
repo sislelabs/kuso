@@ -442,12 +442,17 @@ else
   # in deploy/postgres.yaml patches the same Secret with the
   # composed {dsn, host, port, database} fields kuso-server reads.
   #
-  # IMPORTANT: CNPG also expects the keys named {username, password}
-  # (not {user, password}) per its docs. We provide BOTH name shapes
-  # so kuso-server's existing reads of 'user' keep working alongside
-  # CNPG's reads of 'username'.
+  # CNPG's bootstrap.initdb.secret expects keys {username, password}
+  # (not {user, password}). We provide BOTH name shapes so kuso-server's
+  # existing reads of 'user' keep working alongside CNPG's reads of
+  # 'username'. The dsn-stamp Job will later add {dsn, host, port}
+  # composed-field keys.
+  #
+  # NOTE: type=Opaque (not kubernetes.io/basic-auth) — basic-auth
+  # technically only allows {username, password} keys; some kubelets
+  # are lenient about extra keys, but we don't want to depend on it
+  # since we add four more keys via the dsn-stamp Job.
   kubectl create secret generic kuso-postgres-conn -n kuso --dry-run=client -o yaml \
-    --type=kubernetes.io/basic-auth \
     --from-literal=username="kuso" \
     --from-literal=user="kuso" \
     --from-literal=password="$PG_PASS" \
@@ -507,10 +512,12 @@ kubectl create namespace kuso 2>/dev/null || true
 EXISTING_ADMIN=""
 EXISTING_SESSION=""
 EXISTING_JWT=""
+EXISTING_METRICS_SCRAPE=""
 if kubectl get secret -n kuso kuso-server-secrets >/dev/null 2>&1; then
   EXISTING_ADMIN=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.KUSO_ADMIN_PASSWORD}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   EXISTING_SESSION=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.KUSO_SESSION_KEY}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   EXISTING_JWT=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.JWT_SECRET}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  EXISTING_METRICS_SCRAPE=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.KUSO_METRICS_SCRAPE_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
 fi
 
 if [[ "${KUSO_INSECURE_SECRETS:-0}" == "1" ]]; then
@@ -518,11 +525,13 @@ if [[ "${KUSO_INSECURE_SECRETS:-0}" == "1" ]]; then
   ADMIN_PASSWORD="${KUSO_ADMIN_PASSWORD:-kuso-admin}"
   SESSION_KEY="dev-session-key-do-not-use-in-prod-3232"
   JWT_SECRET="dev-jwt-secret-do-not-use-in-prod-32-chars"
+  METRICS_SCRAPE_TOKEN="dev-metrics-scrape-token-do-not-use"
 else
   # Precedence: explicit env-var override > existing secret > fresh random.
   ADMIN_PASSWORD="${KUSO_ADMIN_PASSWORD:-${EXISTING_ADMIN:-$(random_string)}}"
   SESSION_KEY="${EXISTING_SESSION:-$(random_string)}"
   JWT_SECRET="${EXISTING_JWT:-$(random_string)}"
+  METRICS_SCRAPE_TOKEN="${EXISTING_METRICS_SCRAPE:-$(random_string)}"
   if [[ -n "$EXISTING_ADMIN" ]]; then
     log "reusing existing kuso-server-secrets (admin password unchanged)"
   fi
@@ -551,6 +560,18 @@ kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o ya
   --from-literal=KUSO_DOMAIN="$KUSO_DOMAIN" \
   --from-literal=KUSO_RELEASE_PUBLIC_KEY="$KUSO_RELEASE_PUBKEY" \
   --from-literal=KUSO_REQUIRE_SIGNATURES="$KUSO_REQUIRE_SIGS" \
+  --from-literal=KUSO_METRICS_SCRAPE_TOKEN="$METRICS_SCRAPE_TOKEN" \
+  | kubectl apply -f - >/dev/null
+
+# Mirror the metrics-scrape token into a dedicated Secret the bundled
+# Prometheus mounts. Two reasons for the split: (1) we don't want to
+# hand Prometheus the JWT secret + admin password just to scrape;
+# (2) rotating the scrape token shouldn't bounce kuso-server, so the
+# Secret with that single key is referenced from prometheus.yaml's
+# bearer_token_file path. install.sh re-applies on every run so the
+# two stay in sync.
+kubectl create secret generic kuso-prometheus-scrape -n kuso --dry-run=client -o yaml \
+  --from-literal=token="$METRICS_SCRAPE_TOKEN" \
   | kubectl apply -f - >/dev/null
 
 # k3s node-token Secret. Required so kuso-server can issue agent-join

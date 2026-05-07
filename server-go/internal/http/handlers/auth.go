@@ -139,7 +139,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	// requests don't carry it; same-site GETs (the SPA's own fetch
 	// calls) do. Insecure-cookie fallback for plain-HTTP dev only —
 	// production runs behind traefik+TLS so r.TLS != nil.
-	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	secure := isHTTPS(r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "kuso.JWT_TOKEN",
 		Value:    tok,
@@ -229,7 +229,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	secure := r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
+	secure := isHTTPS(r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "kuso.JWT_TOKEN",
 		Value:    "",
@@ -332,4 +332,21 @@ func contains(haystack []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// isHTTPS returns true when the request was served over TLS, either
+// directly (r.TLS != nil) or behind a TLS-terminating reverse proxy
+// that set X-Forwarded-Proto. Match case-insensitively because
+// Traefik / nginx / ALB don't agree on capitalisation, and a Set-
+// Cookie missing the Secure flag because of "HTTPS" vs "https" is
+// silent-credential-leak territory. Used for every Set-Cookie call
+// site in this package.
+func isHTTPS(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	if r.TLS != nil {
+		return true
+	}
+	return strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https")
 }

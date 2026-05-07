@@ -49,10 +49,16 @@ type GithubHandler struct {
 // refilled 1/sec → 60 webhooks per minute steady-state, 60 burst.
 // GitHub's normal cadence (push, PR open, PR sync) is well under this;
 // crossing it usually means a CI loop or a leaked secret.
+//
+// lastSeen is bumped on every take() so the periodic sweeper can drop
+// installations that haven't had a webhook in days. Without that, a
+// SaaS instance with thousands of GitHub Apps over its lifetime
+// accumulates a permanent map entry per ever-seen installation id.
 type ghTokenBucket struct {
 	mu         sync.Mutex
 	tokens     float64
 	lastRefill time.Time
+	lastSeen   time.Time
 }
 
 func (b *ghTokenBucket) take() bool {
@@ -71,6 +77,7 @@ func (b *ghTokenBucket) take() bool {
 		b.tokens = cap
 	}
 	b.lastRefill = now
+	b.lastSeen = now
 	if b.tokens < 1 {
 		return false
 	}
@@ -96,6 +103,45 @@ func (h *GithubHandler) allowInstallation(id int64) bool {
 		h.installLimiters[id] = b
 	}
 	return b.take()
+}
+
+// gcInstallLimiters drops bucket entries whose lastSeen is older than
+// `maxAge`. Cheap (one-pass scan; the map is at most "live
+// installations" big in steady state). Called from a 1h ticker started
+// by RunInstallLimiterGC.
+func (h *GithubHandler) gcInstallLimiters(maxAge time.Duration) int {
+	now := time.Now()
+	h.limiterMu.Lock()
+	defer h.limiterMu.Unlock()
+	dropped := 0
+	for id, b := range h.installLimiters {
+		b.mu.Lock()
+		idle := now.Sub(b.lastSeen)
+		b.mu.Unlock()
+		if idle > maxAge {
+			delete(h.installLimiters, id)
+			dropped++
+		}
+	}
+	return dropped
+}
+
+// RunInstallLimiterGC starts a goroutine that sweeps idle bucket
+// entries every hour. Drops entries whose last webhook was 7+ days
+// ago. main.go should call this once after wiring the handler.
+func (h *GithubHandler) RunInstallLimiterGC(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(1 * time.Hour)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				h.gcInstallLimiters(7 * 24 * time.Hour)
+			}
+		}
+	}()
 }
 
 // MountPublic registers webhook (no JWT) + setup-callback routes onto

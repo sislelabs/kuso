@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -48,6 +49,15 @@ type BackupHandler struct {
 	Kube      *kube.Client
 	Namespace string // kuso-server namespace, default "kuso"
 	Logger    *slog.Logger
+
+	// restoreLimitMu + restoreLimitTokens implement a simple per-
+	// process rate limit on /api/admin/restore so a leaked admin
+	// token can't spawn unbounded Jobs + Secrets. Bucket of 5,
+	// refilled at 1/hour. Cluster-wide cap (not per-admin) is the
+	// right granularity — a real restore is a once-per-incident op.
+	restoreLimitMu     sync.Mutex
+	restoreLimitTokens float64
+	restoreLimitLast   time.Time
 }
 
 // NewBackupHandler returns a configured handler. Kube + Namespace
@@ -58,6 +68,32 @@ func NewBackupHandler(database *db.DB, kc *kube.Client, namespace string, logger
 		namespace = "kuso"
 	}
 	return &BackupHandler{DB: database, Kube: kc, Namespace: namespace, Logger: logger}
+}
+
+// takeRestoreToken returns true if the cluster-wide restore bucket
+// has capacity. Burst of 5 (covers an admin retrying a flaky
+// restore), refill 1/hour (real restores are rare incident ops).
+// Returns false on quota exhaustion; caller responds 429.
+func (h *BackupHandler) takeRestoreToken() bool {
+	const cap = 5.0
+	const refillPerSec = 1.0 / 3600.0
+	h.restoreLimitMu.Lock()
+	defer h.restoreLimitMu.Unlock()
+	now := time.Now()
+	if h.restoreLimitLast.IsZero() {
+		h.restoreLimitTokens = cap
+	} else {
+		h.restoreLimitTokens += now.Sub(h.restoreLimitLast).Seconds() * refillPerSec
+		if h.restoreLimitTokens > cap {
+			h.restoreLimitTokens = cap
+		}
+	}
+	h.restoreLimitLast = now
+	if h.restoreLimitTokens < 1 {
+		return false
+	}
+	h.restoreLimitTokens--
+	return true
 }
 
 // Mount registers admin-only routes.
@@ -144,6 +180,15 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.Kube == nil {
 		http.Error(w, "restore unavailable: no kube client", http.StatusServiceUnavailable)
+		return
+	}
+	// Cluster-wide rate limit: 5 burst, 1/hour refill. Without this,
+	// a leaked admin token can spawn unbounded restore Jobs + 900 KiB
+	// dump Secrets that leak etcd until either they hit the Job's
+	// TTL (7 days for failed) or an admin manually cleans up.
+	if !h.takeRestoreToken() {
+		http.Error(w, "restore rate limit exceeded — wait a few minutes between restores",
+			http.StatusTooManyRequests)
 		return
 	}
 	// 10 GB hard cap on the upload — nobody's metadata DB is that
@@ -235,7 +280,16 @@ func (h *BackupHandler) RestoreStatus(w http.ResponseWriter, r *http.Request) {
 		"phase":   phase,
 		"active":  job.Status.Active,
 	}
-	if phase == "Succeeded" {
+	// Both terminal phases need the dump Secret cleaned up — leaving
+	// it around on Failed lets a sequence of failed restores
+	// accumulate 900 KiB Secrets that survive the Job's 7-day TTL.
+	// Idempotent: deleteRestoreSecret on a missing Secret is fine.
+	cleanupSecret := func() {
+		secretName := "kuso-restore-data-" + strings.TrimPrefix(jobName, "kuso-restore-")
+		_ = h.deleteRestoreSecret(context.Background(), secretName)
+	}
+	switch phase {
+	case "Succeeded":
 		if job.Annotations == nil || job.Annotations["kuso.sislelabs.com/rollout-triggered"] != "true" {
 			if err := h.triggerKusoServerRollout(ctx); err != nil {
 				h.Logger.Error("restore: rollout", "err", err)
@@ -245,9 +299,9 @@ func (h *BackupHandler) RestoreStatus(w http.ResponseWriter, r *http.Request) {
 				resp["rolloutTriggered"] = true
 			}
 		}
-		// Clean up the Secret; the dump's been consumed.
-		secretName := "kuso-restore-data-" + strings.TrimPrefix(jobName, "kuso-restore-")
-		_ = h.deleteRestoreSecret(context.Background(), secretName)
+		cleanupSecret()
+	case "Failed":
+		cleanupSecret()
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -269,12 +323,25 @@ func (h *BackupHandler) dsnForPgTools() string {
 	if v, ok := sec.Data["dsn"]; ok && len(v) > 0 {
 		return string(v)
 	}
-	user := string(sec.Data["user"])
+	// CNPG-bootstrap shape uses 'username'; legacy / external-Postgres
+	// installs may have 'user'. Try both.
+	user := string(sec.Data["username"])
+	if user == "" {
+		user = string(sec.Data["user"])
+	}
 	pass := string(sec.Data["password"])
 	dbName := string(sec.Data["database"])
+	if dbName == "" {
+		dbName = string(sec.Data["dbname"])
+	}
 	host := string(sec.Data["host"])
 	if host == "" {
-		host = "kuso-postgres"
+		// CNPG primary is at <cluster>-rw; that's the right
+		// fallback now that the bundled Postgres is CNPG-managed.
+		// Pre-v0.9.38 the StatefulSet was just kuso-postgres, but
+		// upgraded clusters get the dsn key populated by the
+		// dsn-stamp Job and never hit this branch.
+		host = "kuso-postgres-rw"
 	}
 	port := string(sec.Data["port"])
 	if port == "" {
@@ -335,6 +402,24 @@ func (h *BackupHandler) createRestoreJob(ctx context.Context, jobName, secretNam
 				},
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
+					// Pod-level security context: drop root, no
+					// privilege escalation, seccomp default. The
+					// pod runs psql against a Secret-backed dump —
+					// nothing privileged needed. postgres:16-alpine
+					// uses uid 70 (the postgres user) by default
+					// when run with non-root via runAsUser; we let
+					// kube pick an arbitrary high uid via
+					// runAsNonRoot=true so the image's own uid 70
+					// isn't a hard requirement.
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: ptrBool(true),
+						RunAsUser:    ptrInt64(70),
+						RunAsGroup:   ptrInt64(70),
+						FSGroup:      ptrInt64(70),
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
+					},
 					Containers: []corev1.Container{{
 						Name:            "psql",
 						Image:           "postgres:16-alpine",
@@ -355,16 +440,37 @@ echo "[restore] done at $(date -u)"
 								},
 							},
 						}},
-						VolumeMounts: []corev1.VolumeMount{{
-							Name: "dump", MountPath: "/data", ReadOnly: true,
-						}},
-					}},
-					Volumes: []corev1.Volume{{
-						Name: "dump",
-						VolumeSource: corev1.VolumeSource{
-							Secret: &corev1.SecretVolumeSource{SecretName: secretName},
+						SecurityContext: &corev1.SecurityContext{
+							AllowPrivilegeEscalation: ptrBool(false),
+							ReadOnlyRootFilesystem:   ptrBool(true),
+							Capabilities: &corev1.Capabilities{
+								Drop: []corev1.Capability{"ALL"},
+							},
+						},
+						VolumeMounts: []corev1.VolumeMount{
+							{Name: "dump", MountPath: "/data", ReadOnly: true},
+							// /tmp is writable so psql can stage
+							// its temp files; rootfs stays read-only.
+							{Name: "tmp", MountPath: "/tmp"},
 						},
 					}},
+					Volumes: []corev1.Volume{
+						{
+							Name: "dump",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName:  secretName,
+									DefaultMode: ptrInt32(0o400),
+								},
+							},
+						},
+						{
+							Name: "tmp",
+							VolumeSource: corev1.VolumeSource{
+								EmptyDir: &corev1.EmptyDirVolumeSource{},
+							},
+						},
+					},
 				},
 			},
 		},
@@ -398,3 +504,10 @@ func (h *BackupHandler) markRolloutTriggered(ctx context.Context, jobName string
 		h.Logger.Warn("restore: mark rollout-triggered", "err", err)
 	}
 }
+
+// Tiny pointer helpers — kube types want *bool, *int32, *int64 in
+// SecurityContext/SeccompProfile/etc. Inline-allocating addresses of
+// literals isn't allowed; these stay alongside the only caller.
+func ptrBool(b bool) *bool       { return &b }
+func ptrInt32(i int32) *int32    { return &i }
+func ptrInt64(i int64) *int64    { return &i }

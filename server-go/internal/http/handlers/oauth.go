@@ -123,7 +123,7 @@ func (h *OAuthHandler) GithubCallback(w http.ResponseWriter, r *http.Request) {
 		// Always clear the cookie — single use.
 		http.SetCookie(w, &http.Cookie{
 			Name: inviteOAuthCookie, Value: "", Path: "/", MaxAge: -1,
-			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r),
 		})
 	}
 	jwt, err := h.upsertAndIssueWithInvite(ctx, prof, "oauth2", inviteToConsume)

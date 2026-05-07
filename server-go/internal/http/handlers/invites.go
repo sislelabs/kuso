@@ -485,7 +485,7 @@ func (h *InvitesHandler) RedeemOAuthStart(w http.ResponseWriter, r *http.Request
 		MaxAge:   600,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https",
+		Secure:   isHTTPS(r),
 	})
 	// Bounce to the OAuth start endpoint — the existing GH flow
 	// handles the rest. The callback inspects the cookie and runs

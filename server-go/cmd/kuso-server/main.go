@@ -684,6 +684,22 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 		} else if n > 0 {
 			logger.Info("daily-cleanup error-events pruned", "rows", n, "days", logDays)
 		}
+		// Revoked-token rows beyond their natural expiry. The
+		// signature layer rejects expired tokens on its own — once
+		// past expiresAt, the revocation row is dead weight.
+		if n, err := database.PruneRevokedTokens(c); err != nil {
+			logger.Warn("daily-cleanup revoked-tokens", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup revoked-tokens pruned", "rows", n)
+		}
+		// GitHub webhook delivery seen-set. GitHub's last retry
+		// happens at ~24h; beyond that, replay protection is moot.
+		// Keep 48h of headroom for clock skew.
+		if n, err := database.PruneGithubDeliveries(c, now.Add(-48*time.Hour)); err != nil {
+			logger.Warn("daily-cleanup github-deliveries", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup github-deliveries pruned", "rows", n)
+		}
 		if logDB != nil {
 			if n, err := logDB.PruneLogsOlderThan(c, now.AddDate(0, 0, -logDays)); err != nil {
 				logger.Warn("daily-cleanup logs", "err", err)

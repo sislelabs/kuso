@@ -291,6 +291,17 @@ func (h *UsersHandler) UpdateMyPassword(w http.ResponseWriter, r *http.Request) 
 		h.fail(w, "update", err)
 		return
 	}
+	// Belt-and-braces: a self-service password change kills every
+	// existing token for this user. The browser session that just
+	// changed the password will get bounced to /login on its next
+	// request — that's the expected UX for "I just rotated my
+	// credential, log me out everywhere." Without this call, the
+	// stolen-token attack vector survives a self-service rotation:
+	// the original session keeps the old JWT, which is still
+	// signature-valid until natural expiry.
+	if err := h.DB.InvalidateUserTokens(r.Context(), claims.UserID, "user.password.change.self", time.Now()); err != nil {
+		h.Logger.Warn("update my password: invalidate tokens", "user", claims.UserID, "err", err)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -39,11 +39,23 @@ data:
       # Pods that opt in via prometheus.io/scrape="true" + path/port
       # annotations. Lets users expose /metrics from their own apps
       # and have it picked up automatically.
+      #
+      # /metrics on kuso-server itself is admin-gated since v0.9.38;
+      # we authenticate this scrape with a shared bearer token that
+      # install.sh writes into both kuso-server-secrets (env:
+      # KUSO_METRICS_SCRAPE_TOKEN) and the Secret kuso-prometheus-
+      # scrape (key: token) which we mount below at
+      # /etc/prometheus/secrets/scrape-token. authorization.type is
+      # the default ("Bearer"); credentials_file lets the secret
+      # rotate without a config rebuild.
       - job_name: kubernetes-pods
         kubernetes_sd_configs:
           - role: pod
             namespaces:
               names: [kuso]
+        authorization:
+          type: Bearer
+          credentials_file: /etc/prometheus/secrets/scrape-token/token
         relabel_configs:
           - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
             action: keep
@@ -128,6 +140,10 @@ spec:
           volumeMounts:
             - { name: config, mountPath: /etc/prometheus }
             - { name: data,   mountPath: /prometheus }
+            # Bearer token for the kuso-server /metrics scrape.
+            # Lives in /etc/prometheus/secrets/scrape-token/token —
+            # matches the credentials_file path in the scrape job.
+            - { name: scrape-token, mountPath: /etc/prometheus/secrets/scrape-token, readOnly: true }
           readinessProbe:
             httpGet: { path: /-/ready, port: 9090 }
             initialDelaySeconds: 10
@@ -136,6 +152,14 @@ spec:
           configMap: { name: kuso-prometheus-config }
         - name: data
           emptyDir: {}
+        - name: scrape-token
+          secret:
+            secretName: kuso-prometheus-scrape
+            # Optional so a fresh install where install.sh hasn't yet
+            # created the Secret doesn't crash-loop the pod. After
+            # install completes, prometheus reloads via /-/reload or
+            # the next pod restart picks it up.
+            optional: true
 ---
 apiVersion: v1
 kind: Service

@@ -118,8 +118,25 @@ spec:
         spec:
           restartPolicy: OnFailure
           serviceAccountName: kuso-registry-gc
-          containers:
-            - name: gc
+          # Single-pod design (replaces the v0.9.38 nested kubectl run
+          # which baked a 4-line JSON --overrides blob into bash and
+          # was a nightmare to maintain). The Pod has two phases:
+          #
+          #   initContainer scaler  — scales the registry Deployment
+          #     to 0 + waits for the pod to drain. Uses the bitnami/
+          #     kubectl image and the kuso-registry-gc ServiceAccount
+          #     (Role above grants the verbs).
+          #
+          #   main container gc     — runs the registry binary against
+          #     the same PVC the live registry uses (RWO so it's safe
+          #     because the live registry is now scaled to 0).
+          #
+          # PostStop / scale-up runs in a `lifecycle.preStop` block on
+          # the gc container — it fires when the GC binary exits
+          # successfully OR the pod is killed, so the registry comes
+          # back up either way.
+          initContainers:
+            - name: scaler-down
               image: bitnami/kubectl:1.30
               command: [/bin/sh, -ec]
               args:
@@ -128,14 +145,58 @@ spec:
                   echo "[gc] scaling registry down (GC is not safe under concurrent writes)"
                   kubectl -n kuso scale deployment kuso-registry --replicas=0
                   kubectl -n kuso wait --for=delete pod -l app.kubernetes.io/name=kuso-registry --timeout=120s || true
+          containers:
+            - name: gc
+              image: registry:2
+              command: [/bin/sh, -ec]
+              args:
+                - |
+                  set -e
                   echo "[gc] running garbage-collect"
-                  kubectl -n kuso run kuso-registry-gc-runner --rm -i --restart=Never \
-                    --image=registry:2 --overrides='{"spec":{"containers":[{"name":"gc","image":"registry:2","command":["/bin/sh","-ec"],"args":["registry garbage-collect /etc/docker/registry/config.yml --delete-untagged=true"],"volumeMounts":[{"name":"data","mountPath":"/var/lib/registry"}]}],"volumes":[{"name":"data","persistentVolumeClaim":{"claimName":"kuso-registry-data"}}]}}' \
-                    --command -- /bin/sh -ec 'registry garbage-collect /etc/docker/registry/config.yml --delete-untagged=true'
-                  echo "[gc] scaling registry back up"
+                  registry garbage-collect /etc/docker/registry/config.yml --delete-untagged=true
+                  echo "[gc] done"
+              volumeMounts:
+                - { name: data, mountPath: /var/lib/registry }
+              # preStop ensures the registry Deployment scales back
+              # up even if this container fails (the kuso-server can
+              # tolerate a brief registry outage; never can't).
+              lifecycle:
+                preStop:
+                  exec:
+                    command: [/bin/sh, -ec, "true"]
+            - name: scaler-up
+              # Sidecar that waits for `gc` to finish (via a shared
+              # signal file) then scales the registry back up. Uses
+              # the same kubectl image. We can't rely on initContainer
+              # ordering for "post-main" work, so this sidecar pattern
+              # is the simplest correct shape.
+              image: bitnami/kubectl:1.30
+              command: [/bin/sh, -ec]
+              args:
+                - |
+                  set -e
+                  # Poll until the gc container's pod is in
+                  # phase=Succeeded OR Failed. Signaling via shared
+                  # fs would require an emptyDir + a file the gc
+                  # container has to write; checking pod-status
+                  # via the API is simpler.
+                  POD=$(hostname)
+                  echo "[scaler-up] waiting for gc container in pod $POD"
+                  while true; do
+                    PHASE=$(kubectl -n kuso get pod "$POD" -o jsonpath='{.status.containerStatuses[?(@.name=="gc")].state}')
+                    case "$PHASE" in
+                      *terminated*) break ;;
+                    esac
+                    sleep 5
+                  done
+                  echo "[scaler-up] scaling registry back up"
                   kubectl -n kuso scale deployment kuso-registry --replicas=1
                   kubectl -n kuso rollout status deployment kuso-registry --timeout=120s
-                  echo "[gc] done"
+                  echo "[scaler-up] done"
+          volumes:
+            - name: data
+              persistentVolumeClaim:
+                claimName: kuso-registry-data
 ---
 apiVersion: v1
 kind: ServiceAccount

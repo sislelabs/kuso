@@ -6,6 +6,7 @@ package http
 import (
 	"bufio"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"log/slog"
 	"net"
@@ -143,26 +144,43 @@ func NewRouter(d Deps) http.Handler {
 	// pod offline (if /healthz checked DB) or silently 5xxs every
 	// request (if it didn't).
 	r.Get("/readyz", readyz(d))
-	// Prometheus scrape endpoint. Default-gated to admin-only since
-	// v0.9.38 — service names, request rates, build counts, leader-
-	// election state are all reconnaissance signal for an attacker.
-	// The in-cluster prometheus-server's scrape config has the admin
-	// bearer wired in; operators running an external Prometheus must
-	// either inject the bearer or set KUSO_METRICS_PUBLIC=true to
-	// restore the old open behaviour.
+	// Prometheus scrape endpoint. Default-gated since v0.9.38 — the
+	// raw metrics expose service names, request rates, build counts,
+	// leader-election state, etc. Three ways to allow scrape access:
 	//
-	// Pre-v0.9.38 the flag was KUSO_METRICS_REQUIRE_AUTH=true (opt-in
-	// gating); we honour both shapes for one release so config baked
-	// into operator scripts doesn't break on upgrade.
+	//   1. KUSO_METRICS_SCRAPE_TOKEN=<secret> — shared bearer; the
+	//      bundled in-cluster Prometheus's scrape config sets the
+	//      Authorization header to "Bearer <secret>". install.sh
+	//      auto-generates this and wires both sides. Recommended.
+	//
+	//   2. JWT admin bearer — a logged-in admin can hit /metrics
+	//      directly. Useful for ad-hoc inspection from a CLI script.
+	//
+	//   3. KUSO_METRICS_PUBLIC=true — opt out of gating entirely.
+	//      Equivalent to the pre-v0.9.38 open behaviour. Use only
+	//      when you know the endpoint is otherwise network-isolated.
+	//
+	// We honour the legacy KUSO_METRICS_REQUIRE_AUTH=false shape for
+	// one release so config baked into operator scripts doesn't
+	// break on upgrade.
 	metricsPublic := os.Getenv("KUSO_METRICS_PUBLIC") == "true" ||
 		os.Getenv("KUSO_METRICS_REQUIRE_AUTH") == "false"
-	if metricsPublic {
+	scrapeToken := os.Getenv("KUSO_METRICS_SCRAPE_TOKEN")
+	switch {
+	case metricsPublic:
 		r.Get("/metrics", promhttp.Handler().ServeHTTP)
-	} else {
-		r.Group(func(r chi.Router) {
-			r.Use(d.Issuer.Middleware())
-			r.Use(httphandlers.AdminOnly)
-			r.Get("/metrics", promhttp.Handler().ServeHTTP)
+	default:
+		// Compose by hand: try the scrape-token shortcut first; on
+		// miss, fall through to JWT-issuer-middleware → admin-only →
+		// promhttp. The shortcut writes 200 and stops; the fall-
+		// through writes 401/403 if neither matches.
+		jwtChain := d.Issuer.Middleware()(httphandlers.AdminOnly(promhttp.Handler()))
+		r.Get("/metrics", func(w http.ResponseWriter, req *http.Request) {
+			if scrapeToken != "" && metricsScrapeTokenMatches(req, scrapeToken) {
+				promhttp.Handler().ServeHTTP(w, req)
+				return
+			}
+			jwtChain.ServeHTTP(w, req)
 		})
 	}
 	if d.Status != nil {
@@ -211,6 +229,10 @@ func NewRouter(d Deps) http.Handler {
 			BaseCtx:    d.BaseCtx,
 		}
 		ghHandler.MountPublic(r)
+		// Sweep cold installation limiter entries every hour so the
+		// in-memory map doesn't grow forever on multi-tenant SaaS
+		// instances that see many GitHub Apps come and go.
+		ghHandler.RunInstallLimiterGC(d.BaseCtx)
 	}
 
 	// Invite redemption is public — the invitee has no JWT yet.
@@ -649,4 +671,25 @@ func slogRequest(logger *slog.Logger) func(http.Handler) http.Handler {
 			)
 		})
 	}
+}
+
+// metricsScrapeTokenMatches returns true if the request's
+// Authorization header carries `Bearer <expected>`. Constant-time
+// compare so a timing oracle on the token isn't trivially exploitable.
+// Pulled out of the inline closure so the unit test can hit it
+// directly.
+func metricsScrapeTokenMatches(r *http.Request, expected string) bool {
+	if expected == "" {
+		return false
+	}
+	hdr := r.Header.Get("Authorization")
+	const prefix = "Bearer "
+	if len(hdr) <= len(prefix) || !strings.EqualFold(hdr[:len(prefix)], prefix) {
+		return false
+	}
+	got := hdr[len(prefix):]
+	if len(got) != len(expected) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(expected)) == 1
 }
