@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.27] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(logs): swallow transient "container is waiting" lines while build pod boots ([399cbab](https://github.com/sislelabs/kuso/commit/399cbab48ca089303ac8d508c98f3f06078df944))
+
 ## [0.9.26] — 2026-05-07
 
 ### 🐛 Bug Fixes
