@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.14] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(drift): correct env label key (env, not env-kind) ([acf0552](https://github.com/sislelabs/kuso/commit/acf0552a54ff9b11122c8f8c399c6ebb5fdb125f))
+
 ## [0.9.13] — 2026-05-07
 
 ### 🐛 Bug Fixes
