@@ -1,0 +1,169 @@
+{{- if and (eq .Values.kind "clickhouse") (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- $version := .Values.version | default "24.8-alpine" -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{- $secretName := include "kusoaddon.connSecretName" . -}}
+{{/*
+  ClickHouse — columnar OLAP database for analytics workloads. Bigger
+  footprint than the other addons (~1 GB minimum, columnar storage,
+  in-memory mark caches), but it's the right answer for indie SaaS
+  founders building product-analytics tables, log warehouses, or
+  ad-hoc reporting on their app DB. Postgres handles "what's the
+  user's todo list"; ClickHouse handles "show me 90-day MRR by
+  cohort", which is what makes a SaaS founder pay attention to it.
+
+  Single-instance config — replication / sharded clusters are out of
+  scope, you'd switch to ClickHouse Cloud or self-hosted via raw
+  Helm if you need that. The auth model is the standard
+  default-user + secret password: every connection authenticates;
+  no anonymous access.
+*/}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $existingPw := "" -}}
+{{- if and $existing $existing.data (index $existing.data "CLICKHOUSE_PASSWORD") -}}
+  {{- $existingPw = (index $existing.data "CLICKHOUSE_PASSWORD" | b64dec) -}}
+{{- end -}}
+{{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+{{- $database := .Values.database | default "kuso" -}}
+{{/*
+  Default user config baked into a secret so we can ${{ }} the
+  password into it. Mounting the secret as a file into ClickHouse's
+  /etc/clickhouse-server/users.d/ overrides the built-in defaults.
+*/}}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $name }}-userconf
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  default-user.xml: |
+    <?xml version="1.0"?>
+    <clickhouse>
+      <users>
+        <default>
+          <password>{{ $password }}</password>
+          <networks>
+            <ip>::/0</ip>
+          </networks>
+          <profile>default</profile>
+          <quota>default</quota>
+          <access_management>1</access_management>
+        </default>
+      </users>
+    </clickhouse>
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+    spec:
+      {{- include "kusoaddon.placement" . | nindent 6 }}
+      containers:
+        - name: clickhouse
+          image: "clickhouse/clickhouse-server:{{ $version }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8123
+            - name: native
+              containerPort: 9000
+          env:
+            # Auto-create the application database on first boot.
+            # ClickHouse's official image reads CLICKHOUSE_DB env in
+            # its entrypoint init scripts.
+            - name: CLICKHOUSE_DB
+              value: {{ $database | quote }}
+            - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
+              value: "1"
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/clickhouse
+            - name: logs
+              mountPath: /var/log/clickhouse-server
+            - name: userconf
+              mountPath: /etc/clickhouse-server/users.d/default-user.xml
+              subPath: default-user.xml
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /ping
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          # Slow boot: ClickHouse needs ~10-30s to load schemas + warm
+          # the mark cache. Without a startupProbe the readiness check
+          # would false-fail and kube would Restart the container.
+          startupProbe:
+            httpGet:
+              path: /ping
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: logs
+          emptyDir: {}
+        - name: userconf
+          secret:
+            secretName: {{ $name }}-userconf
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ include "kusoaddon.storageSize" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 8123
+      targetPort: http
+    - name: native
+      port: 9000
+      targetPort: native
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kusoaddon.connSecretName" . }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  CLICKHOUSE_HOST: {{ $name | quote }}
+  CLICKHOUSE_HTTP_PORT: "8123"
+  CLICKHOUSE_NATIVE_PORT: "9000"
+  CLICKHOUSE_USER: "default"
+  CLICKHOUSE_PASSWORD: {{ $password | quote }}
+  CLICKHOUSE_DATABASE: {{ $database | quote }}
+  # HTTP URL — most TS/Python clients accept this form. Native URL
+  # for the higher-perf clickhouse-driver / clickhouse-go SDKs.
+  CLICKHOUSE_URL: "http://default:{{ $password }}@{{ $name }}:8123/{{ $database }}"
+  CLICKHOUSE_NATIVE_URL: "clickhouse://default:{{ $password }}@{{ $name }}:9000/{{ $database }}"
+{{- end }}

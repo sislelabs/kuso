@@ -1,0 +1,127 @@
+{{- if and (eq .Values.kind "mailpit") (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- $version := .Values.version | default "v1.20" -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{/*
+  Mailpit. SMTP server (port 1025) that captures every outgoing email
+  to a web inbox (port 8025). Every webapp sends email; nobody wants
+  to wire SES credentials into staging or local-feeling dev clusters.
+  Mailpit is a single Go binary, ~30 MB resident, zero auth — it's
+  a dev/staging tool, not a production mailer. Document this in the
+  addon CTA so users don't ship it as their prod path.
+
+  No password (the binary doesn't support SMTP auth out of the box;
+  the in-cluster network is the boundary). The conn secret carries
+  the SMTP host/port that the user's app should set as MAIL_HOST etc.
+*/}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+    spec:
+      {{- include "kusoaddon.placement" . | nindent 6 }}
+      containers:
+        - name: mailpit
+          image: "axllent/mailpit:{{ $version }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: smtp
+              containerPort: 1025
+            - name: http
+              containerPort: 8025
+          env:
+            # Persist messages to disk so they survive pod restarts.
+            # Without this, every Deployment roll loses the inbox —
+            # which destroys the dev workflow ("did the email send?
+            # let me reload the inbox" → empty).
+            - name: MP_DATABASE
+              value: /data/mailpit.db
+            # Cap retention so a forgotten staging install doesn't
+            # eat its PVC. 1000 messages × ~5 KB each = 5 MB ceiling.
+            - name: MP_MAX_MESSAGES
+              value: "1000"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: smtp
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ $name }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+  annotations:
+    # Keep the PVC across helm uninstalls — pre-fix, deleting the
+    # addon dropped the inbox even when the user just wanted to
+    # change `version`. Same pattern as postgres.yaml.
+    "helm.sh/resource-policy": keep
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: {{ include "kusoaddon.storageSize" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: smtp
+      port: 1025
+      targetPort: smtp
+    - name: http
+      port: 8025
+      targetPort: http
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kusoaddon.connSecretName" . }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  # SMTP_* are the canonical names most node/python/ruby/go mailers
+  # read. MAIL_* aliases for the Laravel / Rails / general crowd.
+  SMTP_HOST: {{ $name | quote }}
+  SMTP_PORT: "1025"
+  SMTP_FROM: "no-reply@kuso.local"
+  MAIL_HOST: {{ $name | quote }}
+  MAIL_PORT: "1025"
+  MAIL_USERNAME: ""
+  MAIL_PASSWORD: ""
+  MAIL_ENCRYPTION: "none"
+  # Web inbox URL — services can render a "open inbox" link in dev
+  # error pages or admin UIs by reading this. Internal cluster DNS;
+  # the user's browser reaches it via kubectl port-forward or by
+  # exposing through an Ingress separately.
+  MAILPIT_UI_URL: "http://{{ $name }}:8025"
+{{- end }}

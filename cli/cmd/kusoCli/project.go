@@ -478,8 +478,13 @@ var (
 )
 
 var supportedAddonKinds = []string{
-	"postgres", "redis", "mongodb", "mysql", "rabbitmq", "memcached",
-	"clickhouse", "elasticsearch", "kafka", "cockroachdb", "couchdb",
+	// Implemented kinds — chart renders real workloads + conn secret.
+	"postgres", "redis", "s3",
+	"mailpit", "nats", "meilisearch", "clickhouse",
+	// Reserved (chart emits an "unsupported" marker); listed so the
+	// CLI accepts the kind for projects that pre-declare the field.
+	"mongodb", "mysql", "rabbitmq", "memcached",
+	"elasticsearch", "kafka", "cockroachdb", "couchdb",
 }
 
 var projectAddonCmd = &cobra.Command{

@@ -56,11 +56,15 @@ spec:
                   enum:
                     - postgres
                     - redis
+                    - s3
+                    - mailpit
+                    - nats
+                    - meilisearch
+                    - clickhouse
                     - mongodb
                     - mysql
                     - rabbitmq
                     - memcached
-                    - clickhouse
                     - elasticsearch
                     - kafka
                     - cockroachdb

@@ -21,19 +21,20 @@ interface Props {
 // Kinds the operator's helm chart actually knows how to render. The
 // "unsupported" template emits a no-op for anything else, so the user
 // would get a CR but no actual workload — better to gate the picker.
+// Order = grid order; put implemented kinds first, reserved-only ones
+// last so the picker leads with what works.
 const KINDS = [
+  // Implemented (real chart, real workload).
   "postgres",
   "redis",
   "s3",
-  "mongodb",
-  "mysql",
-  "rabbitmq",
-  "memcached",
+  "mailpit",
+  "nats",
+  "meilisearch",
   "clickhouse",
-  "elasticsearch",
-  "kafka",
-  "cockroachdb",
-  "couchdb",
+  // Reserved — chart renders the unsupported marker. Hidden behind a
+  // flag once we have a Coming-Soon affordance; for now they're kept
+  // out of the picker entirely so users can't add them by accident.
 ] as const;
 
 // AddAddonDialog opens from the canvas right-click menu and lets the

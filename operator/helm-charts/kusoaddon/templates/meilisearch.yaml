@@ -1,0 +1,118 @@
+{{- if and (eq .Values.kind "meilisearch") (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- $version := .Values.version | default "v1.10" -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{- $secretName := include "kusoaddon.connSecretName" . -}}
+{{/*
+  MeiliSearch. Single-binary Rust full-text search engine with typo
+  tolerance, faceted search, and relevance ranking out of the box.
+  ~50 MB resident idle, scales to millions of documents on a single
+  node. Default for indie SaaS / blog / marketplace search where
+  Postgres ts_vector falls short and Algolia is too expensive.
+
+  Auth model: a master key that gates the admin API + per-tenant
+  API keys derived from it. Conn secret carries the master key;
+  user code typically uses derived per-index keys with restricted
+  scope (the user creates those via the admin API after first
+  connect).
+*/}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $existingKey := "" -}}
+{{- if and $existing $existing.data (index $existing.data "MEILI_MASTER_KEY") -}}
+  {{- $existingKey = (index $existing.data "MEILI_MASTER_KEY" | b64dec) -}}
+{{- end -}}
+{{- $masterKey := .Values.password | default $existingKey | default (randAlphaNum 32) -}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+    spec:
+      {{- include "kusoaddon.placement" . | nindent 6 }}
+      containers:
+        - name: meilisearch
+          image: "getmeili/meilisearch:{{ $version }}"
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 7700
+          env:
+            - name: MEILI_MASTER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: MEILI_MASTER_KEY
+            # Production env unlocks performance + telemetry behavior;
+            # development env is more verbose and slower. Indie users
+            # want production by default; set to "development" via
+            # spec.config when iterating.
+            - name: MEILI_ENV
+              value: "production"
+            - name: MEILI_DB_PATH
+              value: /data/meili
+            # Disable the public health "i'm here" telemetry — many
+            # indie projects ship to clients who don't want vendor
+            # pings, and the analytics value is low.
+            - name: MEILI_NO_ANALYTICS
+              value: "true"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ include "kusoaddon.storageSize" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: 7700
+      targetPort: http
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kusoaddon.connSecretName" . }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  MEILI_HOST: {{ $name | quote }}
+  MEILI_PORT: "7700"
+  MEILI_MASTER_KEY: {{ $masterKey | quote }}
+  # Most client SDKs accept either a host+key pair or a full URL —
+  # the URL form drops cleanly into MEILI_URL=… in app env.
+  MEILI_URL: "http://{{ $name }}:7700"
+{{- end }}

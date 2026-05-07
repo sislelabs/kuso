@@ -1,0 +1,180 @@
+{{- if and (eq .Values.kind "nats") (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- $version := .Values.version | default "2.10-alpine" -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{- $secretName := include "kusoaddon.connSecretName" . -}}
+{{/*
+  NATS with JetStream. Single-binary Go MQ + pub/sub, ~10 MB idle.
+  Indie use cases:
+    - Background job queues (replace Sidekiq / Bull / Celery with
+      NATS JetStream consumers — durable, replayable).
+    - Webhook fan-out (one publisher → many subscribers).
+    - Event sourcing for small services (the Streams API).
+  Picked NATS over RabbitMQ deliberately: RabbitMQ's Erlang VM
+  costs ~150 MB idle and brings a lot of operational knobs that
+  indies don't need. NATS is cheaper to run + simpler to reason
+  about. RabbitMQ stays out-of-scope; users who really need it
+  can BYO via raw Helm.
+
+  Auth: a single auth token stored in the conn secret. NATS
+  supports more (NKEYS, JWT, mTLS) but the token model is the
+  simplest match for the existing addon-conn-secret pattern.
+*/}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $existingTok := "" -}}
+{{- if and $existing $existing.data (index $existing.data "NATS_TOKEN") -}}
+  {{- $existingTok = (index $existing.data "NATS_TOKEN" | b64dec) -}}
+{{- end -}}
+{{- $token := .Values.password | default $existingTok | default (randAlphaNum 32) -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-conf
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+data:
+  nats.conf: |
+    # NATS server config. Authoritative source — anything in
+    # spec.config from the CR could be plumbed through here later.
+    port: 4222
+    http_port: 8222
+    server_name: {{ $name }}
+
+    # Single-token auth. Tokens travel in CONNECT frames in cleartext
+    # over the cluster network; that's fine for in-namespace traffic
+    # since kube traffic between pods is generally trusted. For
+    # cross-cluster / external NATS exposure the user should switch
+    # to TLS + NKEYS, which we don't render today.
+    authorization {
+      token: "$NATS_TOKEN_PLACEHOLDER"
+    }
+
+    # JetStream: persistent streams + consumers. Without this NATS
+    # is core (in-memory) only — every restart wipes pending work.
+    # JetStream survives pod restarts and gives at-least-once
+    # delivery. File store on the data PVC.
+    jetstream {
+      store_dir: /data/jetstream
+      # Cap to avoid runaway disk on a misconfigured stream.
+      max_file_store: 1GB
+      max_memory_store: 64MB
+    }
+---
+# nats expects the auth token literal in the config file; we render
+# the placeholder above and then sed-substitute at boot from env.
+# Avoids baking the token into the configmap (which would be readable
+# without the conn-secret RBAC).
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+    spec:
+      {{- include "kusoaddon.placement" . | nindent 6 }}
+      initContainers:
+        # Substitute the token into the config at pod start. nats can
+        # read $VAR in its conf since 2.9, but only for top-level
+        # values — we want the token inline in `authorization { ... }`
+        # which doesn't expand env. Pre-process to /etc/nats/nats.conf.
+        - name: render-conf
+          image: alpine:3.20
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              sed "s#\$NATS_TOKEN_PLACEHOLDER#${NATS_TOKEN}#g" \
+                /raw/nats.conf > /etc/nats/nats.conf
+          env:
+            - name: NATS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: NATS_TOKEN
+          volumeMounts:
+            - name: raw-conf
+              mountPath: /raw
+            - name: conf
+              mountPath: /etc/nats
+      containers:
+        - name: nats
+          image: "nats:{{ $version }}"
+          imagePullPolicy: IfNotPresent
+          args: ["-c", "/etc/nats/nats.conf"]
+          ports:
+            - name: client
+              containerPort: 4222
+            - name: monitor
+              containerPort: 8222
+          volumeMounts:
+            - name: conf
+              mountPath: /etc/nats
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            tcpSocket:
+              port: client
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: raw-conf
+          configMap:
+            name: {{ $name }}-conf
+        - name: conf
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ include "kusoaddon.storageSize" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: client
+      port: 4222
+      targetPort: client
+    - name: monitor
+      port: 8222
+      targetPort: monitor
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kusoaddon.connSecretName" . }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  NATS_HOST: {{ $name | quote }}
+  NATS_PORT: "4222"
+  NATS_TOKEN: {{ $token | quote }}
+  # Most NATS client libs accept a single URL with the token inline,
+  # which is the easiest thing to wire into ${{ <addon>.NATS_URL }}.
+  NATS_URL: "nats://:{{ $token }}@{{ $name }}:4222"
+  # Monitor URL — nats-top, the web monitor at /varz, etc.
+  NATS_MONITOR_URL: "http://{{ $name }}:8222"
+{{- end }}

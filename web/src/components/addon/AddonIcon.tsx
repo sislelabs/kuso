@@ -93,6 +93,33 @@ const BRANDS: Record<
     path:
       "M3 3h18l-1.5 16.5a2 2 0 0 1-2 1.8H6.5a2 2 0 0 1-2-1.8L3 3zm2.2 2L6.5 18.5h11L18.8 5H5.2zm3.3 3h7l-.4 8h-6.2L8.5 8z",
   },
+  mailpit: {
+    // Envelope glyph in Mailpit's brand teal. Mailpit's project doesn't
+    // have a simpleicons entry; this is a generic open-letter mark
+    // that reads as "mail / inbox" at 16px.
+    label: "Mailpit",
+    color: "#1098AD",
+    path:
+      "M3 5h18a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1zm.8 1.6L12 12.4l8.2-5.8H3.8zM4 7.7v10.7h16V7.7l-7.4 5.2a1 1 0 0 1-1.2 0L4 7.7z",
+  },
+  nats: {
+    // simpleicons "nats" is the official cat-with-letter logo. Faithful
+    // path from the brand kit; renders cleanly at the 16-20px tile size.
+    label: "NATS",
+    color: "#27AAE1",
+    path:
+      "M0 4.514v14.972h6.297v-7.66l4.846 7.66h6.79V4.514h-6.297v7.65L6.836 4.514H0zm18.45 0v3.275h2.025V4.514H18.45zm0 4.214v6.029h2.025V8.728H18.45zm0 7.014v3.744h2.025v-3.744H18.45zm3.04-11.228v3.275H24V4.514h-2.51zm0 4.214v6.029H24V8.728h-2.51zm0 7.014v3.744H24v-3.744h-2.51z",
+  },
+  meilisearch: {
+    // Stylised magnifying-glass + "M" mark, in Meili's bright purple/red
+    // gradient — flattened to a single colour because the BRANDS schema
+    // only takes one fill. The shape reads as "search" without depending
+    // on colour to communicate the brand.
+    label: "MeiliSearch",
+    color: "#FF5CAA",
+    path:
+      "M11 3a8 8 0 1 0 5.293 14.293l3.207 3.207 1.5-1.5-3.207-3.207A8 8 0 0 0 11 3zm0 2a6 6 0 1 1 0 12 6 6 0 0 1 0-12zm-2 3v6h1.5v-2.25l1.25 2.25h.75l1.25-2.25V14H15V8h-1.5l-1.5 2.7L10.5 8H9z",
+  },
 };
 
 // Aliases — incoming "kind" strings vary between callers (helm chart
