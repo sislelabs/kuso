@@ -63,14 +63,25 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	if err != nil {
 		return nil, err
 	}
+	// Env CR's metadata.labels carry the SHORT service name
+	// ("kuso-demo-todo-web"), not the FQ form. Helm chart label
+	// templates emit it that way for canvas grouping. Pre-fix, the
+	// FQ-form selector matched zero envs and the drift call hit the
+	// "no production env" early return — UI silently saw an empty
+	// report on every poll, podsStale stayed nil, the badge never
+	// appeared.
+	shortSvc := strings.TrimPrefix(service, project+"-")
+	if shortSvc == "" {
+		shortSvc = service
+	}
 	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: fmt.Sprintf("kuso.sislelabs.com/project=%s,kuso.sislelabs.com/service=%s,kuso.sislelabs.com/env-kind=production",
-			project, fqService(project, service)),
+			project, shortSvc),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list envs for drift: %w", err)
 	}
-	out := &DriftReport{SpecPending: []string{}}
+	out := &DriftReport{SpecPending: []string{}, PodsStale: []string{}}
 	if len(envs.Items) == 0 {
 		// No production env yet — likely a freshly-created service.
 		// Not drift; the create flow will land the env CR shortly.

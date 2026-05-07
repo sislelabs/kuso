@@ -276,15 +276,25 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                       </div>
                     )}
                     {tab === "logs" && (
-                      <ServiceLogsPanel project={project} service={service ?? ""} />
+                      <div className="p-5">
+                        <ServiceLogsPanel project={project} service={service ?? ""} />
+                      </div>
                     )}
                     {tab === "errors" && (
-                      <ServiceErrorsPanel project={project} service={service ?? ""} />
+                      <div className="p-5">
+                        <ServiceErrorsPanel project={project} service={service ?? ""} />
+                      </div>
                     )}
                     {tab === "crons" && (
-                      <ServiceCronsPanel project={project} service={service ?? ""} />
+                      <div className="p-5">
+                        <ServiceCronsPanel project={project} service={service ?? ""} />
+                      </div>
                     )}
                     {tab === "settings" && (
+                      // ServiceSettingsPanel handles its own padding
+                      // (sticky sidebar nav + sectioned form). Wrapping
+                      // in p-5 here would double-pad and break the
+                      // sticky-positioning math.
                       <ServiceSettingsPanel project={project} service={service ?? ""} svc={svc.data} />
                     )}
                   </motion.div>
