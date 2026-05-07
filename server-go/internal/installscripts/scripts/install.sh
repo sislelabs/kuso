@@ -497,6 +497,30 @@ else
   if ! kubectl -n kuso get secret kuso-postgres-conn -o jsonpath='{.data.dsn}' 2>/dev/null | grep -q .; then
     warn "dsn key not yet present in kuso-postgres-conn — kuso-server may need a restart after the Job lands"
   fi
+
+  # Password-alignment guard. The dsn-stamp Job authoritatively
+  # writes whatever CNPG actually used during initdb, so in
+  # steady-state install.sh's PG_PASS guess might disagree with
+  # what's in the Secret. That's correct — we trust CNPG's view.
+  # But: surface the divergence so an operator who hand-edited
+  # kuso-postgres-conn outside install.sh sees the mismatch instead
+  # of debugging "auth failed" with kuso-server.
+  if kubectl -n kuso get secret kuso-postgres-app >/dev/null 2>&1 \
+     && kubectl -n kuso get secret kuso-postgres-conn >/dev/null 2>&1; then
+    APP_PASS=$(kubectl -n kuso get secret kuso-postgres-app -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+    CONN_PASS=$(kubectl -n kuso get secret kuso-postgres-conn -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+    if [[ -n "$APP_PASS" && -n "$CONN_PASS" && "$APP_PASS" != "$CONN_PASS" ]]; then
+      warn "kuso-postgres-conn.password diverges from kuso-postgres-app.password — dsn-stamp should have caught this; kuso-server may fail to authenticate. To recover:"
+      warn "  kubectl -n kuso delete job kuso-postgres-dsn-stamp && kubectl apply -f deploy/postgres.yaml"
+    fi
+  fi
+
+  # Recovery hint for the rare case where the Cluster bootstrapped
+  # but the dsn-stamp Job fully timed out. Operator can re-run the
+  # Job; it's idempotent.
+  if kubectl -n kuso get job kuso-postgres-dsn-stamp -o jsonpath='{.status.failed}' 2>/dev/null | grep -q '^[1-9]'; then
+    warn "dsn-stamp Job has failures — to retry: kubectl -n kuso delete job kuso-postgres-dsn-stamp && kubectl apply -f deploy/postgres.yaml"
+  fi
 fi
 
 # -------- 9. server secrets --------
@@ -570,9 +594,33 @@ kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o ya
 # Secret with that single key is referenced from prometheus.yaml's
 # bearer_token_file path. install.sh re-applies on every run so the
 # two stay in sync.
+#
+# We snapshot the prior token (if any) so we can detect a change
+# downstream and bounce the Prometheus pod — a SecretVolumeSource
+# update propagates eventually, but the kubelet's mount-refresh
+# cadence is up to a minute and Prometheus only rereads
+# credentials_file at scrape time anyway. A rollout-restart is the
+# cheap, deterministic refresh.
+PREV_PROM_TOKEN=""
+if kubectl get secret -n kuso kuso-prometheus-scrape >/dev/null 2>&1; then
+  PREV_PROM_TOKEN=$(kubectl get secret -n kuso kuso-prometheus-scrape -o jsonpath='{.data.token}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+fi
 kubectl create secret generic kuso-prometheus-scrape -n kuso --dry-run=client -o yaml \
   --from-literal=token="$METRICS_SCRAPE_TOKEN" \
   | kubectl apply -f - >/dev/null
+# Restart Prometheus when:
+#   - the token rotated (PREV != current), OR
+#   - the Secret is brand-new (PREV is empty) AND Prometheus was
+#     already running (means we're upgrading from pre-v0.9.38; the
+#     existing pod has no scrape-token volume and needs to mount it)
+# In both cases the rollout is cheap (Recreate strategy on
+# emptyDir storage; ~5s downtime on a 7-day metric retention).
+if kubectl -n kuso get deployment kuso-prometheus >/dev/null 2>&1; then
+  if [[ -z "$PREV_PROM_TOKEN" ]] || [[ "$PREV_PROM_TOKEN" != "$METRICS_SCRAPE_TOKEN" ]]; then
+    log "kicking kuso-prometheus to mount the metrics-scrape token"
+    kubectl -n kuso rollout restart deployment kuso-prometheus >/dev/null 2>&1 || true
+  fi
+fi
 
 # k3s node-token Secret. Required so kuso-server can issue agent-join
 # commands without being pinned to the control-plane node — pre-this,

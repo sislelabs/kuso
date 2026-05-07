@@ -115,13 +115,60 @@ For HA Postgres addons (CNPG-backed `KusoAddon.spec.ha = true`), CNPG-native bac
 If `kuso` itself is broken and you need to grab the metadata DB by hand:
 
 ```bash
-# On any host with kubectl + the kuso kubeconfig:
-kubectl -n kuso exec sts/kuso-postgres -- \
-  pg_dump -U kuso --no-owner --no-privileges --clean --if-exists kuso \
+# On any host with kubectl + the kuso kubeconfig.
+# CNPG creates pods named kuso-postgres-1, kuso-postgres-2, ...
+# kuso-postgres-1 is typically the primary; kuso-postgres-rw
+# Service always points at the current primary regardless.
+#
+# Easiest path: port-forward the rw Service, run pg_dump locally
+# (postgresql-client must be installed):
+kubectl -n kuso port-forward svc/kuso-postgres-rw 5432:5432 &
+PGPASSWORD=$(kubectl -n kuso get secret kuso-postgres-conn -o jsonpath='{.data.password}' | base64 -d) \
+  pg_dump -h localhost -U kuso --no-owner --no-privileges --clean --if-exists kuso \
   | gzip > kuso-snapshot.sql.gz
 ```
 
 `pg_dump` is online-safe and produces a logically consistent snapshot.
+
+## CNPG password divergence (rare)
+
+In v0.9.38+ the bundled metadata DB is a CloudNativePG-managed Cluster.
+The `kuso-postgres-conn` Secret holds the credentials kuso-server reads
+to connect; the password authoritatively comes from CNPG's own
+`kuso-postgres-app` Secret (created during `bootstrap.initdb`). The
+`kuso-postgres-dsn-stamp` Job runs after every Cluster apply and copies
+the CNPG-managed password into `kuso-postgres-conn` — so if anything
+ever drifts, re-running the Job reconciles it.
+
+Symptoms of divergence:
+- kuso-server logs `pq: password authentication failed for user "kuso"`
+- `install.sh` warns `kuso-postgres-conn.password diverges from kuso-postgres-app.password`
+
+Recovery:
+
+```bash
+# Re-run the dsn-stamp Job — it overwrites kuso-postgres-conn with
+# whatever CNPG actually has in kuso-postgres-app.
+kubectl -n kuso delete job kuso-postgres-dsn-stamp
+curl -sfL https://raw.githubusercontent.com/sislelabs/kuso/main/deploy/postgres.yaml | kubectl apply -f -
+kubectl -n kuso wait --for=condition=Complete job/kuso-postgres-dsn-stamp --timeout=300s
+kubectl -n kuso rollout restart deployment kuso-server
+```
+
+If the Cluster itself is broken (failed bootstrap, missing
+`kuso-postgres-app` Secret, primary stuck `Pending`):
+
+```bash
+# 1. Delete the Cluster (NOT the PVCs — those carry your data).
+kubectl -n kuso delete cluster kuso-postgres
+# 2. Delete the now-stale credentials Secrets.
+kubectl -n kuso delete secret kuso-postgres-conn kuso-postgres-app
+# 3. Re-run install.sh; it'll mint fresh credentials and let CNPG
+#    bootstrap a new Cluster against the existing PVCs.
+```
+
+This loses no data — CNPG's bootstrap re-attaches to existing PVCs.
+Verify by running `kuso backup` afterwards and inspecting row counts.
 
 ## What we don't do (and probably won't)
 

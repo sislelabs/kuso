@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -198,6 +197,3 @@ func init() {
 	restoreCmd.Flags().DurationVar(&restoreWait, "wait", 10*time.Minute, "max time to wait for the Job (used with default polling)")
 	restoreCmd.AddCommand(restoreStatusCmd)
 }
-
-// silence unused-import check on strings when we're between revisions.
-var _ = strings.TrimSpace
