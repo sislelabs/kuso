@@ -254,9 +254,16 @@ export function ProjectCanvas({
       }
     });
     envs.forEach((e) => {
-      if (e.spec.kind !== "production") return;
       if (!e.spec.host) return;
-      // env.spec.service is the FQ service name on the env CR.
+      // Every env contributes its host → FQN mapping (not just
+      // production). Pre-fix this was production-only, so a service
+      // in a non-prod env-group whose env-vars referenced its
+      // sibling's prod URL never produced an edge: the prod URL
+      // resolved to the prod FQN, which isn't in the current
+      // (env-filtered) services list, so the edge target lookup
+      // failed. With the test-env's host also in the map, both
+      // halves of the lookup come back with the env-scoped FQN
+      // and the edge lights up.
       hostToFqn.set(e.spec.host, e.spec.service);
     });
     const sortedHosts = [...hostToFqn.keys()].sort((a, b) => b.length - a.length);

@@ -184,9 +184,15 @@ func (s *Service) ListEnvGroups(ctx context.Context, project string) ([]EnvGroup
 
 	// Cross-reference addons: each addon belongs to a group based on
 	// its `kuso.sislelabs.com/env` label. Addons without that label
-	// belong to production (legacy + the default).
+	// belong to production (legacy + the default). Filter by project
+	// label first since the kuso namespace is the default home for
+	// every project's addons — without the filter we'd surface
+	// pedal4e-postgres under hui's env-group listing.
 	for i := range addons {
 		a := addons[i]
+		if a.Labels[labelProject] != project {
+			continue
+		}
 		short := strings.TrimPrefix(a.Name, project+"-")
 		if short == "" {
 			short = a.Name
@@ -308,12 +314,17 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 	if err != nil {
 		addons = nil
 	}
-	// Filter to only addons in the production env (the source of
-	// truth for the mirror). Addons labelled with a different env are
-	// already scoped — we don't mirror them.
+	// Filter to only THIS project's production addons. Other
+	// projects' addons share the namespace (kuso namespace is the
+	// default home for everything); without the project filter we'd
+	// clone an unrelated project's postgres into our env. Skip
+	// addons labelled for a different env-group too.
 	var prodAddons []kube.KusoAddon
 	for i := range addons {
 		a := addons[i]
+		if a.Labels[labelProject] != project {
+			continue
+		}
 		if v := a.Labels[labelEnv]; v != "" && v != "production" {
 			continue
 		}
@@ -436,6 +447,29 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 	}
 	sortByShort(ordered)
 
+	// Sibling rename map: every service we're about to clone,
+	// short → short-<env>. Used by rewriteEnvVarsForGroup to
+	// retarget API_BASE-style refs at the cloned sibling instead of
+	// production. Services NOT being cloned are absent from the map
+	// so their refs stay pointing at production (cross-env coupling).
+	siblingRename := map[string]string{}
+	for _, item := range ordered {
+		siblingRename[item.short] = item.short + "-" + req.Name
+	}
+	// Prod-host → new-host map. Each clone sibling gets a host from
+	// buildEnvHost; the rewriter substitutes the prod host in any
+	// literal env-var value with this new host so e.g.
+	// API_BASE=https://kuso-demo-todo-api.hui.sislelabs.com becomes
+	// API_BASE=https://kuso-demo-todo-api-test.hui.sislelabs.com.
+	prodHosts := map[string]string{}
+	for _, item := range ordered {
+		// Look up production env's host for this service.
+		if prodEnv, perr := s.Kube.GetKusoEnvironment(ctx, ns, item.fqn); perr == nil && prodEnv != nil && prodEnv.Spec.Host != "" {
+			newHost := buildEnvHost(proj.Spec.BaseDomain, project, item.short, req.Name)
+			prodHosts[prodEnv.Spec.Host] = newHost
+		}
+	}
+
 	for idx, item := range ordered {
 		newSvcShort := item.short + "-" + req.Name
 		newSvcCR := fmt.Sprintf("%s-%s", project, newSvcShort)
@@ -460,11 +494,43 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		}
 		createdServices = append(createdServices, newSvcCR)
 
-		// Rewrite envVars to point fresh addons at the new conn-secret.
-		newEnvVars := rewriteEnvVarsForGroup(item.svc.Spec.EnvVars, project, freshAddonRename)
+		// Rewrite envVars: fresh-addon secret refs + sibling-service
+		// URLs both retargeted at the new env-group's clones.
+		newEnvVars := rewriteEnvVarsForGroup(
+			item.svc.Spec.EnvVars,
+			project,
+			freshAddonRename,
+			siblingRename,
+			prodHosts,
+			req.Name,
+		)
 
-		envCRName := fmt.Sprintf("%s-%s", newSvcCR, req.Name)
+		// Env CR name == cloned-service CR name. Pre-fix this was
+		// fmt.Sprintf("%s-%s", newSvcCR, req.Name) which produced
+		// "<project>-<svc>-<env>-<env>" (the env suffix twice).
+		// Reusing newSvcCR directly matches the production-env naming
+		// scheme where one KusoEnvironment is rendered per service —
+		// the helm-operator chart is the same for both.
+		envCRName := newSvcCR
 		host := buildEnvHost(proj.Spec.BaseDomain, project, item.short, req.Name)
+
+		// Seed the cloned env with production's currently-deployed
+		// image so the helm-operator can render a working Deployment
+		// immediately. Without this, spec.image is empty → chart
+		// renders ":latest" which kube can't pull → pods sit at
+		// InvalidImageName forever, requiring a manual Redeploy. Look
+		// up the production env CR for this service and inherit its
+		// image. If we can't find it (no production image yet, e.g.
+		// service was never built), leave spec.image empty — the user
+		// must Redeploy to populate it via the build poller.
+		var inheritImage *kube.KusoImage
+		prodEnvCRName := item.fqn // production env CR is same name as service FQN
+		if prodEnv, perr := s.Kube.GetKusoEnvironment(ctx, ns, prodEnvCRName); perr == nil && prodEnv != nil {
+			if prodEnv.Spec.Image != nil && prodEnv.Spec.Image.Repository != "" && prodEnv.Spec.Image.Tag != "" {
+				cp := *prodEnv.Spec.Image
+				inheritImage = &cp
+			}
+		}
 		port := item.svc.Spec.Port
 		if port == 0 {
 			port = 8080
@@ -511,6 +577,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				IngressClassName: "traefik",
 				EnvFromSecrets:   addonConnSecrets,
 				EnvVars:          newEnvVars,
+				Image:            inheritImage,
 				Placement:        ResolvePlacement(proj.Spec.Placement, item.svc.Spec.Placement),
 				Volumes:          item.svc.Spec.Volumes,
 				Runtime:          item.svc.Spec.Runtime,
@@ -641,51 +708,103 @@ func (s *Service) SetServiceBranchInEnv(ctx context.Context, project, env, servi
 }
 
 // rewriteEnvVarsForGroup walks the source service's envVars and
-// rewrites any secretKeyRef pointing at "<project>-<addon>-conn" so it
-// points at the cloned-addon's conn-secret instead, when policy=fresh.
-// Shared-policy addons are left untouched (the cloned services keep
-// pointing at production's secret).
+// rewrites:
+//
+//  1. Any secretKeyRef pointing at "<project>-<addon>-conn" → cloned-
+//     addon's conn-secret when policy=fresh. Shared-policy addons are
+//     left alone (cloned services keep pointing at production's
+//     secret).
+//
+//  2. Literal values that reference a sibling service's prod URL
+//     (https://<svc>.<basedomain> or
+//     <svc>.<ns>.svc.cluster.local) → the same kind of URL but
+//     pointing at the cloned env-sibling. Without this, a web
+//     service's API_BASE=https://api.example.com keeps hitting
+//     production's API even when the web service is running in
+//     the staging env. The sibling map carries the rename of every
+//     service we're about to clone (short → short-<env>).
 //
 // ValueFrom is stored as map[string]any in our type model so we don't
 // pin to a kube schema rev; navigate by string keys and clone the
 // nested maps so the rewrite doesn't alias back into the source spec.
-func rewriteEnvVarsForGroup(in []kube.KusoEnvVar, project string, freshRename map[string]string) []kube.KusoEnvVar {
+func rewriteEnvVarsForGroup(
+	in []kube.KusoEnvVar,
+	project string,
+	freshRename map[string]string,
+	siblingRename map[string]string,
+	prodHosts map[string]string,
+	envSuffix string,
+) []kube.KusoEnvVar {
 	out := make([]kube.KusoEnvVar, len(in))
 	for i, v := range in {
 		out[i] = v
-		if v.ValueFrom == nil {
+		// (1) secretKeyRef rewrite for fresh addons.
+		if v.ValueFrom != nil {
+			if skrRaw, ok := v.ValueFrom["secretKeyRef"]; ok {
+				if skr, ok := skrRaw.(map[string]any); ok {
+					secName, _ := skr["name"].(string)
+					if strings.HasPrefix(secName, project+"-") && strings.HasSuffix(secName, "-conn") {
+						short := strings.TrimSuffix(strings.TrimPrefix(secName, project+"-"), "-conn")
+						if newShort, isFresh := freshRename[short]; isFresh {
+							newSkr := map[string]any{}
+							for k, vv := range skr {
+								newSkr[k] = vv
+							}
+							newSkr["name"] = fmt.Sprintf("%s-%s-conn", project, newShort)
+							newVF := map[string]any{}
+							for k, vv := range v.ValueFrom {
+								newVF[k] = vv
+							}
+							newVF["secretKeyRef"] = newSkr
+							out[i].ValueFrom = newVF
+						}
+					}
+				}
+			}
 			continue
 		}
-		skrRaw, ok := v.ValueFrom["secretKeyRef"]
-		if !ok {
+
+		// (2) Literal value rewrite for sibling service URLs.
+		// Two patterns:
+		//   - "<svc-fqn>.<ns>.svc.cluster.local" (from ${{ svc.HOST }}
+		//     / ${{ svc.URL }} resolutions). Cluster DNS form.
+		//   - prodHost (from ${{ svc.PUBLIC_URL }} or hand-typed
+		//     external URL). Public host of the prod env.
+		// Replace either with the sibling service's name in this env-
+		// group. The siblingRename map covers every service we're
+		// about to clone; services NOT being cloned keep their
+		// original ref (cross-env coupling, edge case but honest).
+		if v.Value == "" {
 			continue
 		}
-		skr, ok := skrRaw.(map[string]any)
-		if !ok {
-			continue
+		newVal := v.Value
+		// Cluster DNS replace. Match service-FQN that's a key in
+		// siblingRename; rewrite to its renamed sibling. Bounded
+		// match so "kuso-demo-todo-api" doesn't catch
+		// "kuso-demo-todo-api-extra".
+		for src, dst := range siblingRename {
+			oldFQN := project + "-" + src
+			newFQN := project + "-" + dst
+			// "<oldFQN>.<ns>.svc.cluster.local" → "<newFQN>.<ns>..."
+			newVal = strings.ReplaceAll(newVal,
+				oldFQN+".", newFQN+".")
 		}
-		secName, _ := skr["name"].(string)
-		if !strings.HasPrefix(secName, project+"-") || !strings.HasSuffix(secName, "-conn") {
-			continue
+		// Public-host replace. prodHosts is "host.com" → "service-fqn".
+		// For every prod host whose service is in siblingRename, the
+		// new env's host comes from buildEnvHost — but to keep this
+		// rewriter side-effect-free we let the caller compute the new
+		// host map and pass it in via prodHosts (key=old host,
+		// value=new host).
+		for oldHost, newHost := range prodHosts {
+			if oldHost == "" || newHost == "" || oldHost == newHost {
+				continue
+			}
+			newVal = strings.ReplaceAll(newVal, oldHost, newHost)
 		}
-		short := strings.TrimSuffix(strings.TrimPrefix(secName, project+"-"), "-conn")
-		newShort, isFresh := freshRename[short]
-		if !isFresh {
-			continue
+		_ = envSuffix // reserved for future name-only forms
+		if newVal != v.Value {
+			out[i].Value = newVal
 		}
-		// Deep-ish copy: new map for valueFrom + new map for the
-		// secretKeyRef sub-block so we don't mutate the source spec.
-		newSkr := map[string]any{}
-		for k, vv := range skr {
-			newSkr[k] = vv
-		}
-		newSkr["name"] = fmt.Sprintf("%s-%s-conn", project, newShort)
-		newVF := map[string]any{}
-		for k, vv := range v.ValueFrom {
-			newVF[k] = vv
-		}
-		newVF["secretKeyRef"] = newSkr
-		out[i].ValueFrom = newVF
 	}
 	return out
 }
@@ -705,12 +824,23 @@ func cloneServiceSpec(in kube.KusoServiceSpec, project string) kube.KusoServiceS
 }
 
 // buildEnvHost returns the hostname for a cloned service in an env
-// group. Pattern: <service>-<env>.<project>.<basedomain>. Matches the
-// AddEnvironment legacy host scheme so existing DNS / cert-manager
-// behavior carries over.
+// group. Pattern: <service>-<env>.<basedomain>. Per-project sub-
+// domain isn't included because most installs set baseDomain to
+// "<project>.example.com" already (so prepending the project would
+// double it: hui.hui.sislelabs.com). When the project IS distinct
+// from the basedomain owner, we still nest under the project — same
+// rule the production hosts follow.
 func buildEnvHost(baseDomain, project, serviceShort, env string) string {
 	if baseDomain == "" {
 		baseDomain = "kuso.sislelabs.com"
+	}
+	// If the basedomain already starts with "<project>." the project
+	// scope is implicit; just emit "<svc>-<env>.<basedomain>".
+	if strings.HasPrefix(baseDomain, project+".") {
+		if serviceShort == project {
+			return fmt.Sprintf("%s-%s.%s", env, project, baseDomain)
+		}
+		return fmt.Sprintf("%s-%s.%s", serviceShort, env, baseDomain)
 	}
 	if serviceShort == project {
 		return fmt.Sprintf("%s-%s.%s", env, project, baseDomain)
