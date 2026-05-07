@@ -214,6 +214,28 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
           ? (builds.data ?? []).filter((b) => (b.branch ?? "") === envBranch)
           : (builds.data ?? []);
         if (visible.length === 0) {
+          // The branch filter just emptied the list, but other branches
+          // may still have history — say so explicitly instead of
+          // pretending the service has never built.
+          const total = (builds.data ?? []).length;
+          if (envBranch && total > 0) {
+            const otherBranches = Array.from(
+              new Set((builds.data ?? []).map((b) => b.branch ?? "—"))
+            ).filter((b) => b !== envBranch);
+            return (
+              <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
+                No builds on branch <span className="font-mono text-[var(--text-secondary)]">{envBranch}</span>{" "}
+                yet — service has {total} build{total === 1 ? "" : "s"} on{" "}
+                {otherBranches.slice(0, 3).map((b, i) => (
+                  <span key={b}>
+                    {i > 0 ? ", " : ""}
+                    <span className="font-mono text-[var(--text-secondary)]">{b}</span>
+                  </span>
+                ))}
+                {otherBranches.length > 3 ? `, +${otherBranches.length - 3} more` : ""}.
+              </p>
+            );
+          }
           return (
             <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
               No builds for this environment yet. Trigger one with the button above or push to the connected branch.

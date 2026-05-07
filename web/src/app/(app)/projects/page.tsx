@@ -133,16 +133,14 @@ function ProjectsGrid({
       {projects.map((p, i) => {
         const name = p.metadata.name;
         const repo = p.spec.defaultRepo?.url?.replace(/^https?:\/\/(www\.)?/, "");
-        // Display domain. Fall back to the auto-derived
-        // <project>.<server-domain> when baseDomain is unset, since
-        // services land at that hostname by default. We don't know
-        // the server domain on the client — pull it off the live
-        // location so the URL bar's parent suffix wins.
-        const explicitDomain = p.spec.baseDomain;
-        const inferredDomain = !explicitDomain && typeof window !== "undefined"
-          ? `${name}.${window.location.host}`
-          : undefined;
-        const domain = explicitDomain ?? inferredDomain;
+        // Display domain. We only show a domain when the project has
+        // an explicit baseDomain. The previous "infer from
+        // window.location.host" fallback printed the kuso server's
+        // hostname (often a reverse-proxy / VPN-only one) on every
+        // card with no baseDomain, which was confusing — a card
+        // saying "myapp.kuso-internal.local" doesn't tell the user
+        // anything useful about where their app lives.
+        const domain = p.spec.baseDomain;
         const created = p.metadata.creationTimestamp
           ? relativeTime(p.metadata.creationTimestamp)
           : null;

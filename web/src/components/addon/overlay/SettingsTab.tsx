@@ -213,16 +213,18 @@ function ConfigurationSection({
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1">
             <label className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              Storage size
+              Storage size <span className="text-amber-400">· immutable</span>
             </label>
             <Input
               value={storageSize}
               onChange={(e) => setStorageSize(e.target.value)}
               placeholder="e.g. 10Gi"
-              className="h-7 font-mono text-[12px]"
+              disabled
+              className="h-7 font-mono text-[12px] opacity-60"
             />
-            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-              Note: changing this on a running addon requires manual PVC resize.
+            <p className="font-mono text-[10px] text-amber-300/80">
+              Cannot be changed after addon create. To resize, take a backup,
+              delete the addon, recreate at the new size, restore.
             </p>
           </div>
           <div className="space-y-1">

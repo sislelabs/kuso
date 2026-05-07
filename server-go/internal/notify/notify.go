@@ -81,6 +81,13 @@ type Dispatcher struct {
 	ch     chan Event
 	client *http.Client
 
+	// isLeader, when set, gates webhook fan-out so multi-replica
+	// installs don't N-times-deliver the same event to Slack/Discord.
+	// Persistence (the bell-icon feed) still runs on every replica
+	// because that path dedups via a DB unique constraint. nil =
+	// always-on (single-replica installs and tests).
+	isLeader func() bool
+
 	mu          sync.Mutex
 	closed      bool
 	dropOnFloor bool
@@ -103,6 +110,18 @@ type Dispatcher struct {
 // cadence and is short enough that a misconfigured channel can be
 // disabled without restarting the server.
 const notifsCacheTTL = 30 * time.Second
+
+// SetLeaderHook installs a predicate that gates webhook fan-out.
+// Call once during boot, after leader election is wired. Pass nil to
+// reset to always-on behaviour (e.g. in tests).
+func (d *Dispatcher) SetLeaderHook(fn func() bool) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.isLeader = fn
+	d.mu.Unlock()
+}
 
 // New returns a dispatcher bound to a DB for config lookup. queueSize
 // caps the in-memory event buffer; events past that point are dropped
@@ -287,6 +306,16 @@ func (d *Dispatcher) Run(ctx context.Context) {
 
 func (d *Dispatcher) dispatch(ctx context.Context, e Event) {
 	if d.db == nil {
+		return
+	}
+	// Multi-replica safety: webhook fan-out runs only on the leader
+	// so a 3-replica deploy doesn't post 3× to Slack. The bell-icon
+	// feed (persisted by Emit) is unaffected — its uniqueness is
+	// enforced by the DB.
+	d.mu.Lock()
+	leaderFn := d.isLeader
+	d.mu.Unlock()
+	if leaderFn != nil && !leaderFn() {
 		return
 	}
 	notifs, err := d.cachedNotifications(ctx)

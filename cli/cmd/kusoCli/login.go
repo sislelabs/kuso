@@ -62,6 +62,17 @@ trading credentials.`,
 		if loginToken != "" {
 			return persistToken(loginToken)
 		}
+		// Interactive: offer token-paste up-front so OAuth-only orgs
+		// (where /api/auth/login won't accept a password at all) have
+		// a path that doesn't require leaking a password into shell
+		// history. Users mint a token from /settings/tokens and paste
+		// it here. Empty answer falls through to username/password.
+		if loginUsername == "" && loginPassword == "" {
+			pasted := promptLine("Paste an API token (leave blank for username+password)", "", "")
+			if strings.TrimSpace(pasted) != "" {
+				return persistToken(strings.TrimSpace(pasted))
+			}
+		}
 		return runUsernamePasswordLogin()
 	},
 }

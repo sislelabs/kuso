@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -304,6 +305,7 @@ func main() {
 		// every PR) leave one mutex pointer behind forever — slow
 		// memory growth on churn-heavy clusters.
 		buildSvc.RunServiceLockGC(ctx)
+		projSvc.RunServiceLockGC(ctx)
 		logsSvc = logs.New(kc, *namespace)
 		// BuildLogs fallback: when a build:<id> stream lands but the
 		// kaniko pod has been GC'd, the stream serves the archived
@@ -360,7 +362,27 @@ func main() {
 		// installs that want the legacy "always run" behaviour;
 		// the new readyz probe still serves traffic during election
 		// contests so requests aren't blocked on lease acquisition.
+		// leaderActive flips on as long as this replica holds the lease,
+		// off the moment leaderCtx is cancelled. The notify dispatcher
+		// reads it on every webhook fan-out so multi-replica installs
+		// don't deliver the same event N times to Slack/Discord.
+		var leaderActive atomic.Bool
+		notifyDisp.SetLeaderHook(func() bool {
+			// Single-replica installs (KUSO_DISABLE_LEADER_ELECTION) skip
+			// election entirely; in that mode treat the local replica as
+			// always-leader so webhooks still flow.
+			if os.Getenv("KUSO_DISABLE_LEADER_ELECTION") == "true" {
+				return true
+			}
+			return leaderActive.Load()
+		})
+
 		startSingletons := func(workCtx context.Context) {
+			leaderActive.Store(true)
+			go func() {
+				<-workCtx.Done()
+				leaderActive.Store(false)
+			}()
 			if os.Getenv("KUSO_BUILD_POLLER_DISABLED") != "true" {
 				go (&builds.Poller{
 					Svc:        buildSvc,

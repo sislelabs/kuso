@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { useService, useDrift } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
@@ -17,6 +17,24 @@ import { Check, Copy, ExternalLink, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
+// OverlayDirtyContext lets every panel inside ServiceOverlay register
+// whether its form has unsaved edits. The shell uses the union of
+// those flags to gate close/ESC/tab-switch behind a "Discard changes?"
+// confirm — without this, an inadvertent ESC silently lost in-progress
+// env-var edits.
+type OverlayDirtyAPI = {
+  setPanelDirty: (key: string, dirty: boolean) => void;
+};
+const OverlayDirtyContext = createContext<OverlayDirtyAPI | null>(null);
+export function useOverlayDirty(panelKey: string, dirty: boolean) {
+  const api = useContext(OverlayDirtyContext);
+  useEffect(() => {
+    if (!api) return;
+    api.setPanelDirty(panelKey, dirty);
+    return () => api.setPanelDirty(panelKey, false);
+  }, [api, panelKey, dirty]);
+}
+
 type Tab = "deployments" | "variables" | "metrics" | "logs" | "errors" | "crons" | "settings";
 const TABS: { id: Tab; label: string }[] = [
   { id: "deployments", label: "Deployments" },
@@ -32,6 +50,10 @@ interface Props {
   project: string;
   service: string | null;
   env?: string; // "production" | preview short name
+  // defaultTab lets canvas right-click menus deep-link into a specific
+  // tab (Logs, Errors, …). Undefined falls back to the per-service
+  // default of "deployments".
+  defaultTab?: string;
   onClose: () => void;
 }
 
@@ -40,22 +62,94 @@ interface Props {
 // ESC closes it. Slides in from the right with a spring; the dimmed
 // backdrop is its own click target so peripheral clicks dismiss the
 // panel without bubbling into canvas pan/drag.
-export function ServiceOverlay({ project, service, env: envParam = "production", onClose }: Props) {
+export function ServiceOverlay({ project, service, env: envParam = "production", defaultTab, onClose }: Props) {
   const open = !!service;
   const [tab, setTab] = useState<Tab>("deployments");
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // Reset to Deployments whenever a different service opens so the
-  // user lands on the most actionable tab.
+  // Per-panel dirty registry. Children call useOverlayDirty(key, bool);
+  // we keep the ref-mirrored snapshot so onClose/ESC can read the
+  // current state without depending on a render. The setter triggers
+  // a state update so the discard banner can render.
+  const dirtyMap = useRef<Record<string, boolean>>({});
+  const [hasDirtyPanel, setHasDirtyPanel] = useState(false);
+  const dirtyAPI = useMemo<OverlayDirtyAPI>(
+    () => ({
+      setPanelDirty: (key, dirty) => {
+        if (dirty) dirtyMap.current[key] = true;
+        else delete dirtyMap.current[key];
+        setHasDirtyPanel(Object.keys(dirtyMap.current).length > 0);
+      },
+    }),
+    []
+  );
+
+  // Wrapped close that checks the dirty registry first. Browser's
+  // native confirm is the right tool here — modal-on-modal would
+  // tangle focus and zIndex with the existing ConfirmDialog stack.
+  const guardedClose = useCallback(() => {
+    if (
+      hasDirtyPanel &&
+      !window.confirm("Discard unsaved changes? Your edits will be lost.")
+    ) {
+      return;
+    }
+    dirtyMap.current = {};
+    setHasDirtyPanel(false);
+    onClose();
+  }, [hasDirtyPanel, onClose]);
+
+  // Same guard on tab switch — if the user has typed half an env-var
+  // edit in Variables and clicks Settings, ask before discarding.
+  const guardedSetTab = useCallback(
+    (next: Tab) => {
+      if (
+        hasDirtyPanel &&
+        !window.confirm("Discard unsaved changes on this tab?")
+      ) {
+        return;
+      }
+      dirtyMap.current = {};
+      setHasDirtyPanel(false);
+      setTab(next);
+    },
+    [hasDirtyPanel]
+  );
+
+  // When a service opens, land on the requested tab (right-click "View
+  // logs" → Logs, etc.) or fall back to the user's last-used tab in
+  // this session. Falls back to Deployments — the most actionable
+  // default — when there's no remembered tab. Iterating across
+  // services to compare logs no longer punishes the user with a
+  // forced "back to Deployments" reset on every open.
   useEffect(() => {
-    if (service) setTab("deployments");
-  }, [service]);
+    if (!service) return;
+    const valid = TABS.some((t) => t.id === defaultTab);
+    if (valid) {
+      setTab(defaultTab as Tab);
+      return;
+    }
+    let remembered: Tab = "deployments";
+    if (typeof window !== "undefined") {
+      const v = window.sessionStorage.getItem("kuso-service-overlay-tab");
+      if (v && TABS.some((t) => t.id === v)) remembered = v as Tab;
+    }
+    setTab(remembered);
+  }, [service, defaultTab]);
+
+  // Persist tab selection so the next open in this session lands on
+  // the same place. SessionStorage (not localStorage) so a new tab/
+  // window starts fresh.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.sessionStorage.setItem("kuso-service-overlay-tab", tab);
+  }, [tab]);
 
   // Close on ESC + lock body scroll while open.
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") guardedClose();
     };
     window.addEventListener("keydown", onKey);
     const prevOverflow = document.body.style.overflow;
@@ -64,7 +158,7 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
       window.removeEventListener("keydown", onKey);
       document.body.style.overflow = prevOverflow;
     };
-  }, [open, onClose]);
+  }, [open, guardedClose]);
 
   const svc = useService(project, service ?? "");
   const drift = useDrift(project, service ?? "");
@@ -99,7 +193,7 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
           <motion.button
             type="button"
             aria-label="Close"
-            onClick={onClose}
+            onClick={guardedClose}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -201,11 +295,29 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                       title = `Spec out of sync on: ${d.specPending.join(", ")}`;
                     } else {
                       // stale && !rolling: kube isn't going to roll.
-                      label = "out of date — restart needed";
+                      // One-click resolution path — don't make this
+                      // sound scarier than it is.
+                      label = "pending restart — redeploy to apply";
                       cls = "border-amber-500/40 bg-amber-500/10 text-amber-200";
                       title =
                         `Pod still running old ${d.podsStale.join(", ")}. ` +
-                        `Click Deployments → Redeploy or trigger a new build to roll.`;
+                        `Open Deployments and click Redeploy to roll.`;
+                    }
+                    // The "pending restart" case has a 1-click fix on
+                    // the Deployments tab; render it as a button so a
+                    // user can jump straight there. The other cases
+                    // are read-only state, so a span is fine.
+                    if (stale && !rolling && !specOff) {
+                      return (
+                        <button
+                          type="button"
+                          onClick={() => guardedSetTab("deployments")}
+                          className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] hover:brightness-110 ${cls}`}
+                          title={title}
+                        >
+                          {label}
+                        </button>
+                      );
                     }
                     return (
                       <span
@@ -220,7 +332,7 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
               </div>
               <button
                 type="button"
-                onClick={onClose}
+                onClick={guardedClose}
                 aria-label="Close"
                 className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
               >
@@ -239,7 +351,7 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                   <button
                     key={t.id}
                     type="button"
-                    onClick={() => setTab(t.id)}
+                    onClick={() => guardedSetTab(t.id)}
                     className={cn(
                       "relative inline-flex h-10 items-center px-3 text-sm font-medium transition-colors",
                       active
@@ -274,6 +386,7 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                   Failed to load service: {svc.error?.message}
                 </p>
               ) : (
+                <OverlayDirtyContext.Provider value={dirtyAPI}>
                 <AnimatePresence mode="wait">
                   <motion.div
                     key={tab}
@@ -322,6 +435,7 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                     )}
                   </motion.div>
                 </AnimatePresence>
+                </OverlayDirtyContext.Provider>
               )}
             </div>
           </motion.div>

@@ -9,6 +9,7 @@ import { useCan, Perms } from "@/features/auth";
 import { api } from "@/lib/api-client";
 import { Database, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 interface InstanceAddon {
   name: string;
@@ -52,6 +53,7 @@ export default function InstanceAddonsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [newName, setNewName] = useState("");
   const [newDSN, setNewDSN] = useState("");
+  const [pendingUnregister, setPendingUnregister] = useState<string | null>(null);
 
   if (!isAdmin) {
     return (
@@ -155,16 +157,7 @@ export default function InstanceAddonsPage() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (
-                      !confirm(
-                        `Unregister instance addon "${a.name}"?\n\nProjects that opted in will keep their per-project DBs and connection secrets, but no new projects can opt in until you re-register.`
-                      )
-                    ) {
-                      return;
-                    }
-                    unregister.mutate(a.name);
-                  }}
+                  onClick={() => setPendingUnregister(a.name)}
                   disabled={unregister.isPending}
                   className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
                   aria-label={`Unregister ${a.name}`}
@@ -256,6 +249,31 @@ export default function InstanceAddonsPage() {
           </form>
         </section>
       )}
+
+      <ConfirmDialog
+        open={pendingUnregister !== null}
+        title="Unregister instance addon?"
+        body={
+          <p>
+            Projects that already opted in to{" "}
+            <span className="font-mono text-[var(--text-primary)]">
+              {pendingUnregister}
+            </span>{" "}
+            keep their per-project databases and connection secrets, but no
+            new projects can opt in until you re-register. The DSN itself
+            is removed from the kuso-instance-shared Secret.
+          </p>
+        }
+        typeToConfirm={pendingUnregister ?? undefined}
+        confirmLabel="Unregister addon"
+        destructive
+        pending={unregister.isPending}
+        onConfirm={() => {
+          if (pendingUnregister) unregister.mutate(pendingUnregister);
+          setPendingUnregister(null);
+        }}
+        onCancel={() => setPendingUnregister(null)}
+      />
     </div>
   );
 }

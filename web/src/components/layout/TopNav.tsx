@@ -373,9 +373,14 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                 })}
               </CommandGroup>
             )}
-            {/* Trailing "new env" row. Sits below the env list so the
-                user always sees their existing envs first; click ->
-                opens the modal, popover closes itself. */}
+            {/* Trailing "new manual preview" row. Previews are normally
+                spawned by GitHub PR webhooks (open PR → preview-pr-N
+                env appears, close PR → it's torn down). This affordance
+                exists for the rare case where you want to spin up a
+                preview from a branch without an open PR. NOT for
+                "staging" or other long-lived envs — those don't fit
+                the preview-or-prod model and the operator won't
+                maintain them. */}
             <CommandGroup className="px-0">
               <CommandItem
                 value="__new__"
@@ -383,10 +388,11 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                   setOpen(false);
                   setShowNewEnv(true);
                 }}
+                title="Spawn a preview env from a branch. Production + PR-driven previews are the supported lifecycle."
                 className="px-2 py-1.5 text-[12px] text-[var(--accent)]"
               >
                 <Plus className="h-3 w-3" />
-                New environment
+                Manual preview
               </CommandItem>
             </CommandGroup>
           </CommandList>

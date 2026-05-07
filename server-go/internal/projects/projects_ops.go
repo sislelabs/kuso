@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -440,13 +441,6 @@ func (s *Service) aggregateCPUPercent(ctx context.Context, ns, envName string, d
 	if s.Kube == nil || s.Kube.Dynamic == nil {
 		return 0, false
 	}
-	gvr := schema.GroupVersionResource{Group: "metrics.k8s.io", Version: "v1beta1", Resource: "pods"}
-	list, err := s.Kube.Dynamic.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/instance=" + envName,
-	})
-	if err != nil || len(list.Items) == 0 {
-		return 0, false
-	}
 	// Container CPU limit (millicores) — we compute it once from the
 	// deployment spec and reuse it across pods. Pods with no limit
 	// give us nothing to compare against, so we skip the calc.
@@ -461,29 +455,17 @@ func (s *Service) aggregateCPUPercent(ctx context.Context, ns, envName string, d
 	if limitMilli == 0 {
 		return 0, false
 	}
-
+	allPods := s.fetchNsMetrics(ctx, ns)
+	if len(allPods) == 0 {
+		return 0, false
+	}
 	var totalPct int64
 	pods := 0
-	for i := range list.Items {
-		obj := list.Items[i].Object
-		containers, ok := obj["containers"].([]any)
-		if !ok {
+	for _, p := range allPods {
+		if p.instance != envName {
 			continue
 		}
-		var podMilli int64
-		for _, c := range containers {
-			cm, ok := c.(map[string]any)
-			if !ok {
-				continue
-			}
-			usage, ok := cm["usage"].(map[string]any)
-			if !ok {
-				continue
-			}
-			cpuStr, _ := usage["cpu"].(string)
-			podMilli += parsePodCPU(cpuStr)
-		}
-		totalPct += (podMilli * 100) / limitMilli
+		totalPct += (p.cpuMilli * 100) / limitMilli
 		pods++
 	}
 	if pods == 0 {
@@ -497,6 +479,51 @@ func (s *Service) aggregateCPUPercent(ctx context.Context, ns, envName string, d
 		avg = 999
 	}
 	return avg, true
+}
+
+// fetchNsMetrics returns the metrics.k8s.io pod list for ns,
+// singleflight'd into 5-second buckets. Concurrent Describe calls
+// hitting the same project (= same ns) within the same bucket share
+// one round-trip to metrics-server. Without this, a 10-env project
+// with one open canvas tab fired 10 parallel queries every 5s.
+func (s *Service) fetchNsMetrics(ctx context.Context, ns string) []nsPodMetrics {
+	bucket := time.Now().Truncate(5 * time.Second).Unix()
+	key := fmt.Sprintf("%s@%d", ns, bucket)
+	v, _, _ := s.metricsSF.Do(key, func() (any, error) {
+		gvr := schema.GroupVersionResource{Group: "metrics.k8s.io", Version: "v1beta1", Resource: "pods"}
+		list, err := s.Kube.Dynamic.Resource(gvr).Namespace(ns).List(ctx, metav1.ListOptions{})
+		if err != nil || list == nil {
+			return []nsPodMetrics(nil), nil
+		}
+		out := make([]nsPodMetrics, 0, len(list.Items))
+		for i := range list.Items {
+			obj := list.Items[i].Object
+			meta, _ := obj["metadata"].(map[string]any)
+			labels, _ := meta["labels"].(map[string]any)
+			inst, _ := labels["app.kubernetes.io/instance"].(string)
+			containers, ok := obj["containers"].([]any)
+			if !ok {
+				continue
+			}
+			var milli int64
+			for _, c := range containers {
+				cm, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				usage, ok := cm["usage"].(map[string]any)
+				if !ok {
+					continue
+				}
+				cpuStr, _ := usage["cpu"].(string)
+				milli += parsePodCPU(cpuStr)
+			}
+			out = append(out, nsPodMetrics{instance: inst, cpuMilli: milli})
+		}
+		return out, nil
+	})
+	pods, _ := v.([]nsPodMetrics)
+	return pods
 }
 
 // parsePodCPU mirrors the helper in handlers/kubernetes.go but lives
@@ -548,9 +575,16 @@ func (s *Service) populateLiveStatus(ctx context.Context, ns string, e *kube.Kus
 	if s.Kube == nil || s.Kube.Clientset == nil {
 		return
 	}
-	dep, err := s.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, e.Name, metav1.GetOptions{})
-	if err != nil {
-		return
+	// Prefer the Deployment informer cache — every Describe used to
+	// do an O(envs) live Get. Cache miss falls back to live Get so
+	// boot / fresh-CR cases still work.
+	dep, ok := s.Kube.Cache.GetDeployment(ns, e.Name)
+	if !ok {
+		var err error
+		dep, err = s.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, e.Name, metav1.GetOptions{})
+		if err != nil {
+			return
+		}
 	}
 	desired := int32(0)
 	if dep.Spec.Replicas != nil {

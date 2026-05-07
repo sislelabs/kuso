@@ -50,6 +50,9 @@ export async function addAddon(
     kind: string;
     external?: { secretName: string; secretKeys?: string[] };
     useInstanceAddon?: string;
+    version?: string;
+    ha?: boolean;
+    storageSize?: string;
   }
 ): Promise<KusoAddon> {
   return api(

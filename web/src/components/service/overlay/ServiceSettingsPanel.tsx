@@ -11,6 +11,7 @@ import type { KusoService } from "@/types/projects";
 import { Github, Trash2, Network, Layers3, Hammer, Cloud, Save, HardDrive, MapPin } from "lucide-react";
 import { cn } from "@/lib/utils";
 
+import { useOverlayDirty } from "@/components/service/ServiceOverlay";
 import { fromSvc, isEqual, type FormState } from "./settings/_primitives";
 import { SourceSection } from "./settings/SourceSection";
 import { NetworkingSection } from "./settings/NetworkingSection";
@@ -84,6 +85,7 @@ export function ServiceSettingsPanel({ project, service, svc }: Props) {
   }, [baseline]);
 
   const dirty = !isEqual(state, baseline);
+  useOverlayDirty("settings", dirty);
 
   const onSave = async () => {
     const body: PatchServiceBody = {};
@@ -355,6 +357,12 @@ function FloatingSaveBar({
                 }
               />
               {error ? "save failed" : "unsaved changes"}
+            </span>
+            <span
+              className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-200"
+              title="Most settings changes (port, scale, placement, runtime) trigger a rolling restart on save. See docs/EDIT_SAFETY.md."
+            >
+              redeploys on save
             </span>
             <Button size="sm" variant="outline" onClick={onReset} disabled={pending}>
               Discard

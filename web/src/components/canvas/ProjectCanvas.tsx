@@ -70,8 +70,12 @@ interface Props {
   services: KusoService[];
   addons: KusoAddon[];
   envs: KusoEnvironment[];
-  onSelectService?: (svcName: string) => void;
-  onSelectAddon?: (addonName: string) => void;
+  // Both selectors take an optional `tab` so canvas right-click items
+  // can land the user directly on the right overlay tab (Logs, SQL,
+  // Backups, …) instead of the default Deployments. Empty/undefined
+  // means "use the overlay's own default."
+  onSelectService?: (svcName: string, tab?: string) => void;
+  onSelectAddon?: (addonName: string, tab?: string) => void;
 }
 
 interface ContextState {
@@ -485,12 +489,7 @@ export function ProjectCanvas({
         label: "View logs",
         icon: ScrollText,
         onSelect: () => {
-          onSelectService?.(short);
-          // The overlay defaults to the Deployments tab; pick Logs
-          // via a hash so the right tab opens. Future: pass the tab
-          // explicitly; for now hash works because the overlay
-          // listens on hashchange.
-          window.location.hash = "logs";
+          onSelectService?.(short, "logs");
         },
       },
       {
@@ -552,8 +551,7 @@ export function ProjectCanvas({
               label: "SQL console",
               icon: Database,
               onSelect: () => {
-                onSelectAddon?.(data.addon.metadata.name);
-                window.location.hash = "sql";
+                onSelectAddon?.(data.addon.metadata.name, "sql");
               },
             } as ContextMenuItem,
             {
@@ -561,8 +559,7 @@ export function ProjectCanvas({
               label: "Backups + restore",
               icon: HardDrive,
               onSelect: () => {
-                onSelectAddon?.(data.addon.metadata.name);
-                window.location.hash = "backups";
+                onSelectAddon?.(data.addon.metadata.name, "backups");
               },
             } as ContextMenuItem,
           ]

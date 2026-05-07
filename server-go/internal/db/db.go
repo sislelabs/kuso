@@ -44,7 +44,8 @@ var schemaSQL string
 // d.DB.<method> if a caller ever needs the raw passthrough.
 type DB struct {
 	*sql.DB
-	Stats Stats
+	Stats   Stats
+	tenancy *tenancyCache
 }
 
 // Open opens a Postgres connection. dsn is the libpq URI (e.g.
@@ -87,7 +88,7 @@ func Open(dsn string) (*DB, error) {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	d := &DB{DB: sqldb}
+	d := &DB{DB: sqldb, tenancy: newTenancyCache()}
 	if err := d.applySchema(); err != nil {
 		_ = d.Close()
 		return nil, err

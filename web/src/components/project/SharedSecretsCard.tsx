@@ -8,6 +8,7 @@ import { api } from "@/lib/api-client";
 import { Check, KeyRound, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 // Project-level shared secrets card. Each row is one env var that
 // gets auto-mounted into every service in the project via the
@@ -53,6 +54,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
   // manual-add form. Empty = no editor open.
   const [editingKey, setEditingKey] = useState<string>("");
   const [editingValue, setEditingValue] = useState<string>("");
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
 
   const onSave = () => {
     const k = editingKey.trim();
@@ -176,10 +178,7 @@ export function SharedSecretsCard({ project }: { project: string }) {
                 </span>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!confirm(`Delete project secret ${k}?`)) return;
-                    unset.mutate(k);
-                  }}
+                  onClick={() => setPendingDelete(k)}
                   disabled={unset.isPending}
                   className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
                   aria-label={`Delete ${k}`}
@@ -213,6 +212,29 @@ export function SharedSecretsCard({ project }: { project: string }) {
           pending={set.isPending}
         />
       </section>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete shared secret?"
+        body={
+          <p>
+            <span className="font-mono text-[var(--text-primary)]">
+              {pendingDelete}
+            </span>{" "}
+            is mounted on every service in this project. Removing it will
+            cause services that read the variable to crash on next restart
+            until they're updated.
+          </p>
+        }
+        confirmLabel="Delete shared secret"
+        destructive
+        pending={unset.isPending}
+        onConfirm={() => {
+          if (pendingDelete) unset.mutate(pendingDelete);
+          setPendingDelete(null);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </section>
   );
 }

@@ -25,6 +25,9 @@ const TABS: { id: Tab; label: string; icon: React.ComponentType<{ className?: st
 interface Props {
   project: string;
   addon: string | null;
+  // Lets the canvas right-click "SQL console" / "Backups + restore"
+  // entries open the right tab directly. Falls back to "overview".
+  defaultTab?: string;
   onClose: () => void;
 }
 
@@ -36,14 +39,16 @@ interface Props {
 //
 // Per-tab implementations live under ./overlay/. This file is the
 // shell: open/close, tab gating, the slide-in chrome.
-export function AddonOverlay({ project, addon, onClose }: Props) {
+export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
   const open = !!addon;
   const [tab, setTab] = useState<Tab>("overview");
   const panelRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (addon) setTab("overview");
-  }, [addon]);
+    if (!addon) return;
+    const valid = TABS.some((t) => t.id === defaultTab);
+    setTab(valid ? (defaultTab as Tab) : "overview");
+  }, [addon, defaultTab]);
 
   useEffect(() => {
     if (!open) return;

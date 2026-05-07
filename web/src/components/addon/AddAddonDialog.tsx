@@ -53,6 +53,10 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
   const [extSecret, setExtSecret] = useState<string>("");
   const [extKeys, setExtKeys] = useState<string>("");
   const [instName, setInstName] = useState<string>("");
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [version, setVersion] = useState<string>("");
+  const [ha, setHA] = useState(false);
+  const [storageSize, setStorageSize] = useState<string>("");
   const qc = useQueryClient();
 
   // Pull the list of admin-registered instance addons so the picker
@@ -80,6 +84,10 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
       setExtSecret("");
       setExtKeys("");
       setInstName("");
+      setShowAdvanced(false);
+      setVersion("");
+      setHA(false);
+      setStorageSize("");
     }
   }, [open]);
 
@@ -107,6 +115,11 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
         };
       } else if (mode === "instance") {
         body.useInstanceAddon = instName.trim();
+      }
+      if (mode === "managed") {
+        if (version.trim()) body.version = version.trim();
+        if (ha) body.ha = true;
+        if (storageSize.trim()) body.storageSize = storageSize.trim();
       }
       return addAddon(project, body);
     },
@@ -260,16 +273,24 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                     external: "mirror a Secret",
                     instance: "shared server",
                   };
+                  // Instance-shared mode is postgres-only today (chart
+                  // emits the conn-secret bridge only for that kind).
+                  // Disable the chip rather than waiting for a submit-
+                  // time toast.
+                  const disabled = m === "instance" && kind !== "" && kind !== "postgres";
                   return (
                     <button
                       key={m}
                       type="button"
-                      onClick={() => setMode(m)}
+                      onClick={() => !disabled && setMode(m)}
+                      disabled={disabled}
+                      title={disabled ? "Instance-shared mode is postgres-only" : undefined}
                       className={cn(
                         "flex flex-col items-start rounded-sm px-2 py-1.5 text-left transition-colors",
                         active
                           ? "bg-[var(--bg-elevated)] shadow-[var(--shadow-sm)]"
-                          : "hover:bg-[var(--bg-tertiary)]/50"
+                          : "hover:bg-[var(--bg-tertiary)]/50",
+                        disabled && "cursor-not-allowed opacity-40 hover:bg-transparent"
                       )}
                     >
                       <span className="text-[12px] font-medium">{labelMap[m]}</span>
@@ -321,6 +342,69 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                       Empty = mirror every key from the source.
                     </p>
                   </div>
+                </div>
+              )}
+
+              {mode === "managed" && kind && (
+                <div className="space-y-2 border-t border-[var(--border-subtle)] pt-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowAdvanced((v) => !v)}
+                    className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                  >
+                    {showAdvanced ? "▾" : "▸"} advanced
+                  </button>
+                  {showAdvanced && (
+                    <div className="space-y-2">
+                      <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                        These default to the chart's recommended values.
+                        <span className="text-amber-400"> Storage size cannot be reduced after create.</span>
+                      </p>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label
+                            htmlFor="addon-version"
+                            className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+                          >
+                            version
+                          </label>
+                          <Input
+                            id="addon-version"
+                            value={version}
+                            onChange={(e) => setVersion(e.target.value)}
+                            placeholder="(chart default)"
+                            className="mt-1 h-7 font-mono text-[11px]"
+                            spellCheck={false}
+                          />
+                        </div>
+                        <div>
+                          <label
+                            htmlFor="addon-storage"
+                            className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+                          >
+                            storage size
+                          </label>
+                          <Input
+                            id="addon-storage"
+                            value={storageSize}
+                            onChange={(e) => setStorageSize(e.target.value)}
+                            placeholder="10Gi"
+                            className="mt-1 h-7 font-mono text-[11px]"
+                            spellCheck={false}
+                          />
+                        </div>
+                      </div>
+                      <label className="flex items-center gap-2 font-mono text-[11px] text-[var(--text-secondary)]">
+                        <input
+                          type="checkbox"
+                          checked={ha}
+                          onChange={(e) => setHA(e.target.checked)}
+                          className="h-3.5 w-3.5"
+                        />
+                        High availability (multi-replica + anti-affinity)
+                      </label>
+                    </div>
+                  )}
                 </div>
               )}
 

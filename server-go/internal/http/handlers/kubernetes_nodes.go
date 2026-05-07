@@ -73,15 +73,18 @@ func (h *KubernetesHandler) Nodes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	// Pod count per node — single list call beats N pod-per-node
-	// calls. fieldSelector spec.nodeName isn't supported on List
-	// without a label index in some k8s versions, so we filter
-	// in-memory after a cluster-wide list.
-	allPods, _ := h.Kube.Clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
-	podsByNode := map[string]int{}
-	if allPods != nil {
-		for _, p := range allPods.Items {
-			podsByNode[p.Spec.NodeName]++
+	// Pod count per node — served from the shared Pod informer
+	// (indexer keyed on Spec.NodeName). On a cold cache (server boot)
+	// we fall back to a single cluster-wide LIST so the UI never sees
+	// a transient zero-pods view.
+	podsByNode, ok := h.Kube.Cache.PodCountsByNode()
+	if !ok {
+		allPods, _ := h.Kube.Clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
+		podsByNode = map[string]int{}
+		if allPods != nil {
+			for _, p := range allPods.Items {
+				podsByNode[p.Spec.NodeName]++
+			}
 		}
 	}
 	// Live CPU/memory from metrics-server. Failure is non-fatal —

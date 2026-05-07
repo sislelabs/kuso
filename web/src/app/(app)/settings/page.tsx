@@ -154,9 +154,19 @@ export default function SettingsIndex() {
         // Browse mode: grouped sections.
         <div className="space-y-8">
           {GROUPS.map((g) => {
-            const visible = CARDS.map((c, i) => ({ c, i }))
-              .filter(({ c, i }) => c.group === g.id && allow[i]);
-            if (visible.length === 0) return null;
+            // Show every card in the group, but render gated ones in a
+            // locked state so users who lack the perm still discover
+            // the surface and know who to ask for access.
+            const inGroup = CARDS.map((c, i) => ({ c, i, locked: !allow[i] })).filter(
+              ({ c }) => c.group === g.id
+            );
+            if (inGroup.length === 0) return null;
+            // Skip the section entirely only when every card in it is
+            // locked AND it's an admin section the user definitely
+            // can't see — keeps the page from looking empty while
+            // still surfacing what's there.
+            const anyVisible = inGroup.some(({ locked }) => !locked);
+            if (!anyVisible && g.id !== "admin") return null;
             return (
               <section key={g.id}>
                 <header className="mb-3 flex items-baseline justify-between">
@@ -164,9 +174,9 @@ export default function SettingsIndex() {
                   <span className="font-mono text-[10px] text-[var(--text-tertiary)]">{g.hint}</span>
                 </header>
                 <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                  {visible.map(({ c }) => (
+                  {inGroup.map(({ c, locked }) => (
                     <li key={c.href}>
-                      <SettingsCard card={c} />
+                      <SettingsCard card={c} locked={locked} />
                     </li>
                   ))}
                 </ul>
@@ -179,8 +189,31 @@ export default function SettingsIndex() {
   );
 }
 
-function SettingsCard({ card }: { card: Card }) {
+function SettingsCard({ card, locked = false }: { card: Card; locked?: boolean }) {
   const Icon = card.icon;
+  if (locked) {
+    return (
+      <div
+        title={card.perm ? `requires ${card.perm}` : "needs admin access"}
+        className={cn(
+          "flex h-full items-start gap-3 rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4 opacity-60"
+        )}
+      >
+        <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]">
+          <Icon className="h-4 w-4" />
+        </span>
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 text-sm font-semibold tracking-tight text-[var(--text-secondary)]">
+            {card.title}
+            <span className="rounded bg-[var(--bg-tertiary)] px-1 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              admin
+            </span>
+          </div>
+          <p className="mt-0.5 text-[12px] text-[var(--text-tertiary)]">{card.description}</p>
+        </div>
+      </div>
+    );
+  }
   return (
     <Link
       href={card.href}

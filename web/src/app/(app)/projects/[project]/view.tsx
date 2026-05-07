@@ -36,7 +36,9 @@ export function ProjectDetailView() {
   // Overlay state — in-component, NOT in the URL. The panel is a
   // transient inspector, not a route.
   const [selectedService, setSelectedService] = useState<string | null>(null);
+  const [selectedServiceTab, setSelectedServiceTab] = useState<string | undefined>(undefined);
   const [selectedAddon, setSelectedAddon] = useState<string | null>(null);
+  const [selectedAddonTab, setSelectedAddonTab] = useState<string | undefined>(undefined);
 
   // Notification-link entry point: when the URL carries ?service= /
   // ?addon=, open the matching overlay on mount. Lets bell-icon
@@ -133,8 +135,14 @@ export function ProjectDetailView() {
           services={services}
           addons={addonsList}
           envs={envs}
-          onSelectService={(shortName) => setSelectedService(shortName)}
-          onSelectAddon={(name) => setSelectedAddon(name)}
+          onSelectService={(shortName, tab) => {
+            setSelectedService(shortName);
+            setSelectedServiceTab(tab);
+          }}
+          onSelectAddon={(name, tab) => {
+            setSelectedAddon(name);
+            setSelectedAddonTab(tab);
+          }}
         />
       </div>
 
@@ -142,13 +150,21 @@ export function ProjectDetailView() {
         project={projectName}
         service={selectedService}
         env={selectedEnv}
-        onClose={() => setSelectedService(null)}
+        defaultTab={selectedServiceTab}
+        onClose={() => {
+          setSelectedService(null);
+          setSelectedServiceTab(undefined);
+        }}
       />
 
       <AddonOverlay
         project={projectName}
         addon={selectedAddon}
-        onClose={() => setSelectedAddon(null)}
+        defaultTab={selectedAddonTab}
+        onClose={() => {
+          setSelectedAddon(null);
+          setSelectedAddonTab(undefined);
+        }}
       />
     </>
   );

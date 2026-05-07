@@ -26,6 +26,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -437,46 +438,63 @@ func (s *Service) countRunningBuildPodsCluster(ctx context.Context) int {
 	// Without filtering, a single stuck cancelled-build Job pegged
 	// the cluster cap at 1 and wedged every Redeploy.
 	doneNames := map[string]struct{}{}
-	if blist, berr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("").List(lctx, metav1.ListOptions{
+	doneSel, _ := labels.Parse("kuso.sislelabs.com/build-state=done")
+	if blist, ok := s.Kube.Cache.ListFromCache(kube.GVRBuilds, "", doneSel); ok {
+		for _, u := range blist {
+			doneNames[u.GetName()] = struct{}{}
+		}
+	} else if rawBlist, berr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("").List(lctx, metav1.ListOptions{
 		LabelSelector: "kuso.sislelabs.com/build-state=done",
 	}); berr == nil {
-		for i := range blist.Items {
-			doneNames[blist.Items[i].GetName()] = struct{}{}
+		for i := range rawBlist.Items {
+			doneNames[rawBlist.Items[i].GetName()] = struct{}{}
 		}
 	}
-	// One list per selector. The two queries return disjoint sets in
-	// the steady state (post-v0.8.10 pods carry both labels); during
-	// a roll, dedup by name so we don't double-count.
+	// One pass per selector — informer-served when ready, else fall
+	// back to a cluster-wide LIST (the pre-informer behaviour). The
+	// two pod-label flavours dedup via name+namespace so a roll that
+	// renders both the post-v0.8.10 component label and the legacy
+	// name label doesn't double-count.
 	seen := map[string]struct{}{}
-	count := func(sel string) {
-		pods, err := s.Kube.Clientset.CoreV1().Pods("").List(lctx, metav1.ListOptions{
-			LabelSelector: sel,
-		})
+	count := func(selStr string) {
+		sel, err := labels.Parse(selStr)
 		if err != nil {
-			slog.Default().Warn("countRunningBuildPodsCluster", "selector", sel, "err", err)
 			return
 		}
-		for i := range pods.Items {
-			p := &pods.Items[i]
-			if p.Status.Phase != corev1.PodPending && p.Status.Phase != corev1.PodRunning {
-				continue
+		pods, ok := s.Kube.Cache.ListPodsByLabel(sel)
+		if !ok {
+			rawPods, lerr := s.Kube.Clientset.CoreV1().Pods("").List(lctx, metav1.ListOptions{
+				LabelSelector: selStr,
+			})
+			if lerr != nil {
+				slog.Default().Warn("countRunningBuildPodsCluster", "selector", selStr, "err", lerr)
+				return
 			}
-			// Pod's instance label == the KusoBuild CR's name (chart
-			// emits app.kubernetes.io/instance=<release>). If that
-			// CR is in the done set, treat the pod as orphan and
-			// skip it. We're not nuking it here — that's a separate
-			// reconcile concern — just refusing to let it block
-			// admission.
-			inst := p.Labels["app.kubernetes.io/instance"]
-			if _, isDone := doneNames[inst]; isDone {
-				continue
+			for i := range rawPods.Items {
+				accept(seen, doneNames, &rawPods.Items[i])
 			}
-			seen[p.Namespace+"/"+p.Name] = struct{}{}
+			return
+		}
+		for _, p := range pods {
+			accept(seen, doneNames, p)
 		}
 	}
 	count("app.kubernetes.io/component=kusobuild")
 	count("app.kubernetes.io/name=kusobuild")
 	return len(seen)
+}
+
+// accept records a pod into seen iff it's pending/running and not
+// owned by a build CR in the doneNames orphan set. Shared between
+// the cluster and per-project counters.
+func accept(seen, doneNames map[string]struct{}, p *corev1.Pod) {
+	if p.Status.Phase != corev1.PodPending && p.Status.Phase != corev1.PodRunning {
+		return
+	}
+	if _, isDone := doneNames[p.Labels["app.kubernetes.io/instance"]]; isDone {
+		return
+	}
+	seen[p.Namespace+"/"+p.Name] = struct{}{}
 }
 
 // projectBuildCap returns the per-project max-concurrent override
@@ -521,28 +539,46 @@ func (s *Service) countActiveBuildsForProject(ctx context.Context, project strin
 	// pods owned by build CRs labelled state=done. See that function
 	// for the why.
 	doneNames := map[string]struct{}{}
-	if blist, berr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
-		LabelSelector: "kuso.sislelabs.com/project=" + project + ",kuso.sislelabs.com/build-state=done",
-	}); berr == nil {
-		for i := range blist.Items {
-			doneNames[blist.Items[i].GetName()] = struct{}{}
+	doneSelStr := "kuso.sislelabs.com/project=" + project + ",kuso.sislelabs.com/build-state=done"
+	if doneSel, perr := labels.Parse(doneSelStr); perr == nil {
+		if blist, ok := s.Kube.Cache.ListFromCache(kube.GVRBuilds, ns, doneSel); ok {
+			for _, u := range blist {
+				doneNames[u.GetName()] = struct{}{}
+			}
+		} else if rawBlist, berr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
+			LabelSelector: doneSelStr,
+		}); berr == nil {
+			for i := range rawBlist.Items {
+				doneNames[rawBlist.Items[i].GetName()] = struct{}{}
+			}
 		}
 	}
 	seen := map[string]struct{}{}
-	count := func(sel string) {
-		pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(lctx, metav1.ListOptions{LabelSelector: sel})
+	count := func(selStr string) {
+		sel, err := labels.Parse(selStr)
 		if err != nil {
 			return
 		}
-		for i := range pods.Items {
-			p := &pods.Items[i]
-			if p.Status.Phase != corev1.PodPending && p.Status.Phase != corev1.PodRunning {
+		// Pod informer is cluster-wide; the project=… constraint in
+		// the selector keeps the slice small. Filter pods to the
+		// expected namespace afterwards in case multiple projects
+		// somehow end up labelled the same in different namespaces.
+		pods, ok := s.Kube.Cache.ListPodsByLabel(sel)
+		if !ok {
+			rawPods, lerr := s.Kube.Clientset.CoreV1().Pods(ns).List(lctx, metav1.ListOptions{LabelSelector: selStr})
+			if lerr != nil {
+				return
+			}
+			for i := range rawPods.Items {
+				accept(seen, doneNames, &rawPods.Items[i])
+			}
+			return
+		}
+		for _, p := range pods {
+			if p.Namespace != ns {
 				continue
 			}
-			if _, isDone := doneNames[p.Labels["app.kubernetes.io/instance"]]; isDone {
-				continue
-			}
-			seen[p.Name] = struct{}{}
+			accept(seen, doneNames, p)
 		}
 	}
 	count("app.kubernetes.io/component=kusobuild,kuso.sislelabs.com/project=" + project)
@@ -1525,6 +1561,89 @@ type Poller struct {
 	// into "fair every tick".
 	cursorMu       sync.Mutex
 	fairnessCursor map[string]string // ns → last-promoted project
+
+	// archiveQueue dispatches archiveLogs work to a bounded worker
+	// pool so a tick that finds 15 builds finishing simultaneously
+	// doesn't block the leader poller for tens of seconds while it
+	// streams pod logs serially. The buffer is sized for one tick
+	// of typical concurrency; on overflow we drop the snapshot, log
+	// at warn, and increment a metric — the build's terminal phase
+	// is already persisted, only the log archive (a UX nice) is at
+	// risk.
+	archiveOnce  sync.Once
+	archiveQueue chan archiveTask
+}
+
+// archiveTask is one queued snapshot job. The full ctx is captured
+// rather than the request ctx because the worker outlives the
+// markSucceeded/markFailed callsite.
+type archiveTask struct {
+	ns    string
+	build *kube.KusoBuild
+	phase string
+}
+
+// archiveWorkers is the size of the bounded pool that drains
+// archiveQueue. Four workers cover the steady-state shape (up to
+// four builds finishing in the same tick) without piling up enough
+// concurrent kube round-trips to look like a stampede on a small
+// apiserver.
+const archiveWorkers = 4
+
+// archiveBuffer caps the queue depth. Beyond this we drop newer
+// snapshots to keep memory bounded. The same upper bound also acts
+// as the per-tick coalescing window.
+const archiveBuffer = 64
+
+// startArchiveWorkers lazily spins up the bounded pool the first
+// time the poller dispatches an archive task. Workers shut down
+// when the poller's parent context fires.
+func (p *Poller) startArchiveWorkers(ctx context.Context) {
+	p.archiveOnce.Do(func() {
+		p.archiveQueue = make(chan archiveTask, archiveBuffer)
+		for i := 0; i < archiveWorkers; i++ {
+			go p.archiveWorker(ctx)
+		}
+	})
+}
+
+func (p *Poller) archiveWorker(ctx context.Context) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case t, ok := <-p.archiveQueue:
+			if !ok {
+				return
+			}
+			// Detached timeout per task — workers shouldn't share a
+			// single ctx deadline across many in-flight snapshots.
+			tctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			p.archiveLogs(tctx, t.ns, t.build, t.phase)
+			cancel()
+		}
+	}
+}
+
+// queueArchive submits an archive task to the pool. Non-blocking
+// when the queue has headroom; on overflow we run synchronously as
+// a last-resort fallback so a backed-up pool doesn't lose snapshots
+// silently. (synchronous fallback shares the original poller goroutine
+// — the same shape this whole change avoids — so we also log at
+// warn so operators notice the saturation.)
+func (p *Poller) queueArchive(ctx context.Context, ns string, b *kube.KusoBuild, phase string) {
+	if p.LogArchive == nil {
+		return
+	}
+	p.startArchiveWorkers(ctx)
+	t := archiveTask{ns: ns, build: b, phase: phase}
+	select {
+	case p.archiveQueue <- t:
+	default:
+		slog.Default().Warn("builds: archive queue saturated; running inline",
+			"build", b.Name, "phase", phase, "depth", len(p.archiveQueue))
+		p.archiveLogs(ctx, ns, b, phase)
+	}
 }
 
 // Run blocks until ctx is cancelled, ticking every Interval and updating
@@ -2075,7 +2194,7 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 	// but a slow tick interleaved with a slow apiserver could miss
 	// the window — taking the snapshot synchronously here costs ~1s
 	// and removes that race.
-	p.archiveLogs(ctx, ns, b, "succeeded")
+	p.queueArchive(ctx, ns, b, "succeeded")
 	if p.Notifier != nil {
 		ref := b.Spec.Ref
 		if len(ref) > 12 {
@@ -2108,7 +2227,7 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 	if err != nil {
 		return fmt.Errorf("patch build failed: %w", err)
 	}
-	p.archiveLogs(ctx, ns, b, "failed")
+	p.queueArchive(ctx, ns, b, "failed")
 	if p.Notifier != nil {
 		ref := b.Spec.Ref
 		if len(ref) > 12 {

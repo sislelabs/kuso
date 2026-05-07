@@ -3,9 +3,44 @@ package handlers
 import (
 	"net/http"
 	"sort"
+	"sync"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+// clusterCacheTTL bounds how stale the events / storage-class /
+// ingress-domains views can be. 30s matches the dashboard's
+// refetchInterval; below that we burn kube-apiserver load with no
+// user-visible benefit. Above that the cluster-overview tab feels
+// laggy when an admin actively edits an Ingress.
+const clusterCacheTTL = 30 * time.Second
+
+var clusterCache = struct {
+	sync.Mutex
+	entries map[string]clusterCacheEntry
+}{entries: map[string]clusterCacheEntry{}}
+
+type clusterCacheEntry struct {
+	value any
+	until time.Time
+}
+
+func clusterCacheGet(key string) (any, bool) {
+	clusterCache.Lock()
+	defer clusterCache.Unlock()
+	e, ok := clusterCache.entries[key]
+	if !ok || time.Now().After(e.until) {
+		return nil, false
+	}
+	return e.value, true
+}
+
+func clusterCachePut(key string, value any) {
+	clusterCache.Lock()
+	defer clusterCache.Unlock()
+	clusterCache.entries[key] = clusterCacheEntry{value: value, until: time.Now().Add(clusterCacheTTL)}
+}
 
 // Cluster-level read-only endpoints: events feed, storage classes, the
 // union of every Ingress host. The node and env-metrics surfaces live
@@ -46,7 +81,15 @@ func (h *KubernetesHandler) Events(w http.ResponseWriter, r *http.Request) {
 }
 
 // StorageClasses returns every storage class in the cluster.
+//
+// 30s TTL'd. StorageClasses change rarely (once at install, again
+// only when an admin touches the cluster) but the cluster-overview
+// tab polls them often.
 func (h *KubernetesHandler) StorageClasses(w http.ResponseWriter, r *http.Request) {
+	if cached, ok := clusterCacheGet("storage-classes"); ok {
+		writeJSON(w, http.StatusOK, cached)
+		return
+	}
 	ctx, cancel := kubeCtx(r)
 	defer cancel()
 	scs, err := h.Kube.Clientset.StorageV1().StorageClasses().List(ctx, metav1.ListOptions{})
@@ -55,12 +98,21 @@ func (h *KubernetesHandler) StorageClasses(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
+	clusterCachePut("storage-classes", scs.Items)
 	writeJSON(w, http.StatusOK, scs.Items)
 }
 
 // Domains returns the union of every Ingress host currently configured
 // in the cluster. Used by the project-create UI to warn about clashes.
+//
+// 30s TTL'd. Cluster-wide Ingress LIST is the heaviest query in this
+// file (no informer, full TLS spec per item), and the project-create
+// dialog polls this just to populate a "host already taken" hint.
 func (h *KubernetesHandler) Domains(w http.ResponseWriter, r *http.Request) {
+	if cached, ok := clusterCacheGet("ingress-domains"); ok {
+		writeJSON(w, http.StatusOK, cached)
+		return
+	}
 	ctx, cancel := kubeCtx(r)
 	defer cancel()
 	ings, err := h.Kube.Clientset.NetworkingV1().Ingresses("").List(ctx, metav1.ListOptions{})
@@ -82,5 +134,6 @@ func (h *KubernetesHandler) Domains(w http.ResponseWriter, r *http.Request) {
 		out = append(out, d)
 	}
 	sort.Strings(out)
+	clusterCachePut("ingress-domains", out)
 	writeJSON(w, http.StatusOK, out)
 }

@@ -36,6 +36,12 @@ const (
 	// CordonAnnotation marks nodes that nodewatch cordoned itself, so
 	// recovery can safely uncordon (and not stomp on a manual cordon).
 	CordonAnnotation = "kuso.sislelabs.com/cordoned-by-nodewatch"
+	// NotReadySinceAnnotation persists the moment a node first went
+	// NotReady so the threshold survives a leader handover. Without
+	// this, a new leader resets the 5-min counter on every failover —
+	// a node that was 4:50 NotReady at handover gets another 5-min
+	// grace window before nodewatch fires the alert.
+	NotReadySinceAnnotation = "kuso.sislelabs.com/notready-since"
 )
 
 // Config tunes the loop. Zero values fall back to defaults.
@@ -148,12 +154,31 @@ func (w *Watcher) tick(ctx context.Context) {
 					kind: "uncordon", node: n, emit: notify.NodeRecovered(n.Name),
 				})
 			}
+			// Clear the persisted marker so a future flap doesn't see
+			// stale "since" data.
+			if _, has := n.Annotations[NotReadySinceAnnotation]; has {
+				actions = append(actions, pendingAction{kind: "clear-notready-marker", node: n})
+			}
 			continue
 		}
 		first, ok := w.notReadySince[n.Name]
 		if !ok {
-			w.notReadySince[n.Name] = now
-			continue
+			// Recover from the persisted annotation when present —
+			// matters for leader handover, where in-memory state is
+			// fresh but the cluster has seen this node NotReady for a
+			// while already.
+			if v := n.Annotations[NotReadySinceAnnotation]; v != "" {
+				if parsed, perr := time.Parse(time.RFC3339, v); perr == nil {
+					w.notReadySince[n.Name] = parsed.UTC()
+					first = parsed.UTC()
+					ok = true
+				}
+			}
+			if !ok {
+				w.notReadySince[n.Name] = now
+				actions = append(actions, pendingAction{kind: "stamp-notready-marker", node: n, emit: notify.Event{}})
+				continue
+			}
 		}
 		if _, alreadyAlerted := w.alerted[n.Name]; alreadyAlerted {
 			continue
@@ -203,6 +228,25 @@ func (w *Watcher) tick(ctx context.Context) {
 				w.Logger.Warn("nodewatch uncordon", "node", a.node.Name, "err", err)
 			}
 			w.Notify.Emit(a.emit)
+		case "stamp-notready-marker":
+			// Best-effort: failure here just means a leader handover
+			// during this exact NotReady window resets the timer.
+			ts := time.Now().UTC().Format(time.RFC3339)
+			patch := []byte(fmt.Sprintf(
+				`{"metadata":{"annotations":{%q:%q}}}`, NotReadySinceAnnotation, ts))
+			if _, err := w.Kube.Clientset.CoreV1().Nodes().Patch(
+				ctx, a.node.Name, types.MergePatchType, patch, metav1.PatchOptions{},
+			); err != nil {
+				w.Logger.Warn("nodewatch stamp notready-since", "node", a.node.Name, "err", err)
+			}
+		case "clear-notready-marker":
+			patch := []byte(fmt.Sprintf(
+				`{"metadata":{"annotations":{%q:null}}}`, NotReadySinceAnnotation))
+			if _, err := w.Kube.Clientset.CoreV1().Nodes().Patch(
+				ctx, a.node.Name, types.MergePatchType, patch, metav1.PatchOptions{},
+			); err != nil {
+				w.Logger.Warn("nodewatch clear notready-since", "node", a.node.Name, "err", err)
+			}
 		}
 	}
 }

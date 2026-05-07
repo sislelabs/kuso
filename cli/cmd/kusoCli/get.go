@@ -131,7 +131,13 @@ var getServicesCmd = &cobra.Command{
 			return jsonOut(items)
 		case "table", "":
 			t := tablewriter.NewWriter(os.Stdout)
-			t.SetHeader([]string{"NAME", "RUNTIME", "PORT", "PATH"})
+			// Column header "SERVICE" disambiguates against the JSON
+			// path's metadata.name, which is the FQ "<project>-<svc>"
+			// form. The short name shown here is what kuso commands
+			// accept on subsequent invocations (kuso build, kuso env,
+			// kuso shell, …) — JSON consumers should pass --output
+			// json and parse `metadata.name`.
+			t.SetHeader([]string{"SERVICE", "RUNTIME", "PORT", "PATH"})
 			for _, s := range items {
 				spec := mapAt(s, "spec")
 				repo := mapAt(spec, "repo")

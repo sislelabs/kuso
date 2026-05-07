@@ -105,7 +105,7 @@ func requireProjectAccess(
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return false
 	}
-	tenancy, err := dbConn.ListUserTenancy(ctx, claims.UserID)
+	tenancy, err := dbConn.ListUserTenancyCached(ctx, claims.UserID)
 	if err != nil {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return false

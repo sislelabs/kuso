@@ -37,11 +37,16 @@ import (
 	"sync"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/dynamicinformer"
+	coreinformers "k8s.io/client-go/informers"
+	appslisters "k8s.io/client-go/listers/apps/v1"
+	corelisters "k8s.io/client-go/listers/core/v1"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -59,10 +64,29 @@ type Cache struct {
 	// state cheaply on the read path.
 	informers map[schema.GroupVersionResource]informerEntry
 
-	mu       sync.RWMutex
-	stopCh   chan struct{}
-	stopped  bool
+	// Pod informer (typed core/v1) — used by the nodes endpoint and
+	// the build poller, both of which used to do cluster-wide
+	// Pods("").List() per request. The watch keeps an in-process index
+	// keyed by Spec.NodeName so per-node pod counts are O(1).
+	podFactory  coreinformers.SharedInformerFactory
+	podInformer cache.SharedIndexInformer
+	podLister   corelisters.PodLister
+	podSynced   cache.InformerSynced
+
+	// Deployment informer — every populateLiveStatus call used to do a
+	// live Get(deployment); for a 10-env project + open canvas that
+	// was 10 round-trips per 5-second tick. Cluster-wide watch + a
+	// namespaced lister covers it.
+	depLister appslisters.DeploymentLister
+	depSynced cache.InformerSynced
+
+	mu      sync.RWMutex
+	stopCh  chan struct{}
+	stopped bool
 }
+
+// podByNodeIndexKey is the cache.Indexer key for Pod-by-node lookups.
+const podByNodeIndexKey = "spec.nodeName"
 
 type informerEntry struct {
 	lister cache.GenericLister
@@ -91,11 +115,39 @@ func NewCache(c *Client) *Cache {
 		}
 	}
 
-	return &Cache{
+	cc := &Cache{
 		factory:   factory,
 		informers: informers,
 		stopCh:    make(chan struct{}),
 	}
+
+	// Pod informer — typed clientset, cluster-wide, indexed by node.
+	// Without this every /api/kubernetes/nodes call and every build-
+	// admission/cancel did a cluster-wide LIST (5–20 MB at 1k+ pods).
+	if c.Clientset != nil {
+		pf := coreinformers.NewSharedInformerFactory(c.Clientset, resyncPeriod)
+		pi := pf.Core().V1().Pods()
+		informer := pi.Informer()
+		_ = informer.AddIndexers(cache.Indexers{
+			podByNodeIndexKey: func(obj any) ([]string, error) {
+				p, ok := obj.(*corev1.Pod)
+				if !ok || p.Spec.NodeName == "" {
+					return nil, nil
+				}
+				return []string{p.Spec.NodeName}, nil
+			},
+		})
+		cc.podFactory = pf
+		cc.podInformer = informer
+		cc.podLister = pi.Lister()
+		cc.podSynced = informer.HasSynced
+
+		di := pf.Apps().V1().Deployments()
+		cc.depLister = di.Lister()
+		cc.depSynced = di.Informer().HasSynced
+	}
+
+	return cc
 }
 
 // Start kicks off the watches. Idempotent.
@@ -109,6 +161,9 @@ func (c *Cache) Start() {
 		return
 	}
 	c.factory.Start(c.stopCh)
+	if c.podFactory != nil {
+		c.podFactory.Start(c.stopCh)
+	}
 }
 
 // Stop halts the watches. Used in tests + on graceful shutdown.
@@ -137,7 +192,65 @@ func (c *Cache) AllSynced() bool {
 			return false
 		}
 	}
+	if c.podSynced != nil && !c.podSynced() {
+		return false
+	}
+	if c.depSynced != nil && !c.depSynced() {
+		return false
+	}
 	return true
+}
+
+// PodCountsByNode returns a node→pod-count map served from the local
+// Pod informer index. Returns (nil, false) if the informer isn't ready
+// yet — caller should fall back to a live LIST.
+func (c *Cache) PodCountsByNode() (map[string]int, bool) {
+	if c == nil || c.podInformer == nil || c.podSynced == nil || !c.podSynced() {
+		return nil, false
+	}
+	out := map[string]int{}
+	for _, key := range c.podInformer.GetIndexer().ListIndexFuncValues(podByNodeIndexKey) {
+		objs, err := c.podInformer.GetIndexer().ByIndex(podByNodeIndexKey, key)
+		if err != nil {
+			continue
+		}
+		out[key] = len(objs)
+	}
+	return out, true
+}
+
+// GetDeployment returns the Deployment by namespace+name from the
+// shared informer. Returns (nil, false) when the cache isn't ready
+// or the deployment isn't found. Callers should fall back to a live
+// Get when (nil, false) is returned and they actually need the
+// object.
+func (c *Cache) GetDeployment(namespace, name string) (*appsv1.Deployment, bool) {
+	if c == nil || c.depLister == nil || c.depSynced == nil || !c.depSynced() {
+		return nil, false
+	}
+	d, err := c.depLister.Deployments(namespace).Get(name)
+	if err != nil || d == nil {
+		return nil, false
+	}
+	return d, true
+}
+
+// ListPodsByLabel returns every Pod (cluster-wide) whose labels match
+// the given selector, served from the Pod informer. Returns
+// (nil, false) when the cache isn't ready — caller should fall back to
+// a live LIST.
+func (c *Cache) ListPodsByLabel(sel labels.Selector) ([]*corev1.Pod, bool) {
+	if c == nil || c.podLister == nil || c.podSynced == nil || !c.podSynced() {
+		return nil, false
+	}
+	if sel == nil {
+		sel = labels.Everything()
+	}
+	pods, err := c.podLister.List(sel)
+	if err != nil {
+		return nil, false
+	}
+	return pods, true
 }
 
 // WaitForSync blocks until every informer has done its initial list,
@@ -147,20 +260,32 @@ func (c *Cache) WaitForSync(ctx context.Context) bool {
 	if c == nil {
 		return true
 	}
-	syncs := make([]cache.InformerSynced, 0, len(c.informers))
+	syncs := make([]cache.InformerSynced, 0, len(c.informers)+2)
 	for _, e := range c.informers {
 		syncs = append(syncs, e.synced)
+	}
+	if c.podSynced != nil {
+		syncs = append(syncs, c.podSynced)
+	}
+	if c.depSynced != nil {
+		syncs = append(syncs, c.depSynced)
 	}
 	return cache.WaitForCacheSync(ctx.Done(), syncs...)
 }
 
-// listFromCache returns the cached items for gvr in namespace, or
+// ListFromCache returns the cached items for gvr in namespace, or
 // (nil, false) if the cache isn't ready for that GVR yet.
 //
 // "Not ready" means the informer hasn't completed its initial list —
 // in which case the caller should fall back to a live API list so
 // the user doesn't see a transient empty page on server boot.
-func (c *Cache) listFromCache(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, bool) {
+//
+// sel is applied client-side over the in-memory index. Pass
+// labels.Everything() for unfiltered. Filtering against the cache is
+// fundamentally cheaper than a live LIST because the indexer is
+// already fully resident; this is the same model the upstream
+// SharedInformer uses for its native typed listers.
+func (c *Cache) ListFromCache(gvr schema.GroupVersionResource, namespace string, sel labels.Selector) ([]*unstructured.Unstructured, bool) {
 	if c == nil {
 		return nil, false
 	}
@@ -171,14 +296,17 @@ func (c *Cache) listFromCache(gvr schema.GroupVersionResource, namespace string)
 	if !entry.synced() {
 		return nil, false
 	}
+	if sel == nil {
+		sel = labels.Everything()
+	}
 	var (
 		objs []runtime.Object
 		err  error
 	)
 	if namespace == "" {
-		objs, err = entry.lister.List(labels.Everything())
+		objs, err = entry.lister.List(sel)
 	} else {
-		objs, err = entry.lister.ByNamespace(namespace).List(labels.Everything())
+		objs, err = entry.lister.ByNamespace(namespace).List(sel)
 	}
 	if err != nil {
 		return nil, false

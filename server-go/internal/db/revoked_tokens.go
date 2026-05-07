@@ -107,6 +107,7 @@ ON CONFLICT ("userId") DO UPDATE SET
 	if err != nil {
 		return fmt.Errorf("db: invalidate user tokens: %w", err)
 	}
+	d.EvictUserTenancy(userID)
 	return nil
 }
 
@@ -164,6 +165,9 @@ ON CONFLICT ("userId") DO UPDATE SET
 		return 0, fmt.Errorf("db: invalidate users by role: %w", err)
 	}
 	n, _ := res.RowsAffected()
+	if n > 0 {
+		d.EvictAllTenancy()
+	}
 	return n, nil
 }
 
@@ -190,6 +194,9 @@ ON CONFLICT ("userId") DO UPDATE SET
 		return 0, fmt.Errorf("db: invalidate users by group: %w", err)
 	}
 	n, _ := res.RowsAffected()
+	if n > 0 {
+		d.EvictAllTenancy()
+	}
 	return n, nil
 }
 

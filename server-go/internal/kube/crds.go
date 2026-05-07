@@ -6,6 +6,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/util/retry"
@@ -37,23 +38,37 @@ func decodeList[T any](list *unstructured.UnstructuredList, gvr schema.GroupVers
 
 // list is the generic dynamic-client → typed-slice helper.
 //
-// When c.Cache is set and synced for gvr, the list is served from the
-// local informer cache (no API round-trip). Otherwise it falls back
-// to a live LIST. Selectors in opts are NOT applied to the cache —
-// callers that need them get the live path. Today no caller passes
-// non-default opts, so the cache path is universal in practice.
+// When c.Cache is set and synced for gvr the list is served from the
+// local informer cache. LabelSelector is parsed and applied
+// client-side against the in-memory index, which is far cheaper than
+// a live LIST — the indexer is already fully resident, the selector
+// is just a filter pass over a Go slice. FieldSelector still goes to
+// the live API because field indices vary by resource version.
 func list[T any](ctx context.Context, c *Client, gvr schema.GroupVersionResource, namespace string, opts metav1.ListOptions) ([]T, error) {
-	if c.Cache != nil && opts.LabelSelector == "" && opts.FieldSelector == "" {
-		if items, ok := c.Cache.listFromCache(gvr, namespace); ok {
-			out := make([]T, 0, len(items))
-			for _, u := range items {
-				var item T
-				if err := fromUnstructured(u, &item); err != nil {
-					return nil, fmt.Errorf("kube: decode cached %s: %w", gvr.Resource, err)
-				}
-				out = append(out, item)
+	if c.Cache != nil && opts.FieldSelector == "" {
+		sel := labels.Everything()
+		if opts.LabelSelector != "" {
+			parsed, err := labels.Parse(opts.LabelSelector)
+			if err == nil {
+				sel = parsed
+			} else {
+				// Bad selector — bail to the live API which will
+				// surface the parse error to the caller.
+				sel = nil
 			}
-			return out, nil
+		}
+		if sel != nil {
+			if items, ok := c.Cache.ListFromCache(gvr, namespace, sel); ok {
+				out := make([]T, 0, len(items))
+				for _, u := range items {
+					var item T
+					if err := fromUnstructured(u, &item); err != nil {
+						return nil, fmt.Errorf("kube: decode cached %s: %w", gvr.Resource, err)
+					}
+					out = append(out, item)
+				}
+				return out, nil
+			}
 		}
 	}
 	raw, err := c.Dynamic.Resource(gvr).Namespace(namespace).List(ctx, opts)

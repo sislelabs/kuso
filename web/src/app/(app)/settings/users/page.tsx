@@ -11,6 +11,7 @@ import { toast } from "sonner";
 import { Users as UsersIcon, Plus, Trash2, KeyRound, X, Link2, Copy, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 interface UserRow {
   id: string;
@@ -390,11 +391,13 @@ function UserRowItem({
   onReset: () => void;
 }) {
   const qc = useQueryClient();
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const remove = useMutation({
     mutationFn: () => api(`/api/users/id/${encodeURIComponent(u.id)}`, { method: "DELETE" }),
     onSuccess: () => {
       toast.success(`${u.username} deleted`);
       qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      setConfirmOpen(false);
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
   });
@@ -468,12 +471,27 @@ function UserRowItem({
             variant="ghost"
             size="icon-sm"
             aria-label="Delete"
-            onClick={() => {
-              if (window.confirm(`Delete ${u.username}? This cannot be undone.`)) remove.mutate();
-            }}
+            onClick={() => setConfirmOpen(true)}
           >
             <Trash2 className="h-3.5 w-3.5" />
           </Button>
+          <ConfirmDialog
+            open={confirmOpen}
+            title={`Delete ${u.username}?`}
+            body={
+              <p>
+                Permanently removes the account, group memberships, and any
+                tokens issued to this user. The user's projects are not
+                touched. This cannot be undone.
+              </p>
+            }
+            typeToConfirm={u.username}
+            confirmLabel="Delete user"
+            destructive
+            pending={remove.isPending}
+            onConfirm={() => remove.mutate()}
+            onCancel={() => setConfirmOpen(false)}
+          />
         </>
       )}
     </div>

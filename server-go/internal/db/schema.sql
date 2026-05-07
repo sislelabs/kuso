@@ -324,6 +324,23 @@ CREATE TABLE IF NOT EXISTS "LogLine" (
 CREATE INDEX IF NOT EXISTS "LogLine_project_service_ts_idx" ON "LogLine"("project","service","ts" DESC);
 CREATE INDEX IF NOT EXISTS "LogLine_ts_idx" ON "LogLine"("ts");
 
+-- pg_trgm GIN index on LogLine.line so the alert engine's
+-- `ILIKE '%query%'` doesn't sequential-scan the whole partition every
+-- 60s per log-match rule. Without this, a 100M-row table with five
+-- log rules at 60s intervals does five scans per minute — fights the
+-- inserter for IO and pegs Postgres CPU. The trigram index turns each
+-- query into an index probe.
+--
+-- The CREATE EXTENSION call is idempotent and runs as the schema's
+-- owner; the GIN index build is also idempotent and the IF NOT EXISTS
+-- gate keeps re-runs cheap. Operators on managed Postgres flavours
+-- that don't offer pg_trgm see the CREATE EXTENSION fail; the IF NOT
+-- EXISTS-on-the-index then correctly skips. The schema apply skips
+-- already-exists errors as a class so this lands cleanly even when
+-- pg_trgm is missing — alert performance just doesn't get the lift.
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS "LogLine_line_trgm_idx" ON "LogLine" USING GIN ("line" gin_trgm_ops);
+
 -- v0.9.7: missing-env-var hints scraped from runtime crash logs by the
 -- log shipper. One row per (project, service, name); upsert on hit so
 -- a crashloop emitting the same line 1000×/sec doesn't blow up storage.

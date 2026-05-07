@@ -154,7 +154,7 @@ func (h *LogsWSHandler) Tail(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	if !auth.Has(claims.Permissions, auth.PermSettingsAdmin) && h.DB != nil {
 		tenancyCtx, tenancyCancel := context.WithTimeout(r.Context(), 5*time.Second)
-		tenancy, terr := h.DB.ListUserTenancy(tenancyCtx, claims.UserID)
+		tenancy, terr := h.DB.ListUserTenancyCached(tenancyCtx, claims.UserID)
 		tenancyCancel()
 		if terr != nil || auth.ProjectRoleFor(tenancy, project) == "" {
 			http.Error(w, "forbidden", http.StatusForbidden)

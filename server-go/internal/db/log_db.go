@@ -35,36 +35,57 @@ func (d *DB) AsLogDB() *LogDB {
 	return &LogDB{DB: d}
 }
 
-// InsertLogLines batches a slice of lines in one transaction. Caller
-// is responsible for buffering up sane batch sizes (logship flushes
-// every 1s or 500 lines).
+// InsertLogLines batches a slice of lines into a single multi-VALUES
+// INSERT — one round-trip per batch instead of N (the previous
+// prepare-then-Exec-per-row pattern was capped at ~1 line per
+// network RTT). Postgres's parameter limit is ~65k per statement;
+// 6 columns × 5k = 30k stays well below that, and we cap any larger
+// batch into smaller chunks.
+//
+// Caller still buffers — logship flushes every 1s or 500 lines —
+// but operators with a chatty workload that pushes that envelope
+// no longer hit the per-statement RTT ceiling.
 func (d *LogDB) InsertLogLines(ctx context.Context, lines []LogLine) error {
 	if len(lines) == 0 {
 		return nil
 	}
-	tx, err := d.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
+	const maxPerInsert = 5000
+	for start := 0; start < len(lines); start += maxPerInsert {
+		end := start + maxPerInsert
+		if end > len(lines) {
+			end = len(lines)
+		}
+		if err := d.insertLogLinesChunk(ctx, lines[start:end]); err != nil {
+			return err
+		}
 	}
-	defer tx.Rollback()
-	// We can't use d.QueryContext's `?` rewriter through tx.Prepare,
-	// so we write Postgres-native placeholders here.
-	stmt, err := tx.PrepareContext(ctx, `
-		INSERT INTO "LogLine" ("ts","pod","project","service","env","line")
-		VALUES ($1,$2,$3,$4,$5,$6)`)
-	if err != nil {
-		return fmt.Errorf("prepare: %w", err)
+	return nil
+}
+
+func (d *LogDB) insertLogLinesChunk(ctx context.Context, chunk []LogLine) error {
+	if len(chunk) == 0 {
+		return nil
 	}
-	defer stmt.Close()
-	for _, l := range lines {
+	const cols = 6
+	args := make([]any, 0, len(chunk)*cols)
+	var sb strings.Builder
+	sb.WriteString(`INSERT INTO "LogLine" ("ts","pod","project","service","env","line") VALUES `)
+	for i, l := range chunk {
+		if i > 0 {
+			sb.WriteByte(',')
+		}
+		base := i*cols + 1
+		fmt.Fprintf(&sb, "($%d,$%d,$%d,$%d,$%d,$%d)",
+			base, base+1, base+2, base+3, base+4, base+5)
 		// Strip null bytes — Postgres rejects them outright in TEXT
 		// columns (invalid UTF-8 sequence).
 		line := strings.ReplaceAll(l.Line, "\x00", "")
-		if _, err := stmt.ExecContext(ctx, l.Ts.UTC(), l.Pod, l.Project, l.Service, l.Env, line); err != nil {
-			return fmt.Errorf("insert: %w", err)
-		}
+		args = append(args, l.Ts.UTC(), l.Pod, l.Project, l.Service, l.Env, line)
 	}
-	return tx.Commit()
+	if _, err := d.DB.DB.ExecContext(ctx, sb.String(), args...); err != nil {
+		return fmt.Errorf("insert log lines: %w", err)
+	}
+	return nil
 }
 
 // SearchLogs runs the search using LIKE filters. Returns newest-first.
@@ -134,8 +155,20 @@ func (d *LogDB) SearchLogs(ctx context.Context, req SearchLogsRequest) ([]LogLin
 
 // CountLogMatches is the alert-rule helper: how many matches in a
 // given window. Empty query counts every line.
+//
+// Window safety: even if the alert rule says "last 7 days" we cap
+// the actual scan at 24h. Anything wider would be a sequential scan
+// the trigram index can't help much with, and rules with that wide
+// a window are almost always a mistake — they make every tick a
+// big query and the alerted-condition only ever resolves on rule
+// edit. Operators who really need long windows should pre-aggregate.
 func (d *LogDB) CountLogMatches(ctx context.Context, project, service, query string, since time.Time) (int, error) {
 	q := strings.TrimSpace(query)
+	const maxWindow = 24 * time.Hour
+	cutoff := time.Now().Add(-maxWindow)
+	if since.Before(cutoff) {
+		since = cutoff
+	}
 	args := []any{}
 	var sqlStr strings.Builder
 	sqlStr.WriteString(`SELECT COUNT(*) FROM "LogLine" WHERE 1=1`)

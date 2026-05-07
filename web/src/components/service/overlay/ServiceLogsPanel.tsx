@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { searchServiceLogs } from "@/features/services";
 import type { LogLine, LogSearchResponse } from "@/features/services";
+import { useEnvironments } from "@/features/projects";
 import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +30,29 @@ export function ServiceLogsPanel({ project, service }: Props) {
   const [env, setEnv] = useState("");
   const [since, setSince] = useState("1h");
   const [committed, setCommitted] = useState({ q: "", env: "", since: "1h" });
+
+  // Build the env-filter list from the actual envs that exist for
+  // this service (production + any preview-pr-N). The dropdown used
+  // to be hard-coded "all envs / production" so users couldn't scope
+  // to a preview at all.
+  const envs = useEnvironments(project);
+  const fqn = service ? project + "-" + service : "";
+  const envOptions = useMemo(() => {
+    const list = (envs.data ?? []).filter((e) => e.spec.service === fqn);
+    return list
+      .map((e) => {
+        if (e.spec.kind === "production") return { value: "production", label: "production" };
+        // Env CR name is `<project>-<service>-<short>`; the last two
+        // dash-segments are the short identifier (e.g. "preview-pr-12").
+        const short = e.metadata.name.split("-").slice(-2).join("-");
+        return { value: short, label: short };
+      })
+      .sort((a, b) => {
+        if (a.value === "production") return -1;
+        if (b.value === "production") return 1;
+        return a.label.localeCompare(b.label);
+      });
+  }, [envs.data, fqn]);
 
   // Convert "1h" → RFC3339 absolute. The server accepts RFC3339 or
   // unix; we send RFC3339 for consistency with the time pickers.
@@ -102,7 +126,11 @@ export function ServiceLogsPanel({ project, service }: Props) {
           className="h-8 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
         >
           <option value="">all envs</option>
-          <option value="production">production</option>
+          {envOptions.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
         </select>
         <div className="inline-flex rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
           {(["10m", "1h", "6h", "24h", "7d"] as const).map((p) => (

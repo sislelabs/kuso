@@ -9,6 +9,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { Bell, Plus, Trash2, Send, CheckCircle2, Webhook } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 type NotifKind = "discord" | "webhook" | "slack";
 
@@ -116,12 +117,14 @@ function NotificationRow({
     onSuccess: () => toast.success(`Test sent to ${n.name}`),
     onError: (e) => toast.error(e instanceof Error ? e.message : "Test failed"),
   });
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const remove = useMutation({
     mutationFn: () =>
       api(`/api/notifications/${encodeURIComponent(n.id)}`, { method: "DELETE" }),
     onSuccess: () => {
       toast.success(`${n.name} deleted`);
       qc.invalidateQueries({ queryKey: ["admin", "notifications"] });
+      setConfirmOpen(false);
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
   });
@@ -185,14 +188,27 @@ function NotificationRow({
           variant="ghost"
           size="icon-sm"
           aria-label="Delete"
-          onClick={() => {
-            if (window.confirm(`Delete ${n.name}?`)) remove.mutate();
-          }}
+          onClick={() => setConfirmOpen(true)}
         >
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
       {isEditing && <NotificationEditor notification={n} onClose={onClose} />}
+      <ConfirmDialog
+        open={confirmOpen}
+        title={`Delete ${n.name}?`}
+        body={
+          <p>
+            Removes this {n.type} sink. Future events will no longer fan out
+            here. The persisted notification feed is unaffected.
+          </p>
+        }
+        confirmLabel="Delete sink"
+        destructive
+        pending={remove.isPending}
+        onConfirm={() => remove.mutate()}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </div>
   );
 }

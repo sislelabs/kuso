@@ -9,6 +9,7 @@ import { useCan, Perms } from "@/features/auth";
 import { api } from "@/lib/api-client";
 import { Globe, Plus, Trash2, KeyRound } from "lucide-react";
 import { toast } from "sonner";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
 // /settings/instance-secrets — instance-wide env vars. Admin-only.
 // Every service in every project gets these mounted via envFromSecrets
@@ -48,6 +49,10 @@ export default function InstanceSecretsPage() {
     onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
   });
   const [newKey, setNewKey] = useState("");
+  // Typed-name confirm for an instance-secret delete. The blast
+  // radius is huge — every workload in every project mounts these —
+  // so a stray click on the trash icon shouldn't be enough.
+  const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const [newValue, setNewValue] = useState("");
 
   if (!isAdmin) {
@@ -129,10 +134,7 @@ export default function InstanceSecretsPage() {
                 <span className="font-mono text-[10px] text-[var(--text-tertiary)]">value hidden</span>
                 <button
                   type="button"
-                  onClick={() => {
-                    if (!confirm(`Delete instance secret ${k}?`)) return;
-                    unset.mutate(k);
-                  }}
+                  onClick={() => setPendingDelete(k)}
                   disabled={unset.isPending}
                   className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
                   aria-label={`Delete ${k}`}
@@ -211,6 +213,31 @@ export default function InstanceSecretsPage() {
           </div>
         </form>
       </section>
+
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        title="Delete instance secret?"
+        body={
+          <p>
+            <span className="font-mono text-[var(--text-primary)]">
+              {pendingDelete}
+            </span>{" "}
+            is mounted on every workload in every project. Removing it will
+            cause services that read the variable to crash on next restart
+            until they're updated. This cannot be undone — you'll need to
+            re-enter the value to restore.
+          </p>
+        }
+        typeToConfirm={pendingDelete ?? undefined}
+        confirmLabel="Delete instance secret"
+        destructive
+        pending={unset.isPending}
+        onConfirm={() => {
+          if (pendingDelete) unset.mutate(pendingDelete);
+          setPendingDelete(null);
+        }}
+        onCancel={() => setPendingDelete(null)}
+      />
     </div>
   );
 }

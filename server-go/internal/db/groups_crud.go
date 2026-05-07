@@ -148,6 +148,12 @@ func (d *DB) SetGroupTenancy(ctx context.Context, groupID string, t GroupTenancy
 	if n, _ := res.RowsAffected(); n == 0 {
 		return ErrNotFound
 	}
+	// Group's project-membership shape changed — every member's
+	// cached tenancy is now stale. The matching InvalidateUsersByGroup
+	// call site already runs after this returns and would catch it,
+	// but evicting up-front avoids serving one stale request between
+	// the two writes.
+	d.EvictAllTenancy()
 	return nil
 }
 
@@ -234,6 +240,7 @@ INSERT OR IGNORE INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`, userID, grou
 	if err != nil {
 		return fmt.Errorf("db: add user %s to group %s: %w", userID, groupID, err)
 	}
+	d.EvictUserTenancy(userID)
 	return nil
 }
 
@@ -245,6 +252,7 @@ DELETE FROM "_UserToUserGroup" WHERE "A" = ? AND "B" = ?`, userID, groupID)
 	if err != nil {
 		return fmt.Errorf("db: remove user %s from group %s: %w", userID, groupID, err)
 	}
+	d.EvictUserTenancy(userID)
 	return nil
 }
 

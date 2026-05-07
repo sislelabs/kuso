@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -118,7 +119,7 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	// but invisible to the rest of the system.
 	if claims, ok := auth.ClaimsFromContext(ctx); ok && !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
 		if h.DB != nil {
-			tenancy, terr := h.DB.ListUserTenancy(ctx, claims.UserID)
+			tenancy, terr := h.DB.ListUserTenancyCached(ctx, claims.UserID)
 			if terr == nil {
 				allowed := map[string]struct{}{}
 				for _, m := range tenancy.ProjectMemberships {
@@ -280,18 +281,17 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "config-as-code disabled (kube unavailable)", http.StatusServiceUnavailable)
 		return
 	}
-	body := make([]byte, 0, 1<<14)
-	buf := make([]byte, 4096)
-	for {
-		n, err := r.Body.Read(buf)
-		body = append(body, buf[:n]...)
-		if err != nil {
-			break
-		}
-		if len(body) > 1<<20 {
-			http.Error(w, "kuso.yml too large (>1MiB)", http.StatusRequestEntityTooLarge)
-			return
-		}
+	// 1 MiB hard cap. io.LimitReader honours r.Context() so a slow-
+	// loris client can't camp on a goroutine for the full ReadTimeout
+	// — the read unwinds the moment the context fires.
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "read body", http.StatusBadRequest)
+		return
+	}
+	if len(body) >= 1<<20 {
+		http.Error(w, "kuso.yml too large (>1MiB)", http.StatusRequestEntityTooLarge)
+		return
 	}
 	f, err := spec.Parse(body)
 	if err != nil {

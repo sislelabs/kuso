@@ -17,6 +17,7 @@ import (
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"golang.org/x/sync/singleflight"
 
 	"kuso/server/internal/kube"
 )
@@ -64,27 +65,91 @@ type Service struct {
 	// back; without serialisation, two concurrent AddDomain calls
 	// would both read the pre-edit spec and one would stomp the
 	// other's domain. The mutex is per-service so unrelated services
-	// never block each other. sync.Map is the right shape because
-	// the key set is unbounded but each key is hit infrequently.
-	svcMutexes sync.Map // map[string]*sync.Mutex, key = project + "/" + service
+	// never block each other. Entries are GC'd by RunServiceLockGC —
+	// preview-env churn would otherwise leak one mutex per ever-seen
+	// (project, service) over the lifetime of the process.
+	svcMutexesMu sync.Mutex
+	svcMutexes   map[string]*svcMutexEntry
+
+	// metricsSF coalesces concurrent metrics.k8s.io list calls per
+	// namespace so an open dashboard with N envs in the same project
+	// doesn't fire N parallel metrics-server queries — they all share
+	// one round-trip and the result fans out. Singleflight, not a
+	// cache: the key window naturally collapses to one in-flight
+	// request, so cache invalidation isn't a concern.
+	metricsSF singleflight.Group
+}
+
+type svcMutexEntry struct {
+	mu         *sync.Mutex
+	lastAccess time.Time
+}
+
+// nsPodMetrics is the minimum projection of a metrics.k8s.io
+// PodMetrics item we need per pod: the env-instance label this pod
+// belongs to, and the sum of per-container CPU usage in millicores.
+type nsPodMetrics struct {
+	instance string
+	cpuMilli int64
 }
 
 // lockService returns the (project, service) mutex, creating it on
-// first use. The caller is responsible for Unlock.
+// first use and stamping lastAccess so the GC can identify idle
+// entries. The caller is responsible for Unlock.
 func (s *Service) lockService(project, service string) *sync.Mutex {
 	key := project + "/" + service
-	if m, ok := s.svcMutexes.Load(key); ok {
-		mu := m.(*sync.Mutex)
-		mu.Lock()
-		return mu
+	s.svcMutexesMu.Lock()
+	if s.svcMutexes == nil {
+		s.svcMutexes = map[string]*svcMutexEntry{}
 	}
-	mu := &sync.Mutex{}
-	actual, loaded := s.svcMutexes.LoadOrStore(key, mu)
-	if loaded {
-		mu = actual.(*sync.Mutex)
+	e, ok := s.svcMutexes[key]
+	if !ok {
+		e = &svcMutexEntry{mu: &sync.Mutex{}}
+		s.svcMutexes[key] = e
 	}
-	mu.Lock()
-	return mu
+	e.lastAccess = time.Now()
+	s.svcMutexesMu.Unlock()
+	e.mu.Lock()
+	return e.mu
+}
+
+// gcServiceLocks drops idle (project, service) mutexes that haven't
+// been touched in maxAge and aren't currently held. Cheap (one
+// TryLock per entry) so it's safe to run on a 15-min ticker.
+func (s *Service) gcServiceLocks(maxAge time.Duration) int {
+	now := time.Now()
+	s.svcMutexesMu.Lock()
+	defer s.svcMutexesMu.Unlock()
+	var dropped int
+	for key, e := range s.svcMutexes {
+		if now.Sub(e.lastAccess) < maxAge {
+			continue
+		}
+		if !e.mu.TryLock() {
+			continue
+		}
+		e.mu.Unlock()
+		delete(s.svcMutexes, key)
+		dropped++
+	}
+	return dropped
+}
+
+// RunServiceLockGC starts the periodic cleanup. Call once after
+// construction; exits on ctx cancel.
+func (s *Service) RunServiceLockGC(ctx context.Context) {
+	go func() {
+		t := time.NewTicker(15 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				s.gcServiceLocks(2 * time.Hour)
+			}
+		}
+	}()
 }
 
 type nsCacheEntry struct {

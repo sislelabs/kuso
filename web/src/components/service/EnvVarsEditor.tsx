@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useOverlayDirty } from "@/components/service/ServiceOverlay";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Trash2, Plus, Save, Eye, EyeOff, FileText, List, Link2, AlertCircle, Wand2 } from "lucide-react";
@@ -250,6 +251,13 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
   const canWrite = useCan(Perms.SecretsWrite);
   const [rows, setRows] = useState<Row[]>([]);
   const [dirty, setDirty] = useState(false);
+  // Register dirty state with the overlay shell so a stray ESC or
+  // tab switch prompts before discarding edits.
+  useOverlayDirty("variables", dirty);
+  // Tracks the last server-known row set so the concurrent-edit
+  // detector can compare incoming refetches against the baseline,
+  // not the local (possibly-edited) rows.
+  const baselineFromRows = useRef<Row[]>([]);
   const [mode, setMode] = useState<Mode>("rows");
   const [bulkText, setBulkText] = useState("");
   // Sticky "rolled out" window. Tied ONLY to the local savedAt set
@@ -278,12 +286,34 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
   const stickySaved = savedAt != null && now - savedAt < 60_000;
   const ageSec = savedAt != null ? Math.max(0, Math.floor((now - savedAt) / 1000)) : 0;
 
+  // Concurrent-edit guard: when env.data refetches, only re-baseline
+  // the rows when the user has nothing dirty. Otherwise we'd silently
+  // wipe in-progress edits the moment a teammate saved upstream.
+  // Surface a one-shot toast so the user knows a remote change came
+  // in — they can save (PATCH wins; server retries on conflict) or
+  // reload to pick up the upstream version.
+  const [conflictNotified, setConflictNotified] = useState(false);
   useEffect(() => {
-    if (env.data) {
-      setRows((env.data.envVars ?? []).map((v) => toRow(v, project, addonByConn)));
-      setDirty(false);
+    if (!env.data) return;
+    const incoming = (env.data.envVars ?? []).map((v) => toRow(v, project, addonByConn));
+    if (!dirty) {
+      setRows(incoming);
+      baselineFromRows.current = incoming;
+      setConflictNotified(false);
+      return;
     }
-  }, [env.data, addonByConn, project]);
+    // Dirty + remote change: keep local edits, warn once. The PATCH
+    // path is last-write-wins on the server, so a save will still go
+    // through, but the user should know they're on top of someone
+    // else's change.
+    if (!conflictNotified && !rowsShallowEqual(incoming, baselineFromRows.current)) {
+      toast("Another edit landed on this service. Save will overwrite it; reload to merge.");
+      setConflictNotified(true);
+    }
+    // Always update the baseline ref so a refetch-then-discard maps
+    // back to the latest server state.
+    baselineFromRows.current = incoming;
+  }, [env.data, addonByConn, project, dirty, conflictNotified]);
 
   // Bulk text is derived from rows when entering bulk mode and
   // committed back to rows on every keystroke. We keep them in sync
@@ -633,6 +663,14 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
         {dirty && canWrite && (
           <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
             unsaved changes
+          </span>
+        )}
+        {dirty && canWrite && (
+          <span
+            className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-200"
+            title="Saving env-var changes triggers a rolling restart of the deployment."
+          >
+            redeploys on save
           </span>
         )}
       </div>
@@ -1083,3 +1121,16 @@ function InheritedGroup({
   );
 }
 
+// rowsShallowEqual is a cheap diff for the conflict detector — same
+// length, same name/value/fromSecret tuple per row in order. Catches
+// the common cases (added var, edited value, removed var) without
+// pulling in lodash.isEqual.
+function rowsShallowEqual(a: Row[], b: Row[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i].name !== b[i].name) return false;
+    if (a[i].value !== b[i].value) return false;
+    if (a[i].fromSecret !== b[i].fromSecret) return false;
+  }
+  return true;
+}
