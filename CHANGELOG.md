@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.11] — 2026-05-07
+
+### ✨ Features
+- Feat(drift): compare env CR ↔ live deployment, surface "out of date" ([563800a](https://github.com/sislelabs/kuso/commit/563800a81adef89eae73f2c7748ebe479ba10dff))
+
+### 🐛 Bug Fixes
+- Fix(kusoproject): quota.enabled default → false ([e8cf2e2](https://github.com/sislelabs/kuso/commit/e8cf2e2e23fe1fd07dbec469818665319c9a25bf))
+
 ## [0.9.10] — 2026-05-07
 
 ### 🐛 Bug Fixes
