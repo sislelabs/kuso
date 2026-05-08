@@ -23,6 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
@@ -131,17 +132,54 @@ func (s *Shipper) Run(ctx context.Context) {
 }
 
 func (s *Shipper) reconcilePods(ctx context.Context) {
+	for _, ns := range s.scanNamespaces(ctx) {
+		s.reconcileNamespacePods(ctx, ns)
+	}
+}
+
+func (s *Shipper) scanNamespaces(ctx context.Context) []string {
+	out := []string{s.Namespace}
+	seen := map[string]struct{}{s.Namespace: {}}
+	if s.Kube == nil || s.Kube.Dynamic == nil {
+		return out
+	}
 	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	pods, err := s.Kube.Clientset.CoreV1().Pods(s.Namespace).List(listCtx, metav1.ListOptions{})
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRProjects).Namespace(s.Namespace).List(listCtx, metav1.ListOptions{})
 	if err != nil {
-		s.Logger.Warn("logship list pods", "err", err)
+		s.Logger.Warn("logship list projects for namespaces", "err", err)
+		return out
+	}
+	for i := range raw.Items {
+		var p kube.KusoProject
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &p); err != nil {
+			continue
+		}
+		ns := p.Spec.Namespace
+		if ns == "" {
+			ns = s.Namespace
+		}
+		if _, ok := seen[ns]; ok {
+			continue
+		}
+		seen[ns] = struct{}{}
+		out = append(out, ns)
+	}
+	return out
+}
+
+func (s *Shipper) reconcileNamespacePods(ctx context.Context, ns string) {
+	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(listCtx, metav1.ListOptions{})
+	if err != nil {
+		s.Logger.Warn("logship list pods", "namespace", ns, "err", err)
 		return
 	}
 	seen := map[string]struct{}{}
 	for i := range pods.Items {
 		p := &pods.Items[i]
-		uid := string(p.UID)
+		uid := ns + "/" + string(p.UID)
 		seen[uid] = struct{}{}
 		if p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodSucceeded {
 			continue
@@ -156,11 +194,14 @@ func (s *Shipper) reconcilePods(ctx context.Context) {
 		s.mu.Lock()
 		s.streams[uid] = cancel
 		s.mu.Unlock()
-		go s.streamPod(streamCtx, *p)
+		go s.streamPod(streamCtx, ns, *p)
 	}
 	// Drop streams for vanished pods.
 	s.mu.Lock()
 	for uid, cancel := range s.streams {
+		if !strings.HasPrefix(uid, ns+"/") {
+			continue
+		}
 		if _, ok := seen[uid]; !ok {
 			cancel()
 			delete(s.streams, uid)
@@ -169,10 +210,10 @@ func (s *Shipper) reconcilePods(ctx context.Context) {
 	s.mu.Unlock()
 }
 
-func (s *Shipper) streamPod(ctx context.Context, pod corev1.Pod) {
+func (s *Shipper) streamPod(ctx context.Context, ns string, pod corev1.Pod) {
 	defer func() {
 		s.mu.Lock()
-		delete(s.streams, string(pod.UID))
+		delete(s.streams, ns+"/"+string(pod.UID))
 		s.mu.Unlock()
 	}()
 	// Tail starting from "now"-ish: 100 lines back. Hot pods that
@@ -180,7 +221,7 @@ func (s *Shipper) streamPod(ctx context.Context, pod corev1.Pod) {
 	// replay; new pods get full output by virtue of TailLines being
 	// soft-capped by what the kubelet still has.
 	tail := int64(100)
-	req := s.Kube.Clientset.CoreV1().Pods(s.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{
+	req := s.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
 		Follow:     true,
 		TailLines:  &tail,
 		Timestamps: false,

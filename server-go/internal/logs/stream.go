@@ -25,8 +25,8 @@ import (
 	"sync"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -89,6 +89,7 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 	if !strings.HasPrefix(service, project+"-") {
 		fqn = project + "-" + service
 	}
+	ns := s.nsFor(ctx, project)
 
 	// Build-pod stream: env="build:<KusoBuild name>". The chart names
 	// the Job + pods after the release (== the build CR name), so we
@@ -106,7 +107,7 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 		// and the WS closes before the user sees the result.
 		alreadyTerminal := false
 		if s.Kube != nil && s.Kube.Clientset != nil {
-			if jb, jerr := s.Kube.Clientset.BatchV1().Jobs(s.Namespace).Get(ctx, buildName, metav1.GetOptions{}); jerr == nil {
+			if jb, jerr := s.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, buildName, metav1.GetOptions{}); jerr == nil {
 				if jb.Status.Succeeded > 0 || jb.Status.Failed > 0 {
 					alreadyTerminal = true
 				}
@@ -126,7 +127,7 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 				return env, nil
 			}
 		}
-		pods, err := s.Kube.Clientset.CoreV1().Pods(s.Namespace).List(ctx, metav1.ListOptions{
+		pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 			LabelSelector: "app.kubernetes.io/instance=" + buildName,
 		})
 		if err != nil {
@@ -165,12 +166,12 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 					return env, nil
 				case <-time.After(2 * time.Second):
 				}
-				pods2, err := s.Kube.Clientset.CoreV1().Pods(s.Namespace).List(ctx, metav1.ListOptions{
+				pods2, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 					LabelSelector: "app.kubernetes.io/instance=" + buildName,
 				})
 				if err == nil && len(pods2.Items) > 0 {
 					_ = sink.Write(Frame{Type: "phase", Value: "starting"})
-					err = s.streamPods(ctx, pods2.Items, tailLines, sink)
+					err = s.streamPods(ctx, ns, pods2.Items, tailLines, sink)
 					_ = sink.Write(Frame{Type: "phase", Value: "completed"})
 					return env, err
 				}
@@ -183,7 +184,7 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 		// completes mid-stream), send a phase=completed frame so the
 		// client closes the WS cleanly instead of showing
 		// "connection lost".
-		err = s.streamPods(ctx, pods.Items, tailLines, sink)
+		err = s.streamPods(ctx, ns, pods.Items, tailLines, sink)
 		_ = sink.Write(Frame{Type: "phase", Value: "completed"})
 		return env, err
 	}
@@ -193,7 +194,7 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 		envName = fqn + "-" + env
 	}
 
-	envCR, err := s.Kube.GetKusoEnvironment(ctx, s.Namespace, envName)
+	envCR, err := s.Kube.GetKusoEnvironment(ctx, ns, envName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return envName, ErrNotFound
@@ -208,7 +209,7 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 		return envName, ErrNotFound
 	}
 
-	pods, err := s.Kube.Clientset.CoreV1().Pods(s.Namespace).List(ctx, metav1.ListOptions{
+	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/instance=" + envName,
 	})
 	if err != nil {
@@ -218,15 +219,15 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 		// No pods yet — just keep the WS open so the client sees frames
 		// the moment the first pod boots. We retry the listing on a slow
 		// loop until ctx is done.
-		return envName, s.streamWaitForPods(ctx, envName, tailLines, sink)
+		return envName, s.streamWaitForPods(ctx, ns, envName, tailLines, sink)
 	}
 
-	return envName, s.streamPods(ctx, pods.Items, tailLines, sink)
+	return envName, s.streamPods(ctx, ns, pods.Items, tailLines, sink)
 }
 
 // streamWaitForPods polls every 3s for new pods. As soon as one shows
 // up, it transitions into streamPods.
-func (s *Service) streamWaitForPods(ctx context.Context, envName string, tailLines int, sink Sink) error {
+func (s *Service) streamWaitForPods(ctx context.Context, ns, envName string, tailLines int, sink Sink) error {
 	t := time.NewTicker(3 * time.Second)
 	defer t.Stop()
 	heartbeat := time.NewTicker(20 * time.Second)
@@ -240,14 +241,14 @@ func (s *Service) streamWaitForPods(ctx context.Context, envName string, tailLin
 				return err
 			}
 		case <-t.C:
-			pods, err := s.Kube.Clientset.CoreV1().Pods(s.Namespace).List(ctx, metav1.ListOptions{
+			pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 				LabelSelector: "app.kubernetes.io/instance=" + envName,
 			})
 			if err != nil {
 				continue
 			}
 			if len(pods.Items) > 0 {
-				return s.streamPods(ctx, pods.Items, tailLines, sink)
+				return s.streamPods(ctx, ns, pods.Items, tailLines, sink)
 			}
 		}
 	}
@@ -255,7 +256,7 @@ func (s *Service) streamWaitForPods(ctx context.Context, envName string, tailLin
 
 // streamPods spawns one goroutine per pod, fans into sink, returns when
 // all goroutines finish or ctx is canceled.
-func (s *Service) streamPods(ctx context.Context, pods []corev1.Pod, tailLines int, sink Sink) error {
+func (s *Service) streamPods(ctx context.Context, ns string, pods []corev1.Pod, tailLines int, sink Sink) error {
 	var wg sync.WaitGroup
 	frames := make(chan Frame, 64)
 
@@ -272,7 +273,7 @@ func (s *Service) streamPods(ctx context.Context, pods []corev1.Pod, tailLines i
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.streamOnePod(streamCtx, pod, tailLines, frames)
+			s.streamOnePod(streamCtx, ns, pod, tailLines, frames)
 		}()
 	}
 
@@ -370,30 +371,30 @@ func (s *Service) streamPods(ctx context.Context, pods []corev1.Pod, tailLines i
 // Pod-phase transitions are emitted as separate frames so the UI can
 // render "PodInitializing", "Running", "Succeeded" above the log
 // pane while logs are still flowing.
-func (s *Service) streamOnePod(ctx context.Context, pod corev1.Pod, tailLines int, frames chan<- Frame) {
+func (s *Service) streamOnePod(ctx context.Context, ns string, pod corev1.Pod, tailLines int, frames chan<- Frame) {
 	// Phase watcher: emits a "phase" frame on start + on each
 	// transition. Independent of the log stream so users see the pod's
 	// state evolve even while the kaniko container is still init'ing.
-	go s.watchPodPhase(ctx, pod.Name, frames)
+	go s.watchPodPhase(ctx, ns, pod.Name, frames)
 
 	// Stream init containers serially (clone first), then the main
 	// container. Init container logs are bounded and short — we read
 	// them to completion before falling through to the main one.
 	for _, c := range pod.Spec.InitContainers {
-		s.streamOneContainer(ctx, pod.Name, c.Name, true, tailLines, frames)
+		s.streamOneContainer(ctx, ns, pod.Name, c.Name, true, tailLines, frames)
 	}
 	if len(pod.Spec.Containers) == 0 {
 		return
 	}
 	primary := pod.Spec.Containers[0].Name
-	s.streamOneContainer(ctx, pod.Name, primary, false, tailLines, frames)
+	s.streamOneContainer(ctx, ns, pod.Name, primary, false, tailLines, frames)
 }
 
 // streamOneContainer opens a kube log follow stream for a single
 // container in a pod. Init containers run to completion so we don't
 // pass Follow=true; the main container we follow until ctx cancels
 // or kaniko exits.
-func (s *Service) streamOneContainer(ctx context.Context, podName, container string, isInit bool, tailLines int, frames chan<- Frame) {
+func (s *Service) streamOneContainer(ctx context.Context, ns, podName, container string, isInit bool, tailLines int, frames chan<- Frame) {
 	tail := int64(tailLines)
 	opts := &corev1.PodLogOptions{
 		Container: container,
@@ -412,7 +413,7 @@ func (s *Service) streamOneContainer(ctx context.Context, podName, container str
 	var err error
 	deadline := time.Now().Add(60 * time.Second)
 	for {
-		req := s.Kube.Clientset.CoreV1().Pods(s.Namespace).GetLogs(podName, opts)
+		req := s.Kube.Clientset.CoreV1().Pods(ns).GetLogs(podName, opts)
 		stream, err = req.Stream(ctx)
 		if err == nil {
 			break
@@ -474,12 +475,12 @@ func (s *Service) streamOneContainer(ctx context.Context, podName, container str
 // something to show before the first log line; then re-poll every 2s
 // and emit on change. Stops when the pod reaches a terminal phase
 // (Succeeded/Failed) or ctx cancels.
-func (s *Service) watchPodPhase(ctx context.Context, podName string, frames chan<- Frame) {
+func (s *Service) watchPodPhase(ctx context.Context, ns, podName string, frames chan<- Frame) {
 	last := ""
 	t := time.NewTicker(2 * time.Second)
 	defer t.Stop()
 	for {
-		pod, err := s.Kube.Clientset.CoreV1().Pods(s.Namespace).Get(ctx, podName, metav1.GetOptions{})
+		pod, err := s.Kube.Clientset.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{})
 		if err != nil {
 			return
 		}

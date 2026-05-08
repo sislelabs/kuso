@@ -13,9 +13,9 @@ import (
 	"fmt"
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	corev1 "k8s.io/api/core/v1"
 
 	"kuso/server/internal/kube"
 )
@@ -29,8 +29,9 @@ type BuildLogReader interface {
 
 // Service handles log reads. Construct via New.
 type Service struct {
-	Kube      *kube.Client
-	Namespace string
+	Kube       *kube.Client
+	Namespace  string
+	NSResolver *kube.ProjectNamespaceResolver
 	// BuildLogs is the persisted-tail fallback for build:<id> streams
 	// after the kaniko Job pod has been TTL'd. Nil = no fallback (the
 	// stream returns the "pod not found" message as before).
@@ -43,6 +44,13 @@ func New(k *kube.Client, namespace string) *Service {
 		namespace = "kuso"
 	}
 	return &Service{Kube: k, Namespace: namespace}
+}
+
+func (s *Service) nsFor(ctx context.Context, project string) string {
+	if s.NSResolver == nil || project == "" {
+		return s.Namespace
+	}
+	return s.NSResolver.NamespaceFor(ctx, project)
 }
 
 // Errors mirroring sibling packages.
@@ -73,6 +81,7 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 	if !strings.HasPrefix(service, project+"-") {
 		fqn = project + "-" + service
 	}
+	ns := s.nsFor(ctx, project)
 	envName := env
 	if !strings.Contains(env, "-") {
 		envName = fqn + "-" + env
@@ -83,7 +92,7 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 	// (project, service) the caller authorized against; without that
 	// check, ?env=other-project-svc-prod returns logs from a service
 	// the caller has no access to. The env CR's spec is authoritative.
-	envCR, err := s.Kube.GetKusoEnvironment(ctx, s.Namespace, envName)
+	envCR, err := s.Kube.GetKusoEnvironment(ctx, ns, envName)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, envName, ErrNotFound
@@ -96,7 +105,7 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 		return nil, envName, ErrNotFound
 	}
 
-	pods, err := s.Kube.Clientset.CoreV1().Pods(s.Namespace).List(ctx, metav1.ListOptions{
+	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/instance=" + envName,
 	})
 	if err != nil {
@@ -113,7 +122,7 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 	out := make([]Line, 0, lines)
 	for i := range pods.Items {
 		pod := &pods.Items[i]
-		podLines, err := s.tailOnePod(ctx, pod, perPod)
+		podLines, err := s.tailOnePod(ctx, ns, pod, perPod)
 		if err != nil {
 			// Skip the pod rather than failing the whole tail — partial
 			// data beats no data when one container is restarting.
@@ -131,8 +140,8 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 // container and returns the parsed lines. Container selection is left
 // implicit — the kuso operator only renders one container per pod, and
 // the kube API will pick the only one.
-func (s *Service) tailOnePod(ctx context.Context, pod *corev1.Pod, tailLines int64) ([]Line, error) {
-	req := s.Kube.Clientset.CoreV1().Pods(s.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{
+func (s *Service) tailOnePod(ctx context.Context, ns string, pod *corev1.Pod, tailLines int64) ([]Line, error) {
+	req := s.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
 		TailLines: &tailLines,
 	})
 	stream, err := req.Stream(ctx)

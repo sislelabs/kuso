@@ -45,6 +45,10 @@ spec:
         {{- include "kusobuild.labels" . | nindent 8 }}
     spec:
       restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       # Pin to the dedicated SA above. Without this the pod runs as
       # the namespace `default` SA — fine in a vanilla install, but a
       # downstream operator who grants their default SA any permission
@@ -81,6 +85,12 @@ spec:
         # Idempotent — `mkdir -p` on an existing PVC is a no-op.
         - name: cache-init
           image: alpine:3.20
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsUser: 1000
+            runAsGroup: 1000
           command:
             - /bin/sh
             - -c
@@ -97,6 +107,10 @@ spec:
         {{- end }}
         - name: clone
           image: alpine/git:2.45.2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -238,6 +252,10 @@ spec:
         # so each build skips the GitHub-Releases curl|tar (~5s + ~30 MB).
         - name: nixpacks-plan
           image: {{ printf "%s:%s" (.Values.nixpacks.image | default "ghcr.io/sislelabs/kuso-nixpacks") .Values.nixpacks.version | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command: ["/bin/bash", "-c"]
           args:
             - |
@@ -379,6 +397,10 @@ spec:
         # via .Values.static.builderImage if you need bun/python/etc.
         - name: static-plan
           image: {{ .Values.static.builderImage | default "node:20-alpine" | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           workingDir: /workspace/src/{{ .Values.repo.path | default "." }}
           command: ["/bin/sh", "-c"]
           args:
@@ -428,6 +450,10 @@ spec:
         # contract of the lifecycle image.
         - name: buildpacks
           image: {{ .Values.buildpacks.lifecycleImage | default "buildpacksio/lifecycle:0.20.5" | quote }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command:
             - /cnb/lifecycle/creator
             - -app=/workspace/src/{{ .Values.repo.path | default "." }}
@@ -464,9 +490,6 @@ spec:
                   name: {{ include "kusobuild.fullname" . }}-token
                   key: token
             {{- end }}
-          securityContext:
-            runAsUser: 1000
-            runAsGroup: 1000
           volumeMounts:
             - name: workspace
               mountPath: /workspace
@@ -479,6 +502,10 @@ spec:
         {{- else }}
         - name: kaniko
           image: gcr.io/kaniko-project/executor:v1.23.2
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           args:
             {{- if eq .Values.strategy "nixpacks" }}
             - --dockerfile=.nixpacks/Dockerfile

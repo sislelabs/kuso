@@ -21,35 +21,35 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"kuso/server/internal/auth"
-	"kuso/server/internal/db"
-	httpsrv "kuso/server/internal/http"
-	"kuso/server/internal/kube"
 	"kuso/server/internal/addons"
 	"kuso/server/internal/alerts"
-	"kuso/server/internal/crons"
-	"kuso/server/internal/instancesecrets"
-	"kuso/server/internal/leader"
-	"kuso/server/internal/logship"
-	"kuso/server/internal/metrics"
-	"kuso/server/internal/previewdb"
-	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/audit"
+	"kuso/server/internal/auth"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
+	"kuso/server/internal/crons"
+	"kuso/server/internal/db"
+	"kuso/server/internal/errorscan"
 	ghpkg "kuso/server/internal/github"
 	"kuso/server/internal/health"
+	httpsrv "kuso/server/internal/http"
+	"kuso/server/internal/instancesecrets"
+	"kuso/server/internal/kube"
+	"kuso/server/internal/leader"
 	"kuso/server/internal/logs"
+	"kuso/server/internal/logship"
+	"kuso/server/internal/metrics"
 	"kuso/server/internal/nodemetrics"
 	"kuso/server/internal/nodewatch"
-	"kuso/server/internal/errorscan"
 	"kuso/server/internal/notify"
 	"kuso/server/internal/platformharden"
+	"kuso/server/internal/previewdb"
 	"kuso/server/internal/projects"
-	"kuso/server/internal/spec"
-	"kuso/server/internal/updater"
+	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/secrets"
+	"kuso/server/internal/spec"
 	"kuso/server/internal/status"
+	"kuso/server/internal/updater"
 	"kuso/server/internal/version"
 )
 
@@ -326,6 +326,7 @@ func main() {
 		buildSvc.RunServiceLockGC(ctx)
 		projSvc.RunServiceLockGC(ctx)
 		logsSvc = logs.New(kc, *namespace)
+		logsSvc.NSResolver = nsResolver
 		// BuildLogs fallback: when a build:<id> stream lands but the
 		// kaniko pod has been GC'd, the stream serves the archived
 		// tail from the BuildLog table. Wired here so logs and
@@ -509,29 +510,29 @@ func main() {
 	}
 
 	r := httpsrv.NewRouter(httpsrv.Deps{
-		DB:         database,
-		LogDB:      logDB,
-		Issuer:     issuer,
-		SessionKey: sessionKey,
-		Projects:   projSvc,
-		Secrets:    secSvc,
-		Builds:     buildSvc,
-		Logs:       logsSvc,
-		Config:     cfgSvc,
-		Status:     statSvc,
-		Addons:         addonSvc,
+		DB:              database,
+		LogDB:           logDB,
+		Issuer:          issuer,
+		SessionKey:      sessionKey,
+		Projects:        projSvc,
+		Secrets:         secSvc,
+		Builds:          buildSvc,
+		Logs:            logsSvc,
+		Config:          cfgSvc,
+		Status:          statSvc,
+		Addons:          addonSvc,
 		Crons:           cronSvc,
 		ProjectSecrets:  projectSecretSvc,
 		InstanceSecrets: instanceSecretSvc,
-		Audit:      auditSvc,
-		Github:     ghDeps,
-		Notify:     notifyDisp,
-		Spec:       specRecon,
-		Kube:       kubeClient,
-		Namespace:  *namespace,
-		Updater:    updaterSvc,
-		Logger:     logger,
-		BaseCtx:    ctx,
+		Audit:           auditSvc,
+		Github:          ghDeps,
+		Notify:          notifyDisp,
+		Spec:            specRecon,
+		Kube:            kubeClient,
+		Namespace:       *namespace,
+		Updater:         updaterSvc,
+		Logger:          logger,
+		BaseCtx:         ctx,
 	})
 
 	srv := &http.Server{
@@ -1037,7 +1038,6 @@ func (a buildsSettingsAdapter) GetBuildSettings(ctx context.Context) (builds.Bui
 		RegistryHost:       v.RegistryHost,
 	}, nil
 }
-
 
 // ghInstallResolverFunc adapts a plain func to the
 // builds.InstallationResolver interface — saves declaring a struct

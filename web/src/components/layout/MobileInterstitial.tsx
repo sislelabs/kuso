@@ -25,6 +25,7 @@ export function MobileInterstitial() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (/^\/projects\/[^/]+$/.test(window.location.pathname)) return;
     if (window.localStorage.getItem(STORAGE_KEY)) return;
     const isSmall = window.innerWidth < SMALL_VIEWPORT_BREAKPOINT_PX;
     if (isSmall) setShow(true);

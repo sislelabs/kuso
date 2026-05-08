@@ -81,6 +81,7 @@ spec:
         {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
         {{- include "kusoaddon.labels" . | nindent 8 }}
     spec:
+      {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
       {{- include "kusoaddon.placement" . | nindent 6 }}
       initContainers:
         # Substitute the token into the config at pod start. nats can
@@ -89,6 +90,7 @@ spec:
         # which doesn't expand env. Pre-process to /etc/nats/nats.conf.
         - name: render-conf
           image: alpine:3.20
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command: ["/bin/sh", "-c"]
           args:
             - |
@@ -109,6 +111,7 @@ spec:
       containers:
         - name: nats
           image: "nats:{{ $version }}"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           imagePullPolicy: IfNotPresent
           args: ["-c", "/etc/nats/nats.conf"]
           ports:

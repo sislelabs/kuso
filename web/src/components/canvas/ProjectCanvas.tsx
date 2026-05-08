@@ -123,6 +123,7 @@ export function ProjectCanvas({
     queryKey: ["projects", project, "crons"],
     queryFn: () => api(`/api/projects/${encodeURIComponent(project)}/crons`),
     refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
     staleTime: 10_000,
   });
 

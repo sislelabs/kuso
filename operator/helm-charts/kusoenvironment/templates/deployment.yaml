@@ -44,6 +44,10 @@ spec:
         kuso.sislelabs.com/secrets-rev: {{ . | quote }}
       {{- end }}
     spec:
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
       # User pods don't need to talk to the kube apiserver. Disable
       # the default SA token mount so a compromised app container
       # can't list secrets / impersonate ServiceAccounts. Apps that
@@ -109,6 +113,10 @@ spec:
         - name: app
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "latest" }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           {{- /* Workers override the image's default CMD with the
                  user-supplied command (e.g. `bundle exec sidekiq`).
                  Web services keep the image's default. */}}

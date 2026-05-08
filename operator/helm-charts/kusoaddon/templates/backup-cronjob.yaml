@@ -52,9 +52,11 @@ spec:
             kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
         spec:
           restartPolicy: OnFailure
+          {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
           containers:
             - name: dump
               image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
               imagePullPolicy: IfNotPresent
               command: [sh, -c]
               args:

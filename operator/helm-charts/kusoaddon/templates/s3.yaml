@@ -46,10 +46,12 @@ spec:
         {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
         {{- include "kusoaddon.labels" . | nindent 8 }}
     spec:
+      {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
       {{- include "kusoaddon.placement" . | nindent 6 }}
       containers:
         - name: minio
           image: "minio/minio:{{ $version }}"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           args: ["server", "/data", "--console-address", ":9001"]
           ports:
             - name: s3
@@ -154,9 +156,11 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
       containers:
         - name: init
           image: "minio/mc:RELEASE.2024-08-17T11-33-50Z"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command: [sh, -c]
           args:
             - |

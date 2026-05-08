@@ -10,6 +10,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ServiceOverlay } from "@/components/service/ServiceOverlay";
 import { AddonOverlay } from "@/components/addon/AddonOverlay";
+import { MobileIncidentView } from "@/components/project/MobileIncidentView";
 import { Package } from "lucide-react";
 
 // ReactFlow touches `window` and `ResizeObserver` at module scope, which
@@ -138,7 +139,16 @@ export function ProjectDetailView() {
 
   return (
     <>
-      <div className="flex h-[calc(100vh-3rem)] flex-col overflow-hidden">
+      <MobileIncidentView
+        project={projectName}
+        services={services}
+        envs={envs}
+        onSelectService={(shortName, tab) => {
+          setSelectedService(shortName);
+          setSelectedServiceTab(tab);
+        }}
+      />
+      <div className="hidden h-[calc(100vh-3rem)] flex-col overflow-hidden sm:flex">
         {!onProduction && (
           // Sticky banner above the canvas. Reminds the user that the
           // env they're looking at started as a clone — env vars copied

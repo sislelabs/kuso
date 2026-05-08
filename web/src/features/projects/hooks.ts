@@ -36,6 +36,7 @@ export function useEnvGroups(project: string) {
     // cycles. The list is small (one row per env-group); cost is
     // negligible.
     refetchInterval: 10_000,
+    refetchIntervalInBackground: false,
     staleTime: 5_000,
   });
 }
@@ -71,6 +72,7 @@ export function useEnvironments(project: string) {
     // newly-succeeded build sat as SUPERSEDED in the UI and the
     // older one kept its ACTIVE badge until the user hard-refreshed.
     refetchInterval: 10_000,
+    refetchIntervalInBackground: false,
     staleTime: 5_000,
   });
 }

@@ -32,10 +32,12 @@ spec:
         {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
         {{- include "kusoaddon.labels" . | nindent 8 }}
     spec:
+      {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
       {{- include "kusoaddon.placement" . | nindent 6 }}
       containers:
         - name: redis
           image: "redis:{{ $version }}-alpine"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)", "--appendonly", "yes"]
           ports:
             - name: redis

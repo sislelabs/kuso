@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -20,26 +21,26 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 
 	"kuso/server/internal/addons"
-	"kuso/server/internal/crons"
-	"kuso/server/internal/instancesecrets"
-	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/audit"
-	"kuso/server/internal/kube"
-	"kuso/server/internal/notify"
-	"kuso/server/internal/spec"
-	"kuso/server/internal/updater"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
+	"kuso/server/internal/crons"
 	"kuso/server/internal/db"
 	"kuso/server/internal/github"
 	httphandlers "kuso/server/internal/http/handlers"
-	"kuso/server/internal/logs"
 	"kuso/server/internal/installscripts"
+	"kuso/server/internal/instancesecrets"
+	"kuso/server/internal/kube"
+	"kuso/server/internal/logs"
+	"kuso/server/internal/notify"
 	"kuso/server/internal/projects"
+	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/spa"
+	"kuso/server/internal/spec"
 	"kuso/server/internal/status"
+	"kuso/server/internal/updater"
 	"kuso/server/internal/version"
 	"kuso/server/internal/web"
 
@@ -49,42 +50,42 @@ import (
 
 // Deps is the explicit dependency bundle the router needs. Wired in main.
 type Deps struct {
-	DB         *db.DB
+	DB *db.DB
 	// LogDB is now an alias view of *DB (the SQLite-era split is
 	// gone). Held as a separate field so the existing
 	// log-search/alerts wiring keeps its types.
-	LogDB      *db.LogDB
-	Issuer     *auth.Issuer
-	SessionKey string
-	Projects   *projects.Service
-	Secrets    *secrets.Service
-	Builds     *builds.Service
-	Logs       *logs.Service
-	Config     *config.Service
-	Status     *status.Service
+	LogDB           *db.LogDB
+	Issuer          *auth.Issuer
+	SessionKey      string
+	Projects        *projects.Service
+	Secrets         *secrets.Service
+	Builds          *builds.Service
+	Logs            *logs.Service
+	Config          *config.Service
+	Status          *status.Service
 	Addons          *addons.Service
 	Crons           *crons.Service
 	ProjectSecrets  *projectsecrets.Service
 	InstanceSecrets *instancesecrets.Service
-	Audit      *audit.Service
-	Github     *GithubDeps
-	Notify     *notify.Dispatcher
+	Audit           *audit.Service
+	Github          *GithubDeps
+	Notify          *notify.Dispatcher
 	// Spec drives POST /api/projects/{p}/apply (config-as-code).
 	// Optional: nil → endpoint returns 503.
-	Spec       *spec.Reconciler
+	Spec *spec.Reconciler
 	// Kube + Namespace also surface to the apply handler so it can
 	// run the diff. Already implicit in the projects.Service so
 	// duplicating them here is a small price for a clean wire.
-	Kube       *kube.Client
-	Namespace  string
+	Kube      *kube.Client
+	Namespace string
 	// Updater drives /api/system/version + /update. Optional — when
 	// nil the handler returns a flat "no updates available" response.
-	Updater    *updater.Service
-	Logger     *slog.Logger
+	Updater *updater.Service
+	Logger  *slog.Logger
 	// BaseCtx is the server's lifecycle context. Background work
 	// kicked off from request handlers (webhook dispatch, preview-DB
 	// seeds) derives from this so graceful shutdown cancels them.
-	BaseCtx    context.Context
+	BaseCtx context.Context
 }
 
 // GithubDeps bundles the optional GitHub-app surface. Nil when the App
@@ -274,6 +275,7 @@ func NewRouter(d Deps) http.Handler {
 
 	// Authenticated routes.
 	r.Group(func(r chi.Router) {
+		r.Use(cookieCSRFMiddleware)
 		r.Use(d.Issuer.Middleware())
 		r.Get("/api/auth/session", authH.Session)
 
@@ -433,6 +435,61 @@ func NewRouter(d Deps) http.Handler {
 	}
 
 	return r
+}
+
+// cookieCSRFMiddleware protects browser cookie-authenticated mutations.
+// CLI/API clients use Authorization: Bearer and usually do not send Origin;
+// those remain allowed. Browser requests riding the HttpOnly session cookie
+// must prove same-origin via Origin or Referer before unsafe methods run.
+func cookieCSRFMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isSafeMethod(r.Method) || !hasSessionCookie(r) || hasBearerAuth(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if sameOriginHeaderAllowed(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+		http.Error(w, "csrf origin check failed", http.StatusForbidden)
+	})
+}
+
+func isSafeMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	default:
+		return false
+	}
+}
+
+func hasSessionCookie(r *http.Request) bool {
+	c, err := r.Cookie("kuso.JWT_TOKEN")
+	return err == nil && c.Value != ""
+}
+
+func hasBearerAuth(r *http.Request) bool {
+	h := r.Header.Get("Authorization")
+	return len(h) > len("Bearer ") && strings.EqualFold(h[:len("Bearer ")], "Bearer ")
+}
+
+func sameOriginHeaderAllowed(r *http.Request) bool {
+	if origin := r.Header.Get("Origin"); origin != "" {
+		return sameOriginHost(origin, r.Host)
+	}
+	if referer := r.Header.Get("Referer"); referer != "" {
+		return sameOriginHost(referer, r.Host)
+	}
+	return false
+}
+
+func sameOriginHost(raw, host string) bool {
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	return strings.EqualFold(u.Host, host)
 }
 
 // devCORS adds permissive CORS headers. Only mounted when

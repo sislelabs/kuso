@@ -60,6 +60,7 @@ export function useDrift(project: string, service: string) {
     queryFn: () => getDrift(project, service),
     enabled: !!project && !!service,
     refetchInterval: 10_000,
+    refetchIntervalInBackground: false,
     staleTime: 5_000,
   });
 }
@@ -70,6 +71,7 @@ export function useDetectedEnv(project: string, service: string) {
     queryFn: () => getDetectedEnv(project, service),
     enabled: !!project && !!service,
     refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
     staleTime: 15_000,
   });
 }
@@ -109,6 +111,7 @@ export function useBuilds(project: string, service: string) {
       if (s === "pending" || s === "running" || s === "queued") return 3_000;
       return 10_000;
     },
+    refetchIntervalInBackground: false,
   });
   // When the latest build flips to "succeeded", invalidate envs +
   // drift right away so ACTIVE/SUPERSEDED chips flip without waiting
@@ -142,6 +145,7 @@ export function useErrors(project: string, service: string, since = "24h") {
     queryFn: () => listErrors(project, service, since),
     enabled: !!project && !!service,
     refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
   });
 }
 
