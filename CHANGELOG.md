@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.54] — 2026-05-08
+
+### Other
+- Gh: smarter, more resilient build-trigger flow ([a366108](https://github.com/sislelabs/kuso/commit/a3661088d909cbc897035c7a4bd2add19ee4e2be))
+
 ## [0.9.53] — 2026-05-08
 
 ### Other
