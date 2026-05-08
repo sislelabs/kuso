@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Fragment } from "react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Avatar,
   AvatarFallback,
@@ -267,10 +267,8 @@ function EnvironmentSwitcher({ project }: { project: string }) {
   const groups = useEnvGroups(project);
   const [open, setOpen] = useState(false);
   const [showNewEnv, setShowNewEnv] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
 
-  // The project-level env-groups endpoint returns one row per env
-  // (production / staging / preview-pr-N / custom). Each row already
-  // collapses across services; we just present + sort.
   type EnvRow = {
     name: string;
     kind: "production" | "preview" | "custom";
@@ -301,93 +299,138 @@ function EnvironmentSwitcher({ project }: { project: string }) {
     setOpen(false);
   };
 
+  // Roll-our-own dropdown — base-ui Popover + cmdk both had pointer-
+  // path quirks that swallowed env-row clicks intermittently. The
+  // list is small (1 production + N custom + occasional PR previews);
+  // no search needed; click-outside dismisses, ESC dismisses.
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (ev: MouseEvent) => {
+      const el = wrapRef.current;
+      if (el && !el.contains(ev.target as Node)) setOpen(false);
+    };
+    const onKey = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
+  }, [open]);
+
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-sm font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-tertiary)]">
-        <span className="truncate max-w-[160px] font-mono text-xs">{currentEnv}</span>
-        <ChevronDown className="h-3 w-3" />
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-64 gap-0 rounded-md p-0">
-        {/* Plain-button list — replaced cmdk. cmdk's pointer-down path
-            was getting eaten by the popover wrapper in some browsers,
-            so clicks on a non-active row sometimes did nothing. The
-            list is short (1 production + N user-created envs) and
-            doesn't need search/filter, so cmdk was overkill anyway. */}
-        <div className="px-2 py-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-          environments
-        </div>
-        <ul className="px-1 pb-1">
-          {envs.length === 0 && (
-            <li className="px-2 py-2 text-[12px] text-[var(--text-tertiary)]">
-              No environments yet.
-            </li>
+    <div ref={wrapRef} className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={cn(
+          "inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-sm font-medium transition-colors",
+          "border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]",
+          open && "bg-[var(--bg-tertiary)] text-[var(--text-primary)]",
+        )}
+      >
+        <span
+          className={cn(
+            "inline-block h-1.5 w-1.5 rounded-full",
+            currentEnv === "production"
+              ? "bg-emerald-400"
+              : currentEnv.startsWith("pr-") || currentEnv.startsWith("preview-")
+                ? "bg-amber-400"
+                : "bg-blue-400",
           )}
-          {envs.map((e) => {
-            const active = currentEnv === e.name;
-            return (
-              <li key={e.name}>
-                <button
-                  type="button"
-                  onClick={() => setEnv(e.name)}
-                  className={cn(
-                    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-[var(--bg-tertiary)]",
-                    active && "bg-[var(--accent-subtle)] text-[var(--accent)]",
-                  )}
-                >
-                  <span
-                    className={cn(
-                      "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-                      e.kind === "production"
-                        ? "bg-emerald-400"
-                        : e.kind === "preview"
-                          ? "bg-amber-400"
-                          : "bg-blue-400",
-                    )}
-                  />
-                  <span className="truncate font-mono text-[12px]">{e.name}</span>
-                  <span className="ml-auto shrink-0 font-mono text-[10px] text-[var(--text-tertiary)]">
-                    {e.services} svc
-                  </span>
-                  {e.kind === "preview" && (
-                    <span className="shrink-0 rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                      PR
-                    </span>
-                  )}
-                  {active && <Check className="h-3 w-3 shrink-0 text-[var(--accent)]" />}
-                </button>
+        />
+        <span className="truncate max-w-[160px] font-mono text-xs">{currentEnv}</span>
+        <ChevronDown className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
+      </button>
+
+      {open && (
+        <div
+          className="absolute left-0 top-full z-50 mt-1 w-72 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-[var(--shadow-lg)]"
+          role="menu"
+        >
+          <div className="border-b border-[var(--border-subtle)] px-3 py-2">
+            <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              Environments
+            </p>
+            <p className="mt-0.5 text-[11px] text-[var(--text-secondary)]">
+              Pick an env to view its services on the canvas.
+            </p>
+          </div>
+          <ul className="p-1">
+            {envs.length === 0 && (
+              <li className="px-2 py-2 text-[12px] text-[var(--text-tertiary)]">
+                No environments yet.
               </li>
-            );
-          })}
-        </ul>
-        <div className="border-t border-[var(--border-subtle)] px-1 py-1">
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false);
-              setShowNewEnv(true);
-            }}
-            title="Mirror every service + addon under a new env name. Each cloned service gets its own URL."
-            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-[var(--accent)] transition-colors hover:bg-[var(--bg-tertiary)]"
-          >
-            <Plus className="h-3 w-3" />
-            New environment
-          </button>
+            )}
+            {envs.map((e) => {
+              const active = currentEnv === e.name;
+              return (
+                <li key={e.name}>
+                  <button
+                    type="button"
+                    onClick={() => setEnv(e.name)}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors",
+                      active
+                        ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
+                        : "hover:bg-[var(--bg-tertiary)]",
+                    )}
+                  >
+                    <span
+                      className={cn(
+                        "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
+                        e.kind === "production"
+                          ? "bg-emerald-400"
+                          : e.kind === "preview"
+                            ? "bg-amber-400"
+                            : "bg-blue-400",
+                      )}
+                    />
+                    <span className="truncate font-mono text-[12px]">{e.name}</span>
+                    <span className="ml-auto shrink-0 font-mono text-[10px] text-[var(--text-tertiary)]">
+                      {e.services} svc
+                    </span>
+                    {e.kind === "preview" && (
+                      <span className="shrink-0 rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                        PR
+                      </span>
+                    )}
+                    {active && <Check className="h-3 w-3 shrink-0 text-[var(--accent)]" />}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="border-t border-[var(--border-subtle)] p-1">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                setShowNewEnv(true);
+              }}
+              title="Mirror every service + addon under a new env name. Each cloned service gets its own URL."
+              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-[var(--accent)] transition-colors hover:bg-[var(--accent-subtle)]"
+            >
+              <Plus className="h-3 w-3" />
+              New environment
+            </button>
+          </div>
         </div>
-      </PopoverContent>
+      )}
 
       <NewEnvironmentDialog
         project={project}
         open={showNewEnv}
         onClose={() => setShowNewEnv(false)}
         onCreated={(name) => {
-          // Switch into the freshly-created env so the user lands
-          // on its canvas (envs differ by ?env= search param).
           const next = new URLSearchParams(search?.toString() ?? "");
           next.set("env", name);
           router.replace(`${pathname}?${next.toString()}`, { scroll: false });
         }}
       />
-    </Popover>
+    </div>
   );
 }
 
