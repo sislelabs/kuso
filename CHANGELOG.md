@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.47] — 2026-05-08
+
+### 🐛 Bug Fixes
+- Fix(envs): clone service envVars too; switcher click; pulse on running build ([0701d84](https://github.com/sislelabs/kuso/commit/0701d84e45538a492d7662ee40a9c73d4b13160a))
+
 ## [0.9.46] — 2026-05-08
 
 ### 🐛 Bug Fixes
