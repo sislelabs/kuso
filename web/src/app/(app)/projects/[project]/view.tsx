@@ -62,8 +62,10 @@ export function ProjectDetailView() {
     const addon = search?.get("addon");
     if (svc) setSelectedService(stripPrefix(svc));
     if (addon) setSelectedAddon(stripPrefix(addon));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    // Re-run on URL change so the cmd-K palette can navigate from
+    // /projects/<p>?service=A to /projects/<p>?service=B by pushing
+    // a new URL — without this, the overlay keeps showing A.
+  }, [search, projectName]);
 
   // Env switcher legitimately changes what's on screen and survives
   // reload, so it stays in the URL as ?env=<short>.

@@ -353,6 +353,103 @@ export function ProjectCanvas({
   const trigger = useTriggerBuild(project, "");
   const qc = useQueryClient();
 
+  // Keyboard shortcuts on the canvas. Convention is single-letter,
+  // unmodified, fired only when no input/textarea has focus and no
+  // dialog/overlay is on top (we use document.body as the focus
+  // sentinel — anything more interesting steals focus into itself).
+  //
+  //   j / arrow-down  : focus next service
+  //   k / arrow-up    : focus prev service
+  //   enter           : open the focused service
+  //   r               : redeploy focused service
+  //   l               : open focused service's logs tab
+  //   v               : open variables tab
+  //   s               : open settings tab
+  //   ?               : flash a help toast listing all of the above
+  const [focusIdx, setFocusIdx] = useState(-1);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Don't hijack typing in inputs / textareas / contenteditables.
+      const target = e.target as HTMLElement | null;
+      if (target) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+        if (target.isContentEditable) return;
+      }
+      // Ignore when modifiers are held — those are reserved for
+      // browser shortcuts (cmd-K opens the palette, cmd-R reloads).
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const svcNodes = nodes.filter((n) => n.type === "service");
+      if (svcNodes.length === 0) return;
+      const moveFocus = (delta: number) => {
+        e.preventDefault();
+        setFocusIdx((cur) => {
+          const next = cur < 0 ? 0 : (cur + delta + svcNodes.length) % svcNodes.length;
+          return next;
+        });
+      };
+      const focused = focusIdx >= 0 && focusIdx < svcNodes.length ? svcNodes[focusIdx] : null;
+      const focusedShort = focused
+        ? serviceShortName(project, (focused.data as ServiceNodeData).service.metadata.name)
+        : null;
+      switch (e.key) {
+        case "j":
+        case "ArrowDown":
+          moveFocus(1);
+          break;
+        case "k":
+        case "ArrowUp":
+          moveFocus(-1);
+          break;
+        case "Enter":
+          if (focusedShort) {
+            e.preventDefault();
+            onSelectService?.(focusedShort);
+          }
+          break;
+        case "l":
+          if (focusedShort) {
+            e.preventDefault();
+            onSelectService?.(focusedShort, "logs");
+          }
+          break;
+        case "v":
+          if (focusedShort) {
+            e.preventDefault();
+            onSelectService?.(focusedShort, "variables");
+          }
+          break;
+        case "s":
+          if (focusedShort) {
+            e.preventDefault();
+            onSelectService?.(focusedShort, "settings");
+          }
+          break;
+        case "r":
+          if (focused && focusedShort) {
+            e.preventDefault();
+            const data = focused.data as ServiceNodeData;
+            void callTrigger(data.project, focusedShort, trigger).then(
+              () => toast.success(`Build triggered for ${focusedShort}`),
+              (err) =>
+                toast.error(err instanceof Error ? err.message : "Failed to trigger build"),
+            );
+          }
+          break;
+        case "?":
+          e.preventDefault();
+          toast.message("Canvas shortcuts", {
+            description:
+              "j/k or ↑/↓ — focus prev/next · enter — open · l — logs · v — vars · s — settings · r — redeploy",
+            duration: 8_000,
+          });
+          break;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [nodes, focusIdx, project, onSelectService, trigger]);
+
   useEffect(() => {
     if (!project) return;
     const stored = loadStoredLayout(project);
@@ -656,16 +753,31 @@ export function ProjectCanvas({
       }}
     >
       <ReactFlow
-        nodes={nodes.map((n) => ({
-          ...n,
-          data: {
-            ...n.data,
-            __onContext:
-              n.type === "service"
-                ? (e: React.MouseEvent) => onServiceContext(e, n.data as ServiceNodeData)
-                : (e: React.MouseEvent) => onAddonContext(e, n.data as AddonNodeData),
-          },
-        }))}
+        nodes={(() => {
+          // Inject the keyboard-focused flag onto the matching service
+          // node so ServiceNode can render a focus ring without the
+          // shortcut handler having to know its DOM. The focus index
+          // is over the *service-only* slice; map back to the full
+          // nodes array via the same filter order.
+          const svcOnlyOrder = nodes.filter((n) => n.type === "service");
+          const focusedId =
+            focusIdx >= 0 && focusIdx < svcOnlyOrder.length
+              ? svcOnlyOrder[focusIdx].id
+              : null;
+          return nodes.map((n) => ({
+            ...n,
+            data: {
+              ...n.data,
+              __focused: focusedId === n.id,
+              __onContext:
+                n.type === "service"
+                  ? (e: React.MouseEvent) =>
+                      onServiceContext(e, n.data as ServiceNodeData)
+                  : (e: React.MouseEvent) =>
+                      onAddonContext(e, n.data as AddonNodeData),
+            },
+          }));
+        })()}
         edges={edges.filter((e) => {
           // Hide categories the user toggled off. Edges without a
           // kind tag (legacy or future categories) are always shown

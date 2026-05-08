@@ -77,6 +77,22 @@ type CreateServiceRequest struct {
 	Sleep      *ServiceSleep          `json:"sleep,omitempty"`
 	Static     *ServiceStaticSpec     `json:"static,omitempty"`
 	Buildpacks *ServiceBuildpacksSpec `json:"buildpacks,omitempty"`
+	// Image, when runtime=image, points kuso at an existing registry
+	// image instead of building from a repo. Bypasses kaniko/build
+	// entirely — the env CR's image gets stamped at create time and
+	// the helm chart pulls it on next reconcile. Repository required;
+	// Tag defaults to "latest" when empty (with the usual caveat that
+	// :latest is mutable so rollouts won't observe new versions until
+	// the user redeploys with a different tag or kubectl-rolls).
+	Image *ServiceImageSpec `json:"image,omitempty"`
+}
+
+// ServiceImageSpec is the deploy-from-registry shape for runtime=image.
+// Repository is the full reference up to (but not including) the tag,
+// e.g. "ghcr.io/foo/bar". Tag defaults to "latest" when empty.
+type ServiceImageSpec struct {
+	Repository string `json:"repository,omitempty"`
+	Tag        string `json:"tag,omitempty"`
 }
 
 // ServiceStaticSpec configures the static runtime: optional buildCmd

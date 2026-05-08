@@ -113,6 +113,12 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 		"/api/projects/{project}/env-groups/{name}/services/{service}/branch",
 		h.SetEnvGroupServiceBranch,
 	)
+	// Revision history. Read endpoints list/show; revert is a POST so
+	// a bookmark/refresh doesn't accidentally re-apply. Kind is
+	// "service" | "addon" | "environment"; name is the SHORT name.
+	r.Get("/api/projects/{project}/revisions/{kind}/{name}", h.ListRevisions)
+	r.Get("/api/projects/{project}/revisions/{id}", h.GetRevision)
+	r.Post("/api/projects/{project}/revisions/{id}/revert", h.RevertRevision)
 }
 
 // projectCtx pulls a 5-second timeout context from the request. Same

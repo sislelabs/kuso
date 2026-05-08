@@ -66,6 +66,11 @@ export interface DriftReport {
   // survives a page refresh — without this, post-save feedback was
   // purely client-side state that was wiped on refresh.
   lastRolloutAt?: string;
+  // RFC3339 timestamp of the last kuso-server spec write to the env CR.
+  // Pairs with lastRolloutAt to render a single "Saved Ns ago — pod
+  // started Ms after save" line in the env editor (replaces the
+  // 3-state chip that used to flicker).
+  lastSpecMutation?: string;
   envName?: string;
   // helm-operator's last release error (chart render failure, image
   // pull failure, helm release stuck in pending-upgrade, etc).

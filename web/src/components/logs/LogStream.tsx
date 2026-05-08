@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLogStream } from "@/features/logs";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, Copy, RotateCcw, X } from "lucide-react";
+import { ChevronDown, Copy, RotateCcw, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -18,13 +18,35 @@ export function LogStream({ project, service, env = "production", height = "40vh
   const { lines, phase, status, error, clear } = useLogStream(project, service, env, 200);
   const [follow, setFollow] = useState(true);
   const [wrap, setWrap] = useState(false);
+  const [filter, setFilter] = useState("");
+  // Filter is plain substring by default. A leading "/" turns it into
+  // a regex (matches grep -E semantics on the line text). We compile
+  // once per filter change rather than per line.
+  const matcher = useMemo<((s: string) => boolean) | null>(() => {
+    const q = filter.trim();
+    if (!q) return null;
+    if (q.startsWith("/") && q.length > 1) {
+      try {
+        const re = new RegExp(q.slice(1), "i");
+        return (s) => re.test(s);
+      } catch {
+        return null; // invalid regex → fall through to "no filter"
+      }
+    }
+    const lower = q.toLowerCase();
+    return (s) => s.toLowerCase().includes(lower);
+  }, [filter]);
+  const visibleLines = useMemo(
+    () => (matcher ? lines.filter((l) => matcher(l.line)) : lines),
+    [lines, matcher]
+  );
   const scrollerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!follow) return;
     const el = scrollerRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [lines, follow]);
+  }, [visibleLines, follow]);
 
   const onScroll = () => {
     const el = scrollerRef.current;
@@ -123,6 +145,26 @@ export function LogStream({ project, service, env = "production", height = "40vh
           </Button>
         </div>
       </div>
+      {/* Filter row. Substring by default; leading "/" enables regex.
+          Stays in the chrome (out of the scroll viewport) so the
+          input doesn't disappear when logs scroll. Empty filter is a
+          no-op — visibleLines === lines. */}
+      <div className="relative shrink-0 border-b border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-1.5">
+        <Search className="pointer-events-none absolute left-4 top-1/2 h-3 w-3 -translate-y-1/2 text-[var(--text-tertiary)]" />
+        <input
+          type="text"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          placeholder="filter — type a substring, or /regex"
+          className="h-6 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] py-0.5 pl-6 pr-16 font-mono text-[11px] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--border-strong)] focus:outline-none"
+          spellCheck={false}
+        />
+        <span className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 font-mono text-[10px] text-[var(--text-tertiary)]">
+          {filter
+            ? `${visibleLines.length}/${lines.length}`
+            : `${lines.length}`}
+        </span>
+      </div>
       <div
         ref={scrollerRef}
         onScroll={onScroll}
@@ -143,7 +185,13 @@ export function LogStream({ project, service, env = "production", height = "40vh
                 : "disconnected"}
           </p>
         )}
-        {lines.map((l, i) => {
+        {lines.length > 0 && visibleLines.length === 0 && filter && (
+          <p className="text-[var(--text-tertiary)]">
+            no lines match{" "}
+            <span className="font-mono text-[var(--text-secondary)]">{filter}</span>
+          </p>
+        )}
+        {visibleLines.map((l, i) => {
           const podShort = l.pod.length > 12 ? l.pod.slice(-12) : l.pod;
           return (
             <div

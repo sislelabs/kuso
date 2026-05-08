@@ -545,3 +545,27 @@ CREATE TABLE IF NOT EXISTS "GithubWebhookDelivery" (
 CREATE INDEX IF NOT EXISTS "GithubWebhookDelivery_receivedAt_idx"
     ON "GithubWebhookDelivery"("receivedAt");
 
+-- v0.9.53: revision history for service / addon / environment spec
+-- edits. Every UI save writes a row; the History tab reads them for
+-- "show me what this spec looked like 2 hours ago" + "revert to
+-- this version" without forcing the user to dig through git or
+-- audit logs. Append-only, pruned by retention.
+--
+-- We store the FULL snapshot rather than a diff: (a) diffs are
+-- ambiguous when fields move between scalar/structured shapes,
+-- (b) the snapshot is what `kubectl apply` would consume verbatim,
+-- (c) jsonb compresses well in postgres so disk footprint is fine.
+CREATE TABLE IF NOT EXISTS "Revision" (
+    "id" TEXT PRIMARY KEY,
+    "project" TEXT NOT NULL,
+    "kind" TEXT NOT NULL,
+    "name" TEXT NOT NULL,
+    "actor" TEXT NOT NULL DEFAULT '',
+    "summary" TEXT NOT NULL DEFAULT '',
+    "snapshot" JSONB NOT NULL,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS "Revision_project_kind_name_idx"
+    ON "Revision"("project", "kind", "name", "createdAt" DESC);
+CREATE INDEX IF NOT EXISTS "Revision_createdAt_idx"
+    ON "Revision"("createdAt");

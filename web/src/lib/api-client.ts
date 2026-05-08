@@ -69,6 +69,51 @@ export async function clearJwt() {
 // conditional. No-op in v0.10.
 export function setJwt(_token: string) { /* cookie-managed */ }
 
+// Cache-bust on server roll. Every API response carries
+// X-Kuso-Server-Version. We pin the first value seen for the session
+// and watch for drift; once observed, the next route change in the
+// app triggers a hard reload so the browser picks up the new JS
+// chunks. We don't reload mid-action — a save-in-flight shouldn't
+// vanish — only on the next user-initiated navigation.
+//
+// `versionMismatch` is set once and never unset. It's read by the
+// router-level <ServerVersionGuard /> on each pathname change.
+let firstServerVersion: string | null = null;
+let versionMismatch = false;
+const versionListeners = new Set<() => void>();
+
+function observeServerVersion(v: string | null) {
+  if (!v) return;
+  if (firstServerVersion === null) {
+    firstServerVersion = v;
+    return;
+  }
+  if (v !== firstServerVersion && !versionMismatch) {
+    versionMismatch = true;
+    versionListeners.forEach((cb) => {
+      try {
+        cb();
+      } catch {
+        /* listener errors must not break the api call */
+      }
+    });
+  }
+}
+
+export function getServerVersionMismatch(): boolean {
+  return versionMismatch;
+}
+
+export function getPinnedServerVersion(): string | null {
+  return firstServerVersion;
+}
+
+export function onServerVersionMismatch(cb: () => void): () => void {
+  versionListeners.add(cb);
+  if (versionMismatch) cb();
+  return () => versionListeners.delete(cb);
+}
+
 type Options = Omit<RequestInit, "body"> & { body?: unknown };
 
 export async function api<T>(path: string, opts: Options = {}): Promise<T> {
@@ -89,6 +134,7 @@ export async function api<T>(path: string, opts: Options = {}): Promise<T> {
     // cookie via credentials:include. No Authorization header.
     credentials: "include",
   });
+  observeServerVersion(res.headers.get("X-Kuso-Server-Version"));
   if (res.status === 204) return undefined as T;
   const text = await res.text();
   let parsed: unknown = undefined;

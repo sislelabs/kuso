@@ -10,7 +10,8 @@ import { useCan, Perms } from "@/features/auth";
 import type { BuildSummary } from "@/features/services/api";
 import type { KusoEnvironment } from "@/types/projects";
 import { relativeTime } from "@/lib/format";
-import { ChevronDown, ChevronRight, RotateCcw, ExternalLink, Undo2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, RotateCcw, ExternalLink, Undo2, X, GitBranch } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -152,14 +153,23 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
   );
   useNowTick(anyRunning);
 
-  const onRedeploy = async () => {
+  const onRedeploy = async (body: { branch?: string; ref?: string } = {}) => {
     try {
-      await trigger.mutateAsync({});
-      toast.success("Build triggered");
+      await trigger.mutateAsync(body);
+      toast.success(
+        body.branch
+          ? `Build triggered from ${body.branch}`
+          : body.ref
+            ? `Build triggered at ${body.ref}`
+            : "Build triggered"
+      );
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to trigger build");
     }
   };
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerKind, setPickerKind] = useState<"branch" | "ref">("branch");
+  const [pickerValue, setPickerValue] = useState("");
 
   return (
     <div className="space-y-4">
@@ -183,10 +193,87 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
           )}
         </div>
         {canDeploy ? (
-          <Button size="sm" onClick={onRedeploy} disabled={trigger.isPending}>
-            <RotateCcw className="h-3.5 w-3.5" />
-            {trigger.isPending ? "Triggering…" : "Redeploy"}
-          </Button>
+          // Split-button: main click redeploys current; the dropdown
+          // chevron opens a small picker where the user can target a
+          // specific branch or commit SHA / tag without leaving the
+          // overlay. POSTed unchanged to /builds — server already
+          // accepts {branch, ref} for ad-hoc deploys.
+          <div className="inline-flex items-stretch overflow-hidden rounded-md">
+            <Button
+              size="sm"
+              onClick={() => onRedeploy({})}
+              disabled={trigger.isPending}
+              className="rounded-r-none"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              {trigger.isPending ? "Triggering…" : "Redeploy"}
+            </Button>
+            <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+              <PopoverTrigger
+                disabled={trigger.isPending}
+                aria-label="Redeploy options"
+                className="inline-flex h-8 items-center justify-center rounded-l-none rounded-r-md border border-l-0 border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)] disabled:opacity-50"
+              >
+                <ChevronDown className="h-3.5 w-3.5" />
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-72 p-3">
+                <div className="space-y-2 text-[12px]">
+                  <div className="flex items-center gap-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                    <GitBranch className="h-3 w-3" />
+                    deploy from
+                  </div>
+                  <div className="inline-flex rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
+                    {(["branch", "ref"] as const).map((k) => (
+                      <button
+                        key={k}
+                        type="button"
+                        onClick={() => setPickerKind(k)}
+                        className={cn(
+                          "rounded px-2 py-1 font-mono text-[11px] transition-colors",
+                          pickerKind === k
+                            ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                            : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
+                        )}
+                      >
+                        {k === "branch" ? "branch" : "commit / tag"}
+                      </button>
+                    ))}
+                  </div>
+                  <input
+                    type="text"
+                    value={pickerValue}
+                    onChange={(e) => setPickerValue(e.target.value)}
+                    placeholder={pickerKind === "branch" ? "e.g. main" : "e.g. abc1234 or v1.2.3"}
+                    className="h-8 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] placeholder:text-[var(--text-tertiary)] focus:border-[var(--border-strong)] focus:outline-none"
+                    spellCheck={false}
+                    autoFocus
+                  />
+                  <div className="flex justify-end gap-2 pt-1">
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => setPickerOpen(false)}
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={!pickerValue.trim() || trigger.isPending}
+                      onClick={() => {
+                        const v = pickerValue.trim();
+                        if (!v) return;
+                        setPickerOpen(false);
+                        onRedeploy(pickerKind === "branch" ? { branch: v } : { ref: v });
+                        setPickerValue("");
+                      }}
+                    >
+                      Deploy
+                    </Button>
+                  </div>
+                </div>
+              </PopoverContent>
+            </Popover>
+          </div>
         ) : (
           <span
             className="font-mono text-[10px] text-[var(--text-tertiary)]"

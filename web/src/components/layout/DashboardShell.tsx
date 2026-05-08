@@ -3,6 +3,8 @@
 import { Suspense, type ReactNode } from "react";
 import { TopNav } from "@/components/layout/TopNav";
 import { CommandPalette } from "@/components/command/CommandPalette";
+import { ServerVersionGuard } from "@/components/layout/ServerVersionGuard";
+import { MobileInterstitial } from "@/components/layout/MobileInterstitial";
 
 export function DashboardShell({ children }: { children: ReactNode }) {
   // Layout: top nav (h-12) is the entire chrome. Project + env
@@ -26,6 +28,10 @@ export function DashboardShell({ children }: { children: ReactNode }) {
         <Suspense fallback={null}>{children}</Suspense>
       </main>
       <CommandPalette />
+      <Suspense fallback={null}>
+        <ServerVersionGuard />
+      </Suspense>
+      <MobileInterstitial />
     </div>
   );
 }

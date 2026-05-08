@@ -991,6 +991,16 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		return nil, fmt.Errorf("preflight project: %w", err)
 	}
 
+	// runtime=image services don't go through kaniko at all — the
+	// chart pulls the image straight from the registry. A "redeploy"
+	// click for one of these is handled at the env level (image tag
+	// re-stamp + helm reconcile) and never lands here. Refusing
+	// keeps the build pipeline honest: KusoBuild CRs only exist for
+	// services that actually build.
+	if svcCR.Spec.Runtime == "image" {
+		return nil, fmt.Errorf("%w: runtime=image services don't build — change image.tag and save the service spec to redeploy", ErrInvalid)
+	}
+
 	repoURL := ""
 	repoPath := "."
 	if svcCR.Spec.Repo != nil {

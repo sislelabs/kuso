@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Handle, Position } from "@xyflow/react";
+import { Handle, Position, useStore } from "@xyflow/react";
 import { Check, Copy, ExternalLink } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import type { BuildSummary } from "@/features/services/api";
@@ -20,6 +20,9 @@ export interface ServiceNodeData extends Record<string, unknown> {
   latestBuild?: BuildSummary;
   // Injected by ProjectCanvas — fires the right-click context menu.
   __onContext?: (e: React.MouseEvent) => void;
+  // Injected by ProjectCanvas — true when the keyboard focus index
+  // points at this node. Drives the canvas focus ring.
+  __focused?: boolean;
 }
 
 function statusFor(env?: KusoEnvironment, latestBuild?: BuildSummary): DeployStatus {
@@ -90,8 +93,17 @@ function replicasFor(env?: KusoEnvironment): Replicas | null {
   return { ready: r.ready ?? 0, max: ceil, cpuPct: cpu };
 }
 
+// Sub-70% zoom level — at smaller scales, the 10px footer text
+// (replicas + build sha + uptime) compresses into illegible blur and
+// drowns out the load-bearing card border colour. We hide it below
+// this threshold so the card reads as a status tile from far out and
+// reveals detail when the user zooms in.
+const FOOTER_HIDE_BELOW_ZOOM = 0.7;
+
 export function ServiceNode({ data }: { data: ServiceNodeData }) {
   const status = statusFor(data.env, data.latestBuild);
+  const zoom = useStore((s) => s.transform[2]);
+  const showFooter = zoom >= FOOTER_HIDE_BELOW_ZOOM;
   // Visibility:
   //   internal=true → no Ingress; show "internal only" chip.
   //   custom domain set → use it (with the user's tls flag).
@@ -131,7 +143,10 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         status === "failed" && "border-red-500/60",
         status === "sleeping" && "opacity-60 border-[var(--border-strong)]",
         !["building", "deploying", "active", "failed", "sleeping"].includes(status) &&
-          "border-[var(--border-strong)]"
+          "border-[var(--border-strong)]",
+        // Keyboard focus ring — outline (not border) so it stacks on
+        // top of the status colour without overriding it.
+        data.__focused && "outline outline-2 outline-offset-2 outline-[var(--accent)]"
       )}
     >
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
@@ -172,11 +187,16 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
 
       {/* Footer row: replicas left, build line right (or sleep badge
           if applicable). One row, scannable corners — left tells you
-          health, right tells you what code is running. */}
-      <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2 font-mono text-[10px]">
-        <ReplicasBadge replicas={replicas} status={status} />
-        {status === "sleeping" ? <SleepBadge /> : <BuildLine build={data.latestBuild} />}
-      </div>
+          health, right tells you what code is running. Hidden below
+          70% zoom — the card border colour carries the status signal
+          at small scales without the footer text turning into
+          illegible blur. */}
+      {showFooter && (
+        <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2 font-mono text-[10px]">
+          <ReplicasBadge replicas={replicas} status={status} />
+          {status === "sleeping" ? <SleepBadge /> : <BuildLine build={data.latestBuild} />}
+        </div>
+      )}
     </div>
   );
 }

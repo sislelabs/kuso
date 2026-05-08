@@ -110,6 +110,12 @@ func NewRouter(d Deps) http.Handler {
 	// happily consume the whole stream into memory.
 	r.Use(maxBodyBytes(1 << 20))
 	r.Use(metricsMW)
+	// Stamp X-Kuso-Server-Version on every response. The web client
+	// caches the first value it sees and soft-reloads on next route
+	// change when it changes — so a `make ship` followed by an
+	// auto-roll picks up new chunks without the user reaching for
+	// hard-refresh. Single header read, no allocation per request.
+	r.Use(versionHeaderMW(version.Version()))
 	// Global in-flight cap. Without this a slow Postgres or kube
 	// list under burst load can pin every goroutine on the 25-conn
 	// DB pool and the next legitimate request hangs. 100 in flight
@@ -454,6 +460,19 @@ var metricsRequestDuration = promauto.NewHistogramVec(prometheus.HistogramOpts{
 	Help:      "HTTP request latency in seconds.",
 	Buckets:   prometheus.DefBuckets,
 }, []string{"method"})
+
+// versionHeaderMW stamps X-Kuso-Server-Version on every response. The
+// web client uses this for cache-bust-on-roll: it caches the first
+// value seen and soft-reloads on next route change when it differs
+// from a fresher response. Cheap (one header set, no allocs).
+func versionHeaderMW(v string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Kuso-Server-Version", v)
+			next.ServeHTTP(w, r)
+		})
+	}
+}
 
 // metricsMW records request count + duration. Wrap before maxBody so
 // we count the bytes-rejected 413s, after Recoverer so we don't lose

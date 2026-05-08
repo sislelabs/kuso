@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
 import { Button } from "@/components/ui/button";
+import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
 import { Input } from "@/components/ui/input";
 import { Trash2, Plus, Save, Eye, EyeOff, FileText, List, Link2, AlertCircle, Wand2 } from "lucide-react";
 import { useServiceEnv, useSetServiceEnv, useDetectedEnv, useDrift } from "@/features/services";
@@ -129,6 +130,19 @@ function toEnvVar(r: Row): KusoEnvVar {
     return { name: r.name.trim() };
   }
   return { name: r.name.trim(), value: r.value };
+}
+
+// formatEnvForDiff renders a KusoEnvVar as a single line for the
+// diff modal. Secret-backed entries are masked behind <secret-ref>
+// rather than dumping the secret name into the diff text — the
+// user only needs to see "VAR is now sourced from a secret", not
+// which key on which secret. Literal values are clipped to 60 chars
+// so a long DATABASE_URL doesn't push the modal off-screen.
+function formatEnvForDiff(v: KusoEnvVar): string {
+  if (v.valueFrom) return "<secret>";
+  const val = v.value ?? "";
+  if (val.length > 60) return val.slice(0, 57) + "…";
+  return val;
 }
 
 // Valid POSIX-ish env-var name: starts with a letter or underscore,
@@ -345,15 +359,9 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
     setDirty(true);
   };
 
-  const save = async () => {
-    // Trim + validate before submit. Three rules:
-    //   1. Drop rows whose name is empty after trim.
-    //   2. Drop rows that have neither a value nor a fromSecret
-    //      backing — they'd round-trip as ghost entries that the
-    //      pod ignores but the editor keeps re-displaying.
-    //   3. Reject invalid env-var names (POSIX rule) and duplicate
-    //      names with explicit toasts so the user knows what got
-    //      caught.
+  // Two-step save. cleanRows() validates + dedups; the result is
+  // either the proposed payload, or null when validation toast'd.
+  const cleanRows = (): KusoEnvVar[] | null => {
     const seen = new Set<string>();
     const cleaned: KusoEnvVar[] = [];
     for (const r of rows) {
@@ -361,23 +369,60 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
       if (!name) continue;
       if (!ENV_NAME_RE.test(name)) {
         toast.error(`Invalid env var name "${name}" — letters, digits, underscore only`);
-        return;
+        return null;
       }
       if (seen.has(name)) {
         toast.error(`Duplicate env var name "${name}"`);
-        return;
+        return null;
       }
       seen.add(name);
-      // Drop empty literal rows. Secret-backed rows are kept since
-      // they have a valueFrom regardless of value.
       if (!r.fromSecret && r.value === "") continue;
       cleaned.push(toEnvVar(r));
     }
+    return cleaned;
+  };
+
+  const [pendingPayload, setPendingPayload] = useState<KusoEnvVar[] | null>(null);
+  const diffEntries = useMemo<DiffEntry[]>(() => {
+    if (!pendingPayload) return [];
+    const beforeMap = new Map<string, string>();
+    for (const v of env.data?.envVars ?? []) {
+      if (!v.name) continue;
+      beforeMap.set(v.name, formatEnvForDiff(v));
+    }
+    const afterMap = new Map<string, string>();
+    for (const v of pendingPayload) {
+      if (!v.name) continue;
+      afterMap.set(v.name, formatEnvForDiff(v));
+    }
+    const keys = new Set([...beforeMap.keys(), ...afterMap.keys()]);
+    const out: DiffEntry[] = [];
+    for (const k of keys) {
+      const b = beforeMap.get(k);
+      const a = afterMap.get(k);
+      if (b === a) continue;
+      out.push({ field: k, before: b, after: a });
+    }
+    out.sort((x, y) => x.field.localeCompare(y.field));
+    return out;
+  }, [pendingPayload, env.data]);
+
+  const save = () => {
+    const cleaned = cleanRows();
+    if (cleaned == null) return;
+    // No effective changes — fast-path: just clear dirty without
+    // round-tripping. Saves a network call and a flash of the modal.
+    setPendingPayload(cleaned);
+  };
+
+  const applyPending = async () => {
+    if (!pendingPayload) return;
     try {
-      await setEnv.mutateAsync(cleaned);
+      await setEnv.mutateAsync(pendingPayload);
       toast.success("Env vars saved");
       setDirty(false);
       setSavedAt(Date.now());
+      setPendingPayload(null);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to save env vars");
     }
@@ -446,70 +491,15 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
           discoverable on day 1. */}
       <InheritedSection project={project} />
 
-      {/* Status banner. Two real states (drift-derived, refresh-safe):
-            (a) rollout in progress — kube has a new ReplicaSet
-                spinning up. Blue "rolling out…".
-            (b) pod stale w/o rollout — kube didn't auto-roll (rare
-                for env edits; happens for non-template fields).
-                Amber "Redeploy to roll".
-          Plus an optional client-side ack for the user's own save:
-            (c) just-saved sticky for 5s — covers the gap before
-                drift's next 10s poll. Just a "Saved" toast-style
-                inline note, NOT a sky-is-falling warning. */}
-      {(() => {
-        const stale = drift.data?.podsStale && drift.data.podsStale.length > 0;
-        const rolling = drift.data?.rolloutPending;
-        if (rolling) {
-          return (
-            <div className="rounded-md border border-blue-500/40 bg-blue-500/5 px-3 py-2 text-[12px]">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-400" />
-                <div className="flex-1">
-                  <div className="text-blue-200">
-                    Rolling out the new env to a fresh pod…
-                  </div>
-                  <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
-                    kube is creating a new ReplicaSet. The old pod stays
-                    up until the new one is Ready.
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        }
-        if (stale) {
-          return (
-            <div className="rounded-md border border-amber-500/40 bg-amber-500/5 px-3 py-2 text-[12px]">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-400" />
-                <div className="flex-1">
-                  <div className="text-amber-200">
-                    Running pod is out of date. The new {drift.data!.podsStale.join(", ")}
-                    {" "}won't take effect until the deployment rolls.
-                  </div>
-                  <div className="mt-1 text-[11px] text-[var(--text-tertiary)]">
-                    kube didn't auto-roll on this change. Open the Deployments tab
-                    and click Redeploy to force one.
-                  </div>
-                </div>
-              </div>
-            </div>
-          );
-        }
-        if (stickySaved && ageSec < 5) {
-          return (
-            <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 px-3 py-2 text-[12px]">
-              <div className="flex items-start gap-2">
-                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
-                <div className="text-emerald-200">
-                  Saved. Waiting for the rollout to start…
-                </div>
-              </div>
-            </div>
-          );
-        }
-        return null;
-      })()}
+      {/* Status banner — single source of truth derived from kube
+          timestamps. Replaces the previous 3-state chip
+          (rolling/stale/saved) which flickered between states during
+          a rollout and disagreed with itself across refresh.
+          See driftBanner() for the state machine. */}
+      <DriftBanner drift={drift.data} stickySaved={stickySaved} ageSec={ageSec} />
+      {/* Hide the legacy `now` re-render when no banner is up — the
+          interval still ticks for the sticky window. */}
+      <span className="sr-only">{now}</span>
 
       {/* Detected env vars — names kuso noticed are referenced by
           the source repo (build-time scan) or that crashed the pod
@@ -674,6 +664,16 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
           </span>
         )}
       </div>
+      <DiffConfirmDialog
+        open={pendingPayload != null}
+        title="Apply env-var changes?"
+        description="Saving will roll a fresh pod with the updated environment. The current pod stays up until the new one is Ready."
+        entries={diffEntries}
+        confirmLabel="Apply & redeploy"
+        confirming={setEnv.isPending}
+        onCancel={() => setPendingPayload(null)}
+        onConfirm={applyPending}
+      />
     </div>
   );
 }
@@ -1119,6 +1119,94 @@ function InheritedGroup({
       )}
     </div>
   );
+}
+
+// DriftBanner picks one banner state from the drift report instead of
+// the previous flicker-prone 3-state chip. Decision tree, in order:
+//
+//   1. helmError != ""   → red "deploy failed" with the error message
+//   2. lastSpecMutation set AND lastRolloutAt set AND
+//      rolloutDelta >= 0 AND age < 60s → green "saved Ns ago, rolled
+//      out Ms after save". This is the success confirmation.
+//   3. rolloutPending OR podsStale.length > 0 → blue "rolling out N
+//      seconds in (pod hasn't caught up)". One signal, not two.
+//   4. else → null
+//
+// All durations are computed from server timestamps so a hard refresh
+// keeps the same banner.
+function DriftBanner({
+  drift,
+  stickySaved,
+  ageSec,
+}: {
+  drift: import("@/features/services/api").DriftReport | undefined;
+  stickySaved: boolean;
+  ageSec: number;
+}) {
+  if (!drift) return null;
+  const helmErr = drift.helmError?.trim();
+  if (helmErr) {
+    return (
+      <div className="rounded-md border border-red-500/40 bg-red-500/5 px-3 py-2 text-[12px]">
+        <div className="flex items-start gap-2">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-red-400" />
+          <div className="flex-1">
+            <div className="font-medium text-red-200">Deploy failed</div>
+            <div className="mt-1 break-words font-mono text-[11px] text-[var(--text-tertiary)]">
+              {helmErr}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  const editedAt = drift.lastSpecMutation ? Date.parse(drift.lastSpecMutation) : NaN;
+  const rolledAt = drift.lastRolloutAt ? Date.parse(drift.lastRolloutAt) : NaN;
+  const rolling = drift.rolloutPending || (drift.podsStale?.length ?? 0) > 0;
+  const now = Date.now();
+  if (rolling) {
+    const ago = Number.isFinite(editedAt) ? Math.max(0, Math.round((now - editedAt) / 1000)) : null;
+    return (
+      <div className="rounded-md border border-blue-500/40 bg-blue-500/5 px-3 py-2 text-[12px]">
+        <div className="flex items-start gap-2">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-blue-400" />
+          <div className="flex-1 text-blue-200">
+            Rolling out{ago != null ? ` (saved ${ago}s ago)` : "…"}. The new pod
+            won&apos;t serve traffic until it&apos;s Ready.
+          </div>
+        </div>
+      </div>
+    );
+  }
+  if (Number.isFinite(editedAt) && Number.isFinite(rolledAt) && rolledAt >= editedAt) {
+    const sinceSave = Math.max(0, Math.round((now - editedAt) / 1000));
+    if (sinceSave < 120) {
+      const rolloutDelta = Math.max(0, Math.round((rolledAt - editedAt) / 1000));
+      return (
+        <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 px-3 py-2 text-[12px]">
+          <div className="flex items-start gap-2">
+            <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
+            <div className="text-emerald-200">
+              Saved {sinceSave}s ago — pod started {rolloutDelta}s after save.
+            </div>
+          </div>
+        </div>
+      );
+    }
+  }
+  if (stickySaved && ageSec < 5) {
+    return (
+      <div className="rounded-md border border-emerald-500/40 bg-emerald-500/5 px-3 py-2 text-[12px]">
+        <div className="flex items-start gap-2">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-400" />
+          <div className="text-emerald-200">
+            Saved. Waiting for the rollout to start…
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return null;
 }
 
 // rowsShallowEqual is a cheap diff for the conflict detector — same

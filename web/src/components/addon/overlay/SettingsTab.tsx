@@ -11,7 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api-client";
-import { Settings, MapPin, Plus, X, Trash2 } from "lucide-react";
+import { Settings, MapPin, Plus, X, Trash2, RefreshCw } from "lucide-react";
 import type { NodeSummary } from "@/components/layout/ServersPopover";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -44,6 +44,7 @@ export function SettingsTab({
     <div className="space-y-4 p-5">
       <ConfigurationSection project={project} addon={addon} cr={cr} />
       <PlacementSection project={project} addon={addon} cr={cr} />
+      <RepairPasswordSection project={project} addon={addon} cr={cr} />
       <section className="rounded-md border border-red-500/30 bg-red-500/5 p-4">
         <h4 className="text-sm font-semibold">Delete addon</h4>
         <p className="mt-1 text-xs text-[var(--text-secondary)]">
@@ -547,6 +548,66 @@ function PlacementSection({
           {save.isPending ? "Saving…" : "Save placement"}
         </Button>
       </footer>
+    </section>
+  );
+}
+
+// RepairPasswordSection re-syncs the running database's user password
+// to the connection-secret value. Used when the StatefulSet was
+// recreated empty (PVC deleted then re-rolled) and the bootstrap-time
+// password is no longer what the users see in the conn secret.
+//
+// Today this is a postgres-only operation; the server returns
+// ErrInvalid for other kinds. We hide the section entirely for those
+// rather than show a button that always errors.
+//
+// We do NOT rotate the password here — same value flows out of the
+// Secret, just re-applied via ALTER USER. A real rotate (mint a new
+// random + restart consumers) is a future feature; this surface
+// avoids over-promising. A clear warning calls out that any pod
+// holding an open postgres connection will see auth errors until it
+// reconnects.
+function RepairPasswordSection({
+  project,
+  addon,
+  cr,
+}: {
+  project: string;
+  addon: string;
+  cr?: import("@/types/projects").KusoAddon;
+}) {
+  const kind = (cr?.spec.kind ?? "").toLowerCase();
+  const repair = useMutation({
+    mutationFn: () =>
+      api(
+        `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/repair-password`,
+        { method: "POST" }
+      ),
+    onSuccess: () => toast.success("Password resynced — open connections may need to reconnect"),
+    onError: (e) =>
+      toast.error(e instanceof Error ? e.message : "Failed to resync password"),
+  });
+  if (kind !== "postgres") return null;
+  return (
+    <section className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4">
+      <h4 className="text-sm font-semibold">Resync password</h4>
+      <p className="mt-1 text-xs text-[var(--text-secondary)]">
+        Re-applies the connection-secret&apos;s password to the running database
+        user (postgres only). Use after an empty re-bootstrap when the running
+        DB drifted out of sync with what consumers think it is. Open connections
+        will see auth errors until they reconnect — kuso services restart their
+        pods within seconds.
+      </p>
+      <Button
+        variant="outline"
+        size="sm"
+        className="mt-3"
+        disabled={repair.isPending}
+        onClick={() => repair.mutate()}
+      >
+        <RefreshCw className="h-3.5 w-3.5" />
+        {repair.isPending ? "Resyncing…" : "Resync password"}
+      </Button>
     </section>
   );
 }

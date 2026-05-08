@@ -1,13 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCreateProject } from "@/features/projects";
+import { api } from "@/lib/api-client";
 import { toast } from "sonner";
-import { Plus, ArrowRight } from "lucide-react";
+import { Plus, ArrowRight, Globe } from "lucide-react";
 
 // NewProjectPage creates an empty project — just a name and optional
 // base domain. Repos attach later as services (each service owns its
@@ -21,6 +23,22 @@ export default function NewProjectPage() {
   const [name, setName] = useState("");
   const [baseDomain, setBaseDomain] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // Cluster's default baseDomain — when the user hasn't typed one,
+  // the resolved URL preview falls back to this so they see exactly
+  // what their service domain will look like ("api.cluster.com" not
+  // an abstract "{name}.{cluster}").
+  const cfg = useQuery<{ baseDomain?: string }>({
+    queryKey: ["instance-config"],
+    queryFn: () => api("/api/config"),
+    staleTime: 60_000,
+  });
+  const effectiveBase = (baseDomain.trim() || cfg.data?.baseDomain || "").replace(/^\.+|\.+$/g, "");
+  const previewUrl = useMemo(() => {
+    const slug = name.trim() || "<service>";
+    if (!effectiveBase) return `https://${slug}.<cluster-base-domain>`;
+    return `https://${slug}.${effectiveBase}`;
+  }, [name, effectiveBase]);
 
   const onCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -73,9 +91,15 @@ export default function NewProjectPage() {
             <Input
               value={baseDomain}
               onChange={(e) => setBaseDomain(e.target.value)}
-              placeholder="my-product.example.com"
+              placeholder={cfg.data?.baseDomain ?? "my-product.example.com"}
               className="h-8 font-mono text-[13px]"
             />
+          </Field>
+          <Field label="URL preview" hint="how a service in this project will be reachable">
+            <div className="flex items-center gap-2 rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-[12px] text-[var(--text-secondary)]">
+              <Globe className="h-3 w-3 text-[var(--text-tertiary)]" />
+              <span className="truncate">{previewUrl}</span>
+            </div>
           </Field>
         </div>
         <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] px-4 py-3">

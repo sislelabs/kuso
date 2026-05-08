@@ -261,5 +261,11 @@ WHERE id < (
 	if err != nil {
 		return fmt.Errorf("audit: trim: %w", err)
 	}
+	// Piggyback Revision retention onto the same ticker — a separate
+	// leader-elected loop for one DELETE per 5min isn't worth it.
+	// Best-effort: a prune failure here doesn't fail the audit trim.
+	if _, err := s.DB.PruneRevisions(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "audit: prune revisions failed: %v\n", err)
+	}
 	return nil
 }

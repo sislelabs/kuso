@@ -191,6 +191,12 @@ type KusoServiceSpec struct {
 	Sleep      *KusoServiceSleep   `json:"sleep,omitempty"`
 	Static     *KusoStaticSpec     `json:"static,omitempty"`
 	Buildpacks *KusoBuildpacksSpec `json:"buildpacks,omitempty"`
+	// Image is set on runtime=image services to point at an existing
+	// registry image. The propagation step copies this onto every
+	// KusoEnvironment so the chart pulls the image directly without a
+	// build. Other runtimes leave this nil; the build poller writes
+	// the env's Image after a successful kaniko run.
+	Image      *KusoImage          `json:"image,omitempty"`
 	// Placement overrides the project-level placement for this
 	// service. Nil falls through to the project's placement; empty
 	// (non-nil) explicitly clears it.

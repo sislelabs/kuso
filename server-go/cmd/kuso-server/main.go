@@ -269,6 +269,25 @@ func main() {
 		// projects package free of a hard dep on secrets (and to make
 		// it trivial to no-op in tests).
 		projSvc.SecretsCleanupForEnv = secSvc.DeleteForEnv
+		// Revision history: log every successful spec mutation so the
+		// History tab + revert path have something to show. Best-
+		// effort — a DB miss never fails the user-facing save.
+		if database != nil {
+			projSvc.RecordRevision = func(ctx context.Context, project, kind, name, summary string, snapshot []byte) {
+				actor := ""
+				if claims, ok := auth.ClaimsFromContext(ctx); ok {
+					actor = claims.UserID
+				}
+				_ = database.InsertRevision(ctx, db.Revision{
+					Project:  project,
+					Kind:     kind,
+					Name:     name,
+					Actor:    actor,
+					Summary:  summary,
+					Snapshot: snapshot,
+				})
+			}
+		}
 		buildSvc = builds.New(kc, *namespace)
 		buildSvc.NSResolver = nsResolver
 		// Cluster-wide concurrent-build cap. Defaults to 2 — sized

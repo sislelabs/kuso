@@ -19,6 +19,10 @@ export function ThemedToaster() {
       position="bottom-right"
       theme={(resolvedTheme === "light" ? "light" : "dark") as "light" | "dark"}
       richColors
+      // Per-call durations. We keep the global default at 4s for
+      // success/info; errors and warnings get a longer shelf life
+      // when emitted via the toast helpers in @/lib/toast.
+      duration={4000}
       toastOptions={{
         // Token-driven so a future palette tweak doesn't need a
         // toast-specific edit. cards/popovers share --popover, so

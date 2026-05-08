@@ -330,20 +330,27 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
               </button>
             </header>
 
-            {/* Tab strip with sliding indicator. Horizontal scroll
-                on small screens so all tabs stay reachable on a
-                phone instead of getting cropped under the close
-                button. */}
-            <nav className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-[var(--border-subtle)] px-2 sm:px-3">
+            {/* Tab strip with sliding indicator. flex-nowrap +
+                overflow-x-auto so the row scrolls horizontally on
+                narrow viewports instead of wrapping under the close
+                button or cropping. Active tab is scrolled into view
+                via scroll-into-view in a ref callback so a deep-link
+                to a side tab lands in the right place. */}
+            <nav className="flex shrink-0 flex-nowrap items-center gap-1 overflow-x-auto border-b border-[var(--border-subtle)] px-2 sm:px-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
               {TABS.map((t) => {
                 const active = t.id === tab;
                 return (
                   <button
                     key={t.id}
                     type="button"
+                    ref={(el) => {
+                      if (active && el) {
+                        el.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
+                      }
+                    }}
                     onClick={() => guardedSetTab(t.id)}
                     className={cn(
-                      "relative inline-flex h-10 items-center px-3 text-sm font-medium transition-colors",
+                      "relative inline-flex h-10 shrink-0 items-center px-3 text-sm font-medium transition-colors whitespace-nowrap",
                       active
                         ? "text-[var(--text-primary)]"
                         : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"

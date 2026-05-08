@@ -55,6 +55,14 @@ type DriftReport struct {
 	// state, a refresh wipes the post-save banner and the user
 	// loses the visual confirmation that their edit took effect.
 	LastRolloutAt string `json:"lastRolloutAt,omitempty"`
+	// LastSpecMutation is when kuso-server last wrote to the env CR's
+	// spec (RFC3339, sourced from managedFields[manager=kuso-server]).
+	// The UI renders a single "Saved Ns ago — pod started Ms after
+	// save" line from this + LastRolloutAt — replaces the previous
+	// 3-state chip (rolling/stale/saved) which flickered ambiguously.
+	// Always emitted when there's an env CR; empty only on freshly-
+	// created envs the user hasn't edited yet.
+	LastSpecMutation string `json:"lastSpecMutation,omitempty"`
 	// EnvName is the production env CR name we compared against.
 	EnvName string `json:"envName,omitempty"`
 
@@ -208,6 +216,9 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	// timestamp when there's a causal link between a save and a
 	// rolled-out pod within the last 5 minutes.
 	lastEdit := lastSpecMutation(env)
+	if !lastEdit.IsZero() {
+		out.LastSpecMutation = lastEdit.UTC().Format(time.RFC3339)
+	}
 	if !lastEdit.IsZero() && time.Since(lastEdit) < 5*time.Minute {
 		if t := newestPodCreatedAt(ctx, s, ns, env.Name); !t.IsZero() && !t.Before(lastEdit) {
 			out.LastRolloutAt = t.UTC().Format(time.RFC3339)

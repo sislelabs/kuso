@@ -58,10 +58,10 @@ func toBuildpacksSpec(in *ServiceBuildpacksSpec) *kube.KusoBuildpacksSpec {
 // Empty string is accepted and treated as dockerfile.
 func validateRuntime(rt string) error {
 	switch rt {
-	case "", "dockerfile", "nixpacks", "buildpacks", "static", "worker":
+	case "", "dockerfile", "nixpacks", "buildpacks", "static", "worker", "image":
 		return nil
 	default:
-		return fmt.Errorf("%w: unknown runtime %q (supported: dockerfile, nixpacks, buildpacks, static, worker)", ErrInvalid, rt)
+		return fmt.Errorf("%w: unknown runtime %q (supported: dockerfile, nixpacks, buildpacks, static, worker, image)", ErrInvalid, rt)
 	}
 }
 
@@ -198,6 +198,26 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		})
 	}
 
+	// runtime=image services bypass the build pipeline entirely. The
+	// caller supplies an existing registry image; we stamp it onto the
+	// service spec so the env CR can pick it up at create time without
+	// waiting for a kaniko build to land. Validation: Repository is
+	// required; Tag defaults to "latest" (with the usual mutable-tag
+	// caveat — users can redeploy with a fresh ref to roll forward).
+	var imgSpec *kube.KusoImage
+	if req.Runtime == "image" {
+		if req.Image == nil || strings.TrimSpace(req.Image.Repository) == "" {
+			return nil, fmt.Errorf("%w: runtime=image requires image.repository", ErrInvalid)
+		}
+		tag := strings.TrimSpace(req.Image.Tag)
+		if tag == "" {
+			tag = "latest"
+		}
+		imgSpec = &kube.KusoImage{
+			Repository: strings.TrimSpace(req.Image.Repository),
+			Tag:        tag,
+		}
+	}
 	svc := &kube.KusoService{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: fqn,
@@ -220,6 +240,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Sleep:       sleep,
 			Static:      toStaticSpec(req.Static),
 			Buildpacks:  toBuildpacksSpec(req.Buildpacks),
+			Image:       imgSpec,
 		},
 	}
 	created, err := s.Kube.CreateKusoService(ctx, ns, svc)
@@ -294,6 +315,11 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			// chart suppresses Service+Ingress and uses our argv.
 			Runtime: created.Spec.Runtime,
 			Command: created.Spec.Command,
+			// runtime=image: skip the build pipeline entirely. The
+			// chart sees a populated env.spec.image at first reconcile
+			// and pulls it directly. Build poller filters services by
+			// runtime and ignores "image".
+			Image: created.Spec.Image,
 		},
 	}
 	if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {
@@ -1172,6 +1198,21 @@ type PatchSleepRequest struct {
 // Tab B submitted the form mid-edit with domains=[], and A's domain
 // vanished silently. The kube optimistic-concurrency 409 caught some
 // of these but not the read-then-write window the form spans.
+// RevertService decodes a stored revision payload and replays it via
+// PatchService. Kept thin so the revision flow can hand us the raw
+// snapshot.patch bytes without coupling it to any internal type.
+func (s *Service) RevertService(ctx context.Context, project, service string, raw json.RawMessage) error {
+	var req PatchServiceRequest
+	if len(raw) == 0 {
+		return fmt.Errorf("%w: empty snapshot", ErrInvalid)
+	}
+	if err := json.Unmarshal(raw, &req); err != nil {
+		return fmt.Errorf("%w: decode snapshot: %v", ErrInvalid, err)
+	}
+	_, err := s.PatchService(ctx, project, service, req)
+	return err
+}
+
 func (s *Service) PatchService(ctx context.Context, project, service string, req PatchServiceRequest) (*kube.KusoService, error) {
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
@@ -1357,6 +1398,18 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		// service-spec merge step exists.
 		if err := s.propagateInternalToEnvs(ctx, ns, project, service, updated); err != nil {
 			return updated, nil
+		}
+	}
+	// Record a revision row so the History tab can render it. Best-
+	// effort: a DB miss here doesn't fail the user-facing save (the
+	// kube write already succeeded). We store the original PATCH body
+	// shape so revert can replay it via the same code path.
+	if s.RecordRevision != nil {
+		// Wrap the request as {"patch": <req>} so RevertService can
+		// peel it back the same way regardless of which mutator
+		// produced the snapshot.
+		if snap, err := json.Marshal(map[string]any{"patch": req}); err == nil {
+			s.RecordRevision(ctx, project, "service", service, "patch", snap)
 		}
 	}
 	return updated, nil

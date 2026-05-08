@@ -47,6 +47,13 @@ type Service struct {
 	// re-attach secrets manually after creating the addon.
 	AddonConnSecrets func(ctx context.Context, project string) ([]string, error)
 
+	// RecordRevision is called after every successful spec mutation
+	// (PatchService, SetEnv, …) with the patch payload that produced
+	// the new state. The history tab reads these; revert replays the
+	// stored snapshot back through the same patch path. nil = no
+	// revision history (single-tenant servers booting without DB).
+	RecordRevision func(ctx context.Context, project, kind, name, summary string, snapshot []byte)
+
 	nsMu    sync.RWMutex
 	nsCache map[string]nsCacheEntry
 
