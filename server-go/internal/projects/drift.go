@@ -289,15 +289,13 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 	if env.Spec.Image != nil && env.Spec.Image.Repository != "" && env.Spec.Image.Tag != "" {
 		wantImage = env.Spec.Image.Repository + ":" + env.Spec.Image.Tag
 	}
-	// lastSpecEdit is when kuso-server last wrote to this env CR. Any
-	// pod created before this time is by definition serving an older
-	// spec, even if its env-var name happens to match (e.g. user
-	// renamed VAR to VAR2 then back to VAR — pod env says "VAR=x"
-	// matching spec, but the pod predates the rename so the user
-	// expects to see "out of date"). Sourced from managedFields where
-	// helm-operator hasn't overwritten it. Falls back to env CR's
-	// metadata.creationTimestamp when no kuso-server entry exists.
-	lastSpecEdit := lastSpecMutation(env)
+	// We compare pod contents (env map + image) against the spec —
+	// no timestamp gate. The previous "pod older than lastSpecEdit
+	// → stale" rule false-positive'd: every successful build's
+	// image-promote write bumped lastSpecEdit, and any unrelated
+	// later spec edit would flag a brand-new running pod as stale
+	// even though kube hadn't decided to roll. Net effect was a
+	// sticky "pending restart" badge after a clean redeploy.
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		// Skip pods that are terminating — they're the OLD generation
@@ -309,18 +307,24 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 		if len(p.Spec.Containers) == 0 {
 			continue
 		}
-		// Pod created before the latest spec edit → serving the old
-		// generation regardless of what its env vars look like. This
-		// makes the badge survive a page refresh: drift state is
-		// derived from kube timestamps + spec, no client-side memory
-		// of "I just saved" required.
-		if !lastSpecEdit.IsZero() && p.CreationTimestamp.Time.Before(lastSpecEdit) {
-			envMismatch = true
-			if wantImage != "" {
-				imageMismatch = imageMismatch || p.Spec.Containers[0].Image != wantImage
-			}
-			continue
-		}
+		// We used to flag any pod older than lastSpecMutation as stale
+		// regardless of its actual contents. That made sense for the
+		// "user renamed VAR twice and it now matches" edge case, but
+		// it false-positives badly:
+		//   1. The build poller patches env.spec.image on every
+		//      successful build → bumps lastSpecMutation → the
+		//      brand-new pod's creationTimestamp can lag the patch
+		//      by a few hundred ms in the wrong direction (clock
+		//      skew / observed-vs-applied).
+		//   2. Any subsequent unrelated spec write (env var edit
+		//      AFTER a build) bumps lastSpecMutation past the
+		//      currently-running pod's creation time even though
+		//      kube hasn't decided to roll yet.
+		// Both produced a sticky "pending restart" chip on a service
+		// the user just successfully restarted.
+		// The contents compare below is the authoritative signal —
+		// if envMap matches and image matches, the pod IS serving
+		// the latest spec, regardless of when it was born.
 		c := p.Spec.Containers[0]
 		podEnv := map[string]string{}
 		for _, e := range c.Env {

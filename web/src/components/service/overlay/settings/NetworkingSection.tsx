@@ -115,10 +115,16 @@ export function NetworkingSection({ state, setState, autoHost }: SectionProps) {
         control={
           <div className="flex w-full max-w-[420px] flex-col gap-1.5">
             {rows.map((host, i) => (
-              // Key on host text so removing a non-last row doesn't
-              // make React match siblings to the deleted row's
-              // controlled-input DOM. Empty rows fall back to index.
-              <div key={host ? `h:${host}` : `empty:${i}`} className="flex items-center gap-1.5">
+              // Key on row index. We previously keyed on the typed
+              // host value, which made React unmount + remount the
+              // <input> on every keystroke (because `host` was the
+              // value-being-typed) — net effect was the input lost
+              // focus after one character. Index-keyed is the
+              // correct shape for a list-of-strings editor: removal
+              // shifts later rows up by one, which is exactly the
+              // semantic the user expects ("delete this row, the
+              // ones below take its place").
+              <div key={`row-${i}`} className="flex items-center gap-1.5">
                 <Globe className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
                 <Input
                   value={host}
