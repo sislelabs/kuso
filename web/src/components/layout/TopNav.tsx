@@ -273,36 +273,39 @@ function EnvironmentSwitcher({ project }: { project: string }) {
     name: string;
     kind: "production" | "preview" | "custom";
     services: number;
+    href: string;
   };
   const envs = useMemo<EnvRow[]>(() => {
     const list = groups.data ?? [];
-    return list.map((g) => ({
-      name: g.name,
-      kind:
-        g.kind === "production"
-          ? "production"
-          : g.kind === "preview"
-            ? "preview"
-            : "custom",
-      services: g.services?.length ?? 0,
-    }));
-  }, [groups.data]);
+    return list.map((g) => {
+      const params = new URLSearchParams(search?.toString() ?? "");
+      if (g.name === "production") params.delete("env");
+      else params.set("env", g.name);
+      const qs = params.toString();
+      const href = qs ? `${pathname}?${qs}` : pathname;
+      return {
+        name: g.name,
+        kind:
+          g.kind === "production"
+            ? "production"
+            : g.kind === "preview"
+              ? "preview"
+              : "custom",
+        services: g.services?.length ?? 0,
+        href,
+      };
+    });
+  }, [groups.data, pathname, search]);
 
   const currentEnv = search?.get("env") ?? "production";
 
-  const setEnv = (name: string) => {
-    const next = new URLSearchParams(search?.toString() ?? "");
-    if (name === "production") next.delete("env");
-    else next.set("env", name);
-    const qs = next.toString();
-    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
-    setOpen(false);
-  };
-
-  // Roll-our-own dropdown — base-ui Popover + cmdk both had pointer-
-  // path quirks that swallowed env-row clicks intermittently. The
-  // list is small (1 production + N custom + occasional PR previews);
-  // no search needed; click-outside dismisses, ESC dismisses.
+  // Roll-our-own dropdown. Each row is a real <a href> so the
+  // browser navigates synchronously on click — bypasses every
+  // popover/cmdk pointer-event quirk we hit before. We still call
+  // router.replace from the onClick to keep client-side state in
+  // sync (no full reload), but the href is the load-bearing
+  // contract: even if onClick is ever swallowed, the URL still
+  // changes.
   useEffect(() => {
     if (!open) return;
     const onDoc = (ev: MouseEvent) => {
@@ -368,14 +371,27 @@ function EnvironmentSwitcher({ project }: { project: string }) {
               const active = currentEnv === e.name;
               return (
                 <li key={e.name}>
-                  <button
-                    type="button"
-                    onClick={() => setEnv(e.name)}
+                  <a
+                    href={e.href}
+                    onClick={(ev) => {
+                      // Modifier-clicks (cmd/ctrl/middle) keep their
+                      // native open-in-new-tab behavior; the SPA
+                      // intercept only fires for plain left-clicks.
+                      if (
+                        ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey ||
+                        ev.button !== 0
+                      ) {
+                        return;
+                      }
+                      ev.preventDefault();
+                      router.replace(e.href, { scroll: false });
+                      setOpen(false);
+                    }}
                     className={cn(
-                      "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors",
+                      "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors no-underline",
                       active
                         ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
-                        : "hover:bg-[var(--bg-tertiary)]",
+                        : "text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]",
                     )}
                   >
                     <span
@@ -398,7 +414,7 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                       </span>
                     )}
                     {active && <Check className="h-3 w-3 shrink-0 text-[var(--accent)]" />}
-                  </button>
+                  </a>
                 </li>
               );
             })}
