@@ -463,8 +463,10 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 	// API_BASE=https://kuso-demo-todo-api-test.hui.sislelabs.com.
 	prodHosts := map[string]string{}
 	for _, item := range ordered {
-		// Look up production env's host for this service.
-		if prodEnv, perr := s.Kube.GetKusoEnvironment(ctx, ns, item.fqn); perr == nil && prodEnv != nil && prodEnv.Spec.Host != "" {
+		// Production env CR name is "<svc-fqn>-production" (see
+		// projects.productionEnvName).
+		prodEnvCRName := fmt.Sprintf("%s-production", item.fqn)
+		if prodEnv, perr := s.Kube.GetKusoEnvironment(ctx, ns, prodEnvCRName); perr == nil && prodEnv != nil && prodEnv.Spec.Host != "" {
 			newHost := buildEnvHost(proj.Spec.BaseDomain, project, item.short, req.Name)
 			prodHosts[prodEnv.Spec.Host] = newHost
 		}
@@ -505,26 +507,27 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 			req.Name,
 		)
 
-		// Env CR name == cloned-service CR name. Pre-fix this was
-		// fmt.Sprintf("%s-%s", newSvcCR, req.Name) which produced
-		// "<project>-<svc>-<env>-<env>" (the env suffix twice).
-		// Reusing newSvcCR directly matches the production-env naming
-		// scheme where one KusoEnvironment is rendered per service —
-		// the helm-operator chart is the same for both.
-		envCRName := newSvcCR
+		// Env CR name follows the production-env pattern:
+		// "<svc-clone>-production". Each cloned KusoService has its
+		// own KusoEnvironment named after itself + "-production" —
+		// the same scheme AddService uses for the canonical prod env.
+		// Using newSvcCR alone collided with the KusoService release
+		// (helm-operator: "duplicate release name … for chart
+		// kusoservice"). Adding the "-production" suffix
+		// disambiguates while keeping the chart-side semantics
+		// (Kind: "production") identical.
+		envCRName := newSvcCR + "-production"
 		host := buildEnvHost(proj.Spec.BaseDomain, project, item.short, req.Name)
 
 		// Seed the cloned env with production's currently-deployed
 		// image so the helm-operator can render a working Deployment
 		// immediately. Without this, spec.image is empty → chart
 		// renders ":latest" which kube can't pull → pods sit at
-		// InvalidImageName forever, requiring a manual Redeploy. Look
-		// up the production env CR for this service and inherit its
-		// image. If we can't find it (no production image yet, e.g.
-		// service was never built), leave spec.image empty — the user
-		// must Redeploy to populate it via the build poller.
+		// InvalidImageName forever, requiring a manual Redeploy. The
+		// production env CR is named "<project>-<service>-production"
+		// (see projects.productionEnvName) — NOT just <fqn>.
 		var inheritImage *kube.KusoImage
-		prodEnvCRName := item.fqn // production env CR is same name as service FQN
+		prodEnvCRName := fmt.Sprintf("%s-production", item.fqn)
 		if prodEnv, perr := s.Kube.GetKusoEnvironment(ctx, ns, prodEnvCRName); perr == nil && prodEnv != nil {
 			if prodEnv.Spec.Image != nil && prodEnv.Spec.Image.Repository != "" && prodEnv.Spec.Image.Tag != "" {
 				cp := *prodEnv.Spec.Image
