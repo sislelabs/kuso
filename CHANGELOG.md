@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.58] — 2026-05-08
+
+### 📝 Docs
+- Docs: surface "set your app's URL env var" hint on custom-domains ([90c6d5f](https://github.com/sislelabs/kuso/commit/90c6d5f1903c6ec94ecb91c70a844ad5245ce038))
+
 ## [0.9.57] — 2026-05-08
 
 ### 🐛 Bug Fixes
