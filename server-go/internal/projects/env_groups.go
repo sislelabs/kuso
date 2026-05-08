@@ -475,8 +475,29 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 	for idx, item := range ordered {
 		newSvcShort := item.short + "-" + req.Name
 		newSvcCR := fmt.Sprintf("%s-%s", project, newSvcShort)
-		// Clone the KusoService. Branch defaults to whatever production
-		// has — user retunes per-service after create.
+
+		// Rewrite envVars: fresh-addon secret refs + sibling-service
+		// URLs both retargeted at the new env-group's clones. We
+		// apply the rewrite to both the cloned KusoService.spec
+		// AND the cloned KusoEnvironment.spec — they're stored
+		// separately, and the canvas's edge-resolution logic reads
+		// the SERVICE spec.envVars to draw inter-service edges.
+		// Pre-fix only the env CR carried the rewritten URLs, so
+		// the canvas couldn't trace web → api in non-prod envs.
+		newEnvVars := rewriteEnvVarsForGroup(
+			item.svc.Spec.EnvVars,
+			project,
+			freshAddonRename,
+			siblingRename,
+			prodHosts,
+			req.Name,
+		)
+
+		// Clone the KusoService with the rewritten envVars. Branch
+		// defaults to whatever production has — user retunes per-
+		// service after create.
+		clonedSpec := cloneServiceSpec(item.svc.Spec, project)
+		clonedSpec.EnvVars = newEnvVars
 		svcClone := &kube.KusoService{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: newSvcCR,
@@ -488,24 +509,13 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 					"kuso.sislelabs.com/env-group-source-service": item.fqn,
 				},
 			},
-			Spec: cloneServiceSpec(item.svc.Spec, project),
+			Spec: clonedSpec,
 		}
 		if _, err := s.Kube.CreateKusoService(ctx, ns, svcClone); err != nil {
 			rollback()
 			return nil, fmt.Errorf("clone service %s: %w", item.short, err)
 		}
 		createdServices = append(createdServices, newSvcCR)
-
-		// Rewrite envVars: fresh-addon secret refs + sibling-service
-		// URLs both retargeted at the new env-group's clones.
-		newEnvVars := rewriteEnvVarsForGroup(
-			item.svc.Spec.EnvVars,
-			project,
-			freshAddonRename,
-			siblingRename,
-			prodHosts,
-			req.Name,
-		)
 
 		// Env CR name follows the production-env pattern:
 		// "<svc-clone>-production". Each cloned KusoService has its

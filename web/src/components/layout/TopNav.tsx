@@ -322,9 +322,26 @@ function EnvironmentSwitcher({ project }: { project: string }) {
                   return (
                     <CommandItem
                       key={e.name}
-                      value={e.name}
+                      // Differentiate the value from a similarly-named
+                      // project so cmdk's internal filter doesn't
+                      // collapse rows. Adds `env:` prefix to its
+                      // searchable string while keeping the rendered
+                      // label clean.
+                      value={`env:${e.name}`}
+                      // cmdk fires onSelect on keyboard + Enter; the
+                      // pointer path is supposed to fire it too via
+                      // its own handler, but in our PopoverContent
+                      // wrapper a parent's onPointerDown is eating
+                      // the event in some browsers, leaving the
+                      // dropdown open and the URL unchanged. Wire
+                      // both onSelect AND a defensive onMouseDown
+                      // fallback so a click always navigates.
                       onSelect={() => setEnv(e.name)}
-                      className="px-2 py-1.5"
+                      onMouseDown={(ev) => {
+                        ev.preventDefault();
+                        setEnv(e.name);
+                      }}
+                      className="px-2 py-1.5 cursor-pointer"
                     >
                       <span
                         className={cn(

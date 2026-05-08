@@ -25,18 +25,18 @@ export interface ServiceNodeData extends Record<string, unknown> {
 function statusFor(env?: KusoEnvironment, latestBuild?: BuildSummary): DeployStatus {
   // Source-of-truth ordering, in priority:
   //
-  // 1. env.ready = true → active. The running production pod is
-  //    serving traffic; the canvas border should reflect the live
-  //    user-facing state. A queued or pending build doesn't change
-  //    this — the old pod is still healthy until the new one rolls.
-  //
-  // 2. Latest build is RUNNING (kaniko actually executing) → building.
-  //    Pulse the border so the user sees activity. We deliberately
-  //    don't pulse on `pending`/`queued`/`building`-phase status:
+  // 1. Latest build is RUNNING (kaniko actually executing) → building,
+  //    regardless of whether the current pod is healthy. The active
+  //    pod still serves traffic; pulsing the border tells the user
+  //    "something's rolling out" without lying about the running
+  //    state. (We deliberately DON'T pulse on `pending`/`queued`:
   //    those mean "CR exists, no pod yet" or "queued behind another
-  //    build". The production pod is unaffected; flipping the canvas
-  //    to amber while it serves traffic is misleading. (The
-  //    deployments tab still shows the queued/pending row.)
+  //    build" — the user already sees those rows in the deployments
+  //    tab; flipping the canvas amber for them was misleading
+  //    because nothing's actually happening.)
+  //
+  // 2. env.ready = true → active. Steady-state win condition once
+  //    builds are settled.
   //
   // 3. env never came up + latest build failed → failed. Brand-new
   //    service whose first build crashed has no env.ready yet.
@@ -46,11 +46,11 @@ function statusFor(env?: KusoEnvironment, latestBuild?: BuildSummary): DeploySta
   //    phase=failed back.
   //
   // 5. Fall through to env.status.phase as the last resort.
-  if (env?.status?.ready) return "active";
-
   const buildStatus = (latestBuild?.status ?? "").toLowerCase();
   if (buildStatus === "running") return "building";
   if (buildStatus === "deploying") return "deploying";
+
+  if (env?.status?.ready) return "active";
 
   if (!env) return "unknown";
 
