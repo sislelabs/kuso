@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.50] — 2026-05-08
+
+### 🐛 Bug Fixes
+- Fix(env-switcher): rows are real <a href> links ([4709b67](https://github.com/sislelabs/kuso/commit/4709b674578446891b986cf4f39705ebac673e8c))
+
 ## [0.9.49] — 2026-05-08
 
 ### 🐛 Bug Fixes
