@@ -498,6 +498,28 @@ spec:
             - --cache=true
             - --cache-repo={{ .Values.registry.cacheRepo | default (printf "%s/.cache" .Values.image.repository) }}
             - --cleanup
+            # Memory-saving flags for small clusters. Without these
+            # kaniko hashes every file's content on every snapshot,
+            # which on a node_modules tree (~50k files, 200MiB) can
+            # peak well past 2GiB and OOMKill on a 4GB box.
+            #
+            # --snapshot-mode=redo: only re-snapshot when a file's
+            # mtime/size/perms change (vs full content hash). For
+            # node_modules where files are written once and never
+            # touched again, this collapses the snapshot peak from
+            # ~1.5GiB to ~200MiB on representative builds.
+            #
+            # --use-new-run: switches to the streaming run executor
+            # introduced in kaniko 1.10. Lower memory ceiling than
+            # the legacy path because intermediate diffs are written
+            # to disk instead of held in heap.
+            #
+            # --compressed-caching=false: skip the in-memory layer
+            # compression buffer. Slightly larger pushed cache layers
+            # but a meaningful drop in peak RSS during snapshot.
+            - --snapshot-mode=redo
+            - --use-new-run
+            - --compressed-caching=false
           {{- if .Values.auth.secretName }}
           env:
             - name: DOCKER_CONFIG

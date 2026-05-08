@@ -2136,6 +2136,13 @@ func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, 
 		slog.Default().Warn("builds: archive list pods", "err", err, "build", b.Name)
 		return
 	}
+	// Pull the kubelet's terminated reason from container status BEFORE
+	// streaming logs — it's the authoritative answer when a build dies
+	// in a way that doesn't reach stdout (OOMKilled, evicted, signal
+	// before flush). The log-pattern scan still runs after, but
+	// terminatedReason wins for the user-facing message because it's
+	// the "real" cause.
+	terminatedReason := extractTerminatedReason(pods.Items)
 	var combined strings.Builder
 	tail := int64(tailLines)
 	for i := range pods.Items {
@@ -2206,13 +2213,82 @@ func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, 
 	// are gone after helm uninstalls the build) to find out what
 	// went wrong.
 	if phase == "failed" {
-		if reason := extractFailureReason(logs); reason != "" {
+		// Priority: kubelet's terminated reason > log-pattern match.
+		// The kubelet sees signals + OOM kills the application stream
+		// can't observe; trust it first.
+		reason := terminatedReason
+		if reason == "" {
+			reason = extractFailureReason(logs)
+		}
+		if reason != "" {
 			patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, annMessage, reason)
 			if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 				Patch(lctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 				slog.Default().Warn("builds: patch failure reason", "err", err, "build", b.Name)
 			}
 		}
+	}
+}
+
+// extractTerminatedReason inspects the build pod's containerStatuses
+// for the kubelet's authoritative termination reason. Catches the
+// failure modes that don't make it to stdout:
+//
+//   - OOMKilled — kernel killed the container; logs end mid-step
+//   - Error with exit code 137 (SIGKILL, often OOM)
+//   - Error with exit code 143 (SIGTERM, often eviction)
+//   - Evicted — node ran out of disk / memory pressure
+//
+// Walks both LastTerminationState (when the container restarted) and
+// State.Terminated (final state). Returns "" when no terminated
+// container is found, letting the log scan take over.
+//
+// We format with the exit code when present so a user can grep for
+// "exit 137" → OOM, "exit 1" → app error, etc.
+func extractTerminatedReason(pods []corev1.Pod) string {
+	for i := range pods {
+		pod := &pods[i]
+		// Prefer the main containers; init container failures usually
+		// already wrote a clear reason to stdout (git fatal, etc.).
+		for _, allStatuses := range [][]corev1.ContainerStatus{
+			pod.Status.ContainerStatuses,
+			pod.Status.InitContainerStatuses,
+		} {
+			for _, cs := range allStatuses {
+				if t := terminatedFromState(cs); t != "" {
+					return t
+				}
+			}
+		}
+		// Pod-level status reason (Evicted, etc.) covers cases where
+		// containers never started — disk-pressure eviction, kubelet
+		// rejecting a too-large request.
+		if pod.Status.Reason != "" && pod.Status.Phase == corev1.PodFailed {
+			return "pod " + pod.Status.Reason + ": " + pod.Status.Message
+		}
+	}
+	return ""
+}
+
+func terminatedFromState(cs corev1.ContainerStatus) string {
+	t := cs.State.Terminated
+	if t == nil {
+		t = cs.LastTerminationState.Terminated
+	}
+	if t == nil || t.ExitCode == 0 {
+		return ""
+	}
+	switch t.Reason {
+	case "OOMKilled":
+		return fmt.Sprintf("OOMKilled — build hit memory limit (exit %d). Increase Settings → Builds → memory limit, or reduce build footprint.", t.ExitCode)
+	case "Error":
+		// Bare "Error" is a non-zero exit; format with code so users
+		// can map 137 → SIGKILL, 143 → SIGTERM, 1 → app error, etc.
+		return fmt.Sprintf("container exited with code %d (%s)", t.ExitCode, cs.Name)
+	case "":
+		return fmt.Sprintf("container exited with code %d (%s)", t.ExitCode, cs.Name)
+	default:
+		return fmt.Sprintf("%s (exit %d, container %s)", t.Reason, t.ExitCode, cs.Name)
 	}
 }
 
