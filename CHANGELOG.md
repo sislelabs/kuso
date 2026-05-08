@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.57] — 2026-05-08
+
+### 🐛 Bug Fixes
+- Fix two regressions ([595caec](https://github.com/sislelabs/kuso/commit/595caecc71611a722c68453dcb165274fbed57fb))
+
 ## [0.9.56] — 2026-05-08
 
 ### Other
