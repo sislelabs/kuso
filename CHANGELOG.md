@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.46] — 2026-05-08
+
+### 🐛 Bug Fixes
+- Fix(envs): cloned env CR uses -production suffix, not bare service name ([410161e](https://github.com/sislelabs/kuso/commit/410161e32c5f4605f7fbc52363706982755e1f38))
+
 ## [0.9.45] — 2026-05-07
 
 ### 🐛 Bug Fixes
