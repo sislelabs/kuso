@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.52] — 2026-05-08
+
+### 👷 CI
+- Ci: register react-hooks plugin + fix 22 lint errors ([e403395](https://github.com/sislelabs/kuso/commit/e40339555eb80d6b8039ece743d4c44fa12f2352))
+
 ## [0.9.51] — 2026-05-08
 
 ### 🐛 Bug Fixes
