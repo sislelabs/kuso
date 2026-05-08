@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.49] — 2026-05-08
+
+### 🐛 Bug Fixes
+- Fix(env-switcher): roll-our-own dropdown, both directions work ([a0a8df3](https://github.com/sislelabs/kuso/commit/a0a8df35e52ac54e12a948a61c535814be5c742f))
+
 ## [0.9.48] — 2026-05-08
 
 ### 🐛 Bug Fixes
