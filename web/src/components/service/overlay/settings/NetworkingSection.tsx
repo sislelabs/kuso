@@ -110,7 +110,7 @@ export function NetworkingSection({ state, setState, autoHost }: SectionProps) {
         hint={
           hosts.length === 0
             ? "point a DNS A-record at the cluster IP, then add the host below · auto-TLS via Let's Encrypt"
-            : `${hosts.length} bound · DNS must point at the cluster IP for cert minting`
+            : `${hosts.length} bound · DNS must point at cluster IP · if your app redirects to the auto-domain, set NEXTAUTH_URL / AUTH_URL / APP_URL / etc. to the custom host`
         }
         control={
           <div className="flex w-full max-w-[420px] flex-col gap-1.5">
