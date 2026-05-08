@@ -491,6 +491,19 @@ func main() {
 				// mint a fresh installation token when seeding the
 				// clone secret on every build.
 				buildSvc.Tokens = ghCli
+				// Auto-resolve installations by repo owner. Same cache
+				// the UI's `/api/github/installations` endpoint reads,
+				// so when a user types a github URL into AddService
+				// for a repo their installed App can read, the build
+				// finds the installation without manual config.
+				buildSvc.InstallResolver = ghInstallResolverFunc(func(ctx context.Context, owner, repo string) (int64, error) {
+					return ghpkg.ResolveInstallationForRepo(ctx, ghCache, owner, repo)
+				})
+				// Preflight before kaniko: catches "App not installed on
+				// this owner" / "repo deleted" / "renamed without
+				// updating kuso" with one HTTP round-trip instead of a
+				// 30-60s failed-clone cycle.
+				buildSvc.RepoAccess = ghCli
 			}
 		}
 	}
@@ -1023,4 +1036,15 @@ func (a buildsSettingsAdapter) GetBuildSettings(ctx context.Context) (builds.Bui
 		RegistryAuthSecret: v.RegistryAuthSecret,
 		RegistryHost:       v.RegistryHost,
 	}, nil
+}
+
+
+// ghInstallResolverFunc adapts a plain func to the
+// builds.InstallationResolver interface — saves declaring a struct
+// type just to wire one closure. Kept package-private; the only
+// caller is the wiring above.
+type ghInstallResolverFunc func(ctx context.Context, owner, repo string) (int64, error)
+
+func (f ghInstallResolverFunc) ResolveInstallationForRepo(ctx context.Context, owner, repo string) (int64, error) {
+	return f(ctx, owner, repo)
 }

@@ -43,6 +43,29 @@ type TokenMinter interface {
 	MintInstallationToken(ctx context.Context, installationID int64) (string, error)
 }
 
+// InstallationResolver looks up which GitHub App installation has
+// access to a given repo. Lets the build path auto-bind a service
+// to the right installation when the user didn't pin one explicitly.
+//
+// Returns (0, nil) when no match — caller falls through to unauth
+// clone (works for public repos). Errors are logged but non-fatal.
+type InstallationResolver interface {
+	ResolveInstallationForRepo(ctx context.Context, owner, repo string) (int64, error)
+}
+
+// RepoAccessChecker preflights "can the GitHub App actually read this
+// repo?" against the live API. Used to fail-fast before spinning up
+// kaniko — without it, an unreachable repo costs the user a 30-60s
+// pod-schedule + clone-fail cycle just to learn what one HTTP round-
+// trip can answer in ~150ms.
+//
+// nil is fine — when wired we surface clearer errors; when unwired
+// the build path falls through to the kaniko clone (which fails
+// noisily but gets the same job done).
+type RepoAccessChecker interface {
+	CheckRepoAccess(ctx context.Context, installationID int64, owner, repo string) error
+}
+
 // RegistryHost is the in-cluster registry every build pushes to. The
 // helm chart for kuso-registry exposes this as a Service.
 const RegistryHost = "kuso-registry.kuso.svc.cluster.local:5000"
@@ -102,6 +125,18 @@ type Service struct {
 	// expected secret (empty value) so pods start, but private repos
 	// will fail to clone.
 	Tokens TokenMinter
+
+	// InstallResolver maps a github.com repo URL to the App
+	// installation that has access to it. Optional — nil falls
+	// through to the project/service spec InstallationID (which may
+	// also be 0 for public repos).
+	InstallResolver InstallationResolver
+
+	// RepoAccess preflights "can this installation actually read the
+	// repo?" before we spin up the kaniko Job. Optional — nil skips
+	// the preflight and we get the same error after a slower failed
+	// clone. The github.Client implements this interface.
+	RepoAccess RepoAccessChecker
 
 	// MaxConcurrentBuilds is the fallback cap when no Settings
 	// provider is wired (CLI tests, legacy main.go). Production
@@ -1133,6 +1168,35 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	}
 
 	installationID := githubInstallationID(proj, svcCR)
+	// Auto-resolve from the GH-app cache when the user didn't pin
+	// one. Catches the common "I installed the App on my org but
+	// forgot to plumb the installation ID into the project" case —
+	// the cache already has the installation→repo map from the
+	// install-callback flow, so we can look it up without a network
+	// round-trip. Best-effort: a resolver miss falls through to the
+	// existing unauth-clone path.
+	if installationID == 0 && s.InstallResolver != nil {
+		if owner, repoName := splitGithubURL(repoURL); owner != "" {
+			if id, err := s.InstallResolver.ResolveInstallationForRepo(ctx, owner, repoName); err == nil && id > 0 {
+				installationID = id
+			}
+		}
+	}
+
+	// Preflight: when we have a github URL + an installation, verify
+	// the App can actually see the repo. Costs one HTTP round-trip
+	// (~150ms); saves the user a 30-60s "kaniko spins, fails to
+	// clone, helm uninstalls, status=failed" cycle when the App was
+	// never installed on the repo's owner. We never block on a
+	// resolver miss for public github URLs (installationID still 0)
+	// — those clone unauthenticated and that's fine.
+	if installationID > 0 && s.RepoAccess != nil {
+		if owner, repoName := splitGithubURL(repoURL); owner != "" {
+			if err := s.RepoAccess.CheckRepoAccess(ctx, installationID, owner, repoName); err != nil {
+				return nil, fmt.Errorf("%w: github preflight failed for %s/%s: %v — install the kuso GitHub App on this repo's owner OR change the repo URL", ErrInvalid, owner, repoName, err)
+			}
+		}
+	}
 
 	// The chart's clone init container reads $GITHUB_INSTALLATION_TOKEN
 	// from a secret named "<release>-token" with key "token". The
@@ -1492,6 +1556,11 @@ func buildCacheDisabled(proj *kube.KusoProject) bool {
 // unauthenticated and hit `fatal: could not read Username for
 // 'https://github.com'` — the user reported this on a businessguys
 // org repo configured against a different installation.
+//
+// As of v0.9.54, even when both spec slots are 0 the build path
+// auto-resolves via the GH-app cache before reaching this fallback,
+// so a project pointed at a private repo whose org has the App
+// installed Just Works without manual installationID plumbing.
 func githubInstallationID(proj *kube.KusoProject, svc *kube.KusoService) int64 {
 	if svc != nil && svc.Spec.Github != nil && svc.Spec.Github.InstallationID > 0 {
 		return svc.Spec.Github.InstallationID
@@ -1500,6 +1569,37 @@ func githubInstallationID(proj *kube.KusoProject, svc *kube.KusoService) int64 {
 		return 0
 	}
 	return proj.Spec.GitHub.InstallationID
+}
+
+// splitGithubURL parses owner/repo from the canonical github URL
+// shapes the user types into AddService. Returns ("", "") for
+// non-github URLs. Trims a trailing ".git". Lightweight string ops;
+// the canonical implementation lives in the github package
+// (ParseGithubRepoURL) — duplicated here to avoid an import cycle
+// (github already depends on db, builds depends on neither).
+func splitGithubURL(raw string) (owner, repo string) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", ""
+	}
+	if strings.HasPrefix(s, "git@github.com:") {
+		s = strings.TrimPrefix(s, "git@github.com:")
+	} else {
+		s = strings.TrimPrefix(s, "https://")
+		s = strings.TrimPrefix(s, "http://")
+		s = strings.TrimPrefix(s, "git+")
+		if !strings.HasPrefix(s, "github.com/") && !strings.HasPrefix(s, "www.github.com/") {
+			return "", ""
+		}
+		s = strings.TrimPrefix(s, "www.")
+		s = strings.TrimPrefix(s, "github.com/")
+	}
+	s = strings.TrimSuffix(s, ".git")
+	parts := strings.Split(s, "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", ""
+	}
+	return parts[0], parts[1]
 }
 
 // ---- Status poller -------------------------------------------------------
@@ -2099,6 +2199,69 @@ func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, 
 		strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-"), phase, logs); err != nil {
 		slog.Default().Warn("builds: archive save", "err", err, "build", b.Name)
 	}
+	// On failed builds, replace the generic "Job has reached the
+	// specified backoff limit" message with the actual error pulled
+	// from the logs. Without this, the dashboard shows a useless
+	// blanket message and the user has to spelunk pod logs (which
+	// are gone after helm uninstalls the build) to find out what
+	// went wrong.
+	if phase == "failed" {
+		if reason := extractFailureReason(logs); reason != "" {
+			patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, annMessage, reason)
+			if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+				Patch(lctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+				slog.Default().Warn("builds: patch failure reason", "err", err, "build", b.Name)
+			}
+		}
+	}
+}
+
+// extractFailureReason scans build logs for the most useful single-
+// line summary of why the build failed. Pattern-matches the four
+// failure shapes that account for ~95% of real-world cases:
+//
+//   - git clone errors (private repo without auth, branch not found,
+//     repository moved/deleted)
+//   - kaniko/buildpacks "build step N: failed" lines
+//   - Dockerfile / nix syntax errors (the parser emits a clear
+//     "ERROR: parse error" line)
+//   - registry push failures (unauthorized, quota exceeded)
+//
+// Returns "" when no specific reason is found — caller falls back to
+// the kube Job condition message. Bounded at 256 chars so a runaway
+// stack trace doesn't bloat the build CR's annotations beyond the
+// kube etcd 1MiB-per-object soft limit.
+func extractFailureReason(logs string) string {
+	if logs == "" {
+		return ""
+	}
+	patterns := []*regexp.Regexp{
+		// git clone failures
+		regexp.MustCompile(`(?m)^.*fatal: (?:repository .+ not found|could not read Username|Authentication failed|.+ not exists|.+ unable to access).*$`),
+		regexp.MustCompile(`(?m)^.*Repository not found.*$`),
+		regexp.MustCompile(`(?m)^.*remote: Invalid username or password.*$`),
+		regexp.MustCompile(`(?m)^.*ERROR: GITHUB_INSTALLATION_TOKEN must be set.*$`),
+		// kaniko / buildpacks
+		regexp.MustCompile(`(?m)^error building image:.*$`),
+		regexp.MustCompile(`(?m)^.*ERROR: failed to build:.*$`),
+		regexp.MustCompile(`(?m)^.*executor failed running.*: exit code: \d+.*$`),
+		// Dockerfile / nixpacks parse
+		regexp.MustCompile(`(?m)^.*Dockerfile parse error.*$`),
+		regexp.MustCompile(`(?m)^.*nixpacks .* failed.*$`),
+		// registry push
+		regexp.MustCompile(`(?m)^.*denied: requested access to the resource is denied.*$`),
+		regexp.MustCompile(`(?m)^.*push failed:.*$`),
+	}
+	for _, re := range patterns {
+		if m := re.FindString(logs); m != "" {
+			m = strings.TrimSpace(m)
+			if len(m) > 256 {
+				m = m[:256]
+			}
+			return m
+		}
+	}
+	return ""
 }
 
 // detectedEnvRe matches the env-detect init container's sentinel-fenced

@@ -167,6 +167,62 @@ func (h *GithubHandler) MountAuthed(r chi.Router) {
 	r.Get("/api/github/installations/{id}/repos/{owner}/{repo}/tree", h.RepoTree)
 	r.Post("/api/github/detect-runtime", h.DetectRuntime)
 	r.Post("/api/github/scan-addons", h.ScanAddons)
+	// Repo accessibility probe — used by the service-settings UI to
+	// validate "can the App actually read this repo before I save?".
+	// Same code path as the build-trigger preflight, exposed so the
+	// user gets feedback at edit time instead of at next build.
+	r.Post("/api/github/check-repo", h.CheckRepoAccess)
+}
+
+// CheckRepoAccess returns 200 when the configured installation can
+// read the requested repo, 404 / 403 / 502 on the various failure
+// modes. Body: {installationId, owner, repo} — when installationId
+// is 0 we auto-resolve from the cache, mirroring the build-trigger
+// behaviour. Used by the service settings panel's "Test access"
+// button.
+func (h *GithubHandler) CheckRepoAccess(w http.ResponseWriter, r *http.Request) {
+	if h.Client == nil {
+		http.Error(w, "github not configured", http.StatusServiceUnavailable)
+		return
+	}
+	var body struct {
+		InstallationID int64  `json:"installationId"`
+		Owner          string `json:"owner"`
+		Repo           string `json:"repo"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	if body.Owner == "" || body.Repo == "" {
+		http.Error(w, "owner + repo required", http.StatusBadRequest)
+		return
+	}
+	if body.InstallationID == 0 && h.Cache != nil {
+		// Auto-resolve, same as the build path.
+		if id, err := github.ResolveInstallationForRepo(r.Context(), h.Cache, body.Owner, body.Repo); err == nil && id > 0 {
+			body.InstallationID = id
+		}
+	}
+	if body.InstallationID == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":    false,
+			"error": "no GitHub App installation found for owner " + body.Owner + " — install the kuso App on this account",
+		})
+		return
+	}
+	if err := h.Client.CheckRepoAccess(r.Context(), body.InstallationID, body.Owner, body.Repo); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":             false,
+			"error":          err.Error(),
+			"installationId": body.InstallationID,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":             true,
+		"installationId": body.InstallationID,
+	})
 }
 
 // ScanAddons returns suggested addon kinds based on the repo's

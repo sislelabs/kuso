@@ -3,9 +3,50 @@ package github
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"kuso/server/internal/db"
 )
+
+// ParseGithubRepoURL extracts owner + repo from a GitHub URL. Accepts
+// the shapes the user types into the AddService dialog:
+//
+//   https://github.com/owner/repo
+//   https://github.com/owner/repo.git
+//   git@github.com:owner/repo.git
+//   github.com/owner/repo
+//
+// Returns ("", "") when the URL is not on github.com or the path
+// doesn't have at least two segments. Strips the trailing ".git"
+// suffix because the API wants the bare repo name.
+func ParseGithubRepoURL(raw string) (owner, repo string) {
+	s := strings.TrimSpace(raw)
+	if s == "" {
+		return "", ""
+	}
+	// SSH form
+	if strings.HasPrefix(s, "git@github.com:") {
+		s = strings.TrimPrefix(s, "git@github.com:")
+	} else {
+		// Strip scheme.
+		s = strings.TrimPrefix(s, "https://")
+		s = strings.TrimPrefix(s, "http://")
+		s = strings.TrimPrefix(s, "git+")
+		// Only github.com URLs auto-resolve. Self-hosted Enterprise
+		// installs would need their own host suffix here.
+		if !strings.HasPrefix(s, "github.com/") && !strings.HasPrefix(s, "www.github.com/") {
+			return "", ""
+		}
+		s = strings.TrimPrefix(s, "www.")
+		s = strings.TrimPrefix(s, "github.com/")
+	}
+	s = strings.TrimSuffix(s, ".git")
+	parts := strings.Split(s, "/")
+	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
+		return "", ""
+	}
+	return parts[0], parts[1]
+}
 
 // CacheStore lets the dispatcher + admin endpoints persist installation
 // + repo metadata. Backed by *db.DB in production; an interface so tests
@@ -16,6 +57,63 @@ type CacheStore interface {
 	List(ctx context.Context) ([]db.GithubInstallation, error)
 	Repos(ctx context.Context, id int64) ([]db.GithubRepo, error)
 	Delete(ctx context.Context, id int64) error
+}
+
+// ResolveInstallationForRepo finds the cached installation that has
+// access to <owner>/<name>. Used by the build trigger path to
+// auto-bind a service whose project hasn't been pinned to a
+// specific installation — without this, multi-org users had to
+// manually plumb installation IDs through API calls.
+//
+// Lookup order:
+//
+//  1. Exact repo match — an installation that lists "<owner>/<name>"
+//     in its cached repos. Wins because it's authoritative: the App
+//     can read the repo today.
+//  2. Owner match — fall back to any installation whose
+//     accountLogin == owner (case-insensitive). Covers the freshly-
+//     installed window where the repo cache hasn't been populated
+//     yet for that installation.
+//
+// Returns 0 + nil when no installation matches; the caller falls
+// through to unauth clone (which works for public repos).
+//
+// Best-effort: a DB error from the cache is treated as "no match"
+// (returns 0 + the error so the caller can log) — we don't want a
+// transient store hiccup to wedge the build path.
+func ResolveInstallationForRepo(ctx context.Context, store CacheStore, owner, name string) (int64, error) {
+	if store == nil || owner == "" {
+		return 0, nil
+	}
+	insts, err := store.List(ctx)
+	if err != nil {
+		return 0, err
+	}
+	want := strings.ToLower(owner + "/" + name)
+	wantOwner := strings.ToLower(owner)
+	var byOwner int64
+	for _, ins := range insts {
+		if strings.EqualFold(ins.AccountLogin, owner) && byOwner == 0 {
+			byOwner = ins.ID
+		}
+		if name == "" {
+			continue
+		}
+		repos, rerr := store.Repos(ctx, ins.ID)
+		if rerr != nil {
+			continue
+		}
+		for _, r := range repos {
+			if strings.ToLower(r.FullName) == want {
+				return ins.ID, nil
+			}
+		}
+	}
+	if byOwner != 0 {
+		return byOwner, nil
+	}
+	_ = wantOwner // reserved if we add fuzzy matching later
+	return 0, nil
 }
 
 // dbCache adapts *db.DB to the CacheStore interface.

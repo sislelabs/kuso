@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
-import { Github, ExternalLink } from "lucide-react";
+import { Github, ExternalLink, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -30,6 +30,30 @@ export function SourceSection({
     staleTime: 60_000,
   });
   const repoDisplay = state.repoURL.replace(/^https?:\/\/(www\.)?/, "");
+  // Parse owner/repo so we can preview the auto-resolution + run a
+  // server-side access probe. Mirrors the server's parser; kept
+  // local because the regex is one line.
+  const parsed = useMemo(() => {
+    const m = state.repoURL.match(/github\.com[:/]+([^/]+)\/([^/.]+)/i);
+    return m ? { owner: m[1], repo: m[2] } : null;
+  }, [state.repoURL]);
+  const autoResolved = useMemo(() => {
+    if (!parsed || !installs.data) return null;
+    // Exact full-name match wins.
+    for (const inst of installs.data) {
+      const want = `${parsed.owner.toLowerCase()}/${parsed.repo.toLowerCase()}`;
+      if ((inst.repositories ?? []).some((r) => r.fullName.toLowerCase() === want)) {
+        return inst;
+      }
+    }
+    // Owner-match fallback (the App is installed but the repo cache
+    // hasn't refreshed yet).
+    return (
+      installs.data.find(
+        (inst) => inst.accountLogin.toLowerCase() === parsed.owner.toLowerCase(),
+      ) ?? null
+    );
+  }, [parsed, installs.data]);
 
   return (
     <Section id="source" title="Source" icon={Github}>
@@ -102,27 +126,125 @@ export function SourceSection({
       />
       <Row
         label="installation"
-        hint="GitHub App that owns the repo"
+        hint={
+          state.repoInstallationID === 0 && autoResolved
+            ? `auto → ${autoResolved.accountLogin}`
+            : "GitHub App that owns the repo · auto when blank"
+        }
         control={
-          <select
-            value={state.repoInstallationID || 0}
-            onChange={(e) =>
-              setState((s) => ({ ...s, repoInstallationID: Number(e.target.value) || 0 }))
-            }
-            className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
-          >
-            <option value={0}>(unchanged)</option>
-            {(installs.data ?? []).map((inst) => (
-              <option key={inst.id} value={inst.id}>
-                {inst.accountLogin} ({inst.repositories.length} repos)
-              </option>
-            ))}
-          </select>
+          <div className="flex w-full flex-wrap items-center gap-1.5">
+            <select
+              value={state.repoInstallationID || 0}
+              onChange={(e) =>
+                setState((s) => ({ ...s, repoInstallationID: Number(e.target.value) || 0 }))
+              }
+              className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
+            >
+              <option value={0}>auto (resolve from URL)</option>
+              {(installs.data ?? []).map((inst) => (
+                <option key={inst.id} value={inst.id}>
+                  {inst.accountLogin} ({inst.repositories.length} repos)
+                </option>
+              ))}
+            </select>
+            {parsed && (
+              <RepoAccessTest
+                owner={parsed.owner}
+                repo={parsed.repo}
+                installationId={state.repoInstallationID || autoResolved?.id || 0}
+              />
+            )}
+          </div>
         }
         last
       />
       <RenameRow project={project} service={service} />
     </Section>
+  );
+}
+
+// RepoAccessTest hits POST /api/github/check-repo so the user can
+// verify the App can read the repo before they save + redeploy.
+// One-shot: probes on click, shows the result inline, doesn't poll.
+//
+// Why not auto-probe on every URL keystroke: a noisy "checking..."
+// indicator on every character typed creates jitter, and the API
+// hit isn't free. Click-to-probe matches the user's mental model of
+// "I just changed the URL; let me see if it works."
+function RepoAccessTest({
+  owner,
+  repo,
+  installationId,
+}: {
+  owner: string;
+  repo: string;
+  installationId: number;
+}) {
+  const [state, setState] = useState<
+    | { kind: "idle" }
+    | { kind: "checking" }
+    | { kind: "ok"; installationId: number }
+    | { kind: "err"; message: string }
+  >({ kind: "idle" });
+  const probe = async () => {
+    setState({ kind: "checking" });
+    try {
+      const res = await api<{ ok: boolean; error?: string; installationId?: number }>(
+        "/api/github/check-repo",
+        {
+          method: "POST",
+          body: { owner, repo, installationId },
+        },
+      );
+      if (res.ok) {
+        setState({ kind: "ok", installationId: res.installationId ?? 0 });
+      } else {
+        setState({ kind: "err", message: res.error ?? "unknown error" });
+      }
+    } catch (e) {
+      setState({ kind: "err", message: e instanceof Error ? e.message : "request failed" });
+    }
+  };
+  return (
+    <>
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="h-7 px-2 font-mono text-[10px]"
+        onClick={probe}
+        disabled={state.kind === "checking"}
+        title="Verify the GitHub App can read this repo before saving"
+      >
+        {state.kind === "checking" ? (
+          <Loader2 className="h-3 w-3 animate-spin" />
+        ) : state.kind === "ok" ? (
+          <CheckCircle2 className="h-3 w-3 text-emerald-400" />
+        ) : state.kind === "err" ? (
+          <AlertCircle className="h-3 w-3 text-red-400" />
+        ) : null}
+        {state.kind === "checking"
+          ? "checking…"
+          : state.kind === "ok"
+            ? "ok"
+            : state.kind === "err"
+              ? "failed"
+              : "test access"}
+      </Button>
+      {state.kind === "err" && (
+        <span
+          className="font-mono text-[10px] text-red-400"
+          title={state.message}
+        >
+          {state.message.length > 60 ? state.message.slice(0, 60) + "…" : state.message}
+        </span>
+      )}
+      {state.kind === "ok" && state.installationId > 0 && (
+        <span className="font-mono text-[10px] text-emerald-400">
+          installation #{state.installationId}
+        </span>
+      )}
+    </>
   );
 }
 

@@ -102,6 +102,48 @@ func (c *Client) installationTransport(installationID int64) (*ghinstallation.Tr
 	return itr, nil
 }
 
+// CheckRepoAccess does a HEAD-like preflight: GET /repos/{owner}/{repo}
+// via the installation transport. Returns nil when the App can read
+// the repo, ErrRepoNotFound on 404, ErrRepoForbidden on 403, and the
+// raw error for other failures (network, 5xx, etc.).
+//
+// Why HEAD-like and not git ls-remote: ls-remote needs the kaniko Job
+// to spin up + fail, which costs ~30-60s of pod schedule + image pull
+// + clone before we know the repo is unreachable. This is one HTTP
+// round-trip, ~150ms.
+func (c *Client) CheckRepoAccess(ctx context.Context, installationID int64, owner, repo string) error {
+	cli, err := c.Installation(installationID)
+	if err != nil {
+		return err
+	}
+	_, resp, err := cli.Repositories.Get(ctx, owner, repo)
+	if err != nil {
+		if resp != nil {
+			switch resp.StatusCode {
+			case 404:
+				return ErrRepoNotFound
+			case 403:
+				return ErrRepoForbidden
+			}
+		}
+		return fmt.Errorf("github: get repo: %w", err)
+	}
+	return nil
+}
+
+// ErrRepoNotFound is returned by CheckRepoAccess when the App
+// installation has no record of the requested repo. Most often
+// because the owner removed the repo from the installation, the
+// repo was deleted/renamed, or the App was never installed on the
+// owner's account.
+var ErrRepoNotFound = errors.New("github: repo not found or app has no access")
+
+// ErrRepoForbidden is returned when the App's installation is
+// suspended OR the App lacks the required scopes for the repo.
+// Less common than ErrRepoNotFound — usually a config issue on the
+// GitHub side that an admin needs to look at.
+var ErrRepoForbidden = errors.New("github: app installation forbidden from accessing repo")
+
 // ResolveBranchSHA returns the head commit SHA for owner/repo at the
 // given branch via the installation client. Empty string + no error
 // means the branch was not found.
