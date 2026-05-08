@@ -170,7 +170,7 @@ export function Row({
         !last && "border-b border-[var(--border-subtle)]",
       )}
     >
-      <div className="min-w-0 flex-1 sm:min-w-[140px] sm:max-w-[60%]">
+      <div className="min-w-0 sm:w-[200px] sm:shrink-0">
         <div className="text-[12px] text-[var(--text-secondary)]">{label}</div>
         {hint && (
           <div className="break-words font-mono text-[10px] text-[var(--text-tertiary)]/70">
@@ -178,7 +178,7 @@ export function Row({
           </div>
         )}
       </div>
-      <div className="flex min-w-0 flex-1 items-center justify-start gap-2 sm:ml-auto sm:justify-end">
+      <div className="flex min-w-0 flex-1 items-center justify-start gap-2 sm:justify-end">
         {control}
       </div>
     </div>
