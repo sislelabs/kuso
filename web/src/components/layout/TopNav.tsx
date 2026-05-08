@@ -26,7 +26,7 @@ import {
 import { Logo } from "@/components/shared/Logo";
 import { ThemeToggle } from "@/components/shared/ThemeToggle";
 import { useSession, useSignOut, useCan, Perms } from "@/features/auth";
-import { useProjects, useProject, useEnvGroups } from "@/features/projects";
+import { useProjects, useEnvGroups } from "@/features/projects";
 import { useRouteParams } from "@/lib/dynamic-params";
 import { cn } from "@/lib/utils";
 import {

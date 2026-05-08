@@ -136,9 +136,9 @@ function compose(p: Parsed): string {
   }
 }
 
-function pad2(n: number): string {
-  return n < 10 ? `0${n}` : String(n);
-}
+// pad2 was used by an earlier humanize-cron path; the cron-rendering
+// code now lives in cron-explain.ts and the helper is no longer
+// referenced here. Kept removed to satisfy no-unused-vars.
 
 const DOW_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 

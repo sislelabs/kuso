@@ -69,6 +69,11 @@ export default function SettingsIndex() {
   // We can't call useCan inside a render-time filter loop because
   // hooks must run unconditionally per render. Compute the allow
   // map up front with one hook call per card, in stable order.
+  // CARDS is module-scoped + a constant — the rule-of-hooks
+  // requirement (same number of hook calls per render) holds
+  // because CARDS.length is fixed. ESLint can't prove that, so
+  // suppress the rule on this line.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const allow: boolean[] = CARDS.map((c) => useCanOrTrue(c.perm));
 
   const [query, setQuery] = useState("");

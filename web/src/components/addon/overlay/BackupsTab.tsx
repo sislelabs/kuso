@@ -280,7 +280,10 @@ function ConfirmRestore({
 // 5-field cron regex mirrors the server's addons.cronExpr5. Pre-flight
 // check so a typo (in CronPicker's Custom mode) turns the Save button
 // into a visible warning rather than a 400 toast after the round-trip.
-const CRON_RE = /^[\d\*\/,\-?]+\s+[\d\*\/,\-?]+\s+[\d\*\/,\-?]+\s+[\d\*\/,\-?]+\s+[\d\*\/,\-?]+$/;
+// Inside character classes \* and \/ are unnecessary escapes — eslint
+// flagged them. The hyphen is at the end of the class so it doesn't
+// need escaping either; keep classes spelled out for readability.
+const CRON_RE = /^[\d*/,?-]+\s+[\d*/,?-]+\s+[\d*/,?-]+\s+[\d*/,?-]+\s+[\d*/,?-]+$/;
 
 // BackupScheduleEditor lets the user enable / change / disable the
 // per-addon backup CronJob. Schedule = cron expression; retentionDays

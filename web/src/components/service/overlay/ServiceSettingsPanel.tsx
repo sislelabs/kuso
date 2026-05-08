@@ -99,7 +99,9 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     const body: PatchServiceBody = {};
     if (state.displayName !== baseline.displayName) {
       const trimmed = state.displayName.trim();
-      if (trimmed && !/^[A-Za-z0-9 \-]{1,60}$/.test(trimmed)) {
+      // Hyphen at end of class doesn't need escaping (eslint
+      // no-useless-escape).
+      if (trimmed && !/^[A-Za-z0-9 -]{1,60}$/.test(trimmed)) {
         toast.error("Display name: letters/digits/spaces/hyphens only, ≤60 chars");
         return;
       }

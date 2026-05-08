@@ -12,7 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Plus, Trash2, Copy, Check, Infinity, KeyRound } from "lucide-react";
+import { Plus, Trash2, Copy, Check, Infinity as InfinityIcon, KeyRound } from "lucide-react";
 import { relativeTime } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -133,7 +133,7 @@ export default function TokensPage() {
                         : "border-[var(--border-subtle)] bg-[var(--bg-primary)] text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
                     )}
                   >
-                    {p.days === null && <Infinity className="h-3 w-3" />}
+                    {p.days === null && <InfinityIcon className="h-3 w-3" />}
                     {p.label}
                   </button>
                 );
@@ -225,7 +225,7 @@ export default function TokensPage() {
                         className="inline-flex items-center gap-0.5 rounded bg-amber-500/10 px-1 py-0.5 font-mono text-[9px] uppercase tracking-widest text-amber-400"
                         title="Never expires"
                       >
-                        <Infinity className="h-2 w-2" />
+                        <InfinityIcon className="h-2 w-2" />
                         ∞
                       </span>
                     )}

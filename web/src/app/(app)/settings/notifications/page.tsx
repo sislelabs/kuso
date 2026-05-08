@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Bell, Plus, Trash2, Send, CheckCircle2, Webhook } from "lucide-react";
+import { Bell, Plus, Trash2, Send, Webhook } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
