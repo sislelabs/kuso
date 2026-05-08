@@ -308,87 +308,71 @@ function EnvironmentSwitcher({ project }: { project: string }) {
         <ChevronDown className="h-3 w-3" />
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64 gap-0 rounded-md p-0">
-        <Command>
-          <CommandInput placeholder="Switch environment…" className="h-9 text-[13px]" />
-          <CommandList className="p-1">
-            <CommandEmpty className="py-6 text-xs">No environments yet.</CommandEmpty>
-            {envs.length > 0 && (
-              <CommandGroup
-                heading="Environments"
-                className="px-0 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-[var(--text-tertiary)]"
-              >
-                {envs.map((e) => {
-                  const active = currentEnv === e.name;
-                  return (
-                    <CommandItem
-                      key={e.name}
-                      // Differentiate the value from a similarly-named
-                      // project so cmdk's internal filter doesn't
-                      // collapse rows. Adds `env:` prefix to its
-                      // searchable string while keeping the rendered
-                      // label clean.
-                      value={`env:${e.name}`}
-                      // cmdk fires onSelect on keyboard + Enter; the
-                      // pointer path is supposed to fire it too via
-                      // its own handler, but in our PopoverContent
-                      // wrapper a parent's onPointerDown is eating
-                      // the event in some browsers, leaving the
-                      // dropdown open and the URL unchanged. Wire
-                      // both onSelect AND a defensive onMouseDown
-                      // fallback so a click always navigates.
-                      onSelect={() => setEnv(e.name)}
-                      onMouseDown={(ev) => {
-                        ev.preventDefault();
-                        setEnv(e.name);
-                      }}
-                      className="px-2 py-1.5 cursor-pointer"
-                    >
-                      <span
-                        className={cn(
-                          "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-                          e.kind === "production"
-                            ? "bg-emerald-400"
-                            : e.kind === "preview"
-                              ? "bg-amber-400"
-                              : "bg-blue-400",
-                        )}
-                      />
-                      <span className="truncate font-mono text-[12px]">{e.name}</span>
-                      <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
-                        {e.services} svc
-                      </span>
-                      {e.kind === "preview" && (
-                        <span className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                          PR
-                        </span>
-                      )}
-                      {active && <Check className="h-3 w-3 text-[var(--accent)]" />}
-                    </CommandItem>
-                  );
-                })}
-              </CommandGroup>
-            )}
-            {/* Trailing "new environment" row. Spawns a project-level
-                env that mirrors every service + (per-policy) addons.
-                Use case: "send this URL to a client for review". PR
-                previews are still webhook-driven and opt-in — see
-                project settings → Previews. */}
-            <CommandGroup className="px-0">
-              <CommandItem
-                value="__new__"
-                onSelect={() => {
-                  setOpen(false);
-                  setShowNewEnv(true);
-                }}
-                title="Mirror every service + addon under a new env name. Each cloned service gets its own URL."
-                className="px-2 py-1.5 text-[12px] text-[var(--accent)]"
-              >
-                <Plus className="h-3 w-3" />
-                New environment
-              </CommandItem>
-            </CommandGroup>
-          </CommandList>
-        </Command>
+        {/* Plain-button list — replaced cmdk. cmdk's pointer-down path
+            was getting eaten by the popover wrapper in some browsers,
+            so clicks on a non-active row sometimes did nothing. The
+            list is short (1 production + N user-created envs) and
+            doesn't need search/filter, so cmdk was overkill anyway. */}
+        <div className="px-2 py-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+          environments
+        </div>
+        <ul className="px-1 pb-1">
+          {envs.length === 0 && (
+            <li className="px-2 py-2 text-[12px] text-[var(--text-tertiary)]">
+              No environments yet.
+            </li>
+          )}
+          {envs.map((e) => {
+            const active = currentEnv === e.name;
+            return (
+              <li key={e.name}>
+                <button
+                  type="button"
+                  onClick={() => setEnv(e.name)}
+                  className={cn(
+                    "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors hover:bg-[var(--bg-tertiary)]",
+                    active && "bg-[var(--accent-subtle)] text-[var(--accent)]",
+                  )}
+                >
+                  <span
+                    className={cn(
+                      "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
+                      e.kind === "production"
+                        ? "bg-emerald-400"
+                        : e.kind === "preview"
+                          ? "bg-amber-400"
+                          : "bg-blue-400",
+                    )}
+                  />
+                  <span className="truncate font-mono text-[12px]">{e.name}</span>
+                  <span className="ml-auto shrink-0 font-mono text-[10px] text-[var(--text-tertiary)]">
+                    {e.services} svc
+                  </span>
+                  {e.kind === "preview" && (
+                    <span className="shrink-0 rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                      PR
+                    </span>
+                  )}
+                  {active && <Check className="h-3 w-3 shrink-0 text-[var(--accent)]" />}
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+        <div className="border-t border-[var(--border-subtle)] px-1 py-1">
+          <button
+            type="button"
+            onClick={() => {
+              setOpen(false);
+              setShowNewEnv(true);
+            }}
+            title="Mirror every service + addon under a new env name. Each cloned service gets its own URL."
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-[var(--accent)] transition-colors hover:bg-[var(--bg-tertiary)]"
+          >
+            <Plus className="h-3 w-3" />
+            New environment
+          </button>
+        </div>
       </PopoverContent>
 
       <NewEnvironmentDialog

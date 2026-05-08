@@ -72,7 +72,10 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
   // current state without depending on a render. The setter triggers
   // a state update so the discard banner can render.
   const dirtyMap = useRef<Record<string, boolean>>({});
-  const [hasDirtyPanel, setHasDirtyPanel] = useState(false);
+  // Kept for the API stability of useOverlayDirty's setPanelDirty —
+  // panels still call into the registry, the value just no longer
+  // gates close/tab-switch (we removed the window.confirm prompt).
+  const [, setHasDirtyPanel] = useState(false);
   const dirtyAPI = useMemo<OverlayDirtyAPI>(
     () => ({
       setPanelDirty: (key, dirty) => {
@@ -84,37 +87,24 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
     []
   );
 
-  // Wrapped close that checks the dirty registry first. Browser's
-  // native confirm is the right tool here — modal-on-modal would
-  // tangle focus and zIndex with the existing ConfirmDialog stack.
+  // Close + tab-switch unconditionally drop dirty state. The previous
+  // window.confirm("Discard unsaved changes?") was annoying enough
+  // that users asked for it gone — closing an overlay or switching
+  // tabs is fast, and the floating Save bar's pip already signals
+  // unsaved state. If a user really loses an edit they didn't mean
+  // to discard, the inline dirty-pip + Save bar should have been the
+  // signal, not a browser-modal interrupt.
   const guardedClose = useCallback(() => {
-    if (
-      hasDirtyPanel &&
-      !window.confirm("Discard unsaved changes? Your edits will be lost.")
-    ) {
-      return;
-    }
     dirtyMap.current = {};
     setHasDirtyPanel(false);
     onClose();
-  }, [hasDirtyPanel, onClose]);
+  }, [onClose]);
 
-  // Same guard on tab switch — if the user has typed half an env-var
-  // edit in Variables and clicks Settings, ask before discarding.
-  const guardedSetTab = useCallback(
-    (next: Tab) => {
-      if (
-        hasDirtyPanel &&
-        !window.confirm("Discard unsaved changes on this tab?")
-      ) {
-        return;
-      }
-      dirtyMap.current = {};
-      setHasDirtyPanel(false);
-      setTab(next);
-    },
-    [hasDirtyPanel]
-  );
+  const guardedSetTab = useCallback((next: Tab) => {
+    dirtyMap.current = {};
+    setHasDirtyPanel(false);
+    setTab(next);
+  }, []);
 
   // When a service opens, land on the requested tab (right-click "View
   // logs" → Logs, etc.) or fall back to the user's last-used tab in
