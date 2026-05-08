@@ -278,9 +278,15 @@ function EnvironmentSwitcher({ project }: { project: string }) {
   const envs = useMemo<EnvRow[]>(() => {
     const list = groups.data ?? [];
     return list.map((g) => {
+      // Always set ?env=<name>, even for production. The previous
+      // approach (delete env when "production") produced a bare
+      // pathname href; some user-side state (browser cache, sw,
+      // intermediate React effect) wasn't reacting to the implicit
+      // production transition. With an explicit ?env=production
+      // every click changes the URL string, so any reactive code
+      // that watches search params is guaranteed to fire.
       const params = new URLSearchParams(search?.toString() ?? "");
-      if (g.name === "production") params.delete("env");
-      else params.set("env", g.name);
+      params.set("env", g.name);
       const qs = params.toString();
       const href = qs ? `${pathname}?${qs}` : pathname;
       return {
