@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.60] — 2026-05-10
+
+### 🐛 Bug Fixes
+- Fix(logs): build pod logs work via REST tail + add --build CLI flag ([eaaaae8](https://github.com/sislelabs/kuso/commit/eaaaae8931395ec72885f9e138d9f26e5ea82847))
+
 ## [0.9.59] — 2026-05-10
 
 ### Other
