@@ -137,7 +137,7 @@ spec:
           # back up either way.
           initContainers:
             - name: scaler-down
-              image: rancher/kubectl:v1.30.4
+              image: alpine/k8s:1.30.4
               command: [/bin/sh, -ec]
               args:
                 - |
@@ -170,7 +170,7 @@ spec:
               # the same kubectl image. We can't rely on initContainer
               # ordering for "post-main" work, so this sidecar pattern
               # is the simplest correct shape.
-              image: rancher/kubectl:v1.30.4
+              image: alpine/k8s:1.30.4
               command: [/bin/sh, -ec]
               args:
                 - |

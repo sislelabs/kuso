@@ -147,7 +147,7 @@ spec:
       serviceAccountName: kuso-postgres-dsn
       containers:
         - name: stamp
-          image: rancher/kubectl:v1.30.4
+          image: alpine/k8s:1.30.4
           command: [/bin/sh, -ec]
           args:
             - |
