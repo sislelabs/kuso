@@ -205,14 +205,20 @@ metadata:
   name: kuso-postgres-dsn
   namespace: kuso
 rules:
-  - apiGroups: [""]
-    resources: [secrets]
-    resourceNames: [kuso-postgres-app]
-    verbs: [get]
+  # Read username/password/database from the user-supplied bootstrap
+  # secret (install.sh seeds it before CNPG bootstraps) and patch in
+  # the composed DSN + host/port keys once the primary is up.
   - apiGroups: [""]
     resources: [secrets]
     resourceNames: [kuso-postgres-conn]
     verbs: [get, patch]
+  # Wait for kuso-postgres-rw Service — CNPG creates it once the
+  # primary is promoted. The Job uses `kubectl get service` to
+  # check; this rule gives it just that one verb on that one name.
+  - apiGroups: [""]
+    resources: [services]
+    resourceNames: [kuso-postgres-rw]
+    verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
