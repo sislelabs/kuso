@@ -102,6 +102,16 @@ The control-plane Postgres database holds users, sessions, audit logs, GitHub Ap
 
 Some spec edits on a running service are free (env vars, scale), some trigger a rolling restart (port, image), some hit Let's Encrypt rate limits (TLS hosts), and a few will orphan data if you're not careful (volumes). The contract is in **[docs/EDIT_SAFETY.md](./docs/EDIT_SAFETY.md)** — per-field, with the blast radius spelled out. Worth a read before mass-editing live envs from a script or the CLI.
 
+## Claude Code skill
+
+Drop a kuso skill into any project deployed here so Claude knows the CLI surface, the deploy lifecycle, the `${{ ... }}` env-var ref syntax, and the standard debug playbook. From your project repo root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/sislelabs/kuso/main/skills/kuso/install.sh | bash
+```
+
+That writes `.claude/skills/kuso/SKILL.md`; restart Claude Code and `/skills` will show **kuso** active. See **[skills/kuso/](./skills/kuso/)** for the contents and update flow.
+
 ## Repo layout
 
 | Path         | What it is                                                                |
