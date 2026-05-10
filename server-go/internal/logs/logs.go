@@ -82,6 +82,31 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 		fqn = project + "-" + service
 	}
 	ns := s.nsFor(ctx, project)
+
+	// build:<KusoBuild name> — same shape the streaming WS endpoint
+	// accepts. Without this branch, the REST tail tried to look up
+	// an env CR named "build:<id>" and 404'd, even though the
+	// build's pods are right there + the persisted-tail fallback is
+	// wired. CLI users hitting `kuso logs <p> <s> --env build:<id>`
+	// without -f got "server returned 404: not found" with no
+	// recourse short of switching to --follow.
+	if strings.HasPrefix(env, "build:") {
+		buildName := strings.TrimPrefix(env, "build:")
+		out, err := s.tailBuildPods(ctx, ns, buildName, lines)
+		if err == nil && len(out) > 0 {
+			return out, env, nil
+		}
+		// Pods gone (helm uninstalled the build). Fall back to the
+		// archived tail in postgres.
+		if s.BuildLogs != nil {
+			archived, err := s.BuildLogs.GetBuildLog(ctx, buildName)
+			if err == nil && archived != "" {
+				return archivedTextToLines(archived, lines), env, nil
+			}
+		}
+		return []Line{}, env, nil
+	}
+
 	envName := env
 	if !strings.Contains(env, "-") {
 		envName = fqn + "-" + env
@@ -164,4 +189,89 @@ func (s *Service) tailOnePod(ctx context.Context, ns string, pod *corev1.Pod, ta
 		return out, err
 	}
 	return out, nil
+}
+
+// tailBuildPods returns lines from every pod owned by a KusoBuild,
+// honoring init containers in order (clone → env-detect → optional
+// nixpacks-plan → kaniko). Mirrors the WS streamer's pod selection.
+// Returns ([], nil) when no pods exist (caller falls back to the
+// persisted archive).
+func (s *Service) tailBuildPods(ctx context.Context, ns, buildName string, lines int) ([]Line, error) {
+	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/instance=" + buildName,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list build pods: %w", err)
+	}
+	if len(pods.Items) == 0 {
+		return nil, nil
+	}
+	tail := int64(lines)
+	if len(pods.Items) > 1 {
+		tail = int64(lines / len(pods.Items))
+		if tail < 1 {
+			tail = 1
+		}
+	}
+	out := make([]Line, 0, lines)
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		// Pull each container individually — init failures (clone
+		// fatal, missing token) live on the init pod's stdout and
+		// would otherwise be lost if we only read the main one.
+		for _, c := range append(append([]string{}, containerNames(pod.Spec.InitContainers)...), containerNames(pod.Spec.Containers)...) {
+			req := s.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
+				Container: c,
+				TailLines: &tail,
+			})
+			stream, err := req.Stream(ctx)
+			if err != nil {
+				continue
+			}
+			scanner := bufio.NewScanner(stream)
+			scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+			for scanner.Scan() {
+				line := scanner.Text()
+				if line == "" {
+					continue
+				}
+				out = append(out, Line{Pod: pod.Name + "/" + c, Line: line})
+			}
+			stream.Close()
+		}
+	}
+	if len(out) > lines {
+		out = out[len(out)-lines:]
+	}
+	return out, nil
+}
+
+// archivedTextToLines converts a saved build-log blob (one big string,
+// container-prefix headers + line-feeds) into the same Line shape the
+// pod-tail path emits. The persisted archive is best-effort — we
+// don't have per-line pod attribution, so all lines carry an
+// "<archive>" pod tag so users see the source.
+func archivedTextToLines(text string, max int) []Line {
+	lines := strings.Split(text, "\n")
+	if len(lines) > max {
+		lines = lines[len(lines)-max:]
+	}
+	out := make([]Line, 0, len(lines))
+	for _, l := range lines {
+		if l == "" {
+			continue
+		}
+		out = append(out, Line{Pod: "<archive>", Line: l})
+	}
+	return out
+}
+
+// containerNames returns the .Name field of a container slice. Local
+// helper so callers don't grow their own one-liner.
+func containerNames(in []corev1.Container) []string {
+	out := make([]string, len(in))
+	for i := range in {
+		out[i] = in[i].Name
+	}
+	return out
 }

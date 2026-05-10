@@ -24,6 +24,7 @@ var (
 	logsEnv    string
 	logsLines  int
 	logsFollow bool
+	logsBuild  string
 )
 
 var logsCmd = &cobra.Command{
@@ -36,18 +37,31 @@ behaviour). With --follow / -f, opens a WebSocket and streams new
 log lines until ^C — same surface as the web UI's Logs tab.`,
 	Example: `  kuso logs hello web
   kuso logs hello web -f --env staging
-  kuso logs hello web --lines 1000`,
+  kuso logs hello web --lines 1000
+  kuso logs hello web --build hello-web-main-mox0g7ry`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
+		// --build <id> is a friendly alias for --env build:<id>.
+		// Without this, users had to remember the magic prefix and
+		// retype the build name; with it, they can copy the id
+		// straight from `kuso build list` output. Mutually
+		// exclusive with --env so a typo doesn't silently win.
+		envSelector := logsEnv
+		if logsBuild != "" {
+			if logsEnv != "" && logsEnv != "production" {
+				return fmt.Errorf("--build and --env are mutually exclusive")
+			}
+			envSelector = "build:" + logsBuild
+		}
 		if logsFollow {
-			return streamLogs(args[0], args[1], logsEnv, logsLines)
+			return streamLogs(args[0], args[1], envSelector, logsLines)
 		}
 		// Non-follow path: hit the REST endpoint, dump, exit.
 		path := fmt.Sprintf("/api/projects/%s/services/%s/logs?env=%s&lines=%d",
-			args[0], args[1], logsEnv, logsLines)
+			args[0], args[1], url.QueryEscape(envSelector), logsLines)
 		resp, err := api.RawGet(path)
 		if err != nil {
 			return err
@@ -175,4 +189,5 @@ func init() {
 	logsCmd.Flags().StringVar(&logsEnv, "env", "production", "environment (production|preview-pr-N|<custom>)")
 	logsCmd.Flags().IntVar(&logsLines, "lines", 200, "number of lines to fetch (max 2000)")
 	logsCmd.Flags().BoolVarP(&logsFollow, "follow", "f", false, "stream live logs over WebSocket until ^C")
+	logsCmd.Flags().StringVar(&logsBuild, "build", "", "tail a specific build's pod logs (id from `kuso build list`)")
 }
