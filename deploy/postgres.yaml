@@ -152,34 +152,37 @@ spec:
           args:
             - |
               set -e
-              # Wait for CNPG to publish the -app Secret (means the
-              # primary is up + initdb is done). 5 min budget.
+              # The user-supplied bootstrap mode (initdb.secret.name)
+              # tells CNPG to use kuso-postgres-conn as the SOURCE for
+              # the user's password — it does NOT publish a separate
+              # kuso-postgres-app Secret. install.sh has already seeded
+              # username/password/database into kuso-postgres-conn
+              # before this Job runs; we just need to wait for the rw
+              # Service (signal that the primary is promoted) and then
+              # add the composed dsn key.
+              #
+              # Pre-fix this Job waited for kuso-postgres-app to appear
+              # for 5 minutes and then failed — bootstrap mode never
+              # creates that name. Caught when migrating to a new box.
               for i in $(seq 1 60); do
-                if kubectl -n kuso get secret kuso-postgres-app >/dev/null 2>&1; then
+                if kubectl -n kuso get service kuso-postgres-rw >/dev/null 2>&1; then
                   break
                 fi
-                echo "[stamp] waiting for kuso-postgres-app Secret ($i/60)…"
+                echo "[stamp] waiting for kuso-postgres-rw Service ($i/60)…"
                 sleep 5
               done
-              if ! kubectl -n kuso get secret kuso-postgres-app >/dev/null 2>&1; then
-                echo "[stamp] FATAL: kuso-postgres-app Secret never appeared. Check the CNPG operator + Cluster status:" >&2
+              if ! kubectl -n kuso get service kuso-postgres-rw >/dev/null 2>&1; then
+                echo "[stamp] FATAL: Service kuso-postgres-rw never appeared. Check the CNPG operator + Cluster status:" >&2
                 echo "  kubectl -n kuso describe cluster kuso-postgres" >&2
                 echo "  kubectl -n cnpg-system logs deploy/cnpg-controller-manager --tail=200" >&2
                 exit 1
               fi
-              user=$(kubectl -n kuso get secret kuso-postgres-app -o jsonpath='{.data.username}' | base64 -d)
-              pass=$(kubectl -n kuso get secret kuso-postgres-app -o jsonpath='{.data.password}' | base64 -d)
-              dbname=$(kubectl -n kuso get secret kuso-postgres-app -o jsonpath='{.data.dbname}' | base64 -d)
+              user=$(kubectl -n kuso get secret kuso-postgres-conn -o jsonpath='{.data.username}' | base64 -d)
+              pass=$(kubectl -n kuso get secret kuso-postgres-conn -o jsonpath='{.data.password}' | base64 -d)
+              dbname=$(kubectl -n kuso get secret kuso-postgres-conn -o jsonpath='{.data.database}' | base64 -d)
               if [ -z "$user" ] || [ -z "$pass" ] || [ -z "$dbname" ]; then
-                echo "[stamp] FATAL: kuso-postgres-app Secret has empty username/password/dbname — CNPG bootstrap likely failed." >&2
-                kubectl -n kuso get secret kuso-postgres-app -o yaml >&2
-                exit 1
-              fi
-              # Verify the rw Service exists before composing the DSN —
-              # CNPG creates it once the primary is healthy. If it's
-              # missing the operator hasn't finished promotion yet.
-              if ! kubectl -n kuso get service kuso-postgres-rw >/dev/null 2>&1; then
-                echo "[stamp] FATAL: Service kuso-postgres-rw doesn't exist yet — CNPG primary not promoted." >&2
+                echo "[stamp] FATAL: kuso-postgres-conn missing username/password/database — install.sh seeding likely failed." >&2
+                kubectl -n kuso get secret kuso-postgres-conn -o yaml >&2
                 exit 1
               fi
               host="kuso-postgres-rw"
