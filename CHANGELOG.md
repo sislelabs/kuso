@@ -5,6 +5,15 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.59] — 2026-05-10
+
+### Other
+- Skill: drop-in kuso skill for Claude Code ([4735c52](https://github.com/sislelabs/kuso/commit/4735c52517b8137c7da4fe1332d7317183a243e1))
+- Hardening pass: pod-security, RBAC, CSRF, multi-ns logs, mobile incident ([bb1386f](https://github.com/sislelabs/kuso/commit/bb1386fe1a4354faa6ab2e52043fbe1a478b602b))
+
+### 🐛 Bug Fixes
+- Fix: apply scoped to project + CLI image-runtime + skill accuracy ([8e7d418](https://github.com/sislelabs/kuso/commit/8e7d4185a820bca287ccf9e5d9b7cf2c720448a9))
+
 ## [0.9.58] — 2026-05-08
 
 ### 📝 Docs
