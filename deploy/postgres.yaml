@@ -147,7 +147,7 @@ spec:
       serviceAccountName: kuso-postgres-dsn
       containers:
         - name: stamp
-          image: bitnami/kubectl:1.30
+          image: rancher/kubectl:v1.30.4
           command: [/bin/sh, -ec]
           args:
             - |
