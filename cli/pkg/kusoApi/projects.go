@@ -74,6 +74,23 @@ type CreateServiceRequest struct {
 	} `json:"repo"`
 	Runtime string `json:"runtime,omitempty"`
 	Port    int    `json:"port,omitempty"`
+	// Image is required when runtime=image — points at an existing
+	// registry image instead of building from a repo. Server stamps
+	// it onto the env CR at create time so the chart pulls
+	// directly without spinning a kaniko Job. Other runtimes
+	// ignore this field.
+	Image *ServiceImageSpec `json:"image,omitempty"`
+}
+
+// ServiceImageSpec mirrors projects.ServiceImageSpec on the server —
+// duplicated here so the CLI doesn't have to import server-go/.
+// Repository is the full reference up to (not including) the tag,
+// e.g. "ghcr.io/foo/bar". Tag defaults to "latest" server-side
+// when empty, with the usual mutable-tag caveat (next redeploy
+// won't observe a new image until the user changes the tag).
+type ServiceImageSpec struct {
+	Repository string `json:"repository,omitempty"`
+	Tag        string `json:"tag,omitempty"`
 }
 
 type CreateAddonRequest struct {

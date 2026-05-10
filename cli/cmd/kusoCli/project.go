@@ -243,9 +243,11 @@ var projectDescribeCmd = &cobra.Command{
 // ---------------- project service add ----------------
 
 var (
-	serviceAddPath    string
-	serviceAddRuntime string
-	serviceAddPort    int
+	serviceAddPath        string
+	serviceAddRuntime     string
+	serviceAddPort        int
+	serviceAddImageRepo   string
+	serviceAddImageTag    string
 )
 
 var projectServiceCmd = &cobra.Command{
@@ -273,6 +275,21 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 	req.Repo.Path = serviceAddPath
 	req.Runtime = serviceAddRuntime
 	req.Port = serviceAddPort
+	// runtime=image: point kuso at a pre-built image instead of a
+	// repo. The server requires image.repository when runtime is
+	// "image" and rejects the request otherwise; the CLI mirrors
+	// that check so the failure is friendly.
+	if serviceAddRuntime == "image" {
+		if serviceAddImageRepo == "" {
+			return fmt.Errorf("--runtime=image requires --image-repo (e.g. ghcr.io/owner/app)")
+		}
+		req.Image = &kusoApi.ServiceImageSpec{
+			Repository: serviceAddImageRepo,
+			Tag:        serviceAddImageTag,
+		}
+	} else if serviceAddImageRepo != "" || serviceAddImageTag != "" {
+		return fmt.Errorf("--image-repo / --image-tag only valid with --runtime=image")
+	}
 	resp, err := api.AddService(args[0], req)
 	if err != nil {
 		return fmt.Errorf("add service: %w", err)
@@ -829,8 +846,10 @@ func init() {
 	projectCmd.AddCommand(projectServiceCmd)
 	projectServiceCmd.AddCommand(serviceAddCmd)
 	serviceAddCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
-	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static — nixpacks auto-detects most languages with zero config")
+	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static|image — nixpacks auto-detects most languages with zero config; image deploys an existing registry image without building")
 	serviceAddCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
+	serviceAddCmd.Flags().StringVar(&serviceAddImageRepo, "image-repo", "", "(runtime=image) registry image, e.g. ghcr.io/owner/app")
+	serviceAddCmd.Flags().StringVar(&serviceAddImageTag, "image-tag", "", "(runtime=image) tag — defaults to 'latest' server-side")
 	projectServiceCmd.AddCommand(serviceDeleteCmd)
 	serviceDeleteCmd.Flags().BoolVarP(&serviceDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	projectServiceCmd.AddCommand(serviceRenameCmd)
@@ -879,8 +898,10 @@ func init() {
 	rootCmd.AddCommand(serviceCmd)
 	serviceCmd.AddCommand(serviceAddTopCmd)
 	serviceAddTopCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
-	serviceAddTopCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static — nixpacks auto-detects most languages with zero config")
+	serviceAddTopCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static|image — nixpacks auto-detects most languages with zero config; image deploys an existing registry image without building")
 	serviceAddTopCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
+	serviceAddTopCmd.Flags().StringVar(&serviceAddImageRepo, "image-repo", "", "(runtime=image) registry image, e.g. ghcr.io/owner/app")
+	serviceAddTopCmd.Flags().StringVar(&serviceAddImageTag, "image-tag", "", "(runtime=image) tag — defaults to 'latest' server-side")
 	// Top-level alias `kuso service set` mirrors the long form. Cobra
 	// commands can't have two parents, so we mint a fresh shell and
 	// dispatch to the same RunE + share the flag vars (already
