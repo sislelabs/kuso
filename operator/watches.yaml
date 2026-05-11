@@ -8,11 +8,14 @@
 # the kube-apiserver — each reconcile is mostly CPU-bound on rendering
 # helm templates, not API throughput. Tune up further only if reconcile
 # lag is actually visible at scale.
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: Kuso
-  chart: helm-charts/kuso
-  maxConcurrentReconciles: 2
+#
+# Removed in v0.9.61: the legacy "Kind: Kuso" entry. That CRD was
+# retired pre-v0.5 and never came back, but the watch survived in
+# this file. On a fresh install (no kusoes CRD registered) the
+# operator's cache-sync timed out trying to watch a non-existent
+# resource and the entire manager exited non-zero, so NO CR got
+# reconciled — addons stayed as YAML, services never came up.
+# Caught during the migration to the 16GB box.
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoProject
