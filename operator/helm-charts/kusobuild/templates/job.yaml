@@ -45,17 +45,26 @@ spec:
         {{- include "kusobuild.labels" . | nindent 8 }}
     spec:
       restartPolicy: Never
+      # Pod-level fsGroup ONLY — no runAsUser/runAsGroup. Each
+      # container has its own UID (kaniko runs as root inside its
+      # own rootless container; clone+env-detect+nixpacks-plan
+      # need root to apk add packages; cache-init runs as 1000 via
+      # its container securityContext below). Pinning runAsUser
+      # here would cascade to every container and break the ones
+      # that need root.
+      #
+      # fsGroup=1000 makes the cache PVC's mount point group-writable
+      # by GID 1000 — that's what cache-init actually needed. The
+      # kubelet only applies fsGroup to the volume, not to / or
+      # /etc/apk/etc.
       securityContext:
-        runAsNonRoot: true
-        # Match the cache-init's UID 1000 so the kubelet chowns the
-        # mounted PVC to gid=1000 (fsGroup behaviour). Without this,
-        # a PVC created by a previous root-owned build comes back
-        # owned by root:root and cache-init's mkdir under /cache
-        # exits 1 with EACCES — the whole Job hits backoffLimit
-        # before kaniko ever runs.
-        runAsUser: 1000
-        runAsGroup: 1000
         fsGroup: 1000
+        # runAsNonRoot intentionally NOT set at pod level for the
+        # same reason: env-detect needs apk add (which needs root).
+        # Each long-running container (kaniko, the runtime build
+        # itself) keeps allowPrivilegeEscalation:false + drop ALL
+        # caps via its own securityContext, which is the actual
+        # blast-radius reduction we care about.
         seccompProfile:
           type: RuntimeDefault
       # Pin to the dedicated SA above. Without this the pod runs as
