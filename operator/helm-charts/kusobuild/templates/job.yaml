@@ -593,7 +593,11 @@ spec:
 
               IMAGE="{{ .Values.image.repository }}:{{ .Values.image.tag }}"
               CACHE="{{ .Values.registry.cacheRepo | default (printf "%s/.cache" .Values.image.repository) }}"
-              BUILDKIT_HOST="{{ .Values.buildkitd.host | default "tcp://kuso-buildkitd.kuso.svc.cluster.local:1234" }}"
+              # The shared kuso-buildkitd Deployment listens on
+              # this Service in the kuso namespace. Hardcoded
+              # because every kuso install wires the same name;
+              # no value override needed.
+              BUILDKIT_HOST="tcp://kuso-buildkitd.kuso.svc.cluster.local:1234"
 
               echo "==> buildkit: daemon=$BUILDKIT_HOST"
               echo "==> buildkit: image=$IMAGE cache=$CACHE df=$DF ctx=$CTX"
