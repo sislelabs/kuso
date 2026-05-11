@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.74] — 2026-05-11
+
+### 🐛 Bug Fixes
+- Fix(builds): poll every 5s, not 30s — BuildKit warm-cache builds completed in <30s so the poller's first tick saw 'succeeded' without ever observing 'running'. UI showed PENDING all the way through despite logs streaming. ([de32a74](https://github.com/sislelabs/kuso/commit/de32a74418ff29d5b91436f55ede8ff1b569dd83))
+
 ## [0.9.73] — 2026-05-11
 
 ### Other
