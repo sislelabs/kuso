@@ -529,116 +529,149 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
         {{- else }}
-        - name: kaniko
-          image: gcr.io/kaniko-project/executor:v1.23.2
-          # Kaniko needs to chown files when it unpacks the base
-          # image rootfs (e.g. `chown /etc/gshadow` from
-          # node:20-bookworm-slim's init). Dropping ALL capabilities
-          # killed every build at the unpack stage with
-          # "chown /etc/gshadow: operation not permitted".
-          #
-          # We keep allowPrivilegeEscalation=false (no setuid escape)
-          # and drop everything except CHOWN/DAC_OVERRIDE/FOWNER/
-          # SETUID/SETGID — the minimum kaniko needs to manipulate
-          # arbitrary base-image rootfs ownership. Kaniko itself
-          # runs in user-namespace mode so this isn't a host-cap
-          # leak; it just lets the chown syscall inside its sandbox
-          # succeed.
+        # BuildKit (rootless) replaces kaniko as of v0.9.69.
+        #
+        # Why the swap: kaniko serialises stages and snapshots the
+        # whole rootfs after every RUN. On a Next.js+LibreOffice
+        # build we measured ~10½ min wall-clock, of which ~3 min
+        # was just the snapshot+push of the libreoffice apt layer.
+        # BuildKit:
+        #   - executes independent stages in parallel (deps +
+        #     prod-deps + builder ran serially under kaniko; under
+        #     BuildKit they're concurrent),
+        #   - honors `RUN --mount=type=cache` so npm/apt caches
+        #     persist across builds without us having to pre-mount
+        #     subPaths (legacy paths still mounted below for
+        #     Dockerfiles that haven't adopted --mount=type=cache),
+        #   - uses native overlayfs diffing instead of full-tree
+        #     hash snapshots,
+        #   - pushes layers concurrently with the next stage
+        #     building.
+        #
+        # Trade-offs accepted:
+        #   - seccompProfile: Unconfined — buildkit-rootless needs
+        #     ptrace + userfaultfd for its overlay snapshotter.
+        #     allowPrivilegeEscalation is still false; the
+        #     container is still rootless (uid 1000); the cap
+        #     surface is just the kaniko set plus what overlayfs
+        #     wants. No host-cap leak — the userns boundary holds.
+        #   - Insecure-registry config is hard-coded for the
+        #     in-cluster kuso-registry; external registries would
+        #     need TLS like any other client.
+        - name: buildkit
+          image: moby/buildkit:v0.16.0-rootless
           securityContext:
+            runAsUser: 1000
+            runAsGroup: 1000
             allowPrivilegeEscalation: false
+            seccompProfile:
+              type: Unconfined
             capabilities:
               drop: ["ALL"]
+              # CHOWN/FOWNER/SETUID/SETGID let buildkit chown into
+              # arbitrary uids when unpacking base images (same need
+              # kaniko had). DAC_OVERRIDE lets it read files it
+              # technically doesn't own (rare in well-formed images
+              # but kept for parity with kaniko's working set).
               add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"]
-          args:
-            {{- if eq .Values.strategy "nixpacks" }}
-            - --dockerfile=.nixpacks/Dockerfile
-            - --context=dir:///workspace/src/{{ .Values.repo.path | default "." }}
-            {{- else if eq .Values.strategy "static" }}
-            - --dockerfile=.kuso-static.Dockerfile
-            - --context=dir:///workspace/src/{{ .Values.repo.path | default "." }}
-            {{- else }}
-            - --dockerfile=Dockerfile
-            - --context=dir:///workspace/src/{{ .Values.repo.path | default "." }}
-            {{- end }}
-            - --destination={{ .Values.image.repository }}:{{ .Values.image.tag }}
-            {{- if .Values.registry.allowInsecure }}
-            - --insecure
-            - --skip-tls-verify
-            {{- end }}
-            - --cache=true
-            - --cache-repo={{ .Values.registry.cacheRepo | default (printf "%s/.cache" .Values.image.repository) }}
-            - --cleanup
-            # Memory-saving flags for small clusters. Without these
-            # kaniko hashes every file's content on every snapshot,
-            # which on a node_modules tree (~50k files, 200MiB) can
-            # peak well past 2GiB and OOMKill on a 4GB box.
-            #
-            # --snapshot-mode=redo: only re-snapshot when a file's
-            # mtime/size/perms change (vs full content hash). For
-            # node_modules where files are written once and never
-            # touched again, this collapses the snapshot peak from
-            # ~1.5GiB to ~200MiB on representative builds.
-            #
-            # --use-new-run: switches to the streaming run executor
-            # introduced in kaniko 1.10. Lower memory ceiling than
-            # the legacy path because intermediate diffs are written
-            # to disk instead of held in heap.
-            #
-            # --compressed-caching=false: skip the in-memory layer
-            # compression buffer. Slightly larger pushed cache layers
-            # but a meaningful drop in peak RSS during snapshot.
-            - --snapshot-mode=redo
-            - --use-new-run
-            - --compressed-caching=false
-          {{- if .Values.auth.secretName }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              # Resolve the per-strategy Dockerfile + context path.
+              {{- if eq .Values.strategy "nixpacks" }}
+              CTX="/workspace/src/{{ .Values.repo.path | default "." }}"
+              DF=".nixpacks/Dockerfile"
+              {{- else if eq .Values.strategy "static" }}
+              CTX="/workspace/src/{{ .Values.repo.path | default "." }}"
+              DF=".kuso-static.Dockerfile"
+              {{- else }}
+              CTX="/workspace/src/{{ .Values.repo.path | default "." }}"
+              DF="Dockerfile"
+              {{- end }}
+
+              IMAGE="{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+              CACHE="{{ .Values.registry.cacheRepo | default (printf "%s/.cache" .Values.image.repository) }}"
+
+              echo "==> buildkit: image=$IMAGE cache=$CACHE df=$DF ctx=$CTX"
+
+              # buildctl-daemonless.sh spawns buildkitd in the
+              # background, runs buildctl against the local socket,
+              # then exits. This is the official rootless pattern
+              # for single-shot builds.
+              exec buildctl-daemonless.sh \
+                build \
+                --frontend dockerfile.v0 \
+                --local context="$CTX" \
+                --local dockerfile="$CTX" \
+                --opt filename="$DF" \
+                --output type=image,name="$IMAGE",push=true,registry.insecure=true \
+                --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=true \
+                --import-cache type=registry,ref="$CACHE",registry.insecure=true \
+                --progress plain
           env:
+            # buildkit-rootless writes its socket + state to
+            # $XDG_RUNTIME_DIR. The image defaults this to
+            # /run/user/1000 which is read-only when not explicitly
+            # mounted; we mount an emptyDir there.
+            - name: XDG_RUNTIME_DIR
+              value: /run/user/1000
+            # rootlesskit needs HOME to be writable for its
+            # auth + ca-cert juggling. /tmp is on tmpfs.
+            - name: HOME
+              value: /tmp
+            {{- if .Values.auth.secretName }}
+            # Push auth — buildkit reads ~/.docker/config.json
+            # like any docker client. The init container below
+            # rewrites it from the kuso-rendered Secret.
             - name: DOCKER_CONFIG
-              value: /kaniko/.docker
-          {{- end }}
+              value: /tmp/.docker
+            {{- end }}
           volumeMounts:
             - name: workspace
               mountPath: /workspace
+            - name: buildkitd-state
+              mountPath: /home/user/.local/share/buildkit
+            - name: buildkitd-runtime
+              mountPath: /run/user/1000
             {{- if .Values.auth.secretName }}
             - name: docker-config
-              mountPath: /kaniko/.docker
+              mountPath: /tmp/.docker
               readOnly: true
             {{- end }}
             {{- if and (eq .Values.strategy "nixpacks") .Values.cache.pvcName }}
-            # Symlink /nix → /cache/nix so the kaniko snapshot of the
-            # nixpacks-generated image's RUN steps reads from the
-            # warm store. nixpacks-plan symlinked it for its own
-            # process; kaniko runs in a fresh container so we
-            # symlink again here.
             - name: cache
               mountPath: /cache
             {{- end }}
             {{- if .Values.cache.pvcName }}
-            # Per-language dep caches — exposed via subPath so each
-            # mount is a clean dir from the user's perspective. The
-            # Dockerfile RUN stages typically write to ~/.npm,
-            # ~/go/pkg/mod, etc.; with these subPaths backed by the
-            # PVC, a `npm ci` on the second build hits the local
-            # cache instead of npmjs.com.
+            # Legacy per-language dep cache mounts. Dockerfiles
+            # that adopt `RUN --mount=type=cache,target=...` will
+            # use buildkit's native caches (faster, content-
+            # addressed) and ignore these. Dockerfiles that don't
+            # see the same warm dirs they used to under kaniko —
+            # so the swap is non-breaking. UID 1000 needs these
+            # paths to live under /tmp (writable) rather than
+            # /root.
             - name: cache
-              mountPath: /root/.npm
+              mountPath: /tmp/.npm
               subPath: deps/npm
             - name: cache
-              mountPath: /root/go/pkg/mod
+              mountPath: /tmp/go/pkg/mod
               subPath: deps/go-mod
             - name: cache
-              mountPath: /root/.cache/go-build
+              mountPath: /tmp/.cache/go-build
               subPath: deps/go-build
             - name: cache
-              mountPath: /root/.cache/pip
+              mountPath: /tmp/.cache/pip
               subPath: deps/pip
             - name: cache
-              mountPath: /root/.cargo/registry
+              mountPath: /tmp/.cargo/registry
               subPath: deps/cargo
             - name: cache
-              mountPath: /root/.gradle
+              mountPath: /tmp/.gradle
               subPath: deps/gradle
             - name: cache
-              mountPath: /root/.m2
+              mountPath: /tmp/.m2
               subPath: deps/m2
             {{- end }}
           resources:
@@ -646,6 +679,15 @@ spec:
         {{- end }}
       volumes:
         - name: workspace
+          emptyDir: {}
+        # buildkit-rootless state + runtime dirs. emptyDir is fine
+        # here — the durable cache lives in the registry (cache.ref
+        # above) and the per-language PVC. These two just hold
+        # buildkitd's running socket + ephemeral worker metadata
+        # for the lifetime of this Job pod.
+        - name: buildkitd-state
+          emptyDir: {}
+        - name: buildkitd-runtime
           emptyDir: {}
         {{- if .Values.cache.pvcName }}
         - name: cache
