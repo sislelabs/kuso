@@ -560,10 +560,24 @@ spec:
         #     need TLS like any other client.
         - name: buildkit
           image: moby/buildkit:v0.16.0-rootless
+          # buildkit-rootless uses rootlesskit, which invokes
+          # newuidmap/newgidmap (setuid binaries) to set up the
+          # inner user namespace's UID/GID map. That needs
+          # allowPrivilegeEscalation=true so the setuid bit can
+          # take effect; setting it false fails before buildkitd
+          # even starts with
+          # "newuidmap: Could not set caps: exit status 1".
+          # The actual security boundary is still rootlesskit:
+          # the container runs as uid 1000 on the host, drops all
+          # caps it doesn't need, and the inner user namespace
+          # contains everything buildkit does. allowPrivilegeEscalation
+          # only matters when combined with a setuid binary; with
+          # `drop: ALL`-minus-the-five-we-add, the surface is
+          # narrow.
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
-            allowPrivilegeEscalation: false
+            allowPrivilegeEscalation: true
             seccompProfile:
               type: Unconfined
             capabilities:
@@ -571,9 +585,11 @@ spec:
               # CHOWN/FOWNER/SETUID/SETGID let buildkit chown into
               # arbitrary uids when unpacking base images (same need
               # kaniko had). DAC_OVERRIDE lets it read files it
-              # technically doesn't own (rare in well-formed images
-              # but kept for parity with kaniko's working set).
-              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"]
+              # technically doesn't own. SETFCAP + SETPCAP let
+              # rootlesskit's newuidmap actually claim its setuid
+              # privileges — without these the rootless UID map
+              # fails to install.
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "SETFCAP", "SETPCAP"]
           command:
             - /bin/sh
             - -ec
