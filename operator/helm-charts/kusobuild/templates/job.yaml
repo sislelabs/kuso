@@ -105,10 +105,21 @@ spec:
             - -c
             - |
               set -e
+              # mkdir -p is idempotent on PVC re-mount. We previously
+              # ran `chmod -R 0777 /cache` here too, but on a fresh
+              # PVC the root-owned mount point can't be chmod'd by
+              # the runAsUser=1000 init container — non-owner chmod
+              # always errors. fsGroup on the pod spec already gives
+              # the subdirs we just created group-write, which is
+              # what kaniko + nixpacks need; the chmod was paranoid.
               mkdir -p /cache/nix /cache/deps/npm /cache/deps/go-mod \
                        /cache/deps/go-build /cache/deps/pip \
                        /cache/deps/cargo /cache/deps/gradle /cache/deps/m2
-              chmod -R 0777 /cache
+              # chmod each child best-effort so existing dirs from
+              # an earlier root-owned build become writable. Errors
+              # on dirs we already own are silenced (chmod returns 0
+              # in that case anyway).
+              chmod -R g+w /cache/nix /cache/deps 2>/dev/null || true
               du -sh /cache/* 2>/dev/null || true
           volumeMounts:
             - name: cache
