@@ -73,16 +73,13 @@ export function SourceSection({
       />
       <Row
         label="repository"
-        hint="full https URL"
+        hint={
+          autoResolved
+            ? `full https URL · github app: ${autoResolved.accountLogin} (auto)`
+            : "full https URL"
+        }
         control={
           <div className="flex w-full items-center gap-1.5">
-            <Input
-              value={state.repoURL}
-              onChange={(e) => setState((s) => ({ ...s, repoURL: e.target.value }))}
-              placeholder="https://github.com/owner/repo"
-              className="h-7 flex-1 font-mono text-[12px]"
-              spellCheck={false}
-            />
             {state.repoURL && (
               <a
                 href={state.repoURL}
@@ -94,6 +91,20 @@ export function SourceSection({
               >
                 <ExternalLink className="h-3 w-3" />
               </a>
+            )}
+            <Input
+              value={state.repoURL}
+              onChange={(e) => setState((s) => ({ ...s, repoURL: e.target.value }))}
+              placeholder="https://github.com/owner/repo"
+              className="h-7 flex-1 font-mono text-[12px]"
+              spellCheck={false}
+            />
+            {parsed && (
+              <RepoAccessTest
+                owner={parsed.owner}
+                repo={parsed.repo}
+                installationId={state.repoInstallationID || autoResolved?.id || 0}
+              />
             )}
           </div>
         }
@@ -123,41 +134,17 @@ export function SourceSection({
             spellCheck={false}
           />
         }
-      />
-      <Row
-        label="installation"
-        hint={
-          state.repoInstallationID === 0 && autoResolved
-            ? `auto → ${autoResolved.accountLogin}`
-            : "GitHub App that owns the repo · auto when blank"
-        }
-        control={
-          <div className="flex w-full flex-wrap items-center gap-1.5">
-            <select
-              value={state.repoInstallationID || 0}
-              onChange={(e) =>
-                setState((s) => ({ ...s, repoInstallationID: Number(e.target.value) || 0 }))
-              }
-              className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
-            >
-              <option value={0}>auto (resolve from URL)</option>
-              {(installs.data ?? []).map((inst) => (
-                <option key={inst.id} value={inst.id}>
-                  {inst.accountLogin} ({inst.repositories.length} repos)
-                </option>
-              ))}
-            </select>
-            {parsed && (
-              <RepoAccessTest
-                owner={parsed.owner}
-                repo={parsed.repo}
-                installationId={state.repoInstallationID || autoResolved?.id || 0}
-              />
-            )}
-          </div>
-        }
         last
       />
+      {/* The installation row used to live here. Removed since
+          kuso auto-resolves the GitHub App installation from the
+          repo URL's owner — the dropdown was a power-user knob
+          that ~no one actually flipped, and the auto-resolved
+          owner is now surfaced inline on the repository row's
+          hint. The "test access" button moved next to the URL
+          input where it's actually useful. The server still
+          accepts an explicit installationId via the API if a
+          future multi-org corner case needs it. */}
       <RenameRow project={project} service={service} />
     </Section>
   );

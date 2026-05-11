@@ -11,14 +11,18 @@ export function BuildSection({ state, setState }: SectionProps) {
         label="strategy"
         hint="how kuso builds the image"
         control={
-          <div className="inline-flex flex-wrap gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
+          // Pills are nowrap + tighter (px-1.5, text-[10px]) so the
+          // four strategies fit on one line at typical overlay
+          // widths. The wrap-fallback is still there for very
+          // narrow viewports but is rare in practice now.
+          <div className="inline-flex flex-nowrap items-center gap-0.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
             {RUNTIMES.map((r) => (
               <button
                 key={r}
                 type="button"
                 onClick={() => setState((s) => ({ ...s, runtime: r }))}
                 className={cn(
-                  "rounded px-2 py-1 font-mono text-[11px] transition-colors",
+                  "rounded px-1.5 py-1 font-mono text-[10px] whitespace-nowrap transition-colors",
                   state.runtime === r
                     ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
                     : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]",
