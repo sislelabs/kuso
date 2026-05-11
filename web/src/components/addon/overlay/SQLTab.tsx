@@ -64,7 +64,13 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
   };
 
   return (
-    <div className="grid h-full grid-cols-[200px_1fr] gap-0">
+    // minmax(0, 1fr) on the right column is load-bearing: a plain `1fr`
+    // grid track expands to fit its contents, so a SELECT * on a wide
+    // table (50+ columns) blows past the overlay width and turns the
+    // whole tab into a horizontal-scroll mess. With minmax(0, …) the
+    // track can shrink below its natural content width, which lets the
+    // inner `overflow-auto` actually scroll the table independently.
+    <div className="grid h-full min-w-0 grid-cols-[200px_minmax(0,1fr)] gap-0">
       <aside className="overflow-y-auto border-r border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-3">
         <h4 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
           tables
@@ -127,7 +133,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
         )}
       </aside>
 
-      <section className="flex min-h-0 flex-col">
+      <section className="flex min-h-0 min-w-0 flex-col">
         <div className="border-b border-[var(--border-subtle)] p-3">
           <textarea
             value={query}
