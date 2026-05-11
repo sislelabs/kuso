@@ -57,20 +57,42 @@ export function NetworkingSection({ state, setState, autoHost }: SectionProps) {
         hint={
           state.internal
             ? "internal — reachable only from sibling pods via cluster DNS"
-            : "public — Ingress + auto-domain + Let's Encrypt cert · check to flip to internal-only"
+            : "public — Ingress + auto-domain + Let's Encrypt cert"
         }
         control={
-          <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-[12px]">
-            <input
-              type="checkbox"
-              checked={state.internal}
-              onChange={(e) =>
-                setState((s) => ({ ...s, internal: e.target.checked }))
+          <button
+            type="button"
+            role="switch"
+            aria-checked={state.internal}
+            aria-label="Internal-only"
+            onClick={() =>
+              setState((s) => ({ ...s, internal: !s.internal }))
+            }
+            className="group inline-flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 rounded-md px-1 py-0.5"
+          >
+            <span
+              className={`relative h-5 w-9 rounded-full transition-colors ${
+                state.internal
+                  ? "bg-[var(--accent)]"
+                  : "bg-[var(--bg-tertiary)] border border-[var(--border)]"
+              }`}
+            >
+              <span
+                className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+                  state.internal ? "translate-x-4" : "translate-x-0.5"
+                }`}
+              />
+            </span>
+            <span
+              className={
+                state.internal
+                  ? "text-[var(--text-primary)]"
+                  : "text-[var(--text-secondary)] group-hover:text-[var(--text-primary)]"
               }
-              className="h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
-            />
-            <span>Internal-only</span>
-          </label>
+            >
+              Internal-only
+            </span>
+          </button>
         }
       />
       <Row
