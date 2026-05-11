@@ -188,4 +188,18 @@ spec:
                 secretKeyRef:
                   name: {{ $secretName }}
                   key: S3_SECRET_ACCESS_KEY
+            # mc writes its config under $HOME/.mc. Running as a
+            # non-root UID (per podSecurityContext) means $HOME
+            # defaults to "/" and the mkdir fails with EACCES. The
+            # emptyDir mount below + this HOME pin together give mc
+            # a writable scratch dir without needing to know the
+            # exact UID layout of the minio/mc image.
+            - name: HOME
+              value: /tmp
+          volumeMounts:
+            - name: mc-home
+              mountPath: /tmp
+      volumes:
+        - name: mc-home
+          emptyDir: {}
 {{- end }}
