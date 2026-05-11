@@ -592,7 +592,13 @@ spec:
               {{- end }}
 
               IMAGE="{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-              CACHE="{{ .Values.registry.cacheRepo | default (printf "%s/.cache" .Values.image.repository) }}"
+              # BuildKit's registry cache expects a tag-based ref
+              # (repo:tag), not the path-suffix shape kaniko used
+              # (<repo>/.cache). We share one cache tag across all
+              # builds of this service so layers from any tag
+              # build the next one. mode=max writes intermediate
+              # layers too, which is what makes second builds fast.
+              CACHE="{{ .Values.image.repository }}:buildcache"
               # The shared kuso-buildkitd Deployment listens on
               # this Service in the kuso namespace. Hardcoded
               # because every kuso install wires the same name;
