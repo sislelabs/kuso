@@ -558,43 +558,28 @@ spec:
         #   - Insecure-registry config is hard-coded for the
         #     in-cluster kuso-registry; external registries would
         #     need TLS like any other client.
+        # buildctl thin-client. The actual build happens inside
+        # the long-lived kuso-buildkitd Deployment over TCP — see
+        # deploy/buildkitd.yaml. Each build Job uploads its
+        # /workspace context to the daemon via gRPC and streams
+        # progress back. That gives us Coolify-style speed
+        # (warm caches between unrelated builds, no daemon
+        # startup) without the per-Job rootless dance.
+        #
+        # No special caps needed here: buildctl is just a TCP
+        # client. The privilege boundary lives in the daemon.
         - name: buildkit
-          image: moby/buildkit:v0.16.0-rootless
-          # buildkit-rootless uses rootlesskit, which invokes
-          # newuidmap/newgidmap (setuid binaries) to set up the
-          # inner user namespace's UID/GID map. That needs
-          # allowPrivilegeEscalation=true so the setuid bit can
-          # take effect; setting it false fails before buildkitd
-          # even starts with
-          # "newuidmap: Could not set caps: exit status 1".
-          # The actual security boundary is still rootlesskit:
-          # the container runs as uid 1000 on the host, drops all
-          # caps it doesn't need, and the inner user namespace
-          # contains everything buildkit does. allowPrivilegeEscalation
-          # only matters when combined with a setuid binary; with
-          # `drop: ALL`-minus-the-five-we-add, the surface is
-          # narrow.
+          image: moby/buildkit:v0.16.0
           securityContext:
             runAsUser: 1000
             runAsGroup: 1000
-            allowPrivilegeEscalation: true
-            seccompProfile:
-              type: Unconfined
+            allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
-              # CHOWN/FOWNER/SETUID/SETGID let buildkit chown into
-              # arbitrary uids when unpacking base images (same need
-              # kaniko had). DAC_OVERRIDE lets it read files it
-              # technically doesn't own. SETFCAP + SETPCAP let
-              # rootlesskit's newuidmap actually claim its setuid
-              # privileges — without these the rootless UID map
-              # fails to install.
-              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID", "SETFCAP", "SETPCAP"]
           command:
             - /bin/sh
             - -ec
             - |
-              # Resolve the per-strategy Dockerfile + context path.
               {{- if eq .Values.strategy "nixpacks" }}
               CTX="/workspace/src/{{ .Values.repo.path | default "." }}"
               DF=".nixpacks/Dockerfile"
@@ -608,14 +593,26 @@ spec:
 
               IMAGE="{{ .Values.image.repository }}:{{ .Values.image.tag }}"
               CACHE="{{ .Values.registry.cacheRepo | default (printf "%s/.cache" .Values.image.repository) }}"
+              BUILDKIT_HOST="{{ .Values.buildkitd.host | default "tcp://kuso-buildkitd.kuso.svc.cluster.local:1234" }}"
 
+              echo "==> buildkit: daemon=$BUILDKIT_HOST"
               echo "==> buildkit: image=$IMAGE cache=$CACHE df=$DF ctx=$CTX"
 
-              # buildctl-daemonless.sh spawns buildkitd in the
-              # background, runs buildctl against the local socket,
-              # then exits. This is the official rootless pattern
-              # for single-shot builds.
-              exec buildctl-daemonless.sh \
+              # Wait up to 30s for the daemon to accept connections.
+              # In steady state it's already running; this only
+              # matters on a fresh install or after the daemon was
+              # rescheduled. `buildctl debug workers` is cheap +
+              # exits non-zero on connect failure.
+              for i in $(seq 1 30); do
+                if buildctl --addr "$BUILDKIT_HOST" debug workers >/dev/null 2>&1; then
+                  break
+                fi
+                echo "==> waiting for buildkitd ($i/30)..."
+                sleep 1
+              done
+
+              exec buildctl \
+                --addr "$BUILDKIT_HOST" \
                 build \
                 --frontend dockerfile.v0 \
                 --local context="$CTX" \
@@ -626,48 +623,36 @@ spec:
                 --import-cache type=registry,ref="$CACHE",registry.insecure=true \
                 --progress plain
           env:
-            # buildkit-rootless writes its socket + state to
-            # $XDG_RUNTIME_DIR. The image defaults this to
-            # /run/user/1000 which is read-only when not explicitly
-            # mounted; we mount an emptyDir there.
-            - name: XDG_RUNTIME_DIR
-              value: /run/user/1000
-            # rootlesskit needs HOME to be writable for its
-            # auth + ca-cert juggling. /tmp is on tmpfs.
             - name: HOME
               value: /tmp
             {{- if .Values.auth.secretName }}
-            # Push auth — buildkit reads ~/.docker/config.json
-            # like any docker client. The init container below
-            # rewrites it from the kuso-rendered Secret.
             - name: DOCKER_CONFIG
               value: /tmp/.docker
             {{- end }}
           volumeMounts:
             - name: workspace
               mountPath: /workspace
-            - name: buildkitd-state
-              mountPath: /home/user/.local/share/buildkit
-            - name: buildkitd-runtime
-              mountPath: /run/user/1000
             {{- if .Values.auth.secretName }}
             - name: docker-config
               mountPath: /tmp/.docker
               readOnly: true
             {{- end }}
             {{- if and (eq .Values.strategy "nixpacks") .Values.cache.pvcName }}
+            # nixpacks-plan symlinks /nix → /cache/nix; that
+            # symlink is materialised in /workspace by the prior
+            # init container and survives into here via the same
+            # workspace mount, so no separate /cache mount is
+            # needed for nixpacks under buildkit.
             - name: cache
               mountPath: /cache
             {{- end }}
             {{- if .Values.cache.pvcName }}
-            # Legacy per-language dep cache mounts. Dockerfiles
-            # that adopt `RUN --mount=type=cache,target=...` will
-            # use buildkit's native caches (faster, content-
-            # addressed) and ignore these. Dockerfiles that don't
-            # see the same warm dirs they used to under kaniko —
-            # so the swap is non-breaking. UID 1000 needs these
-            # paths to live under /tmp (writable) rather than
-            # /root.
+            # Legacy per-language dep cache mounts. Most modern
+            # Dockerfiles use buildkit's native `RUN --mount=type=cache`
+            # which is content-addressed and shared inside the
+            # daemon's state PVC; those ignore these subPath
+            # mounts. Older Dockerfiles still find their warm
+            # caches at the same paths we used under kaniko.
             - name: cache
               mountPath: /tmp/.npm
               subPath: deps/npm
@@ -695,15 +680,6 @@ spec:
         {{- end }}
       volumes:
         - name: workspace
-          emptyDir: {}
-        # buildkit-rootless state + runtime dirs. emptyDir is fine
-        # here — the durable cache lives in the registry (cache.ref
-        # above) and the per-language PVC. These two just hold
-        # buildkitd's running socket + ephemeral worker metadata
-        # for the lifetime of this Job pod.
-        - name: buildkitd-state
-          emptyDir: {}
-        - name: buildkitd-runtime
           emptyDir: {}
         {{- if .Values.cache.pvcName }}
         - name: cache

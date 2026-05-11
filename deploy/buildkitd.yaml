@@ -1,0 +1,156 @@
+# Long-lived BuildKit daemon. One per kuso install — every
+# kusobuild Job is a thin `buildctl` client that connects here via
+# TCP. This is the Coolify-style architecture: the daemon survives
+# across builds, keeps a hot in-memory + on-disk cache, and reuses
+# overlay snapshots between unrelated builds.
+#
+# Why this beats per-Job rootless buildkit:
+#   - First build is no longer cold. Subsequent builds get
+#     near-instant layer reuse from the local snapshot store, not
+#     just the registry-cache import.
+#   - No rootlesskit setup per Job (saves ~10s of UID-map dance).
+#   - Build pods can shrink to a 30 MB buildctl image instead of
+#     400 MB of moby/buildkit + rootlesskit.
+#
+# Why privileged (and what that means here):
+#   BuildKit needs CAP_SYS_ADMIN to bind-share its rootfs into a
+#   private mount namespace (the mount-share syscall has no
+#   smaller cap on linux). It also wants real /dev/fuse for the
+#   fuse-overlayfs snapshotter unless we switch to the kernel
+#   overlay driver. We grant privileged: true here because:
+#     1. The daemon is OUR code (not user-supplied images) — the
+#        attack surface is the buildkit binary itself, which is
+#        widely audited.
+#     2. The build INPUTS are user-supplied (Dockerfiles, build
+#        contexts) but buildkit executes those inside its own
+#        nested namespaces — a malicious Dockerfile can't escape
+#        the buildkit jail.
+#     3. We're single-tenant per cluster. Multi-tenant would
+#        need rootless or a per-tenant daemon — both possible to
+#        retrofit if/when needed.
+#
+# State: persistent /var/lib/buildkit so a daemon restart doesn't
+# nuke every cache. 20Gi is generous for a 4-project install;
+# tune via KUSO_BUILDKITD_STATE_SIZE if needed.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kuso-buildkitd-state
+  namespace: kuso
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kuso-buildkitd
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-buildkitd
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: kuso-buildkitd
+  ports:
+    - name: grpc
+      port: 1234
+      targetPort: 1234
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kuso-buildkitd
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-buildkitd
+spec:
+  replicas: 1
+  # Recreate (not RollingUpdate) because the daemon owns a PVC
+  # with overlayfs mounts. A second instance trying to mount the
+  # same store mid-handover would fight the existing one. The
+  # daemon is the only writer; a brief gap during upgrades is
+  # cheaper than a corrupted snapshot store.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kuso-buildkitd
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kuso-buildkitd
+    spec:
+      containers:
+        - name: buildkitd
+          image: moby/buildkit:v0.16.0
+          args:
+            # Listen on TCP so build Jobs can connect from
+            # whatever namespace they live in. No mutual TLS yet
+            # — we're single-tenant and the Service IP isn't
+            # routable from outside the cluster. Add mTLS via
+            # --tlscert/--tlskey/--tlscacert when multi-tenant
+            # comes back into scope.
+            - --addr
+            - tcp://0.0.0.0:1234
+            # Use the kernel overlay snapshotter (faster than
+            # fuse-overlayfs by ~15-20% on heavy I/O workloads
+            # like LibreOffice apt install). k3s ships a kernel
+            # new enough that overlayfs works inside a privileged
+            # container.
+            - --oci-worker-snapshotter=overlayfs
+            # Trust the in-cluster insecure registry. Without
+            # this, every image push fails with x509 cert errors
+            # against the plain-HTTP kuso-registry:5000.
+            - --config
+            - /etc/buildkit/buildkitd.toml
+          ports:
+            - name: grpc
+              containerPort: 1234
+          securityContext:
+            # privileged: true is what buildkit-non-rootless
+            # needs to bind-share rootfs + mount overlays. See
+            # the file header comment for the trade-off.
+            privileged: true
+          readinessProbe:
+            exec:
+              command: [buildctl, debug, workers]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          volumeMounts:
+            - name: state
+              mountPath: /var/lib/buildkit
+            - name: config
+              mountPath: /etc/buildkit
+              readOnly: true
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: "4"
+              memory: 6Gi
+      volumes:
+        - name: state
+          persistentVolumeClaim:
+            claimName: kuso-buildkitd-state
+        - name: config
+          configMap:
+            name: kuso-buildkitd-config
+---
+# buildkitd.toml — trust the in-cluster registry (plain HTTP).
+# Anything else needs TLS; the build Job's Dockerfile can still
+# reference public registries with TLS like normal.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kuso-buildkitd-config
+  namespace: kuso
+data:
+  buildkitd.toml: |
+    debug = false
+    [registry."kuso-registry.kuso.svc.cluster.local:5000"]
+      http = true
+      insecure = true

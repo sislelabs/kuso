@@ -352,6 +352,17 @@ kubectl wait --for=condition=Available --timeout=180s \
 REGISTRY_IP=$(kubectl get svc kuso-registry -n kuso -o jsonpath='{.spec.clusterIP}')
 ensure_registry_hosts_entry "$REGISTRY_IP"
 
+# -------- 8a2. buildkitd --------
+# Long-lived BuildKit daemon. Every kusobuild Job connects via TCP
+# instead of spawning its own builder per build, so caches stay
+# warm and the rootless-buildkit kernel-syscall dance is avoided
+# (the daemon runs privileged once; the build Jobs are unprivileged
+# thin clients).
+log "deploying in-cluster buildkitd"
+curl -sfL "${KUSO_RAW}/deploy/buildkitd.yaml" | kubectl apply -f - >/dev/null
+kubectl wait --for=condition=Available --timeout=180s \
+  deployment/kuso-buildkitd -n kuso || warn "kuso-buildkitd not yet ready"
+
 # -------- 8b. prometheus --------
 # Lightweight prometheus that scrapes traefik:9100 + opted-in pods.
 # Required for the dashboard's Metrics tab — without it the
