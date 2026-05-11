@@ -531,10 +531,24 @@ spec:
         {{- else }}
         - name: kaniko
           image: gcr.io/kaniko-project/executor:v1.23.2
+          # Kaniko needs to chown files when it unpacks the base
+          # image rootfs (e.g. `chown /etc/gshadow` from
+          # node:20-bookworm-slim's init). Dropping ALL capabilities
+          # killed every build at the unpack stage with
+          # "chown /etc/gshadow: operation not permitted".
+          #
+          # We keep allowPrivilegeEscalation=false (no setuid escape)
+          # and drop everything except CHOWN/DAC_OVERRIDE/FOWNER/
+          # SETUID/SETGID — the minimum kaniko needs to manipulate
+          # arbitrary base-image rootfs ownership. Kaniko itself
+          # runs in user-namespace mode so this isn't a host-cap
+          # leak; it just lets the chown syscall inside its sandbox
+          # succeed.
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+              add: ["CHOWN", "DAC_OVERRIDE", "FOWNER", "SETUID", "SETGID"]
           args:
             {{- if eq .Values.strategy "nixpacks" }}
             - --dockerfile=.nixpacks/Dockerfile
