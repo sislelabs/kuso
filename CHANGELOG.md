@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.77] — 2026-05-11
+
+### ✨ Features
+- Feat: security hardening + project export/import + CLI parity ([dd2bb08](https://github.com/sislelabs/kuso/commit/dd2bb0860a04774e009b92f323d4a1fc82896d1f))
+
+### 🐛 Bug Fixes
+- Fix(updater): graceful default for unsigned-no-key state ([b5d54cc](https://github.com/sislelabs/kuso/commit/b5d54cc38bc58d5350e7bc1e2ae774eb615591b0))
+
 ## [0.9.76] — 2026-05-11
 
 ### Other
