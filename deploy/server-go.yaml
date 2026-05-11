@@ -272,6 +272,14 @@ spec:
             - { name: KUSO_NAMESPACE, value: kuso }
             - { name: KUSO_ADMIN_USERNAME, value: admin }
             - { name: KUSO_ADMIN_EMAIL, value: admin@kuso.sislelabs.com }
+            # Admin password is now sourced from a mounted file (see
+            # volumeMounts below) instead of the envFrom-loaded
+            # kuso-server-secrets. The file path is read on first
+            # boot only — see cmd/kuso-server/admin_password.go.
+            # The env-var path still works as a fallback for
+            # backwards-compat with older installs that haven't
+            # re-run install.sh.
+            - { name: KUSO_ADMIN_PASSWORD_FILE, value: /etc/kuso/admin/password }
             - { name: KUSO_AUDIT, value: "true" }
             - { name: KUSO_TEMPLATES_ENABLED, value: "false" }
           envFrom:
@@ -321,7 +329,24 @@ spec:
             httpGet: { path: /readyz, port: http }
             periodSeconds: 5
             failureThreshold: 18
-      # No volume mounts — the k3s node-token used to be a hostPath
+          volumeMounts:
+            # Admin bootstrap password projected as a file. Kept off
+            # the env so `kubectl exec` / `describe pod` doesn't
+            # surface it. Marked optional so OAuth-only installs
+            # (no password admin) start without complaint.
+            - name: admin-credentials
+              mountPath: /etc/kuso/admin
+              readOnly: true
+      volumes:
+        - name: admin-credentials
+          secret:
+            secretName: kuso-admin-credentials
+            optional: true
+            defaultMode: 0400
+            items:
+              - key: password
+                path: password
+      # k3s node-token used to be a hostPath
       # of /var/lib/rancher/k3s/server/node-token, which pinned the
       # pod to the control-plane node. Now KUSO_K3S_TOKEN is sourced
       # from the kuso-k3s-token Secret (envFrom above), so the pod

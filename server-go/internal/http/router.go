@@ -341,6 +341,24 @@ func NewRouter(d Deps) http.Handler {
 		if d.Addons != nil {
 			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			addonsH.Mount(r)
+			// Project export + import. Needs Projects + Addons +
+			// ProjectSecrets together; mounted here because we just
+			// confirmed Addons is wired. Single-tenant: import is
+			// admin-only, export is Deployer-or-higher (the handler
+			// enforces both).
+			if d.Projects != nil {
+				exportH := &httphandlers.ExportHandler{
+					Projects:       d.Projects,
+					Addons:         d.Addons,
+					ProjectSecrets: d.ProjectSecrets,
+					Kube:           d.Kube,
+					NSResolver:     d.Addons.NSResolver,
+					Namespace:      d.Namespace,
+					DB:             d.DB,
+					Logger:         d.Logger,
+				}
+				exportH.Mount(r)
+			}
 			if d.Crons != nil {
 				cronsH := &httphandlers.CronsHandler{Svc: d.Crons, DB: d.DB, Logger: d.Logger}
 				cronsH.Mount(r)

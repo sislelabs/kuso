@@ -94,20 +94,21 @@ func main() {
 	// layers: (1) per-jti RevokedToken (logout, manual revoke);
 	// (2) per-user UserTokenInvalidation watermark (role demotion,
 	// group removal, deactivation, password reset). Both are sub-ms
-	// PK probes; the middleware fails open on DB error so a transient
-	// outage doesn't 401 every active user.
-	issuer.SetRevocationChecker(func(ctx context.Context, jti, userID string, iat time.Time) bool {
-		if jti != "" && database.IsTokenRevoked(ctx, jti) {
-			return true
-		}
-		if userID != "" && !iat.IsZero() {
-			watermark := database.UserTokenWatermark(ctx, userID)
-			if !watermark.IsZero() && iat.Before(watermark) {
-				return true
-			}
-		}
-		return false
-	})
+	// PK probes on a hot pool.
+	//
+	// Fail-closed on DB error — previously this checker treated a DB
+	// outage as "not revoked" which left logged-out tokens valid for
+	// their full 10h TTL whenever Postgres flapped. The new behaviour:
+	//
+	//   - Per-request DB error → consult a short-TTL (30s) in-memory
+	//     cache of last-known-good answers. If we have a cached answer
+	//     that's still fresh, use it. Otherwise treat as revoked (401).
+	//   - On success → refresh the cache entry.
+	//
+	// 30s is a deliberate compromise: short enough that a revoked
+	// token can't outlive Postgres being down by more than 30s, long
+	// enough that a flaky pool burst doesn't 401 every active session.
+	issuer.SetRevocationChecker(makeRevocationChecker(database))
 
 	// Two-tier shutdown contexts (R4 audit fix):
 	//
@@ -140,18 +141,32 @@ func main() {
 
 	auditSvc := audit.New(ctx, database)
 
-	// First-boot bootstrap: seed admin role + user from
-	// KUSO_ADMIN_USERNAME / KUSO_ADMIN_PASSWORD when the DB is virgin.
-	// On every subsequent boot, EnsureAdminPassword keeps the env value
-	// as the source of truth — rotating the Secret rotates the hash on
-	// next pod start.
-	if pw := os.Getenv("KUSO_ADMIN_PASSWORD"); pw != "" {
+	// First-boot bootstrap: seed admin role + user from the configured
+	// password source when the DB is virgin.
+	//
+	// Source priority: KUSO_ADMIN_PASSWORD_FILE (mounted Secret file) >
+	// KUSO_ADMIN_PASSWORD (env var, with a warning). File-based is the
+	// recommended path because the env var is visible to anyone with
+	// `kubectl describe pod` or `kubectl exec`.
+	//
+	// Default re-boot behaviour: DO NOT rotate the hash. The DB is the
+	// source of truth and the operator changes the password via the UI.
+	// Pre-fix the bootstrap re-applied the env value on every pod start
+	// (via EnsureAdminPassword), which silently clobbered any UI password
+	// change after the next image roll — both surprising and a footgun.
+	//
+	// Lost-password recovery: set KUSO_ADMIN_PASSWORD_FORCE_RESET=true,
+	// restart the pod once, then remove the flag. This re-applies the
+	// configured password to the admin user. The flag is opt-in so the
+	// default ("file only seeds, never rotates") stays safe.
+	adminPW := readAdminPassword(logger)
+	if adminPW != "" {
 		username := os.Getenv("KUSO_ADMIN_USERNAME")
 		if username == "" {
 			username = "admin"
 		}
 		email := os.Getenv("KUSO_ADMIN_EMAIL")
-		hash, err := auth.HashPassword(pw, 0)
+		hash, err := auth.HashPassword(adminPW, 0)
 		if err != nil {
 			logger.Error("admin: hash password", "err", err)
 			os.Exit(2)
@@ -160,8 +175,12 @@ func main() {
 			logger.Error("admin: bootstrap", "err", err)
 			os.Exit(2)
 		}
-		if _, err := database.EnsureAdminPassword(ctx, username, hash); err != nil && !errors.Is(err, db.ErrNotFound) {
-			logger.Warn("admin: ensure password", "err", err)
+		if v := os.Getenv("KUSO_ADMIN_PASSWORD_FORCE_RESET"); v == "true" || v == "1" {
+			if _, err := database.EnsureAdminPassword(ctx, username, hash); err != nil && !errors.Is(err, db.ErrNotFound) {
+				logger.Warn("admin: force reset password", "err", err)
+			} else {
+				logger.Warn("admin: KUSO_ADMIN_PASSWORD_FORCE_RESET applied — REMOVE THE FLAG after this boot")
+			}
 		}
 		// v0.5 tenancy: ensure an admin group exists and the seed
 		// password admin is in it. Without this an upgrade from a

@@ -25,6 +25,14 @@ func (k *KusoClient) RollbackBuild(project, service, build string) (*resty.Respo
 	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/builds/" + esc(build) + "/rollback")
 }
 
+// CancelBuild stops an in-flight build. The build CR is preserved
+// (with phase=cancelled) so it stays visible in `kuso build list`.
+// 409 from the server means the build already reached a terminal
+// phase — there's nothing to stop.
+func (k *KusoClient) CancelBuild(project, service, build string) (*resty.Response, error) {
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/builds/" + esc(build) + "/cancel")
+}
+
 // ---------- GitHub installations ----------
 
 func (k *KusoClient) GetInstallURL() (*resty.Response, error) {

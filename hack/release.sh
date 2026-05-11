@@ -493,20 +493,63 @@ log "wrote ${DIST_DIR}/release.json"
 # ---- 4b2. release.json signature -----------------------------------
 #
 # Ed25519 signature over the raw release.json bytes. The kuso updater
-# verifies this when KUSO_REQUIRE_SIGNATURES=true is set on a target
-# install (server-go/internal/updater/updater.go::verifyManifest
-# Signature). The public key is embedded in the install bundle (see
-# install.sh KUSO_RELEASE_PUBLIC_KEY).
+# REQUIRES this by default (server-go/internal/updater/updater.go::
+# requireSignatures defaults to true since v0.9.77). Without a valid
+# signature, installs refuse to auto-update — which is the whole point
+# of the supply-chain defence.
 #
-# Skipped silently if KUSO_RELEASE_PRIVATE_KEY isn't set so iterations
-# without keys still produce a usable release.json (the updater logs
-# "unsigned release accepted" and proceeds with a warn). Once the
-# keypair is generated, set KUSO_RELEASE_PRIVATE_KEY to a path
-# containing the PEM-encoded Ed25519 private key.
-if [[ -n "${KUSO_RELEASE_PRIVATE_KEY:-}" ]]; then
+# First-run UX: if KUSO_RELEASE_PRIVATE_KEY isn't set AND a keypair
+# doesn't yet exist at the conventional path, we generate one,
+# print the public key, and prompt the user to bake it into their
+# install (env var KUSO_RELEASE_PUBLIC_KEY on kuso-server).
+#
+# To explicitly ship unsigned (almost never the right answer, but
+# useful for first install before a keypair is wired): pass
+# KUSO_RELEASE_UNSIGNED=1.
+
+KUSO_KEYS_DIR="${KUSO_KEYS_DIR:-${HOME}/.kuso/release-keys}"
+KUSO_RELEASE_PRIVATE_KEY="${KUSO_RELEASE_PRIVATE_KEY:-${KUSO_KEYS_DIR}/release.pem}"
+
+if [[ "${KUSO_RELEASE_UNSIGNED:-0}" == "1" ]]; then
+  warn "KUSO_RELEASE_UNSIGNED=1 set — shipping release.json without a signature"
+  warn "Installs with KUSO_REQUIRE_SIGNATURES=true (the default) will REFUSE to auto-update from this release"
+else
   if [[ ! -f "$KUSO_RELEASE_PRIVATE_KEY" ]]; then
-    fail "KUSO_RELEASE_PRIVATE_KEY=${KUSO_RELEASE_PRIVATE_KEY} does not exist"
+    log "no release keypair at ${KUSO_RELEASE_PRIVATE_KEY} — generating one"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      dry "openssl genpkey -algorithm ed25519 -out ${KUSO_RELEASE_PRIVATE_KEY}"
+    else
+      mkdir -p "$KUSO_KEYS_DIR"
+      chmod 0700 "$KUSO_KEYS_DIR"
+      openssl genpkey -algorithm ed25519 -out "$KUSO_RELEASE_PRIVATE_KEY"
+      chmod 0600 "$KUSO_RELEASE_PRIVATE_KEY"
+    fi
+    PUB_B64=""
+    if [[ "$DRY_RUN" != "1" ]]; then
+      PUB_B64=$(openssl pkey -in "$KUSO_RELEASE_PRIVATE_KEY" -pubout -outform DER 2>/dev/null \
+        | tail -c 32 | openssl base64 -A)
+    fi
+    cat <<NEXT
+
+==> generated a fresh Ed25519 release keypair.
+
+Private key: ${KUSO_RELEASE_PRIVATE_KEY}   (keep this secret + backed up)
+Public key (base64): ${PUB_B64}
+
+To enable signature verification on your kuso install, set this on
+the kuso-server Deployment:
+
+    kubectl -n kuso set env deployment/kuso-server \\
+      KUSO_RELEASE_PUBLIC_KEY=${PUB_B64}
+    kubectl -n kuso rollout restart deployment/kuso-server
+
+Or, to opt out of verification (NOT RECOMMENDED), set
+KUSO_REQUIRE_SIGNATURES=false on the install. Without either,
+the install will fail to auto-update until you wire the key.
+
+NEXT
   fi
+
   log "signing release.json with ${KUSO_RELEASE_PRIVATE_KEY}"
   if [[ "$DRY_RUN" == "1" ]]; then
     dry "openssl pkeyutl -sign -inkey \"$KUSO_RELEASE_PRIVATE_KEY\" -rawin -in \"$DIST_DIR/release.json\" | base64 > \"$DIST_DIR/release.json.sig\""
@@ -515,16 +558,11 @@ if [[ -n "${KUSO_RELEASE_PRIVATE_KEY:-}" ]]; then
       -in "$DIST_DIR/release.json" \
       | openssl base64 -A \
       > "$DIST_DIR/release.json.sig"
-    # Strip stray newline so the file is bare base64 (the verifier
-    # uses base64.StdEncoding which tolerates whitespace, but a clean
-    # file makes diffs easier).
     if [[ "$(uname)" == "Darwin" ]]; then
       printf '\n' >> "$DIST_DIR/release.json.sig"
     fi
     log "wrote ${DIST_DIR}/release.json.sig ($(wc -c < "$DIST_DIR/release.json.sig") bytes)"
   fi
-else
-  warn "KUSO_RELEASE_PRIVATE_KEY not set — release.json will ship unsigned (set KUSO_REQUIRE_SIGNATURES on installs to enforce signatures once a keypair is wired)"
 fi
 
 # ---- 4c. CLI binaries ----------------------------------------------

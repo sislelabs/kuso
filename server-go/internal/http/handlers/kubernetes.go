@@ -92,6 +92,38 @@ func (h *KubernetesHandler) Mount(rt interface {
 // renaming cheap if we ever need to.
 const kusoLabelPrefix = "kuso.sislelabs.com/"
 
+// requireEnvAccess gates a kube envs/{env} handler by the project the
+// env belongs to. Resolves env CR → spec.project → ProjectMembership.
+//
+// Returns true when the caller is allowed (admin bypass, or has the
+// requested role on the project). On deny it writes 404 (NOT 403)
+// so probing for env names doesn't leak existence — same shape as the
+// project-scope endpoints.
+//
+// Errors fall closed: a missing env CR, a kube outage, or a torn
+// label set all deny access. We deliberately don't surface the
+// specific failure mode in the response — the caller has no
+// legitimate need to know why it was denied.
+func (h *KubernetesHandler) requireEnvAccess(
+	ctx context.Context,
+	w http.ResponseWriter,
+	envName string,
+	role db.ProjectRole,
+) bool {
+	if h.Kube == nil || h.DB == nil {
+		// No kube + no DB = either a misconfigured server or a test
+		// stub. Both should fail closed.
+		http.Error(w, "not found", http.StatusNotFound)
+		return false
+	}
+	envCR, err := h.Kube.GetKusoEnvironment(ctx, h.Namespace, envName)
+	if err != nil || envCR == nil || envCR.Spec.Project == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return false
+	}
+	return requireProjectAccess(ctx, w, h.DB, envCR.Spec.Project, role)
+}
+
 // kubeCtx returns a 10-second deadline context for kube round-trips.
 // Long enough to ride out a slow apiserver tick, short enough that a
 // wedged handler doesn't pin a goroutine forever.

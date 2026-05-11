@@ -22,7 +22,7 @@ The `kuso` CLI ships with `backup` and `restore` verbs that pull / push a `pg_du
 kuso backup -o /backups/kuso-$(date -u +%Y%m%d).sql.gz
 ```
 
-If you have a compliance reason to lock it down (multi-tenant kuso-as-a-service, regulated environment), set `KUSO_BACKUP_DISABLED=1` on the server deployment to remove the routes entirely:
+If you have a regulated workload that mandates disabling network-accessible backup endpoints, set `KUSO_BACKUP_DISABLED=1` on the server deployment to remove the routes entirely:
 
 ```bash
 kubectl -n kuso set env deployment/kuso-server KUSO_BACKUP_DISABLED=1

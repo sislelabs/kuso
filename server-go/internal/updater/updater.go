@@ -849,13 +849,21 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
-// requireSignatures returns true when the operator has opted into
-// strict manifest verification. Defaults to false (unsigned releases
-// pass with a warn log) so existing installs can continue to update
-// before keys are wired. Once we ship signed releases everywhere
-// this flag flips to true-by-default in a future major.
+// requireSignatures returns true when the operator wants strict
+// manifest verification — and that's the default. Releases without
+// a valid signature are rejected; the updater logs a clear error
+// and refuses to apply. To opt out (almost never the right answer;
+// it disables the platform's supply-chain defence), set
+// KUSO_REQUIRE_SIGNATURES=false explicitly.
+//
+// Trade-off: a fresh install without a wired public key can't auto-
+// update. install.sh prints the keypair generation steps; users
+// who skipped that step get a loud "configure
+// KUSO_RELEASE_PUBLIC_KEY or set KUSO_REQUIRE_SIGNATURES=false"
+// error rather than silently trusting whatever ghcr returns.
 func requireSignatures() bool {
-	return getenv("KUSO_REQUIRE_SIGNATURES") == "true"
+	v := getenv("KUSO_REQUIRE_SIGNATURES")
+	return v != "false" && v != "0"
 }
 
 // verifyManifestSignature looks for a `release.json.sig` asset on

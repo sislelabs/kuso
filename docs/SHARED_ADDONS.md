@@ -93,7 +93,7 @@ The per-project Secret is just like the native-addon conn-secret. Services that 
 | One project, want isolation, accept the resource cost | **Native** |
 | Already have a Postgres you trust (RDS, managed, on-prem) | **External** |
 | Many small kuso projects on one cluster, want to share one Postgres | **Instance-shared** |
-| Compliance / multi-tenant — projects must not share infra | **Native**, never instance-shared |
+| Compliance / regulated workload — projects must not share infra | **Native**, never instance-shared |
 | Project is critical and shared server's blast radius is unacceptable | **Native** |
 
 ## See also

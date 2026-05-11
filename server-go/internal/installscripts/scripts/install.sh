@@ -548,8 +548,17 @@ EXISTING_ADMIN=""
 EXISTING_SESSION=""
 EXISTING_JWT=""
 EXISTING_METRICS_SCRAPE=""
+# The admin password moved out of kuso-server-secrets into a dedicated
+# `kuso-admin-credentials` Secret mounted as a file. Read from there
+# first; fall back to the legacy kuso-server-secrets key for installs
+# that haven't been re-run since v0.9.77.
+if kubectl get secret -n kuso kuso-admin-credentials >/dev/null 2>&1; then
+  EXISTING_ADMIN=$(kubectl get secret -n kuso kuso-admin-credentials -o jsonpath='{.data.password}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+fi
 if kubectl get secret -n kuso kuso-server-secrets >/dev/null 2>&1; then
-  EXISTING_ADMIN=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.KUSO_ADMIN_PASSWORD}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  if [[ -z "$EXISTING_ADMIN" ]]; then
+    EXISTING_ADMIN=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.KUSO_ADMIN_PASSWORD}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
+  fi
   EXISTING_SESSION=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.KUSO_SESSION_KEY}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   EXISTING_JWT=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.JWT_SECRET}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
   EXISTING_METRICS_SCRAPE=$(kubectl get secret -n kuso kuso-server-secrets -o jsonpath='{.data.KUSO_METRICS_SCRAPE_TOKEN}' 2>/dev/null | base64 -d 2>/dev/null || echo "")
@@ -591,11 +600,20 @@ KUSO_REQUIRE_SIGS="${KUSO_REQUIRE_SIGNATURES:-false}"
 kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o yaml \
   --from-literal=KUSO_SESSION_KEY="$SESSION_KEY" \
   --from-literal=JWT_SECRET="$JWT_SECRET" \
-  --from-literal=KUSO_ADMIN_PASSWORD="$ADMIN_PASSWORD" \
   --from-literal=KUSO_DOMAIN="$KUSO_DOMAIN" \
   --from-literal=KUSO_RELEASE_PUBLIC_KEY="$KUSO_RELEASE_PUBKEY" \
   --from-literal=KUSO_REQUIRE_SIGNATURES="$KUSO_REQUIRE_SIGS" \
   --from-literal=KUSO_METRICS_SCRAPE_TOKEN="$METRICS_SCRAPE_TOKEN" \
+  | kubectl apply -f - >/dev/null
+
+# Admin password lives in its OWN Secret, mounted as a file inside the
+# kuso-server pod (see deploy/server-go.yaml volumes). Splitting it out
+# keeps the password off `kubectl describe pod` and `env` — anyone with
+# pod-exec rights on kuso-server can still cat the file, but the leak
+# surface is much smaller than an env var visible to every pod inspector.
+log "applying kuso-admin-credentials"
+kubectl create secret generic kuso-admin-credentials -n kuso --dry-run=client -o yaml \
+  --from-literal=password="$ADMIN_PASSWORD" \
   | kubectl apply -f - >/dev/null
 
 # Mirror the metrics-scrape token into a dedicated Secret the bundled
@@ -979,12 +997,16 @@ echo
 echo "  UI:        https://${KUSO_DOMAIN}/"
 echo "  Admin:     admin"
 if [[ -n "$EXISTING_ADMIN" && "$ADMIN_PASSWORD" == "$EXISTING_ADMIN" ]]; then
-  echo "  Password:  (unchanged — reused from existing kuso-server-secrets)"
+  echo "  Password:  (unchanged — reused from existing install)"
   echo
-  echo "  Forgot the password? Reset it:"
-  echo "    kubectl -n kuso patch secret kuso-server-secrets --type=merge \\"
-  echo "      -p '{\"stringData\":{\"KUSO_ADMIN_PASSWORD\":\"<new>\"}}'"
+  echo "  Forgot the password? Reset it via the UI (Settings → Users)."
+  echo "  Lost UI access entirely? Force-reset from the configured secret:"
+  echo "    kubectl -n kuso patch secret kuso-admin-credentials --type=merge \\"
+  echo "      -p '{\"stringData\":{\"password\":\"<new>\"}}'"
+  echo "    kubectl -n kuso set env deployment/kuso-server KUSO_ADMIN_PASSWORD_FORCE_RESET=true"
   echo "    kubectl -n kuso rollout restart deployment/kuso-server"
+  echo "    # ...wait for new pod to come up, then:"
+  echo "    kubectl -n kuso set env deployment/kuso-server KUSO_ADMIN_PASSWORD_FORCE_RESET-"
 else
   echo "  Password:  ${ADMIN_PASSWORD}"
   echo

@@ -50,6 +50,9 @@ func clusterCachePut(key string, value any) {
 // Events returns the recent Kubernetes Events in the requested namespace
 // (defaults to KUSO_NAMESPACE). Newest first.
 func (h *KubernetesHandler) Events(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ns := r.URL.Query().Get("namespace")
 	if ns == "" {
 		ns = h.Namespace
@@ -86,6 +89,9 @@ func (h *KubernetesHandler) Events(w http.ResponseWriter, r *http.Request) {
 // only when an admin touches the cluster) but the cluster-overview
 // tab polls them often.
 func (h *KubernetesHandler) StorageClasses(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	if cached, ok := clusterCacheGet("storage-classes"); ok {
 		writeJSON(w, http.StatusOK, cached)
 		return
@@ -109,6 +115,9 @@ func (h *KubernetesHandler) StorageClasses(w http.ResponseWriter, r *http.Reques
 // file (no informer, full TLS spec per item), and the project-create
 // dialog polls this just to populate a "host already taken" hint.
 func (h *KubernetesHandler) Domains(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	if cached, ok := clusterCacheGet("ingress-domains"); ok {
 		writeJSON(w, http.StatusOK, cached)
 		return

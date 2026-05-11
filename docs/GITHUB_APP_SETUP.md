@@ -45,8 +45,7 @@ Open https://github.com/organizations/sislelabs/settings/apps/new and fill in:
 
 ### Where can this GitHub App be installed?
 
-- Choose **Any account** if you want users from outside SisleLabs to install it (multi-tenant kuso).
-- Choose **Only on this account** if kuso is for SisleLabs only.
+kuso is single-tenant by design (one team per cluster, like Coolify). Either choice works; **Only on this account** is the typical pick — it locks the App to your org and prevents accidental cross-account installs.
 
 Click **Create GitHub App.**
 

@@ -188,6 +188,30 @@ func init() {
 	}
 	buildCmd.AddCommand(rollbackCmd)
 
+	cancelCmd := &cobra.Command{
+		Use:   "cancel <project> <service> <build>",
+		Short: "Stop an in-flight build",
+		Long: "Stop a running or pending build. The build CR is preserved with " +
+			"phase=cancelled so it stays visible in `kuso build list`. Returns " +
+			"409 when the build already reached a terminal phase.",
+		Args: cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if api == nil {
+				return fmt.Errorf("not logged in; run 'kuso login' first")
+			}
+			resp, err := api.CancelBuild(args[0], args[1], args[2])
+			if err != nil {
+				return fmt.Errorf("cancel build: %w", err)
+			}
+			if resp.StatusCode() >= 300 {
+				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			}
+			fmt.Printf("build %s cancelled\n", args[2])
+			return nil
+		},
+	}
+	buildCmd.AddCommand(cancelCmd)
+
 	// `kuso redeploy <project> <service>` shortcut at top level.
 	redeployCmd := &cobra.Command{
 		Use:     "redeploy <project> <service>",

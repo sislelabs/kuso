@@ -74,7 +74,7 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 
 ## Scope guardrails (resist scope creep)
 
-kuso is a serious in-cluster PaaS — multi-node, multi-replica, Postgres-backed, HA-capable addons. We scale up inside one Kubernetes cluster. Things deliberately out of scope:
+kuso is **single-tenant** — one team per cluster, like Coolify. NOT a multi-tenant SaaS; that's a different product with a much stricter security model and is explicitly out of scope. Within one team kuso supports multi-node clusters, multi-replica services, Postgres-backed control plane, and HA-capable addons. Things deliberately out of scope:
 
 - Custom DB branching (Vercel + Neon won; integrate, don't compete)
 - Bespoke Grafana clone (5-min sparkline tiles + alerts is enough; ship metrics to real Grafana if you need more)

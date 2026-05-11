@@ -342,3 +342,50 @@ func (k *KusoClient) Apply(project string, yamlBody []byte, dryRun bool) (*resty
 func (k *KusoClient) GetProjectFull(project string) (*resty.Response, error) {
 	return k.client.Get("/api/projects/" + esc(project))
 }
+
+// ListRevisions returns the most recent revisions for one resource
+// (kind ∈ {service, environment, addon, cron}). Limit defaults to 50
+// on the server, hard cap 200.
+func (k *KusoClient) ListRevisions(project, kind, name string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/revisions/" + esc(kind) + "/" + esc(name))
+}
+
+// GetRevision returns one revision (full snapshot included).
+func (k *KusoClient) GetRevision(project, id string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/revisions/" + esc(id))
+}
+
+// RevertRevision replays a stored snapshot through the matching
+// update endpoint. Currently only kind=service is supported by the
+// server; addon/env revert returns 501.
+func (k *KusoClient) RevertRevision(project, id string) (*resty.Response, error) {
+	return k.client.Post("/api/projects/" + esc(project) + "/revisions/" + esc(id) + "/revert")
+}
+
+// RenameService clones the service + envs under newName and deletes
+// the old. Implemented server-side as clone-then-delete because kube
+// CRD names are immutable.
+func (k *KusoClient) RenameService(project, service, newName string) (*resty.Response, error) {
+	k.client.SetBody(map[string]string{"newName": newName})
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/rename")
+}
+
+// ExportProject streams a tar.gz of the project's spec (project +
+// services + envs + addons + secrets) over a single response. The
+// caller gets the raw bytes back via resp.Body().
+func (k *KusoClient) ExportProject(project string) (*resty.Response, error) {
+	return k.client.Post("/api/projects/" + esc(project) + "/export")
+}
+
+// ImportProject uploads a tarball produced by ExportProject. policy
+// is one of "error" (default), "rename", "overwrite" — see the
+// server's ExportHandler.Import for semantics.
+func (k *KusoClient) ImportProject(tarball []byte, policy string) (*resty.Response, error) {
+	k.client.SetBody(tarball)
+	k.client.SetHeader("Content-Type", "application/gzip")
+	path := "/api/projects/import"
+	if policy != "" {
+		path += "?policy=" + policy
+	}
+	return k.client.Post(path)
+}

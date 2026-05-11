@@ -83,6 +83,84 @@ func SweepFinishedBuilds(ctx context.Context, kc *kube.Client, namespace string,
 	return deleted, nil
 }
 
+// CapBuildsPerService trims finished KusoBuild CRs so each service
+// retains at most `max` of its most-recent done builds. Anything
+// older is deleted regardless of age — guards against a hot-fix loop
+// piling up 500 successful builds in an hour from outgrowing the
+// daily SweepFinishedBuilds tick.
+//
+// Why this is a separate sweep from SweepFinishedBuilds (which is
+// age-based): the leader-gated 24h tick can pause for a full day if
+// the leader pod dies + lease takes a minute to re-elect + the next
+// tick lands a day later. This cap-based sweep runs on every replica
+// from the build poller's tick (every ~6min) so a busy cluster can't
+// outgrow retention while the leader is unavailable.
+//
+// "Most recent" is by creationTimestamp. Errors per-CR are logged
+// and counted but don't abort the sweep.
+func CapBuildsPerService(ctx context.Context, kc *kube.Client, namespace string, max int, logFn func(msg string, kv ...any)) (int, error) {
+	if max <= 0 {
+		return 0, nil
+	}
+	list, err := kc.Dynamic.Resource(kube.GVRBuilds).Namespace(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: "kuso.sislelabs.com/build-state=done",
+	})
+	if err != nil {
+		return 0, fmt.Errorf("list finished builds: %w", err)
+	}
+	// Group by service label. Builds without the label (very old, pre
+	// the labelling change) are skipped — they'll fall out via the
+	// age-based SweepFinishedBuilds.
+	type build struct {
+		name string
+		ts   time.Time
+	}
+	byService := map[string][]build{}
+	for i := range list.Items {
+		item := &list.Items[i]
+		labels := item.GetLabels()
+		svc := labels["kuso.sislelabs.com/service"]
+		if svc == "" {
+			continue
+		}
+		ts := item.GetCreationTimestamp()
+		byService[svc] = append(byService[svc], build{name: item.GetName(), ts: ts.Time})
+	}
+	deleted := 0
+	for svc, builds := range byService {
+		if len(builds) <= max {
+			continue
+		}
+		// Sort newest first; keep the first `max`, delete the rest.
+		// Stable sort so two builds with identical timestamps (rare
+		// but possible in a synthetic-ref redeploy burst) retain
+		// their list order for deterministic behaviour.
+		for i := 1; i < len(builds); i++ {
+			j := i
+			for j > 0 && builds[j].ts.After(builds[j-1].ts) {
+				builds[j], builds[j-1] = builds[j-1], builds[j]
+				j--
+			}
+		}
+		for _, b := range builds[max:] {
+			if err := kube.StripHelmFinalizers(ctx, kc, kube.GVRBuilds, namespace, b.name); err != nil && !apierrors.IsNotFound(err) {
+				if logFn != nil {
+					logFn("cap: strip finalizer", "service", svc, "build", b.name, "err", err)
+				}
+			}
+			if err := kc.Dynamic.Resource(kube.GVRBuilds).Namespace(namespace).
+				Delete(ctx, b.name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+				if logFn != nil {
+					logFn("cap: delete build", "service", svc, "build", b.name, "err", err)
+				}
+				continue
+			}
+			deleted++
+		}
+	}
+	return deleted, nil
+}
+
 // SweepOrphanHelmReleases removes Secrets named
 // sh.helm.release.v1.<release>.v<rev> whose corresponding kuso CR no
 // longer exists in the namespace. We restrict the sweep to releases

@@ -2,6 +2,7 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -107,28 +108,62 @@ func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name stri
 // down the helm release but leaves the underlying Secret CR), so
 // repeated PR open/close cycles don't accumulate orphan
 // <project>-<service>-<env>-secrets in the namespace.
+//
+// Resumable on partial failure: if a previous run deleted the env CR
+// but errored before cleaning up addons/secrets, calling this again
+// re-runs the orphan cleanup using label-based discovery instead of
+// the (now-missing) env CR. The first thing every step does is
+// idempotency-check; everything tolerates NotFound. Net effect: a
+// caller can retry on any error without worrying about which phase
+// failed.
 func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) error {
-	e, err := s.GetEnvironment(ctx, project, env)
-	if err != nil {
-		return err
-	}
-	if e.Spec.Kind == "production" {
-		return fmt.Errorf("%w: cannot delete production environment %s", ErrInvalid, env)
-	}
 	defer s.invalidateDescribe(project)
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return err
 	}
+
+	// Phase 1: resolve the env CR (if it still exists) so we can pull
+	// the service FQN out of its spec. On a resumed delete the CR is
+	// already gone — fall back to parsing the env name. Both paths feed
+	// into the same downstream cleanup.
+	var (
+		serviceFQN string
+		envKind    string
+	)
+	e, gerr := s.GetEnvironment(ctx, project, env)
+	switch {
+	case gerr == nil:
+		if e.Spec.Kind == "production" {
+			return fmt.Errorf("%w: cannot delete production environment %s", ErrInvalid, env)
+		}
+		serviceFQN = e.Spec.Service
+		envKind = e.Spec.Kind
+	case apierrors.IsNotFound(gerr) || errors.Is(gerr, ErrNotFound):
+		// CR is gone — a prior run got past phase 2 but failed during
+		// cleanup. Reconstruct what we can from the env name. We can't
+		// verify Kind is "preview" any more, but a missing CR means
+		// the prior run already passed that check, so proceeding is
+		// safe.
+		serviceFQN = inferServiceFQNFromEnv(env)
+	default:
+		return gerr
+	}
+
+	// Phase 2: delete the env CR itself. Idempotent — NotFound is OK
+	// because either we just observed it missing above, or it was
+	// raced away by another caller.
 	if err := s.Kube.DeleteKusoEnvironment(ctx, ns, env); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete env: %w", err)
 	}
-	// Delete any preview-DB clones tied to this PR. Without this,
-	// 100 PRs/day × occasional missed close-webhook = compounding
-	// orphan StatefulSets + PVCs forever. The clone addons get the
-	// `kuso.sislelabs.com/preview-pr=<N>` label at create-time so
-	// we can enumerate without relying on naming conventions.
-	if pr := previewPRNumber(env, e.Spec.Service); pr != "" {
+
+	// Phase 3: tear down preview-DB clones tied to this PR. Label-based
+	// discovery doesn't require the env CR to exist any more. Without
+	// this, 100 PRs/day × occasional missed close-webhook = compounding
+	// orphan StatefulSets + PVCs forever. Per-addon errors are tolerated
+	// — the env is already gone, the addon will get reconciled on the
+	// next sweep tick.
+	if pr := previewPRNumber(env, serviceFQN); pr != "" {
 		selector := fmt.Sprintf("kuso.sislelabs.com/project=%s,kuso.sislelabs.com/preview-pr=%s", project, pr)
 		if addonList, lerr := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).List(ctx, metav1.ListOptions{
 			LabelSelector: selector,
@@ -136,38 +171,51 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 			for i := range addonList.Items {
 				name := addonList.Items[i].GetName()
 				if derr := s.Kube.DeleteKusoAddon(ctx, ns, name); derr != nil && !apierrors.IsNotFound(derr) {
-					// Don't fail the env delete on addon-cleanup
-					// errors — the env is gone, the addon will get
-					// reconciled on the next sweep tick.
 					_ = derr
 				}
 			}
 		}
 	}
-	if s.SecretsCleanupForEnv != nil {
-		// Service short name = env CR's spec.service stripped of the
-		// "<project>-" prefix. Env short name = env CR name with the
-		// service FQN prefix removed (e.g. "myproj-web-pr-7" → "pr-7").
-		svcShort := strings.TrimPrefix(e.Spec.Service, project+"-")
+
+	// Phase 4: wipe per-env Secret. Tolerant of NotFound; the secrets
+	// service handles re-entry on its own. Suppressing the error here
+	// is the existing behaviour and intentional — leaving an orphan
+	// Secret is preferable to surfacing an error the operator can do
+	// nothing about.
+	if s.SecretsCleanupForEnv != nil && serviceFQN != "" {
+		svcShort := strings.TrimPrefix(serviceFQN, project+"-")
 		if svcShort == "" {
-			svcShort = e.Spec.Service
+			svcShort = serviceFQN
 		}
-		envShort := strings.TrimPrefix(env, e.Spec.Service+"-")
+		envShort := strings.TrimPrefix(env, serviceFQN+"-")
 		if envShort == env {
-			// env CR name didn't carry the service prefix — fall back
-			// to using the raw env name. The secrets sanitiser will
-			// produce a stable name regardless.
 			envShort = env
 		}
-		if err := s.SecretsCleanupForEnv(ctx, project, svcShort, envShort); err != nil {
-			// Log via the kube client's logger if available, otherwise
-			// swallow — the env CR is already gone, so leaving an
-			// orphan Secret is preferable to surfacing a cleanup error
-			// the user can do nothing about.
-			_ = err
+		if cerr := s.SecretsCleanupForEnv(ctx, project, svcShort, envShort); cerr != nil {
+			_ = cerr
 		}
 	}
+	// envKind is referenced for the production-env guard above; keep
+	// the variable live so future cleanup phases that need to vary by
+	// kind don't have to re-fetch.
+	_ = envKind
 	return nil
+}
+
+// inferServiceFQNFromEnv reconstructs the service FQN when the env CR
+// is already gone. Convention: env names are "<service-fqn>-<suffix>"
+// where suffix is either "production" or "pr-<N>". Strip the suffix
+// to get the FQN. Returns "" if neither suffix matches — in that case
+// downstream label-based cleanup is a no-op (no preview-pr label to
+// match) and the per-env Secret cleanup skips.
+func inferServiceFQNFromEnv(env string) string {
+	if i := strings.LastIndex(env, "-pr-"); i > 0 {
+		return env[:i]
+	}
+	if strings.HasSuffix(env, "-production") {
+		return strings.TrimSuffix(env, "-production")
+	}
+	return ""
 }
 
 // previewPRNumber extracts the PR number from a preview env CR name.

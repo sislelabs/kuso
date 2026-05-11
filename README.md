@@ -4,9 +4,9 @@ Self-hosted, agent-native PaaS on real Kubernetes. Multi-node out of the box, Po
 
 ## What is kuso?
 
-kuso is a Kubernetes-native PaaS where every operation in the UI is reachable from a typed CLI command, and every CLI command is callable from a first-party MCP server. Apps sleep when idle, autoscale when busy, and the platform scales horizontally — add nodes, add `kuso-server` replicas, point at managed Postgres, ship.
+kuso is a **single-tenant** Kubernetes-native PaaS — one team per cluster, like [Coolify](https://coolify.io/), but Kubernetes-native and agent-driven. Every operation in the UI is reachable from a typed CLI command, and every CLI command is callable from a first-party MCP server. Apps sleep when idle, autoscale when busy, and the platform scales horizontally inside one team's cluster — add nodes, add `kuso-server` replicas, point at managed Postgres, ship.
 
-The platform is built for teams running serious workloads: real CRDs you can `kubectl edit`, structured outputs you can pipe, idempotent operations agents can drive, and an architecture that doesn't fall over when you stop being one person on one box.
+The platform is built for teams running serious workloads: real CRDs you can `kubectl edit`, structured outputs you can pipe, idempotent operations agents can drive, and an architecture that doesn't fall over when you stop being one person on one box. **Not a multi-tenant SaaS** — kuso doesn't enforce the strict cross-tenant isolation that a hosted PaaS needs. One team per install.
 
 ## Why kuso?
 

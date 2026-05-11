@@ -65,6 +65,9 @@ type nodeSummary struct {
 // — we don't pull in the metrics client-go package because that
 // would add ~20MB of vendored deps for a single map lookup.
 func (h *KubernetesHandler) Nodes(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	ctx, cancel := kubeCtx(r)
 	defer cancel()
 	nodes, err := h.Kube.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
@@ -158,6 +161,9 @@ func (h *KubernetesHandler) Nodes(w http.ResponseWriter, r *http.Request) {
 // internal/nodemetrics. Empty array is a valid response (sampler
 // hasn't ticked yet, or this node was just added).
 func (h *KubernetesHandler) NodeHistory(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
 	if h.DB == nil {
 		http.Error(w, "metrics history not wired", http.StatusServiceUnavailable)
 		return

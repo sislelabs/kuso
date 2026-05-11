@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -1682,7 +1683,29 @@ type Poller struct {
 	// risk.
 	archiveOnce  sync.Once
 	archiveQueue chan archiveTask
+
+	// capTickCounter is a small counter the tick uses to throttle the
+	// per-service retention sweep. The leader-gated daily SweepFinished
+	// covers the age-based path; this counter drives a non-leader cap
+	// so KusoBuild CRs can't pile up unbounded if the leader is down
+	// for a day. Increments every tick; fires CapBuildsPerService once
+	// it crosses capTickInterval.
+	capTickMu      sync.Mutex
+	capTickCounter int
 }
+
+// capTickInterval is how many poller ticks pass between per-service
+// retention sweeps. With the default 5s tick this works out to once
+// every ~6min — short enough that a runaway redeploy loop can't
+// outgrow retention in a typical leader-down window, long enough that
+// the kube LIST cost is negligible.
+const capTickInterval = 72
+
+// capBuildsPerServiceMax is the per-service KusoBuild retention cap.
+// 50 covers the common "last week's worth of builds visible in the
+// History panel" use case plus comfortable headroom. Overridable via
+// KUSO_BUILD_RETENTION_PER_SERVICE for clusters that want to see more.
+const capBuildsPerServiceMax = 50
 
 // archiveTask is one queued snapshot job. The full ctx is captured
 // rather than the request ctx because the worker outlives the
@@ -1831,6 +1854,35 @@ func (p *Poller) tick(ctx context.Context) error {
 		// tick has its queued sibling promoted on the next one — keeps
 		// the state machine simple at the cost of one tick of latency.
 		p.dispatchQueued(ctx, ns)
+	}
+	// Per-service retention sweep. Throttled to once every
+	// `capTickInterval` poller ticks (~6min at the default 5s cadence)
+	// so a busy cluster's KusoBuild CR count can't grow unbounded
+	// while the leader-gated daily sweep is paused (leader pod gone,
+	// lease re-electing, etc.). Runs on every replica regardless of
+	// leadership — it's idempotent (delete-by-name) so duplicate work
+	// is harmless.
+	p.capTickMu.Lock()
+	p.capTickCounter++
+	doCap := p.capTickCounter >= capTickInterval
+	if doCap {
+		p.capTickCounter = 0
+	}
+	p.capTickMu.Unlock()
+	if doCap {
+		max := capBuildsPerServiceMax
+		if v := os.Getenv("KUSO_BUILD_RETENTION_PER_SERVICE"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				max = n
+			}
+		}
+		for _, ns := range p.Svc.ScanNamespaces(ctx) {
+			if n, err := CapBuildsPerService(ctx, p.Svc.Kube, ns, max, LogAdapter(p.Logger)); err != nil {
+				p.Logger.Warn("build retention sweep", "ns", ns, "err", err)
+			} else if n > 0 {
+				p.Logger.Info("build retention swept", "ns", ns, "deleted", n, "cap", max)
+			}
+		}
 	}
 	return nil
 }

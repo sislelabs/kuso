@@ -14,6 +14,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"kuso/server/internal/db"
 )
 
 // Per-env runtime telemetry: pod-level CPU/RAM snapshots from
@@ -59,6 +61,14 @@ func (h *KubernetesHandler) EnvMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := kubeCtx(r)
 	defer cancel()
+	// Project-scope check. Pre-fix this handler returned pod-level
+	// metrics for any env name the caller could guess — a viewer
+	// on project A could read project B's pod CPU/mem. Now we
+	// resolve the env CR → spec.project and gate on the caller's
+	// ProjectMembership before listing metrics.
+	if !h.requireEnvAccess(ctx, w, envName, db.ProjectRoleViewer) {
+		return
+	}
 
 	gvr := schema.GroupVersionResource{
 		Group:    "metrics.k8s.io",
@@ -125,6 +135,11 @@ func (h *KubernetesHandler) EnvTimeseries(w http.ResponseWriter, r *http.Request
 	envName := chi.URLParam(r, "env")
 	if envName == "" {
 		http.Error(w, "missing env", http.StatusBadRequest)
+		return
+	}
+	tsCtx, tsCancel := kubeCtx(r)
+	defer tsCancel()
+	if !h.requireEnvAccess(tsCtx, w, envName, db.ProjectRoleViewer) {
 		return
 	}
 	rangeStr := r.URL.Query().Get("range")

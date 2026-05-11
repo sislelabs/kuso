@@ -35,6 +35,9 @@ func (h *ProjectsHandler) ListRevisions(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := projectCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
 	kind := chi.URLParam(r, "kind")
 	name := chi.URLParam(r, "name")
 	limit := 50
@@ -69,6 +72,13 @@ func (h *ProjectsHandler) GetRevision(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "get revision", err)
 		return
 	}
+	// Project-scope gate. Without this, anyone with a valid JWT could
+	// fetch any revision snapshot by ID — which includes the full
+	// patched JSON of the resource, often containing env-var values
+	// and other project-private state.
+	if !requireProjectAccess(ctx, w, h.DB, rev.Project, db.ProjectRoleViewer) {
+		return
+	}
 	writeJSON(w, http.StatusOK, rev)
 }
 
@@ -100,6 +110,14 @@ func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		h.fail(w, "get revision", err)
+		return
+	}
+	// Project-scope gate. Pre-fix any caller with services:write could
+	// revert any revision regardless of which project it belonged to —
+	// effectively cross-project mutation. Gate on Deployer-or-higher
+	// on the revision's project; 404 (not 403) so probing for revision
+	// IDs doesn't leak existence.
+	if !requireProjectAccess(ctx, w, h.DB, rev.Project, db.ProjectRoleDeployer) {
 		return
 	}
 	switch rev.Kind {

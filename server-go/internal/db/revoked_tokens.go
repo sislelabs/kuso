@@ -60,21 +60,28 @@ ON CONFLICT ("jti") DO UPDATE SET
 }
 
 // IsTokenRevoked is the per-jti probe. Hot path on every
-// authenticated request. Fails-open on DB error (treats as
-// not-revoked) — the middleware would otherwise 401 every user
-// during a transient outage.
-func (d *DB) IsTokenRevoked(ctx context.Context, jti string) bool {
+// authenticated request.
+//
+// Returns (revoked, err). err is nil when the row genuinely doesn't
+// exist (ErrNoRows is squashed). The caller decides fail-open vs
+// fail-closed on err != nil — most callers should fail closed but
+// can layer a short cache of last-known-good answers in front to ride
+// out brief DB blips without 401-ing every user.
+func (d *DB) IsTokenRevoked(ctx context.Context, jti string) (bool, error) {
 	if jti == "" {
-		return false
+		return false, nil
 	}
 	var present int
 	err := d.QueryRowContext(ctx,
 		`SELECT 1 FROM "RevokedToken" WHERE "jti" = ? LIMIT 1`, jti,
 	).Scan(&present)
 	if err != nil {
-		return false
+		if errors.Is(err, sql.ErrNoRows) {
+			return false, nil
+		}
+		return false, err
 	}
-	return present == 1
+	return present == 1, nil
 }
 
 // InvalidateUserTokens bumps the per-user "valid-from" watermark to
@@ -117,11 +124,13 @@ ON CONFLICT ("userId") DO UPDATE SET
 // path on every authenticated request — the auth middleware compares
 // the JWT's iat to this value.
 //
-// Fails-open on DB error: returns zero time so the middleware
-// proceeds with the signature/jti checks.
-func (d *DB) UserTokenWatermark(ctx context.Context, userID string) time.Time {
+// Returns (watermark, err). err is nil when the user simply has no
+// watermark row. The caller chooses fail-open vs fail-closed; the
+// middleware layers a per-user TTL cache in front so transient DB
+// blips don't 401 every active session.
+func (d *DB) UserTokenWatermark(ctx context.Context, userID string) (time.Time, error) {
 	if userID == "" {
-		return time.Time{}
+		return time.Time{}, nil
 	}
 	var t sql.NullTime
 	err := d.QueryRowContext(ctx,
@@ -129,16 +138,15 @@ func (d *DB) UserTokenWatermark(ctx context.Context, userID string) time.Time {
 		userID,
 	).Scan(&t)
 	if err != nil {
-		if !errors.Is(err, sql.ErrNoRows) {
-			// Non-not-found: treat as no watermark, log nothing —
-			// caller is in a hot path.
+		if errors.Is(err, sql.ErrNoRows) {
+			return time.Time{}, nil
 		}
-		return time.Time{}
+		return time.Time{}, err
 	}
 	if !t.Valid {
-		return time.Time{}
+		return time.Time{}, nil
 	}
-	return t.Time
+	return t.Time, nil
 }
 
 // InvalidateUsersByRole bumps the watermark for every user assigned
