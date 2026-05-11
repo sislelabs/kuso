@@ -115,8 +115,11 @@ spec:
             # the file header comment for the trade-off.
             privileged: true
           readinessProbe:
+            # buildctl defaults to a unix socket; we run with
+            # --addr tcp://. The probe must pass the same --addr
+            # or it'll look for a socket that doesn't exist.
             exec:
-              command: [buildctl, debug, workers]
+              command: [buildctl, --addr, tcp://127.0.0.1:1234, debug, workers]
             initialDelaySeconds: 5
             periodSeconds: 5
           volumeMounts:
