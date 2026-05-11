@@ -289,12 +289,24 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 	// refuses to apply the manifest. Without the flag we log a warn
 	// (so unsigned releases are visible in monitoring) and proceed.
 	if err := s.verifyManifestSignature(ctx, rel.Assets, body); err != nil {
-		if requireSignatures() {
+		// ErrUnsignedNoKey = both sides missing. Even with
+		// requireSignatures=true we proceed because the operator hasn't
+		// wired a public key yet — refusing every update before key
+		// configuration is a worse outcome than accepting unsigned.
+		// Real verification mismatches (signed-but-bad-key, signed-but-
+		// no-key-configured, signature-doesn't-match-body) still hard
+		// fail under requireSignatures.
+		if errors.Is(err, ErrUnsignedNoKey) {
+			s.Logger.Warn("updater: unsigned release accepted (no public key configured)",
+				"version", rel.TagName,
+				"hint", "wire KUSO_RELEASE_PUBLIC_KEY to enable signature verification")
+		} else if requireSignatures() {
 			return rel.TagName, nil, fmt.Errorf("verify manifest signature: %w", err)
+		} else {
+			s.Logger.Warn("updater: signature problem accepted under KUSO_REQUIRE_SIGNATURES=false",
+				"version", rel.TagName, "err", err,
+				"hint", "set KUSO_REQUIRE_SIGNATURES=true to enforce")
 		}
-		s.Logger.Warn("updater: unsigned release accepted",
-			"version", rel.TagName, "err", err,
-			"hint", "set KUSO_REQUIRE_SIGNATURES=true to enforce")
 	}
 	var m Manifest
 	if err := json.Unmarshal(body, &m); err != nil {
@@ -394,11 +406,15 @@ func (s *Service) fetchVersion(ctx context.Context, version string) (*Manifest, 
 		relAssets[i].BrowserDownloadURL = a.BrowserDownloadURL
 	}
 	if err := s.verifyManifestSignature(ctx, relAssets, body); err != nil {
-		if requireSignatures() {
+		if errors.Is(err, ErrUnsignedNoKey) {
+			if s.Logger != nil {
+				s.Logger.Warn("updater: unsigned release accepted (no public key configured)",
+					"hint", "wire KUSO_RELEASE_PUBLIC_KEY to enable signature verification")
+			}
+		} else if requireSignatures() {
 			return nil, fmt.Errorf("verify manifest signature: %w", err)
-		}
-		// soft-fail: log + proceed.
-		if s.Logger != nil {
+		} else if s.Logger != nil {
+			// soft-fail: log + proceed.
 			s.Logger.Warn("updater: manifest signature check failed",
 				"version", rel.TagName, "err", err)
 		}
@@ -849,6 +865,14 @@ func envOrDefault(key, fallback string) string {
 	return fallback
 }
 
+// ErrUnsignedNoKey is the sentinel returned by verifyManifestSignature
+// when neither a release.json.sig asset nor a configured public key
+// exists. The callers special-case this to accept-with-warning even
+// under KUSO_REQUIRE_SIGNATURES=true, because a fresh install can't
+// have a key wired yet and refusing every update before key setup
+// is a worse outcome than accepting unsigned.
+var ErrUnsignedNoKey = errors.New("updater: no signature on release and no public key configured")
+
 // requireSignatures returns true when the operator wants strict
 // manifest verification — and that's the default. Releases without
 // a valid signature are rejected; the updater logs a clear error
@@ -892,9 +916,13 @@ func (s *Service) verifyManifestSignature(ctx context.Context, assets []struct {
 		}
 	}
 	if sigURL == "" && pubB64 == "" {
-		// No signature, no key — treat as unsigned. Caller decides
-		// whether that's acceptable (requireSignatures gate).
-		return fmt.Errorf("no signature on release")
+		// No signature, no key — treat as unsigned. Caller's
+		// requireSignatures gate now logs+proceeds even when set,
+		// because this state means the operator hasn't configured a
+		// key yet (typical for a fresh install or one upgraded from
+		// pre-v0.9.77). Once a key IS configured, a missing signature
+		// becomes a real hard fail (handled by the next branch).
+		return ErrUnsignedNoKey
 	}
 	if sigURL != "" && pubB64 == "" {
 		return fmt.Errorf("release is signed but KUSO_RELEASE_PUBLIC_KEY is unset")
