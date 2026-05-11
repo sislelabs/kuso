@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.76] — 2026-05-11
+
+### Other
+- Ux: trim user dropdown + alpha-sort env vars ([872c825](https://github.com/sislelabs/kuso/commit/872c8254f390c9c9fb0e253c7d7f58e5553acd3e))
+
 ## [0.9.75] — 2026-05-11
 
 ### Other
