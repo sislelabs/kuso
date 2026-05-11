@@ -47,6 +47,15 @@ spec:
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true
+        # Match the cache-init's UID 1000 so the kubelet chowns the
+        # mounted PVC to gid=1000 (fsGroup behaviour). Without this,
+        # a PVC created by a previous root-owned build comes back
+        # owned by root:root and cache-init's mkdir under /cache
+        # exits 1 with EACCES — the whole Job hits backoffLimit
+        # before kaniko ever runs.
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
         seccompProfile:
           type: RuntimeDefault
       # Pin to the dedicated SA above. Without this the pod runs as
