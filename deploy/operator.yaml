@@ -160,7 +160,7 @@ spec:
           # at apply-time; the literal here is the source of truth
           # for `kubectl apply -f deploy/` direct users — who pulled
           # the long-stale v0.1.0-dev tag pre-v0.9.4.
-          image: ghcr.io/sislelabs/kuso-operator:v0.9.60
+          image: ghcr.io/sislelabs/kuso-operator:v0.9.59
           imagePullPolicy: Always
           args:
             - "--leader-election-id=kuso-operator"
@@ -183,7 +183,13 @@ spec:
           resources:
             limits:
               cpu: 500m
-              memory: 256Mi
+              # Helm template rendering + Secret lookups (e.g.
+              # kusoaddon/s3.yaml's existing-secret lookup) push the
+              # operator past 256Mi under reconcile bursts after a
+              # fresh install. 256Mi → OOMKill loop → CRs sit in
+              # `pending` forever with no Job. 512Mi gives ~2x headroom
+              # without taxing single-node 4GB hosts.
+              memory: 512Mi
             requests:
               cpu: 100m
               memory: 64Mi
