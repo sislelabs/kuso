@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.78] — 2026-05-11
+
+### Other
+- Ux(service-settings): drop "test access" button + style Internal-only as toggle ([20679e3](https://github.com/sislelabs/kuso/commit/20679e3ef2ab0a374bca3443e76d44cd108f1681))
+
 ## [0.9.77] — 2026-05-11
 
 ### ✨ Features
