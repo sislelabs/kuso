@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.75] — 2026-05-11
+
+### Other
+- Ux(settings): tighter Source + Build rows ([3301a20](https://github.com/sislelabs/kuso/commit/3301a2076b348f8244aedaf4d3a5c2e1446ae3cf))
+
+### ✨ Features
+- Feat(github): one-click "Sign in with GitHub" provisioning for services ([d13cb5b](https://github.com/sislelabs/kuso/commit/d13cb5b8b7a75da3bf68991c1e81b2600c5f6812))
+
 ## [0.9.74] — 2026-05-11
 
 ### 🐛 Bug Fixes
