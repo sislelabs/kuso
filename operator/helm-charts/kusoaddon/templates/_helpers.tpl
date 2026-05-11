@@ -2,9 +2,44 @@
 {{- .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
+{{- /*
+podSecurityContext / containerSecurityContext
+
+Set runAsNonRoot=true plus the official non-root UID/GID for each
+upstream addon image. Without the explicit UID, the kubelet sees
+the image's default user (which for stock postgres / redis / etc.
+is `root` in the image metadata even when the entrypoint later
+drops to a non-root account), and the runAsNonRoot=true policy
+fails the container before the entrypoint can run.
+
+Defaults pulled from each upstream image's docs:
+  postgres:16       → UID 999  (postgres)
+  redis:7           → UID 999  (redis)
+  meilisearch       → UID 1000 (meili)
+  clickhouse        → UID 101  (clickhouse)
+  bitnami/minio (s3)→ UID 1001
+  axllent/mailpit   → UID 1000
+  nats:2            → UID 1000
+
+We fall back to UID 1000 for any kind we haven't mapped explicitly
+(safe default — most upstream images either honor it or have a
+matching `nobody` user).
+*/ -}}
+{{- define "kusoaddon.uidForKind" -}}
+{{- if eq .Values.kind "postgres" -}}999
+{{- else if eq .Values.kind "redis" -}}999
+{{- else if eq .Values.kind "clickhouse" -}}101
+{{- else if eq .Values.kind "s3" -}}1001
+{{- else -}}1000
+{{- end -}}
+{{- end -}}
+
 {{- define "kusoaddon.podSecurityContext" -}}
 securityContext:
   runAsNonRoot: true
+  runAsUser: {{ include "kusoaddon.uidForKind" . }}
+  runAsGroup: {{ include "kusoaddon.uidForKind" . }}
+  fsGroup: {{ include "kusoaddon.uidForKind" . }}
   seccompProfile:
     type: RuntimeDefault
 {{- end -}}
