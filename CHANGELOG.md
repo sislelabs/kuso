@@ -5,6 +5,33 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.73] — 2026-05-11
+
+### Other
+- Ux(canvas): pulse on pending/queued builds too, not just running ([db5dc7a](https://github.com/sislelabs/kuso/commit/db5dc7a85b94fb0e64bbc076f121d8f9b458d03a))
+- Build: long-lived shared BuildKit daemon — Coolify-style architecture ([a060ef7](https://github.com/sislelabs/kuso/commit/a060ef7f005a6dd002d1748d728f330dd5076e30))
+- Build: swap kaniko for moby/buildkit:rootless ([fdc8f70](https://github.com/sislelabs/kuso/commit/fdc8f70a13e09a21b257c9fd5a8e9ba76c6c0878))
+
+### 🐛 Bug Fixes
+- Fix(kusobuild): buildkit cache ref must be tag-based (repo:buildcache) — kaniko used a /<repo>/.cache path suffix which buildkit's registry exporter rejects as 'invalid reference format' ([0726a4c](https://github.com/sislelabs/kuso/commit/0726a4caf424ce41a1c94eda0f2e761d336a5884))
+- Fix(kusobuild): hardcode buildkitd host — values.yaml didn't define .buildkitd subtree and helm fails on nil-pointer access in templates. The service name is invariant across kuso installs anyway. ([505f24c](https://github.com/sislelabs/kuso/commit/505f24c62e1179900967fed6e0cbf6553f4f6ce4))
+- Fix(buildkitd): readiness probe must use --addr tcp:// — buildctl defaults to unix socket which doesn't exist when daemon is TCP-only ([3e6668a](https://github.com/sislelabs/kuso/commit/3e6668ad11a9cdd8917942294478b27975f62c6c))
+- Fix(kusobuild/buildkit): allowPrivilegeEscalation=true + SETFCAP/SETPCAP — rootlesskit's newuidmap is setuid, needs both to install the inner-userns UID map. Without these buildkitd never starts ('newuidmap: Could not set caps'). ([a3ca62a](https://github.com/sislelabs/kuso/commit/a3ca62a282eb38e9835cbb761b446727ad51ca07))
+- Fix(kusoenvironment): drop pod-level runAsNonRoot — rejects any image with a named USER (nextjs, node, nginx, etc.). Container-level cap drops kept; that's the real blast-radius reduction. ([318fd76](https://github.com/sislelabs/kuso/commit/318fd76b18f4e87e10e59f7f9678e7a7cc61111f))
+- Fix(kaniko): grant CHOWN/DAC_OVERRIDE/FOWNER/SETUID/SETGID — drop ALL killed every build at base-image rootfs unpack ('chown /etc/gshadow: operation not permitted'). allowPrivilegeEscalation:false kept so no setuid escape; kaniko's own user-ns sandbox contains the rest. ([7dc8b50](https://github.com/sislelabs/kuso/commit/7dc8b50b69188c7041e341a8392f238d73d2e9ed))
+- Fix(kusobuild): pod-level fsGroup only, no runAsUser cascade — env-detect needs root to apk add ripgrep/jq, cache-init needs UID 1000, kaniko needs root. Previous pod-level runAsUser:1000 broke env-detect (exit 99 from apk add EACCES on /etc/apk). ([81faffb](https://github.com/sislelabs/kuso/commit/81faffbefa1033a6a135dc32f71771897a1ff400))
+- Fix(kusobuild): drop the root-only chmod in cache-init; fsGroup already grants write on the dirs we mkdir. Non-owner chmod against the PVC mount point exited non-zero and killed every build. ([98f515e](https://github.com/sislelabs/kuso/commit/98f515e9fe586cefc2ed07be1c9569ed7bc15d7b))
+- Fix(kusobuild): pod-level fsGroup+UID so cache PVC mounts writable by cache-init (UID 1000). Previous runs created the PVC under root via kaniko's UID 0, and the next run as UID 1000 couldn't mkdir under /cache. ([0b7f5b8](https://github.com/sislelabs/kuso/commit/0b7f5b804582ea6f4b50af7622a4c87b0d2f8ccc))
+- Fix(s3 addon): pin HOME=/tmp + emptyDir for mc client config — running as non-root UID 1001 defaulted HOME to /, mkdir /.mc EACCES. ([07496b8](https://github.com/sislelabs/kuso/commit/07496b889775c1ec1dbf910d682e1809250ba454))
+- Fix(addons): pod-security UID/GID for each addon kind so runAsNonRoot ([335ac24](https://github.com/sislelabs/kuso/commit/335ac24ccdde523e55c2257c0b7767db4474f902))
+- Fix(operator): drop legacy Kind=Kuso watch — entire reconcile loop ([853a43f](https://github.com/sislelabs/kuso/commit/853a43f8788f7aba6f87ba5bb13015d4bfcb7966))
+- Fix(deploy): pin operator to v0.9.59 + bump memory limit to 512Mi ([01f5470](https://github.com/sislelabs/kuso/commit/01f54706b9acc29cc7cbc90f02c0c338dd291784))
+- Fix(install.sh): pin operator default to v0.9.59 (last actually-built tag); v0.9.60 release.sh decided 'operator unchanged' and pinned release.json to .59. The default here was stale and caused a fresh install to ImagePullBackOff on the operator deployment. ([454a591](https://github.com/sislelabs/kuso/commit/454a591eaeb787935c74269cce9dd395e1ec8dbb))
+- Fix(postgres-dsn-stamp): add RBAC for services + drop dead -app rule ([49e8544](https://github.com/sislelabs/kuso/commit/49e854479e566f0adf4fde34b09ae0713ccb1885))
+- Fix(postgres-dsn-stamp): read from kuso-postgres-conn, not -app ([857c167](https://github.com/sislelabs/kuso/commit/857c167eb7ff486e7273036a7b0a109f740961a9))
+- Fix(deploy): use alpine/k8s:1.30.4 not rancher/kubectl:v1.30.4 ([485c08b](https://github.com/sislelabs/kuso/commit/485c08b3508c63eb1b157623a1f44c6a35d6ff86))
+- Fix(deploy): replace bitnami/kubectl:1.30 (deprecated, pulled from ([5040a67](https://github.com/sislelabs/kuso/commit/5040a6758a6ee7efb44e2f4f10bd684b92ec0d0b))
+
 ## [0.9.60] — 2026-05-10
 
 ### 🐛 Bug Fixes

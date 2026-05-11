@@ -64,8 +64,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.9.59}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.9.60}"
+KUSO_VERSION="${KUSO_VERSION:-v0.9.73}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.9.73}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 
@@ -351,6 +351,17 @@ kubectl wait --for=condition=Available --timeout=180s \
   deployment/kuso-registry -n kuso || warn "kuso-registry not yet ready"
 REGISTRY_IP=$(kubectl get svc kuso-registry -n kuso -o jsonpath='{.spec.clusterIP}')
 ensure_registry_hosts_entry "$REGISTRY_IP"
+
+# -------- 8a2. buildkitd --------
+# Long-lived BuildKit daemon. Every kusobuild Job connects via TCP
+# instead of spawning its own builder per build, so caches stay
+# warm and the rootless-buildkit kernel-syscall dance is avoided
+# (the daemon runs privileged once; the build Jobs are unprivileged
+# thin clients).
+log "deploying in-cluster buildkitd"
+curl -sfL "${KUSO_RAW}/deploy/buildkitd.yaml" | kubectl apply -f - >/dev/null
+kubectl wait --for=condition=Available --timeout=180s \
+  deployment/kuso-buildkitd -n kuso || warn "kuso-buildkitd not yet ready"
 
 # -------- 8b. prometheus --------
 # Lightweight prometheus that scrapes traefik:9100 + opted-in pods.
