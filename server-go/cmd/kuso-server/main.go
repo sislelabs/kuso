@@ -405,8 +405,20 @@ func main() {
 			}()
 			if os.Getenv("KUSO_BUILD_POLLER_DISABLED") != "true" {
 				go (&builds.Poller{
-					Svc:        buildSvc,
-					Interval:   30 * time.Second,
+					Svc: buildSvc,
+					// 5s tick. With BuildKit's warm-cache path
+					// completing in 15-25s, a 30s interval meant
+					// the build finished before the poller ever
+					// observed it Active — so the build CR's
+					// phase annotation jumped pending → succeeded
+					// and the UI showed PENDING throughout. 5s
+					// gives us 3-5 observations during a typical
+					// build, the cluster-list cost is one chunk
+					// of API server cache per tick (negligible),
+					// and the rare 8-min nixpacks build sees the
+					// status badge update within seconds of going
+					// running.
+					Interval:   5 * time.Second,
 					Logger:     logger,
 					Notifier:   notifyAdapter{notifyDisp},
 					LogArchive: database,
