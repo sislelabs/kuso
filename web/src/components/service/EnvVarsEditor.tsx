@@ -309,7 +309,15 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
   const [conflictNotified, setConflictNotified] = useState(false);
   useEffect(() => {
     if (!env.data) return;
-    const incoming = (env.data.envVars ?? []).map((v) => toRow(v, project, addonByConn));
+    // Alphabetical (case-insensitive). Server returns env vars in
+    // insertion order which is meaningless to a human reading a
+    // 30-var list. Sorting client-side keeps the storage order
+    // intact (the server still sees whatever order PATCH posts —
+    // which IS sorted as a side effect, but that's fine; env-var
+    // order has no semantic meaning).
+    const incoming = (env.data.envVars ?? [])
+      .map((v) => toRow(v, project, addonByConn))
+      .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
     if (!dirty) {
       setRows(incoming);
       baselineFromRows.current = incoming;

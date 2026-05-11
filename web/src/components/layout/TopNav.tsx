@@ -39,11 +39,7 @@ import {
   KeyRound,
   Bell,
   Settings,
-  Server,
   Users,
-  UsersRound,
-  HardDrive,
-  Package,
   Trash2,
 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -706,7 +702,6 @@ function UserMenu() {
   const initial = (user?.name?.[0] ?? user?.email?.[0] ?? "U").toUpperCase();
   const perms = session?.session.permissions ?? [];
   const canAdmin = perms.includes("user:write");
-  const canConfig = perms.includes("config:read");
 
   // Popover (not DropdownMenu) — base-ui's Menu primitive was the only
   // thing in the app using that API surface; it had a hydration/portal
@@ -728,7 +723,19 @@ function UserMenu() {
           </AvatarFallback>
         </Avatar>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-60 p-1">
+      {/* Trimmed menu. Used to be a 10-row flat index of every
+          settings page; now it's just "your account" + a single
+          "Settings…" escape that lands on /settings (which has
+          its own search). The previous shape made the menu
+          taller than the viewport on a 720p browser and forced
+          users to scan a long list for an action that already
+          exists on /settings — every click in here was wasted
+          chrome. The remaining rows are the personal-scope
+          actions (profile, tokens) and admin shortcuts when the
+          user has them. Cluster-wide knobs (nodes, backups,
+          updates, instance secrets, users, groups) all live on
+          /settings now. */}
+      <PopoverContent align="end" className="w-56 p-1">
         <div className="border-b border-[var(--border-subtle)] px-2 py-1.5">
           <p className="truncate text-sm font-medium">{user?.name ?? "User"}</p>
           <p className="truncate font-mono text-[10px] text-[var(--text-tertiary)]">
@@ -737,24 +744,9 @@ function UserMenu() {
         </div>
         <MenuRow href="/settings/profile" icon={UserIcon}>Profile</MenuRow>
         <MenuRow href="/settings/tokens" icon={KeyRound}>API tokens</MenuRow>
-        <MenuRow href="/settings/notifications" icon={Bell}>Notifications</MenuRow>
-        <MenuRow href="/settings/alerts" icon={Bell}>Alert rules</MenuRow>
-        {canAdmin && <MenuRow href="/settings/instance-secrets" icon={KeyRound}>Instance secrets</MenuRow>}
         <div className="my-1 h-px bg-[var(--border-subtle)]" />
-        <MenuRow href="/settings/nodes" icon={Server}>Cluster nodes</MenuRow>
-        {canConfig && <MenuRow href="/settings/config" icon={Settings}>Cluster config</MenuRow>}
-        <MenuRow href="/settings/backups" icon={HardDrive}>Backups</MenuRow>
-        <UpdatesMenuRow />
-        {canAdmin && (
-          <>
-            <div className="my-1 h-px bg-[var(--border-subtle)]" />
-            <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              Admin
-            </p>
-            <MenuRow href="/settings/users" icon={Users}>Users</MenuRow>
-            <MenuRow href="/settings/groups" icon={UsersRound}>Groups</MenuRow>
-          </>
-        )}
+        <MenuRow href="/settings" icon={Settings}>Settings…</MenuRow>
+        {canAdmin && <MenuRow href="/settings/users" icon={Users}>Users &amp; groups</MenuRow>}
         <div className="my-1 h-px bg-[var(--border-subtle)]" />
         <button
           type="button"
@@ -791,35 +783,3 @@ function MenuRow({
   );
 }
 
-// UpdatesMenuItem renders the menu row + a dot when an update is
-// available. Polled with a generous staleTime — the server pulls
-// from GitHub every 6h, no point hitting it from every menu open.
-function UpdatesMenuRow() {
-  const v = useQuery<{ needsUpdate?: boolean; latest?: string }>({
-    queryKey: ["system", "version"],
-    queryFn: () => api("/api/system/version"),
-    staleTime: 5 * 60_000,
-    refetchInterval: 5 * 60_000,
-    retry: false,
-    throwOnError: false,
-  });
-  const needs = !!v.data?.needsUpdate;
-  return (
-    <Link
-      href="/settings/updates"
-      className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-    >
-      <Package className="h-3.5 w-3.5" />
-      Updates
-      {needs && (
-        <span
-          className="ml-auto inline-flex items-center gap-1 rounded-full bg-[var(--accent-subtle)] px-1.5 py-0.5 font-mono text-[9px] text-[var(--accent)]"
-          title={`Update available: ${v.data?.latest ?? ""}`}
-        >
-          <span className="h-1 w-1 rounded-full bg-[var(--accent)]" />
-          new
-        </span>
-      )}
-    </Link>
-  );
-}
