@@ -44,8 +44,14 @@ spec:
         kuso.sislelabs.com/secrets-rev: {{ . | quote }}
       {{- end }}
     spec:
+      # Pod-level securityContext kept minimal so users' Dockerfiles
+      # can pick their own USER directive (named users like
+      # `nextjs`, `node`, `nginx` are widely used and kubelet's
+      # runAsNonRoot=true admission gate rejects them with
+      # "image has non-numeric user, cannot verify user is non-root".
+      # Container-level capabilities are still dropped below — same
+      # blast-radius reduction without breaking real-world images.
       securityContext:
-        runAsNonRoot: true
         seccompProfile:
           type: RuntimeDefault
       # User pods don't need to talk to the kube apiserver. Disable
