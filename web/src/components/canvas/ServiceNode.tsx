@@ -28,15 +28,13 @@ export interface ServiceNodeData extends Record<string, unknown> {
 function statusFor(env?: KusoEnvironment, latestBuild?: BuildSummary): DeployStatus {
   // Source-of-truth ordering, in priority:
   //
-  // 1. Latest build is RUNNING (kaniko actually executing) → building,
-  //    regardless of whether the current pod is healthy. The active
-  //    pod still serves traffic; pulsing the border tells the user
-  //    "something's rolling out" without lying about the running
-  //    state. (We deliberately DON'T pulse on `pending`/`queued`:
-  //    those mean "CR exists, no pod yet" or "queued behind another
-  //    build" — the user already sees those rows in the deployments
-  //    tab; flipping the canvas amber for them was misleading
-  //    because nothing's actually happening.)
+  // 1. Any in-progress build (pending/queued/running/deploying) →
+  //    building. The user pushed something and is staring at the
+  //    canvas; pulsing the border tells them "we see it." Older
+  //    versions of this code only pulsed on `running` (kaniko
+  //    actively executing) and stayed green during the `queued` +
+  //    `pending` window — which can be 5-15s on a busy daemon and
+  //    is exactly when the user wonders "did my push register?"
   //
   // 2. env.ready = true → active. Steady-state win condition once
   //    builds are settled.
@@ -50,7 +48,9 @@ function statusFor(env?: KusoEnvironment, latestBuild?: BuildSummary): DeploySta
   //
   // 5. Fall through to env.status.phase as the last resort.
   const buildStatus = (latestBuild?.status ?? "").toLowerCase();
-  if (buildStatus === "running") return "building";
+  if (buildStatus === "pending" || buildStatus === "queued" || buildStatus === "running") {
+    return "building";
+  }
   if (buildStatus === "deploying") return "deploying";
 
   if (env?.status?.ready) return "active";
