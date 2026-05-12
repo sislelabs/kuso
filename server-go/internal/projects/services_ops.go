@@ -897,7 +897,7 @@ func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, e
 	// service CR (see propagateEnvVarsToEnvs comment). Best-effort:
 	// the service-level save succeeded and is the source of truth, so
 	// a transient kube error here doesn't fail the request.
-	if err := s.propagateEnvVarsToEnvs(ctx, ns, project, service, updated); err != nil {
+	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{EnvVars: true}); err != nil {
 		// Logged via the caller's wrapped error; the service spec is
 		// the durable record that next reconcile/edit will retry from.
 		return nil
@@ -1354,55 +1354,28 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		return nil, fmt.Errorf("update service: %w", err)
 	}
 
-	// Placement changes propagate to every env. Without this each env
-	// would keep its old effective placement until the next time the
-	// env spec was rewritten for some other reason.
-	if placementChanged {
-		if err := s.propagatePlacementToEnvs(ctx, ns, project, service, updated); err != nil {
-			return updated, nil
-		}
-	}
-	if volumesChanged {
-		if err := s.propagateVolumesToEnvs(ctx, ns, project, service, updated); err != nil {
-			return updated, nil
-		}
-	}
-	if portChanged {
-		// kusoenvironment chart reads .spec.port off the env CR for
-		// containerPort + Service.targetPort, so without this every
-		// port edit appears to save but never reaches a running pod.
-		if err := s.propagatePortToEnvs(ctx, ns, project, service, updated); err != nil {
-			return updated, nil
-		}
-	}
-	if scaleChanged {
-		// HPA settings live on the env CR (chart reads
-		// .Values.autoscaling.{enabled,minReplicas,maxReplicas,...}).
-		// Without this, raising scale.max from 5 → 20 would save the
-		// service spec but the existing HPA would keep its old cap
-		// until the env CR was rewritten for some other reason.
-		if err := s.propagateScaleToEnvs(ctx, ns, project, service, updated); err != nil {
-			return updated, nil
-		}
-	}
-	if domainsChanged {
-		// Custom domains live on the service spec but the chart's
-		// Ingress template reads only the env CR's host +
-		// additionalHosts. Without this propagation, the user adds
-		// "api.example.com" → spec.domains saves → no Ingress rule
-		// → Bad Gateway. Best-effort: if the propagation fails the
-		// service spec is still durable + the next save will retry.
-		if err := s.propagateDomainsToEnvs(ctx, ns, project, service, updated); err != nil {
-			return updated, nil
-		}
-	}
-	if internalChanged {
-		// internal toggles the chart's Ingress gate. Same propagation
-		// shape as port/domains — chart reads the env CR only, no
-		// service-spec merge step exists.
-		if err := s.propagateInternalToEnvs(ctx, ns, project, service, updated); err != nil {
-			return updated, nil
-		}
+	// Single chokepoint for service → env propagation. Lists envs
+	// once and writes each env once with every changed field. The
+	// chart still reads the env CR exclusively (it doesn't merge
+	// service+env), so this stays load-bearing until a future
+	// helm-chart change can fold the merge in.
+	//
+	// Best-effort: a propagation failure does NOT roll back the
+	// service spec — the service is the durable record, and the next
+	// save will retry the propagation.
+	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{
+		Placement: placementChanged,
+		Volumes:   volumesChanged,
+		Port:      portChanged,
+		Scale:     scaleChanged,
+		Domains:   domainsChanged,
+		Internal:  internalChanged,
+	}); err != nil {
+		// Match the previous best-effort behaviour: log indirectly
+		// (returned nil; future cleanup adds a logger here) and let
+		// the caller see a successful service-spec save.
+		_ = err
+		return updated, nil
 	}
 	// Record a revision row so the History tab can render it. Best-
 	// effort: a DB miss here doesn't fail the user-facing save (the
@@ -1427,6 +1400,103 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 // name when creating envs.
 func envSelector(project, service string) string {
 	return labelSelector(map[string]string{labelProject: project, labelService: service})
+}
+
+// changedFields names which fields on the parent KusoService have
+// been edited in a single PatchService call. propagateChangedToEnvs
+// dispatches on this so it only writes the env CRs once (instead of
+// the previous O(fields × envs) updates), even when several fields
+// flip together.
+type changedFields struct {
+	EnvVars   bool
+	Placement bool
+	Volumes   bool
+	Port      bool
+	Scale     bool
+	Domains   bool
+	Internal  bool
+}
+
+func (c changedFields) any() bool {
+	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal
+}
+
+// propagateChangedToEnvs is the single chokepoint that mirrors a
+// post-PATCH KusoService onto every owned KusoEnvironment. Replaces
+// six per-field propagators that each issued their own LIST + N
+// UPDATEs; this version lists envs once and applies every changed
+// field in one Update per env.
+//
+// Why this exists at all: the kusoenvironment helm chart reads only
+// the env CR, never the parent service. Without this propagation
+// step, every service-level edit saves to the service but never
+// reaches a running pod. Long-term fix is to teach the chart to
+// merge both CRs (see docs/REVIEW_2026-05-12.md A-P0-3), but until
+// then this is the single place to keep correct.
+func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService, changed changedFields) error {
+	if !changed.any() {
+		return nil
+	}
+	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: envSelector(project, service),
+	})
+	if err != nil {
+		return fmt.Errorf("list envs for propagation: %w", err)
+	}
+	for i := range envs.Items {
+		var env kube.KusoEnvironment
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
+			continue
+		}
+		if changed.EnvVars {
+			env.Spec.EnvVars = svc.Spec.EnvVars
+		}
+		if changed.Placement {
+			// Honour project-default fallback the same way
+			// propagatePlacementToEnvs did — without it, clearing a
+			// service-level placement (svc.Spec.Placement = nil) would
+			// pin envs to nil instead of falling through to the
+			// project's default. Best-effort: missing-project errors
+			// fall back to copying the raw service placement.
+			proj, perr := s.Kube.GetKusoProject(ctx, s.Namespace, project)
+			if perr == nil {
+				env.Spec.Placement = ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement)
+			} else {
+				env.Spec.Placement = svc.Spec.Placement
+			}
+		}
+		if changed.Volumes {
+			env.Spec.Volumes = svc.Spec.Volumes
+		}
+		if changed.Port {
+			port := svc.Spec.Port
+			if port == 0 {
+				port = 8080
+			}
+			env.Spec.Port = port
+		}
+		if changed.Scale {
+			auto := autoscalingFromScale(svc.Spec.Scale)
+			replicaCount := 1
+			if svc.Spec.Scale != nil && svc.Spec.Scale.Min > 0 {
+				replicaCount = svc.Spec.Scale.Min
+			}
+			env.Spec.ReplicaCount = replicaCount
+			env.Spec.Autoscaling = auto
+		}
+		if changed.Domains {
+			hosts := domainHosts(svc.Spec.Domains)
+			env.Spec.AdditionalHosts = hosts
+			env.Spec.TLSHosts = computeTLSHosts(env.Spec.Host, hosts)
+		}
+		if changed.Internal {
+			env.Spec.Internal = svc.Spec.Internal
+		}
+		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
+			return fmt.Errorf("update env %s: %w", env.Name, err)
+		}
+	}
+	return nil
 }
 
 // propagateEnvVarsToEnvs copies the service's envVars onto every owned

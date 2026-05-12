@@ -96,7 +96,7 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 		return nil, fmt.Errorf("update service: %w", err)
 	}
 	defer s.invalidateDescribe(project)
-	if perr := s.propagateDomainsToEnvs(ctx, ns, project, service, updated); perr != nil {
+	if perr := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{Domains: true}); perr != nil {
 		return updated, fmt.Errorf("propagate domains to envs: %w", perr)
 	}
 	return updated, nil
@@ -266,7 +266,7 @@ func (s *Service) persistDomains(ctx context.Context, ns, project, service strin
 	// poll either way; surfacing here is the loud path. Service
 	// CR is durable; the caller can retry or pick up the drift
 	// banner.
-	if err := s.propagateDomainsToEnvs(ctx, ns, project, service, updated); err != nil {
+	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{Domains: true}); err != nil {
 		return updated, fmt.Errorf("propagate domains to envs: %w", err)
 	}
 	return updated, nil
@@ -291,7 +291,7 @@ func (s *Service) persistEnvVars(ctx context.Context, ns, project, service strin
 	// (SetEnv) goes through a different code path (services_ops)
 	// that already does this; we forgot the same on the per-var
 	// path. Mirrors propagateDomainsToEnvs / propagateInternalToEnvs.
-	if err := s.propagateEnvVarsToEnvs(ctx, ns, project, service, updated); err != nil {
+	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{EnvVars: true}); err != nil {
 		return nil, fmt.Errorf("propagate envVars to envs: %w", err)
 	}
 	return updated, nil
