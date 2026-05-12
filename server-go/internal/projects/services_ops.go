@@ -1515,37 +1515,10 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 	return nil
 }
 
-// propagateEnvVarsToEnvs copies the service's envVars onto every owned
-// env. Without this, env-var edits saved on KusoService never reach
-// running pods — the kusoenvironment chart only reads
-// KusoEnvironment.spec.envVars, and there is no helm-operator merge
-// step that pulls service-level vars in. Best-effort: failures are
-// logged-and-returned but the service spec already saved.
-func (s *Service) propagateEnvVarsToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: envSelector(project, service),
-	})
-	if err != nil {
-		return fmt.Errorf("list envs for envVars propagation: %w", err)
-	}
-	for i := range envs.Items {
-		var env kube.KusoEnvironment
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
-			continue
-		}
-		env.Spec.EnvVars = svc.Spec.EnvVars
-		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
-			return fmt.Errorf("update env %s: %w", env.Name, err)
-		}
-	}
-	return nil
-}
-
 // domainHosts pulls the host strings out of a KusoDomain slice,
 // dropping any empty entries. Used at env-creation time + by
-// propagateDomainsToEnvs. Returns nil for an empty input so the
-// JSON serialiser drops the field entirely (matches the omitempty
-// tag — same wire shape as services with no custom domains).
+// propagateChangedToEnvs (Domains branch). Returns nil for an empty
+// input so the JSON serialiser drops the field entirely.
 func domainHosts(domains []kube.KusoDomain) []string {
 	if len(domains) == 0 {
 		return nil
@@ -1563,174 +1536,11 @@ func domainHosts(domains []kube.KusoDomain) []string {
 	return out
 }
 
-// propagateDomainsToEnvs copies the service's custom domains onto
-// every owned env. Without this, a domain edit lands on the service
-// CR but the kusoenvironment chart (which reads only env-CR fields)
-// never emits an Ingress rule for it — exactly the silent-no-op a
-// user hit on v0.7.42 trying to attach mudo.sislelabs.com. The
-// chart wraps each host in its own TLS entry so cert-manager mints
-// per-host certs.
-func (s *Service) propagateDomainsToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
-	hosts := domainHosts(svc.Spec.Domains)
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: envSelector(project, service),
-	})
-	if err != nil {
-		return fmt.Errorf("list envs for domains propagation: %w", err)
-	}
-	for i := range envs.Items {
-		var env kube.KusoEnvironment
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
-			continue
-		}
-		env.Spec.AdditionalHosts = hosts
-		env.Spec.TLSHosts = computeTLSHosts(env.Spec.Host, hosts)
-		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
-			return fmt.Errorf("update env %s: %w", env.Name, err)
-		}
-	}
-	return nil
-}
-
-// propagateInternalToEnvs mirrors KusoService.spec.internal onto every
-// owned env. The chart's Ingress template reads only the env CR's
-// internal flag, so without this a toggle saves to the service spec
-// but the public Ingress hangs around. Best-effort: failures are
-// returned; the service spec is the durable record either way.
-func (s *Service) propagateInternalToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: envSelector(project, service),
-	})
-	if err != nil {
-		return fmt.Errorf("list envs for internal propagation: %w", err)
-	}
-	for i := range envs.Items {
-		var env kube.KusoEnvironment
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
-			continue
-		}
-		env.Spec.Internal = svc.Spec.Internal
-		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
-			return fmt.Errorf("update env %s: %w", env.Name, err)
-		}
-	}
-	return nil
-}
-
-// propagatePortToEnvs copies the service port onto every owned env.
-// The kusoenvironment chart sets containerPort + Service.targetPort
-// from KusoEnvironment.spec.port (NOT from KusoService.spec.port), so
-// a port edit only takes effect once the env CRs follow. The
-// `0 → 8080` default mirrors the AddEnvironment fallback so an env
-// that never had a port set doesn't end up with containerPort=0.
-func (s *Service) propagatePortToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
-	port := svc.Spec.Port
-	if port == 0 {
-		port = 8080
-	}
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: envSelector(project, service),
-	})
-	if err != nil {
-		return fmt.Errorf("list envs for port propagation: %w", err)
-	}
-	for i := range envs.Items {
-		var env kube.KusoEnvironment
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
-			continue
-		}
-		env.Spec.Port = port
-		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
-			return fmt.Errorf("update env %s: %w", env.Name, err)
-		}
-	}
-	return nil
-}
-
-// propagateVolumesToEnvs copies the service's volume list onto every
-// owned env so the chart renders the matching PVCs. Mirrors the
-// placement propagation pattern; failures are best-effort (the
-// service spec already saved successfully).
-func (s *Service) propagateVolumesToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: envSelector(project, service),
-	})
-	if err != nil {
-		return fmt.Errorf("list envs for volume propagation: %w", err)
-	}
-	for i := range envs.Items {
-		var env kube.KusoEnvironment
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
-			continue
-		}
-		env.Spec.Volumes = svc.Spec.Volumes
-		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
-			return fmt.Errorf("update env %s: %w", env.Name, err)
-		}
-	}
-	return nil
-}
-
-// propagateScaleToEnvs copies the service-level scale (replicaCount +
-// HPA) onto every env owned by the service. Without this, an admin
-// who raised scale.max from 5 to 20 would see the service spec save
-// but the running deployment keep its old HPA cap. Mirrors the same
-// shape autoscalingFromScale derives at create time so a Patch and
-// a fresh Add land at the same env CR.
-func (s *Service) propagateScaleToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: envSelector(project, service),
-	})
-	if err != nil {
-		return fmt.Errorf("list envs for scale propagation: %w", err)
-	}
-	auto := autoscalingFromScale(svc.Spec.Scale)
-	replicaCount := 1
-	if svc.Spec.Scale != nil && svc.Spec.Scale.Min > 0 {
-		replicaCount = svc.Spec.Scale.Min
-	}
-	for i := range envs.Items {
-		var env kube.KusoEnvironment
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
-			continue
-		}
-		env.Spec.ReplicaCount = replicaCount
-		env.Spec.Autoscaling = auto
-		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
-			return fmt.Errorf("update env %s: %w", env.Name, err)
-		}
-	}
-	return nil
-}
-
-// propagatePlacementToEnvs updates every KusoEnvironment owned by svc
-// so its spec.placement matches the resolved (project > service)
-// effective value. Called after a service-level placement edit.
-func (s *Service) propagatePlacementToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService) error {
-	proj, err := s.Kube.GetKusoProject(ctx, s.Namespace, project)
-	if err != nil {
-		return fmt.Errorf("get project for placement propagation: %w", err)
-	}
-	effective := ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement)
-
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: envSelector(project, service),
-	})
-	if err != nil {
-		return fmt.Errorf("list envs for placement propagation: %w", err)
-	}
-	for i := range envs.Items {
-		var env kube.KusoEnvironment
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
-			continue
-		}
-		env.Spec.Placement = effective
-		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
-			return fmt.Errorf("update env %s: %w", env.Name, err)
-		}
-	}
-	return nil
-}
+// (Per-field propagators deleted in B6. All service→env propagation
+// flows through propagateChangedToEnvs above, which lists envs once
+// and applies every changed field in one Update per env. Comments
+// elsewhere in this file + drift.go still reference the old names
+// for historical context; those are stable references, not callers.)
 
 func convertDomains(in []ServiceDomain) []kube.KusoDomain {
 	if len(in) == 0 {
