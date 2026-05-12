@@ -778,22 +778,22 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 		// few more minutes producing an image nothing will use.
 		slog.Default().Warn("builds: delete cancelled job", "err", jerr, "build", buildName)
 	}
-	// Also delete the helm release secrets. Without this, the operator's
-	// next reconcile (or a watch event from a Job-deletion ripple) sees
-	// "release exists, manifest says Job should exist, Job is missing"
-	// and re-renders the kaniko Job. We hit this on 2026-05-05 — a
-	// cancelled build kept respawning every 30s until we scaled the
-	// operator to 0. The watch selector excludes state=done from
-	// future reconciles but the existing release record is the
-	// trigger source. Deleting it makes the release a no-op for the
-	// operator.
-	//
-	// internal/buildreaper is the belt-and-braces watcher that
-	// catches the same condition asynchronously — so if this inline
-	// delete fails (transient kube error, context cancellation), the
-	// reaper sweeps the secrets on its next informer notification.
-	// Together they close the resurrection class on cancel + on
-	// post-restart cache-sync paths.
+	// Delete helm release secrets — legacy cleanup for clusters
+	// running pre-v0.10 where the helm-operator owned KusoBuild
+	// rendering. Builds created by the Go controller (v0.10+) have
+	// no helm release secrets to delete; the List returns empty and
+	// this loop no-ops. The legacy 2026-05-05 outage (cancelled
+	// build resurrected every 30s until the operator was scaled to
+	// 0) is closed two ways now:
+	//   1. The operator no longer watches KusoBuild
+	//      (operator/watches.yaml).
+	//   2. internal/buildcontroller owns Job creation directly and
+	//      gates on spec.done=true (set below) so the next informer
+	//      notification skips reconciling a cancelled CR.
+	// We still sweep helm secrets here for mid-upgrade clusters
+	// where the operator may have a release record from before the
+	// rollover. internal/buildreaper is the belt-and-braces watcher
+	// for the same cleanup on the post-restart cache-sync path.
 	helmSelector := "owner=helm,name=" + buildName
 	secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: helmSelector,

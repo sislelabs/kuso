@@ -40,26 +40,19 @@
   chart: helm-charts/kusoaddon
   reconcilePeriod: 3m
   maxConcurrentReconciles: 4
-- group: application.kuso.sislelabs.com
-  version: v1alpha1
-  kind: KusoBuild
-  chart: helm-charts/kusobuild
-  reconcilePeriod: 1m
-  # Build CRs come in bursts (a monorepo push triggers N at once).
-  # Higher concurrency here cuts the queue-time before each kaniko
-  # Job actually starts. The cluster-wide build cap in builds.Service
-  # already caps simultaneous Job pods so we won't OOM the node.
-  maxConcurrentReconciles: 6
-  # Skip completed builds. The kuso-server build poller stamps
-  # `kuso.sislelabs.com/build-state=done` on succeeded/failed CRs;
-  # without this selector, the operator reconciles every old
-  # KusoBuild every 60s forever — burning ~10% of one core in a
-  # cluster with even a dozen build records.
-  selector:
-    matchExpressions:
-      - key: kuso.sislelabs.com/build-state
-        operator: NotIn
-        values: ["done"]
+# KusoBuild was removed from the operator's watch list as of v0.10.
+# Builds are now rendered to Jobs in-process by the kuso-server
+# build controller (server-go/internal/buildcontroller). The chart
+# at helm-charts/kusobuild/ remains in the tree as a compatibility
+# stub for older clusters; new installs do not deploy it.
+#
+# The old block accumulated three workarounds for the
+# helm-operator path: per-CR helm-render tax (3 min reconcile), a
+# build-state=done watch selector (otherwise every old CR
+# reconciled forever burning CPU), and a sharp-edged Cancel path
+# that had to delete the CR + the Job + the helm-release secret
+# to stop resurrection. The Go controller replaces all three with
+# direct Job creation owned by an informer event handler.
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoCron

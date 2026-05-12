@@ -25,6 +25,7 @@ import (
 	"kuso/server/internal/alerts"
 	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
+	"kuso/server/internal/buildcontroller"
 	"kuso/server/internal/buildreaper"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
@@ -517,20 +518,25 @@ func main() {
 			if os.Getenv("KUSO_HEALTH_DISABLED") != "true" {
 				go health.New(kc, *namespace, notifyDisp, logger).Run(workCtx)
 			}
-			// Build-reaper: watches KusoBuild informer for done=true
-			// transitions and deletes the matching helm-release
-			// secret. Without this, the helm-operator can resurrect
-			// cancelled Jobs on its next reconcile — documented
-			// outage class on 2026-05-05. Cancel still does the
-			// secret-delete inline; the reaper is the leader-elected
-			// belt-and-braces that covers Cancel that didn't reach
-			// the secret (transient kube error) and operator
-			// restarts that come back to find a CR already done but
-			// a release record still saying "Job should exist."
-			//
-			// Cheap — one informer-handler subscription, no goroutine
-			// of its own, no new deps. Safe to skip on read-only
-			// shells via KUSO_BUILD_REAPER_DISABLED.
+			// Build controller: renders KusoBuild → Job in-process,
+			// replacing the helm-operator-driven path. The operator
+			// no longer watches KusoBuild (see operator/watches.yaml).
+			// One informer-handler subscription; reconcile is O(1) per
+			// event so bursts of 50-500 builds from a Coolify import
+			// commit no longer queue behind the operator's per-kind
+			// worker pool. Toggle with KUSO_BUILD_CONTROLLER_DISABLED
+			// if you need to roll back to the chart path during a
+			// migration window.
+			if os.Getenv("KUSO_BUILD_CONTROLLER_DISABLED") != "true" && kc != nil && kc.Cache != nil {
+				(&buildcontroller.Service{Kube: kc, Cache: kc.Cache, Namespace: *namespace, Logger: logger}).Start(workCtx)
+			}
+			// Build-reaper: complementary cleanup for any pre-existing
+			// helm-release Secrets from clusters that ran the
+			// pre-controller path. New installs running on the
+			// controller have no helm releases per build to reap, so
+			// the reaper's work shrinks to occasional NotFound
+			// no-ops. Kept on for backwards-compat with rolling-
+			// upgrade clusters.
 			if os.Getenv("KUSO_BUILD_REAPER_DISABLED") != "true" && kc != nil && kc.Cache != nil {
 				(&buildreaper.Service{Kube: kc, Cache: kc.Cache, Logger: logger}).Start(workCtx)
 			}
