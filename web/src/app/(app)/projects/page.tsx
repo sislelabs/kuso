@@ -273,28 +273,37 @@ function ProjectsGrid({
               </dl>
               {summary && (
                 <div className="relative z-10 mt-3 flex items-center gap-3 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                  <span className="inline-flex items-center gap-1">
-                    <Box className="h-3 w-3" />
-                    <span
-                      className={
-                        // Health colors:
-                        //   green  — every defined service is live
-                        //   amber  — at least one live, but some down
-                        //   red    — services defined but zero live
-                        //   muted  — no services yet
-                        services.length === 0
-                          ? ""
-                          : liveServices === 0
-                            ? "text-red-400"
-                            : liveServices < services.length
-                              ? "text-amber-400"
-                              : "text-emerald-400"
-                      }
-                    >
-                      {liveServices}/{services.length}
-                    </span>
-                    <span>live</span>
-                  </span>
+                  {(() => {
+                    // Health is conveyed by colour AND an a11y label
+                    // so screen readers and colour-blind users get
+                    // the same signal as sighted-trichromat users.
+                    // Without the label, "2/3 live" with a green/
+                    // amber/red colour modifier was just "2/3 live"
+                    // to a screen reader — useful but lossy.
+                    let cls = "";
+                    let healthLabel = `${liveServices} of ${services.length} services live`;
+                    if (services.length === 0) {
+                      healthLabel = "no services yet";
+                    } else if (liveServices === 0) {
+                      cls = "text-red-400";
+                      healthLabel = `down — 0 of ${services.length} services live`;
+                    } else if (liveServices < services.length) {
+                      cls = "text-amber-400";
+                      healthLabel = `degraded — ${liveServices} of ${services.length} services live`;
+                    } else {
+                      cls = "text-emerald-400";
+                      healthLabel = `healthy — all ${services.length} services live`;
+                    }
+                    return (
+                      <span className="inline-flex items-center gap-1" aria-label={healthLabel}>
+                        <Box className="h-3 w-3" aria-hidden />
+                        <span className={cls}>
+                          {liveServices}/{services.length}
+                        </span>
+                        <span aria-hidden>live</span>
+                      </span>
+                    );
+                  })()}
                   {addons.length > 0 && (
                     <span className="inline-flex items-center gap-1">
                       <Database className="h-3 w-3" />
