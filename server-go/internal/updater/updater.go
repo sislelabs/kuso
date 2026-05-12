@@ -282,27 +282,30 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 	if err != nil {
 		return rel.TagName, nil, fmt.Errorf("read manifest: %w", err)
 	}
-	// Signature verification. Behind a feature flag — the keypair
-	// rollout is operator-side work (generate Ed25519 key, configure
-	// release.sh to sign release.json, distribute the public key
-	// through install.sh). When KUSO_REQUIRE_SIGNATURES=true is set,
-	// missing or invalid signatures are a hard error and the updater
-	// refuses to apply the manifest. Without the flag we log a warn
-	// (so unsigned releases are visible in monitoring) and proceed.
+	// Signature verification. KUSO_REQUIRE_SIGNATURES defaults to
+	// true and is the single source of truth: any verification
+	// problem (including no-key-no-signature) refuses the update
+	// when require is on. The previous version special-cased
+	// ErrUnsignedNoKey to always proceed — meaning a shipped binary
+	// with an empty releasekey.pub silently accepted every release.
+	// That made the embed cosmetic. Now: require=true blocks the
+	// no-key path with a clear "wire a key" message; require=false
+	// keeps the legacy log-and-proceed behaviour for installs that
+	// haven't rolled out keys yet.
 	if err := s.verifyManifestSignature(ctx, rel.Assets, body); err != nil {
-		// ErrUnsignedNoKey = both sides missing. Even with
-		// requireSignatures=true we proceed because the operator hasn't
-		// wired a public key yet — refusing every update before key
-		// configuration is a worse outcome than accepting unsigned.
-		// Real verification mismatches (signed-but-bad-key, signed-but-
-		// no-key-configured, signature-doesn't-match-body) still hard
-		// fail under requireSignatures.
-		if errors.Is(err, ErrUnsignedNoKey) {
-			s.Logger.Warn("updater: unsigned release accepted (no public key configured)",
-				"version", rel.TagName,
-				"hint", "wire KUSO_RELEASE_PUBLIC_KEY to enable signature verification")
-		} else if requireSignatures() {
+		if requireSignatures() {
+			if errors.Is(err, ErrUnsignedNoKey) {
+				return rel.TagName, nil, fmt.Errorf("verify manifest signature: no public key configured and no signature attached — generate one via hack/release-keygen.sh, commit releasekey.pub, OR set KUSO_REQUIRE_SIGNATURES=false to opt out (data-loss-class hole)")
+			}
 			return rel.TagName, nil, fmt.Errorf("verify manifest signature: %w", err)
+		}
+		// require=false path — log + proceed. Distinguish the
+		// no-key sub-case so monitors can differentiate "haven't
+		// configured yet" from "real verification failure."
+		if errors.Is(err, ErrUnsignedNoKey) {
+			s.Logger.Warn("updater: unsigned release accepted (no public key configured AND KUSO_REQUIRE_SIGNATURES=false)",
+				"version", rel.TagName,
+				"hint", "set KUSO_REQUIRE_SIGNATURES=true once releasekey.pub is wired")
 		} else {
 			s.Logger.Warn("updater: signature problem accepted under KUSO_REQUIRE_SIGNATURES=false",
 				"version", rel.TagName, "err", err,
@@ -407,17 +410,20 @@ func (s *Service) fetchVersion(ctx context.Context, version string) (*Manifest, 
 		relAssets[i].BrowserDownloadURL = a.BrowserDownloadURL
 	}
 	if err := s.verifyManifestSignature(ctx, relAssets, body); err != nil {
-		if errors.Is(err, ErrUnsignedNoKey) {
-			if s.Logger != nil {
-				s.Logger.Warn("updater: unsigned release accepted (no public key configured)",
-					"hint", "wire KUSO_RELEASE_PUBLIC_KEY to enable signature verification")
+		if requireSignatures() {
+			if errors.Is(err, ErrUnsignedNoKey) {
+				return nil, fmt.Errorf("verify manifest signature: no public key configured — generate via hack/release-keygen.sh OR set KUSO_REQUIRE_SIGNATURES=false")
 			}
-		} else if requireSignatures() {
 			return nil, fmt.Errorf("verify manifest signature: %w", err)
-		} else if s.Logger != nil {
-			// soft-fail: log + proceed.
-			s.Logger.Warn("updater: manifest signature check failed",
-				"version", rel.TagName, "err", err)
+		}
+		if s.Logger != nil {
+			if errors.Is(err, ErrUnsignedNoKey) {
+				s.Logger.Warn("updater: unsigned release accepted (no public key AND KUSO_REQUIRE_SIGNATURES=false)",
+					"hint", "set KUSO_REQUIRE_SIGNATURES=true once releasekey.pub is wired")
+			} else {
+				s.Logger.Warn("updater: manifest signature check failed",
+					"version", rel.TagName, "err", err)
+			}
 		}
 	}
 	var m Manifest
