@@ -12,7 +12,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -276,10 +275,13 @@ func (s *Service) invalidateDescribe(project string) {
 
 // ---- naming + labels -----------------------------------------------------
 
+// Label keys are owned by the kube package now (so addons/secrets/
+// builds reach for the same constants). Re-export here as locals so
+// the rest of this package keeps reading naturally.
 const (
-	labelProject = "kuso.sislelabs.com/project"
-	labelService = "kuso.sislelabs.com/service"
-	labelEnv     = "kuso.sislelabs.com/env"
+	labelProject = kube.LabelProject
+	labelService = kube.LabelService
+	labelEnv     = kube.LabelEnv
 )
 
 // serviceCRName is the FQN convention "<project>-<service>" used by the
@@ -294,18 +296,12 @@ func productionEnvName(project, service string) string {
 	return fmt.Sprintf("%s-%s-production", project, service)
 }
 
-// labelSelector joins key=value clauses, skipping empty values, into the
-// comma-separated form the kube API expects. Empty result means
-// no-selector.
+// labelSelector delegates to kube.LabelSelector, which encodes
+// through labels.SelectorFromSet so a project/service name that
+// somehow slipped past validation can't re-shape the selector at the
+// apiserver.
 func labelSelector(pairs map[string]string) string {
-	parts := make([]string, 0, len(pairs))
-	for k, v := range pairs {
-		if v == "" {
-			continue
-		}
-		parts = append(parts, k+"="+v)
-	}
-	return strings.Join(parts, ",")
+	return kube.LabelSelector(pairs)
 }
 
 // ---- errors --------------------------------------------------------------

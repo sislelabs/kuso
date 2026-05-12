@@ -759,7 +759,10 @@ func (s *Service) GetDetectedEnv(ctx context.Context, project, service string) (
 		fqService = project + "-" + service
 	}
 	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("kuso.sislelabs.com/project=%s,kuso.sislelabs.com/service=%s", project, fqService),
+		LabelSelector: kube.LabelSelector(map[string]string{
+			kube.LabelProject: project,
+			kube.LabelService: fqService,
+		}),
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("list builds for detected env: %w", err)

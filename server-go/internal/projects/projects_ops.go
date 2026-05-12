@@ -247,7 +247,7 @@ func (s *Service) propagateBaseDomain(ctx context.Context, project, oldBase, new
 		return err
 	}
 	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "kuso.sislelabs.com/project=" + project,
+		LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: project}),
 	})
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
@@ -331,7 +331,7 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	// pod and the project-delete cleanup races against a half-built
 	// image push.
 	if buildsList, lerr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "kuso.sislelabs.com/project=" + name,
+		LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: name}),
 	}); lerr != nil {
 		return fmt.Errorf("list builds: %w", lerr)
 	} else {

@@ -157,8 +157,11 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	// `env-kind` label only lives on chart-rendered children
 	// (Deployment, Service, etc.) — wrong key for the CR list.
 	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("kuso.sislelabs.com/project=%s,kuso.sislelabs.com/service=%s,kuso.sislelabs.com/env=production",
-			project, shortSvc),
+		LabelSelector: kube.LabelSelector(map[string]string{
+			kube.LabelProject: project,
+			kube.LabelService: shortSvc,
+			kube.LabelEnv:     "production",
+		}),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list envs for drift: %w", err)

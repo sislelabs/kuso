@@ -190,11 +190,11 @@ func NewRouter(d Deps) http.Handler {
 			jwtChain.ServeHTTP(w, req)
 		})
 	}
-	if d.Status != nil {
-		statusH := &httphandlers.StatusHandler{Status: d.Status, Logger: d.Logger}
-		r.Get("/api/status", statusH.Handler())
-	}
-
+	// /api/status moved behind auth — it exposes server, kube, and
+	// operator versions which are useful recon for an attacker
+	// fingerprinting the cluster for CVE matches. /healthz stays
+	// public with the trimmed {status, version} body, which is what
+	// hack/install.sh and the GH release post-deploy probe read.
 	authH := &httphandlers.AuthHandler{
 		DB:         d.DB,
 		Issuer:     d.Issuer,
@@ -278,6 +278,11 @@ func NewRouter(d Deps) http.Handler {
 		r.Use(cookieCSRFMiddleware)
 		r.Use(d.Issuer.Middleware())
 		r.Get("/api/auth/session", authH.Session)
+
+		if d.Status != nil {
+			statusH := &httphandlers.StatusHandler{Status: d.Status, Logger: d.Logger}
+			r.Get("/api/status", statusH.Handler())
+		}
 
 		if d.Projects != nil {
 			projH := &httphandlers.ProjectsHandler{

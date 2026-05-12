@@ -157,3 +157,48 @@ data:
     [registry."kuso-registry.kuso.svc.cluster.local:5000"]
       http = true
       insecure = true
+---
+# NetworkPolicy: only kuso build pods may reach the BuildKit daemon.
+#
+# The TCP port 1234 carries unauthenticated gRPC — any pod that can
+# dial it can submit arbitrary builds with privileged-container
+# semantics. Without this policy, a user app pod or a compromised
+# addon container that happens to live in the cluster can pop
+# buildctl and run a malicious Dockerfile through the privileged
+# daemon. Restricting ingress to pods labelled
+# app.kubernetes.io/component=kusobuild (the well-known build-pod
+# label set by the kusobuild helm chart) reduces the attack surface
+# to "an attacker who already controls a build pod" — which is the
+# same trust boundary as the build pipeline itself.
+#
+# We open the egress side too so the daemon can pull base images
+# and push to the in-cluster registry, but ingress is the dangerous
+# direction; egress stays default-allow for now.
+#
+# Single-tenant: every build pod is ours, so labelling is the
+# correct boundary. A future multi-tenant deployment should also
+# add mTLS so a compromised build pod from tenant A can't pose as
+# tenant B's build pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kuso-buildkitd-ingress
+  namespace: kuso
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kuso-buildkitd
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        # Build pods may live in any namespace (KusoProject.spec.namespace
+        # can be set per project). Match on the build-pod label rather
+        # than scoping to one namespace.
+        - namespaceSelector: {}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: kusobuild
+      ports:
+        - protocol: TCP
+          port: 1234

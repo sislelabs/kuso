@@ -164,7 +164,10 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 	// — the env is already gone, the addon will get reconciled on the
 	// next sweep tick.
 	if pr := previewPRNumber(env, serviceFQN); pr != "" {
-		selector := fmt.Sprintf("kuso.sislelabs.com/project=%s,kuso.sislelabs.com/preview-pr=%s", project, pr)
+		selector := kube.LabelSelector(map[string]string{
+			kube.LabelProject:                  project,
+			"kuso.sislelabs.com/preview-pr":    pr,
+		})
 		if addonList, lerr := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).List(ctx, metav1.ListOptions{
 			LabelSelector: selector,
 		}); lerr == nil {

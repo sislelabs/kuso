@@ -113,7 +113,7 @@ func (s *Service) RegisterInstanceAddon(ctx context.Context, name, dsn string) e
 		return fmt.Errorf("%w: dsn required", ErrInvalid)
 	}
 	if _, err := url.Parse(dsn); err != nil {
-		return fmt.Errorf("%w: dsn parse: %v", ErrInvalid, err)
+		return fmt.Errorf("%w: dsn parse: %w", ErrInvalid, err)
 	}
 	return s.SetKey(ctx, AddonKeyForName(name), dsn)
 }

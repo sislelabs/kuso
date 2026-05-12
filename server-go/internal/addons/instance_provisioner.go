@@ -25,6 +25,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -74,17 +75,21 @@ func (s *Service) provisionInstanceAddonDB(adminDSN, project, addonShort string)
 	}
 	defer db.Close()
 
-	// CREATE DATABASE doesn't run inside a tx; use IF NOT EXISTS via
-	// a pg_database lookup. We can't parameterize identifiers, so we
-	// quote them safely.
-	if _, err := db.Exec(fmt.Sprintf(`SELECT 1 FROM pg_database WHERE datname = '%s'`, escapeLiteral(dbName))); err == nil {
-		var exists int
-		row := db.QueryRow(fmt.Sprintf(`SELECT 1 FROM pg_database WHERE datname = '%s'`, escapeLiteral(dbName)))
-		_ = row.Scan(&exists)
-		if exists != 1 {
-			if _, err := db.Exec(fmt.Sprintf(`CREATE DATABASE %q`, dbName)); err != nil {
-				return "", "", fmt.Errorf("create db %s: %w", dbName, err)
-			}
+	// CREATE DATABASE doesn't run inside a tx; check pg_database, then
+	// create only if missing. datname/rolname are string columns so we
+	// can parameterize the lookup; the CREATE statements still need
+	// quoted identifiers because Postgres doesn't allow params there.
+	// Surfacing the query error (vs the previous _ = ... discard) is
+	// what makes the race-on-concurrent-provision safe: a real network
+	// or permissions error now stops us before we attempt CREATE
+	// against a database whose existence we couldn't verify.
+	var exists int
+	if err := db.QueryRow(`SELECT 1 FROM pg_database WHERE datname = $1`, dbName).Scan(&exists); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", fmt.Errorf("check pg_database: %w", err)
+	}
+	if exists != 1 {
+		if _, err := db.Exec(fmt.Sprintf(`CREATE DATABASE %q`, dbName)); err != nil {
+			return "", "", fmt.Errorf("create db %s: %w", dbName, err)
 		}
 	}
 
@@ -92,7 +97,9 @@ func (s *Service) provisionInstanceAddonDB(adminDSN, project, addonShort string)
 	// so a fresh provision and a re-provision both end with a known
 	// password we can return to the caller.
 	var userExists int
-	_ = db.QueryRow(fmt.Sprintf(`SELECT 1 FROM pg_roles WHERE rolname = '%s'`, escapeLiteral(userName))).Scan(&userExists)
+	if err := db.QueryRow(`SELECT 1 FROM pg_roles WHERE rolname = $1`, userName).Scan(&userExists); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", "", fmt.Errorf("check pg_roles: %w", err)
+	}
 	if userExists != 1 {
 		if _, err := db.Exec(fmt.Sprintf(`CREATE ROLE %q WITH LOGIN PASSWORD '%s'`, userName, escapeLiteral(pw))); err != nil {
 			return "", "", fmt.Errorf("create role: %w", err)

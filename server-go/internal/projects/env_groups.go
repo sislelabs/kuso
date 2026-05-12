@@ -694,7 +694,10 @@ func (s *Service) SetServiceBranchInEnv(ctx context.Context, project, env, servi
 	// includes the env suffix. Reconstruct from labels rather than
 	// guessing the format.
 	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("%s=%s,%s=%s", labelProject, project, labelEnv, env),
+		LabelSelector: kube.LabelSelector(map[string]string{
+			labelProject: project,
+			labelEnv:     env,
+		}),
 	})
 	if err != nil {
 		return fmt.Errorf("list envs in group: %w", err)

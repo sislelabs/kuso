@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -399,7 +400,15 @@ func verifyStateCookie(r *http.Request) bool {
 	if err != nil || c.Value == "" {
 		return false
 	}
-	return r.URL.Query().Get("state") == c.Value
+	// Constant-time compare so a timing oracle can't shave bits off
+	// the state value over many forged callbacks. The string length
+	// is also leaked by ConstantTimeCompare returning early on
+	// mismatch, so first check lengths match in constant time too.
+	q := r.URL.Query().Get("state")
+	if len(q) != len(c.Value) {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(q), []byte(c.Value)) == 1
 }
 
 // setJWTCookie writes the kuso.JWT_TOKEN cookie used by the WebSocket

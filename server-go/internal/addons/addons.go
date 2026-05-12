@@ -121,7 +121,7 @@ func connSecretName(addonCR string) string { return ConnSecretName(addonCR) }
 // List returns every KusoAddon in the project.
 func (s *Service) List(ctx context.Context, project string) ([]kube.KusoAddon, error) {
 	raw, err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(s.nsFor(ctx, project)).
-		List(ctx, metav1.ListOptions{LabelSelector: "kuso.sislelabs.com/project=" + project})
+		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: project})})
 	if err != nil {
 		return nil, fmt.Errorf("list addons: %w", err)
 	}
@@ -236,7 +236,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	}
 	if req.External != nil && req.External.SecretName != "" {
 		if err := s.mirrorExternalSecret(ctx, ns, fqn, req.External); err != nil {
-			return nil, fmt.Errorf("%w: mirror external secret: %v", ErrInvalid, err)
+			return nil, fmt.Errorf("%w: mirror external secret: %w", ErrInvalid, err)
 		}
 	}
 	if req.UseInstanceAddon != "" {
@@ -249,10 +249,10 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 		}
 		dsn, pw, err := s.provisionInstanceAddonDB(adminDSN, project, req.Name)
 		if err != nil {
-			return nil, fmt.Errorf("%w: provision instance addon db: %v", ErrInvalid, err)
+			return nil, fmt.Errorf("%w: provision instance addon db: %w", ErrInvalid, err)
 		}
 		if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw); err != nil {
-			return nil, fmt.Errorf("%w: write conn secret: %v", ErrInvalid, err)
+			return nil, fmt.Errorf("%w: write conn secret: %w", ErrInvalid, err)
 		}
 	}
 	created, err := createAddon(ctx, s, ns, addon)
@@ -459,7 +459,7 @@ func (s *Service) RefreshEnvSecrets(ctx context.Context, project string) error {
 	}
 	ns := s.nsFor(ctx, project)
 	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
-		List(ctx, metav1.ListOptions{LabelSelector: "kuso.sislelabs.com/project=" + project})
+		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: project})})
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
 	}

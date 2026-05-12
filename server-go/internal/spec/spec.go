@@ -98,7 +98,7 @@ var (
 func Parse(raw []byte) (*File, error) {
 	var f File
 	if err := yaml.Unmarshal(raw, &f); err != nil {
-		return nil, fmt.Errorf("%w: yaml: %v", ErrInvalid, err)
+		return nil, fmt.Errorf("%w: yaml: %w", ErrInvalid, err)
 	}
 	if f.Project == "" {
 		return nil, fmt.Errorf("%w: project is required", ErrInvalid)

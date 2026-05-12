@@ -227,8 +227,15 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.createRestoreJob(ctx, jobName, secretName); err != nil {
 		// Best-effort cleanup on Job-create failure so we don't
-		// leak the data Secret.
-		_ = h.deleteRestoreSecret(context.Background(), secretName)
+		// leak the dump Secret (up to 900 KiB of sensitive data).
+		// Detach from r.Context() since the client has already
+		// disconnected on the error response path — but cap at 5s
+		// so a slow apiserver doesn't wedge the handler.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if cerr := h.deleteRestoreSecret(cleanupCtx, secretName); cerr != nil {
+			h.Logger.Warn("restore: cleanup data secret after job-create failure", "secret", secretName, "err", cerr)
+		}
+		cancel()
 		h.Logger.Error("restore: create job", "err", err)
 		http.Error(w, "create job: "+err.Error(), http.StatusInternalServerError)
 		return
@@ -286,7 +293,14 @@ func (h *BackupHandler) RestoreStatus(w http.ResponseWriter, r *http.Request) {
 	// Idempotent: deleteRestoreSecret on a missing Secret is fine.
 	cleanupSecret := func() {
 		secretName := "kuso-restore-data-" + strings.TrimPrefix(jobName, "kuso-restore-")
-		_ = h.deleteRestoreSecret(context.Background(), secretName)
+		// Use a fresh bounded context so this isn't tied to r.Context()
+		// (which was already used for status read) — but cap at 5s so
+		// a stuck apiserver doesn't block the status response.
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := h.deleteRestoreSecret(cleanupCtx, secretName); err != nil {
+			h.Logger.Warn("restore: cleanup data secret", "secret", secretName, "err", err)
+		}
 	}
 	switch phase {
 	case "Succeeded":

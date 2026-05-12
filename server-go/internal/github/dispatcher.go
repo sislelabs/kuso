@@ -185,7 +185,7 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 		// live in the project's execution namespace, which may differ
 		// from the home ns when KusoProject.spec.namespace is set.
 		raw, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.nsFor(ctx, proj.Name)).
-			List(ctx, metav1.ListOptions{LabelSelector: "kuso.sislelabs.com/project=" + proj.Name})
+			List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: proj.Name})})
 		if err != nil {
 			d.Logger.Error("list services for push", "project", proj.Name, "err", err)
 			continue
@@ -273,7 +273,7 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 			continue
 		}
 		services, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.nsFor(ctx, proj.Name)).
-			List(ctx, metav1.ListOptions{LabelSelector: "kuso.sislelabs.com/project=" + proj.Name})
+			List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: proj.Name})})
 		if err != nil {
 			d.Logger.Error("list services for pr", "project", proj.Name, "err", err)
 			continue

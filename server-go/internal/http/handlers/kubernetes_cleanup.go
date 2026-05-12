@@ -6,10 +6,20 @@ import (
 	"strings"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 )
+
+// cleanupPageLimit caps how many objects we fetch per list page. The
+// previous code did one unbounded cluster-wide list per resource — on
+// a cluster with 10k+ pods (busy CI clusters, weeks of accumulated
+// build pods) that allocates hundreds of MB on the kube apiserver in
+// one go. Paginating keeps memory per page bounded; the trade-off is
+// O(pages) round-trips, which is fine for an admin-triggered sweep.
+const cleanupPageLimit = 500
 
 // CleanupResponse summarises what the cleanup pass did. Counters per
 // category so the UI can render a "deleted N pods + M jobs" toast +
@@ -58,76 +68,84 @@ func (h *KubernetesHandler) CleanupCompleted(w http.ResponseWriter, r *http.Requ
 
 	bg := metav1.DeletePropagationBackground
 
-	// First pass: pre-compute the set of Jobs owned by a KusoBuild CRD.
-	// We look these up once so the pod loop can skip their child pods —
-	// otherwise deleting a finished build pod triggers the operator to
-	// reconcile the KusoBuild, recreate the Job, and respawn the pod
-	// with a fresh `nix-env -if` invocation. On a small host that's
-	// enough to OOM-thrash the box (we tripped this on 2026-05-05).
-	allJobs, err := h.Kube.Clientset.BatchV1().Jobs("").List(ctx, metav1.ListOptions{})
-	if err != nil {
+	// First pass: enumerate every Job page-by-page so we can both
+	// (a) build the buildJobs lookup the pod loop needs, and
+	// (b) keep the list of Job pointers for the second pass that
+	// actually deletes them.
+	//
+	// Pre-pagination this was a single unbounded `Jobs("").List(...)` —
+	// on a busy cluster with weeks of accumulated builds that's a
+	// hundreds-of-MB alloc on the apiserver. The pageLimit keeps each
+	// roundtrip bounded.
+	buildJobs := map[string]bool{} // ns/name → true if owned by KusoBuild
+	allJobs := make([]batchv1.Job, 0, cleanupPageLimit)
+	if err := paginateJobs(ctx, h.Kube.Clientset, "", func(page []batchv1.Job) error {
+		for i := range page {
+			j := &page[i]
+			for _, o := range j.OwnerReferences {
+				if o.Kind == "KusoBuild" {
+					buildJobs[j.Namespace+"/"+j.Name] = true
+					break
+				}
+			}
+			allJobs = append(allJobs, page[i])
+		}
+		return nil
+	}); err != nil {
 		http.Error(w, "list jobs: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	buildJobs := map[string]bool{} // ns/name → true if owned by KusoBuild
-	for i := range allJobs.Items {
-		j := &allJobs.Items[i]
-		for _, o := range j.OwnerReferences {
-			if o.Kind == "KusoBuild" {
-				buildJobs[j.Namespace+"/"+j.Name] = true
-				break
-			}
-		}
-	}
 
-	// Pods: pull the cluster-wide list once, filter client-side. Server-
-	// side fieldSelectors don't support OR (Succeeded || Failed), so
-	// the server does two list calls or filters locally. Local is
-	// cheaper for a single sweep.
-	pods, err := h.Kube.Clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{})
-	if err != nil {
+	// Pods: paginate, deleting eligible pods inline. Per-page memory
+	// is bounded; we never hold more than cleanupPageLimit pod objects
+	// at once. Server-side fieldSelectors don't support OR
+	// (Succeeded || Failed), so we still filter client-side, but on
+	// one page at a time.
+	seenNS := map[string]struct{}{}
+	if err := paginatePods(ctx, h.Kube.Clientset, "", func(page []corev1.Pod) error {
+		for i := range page {
+			p := &page[i]
+			if skipNS[p.Namespace] {
+				continue
+			}
+			if p.Status.Phase != corev1.PodSucceeded && p.Status.Phase != corev1.PodFailed {
+				continue
+			}
+			// Skip pods belonging to a KusoBuild's Job — see comment above.
+			// The right way to clear stale builds is `kubectl delete kusobuild`,
+			// not deleting the child Job/pod, which the operator just rebuilds.
+			ownedByBuildJob := false
+			for _, o := range p.OwnerReferences {
+				if o.Kind == "Job" && buildJobs[p.Namespace+"/"+o.Name] {
+					ownedByBuildJob = true
+					break
+				}
+			}
+			if ownedByBuildJob {
+				continue
+			}
+			if err := h.Kube.Clientset.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{
+				PropagationPolicy: &bg,
+			}); err != nil && !apierrors.IsNotFound(err) {
+				out.Errors = append(out.Errors, "pod "+p.Namespace+"/"+p.Name+": "+err.Error())
+				continue
+			}
+			out.PodsDeleted++
+			seenNS[p.Namespace] = struct{}{}
+		}
+		return nil
+	}); err != nil {
 		http.Error(w, "list pods: "+err.Error(), http.StatusInternalServerError)
 		return
-	}
-	seenNS := map[string]struct{}{}
-	for i := range pods.Items {
-		p := &pods.Items[i]
-		if skipNS[p.Namespace] {
-			continue
-		}
-		if p.Status.Phase != corev1.PodSucceeded && p.Status.Phase != corev1.PodFailed {
-			continue
-		}
-		// Skip pods belonging to a KusoBuild's Job — see comment above.
-		// The right way to clear stale builds is `kubectl delete kusobuild`,
-		// not deleting the child Job/pod, which the operator just rebuilds.
-		ownedByBuildJob := false
-		for _, o := range p.OwnerReferences {
-			if o.Kind == "Job" && buildJobs[p.Namespace+"/"+o.Name] {
-				ownedByBuildJob = true
-				break
-			}
-		}
-		if ownedByBuildJob {
-			continue
-		}
-		if err := h.Kube.Clientset.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{
-			PropagationPolicy: &bg,
-		}); err != nil && !apierrors.IsNotFound(err) {
-			out.Errors = append(out.Errors, "pod "+p.Namespace+"/"+p.Name+": "+err.Error())
-			continue
-		}
-		out.PodsDeleted++
-		seenNS[p.Namespace] = struct{}{}
 	}
 
 	// Jobs: completion-time-set is the safe signal. activeDeadline-
 	// elapsed Jobs that haven't been marked Failed yet are left for
 	// the kube garbage collector — touching them mid-state risks
 	// racing with helm-operator's reconcile if a Job is parented to
-	// a Helm release. We reuse allJobs from the pre-pass.
-	for i := range allJobs.Items {
-		j := &allJobs.Items[i]
+	// a Helm release. We reuse the allJobs slice from the pre-pass.
+	for i := range allJobs {
+		j := &allJobs[i]
 		if skipNS[j.Namespace] {
 			continue
 		}
@@ -189,4 +207,50 @@ func (h *KubernetesHandler) CleanupCompleted(w http.ResponseWriter, r *http.Requ
 	out.Namespaces = sortedNamespaces
 
 	writeJSON(w, http.StatusOK, out)
+}
+
+// paginatePods walks every page of pods in namespace (or all
+// namespaces when ns == "") and calls cb with each page. The caller
+// processes one page worth of pods at a time, so peak memory is
+// bounded by cleanupPageLimit even on a cluster with millions of
+// pods. Continue tokens are managed for the caller.
+func paginatePods(ctx context.Context, cs kubernetes.Interface, ns string, cb func([]corev1.Pod) error) error {
+	cont := ""
+	for {
+		page, err := cs.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+			Limit:    cleanupPageLimit,
+			Continue: cont,
+		})
+		if err != nil {
+			return err
+		}
+		if err := cb(page.Items); err != nil {
+			return err
+		}
+		cont = page.Continue
+		if cont == "" {
+			return nil
+		}
+	}
+}
+
+// paginateJobs is the batch/v1 counterpart of paginatePods.
+func paginateJobs(ctx context.Context, cs kubernetes.Interface, ns string, cb func([]batchv1.Job) error) error {
+	cont := ""
+	for {
+		page, err := cs.BatchV1().Jobs(ns).List(ctx, metav1.ListOptions{
+			Limit:    cleanupPageLimit,
+			Continue: cont,
+		})
+		if err != nil {
+			return err
+		}
+		if err := cb(page.Items); err != nil {
+			return err
+		}
+		cont = page.Continue
+		if cont == "" {
+			return nil
+		}
+	}
 }

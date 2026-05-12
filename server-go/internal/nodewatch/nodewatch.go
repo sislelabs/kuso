@@ -17,7 +17,6 @@ package nodewatch
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -340,5 +339,5 @@ func reasonFor(n *corev1.Node) string {
 			return "node Ready=" + string(c.Status)
 		}
 	}
-	return errors.New("no Ready condition reported").Error()
+	return "no Ready condition reported"
 }

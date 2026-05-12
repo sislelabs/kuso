@@ -260,13 +260,16 @@ func (s *Service) loadSettings(ctx context.Context) BuildSettingsView {
 	if ttl <= 0 {
 		ttl = 30 * time.Second
 	}
+	// Hold the lock across the DB read so concurrent callers under a
+	// build storm coalesce on the cache instead of all racing through
+	// to GetBuildSettings — the previous unlock-read-relock pattern
+	// defeated the whole purpose of the cache. One Postgres roundtrip
+	// per TTL is fine; ten in parallel saturates the pool.
 	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
 	if s.settingsCache != nil && time.Now().Before(s.settingsCache.expires) {
-		out := s.settingsCache.view
-		s.settingsMu.Unlock()
-		return out
+		return s.settingsCache.view
 	}
-	s.settingsMu.Unlock()
 	v, err := s.Settings.GetBuildSettings(ctx)
 	if err != nil {
 		// Fall back to static config; never fail a build because
@@ -274,9 +277,7 @@ func (s *Service) loadSettings(ctx context.Context) BuildSettingsView {
 		// next call retries.
 		return BuildSettingsView{MaxConcurrent: s.MaxConcurrentBuilds}
 	}
-	s.settingsMu.Lock()
 	s.settingsCache = &cachedBuildSettings{view: v, expires: time.Now().Add(ttl)}
-	s.settingsMu.Unlock()
 	return v
 }
 
@@ -575,7 +576,10 @@ func (s *Service) countActiveBuildsForProject(ctx context.Context, project strin
 	// pods owned by build CRs labelled state=done. See that function
 	// for the why.
 	doneNames := map[string]struct{}{}
-	doneSelStr := "kuso.sislelabs.com/project=" + project + ",kuso.sislelabs.com/build-state=done"
+	doneSelStr := kube.LabelSelector(map[string]string{
+		kube.LabelProject:                 project,
+		"kuso.sislelabs.com/build-state": "done",
+	})
 	if doneSel, perr := labels.Parse(doneSelStr); perr == nil {
 		if blist, ok := s.Kube.Cache.ListFromCache(kube.GVRBuilds, ns, doneSel); ok {
 			for _, u := range blist {
@@ -617,8 +621,14 @@ func (s *Service) countActiveBuildsForProject(ctx context.Context, project strin
 			accept(seen, doneNames, p)
 		}
 	}
-	count("app.kubernetes.io/component=kusobuild,kuso.sislelabs.com/project=" + project)
-	count("app.kubernetes.io/name=kusobuild,kuso.sislelabs.com/project=" + project)
+	count(kube.LabelSelector(map[string]string{
+		"app.kubernetes.io/component": "kusobuild",
+		kube.LabelProject:             project,
+	}))
+	count(kube.LabelSelector(map[string]string{
+		"app.kubernetes.io/name": "kusobuild",
+		kube.LabelProject:        project,
+	}))
 	return len(seen)
 }
 
@@ -638,8 +648,10 @@ func (s *Service) findRecentForBranch(ctx context.Context, ns, project, fqn, bra
 	// we list everything for the service and filter in code; the
 	// label cardinality is bounded (~5-50 builds per service over
 	// any short window).
-	selector := "kuso.sislelabs.com/project=" + project +
-		",kuso.sislelabs.com/service=" + fqn
+	selector := kube.LabelSelector(map[string]string{
+		kube.LabelProject: project,
+		kube.LabelService: fqn,
+	})
 	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
 		LabelSelector: selector,
 	})
@@ -684,9 +696,10 @@ func (s *Service) findActiveForService(ctx context.Context, ns, project, fqn str
 	}
 	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	selector := "kuso.sislelabs.com/project=" + project +
-		",kuso.sislelabs.com/service=" + fqn +
-		",!kuso.sislelabs.com/build-state"
+	selector := kube.LabelSelector(map[string]string{
+		kube.LabelProject: project,
+		kube.LabelService: fqn,
+	}) + ",!kuso.sislelabs.com/build-state"
 	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
 		LabelSelector: selector,
 	})
@@ -847,9 +860,10 @@ func (s *Service) supersedePriorBuilds(ctx context.Context, ns, project, fqn, ne
 	}
 	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	selector := "kuso.sislelabs.com/project=" + project +
-		",kuso.sislelabs.com/service=" + fqn +
-		",!kuso.sislelabs.com/build-state"
+	selector := kube.LabelSelector(map[string]string{
+		kube.LabelProject: project,
+		kube.LabelService: fqn,
+	}) + ",!kuso.sislelabs.com/build-state"
 	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
 		LabelSelector: selector,
 	})
@@ -969,11 +983,11 @@ var shaRE = regexp.MustCompile(`^[0-9a-f]{40}$`)
 // List returns the builds for a project (and optionally for a single
 // service inside it), newest first.
 func (s *Service) List(ctx context.Context, project, service string) ([]kube.KusoBuild, error) {
-	selector := "kuso.sislelabs.com/project=" + project
+	pairs := map[string]string{kube.LabelProject: project}
 	if service != "" {
-		selector += ",kuso.sislelabs.com/service=" + project + "-" + service
+		pairs[kube.LabelService] = project + "-" + service
 	}
-	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(s.nsFor(ctx, project)).List(ctx, metav1.ListOptions{LabelSelector: selector})
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(s.nsFor(ctx, project)).List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(pairs)})
 	if err != nil {
 		return nil, fmt.Errorf("list builds: %w", err)
 	}
@@ -1385,7 +1399,9 @@ func (s *Service) Rollback(ctx context.Context, project, service, buildName stri
 		return nil, fmt.Errorf("re-read env: %w", err)
 	}
 	var e kube.KusoEnvironment
-	_ = runtime.DefaultUnstructuredConverter.FromUnstructured(envRaw.Object, &e)
+	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envRaw.Object, &e); err != nil {
+		return nil, fmt.Errorf("decode rolled-back env %s: %w", envName, err)
+	}
 	return &e, nil
 }
 
@@ -2639,8 +2655,10 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	if shortService == "" {
 		shortService = b.Spec.Service
 	}
-	selector := "kuso.sislelabs.com/project=" + b.Spec.Project +
-		",kuso.sislelabs.com/service=" + shortService
+	selector := kube.LabelSelector(map[string]string{
+		kube.LabelProject: b.Spec.Project,
+		kube.LabelService: shortService,
+	})
 	raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
 		List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {

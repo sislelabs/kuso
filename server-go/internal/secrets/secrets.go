@@ -443,7 +443,10 @@ func (s *Service) findEnv(ctx context.Context, project, service, env string) (*k
 func (s *Service) envsForService(ctx context.Context, project, service string) ([]kube.KusoEnvironment, error) {
 	raw, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(s.nsFor(ctx, project)).
 		List(ctx, metav1.ListOptions{
-			LabelSelector: "kuso.sislelabs.com/project=" + project + ",kuso.sislelabs.com/service=" + service,
+			LabelSelector: kube.LabelSelector(map[string]string{
+				kube.LabelProject: project,
+				kube.LabelService: service,
+			}),
 		})
 	if err != nil {
 		return nil, fmt.Errorf("list envs for %s/%s: %w", project, service, err)
