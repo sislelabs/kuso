@@ -36,15 +36,22 @@ export function useOverlayDirty(panelKey: string, dirty: boolean) {
 }
 
 type Tab = "deployments" | "variables" | "metrics" | "logs" | "errors" | "crons" | "settings";
-const TABS: { id: Tab; label: string }[] = [
+// Settings is pinned to the right of the strip (rendered outside
+// the scrollable container) because it holds the destructive
+// actions — Delete service, change runtime, change port, change
+// scale. At 1280px the seven-peer-tab layout used to crop Settings
+// behind the scroll edge; users had to scroll to discover the
+// most-important destination. Pinning it surfaces the affordance
+// at any viewport.
+const MAIN_TABS: { id: Tab; label: string }[] = [
   { id: "deployments", label: "Deployments" },
   { id: "variables", label: "Variables" },
   { id: "metrics", label: "Metrics" },
   { id: "logs", label: "Logs" },
   { id: "errors", label: "Errors" },
   { id: "crons", label: "Crons" },
-  { id: "settings", label: "Settings" },
 ];
+const PINNED_TAB: { id: Tab; label: string } = { id: "settings", label: "Settings" };
 
 interface Props {
   project: string;
@@ -114,7 +121,7 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
   // forced "back to Deployments" reset on every open.
   useEffect(() => {
     if (!service) return;
-    const valid = TABS.some((t) => t.id === defaultTab);
+    const valid = [...MAIN_TABS, PINNED_TAB].some((t) => t.id === defaultTab);
     if (valid) {
       setTab(defaultTab as Tab);
       return;
@@ -122,7 +129,7 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
     let remembered: Tab = "deployments";
     if (typeof window !== "undefined") {
       const v = window.sessionStorage.getItem("kuso-service-overlay-tab");
-      if (v && TABS.some((t) => t.id === v)) remembered = v as Tab;
+      if (v && [...MAIN_TABS, PINNED_TAB].some((t) => t.id === v)) remembered = v as Tab;
     }
     setTab(remembered);
   }, [service, defaultTab]);
@@ -330,43 +337,63 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
               </button>
             </header>
 
-            {/* Tab strip with sliding indicator. flex-nowrap +
-                overflow-x-auto so the row scrolls horizontally on
-                narrow viewports instead of wrapping under the close
-                button or cropping. Active tab is scrolled into view
-                via scroll-into-view in a ref callback so a deep-link
-                to a side tab lands in the right place. */}
-            <nav className="flex shrink-0 flex-nowrap items-center gap-1 overflow-x-auto border-b border-[var(--border-subtle)] px-2 sm:px-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-              {TABS.map((t) => {
-                const active = t.id === tab;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    ref={(el) => {
-                      if (active && el) {
-                        el.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
-                      }
-                    }}
-                    onClick={() => guardedSetTab(t.id)}
-                    className={cn(
-                      "relative inline-flex h-10 shrink-0 items-center px-3 text-sm font-medium transition-colors whitespace-nowrap",
-                      active
-                        ? "text-[var(--text-primary)]"
-                        : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
-                    )}
-                  >
-                    {t.label}
-                    {active && (
-                      <motion.span
-                        layoutId="overlay-tab-underline"
-                        className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[var(--text-primary)]"
-                        transition={{ type: "spring", stiffness: 380, damping: 32 }}
-                      />
-                    )}
-                  </button>
-                );
-              })}
+            {/* Tab strip: scrollable left rail for the view tabs,
+                pinned Settings on the right. The left rail scrolls
+                horizontally on narrow viewports; Settings stays
+                visible so the destructive actions are always one
+                click away regardless of width. */}
+            <nav className="flex shrink-0 items-center border-b border-[var(--border-subtle)] px-2 sm:px-3">
+              <div className="flex flex-1 min-w-0 flex-nowrap items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                {MAIN_TABS.map((t) => {
+                  const active = t.id === tab;
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      ref={(el) => {
+                        if (active && el) {
+                          el.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
+                        }
+                      }}
+                      onClick={() => guardedSetTab(t.id)}
+                      className={cn(
+                        "relative inline-flex h-10 shrink-0 items-center px-3 text-sm font-medium transition-colors whitespace-nowrap",
+                        active
+                          ? "text-[var(--text-primary)]"
+                          : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+                      )}
+                    >
+                      {t.label}
+                      {active && (
+                        <motion.span
+                          layoutId="overlay-tab-underline"
+                          className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[var(--text-primary)]"
+                          transition={{ type: "spring", stiffness: 380, damping: 32 }}
+                        />
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+              <button
+                type="button"
+                onClick={() => guardedSetTab(PINNED_TAB.id)}
+                className={cn(
+                  "relative ml-2 inline-flex h-10 shrink-0 items-center border-l border-[var(--border-subtle)] pl-3 pr-2 text-sm font-medium transition-colors whitespace-nowrap",
+                  tab === PINNED_TAB.id
+                    ? "text-[var(--text-primary)]"
+                    : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+                )}
+              >
+                {PINNED_TAB.label}
+                {tab === PINNED_TAB.id && (
+                  <motion.span
+                    layoutId="overlay-tab-underline"
+                    className="absolute inset-x-3 bottom-0 h-[2px] rounded-full bg-[var(--text-primary)]"
+                    transition={{ type: "spring", stiffness: 380, damping: 32 }}
+                  />
+                )}
+              </button>
             </nav>
 
             {/* Body — switches by tab. Wraps in motion.div so each
