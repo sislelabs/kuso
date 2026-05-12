@@ -10,8 +10,9 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { ServiceOverlay } from "@/components/service/ServiceOverlay";
 import { AddonOverlay } from "@/components/addon/AddonOverlay";
+import { AddAddonDialog } from "@/components/addon/AddAddonDialog";
 import { MobileIncidentView } from "@/components/project/MobileIncidentView";
-import { Package } from "lucide-react";
+import { Package, Database } from "lucide-react";
 
 // ReactFlow touches `window` and `ResizeObserver` at module scope, which
 // blew up the static export build. ssr:false skips the prerender pass
@@ -40,6 +41,10 @@ export function ProjectDetailView() {
   const [selectedServiceTab, setSelectedServiceTab] = useState<string | undefined>(undefined);
   const [selectedAddon, setSelectedAddon] = useState<string | null>(null);
   const [selectedAddonTab, setSelectedAddonTab] = useState<string | undefined>(undefined);
+  // Add-addon dialog: opened from the empty-state CTA so a user who
+  // wants to start with a managed DB doesn't need to discover the
+  // canvas right-click menu. Closed by AddAddonDialog on success.
+  const [addAddonOpen, setAddAddonOpen] = useState(false);
 
   // Notification-link entry point: when the URL carries ?service= /
   // ?addon=, open the matching overlay on mount. Lets bell-icon
@@ -123,15 +128,30 @@ export function ProjectDetailView() {
         <EmptyState
           icon={<Package className="h-5 w-5" />}
           title="Empty project"
-          description="A project is a container for services. Add the first service from a GitHub repo to get this canvas lit up."
+          description="A project is a container for services and addons. Wire your first GitHub repo or provision a managed database to get this canvas lit up."
           action={
-            <a
-              href={`/projects/${encodeURIComponent(projectName)}/services/new`}
-              className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-xs font-medium text-[var(--btn-primary-fg)] shadow-[var(--shadow-sm)] transition-colors hover:bg-[var(--btn-primary-bg-hover)] hover:scale-[1.02]"
-            >
-              + Add service
-            </a>
+            <div className="flex items-center gap-2">
+              <a
+                href={`/projects/${encodeURIComponent(projectName)}/services/new`}
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-xs font-medium text-[var(--btn-primary-fg)] shadow-[var(--shadow-sm)] transition-colors hover:bg-[var(--btn-primary-bg-hover)] hover:scale-[1.02]"
+              >
+                + Add service
+              </a>
+              <button
+                type="button"
+                onClick={() => setAddAddonOpen(true)}
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-transparent px-3 text-xs font-medium text-[var(--text-primary)] transition-colors hover:bg-[var(--bg-secondary)]"
+              >
+                <Database className="h-3.5 w-3.5" />
+                Add addon
+              </button>
+            </div>
           }
+        />
+        <AddAddonDialog
+          project={projectName}
+          open={addAddonOpen}
+          onClose={() => setAddAddonOpen(false)}
         />
       </div>
     );
