@@ -88,6 +88,23 @@ export function TopNav() {
         </Crumb>
       )}
 
+      {/* Per-project Settings affordance. Before this the page
+          existed (/projects/<name>/settings) but was reachable only
+          via URL-typing or cmd-K — destructive actions like Delete
+          project and Preview TTL had no visible path from the
+          canvas. The cog sits at the end of the breadcrumb so it
+          reads as "settings for the thing in scope". */}
+      {currentProject && !settingsCrumbs && (
+        <Link
+          href={`/projects/${encodeURIComponent(currentProject)}/settings`}
+          aria-label="Project settings"
+          title="Project settings"
+          className="hidden sm:inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+        >
+          <Settings className="h-3.5 w-3.5" />
+        </Link>
+      )}
+
       {settingsCrumbs?.map((c, i) => (
         <Fragment key={c.href ?? c.label}>
           <Crumb className={i === 0 ? "hidden sm:flex" : undefined}>
