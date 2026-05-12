@@ -9,6 +9,11 @@ package kusoApi
 
 import "github.com/go-resty/resty/v2"
 
+// SetEnvRequest stays a CLI-local type with a loose
+// []map[string]any envVars slice — that's the shape the existing
+// CLI callers build. apiv1's typed EnvVar uses the same JSON tags
+// so the wire round-trip matches; we just don't force every
+// caller through the typed constructor.
 type SetEnvRequest struct {
 	EnvVars []map[string]any `json:"envVars"`
 }

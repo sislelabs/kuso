@@ -35,6 +35,30 @@ type (
 	GitHubInstallationRef = apiv1.GitHubInstallationRef
 	PreviewsSettings      = apiv1.PreviewsSettings
 	PreviewsPatch         = apiv1.PreviewsPatch
+
+	// Service + addon DTOs land here from apiv1 so the CLI shares
+	// the canonical wire shape with server-go. Fields appearing in
+	// apiv1 but not in the old CLI shape (DisplayName, Command,
+	// Domains, EnvVars, Scale, Sleep, Static, Buildpacks) are now
+	// CLI-visible too — a long-overdue surface widening.
+	//
+	// SetEnvRequest stays a CLI-local type in env.go because its
+	// callers build `[]map[string]any` rather than the typed
+	// EnvVar slice; the wire shape matches either way (apiv1's
+	// EnvVar carries the same json tags) and rewriting every
+	// caller costs more than it earns.
+	AddDomainRequest  = apiv1.AddDomainRequest
+	SetEnvVarRequest  = apiv1.SetEnvVarRequest
+	SecretRefBody     = apiv1.SecretRefBody
+	UpdateAddonBackup = apiv1.UpdateAddonBackup
+	AddonExternalSpec = apiv1.AddonExternalSpec
+	EnvVar            = apiv1.EnvVar
+	ServiceDomain     = apiv1.ServiceDomain
+	ServiceRepoSpec   = apiv1.ServiceRepoSpec
+	ServiceScale      = apiv1.ServiceScale
+	ServiceSleep      = apiv1.ServiceSleep
+	ServiceStatic     = apiv1.ServiceStatic
+	ServiceBuildpacks = apiv1.ServiceBuildpacks
 )
 
 // Pointer helpers re-exported so existing call sites keep their
@@ -45,50 +69,16 @@ var (
 	StringPtr = apiv1.StringPtr
 )
 
-type CreateServiceRequest struct {
-	Name string `json:"name"`
-	Repo struct {
-		URL  string `json:"url,omitempty"`
-		Path string `json:"path,omitempty"`
-	} `json:"repo"`
-	Runtime string `json:"runtime,omitempty"`
-	Port    int    `json:"port,omitempty"`
-	// Image is required when runtime=image — points at an existing
-	// registry image instead of building from a repo. Server stamps
-	// it onto the env CR at create time so the chart pulls
-	// directly without spinning a kaniko Job. Other runtimes
-	// ignore this field.
-	Image *ServiceImageSpec `json:"image,omitempty"`
-}
-
-// ServiceImageSpec mirrors projects.ServiceImageSpec on the server —
-// duplicated here so the CLI doesn't have to import server-go/.
-// Repository is the full reference up to (not including) the tag,
-// e.g. "ghcr.io/foo/bar". Tag defaults to "latest" server-side
-// when empty, with the usual mutable-tag caveat (next redeploy
-// won't observe a new image until the user changes the tag).
-type ServiceImageSpec struct {
-	Repository string `json:"repository,omitempty"`
-	Tag        string `json:"tag,omitempty"`
-}
-
-type CreateAddonRequest struct {
-	Name             string                `json:"name"`
-	Kind             string                `json:"kind"`
-	Version          string                `json:"version,omitempty"`
-	Size             string                `json:"size,omitempty"`
-	HA               bool                  `json:"ha,omitempty"`
-	External         *AddonExternalRequest `json:"external,omitempty"`
-	UseInstanceAddon string                `json:"useInstanceAddon,omitempty"`
-}
-
-// AddonExternalRequest tells the server to skip provisioning and
-// mirror an existing kube Secret as the addon's <name>-conn secret.
-// SecretKeys is an optional allowlist; empty mirrors every key.
-type AddonExternalRequest struct {
-	SecretName string   `json:"secretName"`
-	SecretKeys []string `json:"secretKeys,omitempty"`
-}
+// CreateServiceRequest and friends now alias the apiv1 wire shapes
+// directly. Existing call sites that set Repo as a value-typed
+// anonymous struct were migrated to the apiv1.ServiceRepoSpec
+// pointer at the same time as this alias landed.
+type (
+	CreateServiceRequest  = apiv1.CreateServiceRequest
+	ServiceImageSpec      = apiv1.ServiceImage
+	CreateAddonRequest    = apiv1.CreateAddonRequest
+	AddonExternalRequest  = apiv1.AddonExternalSpec
+)
 
 // Projects
 
@@ -151,19 +141,17 @@ func (k *KusoClient) DeleteService(project, service string) (*resty.Response, er
 	return k.client.Delete("/api/projects/" + esc(project) + "/services/" + esc(service))
 }
 
-// PatchServiceDomain mirrors the server's ServiceDomain shape on the
-// PATCH path. Kept inline here so the CLI doesn't have to import the
-// server types — the server is permissive about extra fields, so an
-// older CLI talking to a newer server still works.
-type PatchServiceDomain struct {
-	Host string `json:"host"`
-	TLS  bool   `json:"tls"`
-}
+// PatchServiceDomain is the wire shape of one entry in the PATCH
+// .../services/{s}.domains list. Same struct as apiv1.ServiceDomain
+// but with the json:"host" / json:"tls" tags using strict (non-
+// omitempty) emission so a {"host":"","tls":false} clear is
+// distinguishable from "leave alone."
+type PatchServiceDomain = apiv1.ServiceDomain
 
-// PatchServiceRequest is the partial-update body for PATCH /api/
-// projects/{p}/services/{s}. Pointer fields distinguish "leave alone"
-// from "set to zero". Only fields the CLI actually edits are listed
-// — placement / volumes / scale stay UI-only for now.
+// PatchServiceRequest stays a CLI-local type until apiv1 grows the
+// full server-side PatchServiceRequest surface (placement, volumes,
+// scale, sleep, repo, previews — the domain shape is broader than
+// the create path). The CLI only edits the small subset below.
 type PatchServiceRequest struct {
 	DisplayName *string              `json:"displayName,omitempty"`
 	Port        *int32               `json:"port,omitempty"`
@@ -183,12 +171,6 @@ func (k *KusoClient) PatchService(project, service string, req PatchServiceReque
 	return k.client.Patch("/api/projects/" + esc(project) + "/services/" + esc(service))
 }
 
-// AddDomainRequest mirrors the server-side projects.AddDomainRequest.
-type AddDomainRequest struct {
-	Host string `json:"host"`
-	TLS  bool   `json:"tls"`
-}
-
 // AddDomain appends a single domain to a service. The server applies
 // the change under a per-service lock so concurrent adds don't race.
 // 409 on a duplicate host with the same TLS flag.
@@ -202,17 +184,10 @@ func (k *KusoClient) RemoveDomain(project, service, host string) (*resty.Respons
 	return k.client.Delete("/api/projects/" + esc(project) + "/services/" + esc(service) + "/domains/" + esc(host))
 }
 
-// SetEnvVarRequest mirrors the server-side projects.SetEnvVarRequest.
-// Exactly one of Value or SecretRef must be set.
-type SetEnvVarRequest struct {
-	Value     string                  `json:"value,omitempty"`
-	SecretRef *SetEnvVarSecretRefBody `json:"secretRef,omitempty"`
-}
-
-type SetEnvVarSecretRefBody struct {
-	Name string `json:"name"`
-	Key  string `json:"key"`
-}
+// SetEnvVarSecretRefBody is the legacy alias for apiv1.SecretRefBody.
+// Kept for one release so external import paths still resolve; new
+// code should use SecretRefBody directly.
+type SetEnvVarSecretRefBody = apiv1.SecretRefBody
 
 // SetEnvVar adds or overwrites a single env var by name. Idempotent.
 func (k *KusoClient) SetEnvVar(project, service, name string, req SetEnvVarRequest) (*resty.Response, error) {
@@ -256,27 +231,9 @@ func (k *KusoClient) DeleteAddon(project, addon string) (*resty.Response, error)
 	return k.client.Delete("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "?confirm=" + esc(addon))
 }
 
-// UpdateAddonBackup is the partial-update body for an addon's backup
-// schedule. Mirrors the server's UpdateBackupPatch — pointer fields
-// distinguish "leave alone" from "set". Schedule="" disables the
-// cronjob entirely (chart drops the resource).
-type UpdateAddonBackup struct {
-	Schedule      *string `json:"schedule,omitempty"`
-	RetentionDays *int    `json:"retentionDays,omitempty"`
-}
-
-// UpdateAddonRequest mirrors the server's partial-update body. Same
-// pointer-field convention. Only the knobs the CLI actually edits
-// today (size, version, HA, storageSize, database, backup) are
-// listed; the chart accepts more fields server-side.
-type UpdateAddonRequest struct {
-	Version     *string             `json:"version,omitempty"`
-	Size        *string             `json:"size,omitempty"`
-	HA          *bool               `json:"ha,omitempty"`
-	StorageSize *string             `json:"storageSize,omitempty"`
-	Database    *string             `json:"database,omitempty"`
-	Backup      *UpdateAddonBackup  `json:"backup,omitempty"`
-}
+// UpdateAddonRequest aliases the apiv1 wire shape. The legacy
+// nested-Backup field shape is preserved verbatim.
+type UpdateAddonRequest = apiv1.UpdateAddonRequest
 
 // UpdateAddon PATCHes an addon's spec. Used by `kuso addon-backup
 // schedule` to enable / change / disable the per-addon CronJob.

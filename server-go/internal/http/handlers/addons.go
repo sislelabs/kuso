@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	apiv1 "github.com/sislelabs/kuso/api/apiv1"
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/audit"
@@ -18,6 +19,50 @@ import (
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
+
+// apiv1CreateAddonToDomain converts the wire shape to the internal
+// request. apiv1 owns the JSON contract; addons.CreateAddonRequest
+// stays as the domain shape so internal callers (preview-DB clone,
+// instance-addon resolver) can keep using their private fields
+// without round-tripping through the wire type.
+func apiv1CreateAddonToDomain(in apiv1.CreateAddonRequest) addons.CreateAddonRequest {
+	out := addons.CreateAddonRequest{
+		Name:             in.Name,
+		Kind:             in.Kind,
+		Version:          in.Version,
+		Size:             in.Size,
+		HA:               in.HA,
+		StorageSize:      in.StorageSize,
+		Database:         in.Database,
+		UseInstanceAddon: in.UseInstanceAddon,
+	}
+	if in.External != nil {
+		out.External = &kube.KusoAddonExternal{
+			SecretName: in.External.SecretName,
+			SecretKeys: in.External.SecretKeys,
+		}
+	}
+	return out
+}
+
+// apiv1UpdateAddonToDomain converts the wire PATCH shape. Pointer
+// semantics preserved end-to-end.
+func apiv1UpdateAddonToDomain(in apiv1.UpdateAddonRequest) addons.UpdateAddonRequest {
+	out := addons.UpdateAddonRequest{
+		Version:     in.Version,
+		Size:        in.Size,
+		HA:          in.HA,
+		StorageSize: in.StorageSize,
+		Database:    in.Database,
+	}
+	if in.Backup != nil {
+		out.Backup = &addons.UpdateBackupPatch{
+			Schedule:      in.Backup.Schedule,
+			RetentionDays: in.Backup.RetentionDays,
+		}
+	}
+	return out
+}
 
 // AddonsHandler exposes the /api/projects/:p/addons routes.
 type AddonsHandler struct {
@@ -156,8 +201,8 @@ func (h *AddonsHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AddonsHandler) Add(w http.ResponseWriter, r *http.Request) {
-	var req addons.CreateAddonRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var wire apiv1.CreateAddonRequest
+	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -167,6 +212,7 @@ func (h *AddonsHandler) Add(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project := chi.URLParam(r, "project")
+	req := apiv1CreateAddonToDomain(wire)
 	out, err := h.Svc.Add(ctx, project, req)
 	if err != nil {
 		h.fail(w, "add addon", err)
@@ -190,11 +236,11 @@ func (h *AddonsHandler) Add(w http.ResponseWriter, r *http.Request) {
 }
 
 // Update applies a partial update to the addon spec. Body shape is
-// addons.UpdateAddonRequest — pointer fields, nil means "leave
+// apiv1.UpdateAddonRequest — pointer fields, nil means "leave
 // alone". Returns the updated CR so the UI can re-baseline.
 func (h *AddonsHandler) Update(w http.ResponseWriter, r *http.Request) {
-	var body addons.UpdateAddonRequest
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+	var wire apiv1.UpdateAddonRequest
+	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil && !errors.Is(err, io.EOF) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -203,7 +249,7 @@ func (h *AddonsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
 		return
 	}
-	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"), body)
+	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"), apiv1UpdateAddonToDomain(wire))
 	if err != nil {
 		h.fail(w, "update addon", err)
 		return

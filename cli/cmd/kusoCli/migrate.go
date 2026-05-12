@@ -262,10 +262,12 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 			svcReq := kusoApi.CreateServiceRequest{
 				Name:    svcSlug,
 				Runtime: coolify.RuntimeForBuildPack(it.App.BuildPack),
-				Port:    coolify.ParseFirstPort(it.App.PortsExposes),
+				Port:    int32(coolify.ParseFirstPort(it.App.PortsExposes)),
+				Repo: &kusoApi.ServiceRepoSpec{
+					URL:  coolify.NormalizeRepoURL(it.App.GitRepository),
+					Path: it.App.BaseDirectory,
+				},
 			}
-			svcReq.Repo.URL = coolify.NormalizeRepoURL(it.App.GitRepository)
-			svcReq.Repo.Path = it.App.BaseDirectory
 			sr, err := api.AddService(projectSlug, svcReq)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "      ✗ service %s: %v\n", svcSlug, err)

@@ -264,10 +264,12 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 	if api == nil {
 		return fmt.Errorf("not logged in; run 'kuso login' first")
 	}
-	req := kusoApi.CreateServiceRequest{Name: args[1]}
-	req.Repo.Path = serviceAddPath
-	req.Runtime = serviceAddRuntime
-	req.Port = serviceAddPort
+	req := kusoApi.CreateServiceRequest{
+		Name:    args[1],
+		Runtime: serviceAddRuntime,
+		Port:    int32(serviceAddPort),
+		Repo:    &kusoApi.ServiceRepoSpec{Path: serviceAddPath},
+	}
 	// runtime=image: point kuso at a pre-built image instead of a
 	// repo. The server requires image.repository when runtime is
 	// "image" and rejects the request otherwise; the CLI mirrors

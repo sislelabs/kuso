@@ -56,6 +56,66 @@ func apiv1CreateToDomain(in apiv1.CreateProjectRequest) projects.CreateProjectRe
 	return out
 }
 
+// apiv1CreateServiceToDomain converts the wire shape for POST
+// /api/projects/{p}/services to the internal request. apiv1 owns
+// the JSON contract; the domain struct is purely internal now.
+func apiv1CreateServiceToDomain(in apiv1.CreateServiceRequest) projects.CreateServiceRequest {
+	out := projects.CreateServiceRequest{
+		Name:        in.Name,
+		DisplayName: in.DisplayName,
+		Runtime:     in.Runtime,
+		Command:     in.Command,
+		Port:        in.Port,
+	}
+	if in.Repo != nil {
+		out.Repo = &projects.CreateServiceRepo{URL: in.Repo.URL, Path: in.Repo.Path}
+	}
+	if len(in.Domains) > 0 {
+		out.Domains = make([]projects.ServiceDomain, len(in.Domains))
+		for i, d := range in.Domains {
+			out.Domains[i] = projects.ServiceDomain{Host: d.Host, TLS: d.TLS}
+		}
+	}
+	if len(in.EnvVars) > 0 {
+		out.EnvVars = apiv1EnvVarsToDomain(in.EnvVars)
+	}
+	if in.Scale != nil {
+		out.Scale = &projects.ServiceScale{Min: in.Scale.Min, Max: in.Scale.Max, TargetCPU: in.Scale.TargetCPU}
+	}
+	if in.Sleep != nil {
+		out.Sleep = &projects.ServiceSleep{Enabled: in.Sleep.Enabled, AfterMinutes: in.Sleep.AfterMinutes}
+	}
+	if in.Static != nil {
+		out.Static = &projects.ServiceStaticSpec{
+			BuilderImage: in.Static.BuilderImage,
+			RuntimeImage: in.Static.RuntimeImage,
+			BuildCmd:     in.Static.BuildCmd,
+			OutputDir:    in.Static.OutputDir,
+		}
+	}
+	if in.Buildpacks != nil {
+		out.Buildpacks = &projects.ServiceBuildpacksSpec{
+			BuilderImage:   in.Buildpacks.BuilderImage,
+			LifecycleImage: in.Buildpacks.LifecycleImage,
+		}
+	}
+	if in.Image != nil {
+		out.Image = &projects.ServiceImageSpec{Repository: in.Image.Repository, Tag: in.Image.Tag}
+	}
+	return out
+}
+
+// apiv1EnvVarsToDomain converts the wire env-var slice to the
+// domain shape. Same fields, separate type — kept distinct so
+// rotating one doesn't accidentally rotate the other.
+func apiv1EnvVarsToDomain(in []apiv1.EnvVar) []projects.EnvVar {
+	out := make([]projects.EnvVar, len(in))
+	for i, v := range in {
+		out[i] = projects.EnvVar{Name: v.Name, Value: v.Value, ValueFrom: v.ValueFrom}
+	}
+	return out
+}
+
 // apiv1UpdateToDomain converts the wire PATCH shape to the internal
 // one. Pointer semantics are preserved end-to-end: nil = leave alone,
 // non-nil = apply (even when the dereferenced value is zero).
@@ -324,8 +384,8 @@ func (h *ProjectsHandler) ListServices(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
-	var req projects.CreateServiceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var wire apiv1.CreateServiceRequest
+	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -334,7 +394,7 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
 		return
 	}
-	out, err := h.Svc.AddService(ctx, chi.URLParam(r, "project"), req)
+	out, err := h.Svc.AddService(ctx, chi.URLParam(r, "project"), apiv1CreateServiceToDomain(wire))
 	if err != nil {
 		h.fail(w, "add service", err)
 		return
@@ -439,8 +499,8 @@ func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 // is projects.AddDomainRequest. The mutation is per-service serialised
 // so two concurrent adds don't race.
 func (h *ProjectsHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
-	var req projects.AddDomainRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var wire apiv1.AddDomainRequest
+	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -449,7 +509,8 @@ func (h *ProjectsHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
 		return
 	}
-	out, err := h.Svc.AddDomain(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
+	out, err := h.Svc.AddDomain(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"),
+		projects.AddDomainRequest{Host: wire.Host, TLS: wire.TLS})
 	if err != nil {
 		h.fail(w, "add domain", err)
 		return
@@ -477,10 +538,10 @@ func (h *ProjectsHandler) RemoveDomain(w http.ResponseWriter, r *http.Request) {
 }
 
 // SetEnvVar adds or overwrites a single env var by name. Body is
-// projects.SetEnvVarRequest — exactly one of `value` / `secretRef`.
+// apiv1.SetEnvVarRequest — exactly one of `value` / `secretRef`.
 func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
-	var req projects.SetEnvVarRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var wire apiv1.SetEnvVarRequest
+	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -492,6 +553,10 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
 	name := chi.URLParam(r, "name")
+	req := projects.SetEnvVarRequest{Value: wire.Value}
+	if wire.SecretRef != nil {
+		req.SecretRef = &projects.SetEnvVarSecretRefBody{Name: wire.SecretRef.Name, Key: wire.SecretRef.Key}
+	}
 	out, err := h.Svc.SetEnvVar(ctx, project, service, name, req)
 	if err != nil {
 		h.fail(w, "set env var", err)
@@ -650,8 +715,8 @@ func (h *ProjectsHandler) GetDetectedEnv(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
-	var req projects.SetEnvRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var wire apiv1.SetEnvRequest
+	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -662,11 +727,12 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 	}
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
+	envVars := apiv1EnvVarsToDomain(wire.EnvVars)
 	if err := h.Svc.SetEnvWithOpts(ctx,
 		project,
 		service,
-		req.EnvVars,
-		projects.SetEnvOpts{AllowPending: req.AllowPending},
+		envVars,
+		projects.SetEnvOpts{AllowPending: wire.AllowPending},
 	); err != nil {
 		h.fail(w, "set env", err)
 		return
@@ -676,8 +742,8 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 		// a privilege event (the user can swap DATABASE_URL or wire
 		// in a webhook secret), but the value itself is sensitive
 		// and shouldn't sit in the audit table.
-		names := make([]string, 0, len(req.EnvVars))
-		for _, v := range req.EnvVars {
+		names := make([]string, 0, len(envVars))
+		for _, v := range envVars {
 			names = append(names, v.Name)
 		}
 		h.Audit.Log(ctx, audit.Entry{
@@ -687,7 +753,7 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 			Pipeline: project,
 			App:      service,
 			Resource: "kusoservice",
-			Message:  fmt.Sprintf("set %d env vars: %v (allowPending=%v)", len(names), names, req.AllowPending),
+			Message:  fmt.Sprintf("set %d env vars: %v (allowPending=%v)", len(names), names, wire.AllowPending),
 		})
 	}
 	w.WriteHeader(http.StatusNoContent)
