@@ -31,14 +31,28 @@ export default function ProjectsPage() {
   // First-run redirect: a freshly-logged-in user landing on /projects
   // with zero projects AND zero GitHub installations gets bounced to
   // the guided onboarding. Only fires for users who can create
-  // projects (otherwise the welcome flow is useless to them); only
-  // runs once per session (idempotency via the redirect-replaces-not-
-  // pushes URL).
+  // projects.
+  //
+  // Loop trap: the user can leave /welcome via "skip to dashboard,"
+  // which routes back to /projects. Without a memo we'd bounce them
+  // straight back to /welcome — the back button becomes a trap and
+  // the only escape is closing the tab. Remember in sessionStorage
+  // that we've redirected once this tab-session and don't fire again
+  // even if the no-projects/no-installations precondition still
+  // holds. Cleared on next login (sessionStorage scope).
   useEffect(() => {
     if (isPending || installations.isPending) return;
     if (!canCreate) return;
     if ((data?.length ?? 0) > 0) return;
     if ((installations.data?.length ?? 0) > 0) return;
+    try {
+      if (sessionStorage.getItem("kuso.welcome.redirected") === "1") return;
+      sessionStorage.setItem("kuso.welcome.redirected", "1");
+    } catch {
+      // Storage may throw in private-browsing modes; fall through
+      // and redirect anyway. Worst case is one extra loop, which
+      // is the same as today's behaviour.
+    }
     router.replace("/welcome");
   }, [isPending, installations.isPending, canCreate, data, installations.data, router]);
 
