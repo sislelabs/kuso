@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.9.79] — 2026-05-12
+
+### 🐛 Bug Fixes
+- Fix(addon-sql): stop wide tables from blowing out the overlay ([9dacc6f](https://github.com/sislelabs/kuso/commit/9dacc6f5c3c016e6d7fd5a7ba3de8f683ab4066c))
+
 ## [0.9.78] — 2026-05-11
 
 ### Other
