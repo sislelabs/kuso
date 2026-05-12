@@ -66,8 +66,20 @@ export function ProjectDetailView() {
     };
     const svc = search?.get("service");
     const addon = search?.get("addon");
-    if (svc) setSelectedService(stripPrefix(svc));
-    if (addon) setSelectedAddon(stripPrefix(addon));
+    const tab = search?.get("tab") ?? undefined;
+    if (svc) {
+      setSelectedService(stripPrefix(svc));
+      // cmd-K palette and bell-icon notifications encode a deep-link
+      // tab via ?tab=logs / ?tab=variables / ?tab=settings. Without
+      // this wire-up every "Tail logs · X" entry landed on the
+      // default Deployments tab. Set unconditionally — the overlay
+      // falls back to its own default when undefined.
+      setSelectedServiceTab(tab);
+    }
+    if (addon) {
+      setSelectedAddon(stripPrefix(addon));
+      setSelectedAddonTab(tab);
+    }
     // Re-run on URL change so the cmd-K palette can navigate from
     // /projects/<p>?service=A to /projects/<p>?service=B by pushing
     // a new URL — without this, the overlay keeps showing A.
