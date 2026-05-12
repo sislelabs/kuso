@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/auth"
 	"kuso/server/internal/updater"
 )
 
@@ -71,6 +72,16 @@ func (h *UpdaterHandler) RefreshVersion(w http.ResponseWriter, r *http.Request) 
 // back, or applying a hotfix that's not yet "latest". An empty body
 // (or no version field) defaults to the cached "latest" path.
 func (h *UpdaterHandler) StartUpdate(w http.ResponseWriter, r *http.Request) {
+	// Triggers a cluster-scoped kube Job under the kuso-server SA,
+	// which has ClusterRole-level permissions. Without this gate any
+	// authenticated user (Viewer, Deployer, etc.) could initiate an
+	// upgrade — effectively a privilege escalation to cluster-admin
+	// via a single POST. Gate on the dedicated system:update perm
+	// rather than settings:admin so the surface is greppable + can
+	// be granted to release-bot accounts without admin-ing them.
+	if !requirePerm(w, r, auth.PermSystemUpdate) {
+		return
+	}
 	if h.Svc == nil {
 		http.Error(w, "updater unavailable", http.StatusServiceUnavailable)
 		return
