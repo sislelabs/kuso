@@ -74,7 +74,7 @@ func (h *ImportCoolifyHandler) Preview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req PreviewRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		http.Error(w, "decode: "+err.Error(), http.StatusBadRequest)
 		return
 	}

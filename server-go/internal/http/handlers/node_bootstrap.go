@@ -96,7 +96,7 @@ func (h *NodeBootstrapHandler) MintToken(w http.ResponseWriter, r *http.Request)
 		NodeName   string            `json:"nodeName"`
 		TTLSeconds int               `json:"ttlSeconds"`
 	}
-	if err := decodeJSON(r, &body); err != nil {
+	if err := decodeJSON(w, r, &body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -311,7 +311,7 @@ func (h *NodeBootstrapHandler) ServeScript(w http.ResponseWriter, r *http.Reques
 // auth boundary; everything past it is logged + applied.
 func (h *NodeBootstrapHandler) RegisterNode(w http.ResponseWriter, r *http.Request) {
 	var req nodejoin.RegisterRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}

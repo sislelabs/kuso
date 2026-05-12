@@ -258,7 +258,7 @@ func (h *KubernetesHandler) PutNodeLabels(w http.ResponseWriter, r *http.Request
 	var body struct {
 		Labels map[string]string `json:"labels"`
 	}
-	if err := decodeJSON(r, &body); err != nil {
+	if err := decodeJSON(w, r, &body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}

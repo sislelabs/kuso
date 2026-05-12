@@ -138,9 +138,13 @@ func chiURLParam(r *http.Request, name string) string {
 }
 
 // decodeJSON pulls the request body into out, capping at 1 MiB to
-// avoid unbounded reads from a hostile client.
-func decodeJSON(r *http.Request, out any) error {
-	body := http.MaxBytesReader(nil, r.Body, 1<<20)
+// avoid unbounded reads from a hostile client. Passes w to
+// MaxBytesReader so an oversize body automatically returns 413
+// (the stdlib's behaviour when the writer is non-nil) — the
+// previous nil version silently degraded oversize-body decode
+// failures to 400/500 depending on the caller. B7 in followup.
+func decodeJSON(w http.ResponseWriter, r *http.Request, out any) error {
+	body := http.MaxBytesReader(w, r.Body, 1<<20)
 	defer body.Close()
 	return json.NewDecoder(body).Decode(out)
 }
