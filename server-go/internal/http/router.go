@@ -7,7 +7,6 @@ import (
 	"bufio"
 	"context"
 	"crypto/subtle"
-	"encoding/json"
 	"log/slog"
 	"net"
 	"net/http"
@@ -110,6 +109,7 @@ func NewRouter(d Deps) http.Handler {
 	// into json.NewDecoder(r.Body).Decode, which would otherwise
 	// happily consume the whole stream into memory.
 	r.Use(maxBodyBytes(1 << 20))
+	r.Use(apiSecurityHeadersMW)
 	r.Use(metricsMW)
 	// Stamp X-Kuso-Server-Version on every response. The web client
 	// caches the first value it sees and soft-reloads on next route
@@ -554,6 +554,35 @@ func versionHeaderMW(v string) func(http.Handler) http.Handler {
 	}
 }
 
+// apiSecurityHeadersMW applies the security headers SPA HTML already
+// gets to /api/* responses. Two things matter most:
+//
+//   - X-Content-Type-Options: nosniff blocks a browser from
+//     reinterpreting a JSON response as a script via content sniffing
+//     (the basis of some XSSI attacks against JSON callbacks).
+//   - Cache-Control: no-store stops a forward proxy or browser cache
+//     from holding onto sensitive responses (auth/session, env vars,
+//     secrets). The CSRF/Auth handlers individually set these on the
+//     most sensitive paths today, but blanket no-store on /api/* makes
+//     the policy robust against future handlers that forget.
+//
+// We only set Cache-Control if the handler hasn't set one already —
+// /api/builds/.../logs and similar streaming endpoints set their own
+// caching policy and we don't want to clobber it.
+func apiSecurityHeadersMW(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			h := w.Header()
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("Referrer-Policy", "no-referrer")
+			if h.Get("Cache-Control") == "" {
+				h.Set("Cache-Control", "no-store")
+			}
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // metricsMW records request count + duration. Wrap before maxBody so
 // we count the bytes-rejected 413s, after Recoverer so we don't lose
 // the metric on panic recovery.
@@ -682,76 +711,7 @@ func devCORS(next http.Handler) http.Handler {
 
 // healthz stays unauthenticated and returns the embedded version. The
 // shape ({"status":"ok","version":...}) is the same one Phase 0 shipped.
-func healthz(w http.ResponseWriter, _ *http.Request) {
-	body, _ := json.Marshal(map[string]string{
-		"status":  "ok",
-		"version": version.Version(),
-	})
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
-}
-
-// readyz returns 200 only when the dependencies kuso-server actually
-// needs to serve traffic are healthy: DB reachable + kube informer
-// cache synced (when the cache is enabled). Each check has a 1s
-// budget — readiness probes run every few seconds and a slow probe
-// pins the kube control plane.
-//
-// Response shape:
-//
-//	{"status":"ok"|"unready", "checks":{"db":"ok","kube":"ok"|"syncing"|"err: ..."}}
-func readyz(d Deps) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		checks := map[string]string{}
-		ready := true
-
-		if d.DB != nil {
-			ctx, cancel := context.WithTimeout(r.Context(), time.Second)
-			defer cancel()
-			if err := d.DB.PingContext(ctx); err != nil {
-				// Generic body — readyz is on the public router and
-				// raw Postgres errors leak the DSN host/user. Real
-				// detail goes to slog where it stays inside the pod.
-				checks["db"] = "unavailable"
-				ready = false
-				if d.Logger != nil {
-					d.Logger.Warn("readyz: db ping failed", "err", err)
-				}
-			} else {
-				checks["db"] = "ok"
-			}
-		}
-
-		// Cache is optional — one-shot CLI runs disable it. When wired,
-		// we require AllSynced before declaring ready so the LB doesn't
-		// route to a pod whose informer hasn't done its initial list
-		// (cold reads would fall back to the live API and amplify the
-		// boot-time apiserver hit).
-		if d.Kube != nil && d.Kube.Cache != nil {
-			if d.Kube.Cache.AllSynced() {
-				checks["kube"] = "ok"
-			} else {
-				checks["kube"] = "syncing"
-				ready = false
-			}
-		}
-
-		status := "ok"
-		code := http.StatusOK
-		if !ready {
-			status = "unready"
-			code = http.StatusServiceUnavailable
-		}
-		body, _ := json.Marshal(map[string]any{
-			"status": status,
-			"checks": checks,
-		})
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(code)
-		_, _ = w.Write(body)
-	}
-}
+// healthz / readyz live in probes.go.
 
 // slogRequest is a thin access-log middleware backed by slog. We don't
 // pull in chi/middleware.Logger because its default formatter writes to

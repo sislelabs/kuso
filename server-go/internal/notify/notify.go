@@ -43,21 +43,43 @@ import (
 type EventType string
 
 const (
-	EventBuildStarted   EventType = "build.started"
-	EventBuildSucceeded EventType = "build.succeeded"
-	EventBuildFailed    EventType = "build.failed"
-	EventDeployRolled   EventType = "deploy.rolled"
-	EventPodCrashed     EventType = "pod.crashed"
-	EventAlertFired     EventType = "alert.fired"
-	EventBackupOK       EventType = "backup.succeeded"
-	EventBackupFailed   EventType = "backup.failed"
+	EventBuildStarted    EventType = "build.started"
+	EventBuildSucceeded  EventType = "build.succeeded"
+	EventBuildFailed     EventType = "build.failed"
+	EventBuildCancelled  EventType = "build.cancelled"
+	EventBuildSuperseded EventType = "build.superseded"
+	EventDeployRolled    EventType = "deploy.rolled"
+	EventPodCrashed      EventType = "pod.crashed"
+	EventAlertFired      EventType = "alert.fired"
+	EventBackupOK        EventType = "backup.succeeded"
+	EventBackupFailed    EventType = "backup.failed"
 	// Node lifecycle events. Fired by the nodewatch goroutine when a
 	// kube node has been NotReady past the watcher's threshold.
 	// Recovery emits EventNodeRecovered so the operator sees both
 	// edges of the outage.
 	EventNodeUnreachable EventType = "node.unreachable"
 	EventNodeRecovered   EventType = "node.recovered"
+	// Diagnostic ping fired from the "send a test message" button on
+	// the notification settings page. Not a real platform event —
+	// don't subscribe to it from alerts.
+	EventTestPing EventType = "test.ping"
 )
+
+// AllEventTypes is the canonical list of every event type the
+// notify package emits. The settings UI uses it to enumerate
+// subscriber checkboxes; tests use it to assert that every emission
+// site goes through a typed constant rather than a stringly-typed
+// literal. Add new event types here AND to the const block above.
+var AllEventTypes = []EventType{
+	EventBuildStarted, EventBuildSucceeded, EventBuildFailed,
+	EventBuildCancelled, EventBuildSuperseded,
+	EventDeployRolled,
+	EventPodCrashed,
+	EventAlertFired,
+	EventBackupOK, EventBackupFailed,
+	EventNodeUnreachable, EventNodeRecovered,
+	EventTestPing,
+}
 
 // Event is the wire-stable payload domain code emits. JSON-serialised
 // straight to webhook sinks; rendered to embeds for Discord/Slack.

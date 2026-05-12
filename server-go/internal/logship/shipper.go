@@ -89,6 +89,12 @@ func New(d *db.LogDB, k *kube.Client, namespace string, logger *slog.Logger) *Sh
 	return &Shipper{
 		DB: d, Kube: k, Namespace: namespace, Logger: logger,
 		streams: map[string]context.CancelFunc{},
+		// Pre-seed runCtx so append() called before Run() doesn't fall
+		// back to context.Background() (which would spawn an
+		// uncancellable flush goroutine). Run() overrides this with
+		// the real lifecycle context; until then the bounded background
+		// keeps the contract honest.
+		runCtx: context.Background(),
 	}
 }
 
@@ -171,7 +177,14 @@ func (s *Shipper) scanNamespaces(ctx context.Context) []string {
 func (s *Shipper) reconcileNamespacePods(ctx context.Context, ns string) {
 	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(listCtx, metav1.ListOptions{})
+	// Only list kuso-owned pods (kuso.sislelabs.com/project=...).
+	// Previously listed every pod in the namespace which dragged in
+	// ingress controllers, cert-manager, monitoring, etc. — all of
+	// whose logs we never stream — every 30s. The label-exists
+	// selector keeps the response bounded to workloads we care about.
+	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(listCtx, metav1.ListOptions{
+		LabelSelector: kube.LabelProject,
+	})
 	if err != nil {
 		s.Logger.Warn("logship list pods", "namespace", ns, "err", err)
 		return
@@ -364,21 +377,9 @@ func (s *Shipper) append(l db.LogLine) {
 	s.bufMu.Unlock()
 	if shouldFlush {
 		// Out-of-band flush so a single noisy pod doesn't gate the
-		// rest of the system on the timed flush. Use the shipper's
-		// lifecycle ctx so this goroutine cancels cleanly on shutdown
-		// and doesn't race the graceful flush in Run's select loop.
-		ctx := s.runCtx
-		if ctx == nil {
-			// append called before Run set runCtx — shouldn't happen,
-			// but fall back to a short bounded context rather than
-			// the unbounded context.Background() (which prevented
-			// shutdown from interrupting an in-flight flush).
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
-			go func() { defer cancel(); s.flush(ctx) }()
-			return
-		}
-		go s.flush(ctx)
+		// rest of the system on the timed flush. runCtx is seeded in
+		// New() and replaced by Run(), so it's never nil here.
+		go s.flush(s.runCtx)
 	}
 }
 

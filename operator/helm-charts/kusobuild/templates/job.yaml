@@ -202,6 +202,20 @@ spec:
         # output that happens to look JSON-shaped.
         - name: env-detect
           image: alpine:3.20
+          # No --runAsUser:1000 here because apk add ripgrep jq needs
+          # write access to /etc/apk/. The blast-radius reduction we
+          # CAN apply without baking a custom image is:
+          #   - allowPrivilegeEscalation:false (no setuid escapes)
+          #   - drop all caps (no CAP_NET_RAW, CAP_SYS_PTRACE, etc.)
+          # The container still runs as root inside its own namespace
+          # but cannot use any capability — which is what every other
+          # init container in this Job already does. Long-term fix:
+          # bake a kuso-env-detect image that ships rg+jq so we can
+          # drop to runAsUser:1000 like cache-init.
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           command: ["/bin/sh", "-c"]
           args:
             - |

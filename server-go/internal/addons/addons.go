@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/placement"
 )
 
 // Service is the entrypoint for /api/projects/:p/addons.
@@ -118,20 +119,16 @@ func ConnSecretName(addonCR string) string { return addonCR + "-conn" }
 // connSecretName is the package-private alias.
 func connSecretName(addonCR string) string { return ConnSecretName(addonCR) }
 
-// List returns every KusoAddon in the project.
+// List returns every KusoAddon in the project. Routes through the
+// typed kube helper so the result is served from the informer cache
+// when warm (slice filter, no network call); the previous bespoke
+// dynamic-client path bypassed the cache.
 func (s *Service) List(ctx context.Context, project string) ([]kube.KusoAddon, error) {
-	raw, err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(s.nsFor(ctx, project)).
-		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: project})})
+	out, err := s.Kube.ListKusoAddonsByLabels(ctx, s.nsFor(ctx, project), map[string]string{
+		kube.LabelProject: project,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("list addons: %w", err)
-	}
-	out := make([]kube.KusoAddon, 0, len(raw.Items))
-	for i := range raw.Items {
-		var a kube.KusoAddon
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &a); err != nil {
-			return nil, fmt.Errorf("decode addon: %w", err)
-		}
-		out = append(out, a)
 	}
 	return out, nil
 }
@@ -417,7 +414,7 @@ func (s *Service) validatePlacement(ctx context.Context, p *kube.KusoPlacement) 
 	}
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
-		if kube.PlacementMatchesNode(p, n.Name, n.Labels) {
+		if placement.Matches(p, n.Name, n.Labels) {
 			return nil
 		}
 	}

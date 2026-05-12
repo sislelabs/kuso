@@ -795,7 +795,7 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 	if s.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, project+"-")
 		s.Notifier.Emit(EventEnvelope{
-			Type:     "build.cancelled",
+			Type:     eventBuildCancelled,
 			Title:    fmt.Sprintf("⊘ Build cancelled: %s", short),
 			Body:     fmt.Sprintf("`%s` cancelled by user", buildName),
 			Project:  project,
@@ -907,7 +907,7 @@ func (s *Service) supersedePriorBuilds(ctx context.Context, ns, project, fqn, ne
 		if s.Notifier != nil {
 			short := strings.TrimPrefix(fqn, project+"-")
 			s.Notifier.Emit(EventEnvelope{
-				Type:     "build.superseded",
+				Type:     eventBuildSuperseded,
 				Title:    fmt.Sprintf("⊘ Build superseded: %s", short),
 				Body:     fmt.Sprintf("`%s` cancelled — replaced by `%s`", name, newName),
 				Project:  project,
@@ -1437,9 +1437,22 @@ func (s *Service) ensureCloneTokenSecret(ctx context.Context, ns, buildName stri
 		// Refresh in place — token is short-lived, so reusing a stale
 		// one risks a clone failure on retry.
 		_, uerr := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, secret, metav1.UpdateOptions{})
-		return uerr
+		if apierrors.IsNotFound(uerr) {
+			// Concurrent cancel/cleanup deleted the Secret between our
+			// Create-returns-409 and the Update. Retry Create — same
+			// caller intent (upsert), so we transparently fall back
+			// rather than surface a confusing 404 from an Update path.
+			_, uerr = s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, secret, metav1.CreateOptions{})
+		}
+		if uerr != nil {
+			return fmt.Errorf("upsert clone token secret %s/%s: %w", ns, secret.Name, uerr)
+		}
+		return nil
 	}
-	return err
+	if err != nil {
+		return fmt.Errorf("create clone token secret %s/%s: %w", ns, secret.Name, err)
+	}
+	return nil
 }
 
 // ensureBuildCachePVC upserts a PVC named <fqn>-build-cache in the
@@ -1657,6 +1670,18 @@ type EventEnvelope struct {
 	Severity string
 	Extra    map[string]string
 }
+
+// Event type strings used at the Emit sites in this package. Kept
+// here (rather than imported from notify) to preserve the
+// no-notify-import boundary; the value strings must stay in sync
+// with notify.Event* — covered by the notify package's
+// AllEventTypes table.
+const (
+	eventBuildCancelled  = "build.cancelled"
+	eventBuildSuperseded = "build.superseded"
+	eventBuildSucceeded  = "build.succeeded"
+	eventBuildFailed     = "build.failed"
+)
 
 // LogArchiver persists the last N lines of a build pod's logs at
 // terminal-phase transition so the deployments-tab can show them
@@ -2506,6 +2531,13 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("patch build status: %w", err)
 	}
+	// Delete the per-build clone-token Secret immediately rather
+	// than waiting for the Job TTL (1h) to clean it up. The Secret
+	// carries a short-lived GitHub installation token; any pod with
+	// secrets:get in the build namespace during that window can
+	// clone the repo. Best-effort: kube errors are logged, never
+	// block the status patch.
+	p.deleteCloneTokenSecret(ns, b.Name)
 	// Snapshot the pod logs BEFORE the kaniko Job's TTL reaper can
 	// delete them. 1h is the chart's default ttlSecondsAfterFinished,
 	// but a slow tick interleaved with a slow apiserver could miss
@@ -2519,7 +2551,7 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 		}
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
 		p.Notifier.Emit(EventEnvelope{
-			Type:     "build.succeeded",
+			Type:     eventBuildSucceeded,
 			Title:    fmt.Sprintf("✓ Build succeeded: %s", short),
 			Body:     fmt.Sprintf("ref `%s` on `%s`", ref, b.Spec.Branch),
 			Project:  b.Spec.Project,
@@ -2544,6 +2576,10 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 	if err != nil {
 		return fmt.Errorf("patch build failed: %w", err)
 	}
+	// Same rationale as markSucceeded: drop the clone-token Secret
+	// the moment the build is terminal instead of leaving it for the
+	// Job TTL to harvest.
+	p.deleteCloneTokenSecret(ns, b.Name)
 	p.queueArchive(ctx, ns, b, "failed")
 	if p.Notifier != nil {
 		ref := b.Spec.Ref
@@ -2552,7 +2588,7 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 		}
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
 		p.Notifier.Emit(EventEnvelope{
-			Type:     "build.failed",
+			Type:     eventBuildFailed,
 			Title:    fmt.Sprintf("✗ Build failed: %s", short),
 			Body:     msg,
 			Project:  b.Spec.Project,
@@ -2595,6 +2631,27 @@ func (p *Poller) logger() *slog.Logger {
 		return p.Logger
 	}
 	return slog.Default()
+}
+
+// deleteCloneTokenSecret removes the per-build <name>-token Secret
+// once the build is terminal. Best-effort + bounded: detaches from
+// the caller's context (which may be about to return) so a slow
+// apiserver doesn't block the build-marker patch; logs and swallows
+// every error since the Job TTL is a fallback cleaner that still
+// runs.
+func (p *Poller) deleteCloneTokenSecret(ns, buildName string) {
+	if p.Svc == nil || p.Svc.Kube == nil || p.Svc.Kube.Clientset == nil {
+		return
+	}
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		name := buildName + "-token"
+		err := p.Svc.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{})
+		if err != nil && !apierrors.IsNotFound(err) {
+			p.logger().Warn("delete clone-token secret", "build", buildName, "ns", ns, "err", err)
+		}
+	}()
 }
 
 // annPromotedBuild + annPromotedAt stamp on the env CR record which

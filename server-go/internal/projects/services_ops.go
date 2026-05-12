@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/placement"
 )
 
 // decodeInto adapts the unstructured decode for the projects package.
@@ -1084,7 +1085,7 @@ func (s *Service) validatePlacement(ctx context.Context, p *kube.KusoPlacement) 
 	}
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
-		if kube.PlacementMatchesNode(p, n.Name, n.Labels) {
+		if placement.Matches(p, n.Name, n.Labels) {
 			return nil
 		}
 	}

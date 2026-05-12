@@ -163,7 +163,7 @@ func (h *NotificationsHandler) Test(w http.ResponseWriter, r *http.Request) {
 	// (i.e. every real-world config) would silently drop the test.
 	// SendDirect targets ONE notification, ignoring filters.
 	if err := h.Notify.SendDirect(ctx, n, notify.Event{
-		Type:     "test.ping",
+		Type:     notify.EventTestPing,
 		Title:    fmt.Sprintf("Test from kuso (%s)", n.Name),
 		Body:     "If you can read this, your notification channel is wired up correctly.",
 		Severity: "info",

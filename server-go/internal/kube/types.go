@@ -76,66 +76,11 @@ type KusoPlacement struct {
 	Nodes  []string          `json:"nodes,omitempty"`
 }
 
-// PlacementMatchesNode is the canonical matcher: AND across labels
-// (every requested label must match the node, after applying the
-// kuso.sislelabs.com/ prefix), AND with the optional Nodes list (the
-// node's hostname must appear). Lives in the kube package so both
-// projects and addons can share it without an import cycle.
-func PlacementMatchesNode(p *KusoPlacement, nodeName string, nodeLabels map[string]string) bool {
-	if p == nil {
-		return true
-	}
-	for k, v := range p.Labels {
-		got, ok := nodeLabels["kuso.sislelabs.com/"+k]
-		if !ok || got != v {
-			return false
-		}
-	}
-	if len(p.Nodes) > 0 {
-		hit := false
-		for _, n := range p.Nodes {
-			if n == nodeName {
-				hit = true
-				break
-			}
-		}
-		if !hit {
-			return false
-		}
-	}
-	return true
-}
-
-// CountPlacementMatches returns how many of the supplied (name,
-// labels) pairs satisfy `p`. 0 means the placement is unsatisfiable
-// against the cluster snapshot — every workload pod created with it
-// will sit Pending. Callers should fail validation in that case so
-// users see "no node matches" at save time rather than discovering
-// an indefinitely-pending pod the next day.
-//
-// Pass a node snapshot from the kube informer cache (cheap; already
-// kept warm). Empty / nil placement matches every node by definition.
-func CountPlacementMatches(p *KusoPlacement, nodes []NodeIdentity) int {
-	if p == nil {
-		return len(nodes)
-	}
-	n := 0
-	for _, nd := range nodes {
-		if PlacementMatchesNode(p, nd.Name, nd.Labels) {
-			n++
-		}
-	}
-	return n
-}
-
-// NodeIdentity is the minimum projection of a Node we need for
-// placement matching — name + the kuso label subset already filtered
-// at the source. Defined here (rather than inside placement validators)
-// so multiple callers can share the snapshot shape.
-type NodeIdentity struct {
-	Name   string
-	Labels map[string]string
-}
+// Placement *matching rules* (PlacementMatchesNode, CountPlacementMatches,
+// NodeIdentity) live in internal/placement now. The kube package keeps
+// only the wire type (KusoPlacement above) — types-and-client layer,
+// no business rules. Importing internal/placement avoids the previous
+// "shared rule with no good home" smell.
 
 type KusoRepoRef struct {
 	URL           string `json:"url,omitempty"`

@@ -129,6 +129,18 @@ func (c *Client) ListKusoAddons(ctx context.Context, namespace string) ([]KusoAd
 	return list[KusoAddon](ctx, c, GVRAddons, namespace, metav1.ListOptions{})
 }
 
+// ListKusoAddonsByLabels returns KusoAddon CRs in namespace matching
+// the supplied label pairs. The selector is encoded through
+// kube.LabelSelector so user-controlled values can't reshape the
+// selector at the apiserver. Routes through the cached typed-list
+// helper, so when the informer is warm this is a slice filter, not
+// a network call.
+func (c *Client) ListKusoAddonsByLabels(ctx context.Context, namespace string, labels map[string]string) ([]KusoAddon, error) {
+	return list[KusoAddon](ctx, c, GVRAddons, namespace, metav1.ListOptions{
+		LabelSelector: LabelSelector(labels),
+	})
+}
+
 // GetKusoAddon fetches one KusoAddon by name.
 func (c *Client) GetKusoAddon(ctx context.Context, namespace, name string) (*KusoAddon, error) {
 	return get[KusoAddon](ctx, c, GVRAddons, namespace, name)

@@ -4,13 +4,19 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
+// LabelPrefix is the user-visible kuso label namespace. Workload
+// labels look like kuso.sislelabs.com/<key>; the labels editor
+// strips/re-applies it so the user types `role` and the kube label
+// becomes `kuso.sislelabs.com/role`.
+const LabelPrefix = "kuso.sislelabs.com/"
+
 // Standard label keys used across the codebase. Promoted here so the
 // kube/projects/addons/builds/secrets packages all reach for one set
 // of constants instead of re-typing the strings.
 const (
-	LabelProject = "kuso.sislelabs.com/project"
-	LabelService = "kuso.sislelabs.com/service"
-	LabelEnv     = "kuso.sislelabs.com/env"
+	LabelProject = LabelPrefix + "project"
+	LabelService = LabelPrefix + "service"
+	LabelEnv     = LabelPrefix + "env"
 )
 
 // LabelSelector builds a properly-formatted kube label selector
