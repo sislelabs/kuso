@@ -106,6 +106,12 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 // when the host isn't present — distinguishes "I deleted it from the
 // UI but it was already gone" (idempotent retry) from "I tried to
 // delete it and it really wasn't there" (UI/CLI bug).
+//
+// Uses UpdateKusoServiceWithRetry so a helm-operator status patch
+// landing between our Get and Update doesn't 409 the user's edit.
+// AddDomain showed this pattern; the delete path used to use a
+// plain UpdateKusoService and silently lost writes under operator
+// churn.
 func (s *Service) RemoveDomain(ctx context.Context, project, service, host string) (*kube.KusoService, error) {
 	host = strings.ToLower(strings.TrimSpace(host))
 	if host == "" {
@@ -115,25 +121,43 @@ func (s *Service) RemoveDomain(ctx context.Context, project, service, host strin
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
-	svc, ns, err := s.fetchServiceForDelta(ctx, project, service)
+	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-
-	out := make([]kube.KusoDomain, 0, len(svc.Spec.Domains))
-	found := false
-	for _, d := range svc.Spec.Domains {
-		if strings.EqualFold(d.Host, host) {
-			found = true
-			continue
-		}
-		out = append(out, d)
+	fqn := service
+	if !strings.HasPrefix(service, project+"-") {
+		fqn = project + "-" + service
 	}
-	if !found {
+	var notFound bool
+	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, fqn, func(svc *kube.KusoService) error {
+		notFound = false
+		out := make([]kube.KusoDomain, 0, len(svc.Spec.Domains))
+		found := false
+		for _, d := range svc.Spec.Domains {
+			if strings.EqualFold(d.Host, host) {
+				found = true
+				continue
+			}
+			out = append(out, d)
+		}
+		if !found {
+			notFound = true
+			return kube.ErrAbortRetry
+		}
+		svc.Spec.Domains = out
+		return nil
+	})
+	if notFound {
 		return nil, fmt.Errorf("%w: domain %q", ErrNotFound, host)
 	}
-	svc.Spec.Domains = out
-	return s.persistDomains(ctx, ns, project, service, svc)
+	if err != nil {
+		return nil, fmt.Errorf("update service: %w", err)
+	}
+	if perr := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{Domains: true}); perr != nil {
+		return updated, fmt.Errorf("propagate domains to envs: %w", perr)
+	}
+	return updated, nil
 }
 
 // SetEnvVarRequest is the wire shape for PUT .../env-vars/:name.
@@ -154,6 +178,9 @@ type SetEnvVarSecretRefBody struct {
 // var with the same name is overwritten; new var is appended. Always
 // idempotent — re-running with the same value is a no-op write but
 // returns 200, not 409.
+//
+// Uses UpdateKusoServiceWithRetry so a helm-operator status patch
+// between Get and Update doesn't lose the user's edit.
 func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, req SetEnvVarRequest) (*kube.KusoService, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -171,9 +198,13 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
-	svc, ns, err := s.fetchServiceForDelta(ctx, project, service)
+	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
+	}
+	fqn := service
+	if !strings.HasPrefix(service, project+"-") {
+		fqn = project + "-" + service
 	}
 
 	next := kube.KusoEnvVar{Name: name}
@@ -188,23 +219,34 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 		}
 	}
 
-	replaced := false
-	for i := range svc.Spec.EnvVars {
-		if svc.Spec.EnvVars[i].Name == name {
-			svc.Spec.EnvVars[i] = next
-			replaced = true
-			break
+	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, fqn, func(svc *kube.KusoService) error {
+		replaced := false
+		for i := range svc.Spec.EnvVars {
+			if svc.Spec.EnvVars[i].Name == name {
+				svc.Spec.EnvVars[i] = next
+				replaced = true
+				break
+			}
 		}
+		if !replaced {
+			svc.Spec.EnvVars = append(svc.Spec.EnvVars, next)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("update service: %w", err)
 	}
-	if !replaced {
-		svc.Spec.EnvVars = append(svc.Spec.EnvVars, next)
+	if perr := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{EnvVars: true}); perr != nil {
+		return nil, fmt.Errorf("propagate envVars to envs: %w", perr)
 	}
-
-	return s.persistEnvVars(ctx, ns, project, service, svc)
+	return updated, nil
 }
 
 // UnsetEnvVar removes a single env var by name. ErrNotFound when the
 // var isn't present.
+//
+// Uses UpdateKusoServiceWithRetry so a helm-operator status patch
+// between Get and Update doesn't lose the user's unset.
 func (s *Service) UnsetEnvVar(ctx context.Context, project, service, name string) (*kube.KusoService, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -214,82 +256,42 @@ func (s *Service) UnsetEnvVar(ctx context.Context, project, service, name string
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
-	svc, ns, err := s.fetchServiceForDelta(ctx, project, service)
+	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-
-	out := make([]kube.KusoEnvVar, 0, len(svc.Spec.EnvVars))
-	found := false
-	for _, e := range svc.Spec.EnvVars {
-		if e.Name == name {
-			found = true
-			continue
-		}
-		out = append(out, e)
+	fqn := service
+	if !strings.HasPrefix(service, project+"-") {
+		fqn = project + "-" + service
 	}
-	if !found {
+
+	var notFound bool
+	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, fqn, func(svc *kube.KusoService) error {
+		notFound = false
+		out := make([]kube.KusoEnvVar, 0, len(svc.Spec.EnvVars))
+		found := false
+		for _, e := range svc.Spec.EnvVars {
+			if e.Name == name {
+				found = true
+				continue
+			}
+			out = append(out, e)
+		}
+		if !found {
+			notFound = true
+			return kube.ErrAbortRetry
+		}
+		svc.Spec.EnvVars = out
+		return nil
+	})
+	if notFound {
 		return nil, fmt.Errorf("%w: env var %q", ErrNotFound, name)
 	}
-	svc.Spec.EnvVars = out
-	return s.persistEnvVars(ctx, ns, project, service, svc)
-}
-
-// fetchServiceForDelta is the common preamble for every delta op.
-// Returns the namespace alongside the service so the persist step
-// doesn't have to re-resolve it.
-func (s *Service) fetchServiceForDelta(ctx context.Context, project, service string) (*kube.KusoService, string, error) {
-	ns, err := s.namespaceFor(ctx, project)
-	if err != nil {
-		return nil, "", err
-	}
-	svc, err := s.GetService(ctx, project, service)
-	if err != nil {
-		return nil, "", err
-	}
-	return svc, ns, nil
-}
-
-// persistDomains writes the updated KusoService and propagates the
-// domain change to every env. Returns the updated CR even when
-// propagation fails — the spec is durable and the next save retries.
-func (s *Service) persistDomains(ctx context.Context, ns, project, service string, svc *kube.KusoService) (*kube.KusoService, error) {
-	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
 	}
-	// Surface env-CR propagation failures so the UI can show
-	// "saved but not rolled out" instead of pretending it landed.
-	// The drift indicator (GET /drift) will catch it on the next
-	// poll either way; surfacing here is the loud path. Service
-	// CR is durable; the caller can retry or pick up the drift
-	// banner.
-	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{Domains: true}); err != nil {
-		return updated, fmt.Errorf("propagate domains to envs: %w", err)
-	}
-	return updated, nil
-}
-
-// persistEnvVars writes the updated KusoService. Env vars on the
-// service spec do not propagate to env CRs through the helm chart
-// directly — services pull from envFromSecrets and per-env spec.envVars
-// is the env-level override path. So we only invalidate caches and
-// return.
-func (s *Service) persistEnvVars(ctx context.Context, ns, project, service string, svc *kube.KusoService) (*kube.KusoService, error) {
-	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)
-	if err != nil {
-		return nil, fmt.Errorf("update service: %w", err)
-	}
-	// Propagate to every owned env. Without this the per-var edit
-	// path (SetEnvVar / UnsetEnvVar — used by the env-vars/{name}
-	// REST endpoint AND the `kuso env set` CLI verb) wrote to the
-	// service CR but never reached the env CR — so the running pod
-	// kept the stale value forever. The bulk replacement path
-	// (SetEnv) goes through a different code path (services_ops)
-	// that already does this; we forgot the same on the per-var
-	// path. Routes through the unified propagateChangedToEnvs.
-	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{EnvVars: true}); err != nil {
-		return nil, fmt.Errorf("propagate envVars to envs: %w", err)
+	if perr := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{EnvVars: true}); perr != nil {
+		return nil, fmt.Errorf("propagate envVars to envs: %w", perr)
 	}
 	return updated, nil
 }
