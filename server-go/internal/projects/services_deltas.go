@@ -287,7 +287,7 @@ func (s *Service) persistEnvVars(ctx context.Context, ns, project, service strin
 	// kept the stale value forever. The bulk replacement path
 	// (SetEnv) goes through a different code path (services_ops)
 	// that already does this; we forgot the same on the per-var
-	// path. Mirrors propagateDomainsToEnvs / propagateInternalToEnvs.
+	// path. Routes through the unified propagateChangedToEnvs.
 	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{EnvVars: true}); err != nil {
 		return nil, fmt.Errorf("propagate envVars to envs: %w", err)
 	}

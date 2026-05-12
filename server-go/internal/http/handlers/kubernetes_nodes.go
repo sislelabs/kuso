@@ -11,13 +11,13 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/kube"
-	"kuso/server/internal/nodes"
+	"kuso/server/internal/nodeshape"
 )
 
 // Read-only views over the cluster nodes: list + per-node history.
 // Lifecycle ops (join, validate, remove, label edits) live in
 // kubernetes_node_lifecycle.go. The list-shape lives in
-// internal/nodes/ — this file is just the adapter that gathers the
+// internal/nodeshape/ — this file is just the adapter that gathers the
 // kube inputs and hands them off.
 
 // Nodes lists every cluster node with the bits the UI needs to show
@@ -55,7 +55,7 @@ func (h *KubernetesHandler) Nodes(w http.ResponseWriter, r *http.Request) {
 	// metrics-server is optional in some clusters; we just leave
 	// usage fields at 0 when it's unavailable.
 	usage := nodeMetrics(ctx, h.Kube)
-	out := nodes.BuildSummaries(nodeList.Items, podsByNode, usage)
+	out := nodeshape.BuildSummaries(nodeList.Items, podsByNode, usage)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -103,8 +103,8 @@ func (h *KubernetesHandler) NodeHistory(w http.ResponseWriter, r *http.Request) 
 // REST client. Returns name → usage. Empty map on any failure —
 // cluster monitoring shouldn't be a hard dependency for the nodes
 // list (metrics-server is optional in some k3s installs).
-func nodeMetrics(ctx context.Context, kc *kube.Client) map[string]nodes.Usage {
-	out := map[string]nodes.Usage{}
+func nodeMetrics(ctx context.Context, kc *kube.Client) map[string]nodeshape.Usage {
+	out := map[string]nodeshape.Usage{}
 	if kc == nil || kc.Clientset == nil {
 		return out
 	}
@@ -133,7 +133,7 @@ func nodeMetrics(ctx context.Context, kc *kube.Client) map[string]nodes.Usage {
 		return out
 	}
 	for _, it := range resp.Items {
-		out[it.Metadata.Name] = nodes.Usage{
+		out[it.Metadata.Name] = nodeshape.Usage{
 			CPUMilli: parseCPU(it.Usage.CPU),
 			MemBytes: parseQuantity(it.Usage.Memory),
 		}

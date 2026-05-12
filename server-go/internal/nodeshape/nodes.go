@@ -1,13 +1,19 @@
-// Package nodes shapes the cluster-node list the UI consumes. The
-// HTTP handler is now a thin adapter that gathers inputs (kube node
-// list + pod-counts-per-node + metrics-server usage) and hands them
-// to BuildSummaries.
+// Package nodeshape shapes the cluster-node list the UI consumes.
+// The HTTP handler is the thin adapter that gathers inputs (kube
+// node list + pod-counts-per-node + metrics-server usage) and hands
+// them to BuildSummaries.
 //
 // Keeping the transformation here (rather than inline in the
 // handler) means it's exercisable in tests without spinning up a
 // chi router, and the handler no longer reaches into kube/metrics
 // shapes directly.
-package nodes
+//
+// Note: this package is deliberately NOT a full "nodes service" —
+// the metrics-server probe, pod aggregation, and node-edit endpoints
+// still live on the handler (kubernetes_nodes.go). The name
+// `nodeshape` (vs `nodes`) signals that scope honestly so a future
+// reader doesn't expect a domain-service-style API.
+package nodeshape
 
 import (
 	"sort"

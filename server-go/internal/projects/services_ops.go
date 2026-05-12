@@ -305,7 +305,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			// .Values.envVars (no merge from KusoService at reconcile
 			// time, contrary to a stale comment in values.yaml). Any
 			// later SetEnv / PatchService call propagates updates via
-			// propagateEnvVarsToEnvs to keep them in lockstep.
+			// propagateChangedToEnvs to keep them in lockstep.
 			EnvVars: created.Spec.EnvVars,
 			// Effective placement: service overrides project. Both
 			// nil = schedule anywhere (chart leaves nodeSelector
@@ -901,7 +901,7 @@ func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, e
 		return fmt.Errorf("update service env: %w", err)
 	}
 	// Propagate to envs — the chart reads from the env CR, not the
-	// service CR (see propagateEnvVarsToEnvs comment). Best-effort:
+	// service CR (see propagateChangedToEnvs). Best-effort:
 	// the service-level save succeeded and is the source of truth, so
 	// a transient kube error here doesn't fail the request.
 	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{EnvVars: true}); err != nil {

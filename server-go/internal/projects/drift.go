@@ -179,10 +179,9 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	out.EnvName = env.Name
 
 	// Compare propagated fields. The list mirrors what
-	// {propagateEnvVarsToEnvs, propagateDomainsToEnvs,
-	// propagateInternalToEnvs, propagatePortToEnvs} actually keep
-	// in sync — drift on a non-propagated field would be expected
-	// (e.g. svc.Spec.Repo doesn't get stamped on the env).
+	// propagateChangedToEnvs (the unified chokepoint) actually
+	// keeps in sync — drift on a non-propagated field would be
+	// expected (e.g. svc.Spec.Repo doesn't get stamped on the env).
 	if !reflect.DeepEqual(envVarsForCompare(svc.Spec.EnvVars), envVarsForCompare(env.Spec.EnvVars)) {
 		out.SpecPending = append(out.SpecPending, "envVars")
 	}
@@ -416,7 +415,7 @@ func compareDeploymentTemplateToEnv(ctx context.Context, s *Service, ns string, 
 
 // envVarsForCompare strips the json:",omitempty" zero-value noise so
 // reflect.DeepEqual doesn't false-positive on an empty Value vs an
-// unset Value. The shape matches what propagateEnvVarsToEnvs writes:
+// unset Value. The shape matches what propagateChangedToEnvs writes:
 // the env CR carries the rewritten secret refs verbatim from the
 // service spec, so the slices are identical when in sync.
 func envVarsForCompare(in []kube.KusoEnvVar) []kube.KusoEnvVar {

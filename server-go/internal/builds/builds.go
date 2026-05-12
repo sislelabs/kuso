@@ -5,6 +5,19 @@
 // Phase 5 ships build creation that accepts an explicit ref or a public-
 // repo branch (synthetic ref). Branch → SHA resolution via the GitHub
 // App lands in Phase 6 once the github package is wired.
+//
+// FUTURE: this package + the helm-operator-driven Job rendering for
+// KusoBuild are the most likely subsystem to move to a Go controller
+// (controller-runtime + manager.Reconciler). The pressure points are:
+//
+//   - annotations-as-status races (the operator's helm-release status
+//     and our own status patches interleave; a Go reconciler would
+//     own both writes and avoid the merge dance);
+//   - bulk-create paths (Coolify import commits ~50 KusoBuilds in
+//     quick succession; the helm-operator's 3min reconcile + chart
+//     render-per-CR is the slow path).
+//
+// Out of scope for v0.9; track in the followup review as A-P1-7.
 package builds
 
 import (
