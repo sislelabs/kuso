@@ -201,7 +201,12 @@ function SettingsCard({ card, locked = false }: { card: Card; locked?: boolean }
       <div
         title={card.perm ? `requires ${card.perm}` : "needs admin access"}
         className={cn(
-          "flex h-full items-start gap-3 rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-4 opacity-60"
+          // Dead-opacity treatment replaced with a usable card that
+          // still reads as "you can't enter this" but doesn't leave
+          // viewers with no next step. Lighter opacity (0.85 vs 0.6)
+          // keeps the text legible; the admin badge + hint line
+          // tells them what to do.
+          "flex h-full items-start gap-3 rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)]/60 p-4 opacity-90"
         )}
       >
         <span className="mt-0.5 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]">
@@ -215,6 +220,9 @@ function SettingsCard({ card, locked = false }: { card: Card; locked?: boolean }
             </span>
           </div>
           <p className="mt-0.5 text-[12px] text-[var(--text-tertiary)]">{card.description}</p>
+          <p className="mt-1.5 font-mono text-[10px] text-[var(--text-tertiary)]/70">
+            ask a team admin to enable it for you
+          </p>
         </div>
       </div>
     );
