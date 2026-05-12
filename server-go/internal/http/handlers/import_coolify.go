@@ -103,8 +103,13 @@ func (h *ImportCoolifyHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	inv, err := coolify.Snapshot(ctx, c)
 	if err != nil {
 		// Surface as 502 so the SPA can show "couldn't reach Coolify"
-		// instead of "server error." Don't leak the token in the
-		// returned message — Snapshot may have wrapped it.
+		// instead of "server error." Don't leak err.Error() to the
+		// client: coolify.getRaw embeds up to 256 bytes of the
+		// upstream response body in its error, which compounds the
+		// SSRF concern — an internal target (kube apiserver,
+		// metadata service) would surface its error body inside a
+		// 502. Detailed error stays in slog; the wire response is
+		// generic.
 		if errors.Is(err, context.DeadlineExceeded) {
 			http.Error(w, "coolify request timed out", http.StatusGatewayTimeout)
 			return
@@ -112,7 +117,7 @@ func (h *ImportCoolifyHandler) Preview(w http.ResponseWriter, r *http.Request) {
 		if h.Logger != nil {
 			h.Logger.Warn("coolify snapshot", "err", err)
 		}
-		http.Error(w, "couldn't reach Coolify: "+err.Error(), http.StatusBadGateway)
+		http.Error(w, "couldn't reach Coolify (check server logs for detail)", http.StatusBadGateway)
 		return
 	}
 	resp := PreviewResponse{
