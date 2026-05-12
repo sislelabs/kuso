@@ -18,6 +18,7 @@ import {
   Github,
   Cpu,
   Search,
+  Activity,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -55,8 +56,9 @@ const CARDS: Card[] = [
   { href: "/settings/updates",          title: "Updates",          description: "Self-update the kuso server + operator + CRDs.",                    icon: Package,      perm: Perms.SettingsAdmin, group: "instance", keywords: "version upgrade release self-update" },
 
   // Admin: user/role management.
-  { href: "/settings/users",  title: "Users",  description: "Local users. OAuth users land here on first login.",                                    icon: Users,        perm: Perms.UserWrite, group: "admin", keywords: "user account login oauth invite" },
-  { href: "/settings/groups", title: "Groups", description: "Tenancy: instance roles + project memberships.",                                        icon: UsersRound,   perm: Perms.UserWrite, group: "admin", keywords: "group role permission tenancy member" },
+  { href: "/settings/users",    title: "Users",    description: "Local users. OAuth users land here on first login.",                                  icon: Users,        perm: Perms.UserWrite, group: "admin", keywords: "user account login oauth invite" },
+  { href: "/settings/groups",   title: "Groups",   description: "Tenancy: instance roles + project memberships.",                                      icon: UsersRound,   perm: Perms.UserWrite, group: "admin", keywords: "group role permission tenancy member" },
+  { href: "/settings/activity", title: "Activity", description: "Audit log: who did what, when, against which project.",                               icon: Activity,     perm: Perms.SettingsAdmin, group: "admin", keywords: "audit log activity history who deleted changed" },
 ];
 
 const GROUPS: { id: Card["group"]; label: string; hint: string }[] = [

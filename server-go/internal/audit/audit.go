@@ -76,18 +76,23 @@ func (s *Service) runTrimLoop(ctx context.Context, perTickTimeout time.Duration)
 	}
 }
 
-// Entry is one audit record. Fields default to empty strings so callers
-// only fill in what they care about.
+// Entry is one audit record. JSON tags pin the wire shape — the
+// UI table renders these and tests assert on them. Empty fields
+// round-trip as "" rather than absent because the audit row schema
+// stores NOT NULL on every column, so the consumer never has to
+// branch on undefined.
 type Entry struct {
-	User      string
-	Severity  string
-	Action    string
-	Namespace string
-	Phase     string
-	App       string
-	Pipeline  string
-	Resource  string
-	Message   string
+	ID        int64     `json:"id"`
+	Timestamp time.Time `json:"timestamp"`
+	User      string    `json:"user"`
+	Severity  string    `json:"severity"`
+	Action    string    `json:"action"`
+	Namespace string    `json:"namespace"`
+	Phase     string    `json:"phase"`
+	App       string    `json:"app"`
+	Pipeline  string    `json:"pipeline"`
+	Resource  string    `json:"resource"`
+	Message   string    `json:"message"`
 }
 
 // Log writes one entry. No-op when disabled or DB is nil.
@@ -129,7 +134,7 @@ func (s *Service) Get(ctx context.Context, limit int) ([]Entry, int, error) {
 		limit = 100
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-SELECT timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
+SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
 FROM "Audit" ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, 0, fmt.Errorf("audit: get: %w", err)
@@ -138,8 +143,7 @@ FROM "Audit" ORDER BY id DESC LIMIT ?`, limit)
 	var out []Entry
 	for rows.Next() {
 		var e Entry
-		var ts time.Time
-		if err := rows.Scan(&ts, &e.Severity, &e.Action, &e.Namespace, &e.Phase, &e.App, &e.Pipeline, &e.Resource, &e.Message, &e.User); err != nil {
+		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Severity, &e.Action, &e.Namespace, &e.Phase, &e.App, &e.Pipeline, &e.Resource, &e.Message, &e.User); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, e)
@@ -185,9 +189,7 @@ FROM "Audit" WHERE pipeline = ?`
 	var out []Entry
 	for rows.Next() {
 		var e Entry
-		var ts time.Time
-		var id int64
-		if err := rows.Scan(&id, &ts, &e.Severity, &e.Action, &e.Namespace, &e.Phase, &e.App, &e.Pipeline, &e.Resource, &e.Message, &e.User); err != nil {
+		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Severity, &e.Action, &e.Namespace, &e.Phase, &e.App, &e.Pipeline, &e.Resource, &e.Message, &e.User); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, e)
@@ -211,7 +213,7 @@ func (s *Service) GetForApp(ctx context.Context, pipeline, phase, app string, li
 		limit = 100
 	}
 	rows, err := s.DB.QueryContext(ctx, `
-SELECT timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
+SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
 FROM "Audit" WHERE pipeline = ? AND phase = ? AND app = ?
 ORDER BY id DESC LIMIT ?`, pipeline, phase, app, limit)
 	if err != nil {
@@ -221,8 +223,7 @@ ORDER BY id DESC LIMIT ?`, pipeline, phase, app, limit)
 	var out []Entry
 	for rows.Next() {
 		var e Entry
-		var ts time.Time
-		if err := rows.Scan(&ts, &e.Severity, &e.Action, &e.Namespace, &e.Phase, &e.App, &e.Pipeline, &e.Resource, &e.Message, &e.User); err != nil {
+		if err := rows.Scan(&e.ID, &e.Timestamp, &e.Severity, &e.Action, &e.Namespace, &e.Phase, &e.App, &e.Pipeline, &e.Resource, &e.Message, &e.User); err != nil {
 			return nil, 0, err
 		}
 		out = append(out, e)
