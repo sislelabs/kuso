@@ -820,7 +820,7 @@ func awaitPodGone(ctx context.Context, kc *kube.Client, ns, buildName string, ti
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		pods, err := kc.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: "app.kubernetes.io/instance=" + buildName,
+			LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": buildName}),
 		})
 		if err != nil {
 			return
@@ -2223,7 +2223,7 @@ func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, 
 	lctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	pods, err := p.Svc.Kube.Clientset.CoreV1().Pods(ns).List(lctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/instance=" + b.Name,
+		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": b.Name}),
 	})
 	if err != nil {
 		slog.Default().Warn("builds: archive list pods", "err", err, "build", b.Name)

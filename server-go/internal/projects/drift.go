@@ -270,7 +270,7 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 	// hasn't rendered yet) → don't flag drift, RolloutPending covers
 	// that.
 	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app.kubernetes.io/instance=%s", env.Name),
+		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": env.Name}),
 	})
 	if err != nil || len(pods.Items) == 0 {
 		// Fall through to deployment-template compare so a freshly
@@ -542,7 +542,7 @@ func newestPodCreatedAt(ctx context.Context, s *Service, ns, envName string) tim
 		return time.Time{}
 	}
 	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: fmt.Sprintf("app.kubernetes.io/instance=%s", envName),
+		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": envName}),
 	})
 	if err != nil {
 		return time.Time{}

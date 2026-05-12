@@ -131,7 +131,7 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 	}
 
 	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/instance=" + envName,
+		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": envName}),
 	})
 	if err != nil {
 		return nil, envName, fmt.Errorf("list pods: %w", err)
@@ -198,7 +198,7 @@ func (s *Service) tailOnePod(ctx context.Context, ns string, pod *corev1.Pod, ta
 // persisted archive).
 func (s *Service) tailBuildPods(ctx context.Context, ns, buildName string, lines int) ([]Line, error) {
 	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/instance=" + buildName,
+		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": buildName}),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list build pods: %w", err)
