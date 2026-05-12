@@ -86,7 +86,7 @@ export function ServiceLogsPanel({ project, service }: Props) {
         <div>
           <h3 className="font-mono text-sm font-medium">Logs</h3>
           <p className="font-mono text-[11px] text-[var(--text-tertiary)]">
-            Searchable archive (FTS5). 14d retention. Live tail when no query.
+            Searchable archive (FTS5). 14d retention. Polls every 10s when no query is set — for true streaming, use the Deployments tab.
           </p>
         </div>
       </header>
