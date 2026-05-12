@@ -114,6 +114,14 @@ type Dispatcher struct {
 	closed      bool
 	dropOnFloor bool
 
+	// baseCtx is the dispatcher's lifecycle context, set by Run.
+	// Emit's synchronous persist derives from this so a graceful
+	// shutdown actually cancels in-flight SQLite writes (the previous
+	// context.Background() left them running against a closing DB).
+	// Seeded to Background in New so Emit calls before Run still
+	// have a usable parent.
+	baseCtx context.Context
+
 	// notifsCache is a short-lived cache of the configured notification
 	// channels. Without it, every event drained from `ch` does a fresh
 	// SQLite SELECT + JSON decode — which on a build storm + a single-
@@ -153,9 +161,10 @@ func New(database *db.DB, logger *slog.Logger, queueSize int) *Dispatcher {
 		queueSize = 256
 	}
 	return &Dispatcher{
-		db:     database,
-		logger: logger,
-		ch:     make(chan Event, queueSize),
+		db:      database,
+		logger:  logger,
+		ch:      make(chan Event, queueSize),
+		baseCtx: context.Background(),
 		client: &http.Client{
 			Timeout: 8 * time.Second,
 			// SSRF-safe transport: rejects connections to link-local,
@@ -212,17 +221,34 @@ func ssrfSafeTransport() *http.Transport {
 //
 // Operators with an internal-only install (no internet egress, all
 // notification sinks are in-cluster) can opt out by setting
-// KUSO_NOTIFY_ALLOW_PRIVATE_IPS=true. This is a foot-gun knob —
-// document it as such.
+// KUSO_NOTIFY_ALLOW_PRIVATE_IPS=true. This is a foot-gun knob:
+// inside a kube cluster, RFC1918 covers the apiserver Service IP
+// (typically 10.96.0.1) and every internal Service — a user with
+// notification:write could point a webhook at the apiserver and
+// trick kuso into making an authenticated request. To defend
+// against that AND keep the in-cluster-sink convenience, the allow
+// flag still blocks:
+//
+//   - loopback (always 127.0.0.0/8) — kuso-server's own ports
+//   - link-local 169.254.0.0/16 — cloud metadata 169.254.169.254
+//   - any CIDR in KUSO_NOTIFY_BLOCK_CIDRS (comma-separated). Operators
+//     should set this to their kube service CIDR (e.g.
+//     "10.96.0.0/12,fd00:10:96::/108" for default k3s).
 func isReservedIP(ip net.IP) bool {
-	if isAllowPrivateIPs() {
-		// Still block obvious local-only addresses that have no
-		// reasonable webhook use.
-		return ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-			ip.IsInterfaceLocalMulticast() || ip.IsUnspecified()
-	}
+	// Always block the unconditional set, regardless of the allow flag.
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+		ip.IsInterfaceLocalMulticast() || ip.IsUnspecified() {
+		return true
+	}
+	for _, c := range blockCIDRs() {
+		if c.Contains(ip) {
+			return true
+		}
+	}
+	if isAllowPrivateIPs() {
+		return false
+	}
+	if ip.IsMulticast() {
 		return true
 	}
 	// IsPrivate covers 10/8, 172.16/12, 192.168/16, fc00::/7, fec0::/10.
@@ -236,6 +262,32 @@ func isReservedIP(ip net.IP) bool {
 // change doesn't require a server restart. Cheap (one os.Getenv).
 func isAllowPrivateIPs() bool {
 	return os.Getenv("KUSO_NOTIFY_ALLOW_PRIVATE_IPS") == "true"
+}
+
+// blockCIDRs parses KUSO_NOTIFY_BLOCK_CIDRS into a slice of *net.IPNet.
+// Called on every isReservedIP check, but the env var rarely changes;
+// keeping the parse inline avoids a singleton + mutex for an
+// operation that's already in a network-IO path. Bad entries are
+// silently skipped so a typo doesn't block all webhook traffic — but
+// the dispatcher logs them on dispatch attempts via the dialer error.
+func blockCIDRs() []*net.IPNet {
+	raw := os.Getenv("KUSO_NOTIFY_BLOCK_CIDRS")
+	if raw == "" {
+		return nil
+	}
+	var out []*net.IPNet
+	for _, c := range strings.Split(raw, ",") {
+		c = strings.TrimSpace(c)
+		if c == "" {
+			continue
+		}
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // Emit enqueues an event AND persists it to the in-app feed
@@ -272,7 +324,16 @@ func (d *Dispatcher) Emit(e Event) {
 		// context goroutine until the parent (Background) is collected,
 		// i.e. forever.
 		func() {
-			persistCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			// Parent off the dispatcher's lifecycle ctx so a graceful
+			// shutdown actually cancels in-flight SQLite writes. The
+			// 2s cap still bounds worst case under contention.
+			d.mu.Lock()
+			parent := d.baseCtx
+			d.mu.Unlock()
+			if parent == nil {
+				parent = context.Background()
+			}
+			persistCtx, cancel := context.WithTimeout(parent, 2*time.Second)
 			defer cancel()
 			if err := d.db.InsertNotificationEvent(persistCtx, db.NotificationEvent{
 				Type:     string(e.Type),
@@ -310,6 +371,9 @@ func (d *Dispatcher) Emit(e Event) {
 // notification sink. Exits when ctx is canceled. Call once in a
 // background goroutine.
 func (d *Dispatcher) Run(ctx context.Context) {
+	d.mu.Lock()
+	d.baseCtx = ctx
+	d.mu.Unlock()
 	for {
 		select {
 		case <-ctx.Done():

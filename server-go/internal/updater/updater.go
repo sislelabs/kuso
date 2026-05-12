@@ -21,6 +21,7 @@ package updater
 import (
 	"context"
 	"crypto/ed25519"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -890,6 +891,35 @@ func requireSignatures() bool {
 	return v != "false" && v != "0"
 }
 
+// embeddedReleaseKey is the kuso project's Ed25519 release-signing
+// public key, baked into the binary at build time. Distributing the
+// key inside the artifact (rather than via env var) means an
+// attacker who hijacks GH releases or DNS-poisons api.github.com
+// can't also serve a "no key configured" path that the old env-var-
+// only build silently accepted.
+//
+// The file is checked into the repo: a placeholder empty file in
+// dev, the real key once an operator runs hack/release-keygen.sh
+// and commits the output. Empty file = no embedded key, fall back
+// to env-var behaviour (covers the bootstrap case before keygen has
+// been run).
+//
+//go:embed releasekey.pub
+var embeddedReleaseKey []byte
+
+// resolveReleasePubKey returns the configured Ed25519 release pubkey,
+// preferring the env var (for rotation) and falling back to the
+// embedded key. Returns "" when neither is wired.
+func resolveReleasePubKey() string {
+	if env := strings.TrimSpace(getenv("KUSO_RELEASE_PUBLIC_KEY")); env != "" {
+		return env
+	}
+	if t := strings.TrimSpace(string(embeddedReleaseKey)); t != "" {
+		return t
+	}
+	return ""
+}
+
 // verifyManifestSignature looks for a `release.json.sig` asset on
 // the GH release and verifies it against the configured public key.
 // Returns nil when the signature checks out OR (in non-strict mode)
@@ -898,16 +928,17 @@ func requireSignatures() bool {
 //   - public key configured but signature is missing
 //   - signature exists but verification fails
 //
-// The public key lives in env var KUSO_RELEASE_PUBLIC_KEY (base64
-// Ed25519 public bytes) so it can be distributed via the install
-// script + baked into the deploy yaml. We deliberately don't fetch
-// the key from a URL — that would re-introduce the same supply-chain
-// hole we're closing.
+// The public key is taken (in order) from the KUSO_RELEASE_PUBLIC_KEY
+// env var (override path, useful for rotation) and an embedded copy
+// baked into the binary at build time. Embedding inside the artifact
+// closes the previous "no env var → accept anything" path: a
+// compromised GH releases endpoint can no longer serve a malicious
+// release.json without a real signature.
 func (s *Service) verifyManifestSignature(ctx context.Context, assets []struct {
 	Name               string `json:"name"`
 	BrowserDownloadURL string `json:"browser_download_url"`
 }, manifestBody []byte) error {
-	pubB64 := getenv("KUSO_RELEASE_PUBLIC_KEY")
+	pubB64 := resolveReleasePubKey()
 	sigURL := ""
 	for _, a := range assets {
 		if a.Name == "release.json.sig" {
@@ -918,14 +949,14 @@ func (s *Service) verifyManifestSignature(ctx context.Context, assets []struct {
 	if sigURL == "" && pubB64 == "" {
 		// No signature, no key — treat as unsigned. Caller's
 		// requireSignatures gate now logs+proceeds even when set,
-		// because this state means the operator hasn't configured a
-		// key yet (typical for a fresh install or one upgraded from
-		// pre-v0.9.77). Once a key IS configured, a missing signature
-		// becomes a real hard fail (handled by the next branch).
+		// because this state means no key has been wired yet (typical
+		// for a fresh build before hack/release-keygen.sh has run).
+		// Once releasekey.pub or the env var has a real key, a
+		// missing signature becomes a real hard fail.
 		return ErrUnsignedNoKey
 	}
 	if sigURL != "" && pubB64 == "" {
-		return fmt.Errorf("release is signed but KUSO_RELEASE_PUBLIC_KEY is unset")
+		return fmt.Errorf("release is signed but no release public key configured")
 	}
 	if sigURL == "" && pubB64 != "" {
 		return fmt.Errorf("public key configured but release.json.sig asset missing")

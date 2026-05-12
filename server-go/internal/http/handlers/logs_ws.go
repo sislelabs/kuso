@@ -47,10 +47,32 @@ type LogsWSHandler struct {
 	wsActive map[string]int
 }
 
-// maxWSPerUser bounds simultaneous WS log connections per JWT subject.
-// 8 covers the realistic case (one tab per env across a couple of
-// services) without leaving room for an accidental fork-bomb.
-const maxWSPerUser = 8
+// defaultMaxWSPerUser bounds simultaneous WS log connections per JWT
+// subject. 8 covers the realistic case (one tab per env across a
+// couple of services) without leaving room for an accidental fork-
+// bomb.
+//
+// The cap is per-pod: with N replicas a single user can hold up to
+// 8×N streams cluster-wide. We deliberately don't persist the
+// counter to Postgres because the slot identity is the connection
+// itself (not the JTI), and a crashed pod would otherwise leak DB
+// rows forever. For ≥2 replica deploys, lower the cap via
+// KUSO_WS_PER_USER (e.g. 4) so the multiplied total stays sane.
+const defaultMaxWSPerUser = 8
+
+// maxWSPerUser reads the env override on each acquire. Cheap (one
+// os.Getenv) and avoids forcing a restart on a tuning change.
+func maxWSPerUser() int {
+	v := strings.TrimSpace(os.Getenv("KUSO_WS_PER_USER"))
+	if v == "" {
+		return defaultMaxWSPerUser
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return defaultMaxWSPerUser
+	}
+	return n
+}
 
 // Mount registers the WS log routes onto the public (un-bearer-gated)
 // router. We auth ourselves against the subprotocol header rather than
@@ -267,7 +289,7 @@ func (h *LogsWSHandler) acquireWSSlot(userID string) bool {
 	if h.wsActive == nil {
 		h.wsActive = map[string]int{}
 	}
-	if h.wsActive[userID] >= maxWSPerUser {
+	if h.wsActive[userID] >= maxWSPerUser() {
 		return false
 	}
 	h.wsActive[userID]++

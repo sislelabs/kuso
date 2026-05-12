@@ -41,19 +41,18 @@ type DescribeResponse struct {
 // Describe rolls up project + services + envs filtered by label.
 //
 // Hot path: the projects index page calls this once per card every 15s.
-// Two scalability behaviours live here:
+// One scalability behaviour matters here: services are fetched once
+// per call and threaded through the env populate loop so
+// populateLiveStatus does NOT re-Get the service CR per env
+// (was N×E kube calls; now N).
 //
-//  1. A small in-process LRU-style cache (describeCacheTTL) skips the
-//     full kube fan-out when the same project was just described. The
-//     cache is invalidated on every project / service / env mutation
-//     issued through this Service so writers always see fresh data.
-//  2. Services are fetched once per call and threaded through the env
-//     populate loop so populateLiveStatus does NOT re-Get the service
-//     CR per env (was N×E kube calls; now N).
+// The previous version also kept a 5s describeCache, but the three
+// list calls below all go through the cached list[T] helper in
+// kube/crds.go (informer-served), so the cache only saved every 3rd
+// poll worth of slice-filter cost — not worth the explicit
+// invalidateDescribe() contract at ~10 call sites that has to be
+// kept in sync as new mutators land.
 func (s *Service) Describe(ctx context.Context, name string) (*DescribeResponse, error) {
-	if cached := s.describeCacheGet(name); cached != nil {
-		return cached, nil
-	}
 	p, err := s.Get(ctx, name)
 	if err != nil {
 		return nil, err
@@ -73,9 +72,7 @@ func (s *Service) Describe(ctx context.Context, name string) (*DescribeResponse,
 	if err != nil {
 		return nil, fmt.Errorf("list envs: %w", err)
 	}
-	resp := &DescribeResponse{Project: p, Services: services, Environments: envs}
-	s.describeCachePut(name, resp)
-	return resp, nil
+	return &DescribeResponse{Project: p, Services: services, Environments: envs}, nil
 }
 
 // Create validates input, refuses duplicates, and persists a new project.

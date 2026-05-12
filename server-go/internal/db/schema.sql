@@ -569,3 +569,21 @@ CREATE INDEX IF NOT EXISTS "Revision_project_kind_name_idx"
     ON "Revision"("project", "kind", "name", "createdAt" DESC);
 CREATE INDEX IF NOT EXISTS "Revision_createdAt_idx"
     ON "Revision"("createdAt");
+
+-- LoginAttempt is the persistent backing store for the login rate
+-- limiter. Previously per-process sync.Map state; pod restarts and
+-- multi-replica deploys both reset / multiplied the cap. One row
+-- per active source IP, atomically incremented via INSERT ON
+-- CONFLICT. The pruner deletes rows past their reset_at.
+--
+-- Keyed on ip; expectations:
+--   - typical row count is the unique-IP count over the last 30s
+--     (the limiter window), so single-digit to low hundreds.
+--   - reset_at indexed for the pruner.
+CREATE TABLE IF NOT EXISTS "LoginAttempt" (
+    "ip"      TEXT PRIMARY KEY,
+    "count"   INTEGER NOT NULL DEFAULT 0,
+    "resetAt" TIMESTAMPTZ NOT NULL
+);
+CREATE INDEX IF NOT EXISTS "LoginAttempt_resetAt_idx"
+    ON "LoginAttempt"("resetAt");

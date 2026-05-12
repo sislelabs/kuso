@@ -1,99 +1,94 @@
-// Package handlers — minimal in-process IP rate limiter.
+// Package handlers — IP rate limiter for the auth surface.
 //
-// We don't pull in a dependency for this — the auth surface is the only
-// caller and the bucket is small (one entry per active source IP).
-// State lives in process memory; it resets on restart, which is fine
-// because (a) bcrypt makes brute force expensive enough that a 30s
-// reset window doesn't help an attacker, and (b) a kuso instance
-// restart is rare enough not to be a routine bypass vector.
+// State lives in Postgres (LoginAttempt table). The previous in-
+// process sync.Map version reset on every pod restart and didn't
+// share state across replicas, so the effective cap was
+// maxAttempts × replicas with a fresh window every roll. With the
+// DB-backed limiter, restart and replica fan-out are no longer
+// bypass vectors.
 //
-// For multi-replica deployments later: swap the in-process bucket for
-// a Redis-backed limiter. The interface stays the same.
+// The check is one atomic INSERT-on-conflict (see
+// db.AllowLoginAttempt). If the DB is unreachable we fail-open
+// rather than locking everyone out — the alternative is hard-
+// failing /login on a transient DB blip, which is worse than
+// briefly degrading the limiter.
 package handlers
 
 import (
+	"context"
 	"net/http"
 	"sync"
 	"time"
+
+	"kuso/server/internal/db"
 )
 
-// loginLimiter caps unauthenticated POST /api/auth/login + invite
-// redemption to N attempts per window per IP. Excess attempts get a
-// 429 with a Retry-After header.
-type loginLimiter struct {
-	mu      sync.Mutex
-	buckets map[string]*ipBucket
-	max     int
-	window  time.Duration
+// rateLimitMax / rateLimitWindow define the per-IP cap that gates
+// the login + invite-redeem + OAuth-start paths. Centralised so the
+// reset helper agrees with the live config.
+const (
+	rateLimitMax    = 10
+	rateLimitWindow = 30 * time.Second
+)
+
+// limiterDB is the Postgres handle the limiter writes through. Set
+// once at boot via SetRateLimiterDB; nil = fail-open (every request
+// allowed) with a warning logged on first use.
+var (
+	limiterDBMu sync.RWMutex
+	limiterDB   *db.DB
+)
+
+// SetRateLimiterDB wires the limiter to a Postgres handle. Call once
+// during router construction. Idempotent so tests can swap handles.
+func SetRateLimiterDB(d *db.DB) {
+	limiterDBMu.Lock()
+	limiterDB = d
+	limiterDBMu.Unlock()
 }
 
-type ipBucket struct {
-	count   int
-	resetAt time.Time
-}
-
-func newLoginLimiter(max int, window time.Duration) *loginLimiter {
-	return &loginLimiter{
-		buckets: make(map[string]*ipBucket),
-		max:     max,
-		window:  window,
+// ResetRateLimiterForTesting wipes the LoginAttempt table so a test
+// run that shares a Postgres-backed test process doesn't trip the
+// cap on the 11th login-flow test. Falls back to a no-op when no
+// DB is wired (in-process unit tests).
+func ResetRateLimiterForTesting() {
+	limiterDBMu.RLock()
+	d := limiterDB
+	limiterDBMu.RUnlock()
+	if d == nil {
+		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = d.ResetLoginAttemptsForTesting(ctx)
 }
 
-// allow returns true when the IP is under the cap. It also lazily
-// prunes stale entries, capped at one prune sweep per call to keep
-// the constant factor small.
-func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := time.Now()
-	b, ok := l.buckets[ip]
-	if !ok || now.After(b.resetAt) {
-		l.buckets[ip] = &ipBucket{count: 1, resetAt: now.Add(l.window)}
-		// Opportunistic prune: at most one stale entry per call.
-		for k, v := range l.buckets {
-			if k != ip && now.After(v.resetAt) {
-				delete(l.buckets, k)
-				break
-			}
-		}
+// allowAttempt is the shared check the wrapper helpers call. Returns
+// (true, 0) when the IP is under the cap, (false, retryAfter) when
+// over. Fails open on DB error so a Postgres outage doesn't lock the
+// whole login surface.
+func allowAttempt(ctx context.Context, ip string) (bool, time.Duration) {
+	limiterDBMu.RLock()
+	d := limiterDB
+	limiterDBMu.RUnlock()
+	if d == nil {
 		return true, 0
 	}
-	if b.count >= l.max {
-		return false, time.Until(b.resetAt)
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	res, err := d.AllowLoginAttempt(ctx, ip, rateLimitMax, rateLimitWindow)
+	if err != nil {
+		// Fail open — see package doc.
+		return true, 0
 	}
-	b.count++
-	return true, 0
+	return res.Allowed, res.RetryAfter
 }
 
-// rateLimit wraps an http.HandlerFunc with the limiter. The IP key
-// uses the same extractor the audit logger uses, but only when the
-// request originates from a trusted reverse proxy (controlled by the
-// KUSO_TRUSTED_PROXIES env so a direct caller can't spoof XFF).
-//
-// In keeping with the rest of the package we keep the limiter as a
-// process-global; tests reset it via TestResetLimiterForTesting.
-var defaultLoginLimiter = newLoginLimiter(10, 30*time.Second)
-
-// ResetRateLimiterForTesting resets the global limiter's bucket. Used
-// by handler tests that share the same Postgres-backed test process
-// — without this, the 8th OAuth-flow test in a single `go test` run
-// hits the 10-req/30s cap and fails on a 429 from the rate limiter,
-// not from the code under test.
-//
-// Public-but-unsafe for non-test callers — calling it in production
-// effectively gives one IP a "second chance" on every invocation,
-// which is precisely the behaviour the limiter is supposed to
-// prevent. Wrap in build tags if that ever becomes a real concern.
-func ResetRateLimiterForTesting() {
-	defaultLoginLimiter = newLoginLimiter(10, 30*time.Second)
-}
-
-// withRateLimit wraps the handler with the default limiter.
+// withRateLimit wraps the handler with the persistent limiter.
 func withRateLimit(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
-		ok, retryAfter := defaultLoginLimiter.allow(ip)
+		ok, retryAfter := allowAttempt(r.Context(), ip)
 		if !ok {
 			seconds := int(retryAfter.Seconds())
 			if seconds < 1 {

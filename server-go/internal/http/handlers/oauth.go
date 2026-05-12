@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"strconv"
 	"time"
 
@@ -433,19 +432,21 @@ func setJWTCookie(w http.ResponseWriter, jwt string) {
 	})
 }
 
-// redirectWithJWT replaces the legacy "set cookie + redirect to /"
-// pattern. Instead of writing a JS-readable cookie that an XSS could
-// exfiltrate, we put the JWT in a URL fragment (#token=…). The
-// fragment never reaches the server in subsequent requests, so it's
-// not logged or proxied; the SPA reads it once on the landing page,
-// stores in localStorage, and replaces history.state to scrub it
-// from window.location. The cookie is still set (HttpOnly) for the
-// WS log tail handshake.
+// redirectWithJWT finalises an OAuth flow by setting the HttpOnly
+// session cookie and bouncing the browser to "/?login=ok". The SPA
+// reads session identity via /api/auth/session (which rides the
+// cookie); JS never sees the JWT bytes.
+//
+// Previous implementation emitted "/#token=<jwt>" so the SPA could
+// stash the JWT in localStorage for the WebSocket subprotocol
+// bearer. That path is closed: the WS upgrade also reads the
+// kuso.JWT_TOKEN cookie now (see logs_ws.go), so fragment delivery
+// is dead code. Closing it removes the window where the token sits
+// in browser history / analytics referer / third-party scripts on
+// the landing page.
 func redirectWithJWT(w http.ResponseWriter, r *http.Request, jwt string) {
 	setJWTCookie(w, jwt)
-	// URL-encode the JWT to avoid any reserved-char surprises.
-	target := "/#token=" + url.QueryEscape(jwt)
-	http.Redirect(w, r, target, http.StatusFound)
+	http.Redirect(w, r, "/?login=ok", http.StatusFound)
 }
 
 func randomHex(n int) string {

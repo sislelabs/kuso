@@ -190,6 +190,12 @@ func NewRouter(d Deps) http.Handler {
 			jwtChain.ServeHTTP(w, req)
 		})
 	}
+	// Wire the persistent login rate limiter to the DB. Without this
+	// the limiter falls open (no caps) — better than no /login at all
+	// on a fresh boot before main has stitched the DB in, but main
+	// should call this as early as possible.
+	httphandlers.SetRateLimiterDB(d.DB)
+
 	// /api/status moved behind auth — it exposes server, kube, and
 	// operator versions which are useful recon for an attacker
 	// fingerprinting the cluster for CVE matches. /healthz stays

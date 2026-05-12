@@ -238,6 +238,27 @@ func main() {
 	notifyDisp := notify.New(database, logger, 256)
 	go notifyDisp.Run(ctx)
 
+	// Login rate-limiter pruner. The DB-backed limiter writes one row
+	// per active source IP; rows past their resetAt window are inert
+	// but eventually pile up. A slow ticker keeps the table bounded
+	// without contending with the hot-path INSERT-on-conflict.
+	go func() {
+		t := time.NewTicker(5 * time.Minute)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				pctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+				if _, err := database.PruneLoginAttempts(pctx); err != nil {
+					logger.Warn("prune login attempts", "err", err)
+				}
+				cancel()
+			}
+		}
+	}()
+
 	if kc, err := kube.NewClient(); err != nil {
 		logger.Warn("kube: client unavailable, project + secret + build + log routes disabled", "err", err)
 	} else {
@@ -271,6 +292,42 @@ func main() {
 				logger.Error("KUSO_REQUIRE_CRDS=true and CRDs are missing — refusing to start",
 					"missing", missing)
 				os.Exit(2)
+			}
+		}
+		// Stale-CRD check: the auto-updater rolls the server image
+		// but does NOT apply CRD changes — the operator does that by
+		// hand. When a build embeds new spec fields the live CRD
+		// doesn't carry yet, the apiserver silently prunes them on
+		// write (the v0.7.x placement data-loss bug was caused by
+		// exactly this). Refuse to take traffic until the operator
+		// reapplies the latest CRDs.
+		//
+		// Missing CRDs (not present at all) are handled by
+		// preflightCRDs above; this check only fires on present-but-
+		// stale, which is the dangerous case.
+		schemaCheckCtx, schemaCheckCancel := context.WithTimeout(ctx, 10*time.Second)
+		mismatches, err := kc.CheckSchemas(schemaCheckCtx, nil)
+		schemaCheckCancel()
+		if err != nil {
+			logger.Warn("schema preflight: probe failed; proceeding", "err", err)
+		} else if len(mismatches) > 0 {
+			// Filter out "(CRD not installed)" entries — those are
+			// covered by preflightCRDs and don't indicate stale fields.
+			var stale []kube.SchemaMismatch
+			for _, m := range mismatches {
+				if m.Field == "(CRD not installed)" {
+					continue
+				}
+				stale = append(stale, m)
+			}
+			if len(stale) > 0 {
+				logger.Error("CRDs present but stale — apiserver will silently prune fields this build expects to write",
+					"mismatches", stale,
+					"hint", "kubectl apply -f operator/config/crd/bases/")
+				if os.Getenv("KUSO_ALLOW_STALE_CRDS") != "true" {
+					logger.Error("refusing to start with stale CRDs. set KUSO_ALLOW_STALE_CRDS=true to override (data-loss risk)")
+					os.Exit(3)
+				}
 			}
 		}
 		// Shared informer cache over the six kuso CRDs. Keeps the
