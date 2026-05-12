@@ -36,6 +36,14 @@ nixpacks:
   # The chart appends ":<version>" automatically.
   image: "ghcr.io/sislelabs/kuso-nixpacks"
 
+envDetect:
+  # Image used by the env-detect init container. Bakes ripgrep + jq
+  # so the runtime container runs as runAsUser:1000 instead of
+  # apk-add-as-root. Build via `docker build build/env-detect` +
+  # tag matching the kuso-server release.
+  image: "ghcr.io/sislelabs/kuso-env-detect"
+  tag: "v1"
+
 # Persistent build cache. When pvcName is non-empty the chart mounts
 # that PVC at /cache and points each build container's per-language
 # cache dirs (~/.npm, ~/go/pkg/mod, ~/.cache/pip, ~/.cargo, /nix) at

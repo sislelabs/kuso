@@ -375,6 +375,38 @@ if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
   fi
 fi
 
+# ---- 4a2b. env-detect image ----------------------------------------
+#
+# Bakes ripgrep + jq into a small alpine image so the env-detect
+# init container runs as runAsUser:1000 instead of `apk add`-as-root
+# at runtime. Tagged with KUSO_RELEASE_ENV_DETECT_TAG (default "v1"
+# — bump on Dockerfile changes) so the chart can pin a known good
+# image even when its own version stays put. Same idempotent
+# inspect-before-build dance as the nixpacks image.
+
+ENV_DETECT_TAG="${KUSO_RELEASE_ENV_DETECT_TAG:-v1}"
+ENV_DETECT_IMAGE="${KUSO_RELEASE_ENV_DETECT_IMAGE:-ghcr.io/sislelabs/kuso-env-detect}"
+if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
+  if [[ "${KUSO_RELEASE_FORCE_ENV_DETECT:-0}" != "1" ]] \
+      && docker buildx imagetools inspect "${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG}" >/dev/null 2>&1; then
+    log "env-detect image ${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG} already on ghcr — skipping rebuild"
+  else
+    log "docker buildx → ${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG} (+ :latest)"
+    if [[ "$DRY_RUN" == "1" ]]; then
+      dry "docker buildx build --platform linux/amd64 --push -t ${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG} -t ${ENV_DETECT_IMAGE}:latest -f build/env-detect/Dockerfile build/env-detect"
+    else
+      docker buildx build \
+        --platform linux/amd64 \
+        --push \
+        -t "${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG}" \
+        -t "${ENV_DETECT_IMAGE}:latest" \
+        -f build/env-detect/Dockerfile \
+        build/env-detect >/dev/null
+      log "env-detect image pushed: ${ENV_DETECT_IMAGE}:${ENV_DETECT_TAG}"
+    fi
+  fi
+fi
+
 # ---- 4a3. operator image -------------------------------------------
 #
 # Decide what operator image to bake into release.json. Two paths:

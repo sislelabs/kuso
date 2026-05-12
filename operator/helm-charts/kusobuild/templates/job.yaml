@@ -201,28 +201,23 @@ spec:
         # log parser can extract it without false positives from app
         # output that happens to look JSON-shaped.
         - name: env-detect
-          image: alpine:3.20
-          # No --runAsUser:1000 here because apk add ripgrep jq needs
-          # write access to /etc/apk/. The blast-radius reduction we
-          # CAN apply without baking a custom image is:
-          #   - allowPrivilegeEscalation:false (no setuid escapes)
-          #   - drop all caps (no CAP_NET_RAW, CAP_SYS_PTRACE, etc.)
-          # The container still runs as root inside its own namespace
-          # but cannot use any capability — which is what every other
-          # init container in this Job already does. Long-term fix:
-          # bake a kuso-env-detect image that ships rg+jq so we can
-          # drop to runAsUser:1000 like cache-init.
+          image: {{ printf "%s:%s" (.Values.envDetect.image | default "ghcr.io/sislelabs/kuso-env-detect") (.Values.envDetect.tag | default "v1") | quote }}
+          # Baked image ships ripgrep + jq, so the container runs as
+          # 1000:1000 (matches cache-init). No apk add at runtime,
+          # no root, full cap drop. Matches the rest of the Job's
+          # securityContext shape.
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            runAsUser: 1000
+            runAsGroup: 1000
           command: ["/bin/sh", "-c"]
           args:
             - |
               set -e
               SRC="/workspace/src/{{ .Values.repo.path | default "." }}"
               cd "$SRC"
-              apk add --no-cache --quiet ripgrep jq >/dev/null 2>&1 || apk add --no-cache ripgrep jq
 
               FROM_DOTENV=""
               for f in .env.example .env.template .env.sample .env.dist; do
