@@ -93,10 +93,9 @@ func (h *ImportCoolifyHandler) Preview(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	_ = ctx // coolify.Client doesn't yet take a context; future refactor
 
 	c := coolify.New(req.BaseURL, req.Token)
-	inv, err := coolify.Snapshot(c)
+	inv, err := coolify.Snapshot(ctx, c)
 	if err != nil {
 		// Surface as 502 so the SPA can show "couldn't reach Coolify"
 		// instead of "server error." Don't leak the token in the

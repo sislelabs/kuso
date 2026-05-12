@@ -6,6 +6,7 @@
 package coolify
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -48,12 +49,12 @@ type Inventory struct {
 // Snapshot collects every resource from the Coolify instance and
 // classifies each. Read-only; never mutates anything. Returns a
 // fully-populated Inventory or the first error.
-func Snapshot(c *Client) (*Inventory, error) {
+func Snapshot(ctx context.Context, c *Client) (*Inventory, error) {
 	if err := c.AssertReadOnly(); err != nil {
 		return nil, err
 	}
 	inv := &Inventory{}
-	if v, err := c.Version(); err == nil {
+	if v, err := c.Version(ctx); err == nil {
 		inv.CoolifyVersion = strings.TrimSpace(strings.Trim(v, `"`))
 	}
 
@@ -61,7 +62,7 @@ func Snapshot(c *Client) (*Inventory, error) {
 	// Coolify's /projects returns environments=[] in the list view,
 	// only the per-project endpoint includes them. We need them to
 	// look up environment_id → (project, env) for downstream items.
-	projs, err := c.ListProjects()
+	projs, err := c.ListProjects(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list projects: %w", err)
 	}
@@ -70,7 +71,7 @@ func Snapshot(c *Client) (*Inventory, error) {
 		EnvName     string
 	}{}
 	for i := range projs {
-		full, err := c.GetProject(projs[i].UUID)
+		full, err := c.GetProject(ctx, projs[i].UUID)
 		if err != nil {
 			// Soft-fail per project — we'd rather report N-1 than
 			// abort the whole snapshot for one broken UUID.
@@ -87,7 +88,7 @@ func Snapshot(c *Client) (*Inventory, error) {
 	inv.Projects = projs
 
 	// Apps.
-	apps, err := c.ListApplications()
+	apps, err := c.ListApplications(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list applications: %w", err)
 	}
@@ -108,7 +109,7 @@ func Snapshot(c *Client) (*Inventory, error) {
 	}
 
 	// Services (always skipped per policy, but surfaced).
-	svcs, err := c.ListServices()
+	svcs, err := c.ListServices(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list services: %w", err)
 	}
@@ -129,7 +130,7 @@ func Snapshot(c *Client) (*Inventory, error) {
 	}
 
 	// Databases.
-	dbs, err := c.ListDatabases()
+	dbs, err := c.ListDatabases(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list databases: %w", err)
 	}

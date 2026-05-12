@@ -16,6 +16,7 @@
 package coolify
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -56,14 +57,22 @@ func (c *Client) guard(req *http.Request) error {
 	return nil
 }
 
-// getRaw fetches a path under /api/v1/. Returns the raw body so
-// callers that want forward-compatibility (untyped fields) can
-// decode partially. Non-2xx is surfaced as an error including the
-// status code + first 256 bytes of response so debugging doesn't
-// require a separate curl.
-func (c *Client) getRaw(path string) ([]byte, error) {
+// maxResponseBytes caps how much of a Coolify API response we'll
+// read into memory. A Coolify instance (or a DNS-spoofed server)
+// returning a 2 GB body would OOM the kuso-server pod via the
+// /api/import/coolify/preview endpoint. 32 MiB is generous for any
+// realistic inventory (thousands of apps fit comfortably).
+const maxResponseBytes = 32 << 20
+
+// getRaw fetches a path under /api/v1/. Threads ctx so the caller's
+// timeout actually cancels the underlying HTTP request — the
+// previous version constructed a plain http.NewRequest and the
+// import handler's 60s timeout was dead code. Non-2xx is surfaced
+// as an error including the status code + first 256 bytes of
+// response. Response body is capped via io.LimitReader (B5).
+func (c *Client) getRaw(ctx context.Context, path string) ([]byte, error) {
 	url := c.baseURL + "/api/v1" + path
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -77,7 +86,13 @@ func (c *Client) getRaw(path string) ([]byte, error) {
 		return nil, fmt.Errorf("coolify GET %s: %w", path, err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("coolify GET %s: read body: %w", path, err)
+	}
+	if int64(len(body)) > maxResponseBytes {
+		return nil, fmt.Errorf("coolify GET %s: response exceeds %d bytes — refusing to buffer", path, maxResponseBytes)
+	}
 	if resp.StatusCode/100 != 2 {
 		head := body
 		if len(head) > 256 {
@@ -89,9 +104,9 @@ func (c *Client) getRaw(path string) ([]byte, error) {
 }
 
 // get is the typed variant — decodes into the supplied destination.
-func get[T any](c *Client, path string) (T, error) {
+func get[T any](ctx context.Context, c *Client, path string) (T, error) {
 	var zero T
-	body, err := c.getRaw(path)
+	body, err := c.getRaw(ctx, path)
 	if err != nil {
 		return zero, err
 	}
