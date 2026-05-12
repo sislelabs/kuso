@@ -228,8 +228,28 @@ function Step2PickRepo({
 
   if (installations.length === 0) {
     return (
-      <div className="text-sm text-[var(--text-secondary)]">
-        No GitHub installations yet. Go back to step 1.
+      <div className="space-y-3">
+        <p className="text-sm text-[var(--text-secondary)]">
+          No GitHub installations yet. You can install the kuso GitHub
+          App first, or start a project without a repo and connect one
+          later from its service settings.
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/welcome?step=1"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-3 font-mono text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+          >
+            <ArrowRight className="h-3 w-3 rotate-180" />
+            Back to Step 1
+          </Link>
+          <Link
+            href="/projects/new"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] hover:bg-[var(--accent)]/90"
+          >
+            Start without a repo
+            <ArrowRight className="h-3 w-3" />
+          </Link>
+        </div>
       </div>
     );
   }
