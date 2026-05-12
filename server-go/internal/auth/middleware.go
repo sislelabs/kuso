@@ -14,9 +14,16 @@ const claimsCtxKey ctxKey = 0
 
 // RevocationChecker, when set on an Issuer, is consulted on every
 // successful Verify in the middleware. Used to wire the RevokedToken
-// DB lookups without making the auth package depend on db. The
-// implementation should fail-open (return false) on DB errors so a
-// transient outage doesn't 401 every active user.
+// DB lookups without making the auth package depend on db.
+//
+// SECURITY: the canonical implementation fails CLOSED (returns true
+// = treat as revoked) on cache miss + DB error. Fail-open would let
+// a transient DB outage silently un-revoke every previously revoked
+// token, which is the worst-case outcome for a token-revocation
+// surface. The previous comment claimed fail-open; the cmd/kuso-
+// server/revocation.go implementation has always been fail-closed.
+// Don't write a new RevocationChecker that returns false on DB
+// errors — you'll undo the security property the caller relies on.
 //
 // The checker receives both the jti AND the userID/iat so it can
 // query both the per-jti RevokedToken table and the per-user
