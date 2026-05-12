@@ -593,10 +593,30 @@ log "applying kuso-server-secrets"
 #   openssl genpkey -algorithm Ed25519 -out kuso-release.priv
 #   openssl pkey -in kuso-release.priv -pubout -outform DER \
 #     | tail -c 32 | base64
-# Empty is fine for unsigned releases — the updater logs a warn but
-# proceeds. Set KUSO_REQUIRE_SIGNATURES=true to refuse unsigned.
+#
+# SECURITY: KUSO_REQUIRE_SIGNATURES defaults to "true" — strict
+# verification. A fresh install without a wired public key (no env
+# var, no committed releasekey.pub) cannot auto-update; the updater
+# refuses unsigned releases with a clear "configure
+# KUSO_RELEASE_PUBLIC_KEY or set KUSO_REQUIRE_SIGNATURES=false to
+# opt out" error. This is the correct default — the alternative is
+# "any actor who can MITM the GitHub Releases API serves arbitrary
+# update payloads with SA-level kube perms" (a supply-chain hole
+# every prior install carried). Operators running pre-signed
+# releases or staging clusters can pass KUSO_REQUIRE_SIGNATURES=false
+# to install.sh explicitly to opt out.
 KUSO_RELEASE_PUBKEY="${KUSO_RELEASE_PUBLIC_KEY:-}"
-KUSO_REQUIRE_SIGS="${KUSO_REQUIRE_SIGNATURES:-false}"
+KUSO_REQUIRE_SIGS="${KUSO_REQUIRE_SIGNATURES:-true}"
+if [[ "$KUSO_REQUIRE_SIGS" == "false" || "$KUSO_REQUIRE_SIGS" == "0" ]]; then
+  log "WARNING: KUSO_REQUIRE_SIGNATURES=false — release signature verification is disabled."
+  log "  This means any MITM on the GitHub Releases API can serve arbitrary update payloads."
+  log "  Acceptable for dev / staging; do NOT run a production cluster like this."
+fi
+if [[ "$KUSO_REQUIRE_SIGS" == "true" && -z "$KUSO_RELEASE_PUBKEY" ]]; then
+  log "NOTE: signature verification is on (default) but KUSO_RELEASE_PUBLIC_KEY is empty."
+  log "  Auto-updates will refuse releases until you wire a public key into the secret."
+  log "  See hack/release-keygen.sh; or pass KUSO_REQUIRE_SIGNATURES=false to install.sh."
+fi
 kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o yaml \
   --from-literal=KUSO_SESSION_KEY="$SESSION_KEY" \
   --from-literal=JWT_SECRET="$JWT_SECRET" \
