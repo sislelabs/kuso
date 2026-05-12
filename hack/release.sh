@@ -489,7 +489,10 @@ log "writing dist/release.json + dist/crds.yaml for GitHub release"
 
 # Bundle every CRD into a single applyable file. The updater Job's
 # entrypoint runs `kubectl apply -f /tmp/crds.yaml` and trusts that
-# all of these are safe to re-apply (additive only, today).
+# all of these are safe to re-apply (additive only, today). If you
+# ship a destructive schema change (rename, removal, type narrow),
+# this is the wrong tool — see docs/SCHEMA_MIGRATION.md for the
+# manual recipe.
 {
   for f in operator/config/crd/bases/*.yaml; do
     if [[ -f "$f" ]]; then
