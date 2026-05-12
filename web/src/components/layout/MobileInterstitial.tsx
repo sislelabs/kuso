@@ -25,7 +25,18 @@ export function MobileInterstitial() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    if (/^\/projects\/[^/]+$/.test(window.location.pathname)) return;
+    const path = window.location.pathname;
+    // Flip from "show everywhere except canvas" to "show only on
+    // pages we KNOW are desktop-shaped". The projects list, the
+    // per-project canvas (which has MobileIncidentView), and the
+    // login flow are all reachable from a phone in an incident; the
+    // interstitial gets in the way of someone trying to redeploy a
+    // broken service from a Slack-ping link at midnight.
+    //
+    // Settings pages are the genuine offenders — multi-pane forms,
+    // node tables, role editors. Keep the interstitial there.
+    const desktopOnlyShape = path.startsWith("/settings/");
+    if (!desktopOnlyShape) return;
     if (window.localStorage.getItem(STORAGE_KEY)) return;
     const isSmall = window.innerWidth < SMALL_VIEWPORT_BREAKPOINT_PX;
     if (isSmall) setShow(true);
