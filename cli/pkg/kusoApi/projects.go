@@ -10,6 +10,8 @@ import (
 	"net/url"
 
 	"github.com/go-resty/resty/v2"
+
+	apiv1 "github.com/sislelabs/kuso/api/apiv1"
 )
 
 // esc escapes a single URL path segment. Project/service identifiers
@@ -21,50 +23,27 @@ import (
 // per RFC 3986 §3.3), so a `host:port` domain still round-trips.
 func esc(s string) string { return url.PathEscape(s) }
 
-type CreateProjectRequest struct {
-	Name        string `json:"name"`
-	Description string `json:"description,omitempty"`
-	BaseDomain  string `json:"baseDomain,omitempty"`
-	Namespace   string `json:"namespace,omitempty"`
-	DefaultRepo struct {
-		URL           string `json:"url"`
-		DefaultBranch string `json:"defaultBranch,omitempty"`
-	} `json:"defaultRepo"`
-	GitHub *struct {
-		InstallationID int64 `json:"installationId,omitempty"`
-	} `json:"github,omitempty"`
-	Previews struct {
-		Enabled bool `json:"enabled"`
-		TTLDays int  `json:"ttlDays,omitempty"`
-	} `json:"previews"`
-}
+// Project DTOs are now defined in kuso/api/v1. The aliases below
+// keep every existing kusoApi.CreateProjectRequest call site
+// compiling while the shared module becomes the single source of
+// truth for wire shape. A future field add in api/v1/projects.go
+// flows through to both server and CLI automatically.
+type (
+	CreateProjectRequest  = apiv1.CreateProjectRequest
+	UpdateProjectRequest  = apiv1.UpdateProjectRequest
+	RepoRef               = apiv1.RepoRef
+	GitHubInstallationRef = apiv1.GitHubInstallationRef
+	PreviewsSettings      = apiv1.PreviewsSettings
+	PreviewsPatch         = apiv1.PreviewsPatch
+)
 
-// UpdateProjectRequest mirrors the server's pointer-field shape so a
-// caller can express "leave this field alone" (omit) vs. "set to zero"
-// (send the zero value). Use Bool / Int / String helpers to build
-// pointer literals tersely.
-type UpdateProjectRequest struct {
-	Description *string `json:"description,omitempty"`
-	BaseDomain  *string `json:"baseDomain,omitempty"`
-	DefaultRepo *struct {
-		URL           string `json:"url,omitempty"`
-		DefaultBranch string `json:"defaultBranch,omitempty"`
-	} `json:"defaultRepo,omitempty"`
-	GitHub *struct {
-		InstallationID int64 `json:"installationId,omitempty"`
-	} `json:"github,omitempty"`
-	Previews *struct {
-		Enabled *bool `json:"enabled,omitempty"`
-		TTLDays *int  `json:"ttlDays,omitempty"`
-	} `json:"previews,omitempty"`
-	// AlwaysOn=true overrides every per-service sleep config so all
-	// services in this project run with scale-to-zero disabled.
-	AlwaysOn *bool `json:"alwaysOn,omitempty"`
-}
-
-func BoolPtr(b bool) *bool       { return &b }
-func IntPtr(i int) *int          { return &i }
-func StringPtr(s string) *string { return &s }
+// Pointer helpers re-exported so existing call sites keep their
+// kusoApi.BoolPtr / IntPtr / StringPtr names.
+var (
+	BoolPtr   = apiv1.BoolPtr
+	IntPtr    = apiv1.IntPtr
+	StringPtr = apiv1.StringPtr
+)
 
 type CreateServiceRequest struct {
 	Name string `json:"name"`

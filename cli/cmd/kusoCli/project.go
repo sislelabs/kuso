@@ -50,14 +50,14 @@ var projectCreateCmd = &cobra.Command{
 			Name:       args[0],
 			BaseDomain: projectCreateDomain,
 			Namespace:  projectCreateNamespace,
+			DefaultRepo: &kusoApi.RepoRef{
+				URL:           projectCreateRepo,
+				DefaultBranch: projectCreateBranch,
+			},
+			Previews: &kusoApi.PreviewsSettings{Enabled: projectCreatePreviews},
 		}
-		req.DefaultRepo.URL = projectCreateRepo
-		req.DefaultRepo.DefaultBranch = projectCreateBranch
-		req.Previews.Enabled = projectCreatePreviews
 		if projectCreateInstallationID > 0 {
-			req.GitHub = &struct {
-				InstallationID int64 `json:"installationId,omitempty"`
-			}{InstallationID: projectCreateInstallationID}
+			req.GitHub = &kusoApi.GitHubInstallationRef{InstallationID: projectCreateInstallationID}
 		}
 		resp, err := api.CreateProject(req)
 		if err != nil {
@@ -109,25 +109,18 @@ installation use --github-installation-clear (sets installationId to 0).`,
 			req.BaseDomain = kusoApi.StringPtr(projectUpdateDomain)
 		}
 		if cmd.Flags().Changed("repo") || cmd.Flags().Changed("branch") {
-			req.DefaultRepo = &struct {
-				URL           string `json:"url,omitempty"`
-				DefaultBranch string `json:"defaultBranch,omitempty"`
-			}{URL: projectUpdateRepo, DefaultBranch: projectUpdateBranch}
+			req.DefaultRepo = &kusoApi.RepoRef{
+				URL:           projectUpdateRepo,
+				DefaultBranch: projectUpdateBranch,
+			}
 		}
 		if projectUpdateInstallReset {
-			req.GitHub = &struct {
-				InstallationID int64 `json:"installationId,omitempty"`
-			}{InstallationID: 0}
+			req.GitHub = &kusoApi.GitHubInstallationRef{InstallationID: 0}
 		} else if cmd.Flags().Changed("github-installation") {
-			req.GitHub = &struct {
-				InstallationID int64 `json:"installationId,omitempty"`
-			}{InstallationID: projectUpdateInstallation}
+			req.GitHub = &kusoApi.GitHubInstallationRef{InstallationID: projectUpdateInstallation}
 		}
 		if cmd.Flags().Changed("previews") || cmd.Flags().Changed("previews-ttl") {
-			pv := &struct {
-				Enabled *bool `json:"enabled,omitempty"`
-				TTLDays *int  `json:"ttlDays,omitempty"`
-			}{}
+			pv := &kusoApi.PreviewsPatch{}
 			switch projectUpdatePreviews {
 			case "on", "true", "yes":
 				pv.Enabled = kusoApi.BoolPtr(true)

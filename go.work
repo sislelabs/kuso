@@ -1,6 +1,7 @@
 go 1.26.0
 
 use (
+	./api/apiv1
 	./cli
 	./mcp
 	./server-go

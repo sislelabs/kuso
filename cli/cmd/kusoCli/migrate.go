@@ -226,9 +226,13 @@ func applyMigration(c *coolify.Client, items []coolify.Item) int {
 			continue
 		}
 
-		req := kusoApi.CreateProjectRequest{Name: projectSlug}
-		req.DefaultRepo.URL = defaultRepoURL
-		req.DefaultRepo.DefaultBranch = defaultBranch
+		req := kusoApi.CreateProjectRequest{
+			Name: projectSlug,
+			DefaultRepo: &kusoApi.RepoRef{
+				URL:           defaultRepoURL,
+				DefaultBranch: defaultBranch,
+			},
+		}
 		resp, err := api.CreateProject(req)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "    ✗ create project: %v\n", err)
