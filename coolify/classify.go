@@ -27,9 +27,9 @@ const (
 
 // Verdict is the result of classifying one resource.
 type Verdict struct {
-	Kind   Kind
-	Action string // "migrate" | "skip" | "flag"
-	Reason string // human-readable for the report
+	Kind   Kind   `json:"kind"`
+	Action string `json:"action"` // "migrate" | "skip" | "flag"
+	Reason string `json:"reason"` // human-readable for the report
 }
 
 func ClassifyApplication(a Application) Verdict {

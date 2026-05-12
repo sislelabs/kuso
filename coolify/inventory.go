@@ -16,18 +16,18 @@ import (
 // because the downstream code only cares about the migration-
 // relevant bits.
 type Item struct {
-	Verdict     Verdict
-	UUID        string
-	Name        string
-	ProjectName string // Coolify project this lives in
-	EnvName     string // Coolify environment ("production", etc.)
+	Verdict     Verdict `json:"verdict"`
+	UUID        string  `json:"uuid"`
+	Name        string  `json:"name"`
+	ProjectName string  `json:"projectName"` // Coolify project this lives in
+	EnvName     string  `json:"envName"`     // Coolify environment ("production", etc.)
 	// One of App / Service / Database is set depending on the
 	// underlying Coolify kind. The classifier already inspected the
 	// fields it needed; downstream code reaches into these for the
 	// remaining migration logic (repo URL, db URL, etc.).
-	App      *Application
-	Service  *Service
-	Database *Database
+	App      *Application `json:"app,omitempty"`
+	Service  *Service     `json:"service,omitempty"`
+	Database *Database    `json:"database,omitempty"`
 }
 
 // Inventory is the collected snapshot. Items are flat — the report

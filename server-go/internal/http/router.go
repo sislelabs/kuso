@@ -437,7 +437,7 @@ func mountAuthenticatedRoutes(
 		// follow-up. Admin-only at the handler level; mounted
 		// unconditionally so a fresh install can run the wizard
 		// against an upstream Coolify before importing anything.
-		(&httphandlers.ImportCoolifyHandler{Logger: d.Logger}).Mount(r)
+		(&httphandlers.ImportCoolifyHandler{Logger: d.Logger, Projects: d.Projects, Addons: d.Addons}).Mount(r)
 		if bootstrapH != nil {
 			bootstrapH.MountAdmin(r)
 		}
