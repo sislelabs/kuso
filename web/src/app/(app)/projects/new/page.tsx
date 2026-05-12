@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useCreateProject } from "@/features/projects";
 import { api } from "@/lib/api-client";
+import { restoreFormDraft } from "@/lib/query-client";
 import { toast } from "sonner";
 import { Plus, ArrowRight, Globe } from "lucide-react";
 
@@ -29,6 +30,18 @@ export default function NewProjectPage() {
   // envs on their first PR.
   const [previewsEnabled, setPreviewsEnabled] = useState(true);
   const [submitting, setSubmitting] = useState(false);
+
+  // Post-login draft restore. If the user was mid-create when their
+  // session expired (-> /login -> bounced back here), repopulate the
+  // text fields they'd already typed so they don't have to retype
+  // everything. Drafts older than 30 min are dropped by restoreFormDraft.
+  useEffect(() => {
+    const draft = restoreFormDraft();
+    if (!draft) return;
+    if (draft.name) setName(draft.name);
+    if (draft.description) setDescription(draft.description);
+    if (draft.baseDomain) setBaseDomain(draft.baseDomain);
+  }, []);
 
   // Cluster's default baseDomain — when the user hasn't typed one,
   // the resolved URL preview falls back to this so they see exactly
@@ -88,6 +101,7 @@ export default function NewProjectPage() {
         <div className="space-y-4 px-4 py-4">
           <Field label="Name" hint="lowercase, dashes; used as the slug">
             <Input
+              name="name"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="my-product"
@@ -97,6 +111,7 @@ export default function NewProjectPage() {
           </Field>
           <Field label="Description" hint="optional; shown on the projects list">
             <Input
+              name="description"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
               placeholder="What this project does"
@@ -106,6 +121,7 @@ export default function NewProjectPage() {
           </Field>
           <Field label="Base domain" hint="optional; auto from cluster if blank">
             <Input
+              name="baseDomain"
               value={baseDomain}
               onChange={(e) => setBaseDomain(e.target.value)}
               placeholder={cfg.data?.baseDomain ?? "my-product.example.com"}
