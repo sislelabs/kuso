@@ -1455,6 +1455,21 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 	if err != nil {
 		return fmt.Errorf("list envs for propagation: %w", err)
 	}
+	// Resolve the effective placement once before the loop when
+	// Placement is changed — the previous version called
+	// GetKusoProject inside the loop body, producing N+1 apiserver
+	// GETs for a service with N envs. The project spec doesn't
+	// change during propagation, so one fetch is sufficient.
+	// Best-effort: a project-fetch error falls back to copying the
+	// raw service placement (same fallback the inline version had).
+	var effectivePlacement *kube.KusoPlacement
+	if changed.Placement {
+		if proj, perr := s.Kube.GetKusoProject(ctx, s.Namespace, project); perr == nil {
+			effectivePlacement = ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement)
+		} else {
+			effectivePlacement = svc.Spec.Placement
+		}
+	}
 	for i := range envs.Items {
 		var env kube.KusoEnvironment
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
@@ -1464,18 +1479,7 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			env.Spec.EnvVars = svc.Spec.EnvVars
 		}
 		if changed.Placement {
-			// Honour project-default fallback the same way
-			// propagatePlacementToEnvs did — without it, clearing a
-			// service-level placement (svc.Spec.Placement = nil) would
-			// pin envs to nil instead of falling through to the
-			// project's default. Best-effort: missing-project errors
-			// fall back to copying the raw service placement.
-			proj, perr := s.Kube.GetKusoProject(ctx, s.Namespace, project)
-			if perr == nil {
-				env.Spec.Placement = ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement)
-			} else {
-				env.Spec.Placement = svc.Spec.Placement
-			}
+			env.Spec.Placement = effectivePlacement
 		}
 		if changed.Volumes {
 			env.Spec.Volumes = svc.Spec.Volumes
