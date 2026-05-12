@@ -1,7 +1,7 @@
 "use client";
 
 import { Handle, Position } from "@xyflow/react";
-import { Clock, Globe, Terminal, Box } from "lucide-react";
+import { Clock, Globe, Terminal, Box, MoreHorizontal } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -137,7 +137,7 @@ export function CronNode({ data }: { data: CronNodeData }) {
         // them at the same intensity as a service's hover state is
         // misleading. Use --border-subtle as the default + only flip
         // to amber when suspended.
-        "group flex h-[96px] w-[220px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-2.5 transition-colors cursor-pointer",
+        "group relative flex h-[96px] w-[220px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-2.5 transition-colors cursor-pointer",
         suspended
           ? "opacity-60 border-amber-500/50"
           : "border-[var(--border-subtle)] hover:border-[var(--accent)]/60",
@@ -145,8 +145,20 @@ export function CronNode({ data }: { data: CronNodeData }) {
     >
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
       <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
+      <button
+        type="button"
+        aria-label="Cron actions"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          data.__onContext?.(e);
+        }}
+        className="absolute right-1.5 top-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus:opacity-100 group-hover:opacity-100"
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" />
+      </button>
 
-      <div className="flex items-center gap-1.5">
+      <div className="flex items-center gap-1.5 pr-7">
         <Icon className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)]" />
         <span className="truncate text-[12px] font-medium">{displayName}</span>
         {suspended && (

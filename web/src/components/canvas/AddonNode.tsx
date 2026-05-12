@@ -1,6 +1,7 @@
 "use client";
 
 import { Handle, Position } from "@xyflow/react";
+import { MoreHorizontal } from "lucide-react";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import type { KusoAddon } from "@/types/projects";
 import { cn } from "@/lib/utils";
@@ -38,7 +39,7 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
         // is unambiguously visible at canvas zoom — at 1px the
         // ready/pending state was barely distinguishable from the
         // surface lift.
-        "flex h-[72px] w-[220px] flex-col justify-center rounded-2xl border-2 bg-[var(--bg-elevated)] px-3 py-2 transition-colors cursor-pointer",
+        "group relative flex h-[72px] w-[220px] flex-col justify-center rounded-2xl border-2 bg-[var(--bg-elevated)] px-3 py-2 transition-colors cursor-pointer",
         // Hover wins over the green ready-border so the user gets a
         // clear "you're targeting this" affordance. Without the
         // explicit hover-on-ready rule the green stays put and the
@@ -50,7 +51,19 @@ export function AddonNode({ data }: { data: AddonNodeData }) {
     >
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
       <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
-      <div className="flex items-center gap-2">
+      <button
+        type="button"
+        aria-label="Addon actions"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          data.__onContext?.(e);
+        }}
+        className="absolute right-1.5 top-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus:opacity-100 group-hover:opacity-100"
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" />
+      </button>
+      <div className="flex items-center gap-2 pr-7">
         <AddonIcon kind={data.addon.spec.kind} className="h-5 w-5" />
         <div className="min-w-0 flex-1">
           <p className="truncate text-sm font-medium">{data.addon.metadata.name}</p>

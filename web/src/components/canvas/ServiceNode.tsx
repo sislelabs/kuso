@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Handle, Position, useStore } from "@xyflow/react";
-import { Check, Copy, ExternalLink } from "lucide-react";
+import { Check, Copy, ExternalLink, MoreHorizontal } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import type { BuildSummary } from "@/features/services/api";
 import { type DeployStatus } from "@/components/service/DeployStatusPill";
@@ -135,7 +135,7 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         // extra cell that the previous standalone build line ate.
         // border-2 (vs border-1) so status hue (green/amber/red) is
         // unambiguously visible at canvas zoom levels.
-        "group flex h-[120px] w-[280px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
+        "group relative flex h-[120px] w-[280px] flex-col rounded-2xl border-2 bg-[var(--bg-elevated)] p-3 transition-colors cursor-pointer",
         "hover:border-[var(--border-strong)]",
         (status === "building" || status === "deploying") &&
           "border-[var(--building)]/70 animate-pulse",
@@ -152,13 +152,32 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       <Handle type="target" position={Position.Left} className="!bg-[var(--accent)]" />
       <Handle type="source" position={Position.Right} className="!bg-[var(--accent)]" />
 
+      {/* Kebab — left-click affordance for the same context menu
+          right-click fires. Trackpad users on macOS regularly fail
+          to discover right-click on canvas nodes; the kebab gives
+          them a visible target. Positioned absolutely so it doesn't
+          steal flex space from the header row, opacity-0 until hover
+          to keep the card visually clean at rest. */}
+      <button
+        type="button"
+        aria-label="Service actions"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          data.__onContext?.(e);
+        }}
+        className="absolute right-1.5 top-1.5 z-10 inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] opacity-0 transition-opacity hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] focus:opacity-100 group-hover:opacity-100"
+      >
+        <MoreHorizontal className="h-3.5 w-3.5" />
+      </button>
+
       {/* Header row: runtime icon + name + uptime age. Uptime sits
           on the same row as the name for fast scanning ("how long
           has this revision been live?" is asked at the same time as
           "what is this service?"). One size up so it's legible at
           canvas zoom. The build line + replicas split the footer
           row instead. */}
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2 pr-7">
         <span className="flex min-w-0 items-center gap-2 truncate text-sm font-medium">
           <RuntimeIcon runtime={data.service.spec.runtime} />
           <span className="truncate">{displayName}</span>
