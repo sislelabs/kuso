@@ -27,6 +27,17 @@ var pssLabels = map[string]string{
 	"pod-security.kubernetes.io/warn":    "restricted",
 }
 
+// ManagedByLabel is the namespace-level marker the BuildKit
+// NetworkPolicy uses to scope ingress: only pods scheduled into a
+// kuso-managed namespace can reach the BuildKit daemon. Without
+// this, the policy gated on a self-applicable pod label and any
+// actor who could create pods in any namespace could pivot to the
+// privileged daemon. Stamped at Ensure-time (Create + Patch paths).
+const (
+	ManagedByLabel = "app.kubernetes.io/managed-by"
+	ManagedByValue = "kuso"
+)
+
 // EnsureNamespace creates ns if it doesn't already exist and patches
 // in the Pod Security Standards labels so user pods scheduled there
 // can't run as root or escape the container boundary. AlreadyExists is
@@ -37,7 +48,7 @@ func (c *Client) EnsureNamespace(ctx context.Context, ns string) error {
 	if ns == "" {
 		return nil
 	}
-	labels := map[string]string{"app.kubernetes.io/managed-by": "kuso"}
+	labels := map[string]string{ManagedByLabel: ManagedByValue}
 	for k, v := range pssLabels {
 		labels[k] = v
 	}
@@ -59,8 +70,12 @@ func (c *Client) EnsureNamespace(ctx context.Context, ns string) error {
 		// later relaxes to baseline they re-patch and our next
 		// reconcile no-ops because Create-AlreadyExists short-circuits
 		// before we Patch).
+		patchLabels := map[string]string{ManagedByLabel: ManagedByValue}
+		for k, v := range pssLabels {
+			patchLabels[k] = v
+		}
 		patch, _ := json.Marshal(map[string]any{
-			"metadata": map[string]any{"labels": pssLabels},
+			"metadata": map[string]any{"labels": patchLabels},
 		})
 		if _, perr := c.Clientset.CoreV1().Namespaces().Patch(ctx, ns, types.MergePatchType, patch, metav1.PatchOptions{}); perr != nil && !apierrors.IsNotFound(perr) {
 			return fmt.Errorf("kube: patch namespace %q labels: %w", ns, perr)

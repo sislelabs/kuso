@@ -193,9 +193,19 @@ spec:
   ingress:
     - from:
         # Build pods may live in any namespace (KusoProject.spec.namespace
-        # can be set per project). Match on the build-pod label rather
-        # than scoping to one namespace.
-        - namespaceSelector: {}
+        # can be set per project), BUT only namespaces kuso created
+        # carry app.kubernetes.io/managed-by=kuso (stamped by
+        # EnsureNamespace at project creation time). Requiring BOTH the
+        # namespace marker AND the pod label means an attacker would
+        # need to (a) compromise the cluster enough to label an
+        # arbitrary namespace as kuso-managed AND (b) schedule a pod
+        # with the kusobuild component label into it — at which point
+        # they already have cluster-admin-level perms. Pod label alone
+        # was self-applicable; namespace label gated by kuso-server
+        # raises the bar.
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: kuso
           podSelector:
             matchLabels:
               app.kubernetes.io/component: kusobuild
