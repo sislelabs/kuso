@@ -141,6 +141,73 @@ func (d *DB) ListNotificationEvents(ctx context.Context, limit int, unreadOnly b
 	return out, rows.Err()
 }
 
+// ListNotificationEventsForProjects returns the newest `limit` events
+// whose project is in the given allowlist. Non-admin callers see
+// only events scoped to projects they're a member of; admins should
+// use ListNotificationEvents to see everything. Empty projects =>
+// empty result.
+//
+// readAt is dropped from the projection because the per-user read
+// model doesn't exist yet (the column is a single global flag); a
+// non-admin feed is fire-and-forget so we don't show stale read
+// state from another user's clicks.
+func (d *DB) ListNotificationEventsForProjects(ctx context.Context, limit int, projects []string) ([]NotificationEvent, error) {
+	if limit <= 0 || limit > notificationEventCap {
+		limit = notificationEventCap
+	}
+	if len(projects) == 0 {
+		return []NotificationEvent{}, nil
+	}
+	// Build a $N placeholder list. We use sql.NamedArg-style numbered
+	// placeholders inline because the prismaTime/lib-pq driver
+	// rewriter doesn't expand IN ? with a slice for us.
+	placeholders := make([]string, len(projects))
+	args := make([]any, 0, len(projects)+1)
+	for i, p := range projects {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args = append(args, p)
+	}
+	args = append(args, limit)
+	q := fmt.Sprintf(`
+		SELECT "id","type","title","body","severity","project","service","url","extra","createdAt","readAt"
+		FROM "NotificationEvent"
+		WHERE "project" IN (%s)
+		ORDER BY "id" DESC
+		LIMIT $%d
+	`, joinComma(placeholders), len(projects)+1)
+	rows, err := d.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list scoped notification events: %w", err)
+	}
+	defer rows.Close()
+	out := []NotificationEvent{}
+	for rows.Next() {
+		var e NotificationEvent
+		var body, project, service, url, extra sql.NullString
+		var created, read sql.NullTime
+		if err := rows.Scan(&e.ID, &e.Type, &e.Title, &body, &e.Severity,
+			&project, &service, &url, &extra, &created, &read); err != nil {
+			return nil, fmt.Errorf("scan notification event: %w", err)
+		}
+		e.Body = body.String
+		e.Project = project.String
+		e.Service = service.String
+		e.URL = url.String
+		if extra.Valid && extra.String != "" {
+			_ = json.Unmarshal([]byte(extra.String), &e.Extra)
+		}
+		if created.Valid {
+			e.CreatedAt = created.Time
+		}
+		if read.Valid {
+			t := read.Time
+			e.ReadAt = &t
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // CountUnreadNotificationEvents is the cheap query the bell icon
 // uses to render the unread badge.
 func (d *DB) CountUnreadNotificationEvents(ctx context.Context) (int, error) {

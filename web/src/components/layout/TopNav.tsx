@@ -485,33 +485,34 @@ interface FeedEvent {
 }
 
 function NotificationsButton() {
-  // The feed is admin-only on the server. Hide the bell entirely
-  // for non-admins so they don't see a control that always reads
-  // empty + 401s the popover. Hooks run unconditionally above the
-  // gate so a logout / demote (canSee flipping true→false) doesn't
-  // change hook count between renders.
-  const canSee = useCan(Perms.SettingsAdmin);
+  // Admins get the full feed with read-tracking + clear-all. Non-
+  // admins get a project-scoped read-only feed (/my-feed) so they
+  // still see deploy outcomes on services they own, just without
+  // the read state model (which is global today).
+  const isAdmin = useCan(Perms.SettingsAdmin);
   const qc = useQueryClient();
   // Controlled state so a notification's <Link> click can close the
   // popover before pushing the route — otherwise the popover stays
   // open over the new page until the user clicks elsewhere.
   const [open, setOpen] = useState(false);
-  // Unread count drives the dot badge. Polled every 30s — same
-  // cadence the project-status query uses, so we don't add a
-  // chatter to the server for one icon. enabled: canSee saves the
-  // wasted poll for non-admins (they'd 401 anyway).
+  // Unread count drives the dot badge. Admin-only — the my-feed
+  // path has no read-tracking, so we just always show the bell
+  // without a dot for non-admins.
   const unread = useQuery<{ unread: number }>({
     queryKey: ["notifications", "unread-count"],
     queryFn: () => api("/api/notifications/feed/unread-count"),
-    enabled: canSee,
+    enabled: isAdmin,
     refetchInterval: 30_000,
     staleTime: 15_000,
     retry: false,
     throwOnError: false,
   });
+  const feedPath = isAdmin
+    ? "/api/notifications/feed?limit=30"
+    : "/api/notifications/my-feed?limit=30";
   const feed = useQuery<FeedEvent[]>({
-    queryKey: ["notifications", "feed"],
-    queryFn: () => api("/api/notifications/feed?limit=30"),
+    queryKey: ["notifications", "feed", isAdmin ? "admin" : "scoped"],
+    queryFn: () => api(feedPath),
     enabled: false, // only fetch on popover open
     staleTime: 15_000,
     retry: false,
@@ -543,18 +544,13 @@ function NotificationsButton() {
     },
   });
 
-  // Gate goes here, AFTER every hook, so a canSee transition doesn't
-  // change the hook count between renders.
-  if (!canSee) return null;
-
   const onOpenChange = (next: boolean) => {
     setOpen(next);
     if (next) {
       void feed.refetch();
-      // Mark-read fires on open so the dot disappears the moment
-      // the popover shows. Optimistic; the server-side count
-      // refetches via invalidate in the mutation onSuccess.
-      markRead.mutate();
+      // Mark-read only exists for admins — non-admin feed has no
+      // read tracking (per-user readAt isn't modelled yet).
+      if (isAdmin) markRead.mutate();
     }
   };
 
@@ -577,11 +573,11 @@ function NotificationsButton() {
         <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
           <p className="text-xs font-semibold tracking-tight">Notifications</p>
           <div className="flex items-center gap-3">
-            {/* Clear-all: wipes every event from the in-app feed.
-                Hidden when the feed is already empty so the button
-                doesn't beg to be clicked on a fresh install. Disabled
-                while the mutation is in flight. */}
-            {(feed.data ?? []).length > 0 && (
+            {/* Clear-all + channels-config are admin-only. Non-
+                admin viewers get a read-only feed with no mutation
+                affordances — the feed is project-scoped and read
+                state isn't tracked per-user yet. */}
+            {isAdmin && (feed.data ?? []).length > 0 && (
               <button
                 type="button"
                 onClick={() => clearAll.mutate()}
@@ -594,13 +590,15 @@ function NotificationsButton() {
                 clear
               </button>
             )}
-            <Link
-              href="/settings/notifications"
-              onClick={() => setOpen(false)}
-              className="font-mono text-[10px] text-[var(--accent)] hover:underline"
-            >
-              channels →
-            </Link>
+            {isAdmin && (
+              <Link
+                href="/settings/notifications"
+                onClick={() => setOpen(false)}
+                className="font-mono text-[10px] text-[var(--accent)] hover:underline"
+              >
+                channels →
+              </Link>
+            )}
           </div>
         </header>
         <div className="max-h-96 overflow-y-auto">

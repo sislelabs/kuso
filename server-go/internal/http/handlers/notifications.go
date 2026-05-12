@@ -15,6 +15,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/notify"
 )
@@ -48,10 +49,19 @@ type NotificationsHandler struct {
 }
 
 // Mount registers the routes onto the bearer-protected router.
-// Every notification endpoint is admin-only — gated once via a
-// chi.Group middleware so a future addition can't accidentally
-// bypass the check.
+// CRUD on notification channels + the unread-tracking feed remain
+// admin-only. /my-feed is a read-only project-scoped variant for
+// every authenticated user — non-admin project devs need deploy
+// feedback after closing the service overlay too, and the previous
+// admin-only-bell hid the global feed from them entirely.
 func (h *NotificationsHandler) Mount(r chi.Router) {
+	// Project-scoped read-only feed for any authenticated caller.
+	// Resolves the caller's project memberships and returns only
+	// events whose project matches. Admins fall through to the
+	// admin handler when they prefer (or use this one for an audit-
+	// style read).
+	r.Get("/api/notifications/my-feed", h.MyFeed)
+
 	r.Group(func(r chi.Router) {
 		r.Use(AdminOnly)
 		r.Get("/api/notifications", h.List)
@@ -60,14 +70,64 @@ func (h *NotificationsHandler) Mount(r chi.Router) {
 		r.Put("/api/notifications/{id}", h.Update)
 		r.Delete("/api/notifications/{id}", h.Delete)
 		r.Post("/api/notifications/{id}/test", h.Test)
-		// In-app feed — every dispatched event lands in NotificationEvent
-		// regardless of sink config, so the bell has data even when no
-		// webhooks are wired.
+		// Admin-only in-app feed with global readAt tracking. The
+		// per-user readAt model doesn't exist yet — the column is a
+		// single global flag — so non-admins use /my-feed (no read
+		// tracking) instead of seeing stale read state from admins.
 		r.Get("/api/notifications/feed", h.Feed)
 		r.Get("/api/notifications/feed/unread-count", h.FeedUnread)
 		r.Post("/api/notifications/feed/read-all", h.FeedReadAll)
 		r.Delete("/api/notifications/feed", h.FeedClear)
 	})
+}
+
+// MyFeed returns recent NotificationEvent rows scoped to the
+// caller's project memberships. Read-only; no unread / read-all /
+// clear — those rely on a global readAt flag that would leak admin
+// clicks to viewers and vice-versa. Admins still get the full
+// /feed; this is the non-admin path.
+func (h *NotificationsHandler) MyFeed(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := notifCtx(r)
+	defer cancel()
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	limit := 50
+	if q := r.URL.Query().Get("limit"); q != "" {
+		if n, err := strconv.Atoi(q); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	// Admins see everything via this path too — they may want to
+	// embed the bell on a non-admin route, and there's no reason to
+	// hide events from them.
+	if auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+		out, err := h.DB.ListNotificationEvents(ctx, limit, false)
+		if err != nil {
+			h.fail(w, "my-feed", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	tenancy, err := h.DB.ListUserTenancyCached(ctx, claims.UserID)
+	if err != nil {
+		h.fail(w, "my-feed: tenancy", err)
+		return
+	}
+	projects := auth.ProjectsAccessible(tenancy)
+	if len(projects) == 0 {
+		writeJSON(w, http.StatusOK, []db.NotificationEvent{})
+		return
+	}
+	out, err := h.DB.ListNotificationEventsForProjects(ctx, limit, projects)
+	if err != nil {
+		h.fail(w, "my-feed: list", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // Feed returns the most recent notification events. ?limit=N (clamp
