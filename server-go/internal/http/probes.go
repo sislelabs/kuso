@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
+	"kuso/server/internal/serverstate"
 	"kuso/server/internal/version"
 )
 
@@ -71,6 +73,17 @@ func readyz(d Deps) http.HandlerFunc {
 				checks["kube"] = "syncing"
 				ready = false
 			}
+		}
+
+		// CRD-stale gate. Set at boot when the schema preflight finds
+		// fields this build expects that the live CRDs don't carry.
+		// We come up unready (LB drains) AND surface the field list on
+		// the body so an operator with `curl /readyz` sees exactly what
+		// to re-apply, while the SPA can still load (read paths work)
+		// and show its banner.
+		if info := serverstate.CRDStale(); info != nil && len(info.Mismatches) > 0 {
+			checks["crd"] = "stale: " + strings.Join(info.Mismatches, "; ")
+			ready = false
 		}
 
 		status := "ok"

@@ -7,6 +7,7 @@ import (
 	"bufio"
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"log/slog"
 	"net"
 	"net/http"
@@ -36,6 +37,7 @@ import (
 	"kuso/server/internal/projects"
 	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/secrets"
+	"kuso/server/internal/serverstate"
 	"kuso/server/internal/spa"
 	"kuso/server/internal/spec"
 	"kuso/server/internal/status"
@@ -126,6 +128,12 @@ func NewRouter(d Deps) http.Handler {
 	// hold a request for minutes by design and would saturate the
 	// semaphore.
 	r.Use(inFlightLimit(100))
+	// Boot-time CRD-stale gate. When the schema preflight at boot
+	// surfaces fields this build expects to write but the live CRDs
+	// don't carry, refuse /api/* mutating verbs with a 503 + the
+	// missing-field list. GET still works so the SPA can load and
+	// the operator sees the banner.
+	r.Use(refuseWritesIfCRDStale)
 	if os.Getenv("KUSO_DEV_CORS") == "1" {
 		// Loud warning if this leaked into a production env: the
 		// header `Access-Control-Allow-Origin: *` lets any origin
@@ -692,6 +700,45 @@ func inFlightLimit(n int) func(http.Handler) http.Handler {
 			}
 		})
 	}
+}
+
+// refuseWritesIfCRDStale returns 503 on /api/* mutating verbs when the
+// boot-time schema preflight detected stale CRDs. Read paths (GET,
+// HEAD, OPTIONS) still work so the SPA can load and the operator can
+// see the banner + log in. The body lists the missing fields so a
+// `curl -X POST` returns "go re-apply X, Y, Z" instead of a bare 503.
+//
+// Pairs with serverstate.SetCRDStale (set once during main boot) and
+// readyz (which fails so the LB drains). Without this gate, writes
+// would silently succeed at the API level then be pruned by the
+// apiserver on the way to the CR — the symptom is "I saved a setting
+// and it didn't stick" with no error surfaced anywhere.
+func refuseWritesIfCRDStale(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		info := serverstate.CRDStale()
+		if info == nil || len(info.Mismatches) == 0 {
+			next.ServeHTTP(w, r)
+			return
+		}
+		// Only gate /api/* and only mutating verbs.
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Retry-After", "30")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		body, _ := json.Marshal(map[string]any{
+			"error":      "kuso CRDs are stale — re-apply operator/config/crd/bases/ then restart kuso-server",
+			"mismatches": info.Mismatches,
+		})
+		_, _ = w.Write(body)
+	})
 }
 
 // KUSO_DEV_CORS=1 — production same-origin must NOT enable this (§6.7

@@ -47,6 +47,7 @@ import (
 	"kuso/server/internal/projects"
 	"kuso/server/internal/projectsecrets"
 	"kuso/server/internal/secrets"
+	"kuso/server/internal/serverstate"
 	"kuso/server/internal/spec"
 	"kuso/server/internal/status"
 	"kuso/server/internal/updater"
@@ -325,8 +326,20 @@ func main() {
 					"mismatches", stale,
 					"hint", "kubectl apply -f operator/config/crd/bases/")
 				if os.Getenv("KUSO_ALLOW_STALE_CRDS") != "true" {
-					logger.Error("refusing to start with stale CRDs. set KUSO_ALLOW_STALE_CRDS=true to override (data-loss risk)")
-					os.Exit(3)
+					// Record on package-level state so readyz returns
+					// unready and write middleware refuses /api/*
+					// mutations. We deliberately DO NOT os.Exit here:
+					// crash-looping a pod with stale CRDs leaves the LB
+					// shipping traffic to the old pod with no signal as
+					// to why the rollout stalled. Coming up unready
+					// gives the operator a banner in the SPA and a
+					// useful readyz body for the LB drain.
+					mismatchStrs := make([]string, len(stale))
+					for i, m := range stale {
+						mismatchStrs[i] = m.String()
+					}
+					serverstate.SetCRDStale(&serverstate.CRDStaleInfo{Mismatches: mismatchStrs})
+					logger.Error("starting in degraded mode: readyz=unready, writes refused. apply latest CRDs to recover. override: KUSO_ALLOW_STALE_CRDS=true")
 				}
 			}
 		}
