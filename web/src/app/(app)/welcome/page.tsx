@@ -14,7 +14,7 @@ import { useCreateProject } from "@/features/projects";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { CheckCircle2, Github, Plus, ArrowRight, ArrowDown } from "lucide-react";
+import { CheckCircle2, Github, ArrowRight, ArrowDown, Rocket } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -45,15 +45,19 @@ export default function WelcomePage() {
   const search = useSearchParams();
   const stepParam = search?.get("step");
   const step = ((stepParam ? parseInt(stepParam, 10) : 1) || 1) as Step;
+  const project = search?.get("project") ?? "";
   const installations = useInstallations();
   const installs = installations.data ?? [];
   const hasGitHub = installs.length > 0;
   const [pickedInstall, setPickedInstall] = useState<number | null>(null);
 
-  const setStep = (n: Step) => {
-    const params = new URLSearchParams(search?.toString() ?? "");
-    params.set("step", String(n));
-    router.replace(`/welcome?${params.toString()}`, { scroll: false });
+  const setStep = (n: Step, params: Record<string, string> = {}) => {
+    const usp = new URLSearchParams(search?.toString() ?? "");
+    usp.set("step", String(n));
+    for (const [k, v] of Object.entries(params)) {
+      if (v) usp.set(k, v);
+    }
+    router.replace(`/welcome?${usp.toString()}`, { scroll: false });
   };
 
   return (
@@ -84,9 +88,10 @@ export default function WelcomePage() {
             installations={installs}
             pickedInstall={pickedInstall}
             onPickInstall={setPickedInstall}
-            onPicked={(project) => router.replace(`/projects/${encodeURIComponent(project)}`)}
+            onPicked={(p) => setStep(3, { project: p })}
           />
         )}
+        {step === 3 && <Step3Deploy project={project} />}
       </div>
 
       <p className="mt-4 text-center text-[10px] text-[var(--text-tertiary)]">
@@ -331,6 +336,91 @@ function Step2PickRepo({
           start a project without a repo
         </Link>{" "}
         — connect repos to its services later.
+      </p>
+    </div>
+  );
+}
+
+// Step3Deploy is the "you made it" landing screen. The project exists
+// at this point (Step 2 already POSTed /api/projects); what's missing
+// is the first service inside it. The previous version of /welcome
+// just routed straight to the project canvas, which surfaced the
+// "no services" empty state with no breadcrumb back to onboarding.
+// Users would land there, stare at the empty grid, and bounce.
+//
+// Now: Step 3 anchors the wizard's final state. A bright "deploy your
+// first service" CTA links into the service-create wizard for the
+// new project, with a secondary link to open the project canvas as-is
+// if the user wants to look around first. The route preserves
+// ?step=3&project=<slug> so the back button returns here, not to the
+// repo picker.
+function Step3Deploy({ project }: { project: string }) {
+  if (!project) {
+    // Defensive: if someone deep-links /welcome?step=3 with no
+    // project we degrade to "go to dashboard" rather than rendering
+    // a broken CTA that 404s.
+    return (
+      <div className="text-sm text-[var(--text-secondary)]">
+        Project wasn&apos;t recorded. Head to the{" "}
+        <Link href="/projects" className="text-[var(--accent)] hover:underline">
+          dashboard
+        </Link>{" "}
+        to find what you created.
+      </div>
+    );
+  }
+  const projectPath = `/projects/${encodeURIComponent(project)}`;
+  const addServicePath = `${projectPath}/services/new`;
+  return (
+    <div>
+      <div className="flex items-start gap-3">
+        <CheckCircle2 className="mt-1 h-5 w-5 text-emerald-400" />
+        <div className="min-w-0 flex-1">
+          <h2 className="text-sm font-semibold tracking-tight">
+            Project <span className="font-mono">{project}</span> is live
+          </h2>
+          <p className="mt-1 text-[12px] text-[var(--text-secondary)]">
+            One more click. Pick the part of the repo to deploy first
+            — kuso will detect the runtime (Dockerfile / nixpacks /
+            buildpacks / static) and start a build immediately.
+          </p>
+        </div>
+      </div>
+
+      <div className="mt-5 rounded-md border border-[var(--accent)]/30 bg-[var(--accent-subtle)] p-4">
+        <div className="flex items-start gap-3">
+          <Rocket className="mt-0.5 h-4 w-4 text-[var(--accent)]" />
+          <div className="min-w-0 flex-1">
+            <div className="text-[12px] font-medium text-[var(--text-primary)]">
+              Deploy your first service
+            </div>
+            <p className="mt-1 text-[11px] text-[var(--text-secondary)]">
+              The first build typically finishes in 60–90s. While it
+              runs, you can configure env vars, attach a Postgres
+              addon, or wire a custom domain.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <Link
+                href={addServicePath}
+                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] hover:bg-[var(--accent)]/90"
+              >
+                Add service
+                <ArrowRight className="h-3 w-3" />
+              </Link>
+              <Link
+                href={projectPath}
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] px-3 font-mono text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+              >
+                Open project canvas
+              </Link>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <p className="mt-4 font-mono text-[10px] text-[var(--text-tertiary)]">
+        Tip: every service gets a free <code>*.{`{project}`}.kuso</code> domain. Bring your
+        own under <Link href={`${projectPath}/settings`} className="text-[var(--accent)] hover:underline">project settings</Link>.
       </p>
     </div>
   );
