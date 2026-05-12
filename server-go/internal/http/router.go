@@ -279,7 +279,51 @@ func NewRouter(d Deps) http.Handler {
 		wsH.Mount(r)
 	}
 
-	// Authenticated routes.
+	// Authenticated routes — extracted out of NewRouter so this
+	// function reads as the high-level chain (middleware → public
+	// routes → auth routes → SPA fallback) without sprawling 160
+	// lines of handler wiring inline. The auth group itself is
+	// still one block with conditional gates per handler — collapsing
+	// further requires per-handler Module constructors (deferred:
+	// see docs/REVIEW_2026-05-12.md A-P1-2 rationale).
+	mountAuthenticatedRoutes(r, d, authH, ghHandler, bootstrapH)
+
+	// Public install scripts. Mounted before the SPA fallback so the
+	// SPA's NotFound handler doesn't catch them and serve index.html
+	// (which is what was happening on /install-cli.sh — users curl|sh'd
+	// the homepage HTML and got "syntax error near `<'").
+	installscripts.Mount(r.Get)
+
+	// SPA fallback. Anything that isn't an API or webhook route falls
+	// through to the embedded Vue bundle. The embed.FS always contains
+	// at least a placeholder index.html so this never panics.
+	if spaFS, err := web.Dist(); err == nil {
+		if spaH, err := spa.Handler(spaFS, "/api/", "/ws/", "/healthz", "/readyz"); err == nil {
+			r.NotFound(spaH.ServeHTTP)
+		} else {
+			d.Logger.Warn("spa: handler unavailable", "err", err)
+		}
+	} else {
+		d.Logger.Warn("spa: embedded dist unavailable", "err", err)
+	}
+
+	return r
+}
+
+// mountAuthenticatedRoutes wires every bearer-protected handler in
+// one place. Pulled out of NewRouter so the top-level flow
+// (middleware → public → auth → SPA) reads cleanly. The handlers
+// inside still gate themselves with `if d.X != nil` checks — a
+// future Module-interface refactor (deferred per A-P1-2) could
+// formalise that, but the current shape works and isn't blocking
+// anything.
+func mountAuthenticatedRoutes(
+	r chi.Router,
+	d Deps,
+	authH *httphandlers.AuthHandler,
+	ghHandler *httphandlers.GithubHandler,
+	bootstrapH *httphandlers.NodeBootstrapHandler,
+) {
 	r.Group(func(r chi.Router) {
 		r.Use(cookieCSRFMiddleware)
 		r.Use(d.Issuer.Middleware())
@@ -317,20 +361,11 @@ func NewRouter(d Deps) http.Handler {
 		if d.DB != nil && d.Issuer != nil {
 			adminH := &httphandlers.AdminHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			adminH.Mount(r)
-			// Admin-tunable platform settings (build resources +
-			// concurrency cap today; future toggles join here).
 			settingsH := &httphandlers.SettingsHandler{DB: d.DB, Logger: d.Logger}
 			if d.Builds != nil {
-				// Drop the in-memory build-settings cache on every
-				// admin write so the next Create picks up the new
-				// limits immediately.
 				settingsH.OnBuildSettingsChange = d.Builds.InvalidateSettingsCache
 			}
 			settingsH.Mount(r)
-			// Backup: in-process pg_dump streamed back as gzipped
-			// SQL. Restore: spawns a Job that pipes the dump through
-			// psql, then auto-rolls kuso-server so every replica
-			// drops its stale connection state.
 			httphandlers.NewBackupHandler(d.DB, d.Kube, "", d.Logger).Mount(r)
 			usersH := &httphandlers.UsersHandler{DB: d.DB, Logger: d.Logger}
 			usersH.Mount(r)
@@ -352,11 +387,6 @@ func NewRouter(d Deps) http.Handler {
 		if d.Addons != nil {
 			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			addonsH.Mount(r)
-			// Project export + import. Needs Projects + Addons +
-			// ProjectSecrets together; mounted here because we just
-			// confirmed Addons is wired. Single-tenant: import is
-			// admin-only, export is Deployer-or-higher (the handler
-			// enforces both).
 			if d.Projects != nil {
 				exportH := &httphandlers.ExportHandler{
 					Projects:       d.Projects,
@@ -382,25 +412,12 @@ func NewRouter(d Deps) http.Handler {
 				isH := &httphandlers.InstanceSecretsHandler{Svc: d.InstanceSecrets, Logger: d.Logger}
 				isH.Mount(r)
 			}
-			// SSH keys for the multi-node "Add node" flow. Lives on
-			// the bearer-protected router; handler already filters on
-			// the right perms because the surface only matters to
-			// admins managing cluster topology.
 			sshH := &httphandlers.SSHKeysHandler{DB: d.DB, Logger: d.Logger}
 			sshH.Mount(r)
-			// Log search + alert rules. No kube dep at handler level —
-			// the LogLine table is populated by a separate logship
-			// goroutine wired in main.go. LogDB is a separate SQLite
-			// file; a nil here makes /logs/search return 503.
 			logSearchH := &httphandlers.LogSearchHandler{DB: d.DB, LogDB: d.LogDB, Logger: d.Logger}
 			logSearchH.Mount(r)
 			alertsH := &httphandlers.AlertsHandler{DB: d.DB, Logger: d.Logger}
 			alertsH.Mount(r)
-			// Sentry-style error feed for deployed services. Reads
-			// the ErrorEvent table populated by the errorscan
-			// goroutine; nil DB just means the route is mounted but
-			// every call returns empty (the goroutine isn't
-			// inserting anything).
 			errH := &httphandlers.ErrorsHandler{DB: d.DB, Logger: d.Logger}
 			errH.Mount(r)
 		}
@@ -408,16 +425,12 @@ func NewRouter(d Deps) http.Handler {
 			auditH := &httphandlers.AuditHandler{Svc: d.Audit, DB: d.DB, Logger: d.Logger}
 			auditH.Mount(r)
 		}
-		// Admin-gated node bootstrap-token surface (mint / list / revoke).
-		// The public /bootstrap endpoints are mounted above.
 		if bootstrapH != nil {
 			bootstrapH.MountAdmin(r)
 		}
 		if d.Logs != nil { // Logs implies a kube client; reuse it for /api/kubernetes/*.
 			kubeH := &httphandlers.KubernetesHandler{Kube: d.Logs.Kube, Namespace: d.Logs.Namespace, DB: d.DB, Logger: d.Logger}
 			kubeH.Mount(r)
-			// Backups: same kube + namespace so all the in-cluster
-			// secret/job writes go through one client.
 			backupsH := &httphandlers.BackupsHandler{Kube: d.Logs.Kube, DB: d.DB, Audit: d.Audit, Namespace: d.Logs.Namespace, Logger: d.Logger}
 			backupsH.Mount(r)
 		}
@@ -430,10 +443,7 @@ func NewRouter(d Deps) http.Handler {
 		}
 		// GitHub App self-service setup. Mounted unconditionally:
 		// when the App isn't configured yet, this is the ONLY way a
-		// user can configure it from the UI without reinstalling. We
-		// require a kube client (used to write the Secret + restart
-		// the deployment) — if there isn't one, the routes simply
-		// stay unmounted (admin must use --github-wizard).
+		// user can configure it from the UI without reinstalling.
 		if d.Logs != nil {
 			ghCfgH := &httphandlers.GithubConfigureHandler{
 				Kube:      d.Logs.Kube,
@@ -443,27 +453,6 @@ func NewRouter(d Deps) http.Handler {
 			ghCfgH.Mount(r)
 		}
 	})
-
-	// Public install scripts. Mounted before the SPA fallback so the
-	// SPA's NotFound handler doesn't catch them and serve index.html
-	// (which is what was happening on /install-cli.sh — users curl|sh'd
-	// the homepage HTML and got "syntax error near `<'").
-	installscripts.Mount(r.Get)
-
-	// SPA fallback. Anything that isn't an API or webhook route falls
-	// through to the embedded Vue bundle. The embed.FS always contains
-	// at least a placeholder index.html so this never panics.
-	if spaFS, err := web.Dist(); err == nil {
-		if spaH, err := spa.Handler(spaFS, "/api/", "/ws/", "/healthz", "/readyz"); err == nil {
-			r.NotFound(spaH.ServeHTTP)
-		} else {
-			d.Logger.Warn("spa: handler unavailable", "err", err)
-		}
-	} else {
-		d.Logger.Warn("spa: embedded dist unavailable", "err", err)
-	}
-
-	return r
 }
 
 // cookieCSRFMiddleware protects browser cookie-authenticated mutations.
