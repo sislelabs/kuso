@@ -253,6 +253,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     onSave,
     onDiscard: reset,
     saving: pending,
+    saveError: saveError ?? undefined,
   });
 
   return (

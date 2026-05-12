@@ -279,10 +279,15 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
   // SaveBar-click time, so the latest closure is the one that fires.
   const saveRef = useRef<() => void>(() => {});
   const discardRef = useRef<() => void>(() => {});
+  // setEnv.error stays populated after a failed mutation until the
+  // next mutate() resets it; surface it through the SaveBar so the
+  // user sees a sticky reason for the failure (instead of a 4s toast
+  // that disappears while they're still reading it).
   useOverlayDirty("variables", dirty && canWrite, {
     onSave: () => saveRef.current(),
     onDiscard: () => discardRef.current(),
     saving: setEnv.isPending,
+    saveError: setEnv.error instanceof Error ? setEnv.error.message : undefined,
   });
   // Tracks the last server-known row set so the concurrent-edit
   // detector can compare incoming refetches against the baseline,

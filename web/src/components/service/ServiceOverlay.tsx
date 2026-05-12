@@ -27,6 +27,12 @@ type PanelEntry = {
   onSave?: () => void | Promise<void>;
   onDiscard?: () => void;
   saving?: boolean;
+  // Last save error message for this panel. When set, the unified
+  // SaveBar surfaces it inline next to the Save button so users see
+  // *why* a save failed without having to chase a toast that may
+  // have already disappeared. Cleared by the panel on next save
+  // attempt (or once the panel goes clean).
+  saveError?: string;
 };
 type OverlayDirtyAPI = {
   setPanel: (key: string, entry: PanelEntry) => void;
@@ -36,14 +42,25 @@ const OverlayDirtyContext = createContext<OverlayDirtyAPI | null>(null);
 export function useOverlayDirty(
   panelKey: string,
   dirty: boolean,
-  opts?: { onSave?: () => void | Promise<void>; onDiscard?: () => void; saving?: boolean }
+  opts?: {
+    onSave?: () => void | Promise<void>;
+    onDiscard?: () => void;
+    saving?: boolean;
+    saveError?: string;
+  }
 ) {
   const api = useContext(OverlayDirtyContext);
   useEffect(() => {
     if (!api) return;
-    api.setPanel(panelKey, { dirty, onSave: opts?.onSave, onDiscard: opts?.onDiscard, saving: opts?.saving });
+    api.setPanel(panelKey, {
+      dirty,
+      onSave: opts?.onSave,
+      onDiscard: opts?.onDiscard,
+      saving: opts?.saving,
+      saveError: opts?.saveError,
+    });
     return () => api.clearPanel(panelKey);
-  }, [api, panelKey, dirty, opts?.onSave, opts?.onDiscard, opts?.saving]);
+  }, [api, panelKey, dirty, opts?.onSave, opts?.onDiscard, opts?.saving, opts?.saveError]);
 }
 
 type Tab = "deployments" | "variables" | "metrics" | "logs" | "errors" | "crons" | "settings";
@@ -472,28 +489,43 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                   if (!active || !active.dirty || !active.onSave) return null;
                   return (
                     <div className="pointer-events-none absolute inset-x-0 bottom-3 z-30 flex justify-center px-3">
-                      <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-[var(--border-strong)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]">
-                        <span className="font-mono text-[11px] text-[var(--text-secondary)]">
-                          unsaved changes
-                        </span>
-                        {active.onDiscard && (
+                      <div className="pointer-events-auto flex max-w-[90%] flex-col gap-1 rounded-md border border-[var(--border-strong)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]">
+                        <div className="flex items-center gap-3">
+                          <span className="font-mono text-[11px] text-[var(--text-secondary)]">
+                            unsaved changes
+                          </span>
+                          {active.onDiscard && (
+                            <button
+                              type="button"
+                              onClick={() => active.onDiscard?.()}
+                              disabled={active.saving}
+                              className="font-mono text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-50"
+                            >
+                              discard
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => active.onDiscard?.()}
+                            onClick={() => active.onSave?.()}
                             disabled={active.saving}
-                            className="font-mono text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-50"
+                            className="inline-flex h-7 items-center rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-xs font-medium text-[var(--btn-primary-fg)] hover:bg-[var(--btn-primary-bg-hover)] disabled:opacity-60"
                           >
-                            discard
+                            {active.saving ? "Saving…" : "Save"}
                           </button>
+                        </div>
+                        {active.saveError && (
+                          // Sticky inline error: a toast disappears in
+                          // 4s, leaving the user with a dirty form and
+                          // no clue why the previous save failed. The
+                          // panel clears this on next save attempt.
+                          <p
+                            role="alert"
+                            className="font-mono text-[10px] text-red-300 max-w-[40ch] truncate"
+                            title={active.saveError}
+                          >
+                            ✗ {active.saveError}
+                          </p>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => active.onSave?.()}
-                          disabled={active.saving}
-                          className="inline-flex h-7 items-center rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-xs font-medium text-[var(--btn-primary-fg)] hover:bg-[var(--btn-primary-bg-hover)] disabled:opacity-60"
-                        >
-                          {active.saving ? "Saving…" : "Save"}
-                        </button>
                       </div>
                     </div>
                   );
