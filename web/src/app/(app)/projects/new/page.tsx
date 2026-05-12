@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
@@ -34,11 +34,12 @@ export default function NewProjectPage() {
     staleTime: 60_000,
   });
   const effectiveBase = (baseDomain.trim() || cfg.data?.baseDomain || "").replace(/^\.+|\.+$/g, "");
-  const previewUrl = useMemo(() => {
-    const slug = name.trim() || "<service>";
-    if (!effectiveBase) return `https://${slug}.<cluster-base-domain>`;
-    return `https://${slug}.${effectiveBase}`;
-  }, [name, effectiveBase]);
+  // The preview shows what a *service inside this project* will look
+  // like, not the project itself. We use "web" as a concrete example
+  // so the user reads "web.my-product.example.com" instead of a
+  // bracketed placeholder that looks like magic syntax.
+  const exampleService = "web";
+  const previewBase = effectiveBase || "your-cluster.example.com";
 
   const onCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -95,10 +96,12 @@ export default function NewProjectPage() {
               className="h-8 font-mono text-[13px]"
             />
           </Field>
-          <Field label="URL preview" hint="how a service in this project will be reachable">
+          <Field label="URL preview" hint="example service URL (services get their own subdomain)">
             <div className="flex items-center gap-2 rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-[12px] text-[var(--text-secondary)]">
               <Globe className="h-3 w-3 text-[var(--text-tertiary)]" />
-              <span className="truncate">{previewUrl}</span>
+              <span className="truncate">
+                https://<span className="text-[var(--text-tertiary)]">{exampleService}</span>.{previewBase}
+              </span>
             </div>
           </Field>
         </div>
