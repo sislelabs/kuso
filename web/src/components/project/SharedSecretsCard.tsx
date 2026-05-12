@@ -1,10 +1,13 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { api } from "@/lib/api-client";
+import {
+  useSharedSecrets,
+  useSetSharedSecret,
+  useUnsetSharedSecret,
+} from "@/features/project-secrets";
 import { Check, KeyRound, Plus, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -21,33 +24,9 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 // RESEND_TOKEN) but inline the value entry — no browser prompt
 // dialog. Two flows otherwise share the same submit path.
 export function SharedSecretsCard({ project }: { project: string }) {
-  const qc = useQueryClient();
-  const list = useQuery<{ keys: string[] }>({
-    queryKey: ["projects", project, "shared-secrets"],
-    queryFn: () => api(`/api/projects/${encodeURIComponent(project)}/shared-secrets`),
-  });
-  const set = useMutation({
-    mutationFn: ({ key, value }: { key: string; value: string }) =>
-      api(`/api/projects/${encodeURIComponent(project)}/shared-secrets`, {
-        method: "PUT",
-        body: { key, value },
-      }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["projects", project, "shared-secrets"] });
-    },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
-  });
-  const unset = useMutation({
-    mutationFn: (key: string) =>
-      api(
-        `/api/projects/${encodeURIComponent(project)}/shared-secrets/${encodeURIComponent(key)}`,
-        { method: "DELETE" }
-      ),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["projects", project, "shared-secrets"] });
-    },
-    onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
-  });
+  const list = useSharedSecrets(project);
+  const set = useSetSharedSecret(project);
+  const unset = useUnsetSharedSecret(project);
 
   // editingKey is the env var name currently in the inline editor.
   // Set when the user clicks an integration tile or expands the
