@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter, usePathname, useSearchParams } from "next/navigation";
 import { Fragment } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useState } from "react";
 import {
   Avatar,
   AvatarFallback,
@@ -280,7 +280,6 @@ function EnvironmentSwitcher({ project }: { project: string }) {
   const groups = useEnvGroups(project);
   const [open, setOpen] = useState(false);
   const [showNewEnv, setShowNewEnv] = useState(false);
-  const wrapRef = useRef<HTMLDivElement>(null);
 
   type EnvRow = {
     name: string;
@@ -291,13 +290,6 @@ function EnvironmentSwitcher({ project }: { project: string }) {
   const envs = useMemo<EnvRow[]>(() => {
     const list = groups.data ?? [];
     return list.map((g) => {
-      // Always set ?env=<name>, even for production. The previous
-      // approach (delete env when "production") produced a bare
-      // pathname href; some user-side state (browser cache, sw,
-      // intermediate React effect) wasn't reacting to the implicit
-      // production transition. With an explicit ?env=production
-      // every click changes the URL string, so any reactive code
-      // that watches search params is guaranteed to fire.
       const params = new URLSearchParams(search?.toString() ?? "");
       params.set("env", g.name);
       const qs = params.toString();
@@ -318,142 +310,103 @@ function EnvironmentSwitcher({ project }: { project: string }) {
 
   const currentEnv = search?.get("env") ?? "production";
 
-  // Roll-our-own dropdown. Each row is a real <a href> so the
-  // browser navigates synchronously on click — bypasses every
-  // popover/cmdk pointer-event quirk we hit before. We still call
-  // router.replace from the onClick to keep client-side state in
-  // sync (no full reload), but the href is the load-bearing
-  // contract: even if onClick is ever swallowed, the URL still
-  // changes.
-  useEffect(() => {
-    if (!open) return;
-    const onDoc = (ev: MouseEvent) => {
-      const el = wrapRef.current;
-      if (el && !el.contains(ev.target as Node)) setOpen(false);
-    };
-    const onKey = (ev: KeyboardEvent) => {
-      if (ev.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("mousedown", onDoc);
-    document.addEventListener("keydown", onKey);
-    return () => {
-      document.removeEventListener("mousedown", onDoc);
-      document.removeEventListener("keydown", onKey);
-    };
-  }, [open]);
+  // Migrated from a hand-rolled absolutely-positioned ul with manual
+  // outside-click + ESC listeners to the same Popover+Command
+  // primitive ProjectPicker uses. Behavioural wins: keyboard arrows,
+  // type-to-filter, proper aria roles, focus management, no
+  // duplicated outside-click code. The previous "roll-our-own" was
+  // a workaround for a popover/cmdk pointer-event quirk that was
+  // since fixed upstream; nothing in this dropdown actually needs
+  // the synchronous <a href> escape hatch.
+  const onPick = (href: string) => {
+    setOpen(false);
+    router.replace(href, { scroll: false });
+  };
 
   return (
-    <div ref={wrapRef} className="relative">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className={cn(
-          "inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-sm font-medium transition-colors",
-          "border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]",
-          open && "bg-[var(--bg-tertiary)] text-[var(--text-primary)]",
-        )}
-      >
-        <span
+    <>
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger
           className={cn(
-            "inline-block h-1.5 w-1.5 rounded-full",
-            currentEnv === "production"
-              ? "bg-emerald-400"
-              : currentEnv.startsWith("pr-") || currentEnv.startsWith("preview-")
-                ? "bg-amber-400"
-                : "bg-blue-400",
+            "inline-flex h-7 items-center gap-1.5 rounded-md border px-2 text-sm font-medium transition-colors",
+            "border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] data-[popup-open]:bg-[var(--bg-tertiary)] data-[popup-open]:text-[var(--text-primary)]",
           )}
-        />
-        <span className="truncate max-w-[160px] font-mono text-xs">{currentEnv}</span>
-        <ChevronDown className={cn("h-3 w-3 transition-transform", open && "rotate-180")} />
-      </button>
-
-      {open && (
-        <div
-          className="absolute left-0 top-full z-50 mt-1 w-72 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] shadow-[var(--shadow-lg)]"
-          role="menu"
         >
-          <div className="border-b border-[var(--border-subtle)] px-3 py-2">
-            <p className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-              Environments
-            </p>
-            <p className="mt-0.5 text-[11px] text-[var(--text-secondary)]">
-              Pick an env to view its services on the canvas.
-            </p>
-          </div>
-          <ul className="p-1">
-            {envs.length === 0 && (
-              <li className="px-2 py-2 text-[12px] text-[var(--text-tertiary)]">
-                No environments yet.
-              </li>
+          <span
+            className={cn(
+              "inline-block h-1.5 w-1.5 rounded-full",
+              currentEnv === "production"
+                ? "bg-emerald-400"
+                : currentEnv.startsWith("pr-") || currentEnv.startsWith("preview-")
+                  ? "bg-amber-400"
+                  : "bg-blue-400",
             )}
-            {envs.map((e) => {
-              const active = currentEnv === e.name;
-              return (
-                <li key={e.name}>
-                  <a
-                    href={e.href}
-                    onClick={(ev) => {
-                      // Modifier-clicks (cmd/ctrl/middle) keep their
-                      // native open-in-new-tab behavior; the SPA
-                      // intercept only fires for plain left-clicks.
-                      if (
-                        ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey ||
-                        ev.button !== 0
-                      ) {
-                        return;
-                      }
-                      ev.preventDefault();
-                      router.replace(e.href, { scroll: false });
-                      setOpen(false);
-                    }}
-                    className={cn(
-                      "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left transition-colors no-underline",
-                      active
-                        ? "bg-[var(--accent-subtle)] text-[var(--accent)]"
-                        : "text-[var(--text-primary)] hover:bg-[var(--bg-tertiary)]",
-                    )}
-                  >
-                    <span
-                      className={cn(
-                        "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
-                        e.kind === "production"
-                          ? "bg-emerald-400"
-                          : e.kind === "preview"
-                            ? "bg-amber-400"
-                            : "bg-blue-400",
-                      )}
-                    />
-                    <span className="truncate font-mono text-[12px]">{e.name}</span>
-                    <span className="ml-auto shrink-0 font-mono text-[10px] text-[var(--text-tertiary)]">
-                      {e.services} svc
-                    </span>
-                    {e.kind === "preview" && (
-                      <span className="shrink-0 rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                        PR
-                      </span>
-                    )}
-                    {active && <Check className="h-3 w-3 shrink-0 text-[var(--accent)]" />}
-                  </a>
-                </li>
-              );
-            })}
-          </ul>
-          <div className="border-t border-[var(--border-subtle)] p-1">
-            <button
-              type="button"
-              onClick={() => {
-                setOpen(false);
-                setShowNewEnv(true);
-              }}
-              title="Mirror every service + addon under a new env name. Each cloned service gets its own URL."
-              className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[12px] text-[var(--accent)] transition-colors hover:bg-[var(--accent-subtle)]"
-            >
-              <Plus className="h-3 w-3" />
-              New environment
-            </button>
-          </div>
-        </div>
-      )}
+          />
+          <span className="truncate max-w-[160px] font-mono text-xs">{currentEnv}</span>
+          <ChevronDown className="h-3 w-3 text-[var(--text-tertiary)]" />
+        </PopoverTrigger>
+        <PopoverContent align="start" className="w-72 gap-0 rounded-md p-0">
+          <Command>
+            <CommandInput placeholder="Find an env…" className="h-9 text-[13px]" />
+            <CommandList className="p-1">
+              <CommandEmpty className="py-6 text-xs">No environments.</CommandEmpty>
+              {envs.length > 0 && (
+                <CommandGroup
+                  heading="Environments"
+                  className="px-0 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1 [&_[cmdk-group-heading]]:font-mono [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-widest [&_[cmdk-group-heading]]:text-[var(--text-tertiary)]"
+                >
+                  {envs.map((e) => {
+                    const active = currentEnv === e.name;
+                    return (
+                      <CommandItem
+                        key={e.name}
+                        value={e.name}
+                        onSelect={() => onPick(e.href)}
+                        className="px-2 py-1.5"
+                      >
+                        <span
+                          className={cn(
+                            "inline-block h-1.5 w-1.5 shrink-0 rounded-full",
+                            e.kind === "production"
+                              ? "bg-emerald-400"
+                              : e.kind === "preview"
+                                ? "bg-amber-400"
+                                : "bg-blue-400",
+                          )}
+                        />
+                        <span className="truncate font-mono text-[12px]">{e.name}</span>
+                        <span className="ml-auto shrink-0 font-mono text-[10px] text-[var(--text-tertiary)]">
+                          {e.services} svc
+                        </span>
+                        {e.kind === "preview" && (
+                          <span className="shrink-0 rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                            PR
+                          </span>
+                        )}
+                        {active && <Check className="ml-1 h-3 w-3 shrink-0 text-[var(--accent)]" />}
+                      </CommandItem>
+                    );
+                  })}
+                </CommandGroup>
+              )}
+              <CommandSeparator />
+              <CommandGroup className="px-0">
+                <CommandItem
+                  value="__new__"
+                  onSelect={() => {
+                    setOpen(false);
+                    setShowNewEnv(true);
+                  }}
+                  className="px-2 py-1.5 text-[12px] text-[var(--accent)]"
+                >
+                  <Plus className="h-3 w-3" />
+                  New environment
+                </CommandItem>
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
 
       <NewEnvironmentDialog
         project={project}
@@ -465,7 +418,7 @@ function EnvironmentSwitcher({ project }: { project: string }) {
           router.replace(`${pathname}?${next.toString()}`, { scroll: false });
         }}
       />
-    </div>
+    </>
   );
 }
 
