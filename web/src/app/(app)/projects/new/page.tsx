@@ -23,6 +23,11 @@ export default function NewProjectPage() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [baseDomain, setBaseDomain] = useState("");
+  // Previews default to enabled — most users want PR-deploy URLs. We
+  // surface the toggle so it's not a hidden default; the previous
+  // version hardcoded enabled:true and users got surprise preview
+  // envs on their first PR.
+  const [previewsEnabled, setPreviewsEnabled] = useState(true);
   const [submitting, setSubmitting] = useState(false);
 
   // Cluster's default baseDomain — when the user hasn't typed one,
@@ -55,7 +60,7 @@ export default function NewProjectPage() {
         name: trimmed,
         description: description.trim() || undefined,
         baseDomain: baseDomain.trim() || undefined,
-        previews: { enabled: true, ttlDays: 7 },
+        previews: { enabled: previewsEnabled, ttlDays: 7 },
       });
       toast.success("Project created");
       router.replace(`/projects/${encodeURIComponent(trimmed)}`);
@@ -106,6 +111,24 @@ export default function NewProjectPage() {
               placeholder={cfg.data?.baseDomain ?? "my-product.example.com"}
               className="h-8 font-mono text-[13px]"
             />
+          </Field>
+          <Field label="Preview envs" hint="open a PR → kuso spins up a preview URL (TTL 7 days)">
+            <label className="flex items-center gap-2 text-[13px]">
+              <input
+                type="checkbox"
+                checked={previewsEnabled}
+                onChange={(e) => setPreviewsEnabled(e.target.checked)}
+                className="h-3.5 w-3.5"
+              />
+              <span>
+                Enable preview deploys
+                {previewsEnabled && (
+                  <span className="ml-2 font-mono text-[10px] text-[var(--text-tertiary)]">
+                    (7-day TTL)
+                  </span>
+                )}
+              </span>
+            </label>
           </Field>
           <Field label="URL preview" hint="example service URL (services get their own subdomain)">
             <div className="flex items-center gap-2 rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-[12px] text-[var(--text-secondary)]">
