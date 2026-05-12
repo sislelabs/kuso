@@ -204,14 +204,28 @@ func (h *InvitesHandler) Create(w http.ResponseWriter, r *http.Request) {
 
 // inviteURL returns the public link for an invite. Uses the request's
 // host so it works behind the same ingress that served the API call.
+//
+// SECURITY: X-Forwarded-{Host,Proto} are user-controllable on any
+// connection that isn't from a trusted upstream proxy. Trusting them
+// unconditionally lets an Owner (who can hit POST /invites) forge an
+// invite URL that points at a phishing domain — the recipient sees a
+// link from a real kuso instance via the email/Slack channel and
+// clicks it. Gate on peerIsTrustedProxy(remoteHost(r)) so the
+// forwarded values are honoured only when the connection came from a
+// KUSO_TRUSTED_PROXIES CIDR; otherwise we use r.Host (the address
+// the connection terminated on) which is authoritative.
 func inviteURL(r *http.Request, token string) string {
 	scheme := "https"
-	if r.TLS == nil && r.Header.Get("X-Forwarded-Proto") == "" {
-		scheme = "http"
-	}
 	host := r.Host
-	if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
-		host = forwarded
+	if peerIsTrustedProxy(remoteHost(r)) {
+		if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+			scheme = proto
+		}
+		if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
+			host = forwarded
+		}
+	} else if r.TLS == nil {
+		scheme = "http"
 	}
 	return scheme + "://" + host + "/invite/" + token
 }
