@@ -171,16 +171,25 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
   const url = env?.status?.url as string | undefined;
   const ready = !!env?.status?.ready;
   const phase = (env?.status?.phase as string | undefined)?.toLowerCase();
+  // "rolling" is a real running state, not a diagnostic — the
+  // overlay used to pack it into the drift chip alongside three
+  // other meanings ("pending changes", "restart needed",
+  // "helm: <err>"), which conflated state with diagnostics. Surface
+  // rolling through StatusDot; the drift chip stays purely
+  // diagnostic.
+  const rollingNow = !!drift.data?.rolloutPending;
   const status =
     phase === "building" || phase === "deploying"
       ? "building"
-      : ready
-        ? "active"
-        : phase === "failed" || phase === "error"
-          ? "failed"
-          : phase === "sleeping"
-            ? "sleeping"
-            : "unknown";
+      : ready && rollingNow
+        ? "rolling"
+        : ready
+          ? "active"
+          : phase === "failed" || phase === "error"
+            ? "failed"
+            : phase === "sleeping"
+              ? "sleeping"
+              : "unknown";
 
   return (
     <AnimatePresence>
@@ -241,33 +250,21 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                   ) : (
                     <span className="font-mono text-[10px] text-[var(--text-tertiary)]">no URL yet</span>
                   )}
-                  {/* Drift chip. Priority order matters:
-                        1. rolloutPending — kube has a new ReplicaSet
-                           in flight. Even if podsStale is also true
-                           (it always is during the rollout window),
-                           the right copy is "rolling out…", not
-                           "restart needed" — kube IS auto-rolling.
-                           Blue.
-                        2. specPending — service spec ↔ env CR
-                           mismatch. Propagation bug; shouldn't appear
-                           in steady state. Amber + "pending changes".
-                        3. podsStale w/o rolloutPending — pod env
-                           differs from spec AND no rollout in
-                           progress, which means kube isn't going to
-                           roll on its own (rare; only happens for
-                           non-template fields). Amber + "restart
-                           needed". User must click Redeploy.
-                      Hidden when nothing's pending. */}
+                  {/* Diagnostic chip. The "rolling out" state lives
+                      on StatusDot now — this chip exists purely for
+                      actionable diagnostics:
+                        - helmError: helm-operator failed; user
+                          needs to check the spec.
+                        - specPending: service spec ↔ env CR mismatch
+                          (propagation bug; shouldn't appear in
+                          steady state).
+                        - podsStale w/o rollout: pod env differs from
+                          spec AND no rollout in progress — kube isn't
+                          going to roll on its own; user must
+                          Redeploy. */}
                   {(() => {
                     const d = drift.data;
                     if (!d) return null;
-                    const stale = d.podsStale && d.podsStale.length > 0;
-                    const rolling = d.rolloutPending;
-                    const specOff = d.specPending && d.specPending.length > 0;
-                    // Helm-operator failure chip wins over rolling/stale —
-                    // it's the actual root cause when the spec edit isn't
-                    // taking, and "rolling out" is misleading if the
-                    // chart never rendered.
                     if (d.helmError && d.helmError.length > 0) {
                       return (
                         <span
@@ -278,52 +275,39 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                         </span>
                       );
                     }
-                    if (!stale && !rolling && !specOff) return null;
-                    let label: string;
-                    let title: string;
-                    let cls: string;
-                    if (rolling) {
-                      label = "rolling out…";
-                      cls = "border-blue-500/40 bg-blue-500/10 text-blue-200";
-                      title = "kube is rolling new pods with the latest spec";
-                    } else if (specOff) {
-                      label = "pending changes";
-                      cls = "border-amber-500/40 bg-amber-500/10 text-amber-200";
-                      title = `Spec out of sync on: ${d.specPending.join(", ")}`;
-                    } else {
-                      // stale && !rolling: kube isn't going to roll.
-                      // One-click resolution path — don't make this
-                      // sound scarier than it is.
-                      label = "pending restart — redeploy to apply";
-                      cls = "border-amber-500/40 bg-amber-500/10 text-amber-200";
-                      title =
-                        `Pod still running old ${d.podsStale.join(", ")}. ` +
-                        `Open Deployments and click Redeploy to roll.`;
+                    const stale = d.podsStale && d.podsStale.length > 0;
+                    const rolling = d.rolloutPending;
+                    const specOff = d.specPending && d.specPending.length > 0;
+                    // Suppress diagnostic during an active rollout —
+                    // kube is already resolving it. StatusDot shows
+                    // "Rolling" to surface the same fact.
+                    if (rolling) return null;
+                    if (specOff) {
+                      return (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] text-amber-200"
+                          title={`Spec out of sync on: ${d.specPending.join(", ")}`}
+                        >
+                          pending changes
+                        </span>
+                      );
                     }
-                    // The "pending restart" case has a 1-click fix on
-                    // the Deployments tab; render it as a button so a
-                    // user can jump straight there. The other cases
-                    // are read-only state, so a span is fine.
-                    if (stale && !rolling && !specOff) {
+                    if (stale) {
                       return (
                         <button
                           type="button"
                           onClick={() => guardedSetTab("deployments")}
-                          className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] hover:brightness-110 ${cls}`}
-                          title={title}
+                          className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] text-amber-200 hover:brightness-110"
+                          title={
+                            `Pod still running old ${d.podsStale.join(", ")}. ` +
+                            `Open Deployments and click Redeploy to roll.`
+                          }
                         >
-                          {label}
+                          pending restart — redeploy to apply
                         </button>
                       );
                     }
-                    return (
-                      <span
-                        className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[10px] ${cls}`}
-                        title={title}
-                      >
-                        {label}
-                      </span>
-                    );
+                    return null;
                   })()}
                 </div>
               </div>
@@ -472,6 +456,7 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
 function StatusDot({ status }: { status: string }) {
   const map: Record<string, { dot: string; pulse: boolean; label: string }> = {
     active:    { dot: "bg-emerald-400", pulse: false, label: "Active" },
+    rolling:   { dot: "bg-blue-400",    pulse: true,  label: "Rolling" },
     building:  { dot: "bg-amber-400",   pulse: true,  label: "Building" },
     failed:    { dot: "bg-red-400",     pulse: false, label: "Failed" },
     sleeping:  { dot: "bg-slate-400",   pulse: false, label: "Sleeping" },
