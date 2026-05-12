@@ -1,7 +1,10 @@
 "use client";
 
+import { useEffect } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useProjects } from "@/features/projects";
+import { useInstallations } from "@/features/github";
 import { useCan, Perms } from "@/features/auth";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -17,11 +20,27 @@ import type { KusoEnvironment, KusoService, KusoAddon } from "@/types/projects";
 // "open" affordance. We deliberately don't pre-fetch deploy status —
 // the canvas has the live picture, this page is just navigation.
 export default function ProjectsPage() {
+  const router = useRouter();
   const { data, isPending, isError, error, refetch } = useProjects();
   // project:write gates project creation. Users without it can still
   // see + open projects they belong to (the server already filters
   // /api/projects to their memberships).
   const canCreate = useCan(Perms.ProjectWrite);
+  const installations = useInstallations();
+
+  // First-run redirect: a freshly-logged-in user landing on /projects
+  // with zero projects AND zero GitHub installations gets bounced to
+  // the guided onboarding. Only fires for users who can create
+  // projects (otherwise the welcome flow is useless to them); only
+  // runs once per session (idempotency via the redirect-replaces-not-
+  // pushes URL).
+  useEffect(() => {
+    if (isPending || installations.isPending) return;
+    if (!canCreate) return;
+    if ((data?.length ?? 0) > 0) return;
+    if ((installations.data?.length ?? 0) > 0) return;
+    router.replace("/welcome");
+  }, [isPending, installations.isPending, canCreate, data, installations.data, router]);
 
   return (
     <div className="mx-auto max-w-6xl p-6 lg:p-8">
