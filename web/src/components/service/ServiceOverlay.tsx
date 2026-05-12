@@ -102,6 +102,20 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
   const [tab, setTab] = useState<Tab>("deployments");
   const panelRef = useRef<HTMLDivElement>(null);
 
+  // Scroll the active tab into view when `tab` changes. Previously
+  // this lived in the button's ref={el => el.scrollIntoView(...)},
+  // which fires on every render (including state updates that don't
+  // touch the tab) — so any dirty-state flip or panels-map churn
+  // would re-trigger a smooth-scroll animation on the active tab.
+  // useEffect keyed on tab fires once per actual change.
+  useEffect(() => {
+    if (!open) return;
+    const root = panelRef.current;
+    if (!root) return;
+    const el = root.querySelector<HTMLElement>(`[data-tab="${tab}"][data-active="1"]`);
+    if (el) el.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
+  }, [tab, open]);
+
   // Per-panel dirty + save registry. Children call useOverlayDirty
   // and (optionally) supply onSave/onDiscard so the shell can render
   // one SaveBar at the bottom for the active tab, instead of every
@@ -367,11 +381,8 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                     <button
                       key={t.id}
                       type="button"
-                      ref={(el) => {
-                        if (active && el) {
-                          el.scrollIntoView({ inline: "center", block: "nearest", behavior: "smooth" });
-                        }
-                      }}
+                      data-tab={t.id}
+                      data-active={active ? "1" : undefined}
                       onClick={() => guardedSetTab(t.id)}
                       className={cn(
                         "relative inline-flex h-10 shrink-0 items-center px-3 text-sm font-medium transition-colors whitespace-nowrap",
