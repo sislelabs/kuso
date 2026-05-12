@@ -33,6 +33,7 @@ import (
 	"kuso/server/internal/instancesecrets"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/logs"
+	"kuso/server/internal/migration"
 	"kuso/server/internal/notify"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/projectsecrets"
@@ -437,7 +438,10 @@ func mountAuthenticatedRoutes(
 		// follow-up. Admin-only at the handler level; mounted
 		// unconditionally so a fresh install can run the wizard
 		// against an upstream Coolify before importing anything.
-		(&httphandlers.ImportCoolifyHandler{Logger: d.Logger, Projects: d.Projects, Addons: d.Addons}).Mount(r)
+		(&httphandlers.ImportCoolifyHandler{
+			Logger:    d.Logger,
+			Migration: &migration.Service{Projects: d.Projects, Addons: d.Addons, Logger: d.Logger},
+		}).Mount(r)
 		if bootstrapH != nil {
 			bootstrapH.MountAdmin(r)
 		}

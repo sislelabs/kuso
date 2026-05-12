@@ -12,9 +12,8 @@ import (
 
 	"github.com/sislelabs/kuso/coolify"
 
-	"kuso/server/internal/addons"
 	"kuso/server/internal/httpx"
-	"kuso/server/internal/projects"
+	"kuso/server/internal/migration"
 )
 
 // ImportCoolifyHandler exposes a single endpoint for previewing
@@ -31,9 +30,15 @@ import (
 // path, and lets the UI implement the dry-run preview table
 // without spawning a Job for every snapshot.
 type ImportCoolifyHandler struct {
-	Logger   *slog.Logger
-	Projects *projects.Service
-	Addons   *addons.Service
+	Logger *slog.Logger
+	// Migration owns the provisioning orchestration; the handler is
+	// a thin adapter that validates input, runs the Coolify
+	// snapshot, and hands the result to migration.ImportCoolify.
+	// Old shape had 270 lines of project/service/addon walking
+	// inside the handler file — split out per architecture review
+	// B-01 so a future second importer (Heroku, Render) can plug
+	// in without re-growing this file.
+	Migration *migration.Service
 }
 
 // Mount registers the routes onto the bearer-protected router.
@@ -161,29 +166,17 @@ type CommitRequest struct {
 	UUIDs   []string `json:"uuids"`
 }
 
-// CommitResponse summarises what the commit did. Counters drive the
-// success toast; Skipped/Errors carry per-row reasons for the result
-// table the wizard renders after commit.
-type CommitResponse struct {
-	ProjectsCreated int            `json:"projectsCreated"`
-	ServicesCreated int            `json:"servicesCreated"`
-	AddonsCreated   int            `json:"addonsCreated"`
-	EnvVarsCreated  int            `json:"envVarsCreated"`
-	Skipped         []CommitDetail `json:"skipped"`
-	Errors          []CommitDetail `json:"errors"`
-}
-
-type CommitDetail struct {
-	Kind   string `json:"kind"`
-	Name   string `json:"name"`
-	Reason string `json:"reason"`
-}
+// CommitResponse + CommitDetail are kept as type aliases for the
+// wire shape — the migration package owns the implementation. Web
+// + CLI consumers see the same JSON either way.
+type CommitResponse = migration.Result
+type CommitDetail = migration.Detail
 
 func (h *ImportCoolifyHandler) Commit(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
-	if h.Projects == nil || h.Addons == nil {
+	if h.Migration == nil {
 		http.Error(w, "commit endpoint not configured (kube unavailable)", http.StatusServiceUnavailable)
 		return
 	}
@@ -238,171 +231,9 @@ func (h *ImportCoolifyHandler) Commit(w http.ResponseWriter, r *http.Request) {
 	for _, u := range req.UUIDs {
 		picked[u] = struct{}{}
 	}
-	resp := h.applyCommit(ctx, c, inv, picked)
+	resp := h.Migration.ImportCoolify(ctx, c, inv, picked)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
-}
-
-// applyCommit walks the inventory, keeps the rows whose UUID was
-// ticked in the wizard, and provisions kuso resources for them.
-// Mirrors cli/cmd/kusoCli/migrate.go's applyMigration but writes
-// through the in-process services instead of the HTTP API — same
-// shape, half the latency, and the audit log records this as a
-// single admin action rather than dozens of un-correlated calls.
-func (h *ImportCoolifyHandler) applyCommit(ctx context.Context, c *coolify.Client, inv *coolify.Inventory, picked map[string]struct{}) CommitResponse {
-	out := CommitResponse{}
-	// Group picked items by Coolify project name. Two distinct Coolify
-	// projects can slugify to the same name; assignCoolifySlugs
-	// disambiguates with a numeric suffix.
-	byCoolifyName := map[string][]coolify.Item{}
-	coolifyOrder := []string{}
-	for _, it := range inv.Items {
-		uuid := coolify.ItemUUID(it)
-		if uuid == "" {
-			continue
-		}
-		if _, ok := picked[uuid]; !ok {
-			continue
-		}
-		kind := coolify.ItemKind(it)
-		if it.Verdict.Action != "migrate" {
-			out.Skipped = append(out.Skipped, CommitDetail{
-				Kind:   kind,
-				Name:   it.Name,
-				Reason: "verdict=" + it.Verdict.Action + " (preview classifier blocked import)",
-			})
-			continue
-		}
-		if it.ProjectName == "" {
-			out.Skipped = append(out.Skipped, CommitDetail{Kind: kind, Name: it.Name, Reason: "no Coolify project"})
-			continue
-		}
-		if _, ok := byCoolifyName[it.ProjectName]; !ok {
-			coolifyOrder = append(coolifyOrder, it.ProjectName)
-		}
-		byCoolifyName[it.ProjectName] = append(byCoolifyName[it.ProjectName], it)
-	}
-	slugFor := coolify.AssignKusoSlugs(coolifyOrder)
-
-	for _, coolifyName := range coolifyOrder {
-		projectSlug := slugFor[coolifyName]
-		items := byCoolifyName[coolifyName]
-		// Find a git-backed app to seed defaultRepo. Without one the
-		// project would need its repo wired in the UI later anyway; we
-		// could allow it, but the CLI parity check requires a repo so
-		// we skip here too. The Skipped row carries the reason so the
-		// wizard renders it inline.
-		var defaultRepoURL, defaultBranch string
-		for _, it := range items {
-			if it.App != nil && it.App.GitRepository != "" {
-				defaultRepoURL = coolify.NormalizeRepoURL(it.App.GitRepository)
-				defaultBranch = it.App.GitBranch
-				break
-			}
-		}
-		if defaultRepoURL == "" {
-			out.Skipped = append(out.Skipped, CommitDetail{
-				Kind: "project", Name: coolifyName,
-				Reason: "no git-backed app — kuso project requires a defaultRepo",
-			})
-			continue
-		}
-
-		_, err := h.Projects.Create(ctx, projects.CreateProjectRequest{
-			Name: projectSlug,
-			DefaultRepo: &projects.CreateProjectRepoSpec{
-				URL:           defaultRepoURL,
-				DefaultBranch: defaultBranch,
-			},
-		})
-		switch {
-		case err == nil:
-			out.ProjectsCreated++
-		case errors.Is(err, projects.ErrConflict):
-			// Already exists — fine, fall through to children.
-		default:
-			out.Errors = append(out.Errors, CommitDetail{Kind: "project", Name: projectSlug, Reason: err.Error()})
-			continue
-		}
-
-		// Apps → services + envs.
-		for _, it := range items {
-			if it.App == nil {
-				continue
-			}
-			svcSlug := coolify.ServiceSlugFromApp(it.App)
-			svcReq := projects.CreateServiceRequest{
-				Name:    svcSlug,
-				Runtime: coolify.RuntimeForBuildPack(it.App.BuildPack),
-				Port:    int32(coolify.ParseFirstPort(it.App.PortsExposes)),
-				Repo: &projects.CreateServiceRepo{
-					URL:  coolify.NormalizeRepoURL(it.App.GitRepository),
-					Path: it.App.BaseDirectory,
-				},
-			}
-			if _, err := h.Projects.AddService(ctx, projectSlug, svcReq); err != nil {
-				if !errors.Is(err, projects.ErrConflict) {
-					out.Errors = append(out.Errors, CommitDetail{Kind: "service", Name: projectSlug + "/" + svcSlug, Reason: err.Error()})
-					continue
-				}
-			} else {
-				out.ServicesCreated++
-			}
-
-			envs, err := c.ListApplicationEnvs(ctx, it.App.UUID)
-			if err != nil {
-				out.Errors = append(out.Errors, CommitDetail{Kind: "env", Name: projectSlug + "/" + svcSlug, Reason: "list envs: " + err.Error()})
-				continue
-			}
-			envVars := make([]projects.EnvVar, 0, len(envs))
-			for _, e := range envs {
-				if e.IsCoolify {
-					continue
-				}
-				envVars = append(envVars, projects.EnvVar{Name: e.Key, Value: e.EffectiveValue()})
-			}
-			if len(envVars) == 0 {
-				continue
-			}
-			if err := h.Projects.SetEnv(ctx, projectSlug, svcSlug, envVars); err != nil {
-				out.Errors = append(out.Errors, CommitDetail{Kind: "env", Name: projectSlug + "/" + svcSlug, Reason: err.Error()})
-				continue
-			}
-			out.EnvVarsCreated += len(envVars)
-		}
-
-		// Databases → addons.
-		for _, it := range items {
-			if it.Database == nil {
-				continue
-			}
-			kind := coolify.AddonKindFromCoolify(it.Database.DatabaseType)
-			if kind == "" {
-				out.Skipped = append(out.Skipped, CommitDetail{Kind: "addon", Name: it.Name, Reason: "unsupported database type " + it.Database.DatabaseType})
-				continue
-			}
-			addonName := coolify.SlugifyName(it.Database.Name)
-			if _, err := h.Addons.Add(ctx, projectSlug, addons.CreateAddonRequest{Name: addonName, Kind: kind}); err != nil {
-				if !errors.Is(err, addons.ErrConflict) {
-					out.Errors = append(out.Errors, CommitDetail{Kind: "addon", Name: projectSlug + "/" + addonName, Reason: err.Error()})
-					continue
-				}
-			} else {
-				out.AddonsCreated++
-			}
-		}
-	}
-	if h.Logger != nil {
-		h.Logger.Info("coolify import committed",
-			"projects", out.ProjectsCreated,
-			"services", out.ServicesCreated,
-			"addons", out.AddonsCreated,
-			"envVars", out.EnvVarsCreated,
-			"skipped", len(out.Skipped),
-			"errors", len(out.Errors),
-		)
-	}
-	return out
 }
 
 // Mapping helpers (slugify, runtime classification, port parsing,
