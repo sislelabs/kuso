@@ -191,6 +191,15 @@ function Step1InstallGitHub({
                 <Github className="h-3.5 w-3.5" />
                 Install on GitHub
               </a>
+            ) : installURL.isError ? (
+              // Non-admins get a 403 on /api/github/install-url. The
+              // /settings/github page is also admin-only, so pointing
+              // them there is a dead-end. Tell them what they need
+              // and let them keep going via "start without a repo."
+              <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
+                GitHub App connection requires an admin. Ask a team
+                admin to install it, or skip and start without a repo.
+              </span>
             ) : (
               <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
                 GitHub App not configured yet —{" "}

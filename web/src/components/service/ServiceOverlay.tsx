@@ -517,7 +517,23 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                           )}
                           <button
                             type="button"
-                            onClick={() => active.onSave?.()}
+                            onClick={() => {
+                              // Wrap in try/catch so a panel's onSave
+                              // that throws synchronously (or returns
+                              // a rejecting Promise without internal
+                              // .catch) doesn't bubble up into React's
+                              // event handler and leave the SaveBar
+                              // stuck. The panel itself owns
+                              // saveError surfacing.
+                              try {
+                                const r = active.onSave?.();
+                                if (r && typeof (r as Promise<unknown>).then === "function") {
+                                  (r as Promise<unknown>).catch(() => {});
+                                }
+                              } catch {
+                                // already surfaced by the panel
+                              }
+                            }}
                             disabled={active.saving}
                             className="inline-flex h-7 items-center rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-xs font-medium text-[var(--btn-primary-fg)] hover:bg-[var(--btn-primary-bg-hover)] disabled:opacity-60"
                           >
