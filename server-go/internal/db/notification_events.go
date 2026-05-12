@@ -66,7 +66,23 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 	if e.Severity == "" {
 		e.Severity = "info"
 	}
-	if _, err := d.ExecContext(ctx, `
+	// INSERT + cap-prune in one transaction. Without the wrap, two
+	// concurrent Emits could interleave so that G2's prune subquery
+	// sees a state that hadn't observed G1's INSERT yet, and the
+	// resulting DELETE removed rows the user was supposed to see in
+	// their bell feed. Under build-storm load (50+ webhook deliveries
+	// per second during a deploy burst) the race was reproducible:
+	// notifications appeared and immediately disappeared from the UI.
+	//
+	// Both statements use the same transaction snapshot now, so the
+	// prune always sees the just-inserted row and the offset-from-
+	// top calculation is consistent.
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin notification tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO "NotificationEvent" ("type","title","body","severity","project","service","url","extra")
 		VALUES (?,?,?,?,?,?,?,?)`,
 		e.Type, e.Title, e.Body, e.Severity, e.Project, e.Service, e.URL, extraJSON,
@@ -82,15 +98,23 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 	// (it has to materialise the inner set), so the table got locked
 	// during build storms. The OFFSET form lets the planner stop after
 	// scanning N rows of the descending PK b-tree.
-	if _, err := d.ExecContext(ctx, `
+	if _, err := tx.ExecContext(ctx, `
 		DELETE FROM "NotificationEvent"
 		WHERE "id" < (
 			SELECT "id" FROM "NotificationEvent"
 			ORDER BY "id" DESC
 			LIMIT 1 OFFSET ?
 		)`, notificationEventCap); err != nil {
-		// Pruning failure is non-fatal — the row is in.
+		// Don't roll back over a pruning failure — the INSERT is the
+		// load-bearing part. Commit what we have and accept the
+		// table may briefly exceed the cap.
+		if cerr := tx.Commit(); cerr != nil {
+			return fmt.Errorf("commit after prune failure: %w", cerr)
+		}
 		return nil
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit notification tx: %w", err)
 	}
 	return nil
 }
