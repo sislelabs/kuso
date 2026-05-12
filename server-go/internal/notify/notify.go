@@ -27,9 +27,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -37,6 +35,7 @@ import (
 	"time"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/httpx"
 )
 
 // EventType is one of a fixed set so consumers can filter cleanly.
@@ -178,117 +177,18 @@ func New(database *db.DB, logger *slog.Logger, queueSize int) *Dispatcher {
 	}
 }
 
-// ssrfSafeTransport returns a Transport whose dialer refuses to
-// connect to addresses in private/reserved ranges. Inspired by
-// google/safehttp's safedialer; we keep it tiny so we don't pull
-// the dep.
+// ssrfSafeTransport delegates to the shared httpx helper. Notify and
+// the Coolify importer both need the same dialer guard; one
+// implementation, two consumers.
 func ssrfSafeTransport() *http.Transport {
-	dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
-	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, port, err := net.SplitHostPort(addr)
-			if err != nil {
-				return nil, err
-			}
-			ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
-			if err != nil {
-				return nil, err
-			}
-			for _, ip := range ips {
-				if isReservedIP(ip) {
-					return nil, fmt.Errorf("notify: refusing to dial reserved address %s (%s)", ip, host)
-				}
-			}
-			// Re-dial against the resolved IP so we don't race a
-			// rebinding DNS attack between our check and the dial.
-			if len(ips) == 0 {
-				return nil, fmt.Errorf("notify: no IPs for %s", host)
-			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(ips[0].String(), port))
-		},
-		TLSHandshakeTimeout:   5 * time.Second,
-		ResponseHeaderTimeout: 8 * time.Second,
-		ExpectContinueTimeout: 1 * time.Second,
-	}
+	return httpx.SSRFSafeTransport()
 }
 
-// isReservedIP returns true for addresses we don't want webhook
-// targets to reach: loopback, link-local, private RFC1918, ULA
-// (RFC4193), unspecified, multicast. Public-cloud metadata services
-// live in 169.254.169.254 (link-local), GCE/AWS at the same address;
-// blocking link-local covers both.
-//
-// Operators with an internal-only install (no internet egress, all
-// notification sinks are in-cluster) can opt out by setting
-// KUSO_NOTIFY_ALLOW_PRIVATE_IPS=true. This is a foot-gun knob:
-// inside a kube cluster, RFC1918 covers the apiserver Service IP
-// (typically 10.96.0.1) and every internal Service — a user with
-// notification:write could point a webhook at the apiserver and
-// trick kuso into making an authenticated request. To defend
-// against that AND keep the in-cluster-sink convenience, the allow
-// flag still blocks:
-//
-//   - loopback (always 127.0.0.0/8) — kuso-server's own ports
-//   - link-local 169.254.0.0/16 — cloud metadata 169.254.169.254
-//   - any CIDR in KUSO_NOTIFY_BLOCK_CIDRS (comma-separated). Operators
-//     should set this to their kube service CIDR (e.g.
-//     "10.96.0.0/12,fd00:10:96::/108" for default k3s).
-func isReservedIP(ip net.IP) bool {
-	// Always block the unconditional set, regardless of the allow flag.
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
-		ip.IsInterfaceLocalMulticast() || ip.IsUnspecified() {
-		return true
-	}
-	for _, c := range blockCIDRs() {
-		if c.Contains(ip) {
-			return true
-		}
-	}
-	if isAllowPrivateIPs() {
-		return false
-	}
-	if ip.IsMulticast() {
-		return true
-	}
-	// IsPrivate covers 10/8, 172.16/12, 192.168/16, fc00::/7, fec0::/10.
-	if ip.IsPrivate() {
-		return true
-	}
-	return false
-}
-
-// isAllowPrivateIPs reads the env var on each call so a config
-// change doesn't require a server restart. Cheap (one os.Getenv).
-func isAllowPrivateIPs() bool {
-	return os.Getenv("KUSO_NOTIFY_ALLOW_PRIVATE_IPS") == "true"
-}
-
-// blockCIDRs parses KUSO_NOTIFY_BLOCK_CIDRS into a slice of *net.IPNet.
-// Called on every isReservedIP check, but the env var rarely changes;
-// keeping the parse inline avoids a singleton + mutex for an
-// operation that's already in a network-IO path. Bad entries are
-// silently skipped so a typo doesn't block all webhook traffic — but
-// the dispatcher logs them on dispatch attempts via the dialer error.
-func blockCIDRs() []*net.IPNet {
-	raw := os.Getenv("KUSO_NOTIFY_BLOCK_CIDRS")
-	if raw == "" {
-		return nil
-	}
-	var out []*net.IPNet
-	for _, c := range strings.Split(raw, ",") {
-		c = strings.TrimSpace(c)
-		if c == "" {
-			continue
-		}
-		_, n, err := net.ParseCIDR(c)
-		if err != nil {
-			continue
-		}
-		out = append(out, n)
-	}
-	return out
-}
+// (isReservedIP / isAllowPrivateIPs / blockCIDRs moved to
+// kuso/server/internal/httpx. Both notify and the Coolify importer
+// share the same dialer guard now; the back-compat env var
+// KUSO_NOTIFY_ALLOW_PRIVATE_IPS still works alongside the new
+// KUSO_ALLOW_PRIVATE_OUTBOUND. See httpx/ssrf.go for the policy.)
 
 // Emit enqueues an event AND persists it to the in-app feed
 // synchronously. The persist step makes the bell-icon feed durable

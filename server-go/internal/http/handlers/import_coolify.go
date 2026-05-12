@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/sislelabs/kuso/coolify"
+
+	"kuso/server/internal/httpx"
 )
 
 // ImportCoolifyHandler exposes a single endpoint for previewing
@@ -82,10 +84,6 @@ func (h *ImportCoolifyHandler) Preview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "baseUrl and token required", http.StatusBadRequest)
 		return
 	}
-	// Block private-network targets unless explicitly allowed. The
-	// notify SSRF helper from S-P2-2 has the same shape but lives in
-	// a different package; duplicate the minimal check here rather
-	// than couple this handler to notify.
 	if u, err := url.Parse(req.BaseURL); err != nil || u.Scheme == "" || (u.Scheme != "https" && u.Scheme != "http") {
 		http.Error(w, "baseUrl must be http(s)://...", http.StatusBadRequest)
 		return
@@ -94,7 +92,14 @@ func (h *ImportCoolifyHandler) Preview(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 
-	c := coolify.New(req.BaseURL, req.Token)
+	// SSRF guard: refuse to dial RFC1918 / loopback / link-local
+	// (catches http://10.96.0.1 = kube apiserver,
+	// http://169.254.169.254 = cloud metadata). Admin-only doesn't
+	// excuse it — admins should still not be able to pivot kuso's
+	// SA token toward the kube API via SSRF. Operators on
+	// fully-internal Coolify installs can opt in via
+	// KUSO_ALLOW_PRIVATE_OUTBOUND=true.
+	c := coolify.NewWithTransport(req.BaseURL, req.Token, httpx.SSRFSafeTransport())
 	inv, err := coolify.Snapshot(ctx, c)
 	if err != nil {
 		// Surface as 502 so the SPA can show "couldn't reach Coolify"

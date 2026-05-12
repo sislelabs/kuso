@@ -27,14 +27,33 @@ type Client struct {
 	http    *http.Client
 }
 
-// New constructs a Client. baseURL is e.g. "https://ops.sisle.org"
-// (no trailing slash, no /api/v1 path — we add that). Token is the
-// "Bearer …" value.
+// New constructs a Client with the default http.Transport. baseURL is
+// e.g. "https://ops.sisle.org" (no trailing slash, no /api/v1 path
+// — we add that). Token is the "Bearer …" value.
+//
+// Server-side callers should prefer NewWithTransport and pass an
+// SSRF-safe transport — admin users posting a baseURL pointing at
+// http://10.96.0.1 (kube apiserver) or http://169.254.169.254
+// (cloud metadata) would otherwise pivot the kuso server's network
+// position. CLI callers go through New() because the CLI runs on
+// the user's own machine; SSRF there isn't a server-side concern.
 func New(baseURL, token string) *Client {
+	return NewWithTransport(baseURL, token, nil)
+}
+
+// NewWithTransport is the SSRF-aware constructor. Pass an
+// http.Transport whose DialContext refuses RFC1918 / link-local
+// targets (see internal/httpx in server-go); nil falls back to the
+// default Transport.
+func NewWithTransport(baseURL, token string, t http.RoundTripper) *Client {
+	c := &http.Client{Timeout: 30 * time.Second}
+	if t != nil {
+		c.Transport = t
+	}
 	return &Client{
 		baseURL: strings.TrimRight(baseURL, "/"),
 		token:   token,
-		http:    &http.Client{Timeout: 30 * time.Second},
+		http:    c,
 	}
 }
 
