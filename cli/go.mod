@@ -7,14 +7,18 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/sislelabs/kuso/api/apiv1 v0.0.0
+	github.com/sislelabs/kuso/coolify v0.0.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.20.1
 	gopkg.in/yaml.v3 v3.0.1
 )
 
-// api/v1 is in this repo. The replace pins to the local copy so tagged
-// CLI releases don't require a separate api/v1 module publish.
+// Local-repo modules. Replace directives pin to in-tree copies so
+// tagged CLI releases don't require publishing each module
+// separately.
 replace github.com/sislelabs/kuso/api/apiv1 => ../api/apiv1
+
+replace github.com/sislelabs/kuso/coolify => ../coolify
 
 require (
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect

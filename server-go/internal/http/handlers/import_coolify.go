@@ -9,7 +9,7 @@ import (
 	"net/url"
 	"time"
 
-	"kuso/server/internal/coolify"
+	"github.com/sislelabs/kuso/coolify"
 )
 
 // ImportCoolifyHandler exposes a single endpoint for previewing

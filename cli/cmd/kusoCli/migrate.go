@@ -1,6 +1,7 @@
 package kusoCli
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,7 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"kuso/pkg/coolify"
+	"github.com/sislelabs/kuso/coolify"
 	"kuso/pkg/kusoApi"
 )
 
@@ -53,7 +54,7 @@ var migrateCoolifyCmd = &cobra.Command{
 		}
 		c := coolify.New(migrateCoolifyURL, migrateCoolifyToken)
 		fmt.Fprintln(os.Stderr, "→ snapshotting Coolify (read-only)…")
-		inv, err := coolify.Snapshot(c)
+		inv, err := coolify.Snapshot(cmd.Context(), c)
 		if err != nil {
 			return fmt.Errorf("snapshot: %w", err)
 		}
@@ -94,7 +95,7 @@ var migrateCoolifyCmd = &cobra.Command{
 		}
 
 		fmt.Fprintln(os.Stderr, "→ applying to kuso…")
-		applied := applyMigration(c, items)
+		applied := applyMigration(cmd.Context(), c, items)
 		fmt.Fprintf(os.Stderr, "→ applied %d resources\n", applied)
 
 		if migrateOutDir != "" {
@@ -183,7 +184,7 @@ func actionEmoji(a string) string {
 	return "·"
 }
 
-func applyMigration(c *coolify.Client, items []coolify.Item) int {
+func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item) int {
 	created := 0
 	// Group by Coolify project NAME first (not slug) so two distinct
 	// Coolify projects that happen to slugify to the same string each
@@ -278,7 +279,7 @@ func applyMigration(c *coolify.Client, items []coolify.Item) int {
 			created++
 			fmt.Fprintf(os.Stderr, "      ✓ service %s\n", svcSlug)
 
-			envs, err := c.ListApplicationEnvs(it.App.UUID)
+			envs, err := c.ListApplicationEnvs(ctx, it.App.UUID)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "        ⚠ list envs: %v\n", err)
 				continue

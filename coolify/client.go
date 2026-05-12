@@ -1,18 +1,12 @@
 // Package coolify is a strictly read-only client for Coolify v4's
-// REST API. Used by the `kuso migrate coolify` subcommand AND the
-// /api/import/coolify/preview endpoint to inspect a remote Coolify
-// instance and translate its resources into kuso CRs.
+// REST API. Imported by both `kuso migrate coolify` (in cli/) and
+// the /api/import/coolify/preview endpoint (in server-go/) so the
+// classifier verdicts and kuso-shape mapping they emit can't drift.
 //
 // The client has a HARDCODED method allow-list (GET only) so a
 // future bug or feature can't accidentally call DELETE / PATCH /
 // POST against the source Coolify — every write happens on kuso,
 // not on the user's source-of-truth instance.
-//
-// NOTE: this package is currently duplicated with cli/pkg/coolify.
-// Both copies share the same source; a future cleanup should
-// extract one canonical copy (likely a shared kuso-coolify module)
-// and have both consumers import it. Until then, keep the two in
-// sync by hand on any field/classifier change.
 package coolify
 
 import (

@@ -2,9 +2,13 @@ module kuso/server
 
 go 1.26.0
 
-// api/apiv1 is in this repo. The replace pins to the local copy so
-// tagged server releases don't require publishing api/apiv1 separately.
+// Local-repo modules. Replace directives pin to in-tree copies so
+// tagged releases don't require publishing each module separately.
 replace github.com/sislelabs/kuso/api/apiv1 => ../api/apiv1
+
+replace github.com/sislelabs/kuso/coolify => ../coolify
+
+require github.com/sislelabs/kuso/coolify v0.0.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.7
