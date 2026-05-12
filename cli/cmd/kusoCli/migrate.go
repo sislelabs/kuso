@@ -217,7 +217,7 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 		var defaultRepoURL, defaultBranch string
 		for _, it := range byProject[projectSlug] {
 			if it.App != nil && it.App.GitRepository != "" {
-				defaultRepoURL = "https://github.com/" + strings.TrimSuffix(it.App.GitRepository, ".git")
+				defaultRepoURL = normalizeRepoURL(it.App.GitRepository)
 				defaultBranch = it.App.GitBranch
 				break
 			}
@@ -265,7 +265,7 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 				Runtime: runtimeForBuildPack(it.App.BuildPack),
 				Port:    parseFirstPort(it.App.PortsExposes),
 			}
-			svcReq.Repo.URL = "https://github.com/" + strings.TrimSuffix(it.App.GitRepository, ".git")
+			svcReq.Repo.URL = normalizeRepoURL(it.App.GitRepository)
 			svcReq.Repo.Path = it.App.BaseDirectory
 			sr, err := api.AddService(projectSlug, svcReq)
 			if err != nil {
@@ -453,6 +453,26 @@ func serviceSlugFromApp(a *coolify.Application) string {
 		}
 	}
 	return slugifyName(a.Name)
+}
+
+// normalizeRepoURL converts a Coolify GitRepository value into a
+// kuso repo URL. Coolify stores it as either an owner/repo slug
+// (the common case) OR a full URL (Public Repository mode / non-
+// GitHub host). The previous code unconditionally prepended
+// `https://github.com/`, producing
+// `https://github.com/https://github.com/...` for any already-URL
+// value — every kaniko build would fail at clone. See the matching
+// helper in server-go/internal/http/handlers/import_coolify.go;
+// promoted to coolify/ as a follow-up.
+func normalizeRepoURL(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "git@") {
+		return strings.TrimSuffix(s, ".git")
+	}
+	return "https://github.com/" + strings.TrimSuffix(s, ".git")
 }
 
 func runtimeForBuildPack(bp string) string {

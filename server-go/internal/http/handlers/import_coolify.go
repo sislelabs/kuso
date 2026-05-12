@@ -297,7 +297,7 @@ func (h *ImportCoolifyHandler) applyCommit(ctx context.Context, c *coolify.Clien
 		var defaultRepoURL, defaultBranch string
 		for _, it := range items {
 			if it.App != nil && it.App.GitRepository != "" {
-				defaultRepoURL = "https://github.com/" + strings.TrimSuffix(it.App.GitRepository, ".git")
+				defaultRepoURL = normalizeRepoURL(it.App.GitRepository)
 				defaultBranch = it.App.GitBranch
 				break
 			}
@@ -338,7 +338,7 @@ func (h *ImportCoolifyHandler) applyCommit(ctx context.Context, c *coolify.Clien
 				Runtime: runtimeForBuildPack(it.App.BuildPack),
 				Port:    int32(parseFirstPort(it.App.PortsExposes)),
 				Repo: &projects.CreateServiceRepo{
-					URL:  "https://github.com/" + strings.TrimSuffix(it.App.GitRepository, ".git"),
+					URL:  normalizeRepoURL(it.App.GitRepository),
 					Path: it.App.BaseDirectory,
 				},
 			}
@@ -470,6 +470,30 @@ func coolifyServiceSlug(a *coolify.Application) string {
 		repo = a.Name
 	}
 	return slugifyName(repo)
+}
+
+// normalizeRepoURL converts a Coolify GitRepository value into a kuso
+// repo URL. Coolify stores this field as either an owner/repo slug
+// (the common case for GitHub App installs) OR a full http(s):// URL
+// (when the user configured the repo via "Public Repository" mode or
+// imported from a non-GitHub host). The previous code unconditionally
+// prepended `https://github.com/`, producing
+// `https://github.com/https://github.com/...` for any already-URL
+// value — every kaniko build for that service silently failed at the
+// clone step. Trimming a trailing `.git` is idempotent against both
+// shapes.
+func normalizeRepoURL(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "git@") {
+		// Already a URL (or an SSH-style remote, which kuso doesn't
+		// build from but we shouldn't double-prefix). Return as-is
+		// minus the optional .git suffix.
+		return strings.TrimSuffix(s, ".git")
+	}
+	return "https://github.com/" + strings.TrimSuffix(s, ".git")
 }
 
 // runtimeForBuildPack maps a Coolify BuildPack to a kuso runtime.
