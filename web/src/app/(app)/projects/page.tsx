@@ -177,13 +177,30 @@ function ProjectsGrid({
           if (st?.ready === true) return true;
           return false;
         }).length;
+        // Surface a service URL when the project has exactly one
+        // service with at least one configured domain. Multi-service
+        // projects don't get the chip — there's no good "default"
+        // pick and a wrong one is worse than none.
+        const openURL = (() => {
+          if (services.length !== 1) return null;
+          const host = services[0]?.spec.domains?.[0]?.host;
+          if (!host) return null;
+          const scheme = services[0]?.spec.domains?.[0]?.tls === false ? "http" : "https";
+          return `${scheme}://${host}`;
+        })();
         return (
           <li key={p.metadata.uid ?? name}>
-            <Link
-              href={`/projects/${name}`}
-              className="group block rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40"
-            >
-              <div className="flex items-start justify-between gap-2">
+            {/* The card is a div + an absolutely-positioned Link
+                overlay so we can sprinkle real <a> elements (the
+                "open ↗" chip) inside the same card without nesting
+                anchors — invalid HTML and behaves badly in Safari. */}
+            <div className="group relative rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40">
+              <Link
+                href={`/projects/${name}`}
+                aria-label={`Open project ${name}`}
+                className="absolute inset-0 z-0 rounded-md"
+              />
+              <div className="relative z-10 flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
                   <h2 className="truncate text-sm font-semibold tracking-tight text-[var(--text-primary)]">
                     {name}
@@ -194,14 +211,27 @@ function ProjectsGrid({
                     </p>
                   )}
                 </div>
-                <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--text-primary)]" />
+                <div className="flex items-center gap-2">
+                  {openURL && (
+                    <a
+                      href={openURL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      className="relative z-20 inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 text-[10px] font-mono text-[var(--text-secondary)] opacity-0 transition-opacity hover:text-[var(--text-primary)] group-hover:opacity-100"
+                    >
+                      open ↗
+                    </a>
+                  )}
+                  <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--text-primary)]" />
+                </div>
               </div>
-              <dl className="mt-3 space-y-1 text-[11px]">
+              <dl className="relative z-10 mt-3 space-y-1 text-[11px]">
                 {repo && <Row icon={GitBranch} value={repo} />}
                 {domain && <Row icon={Globe} value={domain} />}
               </dl>
               {summary && (
-                <div className="mt-3 flex items-center gap-3 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                <div className="relative z-10 mt-3 flex items-center gap-3 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
                   <span className="inline-flex items-center gap-1">
                     <Box className="h-3 w-3" />
                     <span
@@ -234,11 +264,11 @@ function ProjectsGrid({
                 </div>
               )}
               {created && (
-                <p className="mt-3 border-t border-[var(--border-subtle)] pt-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                <p className="relative z-10 mt-3 border-t border-[var(--border-subtle)] pt-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
                   created {created}
                 </p>
               )}
-            </Link>
+            </div>
           </li>
         );
       })}
