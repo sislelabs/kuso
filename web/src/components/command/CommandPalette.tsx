@@ -29,7 +29,12 @@ import {
   Database,
   Server,
   Box,
+  Play,
+  ScrollText,
+  Variable,
 } from "lucide-react";
+import { triggerBuild } from "@/features/services";
+import { toast } from "sonner";
 
 // Pull the current project name out of the pathname when we're on a
 // /projects/<name>/... route. That lets the palette load the
@@ -81,9 +86,35 @@ export function CommandPalette() {
   const serviceList = services.data ?? [];
   const addonList = addons.data ?? [];
 
+  // Per-service env-var index. cmdk's value-string matching means a
+  // user typing "DATABASE_URL" lands on the right service row even
+  // though the literal isn't in metadata.name — we cram the env-var
+  // keys into the value string and surface them as their own
+  // CommandGroup so the result reads as "DATABASE_URL → web".
+  const envVarRows = useMemo(() => {
+    const rows: { service: string; key: string }[] = [];
+    for (const s of serviceList) {
+      const name = s.metadata.name;
+      for (const v of s.spec.envVars ?? []) {
+        if (v.name) rows.push({ service: name, key: v.name });
+      }
+    }
+    return rows;
+  }, [serviceList]);
+
+  const runBuild = async (svc: string) => {
+    setOpen(false);
+    try {
+      await triggerBuild(currentProject, svc, {});
+      toast.success(`Build queued for ${svc}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to trigger build");
+    }
+  };
+
   return (
     <CommandDialog open={open} onOpenChange={setOpen}>
-      <CommandInput placeholder="Search projects, services, addons, settings…" />
+      <CommandInput placeholder="Jump or do: project, service, env var, redeploy…" />
       <CommandList>
         <CommandEmpty>No matches.</CommandEmpty>
 
@@ -106,6 +137,61 @@ export function CommandPalette() {
               })}
             </CommandGroup>
             <CommandSeparator />
+
+            {/* Service actions — power users hit cmd-K + "redeploy api"
+                instead of clicking through to the canvas and finding
+                the Trigger button. Same for tailing logs. */}
+            <CommandGroup heading="Service actions">
+              {serviceList.map((s) => {
+                const name = s.metadata.name;
+                return (
+                  <CommandItem
+                    key={`redeploy-${name}`}
+                    onSelect={() => runBuild(name)}
+                    value={`redeploy build trigger ${name}`}
+                  >
+                    <Play className="h-4 w-4 text-[var(--text-tertiary)]" />
+                    <span>Redeploy {name}</span>
+                  </CommandItem>
+                );
+              })}
+              {serviceList.map((s) => {
+                const name = s.metadata.name;
+                return (
+                  <CommandItem
+                    key={`logs-${name}`}
+                    onSelect={() => go(`/projects/${currentProject}?service=${name}&tab=logs`)}
+                    value={`logs tail ${name}`}
+                  >
+                    <ScrollText className="h-4 w-4 text-[var(--text-tertiary)]" />
+                    <span>Tail logs · {name}</span>
+                  </CommandItem>
+                );
+              })}
+            </CommandGroup>
+            <CommandSeparator />
+
+            {/* Env-var index. The user types DATABASE_URL and lands
+                on the Variables tab of the right service with no
+                round-trip through the overlay tabs. */}
+            {envVarRows.length > 0 && (
+              <>
+                <CommandGroup heading="Env vars">
+                  {envVarRows.map(({ service, key }) => (
+                    <CommandItem
+                      key={`env-${service}-${key}`}
+                      onSelect={() => go(`/projects/${currentProject}?service=${service}&tab=variables`)}
+                      value={`env variable ${key} ${service}`}
+                    >
+                      <Variable className="h-4 w-4 text-[var(--text-tertiary)]" />
+                      <span className="font-mono">{key}</span>
+                      <CommandShortcut>{service}</CommandShortcut>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+                <CommandSeparator />
+              </>
+            )}
           </>
         )}
 

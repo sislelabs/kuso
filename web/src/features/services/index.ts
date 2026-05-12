@@ -26,6 +26,7 @@ export {
   cancelBuild,
   searchServiceLogs,
   listErrors,
+  triggerBuild,
 } from "./api";
 export type {
   BuildSummary,
