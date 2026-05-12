@@ -246,8 +246,20 @@ function NonProdBanner({ project, env }: { project: string; env: string }) {
           ) : (
             <>
               This env was cloned from production. Env vars were copied verbatim;{" "}
-              <span className="font-medium">addon refs were rewritten only for &quot;fresh&quot; addons</span>.
-              Open each service&apos;s <span className="font-mono">Variables</span> tab and confirm
+              <span className="font-medium">addon refs were rewritten only for &quot;fresh&quot; addons</span>
+              <details className="mt-1 inline-block align-baseline">
+                <summary className="inline cursor-pointer font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]">
+                  what&apos;s a &quot;fresh&quot; addon?
+                </summary>
+                <div className="mt-1 max-w-prose rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/60 p-2 font-mono text-[11px] text-[var(--text-secondary)]">
+                  When you cloned production, any addons that already lived in
+                  this env are <em>fresh</em>: their conn-secrets point at the
+                  cloned env&apos;s own databases. Addons the new env <em>didn&apos;t</em>{" "}
+                  have were inherited — those still point at production data.
+                  Inherited addons read fine but are dangerous to write to.
+                </div>
+              </details>
+              . Open each service&apos;s <span className="font-mono">Variables</span> tab and confirm
               they point at the right secrets before sharing the URL.
             </>
           )}
