@@ -275,7 +275,6 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 	if strings.HasPrefix(req.Name, "pr-") {
 		return nil, fmt.Errorf("%w: name %q is reserved (pr-* is webhook-driven)", ErrInvalid, req.Name)
 	}
-	defer s.invalidateDescribe(project)
 
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
@@ -624,7 +623,6 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 	if name == "production" {
 		return fmt.Errorf("%w: cannot delete production env", ErrInvalid)
 	}
-	defer s.invalidateDescribe(project)
 
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {

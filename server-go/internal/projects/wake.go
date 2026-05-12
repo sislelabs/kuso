@@ -27,7 +27,6 @@ func (s *Service) WakeService(ctx context.Context, project, service string) erro
 	if err != nil {
 		return err
 	}
-	defer s.invalidateDescribe(project)
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return err

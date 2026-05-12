@@ -221,14 +221,7 @@ func (s *Service) invalidateNamespace(project string) {
 	s.nsMu.Lock()
 	delete(s.nsCache, project)
 	s.nsMu.Unlock()
-	s.invalidateDescribe(project)
 }
-
-// invalidateDescribe was a real cache-invalidator; the describe cache
-// is gone. Keeping the function as a no-op so the ~10 mutator call
-// sites that wired up `defer s.invalidateDescribe(...)` don't have to
-// be touched right now — a future cleanup pass can sweep them.
-func (s *Service) invalidateDescribe(string) {}
 
 // ---- naming + labels -----------------------------------------------------
 

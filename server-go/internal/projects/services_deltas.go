@@ -95,7 +95,6 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
 	}
-	defer s.invalidateDescribe(project)
 	if perr := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{Domains: true}); perr != nil {
 		return updated, fmt.Errorf("propagate domains to envs: %w", perr)
 	}
@@ -255,7 +254,6 @@ func (s *Service) fetchServiceForDelta(ctx context.Context, project, service str
 // domain change to every env. Returns the updated CR even when
 // propagation fails — the spec is durable and the next save retries.
 func (s *Service) persistDomains(ctx context.Context, ns, project, service string, svc *kube.KusoService) (*kube.KusoService, error) {
-	defer s.invalidateDescribe(project)
 	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
@@ -278,7 +276,6 @@ func (s *Service) persistDomains(ctx context.Context, ns, project, service strin
 // is the env-level override path. So we only invalidate caches and
 // return.
 func (s *Service) persistEnvVars(ctx context.Context, ns, project, service string, svc *kube.KusoService) (*kube.KusoService, error) {
-	defer s.invalidateDescribe(project)
 	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
