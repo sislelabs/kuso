@@ -19,6 +19,7 @@ import {
   Cpu,
   Search,
   Activity,
+  ArrowDown,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -54,6 +55,7 @@ const CARDS: Card[] = [
   { href: "/settings/builds",           title: "Build resources",  description: "Concurrency cap + per-build memory/CPU limits. Tune to your VM size.", icon: Cpu,         perm: Perms.SettingsAdmin, group: "instance", keywords: "kaniko buildpacks memory cpu limit concurrent" },
   { href: "/settings/backups",          title: "Backups",          description: "Server backup/restore + S3 credentials for scheduled addon dumps.", icon: HardDrive,    perm: Perms.SettingsAdmin, group: "instance", keywords: "backup restore s3 dump pg_dump snapshot" },
   { href: "/settings/updates",          title: "Updates",          description: "Self-update the kuso server + operator + CRDs.",                    icon: Package,      perm: Perms.SettingsAdmin, group: "instance", keywords: "version upgrade release self-update" },
+  { href: "/settings/import",           title: "Import from Coolify", description: "Migrate Coolify apps + dbs + services into kuso.",               icon: ArrowDown,    perm: Perms.SettingsAdmin, group: "instance", keywords: "coolify import migrate migration" },
 
   // Admin: user/role management.
   { href: "/settings/users",    title: "Users",    description: "Local users. OAuth users land here on first login.",                                  icon: Users,        perm: Perms.UserWrite, group: "admin", keywords: "user account login oauth invite" },

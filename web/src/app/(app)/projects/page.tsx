@@ -66,15 +66,23 @@ export default function ProjectsPage() {
         <EmptyState
           icon={<LayoutGrid className="h-5 w-5" />}
           title="No projects yet"
-          description="Connect a GitHub repo and kuso will build, deploy, and give you a live URL."
+          description="Connect a GitHub repo and kuso will build, deploy, and give you a live URL. Already running Coolify? Import from there in one step."
           action={
-            <Link
-              href="/projects/new"
-              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] hover:bg-[var(--accent)]/90"
-            >
-              <Plus className="h-3.5 w-3.5" />
-              Create your first project
-            </Link>
+            <div className="flex flex-wrap items-center gap-2">
+              <Link
+                href="/projects/new"
+                className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--accent)] px-3 text-xs font-medium text-[var(--accent-foreground)] hover:bg-[var(--accent)]/90"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Create your first project
+              </Link>
+              <Link
+                href="/settings/import"
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-transparent px-3 text-xs font-medium text-[var(--text-primary)] hover:bg-[var(--bg-secondary)]"
+              >
+                Import from Coolify
+              </Link>
+            </div>
           }
         />
       )}

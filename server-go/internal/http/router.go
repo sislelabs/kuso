@@ -425,6 +425,11 @@ func mountAuthenticatedRoutes(
 			auditH := &httphandlers.AuditHandler{Svc: d.Audit, DB: d.DB, Logger: d.Logger}
 			auditH.Mount(r)
 		}
+		// Coolify import — read-only preview now, commit endpoint
+		// follow-up. Admin-only at the handler level; mounted
+		// unconditionally so a fresh install can run the wizard
+		// against an upstream Coolify before importing anything.
+		(&httphandlers.ImportCoolifyHandler{Logger: d.Logger}).Mount(r)
 		if bootstrapH != nil {
 			bootstrapH.MountAdmin(r)
 		}
