@@ -18,21 +18,32 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
 // OverlayDirtyContext lets every panel inside ServiceOverlay register
-// whether its form has unsaved edits. The shell uses the union of
-// those flags to gate close/ESC/tab-switch behind a "Discard changes?"
-// confirm — without this, an inadvertent ESC silently lost in-progress
-// env-var edits.
+// whether its form has unsaved edits AND (optionally) the save +
+// discard handlers the shell's unified SaveBar fires. Panels that
+// need their own inline button still can — useOverlayDirty without
+// onSave keeps the existing dirty-tracking-only behaviour.
+type PanelEntry = {
+  dirty: boolean;
+  onSave?: () => void | Promise<void>;
+  onDiscard?: () => void;
+  saving?: boolean;
+};
 type OverlayDirtyAPI = {
-  setPanelDirty: (key: string, dirty: boolean) => void;
+  setPanel: (key: string, entry: PanelEntry) => void;
+  clearPanel: (key: string) => void;
 };
 const OverlayDirtyContext = createContext<OverlayDirtyAPI | null>(null);
-export function useOverlayDirty(panelKey: string, dirty: boolean) {
+export function useOverlayDirty(
+  panelKey: string,
+  dirty: boolean,
+  opts?: { onSave?: () => void | Promise<void>; onDiscard?: () => void; saving?: boolean }
+) {
   const api = useContext(OverlayDirtyContext);
   useEffect(() => {
     if (!api) return;
-    api.setPanelDirty(panelKey, dirty);
-    return () => api.setPanelDirty(panelKey, false);
-  }, [api, panelKey, dirty]);
+    api.setPanel(panelKey, { dirty, onSave: opts?.onSave, onDiscard: opts?.onDiscard, saving: opts?.saving });
+    return () => api.clearPanel(panelKey);
+  }, [api, panelKey, dirty, opts?.onSave, opts?.onDiscard, opts?.saving]);
 }
 
 type Tab = "deployments" | "variables" | "metrics" | "logs" | "errors" | "crons" | "settings";
@@ -74,21 +85,26 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
   const [tab, setTab] = useState<Tab>("deployments");
   const panelRef = useRef<HTMLDivElement>(null);
 
-  // Per-panel dirty registry. Children call useOverlayDirty(key, bool);
-  // we keep the ref-mirrored snapshot so onClose/ESC can read the
-  // current state without depending on a render. The setter triggers
-  // a state update so the discard banner can render.
+  // Per-panel dirty + save registry. Children call useOverlayDirty
+  // and (optionally) supply onSave/onDiscard so the shell can render
+  // one SaveBar at the bottom for the active tab, instead of every
+  // panel rolling its own button placement.
   const dirtyMap = useRef<Record<string, boolean>>({});
-  // Kept for the API stability of useOverlayDirty's setPanelDirty —
-  // panels still call into the registry, the value just no longer
-  // gates close/tab-switch (we removed the window.confirm prompt).
-  const [, setHasDirtyPanel] = useState(false);
+  const [panels, setPanels] = useState<Record<string, PanelEntry>>({});
   const dirtyAPI = useMemo<OverlayDirtyAPI>(
     () => ({
-      setPanelDirty: (key, dirty) => {
-        if (dirty) dirtyMap.current[key] = true;
+      setPanel: (key, entry) => {
+        if (entry.dirty) dirtyMap.current[key] = true;
         else delete dirtyMap.current[key];
-        setHasDirtyPanel(Object.keys(dirtyMap.current).length > 0);
+        setPanels((prev) => ({ ...prev, [key]: entry }));
+      },
+      clearPanel: (key) => {
+        delete dirtyMap.current[key];
+        setPanels((prev) => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
       },
     }),
     []
@@ -103,13 +119,13 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
   // signal, not a browser-modal interrupt.
   const guardedClose = useCallback(() => {
     dirtyMap.current = {};
-    setHasDirtyPanel(false);
+    setPanels({});
     onClose();
   }, [onClose]);
 
   const guardedSetTab = useCallback((next: Tab) => {
     dirtyMap.current = {};
-    setHasDirtyPanel(false);
+    setPanels({});
     setTab(next);
   }, []);
 
@@ -381,8 +397,9 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
             </nav>
 
             {/* Body — switches by tab. Wraps in motion.div so each
-                tab swap fades, but the body itself owns its own scroll. */}
-            <div className="flex-1 min-h-0 overflow-hidden">
+                tab swap fades, but the body itself owns its own scroll.
+                Relative for the unified SaveBar's absolute anchor. */}
+            <div className="relative flex-1 min-h-0 overflow-hidden">
               {svc.isPending ? (
                 <div className="space-y-3 p-6">
                   <Skeleton className="h-8 w-48" />
@@ -443,6 +460,44 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                     )}
                   </motion.div>
                 </AnimatePresence>
+                {/* Unified SaveBar — renders for the active tab when
+                    its panel has registered an onSave via
+                    useOverlayDirty. Sits above the panel scroll so
+                    Save is one click regardless of how far the user
+                    has scrolled inside a long form. Panels that
+                    don't register onSave (Deployments, Logs, etc)
+                    skip this entirely. */}
+                {(() => {
+                  const active = panels[tab];
+                  if (!active || !active.dirty || !active.onSave) return null;
+                  return (
+                    <div className="pointer-events-none absolute inset-x-0 bottom-3 z-30 flex justify-center px-3">
+                      <div className="pointer-events-auto flex items-center gap-3 rounded-md border border-[var(--border-strong)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]">
+                        <span className="font-mono text-[11px] text-[var(--text-secondary)]">
+                          unsaved changes
+                        </span>
+                        {active.onDiscard && (
+                          <button
+                            type="button"
+                            onClick={() => active.onDiscard?.()}
+                            disabled={active.saving}
+                            className="font-mono text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-50"
+                          >
+                            discard
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => active.onSave?.()}
+                          disabled={active.saving}
+                          className="inline-flex h-7 items-center rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-xs font-medium text-[var(--btn-primary-fg)] hover:bg-[var(--btn-primary-bg-hover)] disabled:opacity-60"
+                        >
+                          {active.saving ? "Saving…" : "Save"}
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })()}
                 </OverlayDirtyContext.Provider>
               )}
             </div>

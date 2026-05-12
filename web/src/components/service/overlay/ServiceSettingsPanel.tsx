@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { usePatchService, type PatchServiceBody } from "@/features/services";
@@ -9,7 +8,7 @@ import { useCan, Perms } from "@/features/auth";
 import { useEnvironments, setEnvGroupServiceBranch } from "@/features/projects";
 import { useQueryClient } from "@tanstack/react-query";
 import type { KusoService } from "@/types/projects";
-import { Github, Trash2, Network, Layers3, Hammer, Cloud, Save, HardDrive, MapPin } from "lucide-react";
+import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
@@ -93,7 +92,6 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   }, [baseline]);
 
   const dirty = !isEqual(state, baseline);
-  useOverlayDirty("settings", dirty);
 
   const onSave = async () => {
     const body: PatchServiceBody = {};
@@ -246,6 +244,17 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     setSaveError(null);
   };
 
+  // Register dirty + save with the overlay shell so the unified
+  // SaveBar (rendered in ServiceOverlay.tsx) fires onSave for this
+  // panel. The inline FloatingSaveBar below stays for the
+  // read-only "your role can't edit" affordance, but the dirty
+  // case is handled by the shell now.
+  useOverlayDirty("settings", dirty && canWrite, {
+    onSave,
+    onDiscard: reset,
+    saving: pending,
+  });
+
   return (
     <div className="relative">
       {/* On md+ the layout is a 2-col grid with a sticky sidebar
@@ -304,18 +313,18 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
         </nav>
       </div>
 
-      {/* Floating save bar — slides up from bottom-right when ANY
-          field is dirty. Sticks to the overlay's right edge so it
-          stays visible while the user scrolls through sections.
-          Gated by services:write — viewers can flip switches in
-          their browser but can't commit. */}
-      <FloatingSaveBar
-        dirty={dirty && canWrite}
-        pending={pending}
-        error={saveError}
-        onSave={onSave}
-        onReset={reset}
-      />
+      {/* The dirty/save UX is now handled by the unified SaveBar
+          in ServiceOverlay.tsx via useOverlayDirty's onSave hook.
+          We only keep the inline "read-only" hint for users whose
+          role can't commit — they need an explanation, not a
+          disabled button. */}
+      {saveError && (
+        <div className="sticky bottom-16 z-20 mx-4 flex items-center justify-end">
+          <span className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 font-mono text-[10px] text-red-300 shadow-[var(--shadow-md)]">
+            {saveError}
+          </span>
+        </div>
+      )}
       {dirty && !canWrite && (
         <div className="sticky bottom-4 z-20 mx-4 flex items-center justify-end">
           <span className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-elevated)] px-3 py-2 font-mono text-[10px] text-[var(--text-tertiary)] shadow-[var(--shadow-md)]">
@@ -327,72 +336,9 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   );
 }
 
-function FloatingSaveBar({
-  dirty,
-  pending,
-  error,
-  onSave,
-  onReset,
-}: {
-  dirty: boolean;
-  pending: boolean;
-  error: string | null;
-  onSave: () => void;
-  onReset: () => void;
-}) {
-  // Layout: "unsaved changes" anchored left so the user reads
-  // status first; Discard + Save on the right with Discard as a
-  // proper outline button (was an underline-text affordance —
-  // invisible in dark mode unless you knew where to look).
-  // Persistent error pip surfaces the last save failure inline so
-  // the user can see what blocked the save without chasing a toast
-  // that already disappeared. Dismissing = clicking Discard or
-  // saving again successfully.
-  return (
-    <AnimatePresence>
-      {dirty && (
-        <motion.div
-          initial={{ y: 60, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          exit={{ y: 60, opacity: 0 }}
-          transition={{ type: "spring", stiffness: 360, damping: 32 }}
-          className={
-            "sticky bottom-4 z-20 mx-4 flex flex-col gap-1.5 rounded-md border bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)] " +
-            (error ? "border-red-500/50" : "border-[var(--border-subtle)]")
-          }
-        >
-          <div className="flex items-center gap-2">
-            <span className="mr-auto inline-flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-              <span
-                className={
-                  "inline-block h-1.5 w-1.5 rounded-full " +
-                  (error ? "bg-red-400" : "bg-amber-400")
-                }
-              />
-              {error ? "save failed" : "unsaved changes"}
-            </span>
-            <span
-              className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-200"
-              title="Most settings changes (port, scale, placement, runtime) trigger a rolling restart on save. See docs/EDIT_SAFETY.md."
-            >
-              redeploys on save
-            </span>
-            <Button size="sm" variant="outline" onClick={onReset} disabled={pending}>
-              Discard
-            </Button>
-            <Button size="sm" onClick={onSave} disabled={pending}>
-              <Save className="h-3 w-3" />
-              {pending ? "Saving…" : error ? "Retry save" : "Save changes"}
-            </Button>
-          </div>
-          {error && (
-            <p className="font-mono text-[10px] text-red-400">{error}</p>
-          )}
-        </motion.div>
-      )}
-    </AnimatePresence>
-  );
-}
+// (FloatingSaveBar removed — the overlay shell renders a unified
+// SaveBar from useOverlayDirty's onSave hook now. See U-P1-1 in
+// docs/REVIEW_2026-05-12.md.)
 
 // EnvBranchSection is the per-(env, service) branch override surface.
 // Only rendered for non-production envs; the production branch is set
