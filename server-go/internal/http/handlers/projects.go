@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	apiv1 "github.com/sislelabs/kuso/api/apiv1"
 
 	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
@@ -19,6 +20,68 @@ import (
 	"kuso/server/internal/projects"
 	"kuso/server/internal/spec"
 )
+
+// apiv1CreateToDomain narrows the shared wire DTO down to the
+// internal projects.CreateProjectRequest shape. Keeping the wire
+// type in apiv1 lets the CLI + future clients share JSON tags
+// (the source of truth for the API contract) without forcing every
+// internal service to import the apiv1 module.
+//
+// When a field exists on both sides we copy it. When only one side
+// has it (today: nothing — they're in sync), this function is where
+// the divergence gets reconciled. If apiv1 ever adds a field the
+// domain doesn't carry, this is the discard point.
+func apiv1CreateToDomain(in apiv1.CreateProjectRequest) projects.CreateProjectRequest {
+	out := projects.CreateProjectRequest{
+		Name:        in.Name,
+		Description: in.Description,
+		BaseDomain:  in.BaseDomain,
+		Namespace:   in.Namespace,
+	}
+	if in.DefaultRepo != nil {
+		out.DefaultRepo = &projects.CreateProjectRepoSpec{
+			URL:           in.DefaultRepo.URL,
+			DefaultBranch: in.DefaultRepo.DefaultBranch,
+		}
+	}
+	if in.GitHub != nil {
+		out.GitHub = &projects.CreateProjectGithubSpec{InstallationID: in.GitHub.InstallationID}
+	}
+	if in.Previews != nil {
+		out.Previews = &projects.CreateProjectPreviewsSpec{
+			Enabled: in.Previews.Enabled,
+			TTLDays: in.Previews.TTLDays,
+		}
+	}
+	return out
+}
+
+// apiv1UpdateToDomain converts the wire PATCH shape to the internal
+// one. Pointer semantics are preserved end-to-end: nil = leave alone,
+// non-nil = apply (even when the dereferenced value is zero).
+func apiv1UpdateToDomain(in apiv1.UpdateProjectRequest) projects.UpdateProjectRequest {
+	out := projects.UpdateProjectRequest{
+		Description: in.Description,
+		BaseDomain:  in.BaseDomain,
+		AlwaysOn:    in.AlwaysOn,
+	}
+	if in.DefaultRepo != nil {
+		out.DefaultRepo = &projects.CreateProjectRepoSpec{
+			URL:           in.DefaultRepo.URL,
+			DefaultBranch: in.DefaultRepo.DefaultBranch,
+		}
+	}
+	if in.GitHub != nil {
+		out.GitHub = &projects.CreateProjectGithubSpec{InstallationID: in.GitHub.InstallationID}
+	}
+	if in.Previews != nil {
+		out.Previews = &projects.UpdateProjectPreviewsSpec{
+			Enabled: in.Previews.Enabled,
+			TTLDays: in.Previews.TTLDays,
+		}
+	}
+	return out
+}
 
 // ProjectsHandler holds the projects.Service the routes call. The
 // Kube/Namespace/Reconciler fields back the config-as-code endpoint
@@ -167,14 +230,14 @@ func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if !requirePerm(w, r, auth.PermProjectWrite) {
 		return
 	}
-	var req projects.CreateProjectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var wire apiv1.CreateProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	out, err := h.Svc.Create(ctx, req)
+	out, err := h.Svc.Create(ctx, apiv1CreateToDomain(wire))
 	if err != nil {
 		h.fail(w, "create project", err)
 		return
@@ -200,8 +263,8 @@ func (h *ProjectsHandler) Describe(w http.ResponseWriter, r *http.Request) {
 // see projects.UpdateProjectRequest. Pointer fields distinguish unset
 // from set-to-zero so callers can explicitly toggle previews.enabled.
 func (h *ProjectsHandler) Update(w http.ResponseWriter, r *http.Request) {
-	var req projects.UpdateProjectRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var wire apiv1.UpdateProjectRequest
+	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
@@ -210,7 +273,7 @@ func (h *ProjectsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
 		return
 	}
-	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), req)
+	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), apiv1UpdateToDomain(wire))
 	if err != nil {
 		h.fail(w, "update project", err)
 		return

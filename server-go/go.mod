@@ -10,6 +10,8 @@ replace github.com/sislelabs/kuso/coolify => ../coolify
 
 require github.com/sislelabs/kuso/coolify v0.0.0
 
+require github.com/sislelabs/kuso/api/apiv1 v0.0.0
+
 require (
 	github.com/aws/aws-sdk-go-v2 v1.41.7
 	github.com/aws/aws-sdk-go-v2/config v1.32.17

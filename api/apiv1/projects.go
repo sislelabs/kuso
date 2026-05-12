@@ -6,13 +6,13 @@ package v1
 // earlier version inlined these as anonymous structs which made
 // referencing them in tests awkward — they're named here.
 type CreateProjectRequest struct {
-	Name        string                  `json:"name"`
-	Description string                  `json:"description,omitempty"`
-	BaseDomain  string                  `json:"baseDomain,omitempty"`
-	Namespace   string                  `json:"namespace,omitempty"`
-	DefaultRepo *RepoRef                `json:"defaultRepo,omitempty"`
-	GitHub      *GitHubInstallationRef  `json:"github,omitempty"`
-	Previews    *PreviewsSettings       `json:"previews,omitempty"`
+	Name        string                 `json:"name"`
+	Description string                 `json:"description,omitempty"`
+	BaseDomain  string                 `json:"baseDomain,omitempty"`
+	Namespace   string                 `json:"namespace,omitempty"`
+	DefaultRepo *RepoRef               `json:"defaultRepo,omitempty"`
+	GitHub      *GitHubInstallationRef `json:"github,omitempty"`
+	Previews    *PreviewsSettings      `json:"previews,omitempty"`
 }
 
 // UpdateProjectRequest is PATCH /api/projects/{name}.
