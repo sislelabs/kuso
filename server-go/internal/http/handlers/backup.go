@@ -232,10 +232,10 @@ func (h *BackupHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		// disconnected on the error response path — but cap at 5s
 		// so a slow apiserver doesn't wedge the handler.
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
 		if cerr := h.deleteRestoreSecret(cleanupCtx, secretName); cerr != nil {
 			h.Logger.Warn("restore: cleanup data secret after job-create failure", "secret", secretName, "err", cerr)
 		}
-		cancel()
 		h.Logger.Error("restore: create job", "err", err)
 		http.Error(w, "create job: "+err.Error(), http.StatusInternalServerError)
 		return
