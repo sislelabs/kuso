@@ -5,7 +5,7 @@ import { useOverlayDirty } from "@/components/service/ServiceOverlay";
 import { Button } from "@/components/ui/button";
 import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
 import { Input } from "@/components/ui/input";
-import { Trash2, Plus, Save, Eye, EyeOff, FileText, List, Link2, AlertCircle, Wand2 } from "lucide-react";
+import { Trash2, Plus, Eye, EyeOff, FileText, List, Link2, AlertCircle, Wand2 } from "lucide-react";
 import { useServiceEnv, useSetServiceEnv, useDetectedEnv, useDrift } from "@/features/services";
 import type { DetectedEnv } from "@/features/services/api";
 import { listAddonSecretKeys } from "@/features/services/api";
@@ -265,9 +265,25 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
   const canWrite = useCan(Perms.SecretsWrite);
   const [rows, setRows] = useState<Row[]>([]);
   const [dirty, setDirty] = useState(false);
-  // Register dirty state with the overlay shell so a stray ESC or
-  // tab switch prompts before discarding edits.
-  useOverlayDirty("variables", dirty);
+  // Register dirty + save with the overlay shell so the unified
+  // SaveBar fires onSave for this panel. The previous version only
+  // registered dirty (for the ESC-prompt) but kept its own inline
+  // Save button — so users on a 1280-wide screen saw two save
+  // affordances (overlay SaveBar + inline button) for the same
+  // edit. Funnelling save through the shell removes the duplicate
+  // and matches ServiceSettingsPanel's pattern.
+  //
+  // The callbacks have to be set up via refs because save/reset
+  // close over `rows` + `baselineFromRows`, both of which only exist
+  // after this hook in the component body. The hook reads the ref at
+  // SaveBar-click time, so the latest closure is the one that fires.
+  const saveRef = useRef<() => void>(() => {});
+  const discardRef = useRef<() => void>(() => {});
+  useOverlayDirty("variables", dirty && canWrite, {
+    onSave: () => saveRef.current(),
+    onDiscard: () => discardRef.current(),
+    saving: setEnv.isPending,
+  });
   // Tracks the last server-known row set so the concurrent-edit
   // detector can compare incoming refetches against the baseline,
   // not the local (possibly-edited) rows.
@@ -422,6 +438,16 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
     // round-tripping. Saves a network call and a flash of the modal.
     setPendingPayload(cleaned);
   };
+  // Revert to the last server-known row set. Used by the overlay
+  // SaveBar's Discard button + ESC-prompt confirmation.
+  const discard = () => {
+    setRows(baselineFromRows.current);
+    setDirty(false);
+  };
+  // Re-point the refs every render so the overlay hook fires the
+  // latest closure (with the latest `rows`).
+  saveRef.current = save;
+  discardRef.current = discard;
 
   const applyPending = async () => {
     if (!pendingPayload) return;
@@ -640,27 +666,12 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
             <Plus className="h-3.5 w-3.5" /> Add
           </Button>
         )}
-        {canWrite ? (
-          <Button
-            size="sm"
-            onClick={save}
-            type="button"
-            disabled={!dirty || setEnv.isPending}
-          >
-            <Save className="h-3.5 w-3.5" />
-            {setEnv.isPending ? "Saving…" : "Save"}
-          </Button>
-        ) : (
+        {!canWrite && (
           <span
             className="font-mono text-[10px] text-[var(--text-tertiary)]"
             title="secrets:write permission required"
           >
             read-only
-          </span>
-        )}
-        {dirty && canWrite && (
-          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-            unsaved changes
           </span>
         )}
         {dirty && canWrite && (
@@ -671,6 +682,10 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
             redeploys on save
           </span>
         )}
+        {/* Save / Discard moved to the unified SaveBar at the bottom
+            of ServiceOverlay (U-P0-D). The bar sits above the panel
+            scroll so it's always reachable on long env-var lists,
+            and the keyboard shortcut (⌘S) wires to it directly. */}
       </div>
       <DiffConfirmDialog
         open={pendingPayload != null}
