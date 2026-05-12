@@ -15,6 +15,7 @@ import { Settings, MapPin, Plus, X, Trash2, RefreshCw } from "lucide-react";
 import type { NodeSummary } from "@/components/layout/ServersPopover";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { useAddonOverlayDirty } from "@/components/addon/AddonOverlay";
 
 export function SettingsTab({
   project,
@@ -170,6 +171,23 @@ function ConfigurationSection({
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "Save failed"),
+  });
+
+  const reset = () => {
+    setVersion(initial.version);
+    setSize(initial.size);
+    setHa(initial.ha);
+    setStorageSize(initial.storageSize);
+    setDatabase(initial.database);
+  };
+  // Register with the overlay shell so the unified SaveBar at the
+  // bottom fires onSave + a tab-switch discards local edits cleanly
+  // instead of silently leaving them dangling.
+  useAddonOverlayDirty("addon-configuration", dirty, {
+    onSave: () => save.mutateAsync(),
+    onDiscard: reset,
+    saving: save.isPending,
+    saveError: save.error instanceof Error ? save.error.message : undefined,
   });
 
   return (
@@ -367,6 +385,18 @@ function PlacementSection({
       ),
     ) !== JSON.stringify(initialLabels) ||
     JSON.stringify(pickedNodes) !== JSON.stringify(initialNodes);
+
+  // Register with the overlay shell. Discard reverts to the
+  // baseline; the SaveBar surfaces save errors inline.
+  useAddonOverlayDirty("addon-placement", dirty, {
+    onSave: () => save.mutateAsync(),
+    onDiscard: () => {
+      setLabels(Object.entries(initialLabels).map(([k, v]) => ({ key: k, value: v })));
+      setPickedNodes(initialNodes);
+    },
+    saving: save.isPending,
+    saveError: save.error instanceof Error ? save.error.message : undefined,
+  });
 
   const addLabel = () => setLabels((cur) => [...cur, { key: "", value: "" }]);
   const updLabel = (i: number, patch: Partial<{ key: string; value: string }>) =>

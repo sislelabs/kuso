@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { useAddons } from "@/features/projects";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -13,6 +13,54 @@ import { OverviewTab } from "./overlay/OverviewTab";
 import { BackupsTab } from "./overlay/BackupsTab";
 import { SQLTab } from "./overlay/SQLTab";
 import { SettingsTab } from "./overlay/SettingsTab";
+
+// AddonOverlayDirtyContext mirrors the per-panel dirty registry on
+// ServiceOverlay. Each form section inside a tab (Configuration,
+// Placement, Resync …) calls useAddonOverlayDirty to register its
+// dirty state + onSave/onDiscard so the shell can render one
+// unified SaveBar at the bottom and prompt before tab-switch
+// discards an unsaved edit. Without this the user could switch
+// from Configuration → Backups → back and the typed values were
+// gone with no warning.
+type PanelEntry = {
+  dirty: boolean;
+  onSave?: () => unknown;
+  onDiscard?: () => void;
+  saving?: boolean;
+  saveError?: string;
+};
+type AddonOverlayDirtyAPI = {
+  setPanel: (key: string, entry: PanelEntry) => void;
+  clearPanel: (key: string) => void;
+};
+const AddonOverlayDirtyContext = createContext<AddonOverlayDirtyAPI | null>(null);
+export function useAddonOverlayDirty(
+  panelKey: string,
+  dirty: boolean,
+  opts?: {
+    // unknown return is intentional — callers commonly pass a
+    // useMutation().mutateAsync() which returns the typed response.
+    // We only care that the call fired; the shell catches a rejected
+    // promise to prevent the SaveBar getting stuck.
+    onSave?: () => unknown;
+    onDiscard?: () => void;
+    saving?: boolean;
+    saveError?: string;
+  }
+) {
+  const api = useContext(AddonOverlayDirtyContext);
+  useEffect(() => {
+    if (!api) return;
+    api.setPanel(panelKey, {
+      dirty,
+      onSave: opts?.onSave,
+      onDiscard: opts?.onDiscard,
+      saving: opts?.saving,
+      saveError: opts?.saveError,
+    });
+    return () => api.clearPanel(panelKey);
+  }, [api, panelKey, dirty, opts?.onSave, opts?.onDiscard, opts?.saving, opts?.saveError]);
+}
 
 type Tab = "overview" | "backups" | "sql" | "settings";
 const TABS: { id: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
@@ -44,16 +92,60 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
   const [tab, setTab] = useState<Tab>("overview");
   const panelRef = useRef<HTMLDivElement>(null);
 
+  // Per-panel dirty + save registry. The active tab's onSave wires
+  // into the floating SaveBar below; on tab-switch (or close) we
+  // run each panel's onDiscard so transient form state doesn't
+  // silently survive.
+  const [panels, setPanels] = useState<Record<string, PanelEntry>>({});
+  const dirtyAPI = useMemo<AddonOverlayDirtyAPI>(
+    () => ({
+      setPanel: (key, entry) => {
+        setPanels((prev) => ({ ...prev, [key]: entry }));
+      },
+      clearPanel: (key) => {
+        setPanels((prev) => {
+          const next = { ...prev };
+          delete next[key];
+          return next;
+        });
+      },
+    }),
+    []
+  );
+
+  // Tab-switch / close discards local form state cleanly. Without
+  // this the SettingsTab forms held edited values across a
+  // Configuration → Backups → Configuration round-trip and the
+  // user couldn't tell whether their edits had been saved. We don't
+  // prompt: the floating SaveBar's persistent "unsaved changes"
+  // indicator already telegraphs the state and corrections are
+  // cheap. ServiceOverlay made the same call.
+  const guardedSetTab = (next: Tab) => {
+    if (next === tab) return;
+    for (const e of Object.values(panels)) {
+      e.onDiscard?.();
+    }
+    setTab(next);
+  };
+  const guardedClose = () => {
+    for (const e of Object.values(panels)) {
+      e.onDiscard?.();
+    }
+    setPanels({});
+    onClose();
+  };
+
   useEffect(() => {
     if (!addon) return;
     const valid = TABS.some((t) => t.id === defaultTab);
     setTab(valid ? (defaultTab as Tab) : "overview");
+    setPanels({});
   }, [addon, defaultTab]);
 
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") guardedClose();
     };
     window.addEventListener("keydown", onKey);
     const prev = document.body.style.overflow;
@@ -78,7 +170,7 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
           <motion.button
             type="button"
             aria-label="Close"
-            onClick={onClose}
+            onClick={guardedClose}
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -109,7 +201,7 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
               </div>
               <button
                 type="button"
-                onClick={onClose}
+                onClick={guardedClose}
                 aria-label="Close"
                 className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
               >
@@ -130,7 +222,7 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
                   <button
                     key={t.id}
                     type="button"
-                    onClick={() => setTab(t.id)}
+                    onClick={() => guardedSetTab(t.id)}
                     className={cn(
                       "relative inline-flex h-10 items-center gap-1.5 px-3 text-sm font-medium transition-colors",
                       active
@@ -152,21 +244,80 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
               })}
             </nav>
 
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              {!data ? (
-                <div className="space-y-3 p-6">
-                  <Skeleton className="h-8 w-48" />
-                  <Skeleton className="h-32 w-full" />
-                </div>
-              ) : tab === "overview" ? (
-                <OverviewTab project={project} addon={addon!} kind={kind} cr={data} />
-              ) : tab === "backups" ? (
-                <BackupsTab project={project} addon={addon!} />
-              ) : tab === "sql" ? (
-                <SQLTab project={project} addon={addon!} />
-              ) : (
-                <SettingsTab project={project} addon={addon!} cr={data} onClose={onClose} />
-              )}
+            <div className="relative min-h-0 flex-1 overflow-y-auto">
+              <AddonOverlayDirtyContext.Provider value={dirtyAPI}>
+                {!data ? (
+                  <div className="space-y-3 p-6">
+                    <Skeleton className="h-8 w-48" />
+                    <Skeleton className="h-32 w-full" />
+                  </div>
+                ) : tab === "overview" ? (
+                  <OverviewTab project={project} addon={addon!} kind={kind} cr={data} />
+                ) : tab === "backups" ? (
+                  <BackupsTab project={project} addon={addon!} />
+                ) : tab === "sql" ? (
+                  <SQLTab project={project} addon={addon!} />
+                ) : (
+                  <SettingsTab project={project} addon={addon!} cr={data} onClose={guardedClose} />
+                )}
+                {/* Unified SaveBar: any panel that registered onSave
+                    with useAddonOverlayDirty surfaces here. Multiple
+                    forms on one tab (Configuration + Placement +
+                    Resync on Settings) each render their own pill
+                    keyed by panelKey — pick the first dirty one. */}
+                {(() => {
+                  const active = Object.entries(panels).find(([, e]) => e.dirty && e.onSave);
+                  if (!active) return null;
+                  const [, entry] = active;
+                  return (
+                    <div className="pointer-events-none absolute inset-x-0 bottom-3 z-30 flex justify-center px-3">
+                      <div className="pointer-events-auto flex max-w-[90%] flex-col gap-1 rounded-md border border-[var(--border-strong)] bg-[var(--bg-elevated)] px-3 py-2 shadow-[var(--shadow-lg)]">
+                        <div className="flex items-center gap-3">
+                          <span className="font-mono text-[11px] text-[var(--text-secondary)]">
+                            unsaved changes
+                          </span>
+                          {entry.onDiscard && (
+                            <button
+                              type="button"
+                              onClick={() => entry.onDiscard?.()}
+                              disabled={entry.saving}
+                              className="font-mono text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-50"
+                            >
+                              discard
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              try {
+                                const r = entry.onSave?.();
+                                if (r && typeof (r as Promise<unknown>).then === "function") {
+                                  (r as Promise<unknown>).catch(() => {});
+                                }
+                              } catch {
+                                /* surfaced by panel */
+                              }
+                            }}
+                            disabled={entry.saving}
+                            className="inline-flex h-7 items-center rounded-md border border-[var(--btn-primary-border)] bg-[var(--btn-primary-bg)] px-3 text-xs font-medium text-[var(--btn-primary-fg)] hover:bg-[var(--btn-primary-bg-hover)] disabled:opacity-60"
+                          >
+                            {entry.saving ? "Saving…" : "Save"}
+                          </button>
+                        </div>
+                        {entry.saveError && (
+                          <p
+                            role="alert"
+                            className="font-mono text-[10px] text-red-300 max-w-[40ch] truncate"
+                            title={entry.saveError}
+                          >
+                            ✗ {entry.saveError}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </AddonOverlayDirtyContext.Provider>
             </div>
           </motion.div>
         </div>
