@@ -204,7 +204,22 @@ function ProjectsGrid({
                 <div className="mt-3 flex items-center gap-3 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
                   <span className="inline-flex items-center gap-1">
                     <Box className="h-3 w-3" />
-                    <span className={liveServices > 0 ? "text-emerald-400" : ""}>
+                    <span
+                      className={
+                        // Health colors:
+                        //   green  — every defined service is live
+                        //   amber  — at least one live, but some down
+                        //   red    — services defined but zero live
+                        //   muted  — no services yet
+                        services.length === 0
+                          ? ""
+                          : liveServices === 0
+                            ? "text-red-400"
+                            : liveServices < services.length
+                              ? "text-amber-400"
+                              : "text-emerald-400"
+                      }
+                    >
                       {liveServices}/{services.length}
                     </span>
                     <span>live</span>
