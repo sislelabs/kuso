@@ -41,7 +41,19 @@ envDetect:
   # so the runtime container runs as runAsUser:1000 instead of
   # apk-add-as-root. Build via `docker build build/env-detect` +
   # tag matching the kuso-server release.
+  #
+  # SECURITY: `tag` MUST point at an immutable reference. A mutable
+  # tag (e.g. "v1", "latest") lets anyone with push access to the
+  # registry silently swap what every build's init container pulls.
+  # Prefer a sha256 digest ("@sha256:...") for tamper-evident pulls;
+  # failing that, use a never-re-pushed semver ("v1.0.0", not "v1").
+  # The release pipeline publishes both forms — pick the digest in
+  # production deploys.
   image: "ghcr.io/sislelabs/kuso-env-detect"
+  # NOTE: leaving "v1" until the release pipeline tags + publishes
+  # an immutable v1.x.y (planned). Operators running in regulated
+  # environments should override this to "@sha256:<digest>" in
+  # their values.yaml until then.
   tag: "v1"
 
 # Persistent build cache. When pvcName is non-empty the chart mounts

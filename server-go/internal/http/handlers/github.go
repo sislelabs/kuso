@@ -396,6 +396,14 @@ func (h *GithubHandler) InstallURL(w http.ResponseWriter, _ *http.Request) {
 }
 
 // ListInstallations returns the cached installation list.
+//
+// SCOPE: returns every installation the GitHub App can see, with the
+// full repo list per installation. This is intentional for kuso's
+// single-tenant model (one team per cluster — Coolify-style, see
+// CLAUDE.md). In a hypothetical multi-org setup where users from
+// org A shouldn't see org B's repos, this endpoint would need a
+// per-user installation filter via the GitHub user-to-installations
+// API. Out of scope for v1; multi-tenant is a different product.
 func (h *GithubHandler) ListInstallations(w http.ResponseWriter, r *http.Request) {
 	if h.Cache == nil {
 		writeJSON(w, http.StatusOK, []any{})
