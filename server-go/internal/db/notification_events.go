@@ -158,6 +158,16 @@ func (d *DB) ListNotificationEventsForProjects(ctx context.Context, limit int, p
 	if len(projects) == 0 {
 		return []NotificationEvent{}, nil
 	}
+	// Cap the IN-clause size. Postgres's max_function_args is
+	// 32,767 — far above realistic project memberships in a single-
+	// tenant install (tens at most). But an attacker who somehow
+	// inflates the tenancy table could trigger a degraded query
+	// plan; truncate to the first 500 projects (alphabetised, so
+	// the cut is deterministic). B8 in followup review.
+	const maxIN = 500
+	if len(projects) > maxIN {
+		projects = projects[:maxIN]
+	}
 	// Build a $N placeholder list. We use sql.NamedArg-style numbered
 	// placeholders inline because the prismaTime/lib-pq driver
 	// rewriter doesn't expand IN ? with a slice for us.
