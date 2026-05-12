@@ -21,6 +21,7 @@ export default function NewProjectPage() {
   const create = useCreateProject();
 
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [baseDomain, setBaseDomain] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -52,6 +53,7 @@ export default function NewProjectPage() {
     try {
       await create.mutateAsync({
         name: trimmed,
+        description: description.trim() || undefined,
         baseDomain: baseDomain.trim() || undefined,
         previews: { enabled: true, ttlDays: 7 },
       });
@@ -86,6 +88,15 @@ export default function NewProjectPage() {
               placeholder="my-product"
               className="h-8 font-mono text-[13px]"
               autoFocus
+            />
+          </Field>
+          <Field label="Description" hint="optional; shown on the projects list">
+            <Input
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="What this project does"
+              className="h-8 text-[13px]"
+              maxLength={120}
             />
           </Field>
           <Field label="Base domain" hint="optional; auto from cluster if blank">
