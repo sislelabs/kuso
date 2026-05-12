@@ -180,6 +180,20 @@ func (c *Cache) Stop() {
 	c.stopped = true
 }
 
+// CRDInformer returns the SharedIndexInformer for one of kuso's CRD
+// GVRs so a downstream caller can attach an AddEventHandler. Used by
+// the build-reaper that watches KusoBuild transitions to done=true
+// and deletes the matching helm-release secret so the operator's
+// next reconcile can't resurrect the Job. Returns nil when the
+// GVR isn't tracked (defensive — callers shouldn't see this in
+// practice).
+func (c *Cache) CRDInformer(gvr schema.GroupVersionResource) cache.SharedIndexInformer {
+	if c == nil {
+		return nil
+	}
+	return c.factory.ForResource(gvr).Informer()
+}
+
 // AllSynced returns true once every informer has finished its initial
 // list. Cheap to call repeatedly — backs the readiness probe so the
 // kube-LB doesn't send traffic before the cache is warm.

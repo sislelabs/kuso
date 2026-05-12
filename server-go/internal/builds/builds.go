@@ -787,6 +787,13 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 	// future reconciles but the existing release record is the
 	// trigger source. Deleting it makes the release a no-op for the
 	// operator.
+	//
+	// internal/buildreaper is the belt-and-braces watcher that
+	// catches the same condition asynchronously — so if this inline
+	// delete fails (transient kube error, context cancellation), the
+	// reaper sweeps the secrets on its next informer notification.
+	// Together they close the resurrection class on cancel + on
+	// post-restart cache-sync paths.
 	helmSelector := "owner=helm,name=" + buildName
 	secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{
 		LabelSelector: helmSelector,

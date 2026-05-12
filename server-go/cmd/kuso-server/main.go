@@ -25,6 +25,7 @@ import (
 	"kuso/server/internal/alerts"
 	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
+	"kuso/server/internal/buildreaper"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	"kuso/server/internal/crons"
@@ -515,6 +516,23 @@ func main() {
 			}
 			if os.Getenv("KUSO_HEALTH_DISABLED") != "true" {
 				go health.New(kc, *namespace, notifyDisp, logger).Run(workCtx)
+			}
+			// Build-reaper: watches KusoBuild informer for done=true
+			// transitions and deletes the matching helm-release
+			// secret. Without this, the helm-operator can resurrect
+			// cancelled Jobs on its next reconcile — documented
+			// outage class on 2026-05-05. Cancel still does the
+			// secret-delete inline; the reaper is the leader-elected
+			// belt-and-braces that covers Cancel that didn't reach
+			// the secret (transient kube error) and operator
+			// restarts that come back to find a CR already done but
+			// a release record still saying "Job should exist."
+			//
+			// Cheap — one informer-handler subscription, no goroutine
+			// of its own, no new deps. Safe to skip on read-only
+			// shells via KUSO_BUILD_REAPER_DISABLED.
+			if os.Getenv("KUSO_BUILD_REAPER_DISABLED") != "true" && kc != nil && kc.Cache != nil {
+				(&buildreaper.Service{Kube: kc, Cache: kc.Cache, Logger: logger}).Start(workCtx)
 			}
 			if os.Getenv("KUSO_PREVIEW_CLEANUP_DISABLED") != "true" {
 				go runPreviewCleanup(workCtx, projSvc, logger)
