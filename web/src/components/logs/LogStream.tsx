@@ -165,6 +165,28 @@ export function LogStream({ project, service, env = "production", height = "40vh
             : `${lines.length}`}
         </span>
       </div>
+      <div className="relative min-h-0 flex-1">
+        {/* Scroll-pause indicator. When `follow` is off (the user
+            scrolled up) we render a floating "Jump to live" pill at
+            the bottom of the viewport. The same button restores
+            follow=true and snaps to the tail. Without this, the
+            stream silently kept appending while the user thought
+            they were caught up — they'd think the stream stalled
+            and reload, losing buffered context. */}
+        {!follow && lines.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              setFollow(true);
+              const el = scrollerRef.current;
+              if (el) el.scrollTop = el.scrollHeight;
+            }}
+            className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-full border border-amber-500/40 bg-[#0b0b0e]/95 px-3 py-1 font-mono text-[10px] uppercase tracking-widest text-amber-200 shadow-md backdrop-blur hover:bg-[#1a1a20]"
+            aria-label="scroll paused — jump to live tail"
+          >
+            paused · jump to live ↓
+          </button>
+        )}
       <div
         ref={scrollerRef}
         onScroll={onScroll}
@@ -174,7 +196,7 @@ export function LogStream({ project, service, env = "production", height = "40vh
         // ad-hoc embed with no flex parent), maxHeight caps us at the
         // requested viewport unit so we don't push the page.
         style={height === "100%" ? undefined : { maxHeight: height }}
-        className="min-h-0 flex-1 overflow-auto bg-[#0b0b0e] p-3 font-mono text-[11px] leading-relaxed text-zinc-200"
+        className="h-full min-h-0 overflow-auto bg-[#0b0b0e] p-3 font-mono text-[11px] leading-relaxed text-zinc-200"
       >
         {lines.length === 0 && (
           <p className="text-[var(--text-tertiary)]">
@@ -218,6 +240,7 @@ export function LogStream({ project, service, env = "production", height = "40vh
             </div>
           );
         })}
+      </div>
       </div>
     </div>
   );
