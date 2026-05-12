@@ -66,6 +66,35 @@ func validateRuntime(rt string) error {
 	}
 }
 
+// repoPathRE is the allow-list for a service's spec.repo.path. The
+// value is interpolated into shell strings inside the build chart
+// (`SRC="/workspace/src/{{ repo.path }}"`); anything outside this
+// character set could break out of the quotes via `";` or invoke
+// command substitution via `$(...)`. The legitimate values are
+// directory-style paths: letters, digits, slash, underscore, dot,
+// dash. No leading slash (server prefixes), no `..` traversal, no
+// shell metacharacters.
+//
+// Empty value is allowed (means "repo root"); the chart applies its
+// own default of `.` when empty.
+var repoPathRE = regexp.MustCompile(`^[a-zA-Z0-9._/-]+$`)
+
+func validateRepoPath(p string) error {
+	if p == "" {
+		return nil
+	}
+	if strings.Contains(p, "..") {
+		return fmt.Errorf("%w: repo.path must not contain .. (traversal)", ErrInvalid)
+	}
+	if strings.HasPrefix(p, "/") {
+		return fmt.Errorf("%w: repo.path must be a relative path", ErrInvalid)
+	}
+	if !repoPathRE.MatchString(p) {
+		return fmt.Errorf("%w: repo.path may only contain letters, digits, dot, slash, underscore, dash", ErrInvalid)
+	}
+	return nil
+}
+
 // ListServices returns every service in the project, label-filtered.
 func (s *Service) ListServices(ctx context.Context, project string) ([]kube.KusoService, error) {
 	return s.listServicesForProject(ctx, project)
@@ -149,6 +178,14 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	if req.Repo != nil {
 		repoURL = req.Repo.URL
 		if req.Repo.Path != "" {
+			// Validate before stamping onto the CR — the chart
+			// interpolates this into shell strings, so a value like
+			// `."; rm -rf / #` would break out of the quotes and
+			// run arbitrary commands in the build container. Same
+			// validator covers PatchService below.
+			if err := validateRepoPath(req.Repo.Path); err != nil {
+				return nil, err
+			}
 			repoPath = req.Repo.Path
 		}
 	}
@@ -1297,6 +1334,9 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		if req.Repo.URL == "" {
 			svc.Spec.Repo = nil
 		} else {
+			if err := validateRepoPath(req.Repo.Path); err != nil {
+				return nil, err
+			}
 			svc.Spec.Repo = &kube.KusoRepoRef{
 				URL:           req.Repo.URL,
 				DefaultBranch: req.Repo.Branch,
