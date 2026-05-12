@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -131,7 +130,7 @@ func renderMigrationReport(inv *coolify.Inventory, items []coolify.Item) string 
 		}
 		byCoolifyName[key] = append(byCoolifyName[key], it)
 	}
-	slugFor := assignKusoSlugs(order)
+	slugFor := coolify.AssignKusoSlugs(order)
 	for _, name := range order {
 		kusoSlug := slugFor[name]
 		header := name
@@ -203,7 +202,7 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 		}
 		byCoolifyName[it.ProjectName] = append(byCoolifyName[it.ProjectName], it)
 	}
-	slugFor := assignKusoSlugs(coolifyOrder)
+	slugFor := coolify.AssignKusoSlugs(coolifyOrder)
 	order := make([]string, 0, len(coolifyOrder))
 	byProject := map[string][]coolify.Item{}
 	for _, name := range coolifyOrder {
@@ -217,7 +216,7 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 		var defaultRepoURL, defaultBranch string
 		for _, it := range byProject[projectSlug] {
 			if it.App != nil && it.App.GitRepository != "" {
-				defaultRepoURL = normalizeRepoURL(it.App.GitRepository)
+				defaultRepoURL = coolify.NormalizeRepoURL(it.App.GitRepository)
 				defaultBranch = it.App.GitBranch
 				break
 			}
@@ -259,13 +258,13 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 			// + uuid suffix (e.g. "biznesguys/foo:main-abc123def"). The
 			// useful part for a kuso service name is the repo basename
 			// — short, predictable, kube-DNS-safe after slugify.
-			svcSlug := serviceSlugFromApp(it.App)
+			svcSlug := coolify.ServiceSlugFromApp(it.App)
 			svcReq := kusoApi.CreateServiceRequest{
 				Name:    svcSlug,
-				Runtime: runtimeForBuildPack(it.App.BuildPack),
-				Port:    parseFirstPort(it.App.PortsExposes),
+				Runtime: coolify.RuntimeForBuildPack(it.App.BuildPack),
+				Port:    coolify.ParseFirstPort(it.App.PortsExposes),
 			}
-			svcReq.Repo.URL = normalizeRepoURL(it.App.GitRepository)
+			svcReq.Repo.URL = coolify.NormalizeRepoURL(it.App.GitRepository)
 			svcReq.Repo.Path = it.App.BaseDirectory
 			sr, err := api.AddService(projectSlug, svcReq)
 			if err != nil {
@@ -318,7 +317,7 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 			if kind == "" {
 				continue
 			}
-			addonName := slugifyName(it.Database.Name)
+			addonName := coolify.SlugifyName(it.Database.Name)
 			ar, err := api.AddAddon(projectSlug, kusoApi.CreateAddonRequest{Name: addonName, Kind: kind})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "      ✗ addon %s: %v\n", addonName, err)
@@ -341,7 +340,7 @@ func writeDataMigrationScripts(items []coolify.Item, outDir string) int {
 		if it.Database == nil || it.Verdict.Action != "migrate" {
 			continue
 		}
-		name := slugifyName(it.Database.Name)
+		name := coolify.SlugifyName(it.Database.Name)
 		path := filepath.Join(outDir, "migrate-data-"+name+".sh")
 		body := buildDataMigrationScript(it)
 		// 0o700: data-migration scripts contain DATABASE_URL with
@@ -381,7 +380,7 @@ set -euo pipefail
 SRC=%q
 DST="${DST:-}"            # set to the kuso addon URL before running
 if [[ -z "$DST" ]]; then echo "set DST=<kuso addon connection URL>" >&2; exit 1; fi
-`, d.Name, kind, slugifyName(it.ProjectName), src, src)
+`, d.Name, kind, coolify.SlugifyName(it.ProjectName), src, src)
 
 	switch kind {
 	case "postgres":
@@ -407,128 +406,14 @@ exit 1
 	}
 }
 
-// assignKusoSlugs takes a list of Coolify project names in source
-// order and returns a map of Coolify name → kuso slug. When two
-// projects slugify to the same base, the first wins the bare slug
-// and subsequent ones get "-2", "-3", etc. Used by both the report
-// renderer and the apply path so previews and writes agree.
-func assignKusoSlugs(coolifyNames []string) map[string]string {
-	out := map[string]string{}
-	used := map[string]int{}
-	for _, name := range coolifyNames {
-		base := slugifyName(name)
-		if base == "" {
-			base = "x-unnamed"
-		}
-		used[base]++
-		slug := base
-		if used[base] > 1 {
-			slug = fmt.Sprintf("%s-%d", base, used[base])
-		}
-		out[name] = slug
-	}
-	return out
-}
-
-// serviceSlugFromApp derives a short kuso service name from a
-// Coolify Application. Order of preference:
-//  1. Last path segment of GitRepository ("biznesguys/foo" → "foo")
-//  2. Slugified Application.Name (the full ugly Coolify name)
-// Either way we run through slugifyName for the kube-safety + length
-// guarantees.
-func serviceSlugFromApp(a *coolify.Application) string {
-	if a.GitRepository != "" {
-		// Take the last "/"-delimited segment, strip ":branch-uuid"
-		// suffix Coolify sometimes appends.
-		repo := a.GitRepository
-		if i := strings.LastIndex(repo, "/"); i >= 0 {
-			repo = repo[i+1:]
-		}
-		if i := strings.Index(repo, ":"); i >= 0 {
-			repo = repo[:i]
-		}
-		repo = strings.TrimSuffix(repo, ".git")
-		if s := slugifyName(repo); s != "" {
-			return s
-		}
-	}
-	return slugifyName(a.Name)
-}
-
-// normalizeRepoURL converts a Coolify GitRepository value into a
-// kuso repo URL. Coolify stores it as either an owner/repo slug
-// (the common case) OR a full URL (Public Repository mode / non-
-// GitHub host). The previous code unconditionally prepended
-// `https://github.com/`, producing
-// `https://github.com/https://github.com/...` for any already-URL
-// value — every kaniko build would fail at clone. See the matching
-// helper in server-go/internal/http/handlers/import_coolify.go;
-// promoted to coolify/ as a follow-up.
-func normalizeRepoURL(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return ""
-	}
-	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "git@") {
-		return strings.TrimSuffix(s, ".git")
-	}
-	return "https://github.com/" + strings.TrimSuffix(s, ".git")
-}
-
-func runtimeForBuildPack(bp string) string {
-	switch strings.ToLower(bp) {
-	case "nixpacks":
-		return "nixpacks"
-	case "dockerfile":
-		return "dockerfile"
-	case "static":
-		return "static"
-	}
-	return ""
-}
-
-func parseFirstPort(s string) int {
-	for _, p := range strings.Split(s, ",") {
-		p = strings.TrimSpace(p)
-		if n, err := strconv.Atoi(p); err == nil && n > 0 {
-			return n
-		}
-	}
-	return 0
-}
-
-// slugifyName turns a Coolify name into a kube-safe slug. Lowercase,
-// replace runs of non-[a-z0-9] with "-", trim leading/trailing dashes,
-// truncate to 50 chars (kuso adds suffixes per environment, so leave
-// headroom under the 63-byte DNS label limit).
-func slugifyName(s string) string {
-	s = strings.ToLower(strings.TrimSpace(s))
-	if s == "" {
-		return ""
-	}
-	var out strings.Builder
-	prevDash := true
-	for _, r := range s {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			out.WriteRune(r)
-			prevDash = false
-		default:
-			if !prevDash {
-				out.WriteRune('-')
-				prevDash = true
-			}
-		}
-	}
-	res := strings.Trim(out.String(), "-")
-	if len(res) > 50 {
-		res = strings.Trim(res[:50], "-")
-	}
-	if res == "" {
-		res = "x-unnamed"
-	}
-	return res
-}
+// Mapping helpers (slugify, runtime classification, port parsing,
+// service-slug derivation, repo-URL normalisation, slug assignment)
+// live in github.com/sislelabs/kuso/coolify. The CLI and the
+// server-side importer both use that single source of truth, so
+// preview verdicts can no longer disagree with apply outcomes the
+// way they did when this file kept its own copies (slugify clamped
+// to 50 vs 63 chars, runtimeForBuildPack returned "" vs "dockerfile"
+// on unknown, parseFirstPort handled "3000:3000" only server-side).
 
 func init() {
 	rootCmd.AddCommand(migrateCmd)

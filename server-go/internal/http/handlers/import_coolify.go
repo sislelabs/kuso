@@ -8,8 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/sislelabs/kuso/coolify"
@@ -259,14 +257,14 @@ func (h *ImportCoolifyHandler) applyCommit(ctx context.Context, c *coolify.Clien
 	byCoolifyName := map[string][]coolify.Item{}
 	coolifyOrder := []string{}
 	for _, it := range inv.Items {
-		uuid := coolifyItemUUID(it)
+		uuid := coolify.ItemUUID(it)
 		if uuid == "" {
 			continue
 		}
 		if _, ok := picked[uuid]; !ok {
 			continue
 		}
-		kind := coolifyItemKind(it)
+		kind := coolify.ItemKind(it)
 		if it.Verdict.Action != "migrate" {
 			out.Skipped = append(out.Skipped, CommitDetail{
 				Kind:   kind,
@@ -284,7 +282,7 @@ func (h *ImportCoolifyHandler) applyCommit(ctx context.Context, c *coolify.Clien
 		}
 		byCoolifyName[it.ProjectName] = append(byCoolifyName[it.ProjectName], it)
 	}
-	slugFor := assignCoolifySlugs(coolifyOrder)
+	slugFor := coolify.AssignKusoSlugs(coolifyOrder)
 
 	for _, coolifyName := range coolifyOrder {
 		projectSlug := slugFor[coolifyName]
@@ -297,7 +295,7 @@ func (h *ImportCoolifyHandler) applyCommit(ctx context.Context, c *coolify.Clien
 		var defaultRepoURL, defaultBranch string
 		for _, it := range items {
 			if it.App != nil && it.App.GitRepository != "" {
-				defaultRepoURL = normalizeRepoURL(it.App.GitRepository)
+				defaultRepoURL = coolify.NormalizeRepoURL(it.App.GitRepository)
 				defaultBranch = it.App.GitBranch
 				break
 			}
@@ -332,13 +330,13 @@ func (h *ImportCoolifyHandler) applyCommit(ctx context.Context, c *coolify.Clien
 			if it.App == nil {
 				continue
 			}
-			svcSlug := coolifyServiceSlug(it.App)
+			svcSlug := coolify.ServiceSlugFromApp(it.App)
 			svcReq := projects.CreateServiceRequest{
 				Name:    svcSlug,
-				Runtime: runtimeForBuildPack(it.App.BuildPack),
-				Port:    int32(parseFirstPort(it.App.PortsExposes)),
+				Runtime: coolify.RuntimeForBuildPack(it.App.BuildPack),
+				Port:    int32(coolify.ParseFirstPort(it.App.PortsExposes)),
 				Repo: &projects.CreateServiceRepo{
-					URL:  normalizeRepoURL(it.App.GitRepository),
+					URL:  coolify.NormalizeRepoURL(it.App.GitRepository),
 					Path: it.App.BaseDirectory,
 				},
 			}
@@ -383,7 +381,7 @@ func (h *ImportCoolifyHandler) applyCommit(ctx context.Context, c *coolify.Clien
 				out.Skipped = append(out.Skipped, CommitDetail{Kind: "addon", Name: it.Name, Reason: "unsupported database type " + it.Database.DatabaseType})
 				continue
 			}
-			addonName := slugifyName(it.Database.Name)
+			addonName := coolify.SlugifyName(it.Database.Name)
 			if _, err := h.Addons.Add(ctx, projectSlug, addons.CreateAddonRequest{Name: addonName, Kind: kind}); err != nil {
 				if !errors.Is(err, addons.ErrConflict) {
 					out.Errors = append(out.Errors, CommitDetail{Kind: "addon", Name: projectSlug + "/" + addonName, Reason: err.Error()})
@@ -407,143 +405,8 @@ func (h *ImportCoolifyHandler) applyCommit(ctx context.Context, c *coolify.Clien
 	return out
 }
 
-// coolifyItemUUID returns the Coolify UUID of an item if known. Used
-// to match wizard-ticked rows against the freshly fetched inventory.
-func coolifyItemUUID(it coolify.Item) string {
-	switch {
-	case it.App != nil:
-		return it.App.UUID
-	case it.Database != nil:
-		return it.Database.UUID
-	case it.Service != nil:
-		return it.Service.UUID
-	}
-	return ""
-}
-
-// coolifyItemKind picks a human label for the resource kind. Used
-// only in error/skip rows.
-func coolifyItemKind(it coolify.Item) string {
-	switch {
-	case it.App != nil:
-		return "application"
-	case it.Database != nil:
-		return "database"
-	case it.Service != nil:
-		return "service"
-	}
-	return "unknown"
-}
-
-// assignCoolifySlugs maps Coolify project names to kuso project slugs,
-// disambiguating collisions with a numeric suffix. Mirrors the CLI's
-// assignKusoSlugs verbatim.
-func assignCoolifySlugs(names []string) map[string]string {
-	taken := map[string]bool{}
-	out := map[string]string{}
-	for _, n := range names {
-		base := slugifyName(n)
-		slug := base
-		i := 2
-		for taken[slug] {
-			slug = fmt.Sprintf("%s-%d", base, i)
-			i++
-		}
-		taken[slug] = true
-		out[n] = slug
-	}
-	return out
-}
-
-// coolifyServiceSlug derives a kuso service slug from a Coolify app.
-// Same pattern as the CLI: take the basename of the git repo so a
-// service is "todo-api", not "biznesguys/todo-api:main-abc123".
-func coolifyServiceSlug(a *coolify.Application) string {
-	if a == nil {
-		return ""
-	}
-	repo := strings.TrimSuffix(a.GitRepository, ".git")
-	if i := strings.LastIndex(repo, "/"); i >= 0 {
-		repo = repo[i+1:]
-	}
-	if repo == "" {
-		repo = a.Name
-	}
-	return slugifyName(repo)
-}
-
-// normalizeRepoURL converts a Coolify GitRepository value into a kuso
-// repo URL. Coolify stores this field as either an owner/repo slug
-// (the common case for GitHub App installs) OR a full http(s):// URL
-// (when the user configured the repo via "Public Repository" mode or
-// imported from a non-GitHub host). The previous code unconditionally
-// prepended `https://github.com/`, producing
-// `https://github.com/https://github.com/...` for any already-URL
-// value — every kaniko build for that service silently failed at the
-// clone step. Trimming a trailing `.git` is idempotent against both
-// shapes.
-func normalizeRepoURL(s string) string {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return ""
-	}
-	if strings.HasPrefix(s, "http://") || strings.HasPrefix(s, "https://") || strings.HasPrefix(s, "git@") {
-		// Already a URL (or an SSH-style remote, which kuso doesn't
-		// build from but we shouldn't double-prefix). Return as-is
-		// minus the optional .git suffix.
-		return strings.TrimSuffix(s, ".git")
-	}
-	return "https://github.com/" + strings.TrimSuffix(s, ".git")
-}
-
-// runtimeForBuildPack maps a Coolify BuildPack to a kuso runtime.
-// Unknown maps to "dockerfile" — the safest default since every
-// Coolify app needs *some* build, and a Dockerfile is the lowest
-// common denominator.
-func runtimeForBuildPack(bp string) string {
-	switch strings.ToLower(bp) {
-	case "nixpacks":
-		return "nixpacks"
-	case "static":
-		return "static"
-	case "dockerfile", "":
-		return "dockerfile"
-	default:
-		return "dockerfile"
-	}
-}
-
-// parseFirstPort takes a comma-separated Coolify port list and
-// returns the first numeric value, or 0 on no match.
-func parseFirstPort(s string) int {
-	for _, part := range strings.Split(s, ",") {
-		part = strings.TrimSpace(part)
-		if part == "" {
-			continue
-		}
-		// Coolify can emit "3000:3000" — take the listening side
-		// (left), not the container side.
-		if i := strings.Index(part, ":"); i > 0 {
-			part = part[:i]
-		}
-		var n int
-		if _, err := fmt.Sscanf(part, "%d", &n); err == nil && n > 0 && n < 65536 {
-			return n
-		}
-	}
-	return 0
-}
-
-var slugifyRE = regexp.MustCompile(`[^a-z0-9-]+`)
-
-// slugifyName: lowercase, non-[a-z0-9-] → "-", strip leading/trailing
-// "-", clamp to 63 chars (kube DNS label max).
-func slugifyName(s string) string {
-	s = strings.ToLower(s)
-	s = slugifyRE.ReplaceAllString(s, "-")
-	s = strings.Trim(s, "-")
-	if len(s) > 63 {
-		s = s[:63]
-	}
-	return s
-}
+// Mapping helpers (slugify, runtime classification, port parsing,
+// repo-URL normalisation, item UUID/kind) live in
+// github.com/sislelabs/kuso/coolify as Coolify.{Helper}. The
+// importer + CLI share that one canonical implementation; see
+// coolify/mapping.go for the per-helper rationale.
