@@ -819,7 +819,19 @@ func (s *Service) SetEnv(ctx context.Context, project, service string, envVars [
 
 // SetEnvWithOpts is the variant that threads strictness through to
 // the var-ref rewriter.
+//
+// Hold the per-service mutex for the full read-modify-write window —
+// without it, a concurrent PatchService and SetEnv on the same
+// service both read the pre-edit spec, one stomps the other, and
+// propagateChangedToEnvs then writes a stale spec onto the env CRs.
+// The kube optimistic-concurrency check catches the service-spec
+// race (returns 409) but propagation already fired with the bad
+// data. Every other delta op (AddDomain, SetEnvVar, PatchService)
+// holds this lock; this path was the outlier (B2 in followup).
 func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, envVars []EnvVar, opts SetEnvOpts) error {
+	mu := s.lockService(project, service)
+	defer mu.Unlock()
+
 	// Validate + normalize before any kube round-trip. Trims names
 	// (a leading non-breaking space slipped in once and was
 	// effectively unfixable from the editor), enforces POSIX env
