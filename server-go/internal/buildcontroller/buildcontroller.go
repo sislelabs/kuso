@@ -418,11 +418,21 @@ func resourceRequirements(b *kube.KusoBuild) (corev1.ResourceRequirements, error
 // kusoBuildLabels mirrors _helpers.tpl's "kusobuild.labels" set.
 // Server-go's build poller selects on these (specifically build-state)
 // so the labels must round-trip identically.
-func kusoBuildLabels(b *kube.KusoBuild) map[string]string {
+//
+// `app.kubernetes.io/instance` is critical: every log-stream + cancel
+// + drift path selects pods on `instance=<build-name>`. The helm
+// chart emitted this via the standard "kusobuild.labels" helper
+// because Helm sets it automatically from .Release.Name; the v0.10.0
+// Go controller has to set it explicitly. Without it `kubectl get
+// pods -l app.kubernetes.io/instance=<build>` returns zero rows
+// and the Deployments tab shows "build pod hasn't started yet" for
+// every build.
+func kusoBuildLabels(b *kube.KusoBuild, buildName string) map[string]string {
 	out := map[string]string{
-		"app.kubernetes.io/name":      "kusobuild",
-		"app.kubernetes.io/component": "kusobuild",
+		"app.kubernetes.io/name":       "kusobuild",
+		"app.kubernetes.io/component":  "kusobuild",
 		"app.kubernetes.io/managed-by": "kuso",
+		"app.kubernetes.io/instance":   buildName,
 	}
 	if b == nil {
 		return out

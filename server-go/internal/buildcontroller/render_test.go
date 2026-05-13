@@ -254,14 +254,25 @@ func TestRenderJobLabelsRoundTrip(t *testing.T) {
 		"app.kubernetes.io/name":        "kusobuild",
 		"app.kubernetes.io/component":   "kusobuild",
 		"app.kubernetes.io/managed-by":  "kuso",
-		"kuso.sislelabs.com/project":    "alpha",
-		"kuso.sislelabs.com/service":    "api",
-		"kuso.sislelabs.com/build-ref":  baseBuild().Spec.Ref,
+		// `instance=<build-name>` is the critical selector key used
+		// by logs/stream + builds.Cancel + drift. The helm chart
+		// stamped this automatically from .Release.Name; the Go
+		// controller has to set it explicitly. Regression here
+		// breaks the Deployments-tab log viewer for every build.
+		"app.kubernetes.io/instance":   "b1",
+		"kuso.sislelabs.com/project":   "alpha",
+		"kuso.sislelabs.com/service":   "api",
+		"kuso.sislelabs.com/build-ref": baseBuild().Spec.Ref,
 	}
 	for k, v := range want {
 		if got := job.Labels[k]; got != v {
 			t.Errorf("job label %s = %q, want %q", k, got, v)
 		}
+	}
+	// And on the pod template — log selectors hit the pod, not the
+	// Job itself.
+	if got := job.Spec.Template.Labels["app.kubernetes.io/instance"]; got != "b1" {
+		t.Errorf("pod template label app.kubernetes.io/instance = %q, want b1", got)
 	}
 }
 

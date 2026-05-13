@@ -152,13 +152,15 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 					return env, nil
 				}
 			}
-			// Distinguish "operator hasn't rendered yet" from "Job ran
-			// and was GC'd". The KusoBuild CR exists either way, but a
-			// brand-new build with no Job means the helm-operator hasn't
-			// caught up to the watch event — a few seconds for the
-			// reconcile to fire. We poll briefly so the deployments tab
-			// transitions cleanly into live tail instead of flashing
-			// "build pod not found" on every redeploy.
+			// Distinguish "controller hasn't created the Job yet" from
+			// "Job ran and was GC'd". The KusoBuild CR exists either
+			// way, but a brand-new build with no Job means
+			// buildcontroller's informer notification is still in
+			// flight — usually a few hundred ms, occasionally a
+			// second or two on a busy cluster. Poll briefly so the
+			// deployments tab transitions cleanly into live tail
+			// instead of flashing "build pod not found" on every
+			// redeploy.
 			waitDeadline := time.Now().Add(20 * time.Second)
 			for time.Now().Before(waitDeadline) {
 				select {
@@ -176,7 +178,7 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 					return env, err
 				}
 			}
-			_ = sink.Write(Frame{Type: "log", Pod: buildName, Line: "build pod hasn't started yet — operator may be reconciling. Try again in a few seconds."})
+			_ = sink.Write(Frame{Type: "log", Pod: buildName, Line: "build pod hasn't started yet — controller is still creating the Job. Try again in a few seconds."})
 			_ = sink.Write(Frame{Type: "phase", Value: "completed"})
 			return env, nil
 		}

@@ -38,7 +38,7 @@ func renderServiceAccount(buildName, ns string, owner metav1.OwnerReference) *co
 // the CR, so a parse failure here implies an external apply.
 func renderJob(buildName, ns string, b *kube.KusoBuild, owner metav1.OwnerReference) *batchv1.Job {
 	strategy := strategyOf(b)
-	labels := kusoBuildLabels(b)
+	labels := kusoBuildLabels(b, buildName)
 	res, _ := resourceRequirements(b) // error already vetted server-side
 
 	job := &batchv1.Job{
