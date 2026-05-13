@@ -342,7 +342,15 @@ spec:
           secret:
             secretName: kuso-admin-credentials
             optional: true
-            defaultMode: 0400
+            # 0444 not 0400: the kuso-server container runs as the non-root
+            # `kuso` user (Dockerfile `USER kuso`), and projected secrets
+            # are owned by root:root. With 0400 only root can read the
+            # file — the kuso user gets EACCES, readAdminPassword() logs
+            # "permission denied" and skips first-boot admin bootstrap,
+            # leaving no admin user in the DB. 0444 makes the password
+            # world-readable inside the pod (still scoped to the mount,
+            # still single-tenant, still in-cluster).
+            defaultMode: 0444
             items:
               - key: password
                 path: password
