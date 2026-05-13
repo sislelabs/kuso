@@ -427,6 +427,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 				labelService: req.Name,
 				labelEnv:     "production",
 			},
+			OwnerReferences: []metav1.OwnerReference{kube.OwnerRefForService(created)},
 		},
 		Spec: kube.KusoEnvironmentSpec{
 			Project:          project,
@@ -652,6 +653,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 				labelService: service,
 				labelEnv:     req.Name,
 			},
+			OwnerReferences: []metav1.OwnerReference{kube.OwnerRefForService(svc)},
 		},
 		Spec: kube.KusoEnvironmentSpec{
 			Project:          project,
@@ -777,6 +779,7 @@ func (s *Service) RenameService(ctx context.Context, project, oldName, newName s
 					labelService: newName,
 					labelEnv:     envShort,
 				},
+				OwnerReferences: []metav1.OwnerReference{kube.OwnerRefForService(created)},
 			},
 			Spec: oldEnv.Spec,
 		}

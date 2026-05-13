@@ -457,6 +457,11 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 			e.Spec.Service = newSvc
 		}
 		stripServerMeta(&e.ObjectMeta)
+		// Re-attach the ownerRef to the freshly-imported parent service
+		// so kube GC continues to cascade on delete after restore.
+		if parent, gerr := h.Kube.GetKusoService(ctx, ns, e.Spec.Service); gerr == nil && parent != nil {
+			e.ObjectMeta.OwnerReferences = []metav1.OwnerReference{kube.OwnerRefForService(parent)}
+		}
 		if _, err := h.Kube.CreateKusoEnvironment(ctx, ns, &e); err != nil {
 			if apierrors.IsAlreadyExists(err) {
 				out.Warnings = append(out.Warnings, fmt.Sprintf("env %s already exists, skipping", e.Name))

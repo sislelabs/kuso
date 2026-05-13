@@ -458,3 +458,33 @@ func (c *Client) DeleteKusoCron(ctx context.Context, namespace, name string) err
 func (c *Client) UpdateKusoEnvironment(ctx context.Context, namespace string, e *KusoEnvironment) (*KusoEnvironment, error) {
 	return update[KusoEnvironment](ctx, c, GVREnvironments, "KusoEnvironment", namespace, e)
 }
+
+// OwnerRefForService returns a metav1.OwnerReference pointing at the
+// given KusoService — meant to be attached to child env/cron CRs so
+// kube's GC reaps them automatically when the service is deleted.
+//
+// Why this matters: without an owner ref, deleting a service relies on
+// our application-level cascade (DeleteService walks envs + crons +
+// per-env secrets). That cascade can be skipped or partial — for
+// example when an operator restart races with a DELETE request and
+// part of the cascade fails, the children leak. With ownerReferences,
+// kube's GC handles the cascade in-cluster on the next reconcile pass
+// regardless of what the server-go side does. The application-level
+// cascade still runs (it does the helm release cleanup the kube GC
+// doesn't), but it's now belt-and-suspenders rather than the only
+// safety net.
+//
+// `BlockOwnerDeletion=true` makes kube refuse to release the service
+// finalizer until the child is gone — keeps the deletion ordering
+// sane. `Controller=true` so only one ref per child claims control.
+func OwnerRefForService(s *KusoService) metav1.OwnerReference {
+	tru := true
+	return metav1.OwnerReference{
+		APIVersion:         GroupName + "/" + Version,
+		Kind:               "KusoService",
+		Name:               s.Name,
+		UID:                s.UID,
+		Controller:         &tru,
+		BlockOwnerDeletion: &tru,
+	}
+}

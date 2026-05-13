@@ -421,23 +421,29 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	port := int32(8080)
 	var svcRuntime string
 	var svcCommand []string
+	var parentSvc *kube.KusoService
 	if svc, err := d.Kube.GetKusoService(ctx, ns, serviceFQN); err == nil && svc != nil {
 		if svc.Spec.Port > 0 {
 			port = svc.Spec.Port
 		}
 		svcRuntime = svc.Spec.Runtime
 		svcCommand = svc.Spec.Command
+		parentSvc = svc
 	}
 
-	env := &kube.KusoEnvironment{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: envName,
-			Labels: map[string]string{
-				"kuso.sislelabs.com/project": proj.Name,
-				"kuso.sislelabs.com/service": short,
-				"kuso.sislelabs.com/env":     fmt.Sprintf("preview-pr-%d", pr.Number),
-			},
+	objMeta := metav1.ObjectMeta{
+		Name: envName,
+		Labels: map[string]string{
+			"kuso.sislelabs.com/project": proj.Name,
+			"kuso.sislelabs.com/service": short,
+			"kuso.sislelabs.com/env":     fmt.Sprintf("preview-pr-%d", pr.Number),
 		},
+	}
+	if parentSvc != nil {
+		objMeta.OwnerReferences = []metav1.OwnerReference{kube.OwnerRefForService(parentSvc)}
+	}
+	env := &kube.KusoEnvironment{
+		ObjectMeta: objMeta,
 		Spec: kube.KusoEnvironmentSpec{
 			Project: proj.Name,
 			Service: serviceFQN,

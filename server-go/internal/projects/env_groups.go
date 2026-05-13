@@ -570,7 +570,8 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 					labelService: newSvcCR,
 					labelEnv:     req.Name,
 				},
-				Annotations: annot,
+				Annotations:     annot,
+				OwnerReferences: []metav1.OwnerReference{kube.OwnerRefForService(item.svc)},
 			},
 			Spec: kube.KusoEnvironmentSpec{
 				Project:          project,

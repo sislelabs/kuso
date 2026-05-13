@@ -244,15 +244,23 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 	if err != nil {
 		return nil, err
 	}
-	cr := &kube.KusoCron{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: fqn,
-			Labels: map[string]string{
-				"kuso.sislelabs.com/project": project,
-				"kuso.sislelabs.com/service": serviceFQN,
-				"kuso.sislelabs.com/cron":    req.Name,
-			},
+	objMeta := metav1.ObjectMeta{
+		Name: fqn,
+		Labels: map[string]string{
+			"kuso.sislelabs.com/project": project,
+			"kuso.sislelabs.com/service": serviceFQN,
+			"kuso.sislelabs.com/cron":    req.Name,
 		},
+	}
+	// Owner ref to the parent service so kube GC cascades the cron CR
+	// + its rendered CronJob when the service is deleted, even if the
+	// application-level cascade in projects.DeleteService is skipped or
+	// fails partway through.
+	if parent, gerr := s.Kube.GetKusoService(ctx, ns, serviceFQN); gerr == nil && parent != nil {
+		objMeta.OwnerReferences = []metav1.OwnerReference{kube.OwnerRefForService(parent)}
+	}
+	cr := &kube.KusoCron{
+		ObjectMeta: objMeta,
 		Spec: kube.KusoCronSpec{
 			Project:               project,
 			Service:               serviceFQN,
