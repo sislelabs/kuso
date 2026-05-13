@@ -498,6 +498,36 @@ func main() {
 			return leaderActive.Load()
 		})
 
+		// Install informer handlers for build controller + reaper
+		// ONCE at boot. The Service.Start is idempotent (sync.Once)
+		// and the per-event work is gated on leaderActive — so the
+		// handler exists across the whole process lifetime but only
+		// the lease holder reconciles. Doing this here instead of
+		// inside startSingletons fixes the cross-leader-tenure
+		// handler-accumulation bug: a flapping lease used to attach
+		// a fresh handler every acquire, each holding its own
+		// `running` map, producing N parallel reconciles per CR
+		// event after N flaps.
+		if kc.Cache != nil {
+			if os.Getenv("KUSO_BUILD_CONTROLLER_DISABLED") != "true" {
+				(&buildcontroller.Service{
+					Kube:         kc,
+					Cache:        kc.Cache,
+					Namespace:    *namespace,
+					Logger:       logger,
+					LeaderActive: &leaderActive,
+				}).Start(ctx)
+			}
+			if os.Getenv("KUSO_BUILD_REAPER_DISABLED") != "true" {
+				(&buildreaper.Service{
+					Kube:         kc,
+					Cache:        kc.Cache,
+					Logger:       logger,
+					LeaderActive: &leaderActive,
+				}).Start(ctx)
+			}
+		}
+
 		startSingletons := func(workCtx context.Context) {
 			leaderActive.Store(true)
 			go func() {
@@ -528,28 +558,13 @@ func main() {
 			if os.Getenv("KUSO_HEALTH_DISABLED") != "true" {
 				go health.New(kc, *namespace, notifyDisp, logger).Run(workCtx)
 			}
-			// Build controller: renders KusoBuild → Job in-process,
-			// replacing the helm-operator-driven path. The operator
-			// no longer watches KusoBuild (see operator/watches.yaml).
-			// One informer-handler subscription; reconcile is O(1) per
-			// event so bursts of 50-500 builds from a Coolify import
-			// commit no longer queue behind the operator's per-kind
-			// worker pool. Toggle with KUSO_BUILD_CONTROLLER_DISABLED
-			// if you need to roll back to the chart path during a
-			// migration window.
-			if os.Getenv("KUSO_BUILD_CONTROLLER_DISABLED") != "true" && kc != nil && kc.Cache != nil {
-				(&buildcontroller.Service{Kube: kc, Cache: kc.Cache, Namespace: *namespace, Logger: logger}).Start(workCtx)
-			}
-			// Build-reaper: complementary cleanup for any pre-existing
-			// helm-release Secrets from clusters that ran the
-			// pre-controller path. New installs running on the
-			// controller have no helm releases per build to reap, so
-			// the reaper's work shrinks to occasional NotFound
-			// no-ops. Kept on for backwards-compat with rolling-
-			// upgrade clusters.
-			if os.Getenv("KUSO_BUILD_REAPER_DISABLED") != "true" && kc != nil && kc.Cache != nil {
-				(&buildreaper.Service{Kube: kc, Cache: kc.Cache, Logger: logger}).Start(workCtx)
-			}
+			// Build controller + reaper moved out of startSingletons.
+			// They install informer handlers at boot (one-shot, gated
+			// on leaderActive) — the previous shape registered a
+			// fresh handler on every leader acquire, leaking N
+			// handlers across N re-elections. See the LIFETIME
+			// comments in internal/buildcontroller and
+			// internal/buildreaper for the bug we're avoiding.
 			if os.Getenv("KUSO_PREVIEW_CLEANUP_DISABLED") != "true" {
 				go runPreviewCleanup(workCtx, projSvc, logger)
 			}

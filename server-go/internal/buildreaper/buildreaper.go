@@ -39,6 +39,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -52,10 +53,22 @@ import (
 // Service holds the dependencies the reaper needs. The Cache is
 // where we install the event handler; the kube client is what we
 // use to delete the helm-release Secret on done-transition.
+// LIFETIME: Start must be called exactly once at boot, NOT once
+// per leader-election cycle. The previous shape registered a new
+// handler on every leader acquire, so after N re-elections every
+// done-transition fired N reap goroutines that all hit the same
+// helm-release Secret. sync.Once keeps Start idempotent against
+// programming errors. LeaderActive gates the work, not the
+// registration.
 type Service struct {
-	Kube   *kube.Client
-	Cache  *kube.Cache
-	Logger *slog.Logger
+	Kube         *kube.Client
+	Cache        *kube.Cache
+	Logger       *slog.Logger
+	// LeaderActive gates per-event reaping. nil = always-active.
+	// Reaping a helm secret while another replica is doing the same
+	// is idempotent (NotFound is swallowed), but only the lease
+	// holder should be issuing the calls in normal operation.
+	LeaderActive *atomic.Bool
 
 	// reaped tracks Build CRs we've already reaped this process
 	// lifetime. The informer can fire multiple update events for the
@@ -63,16 +76,22 @@ type Service struct {
 	// after our cancel stamp) and reaping twice is wasted API calls.
 	mu     sync.Mutex
 	reaped map[string]struct{}
+
+	startOnce sync.Once
 }
 
 // Start installs the AddEventHandler on the KusoBuild informer.
 // Returns immediately; the handler runs from the informer worker.
-// Safe to call once; calling twice double-attaches and double-reaps
-// (still idempotent at the kube level but wasteful).
+// Idempotent — only the first call wires the handler. Call once at
+// boot.
 func (s *Service) Start(ctx context.Context) {
 	if s == nil || s.Cache == nil || s.Kube == nil {
 		return
 	}
+	s.startOnce.Do(func() { s.installHandler(ctx) })
+}
+
+func (s *Service) installHandler(ctx context.Context) {
 	if s.reaped == nil {
 		s.reaped = make(map[string]struct{})
 	}
@@ -104,6 +123,9 @@ func (s *Service) Start(ctx context.Context) {
 // dedups against repeated informer notifications (status patches keep
 // flowing from the operator even after we mark the CR done).
 func (s *Service) maybeReap(ctx context.Context, obj any, source string) {
+	if s.LeaderActive != nil && !s.LeaderActive.Load() {
+		return
+	}
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
 		return

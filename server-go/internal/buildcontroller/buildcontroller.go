@@ -47,6 +47,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -88,30 +89,56 @@ const (
 )
 
 // Service is the controller entry point. Held on the server-go Deps
-// (alongside the build poller + reaper) and started once per leader
-// election.
+// (alongside the build poller + reaper). Start() installs the
+// informer handler exactly once per process; per-event work is gated
+// on LeaderActive so a non-leader replica observes events but does
+// not act on them.
+//
+// LIFETIME: Start must be called exactly once at boot, NOT once per
+// leader-election cycle. The previous shape (one Start per leader
+// acquire) accumulated event handlers on the shared informer —
+// after N re-elections every CR event fired N reconcile closures,
+// each with its own `running` dedup map that couldn't see the
+// others. sync.Once defends against repeat-call programming errors;
+// the canonical wiring is "boot calls Start once, leader controls
+// LeaderActive."
 type Service struct {
-	Kube      *kube.Client
-	Cache     *kube.Cache
-	Namespace string // home namespace (only used for cross-ns logging)
-	Logger    *slog.Logger
+	Kube         *kube.Client
+	Cache        *kube.Cache
+	Namespace    string // home namespace (only used for cross-ns logging)
+	Logger       *slog.Logger
+	// LeaderActive gates per-event work. nil = always-active (safe
+	// for single-replica deploys where leader election is bypassed);
+	// non-nil = only reconcile while this atomic reads true.
+	LeaderActive *atomic.Bool
 
 	// running tracks CRs we've already kicked off a reconcile for, to
-	// dedup against the informer's update floods (helm-operator-style
-	// noise no longer applies, but the build poller still patches
-	// annotations every few seconds while a Job is active, and each
-	// patch fires an Update event we'd otherwise re-reconcile).
-	mu       sync.Mutex
-	running  map[string]struct{}
+	// dedup against the informer's update floods (the build poller
+	// patches annotations every few seconds while a Job is active,
+	// and each patch fires an Update event we'd otherwise
+	// re-reconcile).
+	mu      sync.Mutex
+	running map[string]struct{}
+
+	// startOnce makes Start idempotent. The whole struct is intended
+	// to live for the process lifetime; accidental double-Start (e.g.
+	// from a future refactor that wires it inside the leader block
+	// again) becomes a no-op rather than handler duplication.
+	startOnce sync.Once
 }
 
 // Start installs the AddEventHandler on the KusoBuild informer.
-// Non-blocking — the informer's worker runs the handler. Safe to
-// call once per process; calling twice double-attaches.
+// Non-blocking — the informer's worker runs the handler. Idempotent:
+// safe to call repeatedly, but ONLY the first call wires the handler.
+// Call exactly once at boot.
 func (s *Service) Start(ctx context.Context) {
 	if s == nil || s.Cache == nil || s.Kube == nil {
 		return
 	}
+	s.startOnce.Do(func() { s.installHandler(ctx) })
+}
+
+func (s *Service) installHandler(ctx context.Context) {
 	if s.running == nil {
 		s.running = make(map[string]struct{})
 	}
@@ -123,8 +150,8 @@ func (s *Service) Start(ctx context.Context) {
 		return
 	}
 	_, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: func(obj any) { s.reconcile(ctx, obj, "add") },
-		UpdateFunc: func(_, newObj any) { s.reconcile(ctx, newObj, "update") },
+		AddFunc:    func(obj any) { s.maybeReconcile(ctx, obj, "add") },
+		UpdateFunc: func(_, newObj any) { s.maybeReconcile(ctx, newObj, "update") },
 		DeleteFunc: func(obj any) {
 			if u, ok := obj.(*unstructured.Unstructured); ok {
 				key := u.GetNamespace() + "/" + u.GetName()
@@ -140,6 +167,15 @@ func (s *Service) Start(ctx context.Context) {
 	if s.Logger != nil {
 		s.Logger.Info("buildcontroller: started — rendering KusoBuild → Job in-process")
 	}
+}
+
+// maybeReconcile is the leader-gated dispatch step. Non-leaders see
+// every event but do nothing, so the lease holder is the sole writer.
+func (s *Service) maybeReconcile(ctx context.Context, obj any, source string) {
+	if s.LeaderActive != nil && !s.LeaderActive.Load() {
+		return
+	}
+	s.reconcile(ctx, obj, source)
 }
 
 // reconcile is the per-event entry point. Decodes the unstructured
