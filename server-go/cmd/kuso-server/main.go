@@ -351,6 +351,16 @@ func main() {
 		// Reads against an unsynced informer transparently fall back
 		// to the live API, so no boot-time block.
 		kc.EnableCache()
+		// Stamp the home namespace as kuso-managed on every boot. The
+		// BuildKit NetworkPolicy (deploy/buildkitd.yaml) requires this
+		// label on the build pod's namespace; install.sh writes it on
+		// fresh installs but pre-existing namespaces from older kuso
+		// versions never get it, breaking every build after upgrade
+		// with BackoffLimitExceeded and no logs. Cheap, idempotent.
+		if err := kc.LabelNamespaceManaged(ctx, *namespace); err != nil {
+			logger.Warn("home namespace: label managed-by failed (builds may be blocked by BuildKit NetworkPolicy)",
+				"ns", *namespace, "err", err)
+		}
 		nsResolver := kube.NewProjectNamespaceResolver(kc, *namespace)
 		projSvc = projects.New(kc, *namespace)
 		secSvc = secrets.New(kc, *namespace)

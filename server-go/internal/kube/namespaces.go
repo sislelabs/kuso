@@ -84,3 +84,27 @@ func (c *Client) EnsureNamespace(ctx context.Context, ns string) error {
 	}
 	return fmt.Errorf("kube: ensure namespace %q: %w", ns, err)
 }
+
+// LabelNamespaceManaged stamps app.kubernetes.io/managed-by=kuso on an
+// existing namespace without touching PSS labels. Use this on the home
+// namespace at kuso-server boot so upgrades from pre-3cc6c57 installs
+// (which never carried the label) pick it up and the BuildKit
+// NetworkPolicy starts admitting build-pod traffic again. Different
+// from EnsureNamespace because we DON'T want to stamp PSS=restricted on
+// the home ns — kuso-server lives there and PSS=restricted blocks the
+// in-cluster registry's runAsRoot. Idempotent.
+func (c *Client) LabelNamespaceManaged(ctx context.Context, ns string) error {
+	if ns == "" {
+		return nil
+	}
+	patch, _ := json.Marshal(map[string]any{
+		"metadata": map[string]any{
+			"labels": map[string]string{ManagedByLabel: ManagedByValue},
+		},
+	})
+	_, err := c.Clientset.CoreV1().Namespaces().Patch(ctx, ns, types.MergePatchType, patch, metav1.PatchOptions{})
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("kube: label namespace %q managed-by: %w", ns, err)
+	}
+	return nil
+}
