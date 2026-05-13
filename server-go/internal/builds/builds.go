@@ -1543,114 +1543,10 @@ func (s *Service) ensureBuildCachePVC(ctx context.Context, ns, fqn string, svcCR
 // ImageTag returns the canonical image tag for a ref: 12-char SHA prefix
 // for full SHAs, otherwise the ref verbatim. Exported for the GitHub
 // webhook handler in Phase 6.
-func ImageTag(ref string) string {
-	if shaRE.MatchString(ref) {
-		return ref[:12]
-	}
-	return ref
-}
-
-func buildCRName(project, service, ref string) string {
-	return fmt.Sprintf("%s-%s-%s", project, service, shortRef(ref))
-}
-
-func shortRef(ref string) string {
-	if shaRE.MatchString(ref) {
-		return ref[:12]
-	}
-	// Trim to a k8s-name-safe slug. Replace anything not [a-z0-9-] with
-	// dashes and clip to 32 chars so the full build name stays under 63.
-	const max = 32
-	out := make([]byte, 0, len(ref))
-	for i := 0; i < len(ref); i++ {
-		c := ref[i]
-		switch {
-		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
-			out = append(out, c)
-		case c >= 'A' && c <= 'Z':
-			out = append(out, c+('a'-'A'))
-		case c == '-':
-			out = append(out, c)
-		default:
-			out = append(out, '-')
-		}
-	}
-	if len(out) > max {
-		out = out[:max]
-	}
-	return strings.Trim(string(out), "-")
-}
-
-// buildCacheDisabled reads the per-project escape hatch annotation.
-// Set kuso.sislelabs.com/build-cache-disabled=true on a KusoProject
-// to skip the persistent build cache for every service in that
-// project. Useful when a corrupted PVC is causing build failures —
-// users can flip the annotation, the next build runs cold, and they
-// can delete the broken PVC by hand.
-func buildCacheDisabled(proj *kube.KusoProject) bool {
-	if proj == nil || proj.Annotations == nil {
-		return false
-	}
-	return proj.Annotations["kuso.sislelabs.com/build-cache-disabled"] == "true"
-}
-
-// githubInstallationID resolves the GitHub App installation ID to use
-// for cloning a service's repo. Service-level wins over project-level
-// so a project linked to org A can host a service whose repo lives
-// in org B (different installations). Falls back to project-level
-// when the service didn't override (the common case), then 0 for
-// fully public repos.
-//
-// Pre-fix this only checked project-level, so a service whose repo
-// was in a different org than the project's defaultRepo cloned
-// unauthenticated and hit `fatal: could not read Username for
-// 'https://github.com'` — the user reported this on a businessguys
-// org repo configured against a different installation.
-//
-// As of v0.9.54, even when both spec slots are 0 the build path
-// auto-resolves via the GH-app cache before reaching this fallback,
-// so a project pointed at a private repo whose org has the App
-// installed Just Works without manual installationID plumbing.
-func githubInstallationID(proj *kube.KusoProject, svc *kube.KusoService) int64 {
-	if svc != nil && svc.Spec.Github != nil && svc.Spec.Github.InstallationID > 0 {
-		return svc.Spec.Github.InstallationID
-	}
-	if proj == nil || proj.Spec.GitHub == nil {
-		return 0
-	}
-	return proj.Spec.GitHub.InstallationID
-}
-
-// splitGithubURL parses owner/repo from the canonical github URL
-// shapes the user types into AddService. Returns ("", "") for
-// non-github URLs. Trims a trailing ".git". Lightweight string ops;
-// the canonical implementation lives in the github package
-// (ParseGithubRepoURL) — duplicated here to avoid an import cycle
-// (github already depends on db, builds depends on neither).
-func splitGithubURL(raw string) (owner, repo string) {
-	s := strings.TrimSpace(raw)
-	if s == "" {
-		return "", ""
-	}
-	if strings.HasPrefix(s, "git@github.com:") {
-		s = strings.TrimPrefix(s, "git@github.com:")
-	} else {
-		s = strings.TrimPrefix(s, "https://")
-		s = strings.TrimPrefix(s, "http://")
-		s = strings.TrimPrefix(s, "git+")
-		if !strings.HasPrefix(s, "github.com/") && !strings.HasPrefix(s, "www.github.com/") {
-			return "", ""
-		}
-		s = strings.TrimPrefix(s, "www.")
-		s = strings.TrimPrefix(s, "github.com/")
-	}
-	s = strings.TrimSuffix(s, ".git")
-	parts := strings.Split(s, "/")
-	if len(parts) < 2 || parts[0] == "" || parts[1] == "" {
-		return "", ""
-	}
-	return parts[0], parts[1]
-}
+// (ImageTag / buildCRName / shortRef / buildCacheDisabled /
+// githubInstallationID / splitGithubURL moved to refs.go alongside
+// containerNames / completedCondition. This file keeps the
+// stateful Service surface; refs.go holds the pure helpers.)
 
 // ---- Status poller -------------------------------------------------------
 
@@ -2204,19 +2100,6 @@ func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) e
 	return nil
 }
 
-func completedCondition(job *batchv1.Job) *batchv1.JobCondition {
-	for i := range job.Status.Conditions {
-		c := &job.Status.Conditions[i]
-		if c.Status != "True" {
-			continue
-		}
-		if c.Type == batchv1.JobComplete || c.Type == batchv1.JobFailed {
-			return c
-		}
-	}
-	return nil
-}
-
 // Build phase + timing live on annotations, not .status. helm-operator
 // owns .status on every CR it manages (it overwrites the whole stanza
 // with conditions + deployedRelease on each reconcile, every 1m for
@@ -2515,14 +2398,6 @@ func (p *Poller) persistDetectedEnv(ctx context.Context, ns string, b *kube.Kuso
 // containerNames extracts pod container names. Wrapped because the
 // init+main split needs concatenating and a tiny helper makes
 // archiveLogs readable.
-func containerNames(cs []corev1.Container) []string {
-	out := make([]string, 0, len(cs))
-	for i := range cs {
-		out = append(out, cs[i].Name)
-	}
-	return out
-}
-
 func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild) error {
 	// Re-read the CR right before stamping. A user Cancel between
 	// "kaniko exited 0" and this patch would otherwise be undone:
