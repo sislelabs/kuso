@@ -106,6 +106,11 @@ export interface BuildSummary {
   // archaeology. source ∈ user | webhook | api | system.
   triggeredBy?: string;
   triggeredByUser?: string;
+  // errorMessage is the extracted failure cause for status=failed
+  // builds. Server-side archiveLogs scans the build's tail logs +
+  // the kubelet's terminated reason and stamps the hit. The UI
+  // renders it as a sticky red banner above the log viewer.
+  errorMessage?: string;
 }
 
 export async function listBuilds(project: string, service: string): Promise<BuildSummary[]> {

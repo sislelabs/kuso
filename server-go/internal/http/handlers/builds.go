@@ -135,6 +135,14 @@ type buildSummary struct {
 	FinishedAt      string `json:"finishedAt,omitempty"`
 	TriggeredBy     string `json:"triggeredBy,omitempty"`     // user|webhook|api|system
 	TriggeredByUser string `json:"triggeredByUser,omitempty"` // username for source=user
+	// ErrorMessage is the extracted failure cause for status=failed
+	// builds. archiveLogs.extractFailureReason regex-scans the build's
+	// tail logs and stamps the hit (or the kubelet's terminated reason
+	// — OOMKilled, exit code, eviction) onto kuso.sislelabs.com/build-
+	// message. The Deployments-tab UI renders it as a sticky red banner
+	// above the log viewer so users don't have to hand-grep 200-600
+	// lines of kaniko noise to find "why".
+	ErrorMessage string `json:"errorMessage,omitempty"`
 }
 
 func toBuildSummary(b kube.KusoBuild) buildSummary {
@@ -169,6 +177,13 @@ func toBuildSummary(b kube.KusoBuild) buildSummary {
 		}
 		if v, ok := b.Annotations["kuso.sislelabs.com/build-commit-message"]; ok {
 			out.CommitMessage = v
+		}
+		// build-message is the extracted failure cause. Only meaningful
+		// for terminal failed/cancelled phases; succeeded builds may
+		// also stamp this (e.g. cancelled-then-cleaned) but the UI gates
+		// on status=failed.
+		if v, ok := b.Annotations["kuso.sislelabs.com/build-message"]; ok {
+			out.ErrorMessage = v
 		}
 	}
 	if out.Status == "" && b.Status != nil {

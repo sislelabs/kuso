@@ -290,6 +290,20 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
                             {b.commitMessage}
                           </div>
                         )}
+                        {b.status === "failed" && b.errorMessage && (
+                          // Collapsed-state preview of the failure cause
+                          // so users don't have to expand the row to see
+                          // "why." Truncated to one line; the full text
+                          // is in the expanded banner above the log
+                          // viewport. title= surfaces the full string on
+                          // hover.
+                          <div
+                            className="truncate font-mono text-[11px] text-red-300/90"
+                            title={b.errorMessage}
+                          >
+                            ✗ {b.errorMessage}
+                          </div>
+                        )}
                         <div className="font-mono text-[10px] text-[var(--text-tertiary)]">
                           {created}
                           {duration && (
@@ -338,6 +352,29 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
                   </div>
                   {isOpen && (
                     <div className="min-w-0 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]">
+                      {/* Failure-cause banner. Server's archiveLogs
+                          scans the build's tail logs + the kubelet's
+                          terminated reason and stamps the hit into
+                          kuso.sislelabs.com/build-message; the API
+                          surfaces it on BuildSummary.errorMessage.
+                          Without this, users were hand-grepping
+                          200-600 lines of kaniko/buildkit log noise
+                          to find the one-line cause. */}
+                      {b.status === "failed" && b.errorMessage && (
+                        <div className="border-b border-red-500/40 bg-red-500/10 px-3 py-2 text-[12px] text-red-200">
+                          <div className="flex items-start gap-2">
+                            <span aria-hidden className="select-none">✗</span>
+                            <div className="min-w-0 flex-1">
+                              <div className="font-mono text-[10px] uppercase tracking-widest text-red-300/80">
+                                build failure cause
+                              </div>
+                              <div className="mt-0.5 break-words font-mono text-[11px] leading-snug">
+                                {b.errorMessage}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
                       <BuildLogs project={project} service={service} buildId={b.id} />
                     </div>
                   )}
