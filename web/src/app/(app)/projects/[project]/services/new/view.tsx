@@ -6,7 +6,7 @@ import Link from "next/link";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Github, ArrowRight, Check, Plus } from "lucide-react";
+import { Github, ArrowRight, Check, Plus, Box } from "lucide-react";
 import { toast } from "sonner";
 import {
   useInstallURL,
@@ -33,6 +33,18 @@ export function AddServiceView() {
   const installURL = useInstallURL();
   const installs = useInstallations();
   const detect = useDetectRuntime();
+
+  // Source mode: "repo" wires a GitHub repo + kaniko/buildkit build.
+  // "image" deploys a pre-built OCI image directly (no build, no
+  // GitHub App needed). The image path is the escape hatch for
+  // single-tenant teams that publish their images via their own CI
+  // (or for evaluating kuso against a public image like
+  // `nginx:1.27-alpine`). Selecting it hides the repo picker
+  // entirely so a user without a configured GitHub App can still
+  // get to first compute.
+  const [source, setSource] = useState<"repo" | "image">("repo");
+  const [imageRepo, setImageRepo] = useState("");
+  const [imageTag, setImageTag] = useState("latest");
 
   const [picked, setPicked] = useState<{ installationId: number; repo: GithubRepo } | null>(null);
   // Display name is the free-form label the user types (e.g. "Todo
@@ -91,10 +103,6 @@ export function AddServiceView() {
   }, [picked]);
 
   const onAdd = async () => {
-    if (!picked) {
-      toast.error("Pick a repo first");
-      return;
-    }
     if (!name.trim()) {
       toast.error("Service name required");
       return;
@@ -103,18 +111,41 @@ export function AddServiceView() {
       toast.error("Service name needs at least one letter or digit");
       return;
     }
+    if (source === "repo" && !picked) {
+      toast.error("Pick a repo first");
+      return;
+    }
+    if (source === "image" && !imageRepo.trim()) {
+      toast.error("Image repository required, e.g. ghcr.io/owner/app");
+      return;
+    }
     setSubmitting(true);
     try {
-      await api(`/api/projects/${encodeURIComponent(project)}/services`, {
-        method: "POST",
-        body: {
-          // name = slug (server also slugifies defensively); displayName
-          // = the free-form label.
+      // Body shape diverges by source. Server validates either way:
+      //   - source=repo  → runtime in {dockerfile,nixpacks,static,
+      //     buildpacks,worker}; repo.{url,defaultBranch,path}; github
+      //     installationId for private repos.
+      //   - source=image → runtime="image"; image.{repository,tag};
+      //     no repo + no github.
+      let body: Record<string, unknown>;
+      if (source === "image") {
+        body = {
+          name: slug,
+          displayName: name.trim(),
+          runtime: "image",
+          image: {
+            repository: imageRepo.trim(),
+            tag: imageTag.trim() || "latest",
+          },
+          ...(port ? { port: parseInt(port, 10) } : {}),
+        };
+      } else {
+        body = {
           name: slug,
           displayName: name.trim(),
           repo: {
-            url: `https://github.com/${picked.repo.fullName}`,
-            defaultBranch: picked.repo.defaultBranch,
+            url: `https://github.com/${picked!.repo.fullName}`,
+            defaultBranch: picked!.repo.defaultBranch,
             ...(path.trim() ? { path: path.trim() } : {}),
           },
           runtime,
@@ -122,8 +153,12 @@ export function AddServiceView() {
             ? { command: command.trim().split(/\s+/).filter(Boolean) }
             : {}),
           ...(port ? { port: parseInt(port, 10) } : {}),
-          github: { installationId: picked.installationId },
-        },
+          github: { installationId: picked!.installationId },
+        };
+      }
+      await api(`/api/projects/${encodeURIComponent(project)}/services`, {
+        method: "POST",
+        body,
       });
       toast.success(`Service ${name} added`);
       router.replace(`/projects/${encodeURIComponent(project)}`);
@@ -143,10 +178,122 @@ export function AddServiceView() {
       <header>
         <h1 className="font-heading text-2xl font-semibold tracking-tight">Add service</h1>
         <p className="mt-1 text-sm text-[var(--text-secondary)]">
-          Adding to <span className="font-mono text-[var(--text-primary)]">{project}</span>. Pick a
-          GitHub repo; kuso detects the runtime and port.
+          Adding to <span className="font-mono text-[var(--text-primary)]">{project}</span>.{" "}
+          {source === "repo"
+            ? "Pick a GitHub repo; kuso detects the runtime and port."
+            : "Deploy a pre-built OCI image. No build, no GitHub App needed."}
         </p>
       </header>
+
+      {/* Source mode — repo (kaniko/buildkit) or pre-built image.
+          Selecting image hides the GitHub-flavoured panels entirely so
+          a kuso install without a configured GitHub App can still
+          reach first compute. */}
+      <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+        <div className="border-b border-[var(--border-subtle)] px-4 py-2.5">
+          <h2 className="text-sm font-semibold tracking-tight">Source</h2>
+        </div>
+        <div className="flex gap-2 px-4 py-3">
+          <button
+            type="button"
+            onClick={() => setSource("repo")}
+            className={
+              "flex flex-1 flex-col gap-1 rounded-md border px-3 py-2 text-left transition-colors " +
+              (source === "repo"
+                ? "border-[var(--accent)] bg-[var(--accent-subtle)]"
+                : "border-[var(--border-subtle)] bg-[var(--bg-primary)] hover:bg-[var(--bg-tertiary)]")
+            }
+          >
+            <span className="flex items-center gap-1.5 text-sm font-medium">
+              <Github className="h-3.5 w-3.5" />
+              GitHub repo
+            </span>
+            <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+              kuso builds on every push
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setSource("image")}
+            className={
+              "flex flex-1 flex-col gap-1 rounded-md border px-3 py-2 text-left transition-colors " +
+              (source === "image"
+                ? "border-[var(--accent)] bg-[var(--accent-subtle)]"
+                : "border-[var(--border-subtle)] bg-[var(--bg-primary)] hover:bg-[var(--bg-tertiary)]")
+            }
+          >
+            <span className="flex items-center gap-1.5 text-sm font-medium">
+              <Box className="h-3.5 w-3.5" />
+              Pre-built image
+            </span>
+            <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+              your own CI publishes the image
+            </span>
+          </button>
+        </div>
+      </section>
+
+      {source === "image" ? (
+        <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+          <div className="border-b border-[var(--border-subtle)] px-4 py-2.5">
+            <h2 className="text-sm font-semibold tracking-tight">Image</h2>
+          </div>
+          <div className="space-y-3 px-4 py-3">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="name" hint={slug ? `url slug: ${slug}` : "letters / digits / spaces / hyphens"}>
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="My API"
+                  className="h-8 text-[12px]"
+                />
+              </Field>
+              <Field label="port" hint="container port; defaults to 8080">
+                <Input
+                  type="number"
+                  value={port}
+                  onChange={(e) => setPort(e.target.value)}
+                  placeholder="8080"
+                  className="h-8 font-mono text-[12px]"
+                />
+              </Field>
+            </div>
+            <Field label="image" hint="full registry path; e.g. ghcr.io/owner/app">
+              <Input
+                value={imageRepo}
+                onChange={(e) => setImageRepo(e.target.value)}
+                placeholder="ghcr.io/owner/app"
+                className="h-8 font-mono text-[12px]"
+              />
+            </Field>
+            <Field label="tag" hint="immutable tags or digests roll predictably; :latest is mutable">
+              <Input
+                value={imageTag}
+                onChange={(e) => setImageTag(e.target.value)}
+                placeholder="latest"
+                className="h-8 font-mono text-[12px]"
+              />
+            </Field>
+            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+              kuso pulls this image directly — no build, no kaniko, no GitHub App. Push a new
+              image via your own CI, then bump the tag here to roll the service.
+            </p>
+          </div>
+          <footer className="flex items-center justify-between border-t border-[var(--border-subtle)] px-4 py-3">
+            <Link
+              href={`/projects/${encodeURIComponent(project)}`}
+              className="font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+            >
+              ← cancel
+            </Link>
+            <Button type="button" size="sm" onClick={onAdd} disabled={submitting}>
+              <Plus className="h-3.5 w-3.5" />
+              {submitting ? "Adding…" : "Add service"}
+            </Button>
+          </footer>
+        </section>
+      ) : (
+      <>
 
       {/* Repo picker */}
       <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
@@ -343,6 +490,8 @@ export function AddServiceView() {
             </Button>
           </footer>
         </section>
+      )}
+      </>
       )}
     </div>
   );
