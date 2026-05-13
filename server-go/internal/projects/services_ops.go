@@ -748,17 +748,15 @@ func (s *Service) RenameService(ctx context.Context, project, oldName, newName s
 	// (non-production) envs come along with their branch + host
 	// preserved; preview envs are dropped (they're short-lived and
 	// the GH webhook will recreate them on the next PR event).
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: labelSelector(map[string]string{labelProject: project, labelService: oldName}),
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		labelProject: project,
+		labelService: oldName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list envs: %w", err)
 	}
-	for i := range envs.Items {
-		var oldEnv kube.KusoEnvironment
-		if err := decodeInto(&envs.Items[i], &oldEnv); err != nil {
-			continue
-		}
+	for i := range envs {
+		oldEnv := envs[i]
 		if oldEnv.Spec.Kind == "preview" {
 			continue
 		}
@@ -837,15 +835,16 @@ func (s *Service) DeleteService(ctx context.Context, project, service string) er
 	if err != nil {
 		return err
 	}
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: labelSelector(map[string]string{labelProject: project, labelService: service}),
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		labelProject: project,
+		labelService: service,
 	})
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
 	}
-	for i := range envs.Items {
-		if err := s.Kube.DeleteKusoEnvironment(ctx, ns, envs.Items[i].GetName()); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("delete env %s: %w", envs.Items[i].GetName(), err)
+	for i := range envs {
+		if err := s.Kube.DeleteKusoEnvironment(ctx, ns, envs[i].Name); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete env %s: %w", envs[i].Name, err)
 		}
 	}
 	if err := s.Kube.DeleteKusoService(ctx, ns, serviceCRName(project, service)); err != nil && !apierrors.IsNotFound(err) {
@@ -899,19 +898,17 @@ func (s *Service) GetDetectedEnv(ctx context.Context, project, service string) (
 	if !strings.HasPrefix(service, project+"-") {
 		fqService = project + "-" + service
 	}
-	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: kube.LabelSelector(map[string]string{
-			kube.LabelProject: project,
-			kube.LabelService: fqService,
-		}),
+	raw, err := s.Kube.ListKusoBuildsByLabels(ctx, ns, map[string]string{
+		kube.LabelProject: project,
+		kube.LabelService: fqService,
 	})
 	if err != nil {
 		return nil, "", fmt.Errorf("list builds for detected env: %w", err)
 	}
 	var bestNames []string
 	var bestAt string
-	for i := range raw.Items {
-		anns := raw.Items[i].GetAnnotations()
+	for i := range raw {
+		anns := raw[i].Annotations
 		if anns == nil {
 			continue
 		}
@@ -1590,8 +1587,13 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 	if !changed.any() {
 		return nil
 	}
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: envSelector(project, service),
+	// Cached typed list — warm informer = slice filter, cold = one
+	// network call. Pre-pass-4 P1-1 this went through
+	// Dynamic.Resource(...).List directly, missing the informer
+	// cache entirely and producing per-tick apiserver load.
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		labelProject: project,
+		labelService: service,
 	})
 	if err != nil {
 		return fmt.Errorf("list envs for propagation: %w", err)
@@ -1611,8 +1613,8 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			effectivePlacement = svc.Spec.Placement
 		}
 	}
-	for i := range envs.Items {
-		envName := envs.Items[i].GetName()
+	for i := range envs {
+		envName := envs[i].Name
 		// RMW with retry-on-409: re-fetch the env CR, apply the
 		// propagation, write. Without this the helm-operator's
 		// status patches (which fire every reconcile while the env

@@ -158,10 +158,13 @@ func (b *buildQueueProbe) refresh() (int, int) {
 	defer cancel()
 
 	queue := 0
-	if list, err := b.kc.Dynamic.Resource(kube.GVRBuilds).Namespace("").List(ctx, metav1.ListOptions{
-		LabelSelector: "kuso.sislelabs.com/build-state=queued",
+	// Cluster-wide list — cache-backed (pass-4 P1-1). Metrics tick
+	// is per-scrape (every 15s default), and queue-counter polls
+	// historically thrashed the apiserver on multi-project clusters.
+	if list, err := b.kc.ListKusoBuildsByLabels(ctx, "", map[string]string{
+		"kuso.sislelabs.com/build-state": "queued",
 	}); err == nil {
-		queue = len(list.Items)
+		queue = len(list)
 	}
 
 	running := 0

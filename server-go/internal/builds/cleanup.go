@@ -43,20 +43,20 @@ import (
 // logged to logFn but don't abort the sweep.
 func SweepFinishedBuilds(ctx context.Context, kc *kube.Client, namespace string, keepFor time.Duration, logFn func(msg string, kv ...any)) (int, error) {
 	cutoff := time.Now().Add(-keepFor)
-	list, err := kc.Dynamic.Resource(kube.GVRBuilds).Namespace(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "kuso.sislelabs.com/build-state=done",
+	list, err := kc.ListKusoBuildsByLabels(ctx, namespace, map[string]string{
+		"kuso.sislelabs.com/build-state": "done",
 	})
 	if err != nil {
 		return 0, fmt.Errorf("list finished builds: %w", err)
 	}
 	deleted := 0
-	for i := range list.Items {
-		item := &list.Items[i]
-		ts := item.GetCreationTimestamp()
-		if ts.IsZero() || ts.After(cutoff) {
+	for i := range list {
+		item := &list[i]
+		ts := item.CreationTimestamp
+		if ts.IsZero() || ts.Time.After(cutoff) {
 			continue
 		}
-		name := item.GetName()
+		name := item.Name
 		// The watch-selector excludes build-state=done from the
 		// helm-operator's reconcile queue, which means it also won't
 		// see our delete event — so the helm-uninstall finalizer
@@ -102,8 +102,8 @@ func CapBuildsPerService(ctx context.Context, kc *kube.Client, namespace string,
 	if max <= 0 {
 		return 0, nil
 	}
-	list, err := kc.Dynamic.Resource(kube.GVRBuilds).Namespace(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "kuso.sislelabs.com/build-state=done",
+	list, err := kc.ListKusoBuildsByLabels(ctx, namespace, map[string]string{
+		"kuso.sislelabs.com/build-state": "done",
 	})
 	if err != nil {
 		return 0, fmt.Errorf("list finished builds: %w", err)
@@ -116,15 +116,13 @@ func CapBuildsPerService(ctx context.Context, kc *kube.Client, namespace string,
 		ts   time.Time
 	}
 	byService := map[string][]build{}
-	for i := range list.Items {
-		item := &list.Items[i]
-		labels := item.GetLabels()
-		svc := labels["kuso.sislelabs.com/service"]
+	for i := range list {
+		item := &list[i]
+		svc := item.Labels["kuso.sislelabs.com/service"]
 		if svc == "" {
 			continue
 		}
-		ts := item.GetCreationTimestamp()
-		byService[svc] = append(byService[svc], build{name: item.GetName(), ts: ts.Time})
+		byService[svc] = append(byService[svc], build{name: item.Name, ts: item.CreationTimestamp.Time})
 	}
 	deleted := 0
 	for svc, builds := range byService {

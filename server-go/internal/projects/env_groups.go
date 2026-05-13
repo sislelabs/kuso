@@ -632,14 +632,14 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 	selector := fmt.Sprintf("%s=%s,%s=%s", labelProject, project, labelEnv, name)
 
 	// Envs first.
-	envList, _ := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
-		List(ctx, metav1.ListOptions{LabelSelector: selector})
-	if envList != nil {
-		for i := range envList.Items {
-			n := envList.Items[i].GetName()
-			if err := s.Kube.DeleteKusoEnvironment(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
-				return fmt.Errorf("delete env %s: %w", n, err)
-			}
+	envList, _ := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		labelProject: project,
+		labelEnv:     name,
+	})
+	for i := range envList {
+		n := envList[i].Name
+		if err := s.Kube.DeleteKusoEnvironment(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete env %s: %w", n, err)
 		}
 	}
 
@@ -691,25 +691,19 @@ func (s *Service) SetServiceBranchInEnv(ctx context.Context, project, env, servi
 	// In create-env we use "<svc-cr>-<env>" where svc-cr already
 	// includes the env suffix. Reconstruct from labels rather than
 	// guessing the format.
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: kube.LabelSelector(map[string]string{
-			labelProject: project,
-			labelEnv:     env,
-		}),
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		labelProject: project,
+		labelEnv:     env,
 	})
 	if err != nil {
 		return fmt.Errorf("list envs in group: %w", err)
 	}
 	matchSvc := fmt.Sprintf("%s-%s-%s", project, serviceShort, env)
-	for i := range envs.Items {
-		var e kube.KusoEnvironment
-		if err := decodeInto(&envs.Items[i], &e); err != nil {
+	for i := range envs {
+		if envs[i].Spec.Service != matchSvc {
 			continue
 		}
-		if e.Spec.Service != matchSvc {
-			continue
-		}
-		envCRName = e.Name
+		envCRName = envs[i].Name
 		break
 	}
 	patch := fmt.Sprintf(`{"spec":{"branch":%q}}`, branch)

@@ -146,9 +146,33 @@ func (c *Client) GetKusoAddon(ctx context.Context, namespace, name string) (*Kus
 	return get[KusoAddon](ctx, c, GVRAddons, namespace, name)
 }
 
+// ListKusoEnvironmentsByLabels returns KusoEnvironment CRs in
+// namespace matching the supplied label pairs. Routes through the
+// cached typed-list helper — warm informer = slice filter, cold =
+// network call. Used by every "list envs for a service" hot path:
+// propagateChangedToEnvs, drift detection, env-rename, pod
+// enumeration, the build poller. Before this helper existed, all
+// those sites went through Dynamic.Resource(GVREnvironments).List
+// directly and bypassed the cache (pass-4 P1-1).
+func (c *Client) ListKusoEnvironmentsByLabels(ctx context.Context, namespace string, labels map[string]string) ([]KusoEnvironment, error) {
+	return list[KusoEnvironment](ctx, c, GVREnvironments, namespace, metav1.ListOptions{
+		LabelSelector: LabelSelector(labels),
+	})
+}
+
 // ListKusoBuilds returns all KusoBuild CRs in namespace.
 func (c *Client) ListKusoBuilds(ctx context.Context, namespace string) ([]KusoBuild, error) {
 	return list[KusoBuild](ctx, c, GVRBuilds, namespace, metav1.ListOptions{})
+}
+
+// ListKusoBuildsByLabels returns KusoBuild CRs in namespace matching
+// the supplied label pairs. Cache-friendly; used by the build
+// poller's tick (was previously per-namespace Dynamic.Resource list,
+// bypassing the cache) and the find-recent-by-branch lookup.
+func (c *Client) ListKusoBuildsByLabels(ctx context.Context, namespace string, labels map[string]string) ([]KusoBuild, error) {
+	return list[KusoBuild](ctx, c, GVRBuilds, namespace, metav1.ListOptions{
+		LabelSelector: LabelSelector(labels),
+	})
 }
 
 // GetKusoBuild fetches one KusoBuild by name.

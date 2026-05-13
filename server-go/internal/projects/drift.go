@@ -156,26 +156,23 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	// in metadata.labels (set by the server at create time). The
 	// `env-kind` label only lives on chart-rendered children
 	// (Deployment, Service, etc.) — wrong key for the CR list.
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: kube.LabelSelector(map[string]string{
-			kube.LabelProject: project,
-			kube.LabelService: shortSvc,
-			kube.LabelEnv:     "production",
-		}),
+	// Cached typed list (pass-4 P1-1) — drift is polled every 10s
+	// per open service overlay, so hot-path performance matters.
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		kube.LabelProject: project,
+		kube.LabelService: shortSvc,
+		kube.LabelEnv:     "production",
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list envs for drift: %w", err)
 	}
 	out := &DriftReport{SpecPending: []string{}, PodsStale: []string{}}
-	if len(envs.Items) == 0 {
+	if len(envs) == 0 {
 		// No production env yet — likely a freshly-created service.
 		// Not drift; the create flow will land the env CR shortly.
 		return out, nil
 	}
-	var env kube.KusoEnvironment
-	if cerr := decodeInto(&envs.Items[0], &env); cerr != nil {
-		return out, nil
-	}
+	env := envs[0]
 	out.EnvName = env.Name
 
 	// Compare propagated fields. The list mirrors what

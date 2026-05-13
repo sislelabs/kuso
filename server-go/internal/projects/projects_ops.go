@@ -243,25 +243,31 @@ func (s *Service) propagateBaseDomain(ctx context.Context, project, oldBase, new
 	if err != nil {
 		return err
 	}
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: project}),
+	// Cached typed list — warm informer = slice filter, cold = one
+	// network call (pass-4 P1-1).
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		kube.LabelProject: project,
 	})
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
 	}
-	for i := range envs.Items {
-		var env kube.KusoEnvironment
-		if cerr := decodeInto(&envs.Items[i], &env); cerr != nil {
-			continue
-		}
+	for i := range envs {
+		env := &envs[i]
 		expected := defaultHost(env.Spec.Service, project, oldBase)
 		if env.Spec.Host != expected {
 			// User-customised host — leave it.
 			continue
 		}
-		env.Spec.Host = defaultHost(env.Spec.Service, project, newBase)
-		env.Spec.TLSHosts = computeTLSHosts(env.Spec.Host, env.Spec.AdditionalHosts)
-		if _, uerr := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); uerr != nil {
+		// RMW retry so a status-patch race doesn't lose the
+		// new host. Without retry, propagating a baseDomain
+		// change across N envs at the same time as the
+		// helm-operator's reconcile cycle could silently revert
+		// some of them.
+		if _, uerr := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(live *kube.KusoEnvironment) error {
+			live.Spec.Host = defaultHost(env.Spec.Service, project, newBase)
+			live.Spec.TLSHosts = computeTLSHosts(live.Spec.Host, live.Spec.AdditionalHosts)
+			return nil
+		}); uerr != nil {
 			return fmt.Errorf("update env %s: %w", env.Name, uerr)
 		}
 	}
@@ -327,13 +333,13 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	// so without this delete the next reconcile re-renders the build
 	// pod and the project-delete cleanup races against a half-built
 	// image push.
-	if buildsList, lerr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: name}),
+	if buildsList, lerr := s.Kube.ListKusoBuildsByLabels(ctx, ns, map[string]string{
+		kube.LabelProject: name,
 	}); lerr != nil {
 		return fmt.Errorf("list builds: %w", lerr)
 	} else {
-		for i := range buildsList.Items {
-			bn := buildsList.Items[i].GetName()
+		for i := range buildsList {
+			bn := buildsList[i].Name
 			if derr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 				Delete(ctx, bn, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
 				return fmt.Errorf("delete build %s: %w", bn, derr)
@@ -386,18 +392,15 @@ func (s *Service) listEnvsForProjectWithServices(ctx context.Context, project st
 	if err != nil {
 		return nil, err
 	}
-	raw, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: labelSelector(map[string]string{labelProject: project}),
+	raw, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		labelProject: project,
 	})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]kube.KusoEnvironment, 0, len(raw.Items))
-	for i := range raw.Items {
-		var e kube.KusoEnvironment
-		if err := decodeInto(&raw.Items[i], &e); err != nil {
-			return nil, err
-		}
+	out := make([]kube.KusoEnvironment, 0, len(raw))
+	for i := range raw {
+		e := raw[i]
 		populateDerivedStatus(&e)
 		s.populateLiveStatus(ctx, ns, &e, svcByName)
 		out = append(out, e)

@@ -460,13 +460,14 @@ func (s *Service) RefreshEnvSecrets(ctx context.Context, project string) error {
 		secrets = append(secrets, connSecretName(a.Name))
 	}
 	ns := s.nsFor(ctx, project)
-	envs, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
-		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: project})})
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		kube.LabelProject: project,
+	})
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
 	}
-	for i := range envs.Items {
-		envName := envs.Items[i].GetName()
+	for i := range envs {
+		envName := envs[i].Name
 		patch := buildEnvFromSecretsPatch(secrets)
 		if _, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
 			Patch(ctx, envName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil && !apierrors.IsNotFound(err) {

@@ -441,23 +441,9 @@ func (s *Service) findEnv(ctx context.Context, project, service, env string) (*k
 }
 
 func (s *Service) envsForService(ctx context.Context, project, service string) ([]kube.KusoEnvironment, error) {
-	raw, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(s.nsFor(ctx, project)).
-		List(ctx, metav1.ListOptions{
-			LabelSelector: kube.LabelSelector(map[string]string{
-				kube.LabelProject: project,
-				kube.LabelService: service,
-			}),
-		})
-	if err != nil {
-		return nil, fmt.Errorf("list envs for %s/%s: %w", project, service, err)
-	}
-	out := make([]kube.KusoEnvironment, 0, len(raw.Items))
-	for i := range raw.Items {
-		var e kube.KusoEnvironment
-		if err := unstructuredInto(&raw.Items[i], &e); err != nil {
-			return nil, err
-		}
-		out = append(out, e)
-	}
-	return out, nil
+	// Cached typed list (pass-4 P1-1).
+	return s.Kube.ListKusoEnvironmentsByLabels(ctx, s.nsFor(ctx, project), map[string]string{
+		kube.LabelProject: project,
+		kube.LabelService: service,
+	})
 }

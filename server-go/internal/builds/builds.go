@@ -661,24 +661,18 @@ func (s *Service) findRecentForBranch(ctx context.Context, ns, project, fqn, bra
 	// we list everything for the service and filter in code; the
 	// label cardinality is bounded (~5-50 builds per service over
 	// any short window).
-	selector := kube.LabelSelector(map[string]string{
+	raw, err := s.Kube.ListKusoBuildsByLabels(lctx, ns, map[string]string{
 		kube.LabelProject: project,
 		kube.LabelService: fqn,
-	})
-	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
-		LabelSelector: selector,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list recent builds: %w", err)
 	}
 	cutoff := time.Now().Add(-window)
 	var best *kube.KusoBuild
-	for i := range raw.Items {
-		if raw.Items[i].GetLabels()["kuso.sislelabs.com/build-state"] == "done" {
-			continue
-		}
-		var b kube.KusoBuild
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &b); err != nil {
+	for i := range raw {
+		b := raw[i]
+		if b.Labels["kuso.sislelabs.com/build-state"] == "done" {
 			continue
 		}
 		if b.Spec.Branch != branch {
@@ -709,20 +703,21 @@ func (s *Service) findActiveForService(ctx context.Context, ns, project, fqn str
 	}
 	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	selector := kube.LabelSelector(map[string]string{
+	raw, err := s.Kube.ListKusoBuildsByLabels(lctx, ns, map[string]string{
 		kube.LabelProject: project,
 		kube.LabelService: fqn,
-	}) + ",!kuso.sislelabs.com/build-state"
-	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
-		LabelSelector: selector,
 	})
 	if err != nil {
 		return "", fmt.Errorf("list active builds: %w", err)
 	}
-	if len(raw.Items) == 0 {
-		return "", nil
+	// "In-flight" = no build-state label. We can't express `absent` in
+	// the cache-helper's equality map, so filter in code.
+	for i := range raw {
+		if raw[i].Labels["kuso.sislelabs.com/build-state"] == "" {
+			return raw[i].Name, nil
+		}
 	}
-	return raw.Items[0].GetName(), nil
+	return "", nil
 }
 
 // Cancel marks an in-flight build as cancelled and tears down its
@@ -880,20 +875,22 @@ func (s *Service) supersedePriorBuilds(ctx context.Context, ns, project, fqn, ne
 	}
 	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	selector := kube.LabelSelector(map[string]string{
+	raw, err := s.Kube.ListKusoBuildsByLabels(lctx, ns, map[string]string{
 		kube.LabelProject: project,
 		kube.LabelService: fqn,
-	}) + ",!kuso.sislelabs.com/build-state"
-	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
-		LabelSelector: selector,
 	})
 	if err != nil {
 		slog.Default().Warn("builds: list active for supersede", "err", err, "project", project, "service", fqn)
 		return
 	}
 	now := time.Now().UTC().Format(time.RFC3339)
-	for i := range raw.Items {
-		name := raw.Items[i].GetName()
+	for i := range raw {
+		// `!build-state` (in-flight) filter — done in code since the
+		// cache helper takes an equality-only map.
+		if raw[i].Labels["kuso.sislelabs.com/build-state"] != "" {
+			continue
+		}
+		name := raw[i].Name
 		if name == newName {
 			continue
 		}
@@ -1007,17 +1004,9 @@ func (s *Service) List(ctx context.Context, project, service string) ([]kube.Kus
 	if service != "" {
 		pairs[kube.LabelService] = project + "-" + service
 	}
-	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(s.nsFor(ctx, project)).List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(pairs)})
+	out, err := s.Kube.ListKusoBuildsByLabels(ctx, s.nsFor(ctx, project), pairs)
 	if err != nil {
 		return nil, fmt.Errorf("list builds: %w", err)
-	}
-	out := make([]kube.KusoBuild, 0, len(raw.Items))
-	for i := range raw.Items {
-		var b kube.KusoBuild
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &b); err != nil {
-			return nil, fmt.Errorf("decode build: %w", err)
-		}
-		out = append(out, b)
 	}
 	// Newest first by creationTimestamp; ties break on name lexically so
 	// the order is stable across calls.
@@ -1781,27 +1770,29 @@ func (p *Poller) tick(ctx context.Context) error {
 	// 1000 historical builds in a busy cluster, this turns a full-table
 	// list into an indexed scan over the few in-flight rows — and
 	// matches what the operator side already does.
-	const activeBuilds = "!kuso.sislelabs.com/build-state"
 	for _, ns := range p.Svc.ScanNamespaces(ctx) {
-		raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
-			List(ctx, metav1.ListOptions{LabelSelector: activeBuilds})
+		// All builds in the namespace via the informer cache; we filter
+		// out done ones in code (the cache helper takes equality maps
+		// only, can't express `!build-state`). The active-build set is
+		// small relative to historical builds, so the scan cost is fine.
+		raw, err := p.Svc.Kube.ListKusoBuildsByLabels(ctx, ns, nil)
 		if err != nil {
 			p.Logger.Warn("build poller list", "ns", ns, "err", err)
 			continue
 		}
-		for i := range raw.Items {
-			var b kube.KusoBuild
-			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &b); err != nil {
+		for i := range raw {
+			b := &raw[i]
+			if b.Labels["kuso.sislelabs.com/build-state"] == "done" {
 				continue
 			}
 			// Defensive: the selector excludes done builds, but a
 			// build mid-mark could land here on a race. Keep the
 			// in-memory phase check so we skip it cleanly.
-			phase := buildPhase(&b)
+			phase := buildPhase(b)
 			if phase == "succeeded" || phase == "failed" {
 				continue
 			}
-			if err := p.checkBuild(ctx, ns, &b); err != nil && !apierrors.IsNotFound(err) {
+			if err := p.checkBuild(ctx, ns, b); err != nil && !apierrors.IsNotFound(err) {
 				p.Logger.Warn("build poller checkBuild", "build", b.Name, "ns", ns, "err", err)
 			}
 		}
@@ -1871,13 +1862,14 @@ func (p *Poller) tick(ctx context.Context) error {
 //
 // Best-effort: kube errors are warn-logged and the next tick retries.
 func (p *Poller) dispatchQueued(ctx context.Context, ns string) {
-	raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
-		List(ctx, metav1.ListOptions{LabelSelector: "kuso.sislelabs.com/build-state=queued"})
+	raw, err := p.Svc.Kube.ListKusoBuildsByLabels(ctx, ns, map[string]string{
+		"kuso.sislelabs.com/build-state": "queued",
+	})
 	if err != nil {
 		p.Logger.Warn("build poller queue list", "ns", ns, "err", err)
 		return
 	}
-	if len(raw.Items) == 0 {
+	if len(raw) == 0 {
 		return
 	}
 	// Group queued builds by (project, service). Sorting keys makes
@@ -1888,18 +1880,15 @@ func (p *Poller) dispatchQueued(ctx context.Context, ns string) {
 		list    []*kube.KusoBuild
 	}
 	byKey := map[string]*svcQueue{}
-	for i := range raw.Items {
-		var b kube.KusoBuild
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &b); err != nil {
-			continue
-		}
+	for i := range raw {
+		b := &raw[i]
 		key := b.Spec.Project + "/" + b.Spec.Service
 		q, ok := byKey[key]
 		if !ok {
 			q = &svcQueue{project: b.Spec.Project, fqn: b.Spec.Service}
 			byKey[key] = q
 		}
-		q.list = append(q.list, &b)
+		q.list = append(q.list, b)
 	}
 	// Group services by project so we can round-robin at the project
 	// level (not the service level).
