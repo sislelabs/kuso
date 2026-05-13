@@ -45,14 +45,32 @@ RUN --mount=type=cache,target=/web/.next/cache \
 FROM golang:1.26-bookworm AS build
 ARG VERSION=v0.2.0-dev
 
-WORKDIR /src
-COPY server-go/go.mod server-go/go.sum* ./
+# server-go/go.mod has `replace` directives pointing at the in-repo
+# api/apiv1 and coolify modules. Those paths are relative to
+# server-go/, so we lay the workspace out at /workspace/{server-go,
+# api/apiv1,coolify} inside the container so the replaces resolve.
+# WORKDIR drops into server-go/ so subsequent `go mod download` /
+# `go build` invocations target the right module.
+#
+# Copy go.mod + go.sum files first so npm-style layer caching works:
+# a server-go source edit doesn't bust the `go mod download` layer
+# unless its dependencies changed.
+WORKDIR /workspace
+COPY api/apiv1/go.mod api/apiv1/go.sum* ./api/apiv1/
+COPY coolify/go.mod coolify/go.sum* ./coolify/
+COPY server-go/go.mod server-go/go.sum* ./server-go/
+
+WORKDIR /workspace/server-go
 RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
-COPY server-go/ ./
+
+# Now bring in the actual sources for each replaced module + server-go.
+COPY api/apiv1/ /workspace/api/apiv1/
+COPY coolify/ /workspace/coolify/
+COPY server-go/ /workspace/server-go/
 
 # Replace the placeholder web/dist with the real SPA bundle.
-COPY --from=web-build /tmp/dist /src/internal/web/dist
+COPY --from=web-build /tmp/dist /workspace/server-go/internal/web/dist
 
 # CGO_ENABLED=0 + -trimpath gives a fully static, reproducible binary
 # that runs in a `scratch` rootfs.
