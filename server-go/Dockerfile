@@ -42,7 +42,7 @@ RUN --mount=type=cache,target=/web/.next/cache \
 
 # ---- 2. go build ---------------------------------------------------------
 
-FROM golang:1.25-bookworm AS build
+FROM golang:1.26-bookworm AS build
 ARG VERSION=v0.2.0-dev
 
 WORKDIR /src
