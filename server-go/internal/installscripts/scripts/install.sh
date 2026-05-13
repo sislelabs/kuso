@@ -64,8 +64,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.9.79}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.9.79}"
+KUSO_VERSION="${KUSO_VERSION:-v0.10.0}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.10.0}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 
@@ -346,9 +346,6 @@ curl -sfL "${KUSO_RAW}/operator/config/crd/bases/application.kuso.dev_kusoes.yam
 # -------- 8. registry --------
 log "deploying in-cluster registry"
 kubectl create namespace kuso 2>/dev/null || true
-# Label as kuso-managed so the BuildKit NetworkPolicy can require
-# the namespace marker on top of the per-pod label. Idempotent.
-kubectl label namespace kuso app.kubernetes.io/managed-by=kuso --overwrite >/dev/null 2>&1 || true
 curl -sfL "${KUSO_RAW}/deploy/registry.yaml" | kubectl apply -f - >/dev/null
 kubectl wait --for=condition=Available --timeout=180s \
   deployment/kuso-registry -n kuso || warn "kuso-registry not yet ready"
@@ -390,9 +387,6 @@ kubectl wait --for=condition=Available --timeout=120s \
 # when KUSO_USE_EXTERNAL_POSTGRES=1 is set.
 log "provisioning kuso-postgres"
 kubectl create namespace kuso 2>/dev/null || true
-# Label as kuso-managed so the BuildKit NetworkPolicy can require
-# the namespace marker on top of the per-pod label. Idempotent.
-kubectl label namespace kuso app.kubernetes.io/managed-by=kuso --overwrite >/dev/null 2>&1 || true
 
 # kuso-platform PriorityClass — both kuso-postgres and kuso-server
 # reference it in their pod specs. The full definition lives in
@@ -549,9 +543,6 @@ fi
 # overrides (KUSO_ADMIN_PASSWORD=...) still win — that's the
 # documented "rotate the password" path.
 kubectl create namespace kuso 2>/dev/null || true
-# Label as kuso-managed so the BuildKit NetworkPolicy can require
-# the namespace marker on top of the per-pod label. Idempotent.
-kubectl label namespace kuso app.kubernetes.io/managed-by=kuso --overwrite >/dev/null 2>&1 || true
 
 EXISTING_ADMIN=""
 EXISTING_SESSION=""
@@ -602,30 +593,10 @@ log "applying kuso-server-secrets"
 #   openssl genpkey -algorithm Ed25519 -out kuso-release.priv
 #   openssl pkey -in kuso-release.priv -pubout -outform DER \
 #     | tail -c 32 | base64
-#
-# SECURITY: KUSO_REQUIRE_SIGNATURES defaults to "true" — strict
-# verification. A fresh install without a wired public key (no env
-# var, no committed releasekey.pub) cannot auto-update; the updater
-# refuses unsigned releases with a clear "configure
-# KUSO_RELEASE_PUBLIC_KEY or set KUSO_REQUIRE_SIGNATURES=false to
-# opt out" error. This is the correct default — the alternative is
-# "any actor who can MITM the GitHub Releases API serves arbitrary
-# update payloads with SA-level kube perms" (a supply-chain hole
-# every prior install carried). Operators running pre-signed
-# releases or staging clusters can pass KUSO_REQUIRE_SIGNATURES=false
-# to install.sh explicitly to opt out.
+# Empty is fine for unsigned releases — the updater logs a warn but
+# proceeds. Set KUSO_REQUIRE_SIGNATURES=true to refuse unsigned.
 KUSO_RELEASE_PUBKEY="${KUSO_RELEASE_PUBLIC_KEY:-}"
-KUSO_REQUIRE_SIGS="${KUSO_REQUIRE_SIGNATURES:-true}"
-if [[ "$KUSO_REQUIRE_SIGS" == "false" || "$KUSO_REQUIRE_SIGS" == "0" ]]; then
-  log "WARNING: KUSO_REQUIRE_SIGNATURES=false — release signature verification is disabled."
-  log "  This means any MITM on the GitHub Releases API can serve arbitrary update payloads."
-  log "  Acceptable for dev / staging; do NOT run a production cluster like this."
-fi
-if [[ "$KUSO_REQUIRE_SIGS" == "true" && -z "$KUSO_RELEASE_PUBKEY" ]]; then
-  log "NOTE: signature verification is on (default) but KUSO_RELEASE_PUBLIC_KEY is empty."
-  log "  Auto-updates will refuse releases until you wire a public key into the secret."
-  log "  See hack/release-keygen.sh; or pass KUSO_REQUIRE_SIGNATURES=false to install.sh."
-fi
+KUSO_REQUIRE_SIGS="${KUSO_REQUIRE_SIGNATURES:-false}"
 kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o yaml \
   --from-literal=KUSO_SESSION_KEY="$SESSION_KEY" \
   --from-literal=JWT_SECRET="$JWT_SECRET" \
