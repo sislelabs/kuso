@@ -95,6 +95,97 @@ func validateRepoPath(p string) error {
 	return nil
 }
 
+// ociImageRE is the allow-list for an OCI image reference. Used to
+// validate every user-supplied image string (static.runtimeImage,
+// static.builderImage, buildpacks.builderImage,
+// buildpacks.lifecycleImage). The build controller interpolates
+// these into the static-plan init container's heredoc:
+//
+//   cat > .kuso-static.Dockerfile <<EOF
+//   FROM $RUNTIME_IMAGE
+//   COPY $OUTPUT_DIR /usr/share/nginx/html
+//   EOF
+//
+// A value with embedded newlines breaks out of the heredoc and the
+// following lines run as shell commands. Restricting to the OCI
+// reference grammar (no whitespace, no newlines, just registry +
+// path + tag/digest characters) closes the heredoc-injection path.
+//
+// Grammar: ASCII letters, digits, dot, dash, underscore, slash,
+// colon (tag separator), at sign (digest separator). Empty allowed
+// (chart applies its default). Length capped at 255 (OCI cap) so a
+// 10MB value can't be smuggled in.
+var ociImageRE = regexp.MustCompile(`^[a-zA-Z0-9._/:@-]+$`)
+
+func validateImageRef(field, v string) error {
+	if v == "" {
+		return nil
+	}
+	if len(v) > 255 {
+		return fmt.Errorf("%w: %s must be ≤ 255 characters", ErrInvalid, field)
+	}
+	if !ociImageRE.MatchString(v) {
+		return fmt.Errorf("%w: %s contains characters outside the OCI reference grammar (letters, digits, ./_-:@)", ErrInvalid, field)
+	}
+	return nil
+}
+
+// validateStaticSpec checks every user-supplied field on the static
+// runtime block. outputDir reuses the repo.path validator (same
+// shell-context risk + same allow-list); the three image fields
+// route through validateImageRef.
+func validateStaticSpec(s *ServiceStaticSpec) error {
+	if s == nil {
+		return nil
+	}
+	if err := validateImageRef("static.builderImage", s.BuilderImage); err != nil {
+		return err
+	}
+	if err := validateImageRef("static.runtimeImage", s.RuntimeImage); err != nil {
+		return err
+	}
+	// outputDir is interpolated as `COPY $OUTPUT_DIR ...` — same
+	// shell-context risk as repo.path. buildCmd stays unvalidated
+	// (it IS a shell command by design).
+	if s.OutputDir != "" {
+		if strings.Contains(s.OutputDir, "..") {
+			return fmt.Errorf("%w: static.outputDir must not contain .. (traversal)", ErrInvalid)
+		}
+		if strings.HasPrefix(s.OutputDir, "/") {
+			return fmt.Errorf("%w: static.outputDir must be a relative path", ErrInvalid)
+		}
+		if !repoPathRE.MatchString(s.OutputDir) {
+			return fmt.Errorf("%w: static.outputDir may only contain letters, digits, dot, slash, underscore, dash", ErrInvalid)
+		}
+	}
+	return nil
+}
+
+// validateBuildpacksSpec checks the buildpacks-runtime user inputs.
+// Both image fields are user-overridable so both need the OCI ref
+// allow-list.
+func validateBuildpacksSpec(s *ServiceBuildpacksSpec) error {
+	if s == nil {
+		return nil
+	}
+	if err := validateImageRef("buildpacks.builderImage", s.BuilderImage); err != nil {
+		return err
+	}
+	return validateImageRef("buildpacks.lifecycleImage", s.LifecycleImage)
+}
+
+// validateServiceImageSpec covers runtime=image deploys. Repository
+// + Tag are both user-supplied.
+func validateServiceImageSpec(s *ServiceImageSpec) error {
+	if s == nil {
+		return nil
+	}
+	if err := validateImageRef("image.repository", s.Repository); err != nil {
+		return err
+	}
+	return validateImageRef("image.tag", s.Tag)
+}
+
 // ListServices returns every service in the project, label-filtered.
 func (s *Service) ListServices(ctx context.Context, project string) ([]kube.KusoService, error) {
 	return s.listServicesForProject(ctx, project)
@@ -156,6 +247,22 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	// rather than threading slug everywhere.
 	req.Name = slug
 	if err := validateRuntime(req.Runtime); err != nil {
+		return nil, err
+	}
+	// Static / Buildpacks / Image specs all carry user-supplied
+	// strings that the build controller interpolates into shell
+	// contexts (the static heredoc, the buildpacks creator argv,
+	// the runtime=image env CR stamp). Validate at the wire
+	// boundary so a malformed value gets a clean 400 rather than
+	// the build pod failing in a confusing way an hour later (or
+	// worse, the heredoc breakout described in pass-4 Sec F-03).
+	if err := validateStaticSpec(req.Static); err != nil {
+		return nil, err
+	}
+	if err := validateBuildpacksSpec(req.Buildpacks); err != nil {
+		return nil, err
+	}
+	if err := validateServiceImageSpec(req.Image); err != nil {
 		return nil, err
 	}
 	proj, err := s.Get(ctx, project)
