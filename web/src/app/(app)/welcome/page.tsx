@@ -192,14 +192,33 @@ function Step1InstallGitHub({
                 Install on GitHub
               </a>
             ) : installURL.isError ? (
-              // Non-admins get a 403 on /api/github/install-url. The
-              // /settings/github page is also admin-only, so pointing
-              // them there is a dead-end. Tell them what they need
-              // and let them keep going via "start without a repo."
-              <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
-                GitHub App connection requires an admin. Ask a team
-                admin to install it, or skip and start without a repo.
-              </span>
+              // Non-admins 403 on /api/github/install-url, and the
+              // /settings/github page is admin-only too. The previous
+              // copy said "ask an admin" with no path forward — UX
+              // P0-A from the pass-4 review. Now we offer a real
+              // alternative: deploy a pre-built image (no GitHub App
+              // needed; the runtime=image path landed alongside this
+              // change). Plus a mailto fallback so a user on a fresh
+              // install can ping the admin without leaving the page.
+              <div className="space-y-2">
+                <p className="font-mono text-[11px] text-[var(--text-tertiary)]">
+                  GitHub App requires an admin. Two paths forward:
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Link
+                    href="/projects/new"
+                    className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 font-mono text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]/80 hover:text-[var(--text-primary)]"
+                  >
+                    Deploy a pre-built image →
+                  </Link>
+                  <a
+                    href="mailto:?subject=kuso GitHub App install request&body=Hi%20%E2%80%94%20I%27d%20like%20to%20deploy%20a%20service%20on%20our%20kuso%20instance%20but%20the%20GitHub%20App%20isn%27t%20installed%20yet.%20Could%20you%20configure%20it%20at%20%2Fsettings%2Fgithub%3F%20Thanks!"
+                    className="inline-flex h-7 items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-transparent px-2 font-mono text-[11px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+                  >
+                    Email an admin
+                  </a>
+                </div>
+              </div>
             ) : (
               <span className="font-mono text-[11px] text-[var(--text-tertiary)]">
                 GitHub App not configured yet —{" "}
