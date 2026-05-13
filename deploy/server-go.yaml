@@ -8,8 +8,23 @@
 #
 # The cluster-wide grant is tighter than the install.sh historical
 # `cluster-admin` binding: only the verbs the server actually needs,
-# scoped to the resources we manage. Tighten further once we land
-# the namespace-scoped split tracked for v0.8.
+# scoped to the resources we manage.
+#
+# FUTURE TIGHTENING (pass-4 Sec F-07/F-08): cluster-wide `secrets:*`
+# is the largest remaining surface — a kuso-server RCE today reads
+# every Secret in every namespace, including kube-system's SA
+# signing key. Kubernetes RBAC doesn't support label-selector
+# scoping, so the real fix is a split:
+#
+#   - Cluster-scope: secrets:get,list,watch (informer reads only)
+#   - Namespace-bound Role: secrets:create,update,patch,delete on
+#     each managed namespace (home `kuso` + each project ns),
+#     bound via a RoleBinding that EnsureNamespace creates.
+#
+# That's a bigger lift (install.sh + EnsureNamespace would have to
+# stamp the RoleBinding); tracked for v0.11. Same shape for
+# pods/exec (only used to talk to addon pods in project namespaces).
+# For now this commit drops the small unused bits.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -66,8 +81,15 @@ rules:
   - apiGroups: [""]
     resources: [nodes/status]
     verbs: [get, list, watch]
+  # pods/portforward removed (pass-4 Sec F-07): unused by every
+  # server code path. The CLI runs `kubectl port-forward` locally
+  # using the user's kubeconfig, not via kuso-server.
+  # pods/exec stays — addons.repair.execInPod uses it to push
+  # password resyncs into postgres addon pods (one-shot psql
+  # ALTER ROLE). Scoping to managed namespaces only is the
+  # follow-up tracked above.
   - apiGroups: [""]
-    resources: [pods/log, pods/exec, pods/portforward]
+    resources: [pods/log, pods/exec]
     verbs: [get, list, create]
   - apiGroups: [apps]
     resources: [deployments, statefulsets, replicasets]
