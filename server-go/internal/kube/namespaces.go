@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -84,6 +86,59 @@ func (c *Client) EnsureNamespace(ctx context.Context, ns string) error {
 	}
 	return fmt.Errorf("kube: ensure namespace %q: %w", ns, err)
 }
+
+// IsManagedNamespace reports whether the named namespace carries
+// app.kubernetes.io/managed-by=kuso. The build controller calls
+// this before reconciling any KusoBuild CR — a malicious or
+// erroneously-applied CR in kube-system (which doesn't carry the
+// label) would otherwise get a privileged build pod scheduled in
+// a context that lacks pod-security.kubernetes.io/enforce=restricted.
+//
+// Result is cached for 30s per namespace. NotFound returns (false,
+// nil) — the caller treats that as "not managed" without erroring,
+// which is the right shape for the build controller's "skip and
+// log" path. Other errors propagate so a transient kube outage
+// doesn't silently let unmanaged-ns builds slip through.
+func (c *Client) IsManagedNamespace(ctx context.Context, ns string) (bool, error) {
+	if ns == "" {
+		return false, nil
+	}
+	now := time.Now()
+	managedNsCacheMu.RLock()
+	if e, ok := managedNsCache[ns]; ok && now.Before(e.expires) {
+		managedNsCacheMu.RUnlock()
+		return e.managed, nil
+	}
+	managedNsCacheMu.RUnlock()
+
+	nsObj, err := c.Clientset.CoreV1().Namespaces().Get(ctx, ns, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			managedNsCacheMu.Lock()
+			managedNsCache[ns] = managedNsEntry{managed: false, expires: now.Add(managedNsCacheTTL)}
+			managedNsCacheMu.Unlock()
+			return false, nil
+		}
+		return false, fmt.Errorf("kube: get namespace %q: %w", ns, err)
+	}
+	managed := nsObj.Labels[ManagedByLabel] == ManagedByValue
+	managedNsCacheMu.Lock()
+	managedNsCache[ns] = managedNsEntry{managed: managed, expires: now.Add(managedNsCacheTTL)}
+	managedNsCacheMu.Unlock()
+	return managed, nil
+}
+
+type managedNsEntry struct {
+	managed bool
+	expires time.Time
+}
+
+const managedNsCacheTTL = 30 * time.Second
+
+var (
+	managedNsCacheMu sync.RWMutex
+	managedNsCache   = map[string]managedNsEntry{}
+)
 
 // LabelNamespaceManaged stamps app.kubernetes.io/managed-by=kuso on an
 // existing namespace without touching PSS labels. Use this on the home

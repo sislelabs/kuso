@@ -211,6 +211,37 @@ func (s *Service) reconcile(ctx context.Context, obj any, source string) {
 		return
 	}
 
+	// Refuse to reconcile CRs outside kuso-managed namespaces. An
+	// admin (or compromised kuso-server with cluster-wide write
+	// perms) could apply a KusoBuild in `kube-system` — which lacks
+	// pod-security.kubernetes.io/enforce=restricted — and the
+	// controller would happily schedule a build pod there in a less-
+	// restricted PSS context. The managed-by=kuso label on the
+	// namespace is the same gate the BuildKit NetworkPolicy uses;
+	// we're enforcing it here at the controller level too so the
+	// namespace serves as a single coherent trust boundary.
+	{
+		ns := u.GetNamespace()
+		nsCtx, nsCancel := context.WithTimeout(ctx, 3*time.Second)
+		managed, mErr := s.Kube.IsManagedNamespace(nsCtx, ns)
+		nsCancel()
+		if mErr != nil {
+			if s.Logger != nil {
+				s.Logger.Warn("buildcontroller: namespace check failed; skipping",
+					"err", mErr, "ns", ns, "build", u.GetName())
+			}
+			return
+		}
+		if !managed {
+			if s.Logger != nil {
+				s.Logger.Warn("buildcontroller: refusing to reconcile KusoBuild in unmanaged namespace",
+					"ns", ns, "build", u.GetName(),
+					"hint", "stamp app.kubernetes.io/managed-by=kuso on the namespace if this is intentional")
+			}
+			return
+		}
+	}
+
 	key := u.GetNamespace() + "/" + u.GetName()
 	s.mu.Lock()
 	if _, already := s.running[key]; already {
