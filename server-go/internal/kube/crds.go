@@ -306,6 +306,31 @@ func (c *Client) UpdateKusoServiceWithRetry(ctx context.Context, namespace, name
 	return updateWithRetry[KusoService](ctx, c, GVRServices, "KusoService", namespace, name, mutate)
 }
 
+// UpdateKusoEnvironmentWithRetry — RMW variant for env CRs. Used by
+// the propagation path (propagateChangedToEnvs) so a helm-operator
+// status patch landing mid-loop doesn't overwrite our new spec with
+// the stale snapshot the caller assembled before the loop started.
+// Without this, a service-spec change that fans out to N envs has
+// an N% chance of losing one or more env writes whenever the
+// operator is reconciling at the same time.
+func (c *Client) UpdateKusoEnvironmentWithRetry(ctx context.Context, namespace, name string, mutate func(*KusoEnvironment) error) (*KusoEnvironment, error) {
+	return updateWithRetry[KusoEnvironment](ctx, c, GVREnvironments, "KusoEnvironment", namespace, name, mutate)
+}
+
+// UpdateKusoAddonWithRetry — same shape for addon CRs. Addon settings
+// edits (placement, size, version) race against the operator's
+// helm-release status patches; without RMW retry, a Settings → Save
+// from the UI that lands during a reconcile silently reverts.
+func (c *Client) UpdateKusoAddonWithRetry(ctx context.Context, namespace, name string, mutate func(*KusoAddon) error) (*KusoAddon, error) {
+	return updateWithRetry[KusoAddon](ctx, c, GVRAddons, "KusoAddon", namespace, name, mutate)
+}
+
+// UpdateKusoCronWithRetry — same shape for cron CRs. Cron schedule /
+// command edits race against the operator's status patches.
+func (c *Client) UpdateKusoCronWithRetry(ctx context.Context, namespace, name string, mutate func(*KusoCron) error) (*KusoCron, error) {
+	return updateWithRetry[KusoCron](ctx, c, GVRCrons, "KusoCron", namespace, name, mutate)
+}
+
 // CreateKusoProject creates a new KusoProject CR.
 func (c *Client) CreateKusoProject(ctx context.Context, namespace string, p *KusoProject) (*KusoProject, error) {
 	return create[KusoProject](ctx, c, GVRProjects, "KusoProject", namespace, p)

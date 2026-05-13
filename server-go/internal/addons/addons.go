@@ -307,61 +307,68 @@ var cronExpr5 = regexp.MustCompile(`^[\d\*\/\,\-\?]+\s+[\d\*\/\,\-\?]+\s+[\d\*\/
 func (s *Service) Update(ctx context.Context, project, name string, req UpdateAddonRequest) (*kube.KusoAddon, error) {
 	ns := s.nsFor(ctx, project)
 	fqn := addonCRName(project, name)
-	addon, err := s.Kube.GetKusoAddon(ctx, ns, fqn)
+	// RMW with retry-on-409: helm-operator continuously patches
+	// .status on the KusoAddon CR every reconcile. A plain
+	// GET-mutate-PUT loses the user's edit whenever a status patch
+	// lands between the GET and PUT (the previous update() path
+	// bumped RV on our stale snapshot and resent, silently
+	// overwriting the operator's status block). Same fix shape as
+	// F-03 on the service side.
+	updated, err := s.Kube.UpdateKusoAddonWithRetry(ctx, ns, fqn, func(addon *kube.KusoAddon) error {
+		if req.Version != nil {
+			addon.Spec.Version = *req.Version
+		}
+		if req.Size != nil {
+			addon.Spec.Size = *req.Size
+		}
+		if req.HA != nil {
+			addon.Spec.HA = *req.HA
+		}
+		if req.StorageSize != nil {
+			addon.Spec.StorageSize = *req.StorageSize
+		}
+		if req.Database != nil {
+			addon.Spec.Database = *req.Database
+		}
+		if req.Backup != nil {
+			// Lazy-init the spec.backup struct so we can patch a single
+			// field without overwriting the other one. The chart treats
+			// missing fields as "use default" — Schedule "" → no cronjob,
+			// RetentionDays 0 → keep forever (chart's prune step skips).
+			if addon.Spec.Backup == nil {
+				addon.Spec.Backup = &kube.KusoBackup{}
+			}
+			if req.Backup.Schedule != nil {
+				s := strings.TrimSpace(*req.Backup.Schedule)
+				// Empty disables the cronjob — that's the canonical "turn
+				// off backups" path. Non-empty must look like a five-field
+				// cron expression so the user sees the error here, not
+				// when the cronjob fails to parse hours later.
+				if s != "" && !cronExpr5.MatchString(s) {
+					return fmt.Errorf("%w: backup schedule %q must be a 5-field cron expression (e.g. `0 3 * * *`)", ErrInvalid, s)
+				}
+				addon.Spec.Backup.Schedule = s
+			}
+			if req.Backup.RetentionDays != nil {
+				d := *req.Backup.RetentionDays
+				// Cap at 3650 days (10 years) — anything larger is almost
+				// certainly a typo (someone meant retention HOURS) and the
+				// prune step's date arithmetic should stay sane. Negatives
+				// are rejected; 0 means "keep forever" and is allowed.
+				if d < 0 || d > 3650 {
+					return fmt.Errorf("%w: backup retentionDays %d must be 0..3650", ErrInvalid, d)
+				}
+				addon.Spec.Backup.RetentionDays = d
+			}
+		}
+		return nil
+	})
 	if err != nil {
+		// updateWithRetry wraps NotFound as the underlying err; unwrap
+		// to give the caller a clean sentinel for the 404 path.
 		if apierrors.IsNotFound(err) {
 			return nil, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
 		}
-		return nil, fmt.Errorf("get addon: %w", err)
-	}
-	if req.Version != nil {
-		addon.Spec.Version = *req.Version
-	}
-	if req.Size != nil {
-		addon.Spec.Size = *req.Size
-	}
-	if req.HA != nil {
-		addon.Spec.HA = *req.HA
-	}
-	if req.StorageSize != nil {
-		addon.Spec.StorageSize = *req.StorageSize
-	}
-	if req.Database != nil {
-		addon.Spec.Database = *req.Database
-	}
-	if req.Backup != nil {
-		// Lazy-init the spec.backup struct so we can patch a single
-		// field without overwriting the other one. The chart treats
-		// missing fields as "use default" — Schedule "" → no cronjob,
-		// RetentionDays 0 → keep forever (chart's prune step skips).
-		if addon.Spec.Backup == nil {
-			addon.Spec.Backup = &kube.KusoBackup{}
-		}
-		if req.Backup.Schedule != nil {
-			s := strings.TrimSpace(*req.Backup.Schedule)
-			// Empty disables the cronjob — that's the canonical "turn
-			// off backups" path. Non-empty must look like a five-field
-			// cron expression so the user sees the error here, not
-			// when the cronjob fails to parse hours later.
-			if s != "" && !cronExpr5.MatchString(s) {
-				return nil, fmt.Errorf("%w: backup schedule %q must be a 5-field cron expression (e.g. `0 3 * * *`)", ErrInvalid, s)
-			}
-			addon.Spec.Backup.Schedule = s
-		}
-		if req.Backup.RetentionDays != nil {
-			d := *req.Backup.RetentionDays
-			// Cap at 3650 days (10 years) — anything larger is almost
-			// certainly a typo (someone meant retention HOURS) and the
-			// prune step's date arithmetic should stay sane. Negatives
-			// are rejected; 0 means "keep forever" and is allowed.
-			if d < 0 || d > 3650 {
-				return nil, fmt.Errorf("%w: backup retentionDays %d must be 0..3650", ErrInvalid, d)
-			}
-			addon.Spec.Backup.RetentionDays = d
-		}
-	}
-	updated, err := s.Kube.UpdateKusoAddon(ctx, ns, addon)
-	if err != nil {
 		return nil, fmt.Errorf("update addon: %w", err)
 	}
 	return updated, nil
@@ -374,25 +381,23 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 func (s *Service) SetPlacement(ctx context.Context, project, name string, p *kube.KusoPlacement) error {
 	ns := s.nsFor(ctx, project)
 	fqn := addonCRName(project, name)
-	addon, err := s.Kube.GetKusoAddon(ctx, ns, fqn)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
-		}
-		return fmt.Errorf("get addon: %w", err)
-	}
 	if p != nil && len(p.Labels) == 0 && len(p.Nodes) == 0 {
 		// Treat the empty struct the same as nil — store no placement.
 		p = nil
 	}
+	// Placement validation is independent of the CR (it asks "does any
+	// node match these labels"), so do it once outside the retry loop.
 	if err := s.validatePlacement(ctx, p); err != nil {
 		return err
 	}
-	addon.Spec.Placement = p
-	// Use Update via the kube wrapper. helm-operator picks up the
-	// change on its 3m reconcile (or sooner via watch) and re-renders
-	// the chart, which now includes the placement values.
-	if _, err := s.Kube.UpdateKusoAddon(ctx, ns, addon); err != nil {
+	_, err := s.Kube.UpdateKusoAddonWithRetry(ctx, ns, fqn, func(addon *kube.KusoAddon) error {
+		addon.Spec.Placement = p
+		return nil
+	})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+		}
 		return fmt.Errorf("update addon: %w", err)
 	}
 	return nil

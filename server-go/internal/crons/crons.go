@@ -333,35 +333,44 @@ func (s *Service) AddProject(ctx context.Context, project string, req CreateProj
 }
 
 func (s *Service) Update(ctx context.Context, project, service, name string, req UpdateCronRequest) (*kube.KusoCron, error) {
-	cr, err := s.Get(ctx, project, service, name)
-	if err != nil {
-		return nil, err
-	}
+	fqn := CRName(project, service, name)
+	ns := s.nsFor(ctx, project)
+	// Validate the schedule once outside the retry loop — it's pure
+	// input validation and doesn't depend on the CR's current state.
 	if req.Schedule != nil {
 		if err := validateSchedule(*req.Schedule); err != nil {
 			return nil, err
 		}
-		cr.Spec.Schedule = *req.Schedule
-	}
-	if req.Command != nil {
-		cr.Spec.Command = req.Command
-	}
-	if req.Suspend != nil {
-		cr.Spec.Suspend = *req.Suspend
 	}
 	if req.ConcurrencyPolicy != nil {
 		switch *req.ConcurrencyPolicy {
 		case "Allow", "Forbid", "Replace":
-			cr.Spec.ConcurrencyPolicy = *req.ConcurrencyPolicy
 		default:
 			return nil, fmt.Errorf("%w: concurrencyPolicy must be Allow|Forbid|Replace", ErrInvalid)
 		}
 	}
-	if req.ActiveDeadlineSeconds != nil {
-		cr.Spec.ActiveDeadlineSeconds = *req.ActiveDeadlineSeconds
-	}
-	updated, err := s.Kube.UpdateKusoCron(ctx, s.nsFor(ctx, project), cr)
+	updated, err := s.Kube.UpdateKusoCronWithRetry(ctx, ns, fqn, func(cr *kube.KusoCron) error {
+		if req.Schedule != nil {
+			cr.Spec.Schedule = *req.Schedule
+		}
+		if req.Command != nil {
+			cr.Spec.Command = req.Command
+		}
+		if req.Suspend != nil {
+			cr.Spec.Suspend = *req.Suspend
+		}
+		if req.ConcurrencyPolicy != nil {
+			cr.Spec.ConcurrencyPolicy = *req.ConcurrencyPolicy
+		}
+		if req.ActiveDeadlineSeconds != nil {
+			cr.Spec.ActiveDeadlineSeconds = *req.ActiveDeadlineSeconds
+		}
+		return nil
+	})
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
+		}
 		return nil, fmt.Errorf("update cron: %w", err)
 	}
 	return updated, nil
@@ -387,25 +396,30 @@ func (s *Service) resolveFromProductionEnv(ctx context.Context, ns, serviceFQN s
 // current production env and patches the cron CR. Called from the UI
 // "Sync image" button so a cron picks up new builds.
 func (s *Service) SyncFromService(ctx context.Context, project, service, name string) (*kube.KusoCron, error) {
-	cr, err := s.Get(ctx, project, service, name)
-	if err != nil {
-		return nil, err
-	}
 	ns := s.nsFor(ctx, project)
+	fqn := CRName(project, service, name)
 	serviceFQN := service
 	if !strings.HasPrefix(service, project+"-") {
 		serviceFQN = project + "-" + service
 	}
+	// Resolve once outside the retry loop — the production env is the
+	// source of truth and a 409 retry on the cron CR doesn't change
+	// what we'd resolve here.
 	image, envFromSecrets, placement, err := s.resolveFromProductionEnv(ctx, ns, serviceFQN)
 	if err != nil {
 		return nil, err
 	}
-	cr.Spec.Image = image
-	cr.Spec.EnvFromSecrets = envFromSecrets
-	cr.Spec.Placement = placement
-	updated, err := s.Kube.UpdateKusoCron(ctx, ns, cr)
-	if err != nil {
-		return nil, fmt.Errorf("sync cron: %w", err)
+	updated, uerr := s.Kube.UpdateKusoCronWithRetry(ctx, ns, fqn, func(cr *kube.KusoCron) error {
+		cr.Spec.Image = image
+		cr.Spec.EnvFromSecrets = envFromSecrets
+		cr.Spec.Placement = placement
+		return nil
+	})
+	if uerr != nil {
+		if apierrors.IsNotFound(uerr) {
+			return nil, fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
+		}
+		return nil, fmt.Errorf("sync cron: %w", uerr)
 	}
 	return updated, nil
 }
@@ -428,47 +442,50 @@ func (s *Service) Delete(ctx context.Context, project, service, name string) err
 func (s *Service) UpdateProject(ctx context.Context, project, name string, req UpdateProjectCronRequest) (*kube.KusoCron, error) {
 	ns := s.nsFor(ctx, project)
 	fqn := project + "-" + name
-	cr, err := s.Kube.GetKusoCron(ctx, ns, fqn)
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
-		}
-		return nil, fmt.Errorf("get cron: %w", err)
-	}
+	// Validate pure-input fields before entering the retry loop.
 	if req.Schedule != nil {
 		if err := validateSchedule(*req.Schedule); err != nil {
 			return nil, err
 		}
-		cr.Spec.Schedule = *req.Schedule
-	}
-	if req.DisplayName != nil {
-		cr.Spec.DisplayName = strings.TrimSpace(*req.DisplayName)
-	}
-	if req.Suspend != nil {
-		cr.Spec.Suspend = *req.Suspend
-	}
-	if req.URL != nil {
-		cr.Spec.URL = strings.TrimSpace(*req.URL)
-	}
-	if req.Image != nil {
-		cr.Spec.Image = req.Image
-	}
-	if req.Command != nil {
-		cr.Spec.Command = req.Command
 	}
 	if req.ConcurrencyPolicy != nil {
 		switch *req.ConcurrencyPolicy {
 		case "Allow", "Forbid", "Replace":
-			cr.Spec.ConcurrencyPolicy = *req.ConcurrencyPolicy
 		default:
 			return nil, fmt.Errorf("%w: concurrencyPolicy must be Allow|Forbid|Replace", ErrInvalid)
 		}
 	}
-	if req.ActiveDeadlineSeconds != nil {
-		cr.Spec.ActiveDeadlineSeconds = *req.ActiveDeadlineSeconds
-	}
-	updated, err := s.Kube.UpdateKusoCron(ctx, ns, cr)
+	updated, err := s.Kube.UpdateKusoCronWithRetry(ctx, ns, fqn, func(cr *kube.KusoCron) error {
+		if req.Schedule != nil {
+			cr.Spec.Schedule = *req.Schedule
+		}
+		if req.DisplayName != nil {
+			cr.Spec.DisplayName = strings.TrimSpace(*req.DisplayName)
+		}
+		if req.Suspend != nil {
+			cr.Spec.Suspend = *req.Suspend
+		}
+		if req.URL != nil {
+			cr.Spec.URL = strings.TrimSpace(*req.URL)
+		}
+		if req.Image != nil {
+			cr.Spec.Image = req.Image
+		}
+		if req.Command != nil {
+			cr.Spec.Command = req.Command
+		}
+		if req.ConcurrencyPolicy != nil {
+			cr.Spec.ConcurrencyPolicy = *req.ConcurrencyPolicy
+		}
+		if req.ActiveDeadlineSeconds != nil {
+			cr.Spec.ActiveDeadlineSeconds = *req.ActiveDeadlineSeconds
+		}
+		return nil
+	})
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: cron %s", ErrNotFound, fqn)
+		}
 		return nil, fmt.Errorf("update project cron: %w", err)
 	}
 	return updated, nil

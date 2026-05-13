@@ -1505,45 +1505,54 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 		}
 	}
 	for i := range envs.Items {
-		var env kube.KusoEnvironment
-		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envs.Items[i].Object, &env); err != nil {
-			continue
-		}
-		if changed.EnvVars {
-			env.Spec.EnvVars = svc.Spec.EnvVars
-		}
-		if changed.Placement {
-			env.Spec.Placement = effectivePlacement
-		}
-		if changed.Volumes {
-			env.Spec.Volumes = svc.Spec.Volumes
-		}
-		if changed.Port {
-			port := svc.Spec.Port
-			if port == 0 {
-				port = 8080
+		envName := envs.Items[i].GetName()
+		// RMW with retry-on-409: re-fetch the env CR, apply the
+		// propagation, write. Without this the helm-operator's
+		// status patches (which fire every reconcile while the env
+		// is rolling) race our update — the apiserver returns 409,
+		// the legacy update() path bumps RV on our STALE snapshot
+		// and resends, overwriting any spec field the operator
+		// touched. F-03 fixed the same class for KusoService writes;
+		// the propagation loop is the last surface in this package
+		// that needs RMW.
+		_, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envName, func(env *kube.KusoEnvironment) error {
+			if changed.EnvVars {
+				env.Spec.EnvVars = svc.Spec.EnvVars
 			}
-			env.Spec.Port = port
-		}
-		if changed.Scale {
-			auto := autoscalingFromScale(svc.Spec.Scale)
-			replicaCount := 1
-			if svc.Spec.Scale != nil && svc.Spec.Scale.Min > 0 {
-				replicaCount = svc.Spec.Scale.Min
+			if changed.Placement {
+				env.Spec.Placement = effectivePlacement
 			}
-			env.Spec.ReplicaCount = replicaCount
-			env.Spec.Autoscaling = auto
-		}
-		if changed.Domains {
-			hosts := domainHosts(svc.Spec.Domains)
-			env.Spec.AdditionalHosts = hosts
-			env.Spec.TLSHosts = computeTLSHosts(env.Spec.Host, hosts)
-		}
-		if changed.Internal {
-			env.Spec.Internal = svc.Spec.Internal
-		}
-		if _, err := s.Kube.UpdateKusoEnvironment(ctx, ns, &env); err != nil {
-			return fmt.Errorf("update env %s: %w", env.Name, err)
+			if changed.Volumes {
+				env.Spec.Volumes = svc.Spec.Volumes
+			}
+			if changed.Port {
+				port := svc.Spec.Port
+				if port == 0 {
+					port = 8080
+				}
+				env.Spec.Port = port
+			}
+			if changed.Scale {
+				auto := autoscalingFromScale(svc.Spec.Scale)
+				replicaCount := 1
+				if svc.Spec.Scale != nil && svc.Spec.Scale.Min > 0 {
+					replicaCount = svc.Spec.Scale.Min
+				}
+				env.Spec.ReplicaCount = replicaCount
+				env.Spec.Autoscaling = auto
+			}
+			if changed.Domains {
+				hosts := domainHosts(svc.Spec.Domains)
+				env.Spec.AdditionalHosts = hosts
+				env.Spec.TLSHosts = computeTLSHosts(env.Spec.Host, hosts)
+			}
+			if changed.Internal {
+				env.Spec.Internal = svc.Spec.Internal
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("update env %s: %w", envName, err)
 		}
 	}
 	return nil
