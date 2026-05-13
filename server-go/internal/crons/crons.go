@@ -119,11 +119,21 @@ type UpdateProjectCronRequest struct {
 	ActiveDeadlineSeconds *int            `json:"activeDeadlineSeconds,omitempty"`
 }
 
-// 5-field cron expression: m h dom mon dow. Plus the * / , - / ranges
-// + step syntax. We don't accept the optional seconds field or @hourly
-// macros — kube CronJob takes the standard form, anything else is a
-// surprise hop.
-var cronExpr = regexp.MustCompile(`^[\d\*\/\,\-\?]+\s+[\d\*\/\,\-\?]+\s+[\d\*\/\,\-\?]+\s+[\d\*\/\,\-\?]+\s+[\d\*\/\,\-\?]+$`)
+// 5-field cron expression: m h dom mon dow. Plus the * / , - ranges
+// + step syntax.
+//
+// `?` is INTENTIONALLY excluded. The Quartz cron dialect uses `?` in
+// the dom/dow slots to mean "no specific value"; kube CronJob is
+// standard-cron and rejects `?` with a confusing apiserver error
+// hours after submission. The pass-4 review flagged this as a
+// "validator lies" bug — we accepted Quartz-form strings here only
+// to have helm-operator fail in production. Symptom: cron CR
+// appears to save successfully, never fires, no UI feedback.
+//
+// Standard 5-field grammar only; `@hourly`/`@daily` macros and the
+// 6-field-with-seconds form are also rejected (kube CronJob takes
+// the standard form, anything else is a surprise hop).
+var cronExpr = regexp.MustCompile(`^[\d\*\/\,\-]+\s+[\d\*\/\,\-]+\s+[\d\*\/\,\-]+\s+[\d\*\/\,\-]+\s+[\d\*\/\,\-]+$`)
 
 // validateSchedule returns ErrInvalid for anything that wouldn't
 // pass `kubectl create cronjob --schedule=…`. Cheap — we don't
@@ -133,6 +143,12 @@ func validateSchedule(s string) error {
 	s = strings.TrimSpace(s)
 	if s == "" {
 		return fmt.Errorf("%w: schedule is required", ErrInvalid)
+	}
+	// @-macros (Quartz / Vixie-cron shorthand) — reject with a
+	// helpful suggestion since the user likely meant the equivalent
+	// 5-field form.
+	if strings.HasPrefix(s, "@") {
+		return fmt.Errorf("%w: schedule %q uses a macro (@hourly, @daily, etc.) which kube CronJob doesn't support — use the 5-field form (e.g. `0 * * * *` for hourly)", ErrInvalid, s)
 	}
 	if !cronExpr.MatchString(s) {
 		return fmt.Errorf("%w: schedule %q does not look like a 5-field cron expression (e.g. `*/15 * * * *`)", ErrInvalid, s)
