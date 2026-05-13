@@ -1,0 +1,178 @@
+// service → env propagation chokepoint.
+//
+// Why this file exists, separately from services_ops.go and
+// projects_ops.go:
+//
+// The kusoenvironment helm chart reads only the env CR; the parent
+// service CR is invisible to it. So every service-level edit
+// (PatchService, SetEnv, AddDomain, …) has to mirror the changed
+// fields onto every env CR or the change never reaches a running pod.
+// That mirror logic is the single highest-leverage chokepoint in the
+// codebase — a bug here silently breaks every save flow in the UI.
+//
+// Pulling it into its own file makes that chokepoint structurally
+// visible: any change to service → env mirroring lives here, period.
+// `propagateChangedToEnvs` is the single entrypoint for service-level
+// field changes; `propagateBaseDomain` is the project-level analogue.
+//
+// The functions stay methods on *Service because they need its Kube
+// client, home namespace, and the existing per-service mutex — the
+// extraction is about file-level scoping, not changing the type
+// hierarchy.
+
+package projects
+
+import (
+	"context"
+	"fmt"
+
+	"kuso/server/internal/kube"
+)
+
+// changedFields names which fields on the parent KusoService have
+// been edited in a single PatchService call. propagateChangedToEnvs
+// dispatches on this so it only writes the env CRs once (instead of
+// the previous O(fields × envs) updates), even when several fields
+// flip together.
+type changedFields struct {
+	EnvVars   bool
+	Placement bool
+	Volumes   bool
+	Port      bool
+	Scale     bool
+	Domains   bool
+	Internal  bool
+}
+
+func (c changedFields) any() bool {
+	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal
+}
+
+// propagateChangedToEnvs is the single chokepoint that mirrors a
+// post-PATCH KusoService onto every owned KusoEnvironment. Replaces
+// six per-field propagators that each issued their own LIST + N
+// UPDATEs; this version lists envs once and applies every changed
+// field in one Update per env.
+//
+// Long-term fix is to teach the chart to merge both CRs (see
+// docs/REVIEW_2026-05-12.md A-P0-3), but until then this is the
+// single place to keep correct.
+func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService, changed changedFields) error {
+	if !changed.any() {
+		return nil
+	}
+	// Cached typed list — warm informer = slice filter, cold = one
+	// network call.
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		labelProject: project,
+		labelService: service,
+	})
+	if err != nil {
+		return fmt.Errorf("list envs for propagation: %w", err)
+	}
+	// Resolve the effective placement once before the loop when
+	// Placement is changed — calling GetKusoProject inside the loop
+	// produces N+1 apiserver GETs for a service with N envs. The
+	// project spec doesn't change during propagation, so one fetch
+	// suffices. Best-effort: a project-fetch error falls back to
+	// copying the raw service placement.
+	var effectivePlacement *kube.KusoPlacement
+	if changed.Placement {
+		if proj, perr := s.Kube.GetKusoProject(ctx, s.Namespace, project); perr == nil {
+			effectivePlacement = ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement)
+		} else {
+			effectivePlacement = svc.Spec.Placement
+		}
+	}
+	for i := range envs {
+		envName := envs[i].Name
+		// RMW with retry-on-409: re-fetch the env CR, apply the
+		// propagation, write. Without this the helm-operator's
+		// status patches (which fire every reconcile while the env
+		// is rolling) race our update — the apiserver returns 409,
+		// the legacy update() path bumps RV on our STALE snapshot
+		// and resends, overwriting any spec field the operator
+		// touched. F-03 fixed the same class for KusoService writes;
+		// the propagation loop is the last surface in this package
+		// that needs RMW.
+		_, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envName, func(env *kube.KusoEnvironment) error {
+			if changed.EnvVars {
+				env.Spec.EnvVars = svc.Spec.EnvVars
+			}
+			if changed.Placement {
+				env.Spec.Placement = effectivePlacement
+			}
+			if changed.Volumes {
+				env.Spec.Volumes = svc.Spec.Volumes
+			}
+			if changed.Port {
+				port := svc.Spec.Port
+				if port == 0 {
+					port = 8080
+				}
+				env.Spec.Port = port
+			}
+			if changed.Scale {
+				auto := autoscalingFromScale(svc.Spec.Scale)
+				replicaCount := 1
+				if svc.Spec.Scale != nil && svc.Spec.Scale.Min > 0 {
+					replicaCount = svc.Spec.Scale.Min
+				}
+				env.Spec.ReplicaCount = replicaCount
+				env.Spec.Autoscaling = auto
+			}
+			if changed.Domains {
+				hosts := domainHosts(svc.Spec.Domains)
+				env.Spec.AdditionalHosts = hosts
+				env.Spec.TLSHosts = computeTLSHosts(env.Spec.Host, hosts)
+			}
+			if changed.Internal {
+				env.Spec.Internal = svc.Spec.Internal
+			}
+			return nil
+		})
+		if err != nil {
+			return fmt.Errorf("update env %s: %w", envName, err)
+		}
+	}
+	return nil
+}
+
+// propagateBaseDomain rewrites the Host on every owned env that still
+// holds the OLD default-shape host (i.e. the auto-generated domain we
+// stamped at create time). Hosts that don't match the old pattern were
+// customised by the user and are left alone — overwriting them would
+// silently destroy the operator's custom DNS work.
+//
+// AdditionalHosts (manually-added domains in the Networking tab) are
+// untouched. Only the primary Host moves.
+func (s *Service) propagateBaseDomain(ctx context.Context, project, oldBase, newBase string) error {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return err
+	}
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		kube.LabelProject: project,
+	})
+	if err != nil {
+		return fmt.Errorf("list envs: %w", err)
+	}
+	for i := range envs {
+		env := &envs[i]
+		expected := defaultHost(env.Spec.Service, project, oldBase)
+		if env.Spec.Host != expected {
+			// User-customised host — leave it.
+			continue
+		}
+		// RMW retry so a status-patch race doesn't lose the new
+		// host while the helm-operator status-patches in parallel.
+		if _, uerr := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(live *kube.KusoEnvironment) error {
+			live.Spec.Host = defaultHost(env.Spec.Service, project, newBase)
+			live.Spec.TLSHosts = computeTLSHosts(live.Spec.Host, live.Spec.AdditionalHosts)
+			return nil
+		}); uerr != nil {
+			return fmt.Errorf("update env %s: %w", env.Name, uerr)
+		}
+	}
+	return nil
+}

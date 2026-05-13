@@ -230,49 +230,8 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 	return out, nil
 }
 
-// propagateBaseDomain rewrites the Host on every owned env that still
-// holds the OLD default-shape host (i.e. the auto-generated domain we
-// stamped at create time). Hosts that don't match the old pattern were
-// customised by the user and are left alone — overwriting them would
-// silently destroy the operator's custom DNS work.
-//
-// AdditionalHosts (manually-added domains in the Networking tab) are
-// untouched. Only the primary Host moves.
-func (s *Service) propagateBaseDomain(ctx context.Context, project, oldBase, newBase string) error {
-	ns, err := s.namespaceFor(ctx, project)
-	if err != nil {
-		return err
-	}
-	// Cached typed list — warm informer = slice filter, cold = one
-	// network call (pass-4 P1-1).
-	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
-		kube.LabelProject: project,
-	})
-	if err != nil {
-		return fmt.Errorf("list envs: %w", err)
-	}
-	for i := range envs {
-		env := &envs[i]
-		expected := defaultHost(env.Spec.Service, project, oldBase)
-		if env.Spec.Host != expected {
-			// User-customised host — leave it.
-			continue
-		}
-		// RMW retry so a status-patch race doesn't lose the
-		// new host. Without retry, propagating a baseDomain
-		// change across N envs at the same time as the
-		// helm-operator's reconcile cycle could silently revert
-		// some of them.
-		if _, uerr := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(live *kube.KusoEnvironment) error {
-			live.Spec.Host = defaultHost(env.Spec.Service, project, newBase)
-			live.Spec.TLSHosts = computeTLSHosts(live.Spec.Host, live.Spec.AdditionalHosts)
-			return nil
-		}); uerr != nil {
-			return fmt.Errorf("update env %s: %w", env.Name, uerr)
-		}
-	}
-	return nil
-}
+// propagateBaseDomain lives in propagate.go — the project-level
+// analogue of propagateChangedToEnvs, kept next to its sibling.
 
 // Delete cascades every owned CR: envs, services, addons, builds, and
 // finally the project itself. Without enumerating addons + builds the
