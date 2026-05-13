@@ -805,9 +805,12 @@ func TestPoller_SkipsTerminal(t *testing.T) {
 	// A build already marked succeeded MUST NOT be re-poked — no Job
 	// existing should be a no-op, not an error path.
 	b := &kube.KusoBuild{
-		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-old", Namespace: "kuso"},
-		Spec:       kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "old", Image: &kube.KusoImage{}},
-		Status:     map[string]any{"phase": "succeeded"},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        "alpha-web-old",
+			Namespace:   "kuso",
+			Annotations: map[string]string{"kuso.sislelabs.com/build-phase": "succeeded"},
+		},
+		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "old", Image: &kube.KusoImage{}},
 	}
 	s := fakeService(t, seedBuild(b))
 	p := &Poller{Svc: s, Interval: time.Hour}

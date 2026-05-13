@@ -57,20 +57,6 @@ func SweepFinishedBuilds(ctx context.Context, kc *kube.Client, namespace string,
 			continue
 		}
 		name := item.Name
-		// The watch-selector excludes build-state=done from the
-		// helm-operator's reconcile queue, which means it also won't
-		// see our delete event — so the helm-uninstall finalizer
-		// would hang the CR forever. Strip it ourselves before delete.
-		// SweepOrphanHelmReleases reaps the dangling helm secret on a
-		// later tick.
-		if err := kube.StripHelmFinalizers(ctx, kc, kube.GVRBuilds, namespace, name); err != nil && !apierrors.IsNotFound(err) {
-			if logFn != nil {
-				logFn("strip finalizer", "name", name, "err", err)
-			}
-			// Don't continue — try the delete anyway. The kube API
-			// will refuse if the finalizer is still attached, in
-			// which case we log + skip on the next line.
-		}
 		if err := kc.Dynamic.Resource(kube.GVRBuilds).Namespace(namespace).
 			Delete(ctx, name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 			if logFn != nil {
@@ -141,11 +127,6 @@ func CapBuildsPerService(ctx context.Context, kc *kube.Client, namespace string,
 			}
 		}
 		for _, b := range builds[max:] {
-			if err := kube.StripHelmFinalizers(ctx, kc, kube.GVRBuilds, namespace, b.name); err != nil && !apierrors.IsNotFound(err) {
-				if logFn != nil {
-					logFn("cap: strip finalizer", "service", svc, "build", b.name, "err", err)
-				}
-			}
 			if err := kc.Dynamic.Resource(kube.GVRBuilds).Namespace(namespace).
 				Delete(ctx, b.name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 				if logFn != nil {
@@ -189,7 +170,6 @@ func SweepOrphanHelmReleases(ctx context.Context, kc *kube.Client, namespace str
 		{"kusoservices", kube.GVRServices},
 		{"kusoenvironments", kube.GVREnvironments},
 		{"kusoaddons", kube.GVRAddons},
-		{"kusobuilds", kube.GVRBuilds},
 		{"kusocrons", kube.GVRCrons},
 	}
 	for _, g := range gvrs {

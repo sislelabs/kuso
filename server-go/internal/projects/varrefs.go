@@ -160,12 +160,12 @@ func ExpandServiceKey(ref ServiceRef, key string) string {
 var ErrUnknownVarRef = errors.New("variable reference does not match any service or addon in this project")
 
 // RewriteOpts controls how RewriteEnvVar handles refs that don't yet
-// resolve to a known addon. The default (zero value) keeps the
-// pre-v0.10 strict behaviour: unknown ref → ErrUnknownVarRef. The
-// SPA's env editor sets AllowPending=true so a user can save an env
-// var that references an addon still mid-provisioning; the secret
-// mount resolves itself once the addon's `<addon>-conn` Secret
-// materialises and the pod restarts.
+// resolve to a known addon. The default (zero value) is strict:
+// unknown ref → ErrUnknownVarRef. The SPA's env editor sets
+// AllowPending=true so a user can save an env var that references an
+// addon still mid-provisioning; the secret mount resolves itself once
+// the addon's `<addon>-conn` Secret materialises and the pod
+// restarts.
 type RewriteOpts struct {
 	// AllowPending lets unknown addon refs through with a speculative
 	// secretKeyRef pointing at <name>-conn (or <project>-<name>-conn
@@ -190,10 +190,9 @@ type RewriteOpts struct {
 //   4. Else: ErrUnknownVarRef. We refuse to silently write a broken
 //      reference.
 //
-// When the resolvers are nil, all refs fall through to the legacy
-// addon path (no validation). Callers that supply both resolvers
-// get full validation; callers that supply neither preserve the
-// pre-v0.6.16 behaviour.
+// When the resolvers are nil, all refs fall through to the
+// unvalidated addon path. Production wires real resolvers; the
+// nil path exists for the var-ref parser tests in varrefs_test.go.
 func RewriteEnvVar(in EnvVar, svcResolver ServiceRefResolver, addonResolver AddonRefResolver) (EnvVar, error) {
 	return RewriteEnvVarWithOpts(in, svcResolver, addonResolver, RewriteOpts{})
 }
@@ -264,9 +263,9 @@ func RewriteEnvVarWithOpts(in EnvVar, svcResolver ServiceRefResolver, addonResol
 		}
 		return EnvVar{}, fmt.Errorf("env var %q: %w (looked up %q)", in.Name, ErrUnknownVarRef, ref.Name)
 	}
-	// No addonResolver wired → legacy behaviour: trust the ref name
-	// and emit a secretKeyRef. Preserves callers that haven't been
-	// updated. New code should always pass an addonResolver.
+	// No addonResolver wired → trust the ref name and emit a
+	// secretKeyRef without lookup. Test-only path; production
+	// always wires a resolver.
 	return EnvVar{
 		Name: in.Name,
 		ValueFrom: map[string]any{

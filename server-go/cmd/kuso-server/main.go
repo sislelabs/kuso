@@ -26,7 +26,6 @@ import (
 	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/buildcontroller"
-	"kuso/server/internal/buildreaper"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	"kuso/server/internal/crons"
@@ -518,14 +517,6 @@ func main() {
 					LeaderActive: &leaderActive,
 				}).Start(ctx)
 			}
-			if os.Getenv("KUSO_BUILD_REAPER_DISABLED") != "true" {
-				(&buildreaper.Service{
-					Kube:         kc,
-					Cache:        kc.Cache,
-					Logger:       logger,
-					LeaderActive: &leaderActive,
-				}).Start(ctx)
-			}
 		}
 
 		startSingletons := func(workCtx context.Context) {
@@ -558,13 +549,13 @@ func main() {
 			if os.Getenv("KUSO_HEALTH_DISABLED") != "true" {
 				go health.New(kc, *namespace, notifyDisp, logger).Run(workCtx)
 			}
-			// Build controller + reaper moved out of startSingletons.
-			// They install informer handlers at boot (one-shot, gated
+			// Build controller moved out of startSingletons. It
+			// installs informer handlers at boot (one-shot, gated
 			// on leaderActive) — the previous shape registered a
 			// fresh handler on every leader acquire, leaking N
 			// handlers across N re-elections. See the LIFETIME
-			// comments in internal/buildcontroller and
-			// internal/buildreaper for the bug we're avoiding.
+			// comments in internal/buildcontroller for the bug
+			// we're avoiding.
 			if os.Getenv("KUSO_PREVIEW_CLEANUP_DISABLED") != "true" {
 				go runPreviewCleanup(workCtx, projSvc, logger)
 			}
@@ -1072,7 +1063,6 @@ func runFinalizerSweep(ctx context.Context, kc *kube.Client, namespace string, l
 			{"kusoservices", kube.GVRServices},
 			{"kusoaddons", kube.GVRAddons},
 			{"kusoprojects", kube.GVRProjects},
-			{"kusobuilds", kube.GVRBuilds},
 		} {
 			cleared, _, err := kc.CleanupStuckHelmFinalizers(c, namespace, item.gvr, logFn)
 			if err != nil {

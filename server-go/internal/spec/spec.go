@@ -178,24 +178,10 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 	}
 	liveAddonByName := map[string]bool{}
 	for _, la := range liveAddons {
-		// SCOPE TO THE TARGET PROJECT. Pre-fix this loop iterated
-		// every addon in the namespace, which on a multi-tenant
-		// install means every other project's addons also got
-		// queued for deletion when the user ran `kuso apply`
-		// against THEIR project. A real user hit this — the
-		// dry-run plan listed deletes against `hui-postgres`,
-		// `pedal4e-robiv0`, `tickets-…` while applying papelito's
-		// kuso.yml. Filter by .spec.project (server-managed,
-		// matches AddService's stamp) and by the kuso project
-		// label as a fallback for any pre-v0.5 addon CR that
-		// missed the spec field.
-		if la.Spec.Project != "" && la.Spec.Project != f.Project {
+		// Scope to the target project — every addon CR has
+		// .spec.project set since AddService stamps it on create.
+		if la.Spec.Project != f.Project {
 			continue
-		}
-		if la.Spec.Project == "" {
-			if l := la.Labels["kuso.sislelabs.com/project"]; l != "" && l != f.Project {
-				continue
-			}
 		}
 		// Addon CR names are <project>-<short>; strip the prefix
 		// before comparing to the YAML's short name. Without this

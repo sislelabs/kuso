@@ -110,23 +110,12 @@ const (
 	annCommitMessage = "kuso.sislelabs.com/build-commit-message"
 )
 
-// buildPhase returns the kuso-tracked phase from build annotations,
-// falling back to the legacy .status.phase for builds created before
-// v0.6.3 (their annotation slot is empty; .status.phase may still be
-// set if helm-operator hadn't re-reconciled yet).
+// buildPhase returns the kuso-tracked phase annotation.
 func buildPhase(b *kube.KusoBuild) string {
 	if b == nil {
 		return ""
 	}
-	if v, ok := b.Annotations[annPhase]; ok && v != "" {
-		return v
-	}
-	if b.Status != nil {
-		if s, ok := b.Status["phase"].(string); ok {
-			return s
-		}
-	}
-	return ""
+	return b.Annotations[annPhase]
 }
 
 // Service handles the build domain. Construct via New.
@@ -463,16 +452,10 @@ func (s *Service) admitBuild(ctx context.Context, project string) (release func(
 }
 
 // countRunningBuildPodsCluster lists pods labelled as kusobuild
-// (either the v0.8.10+ component label or the legacy name label
-// every chart version has set since v0.6) across all namespaces and
-// returns the count whose phase is Pending or Running. Best-effort:
-// kube errors return 0 (admit) — we'd rather risk one extra build
-// than wedge the system on a transient apiserver hiccup.
-//
-// We accept the OR of two label selectors so a roll that mixes pre-
-// and post-v0.8.10 operator-rendered Job pods is still counted
-// correctly. Without the OR, a Job pod rendered by the old operator
-// (no component label) would slip past the cap and we'd over-admit.
+// across all namespaces and returns the count whose phase is Pending
+// or Running. Best-effort: kube errors return 0 (admit) — we'd rather
+// risk one extra build than wedge the system on a transient apiserver
+// hiccup.
 func (s *Service) countRunningBuildPodsCluster(ctx context.Context) int {
 	if s.Kube == nil {
 		return 0
@@ -500,37 +483,31 @@ func (s *Service) countRunningBuildPodsCluster(ctx context.Context) int {
 			doneNames[rawBlist.Items[i].GetName()] = struct{}{}
 		}
 	}
-	// One pass per selector — informer-served when ready, else fall
-	// back to a cluster-wide LIST (the pre-informer behaviour). The
-	// two pod-label flavours dedup via name+namespace so a roll that
-	// renders both the post-v0.8.10 component label and the legacy
-	// name label doesn't double-count.
+	// Informer-served when ready, else fall back to a cluster-wide
+	// LIST (the pre-informer behaviour).
 	seen := map[string]struct{}{}
-	count := func(selStr string) {
-		sel, err := labels.Parse(selStr)
-		if err != nil {
-			return
-		}
-		pods, ok := s.Kube.Cache.ListPodsByLabel(sel)
-		if !ok {
-			rawPods, lerr := s.Kube.Clientset.CoreV1().Pods("").List(lctx, metav1.ListOptions{
-				LabelSelector: selStr,
-			})
-			if lerr != nil {
-				slog.Default().Warn("countRunningBuildPodsCluster", "selector", selStr, "err", lerr)
-				return
-			}
-			for i := range rawPods.Items {
-				accept(seen, doneNames, &rawPods.Items[i])
-			}
-			return
-		}
-		for _, p := range pods {
-			accept(seen, doneNames, p)
-		}
+	const selStr = "app.kubernetes.io/component=kusobuild"
+	sel, err := labels.Parse(selStr)
+	if err != nil {
+		return 0
 	}
-	count("app.kubernetes.io/component=kusobuild")
-	count("app.kubernetes.io/name=kusobuild")
+	pods, ok := s.Kube.Cache.ListPodsByLabel(sel)
+	if !ok {
+		rawPods, lerr := s.Kube.Clientset.CoreV1().Pods("").List(lctx, metav1.ListOptions{
+			LabelSelector: selStr,
+		})
+		if lerr != nil {
+			slog.Default().Warn("countRunningBuildPodsCluster", "selector", selStr, "err", lerr)
+			return 0
+		}
+		for i := range rawPods.Items {
+			accept(seen, doneNames, &rawPods.Items[i])
+		}
+		return len(seen)
+	}
+	for _, p := range pods {
+		accept(seen, doneNames, p)
+	}
 	return len(seen)
 }
 
@@ -575,9 +552,6 @@ func (s *Service) projectBuildCap(ctx context.Context, project string) int {
 // build pods for a project (not CRs — queued CRs don't render pods
 // and don't consume resources). Best-effort: kube errors return 0
 // (admit) — we'd rather risk one extra build than wedge.
-//
-// Accepts either the v0.8.10+ component label or the legacy name
-// label so a roll-in-progress doesn't under-count active builds.
 func (s *Service) countActiveBuildsForProject(ctx context.Context, project string) int {
 	if s.Kube == nil || project == "" {
 		return 0
@@ -607,41 +581,35 @@ func (s *Service) countActiveBuildsForProject(ctx context.Context, project strin
 		}
 	}
 	seen := map[string]struct{}{}
-	count := func(selStr string) {
-		sel, err := labels.Parse(selStr)
-		if err != nil {
-			return
-		}
-		// Pod informer is cluster-wide; the project=… constraint in
-		// the selector keeps the slice small. Filter pods to the
-		// expected namespace afterwards in case multiple projects
-		// somehow end up labelled the same in different namespaces.
-		pods, ok := s.Kube.Cache.ListPodsByLabel(sel)
-		if !ok {
-			rawPods, lerr := s.Kube.Clientset.CoreV1().Pods(ns).List(lctx, metav1.ListOptions{LabelSelector: selStr})
-			if lerr != nil {
-				return
-			}
-			for i := range rawPods.Items {
-				accept(seen, doneNames, &rawPods.Items[i])
-			}
-			return
-		}
-		for _, p := range pods {
-			if p.Namespace != ns {
-				continue
-			}
-			accept(seen, doneNames, p)
-		}
-	}
-	count(kube.LabelSelector(map[string]string{
+	selStr := kube.LabelSelector(map[string]string{
 		"app.kubernetes.io/component": "kusobuild",
 		kube.LabelProject:             project,
-	}))
-	count(kube.LabelSelector(map[string]string{
-		"app.kubernetes.io/name": "kusobuild",
-		kube.LabelProject:        project,
-	}))
+	})
+	sel, err := labels.Parse(selStr)
+	if err != nil {
+		return 0
+	}
+	// Pod informer is cluster-wide; the project=… constraint in the
+	// selector keeps the slice small. Filter pods to the expected
+	// namespace afterwards in case multiple projects somehow end up
+	// labelled the same in different namespaces.
+	pods, ok := s.Kube.Cache.ListPodsByLabel(sel)
+	if !ok {
+		rawPods, lerr := s.Kube.Clientset.CoreV1().Pods(ns).List(lctx, metav1.ListOptions{LabelSelector: selStr})
+		if lerr != nil {
+			return 0
+		}
+		for i := range rawPods.Items {
+			accept(seen, doneNames, &rawPods.Items[i])
+		}
+		return len(seen)
+	}
+	for _, p := range pods {
+		if p.Namespace != ns {
+			continue
+		}
+		accept(seen, doneNames, p)
+	}
 	return len(seen)
 }
 
@@ -772,35 +740,6 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 		// poller won't promote it. Worst case the kaniko Job runs for a
 		// few more minutes producing an image nothing will use.
 		slog.Default().Warn("builds: delete cancelled job", "err", jerr, "build", buildName)
-	}
-	// Delete helm release secrets — legacy cleanup for clusters
-	// running pre-v0.10 where the helm-operator owned KusoBuild
-	// rendering. Builds created by the Go controller (v0.10+) have
-	// no helm release secrets to delete; the List returns empty and
-	// this loop no-ops. The legacy 2026-05-05 outage (cancelled
-	// build resurrected every 30s until the operator was scaled to
-	// 0) is closed two ways now:
-	//   1. The operator no longer watches KusoBuild
-	//      (operator/watches.yaml).
-	//   2. internal/buildcontroller owns Job creation directly and
-	//      gates on spec.done=true (set below) so the next informer
-	//      notification skips reconciling a cancelled CR.
-	// We still sweep helm secrets here for mid-upgrade clusters
-	// where the operator may have a release record from before the
-	// rollover. internal/buildreaper is the belt-and-braces watcher
-	// for the same cleanup on the post-restart cache-sync path.
-	helmSelector := "owner=helm,name=" + buildName
-	secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: helmSelector,
-	})
-	if lerr == nil {
-		for i := range secs.Items {
-			name := secs.Items[i].Name
-			if derr := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
-				slog.Default().Warn("builds: delete helm release secret",
-					"err", derr, "secret", name, "build", buildName)
-			}
-		}
 	}
 	// Wait briefly for the build pod to actually disappear so the
 	// caller (and the deployments tab refetch) sees a clean state.
