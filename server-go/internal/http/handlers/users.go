@@ -278,7 +278,7 @@ func (h *UsersHandler) UpdateMyPassword(w http.ResponseWriter, r *http.Request) 
 		h.fail(w, "load user", err)
 		return
 	}
-	if err := auth.VerifyPassword(u.Password, body.CurrentPassword, ""); err != nil {
+	if err := auth.VerifyPassword(u.Password, body.CurrentPassword); err != nil {
 		http.Error(w, "current password incorrect", http.StatusForbidden)
 		return
 	}

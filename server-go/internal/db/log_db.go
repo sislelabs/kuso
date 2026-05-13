@@ -1,15 +1,12 @@
-// log_db.go — log search + alert support against the unified Postgres
-// DB. The pre-v0.9 split into a separate SQLite file was a workaround
-// for SQLite's single-writer model. Postgres handles concurrent writes
-// natively, so the LogDB type is now a thin alias around *DB; the
-// pre-existing call sites on LogDB keep compiling without changes.
+// log_db.go — log search + alert support against the Postgres DB.
+// LogDB is a thin alias type around *DB, kept distinct from *DB so
+// the log-search/alerts wiring (logship.Shipper, alerts.Engine) has
+// its own typed handle.
 //
-// Search: dropped the SQLite FTS5 path. Postgres tsvector would be
-// the equivalent here, but for kuso's working volume the LIKE-based
-// scan over the (project, service, ts) index is fast enough and
-// keeps the schema simple. If full-text becomes a need, swap the
-// LIKE for `to_tsvector('english', line) @@ plainto_tsquery(?)` plus
-// a generated column + GIN index.
+// Search uses LIKE over the (project, service, ts) index. If
+// full-text ever becomes a need, swap the LIKE for
+// `to_tsvector('english', line) @@ plainto_tsquery(?)` plus a
+// generated column + GIN index.
 
 package db
 
@@ -21,9 +18,9 @@ import (
 	"time"
 )
 
-// LogDB is an alias type around *DB to keep the call-site shape from
-// pre-v0.9 (logship.Shipper, alerts.Engine, log search handler) the
-// same. Methods defined on *LogDB delegate to the embedded *DB.
+// LogDB is an alias type around *DB used by the log-search and alerts
+// wiring (logship.Shipper, alerts.Engine, the /api/logs/search handler)
+// so those modules carry a distinct type from generic *DB.
 type LogDB struct {
 	*DB
 }

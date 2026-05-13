@@ -97,8 +97,8 @@ func CRName(project, name string) string {
 	return project + "-" + name
 }
 
-// addonCRName is the package-private alias kept for test back-compat
-// and existing internal callers.
+// addonCRName is the package-private alias of CRName. Internal
+// callers and tests reach for the lowercase name.
 func addonCRName(project, name string) string { return CRName(project, name) }
 
 // ShortName is the inverse of CRName: strip the "<project>-" prefix

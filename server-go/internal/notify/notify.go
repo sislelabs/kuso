@@ -186,9 +186,7 @@ func ssrfSafeTransport() *http.Transport {
 
 // (isReservedIP / isAllowPrivateIPs / blockCIDRs moved to
 // kuso/server/internal/httpx. Both notify and the Coolify importer
-// share the same dialer guard now; the back-compat env var
-// KUSO_NOTIFY_ALLOW_PRIVATE_IPS still works alongside the new
-// KUSO_ALLOW_PRIVATE_OUTBOUND. See httpx/ssrf.go for the policy.)
+// share the same dialer guard. See httpx/ssrf.go for the policy.)
 
 // Emit enqueues an event AND persists it to the in-app feed
 // synchronously. The persist step makes the bell-icon feed durable

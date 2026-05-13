@@ -22,18 +22,17 @@ import (
 
 // AuthHandler implements POST /api/auth/login (and friends). It depends
 // on the DB for password verify + permissions lookup and on the Issuer
-// for JWT signing. SessionKey is the legacy HMAC fallback secret.
+// for JWT signing.
 //
 // Config is optional — when wired, /api/auth/session surfaces the
-// feature-flag bundle the Vue UI's nav reads on first paint. Audit is
+// feature-flag bundle the SPA's nav reads on first paint. Audit is
 // optional too — when wired, login attempts emit audit rows.
 type AuthHandler struct {
-	DB         *db.DB
-	Issuer     *auth.Issuer
-	SessionKey string
-	Config     *config.Service
-	Audit      *audit.Service
-	Logger     *slog.Logger
+	DB     *db.DB
+	Issuer *auth.Issuer
+	Config *config.Service
+	Audit  *audit.Service
+	Logger *slog.Logger
 }
 
 // loginRequest matches the TS controller's body shape: {username, password}.
@@ -72,7 +71,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// Constant-time miss branch so user-enumeration timing is
 		// uninformative. The dummy is bcrypt of "" at cost 10.
-		_ = auth.VerifyPassword("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy", req.Password, h.SessionKey)
+		_ = auth.VerifyPassword("$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy", req.Password)
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -80,7 +79,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	if err := auth.VerifyPassword(user.Password, req.Password, h.SessionKey); err != nil {
+	if err := auth.VerifyPassword(user.Password, req.Password); err != nil {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
@@ -97,10 +96,10 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if perms == nil {
 		perms = []string{}
 	}
-	// v0.5 tenancy: union the role-derived perms (legacy) with the
-	// instance + project role table from the user's group
-	// memberships. The role-perms pivot stays for backwards compat;
-	// new installs only populate UserGroup tenancy.
+	// Union the role-derived perms with the instance + project role
+	// table from the user's group memberships. Both pivots are
+	// active: role-perms covers the admin/superuser shape; UserGroup
+	// tenancy covers per-project membership.
 	if tenancy, terr := h.DB.ListUserTenancy(ctx, user.ID); terr == nil {
 		for _, p := range auth.Compute(tenancy) {
 			if !contains(perms, p) {
@@ -133,12 +132,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// HttpOnly session cookie. Pre-v0.10 the SPA stashed the JWT in
-	// localStorage, where any XSS could lift the session. Cookie is
-	// HttpOnly + Secure + SameSite=Lax + Path=/ so cross-site
-	// requests don't carry it; same-site GETs (the SPA's own fetch
-	// calls) do. Insecure-cookie fallback for plain-HTTP dev only —
-	// production runs behind traefik+TLS so r.TLS != nil.
+	// HttpOnly session cookie: HttpOnly + Secure + SameSite=Lax +
+	// Path=/ so cross-site requests don't carry it; same-site GETs
+	// (the SPA's own fetch calls) do. Insecure-cookie fallback for
+	// plain-HTTP dev only — production runs behind traefik+TLS so
+	// r.TLS != nil.
 	secure := isHTTPS(r)
 	http.SetCookie(w, &http.Cookie{
 		Name:     "kuso.JWT_TOKEN",
@@ -196,9 +194,7 @@ func (h *AuthHandler) Session(w http.ResponseWriter, r *http.Request) {
 // Logout clears the kuso.JWT_TOKEN cookie AND, if the request carries
 // a verified bearer, persists a RevokedToken row keyed on the JWT's
 // jti. The auth middleware's per-request check rejects revoked tokens
-// on the next call. Pre-v0.9.38 logout was a UI gesture only — bearer
-// tokens stayed valid until natural expiry, leaked CLI tokens were
-// uncontainable.
+// on the next call.
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	// Logout is mounted public (no middleware) so users with an
 	// already-expired token can still clear their cookie. We do a

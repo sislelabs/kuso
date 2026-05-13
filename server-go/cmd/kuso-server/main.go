@@ -69,7 +69,6 @@ func main() {
 	slog.SetDefault(logger)
 
 	jwtSecret := os.Getenv("JWT_SECRET")
-	sessionKey := os.Getenv("KUSO_SESSION_KEY")
 
 	issuer, err := auth.NewIssuer(jwtSecret, parseTTL(os.Getenv("JWT_EXPIRESIN")))
 	if err != nil {
@@ -479,8 +478,8 @@ func main() {
 		// logs, race on cleanup deletes). They live behind a kube
 		// Lease lock so exactly one pod runs them at a time. Set
 		// KUSO_DISABLE_LEADER_ELECTION=true on single-replica
-		// installs that want the legacy "always run" behaviour;
-		// the new readyz probe still serves traffic during election
+		// installs that want every singleton to run unconditionally;
+		// the readyz probe still serves traffic during election
 		// contests so requests aren't blocked on lease acquisition.
 		// leaderActive flips on as long as this replica holds the lease,
 		// off the moment leaderCtx is cancelled. The notify dispatcher
@@ -578,9 +577,9 @@ func main() {
 			}
 		}
 		if os.Getenv("KUSO_DISABLE_LEADER_ELECTION") == "true" {
-			// Legacy single-replica path. Skip the lease lock and start
-			// every singleton against the parent ctx. Recommended only
-			// for replicas=1 deploys that don't want a Lease object
+			// Replicas=1 escape hatch: skip the lease lock and start
+			// every singleton against the parent ctx. Use only for
+			// single-replica deploys that don't want a Lease object
 			// in their kube namespace.
 			startSingletons(ctx)
 		} else {
@@ -654,7 +653,6 @@ func main() {
 		DB:              database,
 		LogDB:           logDB,
 		Issuer:          issuer,
-		SessionKey:      sessionKey,
 		Projects:        projSvc,
 		Secrets:         secSvc,
 		Builds:          buildSvc,

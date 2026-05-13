@@ -58,7 +58,6 @@ type Deps struct {
 	// log-search/alerts wiring keeps its types.
 	LogDB           *db.LogDB
 	Issuer          *auth.Issuer
-	SessionKey      string
 	Projects        *projects.Service
 	Secrets         *secrets.Service
 	Builds          *builds.Service
@@ -173,14 +172,9 @@ func NewRouter(d Deps) http.Handler {
 	//      directly. Useful for ad-hoc inspection from a CLI script.
 	//
 	//   3. KUSO_METRICS_PUBLIC=true — opt out of gating entirely.
-	//      Equivalent to the pre-v0.9.38 open behaviour. Use only
-	//      when you know the endpoint is otherwise network-isolated.
-	//
-	// We honour the legacy KUSO_METRICS_REQUIRE_AUTH=false shape for
-	// one release so config baked into operator scripts doesn't
-	// break on upgrade.
-	metricsPublic := os.Getenv("KUSO_METRICS_PUBLIC") == "true" ||
-		os.Getenv("KUSO_METRICS_REQUIRE_AUTH") == "false"
+	//      Use only when you know the endpoint is otherwise
+	//      network-isolated.
+	metricsPublic := os.Getenv("KUSO_METRICS_PUBLIC") == "true"
 	scrapeToken := os.Getenv("KUSO_METRICS_SCRAPE_TOKEN")
 	switch {
 	case metricsPublic:
@@ -211,12 +205,11 @@ func NewRouter(d Deps) http.Handler {
 	// public with the trimmed {status, version} body, which is what
 	// hack/install.sh and the GH release post-deploy probe read.
 	authH := &httphandlers.AuthHandler{
-		DB:         d.DB,
-		Issuer:     d.Issuer,
-		SessionKey: d.SessionKey,
-		Config:     d.Config,
-		Audit:      d.Audit,
-		Logger:     d.Logger,
+		DB:     d.DB,
+		Issuer: d.Issuer,
+		Config: d.Config,
+		Audit:  d.Audit,
+		Logger: d.Logger,
 	}
 	// Rate-limit login at 10 attempts / 30s / IP. Bcrypt makes offline
 	// cracking expensive, but online brute-force against a known
@@ -279,11 +272,10 @@ func NewRouter(d Deps) http.Handler {
 	// can't see), so this route is mounted on the public router.
 	if d.Logs != nil && d.Issuer != nil {
 		wsH := &httphandlers.LogsWSHandler{
-			Svc:        d.Logs,
-			Issuer:     d.Issuer,
-			SessionKey: d.SessionKey,
-			DB:         d.DB,
-			Logger:     d.Logger,
+			Svc:    d.Logs,
+			Issuer: d.Issuer,
+			DB:     d.DB,
+			Logger: d.Logger,
 		}
 		wsH.Mount(r)
 	}

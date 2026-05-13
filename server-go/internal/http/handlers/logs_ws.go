@@ -32,11 +32,10 @@ import (
 
 // LogsWSHandler exposes the WS log tail.
 type LogsWSHandler struct {
-	Svc        *logs.Service
-	Issuer     *auth.Issuer
-	SessionKey string // bcrypt-derived JWT verifying key (same as bearer middleware)
-	DB         *db.DB
-	Logger     *slog.Logger
+	Svc    *logs.Service
+	Issuer *auth.Issuer
+	DB     *db.DB
+	Logger *slog.Logger
 
 	// Per-user connection accounting. wsActive caps the number of
 	// concurrent log streams a single principal can hold open. Without

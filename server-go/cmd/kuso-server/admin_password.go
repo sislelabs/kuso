@@ -14,9 +14,10 @@ import (
 //     the recommended source: the value never appears in `env`,
 //     `kubectl describe pod`, or process snapshots.
 //
-//  2. KUSO_ADMIN_PASSWORD — env var. Backwards-compat path. Logs a
-//     warning because the value is visible to anyone with kubectl
-//     exec / describe rights on the kuso-server pod.
+//  2. KUSO_ADMIN_PASSWORD — env var. Insecure fallback for dev /
+//     bootstrap; logs a warning because the value is visible to
+//     anyone with kubectl exec / describe rights on the kuso-server
+//     pod.
 //
 // Returns empty string when neither is set (OAuth-only installs). A
 // file read error is logged and treated as "not set" so a misconfigured

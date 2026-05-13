@@ -100,21 +100,11 @@ func IsReservedIP(ip net.IP) bool {
 }
 
 func isAllowPrivateOutbound() bool {
-	// Backwards-compat: the old notify-specific env var still works.
-	if os.Getenv("KUSO_NOTIFY_ALLOW_PRIVATE_IPS") == "true" {
-		return true
-	}
 	return os.Getenv("KUSO_ALLOW_PRIVATE_OUTBOUND") == "true"
 }
 
 func blockCIDRs() []*net.IPNet {
 	raw := os.Getenv("KUSO_BLOCK_CIDRS")
-	if raw == "" {
-		// Fall back to the notify-specific env so an operator
-		// already-configured for the notify path picks up the
-		// shared transport's block list automatically.
-		raw = os.Getenv("KUSO_NOTIFY_BLOCK_CIDRS")
-	}
 	if raw == "" {
 		return nil
 	}

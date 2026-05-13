@@ -14,7 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
@@ -90,7 +89,7 @@ func featuresFromEnv() Features {
 		ConsoleEnabled:   os.Getenv("KUSO_CONSOLE_ENABLED") == "true",
 		AuditEnabled:     os.Getenv("KUSO_AUDIT_ENABLED") != "false",
 		AdminDisabled:    os.Getenv("KUSO_ADMIN_DISABLED") == "true",
-		LocalAuth:        strings.TrimSpace(os.Getenv("KUSO_SESSION_KEY")) != "",
+		LocalAuth:        true,
 		GithubAuth:       githubID != "" && githubSecret != "" && githubCallback != "",
 		OAuth2Auth: os.Getenv("OAUTH2_CLIENT_AUTH_URL") != "" &&
 			os.Getenv("OAUTH2_CLIENT_TOKEN_URL") != "" &&

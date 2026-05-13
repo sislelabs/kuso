@@ -41,9 +41,7 @@ import (
 //     for a once-a-blue-moon op.
 //
 // On success the handler triggers a rolling restart of kuso-server so
-// every replica drops its now-stale connection state. Pre-v0.9.38 the
-// user had to do that rollout manually with kubectl — easy to forget,
-// easy to leave the cluster split-brain.
+// every replica drops its now-stale connection state.
 type BackupHandler struct {
 	DB        *db.DB
 	Kube      *kube.Client

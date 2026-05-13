@@ -100,10 +100,10 @@ VALUES (?, ?, ?, ?, false, true, ?, 'local', ?, ?)`,
 //   - If no group has instanceRole=admin, create "kuso-admins" with
 //     that role.
 //   - If the admin group has zero members but a local "admin"-style
-//     user exists, attach that user. This covers the v0.4 → v0.5
-//     migration: legacy clusters had a password seed admin and no
-//     groups; without this they'd boot v0.5 and have no path to
-//     administer.
+//     seed user exists (created by the KUSO_ADMIN_PASSWORD bootstrap
+//     flow), attach that user. Without this, a fresh install ends
+//     up with an admin account that isn't in the admin group and
+//     can't administer anything.
 //
 // Idempotent. Safe to call on every boot.
 func (d *DB) EnsureAdminGroup(ctx context.Context, seedUsername string) error {

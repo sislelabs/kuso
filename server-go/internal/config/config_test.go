@@ -95,7 +95,6 @@ func TestUpdateSettings_RefusesAdminDisabled(t *testing.T) {
 
 func TestFeaturesFromEnv(t *testing.T) {
 	// t.Setenv + t.Parallel are incompatible.
-	t.Setenv("KUSO_SESSION_KEY", "k")
 	t.Setenv("GITHUB_CLIENT_ID", "id")
 	t.Setenv("GITHUB_CLIENT_SECRET", "sec")
 	t.Setenv("GITHUB_CLIENT_CALLBACKURL", "cb")
@@ -103,7 +102,7 @@ func TestFeaturesFromEnv(t *testing.T) {
 	t.Setenv("KUSO_BUILD_REGISTRY", "registry.example.com")
 	feats := featuresFromEnv()
 	if !feats.LocalAuth {
-		t.Error("LocalAuth should be true when KUSO_SESSION_KEY is set")
+		t.Error("LocalAuth should be true (always-on for single-tenant)")
 	}
 	if !feats.GithubAuth {
 		t.Error("GithubAuth should be true when all GitHub envs are set")

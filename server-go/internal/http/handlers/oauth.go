@@ -307,8 +307,8 @@ func (h *OAuthHandler) upsertAndIssue(ctx context.Context, prof *auth.OAuthProfi
 		perms = []string{}
 	}
 	// Union tenancy-derived perms (instanceRole + projectMemberships)
-	// with the legacy role-perms pivot, same as the password-login
-	// flow. Keeps OAuth + password identical post-bootstrap.
+	// with the role-perms pivot, same as the password-login flow.
+	// Keeps OAuth + password identical post-bootstrap.
 	if tenancy, terr := h.DB.ListUserTenancy(ctx, user.ID); terr == nil {
 		for _, p := range auth.Compute(tenancy) {
 			if !containsStr(perms, p) {

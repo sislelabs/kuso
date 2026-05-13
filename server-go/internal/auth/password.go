@@ -1,50 +1,21 @@
 package auth
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"crypto/subtle"
-	"encoding/hex"
 	"errors"
 
 	"golang.org/x/crypto/bcrypt"
 )
 
-// VerifyPassword checks a plaintext password against the stored hash.
-//
-// Two formats are accepted, matching the TS auth.service.ts logic:
-//  1. bcrypt — the default for any user created in v3+.
-//  2. legacy HMAC-SHA256 hex digest with KUSO_SESSION_KEY as the key.
-//     This is for users still carrying a v2-era hash; the TS code
-//     compares both and treats either match as success.
-//
-// sessionKey may be empty if the user has no legacy hash to fall back on
-// (the bcrypt path doesn't need it). Returns nil on success, a non-nil
-// error otherwise — never indicates *which* path failed, to prevent
-// timing oracles.
-func VerifyPassword(stored, plaintext, sessionKey string) error {
+// VerifyPassword checks a plaintext password against a stored bcrypt
+// hash. Returns nil on success, errInvalidCredentials otherwise.
+func VerifyPassword(stored, plaintext string) error {
 	if stored == "" {
 		return errors.New("auth: stored password empty")
 	}
-	// bcrypt hashes always start with $2 — fast pre-check avoids paying
-	// the bcrypt cost on legacy rows.
-	if len(stored) > 4 && stored[0] == '$' && stored[1] == '2' {
-		if err := bcrypt.CompareHashAndPassword([]byte(stored), []byte(plaintext)); err == nil {
-			return nil
-		}
+	if err := bcrypt.CompareHashAndPassword([]byte(stored), []byte(plaintext)); err != nil {
 		return errInvalidCredentials
 	}
-	// Legacy HMAC-SHA256 path: only attempt if a session key is wired.
-	if sessionKey == "" {
-		return errInvalidCredentials
-	}
-	mac := hmac.New(sha256.New, []byte(sessionKey))
-	mac.Write([]byte(plaintext))
-	digest := hex.EncodeToString(mac.Sum(nil))
-	if subtle.ConstantTimeCompare([]byte(stored), []byte(digest)) == 1 {
-		return nil
-	}
-	return errInvalidCredentials
+	return nil
 }
 
 // errInvalidCredentials is the single sentinel both paths return so a
