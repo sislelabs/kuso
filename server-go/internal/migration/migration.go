@@ -20,6 +20,7 @@ import (
 	"github.com/sislelabs/kuso/coolify"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/kube"
 	"kuso/server/internal/projects"
 )
 
@@ -44,18 +45,35 @@ type Result struct {
 	Errors          []Detail `json:"errors"`
 }
 
+// ProjectsAPI is the minimal projects.Service surface the importer
+// uses. Defined as an interface so tests can fake it without spinning
+// up a kube client — the freshly-extracted migration package was
+// untested at v0.10.0 specifically because the concrete-type field
+// blocked stub injection.
+type ProjectsAPI interface {
+	Create(ctx context.Context, req projects.CreateProjectRequest) (*kube.KusoProject, error)
+	AddService(ctx context.Context, project string, req projects.CreateServiceRequest) (*kube.KusoService, error)
+	SetEnv(ctx context.Context, project, service string, envVars []projects.EnvVar) error
+}
+
+// AddonsAPI is the minimal addons.Service surface the importer uses.
+type AddonsAPI interface {
+	Add(ctx context.Context, project string, req addons.CreateAddonRequest) (*kube.KusoAddon, error)
+}
+
+// CoolifyClient is the minimal coolify.Client surface — just the per-
+// app env listing. Interface so tests can return canned env slices
+// without a real Coolify HTTP server.
+type CoolifyClient interface {
+	ListApplicationEnvs(ctx context.Context, appUUID string) ([]coolify.EnvVar, error)
+}
+
 // Service is the importer entry point. Constructed in main with the
 // in-process projects + addons services + an optional logger;
 // handlers call ImportCoolify(...) and write the JSON response.
-//
-// We don't take an interface for projects/addons because the only
-// callers are real (test paths today fake the kube client at a lower
-// layer, not the project service). When mocking ever becomes
-// useful, swap the concrete *projects.Service / *addons.Service for
-// minimal interfaces — both already have stable signatures.
 type Service struct {
-	Projects *projects.Service
-	Addons   *addons.Service
+	Projects ProjectsAPI
+	Addons   AddonsAPI
 	Logger   *slog.Logger
 }
 
@@ -68,7 +86,7 @@ type Service struct {
 // Single-tenant: this is an admin-level operation and the audit log
 // records it as one event (the handler stamps the audit entry; the
 // importer just returns the result).
-func (s *Service) ImportCoolify(ctx context.Context, c *coolify.Client, inv *coolify.Inventory, picked map[string]struct{}) Result {
+func (s *Service) ImportCoolify(ctx context.Context, c CoolifyClient, inv *coolify.Inventory, picked map[string]struct{}) Result {
 	out := Result{}
 	if s.Projects == nil || s.Addons == nil {
 		out.Errors = append(out.Errors, Detail{Kind: "import", Name: "coolify", Reason: "migration service misconfigured (projects or addons nil)"})
@@ -140,7 +158,7 @@ func groupPicked(inv *coolify.Inventory, picked map[string]struct{}, out *Result
 // importOneProject provisions a single kuso project from its grouped
 // Coolify items. Splits into create-project + per-app + per-database
 // to keep the loop bodies small.
-func (s *Service) importOneProject(ctx context.Context, c *coolify.Client, projectSlug, coolifyName string, items []coolify.Item, out *Result) {
+func (s *Service) importOneProject(ctx context.Context, c CoolifyClient, projectSlug, coolifyName string, items []coolify.Item, out *Result) {
 	defaultRepoURL, defaultBranch := pickDefaultRepo(items)
 	if defaultRepoURL == "" {
 		// kuso requires a defaultRepo on the project — without one
@@ -214,7 +232,7 @@ func (s *Service) createProject(ctx context.Context, slug, repoURL, branch strin
 
 // importApp creates the KusoService + writes its env vars. Per-row
 // errors are appended to out and don't fail the larger import.
-func (s *Service) importApp(ctx context.Context, c *coolify.Client, projectSlug string, it coolify.Item, out *Result) {
+func (s *Service) importApp(ctx context.Context, c CoolifyClient, projectSlug string, it coolify.Item, out *Result) {
 	svcSlug := coolify.ServiceSlugFromApp(it.App)
 	svcReq := projects.CreateServiceRequest{
 		Name:    svcSlug,
