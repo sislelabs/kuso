@@ -49,6 +49,10 @@
 #                             the conventional-commits scan; rare but
 #                             useful when prior commits lacked markers)
 #   KUSO_RELEASE_BREAKING=0   force release.json breaking=false
+#   KUSO_RELEASE_SKIP_VISIBILITY_CHECK=1
+#                             skip the post-push ghcr public-pull check.
+#                             Use when the target cluster has a private-
+#                             registry pull-secret wired up (rare).
 #
 #   Local dev escape hatch (almost never use these):
 #   KUSO_RELEASE_ROLL=1       ssh + kubectl set image after publish.
@@ -335,6 +339,60 @@ if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
       -f build/updater/Dockerfile \
       build/updater >/dev/null
     log "updater image pushed: ${UPDATER_IMAGE}:${VERSION}"
+  fi
+fi
+
+# ---- 4a2. ghcr visibility precheck --------------------------------
+#
+# Brand-new container packages on ghcr default to private even when
+# the org's other packages are public. Symptom: the GitHub release
+# publishes successfully, the kube updater Job pulls the new image,
+# gets a 401 from the ghcr token endpoint, and crashloops in
+# ImagePullBackOff. Discovered the hard way on v0.11.1 when the
+# kuso-updater image (added in a recent release) had never been
+# flipped to public — the cluster stayed on the prior version while
+# the updater Job re-tried forever and the notifications channel
+# flooded with "Pod crashed" alerts.
+#
+# GitHub's REST API does NOT expose a container-package-visibility-
+# change endpoint (only the web UI does), so we can't auto-fix.
+# What we CAN do is detect the condition and fail loudly before we
+# publish the GH release — if a release.json points at unpullable
+# images, every cluster on auto-update would try, fail, and alert.
+#
+# Skip via KUSO_RELEASE_SKIP_VISIBILITY_CHECK=1 (e.g. for a release
+# of a not-yet-public image when the dev cluster has a pull-secret
+# wired up — rare).
+if [[ "${KUSO_RELEASE_SKIP_VISIBILITY_CHECK:-0}" != "1" && "$DRY_RUN" != "1" ]]; then
+  log "checking ghcr image visibility (anonymous pull)"
+  visibility_failures=()
+  for img in "${KUSO_RELEASE_IMAGE}:${VERSION}" "${OPERATOR_IMAGE}:${OPERATOR_VERSION}" "${UPDATER_IMAGE}:${VERSION}"; do
+    repo_part="${img%:*}"     # strip :tag
+    ref_part="${img##*:}"     # tag only
+    path="${repo_part#ghcr.io/}"
+    code=$(curl -sSL -o /dev/null -w "%{http_code}" \
+      -H "Accept: application/vnd.oci.image.index.v1+json" \
+      "https://ghcr.io/v2/${path}/manifests/${ref_part}" 2>/dev/null || echo "000")
+    if [[ "$code" == "200" ]]; then
+      log "  ${img} ✓ public"
+    else
+      visibility_failures+=("${img} (HTTP $code)")
+    fi
+  done
+  if [[ ${#visibility_failures[@]} -gt 0 ]]; then
+    msg="the following images are not publicly pullable from ghcr (kube nodes won't be able to fetch them without imagePullSecrets):"
+    for f in "${visibility_failures[@]}"; do
+      msg="${msg}
+       - ${f}"
+    done
+    msg="${msg}
+       Fix: open each package's settings page on GitHub and flip
+       visibility to Public. For sislelabs packages:
+         https://github.com/orgs/sislelabs/packages/container/<name>/settings
+       Then re-run \`make ship VERSION=${VERSION}\` (or skip the
+       check with KUSO_RELEASE_SKIP_VISIBILITY_CHECK=1 if you know
+       the cluster has a pull-secret for them)."
+    fail "${msg}"
   fi
 fi
 
