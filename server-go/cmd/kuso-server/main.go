@@ -237,6 +237,10 @@ func main() {
 	// branch means /api/notifications/{id}/test still works on
 	// kube-less dev installs.
 	notifyDisp := notify.New(database, logger, 256)
+	// Hand the renderer the server's build version so it can stamp it
+	// into the Discord embed footer ("distill · v0.11.3"). Done once
+	// at boot since version is a build-time constant.
+	notify.SetVersion(version.Version())
 	go notifyDisp.Run(ctx)
 
 	// Login rate-limiter pruner. The DB-backed limiter writes one row
@@ -1113,15 +1117,24 @@ func redactDSN(dsn string) string {
 type notifyAdapter struct{ d *notify.Dispatcher }
 
 func (a notifyAdapter) Emit(e builds.EventEnvelope) {
+	fields := make([]notify.EnvelopeField, 0, len(e.Fields))
+	for _, f := range e.Fields {
+		fields = append(fields, notify.EnvelopeField{Name: f.Name, Value: f.Value, Inline: f.Inline})
+	}
 	a.d.EmitEnvelope(notify.EmitEnvelope{
-		Type:     e.Type,
-		Title:    e.Title,
-		Body:     e.Body,
-		Project:  e.Project,
-		Service:  e.Service,
-		URL:      e.URL,
-		Severity: e.Severity,
-		Extra:    e.Extra,
+		Type:        e.Type,
+		Title:       e.Title,
+		Body:        e.Body,
+		Project:     e.Project,
+		Service:     e.Service,
+		URL:         e.URL,
+		Severity:    e.Severity,
+		Extra:       e.Extra,
+		Description: e.Description,
+		LogTail:     e.LogTail,
+		DurationMs:  e.DurationMs,
+		Fields:      fields,
+		Footer:      e.Footer,
 	})
 }
 

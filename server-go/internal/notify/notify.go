@@ -83,6 +83,13 @@ var AllEventTypes = []EventType{
 
 // Event is the wire-stable payload domain code emits. JSON-serialised
 // straight to webhook sinks; rendered to embeds for Discord/Slack.
+//
+// Field shape grew over time. The original four (Title/Body/URL/Extra)
+// produced the early "thin card" Discord embeds. The richer fields
+// (Description/LogTail/Fields/Footer/DurationMs) feed the redesigned
+// embeds — emit sites that don't populate them still get a clean
+// (if less informative) card via the renderer's missing-field
+// fall-throughs.
 type Event struct {
 	Type      EventType         `json:"type"`
 	Timestamp time.Time         `json:"timestamp"`
@@ -93,6 +100,41 @@ type Event struct {
 	URL       string            `json:"url,omitempty"`
 	Severity  string            `json:"severity,omitempty"` // info | warn | error
 	Extra     map[string]string `json:"extra,omitempty"`
+
+	// Rich-card fields. All optional; the Discord renderer drops
+	// missing ones gracefully so older emit sites that only set the
+	// classic fields still produce a valid (if thinner) embed.
+
+	// Description is short prose under the title — commit message,
+	// crash reason, etc. One paragraph; the renderer truncates at
+	// Discord's per-embed description limit (4096 chars).
+	Description string `json:"description,omitempty"`
+	// LogTail is the tail of relevant logs (last ~5 lines is the
+	// expected shape). Renderer wraps it in a code fence; long tails
+	// move from the description into a dedicated full-width field
+	// because Discord caps description at 4096 but a field value at
+	// 1024 — the split is a renderer concern, not the caller's.
+	LogTail string `json:"logTail,omitempty"`
+	// DurationMs is wall-clock duration for events that have one
+	// (build start→finish, deploy roll). Renderer formats as "1m 24s"
+	// or "12s".
+	DurationMs int64 `json:"durationMs,omitempty"`
+	// Fields is the inline field block under the description. Order
+	// preserved. Mixing inline=true and inline=false works the way
+	// Discord renders it: inlines pack 3-up; non-inline forces a row.
+	Fields []EventField `json:"fields,omitempty"`
+	// Footer is an optional override for the default footer (which is
+	// "<project> · <kuso version>"). Empty = use default.
+	Footer string `json:"footer,omitempty"`
+}
+
+// EventField is one row in the rich-card 2-column field block. Mirrors
+// the Discord embed field shape so the renderer can map 1:1; webhook
+// sinks see the same JSON.
+type EventField struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Inline bool   `json:"inline,omitempty"`
 }
 
 // Dispatcher is the fan-out service. Construct via New + start with
@@ -433,29 +475,7 @@ func eventMatches(event string, whitelist []string) bool {
 // Discord renders @here / @everyone / <@&roleID> as actual pings
 // at the top of the card.
 func (d *Dispatcher) sendDiscord(ctx context.Context, url string, e Event, mention string) {
-	color := discordColor(e)
-	embed := map[string]any{
-		"title":       e.Title,
-		"description": e.Body,
-		"color":       color,
-		"timestamp":   e.Timestamp.Format(time.RFC3339),
-		"fields":      discordFields(e),
-	}
-	if abs := absoluteURL(e.URL); abs != "" {
-		embed["url"] = abs
-	}
-	body := map[string]any{
-		"username": "kuso",
-		"embeds":   []any{embed},
-	}
-	if mention != "" {
-		body["content"] = mention
-		// Allowed_mentions explicitly enables the parsing — without
-		// this Discord strips @here / @everyone for hardened webhooks.
-		// Roles need explicit IDs in `roles`.
-		body["allowed_mentions"] = allowedMentionsFor(mention)
-	}
-	d.post(ctx, url, body, nil)
+	d.post(ctx, url, discordPayload(e, mention), nil)
 }
 
 // mentionFor reads the per-event mention rule out of Config.mentions.
@@ -535,18 +555,174 @@ func discordColor(e Event) int {
 	}
 }
 
-func discordFields(e Event) []map[string]any {
-	out := make([]map[string]any, 0, 4)
-	if e.Project != "" {
-		out = append(out, map[string]any{"name": "Project", "value": e.Project, "inline": true})
+// discordPayload assembles the full Discord webhook body for an Event.
+// Shared by sendDiscord + sendDiscordSync so the two paths can't drift.
+//
+// Card grammar (consistent across all event types):
+//
+//	┌─ Title (linked to e.URL) ─────────────────────────────┐
+//	│ Description prose — commit message, crash reason, ... │
+//	│ ```                                                   │
+//	│ <log tail, code-fenced — only if it fits>            │
+//	│ ```                                                   │
+//	│ ─────────────────────────────────────                 │
+//	│ Field A    Field B    Field C   (inline pack 3-up)    │
+//	│ Logs (full-width, when LogTail too long for desc)     │
+//	│ ─────────────────────────────────────                 │
+//	│ <project> · v<version>                       <time>   │
+//	└───────────────────────────────────────────────────────┘
+//
+// All Event rich-card fields are optional; absent ones drop out so an
+// emit site that only sets Title/Body/URL still produces a clean
+// (thinner) card.
+func discordPayload(e Event, mention string) map[string]any {
+	embed := map[string]any{
+		"title":     e.Title,
+		"color":     discordColor(e),
+		"timestamp": e.Timestamp.Format(time.RFC3339),
 	}
-	if e.Service != "" {
-		out = append(out, map[string]any{"name": "Service", "value": e.Service, "inline": true})
+	if abs := absoluteURL(e.URL); abs != "" {
+		embed["url"] = abs
 	}
+	// Build description: prefer Description, fall back to legacy Body.
+	// Append log tail inline when it fits (description cap is 4096;
+	// fence wrappers cost 8 chars). Otherwise spill into a Logs field
+	// below — Discord caps a field value at 1024, but the renderer
+	// trims to fit so the embed validates either way.
+	desc := strings.TrimSpace(e.Description)
+	if desc == "" {
+		desc = strings.TrimSpace(e.Body)
+	}
+	logTail := strings.TrimSpace(e.LogTail)
+	logInDesc := false
+	if logTail != "" {
+		fenced := "```\n" + logTail + "\n```"
+		// Reserve ~200 chars headroom in case desc grows in future.
+		if len(desc)+1+len(fenced) <= 3800 {
+			if desc != "" {
+				desc += "\n" + fenced
+			} else {
+				desc = fenced
+			}
+			logInDesc = true
+		}
+	}
+	if desc != "" {
+		embed["description"] = truncateRunes(desc, 4096)
+	}
+	// Field block. The renderer assembles in this order:
+	//   1. Caller-supplied Fields (the rich cards' main data),
+	//   2. Logs (only if LogTail didn't fit into the description),
+	//   3. Legacy Extra entries (kept for back-compat — old emit
+	//      sites that haven't migrated to Fields still get rendered).
+	fields := make([]map[string]any, 0, len(e.Fields)+4)
+	for _, f := range e.Fields {
+		if f.Name == "" || f.Value == "" {
+			continue
+		}
+		fields = append(fields, map[string]any{
+			"name":   truncateRunes(f.Name, 256),
+			"value":  truncateRunes(f.Value, 1024),
+			"inline": f.Inline,
+		})
+	}
+	if logTail != "" && !logInDesc {
+		// Wrap in a code fence, then truncate to fit Discord's 1024
+		// limit for field values. Better to lose the tail of the
+		// snippet than the whole embed.
+		fenced := "```\n" + logTail + "\n```"
+		fields = append(fields, map[string]any{
+			"name":   "Logs",
+			"value":  truncateRunes(fenced, 1024),
+			"inline": false,
+		})
+	}
+	// Extra is the legacy escape hatch. Skip the project/service
+	// duplicates the old discordFields() used to emit — the redesigned
+	// card surfaces those in the title/footer, not as field rows.
 	for k, v := range e.Extra {
-		out = append(out, map[string]any{"name": k, "value": v, "inline": true})
+		if k == "" || v == "" {
+			continue
+		}
+		if k == "deployURL" || k == "ref" {
+			// Already surfaced through Fields when callers migrate;
+			// skipped here to avoid duplicates on cards that pass both
+			// the legacy Extra map and the new Fields slice.
+			continue
+		}
+		fields = append(fields, map[string]any{
+			"name":   truncateRunes(k, 256),
+			"value":  truncateRunes(v, 1024),
+			"inline": true,
+		})
 	}
-	return out
+	if len(fields) > 0 {
+		// Discord caps the field count at 25; truncate defensively.
+		if len(fields) > 25 {
+			fields = fields[:25]
+		}
+		embed["fields"] = fields
+	}
+	// Footer. Default = "<project> · v<version>" so the cluster's
+	// origin is always visible on the card. Caller can override via
+	// e.Footer for events that aren't project-scoped (node events).
+	footer := e.Footer
+	if footer == "" {
+		parts := make([]string, 0, 2)
+		if e.Project != "" {
+			parts = append(parts, e.Project)
+		}
+		if v := strings.TrimSpace(currentVersion); v != "" {
+			parts = append(parts, v)
+		}
+		footer = strings.Join(parts, " · ")
+	}
+	if footer != "" {
+		embed["footer"] = map[string]any{"text": truncateRunes(footer, 2048)}
+	}
+	body := map[string]any{
+		"username": "kuso",
+		"embeds":   []any{embed},
+	}
+	if mention != "" {
+		body["content"] = mention
+		// Allowed_mentions explicitly enables the parsing — without
+		// this Discord strips @here / @everyone for hardened webhooks.
+		// Roles need explicit IDs in `roles`.
+		body["allowed_mentions"] = allowedMentionsFor(mention)
+	}
+	return body
+}
+
+// truncateRunes shortens s to at most max RUNES (not bytes), appending
+// "…" when truncation actually happened. We count runes because Discord
+// limits are in characters, and a byte-count truncation could split a
+// UTF-8 sequence and produce an invalid embed.
+func truncateRunes(s string, max int) string {
+	if max <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	if max <= 1 {
+		return string(r[:max])
+	}
+	return string(r[:max-1]) + "…"
+}
+
+// currentVersion is the kuso server version stamped at build time. We
+// read it lazily via a getter rather than a fixed init so tests can
+// override it without touching the version package. The default empty
+// string just means "no version suffix on the footer."
+var currentVersion = ""
+
+// SetVersion installs the server version string the renderer surfaces
+// in the embed footer. Called once from cmd/kuso-server/main during
+// boot. Optional — empty version just omits the suffix.
+func SetVersion(v string) {
+	currentVersion = strings.TrimSpace(v)
 }
 
 // sendWebhook POSTs the raw event JSON to a generic URL. When secret
@@ -639,23 +815,7 @@ func (d *Dispatcher) postSync(ctx context.Context, url string, body any, extra h
 
 // sendDiscordSync mirrors sendDiscord but returns the upstream error.
 func (d *Dispatcher) sendDiscordSync(ctx context.Context, url string, e Event, mention string) error {
-	color := discordColor(e)
-	embed := map[string]any{
-		"title":       e.Title,
-		"description": e.Body,
-		"color":       color,
-		"timestamp":   e.Timestamp.Format(time.RFC3339),
-		"fields":      discordFields(e),
-	}
-	if abs := absoluteURL(e.URL); abs != "" {
-		embed["url"] = abs
-	}
-	body := map[string]any{"username": "kuso", "embeds": []any{embed}}
-	if mention != "" {
-		body["content"] = mention
-		body["allowed_mentions"] = allowedMentionsFor(mention)
-	}
-	return d.postSync(ctx, url, body, nil)
+	return d.postSync(ctx, url, discordPayload(e, mention), nil)
 }
 
 // sendWebhookSync mirrors sendWebhook with error propagation.
@@ -762,19 +922,47 @@ func BuildFailed(project, service, ref, reason string) Event {
 	}
 }
 
-func PodCrashed(project, service, podName, reason string) Event {
+// PodCrashed fires when the health watcher sees a pod in
+// CrashLoopBackOff / ImagePullBackOff / ContainerConfigError state.
+// envKind is "production" / "preview-pr-7" / ... (or "" when unknown);
+// restarts is the kubelet's running restart count for the container;
+// logTail is the last few lines of the previous container's logs (may
+// be empty when no prior container exists — first-boot ImagePullBackOff
+// produces no logs to tail).
+func PodCrashed(project, service, podName, reason, envKind, logTail string, restarts int) Event {
 	// Crashes → service overlay (Logs tab in particular is what the
 	// user wants next, but the overlay router defaults to Logs when
 	// the service has crashed pods, so a single deep-link works).
+	title := fmt.Sprintf("⚠ Pod crashed · %s / %s", project, service)
+	// Description carries the human-readable orientation ("production ·
+	// <pod>"); the field block has the actionable details.
+	desc := podName
+	if envKind != "" {
+		desc = envKind + " · " + podName
+	}
+	fields := []EventField{
+		{Name: "Reason", Value: reason, Inline: true},
+	}
+	if restarts > 0 {
+		fields = append(fields, EventField{
+			Name: "Restarts", Value: fmt.Sprintf("%d", restarts), Inline: true,
+		})
+	}
+	if envKind != "" {
+		fields = append(fields, EventField{Name: "Env", Value: envKind, Inline: true})
+	}
 	return Event{
-		Type:     EventPodCrashed,
-		Title:    fmt.Sprintf("⚠ Pod crashed: %s", service),
-		Body:     reason,
-		Project:  project,
-		Service:  service,
-		URL:      serviceURL(project, service),
-		Severity: "warn",
-		Extra:    map[string]string{"pod": podName},
+		Type:        EventPodCrashed,
+		Title:       title,
+		Description: desc,
+		LogTail:     logTail,
+		Body:        reason, // back-compat for raw-webhook consumers
+		Project:     project,
+		Service:     service,
+		URL:         serviceURL(project, service),
+		Severity:    "warn",
+		Extra:       map[string]string{"pod": podName},
+		Fields:      fields,
 	}
 }
 
@@ -782,29 +970,83 @@ func PodCrashed(project, service, podName, reason string) Event {
 // nodewatch threshold (5 min by default). The watcher cordons the
 // node before emitting so the event narrates a state change the
 // operator can act on, not a transient blip.
-func NodeUnreachable(node, reason string) Event {
+//
+// downFor is how long the node has been NotReady at emit time —
+// usually ~= the watcher's threshold. affectedPods is the number of
+// pods that were running on the node when it went unreachable (0 when
+// the count couldn't be computed).
+func NodeUnreachable(node, reason string, downFor time.Duration, affectedPods int) Event {
+	desc := "NotReady — auto-cordoned"
+	if downFor > 0 {
+		desc = fmt.Sprintf("NotReady for %s — auto-cordoned", formatShortDuration(downFor))
+	}
+	fields := []EventField{}
+	if reason != "" {
+		fields = append(fields, EventField{Name: "Reason", Value: reason, Inline: true})
+	}
+	if affectedPods > 0 {
+		fields = append(fields, EventField{
+			Name: "Affected pods", Value: fmt.Sprintf("%d", affectedPods), Inline: true,
+		})
+	}
 	return Event{
-		Type:     EventNodeUnreachable,
-		Title:    fmt.Sprintf("✗ Node unreachable: %s", node),
-		Body:     reason,
-		URL:      "/settings/nodes",
-		Severity: "error",
-		Extra:    map[string]string{"node": node},
+		Type:        EventNodeUnreachable,
+		Title:       fmt.Sprintf("⚠ Node unreachable · %s", node),
+		Description: desc,
+		Body:        reason,
+		URL:         "/settings/nodes",
+		Severity:    "error",
+		Extra:       map[string]string{"node": node},
+		Fields:      fields,
+		Footer:      "node · " + node,
 	}
 }
 
 // NodeRecovered fires when a previously-cordoned-as-unreachable node
 // transitions back to Ready. The watcher uncordons it (so workloads
-// can land again) before emitting.
-func NodeRecovered(node string) Event {
-	return Event{
-		Type:     EventNodeRecovered,
-		Title:    fmt.Sprintf("✓ Node recovered: %s", node),
-		Body:     "node is Ready again and uncordoned",
-		URL:      "/settings/nodes",
-		Severity: "info",
-		Extra:    map[string]string{"node": node},
+// can land again) before emitting. downFor is the total time the node
+// was unreachable (computed from the notReadySince annotation).
+func NodeRecovered(node string, downFor time.Duration) Event {
+	desc := "node is Ready again and uncordoned"
+	if downFor > 0 {
+		desc = fmt.Sprintf("Ready again after %s — uncordoned", formatShortDuration(downFor))
 	}
+	return Event{
+		Type:        EventNodeRecovered,
+		Title:       fmt.Sprintf("✓ Node recovered · %s", node),
+		Description: desc,
+		Body:        desc,
+		URL:         "/settings/nodes",
+		Severity:    "info",
+		Extra:       map[string]string{"node": node},
+		Footer:      "node · " + node,
+	}
+}
+
+// formatShortDuration renders a duration compactly: "5m", "1h 24m",
+// "2d 3h". Mirrors the build-card duration style; lives in notify
+// because the node helpers use it too.
+func formatShortDuration(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		return fmt.Sprintf("%dm", int(d/time.Minute))
+	}
+	if d < 24*time.Hour {
+		h := int(d / time.Hour)
+		m := int((d % time.Hour) / time.Minute)
+		if m == 0 {
+			return fmt.Sprintf("%dh", h)
+		}
+		return fmt.Sprintf("%dh %dm", h, m)
+	}
+	days := int(d / (24 * time.Hour))
+	h := int((d % (24 * time.Hour)) / time.Hour)
+	if h == 0 {
+		return fmt.Sprintf("%dd", days)
+	}
+	return fmt.Sprintf("%dd %dh", days, h)
 }
 
 func AlertFired(title, body, severity string, extra map[string]string) Event {

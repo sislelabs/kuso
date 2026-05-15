@@ -109,7 +109,14 @@ func (w *Watcher) checkPods(ctx context.Context) {
 		}
 		project := p.Labels["kuso.sislelabs.com/project"]
 		service := p.Labels["app.kubernetes.io/instance"]
-		w.Notify.Emit(notify.PodCrashed(project, service, p.Name, reason))
+		envKind := p.Labels["kuso.sislelabs.com/env-kind"]
+		restarts := containerRestartTotal(p)
+		// Best-effort: pull the previous container's tail. We're inside
+		// the tick loop so this should be fast and bounded — the helper
+		// timeouts at 5s per call. Failures yield "" which the renderer
+		// drops cleanly.
+		logTail := w.previousLogTail(p, reason)
+		w.Notify.Emit(notify.PodCrashed(project, service, p.Name, reason, envKind, logTail, restarts))
 	}
 	// Garbage-collect stale alerts so a recovered pod can re-alert
 	// later.
@@ -184,4 +191,86 @@ func (w *Watcher) checkNodes(ctx context.Context) {
 			))
 		}
 	}
+}
+
+// containerRestartTotal sums RestartCount across every container in a
+// pod. Init containers are included — an init-loop crash is just as
+// alert-worthy as a main-container one, and the user wants the full
+// picture in the Discord card.
+func containerRestartTotal(p *corev1.Pod) int {
+	var total int32
+	for _, cs := range p.Status.ContainerStatuses {
+		total += cs.RestartCount
+	}
+	for _, cs := range p.Status.InitContainerStatuses {
+		total += cs.RestartCount
+	}
+	return int(total)
+}
+
+// previousLogTail pulls the last ~5 lines of the previous container's
+// stdout for a crashing pod. "Previous" matters because the current
+// container is in waiting/backoff — its logs are empty; the prior run
+// is where the actual error landed.
+//
+// Best-effort: 5s timeout, kube errors swallowed, empty string when
+// no previous run exists (first-boot ImagePullBackOff yields nothing
+// to tail anyway). The notify renderer drops empty log tails cleanly.
+func (w *Watcher) previousLogTail(p *corev1.Pod, reason string) string {
+	if w == nil || w.Kube == nil || p == nil {
+		return ""
+	}
+	// ImagePullBackOff has no prior container — skip the log read.
+	if reason == "ImagePullBackOff" || reason == "ErrImagePull" ||
+		reason == "CreateContainerConfigError" || reason == "init:ImagePullBackOff" ||
+		reason == "init:ErrImagePull" {
+		return ""
+	}
+	// Find the first container with restart history. Main containers
+	// take priority over init containers since runtime crashes are
+	// what we usually want to surface.
+	cName := ""
+	for _, cs := range p.Status.ContainerStatuses {
+		if cs.RestartCount > 0 {
+			cName = cs.Name
+			break
+		}
+	}
+	if cName == "" {
+		for _, cs := range p.Status.InitContainerStatuses {
+			if cs.RestartCount > 0 {
+				cName = cs.Name
+				break
+			}
+		}
+	}
+	if cName == "" {
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	tail := int64(5)
+	prev := true
+	req := w.Kube.Clientset.CoreV1().Pods(p.Namespace).GetLogs(p.Name, &corev1.PodLogOptions{
+		Container: cName,
+		Previous:  prev,
+		TailLines: &tail,
+	})
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return ""
+	}
+	defer stream.Close()
+	buf := make([]byte, 4096)
+	var data []byte
+	for {
+		n, rerr := stream.Read(buf)
+		if n > 0 {
+			data = append(data, buf[:n]...)
+		}
+		if rerr != nil {
+			break
+		}
+	}
+	return strings.TrimSpace(string(data))
 }

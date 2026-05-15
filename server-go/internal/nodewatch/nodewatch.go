@@ -146,11 +146,15 @@ func (w *Watcher) tick(ctx context.Context) {
 		seen[n.Name] = struct{}{}
 		ready := isReady(n)
 		if ready {
+			downFor := time.Duration(0)
+			if first, ok := w.notReadySince[n.Name]; ok {
+				downFor = now.Sub(first)
+			}
 			delete(w.notReadySince, n.Name)
 			if _, was := w.alerted[n.Name]; was {
 				delete(w.alerted, n.Name)
 				actions = append(actions, pendingAction{
-					kind: "uncordon", node: n, emit: notify.NodeRecovered(n.Name),
+					kind: "uncordon", node: n, emit: notify.NodeRecovered(n.Name, downFor),
 				})
 			}
 			// Clear the persisted marker so a future flap doesn't see
@@ -190,8 +194,14 @@ func (w *Watcher) tick(ctx context.Context) {
 		// apiserver. The post-unlock dispatcher rolls back the alerted
 		// flag on cordon failure to keep the original retry semantics.
 		w.alerted[n.Name] = struct{}{}
+		// downFor is computed at emit time so the card shows the actual
+		// elapsed NotReady, not the static threshold (which would lie
+		// for nodes that were already NotReady at leader handover).
+		// affectedPods is filled in post-unlock by countPodsOnNode —
+		// we don't make kube calls under the mutex.
 		actions = append(actions, pendingAction{
-			kind: "cordon", node: n, emit: notify.NodeUnreachable(n.Name, reasonFor(n)),
+			kind: "cordon", node: n,
+			emit: notify.NodeUnreachable(n.Name, reasonFor(n), now.Sub(first), 0),
 		})
 	}
 	for k := range w.notReadySince {
@@ -220,6 +230,13 @@ func (w *Watcher) tick(ctx context.Context) {
 				delete(w.alerted, a.node.Name)
 				w.mu.Unlock()
 				continue
+			}
+			// Patch in the affected-pods count for the Discord card.
+			// We compute this AFTER cordon (so the user sees the count
+			// that matters — pods that were scheduled on the bad node).
+			// Best-effort; a kube outage here just leaves the field off.
+			if count := w.countPodsOnNode(ctx, a.node.Name); count > 0 {
+				a.emit = withAffectedPods(a.emit, count)
 			}
 			w.Notify.Emit(a.emit)
 		case "uncordon":
@@ -340,4 +357,53 @@ func reasonFor(n *corev1.Node) string {
 		}
 	}
 	return "no Ready condition reported"
+}
+
+// countPodsOnNode returns the number of non-terminated pods scheduled
+// on the named node. Used by the cordon path to surface "X pods
+// affected" on the Discord card. Best-effort: a kube outage here just
+// yields 0 and the renderer omits the field.
+//
+// We skip Succeeded/Failed pods since they're no longer running —
+// they don't represent live load that needs rescheduling. DaemonSet
+// pods are counted, which matches how an operator thinks about
+// "what's on this box."
+func (w *Watcher) countPodsOnNode(ctx context.Context, nodeName string) int {
+	if w == nil || w.Kube == nil || nodeName == "" {
+		return 0
+	}
+	cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	pods, err := w.Kube.Clientset.CoreV1().Pods("").List(cctx, metav1.ListOptions{
+		FieldSelector: "spec.nodeName=" + nodeName,
+	})
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for i := range pods.Items {
+		ph := pods.Items[i].Status.Phase
+		if ph == corev1.PodSucceeded || ph == corev1.PodFailed {
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// withAffectedPods stamps the affected-pods count onto a notify.Event
+// that was assembled with count=0 (because we compute the count post-
+// unlock). Returns a copy so the caller's struct stays untouched.
+func withAffectedPods(e notify.Event, count int) notify.Event {
+	if count <= 0 {
+		return e
+	}
+	// Append rather than replace: we want to keep the Reason field
+	// that NodeUnreachable already set.
+	fields := append([]notify.EventField{}, e.Fields...)
+	fields = append(fields, notify.EventField{
+		Name: "Affected pods", Value: fmt.Sprintf("%d", count), Inline: true,
+	})
+	e.Fields = fields
+	return e
 }

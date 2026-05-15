@@ -748,14 +748,17 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 	awaitPodGone(ctx, s.Kube, ns, buildName, 5*time.Second)
 	if s.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, project+"-")
+		title, desc, fields := buildRichCard(b, short, "cancelled", "")
 		s.Notifier.Emit(EventEnvelope{
-			Type:     eventBuildCancelled,
-			Title:    fmt.Sprintf("⊘ Build cancelled: %s", short),
-			Body:     fmt.Sprintf("`%s` cancelled by user", buildName),
-			Project:  project,
-			Service:  short,
-			URL:      buildEventURL(project, short),
-			Severity: "info",
+			Type:        eventBuildCancelled,
+			Title:       title,
+			Description: desc,
+			Project:     project,
+			Service:     short,
+			URL:         buildEventURL(project, short),
+			Severity:    "info",
+			DurationMs:  buildDurationMs(b),
+			Fields:      fields,
 		})
 	}
 	return nil
@@ -862,14 +865,20 @@ func (s *Service) supersedePriorBuilds(ctx context.Context, ns, project, fqn, ne
 		}
 		if s.Notifier != nil {
 			short := strings.TrimPrefix(fqn, project+"-")
+			title, desc, fields := buildRichCard(&raw[i], short, "superseded", "")
+			if desc == "" {
+				desc = "Replaced by `" + newName + "`"
+			}
 			s.Notifier.Emit(EventEnvelope{
-				Type:     eventBuildSuperseded,
-				Title:    fmt.Sprintf("⊘ Build superseded: %s", short),
-				Body:     fmt.Sprintf("`%s` cancelled — replaced by `%s`", name, newName),
-				Project:  project,
-				Service:  short,
-				URL:      buildEventURL(project, short),
-				Severity: "info",
+				Type:        eventBuildSuperseded,
+				Title:       title,
+				Description: desc,
+				Project:     project,
+				Service:     short,
+				URL:         buildEventURL(project, short),
+				Severity:    "info",
+				DurationMs:  buildDurationMs(&raw[i]),
+				Fields:      fields,
 			})
 		}
 	}
@@ -1502,6 +1511,209 @@ func buildEventURL(project, service string) string {
 	return fmt.Sprintf("/projects/%s?service=%s", project, service)
 }
 
+// buildRichCard assembles the title, description, and inline field
+// block for a build.* notification. phase is "succeeded"/"failed";
+// failureReason is the markFailed message (ignored on success).
+// Description is the commit message (first line) when available;
+// the field block surfaces ref + author + duration so consumers
+// don't need to click through to get the basics.
+//
+// Returned fields are []EnvelopeField — the notify adapter forwards
+// them straight through to the Discord renderer's field block.
+func buildRichCard(b *kube.KusoBuild, short, phase, failureReason string) (title, description string, fields []EnvelopeField) {
+	var glyph, verb string
+	switch phase {
+	case "failed":
+		glyph, verb = "✗", "Build failed"
+	case "cancelled":
+		glyph, verb = "⊘", "Build cancelled"
+	case "superseded":
+		glyph, verb = "⊘", "Build superseded"
+	default:
+		glyph, verb = "✓", "Build succeeded"
+	}
+	title = fmt.Sprintf("%s %s · %s / %s", glyph, verb, b.Spec.Project, short)
+
+	annos := b.Annotations
+	// Description = the human-readable commit message. We trim to the
+	// first line so the card doesn't drown in a long multi-line body
+	// — Discord renders newlines but a build card with 20 lines of
+	// commit prose pushes the field block off-screen.
+	if cm := strings.TrimSpace(annos[annCommitMessage]); cm != "" {
+		if nl := strings.IndexByte(cm, '\n'); nl >= 0 {
+			cm = cm[:nl]
+		}
+		description = cm
+	} else if phase == "failed" && failureReason != "" {
+		// No commit msg + failed build → show the reason as the
+		// description so the card still has prose at the top.
+		description = failureReason
+	}
+
+	// Field block — kept compact (3 inline fields). Branch and ref
+	// share a row because they're conceptually one pointer ("main @
+	// abcdef"); author and duration each get their own slot.
+	ref := b.Spec.Ref
+	if len(ref) > 7 {
+		ref = ref[:7]
+	}
+	branchAndRef := ""
+	switch {
+	case b.Spec.Branch != "" && ref != "":
+		branchAndRef = fmt.Sprintf("`%s` · `%s`", b.Spec.Branch, ref)
+	case b.Spec.Branch != "":
+		branchAndRef = fmt.Sprintf("`%s`", b.Spec.Branch)
+	case ref != "":
+		branchAndRef = fmt.Sprintf("`%s`", ref)
+	}
+	if branchAndRef != "" {
+		fields = append(fields, EnvelopeField{Name: "Ref", Value: branchAndRef, Inline: true})
+	}
+	if user := strings.TrimSpace(annos[annTriggerUser]); user != "" {
+		fields = append(fields, EnvelopeField{Name: "By", Value: user, Inline: true})
+	} else if src := strings.TrimSpace(annos[annTriggerSource]); src != "" {
+		fields = append(fields, EnvelopeField{Name: "By", Value: src, Inline: true})
+	}
+	if d := buildDurationMs(b); d > 0 {
+		var label string
+		switch phase {
+		case "failed":
+			label = "Failed after"
+		case "cancelled", "superseded":
+			label = "Stopped after"
+		default:
+			label = "Built in"
+		}
+		fields = append(fields, EnvelopeField{
+			Name:   label,
+			Value:  formatBuildDuration(d),
+			Inline: true,
+		})
+	}
+	return title, description, fields
+}
+
+// buildDurationMs reads start + completed timestamps off the build CR
+// and returns the wall-clock duration in ms. Returns 0 when either
+// stamp is missing (e.g. a build that failed before the pod ever
+// started) so the renderer drops the field gracefully.
+func buildDurationMs(b *kube.KusoBuild) int64 {
+	if b == nil {
+		return 0
+	}
+	start := strings.TrimSpace(b.Annotations[annStartedAt])
+	end := strings.TrimSpace(b.Annotations[annCompletedAt])
+	if start == "" || end == "" {
+		return 0
+	}
+	startT, err := time.Parse(time.RFC3339, start)
+	if err != nil {
+		return 0
+	}
+	endT, err := time.Parse(time.RFC3339, end)
+	if err != nil {
+		return 0
+	}
+	d := endT.Sub(startT)
+	if d <= 0 {
+		return 0
+	}
+	return d.Milliseconds()
+}
+
+// formatBuildDuration prints a compact human duration: "12s", "1m 24s",
+// "2h 5m". Caps at hours+minutes — a multi-day build would be a real
+// problem we'd want surfaced differently anyway.
+func formatBuildDuration(ms int64) string {
+	d := time.Duration(ms) * time.Millisecond
+	if d < time.Minute {
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+	if d < time.Hour {
+		m := int(d / time.Minute)
+		s := int((d % time.Minute) / time.Second)
+		if s == 0 {
+			return fmt.Sprintf("%dm", m)
+		}
+		return fmt.Sprintf("%dm %ds", m, s)
+	}
+	h := int(d / time.Hour)
+	m := int((d % time.Hour) / time.Minute)
+	if m == 0 {
+		return fmt.Sprintf("%dh", h)
+	}
+	return fmt.Sprintf("%dh %dm", h, m)
+}
+
+// tailBuildLogs grabs the last `lines` log lines from the build's
+// container pods. Used by the failed-build notification path to
+// include a fenced log excerpt in the Discord card.
+//
+// Best-effort — bounded by a 5s deadline, kube errors are swallowed,
+// returns "" when no pod / no logs are available. The archive path
+// (archiveLogs) still runs separately for the durable DB snapshot;
+// this is a lightweight read of the tail, not a replacement.
+func (p *Poller) tailBuildLogs(ctx context.Context, ns string, b *kube.KusoBuild, lines int) string {
+	if p == nil || p.Svc == nil || p.Svc.Kube == nil || b == nil || lines <= 0 {
+		return ""
+	}
+	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	pods, err := p.Svc.Kube.Clientset.CoreV1().Pods(ns).List(lctx, metav1.ListOptions{
+		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": b.Name}),
+	})
+	if err != nil || len(pods.Items) == 0 {
+		return ""
+	}
+	// Sort: most-recently-created pod first. Failed builds with retries
+	// can leave older pods behind, and the latest one is where the
+	// actual failure lives.
+	pod := &pods.Items[0]
+	for i := 1; i < len(pods.Items); i++ {
+		if pods.Items[i].CreationTimestamp.After(pod.CreationTimestamp.Time) {
+			pod = &pods.Items[i]
+		}
+	}
+	tail := int64(lines)
+	// We try the main container first (kaniko output), then init
+	// containers (clone failures land here). First non-empty wins.
+	tryNames := append([]string{}, containerNames(pod.Spec.Containers)...)
+	tryNames = append(tryNames, containerNames(pod.Spec.InitContainers)...)
+	for _, c := range tryNames {
+		req := p.Svc.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
+			Container: c,
+			TailLines: &tail,
+		})
+		stream, err := req.Stream(lctx)
+		if err != nil {
+			continue
+		}
+		buf := make([]byte, 4096)
+		var data []byte
+		for {
+			n, rerr := stream.Read(buf)
+			if n > 0 {
+				data = append(data, buf[:n]...)
+			}
+			if rerr != nil {
+				break
+			}
+		}
+		stream.Close()
+		s := strings.TrimSpace(string(data))
+		if s != "" {
+			// One last defensive trim: if the container streamed more
+			// than `lines` lines (rare; happens when a single log line
+			// is broken into many small writes), keep just the tail.
+			if ls := strings.Split(s, "\n"); len(ls) > lines {
+				s = strings.Join(ls[len(ls)-lines:], "\n")
+			}
+			return s
+		}
+	}
+	return ""
+}
+
 // EventEnvelope is the minimum payload a notify dispatcher needs.
 // Mirrors notify.Event's interesting fields without the import.
 type EventEnvelope struct {
@@ -1513,6 +1725,24 @@ type EventEnvelope struct {
 	URL      string
 	Severity string
 	Extra    map[string]string
+
+	// Rich-card fields — same semantics as notify.Event. Builds
+	// populates these when it knows the data (commit message,
+	// duration, archived log tail on failure); the adapter forwards
+	// 1:1, and the notify Discord renderer drops missing ones.
+	Description string
+	LogTail     string
+	DurationMs  int64
+	Fields      []EnvelopeField
+	Footer      string
+}
+
+// EnvelopeField mirrors notify.EventField for the same import-boundary
+// reason. Pure data; no methods.
+type EnvelopeField struct {
+	Name   string
+	Value  string
+	Inline bool
 }
 
 // Event type strings used at the Emit sites in this package. Kept
@@ -2368,19 +2598,18 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 	// and removes that race.
 	p.queueArchive(ctx, ns, b, "succeeded")
 	if p.Notifier != nil {
-		ref := b.Spec.Ref
-		if len(ref) > 12 {
-			ref = ref[:12]
-		}
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
+		title, desc, fields := buildRichCard(b, short, "succeeded", "")
 		p.Notifier.Emit(EventEnvelope{
-			Type:     eventBuildSucceeded,
-			Title:    fmt.Sprintf("✓ Build succeeded: %s", short),
-			Body:     fmt.Sprintf("ref `%s` on `%s`", ref, b.Spec.Branch),
-			Project:  b.Spec.Project,
-			Service:  short,
-			URL:      buildEventURL(b.Spec.Project, short),
-			Severity: "info",
+			Type:        eventBuildSucceeded,
+			Title:       title,
+			Description: desc,
+			Project:     b.Spec.Project,
+			Service:     short,
+			URL:         buildEventURL(b.Spec.Project, short),
+			Severity:    "info",
+			DurationMs:  buildDurationMs(b),
+			Fields:      fields,
 		})
 	}
 	return p.promoteImage(ctx, ns, b)
@@ -2405,20 +2634,25 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 	p.deleteCloneTokenSecret(ns, b.Name)
 	p.queueArchive(ctx, ns, b, "failed")
 	if p.Notifier != nil {
-		ref := b.Spec.Ref
-		if len(ref) > 12 {
-			ref = ref[:12]
-		}
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
+		// Pull the last 5 lines of the build pod's logs so the Discord
+		// card includes a code-fenced excerpt of the actual error.
+		// Cheap (5s timeout, single pod list + log stream); failure
+		// just yields no log tail — the rest of the card still renders.
+		logTail := p.tailBuildLogs(ctx, ns, b, 5)
+		title, desc, fields := buildRichCard(b, short, "failed", msg)
 		p.Notifier.Emit(EventEnvelope{
-			Type:     eventBuildFailed,
-			Title:    fmt.Sprintf("✗ Build failed: %s", short),
-			Body:     msg,
-			Project:  b.Spec.Project,
-			Service:  short,
-			URL:      buildEventURL(b.Spec.Project, short),
-			Severity: "error",
-			Extra:    map[string]string{"ref": ref, "branch": b.Spec.Branch},
+			Type:        eventBuildFailed,
+			Title:       title,
+			Description: desc,
+			Body:        msg, // kept for back-compat sinks (raw webhook)
+			LogTail:     logTail,
+			Project:     b.Spec.Project,
+			Service:     short,
+			URL:         buildEventURL(b.Spec.Project, short),
+			Severity:    "error",
+			DurationMs:  buildDurationMs(b),
+			Fields:      fields,
 		})
 	}
 	return nil
