@@ -28,6 +28,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"regexp"
 	"strconv"
 	"strings"
@@ -440,8 +441,8 @@ func (d *Dispatcher) sendDiscord(ctx context.Context, url string, e Event, menti
 		"timestamp":   e.Timestamp.Format(time.RFC3339),
 		"fields":      discordFields(e),
 	}
-	if e.URL != "" {
-		embed["url"] = e.URL
+	if abs := absoluteURL(e.URL); abs != "" {
+		embed["url"] = abs
 	}
 	body := map[string]any{
 		"username": "kuso",
@@ -646,8 +647,8 @@ func (d *Dispatcher) sendDiscordSync(ctx context.Context, url string, e Event, m
 		"timestamp":   e.Timestamp.Format(time.RFC3339),
 		"fields":      discordFields(e),
 	}
-	if e.URL != "" {
-		embed["url"] = e.URL
+	if abs := absoluteURL(e.URL); abs != "" {
+		embed["url"] = abs
 	}
 	body := map[string]any{"username": "kuso", "embeds": []any{embed}}
 	if mention != "" {
@@ -687,6 +688,39 @@ func serviceURL(project, service string) string {
 		return ""
 	}
 	return fmt.Sprintf("/projects/%s?service=%s", project, service)
+}
+
+// absoluteURL upgrades an in-app path like "/projects/foo?service=bar"
+// to a full https URL for external sinks (Discord, Slack) that reject
+// relative paths in embed `url` fields. Already-absolute URLs pass
+// through unchanged. Returns "" when no base URL can be derived — the
+// caller MUST omit the `url` field in that case rather than send an
+// invalid embed (Discord 400s the entire payload otherwise).
+//
+// Preference order matches handlers/node_bootstrap.go's publicBaseURL,
+// minus the request-scoped XFF logic (we have no *http.Request here):
+//  1. KUSO_PUBLIC_URL — operator-set source of truth.
+//  2. https://$KUSO_DOMAIN — install.sh sets this on every deployment.
+func absoluteURL(in string) string {
+	if in == "" {
+		return ""
+	}
+	if strings.HasPrefix(in, "http://") || strings.HasPrefix(in, "https://") {
+		return in
+	}
+	if !strings.HasPrefix(in, "/") {
+		return ""
+	}
+	base := strings.TrimRight(strings.TrimSpace(os.Getenv("KUSO_PUBLIC_URL")), "/")
+	if base == "" {
+		if d := strings.TrimSpace(os.Getenv("KUSO_DOMAIN")); d != "" {
+			base = "https://" + d
+		}
+	}
+	if base == "" {
+		return ""
+	}
+	return base + in
 }
 
 func projectURL(project string) string {
