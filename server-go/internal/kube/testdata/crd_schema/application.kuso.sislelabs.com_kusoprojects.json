@@ -13,6 +13,11 @@
       },
       "spec": {
         "properties": {
+          "alwaysOn": {
+            "default": false,
+            "description": "When true, every service in this project runs with\nsleep.enabled=false regardless of per-service sleep\nconfig. Lets a project opt out of scale-to-zero\nglobally — useful when cold-start latency is\nunacceptable (low-traffic but latency-sensitive\nAPIs, background processors that must always be\nlistening).\n",
+            "type": "boolean"
+          },
           "baseDomain": {
             "description": "Domain under which auto-generated service hostnames are emitted.",
             "type": "string"
@@ -44,6 +49,26 @@
           "namespace": {
             "description": "Optional execution namespace for this project's child\nresources (services, environments, addons, builds,\nplus their per-service Secrets). The KusoProject CR\nitself always lives in the server's home namespace;\nthis field controls only child routing. Empty = home.\n",
             "type": "string"
+          },
+          "placement": {
+            "description": "Project-default node-pinning policy. Services\nwithout their own placement inherit it; new\nenvironments derived from a service inherit the\nservice's effective placement (with project as\nfallback). Empty = schedule anywhere.\n",
+            "properties": {
+              "labels": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Node-label matchers (AND across keys). The\nserver prefixes them with kuso.sislelabs.com/\nbehind the scenes so user-typed labels are\nkept in a separate namespace from kube's.\n",
+                "type": "object"
+              },
+              "nodes": {
+                "description": "Specific hostnames the workload may schedule\nonto. Combines with labels via AND: a node\nmust match all labels AND be in this list\n(when set), or match all labels (when empty).\n",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
           },
           "previews": {
             "properties": {

@@ -16,7 +16,7 @@
       "requests": { "cpu": "100m", "memory": "256Mi" },
       "limits":   { "cpu": "1000m", "memory": "1Gi" }
     },
-    "password": "REDACTED",
+    "passwordSecret": { "name": "alpha-postgres-byo", "key": "password" },
     "database": "alpha",
     "backup": {
       "schedule": "0 4 * * *",

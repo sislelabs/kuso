@@ -329,9 +329,17 @@ type KusoAddonSpec struct {
 	HA          bool           `json:"ha,omitempty"`
 	StorageSize string         `json:"storageSize,omitempty"`
 	Resources   map[string]any `json:"resources,omitempty"`
-	Password    string         `json:"password,omitempty"`
-	Database    string         `json:"database,omitempty"`
-	Backup      *KusoBackup    `json:"backup,omitempty"`
+	// PasswordSecret is a SecretKeyRef escape hatch for bringing
+	// your own password. The user creates a Secret in the addon's
+	// namespace out-of-band; the helm chart looks it up at render
+	// time and feeds the value through to the addon as its initial
+	// password. When unset, the chart generates a random password
+	// on first install and persists it as the conn-secret. The
+	// legacy inline spec.password field was removed because it
+	// persisted plaintext credentials in etcd.
+	PasswordSecret *KusoSecretKeyRef `json:"passwordSecret,omitempty"`
+	Database       string            `json:"database,omitempty"`
+	Backup         *KusoBackup       `json:"backup,omitempty"`
 	// Placement pins the addon's StatefulSet to a subset of nodes.
 	// Same shape as KusoServiceSpec.Placement — empty = schedule
 	// anywhere. The addon helm chart reads this to render nodeSelector
@@ -362,6 +370,14 @@ type KusoAddonSpec struct {
 type KusoAddonExternal struct {
 	SecretName string   `json:"secretName,omitempty"`
 	SecretKeys []string `json:"secretKeys,omitempty"`
+}
+
+// KusoSecretKeyRef is the same shape as kube's SecretKeySelector but
+// scoped to the local namespace. Used by KusoAddonSpec.PasswordSecret
+// and any future BYO-credential paths.
+type KusoSecretKeyRef struct {
+	Name string `json:"name,omitempty"`
+	Key  string `json:"key,omitempty"`
 }
 
 type KusoBackup struct {

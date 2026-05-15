@@ -24,6 +24,10 @@
             },
             "type": "array"
           },
+          "displayName": {
+            "description": "Free-form label shown in the UI (canvas chip,\noverlay header). Decoupled from the CR name + URL\nslug so renaming the visual label is fast and\ndoesn't recreate kube resources. Validation:\nletters / digits / spaces / hyphens, max 60 chars.\nEmpty = UI falls back to the slug.\n",
+            "type": "string"
+          },
           "domains": {
             "items": {
               "properties": {
@@ -81,6 +85,36 @@
             "description": "For runtime=worker: name of the sibling KusoService\nwhose image this worker should use. Empty = build from\nthe worker's own repo.\n",
             "type": "string"
           },
+          "github": {
+            "description": "Per-service GitHub App installation override. Lets\ndifferent services in one project bind to different\ninstallations (different orgs, accounts). Same wire\nshape as KusoProject.spec.github — installationId\nis what the build pod uses to mint clone tokens.\n",
+            "properties": {
+              "installationId": {
+                "format": "int64",
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "image": {
+            "description": "Registry-image pointer for runtime=image services\n(no kaniko build). The propagation step copies\nthis onto every KusoEnvironment so the chart\npulls the tag directly. Other runtimes leave it\nnil; the build poller writes the env's Image\nafter a successful build.\n",
+            "properties": {
+              "pullPolicy": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              },
+              "tag": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "internal": {
+            "default": false,
+            "description": "When true, skip the Ingress entirely. The in-cluster Service still exists so sibling pods can reach the service via ${{ svc.URL }}, but no public domain or TLS is provisioned. Mirrored onto every KusoEnvironment owned by this service.",
+            "type": "boolean"
+          },
           "placement": {
             "description": "AND-of-labels node selector + explicit node allowlist. Empty/missing means \"schedule anywhere\". The env helm chart fans this out to nodeSelector + topologySpreadConstraints.",
             "properties": {
@@ -102,6 +136,16 @@
           "port": {
             "format": "int32",
             "type": "integer"
+          },
+          "previews": {
+            "description": "Per-service preview opt-out. When disabled=true the\nservice is excluded from PR previews even when the\nproject-level toggle is on. Useful for shared\nworkers, crons, internal-only services that don't\nmake sense as throwaway URLs. Nil = inherit the\nproject setting.\n",
+            "properties": {
+              "disabled": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
           },
           "project": {
             "type": "string"

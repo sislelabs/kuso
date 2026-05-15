@@ -174,6 +174,53 @@ spec:
                       accessModes:
                         type: array
                         items: { type: string }
+                displayName:
+                  type: string
+                  description: |
+                    Free-form label shown in the UI (canvas chip,
+                    overlay header). Decoupled from the CR name + URL
+                    slug so renaming the visual label is fast and
+                    doesn't recreate kube resources. Validation:
+                    letters / digits / spaces / hyphens, max 60 chars.
+                    Empty = UI falls back to the slug.
+                image:
+                  type: object
+                  description: |
+                    Registry-image pointer for runtime=image services
+                    (no kaniko build). The propagation step copies
+                    this onto every KusoEnvironment so the chart
+                    pulls the tag directly. Other runtimes leave it
+                    nil; the build poller writes the env's Image
+                    after a successful build.
+                  properties:
+                    repository: { type: string }
+                    tag: { type: string }
+                    pullPolicy: { type: string }
+                github:
+                  type: object
+                  description: |
+                    Per-service GitHub App installation override. Lets
+                    different services in one project bind to different
+                    installations (different orgs, accounts). Same wire
+                    shape as KusoProject.spec.github — installationId
+                    is what the build pod uses to mint clone tokens.
+                  properties:
+                    installationId:
+                      type: integer
+                      format: int64
+                previews:
+                  type: object
+                  description: |
+                    Per-service preview opt-out. When disabled=true the
+                    service is excluded from PR previews even when the
+                    project-level toggle is on. Useful for shared
+                    workers, crons, internal-only services that don't
+                    make sense as throwaway URLs. Nil = inherit the
+                    project setting.
+                  properties:
+                    disabled:
+                      type: boolean
+                      default: false
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

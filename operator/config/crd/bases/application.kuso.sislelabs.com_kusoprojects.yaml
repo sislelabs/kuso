@@ -78,6 +78,42 @@ spec:
                     ttlDays:
                       type: integer
                       default: 7
+                alwaysOn:
+                  type: boolean
+                  description: |
+                    When true, every service in this project runs with
+                    sleep.enabled=false regardless of per-service sleep
+                    config. Lets a project opt out of scale-to-zero
+                    globally — useful when cold-start latency is
+                    unacceptable (low-traffic but latency-sensitive
+                    APIs, background processors that must always be
+                    listening).
+                  default: false
+                placement:
+                  type: object
+                  description: |
+                    Project-default node-pinning policy. Services
+                    without their own placement inherit it; new
+                    environments derived from a service inherit the
+                    service's effective placement (with project as
+                    fallback). Empty = schedule anywhere.
+                  properties:
+                    labels:
+                      type: object
+                      description: |
+                        Node-label matchers (AND across keys). The
+                        server prefixes them with kuso.sislelabs.com/
+                        behind the scenes so user-typed labels are
+                        kept in a separate namespace from kube's.
+                      additionalProperties: { type: string }
+                    nodes:
+                      type: array
+                      description: |
+                        Specific hostnames the workload may schedule
+                        onto. Combines with labels via AND: a node
+                        must match all labels AND be in this list
+                        (when set), or match all labels (when empty).
+                      items: { type: string }
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

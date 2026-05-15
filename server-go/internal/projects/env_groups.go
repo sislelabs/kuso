@@ -392,10 +392,11 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 			},
 			Spec: a.Spec,
 		}
-		// Don't carry over the production password — let the chart
-		// generate a new one (preserve-on-existing means an empty
-		// spec.password is fine).
-		clone.Spec.Password = ""
+		// Don't carry over the production passwordSecret reference —
+		// the chart generates a fresh random password on first
+		// install when no ref is set, which is what we want for
+		// the cloned env-group (isolated credentials from prod).
+		clone.Spec.PasswordSecret = nil
 		clone.Spec.Project = project
 		if _, err := s.Kube.CreateKusoAddon(ctx, ns, clone); err != nil {
 			rollback()
