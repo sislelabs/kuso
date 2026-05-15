@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/olekukonko/tablewriter"
@@ -12,6 +13,16 @@ import (
 
 	"kuso/pkg/kusoApi"
 )
+
+// indexNewline returns the index of the first '\n' or '\r' in s, or -1.
+// Used to clip multi-line failure reasons down to their first line for
+// table rendering — the full text is still available via `-o json`.
+func indexNewline(s string) int {
+	if i := strings.IndexAny(s, "\r\n"); i >= 0 {
+		return i
+	}
+	return -1
+}
 
 // `kuso build` — trigger and inspect builds.
 //
@@ -81,13 +92,14 @@ var buildListCmd = &cobra.Command{
 		// decoded as []KusoBuild and printed an empty table because
 		// metadata/spec/status were never populated.
 		type buildRow struct {
-			ID         string `json:"id"`
-			Branch     string `json:"branch"`
-			CommitSha  string `json:"commitSha"`
-			ImageTag   string `json:"imageTag"`
-			Status     string `json:"status"`
-			StartedAt  string `json:"startedAt"`
-			FinishedAt string `json:"finishedAt"`
+			ID           string `json:"id"`
+			Branch       string `json:"branch"`
+			CommitSha    string `json:"commitSha"`
+			ImageTag     string `json:"imageTag"`
+			Status       string `json:"status"`
+			StartedAt    string `json:"startedAt"`
+			FinishedAt   string `json:"finishedAt"`
+			ErrorMessage string `json:"errorMessage,omitempty"`
 		}
 		var items []buildRow
 		if err := json.Unmarshal(resp.Body(), &items); err != nil {
@@ -111,21 +123,49 @@ var buildListCmd = &cobra.Command{
 				fmt.Println("no builds yet — try `kuso build trigger <project> <service>`")
 				return nil
 			}
+			// Add a REASON column only when at least one row has a failure
+			// message — keeps successful-only listings narrow on small terms,
+			// surfaces the actual cause when a build's failed so users don't
+			// have to ssh to the cluster to find out why.
+			showReason := false
+			for _, b := range items {
+				if b.ErrorMessage != "" {
+					showReason = true
+					break
+				}
+			}
 			t := tablewriter.NewWriter(os.Stdout)
-			t.SetHeader([]string{"ID", "BRANCH", "SHA", "TAG", "STATUS", "AGE"})
+			header := []string{"ID", "BRANCH", "SHA", "TAG", "STATUS", "AGE"}
+			if showReason {
+				header = append(header, "REASON")
+			}
+			t.SetHeader(header)
 			for _, b := range items {
 				sha := b.CommitSha
 				if len(sha) > 12 {
 					sha = sha[:12]
 				}
-				t.Append([]string{
+				row := []string{
 					b.ID,
 					b.Branch,
 					sha,
 					b.ImageTag,
 					b.Status,
 					relativeAge(b.StartedAt),
-				})
+				}
+				if showReason {
+					reason := b.ErrorMessage
+					// Cap to one line; the full text is in `-o json` for
+					// scripts and in the archived build log for humans.
+					if i := indexNewline(reason); i >= 0 {
+						reason = reason[:i]
+					}
+					if len(reason) > 80 {
+						reason = reason[:77] + "..."
+					}
+					row = append(row, reason)
+				}
+				t.Append(row)
 			}
 			t.Render()
 			return nil
