@@ -45,6 +45,10 @@
 #   KUSO_RELEASE_PUSH=0       skip the git push (for local testing)
 #   KUSO_RELEASE_OPERATOR=1   force operator image rebuild even if
 #                             operator/ didn't change
+#   KUSO_RELEASE_BREAKING=1   force release.json breaking=true (override
+#                             the conventional-commits scan; rare but
+#                             useful when prior commits lacked markers)
+#   KUSO_RELEASE_BREAKING=0   force release.json breaking=false
 #
 #   Local dev escape hatch (almost never use these):
 #   KUSO_RELEASE_ROLL=1       ssh + kubectl set image after publish.
@@ -506,6 +510,44 @@ log "writing dist/release.json + dist/crds.yaml for GitHub release"
 # Keep "additive" as the default migration kind; the moment we ship
 # something destructive, this script grows a CRD-diff step.
 PUBLISHED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+
+# breaking is derived from conventional-commits markers between the last
+# released tag and HEAD: either a "BREAKING CHANGE" footer in the body
+# or a "!:" suffix after the type (e.g. "refactor!:", "feat(api)!:").
+# Previously hardcoded false, which lied to the updater on every release
+# that dropped back-compat paths. The updater uses this flag to gate
+# auto-upgrade on clusters with conservative update policies.
+#
+# Override: set KUSO_RELEASE_BREAKING=1 to force-flag a release that
+# contains breaking work the commits didn't mark with the convention.
+# Set =0 to force-clear (rare, but useful when a "!:" was added in
+# error). Empty/unset = use the auto-detection below.
+if [[ -n "${KUSO_RELEASE_BREAKING:-}" ]]; then
+  case "${KUSO_RELEASE_BREAKING}" in
+    1|true|yes)  BREAKING=true  ;;
+    0|false|no)  BREAKING=false ;;
+    *) fail "KUSO_RELEASE_BREAKING must be 0/1 (got: ${KUSO_RELEASE_BREAKING})" ;;
+  esac
+  log "breaking flag forced by KUSO_RELEASE_BREAKING → breaking=${BREAKING}"
+else
+  PREV_TAG="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${VERSION}\$" | head -1)"
+  if [[ -z "$PREV_TAG" ]]; then
+    BREAKING=false
+  else
+    # %B is the full message (subject + body). grep -E with multiline -z
+    # is tricky in portable bash; instead, scan subject for "!:" and
+    # body for the literal footer string.
+    if git log --format='%s' "${PREV_TAG}..HEAD" | grep -qE '^[a-z]+(\([^)]+\))?!:'; then
+      BREAKING=true
+    elif git log --format='%B' "${PREV_TAG}..HEAD" | grep -q '^BREAKING CHANGE'; then
+      BREAKING=true
+    else
+      BREAKING=false
+    fi
+    log "breaking-change scan: ${PREV_TAG}..HEAD → breaking=${BREAKING}"
+  fi
+fi
+
 cat > "$DIST_DIR/release.json" <<EOF
 {
   "version": "${VERSION}",
@@ -520,10 +562,10 @@ cat > "$DIST_DIR/release.json" <<EOF
     "minServer": "v0.4.0",
     "migrations": []
   },
-  "breaking": false
+  "breaking": ${BREAKING}
 }
 EOF
-log "wrote ${DIST_DIR}/release.json"
+log "wrote ${DIST_DIR}/release.json (breaking=${BREAKING})"
 
 # ---- 4b2. release.json signature -----------------------------------
 #
@@ -860,7 +902,45 @@ if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
       dry "git push origin HEAD && git push origin ${VERSION}"
     else
       git push origin HEAD
-      git push origin "${VERSION}" || warn "tag push failed (already on remote?)"
+
+      # Tag-push needs an explicit collision check. Plain `git push
+      # origin vX.Y.Z` rejects-and-warns when the remote tag exists
+      # pointing at a different SHA — we used to swallow that with
+      # `|| warn`, which left the remote tag pointing at whatever
+      # came before (typically an aborted earlier run) while the
+      # GitHub release + ghcr image were built from the new commit.
+      # The artifacts and the tag would disagree, which is exactly
+      # the trap that caught us shipping v0.11.0.
+      local_sha="$(git rev-list -n1 "${VERSION}")"
+      remote_sha="$(git ls-remote origin "refs/tags/${VERSION}" | awk '{print $1}')"
+      # ls-remote returns the tag object's own SHA for annotated
+      # tags; dereference both sides to the commit they point at.
+      if [[ -n "$remote_sha" ]]; then
+        remote_commit="$(git rev-list -n1 "$remote_sha" 2>/dev/null || echo "$remote_sha")"
+      else
+        remote_commit=""
+      fi
+
+      if [[ -z "$remote_commit" ]]; then
+        # No remote tag yet — normal first-push path.
+        git push origin "${VERSION}"
+      elif [[ "$remote_commit" == "$local_sha" ]]; then
+        # Identical pointer — re-running ship is idempotent. Don't
+        # log this as failure.
+        log "tag ${VERSION} already on origin at the right commit — skipping push"
+      else
+        # Divergent. Stop here. The user can either delete-and-replace
+        # (after confirming nothing else depends on the stale tag) or
+        # bump the version. Either way, refusing to ship inconsistent
+        # state is safer than papering over it.
+        fail "tag ${VERSION} on origin points at ${remote_commit:0:12}, but we just built ${local_sha:0:12}.
+       The GitHub release + ghcr image have already been published
+       at the new commit, but the tag ref disagrees — refusing to
+       leave the repo in that state. To recover:
+         git push --delete origin ${VERSION}   # only if no one is pinning it
+         git push origin ${VERSION}             # push the correct annotated tag
+       Or bump VERSION and re-ship."
+      fi
     fi
     log "pushed commit + tag to origin"
   else
