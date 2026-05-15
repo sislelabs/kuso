@@ -181,6 +181,28 @@ function LogList({ lines, highlight }: { lines: LogLine[]; highlight: string }) 
   // Reverse — server returns newest-first; humans tail-follow oldest-first.
   const ordered = useMemo(() => [...lines].reverse(), [lines]);
 
+  // Coalesce consecutive lines from the same pod+second so a multi-line
+  // stack trace renders as one timestamped block, not 30 lines with the
+  // same prefix repeated. The server splits log frames on \n upstream
+  // (stream.go:118/143), so a 30-line traceback arrives as 30 frames.
+  // Keeping the prefix on each was making errors un-copyable — readers
+  // had to manually strip "MM-DD HH:MM:SS  pod  " from every line.
+  //
+  // Rule: a line is "continuation" of the previous when it has the same
+  // pod AND the same fmtTs result (sub-second resolution). The first
+  // line of each group shows ts + pod; continuations show empty cells.
+  const grouped = useMemo(() => {
+    let prevPod = "";
+    let prevTs = "";
+    return ordered.map((l) => {
+      const ts = fmtTs(l.ts);
+      const isContinuation = l.pod === prevPod && ts === prevTs;
+      prevPod = l.pod;
+      prevTs = ts;
+      return { line: l, isContinuation };
+    });
+  }, [ordered]);
+
   // Auto-scroll to bottom on first paint + when new lines arrive
   // and the user is already near the bottom (don't yank if they're
   // reading old lines).
@@ -203,13 +225,13 @@ function LogList({ lines, highlight }: { lines: LogLine[]; highlight: string }) 
     >
       <table className="w-full">
         <tbody>
-          {ordered.map((l) => (
+          {grouped.map(({ line: l, isContinuation }) => (
             <tr key={l.id} className="border-b border-[var(--border-subtle)]/40 last:border-b-0 hover:bg-[var(--bg-tertiary)]/30">
               <td className="w-44 align-top px-2 py-1 text-[10px] text-[var(--text-tertiary)] whitespace-nowrap">
-                {fmtTs(l.ts)}
+                {isContinuation ? "" : fmtTs(l.ts)}
               </td>
               <td className="w-32 align-top px-1 py-1 text-[10px] text-[var(--text-tertiary)] truncate" title={l.pod}>
-                {shortPod(l.pod)}
+                {isContinuation ? "" : shortPod(l.pod)}
               </td>
               <td className="px-2 py-1 text-[var(--text-secondary)]">
                 <Highlight text={l.line} query={highlight} />
