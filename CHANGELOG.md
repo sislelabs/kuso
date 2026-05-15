@@ -5,6 +5,12 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.11.1] — 2026-05-15
+
+### 🐛 Bug Fixes
+- Fix: propagate Runtime service→env; draw auto-injected addon edges on canvas ([d5a9d09](https://github.com/sislelabs/kuso/commit/d5a9d09b496637f2449840a5489f1c891620aaaa))
+- Fix(release.sh): real breaking-change detection + hard-fail on tag-push collision ([84b21de](https://github.com/sislelabs/kuso/commit/84b21de934cdbe2acfb95a902f6d24e7053c6f06))
+
 ## [0.11.0] — 2026-05-15
 
 ### Other
