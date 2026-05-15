@@ -9,7 +9,7 @@ import { useCan, Perms } from "@/features/auth";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database } from "lucide-react";
+import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, MemoryStick } from "lucide-react";
 import { relativeTime } from "@/lib/format";
 import { useQueries } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
@@ -130,16 +130,71 @@ export default function ProjectsPage() {
 function Row({
   icon: Icon,
   value,
+  href,
 }: {
   icon: React.ComponentType<{ className?: string }>;
   value: string;
+  // When set the row becomes an external <a> opening href in a new
+  // tab. Used by the domain row so users can click the public URL
+  // straight off the project card. We stopPropagation so clicking
+  // the link doesn't also trigger the parent card's nav handler.
+  href?: string;
 }) {
-  return (
-    <div className="flex items-center gap-1.5 text-[var(--text-tertiary)]">
+  const body = (
+    <>
       <Icon className="h-3 w-3 shrink-0" />
       <span className="truncate font-mono text-[var(--text-secondary)]">{value}</span>
-    </div>
+    </>
   );
+  if (href) {
+    return (
+      <a
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        className="relative z-20 flex items-center gap-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--accent)]"
+      >
+        {body}
+      </a>
+    );
+  }
+  return (
+    <div className="flex items-center gap-1.5 text-[var(--text-tertiary)]">{body}</div>
+  );
+}
+
+// ProjectMetricsResp matches the server's projectMetricsResponse JSON
+// shape (kubernetes_env_metrics.go). Kept inline rather than a feature
+// module — this is the only consumer.
+interface ProjectMetricsResp {
+  project: string;
+  cpuMillicores: number;
+  memBytes: number;
+  pods: number;
+  envs: number;
+}
+
+// formatMillicores collapses millicores to a tight string: "142m" up to
+// 999m, then "1.4" cores. Drops trailing zeros so "1.0" reads as "1".
+function formatMillicores(m: number): string {
+  if (m < 1000) return `${m}m`;
+  const cores = m / 1000;
+  return cores >= 10 ? `${cores.toFixed(0)}` : `${cores.toFixed(1).replace(/\.0$/, "")}`;
+}
+
+// formatBytes uses MiB / GiB so the units match metrics-server (binary,
+// not decimal). Project cards skip the suffix verbosity — "384 MiB" is
+// enough; we don't show "384.32 MiB".
+function formatBytes(b: number): string {
+  if (b <= 0) return "0 MiB";
+  const MiB = 1024 * 1024;
+  const GiB = 1024 * MiB;
+  if (b >= GiB) {
+    const v = b / GiB;
+    return `${v >= 10 ? v.toFixed(0) : v.toFixed(1)} GiB`;
+  }
+  return `${Math.round(b / MiB)} MiB`;
 }
 
 interface DescribeResp {
@@ -167,6 +222,20 @@ function ProjectsGrid({
       queryKey: ["projects", p.metadata.name, "describe-summary"],
       queryFn: () => api<DescribeResp>(`/api/projects/${encodeURIComponent(p.metadata.name)}`),
       staleTime: 15_000,
+    })),
+  });
+  // Per-project CPU/RAM rollup, polled every 30s. metrics-server
+  // emits new samples every 15s so 30s gives near-fresh data without
+  // hammering the API. Failures fall through to empty values — the
+  // server already returns 200 + zeros on metrics-server outage so we
+  // shouldn't see errors in practice, but guard anyway.
+  const metricQueries = useQueries({
+    queries: projects.map((p) => ({
+      queryKey: ["projects", p.metadata.name, "metrics-rollup"],
+      queryFn: () =>
+        api<ProjectMetricsResp>(`/api/projects/${encodeURIComponent(p.metadata.name)}/metrics`),
+      refetchInterval: 30_000,
+      staleTime: 25_000,
     })),
   });
   return (
@@ -218,24 +287,46 @@ function ProjectsGrid({
           if (st?.ready === true) return true;
           return false;
         }).length;
-        // Surface a service URL when the project has exactly one
-        // service with at least one configured domain. Multi-service
-        // projects don't get the chip — there's no good "default"
-        // pick and a wrong one is worse than none.
-        const openURL = (() => {
-          if (services.length !== 1) return null;
-          const host = services[0]?.spec.domains?.[0]?.host;
-          if (!host) return null;
-          const scheme = services[0]?.spec.domains?.[0]?.tls === false ? "http" : "https";
-          return `${scheme}://${host}`;
+        // Public URL of the live deployment, surfaced TWICE on the card:
+        //   1. The domain `Row` becomes an <a> opening it in a new tab.
+        //   2. Used by the body of the card if we ever want a "visit
+        //      site" affordance separate from "open in kuso".
+        // We prefer the first live service with a configured domain so
+        // multi-service projects (frontend + api + worker) link to the
+        // user-facing one. Falls back to any service-with-domain so an
+        // offline project still has an obvious link.
+        const publicURL = (() => {
+          const pick = (s: (typeof services)[number] | undefined) => {
+            const host = s?.spec.domains?.[0]?.host;
+            if (!host) return null;
+            const scheme = s?.spec.domains?.[0]?.tls === false ? "http" : "https";
+            return `${scheme}://${host}`;
+          };
+          const live = services.find((s) => {
+            const prod = envs.find(
+              (e) => e.spec.service === s.metadata.name && e.spec.kind === "production"
+            );
+            const st = prod?.status as
+              | { ready?: boolean; replicas?: { ready?: number } }
+              | undefined;
+            const isLive =
+              (st?.replicas?.ready ?? 0) > 0 || st?.ready === true;
+            return isLive && (s.spec.domains?.[0]?.host ?? "") !== "";
+          });
+          if (live) return pick(live);
+          const anyWithDomain = services.find(
+            (s) => (s.spec.domains?.[0]?.host ?? "") !== ""
+          );
+          return pick(anyWithDomain);
         })();
+        const metrics = metricQueries[i]?.data;
         return (
           <li key={p.metadata.uid ?? name}>
             {/* The card is a div + an absolutely-positioned Link
                 overlay so we can sprinkle real <a> elements (the
                 "open ↗" chip) inside the same card without nesting
                 anchors — invalid HTML and behaves badly in Safari. */}
-            <div className="group relative rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40">
+            <div className="group relative cursor-pointer rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40">
               <Link
                 href={`/projects/${name}`}
                 aria-label={`Open project ${name}`}
@@ -243,7 +334,7 @@ function ProjectsGrid({
               />
               <div className="relative z-10 flex items-start justify-between gap-2">
                 <div className="min-w-0 flex-1">
-                  <h2 className="truncate text-sm font-semibold tracking-tight text-[var(--text-primary)]">
+                  <h2 className="truncate text-sm font-semibold tracking-tight text-[var(--text-primary)] transition-colors group-hover:text-[var(--accent)]">
                     {name}
                   </h2>
                   {p.spec.description && (
@@ -252,24 +343,23 @@ function ProjectsGrid({
                     </p>
                   )}
                 </div>
-                <div className="flex items-center gap-2">
-                  {openURL && (
-                    <a
-                      href={openURL}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      onClick={(e) => e.stopPropagation()}
-                      className="relative z-20 inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 text-[10px] font-mono text-[var(--text-secondary)] opacity-0 transition-opacity hover:text-[var(--text-primary)] group-hover:opacity-100"
-                    >
-                      open ↗
-                    </a>
-                  )}
-                  <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--text-primary)]" />
-                </div>
+                {/* The arrow signals the whole card is a link into kuso.
+                    The card-wide overlay <Link> below handles the
+                    actual nav; this is purely affordance. */}
+                <ArrowUpRight
+                  aria-hidden
+                  className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--accent)]"
+                />
               </div>
               <dl className="relative z-10 mt-3 space-y-1 text-[11px]">
                 {repo && <Row icon={GitBranch} value={repo} />}
-                {domain && <Row icon={Globe} value={domain} />}
+                {domain && (
+                  <Row
+                    icon={Globe}
+                    value={domain}
+                    href={publicURL ?? `https://${domain}`}
+                  />
+                )}
               </dl>
               {summary && (
                 <div className="relative z-10 mt-3 flex items-center gap-3 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
@@ -310,6 +400,29 @@ function ProjectsGrid({
                       <span>{addons.length}</span>
                       <span>addon{addons.length === 1 ? "" : "s"}</span>
                     </span>
+                  )}
+                  {/* Resource line — only shown when we actually have
+                      pod metrics. Skipped for offline projects so the
+                      card doesn't render a misleading "0m · 0 MiB"
+                      that could be confused with "metrics-server down".
+                      30s poll handled by the parent useQueries. */}
+                  {metrics && metrics.pods > 0 && (
+                    <>
+                      <span
+                        className="inline-flex items-center gap-1"
+                        aria-label={`${formatMillicores(metrics.cpuMillicores)} CPU across ${metrics.pods} pod${metrics.pods === 1 ? "" : "s"}`}
+                      >
+                        <Cpu className="h-3 w-3" aria-hidden />
+                        <span>{formatMillicores(metrics.cpuMillicores)}</span>
+                      </span>
+                      <span
+                        className="inline-flex items-center gap-1"
+                        aria-label={`${formatBytes(metrics.memBytes)} memory`}
+                      >
+                        <MemoryStick className="h-3 w-3" aria-hidden />
+                        <span>{formatBytes(metrics.memBytes)}</span>
+                      </span>
+                    </>
                   )}
                 </div>
               )}

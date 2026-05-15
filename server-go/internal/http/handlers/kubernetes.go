@@ -74,6 +74,12 @@ func (h *KubernetesHandler) Mount(rt interface {
 	// Per-env CPU + mem snapshot. Reads from the metrics.k8s.io
 	// metrics-server API. Returns one entry per pod in the env.
 	rt.Get("/api/kubernetes/envs/{env}/metrics", h.EnvMetrics)
+	// Per-project CPU + mem rollup summed across production envs.
+	// Powers the resource line on /projects landing-page cards.
+	// Lives under /api/projects/{project}/metrics rather than the
+	// /api/kubernetes/... tree so the URL reads naturally and so it
+	// shares the project-access auth gate with sibling project routes.
+	rt.Get("/api/projects/{project}/metrics", h.ProjectMetrics)
 	// Per-env traffic timeseries (requests/sec, error rate, p95
 	// response time). Reads from the in-cluster prometheus deployed
 	// via deploy/prometheus.yaml. The host can reach kuso-prometheus

@@ -119,6 +119,116 @@ func (h *KubernetesHandler) EnvMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// projectMetricsResponse is the JSON wire shape for the project-card
+// rollup: a single summed snapshot across every production env in the
+// project. Counts of pods/envs help the UI explain "0 / 0" when a
+// project hasn't deployed anything yet vs. "metrics-server down".
+type projectMetricsResponse struct {
+	Project  string `json:"project"`
+	CPUm     int64  `json:"cpuMillicores"`
+	MemBytes int64  `json:"memBytes"`
+	Pods     int    `json:"pods"`
+	Envs     int    `json:"envs"`
+}
+
+// ProjectMetrics returns CPU + memory summed across every production
+// KusoEnvironment in the project. Powers the resource line on the
+// /projects landing-page cards. Empty/zero results when:
+//   - the project has no production envs (Pods=0, Envs=0)
+//   - metrics-server is missing (graceful fall-through; Pods=0)
+//   - the user lacks viewer role on the project (403)
+//
+// We deliberately limit to kind="production" so previews coming and
+// going don't make the card numbers jitter; the per-env panel under
+// /projects/<name> still shows preview env metrics individually.
+func (h *KubernetesHandler) ProjectMetrics(w http.ResponseWriter, r *http.Request) {
+	project := chi.URLParam(r, "project")
+	if project == "" {
+		http.Error(w, "missing project", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := kubeCtx(r)
+	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	out := projectMetricsResponse{Project: project}
+	if h.Kube == nil {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	// Resolve project → production env CR names. The instance label on
+	// metrics-server pods matches the env CR name, so once we have the
+	// list we filter pod metrics by `app.kubernetes.io/instance in
+	// (env1, env2, ...)`.
+	envs, err := h.Kube.ListKusoEnvironmentsByLabels(ctx, h.Namespace, map[string]string{
+		"kuso.sislelabs.com/project": project,
+	})
+	if err != nil {
+		// Treat list failure as "no data" — the card just shows "—"
+		// rather than an error banner.
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	prodEnvs := make(map[string]struct{}, len(envs))
+	for i := range envs {
+		if envs[i].Spec.Kind == "production" {
+			prodEnvs[envs[i].Name] = struct{}{}
+		}
+	}
+	out.Envs = len(prodEnvs)
+	if len(prodEnvs) == 0 {
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	// Build a label-selector that matches any of the production env
+	// names. metrics.k8s.io supports the standard set-based selector.
+	envNames := make([]string, 0, len(prodEnvs))
+	for n := range prodEnvs {
+		envNames = append(envNames, n)
+	}
+	selector := "app.kubernetes.io/instance in (" + strings.Join(envNames, ",") + ")"
+	gvr := schema.GroupVersionResource{
+		Group:    "metrics.k8s.io",
+		Version:  "v1beta1",
+		Resource: "pods",
+	}
+	list, err := h.Kube.Dynamic.Resource(gvr).Namespace(h.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: selector,
+	})
+	if err != nil {
+		// metrics-server missing or transient API outage — return zeros
+		// rather than 500ing the card. The UI renders a "—" state.
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+	for i := range list.Items {
+		item := list.Items[i].Object
+		containers, ok := item["containers"].([]any)
+		if !ok {
+			continue
+		}
+		out.Pods++
+		for _, c := range containers {
+			cm, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			usage, ok := cm["usage"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if cpu, ok := usage["cpu"].(string); ok {
+				out.CPUm += parseCPU(cpu)
+			}
+			if mem, ok := usage["memory"].(string); ok {
+				out.MemBytes += parseQuantity(mem)
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
 // timeseriesResponse mirrors the PromQL `query_range` shape, simplified
 // for the kuso UI: one series per metric, points are [unixSeconds, value].
 type timeseriesResponse struct {
