@@ -776,8 +776,12 @@ func rewriteEnvVarsForGroup(
 
 		// (2) Literal value rewrite for sibling service URLs.
 		// Two patterns:
-		//   - "<svc-fqn>.<ns>.svc.cluster.local" (from ${{ svc.HOST }}
-		//     / ${{ svc.URL }} resolutions). Cluster DNS form.
+		//   - "<svc-fqn>-production.<ns>.svc.cluster.local" (from
+		//     ${{ svc.HOST }} / ${{ svc.URL }} resolutions). Cluster
+		//     DNS form. The "-production" suffix matches the
+		//     kusoenvironment chart's Service name (the chart names
+		//     every kube object after the helm release =
+		//     productionEnvName(project, service)).
 		//   - prodHost (from ${{ svc.PUBLIC_URL }} or hand-typed
 		//     external URL). Public host of the prod env.
 		// Replace either with the sibling service's name in this env-
@@ -790,14 +794,14 @@ func rewriteEnvVarsForGroup(
 		newVal := v.Value
 		// Cluster DNS replace. Match service-FQN that's a key in
 		// siblingRename; rewrite to its renamed sibling. Bounded
-		// match so "kuso-demo-todo-api" doesn't catch
-		// "kuso-demo-todo-api-extra".
+		// match (anchored on "-production.") so "kuso-demo-todo-api"
+		// doesn't accidentally catch "kuso-demo-todo-api-extra".
 		for src, dst := range siblingRename {
 			oldFQN := project + "-" + src
 			newFQN := project + "-" + dst
-			// "<oldFQN>.<ns>.svc.cluster.local" → "<newFQN>.<ns>..."
+			// "<oldFQN>-production.<ns>.svc..." → "<newFQN>-production.<ns>..."
 			newVal = strings.ReplaceAll(newVal,
-				oldFQN+".", newFQN+".")
+				oldFQN+"-production.", newFQN+"-production.")
 		}
 		// Public-host replace. prodHosts is "host.com" → "service-fqn".
 		// For every prod host whose service is in siblingRename, the

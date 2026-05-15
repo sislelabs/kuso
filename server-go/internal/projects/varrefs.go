@@ -17,9 +17,16 @@ import (
 // envFrom/valueFrom or just stores the literal expansion.
 //
 // Service refs support these synthetic keys:
-//   HOST          → <service-fqn>.<namespace>.svc.cluster.local
-//   PORT          → spec.port (string)
-//   URL           → http://HOST:PORT (in-cluster; alias INTERNAL_URL)
+//   HOST          → <fqn>-production.<namespace>.svc.cluster.local
+//                   (the kusoenvironment helm chart names the Service
+//                   after the release, which is <fqn>-production. The
+//                   *bare* <fqn> is the KusoService CR name, not a
+//                   kube Service — no DNS for it.)
+//   PORT          → 80 (the kube Service's port; the chart maps it to
+//                   the env's containerPort internally)
+//   URL           → http://HOST (in-cluster; alias INTERNAL_URL).
+//                   Port elided because it's always 80; explicit :80
+//                   in URLs trips up some HTTP libraries.
 //   INTERNAL_URL  → alias for URL (Railway parity)
 //   PUBLIC_HOST   → first custom domain, or the auto domain on the
 //                   production env (e.g. svc.proj.kuso.sislelabs.com).
@@ -120,21 +127,39 @@ type AddonRefResolver func(name string) (connSecretName string, ok bool)
 // ExpandServiceKey turns a (ServiceRef, key) pair into the literal
 // value that goes on the pod env. Mirrors Railway's reference-
 // variable surface plus the kuso PUBLIC_* extension.
+//
+// Why `<fqn>-production`: the kusoenvironment helm chart names every
+// kube object after the release, which is productionEnvName(...) =
+// "<project>-<service>-production". ref.FQN is the KusoService CR
+// name (i.e. "<project>-<service>"), so we suffix "-production" to
+// land on the actual Service.
+//
+// Why port 80: the chart's service.yaml fixes Service.spec.ports[0].
+// port to 80 and maps it to the named "http" targetPort (which is
+// ref.Port). External callers always hit 80; the containerPort is
+// only relevant inside the pod.
+//
+// Previews use their own env scope (preview-pr-N) and would need a
+// separate expansion path — they currently don't get one because
+// PUBLIC_URL is what previews want anyway. Until that lands, refs
+// from a preview env to a sibling preview pod resolve to the
+// production sibling, which is the safer default (matches "preview
+// reads against prod data" expectation).
 func ExpandServiceKey(ref ServiceRef, key string) string {
-	host := ref.FQN + "." + ref.NS + ".svc.cluster.local"
+	host := ref.FQN + "-production." + ref.NS + ".svc.cluster.local"
 	switch key {
 	case "HOST":
 		return host
 	case "PORT":
-		if ref.Port == 0 {
-			return ""
-		}
-		return fmt.Sprintf("%d", ref.Port)
+		// Service port is always 80 — see comment above.
+		return "80"
 	case "URL", "INTERNAL_URL":
-		if ref.Port == 0 {
-			return "http://" + host
-		}
-		return fmt.Sprintf("http://%s:%d", host, ref.Port)
+		// Elide :80 from the URL. Most HTTP clients handle the
+		// explicit port fine, but Go's http2 transport and some
+		// SDKs (notably older `requests` releases) misroute
+		// host:80 against a non-TLS scheme on retry. Leaving it
+		// implicit is the safer wire format.
+		return "http://" + host
 	case "PUBLIC_HOST":
 		return ref.PublicHost
 	case "PUBLIC_URL":

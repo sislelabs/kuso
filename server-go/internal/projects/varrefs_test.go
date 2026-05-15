@@ -112,10 +112,13 @@ func TestRewriteEnvVar_ServiceRef(t *testing.T) {
 		key  string
 		want string
 	}{
-		{"HOST", "myproj-api.kuso.svc.cluster.local"},
-		{"PORT", "8080"},
-		{"URL", "http://myproj-api.kuso.svc.cluster.local:8080"},
-		{"INTERNAL_URL", "http://myproj-api.kuso.svc.cluster.local:8080"},
+		// HOST/URL/INTERNAL_URL target the production env's Service,
+		// which is named <fqn>-production. PORT is always 80 (the
+		// Service port, mapped to the env's containerPort).
+		{"HOST", "myproj-api-production.kuso.svc.cluster.local"},
+		{"PORT", "80"},
+		{"URL", "http://myproj-api-production.kuso.svc.cluster.local"},
+		{"INTERNAL_URL", "http://myproj-api-production.kuso.svc.cluster.local"},
 		{"PUBLIC_HOST", "api.myproj.kuso.sislelabs.com"},
 		{"PUBLIC_URL", "https://api.myproj.kuso.sislelabs.com"},
 	}
