@@ -53,7 +53,12 @@ rules:
     verbs: [get, list, watch, create, patch]
   - apiGroups: [""]
     resources: [configmaps]
-    verbs: [get, list, watch, create, update]
+    # patch + delete were missing on releases through v0.11.1: the
+    # in-cluster updater Job (kubectl apply on the kuso-update-status
+    # ConfigMap) fails with Forbidden until both are granted, and the
+    # progress-status writes during an in-place upgrade hard-fail with
+    # 403. delete is granted so the updater can GC its old status CMs.
+    verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [""]
     resources: [secrets]
     verbs: [get, list, watch, create, update, patch, delete]
@@ -114,6 +119,18 @@ rules:
   - apiGroups: [helm.cattle.io]
     resources: [helmcharts]
     verbs: [get, list, watch]
+  # CRDs: the in-cluster updater Job (kuso upgrade) applies the
+  # crds.yaml shipped with each release so schema additions (new
+  # fields on KusoService/KusoEnvironment/etc.) reach the cluster
+  # without a manual install step. Without these verbs every upgrade
+  # past v0.11.0 fails with `customresourcedefinitions is forbidden`
+  # at the kubectl-apply preflight step. Get + create + update +
+  # patch are the minimum for `kubectl apply` against an existing
+  # CRD; list/watch let the updater see what's already installed
+  # before deciding what to add.
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    verbs: [get, list, watch, create, update, patch]
   # Metrics for the per-node sparkline + alert engine.
   - apiGroups: [metrics.k8s.io]
     resources: [nodes, pods]
