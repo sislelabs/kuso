@@ -5,6 +5,15 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.11.3] — 2026-05-15
+
+### ✨ Features
+- Feat(projects): per-card CPU/RAM rollup + rewired card links ([66509be](https://github.com/sislelabs/kuso/commit/66509be319eeb950193f4d7d353e5e4220483eea))
+
+### 🐛 Bug Fixes
+- Fix(notify): absolutify embed URLs so Discord stops 400ing ([9ecbe9b](https://github.com/sislelabs/kuso/commit/9ecbe9b77fe158fdfa1d83505fb6dab7ae5fa639))
+- Fix(release.sh): use ghcr token-dance in visibility precheck ([0f343e5](https://github.com/sislelabs/kuso/commit/0f343e5d6144100f5e93c21e6bb699fb90f2103a))
+
 ## [0.11.2] — 2026-05-15
 
 ### 🐛 Bug Fixes
