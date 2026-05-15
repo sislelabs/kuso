@@ -36,16 +36,21 @@ kind: ClusterRole
 metadata:
   name: kuso-server
 rules:
-  # Kuso CRDs we own.
+  # Kuso CRDs we own. kusoes is the cluster-level install/config CRD
+  # added in a recent release; without it kuso-server fails its
+  # startup config-reload with "kusoes is forbidden" and never goes
+  # ready. The kusoes/status subresource is included for symmetry —
+  # the reconciler patches phase/conditions there.
   - apiGroups: [application.kuso.sislelabs.com]
     resources:
       [kusoprojects, kusoservices, kusoenvironments, kusoaddons,
-       kusobuilds, kusocrons]
+       kusobuilds, kusocrons, kusoes]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [application.kuso.sislelabs.com]
     resources:
       [kusoprojects/status, kusoservices/status, kusoenvironments/status,
-       kusoaddons/status, kusobuilds/status, kusocrons/status]
+       kusoaddons/status, kusobuilds/status, kusocrons/status,
+       kusoes/status]
     verbs: [get, update, patch]
   # Kube-native resources we read/write to manage tenants.
   - apiGroups: [""]
