@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.11.2] — 2026-05-15
+
+### 🐛 Bug Fixes
+- Fix(crd): reconcile spec.* drift between Go structs and CRD yamls ([0ff34f4](https://github.com/sislelabs/kuso/commit/0ff34f4c59f8de0c9c2c3cf69d4ac69ddce81f7d))
+- Fix(rbac): grant kuso-server access to kusoes CRD ([a9ec2a8](https://github.com/sislelabs/kuso/commit/a9ec2a84e7ad97d4e6668f2b54f0f50875c2a20a))
+- Fix(rbac): grant kuso-server configmaps:patch/delete + crd:get/create/update/patch ([238239f](https://github.com/sislelabs/kuso/commit/238239fdbc77d142998a95613d75bdc31c86909d))
+- Fix(release.sh): fail loudly when a release's images aren't public on ghcr ([b7418b7](https://github.com/sislelabs/kuso/commit/b7418b78a7927afb08a996ac378de82ef2d785d0))
+
 ## [0.11.1] — 2026-05-15
 
 ### 🐛 Bug Fixes
