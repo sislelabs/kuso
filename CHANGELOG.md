@@ -5,6 +5,16 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.11.4] — 2026-05-15
+
+### ✨ Features
+- Feat(notify): rich Discord cards across build/pod/node events ([f5200aa](https://github.com/sislelabs/kuso/commit/f5200aa0ca5ed7488deb8753ba6a693b328d0378))
+
+### 🐛 Bug Fixes
+- Fix(logs): coalesce continuation lines so multi-line tracebacks stay readable ([c1db65e](https://github.com/sislelabs/kuso/commit/c1db65ed033791efce9f9723e089b971cb5b3518))
+- Fix(shared-secret): roll dependent envs on set/unset, surface count in CLI ([6e2dee6](https://github.com/sislelabs/kuso/commit/6e2dee6c425221688a3f98b5bab92c414d3ad43c))
+- Fix(varrefs): ${{ svc.URL }} resolves to the actual kube Service name ([bc2273f](https://github.com/sislelabs/kuso/commit/bc2273fc67b7f222d083f42a51d4640a17fd4a08))
+
 ## [0.11.3] — 2026-05-15
 
 ### ✨ Features
