@@ -81,6 +81,10 @@ spec:
                     properties:
                       host: { type: string }
                       tls: { type: boolean, default: true }
+                internal:
+                  type: boolean
+                  description: When true, skip the Ingress entirely. The in-cluster Service still exists so sibling pods can reach the service via ${{ svc.URL }}, but no public domain or TLS is provisioned. Mirrored onto every KusoEnvironment owned by this service.
+                  default: false
                 envVars:
                   # Closed schema — preserve-unknown-fields would let a
                   # tenant slip valueFrom.secretKeyRef in and exfiltrate
