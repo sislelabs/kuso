@@ -42,10 +42,16 @@ type changedFields struct {
 	Scale     bool
 	Domains   bool
 	Internal  bool
+	// Runtime carries spec.runtime changes (e.g. dockerfile→worker).
+	// The chart renders ports + probes + Service + Ingress conditionally
+	// on the env's runtime, so without this propagation a runtime flip
+	// at the service level was silently dropped — the deployment kept
+	// its old probe shape forever and crashlooped headless binaries.
+	Runtime bool
 }
 
 func (c changedFields) any() bool {
-	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal
+	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime
 }
 
 // propagateChangedToEnvs is the single chokepoint that mirrors a
@@ -128,6 +134,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			}
 			if changed.Internal {
 				env.Spec.Internal = svc.Spec.Internal
+			}
+			if changed.Runtime {
+				env.Spec.Runtime = svc.Spec.Runtime
 			}
 			return nil
 		})

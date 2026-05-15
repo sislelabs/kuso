@@ -1393,8 +1393,10 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		svc.Spec.Port = *req.Port
 		portChanged = true
 	}
+	runtimeChanged := false
 	if req.Runtime != nil {
 		svc.Spec.Runtime = *req.Runtime
+		runtimeChanged = true
 	}
 	domainsChanged := false
 	if req.Domains != nil {
@@ -1523,6 +1525,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		Scale:     scaleChanged,
 		Domains:   domainsChanged,
 		Internal:  internalChanged,
+		Runtime:   runtimeChanged,
 	}); err != nil {
 		// Match the previous best-effort behaviour: log indirectly
 		// (returned nil; future cleanup adds a logger here) and let

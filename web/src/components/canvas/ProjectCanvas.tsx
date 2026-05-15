@@ -166,19 +166,30 @@ export function ProjectCanvas({
 
   const initialEdges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
-    // Addon → service: only when the service explicitly references
-    // the addon's conn-secret. The kuso server auto-attaches every
-    // addon's secret to every service env via envFromSecrets, but
-    // that means "secret is mounted on the pod" — NOT "service uses
-    // it." A service that never reads DATABASE_URL shouldn't have
-    // a line drawn to postgres on the canvas.
+    // Addon → service edges come in two flavours:
     //
-    // We detect explicit references in two forms:
-    //   1. valueFrom.secretKeyRef.name == "<addon>-conn"
-    //      (set by the server when it resolves `${{addon.KEY}}`)
-    //   2. value contains the still-unresolved `${{addon.KEY}}` text
-    //      (rare — only on freshly typed env vars before save round-trip)
-    const usedAddons = new Set<string>(); // "<service-fqn>|<addon-fqn>"
+    //   1. "explicit" — the service actively reads the addon (either
+    //      a server-resolved valueFrom.secretKeyRef pointing at the
+    //      addon's conn-secret, or an unresolved `${{addon.KEY}}`
+    //      ref still in spec.envVars). Drawn in amber, fully opaque.
+    //
+    //   2. "auto-injected" — kuso's server stamps every addon's
+    //      conn-secret into every env's envFromSecrets at create
+    //      time. That means the secret is mounted on the pod even
+    //      when no env-var explicitly references it. Most projects
+    //      use this exclusively (e.g. an app that just reads
+    //      DATABASE_URL from process.env without configuring a
+    //      ref). Drawn in amber, dashed + dimmer, so the user
+    //      sees "this addon is available to this service" without
+    //      conflating it with "this service explicitly uses it."
+    //
+    // The two-tier render keeps the original signal intact (an
+    // explicit ref still looks like a hard dependency) while
+    // surfacing the implicit wiring that previously made the canvas
+    // look like the addon was disconnected from the rest of the
+    // project.
+    const explicitUsedAddons = new Set<string>(); // "<svc-fqn>|<addon-fqn>"
+    const implicitUsedAddons = new Set<string>(); // same shape
     services.forEach((s) => {
       for (const ev of s.spec.envVars ?? []) {
         // valueFrom path: server-resolved addon refs land here.
@@ -188,7 +199,7 @@ export function ProjectCanvas({
           // suffix and match against known addons.
           const addonFQN = skr.name.slice(0, -"-conn".length);
           if (addons.some((a) => a.metadata.name === addonFQN)) {
-            usedAddons.add(`${s.metadata.name}|${addonFQN}`);
+            explicitUsedAddons.add(`${s.metadata.name}|${addonFQN}`);
           }
         }
         // value path: literal ${{addon.KEY}} text. Server resolves
@@ -203,7 +214,7 @@ export function ProjectCanvas({
             const candidates = [refName, `${project}-${refName}`];
             for (const c of candidates) {
               if (addons.some((a) => a.metadata.name === c)) {
-                usedAddons.add(`${s.metadata.name}|${c}`);
+                explicitUsedAddons.add(`${s.metadata.name}|${c}`);
                 break;
               }
             }
@@ -211,7 +222,26 @@ export function ProjectCanvas({
         }
       }
     });
-    usedAddons.forEach((key) => {
+    // Auto-injected edges: scan the matching env CR's envFromSecrets.
+    // The conn-secret naming convention "<addon-fqn>-conn" is the
+    // same as the explicit path above; we just discover it via the
+    // env CR's mount list rather than an env-var ref.
+    envs.forEach((e) => {
+      const svcFQN = e.spec.service;
+      const secrets = e.spec.envFromSecrets ?? [];
+      for (const secretName of secrets) {
+        if (!secretName.endsWith("-conn")) continue;
+        const addonFQN = secretName.slice(0, -"-conn".length);
+        if (!addons.some((a) => a.metadata.name === addonFQN)) continue;
+        // Don't downgrade an explicit edge — if the service already
+        // has a hard ref, the amber-solid edge wins.
+        const key = `${svcFQN}|${addonFQN}`;
+        if (!explicitUsedAddons.has(key)) {
+          implicitUsedAddons.add(key);
+        }
+      }
+    });
+    explicitUsedAddons.forEach((key) => {
       const [svcFQN, addonFQN] = key.split("|");
       out.push({
         id: `e:${addonFQN}->${svcFQN}`,
@@ -226,6 +256,25 @@ export function ProjectCanvas({
         // glance.
         data: { kind: "addon" },
         style: { stroke: "rgb(245 158 11)", strokeWidth: 1.5, opacity: 0.85 },
+      });
+    });
+    implicitUsedAddons.forEach((key) => {
+      const [svcFQN, addonFQN] = key.split("|");
+      out.push({
+        id: `e:auto:${addonFQN}->${svcFQN}`,
+        source: `addon:${addonFQN}`,
+        target: `svc:${svcFQN}`,
+        animated: false,
+        // Same edge category ("addon") so the filter chip toggles
+        // both kinds together. Dashed + dimmer to read as "wired
+        // but not actively referenced" at a glance.
+        data: { kind: "addon" },
+        style: {
+          stroke: "rgb(245 158 11)",
+          strokeWidth: 1.25,
+          strokeDasharray: "4 4",
+          opacity: 0.4,
+        },
       });
     });
     // Service → service edges from env-var refs. The server resolves

@@ -92,6 +92,12 @@ export interface KusoEnvironmentSpec {
   // an ingress.
   host?: string;
   tlsEnabled?: boolean;
+  // envFromSecrets is the list of Kubernetes Secret names that get
+  // envFrom-mounted into every pod for this env. The server stamps
+  // every project addon's "<addon>-conn" secret into here at create
+  // time, so the canvas can detect "service has access to addon X"
+  // even when the user never wrote an explicit ${{ x.URL }} ref.
+  envFromSecrets?: string[];
 }
 
 export interface KusoEnvironment {
