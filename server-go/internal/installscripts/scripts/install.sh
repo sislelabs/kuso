@@ -64,8 +64,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.10.0}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.10.0}"
+KUSO_VERSION="${KUSO_VERSION:-v0.11.0}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.11.0}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 
@@ -346,11 +346,6 @@ curl -sfL "${KUSO_RAW}/operator/config/crd/bases/application.kuso.dev_kusoes.yam
 # -------- 8. registry --------
 log "deploying in-cluster registry"
 kubectl create namespace kuso 2>/dev/null || true
-# Label the home namespace as kuso-managed. The BuildKit NetworkPolicy
-# (deploy/buildkitd.yaml) requires this label on the build pod's namespace
-# before allowing ingress to the daemon. Without it every build dies in ~13s
-# at BackoffLimitExceeded with no logs. Idempotent.
-kubectl label namespace kuso app.kubernetes.io/managed-by=kuso --overwrite >/dev/null 2>&1 || true
 curl -sfL "${KUSO_RAW}/deploy/registry.yaml" | kubectl apply -f - >/dev/null
 kubectl wait --for=condition=Available --timeout=180s \
   deployment/kuso-registry -n kuso || warn "kuso-registry not yet ready"
@@ -392,11 +387,6 @@ kubectl wait --for=condition=Available --timeout=120s \
 # when KUSO_USE_EXTERNAL_POSTGRES=1 is set.
 log "provisioning kuso-postgres"
 kubectl create namespace kuso 2>/dev/null || true
-# Label the home namespace as kuso-managed. The BuildKit NetworkPolicy
-# (deploy/buildkitd.yaml) requires this label on the build pod's namespace
-# before allowing ingress to the daemon. Without it every build dies in ~13s
-# at BackoffLimitExceeded with no logs. Idempotent.
-kubectl label namespace kuso app.kubernetes.io/managed-by=kuso --overwrite >/dev/null 2>&1 || true
 
 # kuso-platform PriorityClass — both kuso-postgres and kuso-server
 # reference it in their pod specs. The full definition lives in
@@ -553,11 +543,6 @@ fi
 # overrides (KUSO_ADMIN_PASSWORD=...) still win — that's the
 # documented "rotate the password" path.
 kubectl create namespace kuso 2>/dev/null || true
-# Label the home namespace as kuso-managed. The BuildKit NetworkPolicy
-# (deploy/buildkitd.yaml) requires this label on the build pod's namespace
-# before allowing ingress to the daemon. Without it every build dies in ~13s
-# at BackoffLimitExceeded with no logs. Idempotent.
-kubectl label namespace kuso app.kubernetes.io/managed-by=kuso --overwrite >/dev/null 2>&1 || true
 
 EXISTING_ADMIN=""
 EXISTING_SESSION=""

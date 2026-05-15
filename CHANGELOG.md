@@ -5,6 +5,45 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.11.0] — 2026-05-15
+
+### Other
+- Fix+test(crons): reject Quartz ? + @-macros that kube CronJob can't parse (P1-6) ([964e52a](https://github.com/sislelabs/kuso/commit/964e52abaae28e35d80f8f9b793698a122dc6047))
+- Ux(welcome): two real paths forward on non-admin GitHub-blocked state (UX P0-A) ([9a516d8](https://github.com/sislelabs/kuso/commit/9a516d8b5f2ecbe1be4408c0789973680cecf91a))
+- Ux(services/new): deploy-from-image source mode (UX P0-B) ([a3dc105](https://github.com/sislelabs/kuso/commit/a3dc1051e3c433c372b6487b71d4ae957096cd36))
+- Ux(deployments): surface build failure cause inline + banner (UX P0-C) ([dcf8c44](https://github.com/sislelabs/kuso/commit/dcf8c444f8dcfd92dbab3ed32a63c31b74283f99))
+
+### ✨ Features
+- Feat(cli): surface build error message in `kuso build list` ([c8ae68d](https://github.com/sislelabs/kuso/commit/c8ae68db87cf18e8eccd51d62b12967479ba00b8))
+
+### 🐛 Bug Fixes
+- Fix(crd): add spec.internal to kusoservices schema ([38f5dd1](https://github.com/sislelabs/kuso/commit/38f5dd10a7c187fcbab7a4ee278dee8eeffb5c04))
+- Fix(sec): drop pods/portforward from kuso-server RBAC + document the split (Sec F-07 partial) ([89ff1ff](https://github.com/sislelabs/kuso/commit/89ff1ff825d3819151dafcf06b817d1819adb3fd))
+- Fix(sec): validate static/buildpacks/image refs against shell injection (Sec F-03) ([01340ba](https://github.com/sislelabs/kuso/commit/01340bac56231230dc49ebafa1d09b7b36ec2e82))
+- Fix(buildcontroller): stamp app.kubernetes.io/instance on build pods ([30e7294](https://github.com/sislelabs/kuso/commit/30e7294e2e5b751e01249c17f39e0029b99f6e34))
+- Fix(sec): buildcontroller refuses unmanaged-namespace KusoBuild CRs (Sec F-02) ([67a67bb](https://github.com/sislelabs/kuso/commit/67a67bb572c9f4853332dfad45878ebd09bae180))
+- Fix(buildcontroller,buildreaper): single-shot handler registration (Correct P0-3) ([fe4ea2e](https://github.com/sislelabs/kuso/commit/fe4ea2e0b04959dda47204275485bfc874a0c76f))
+- Fix(kube): RMW retry on env/addon/cron updates closes lost-write on 409 (Correct P0-2) ([fe990ff](https://github.com/sislelabs/kuso/commit/fe990ff937dcb836ab9c7f076d74ba7cb6eb6ed4))
+- Fix(install): restore managed-by label on the home namespace ([4cbe00d](https://github.com/sislelabs/kuso/commit/4cbe00d26b95d42a7c350478a48b6e6608451a46))
+- Fix(rbac): grant kuso-server serviceaccounts:create for in-process buildcontroller ([20b5f58](https://github.com/sislelabs/kuso/commit/20b5f58d69e14929d650fc79fda46ca97346a128))
+- Fix(install): chmod 0444 on admin password file so non-root kuso user can read ([74a8b9b](https://github.com/sislelabs/kuso/commit/74a8b9b577c0a5289651931356f83798b8d25789))
+
+### 📝 Docs
+- Docs: pass-4 review reports (post-v0.10.0) ([678452b](https://github.com/sislelabs/kuso/commit/678452b342849a3a6741a69da0537d44968543f4))
+
+### 🔨 Refactors
+- Refactor: drop more back-compat paths (HMAC auth, prisma-int64, env aliases) ([f74b59a](https://github.com/sislelabs/kuso/commit/f74b59aa3a4fc8f7fbfadc8916e5aaeacc6fef5f))
+- Refactor: drop back-compat paths obsoleted by v0.10 + single-tenant policy ([5075b03](https://github.com/sislelabs/kuso/commit/5075b03c38eaeee64c797ccfb0a611969818f1ed))
+- Refactor(db): introduce per-domain views over *DB (Arch P0-2 wedge) ([e8d4c7e](https://github.com/sislelabs/kuso/commit/e8d4c7e9f391f6ea25ed04a4d9fa081baa6c1777))
+- Refactor(projects): extract service→env propagation to propagate.go (P0-1 partial) ([1b65756](https://github.com/sislelabs/kuso/commit/1b657567656733110a3b3a06cf0c90c19aa5fe30))
+- Refactor(kube): owner-ref env + cron CRs to parent service (Arch P1-2) ([2974a35](https://github.com/sislelabs/kuso/commit/2974a35aff53d9f5f59e94dcc0eb57dc4fbfdb68))
+- Refactor(kube): route list-by-labels through informer cache (Arch P1-1) ([73ae542](https://github.com/sislelabs/kuso/commit/73ae54217bf286515a7ca12a5fd8c8269ea5f4fe))
+- Refactor(builds): extract pure helpers to refs.go (Arch P0-3 partial) ([ab7a53c](https://github.com/sislelabs/kuso/commit/ab7a53cd883db3cd5f555e3c01908cea3b7055e2))
+
+### 🧪 Tests
+- Test(buildcontroller): leader gate + running-map dedup + instance-label pin (P1) ([80c4e22](https://github.com/sislelabs/kuso/commit/80c4e222f178a201829c30b6b62a8644a6d1c2d9))
+- Test(migration): cover import paths + extract interfaces (P1-5/P1-12) ([a909a26](https://github.com/sislelabs/kuso/commit/a909a26ef5b8d8534a7f238fe1757be972922d07))
+
 ## [0.10.0] — 2026-05-13
 
 ### Other
