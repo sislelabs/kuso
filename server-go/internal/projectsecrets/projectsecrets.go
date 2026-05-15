@@ -13,10 +13,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strconv"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
 )
@@ -71,10 +75,13 @@ func (s *Service) ListKeys(ctx context.Context, project string) ([]string, error
 }
 
 // SetKey upserts a single env-var-style entry. Creates the Secret
-// when it doesn't exist yet.
-func (s *Service) SetKey(ctx context.Context, project, key, value string) error {
+// when it doesn't exist yet. Returns the number of KusoEnvironments
+// whose pods were triggered to roll so the new value reaches them —
+// kube's envFrom is evaluated at pod start, so a Secret-only update
+// is invisible to already-running pods until they restart.
+func (s *Service) SetKey(ctx context.Context, project, key, value string) (rolled int, err error) {
 	if key == "" {
-		return fmt.Errorf("%w: key required", ErrInvalid)
+		return 0, fmt.Errorf("%w: key required", ErrInvalid)
 	}
 	ns := s.nsFor(ctx, project)
 	name := SecretName(project)
@@ -93,51 +100,103 @@ func (s *Service) SetKey(ctx context.Context, project, key, value string) error 
 			Data: map[string][]byte{key: []byte(value)},
 			Type: corev1.SecretTypeOpaque,
 		}
-		_, err := s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, fresh, metav1.CreateOptions{})
-		if err != nil {
-			return fmt.Errorf("create shared secret: %w", err)
+		_, cerr := s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, fresh, metav1.CreateOptions{})
+		if cerr != nil {
+			return 0, fmt.Errorf("create shared secret: %w", cerr)
 		}
-		return nil
+		return s.rollDependentEnvs(ctx, project, ns, name)
 	}
 	if err != nil {
-		return fmt.Errorf("read shared secret: %w", err)
+		return 0, fmt.Errorf("read shared secret: %w", err)
 	}
 	if sec.Data == nil {
 		sec.Data = map[string][]byte{}
 	}
 	sec.Data[key] = []byte(value)
-	_, err = s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("update shared secret: %w", err)
+	_, uerr := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{})
+	if uerr != nil {
+		return 0, fmt.Errorf("update shared secret: %w", uerr)
 	}
-	return nil
+	return s.rollDependentEnvs(ctx, project, ns, name)
 }
 
-// UnsetKey removes one entry. No-op when the key (or the whole
-// Secret) doesn't exist — matches the "delete is idempotent"
-// expectation for kuso secrets.
-func (s *Service) UnsetKey(ctx context.Context, project, key string) error {
+// UnsetKey removes one entry. No-op (rolled=0) when the key (or the
+// whole Secret) doesn't exist — matches the "delete is idempotent"
+// expectation for kuso secrets. When a key is actually removed, rolls
+// every env that has the shared Secret attached so the removal takes
+// effect on already-running pods.
+func (s *Service) UnsetKey(ctx context.Context, project, key string) (rolled int, err error) {
 	ns := s.nsFor(ctx, project)
 	name := SecretName(project)
 	sec, err := s.read(ctx, ns, name)
 	if apierrors.IsNotFound(err) {
-		return nil
+		return 0, nil
 	}
 	if err != nil {
-		return fmt.Errorf("read shared secret: %w", err)
+		return 0, fmt.Errorf("read shared secret: %w", err)
 	}
 	if sec.Data == nil {
-		return nil
+		return 0, nil
 	}
 	if _, ok := sec.Data[key]; !ok {
-		return nil
+		return 0, nil
 	}
 	delete(sec.Data, key)
-	_, err = s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{})
-	if err != nil {
-		return fmt.Errorf("update shared secret: %w", err)
+	_, uerr := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{})
+	if uerr != nil {
+		return 0, fmt.Errorf("update shared secret: %w", uerr)
 	}
-	return nil
+	return s.rollDependentEnvs(ctx, project, ns, name)
+}
+
+// rollDependentEnvs bumps spec.secretsRev on every KusoEnvironment in
+// the project whose pods consume the named Secret via envFromSecrets.
+// The kusoenvironment chart projects spec.secretsRev onto the pod
+// template's annotations (kuso.sislelabs.com/secrets-rev), which
+// kubelet treats as a template change → rolling restart.
+//
+// Without this, kube's envFrom semantics leave running pods stale:
+// they hold the env they were launched with, even after the backing
+// Secret changes. New pods get the new value; existing ones don't.
+//
+// Best-effort: a patch error on a single env is logged + counted as
+// a miss, but doesn't abort the loop or fail the secret write. The
+// secret value is the source of truth — partial rollout is a
+// recoverable degraded state, while refusing the secret update on a
+// rollout failure would leave the cluster with no path forward.
+//
+// Returns the number of envs successfully rolled.
+func (s *Service) rollDependentEnvs(ctx context.Context, project, ns, secretName string) (int, error) {
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		kube.LabelProject: project,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("list envs: %w", err)
+	}
+	rev := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	patch := fmt.Sprintf(`{"spec":{"secretsRev":%q}}`, rev)
+	rolled := 0
+	for _, e := range envs {
+		hasIt := false
+		for _, s := range e.Spec.EnvFromSecrets {
+			if s == secretName {
+				hasIt = true
+				break
+			}
+		}
+		if !hasIt {
+			continue
+		}
+		_, perr := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+			Patch(ctx, e.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+		if perr != nil {
+			slog.Warn("projectsecrets: bump secretsRev failed",
+				"env", e.Name, "project", project, "err", perr)
+			continue
+		}
+		rolled++
+	}
+	return rolled, nil
 }
 
 func (s *Service) read(ctx context.Context, ns, name string) (*corev1.Secret, error) {

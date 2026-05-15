@@ -501,7 +501,10 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 		var data map[string]string
 		if err := json.Unmarshal(raw, &data); err == nil {
 			for k, v := range data {
-				if err := h.ProjectSecrets.SetKey(ctx, desiredName, k, v); err != nil {
+				// Rolled count is irrelevant during import — every env
+				// is brand new and hasn't started consuming the shared
+				// Secret yet. Drop the value, keep the error gate.
+				if _, err := h.ProjectSecrets.SetKey(ctx, desiredName, k, v); err != nil {
 					out.Warnings = append(out.Warnings, fmt.Sprintf("project secret %s: %v", k, err))
 				} else {
 					out.Secrets++

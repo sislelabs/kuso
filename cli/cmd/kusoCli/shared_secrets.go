@@ -94,7 +94,17 @@ var sharedSecretSetCmd = &cobra.Command{
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
-		fmt.Printf("set %s on %s\n", req.Key, args[0])
+		// Surface the rollout count so the user knows the change
+		// actually reached the running pods. Previously this just
+		// printed "set X on Y" — leaving the user to discover the
+		// hard way that kube's envFrom is evaluated at pod-start,
+		// not on Secret update, so existing pods were still holding
+		// the old value.
+		var body struct {
+			Rolled int `json:"rolled"`
+		}
+		_ = json.Unmarshal(resp.Body(), &body)
+		fmt.Printf("set %s on %s — %s\n", req.Key, args[0], rolloutMsg(body.Rolled))
 		return nil
 	},
 }
@@ -115,9 +125,30 @@ var sharedSecretUnsetCmd = &cobra.Command{
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
-		fmt.Printf("unset %s on %s\n", args[1], args[0])
+		var body struct {
+			Rolled int `json:"rolled"`
+		}
+		_ = json.Unmarshal(resp.Body(), &body)
+		fmt.Printf("unset %s on %s — %s\n", args[1], args[0], rolloutMsg(body.Rolled))
 		return nil
 	},
+}
+
+// rolloutMsg formats the number of envs the server rolled into a
+// short human phrase for CLI output. Plural rules in English are
+// just plural enough that switching on the count reads cleanest.
+//
+// Shared between `secret set` and `shared-secret set` since both
+// surface the rollout count the same way.
+func rolloutMsg(rolled int) string {
+	switch rolled {
+	case 0:
+		return "no running envs to roll"
+	case 1:
+		return "rolled 1 env"
+	default:
+		return fmt.Sprintf("rolled %d envs", rolled)
+	}
 }
 
 func init() {

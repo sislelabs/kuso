@@ -75,11 +75,16 @@ func (h *ProjectSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
 		return
 	}
-	if err := h.Svc.SetKey(ctx, chi.URLParam(r, "project"), body.Key, body.Value); err != nil {
+	rolled, err := h.Svc.SetKey(ctx, chi.URLParam(r, "project"), body.Key, body.Value)
+	if err != nil {
 		h.fail(w, "set shared secret", err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	// 200 with body so the CLI can surface the rollout count. Previous
+	// 204-no-content gave the user no signal that anything happened
+	// downstream of the Secret update — leading to the "set the value
+	// but pods don't see it" trap that motivated this fix.
+	writeJSON(w, http.StatusOK, map[string]any{"rolled": rolled})
 }
 
 func (h *ProjectSecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
@@ -88,11 +93,12 @@ func (h *ProjectSecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
 		return
 	}
-	if err := h.Svc.UnsetKey(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "key")); err != nil {
+	rolled, err := h.Svc.UnsetKey(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "key"))
+	if err != nil {
 		h.fail(w, "unset shared secret", err)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, map[string]any{"rolled": rolled})
 }
 
 func (h *ProjectSecretsHandler) fail(w http.ResponseWriter, op string, err error) {
