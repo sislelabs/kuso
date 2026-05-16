@@ -5,6 +5,13 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.11.6] — 2026-05-16
+
+### 🐛 Bug Fixes
+- Fix(notify, ui): synthetic-ref + Site link + bell-feed clear ([85101d7](https://github.com/sislelabs/kuso/commit/85101d72b76a4a27d04ae2990190fe4aeb22f9be))
+- Fix(secrets): detect shadow conflicts at write time ([d35981b](https://github.com/sislelabs/kuso/commit/d35981b6805b8d9a333c7450878d3a0d798db5d9))
+- Fix(release.sh): auto-recover from tag wedge + publish GH release ([26b454f](https://github.com/sislelabs/kuso/commit/26b454f4e8cff61623b8c887333f196c0c1dda5e))
+
 ## [0.11.5] — 2026-05-16
 
 ### 🐛 Bug Fixes
