@@ -1002,17 +1002,35 @@ if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
         # log this as failure.
         log "tag ${VERSION} already on origin at the right commit — skipping push"
       else
-        # Divergent. Stop here. The user can either delete-and-replace
-        # (after confirming nothing else depends on the stale tag) or
-        # bump the version. Either way, refusing to ship inconsistent
-        # state is safer than papering over it.
-        fail "tag ${VERSION} on origin points at ${remote_commit:0:12}, but we just built ${local_sha:0:12}.
-       The GitHub release + ghcr image have already been published
-       at the new commit, but the tag ref disagrees — refusing to
-       leave the repo in that state. To recover:
-         git push --delete origin ${VERSION}   # only if no one is pinning it
-         git push origin ${VERSION}             # push the correct annotated tag
-       Or bump VERSION and re-ship."
+        # Divergent: remote tag points at a different commit than the
+        # one we just built artifacts from. This happens when an
+        # earlier ship attempt for the same VERSION partially failed
+        # and left the tag stranded on the pre-release commit. Auto-
+        # recover by force-replacing the remote tag — the GH release
+        # + ghcr image are already at $local_sha, so making the tag
+        # agree is the only consistent move. Force-pushing a tag is
+        # safe in this workflow: live kuso instances follow
+        # release.json (NOT git tags), and `KUSO_REF=vX.Y.Z` pinning
+        # resolves to whatever the tag currently points at anyway.
+        warn "tag ${VERSION} on origin points at ${remote_commit:0:12}, but we just built ${local_sha:0:12} — force-replacing the remote tag"
+        git push --delete origin "${VERSION}" >/dev/null 2>&1 || true
+        git push origin "${VERSION}"
+        log "tag ${VERSION} force-repointed to ${local_sha:0:12}"
+      fi
+
+      # The GH release was created in step 4, BEFORE the tag landed
+      # on origin. GH defaults to draft when its target tag-name
+      # doesn't yet exist remotely — so the release is sitting as a
+      # draft right now. Flip it to published + mark as latest now
+      # that the tag is on origin. Best-effort: gh CLI not installed
+      # or GH API hiccups just leaves the release as draft, which is
+      # recoverable manually.
+      if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]] && command -v gh >/dev/null 2>&1; then
+        if gh release edit "${VERSION}" --draft=false --latest >/dev/null 2>&1; then
+          log "GH release ${VERSION} published + marked latest"
+        else
+          warn "gh release edit ${VERSION} --draft=false --latest failed — release may still be draft"
+        fi
       fi
     fi
     log "pushed commit + tag to origin"
