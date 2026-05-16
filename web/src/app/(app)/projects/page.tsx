@@ -153,7 +153,13 @@ function Row({
         target="_blank"
         rel="noopener noreferrer"
         onClick={(e) => e.stopPropagation()}
-        className="relative z-20 flex items-center gap-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--accent)]"
+        // Opt back into pointer events — the parent card has
+        // `pointer-events-none` on its content so card clicks land on
+        // the overlay <Link>. The domain row is the one nested
+        // interactive child; this puts it back into the click flow
+        // (and above the overlay via z-30) so the user can click
+        // straight to the live site.
+        className="pointer-events-auto relative z-30 inline-flex w-fit items-center gap-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--accent)]"
       >
         {body}
       </a>
@@ -322,47 +328,61 @@ function ProjectsGrid({
         const metrics = metricQueries[i]?.data;
         return (
           <li key={p.metadata.uid ?? name}>
-            {/* The card is a div + an absolutely-positioned Link
-                overlay so we can sprinkle real <a> elements (the
-                "open ↗" chip) inside the same card without nesting
-                anchors — invalid HTML and behaves badly in Safari. */}
+            {/* Card layout: the whole card is one big <Link> into
+                kuso, with nested clickable bits (the external domain
+                row) escaped via pointer-events. We previously used an
+                absolutely-positioned overlay <Link> at z-0 with the
+                content at z-10, which made the content block clicks
+                from reaching the link — the user could only navigate
+                by clicking the small gaps between rows. The fix:
+                pointer-events-none on the link overlay's content, and
+                pointer-events-auto on the one nested <a> that needs
+                its own click. The overlay <Link> stays at z-10
+                covering the whole card. */}
             <div className="group relative cursor-pointer rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40">
               <Link
                 href={`/projects/${name}`}
                 aria-label={`Open project ${name}`}
-                className="absolute inset-0 z-0 rounded-md"
+                className="absolute inset-0 z-10 rounded-md"
               />
-              <div className="relative z-10 flex items-start justify-between gap-2">
-                <div className="min-w-0 flex-1">
-                  <h2 className="truncate text-sm font-semibold tracking-tight text-[var(--text-primary)] transition-colors group-hover:text-[var(--accent)]">
-                    {name}
-                  </h2>
-                  {p.spec.description && (
-                    <p className="mt-1 line-clamp-2 text-[12px] text-[var(--text-secondary)]">
-                      {p.spec.description}
-                    </p>
-                  )}
-                </div>
-                {/* The arrow signals the whole card is a link into kuso.
-                    The card-wide overlay <Link> below handles the
-                    actual nav; this is purely affordance. */}
-                <ArrowUpRight
-                  aria-hidden
-                  className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--accent)]"
-                />
-              </div>
-              <dl className="relative z-10 mt-3 space-y-1 text-[11px]">
-                {repo && <Row icon={GitBranch} value={repo} />}
-                {domain && (
-                  <Row
-                    icon={Globe}
-                    value={domain}
-                    href={publicURL ?? `https://${domain}`}
+              {/* Content sits BELOW the overlay <Link> but is visible
+                  because the overlay is transparent. pointer-events-
+                  none on the content tree means clicks pass through
+                  to the link — the one interactive child (the domain
+                  row's external <a>) opts back into pointer events on
+                  itself. */}
+              <div className="pointer-events-none relative z-20">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <h2 className="truncate text-sm font-semibold tracking-tight text-[var(--text-primary)] transition-colors group-hover:text-[var(--accent)]">
+                      {name}
+                    </h2>
+                    {p.spec.description && (
+                      <p className="mt-1 line-clamp-2 text-[12px] text-[var(--text-secondary)]">
+                        {p.spec.description}
+                      </p>
+                    )}
+                  </div>
+                  {/* The arrow signals the whole card is a link into
+                      kuso. The overlay <Link> handles the actual
+                      nav; this is purely affordance. */}
+                  <ArrowUpRight
+                    aria-hidden
+                    className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--accent)]"
                   />
-                )}
-              </dl>
+                </div>
+                <dl className="mt-3 space-y-1 text-[11px]">
+                  {repo && <Row icon={GitBranch} value={repo} />}
+                  {domain && (
+                    <Row
+                      icon={Globe}
+                      value={domain}
+                      href={publicURL ?? `https://${domain}`}
+                    />
+                  )}
+                </dl>
               {summary && (
-                <div className="relative z-10 mt-3 flex items-center gap-3 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                <div className="mt-3 flex items-center gap-3 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
                   {(() => {
                     // Health is conveyed by colour AND an a11y label
                     // so screen readers and colour-blind users get
@@ -427,10 +447,11 @@ function ProjectsGrid({
                 </div>
               )}
               {created && (
-                <p className="relative z-10 mt-3 border-t border-[var(--border-subtle)] pt-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                <p className="mt-3 border-t border-[var(--border-subtle)] pt-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
                   created {created}
                 </p>
               )}
+              </div>
             </div>
           </li>
         );
