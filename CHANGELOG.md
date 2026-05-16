@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.11.5] — 2026-05-16
+
+### 🐛 Bug Fixes
+- Fix(projects): card click reliably nav into kuso ([bc18c68](https://github.com/sislelabs/kuso/commit/bc18c68ccd0d796bd1a459534b80f56fac116957))
+
 ## [0.11.4] — 2026-05-15
 
 ### ✨ Features
