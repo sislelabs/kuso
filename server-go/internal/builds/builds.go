@@ -748,7 +748,7 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 	awaitPodGone(ctx, s.Kube, ns, buildName, 5*time.Second)
 	if s.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, project+"-")
-		title, desc, fields := buildRichCard(b, short, "cancelled", "")
+		title, desc, fields := buildRichCard(b, short, "cancelled", "", "")
 		s.Notifier.Emit(EventEnvelope{
 			Type:        eventBuildCancelled,
 			Title:       title,
@@ -865,7 +865,7 @@ func (s *Service) supersedePriorBuilds(ctx context.Context, ns, project, fqn, ne
 		}
 		if s.Notifier != nil {
 			short := strings.TrimPrefix(fqn, project+"-")
-			title, desc, fields := buildRichCard(&raw[i], short, "superseded", "")
+			title, desc, fields := buildRichCard(&raw[i], short, "superseded", "", "")
 			if desc == "" {
 				desc = "Replaced by `" + newName + "`"
 			}
@@ -1518,9 +1518,15 @@ func buildEventURL(project, service string) string {
 // the field block surfaces ref + author + duration so consumers
 // don't need to click through to get the basics.
 //
+// siteURL is the optional public URL of the deployed service ("" to
+// omit). When provided it becomes a "Site" field in the card so the
+// user can click straight through to the live deployment from
+// Discord. Callers fetch it from the KusoService CR's first
+// configured domain.
+//
 // Returned fields are []EnvelopeField — the notify adapter forwards
 // them straight through to the Discord renderer's field block.
-func buildRichCard(b *kube.KusoBuild, short, phase, failureReason string) (title, description string, fields []EnvelopeField) {
+func buildRichCard(b *kube.KusoBuild, short, phase, failureReason, siteURL string) (title, description string, fields []EnvelopeField) {
 	var glyph, verb string
 	switch phase {
 	case "failed":
@@ -1535,6 +1541,17 @@ func buildRichCard(b *kube.KusoBuild, short, phase, failureReason string) (title
 	title = fmt.Sprintf("%s %s · %s / %s", glyph, verb, b.Spec.Project, short)
 
 	annos := b.Annotations
+	// Detect a synthetic ref ("<branch>-<base36-unix-ms>") produced
+	// by the redeploy path when no real SHA was supplied. We do NOT
+	// surface the synthetic suffix in the card — it's an internal
+	// dedup token, not a meaningful git pointer. Heuristic: starts
+	// with the branch + "-" and the suffix is base36. Real short
+	// SHAs (12 hex chars) don't match.
+	rawRef := b.Spec.Ref
+	isSynth := b.Spec.Branch != "" &&
+		strings.HasPrefix(rawRef, b.Spec.Branch+"-") &&
+		!isHexSHA(rawRef)
+
 	// Description = the human-readable commit message. We trim to the
 	// first line so the card doesn't drown in a long multi-line body
 	// — Discord renders newlines but a build card with 20 lines of
@@ -1544,21 +1561,36 @@ func buildRichCard(b *kube.KusoBuild, short, phase, failureReason string) (title
 			cm = cm[:nl]
 		}
 		description = cm
+	} else if isSynth {
+		// Redeploys (no SHA, no commit message) get a synthesised
+		// description so the card still has a one-line orientation
+		// instead of being just a title.
+		who := strings.TrimSpace(annos[annTriggerUser])
+		if who != "" {
+			description = fmt.Sprintf("Manual redeploy of `%s` by %s", b.Spec.Branch, who)
+		} else {
+			description = fmt.Sprintf("Manual redeploy of `%s`", b.Spec.Branch)
+		}
 	} else if phase == "failed" && failureReason != "" {
 		// No commit msg + failed build → show the reason as the
 		// description so the card still has prose at the top.
 		description = failureReason
 	}
 
-	// Field block — kept compact (3 inline fields). Branch and ref
-	// share a row because they're conceptually one pointer ("main @
-	// abcdef"); author and duration each get their own slot.
-	ref := b.Spec.Ref
-	if len(ref) > 7 {
+	// Field block — kept compact. Branch and ref share a row because
+	// they're conceptually one pointer ("main · abcdef"); author and
+	// duration each get their own slot.
+	//
+	// For a synthetic ref we show only the branch (the synth suffix
+	// is internal bookkeeping, not a useful git pointer).
+	ref := rawRef
+	if !isSynth && len(ref) > 7 {
 		ref = ref[:7]
 	}
 	branchAndRef := ""
 	switch {
+	case isSynth && b.Spec.Branch != "":
+		branchAndRef = fmt.Sprintf("`%s`", b.Spec.Branch)
 	case b.Spec.Branch != "" && ref != "":
 		branchAndRef = fmt.Sprintf("`%s` · `%s`", b.Spec.Branch, ref)
 	case b.Spec.Branch != "":
@@ -1590,7 +1622,33 @@ func buildRichCard(b *kube.KusoBuild, short, phase, failureReason string) (title
 			Inline: true,
 		})
 	}
+	// "Site" field links to the live deployment. Only shown for
+	// succeeded builds since failed/cancelled/superseded builds don't
+	// produce a new live URL anyway — pointing at the existing one
+	// would be misleading ("succeeded build of v2, click here to see
+	// v2" is right; "failed build of v2, click here" lands on v1).
+	if phase == "succeeded" && siteURL != "" {
+		// Discord field values can contain markdown links. The label
+		// pattern matches the Ref field's backtick style for visual
+		// consistency.
+		fields = append(fields, EnvelopeField{
+			Name:   "Site",
+			Value:  fmt.Sprintf("[%s](%s)", siteHostFromURL(siteURL), siteURL),
+			Inline: true,
+		})
+	}
 	return title, description, fields
+}
+
+// siteHostFromURL strips https:// (or http://) and any trailing slash
+// from a URL so the Discord card shows "web.distill.sislelabs.com"
+// instead of the full URL — the markdown link target carries the
+// scheme so the click still works.
+func siteHostFromURL(u string) string {
+	u = strings.TrimPrefix(u, "https://")
+	u = strings.TrimPrefix(u, "http://")
+	u = strings.TrimSuffix(u, "/")
+	return u
 }
 
 // buildDurationMs reads start + completed timestamps off the build CR
@@ -1619,6 +1677,53 @@ func buildDurationMs(b *kube.KusoBuild) int64 {
 		return 0
 	}
 	return d.Milliseconds()
+}
+
+// lookupSiteURL resolves the public URL of a service for inclusion in
+// notification cards. Returns "" when the service has no configured
+// domain, or on any kube lookup error (we don't fail the notification
+// over a missing site link).
+//
+// fqn is the service's KusoService CR name (e.g. "distill-web"), not
+// the short alias. Convention: https when TLS, http otherwise. We
+// always pick the first domain entry — services with multiple are
+// rare and the first is typically the canonical user-facing one.
+func lookupSiteURL(ctx context.Context, kc *kube.Client, ns, fqn string) string {
+	if kc == nil || ns == "" || fqn == "" {
+		return ""
+	}
+	lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	svc, err := kc.GetKusoService(lctx, ns, fqn)
+	if err != nil || svc == nil || len(svc.Spec.Domains) == 0 {
+		return ""
+	}
+	host := strings.TrimSpace(svc.Spec.Domains[0].Host)
+	if host == "" {
+		return ""
+	}
+	scheme := "https"
+	if !svc.Spec.Domains[0].TLS {
+		scheme = "http"
+	}
+	return scheme + "://" + host
+}
+
+// isHexSHA returns true when s is a hex-only string of 7+ characters.
+// Used to discriminate a real (possibly trimmed) git SHA from the
+// synthetic "<branch>-<base36>" refs the redeploy path generates.
+// Lowercase only — git outputs lowercase SHAs everywhere.
+func isHexSHA(s string) bool {
+	if len(s) < 7 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 // formatBuildDuration prints a compact human duration: "12s", "1m 24s",
@@ -2599,7 +2704,13 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 	p.queueArchive(ctx, ns, b, "succeeded")
 	if p.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
-		title, desc, fields := buildRichCard(b, short, "succeeded", "")
+		// Best-effort site URL lookup for the "Site" field; failure
+		// just omits the field.
+		var siteURL string
+		if p.Svc != nil {
+			siteURL = lookupSiteURL(ctx, p.Svc.Kube, ns, b.Spec.Service)
+		}
+		title, desc, fields := buildRichCard(b, short, "succeeded", "", siteURL)
 		p.Notifier.Emit(EventEnvelope{
 			Type:        eventBuildSucceeded,
 			Title:       title,
@@ -2640,7 +2751,10 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 		// Cheap (5s timeout, single pod list + log stream); failure
 		// just yields no log tail — the rest of the card still renders.
 		logTail := p.tailBuildLogs(ctx, ns, b, 5)
-		title, desc, fields := buildRichCard(b, short, "failed", msg)
+		// No site URL on failure: the prior image is still live; a
+		// click-through would land on an already-running version that
+		// has nothing to do with this card's failed build.
+		title, desc, fields := buildRichCard(b, short, "failed", msg, "")
 		p.Notifier.Emit(EventEnvelope{
 			Type:        eventBuildFailed,
 			Title:       title,

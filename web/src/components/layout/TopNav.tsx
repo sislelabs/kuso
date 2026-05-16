@@ -463,8 +463,16 @@ function NotificationsButton() {
   const feedPath = isAdmin
     ? "/api/notifications/feed?limit=30"
     : "/api/notifications/my-feed?limit=30";
+  // Pinned to a single const so the optimistic-clear cache write and
+  // the invalidation can't drift from the useQuery key. The previous
+  // version had the useQuery key at ["notifications", "feed", scope]
+  // but the mutation wrote/invalidated ["notifications", "feed"] —
+  // React Query matches keys tuple-by-tuple, so the writes hit a
+  // different cache slot and the popover only updated after a
+  // close-then-reopen kicked off a fresh refetch.
+  const feedKey = ["notifications", "feed", isAdmin ? "admin" : "scoped"] as const;
   const feed = useQuery<FeedEvent[]>({
-    queryKey: ["notifications", "feed", isAdmin ? "admin" : "scoped"],
+    queryKey: feedKey,
     queryFn: () => api(feedPath),
     enabled: false, // only fetch on popover open
     staleTime: 15_000,
@@ -486,14 +494,14 @@ function NotificationsButton() {
   const clearAll = useMutation({
     mutationFn: () => api("/api/notifications/feed", { method: "DELETE" }),
     onMutate: () => {
-      qc.setQueryData(["notifications", "feed"], [] as FeedEvent[]);
+      qc.setQueryData(feedKey, [] as FeedEvent[]);
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["notifications", "unread-count"] });
-      qc.invalidateQueries({ queryKey: ["notifications", "feed"] });
+      qc.invalidateQueries({ queryKey: feedKey });
     },
     onError: () => {
-      qc.invalidateQueries({ queryKey: ["notifications", "feed"] });
+      qc.invalidateQueries({ queryKey: feedKey });
     },
   });
 

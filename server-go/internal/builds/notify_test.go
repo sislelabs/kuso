@@ -30,7 +30,7 @@ func TestBuildRichCard_Succeeded(t *testing.T) {
 			Ref:     "53d3f34262ef",
 		},
 	}
-	title, desc, fields := buildRichCard(b, "web", "succeeded", "")
+	title, desc, fields := buildRichCard(b, "web", "succeeded", "", "")
 	if title != "✓ Build succeeded · distill / web" {
 		t.Errorf("title: %q", title)
 	}
@@ -69,7 +69,7 @@ func TestBuildRichCard_Failed(t *testing.T) {
 			Ref:     "abc1234",
 		},
 	}
-	title, desc, fields := buildRichCard(b, "web", "failed", "kaniko: COPY failed: not found")
+	title, desc, fields := buildRichCard(b, "web", "failed", "kaniko: COPY failed: not found", "")
 	if title != "✗ Build failed · distill / web" {
 		t.Errorf("title: %q", title)
 	}
@@ -85,6 +85,101 @@ func TestBuildRichCard_Failed(t *testing.T) {
 	}
 }
 
+// TestBuildRichCard_SyntheticRef verifies that a redeploy-triggered
+// build (no real SHA, ref of "<branch>-<base36>") collapses the ref
+// field to just the branch and synthesises a "Manual redeploy" desc.
+// Without this the user sees nonsensical "main · main-mp" in Discord.
+func TestBuildRichCard_SyntheticRef(t *testing.T) {
+	b := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				annTriggerUser: "ivo9999",
+				annStartedAt:   "2026-05-16T12:00:00Z",
+				annCompletedAt: "2026-05-16T12:00:12Z",
+			},
+		},
+		Spec: kube.KusoBuildSpec{
+			Project: "distill",
+			Service: "distill-web",
+			Branch:  "main",
+			Ref:     "main-mp81chv5", // synthetic — branch prefix + base36 suffix
+		},
+	}
+	_, desc, fields := buildRichCard(b, "web", "succeeded", "", "")
+	if desc != "Manual redeploy of `main` by ivo9999" {
+		t.Errorf("synthetic-ref description: %q", desc)
+	}
+	// Ref field shows only the branch, not the synth suffix.
+	if fields[0].Name != "Ref" || fields[0].Value != "`main`" {
+		t.Errorf("synth-ref field should hide the suffix: %+v", fields[0])
+	}
+}
+
+// TestBuildRichCard_SiteURL verifies the Site field is appended for
+// succeeded builds with a configured public URL — and stripped of the
+// scheme for display, with the full URL preserved in the markdown
+// link target.
+func TestBuildRichCard_SiteURL(t *testing.T) {
+	b := &kube.KusoBuild{
+		Spec: kube.KusoBuildSpec{
+			Project: "distill",
+			Service: "distill-web",
+			Branch:  "main",
+			Ref:     "53d3f34262ef",
+		},
+	}
+	_, _, fields := buildRichCard(b, "web", "succeeded", "", "https://web.distill.sislelabs.com")
+	var siteField *EnvelopeField
+	for i := range fields {
+		if fields[i].Name == "Site" {
+			siteField = &fields[i]
+		}
+	}
+	if siteField == nil {
+		t.Fatalf("Site field missing on succeeded build")
+	}
+	if siteField.Value != "[web.distill.sislelabs.com](https://web.distill.sislelabs.com)" {
+		t.Errorf("Site field value: %q", siteField.Value)
+	}
+}
+
+// TestBuildRichCard_NoSiteURLOnFailure verifies the Site field is NOT
+// added for failed/cancelled/superseded builds — clicking through to
+// "the live site" of a failed build would land on the prior version,
+// which is misleading.
+func TestBuildRichCard_NoSiteURLOnFailure(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{Project: "p", Service: "p-s"}}
+	for _, phase := range []string{"failed", "cancelled", "superseded"} {
+		t.Run(phase, func(t *testing.T) {
+			_, _, fields := buildRichCard(b, "s", phase, "boom", "https://example.com")
+			for _, f := range fields {
+				if f.Name == "Site" {
+					t.Errorf("Site field leaked into %s build: %+v", phase, f)
+				}
+			}
+		})
+	}
+}
+
+// TestIsHexSHA covers the heuristic used to discriminate a real (short
+// or full) git SHA from a synthetic redeploy ref.
+func TestIsHexSHA(t *testing.T) {
+	cases := map[string]bool{
+		"":             false,
+		"ab12":         false, // too short
+		"abcdef0":      true,  // 7-char short SHA (git's default abbrev)
+		"53d3f34262ef": true,  // 12-char short SHA
+		"main-mp81chv": false, // synthetic ref shape
+		"BADBEEF":      false, // uppercase rejected (git outputs lowercase)
+		"zzz1234":      false, // out-of-range hex
+	}
+	for in, want := range cases {
+		if got := isHexSHA(in); got != want {
+			t.Errorf("isHexSHA(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 // TestBuildRichCard_NoData covers an emit where the CR has no commit
 // message and no start time — the card still renders with at minimum
 // the title and (if present) ref.
@@ -95,7 +190,7 @@ func TestBuildRichCard_NoData(t *testing.T) {
 			Service: "p-s",
 		},
 	}
-	title, desc, fields := buildRichCard(b, "s", "succeeded", "")
+	title, desc, fields := buildRichCard(b, "s", "succeeded", "", "")
 	if title != "✓ Build succeeded · p / s" {
 		t.Errorf("title: %q", title)
 	}
