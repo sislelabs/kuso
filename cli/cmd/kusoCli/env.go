@@ -222,6 +222,7 @@ var envUnsetCmd = &cobra.Command{
 //     # only the preview-pr-42 env sees this
 
 var secretEnvFlag string
+var secretForceFlag bool
 
 var secretCmd = &cobra.Command{
 	Use:   "secret",
@@ -280,9 +281,30 @@ var secretSetCmd = &cobra.Command{
 			Key:   args[2],
 			Value: args[3],
 			Env:   secretEnvFlag,
+			Force: secretForceFlag,
 		})
 		if err != nil {
 			return err
+		}
+		if resp.StatusCode() == 409 {
+			if s := parseShadowed(resp.Body()); s != nil {
+				// Service-scoped writes shadow the project-shared Secret —
+				// kube's envFrom mounts service-scoped after shared, so the
+				// service value silently overrides. That's usually fine and
+				// often intentional (per-service override of a shared
+				// default), but requiring --force prevents the user from
+				// accidentally diverging two services' values.
+				return fmt.Errorf(
+					"%s is already set as a project-shared secret on %s\n"+
+						"\nthis service-scoped write would override the shared value at pod start.\n"+
+						"if that's intentional, fix one of:\n"+
+						"  • drop the shared key:  kuso shared-secret unset %s %s\n"+
+						"  • or force the write:  kuso secret set %s %s %s … --force\n",
+					s.Key, args[0],
+					args[0], s.Key,
+					args[0], args[1], s.Key,
+				)
+			}
 		}
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
@@ -329,4 +351,5 @@ func init() {
 	secretCmd.AddCommand(secretListCmd, secretSetCmd, secretUnsetCmd)
 	secretCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	secretCmd.PersistentFlags().StringVar(&secretEnvFlag, "env", "", "scope to one environment (production|preview-pr-N); empty = shared across all envs")
+	secretSetCmd.Flags().BoolVar(&secretForceFlag, "force", false, "override the shadow check (set even if a project-shared secret with the same key exists)")
 }

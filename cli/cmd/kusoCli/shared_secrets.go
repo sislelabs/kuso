@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
@@ -19,6 +20,40 @@ import (
 //   kuso shared-secret list <project>
 //   kuso shared-secret set <project> <KEY>=<VALUE>
 //   kuso shared-secret unset <project> <KEY>
+
+var sharedSecretForceFlag bool
+
+// shadowedResp captures the server's 409 body for a shadow conflict:
+//
+//	{"error": "...", "code": "shadowed", "key": "FOO", "scope": "service",
+//	 "services": ["api","bot"]}
+//
+// scope tells us which write was attempted ("shared" = user is writing a
+// shared key that one or more services already shadow; "service" = user
+// is writing a service key that shared already holds). services is only
+// populated for scope=shared.
+type shadowedResp struct {
+	Code     string   `json:"code"`
+	Key      string   `json:"key"`
+	Scope    string   `json:"scope"`
+	Services []string `json:"services"`
+	Error    string   `json:"error"`
+}
+
+// parseShadowed returns a non-nil shadowedResp iff the response body
+// contains code:"shadowed". Used by both `secret set` and `shared-secret
+// set` to render a helpful "unset the override or pass --force" message
+// instead of just dumping the raw 409 body at the user.
+func parseShadowed(body []byte) *shadowedResp {
+	var s shadowedResp
+	if err := json.Unmarshal(body, &s); err != nil {
+		return nil
+	}
+	if s.Code != "shadowed" {
+		return nil
+	}
+	return &s
+}
 
 var sharedSecretCmd = &cobra.Command{
 	Use:     "shared-secret",
@@ -86,10 +121,30 @@ var sharedSecretSetCmd = &cobra.Command{
 		if eq <= 0 {
 			return fmt.Errorf("argument must be KEY=VALUE")
 		}
-		req := kusoApi.SetSharedSecretRequest{Key: kv[:eq], Value: kv[eq+1:]}
+		req := kusoApi.SetSharedSecretRequest{Key: kv[:eq], Value: kv[eq+1:], Force: sharedSecretForceFlag}
 		resp, err := api.SetSharedSecret(args[0], req)
 		if err != nil {
 			return err
+		}
+		if resp.StatusCode() == 409 {
+			if s := parseShadowed(resp.Body()); s != nil {
+				// Shared writes are shadowed by service-scoped Secrets with
+				// the same key — kube's envFrom evaluates sources in order
+				// and the chart mounts service-scoped after shared, so the
+				// service value wins. Without this warning the user sets
+				// shared, rolls pods, and is baffled when the old value
+				// is still in effect.
+				return fmt.Errorf(
+					"%s is already set as a service-scoped secret on: %s\n"+
+						"\nservice-scoped values override shared at pod start, so the shared write\n"+
+						"would have no effect. fix one of:\n"+
+						"  • unset the override:  kuso secret unset %s <service> %s\n"+
+						"  • or force the write:  kuso shared-secret set %s %s=… --force\n",
+					s.Key, strings.Join(s.Services, ", "),
+					args[0], s.Key,
+					args[0], s.Key,
+				)
+			}
 		}
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
@@ -156,5 +211,6 @@ func init() {
 	sharedSecretCmd.AddCommand(sharedSecretListCmd)
 	sharedSecretListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	sharedSecretCmd.AddCommand(sharedSecretSetCmd)
+	sharedSecretSetCmd.Flags().BoolVar(&sharedSecretForceFlag, "force", false, "override the shadow check (set even if a service-scoped secret with the same key exists)")
 	sharedSecretCmd.AddCommand(sharedSecretUnsetCmd)
 }

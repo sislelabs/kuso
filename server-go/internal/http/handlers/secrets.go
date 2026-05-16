@@ -68,6 +68,12 @@ type setSecretRequest struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
 	Env   string `json:"env,omitempty"`
+	// Force=true bypasses the shadow check that warns when this
+	// service-scoped value would override a project-shared value of
+	// the same key. The override itself is usually intentional, but
+	// requiring the user to opt in prevents accidentally diverging
+	// values. CLI maps this to --force.
+	Force bool `json:"force,omitempty"`
 }
 
 // Set upserts a single (key, value) into the scoped Secret. The key is
@@ -86,7 +92,7 @@ func (h *SecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	}
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
-	if err := h.Svc.SetKey(ctx, project, service, req.Env, req.Key, req.Value); err != nil {
+	if err := h.Svc.SetKeyOpts(ctx, project, service, req.Env, req.Key, req.Value, secrets.SetOptions{Force: req.Force}); err != nil {
 		h.fail(w, "set secret", err)
 		return
 	}
@@ -135,6 +141,18 @@ func (h *SecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *SecretsHandler) fail(w http.ResponseWriter, op string, err error) {
+	if shadow := secrets.AsShadowed(err); shadow != nil {
+		// 409 + structured body so the CLI can render a helpful
+		// "this will override project-shared X; pass --force to
+		// proceed" message instead of just "conflict".
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error": err.Error(),
+			"code":  "shadowed",
+			"key":   shadow.Key,
+			"scope": shadow.Scope,
+		})
+		return
+	}
 	switch {
 	case errors.Is(err, secrets.ErrNotFound):
 		http.Error(w, "not found", http.StatusNotFound)

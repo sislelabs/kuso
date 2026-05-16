@@ -503,8 +503,13 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 			for k, v := range data {
 				// Rolled count is irrelevant during import — every env
 				// is brand new and hasn't started consuming the shared
-				// Secret yet. Drop the value, keep the error gate.
-				if _, err := h.ProjectSecrets.SetKey(ctx, desiredName, k, v); err != nil {
+				// Secret yet. Force=true bypasses the shadow guard
+				// because import is bulk infrastructure setup; if the
+				// source bundle defined the same key in both shared and
+				// service-scoped, the user's intent is to recreate that
+				// exact topology, and the guard would refuse legitimate
+				// writes.
+				if _, err := h.ProjectSecrets.SetKey(ctx, desiredName, k, v, projectsecrets.SetOptions{Force: true}); err != nil {
 					out.Warnings = append(out.Warnings, fmt.Sprintf("project secret %s: %v", k, err))
 				} else {
 					out.Secrets++

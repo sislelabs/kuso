@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/secrets"
 )
 
 type Service struct {
@@ -74,16 +75,39 @@ func (s *Service) ListKeys(ctx context.Context, project string) ([]string, error
 	return out, nil
 }
 
+// SetOptions controls SetKey behavior. Force=true bypasses the
+// shadow guard (see CheckSharedSetShadow) — use when the caller has
+// explicitly accepted that a service-scoped copy of the same key
+// will override the new shared value.
+type SetOptions struct {
+	Force bool
+}
+
 // SetKey upserts a single env-var-style entry. Creates the Secret
 // when it doesn't exist yet. Returns the number of KusoEnvironments
 // whose pods were triggered to roll so the new value reaches them —
 // kube's envFrom is evaluated at pod start, so a Secret-only update
 // is invisible to already-running pods until they restart.
-func (s *Service) SetKey(ctx context.Context, project, key, value string) (rolled int, err error) {
+//
+// When any service in the project has the same key in its service-
+// scoped Secret, the new shared value would be silently invisible
+// (kube's "last source wins" envFrom semantics + the chart mounting
+// service-scoped AFTER shared). SetKey refuses with a *ShadowedError
+// in that case unless opts.Force is true. Callers usually surface
+// the error to the user with a "unset the service-scoped copy or
+// pass --force" message — silent shadowing is exactly the trap this
+// guard exists to prevent.
+func (s *Service) SetKey(ctx context.Context, project, key, value string, opts SetOptions) (rolled int, err error) {
 	if key == "" {
 		return 0, fmt.Errorf("%w: key required", ErrInvalid)
 	}
 	ns := s.nsFor(ctx, project)
+	if !opts.Force {
+		shadow, _ := secrets.CheckSharedSetShadow(ctx, s.Kube, project, ns, key)
+		if shadow != nil {
+			return 0, shadow
+		}
+	}
 	name := SecretName(project)
 	sec, err := s.read(ctx, ns, name)
 	if apierrors.IsNotFound(err) {

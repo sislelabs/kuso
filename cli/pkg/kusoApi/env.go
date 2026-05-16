@@ -24,6 +24,10 @@ type SetSecretRequest struct {
 	// Optional: scope this secret to one environment. Empty means
 	// "shared" — applies to every env of the service.
 	Env string `json:"env,omitempty"`
+	// Force=true bypasses the server-side shadow check that warns when
+	// this service-scoped value would override a project-shared value
+	// of the same key. CLI maps this to --force.
+	Force bool `json:"force,omitempty"`
 }
 
 func (k *KusoClient) GetEnv(project, service string) (*resty.Response, error) {

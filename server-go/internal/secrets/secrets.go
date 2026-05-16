@@ -110,11 +110,41 @@ func (s *Service) ListKeys(ctx context.Context, project, service, env string) ([
 // On success the scoped Secret is also attached to its env's
 // envFromSecrets (idempotent) and spec.secretsRev is bumped so the
 // helm-operator rolls the Deployment.
+// SetOptions controls SetKey behavior. Force=true bypasses the
+// shadow guard (see CheckServiceSetShadow) — use when the caller
+// has explicitly accepted that this service-scoped value will
+// override a project-shared value of the same name. Usually the
+// user wants exactly that (per-service override is a legitimate
+// pattern), but surfacing the conflict prevents accidentally
+// diverging values.
+type SetOptions struct {
+	Force bool
+}
+
+// SetKey is the legacy entry point — calls SetKeyOpts with Force=true
+// so existing callers (env-group clone, github webhook flows, etc.)
+// don't break. New external callers (HTTP handler, CLI) should use
+// SetKeyOpts so the shadow guard can fire.
 func (s *Service) SetKey(ctx context.Context, project, service, env, key, value string) error {
+	return s.SetKeyOpts(ctx, project, service, env, key, value, SetOptions{Force: true})
+}
+
+// SetKeyOpts upserts (key, value) into the scoped Secret with
+// optional shadow detection. When opts.Force is false and the
+// project-shared Secret already holds the same key, returns a
+// *ShadowedError so the caller can surface the conflict to the
+// user before silently diverging values.
+func (s *Service) SetKeyOpts(ctx context.Context, project, service, env, key, value string, opts SetOptions) error {
 	if key == "" {
 		return fmt.Errorf("%w: key is required", ErrInvalid)
 	}
 	ns := s.nsFor(ctx, project)
+	if !opts.Force {
+		shadow, _ := CheckServiceSetShadow(ctx, s.Kube, project, ns, key)
+		if shadow != nil {
+			return shadow
+		}
+	}
 	name := Name(project, service, env)
 	if err := s.upsertKey(ctx, ns, name, key, value); err != nil {
 		return err

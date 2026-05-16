@@ -11,6 +11,11 @@ import "github.com/go-resty/resty/v2"
 type SetSharedSecretRequest struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
+	// Force=true bypasses the server-side shadow check that warns when
+	// a service-scoped Secret already holds the same key (those override
+	// shared at pod start, so a shared write would be silently ignored).
+	// CLI maps this to --force.
+	Force bool `json:"force,omitempty"`
 }
 
 func (k *KusoClient) ListSharedSecrets(project string) (*resty.Response, error) {

@@ -23,6 +23,7 @@ import (
 
 	"kuso/server/internal/db"
 	"kuso/server/internal/projectsecrets"
+	"kuso/server/internal/secrets"
 )
 
 type ProjectSecretsHandler struct {
@@ -58,6 +59,10 @@ func (h *ProjectSecretsHandler) List(w http.ResponseWriter, r *http.Request) {
 type setSharedSecretBody struct {
 	Key   string `json:"key"`
 	Value string `json:"value"`
+	// Force=true bypasses the shadow check that would otherwise
+	// refuse the write when a service-scoped Secret holds the same
+	// key. CLI maps this to --force.
+	Force bool `json:"force"`
 }
 
 func (h *ProjectSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +80,7 @@ func (h *ProjectSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
 		return
 	}
-	rolled, err := h.Svc.SetKey(ctx, chi.URLParam(r, "project"), body.Key, body.Value)
+	rolled, err := h.Svc.SetKey(ctx, chi.URLParam(r, "project"), body.Key, body.Value, projectsecrets.SetOptions{Force: body.Force})
 	if err != nil {
 		h.fail(w, "set shared secret", err)
 		return
@@ -102,6 +107,19 @@ func (h *ProjectSecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProjectSecretsHandler) fail(w http.ResponseWriter, op string, err error) {
+	if shadow := secrets.AsShadowed(err); shadow != nil {
+		// 409 + structured body so the CLI can render a helpful
+		// "X already set on service <svc> as service-scoped; unset
+		// it or pass --force" message instead of just "conflict".
+		writeJSON(w, http.StatusConflict, map[string]any{
+			"error":    err.Error(),
+			"code":     "shadowed",
+			"key":      shadow.Key,
+			"scope":    shadow.Scope,
+			"services": shadow.Services,
+		})
+		return
+	}
 	switch {
 	case errors.Is(err, projectsecrets.ErrInvalid):
 		http.Error(w, err.Error(), http.StatusBadRequest)
