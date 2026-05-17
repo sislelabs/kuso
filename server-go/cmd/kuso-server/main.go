@@ -34,6 +34,7 @@ import (
 	ghpkg "kuso/server/internal/github"
 	"kuso/server/internal/health"
 	httpsrv "kuso/server/internal/http"
+	"kuso/server/internal/instancepg"
 	"kuso/server/internal/instancesecrets"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/leader"
@@ -227,6 +228,7 @@ func main() {
 	var cronSvc *crons.Service
 	var projectSecretSvc *projectsecrets.Service
 	var instanceSecretSvc *instancesecrets.Service
+	var instancePGSvc *instancepg.Service
 	var ghDeps *httpsrv.GithubDeps
 	var kubeClient *kube.Client
 	var specRecon *spec.Reconciler
@@ -445,6 +447,14 @@ func main() {
 		projectSecretSvc = projectsecrets.New(kc, *namespace)
 		projectSecretSvc.NSResolver = nsResolver
 		instanceSecretSvc = instancesecrets.New(kc, *namespace)
+		// Cluster-shared PG. Manages the optional kuso-managed Postgres
+		// instance (StatefulSet on this cluster) AND the registration
+		// of an external-PG admin DSN. The background Reconcile loop
+		// promotes a freshly-provisioned managed PG from "pending" to
+		// "ready" by harvesting the helm-chart's conn Secret and
+		// writing the admin DSN into instance-secrets.
+		instancePGSvc = instancepg.New(kc, *namespace, instanceSecretSvc, logger)
+		go instancePGSvc.Run(ctx, 0)
 		// Wire the addon→env auto-attach hook so a freshly-created
 		// service env starts with envFromSecrets pre-populated for
 		// every existing project addon. Without this, services added
@@ -667,6 +677,7 @@ func main() {
 		Crons:           cronSvc,
 		ProjectSecrets:  projectSecretSvc,
 		InstanceSecrets: instanceSecretSvc,
+		InstancePG:      instancePGSvc,
 		Audit:           auditSvc,
 		Github:          ghDeps,
 		Notify:          notifyDisp,

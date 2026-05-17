@@ -30,6 +30,7 @@ import (
 	"kuso/server/internal/github"
 	httphandlers "kuso/server/internal/http/handlers"
 	"kuso/server/internal/installscripts"
+	"kuso/server/internal/instancepg"
 	"kuso/server/internal/instancesecrets"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/logs"
@@ -68,6 +69,7 @@ type Deps struct {
 	Crons           *crons.Service
 	ProjectSecrets  *projectsecrets.Service
 	InstanceSecrets *instancesecrets.Service
+	InstancePG      *instancepg.Service
 	Audit           *audit.Service
 	Github          *GithubDeps
 	Notify          *notify.Dispatcher
@@ -412,6 +414,10 @@ func mountAuthenticatedRoutes(
 			if d.InstanceSecrets != nil {
 				isH := &httphandlers.InstanceSecretsHandler{Svc: d.InstanceSecrets, Logger: d.Logger}
 				isH.Mount(r)
+			}
+			if d.InstancePG != nil {
+				ipgH := &httphandlers.InstancePGHandler{Svc: d.InstancePG}
+				ipgH.Mount(r)
 			}
 			sshH := &httphandlers.SSHKeysHandler{DB: d.DB, Logger: d.Logger}
 			sshH.Mount(r)
