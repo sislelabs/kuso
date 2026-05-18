@@ -79,7 +79,7 @@ func (d *DB) EnqueueOutbox(ctx context.Context, notificationID string, eventType
 //
 // The returned Tx MUST be committed (with MarkOutboxDelivered or
 // MarkOutboxAttempt) or rolled back by the caller.
-func (d *DB) ClaimOutboxRow(ctx context.Context) (*sql.Tx, *OutboxRow, error) {
+func (d *DB) ClaimOutboxRow(ctx context.Context) (*Tx, *OutboxRow, error) {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, nil, fmt.Errorf("claim outbox: begin: %w", err)
@@ -110,13 +110,18 @@ func (d *DB) ClaimOutboxRow(ctx context.Context) (*sql.Tx, *OutboxRow, error) {
 		t := deliveredAt.Time
 		r.DeliveredAt = &t
 	}
-	return tx.Tx, &r, nil
+	return tx, &r, nil
 }
 
 // MarkOutboxDelivered commits the claim with deliveredAt=now(). After
 // commit the row stays in the table (operators can audit successful
 // deliveries) until the daily cleanup goroutine prunes it.
-func (d *DB) MarkOutboxDelivered(ctx context.Context, tx *sql.Tx, id int64) error {
+//
+// Receives the kuso wrapper *Tx (not *sql.Tx) so its ExecContext
+// hits the SQLite→Postgres `?`→`$N` placeholder rewriter — without
+// that, the `WHERE "id" = ?` here lands as `WHERE "id" = ?` and
+// lib/pq errors with "syntax error at end of input".
+func (d *DB) MarkOutboxDelivered(ctx context.Context, tx *Tx, id int64) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE "NotificationOutbox"
 		SET "deliveredAt" = CURRENT_TIMESTAMP,
@@ -130,10 +135,9 @@ func (d *DB) MarkOutboxDelivered(ctx context.Context, tx *sql.Tx, id int64) erro
 }
 
 // MarkOutboxAttempt commits the claim with attempts++ + lastError +
-// nextAttemptAt advanced by backoff. The caller computes the
-// backoff window so a future policy change (e.g. capped at 30 min)
-// touches one site, not this storage call.
-func (d *DB) MarkOutboxAttempt(ctx context.Context, tx *sql.Tx, id int64, errMsg string, nextAttemptAt time.Time) error {
+// nextAttemptAt advanced by backoff. Same *Tx-not-*sql.Tx note as
+// MarkOutboxDelivered above.
+func (d *DB) MarkOutboxAttempt(ctx context.Context, tx *Tx, id int64, errMsg string, nextAttemptAt time.Time) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE "NotificationOutbox"
 		SET "attempts" = "attempts" + 1,

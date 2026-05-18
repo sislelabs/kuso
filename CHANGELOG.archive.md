@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.30] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(settings/builds): preset cards show real headroom math ([70581ac](https://github.com/sislelabs/kuso/commit/70581ac275066fb452c64b51724977deef496823))
+
 ## [0.9.29] — 2026-05-07
 
 ### 🐛 Bug Fixes
