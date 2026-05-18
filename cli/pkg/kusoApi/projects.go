@@ -1,4 +1,4 @@
-// v0.2 project/service/environment/addon API methods. See docs/REDESIGN.md.
+// v0.2 project/service/environment/addon API methods.
 //
 // All requests bind to /api/projects/... and rely on the bearer token wired
 // up by KusoClient.Init / SetApiUrl. Note: KusoClient.client is a

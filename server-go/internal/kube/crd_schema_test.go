@@ -47,7 +47,7 @@ func TestCRDSchema_GoldenStable(t *testing.T) {
 		}
 		// Skip the legacy/staging CRDs that aren't part of the live
 		// surface (the application.kuso.dev_kusoes.yaml shim that
-		// docs/REWRITE.md keeps for backwards-compat). Only freeze
+		//for backwards-compat). Only freeze
 		// the .sislelabs.com group.
 		if !strings.Contains(e.Name(), "kuso.sislelabs.com") {
 			continue

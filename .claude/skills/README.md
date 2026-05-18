@@ -8,8 +8,6 @@ Project-specific skills for AI agents working on kuso. Each `.md` file is a skil
 | ------------------------------------------------------ | -------------------------------------------------------------------------------- |
 | [`repo-orientation.md`](./repo-orientation.md)         | Start of every session. What lives where, what not to touch.                     |
 | [`platform-architecture.md`](./platform-architecture.md) | Before reasoning about scaling, persistence, leader election, multi-node placement. |
-| [`projects-redesign.md`](./projects-redesign.md)       | Before any v0.2+ work — the canonical project/service/env/addon model.           |
-| [`crd-architecture.md`](./crd-architecture.md)         | Historical context only — describes the v0.1 model that was hard-forked.         |
 | [`agentic-workflow.md`](./agentic-workflow.md)         | Before making changes — sets ground rules for what to do without asking.         |
 | [`mcp-development.md`](./mcp-development.md)           | Before touching `mcp/` — tool design rules, layout, how to add a new tool.       |
 | [`smoke-tests.md`](./smoke-tests.md)                   | Before opening a PR — which smoke test catches what, in cost order.              |

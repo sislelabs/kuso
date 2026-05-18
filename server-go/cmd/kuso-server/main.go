@@ -1,5 +1,4 @@
-// Command kuso-server is the Go rewrite of the Kuso control-plane HTTP API.
-// See kuso/docs/REWRITE.md for the full plan.
+// Command kuso-server is the kuso control-plane HTTP API.
 package main
 
 import (
@@ -351,9 +350,9 @@ func main() {
 		}
 		// Shared informer cache over the six kuso CRDs. Keeps the
 		// dashboard's read paths off the API server — one WATCH per
-		// GVR instead of LIST-on-every-request. See SCALABILITY_ANALYSIS.md §3.
-		// Reads against an unsynced informer transparently fall back
-		// to the live API, so no boot-time block.
+		// GVR instead of LIST-on-every-request. Reads against an
+		// unsynced informer transparently fall back to the live API,
+		// so no boot-time block.
 		kc.EnableCache()
 		// Stamp the home namespace as kuso-managed on every boot. The
 		// BuildKit NetworkPolicy (deploy/buildkitd.yaml) requires this

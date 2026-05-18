@@ -10,7 +10,7 @@
 //   build poller, that's hundreds of LISTs per minute against the
 //   k3s API server — each one re-marshalling the full unstructured
 //   payload through json. The cache reduces this to one WATCH per
-//   GVR and O(1) lookups. See SCALABILITY_ANALYSIS.md §3.
+//   GVR and O(1) lookups.
 //
 // Design notes:
 //

@@ -28,8 +28,7 @@ func (m SchemaMismatch) String() string { return m.CRD + ": missing " + m.Field 
 // when this build issues a write, which is exactly the v0.7.x data-
 // loss class the audit flagged. On any mismatch readyz fails and
 // the server refuses to take traffic; the operator runs
-// `kubectl apply -f operator/config/crd/bases/...` from
-// docs/SCHEMA_MIGRATION.md to fix.
+// `kubectl apply -f operator/config/crd/bases/...` to fix.
 //
 // Pass nil cfg to fall through to in-cluster config. Pass a typed
 // list of (typeFor, GVR, plural) tuples — we read the Go field tags

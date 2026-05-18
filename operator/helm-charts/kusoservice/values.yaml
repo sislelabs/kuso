@@ -1,5 +1,5 @@
-# Default values for KusoService CRs. Mirrors KusoService.spec from
-# docs/REDESIGN.md. helm-operator copies the CR spec onto these at reconcile.
+# Default values for KusoService CRs. Mirrors KusoService.spec.
+# helm-operator copies the CR spec onto these at reconcile.
 
 # project: required. The KusoProject this service belongs to. Used for label
 # scoping and to find the project's defaultRepo / addon connection secrets.
@@ -12,8 +12,7 @@ repo:
   path: "."
 
 # runtime: dockerfile | nixpacks | buildpacks | static
-# Auto-detected at create time by the server (see docs/REDESIGN.md "Auto-detect
-# runtime"). User-overridable. Empty means "ask".
+# Auto-detected at create time by the server. User-overridable. Empty means "ask".
 runtime: ""
 
 # port: container port the service listens on. Auto-detected at create time;

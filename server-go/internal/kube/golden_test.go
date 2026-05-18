@@ -18,7 +18,7 @@ import (
 //
 // Why this exists:
 //
-// We hand-roll the typed structs in types.go (per docs/REWRITE.md §3 —
+// We hand-roll the typed structs in types.go(
 // no codegen until we hit pain). That means every time someone adds a
 // new spec field, they have to remember to:
 //

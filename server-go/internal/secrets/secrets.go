@@ -8,10 +8,10 @@
 //              only on that env. Per-env values OVERRIDE shared
 //              (envFrom mounts shared first, per-env second).
 //
-// The race-free patch logic in setKey/removeKey is the §6.4 landmine
-// from REWRITE.md — any change to this file MUST keep the merge-patch
-// (set) and json-patch-with-test (remove) shapes intact, or concurrent
-// writes will silently lose data.
+// The race-free patch logic in setKey/removeKey is the landmine —
+// any change to this file MUST keep the merge-patch (set) and
+// json-patch-with-test (remove) shapes intact, or concurrent writes
+// will silently lose data.
 package secrets
 
 import (

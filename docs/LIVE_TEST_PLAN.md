@@ -109,10 +109,12 @@ spec:
   ports: [{ port: 80, targetPort: 3000 }]
 ```
 
-> ⚠️ **SQLite single-writer constraint** (REWRITE.md §6.6): the Go
-> Deployment MUST share the same PVC the TS server uses, BUT only one
-> server may write at a time. For side-by-side testing, scale the Go
-> deployment to 1 and treat the TS deployment as read-only — every
+> ⚠️ **Legacy SQLite single-writer constraint** — only relevant for
+> pre-v0.9 side-by-side testing of the Go/TS servers. The current
+> control plane runs on Postgres and is multi-writer; ignore this
+> note unless you're spelunking historical layouts. For pre-v0.9
+> side-by-side, scale the Go deployment to 1 and treat the TS deployment
+> as read-only — every
 > write workflow below is run *only* against the Go server. Do NOT
 > hit `POST` / `PUT` / `DELETE` on the TS server during the test.
 
@@ -339,7 +341,7 @@ seq 1 6 | xargs -P 6 -I {} curl -fsS -X POST $KUSO/api/projects/smoke/services/w
 
 ## 7. Resilience sweeps
 
-These are the same probes from REWRITE.md §8 acceptance #4.
+Resilience probes — kill control-plane components, confirm recovery.
 
 ### 7.1 Kill kuso-server-go
 - [ ] `kubectl rollout restart deployment/kuso-server-go -n kuso`.

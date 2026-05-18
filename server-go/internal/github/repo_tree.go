@@ -111,8 +111,7 @@ type DetectedRuntime struct {
 	Reason  string `json:"reason"`
 }
 
-// DetectRuntime applies the auto-detect rules from
-// docs/REDESIGN.md "Auto-detect runtime".
+// DetectRuntime applies the auto-detect rules:
 //
 //   1. Dockerfile present → runtime=dockerfile, port=parseExpose() ?? 8080
 //   2. index.html only (no package.json/go.mod/...) → runtime=static, port=80

@@ -1,4 +1,4 @@
-# helm-operator watches. v0.2 reshape — see docs/REDESIGN.md.
+# helm-operator watches. v0.2 reshape.
 #
 # maxConcurrentReconciles bumps each kind's worker pool from the
 # helm-operator default of 1. Reconcile is one-helm-render-and-apply

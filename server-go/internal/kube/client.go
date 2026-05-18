@@ -3,7 +3,7 @@
 // Secret, Pod, ConfigMap) and a dynamic.Interface (for our six CRDs).
 //
 // CRD typing is hand-rolled in types.go + crds.go rather than codegen.
-// See kuso/docs/REWRITE.md §3 ("no codegen unless we hit pain").
+//
 package kube
 
 import (

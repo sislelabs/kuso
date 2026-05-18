@@ -17,5 +17,5 @@ metadata:
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 data:
-  status: "addon kind '{{ .Values.kind }}' is reserved but not implemented in v0.2.0 — see docs/REDESIGN.md"
+  status: "addon kind '{{ .Values.kind }}' is reserved but not implemented in v0.2.0"
 {{- end }}

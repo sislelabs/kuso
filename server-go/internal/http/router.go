@@ -287,8 +287,8 @@ func NewRouter(d Deps) http.Handler {
 	// routes → auth routes → SPA fallback) without sprawling 160
 	// lines of handler wiring inline. The auth group itself is
 	// still one block with conditional gates per handler — collapsing
-	// further requires per-handler Module constructors (deferred:
-	// see docs/REVIEW_2026-05-12.md A-P1-2 rationale).
+		// still one block with conditional gates per handler — collapsing
+		// further requires per-handler Module constructors (deferred).
 	mountAuthenticatedRoutes(r, d, authH, ghHandler, bootstrapH)
 
 	// Public install scripts. Mounted before the SPA fallback so the
@@ -317,9 +317,8 @@ func NewRouter(d Deps) http.Handler {
 // one place. Pulled out of NewRouter so the top-level flow
 // (middleware → public → auth → SPA) reads cleanly. The handlers
 // inside still gate themselves with `if d.X != nil` checks — a
-// future Module-interface refactor (deferred per A-P1-2) could
-// formalise that, but the current shape works and isn't blocking
-// anything.
+// future Module-interface refactor could formalise that, but the
+// current shape works and isn't blocking anything.
 func mountAuthenticatedRoutes(
 	r chi.Router,
 	d Deps,

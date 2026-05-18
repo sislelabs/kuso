@@ -338,8 +338,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
 }
 
 // (FloatingSaveBar removed — the overlay shell renders a unified
-// SaveBar from useOverlayDirty's onSave hook now. See U-P1-1 in
-// docs/REVIEW_2026-05-12.md.)
+// SaveBar from useOverlayDirty's onSave hook now.)
 
 // EnvBranchSection is the per-(env, service) branch override surface.
 // Only rendered for non-production envs; the production branch is set

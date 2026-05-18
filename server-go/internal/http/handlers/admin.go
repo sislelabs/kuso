@@ -20,7 +20,7 @@ import (
 // AdminHandler hosts the read-mostly /api routes that drive the admin
 // pages of the Vue UI: users, roles, groups, audit, and the user's own
 // tokens. Full CRUD on users/roles/groups is intentionally deferred —
-// see kuso/docs/REWRITE.md §5 Phase 8 — and lives behind the same JWT
+// see kuso/Phase 8 — and lives behind the same JWT
 // middleware so the listing surface is enough for the cutover.
 type AdminHandler struct {
 	DB     *db.DB

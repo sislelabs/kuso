@@ -60,9 +60,8 @@ func (c changedFields) any() bool {
 // UPDATEs; this version lists envs once and applies every changed
 // field in one Update per env.
 //
-// Long-term fix is to teach the chart to merge both CRs (see
-// docs/REVIEW_2026-05-12.md A-P0-3), but until then this is the
-// single place to keep correct.
+// Long-term fix is to teach the chart to merge both CRs; until then
+// this is the single place to keep correct.
 func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, service string, svc *kube.KusoService, changed changedFields) error {
 	if !changed.any() {
 		return nil

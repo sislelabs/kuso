@@ -17,7 +17,7 @@ kuso is a self-hosted, agent-native PaaS on real Kubernetes. Multi-node, multi-r
 | `cli/`       | Go + Cobra                             | `kuso` command-line tool. Talks to the server REST API.                                     |
 | `mcp/`       | Go                                     | `kuso-mcp` Model Context Protocol server. Wraps `cli/` and REST API.                        |
 | `deploy/`    | YAML manifests                         | Production manifests applied to the test cluster.                                           |
-| `docs/`      | Markdown                               | REDESIGN, REWRITE, WORKFLOWS, GITHUB_APP_SETUP, LIVE_TEST_PLAN.                              |
+| `docs/`      | Markdown                               | Operational + integration docs (WORKFLOWS, GITHUB_APP_SETUP, EDIT_SAFETY, BACKUP_RESTORE, etc).|
 | `.claude/`   | Skill files (this dir)                 | Project-specific context for AI agents.                                                     |
 
 ## Two things to know before editing

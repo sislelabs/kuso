@@ -1,5 +1,5 @@
 # Default values for KusoEnvironment CRs. The server creates these — one per
-# (service, env) tuple. Mirrors KusoEnvironment.spec from docs/REDESIGN.md.
+# (service, env) tuple.Mirrors KusoEnvironment.spec.
 
 # project / service: required. The KusoProject and KusoService this env
 # belongs to. Used for label scoping, addon-secret discovery, and ownership.

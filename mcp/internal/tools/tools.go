@@ -1,6 +1,6 @@
 // Package tools registers the MCP tool surface on a kuso-mcp server.
 //
-// v0.2 reshape — see docs/REDESIGN.md. Pipelines / apps / phases tools
+// v0.2 reshape. Pipelines / apps / phases tools
 // have been removed. Current surface:
 //
 //   health             smoke test (no HTTP)

@@ -36,8 +36,8 @@ The server speaks MCP over stdio. Wire it up in your client by pointing at the `
 
 ## Tool surface
 
-v0.2 reshape (see [`docs/REDESIGN.md`](../docs/REDESIGN.md)) replaces the
-pipelines/apps tool surface with a project-shaped one. Current state:
+The v0.2 reshape replaced the pipelines/apps tool surface with a
+project-shaped one. Current state:
 
 | Tool                | Status      |
 | ------------------- | ----------- |

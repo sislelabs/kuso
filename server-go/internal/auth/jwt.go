@@ -1,7 +1,7 @@
 // Package auth handles password verification, JWT issuance/validation,
 // and the bearer-token middleware. It MUST stay wire-compatible with the
 // TS server's JWT shape so existing CLI tokens keep working through the
-// cutover (kuso/docs/REWRITE.md §8 acceptance #1).
+// cutover (kuso/acceptance #1).
 package auth
 
 import (

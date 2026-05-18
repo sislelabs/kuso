@@ -568,8 +568,8 @@ log "writing dist/release.json + dist/crds.yaml for GitHub release"
 # entrypoint runs `kubectl apply -f /tmp/crds.yaml` and trusts that
 # all of these are safe to re-apply (additive only, today). If you
 # ship a destructive schema change (rename, removal, type narrow),
-# this is the wrong tool — see docs/SCHEMA_MIGRATION.md for the
-# manual recipe.
+# this is the wrong tool — apply the manual migration over ssh
+# before cutting the release.
 {
   for f in operator/config/crd/bases/*.yaml; do
     if [[ -f "$f" ]]; then
