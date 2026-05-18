@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/db"
@@ -105,13 +106,30 @@ func (s *Sampler) sampleOnce(ctx context.Context) error {
 		return errors.New("kube clientset not wired")
 	}
 	now := time.Now().UTC()
-	nodes, err := s.Kube.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return fmt.Errorf("list nodes: %w", err)
+	// Prefer the shared informer's local view — see the equivalent
+	// comment in nodewatch.tick for the rationale. Sampler runs every
+	// 5min so the savings are smaller per-tick than nodewatch's 30s
+	// cadence, but reading from the local index removes one of two
+	// per-tick apiserver round-trips (the other is the metrics-server
+	// usage poll, which has no informer equivalent).
+	var nodes []*corev1.Node
+	if s.Kube.Cache != nil {
+		if cached, ok := s.Kube.Cache.ListNodes(); ok {
+			nodes = cached
+		}
+	}
+	if nodes == nil {
+		raw, err := s.Kube.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return fmt.Errorf("list nodes: %w", err)
+		}
+		nodes = make([]*corev1.Node, len(raw.Items))
+		for i := range raw.Items {
+			nodes[i] = &raw.Items[i]
+		}
 	}
 	usage := s.metricsServerUsage(ctx)
-	for i := range nodes.Items {
-		n := &nodes.Items[i]
+	for _, n := range nodes {
 		cpuCap := n.Status.Capacity.Cpu().MilliValue()
 		memCap, _ := n.Status.Capacity.Memory().AsInt64()
 		diskCap, _ := n.Status.Capacity.StorageEphemeral().AsInt64()

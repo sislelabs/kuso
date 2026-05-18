@@ -136,10 +136,16 @@ The three security items that block scaling up trust in the platform.
   existing daily cleanup tick. **Deferred** — non-trivial migration
   needs a session where it can be tested against real Postgres
   data.
-- [ ] **#8 Node informer for watcher/sampler.** Switch `nodewatch`
-  and `nodemetrics` from `List`-per-tick to a Node informer with
-  event handlers. **Deferred** — half-day refactor of two
-  goroutines; land in its own session.
+- [x] **#8 Node informer for watcher/sampler.** Added typed Node
+  informer to `kube.Cache` alongside the existing Pod / Deployment
+  informers. New `Cache.ListNodes()` returns a snapshot from the
+  local indexer; `(nil, false)` triggers the cold-boot fallback to
+  a live `Nodes().List()`. Both `nodewatch.Watcher.tick` and
+  `nodemetrics.Sampler.sampleOnce` now prefer the informer path —
+  on a 50-node cluster the ~500ms-per-30s-tick apiserver work goes
+  to a microsecond map walk. Two new test paths pin the cache
+  surface (nil-cache fallback + happy-path snapshot via
+  `kubefake.NewSimpleClientset`).
 - [ ] **#9 Build status SSE.** Replace the 5s poll in
   `ProjectCanvas`/`useBuilds` with SSE. **Deferred** — hardest
   item in the phase; touches server + client + needs replay/resume

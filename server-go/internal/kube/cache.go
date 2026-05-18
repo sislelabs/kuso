@@ -80,6 +80,15 @@ type Cache struct {
 	depLister appslisters.DeploymentLister
 	depSynced cache.InformerSynced
 
+	// Node informer — nodewatch.Watcher (30s tick) and nodemetrics.Sampler
+	// (5min tick) used to Nodes().List() every iteration. On a 50-node
+	// cluster that's ~500ms of apiserver work per tick. The informer
+	// keeps an in-process view backed by one cluster-wide WATCH; the
+	// ticker still drives the work cadence, but the data comes from
+	// the indexer instead of a fresh LIST.
+	nodeLister corelisters.NodeLister
+	nodeSynced cache.InformerSynced
+
 	mu      sync.RWMutex
 	stopCh  chan struct{}
 	stopped bool
@@ -145,6 +154,15 @@ func NewCache(c *Client) *Cache {
 		di := pf.Apps().V1().Deployments()
 		cc.depLister = di.Lister()
 		cc.depSynced = di.Informer().HasSynced
+
+		// Node informer rides the same factory — Start() below kicks
+		// every informer the factory knows about, so adding this here
+		// is enough to bring it up. The lister returns typed
+		// *corev1.Node objects so consumers (nodewatch / nodemetrics)
+		// don't have to unmarshal unstructured.
+		ni := pf.Core().V1().Nodes()
+		cc.nodeLister = ni.Lister()
+		cc.nodeSynced = ni.Informer().HasSynced
 	}
 
 	return cc
@@ -212,7 +230,28 @@ func (c *Cache) AllSynced() bool {
 	if c.depSynced != nil && !c.depSynced() {
 		return false
 	}
+	if c.nodeSynced != nil && !c.nodeSynced() {
+		return false
+	}
 	return true
+}
+
+// ListNodes returns a snapshot of every Node currently in the
+// informer's local indexer. Returns (nil, false) when the cache
+// isn't ready — callers fall back to a live Nodes().List(). The
+// returned slice is owned by the caller; the informer's pointers
+// are shared (same `*corev1.Node` instance every reader sees), so
+// callers must NOT mutate the returned objects. Read-only is the
+// only safe mode.
+func (c *Cache) ListNodes() ([]*corev1.Node, bool) {
+	if c == nil || c.nodeLister == nil || c.nodeSynced == nil || !c.nodeSynced() {
+		return nil, false
+	}
+	nodes, err := c.nodeLister.List(labels.Everything())
+	if err != nil {
+		return nil, false
+	}
+	return nodes, true
 }
 
 // PodCountsByNode returns a node→pod-count map served from the local

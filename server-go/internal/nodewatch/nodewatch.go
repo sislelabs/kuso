@@ -126,12 +126,34 @@ type pendingAction struct {
 }
 
 func (w *Watcher) tick(ctx context.Context) {
-	listCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	nodes, err := w.Kube.Clientset.CoreV1().Nodes().List(listCtx, metav1.ListOptions{})
-	if err != nil {
-		w.Logger.Warn("nodewatch list nodes failed", "err", err)
-		return
+	// Prefer the shared informer's local indexer — one cluster-wide
+	// WATCH instead of a fresh LIST per tick. At 50+ nodes the LIST
+	// was ~500ms of apiserver work per 30-sec tick; the informer
+	// brings it to a microsecond map walk. Fall back to a live LIST
+	// only when the cache isn't ready (cold-boot window).
+	//
+	// The objects the informer hands us are read-only pointers shared
+	// with every other reader. We never mutate them — only the
+	// in-process notReadySince/alerted maps and the cordon/uncordon
+	// kube calls in the post-unlock action dispatcher.
+	var nodes []*corev1.Node
+	if w.Kube.Cache != nil {
+		if cached, ok := w.Kube.Cache.ListNodes(); ok {
+			nodes = cached
+		}
+	}
+	if nodes == nil {
+		listCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		raw, err := w.Kube.Clientset.CoreV1().Nodes().List(listCtx, metav1.ListOptions{})
+		if err != nil {
+			w.Logger.Warn("nodewatch list nodes failed", "err", err)
+			return
+		}
+		nodes = make([]*corev1.Node, len(raw.Items))
+		for i := range raw.Items {
+			nodes[i] = &raw.Items[i]
+		}
 	}
 	now := time.Now().UTC()
 
@@ -141,8 +163,7 @@ func (w *Watcher) tick(ctx context.Context) {
 	var actions []pendingAction
 	w.mu.Lock()
 	seen := map[string]struct{}{}
-	for i := range nodes.Items {
-		n := &nodes.Items[i]
+	for _, n := range nodes {
 		seen[n.Name] = struct{}{}
 		ready := isReady(n)
 		if ready {
