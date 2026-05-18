@@ -85,6 +85,22 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 		if s.Spec.Kind != "postgres" {
 			continue
 		}
+		// Instance-pg addons (project consumes the cluster-shared PG
+		// via spec.useInstanceAddon=pg) aren't cloneable by the
+		// CR-duplication path used below — there's no per-project
+		// StatefulSet to spin up; everyone shares one Postgres. The
+		// correct shape is to CREATE DATABASE inside the cluster PG +
+		// pg_dump | pg_restore against the cluster's admin DSN +
+		// emit a synthetic conn Secret for the new DB. Tracked as a
+		// follow-up — for now we skip these with a loud log so the
+		// PR preview falls back to sharing the cluster PG's main DB
+		// (which a reviewer can break, so use cautiously).
+		if s.Spec.UseInstanceAddon != "" {
+			c.Logger.Warn("preview db: instance-pg addon clone not yet implemented; skipping",
+				"addon", s.Name, "project", project, "pr", prNumber,
+				"hint", "preview env will share the cluster PG's source database")
+			continue
+		}
 		shortSrc := addons.ShortName(project, s.Name)
 		cloneShort := fmt.Sprintf("%s-pr-%d", shortSrc, prNumber)
 		cloneFQN := addons.CRName(project, cloneShort)
