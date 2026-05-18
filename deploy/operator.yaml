@@ -44,15 +44,16 @@ rules:
   - apiGroups: [application.kuso.sislelabs.com]
     resources:
       [kusoprojects, kusoservices, kusoenvironments, kusoaddons,
-       kusobuilds, kusocrons]
+       kusobuilds, kusocrons, kusoruns]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [application.kuso.sislelabs.com]
     resources:
       [kusoprojects/status, kusoservices/status, kusoenvironments/status,
        kusoaddons/status, kusobuilds/status, kusocrons/status,
+       kusoruns/status,
        kusoprojects/finalizers, kusoservices/finalizers,
        kusoenvironments/finalizers, kusoaddons/finalizers,
-       kusobuilds/finalizers, kusocrons/finalizers]
+       kusobuilds/finalizers, kusocrons/finalizers, kusoruns/finalizers]
     verbs: [get, update, patch]
   # Core kube objects helm charts emit per env namespace.
   - apiGroups: [""]

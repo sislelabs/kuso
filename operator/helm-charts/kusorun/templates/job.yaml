@@ -73,8 +73,15 @@ spec:
           {{- with .Values.envFromSecrets }}
           envFrom:
             {{- range . }}
+            # optional=true mirrors the kusoenvironment chart's
+            # rendering — a missing secret (e.g. an addon that's been
+            # uninstalled while a run reference still carries its
+            # conn-secret name) shouldn't pin the pod in
+            # CreateContainerConfigError. The run still starts and
+            # the missing-env-var hint surfaces in the user's code.
             - secretRef:
                 name: {{ . | quote }}
+                optional: true
             {{- end }}
           {{- end }}
           resources:

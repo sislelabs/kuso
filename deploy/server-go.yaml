@@ -33,13 +33,13 @@ rules:
   - apiGroups: [application.kuso.sislelabs.com]
     resources:
       [kusoprojects, kusoservices, kusoenvironments, kusoaddons,
-       kusobuilds, kusocrons, kusoes]
+       kusobuilds, kusocrons, kusoruns, kusoes]
     verbs: [get, list, watch, create, update, patch, delete]
   - apiGroups: [application.kuso.sislelabs.com]
     resources:
       [kusoprojects/status, kusoservices/status, kusoenvironments/status,
        kusoaddons/status, kusobuilds/status, kusocrons/status,
-       kusoes/status]
+       kusoruns/status, kusoes/status]
     verbs: [get, update, patch]
   # Kube-native resources we read/write to manage tenants.
   - apiGroups: [""]
