@@ -433,6 +433,13 @@ func kusoBuildLabels(b *kube.KusoBuild, buildName string) map[string]string {
 		"app.kubernetes.io/component":  "kusobuild",
 		"app.kubernetes.io/managed-by": "kuso",
 		"app.kubernetes.io/instance":   buildName,
+		// Build pods MUST reach github.com (and other public git/
+		// package registries) for the clone + nixpacks deps phases.
+		// The kusoproject default-deny NetworkPolicy that landed in
+		// v0.13 only allows public egress for pods carrying this
+		// opt-in label. Without it, the build pod's `git clone`
+		// hangs against a deny-egress and times out 30s in.
+		"kuso.sislelabs.com/network-egress-public": "true",
 	}
 	if b == nil {
 		return out

@@ -138,6 +138,39 @@ spec:
         - port: 5000
           protocol: TCP
 ---
+# Egress to the in-cluster BuildKit daemon. Build pods talk to
+# kuso-buildkitd:1234 to push image layers + drive the build. The
+# daemon's own NetworkPolicy gates ingress to managed namespaces;
+# this rule opens the symmetric egress on the project side. Without
+# it, the build pod hits a deny-egress and fails with
+# "transport: error while dialing: dial tcp 10.x.x.x:1234: connect:
+# connection refused" after ~30 seconds of buildctl handshake retries.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-buildkit-egress
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    {{- toYaml $projectSelector | nindent 4 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kuso-buildkitd
+        # Same-ns fallback for single-namespace installs.
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kuso-buildkitd
+      ports:
+        - port: 1234
+          protocol: TCP
+---
 # Public internet egress for opted-in pods. The block-list excludes
 # RFC1918 private ranges + the AWS/Azure/GCP cloud-metadata service
 # (169.254.169.254) so a workload pod can reach github.com and the

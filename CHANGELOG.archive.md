@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.31] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(env-dialog): branch field references the picked service's repo ([a3e8653](https://github.com/sislelabs/kuso/commit/a3e865335c9c8fec76671f4f993b18a0cf874e57))
+
 ## [0.9.30] — 2026-05-07
 
 ### 🐛 Bug Fixes
