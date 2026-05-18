@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.29] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(builds): queue at cap-hit instead of returning 409 ([148c9f8](https://github.com/sislelabs/kuso/commit/148c9f8dc7cd36f4062b493de87edc978c39a3f3))
+
 ## [0.9.28] — 2026-05-07
 
 ### 🐛 Bug Fixes

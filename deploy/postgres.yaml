@@ -429,7 +429,12 @@ spec:
               # newline appended).
               hash="$(printf '%s%s' "$pass" "$user" | md5sum | awk '{print $1}')"
               printf '"%s" "md5%s"\n' "$user" "$hash" > /shared/userlist.txt
-              chmod 0440 /shared/userlist.txt
+              # 0444 (world-readable). The pgbouncer container runs as
+              # uid 70 (postgres in edoburu's image), and writes from
+              # the init container land as root:root. 0440 prevented
+              # pgbouncer from reading its own userlist and the auth
+              # path silently failed on every connect.
+              chmod 0444 /shared/userlist.txt
           volumeMounts:
             - { name: pg-conn, mountPath: /etc/pg-conn, readOnly: true }
             - { name: shared, mountPath: /shared }
