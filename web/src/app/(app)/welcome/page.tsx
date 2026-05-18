@@ -12,7 +12,6 @@ import {
 } from "@/features/github";
 import { useCreateProject } from "@/features/projects";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { CheckCircle2, Github, ArrowRight, ArrowDown, Rocket } from "lucide-react";
 import { cn } from "@/lib/utils";

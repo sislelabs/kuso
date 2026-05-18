@@ -28,8 +28,15 @@ interface Card {
   title: string;
   description: string;
   icon: React.ComponentType<{ className?: string }>;
-  perm?: string; // when set, hides the card without this permission
-  group: "account" | "instance" | "admin";
+  perm?: string; // when set, locks the card without this permission
+  // Group buckets settings by the operator-mental-model rather than
+  // by who can see what. Cluster = state of this kuso deployment;
+  // Team = users + groups + roles + audit; Integrations = external
+  // wires (GitHub, Discord, Coolify import); You = personal scope.
+  // This re-grouping replaces the old account/instance/admin split
+  // because it scales better with 18+ routes (the old "instance"
+  // bucket had become a 10-card dumping ground).
+  group: "cluster" | "team" | "integrations" | "you";
   // keywords: words a user might type into the search box that aren't
   // in the title or description verbatim. e.g. typing "webhook" should
   // surface Notifications even though the description doesn't say
@@ -41,39 +48,40 @@ interface Card {
 // perm (admin-only sections drop off for project-scoped users
 // instead of showing them and 403'ing on click).
 const CARDS: Card[] = [
-  // Account: anyone authed.
-  { href: "/settings/profile",       title: "Profile",       description: "Name, email, password.",                                                  icon: UserIcon,     group: "account",  keywords: "name email password 2fa twofa avatar" },
-  { href: "/settings/tokens",        title: "API tokens",    description: "Mint personal access tokens for the CLI + scripts.",                      icon: KeyRound,     group: "account",  keywords: "pat bearer cli script automation" },
-  { href: "/settings/notifications", title: "Notifications", description: "Discord webhooks, generic webhook fan-out, alerts.",                      icon: Bell,         group: "account",  keywords: "webhook slack discord email alert" },
+  // You: personal-scope settings, anyone authed.
+  { href: "/settings/profile",       title: "Profile",       description: "Name, email, password.",                                                  icon: UserIcon,     group: "you",  keywords: "name email password 2fa twofa avatar" },
+  { href: "/settings/tokens",        title: "API tokens",    description: "Mint personal access tokens for the CLI + scripts.",                      icon: KeyRound,     group: "you",  keywords: "pat bearer cli script automation" },
 
-  // Instance: shows for anyone, write-gated downstream.
-  { href: "/settings/nodes",            title: "Cluster nodes",    description: "Tag nodes with labels for placement; schedulable state.",            icon: Server,       group: "instance", keywords: "node labels placement cordon drain join bootstrap" },
-  { href: "/settings/config",           title: "Cluster config",   description: "Cluster-wide knobs (cert-manager email, base domain).",              icon: SettingsIcon, perm: Perms.SettingsRead,  group: "instance", keywords: "cert-manager letsencrypt domain dns base hostname" },
-  { href: "/settings/instance-secrets", title: "Instance secrets", description: "Env vars auto-mounted into every service in every project.",        icon: Globe,        perm: Perms.SettingsAdmin, group: "instance", keywords: "env environment variable global secret" },
-  { href: "/settings/github",           title: "GitHub App",       description: "Connect a GitHub App so kuso can monitor repos and trigger builds.", icon: Github,       perm: Perms.SettingsAdmin, group: "instance", keywords: "github app webhook repo build push pr" },
-  { href: "/settings/database",         title: "Cluster database", description: "First-class Postgres. One instance, per-project databases. Managed or external.", icon: Database, perm: Perms.SettingsAdmin, group: "instance", keywords: "postgres pg database shared cluster" },
-  { href: "/settings/instance-addons",  title: "Instance addons",  description: "Other shared services (Redis, MySQL, custom DSNs) that projects can attach.",  icon: Database,     perm: Perms.SettingsAdmin, group: "instance", keywords: "shared redis mysql clickhouse" },
-  { href: "/settings/builds",           title: "Build resources",  description: "Concurrency cap + per-build memory/CPU limits. Tune to your VM size.", icon: Cpu,         perm: Perms.SettingsAdmin, group: "instance", keywords: "kaniko buildpacks memory cpu limit concurrent" },
-  { href: "/settings/backups",          title: "Backups",          description: "Server backup/restore + S3 credentials for scheduled addon dumps.", icon: HardDrive,    perm: Perms.SettingsAdmin, group: "instance", keywords: "backup restore s3 dump pg_dump snapshot" },
-  { href: "/settings/updates",          title: "Updates",          description: "Self-update the kuso server + operator + CRDs.",                    icon: Package,      perm: Perms.SettingsAdmin, group: "instance", keywords: "version upgrade release self-update" },
-  { href: "/settings/import",           title: "Import from Coolify", description: "Migrate Coolify apps + dbs + services into kuso.",               icon: ArrowDown,    perm: Perms.SettingsAdmin, group: "instance", keywords: "coolify import migrate migration" },
+  // Cluster: state of this kuso deployment.
+  { href: "/settings/nodes",            title: "Cluster nodes",    description: "Tag nodes with labels for placement; schedulable state.",            icon: Server,       group: "cluster", keywords: "node labels placement cordon drain join bootstrap" },
+  { href: "/settings/config",           title: "Cluster config",   description: "Cluster-wide knobs (cert-manager email, base domain).",              icon: SettingsIcon, perm: Perms.SettingsRead,  group: "cluster", keywords: "cert-manager letsencrypt domain dns base hostname" },
+  { href: "/settings/database",         title: "Cluster database", description: "First-class Postgres. One instance, per-project databases. Managed or external.", icon: Database, perm: Perms.SettingsAdmin, group: "cluster", keywords: "postgres pg database shared cluster" },
+  { href: "/settings/instance-addons",  title: "Instance addons",  description: "Other shared services (Redis, MySQL, custom DSNs) that projects can attach.",  icon: Database,     perm: Perms.SettingsAdmin, group: "cluster", keywords: "shared redis mysql clickhouse" },
+  { href: "/settings/instance-secrets", title: "Instance secrets", description: "Env vars auto-mounted into every service in every project.",        icon: Globe,        perm: Perms.SettingsAdmin, group: "cluster", keywords: "env environment variable global secret" },
+  { href: "/settings/builds",           title: "Build resources",  description: "Concurrency cap + per-build memory/CPU limits. Tune to your VM size.", icon: Cpu,         perm: Perms.SettingsAdmin, group: "cluster", keywords: "kaniko buildpacks memory cpu limit concurrent" },
+  { href: "/settings/backups",          title: "Backups",          description: "Server backup/restore + S3 credentials for scheduled addon dumps.", icon: HardDrive,    perm: Perms.SettingsAdmin, group: "cluster", keywords: "backup restore s3 dump pg_dump snapshot" },
+  { href: "/settings/updates",          title: "Updates",          description: "Self-update the kuso server + operator + CRDs.",                    icon: Package,      perm: Perms.SettingsAdmin, group: "cluster", keywords: "version upgrade release self-update" },
 
-  // Admin: user/role management.
-  { href: "/settings/users",    title: "Users",    description: "Local users. OAuth users land here on first login.",                                  icon: Users,        perm: Perms.UserWrite, group: "admin", keywords: "user account login oauth invite" },
-  { href: "/settings/groups",   title: "Groups",   description: "Tenancy: instance roles + project memberships.",                                      icon: UsersRound,   perm: Perms.UserWrite, group: "admin", keywords: "group role permission tenancy member" },
+  // Team: users + groups + roles + audit log.
+  { href: "/settings/users",    title: "Users",    description: "Local users. OAuth users land here on first login.",                                  icon: Users,        perm: Perms.UserWrite, group: "team", keywords: "user account login oauth invite" },
+  { href: "/settings/groups",   title: "Groups",   description: "Tenancy: instance roles + project memberships.",                                      icon: UsersRound,   perm: Perms.UserWrite, group: "team", keywords: "group role permission tenancy member" },
   // /settings/activity is gated on audit:read, not settings:admin. The
   // page itself supports a non-admin "set the project filter" path
-  // (instance-wide list is server-403; project-scoped is Viewer+), so
-  // hiding the entire tile from non-admins was over-restrictive. Any
-  // user with audit:read can land here and pull the audit log for a
-  // project they're a member of.
-  { href: "/settings/activity", title: "Activity", description: "Audit log: who did what, when, against which project.",                               icon: Activity,     perm: Perms.AuditRead, group: "admin", keywords: "audit log activity history who deleted changed" },
+  // so users with audit:read can pull a project's audit log even
+  // without instance-wide rights.
+  { href: "/settings/activity", title: "Activity", description: "Audit log: who did what, when, against which project.",                               icon: Activity,     perm: Perms.AuditRead, group: "team", keywords: "audit log activity history who deleted changed" },
+
+  // Integrations: external wires.
+  { href: "/settings/github",        title: "GitHub App",   description: "Connect a GitHub App so kuso can monitor repos and trigger builds.", icon: Github,    perm: Perms.SettingsAdmin, group: "integrations", keywords: "github app webhook repo build push pr" },
+  { href: "/settings/notifications", title: "Notifications", description: "Discord webhooks, generic webhook fan-out, alerts.",                  icon: Bell,      group: "integrations", keywords: "webhook slack discord email alert" },
+  { href: "/settings/import",        title: "Import from Coolify", description: "Migrate Coolify apps + dbs + services into kuso.",             icon: ArrowDown, perm: Perms.SettingsAdmin, group: "integrations", keywords: "coolify import migrate migration" },
 ];
 
 const GROUPS: { id: Card["group"]; label: string; hint: string }[] = [
-  { id: "account",  label: "Account",  hint: "your identity + how you receive notifications" },
-  { id: "instance", label: "Instance", hint: "this kuso deployment" },
-  { id: "admin",    label: "Admin",    hint: "user + access management" },
+  { id: "cluster",      label: "Cluster",      hint: "this kuso deployment" },
+  { id: "team",         label: "Team",         hint: "users + access + audit" },
+  { id: "integrations", label: "Integrations", hint: "external services + notifications" },
+  { id: "you",          label: "You",          hint: "personal settings" },
 ];
 
 export default function SettingsIndex() {
@@ -177,12 +185,12 @@ export default function SettingsIndex() {
               ({ c }) => c.group === g.id
             );
             if (inGroup.length === 0) return null;
-            // Skip the section entirely only when every card in it is
-            // locked AND it's an admin section the user definitely
-            // can't see — keeps the page from looking empty while
-            // still surfacing what's there.
+            // Skip the section entirely when every card in it is
+            // locked, except for the "team" section — keep it visible
+            // (locked) so non-admins discover the surface and know
+            // who to ask for access.
             const anyVisible = inGroup.some(({ locked }) => !locked);
-            if (!anyVisible && g.id !== "admin") return null;
+            if (!anyVisible && g.id !== "team") return null;
             return (
               <section key={g.id}>
                 <header className="mb-3 flex items-baseline justify-between">

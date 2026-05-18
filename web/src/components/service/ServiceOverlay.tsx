@@ -2,8 +2,10 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { useService, useDrift } from "@/features/services";
+import { useService, useDrift, useBuilds, rollbackBuild } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { Undo2 } from "lucide-react";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { ServiceDeploymentsPanel } from "./overlay/ServiceDeploymentsPanel";
@@ -356,6 +358,19 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                     }
                     return null;
                   })()}
+                  {/* Primary rollback affordance. Surfaces in the
+                      header when the env is in a bad state so users
+                      don't have to hunt through Deployments tab to
+                      find a green build buried in superseded rows.
+                      Hidden when the env is healthy (then rollback
+                      lives on the row-level chip in Deployments). */}
+                  {service ? (
+                    <HeaderRollbackChip
+                      project={project}
+                      service={service}
+                      envFailed={status === "failed"}
+                    />
+                  ) : null}
                 </div>
               </div>
               <button
@@ -565,6 +580,141 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
       )}
     </AnimatePresence>
   );
+}
+
+// HeaderRollbackChip surfaces a one-click rollback affordance in the
+// overlay header when the service is in a bad state. The "bad state"
+// trigger is one of:
+//   - the current env is failed (env-level deploy failure), or
+//   - the most recent build is failed (build-level failure that
+//     didn't promote, so the env is still on an older image but the
+//     user might want to roll further back).
+// In both cases the chip targets the most recent SUCCEEDED build —
+// rolling forward to a known-good image. Hidden entirely when there's
+// no failure to recover from, no eligible succeeded build, or the
+// service has only one succeeded build (rolling back to the build
+// that's already active would no-op).
+function HeaderRollbackChip({
+  project,
+  service,
+  envFailed,
+}: {
+  project: string;
+  service: string;
+  envFailed: boolean;
+}) {
+  const builds = useBuilds(project, service);
+  const [confirming, setConfirming] = useState(false);
+  const qc = useQueryClient();
+  // Order newest → oldest. The hook already returns this order but
+  // we don't want to depend on that contract for a header surface;
+  // a stable copy + explicit sort keeps the chip safe against an
+  // upstream re-order.
+  const sorted = useMemo(() => {
+    const list = (builds.data ?? []).slice();
+    list.sort((a, b) => {
+      const ta = a.finishedAt ?? a.startedAt ?? "";
+      const tb = b.finishedAt ?? b.startedAt ?? "";
+      return tb.localeCompare(ta);
+    });
+    return list;
+  }, [builds.data]);
+  const mostRecent = sorted[0];
+  const recentFailed = mostRecent?.status === "failed";
+  const trigger = envFailed || recentFailed;
+  // Find the freshest succeeded build that ISN'T the one we're
+  // already on. We can't see "current active image" directly here,
+  // but rolling to the most-recent-succeeded that's NOT the most
+  // recent overall is a safe heuristic: when builds[0] is failed,
+  // we want the next green one down; when env is failed but builds[0]
+  // is succeeded, we still want to offer rollback (env failed after
+  // promote), and the user can re-roll-forward via Redeploy.
+  const target = useMemo(() => {
+    if (!trigger) return undefined;
+    if (recentFailed) {
+      return sorted.find((b) => b.status === "succeeded");
+    }
+    // env failed but builds[0] is succeeded — offer the previous
+    // succeeded build so the user can roll backwards.
+    const succeeded = sorted.filter((b) => b.status === "succeeded");
+    return succeeded[1] ?? succeeded[0];
+  }, [trigger, recentFailed, sorted]);
+  const m = useMutation({
+    mutationFn: (buildId: string) => rollbackBuild(project, service, buildId),
+    onSuccess: () => {
+      toast.success(`Rolled back to ${target?.commitSha?.slice(0, 7) ?? target?.id ?? "previous build"}`);
+      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });
+      qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+      setConfirming(false);
+    },
+    onError: (e) => {
+      toast.error(e instanceof Error ? e.message : "Rollback failed");
+      setConfirming(false);
+    },
+  });
+  if (!trigger || !target) return null;
+  const sha = target.commitSha?.slice(0, 7) ?? target.id.slice(0, 8);
+  // Age stamp for the title — gives the user a sense of "how far back
+  // am I rolling" without forcing them to open Deployments.
+  const ageStamp = target.finishedAt ? relativeAge(target.finishedAt) : "";
+  if (!confirming) {
+    return (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          setConfirming(true);
+        }}
+        title={`Roll production back to ${sha}${ageStamp ? ` (${ageStamp})` : ""}`}
+        className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] text-amber-200 hover:brightness-110"
+      >
+        <Undo2 className="h-3 w-3" />
+        rollback to {sha}
+        {ageStamp ? <span className="text-amber-200/70"> · {ageStamp}</span> : null}
+      </button>
+    );
+  }
+  return (
+    <span
+      onClick={(e) => e.stopPropagation()}
+      className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 font-mono text-[10px] text-amber-200"
+    >
+      roll to {sha}?
+      <button
+        type="button"
+        disabled={m.isPending}
+        onClick={() => m.mutate(target.id)}
+        className="rounded px-1 text-amber-300 hover:text-amber-100 disabled:opacity-50"
+      >
+        {m.isPending ? "…" : "yes"}
+      </button>
+      <button
+        type="button"
+        disabled={m.isPending}
+        onClick={() => setConfirming(false)}
+        className="rounded px-1 text-amber-200/60 hover:text-amber-100 disabled:opacity-50"
+      >
+        no
+      </button>
+    </span>
+  );
+}
+
+// relativeAge formats an ISO timestamp as a compact "Nm/Nh/Nd ago"
+// suffix for header chips. Falls back to the empty string on parse
+// failure so the chip degrades cleanly to "rollback to <sha>" with
+// no time hint.
+function relativeAge(iso: string): string {
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const secs = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (secs < 60) return `${secs}s ago`;
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.round(mins / 60);
+  if (hours < 48) return `${hours}h ago`;
+  const days = Math.round(hours / 24);
+  return `${days}d ago`;
 }
 
 function StatusDot({ status }: { status: string }) {

@@ -90,22 +90,34 @@ The three security items that block scaling up trust in the platform.
 
 ## Phase 4 — UX wins (cheap)
 
-- [ ] **#11 Settings nav grouping.** Group the 18 settings routes
-  into Cluster / Team / Integrations / You sections in the left rail.
-- [ ] **#12 Primary rollback affordance.** On `ServiceOverlay` header,
-  when the current env is degraded OR the last build is failed, add a
-  chip `Rollback to <build-name> (Xm ago)` next to the status pill.
-  Calls the existing rollback endpoint.
-- [ ] **#13 Split `ServiceDeploymentsPanel.tsx` (527 LOC).** Extract
-  `<BuildRow>`, `<BuildErrorBanner>`, `<BuildLogsModal>`. No
-  behaviour change.
-- [ ] **#14 Poll interval audit.** Bump per-node detail poll on
-  `settings/nodes/view.tsx:1185` from 5s → 15s. Keep the
-  bootstrap-status poll at 5s.
-- [ ] **#16 Truncate CHANGELOG.md.** Tail last 50 releases, archive
-  rest to `CHANGELOG.archive.md`. Update `cliff.toml` if needed to
-  cap output.
-- [ ] Commit: `ux: settings grouping, rollback chip, poll cleanup`
+- [x] **#11 Settings nav grouping.** Re-bucketed the 18 settings routes
+  into Cluster / Team / Integrations / You (was account/instance/admin).
+  Group hint copy updated; locked-section keep-visible rule moved to
+  the `team` group so non-admins still discover user-management.
+- [x] **#12 Primary rollback affordance.** Added `HeaderRollbackChip`
+  to `ServiceOverlay` header. Surfaces when the env is failed OR
+  the most recent build failed; targets the most recent succeeded
+  build with a relative-age hint. Inline yes/no confirm; reuses the
+  existing `rollbackBuild` mutation.
+- [x] **#13 Split `ServiceDeploymentsPanel.tsx` (527 → 237 LOC).**
+  New `BuildRow.tsx` (330 LOC) holds the row + BuildErrorBanner +
+  BuildLogs + RollbackButton + CancelButton + StatusBadge. The
+  panel keeps the data hooks, env-branch filter, and the new slim
+  `<BuildsList>` extraction.
+- [-] **#14 Poll interval audit.** Skipped — re-audit found no per-
+  node detail poll at 5s. The two 5s polls in `settings/nodes/view.tsx`
+  are bootstrap-token watchers, which the original review item said
+  should STAY at 5s. ProjectCanvas's 5s `latest-builds` poll has a
+  matching 5s staleTime so refocus doesn't double-fetch. No action
+  needed.
+- [x] **#16 Truncate CHANGELOG.md.** Split at release #50 — recent
+  releases stay in `CHANGELOG.md` (440 → ~440 LOC), older entries
+  pushed to `CHANGELOG.archive.md`. `hack/release.sh` updated to
+  regenerate via git-cliff into a tmp file then split + write both
+  files on every ship; the boundary stays at the most-recent 50.
+- [x] Bonus: stripped unused `Input` import from `welcome/page.tsx`
+  (pre-existing lint error that was blocking CI).
+- [x] Commit: `ux: settings grouping, rollback chip, deployments split, changelog cap`
 
 ## Phase 5 — Scalability (heavier)
 

@@ -1,31 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { LogStream } from "@/components/logs/LogStream";
-import { useBuilds, useTriggerBuild, rollbackBuild, cancelBuild } from "@/features/services";
+import { useBuilds, useTriggerBuild } from "@/features/services";
 import { useCan, Perms } from "@/features/auth";
 import type { BuildSummary } from "@/features/services/api";
 import type { KusoEnvironment } from "@/types/projects";
-import { relativeTime } from "@/lib/format";
-import { ChevronDown, ChevronRight, RotateCcw, ExternalLink, Undo2, X } from "lucide-react";
+import { RotateCcw, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
-import { cn } from "@/lib/utils";
+import { BuildRow, type BuildRowStatus } from "./BuildRow";
 
 interface Props {
   project: string;
   service: string;
   env?: KusoEnvironment;
 }
-
-// Status drives the badge. ACTIVE is now reserved for the build whose
-// image is the one the env is currently running — older successful
-// builds become SUPERSEDED so the user can tell which one's live at
-// a glance. Without this, every successful build wore an ACTIVE pill
-// forever, which lied during a redeploy.
-type Status = "active" | "superseded" | "failed" | "running" | "pending" | "queued" | "cancelled" | "unknown";
 
 // formatDuration turns a millisecond span into the kind of label the
 // build CI/CDs of the world print: "12s", "1m 04s", "3m 17s",
@@ -49,14 +39,10 @@ function formatDuration(ms: number): string {
 //   - running:   now - startedAt (live counter)
 //   - finished:  finishedAt - startedAt
 //   - missing:   "" so the renderer skips the whole pill
-// Lives in the shared util area so the same shape is used for the
-// live + completed cases — flips between them with no layout shift.
-function buildDuration(b: BuildSummary, status: Status): string {
+function buildDuration(b: BuildSummary, status: BuildRowStatus): string {
   const startMs = b.startedAt ? Date.parse(b.startedAt) : NaN;
   if (!Number.isFinite(startMs)) return "";
-  if (status === "running") {
-    return formatDuration(Date.now() - startMs);
-  }
+  if (status === "running") return formatDuration(Date.now() - startMs);
   const endMs = b.finishedAt ? Date.parse(b.finishedAt) : NaN;
   if (!Number.isFinite(endMs)) return "";
   return formatDuration(endMs - startMs);
@@ -75,34 +61,13 @@ function useNowTick(running: boolean) {
   }, [running]);
 }
 
-// triggerLabel renders the "by X" suffix shown on each build row. The
-// shape is human-friendly:
-//   - source=user + user=alice  → "by alice"
-//   - source=user (no name)     → "by you" (the only logged-in user
-//                                  on a single-tenant install)
-//   - source=webhook + user=bob → "by bob (webhook)"
-//   - source=webhook (no user)  → "via webhook"
-//   - source=api / system       → "via API" / "via system"
-//   - none                      → "" (renderer skips the suffix)
-function triggerLabel(b: BuildSummary): string {
-  const src = b.triggeredBy ?? "";
-  const user = b.triggeredByUser ?? "";
-  if (src === "user") {
-    return user ? `by ${user}` : "by you";
-  }
-  if (src === "webhook") {
-    return user ? `by ${user} (webhook)` : "via webhook";
-  }
-  if (src === "api") return "via API";
-  if (src === "system") return "via system";
-  return "";
-}
-
-function classify(b: BuildSummary, activeImageTag?: string): Status {
+// classify maps the raw build status string to the row's visual
+// status. ACTIVE is reserved for the build whose imageTag matches the
+// env's current image — older successes become SUPERSEDED so the
+// "currently live" build is unambiguous.
+function classify(b: BuildSummary, activeImageTag?: string): BuildRowStatus {
   const s = (b.status ?? "").toLowerCase();
   if (s === "succeeded") {
-    // No env tag yet (fresh service, never deployed) → first
-    // successful build is the one that promoted, so it's active.
     if (!activeImageTag) return "active";
     return b.imageTag && b.imageTag === activeImageTag ? "active" : "superseded";
   }
@@ -114,39 +79,13 @@ function classify(b: BuildSummary, activeImageTag?: string): Status {
   return "unknown";
 }
 
-function statusBadge(s: Status) {
-  const map: Record<Status, { label: string; cls: string }> = {
-    active:     { label: "ACTIVE",     cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" },
-    superseded: { label: "SUPERSEDED", cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
-    failed:     { label: "FAILED",     cls: "bg-red-500/10 text-red-400 border-red-500/30" },
-    running:    { label: "BUILDING",   cls: "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30" },
-    pending:    { label: "PENDING",    cls: "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-subtle)]" },
-    queued:     { label: "QUEUED",     cls: "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-subtle)] border-dashed" },
-    cancelled:  { label: "CANCELLED",  cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
-    unknown:    { label: "UNKNOWN",    cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
-  };
-  const m = map[s];
-  return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center rounded px-1.5 py-0.5 font-mono text-[9px] font-semibold tracking-widest border",
-        m.cls
-      )}
-    >
-      {m.label}
-    </span>
-  );
-}
-
 export function ServiceDeploymentsPanel({ project, service, env }: Props) {
   const builds = useBuilds(project, service);
   const trigger = useTriggerBuild(project, service);
   const [expanded, setExpanded] = useState<string | null>(null);
   const canDeploy = useCan(Perms.ServicesWrite);
   // Re-render every second while at least one build is running so
-  // the in-flight duration display ticks visibly. The hook itself
-  // skips the interval when nothing is running so finished-only
-  // panels don't burn cycles.
+  // the in-flight duration display ticks visibly.
   const anyRunning = (builds.data ?? []).some(
     (b) => (b.status ?? "").toLowerCase() === "running",
   );
@@ -203,325 +142,96 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
           <Skeleton className="h-16 w-full" />
           <Skeleton className="h-16 w-full" />
         </div>
-      ) : (() => {
-        // Filter to builds matching the active env's branch. Without
-        // this filter the deployments tab listed every build for the
-        // service across every env, so a PR-branch build would appear
-        // under production. Bug fix: each env shows only its own
-        // history.
-        const envBranch = env?.spec?.branch;
-        const visible = envBranch
-          ? (builds.data ?? []).filter((b) => (b.branch ?? "") === envBranch)
-          : (builds.data ?? []);
-        if (visible.length === 0) {
-          // The branch filter just emptied the list, but other branches
-          // may still have history — say so explicitly instead of
-          // pretending the service has never built.
-          const total = (builds.data ?? []).length;
-          if (envBranch && total > 0) {
-            const otherBranches = Array.from(
-              new Set((builds.data ?? []).map((b) => b.branch ?? "—"))
-            ).filter((b) => b !== envBranch);
-            return (
-              <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
-                No builds on branch <span className="font-mono text-[var(--text-secondary)]">{envBranch}</span>{" "}
-                yet — service has {total} build{total === 1 ? "" : "s"} on{" "}
-                {otherBranches.slice(0, 3).map((b, i) => (
-                  <span key={b}>
-                    {i > 0 ? ", " : ""}
-                    <span className="font-mono text-[var(--text-secondary)]">{b}</span>
-                  </span>
-                ))}
-                {otherBranches.length > 3 ? `, +${otherBranches.length - 3} more` : ""}.
-              </p>
-            );
-          }
-          return (
-            <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
-              No builds for this environment yet. Trigger one with the button above or push to the connected branch.
-            </p>
-          );
-        }
-        return (
-        <ul className="space-y-2">
-          {(() => {
-            // env.spec.image.tag is the source of truth for "what's
-            // actually running." Find the active build by matching
-            // imageTag; null when the env hasn't been promoted yet.
-            const envImage = (env?.spec as { image?: { tag?: string } } | undefined)?.image;
-            const activeTag = envImage?.tag;
-            return visible.map((b) => {
-              const s = classify(b, activeTag);
-              const sha = (b.commitSha ?? "").slice(0, 12);
-              const branch = b.branch ?? "—";
-              const ts = b.startedAt ?? b.finishedAt;
-              const created = ts ? relativeTime(ts) : "—";
-              const duration = buildDuration(b, s);
-              const isOpen = expanded === b.id;
-              return (
-                <li
-                  key={b.id}
-                  className={cn(
-                    // overflow-hidden is the fix for the redeploy
-                    // layout break — the expanded BuildLogs container
-                    // contains a <pre> that grows wider than its
-                    // parent and was punching through the rounded card.
-                    "overflow-hidden rounded-md border bg-[var(--bg-secondary)]",
-                    s === "failed" && "border-red-500/30",
-                    s === "active" && "border-emerald-500/30",
-                    s === "running" && "border-amber-500/30",
-                    !["failed", "active", "running"].includes(s) && "border-[var(--border-subtle)]"
-                  )}
-                >
-                  <div className="flex items-center gap-1 px-3 py-2.5">
-                    <button
-                      type="button"
-                      onClick={() => setExpanded(isOpen ? null : b.id)}
-                      className="flex flex-1 items-center gap-3 text-left"
-                    >
-                      {statusBadge(s)}
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium">
-                          <span className="font-mono">{sha || "—"}</span>
-                          <span className="ml-2 text-xs text-[var(--text-tertiary)]">on {branch}</span>
-                        </div>
-                        {b.commitMessage && (
-                          <div className="truncate text-xs text-[var(--text-secondary)]">
-                            {b.commitMessage}
-                          </div>
-                        )}
-                        {b.status === "failed" && b.errorMessage && (
-                          // Collapsed-state preview of the failure cause
-                          // so users don't have to expand the row to see
-                          // "why." Truncated to one line; the full text
-                          // is in the expanded banner above the log
-                          // viewport. title= surfaces the full string on
-                          // hover.
-                          <div
-                            className="truncate font-mono text-[11px] text-red-300/90"
-                            title={b.errorMessage}
-                          >
-                            ✗ {b.errorMessage}
-                          </div>
-                        )}
-                        <div className="font-mono text-[10px] text-[var(--text-tertiary)]">
-                          {created}
-                          {duration && (
-                            <>
-                              {" · "}
-                              <span className={cn(s === "running" && "text-[var(--building)]")}>
-                                {duration}
-                              </span>
-                            </>
-                          )}
-                          {triggerLabel(b) && (
-                            <>
-                              {" · "}
-                              <span>{triggerLabel(b)}</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                    {/* Rollback only for succeeded-but-superseded builds.
-                        Server validates phase=succeeded too; the
-                        client-side gate is just to hide the noise. */}
-                    {s === "superseded" && canDeploy && (
-                      <RollbackButton project={project} service={service} buildId={b.id} sha={sha} />
-                    )}
-                    {/* Cancel only for running/pending builds. Lets the
-                        user unjam a wedged kaniko Job without ssh; the
-                        server stamps phase=cancelled + tears down the
-                        Job. After v0.8.5 a second redeploy 409s while
-                        a build is in flight, so Cancel is the
-                        designated escape hatch. */}
-                    {(s === "running" || s === "pending" || s === "queued") && canDeploy && (
-                      <CancelButton project={project} service={service} buildId={b.id} />
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => setExpanded(isOpen ? null : b.id)}
-                      className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
-                    >
-                      {isOpen ? (
-                        <ChevronDown className="h-4 w-4 shrink-0" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 shrink-0" />
-                      )}
-                    </button>
-                  </div>
-                  {isOpen && (
-                    <div className="min-w-0 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]">
-                      {/* Failure-cause banner. Server's archiveLogs
-                          scans the build's tail logs + the kubelet's
-                          terminated reason and stamps the hit into
-                          kuso.sislelabs.com/build-message; the API
-                          surfaces it on BuildSummary.errorMessage.
-                          Without this, users were hand-grepping
-                          200-600 lines of kaniko/buildkit log noise
-                          to find the one-line cause. */}
-                      {b.status === "failed" && b.errorMessage && (
-                        <div className="border-b border-red-500/40 bg-red-500/10 px-3 py-2 text-[12px] text-red-200">
-                          <div className="flex items-start gap-2">
-                            <span aria-hidden className="select-none">✗</span>
-                            <div className="min-w-0 flex-1">
-                              <div className="font-mono text-[10px] uppercase tracking-widest text-red-300/80">
-                                build failure cause
-                              </div>
-                              <div className="mt-0.5 break-words font-mono text-[11px] leading-snug">
-                                {b.errorMessage}
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      )}
-                      <BuildLogs project={project} service={service} buildId={b.id} />
-                    </div>
-                  )}
-                </li>
-              );
-            });
-          })()}
-        </ul>
-        );
-      })()}
+      ) : (
+        <BuildsList
+          project={project}
+          service={service}
+          builds={builds.data ?? []}
+          env={env}
+          expanded={expanded}
+          setExpanded={setExpanded}
+          canDeploy={canDeploy}
+        />
+      )}
     </div>
   );
 }
 
-// BuildLogs streams the build pod's logs. LogStream is keyed on env
-// today; we encode the build id as env=build:<id> so the server can
-// route to the kaniko pod by name. If the server doesn't recognise
-// it we fall through to "no logs available" (the server side handles
-// that case gracefully).
-function BuildLogs({ project, service, buildId }: { project: string; service: string; buildId: string }) {
-  return (
-    <div className="h-72 p-2">
-      <LogStream
-        project={project}
-        service={service}
-        env={`build:${buildId}`}
-        height="100%"
-      />
-    </div>
-  );
-}
-
-// CancelButton — POSTs the build's cancel endpoint. No confirm step:
-// cancelling a build is reversible (the user can just trigger a new
-// one) and a confirm dialog on top of a wedged build is friction.
-// Disabled while the request is pending so a double-click doesn't
-// fire two POSTs.
-function CancelButton({
+// BuildsList does the env-branch filter, computes the current
+// active image tag, and renders a BuildRow per build. Extracted out
+// of the panel body so the panel's data-fetching + redeploy bar are
+// readable without scrolling past 100 lines of rendering.
+function BuildsList({
   project,
   service,
-  buildId,
+  builds,
+  env,
+  expanded,
+  setExpanded,
+  canDeploy,
 }: {
   project: string;
   service: string;
-  buildId: string;
+  builds: BuildSummary[];
+  env?: KusoEnvironment;
+  expanded: string | null;
+  setExpanded: (id: string | null) => void;
+  canDeploy: boolean;
 }) {
-  const qc = useQueryClient();
-  const m = useMutation({
-    mutationFn: () => cancelBuild(project, service, buildId),
-    onSuccess: () => {
-      toast.success("Build cancelled");
-      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });
-    },
-    onError: (e) => {
-      toast.error(e instanceof Error ? e.message : "Cancel failed");
-    },
-  });
-  return (
-    <button
-      type="button"
-      onClick={(e) => {
-        e.stopPropagation();
-        m.mutate();
-      }}
-      disabled={m.isPending}
-      title="Cancel this build"
-      className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:border-red-500/40 hover:bg-red-500/5 hover:text-red-400 disabled:opacity-50"
-    >
-      <X className="h-3 w-3" />
-      {m.isPending ? "…" : "cancel"}
-    </button>
-  );
-}
-
-// RollbackButton — tiny inline confirm/yes/no flow that POSTs the
-// build's rollback endpoint. Server validates phase=succeeded so the
-// only client-side check is "we're on a superseded build" gate.
-function RollbackButton({
-  project,
-  service,
-  buildId,
-  sha,
-}: {
-  project: string;
-  service: string;
-  buildId: string;
-  sha: string;
-}) {
-  const qc = useQueryClient();
-  const [confirming, setConfirming] = useState(false);
-  const m = useMutation({
-    mutationFn: () => rollbackBuild(project, service, buildId),
-    onSuccess: () => {
-      toast.success(`Rolled back to ${sha || buildId}`);
-      qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });
-      // The env list is keyed under "envs" everywhere else (see
-      // features/projects/hooks.ts useEnvs); this used to invalidate
-      // "environments" which never matched and left the Deployments
-      // tab showing stale ACTIVE badges after rollback.
-      qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
-      setConfirming(false);
-    },
-    onError: (e) => {
-      toast.error(e instanceof Error ? e.message : "Rollback failed");
-      setConfirming(false);
-    },
-  });
-  if (!confirming) {
+  // Filter to builds matching the active env's branch. Without this
+  // filter the deployments tab would list every build for the
+  // service across every env, so a PR-branch build would appear
+  // under production.
+  const envBranch = env?.spec?.branch;
+  const visible = envBranch ? builds.filter((b) => (b.branch ?? "") === envBranch) : builds;
+  if (visible.length === 0) {
+    const total = builds.length;
+    if (envBranch && total > 0) {
+      const otherBranches = Array.from(new Set(builds.map((b) => b.branch ?? "—"))).filter(
+        (b) => b !== envBranch
+      );
+      return (
+        <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
+          No builds on branch{" "}
+          <span className="font-mono text-[var(--text-secondary)]">{envBranch}</span> yet — service has{" "}
+          {total} build{total === 1 ? "" : "s"} on{" "}
+          {otherBranches.slice(0, 3).map((b, i) => (
+            <span key={b}>
+              {i > 0 ? ", " : ""}
+              <span className="font-mono text-[var(--text-secondary)]">{b}</span>
+            </span>
+          ))}
+          {otherBranches.length > 3 ? `, +${otherBranches.length - 3} more` : ""}.
+        </p>
+      );
+    }
     return (
-      <button
-        type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setConfirming(true);
-        }}
-        title={`Roll production back to ${sha || buildId}`}
-        className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:border-amber-500/40 hover:bg-amber-500/5 hover:text-amber-400"
-      >
-        <Undo2 className="h-3 w-3" />
-        rollback
-      </button>
+      <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
+        No builds for this environment yet. Trigger one with the button above or push to the connected
+        branch.
+      </p>
     );
   }
+  const envImage = (env?.spec as { image?: { tag?: string } } | undefined)?.image;
+  const activeTag = envImage?.tag;
   return (
-    <div
-      onClick={(e) => e.stopPropagation()}
-      className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/5 px-1.5 py-1"
-    >
-      <span className="font-mono text-[10px] text-amber-400">rollback to {sha || buildId.slice(0, 8)}?</span>
-      <Button
-        size="sm"
-        variant="ghost"
-        disabled={m.isPending}
-        onClick={() => m.mutate()}
-        className="h-5 px-2 text-[10px] text-amber-400"
-      >
-        {m.isPending ? "…" : "yes"}
-      </Button>
-      <Button
-        size="sm"
-        variant="ghost"
-        onClick={() => setConfirming(false)}
-        disabled={m.isPending}
-        className="h-5 px-2 text-[10px]"
-      >
-        no
-      </Button>
-    </div>
+    <ul className="space-y-2">
+      {visible.map((b) => {
+        const s = classify(b, activeTag);
+        return (
+          <BuildRow
+            key={b.id}
+            project={project}
+            service={service}
+            build={b}
+            status={s}
+            duration={buildDuration(b, s)}
+            isOpen={expanded === b.id}
+            canDeploy={canDeploy}
+            onToggle={() => setExpanded(expanded === b.id ? null : b.id)}
+          />
+        );
+      })}
+    </ul>
   );
 }
