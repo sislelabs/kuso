@@ -67,20 +67,26 @@ The three security items that block scaling up trust in the platform.
 
 ## Phase 3 — Mechanical refactors (file splits, no behaviour change)
 
-- [ ] **#4 Split `builds.go` (2953 LOC → 4 files).**
-  - `admission.go` — admitBuild, projectBuildCap, count* helpers
-  - `cards.go` — buildRichCard + URL/site helpers
-  - `lifecycle.go` — Create, Cancel, Rollback, supersedePriorBuilds
-  - `cache_pvc.go` — ensureBuildCachePVC, ensureCloneTokenSecret
-  - Leave a slim `builds.go` with Service struct + New() + List()
-  - Keep all existing tests green; no test-file churn
-- [ ] **#5 Split `projects.Service` god struct.** Define a
-  `handlers.ProjectsAPI` interface in
-  `server-go/internal/http/handlers/projects.go` containing only the
-  methods handlers call (~8-10). Handlers depend on the interface;
-  the concrete `*projects.Service` satisfies it. Doesn't move code,
-  just creates the seam.
-- [ ] Commit: `refactor: split builds.go + projects.Service interface seam`
+- [x] **#4 Split `builds.go` (2953 → 2007 LOC + 4 new files).**
+  - `admission.go` — admit/cap/count helpers, supersedePriorBuilds,
+    nsFor, ScanNamespaces, awaitPodGone, findRecent/findActive
+  - `cards.go` — EventEnvelope, EnvelopeField, EventEmitter,
+    buildRichCard, buildEventURL, lookupSiteURL, buildDurationMs,
+    siteHostFromURL, isHexSHA, formatBuildDuration, event consts
+  - `lifecycle.go` — Cancel, Rollback
+  - `cache_pvc.go` — ensureCloneTokenSecret, ensureBuildCachePVC
+  - `builds.go` keeps Service struct, New, List, Create (still the
+    integration centre), Poller, and the build-status archive/promote
+    machinery
+  - Tests untouched — all in same package, no API changes.
+- [x] **#5 `handlers.ProjectsAPI` interface seam.** New
+  `projects_api.go` in handlers package lists the 32 methods
+  handlers call. ProjectsHandler.Svc and ExportHandler.Projects
+  switched from `*projects.Service` → `ProjectsAPI`. Compile-time
+  guard (`var _ ProjectsAPI = (*projects.Service)(nil)`) catches
+  signature drift. Tests can now stand up a fake without the kube
+  + DB dependency chain.
+- [x] Commit: `refactor: split builds.go + projects.Service interface seam`
 
 ## Phase 4 — UX wins (cheap)
 

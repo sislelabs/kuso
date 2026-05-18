@@ -143,12 +143,14 @@ func apiv1UpdateToDomain(in apiv1.UpdateProjectRequest) projects.UpdateProjectRe
 	return out
 }
 
-// ProjectsHandler holds the projects.Service the routes call. The
+// ProjectsHandler wires HTTP routes onto the projects domain service.
+// Svc is a ProjectsAPI (interface, not concrete) so tests can stand
+// up a fake without the full projects.Service machinery. The
 // Kube/Namespace/Reconciler fields back the config-as-code endpoint
 // (POST /api/projects/{p}/apply); they're optional and the handler
 // returns 503 when nil.
 type ProjectsHandler struct {
-	Svc        *projects.Service
+	Svc        ProjectsAPI
 	Logger     *slog.Logger
 	Kube       *kube.Client
 	Namespace  string

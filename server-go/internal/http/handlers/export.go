@@ -38,7 +38,7 @@ import (
 // two snapshots taken in quick succession, but timestamps in the
 // underlying CRs will of course drift across them.
 type ExportHandler struct {
-	Projects       *projects.Service
+	Projects       ProjectsAPI
 	Addons         *addons.Service
 	ProjectSecrets *projectsecrets.Service
 	Kube           *kube.Client
