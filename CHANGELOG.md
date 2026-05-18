@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.4] — 2026-05-18
+
+### 🐛 Bug Fixes
+- Fix(networkpolicy): build pods can reach buildkit + github ([b0d858c](https://github.com/sislelabs/kuso/commit/b0d858c6bb606010f278a94870b844643b8dfc1a))
+
 ## [0.13.3] — 2026-05-18
 
 ### 🐛 Bug Fixes
@@ -463,11 +468,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(builds): tighten pending→running chip latency ([6f6c4f8](https://github.com/sislelabs/kuso/commit/6f6c4f80f4d20969510d2af7af32e5e9c77e50f3))
-
-## [0.9.32] — 2026-05-07
-
-### 🐛 Bug Fixes
-- Fix(builds): GitHub installation falls back to service-level ([29f841b](https://github.com/sislelabs/kuso/commit/29f841bdf508ce5bfd8041c336c3ab713f4350ec))
 
 
 ---
