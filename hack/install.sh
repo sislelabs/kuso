@@ -470,15 +470,21 @@ else
     --from-literal=database="kuso" \
     | kubectl apply -f - >/dev/null
 
-  # Single-node mode: kustomize the manifest before applying so the
-  # 3-instance default doesn't peg a 1-node test cluster as
-  # "schedulable=0/3". Operators with 1 worker pass
-  # KUSO_POSTGRES_SINGLE_NODE=true and accept the SPOF for dev.
+  # HA mode: the default manifest ships single-instance (1 primary,
+  # no standby) because kuso is single-tenant and typically deployed
+  # on one node, where HA-postgres buys nothing. Operators on ≥3-node
+  # production clusters who want streaming replication + automatic
+  # failover set KUSO_POSTGRES_HA=1, which patches the manifest to
+  # `instances: 3` + enables anti-affinity so the standbys land on
+  # different nodes than the primary.
+  #
+  # KUSO_POSTGRES_SINGLE_NODE is honoured for back-compat with older
+  # install commands but is a no-op now (single-node is the default).
   PG_MANIFEST=$(curl -sfL "${KUSO_RAW}/deploy/postgres.yaml")
-  if [[ "${KUSO_POSTGRES_SINGLE_NODE:-0}" == "1" || "${KUSO_POSTGRES_SINGLE_NODE:-false}" == "true" ]]; then
-    warn "KUSO_POSTGRES_SINGLE_NODE: scaling kuso-postgres Cluster to 1 instance (SPOF for dev only)"
-    PG_MANIFEST=$(echo "$PG_MANIFEST" | sed 's/^  instances: 3$/  instances: 1/' \
-      | sed 's/    enablePodAntiAffinity: true/    enablePodAntiAffinity: false/')
+  if [[ "${KUSO_POSTGRES_HA:-0}" == "1" || "${KUSO_POSTGRES_HA:-false}" == "true" ]]; then
+    log "KUSO_POSTGRES_HA: scaling kuso-postgres Cluster to 3 instances (primary + 2 standbys)"
+    PG_MANIFEST=$(echo "$PG_MANIFEST" | sed 's/^  instances: 1$/  instances: 3/' \
+      | sed 's/    enablePodAntiAffinity: false/    enablePodAntiAffinity: true/')
   fi
   echo "$PG_MANIFEST" | kubectl apply -f - >/dev/null
 

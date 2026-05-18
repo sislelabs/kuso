@@ -38,10 +38,13 @@
 #      Secret with the {dsn, host, port} composed-field shape
 #      kuso-server reads.
 #
-# Single-node dev clusters (1 worker): set
-# KUSO_POSTGRES_SINGLE_NODE=true on the install command, which
-# patches `instances: 1` and disables anti-affinity. Default install
-# assumes ≥3 nodes.
+# Default = single-instance (1 primary, no standby). kuso is single-
+# tenant and typically deployed on one node; HA-postgres on a 1-node
+# cluster buys you nothing (all replicas land on the same kernel +
+# disk) and costs ~440 MB RAM. Operators on ≥3-node production
+# clusters who want streaming replication + automatic failover set
+# KUSO_POSTGRES_HA=1 on the install command, which patches
+# `instances: 3` and enables anti-affinity.
 
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
@@ -57,11 +60,15 @@ spec:
   # upgrades via rolling restart of the standbys then a switchover.
   imageName: "ghcr.io/cloudnative-pg/postgresql:16.4"
 
-  # 3 instances = 1 primary + 2 streaming standbys. Tolerates one
-  # node failure without quorum loss; a second failure during
-  # recovery degrades to read-only (correct behaviour). Tune to 5
-  # for stricter availability targets at the cost of write latency.
-  instances: 3
+  # Default = 1 instance (single-node primary, no standby). kuso is
+  # single-tenant: one team per cluster, typically deployed on one
+  # node. A 3-instance cluster on a 1-node host gives you ZERO
+  # availability gain (all pods land on the same kernel + disk) and
+  # costs ~440 MB RAM + 1.5 GB disk. Operators running multi-node
+  # production should opt in to HA via KUSO_POSTGRES_HA=1, which
+  # install.sh rewrites this to `instances: 3` (1 primary + 2
+  # streaming standbys, tolerates one node failure).
+  instances: 1
 
   # Unsupervised: CNPG drives the failover automatically. The
   # alternative ("supervised") requires an operator to bless every
@@ -95,10 +102,12 @@ spec:
       cpu: 1000m
       memory: 1Gi
 
-  # Pod anti-affinity: the 3 instances must land on different nodes.
-  # Single-node dev clusters: install.sh kustomize-patches this off.
+  # Pod anti-affinity: only meaningful when instances > 1 (different
+  # nodes for primary + standbys). Default-off matches the single-
+  # instance default above; install.sh flips it on when the operator
+  # opts in to HA via KUSO_POSTGRES_HA=1.
   affinity:
-    enablePodAntiAffinity: true
+    enablePodAntiAffinity: false
     topologyKey: kubernetes.io/hostname
     # Schedulable on control-plane nodes; we tolerate the standard
     # taint so a 1-node "test cluster" can still schedule (with the

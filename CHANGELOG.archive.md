@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.34] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(logs): copy-friendly build logs ([94534ed](https://github.com/sislelabs/kuso/commit/94534ed3372d0d62d6ac6d6f56981c33b5242caf))
+
 ## [0.9.33] — 2026-05-07
 
 ### 🐛 Bug Fixes
