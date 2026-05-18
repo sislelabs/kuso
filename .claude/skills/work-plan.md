@@ -173,22 +173,49 @@ The three security items that block scaling up trust in the platform.
 
 ## Phase 6 — New features (big)
 
-- [ ] **F2 KusoRun CR.** One-shot task runner. New CRD, new helm
-  chart, new domain service, new HTTP/CLI/MCP surface. ~1-2 days.
-- [ ] **F1 Build dry-run.** `KusoBuild.spec.dryRun = true` mode that
-  hadolint-lints + checks base-image existence + first 3 stages.
-  Smaller than F2 — bolt onto existing build pipeline.
-- [ ] **F3 Default-deny NetworkPolicy + envref-derived allow rules.**
-  Per-namespace policy at create-time. Allow rules synthesized from
-  the `${{ X.URL }}` env-ref dependency graph.
-- [ ] **F4 Preview-DB cloning.** For `instancepg.Mode == managed`,
-  add `pg_dump | pg_restore` into preview env DB on PR open. Wire
-  into `internal/previewdb`.
-- [ ] **F5 Cost rollup page.** Aggregate `NodeMetric` + per-env
-  metrics by project. New page `/settings/usage`. Settable
-  `cost.cpuPerHour` in `Kuso` CR.
-- [ ] **F6 MCP `plan` verb.** New MCP tool returning the kube-level
-  diff for a desired-state spec without applying.
+- [~] **F2 KusoRun CR.** Scaffolding shipped: CRD YAML + helm chart
+  (Job-rendering with the parent service's image + envFromSecrets
+  + placement) + watches.yaml entry + Go types + GVR + CRUD helpers
+  + domain service (Create/List/Get/Cancel/Delete with image
+  snapshot from production env) + HTTP handler + CLI `kuso run
+  <project> <service> -- <command…>`. **Deferred**: phase-write
+  poller that watches Job terminal transitions and stamps run-phase
+  on the CR (currently CRs land in phase=pending and the operator
+  renders the Job, but observation needs the poller); MCP tool;
+  UI panel in the service overlay.
+- [~] **F1 Build dry-run.** Shipped: `KusoBuild.spec.dryRun` flag
+  flows from CreateBuildRequest → CR → buildkit args. When true,
+  buildkit uses `output=type=image,push=false` and skips
+  `--export-cache`; the poller's markSucceeded short-circuits
+  before promoteImage. CLI: `kuso build trigger --dry-run`. CRD
+  schema + golden updated. **Deferred**: hadolint integration as a
+  pre-buildkit init container.
+- [x] **F3 Default-deny NetworkPolicy.** Flipped kusoproject's
+  `networkPolicy.enabled` to true by default. The combined policy
+  stack (default-deny + allow-dns + allow-intra-project +
+  allow-platform + allow-registry + opt-in public-egress) was
+  already in place; this just makes it on-by-default. **Deferred**:
+  envref-derived fine-grained allow rules (A → only B vs.
+  A → every sibling); needs live-cluster validation.
+- [~] **F4 Preview-DB cloning.** Per-project addon clone path was
+  already shipping pre-Phase-6 — the `previewdb.Cloner` creates a
+  fresh `<source>-pr-<N>` addon CR and runs `pg_dump | psql` to
+  seed it. **Deferred**: instance-pg case (`CREATE DATABASE` inside
+  the cluster PG + dump/restore against the cluster's admin DSN);
+  the addon loop now skips instance-pg addons with a loud warn log
+  + a "preview shares source DB" hint so operators see the gap.
+- [x] **F5 Cost rollup page.** New `db/cost_rollup.go` aggregates
+  NodeMetric into per-(node, day) usage + per-node totals. New
+  `/api/usage` handler + `/settings/usage` page renders the 7/30/90
+  window picker + projection at operator-configured rates (spec.
+  cost.{cpuPerHour, memGBPerHour, currency} on the Kuso CR).
+  Per-project attribution explicitly deferred (NodeMetric is
+  per-node; per-project needs a new sampler dimension).
+- [x] **F6 MCP `plan` verb.** New `plan` tool that POSTs a kuso.yml
+  to `/api/projects/{p}/apply?dryRun=1` and returns the typed
+  diff. Read-only — callable from `--read-only` MCP mode via the
+  new `kusoclient.PostRaw(... readOnlyOk=true)` helper. Text
+  output mirrors `terraform plan` shape (`+ Services`, `~ Addons`).
 
 ---
 
