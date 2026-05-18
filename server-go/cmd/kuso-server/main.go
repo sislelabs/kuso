@@ -616,6 +616,19 @@ func main() {
 					BatchSize: 500,
 				}).Run(workCtx)
 			}
+			// Runs phase-write poller. Observes Job terminal
+			// transitions and stamps run-phase / completedAt /
+			// message annotations onto the parent KusoRun CR so
+			// the UI + CLI can render "this run succeeded" vs
+			// "this run failed with <msg>" without relying on raw
+			// kube. Leader-gated by living inside startSingletons.
+			if runSvc != nil && os.Getenv("KUSO_RUNS_POLLER_DISABLED") != "true" {
+				go (&runs.Poller{
+					Svc:      runSvc,
+					Interval: 5 * time.Second,
+					Logger:   logger.With("component", "runs-poller"),
+				}).Run(workCtx)
+			}
 			// instance-pg reconciler: harvests the cluster PG addon's
 			// conn Secret and writes the admin DSN into instance-secrets.
 			// Leader-gated because the DSN write races across replicas;

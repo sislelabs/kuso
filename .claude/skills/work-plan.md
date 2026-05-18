@@ -173,16 +173,15 @@ The three security items that block scaling up trust in the platform.
 
 ## Phase 6 — New features (big)
 
-- [~] **F2 KusoRun CR.** Scaffolding shipped: CRD YAML + helm chart
-  (Job-rendering with the parent service's image + envFromSecrets
-  + placement) + watches.yaml entry + Go types + GVR + CRUD helpers
-  + domain service (Create/List/Get/Cancel/Delete with image
-  snapshot from production env) + HTTP handler + CLI `kuso run
-  <project> <service> -- <command…>`. **Deferred**: phase-write
-  poller that watches Job terminal transitions and stamps run-phase
-  on the CR (currently CRs land in phase=pending and the operator
-  renders the Job, but observation needs the poller); MCP tool;
-  UI panel in the service overlay.
+- [~] **F2 KusoRun CR.** Now ~complete on the API/CLI/MCP side:
+  CRD + helm chart + watches.yaml + Go types + GVR + CRUD +
+  domain service + HTTP handler + CLI + phase-write poller +
+  MCP `run` tool. The poller watches Jobs for terminal transitions
+  and stamps phase=succeeded/failed/cancelled + completedAt +
+  message annotations onto the CR, leader-gated under
+  startSingletons. **Deferred**: UI panel in the service overlay
+  (Runs tab with status list + inline "fire one off" action). The
+  full backend surface is functional; only the UI tab remains.
 - [~] **F1 Build dry-run.** Shipped: `KusoBuild.spec.dryRun` flag
   flows from CreateBuildRequest → CR → buildkit args. When true,
   buildkit uses `output=type=image,push=false` and skips
