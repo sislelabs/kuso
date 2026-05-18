@@ -357,10 +357,14 @@ spec:
             - { containerPort: 3000, name: http }
           env:
             - { name: KUSO_HTTP_ADDR, value: ":3000" }
-            # Postgres DSN. The install script creates a Secret
-            # `kuso-postgres-conn` with key `dsn`; deploy-only
-            # installs that bring their own Postgres can replace
-            # this with their own valueFrom.
+            # Postgres DSN. The install script + the kuso-postgres-
+            # dsn-stamp Job (deploy/postgres.yaml) compose this and
+            # write it into the kuso-postgres-conn Secret. By default
+            # the DSN points at kuso-pgbouncer:6432 (transaction
+            # pooler) when PgBouncer is present, falling back to
+            # kuso-postgres-rw:5432 otherwise. Deploy-only installs
+            # bringing their own Postgres / pooler can replace this
+            # with their own valueFrom.
             - name: KUSO_DB_DSN
               valueFrom:
                 secretKeyRef:

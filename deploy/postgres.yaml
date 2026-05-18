@@ -185,8 +185,31 @@ spec:
                 kubectl -n kuso get secret kuso-postgres-conn -o yaml >&2
                 exit 1
               fi
-              host="kuso-postgres-rw"
-              port="5432"
+              # Wait for PgBouncer too — the DSN we stamp points at it
+              # (kuso-pgbouncer:6432, transaction-pool mode), so kuso-
+              # server can't connect until the pooler is up. Falls
+              # back to the direct rw Service after 60s of waiting so
+              # a broken/disabled PgBouncer doesn't wedge install
+              # forever; operators see the fallback in the log and
+              # know to investigate.
+              pgbouncer_host="kuso-pgbouncer"
+              pgbouncer_port="6432"
+              for i in $(seq 1 12); do
+                if kubectl -n kuso get service "$pgbouncer_host" >/dev/null 2>&1; then
+                  break
+                fi
+                echo "[stamp] waiting for kuso-pgbouncer Service ($i/12)…"
+                sleep 5
+              done
+              if kubectl -n kuso get service "$pgbouncer_host" >/dev/null 2>&1; then
+                host="$pgbouncer_host"
+                port="$pgbouncer_port"
+                echo "[stamp] routing DSN through PgBouncer at $host:$port"
+              else
+                host="kuso-postgres-rw"
+                port="5432"
+                echo "[stamp] PgBouncer not present — falling back to direct rw Service at $host:$port"
+              fi
               dsn="postgres://${user}:${pass}@${host}:${port}/${dbname}?sslmode=disable"
               kubectl -n kuso patch secret kuso-postgres-conn --type=merge \
                 -p "$(printf '{"stringData":{"dsn":"%s","host":"%s","port":"%s","username":"%s","user":"%s","password":"%s","database":"%s"}}' \
@@ -215,9 +238,11 @@ rules:
   # Wait for kuso-postgres-rw Service — CNPG creates it once the
   # primary is promoted. The Job uses `kubectl get service` to
   # check; this rule gives it just that one verb on that one name.
+  # kuso-pgbouncer is also listed because the Job prefers to route
+  # the DSN through PgBouncer when it's reachable.
   - apiGroups: [""]
     resources: [services]
-    resourceNames: [kuso-postgres-rw]
+    resourceNames: [kuso-postgres-rw, kuso-pgbouncer]
     verbs: [get]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -233,3 +258,181 @@ subjects:
   - kind: ServiceAccount
     name: kuso-postgres-dsn
     namespace: kuso
+---
+# PgBouncer in transaction-pooling mode.
+#
+# Why: CNPG primary defaults to max_connections=100. Three kuso-server
+# replicas (pool=25 each) + the operator + logship + addon pollers
+# fills that ceiling the moment a serious install scales horizontally.
+# PgBouncer fronts the primary with one process holding ~50 server
+# connections and multiplexes thousands of client connections onto
+# them — the per-client wait shifts from "wait for a free server
+# conn" (slow) to "wait for a free pool slot" (fast).
+#
+# Mode = transaction. Audited the server-go DB code for incompatible
+# usage before flipping this on:
+#   - PrepareContext lives on *Tx (transaction-scoped) → safe.
+#   - pg_advisory_xact_lock (bootstrap.go) → transaction-scoped → safe.
+#   - SET LOCAL statement_timeout (backups.go) → resets on COMMIT → safe.
+#   - No LISTEN/NOTIFY, no session-level prepared statements.
+#
+# When you bring your own managed Postgres (RDS / Crunchy / Supabase)
+# point KUSO_DB_DSN at the managed pooler directly and either delete
+# this Deployment or set its replicas to 0. The bundled CNPG cluster
+# stays present for any addon that's also project-scoped.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kuso-pgbouncer-config
+  namespace: kuso
+data:
+  pgbouncer.ini: |
+    [databases]
+    ; * matches any dbname client connects with. CNPG bootstrap names
+    ; the kuso DB after the install secret's `database` key; we keep
+    ; this generic so future migrations (different DB name) don't need
+    ; a config update.
+    * = host=kuso-postgres-rw port=5432
+
+    [pgbouncer]
+    listen_addr = 0.0.0.0
+    listen_port = 6432
+    auth_type = md5
+    auth_file = /etc/pgbouncer/userlist.txt
+    ; transaction pool: per-transaction multiplexing. See Mode comment
+    ; above for the audit confirming kuso's DB usage is compatible.
+    pool_mode = transaction
+    ; Per-pool server connections. With 3 kuso-server replicas the
+    ; pooler holds at most 3 × 50 = 150 client conns total against
+    ; ~50 actual server conns — comfortable under the default
+    ; CNPG max_connections=100 with ~50 headroom for CNPG internals,
+    ; replication, and admin tooling.
+    max_client_conn = 200
+    default_pool_size = 25
+    ; Reserve a couple of slots so admin SQL (psql -h ...) can always
+    ; get in even under heavy app load.
+    reserve_pool_size = 5
+    reserve_pool_timeout = 3
+    ; Bound the time clients wait for a server conn — slow timeout +
+    ; fast surfacing of "pool exhausted" beats unbounded wedge.
+    query_wait_timeout = 30
+    server_idle_timeout = 600
+    ; Logs to stderr so kubectl logs works.
+    log_connections = 0
+    log_disconnections = 0
+    log_pooler_errors = 1
+    ignore_startup_parameters = extra_float_digits,search_path
+    admin_users = kuso
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kuso-pgbouncer
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-pgbouncer
+spec:
+  selector:
+    app.kubernetes.io/name: kuso-pgbouncer
+  ports:
+    - name: pgbouncer
+      port: 6432
+      targetPort: 6432
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kuso-pgbouncer
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-pgbouncer
+spec:
+  # Single replica is fine: PgBouncer is sub-ms-latency and a 1-pod
+  # failure window matches kuso-server's tolerance. HA on the pooler
+  # is overkill until ~500 concurrent users; bump to 2+ if you scale
+  # past that and put a Service in front anyway.
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels: { app.kubernetes.io/name: kuso-pgbouncer }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: kuso-pgbouncer }
+    spec:
+      # kuso-platform priority so the kubelet picks a workload pod
+      # to evict before the pooler.
+      priorityClassName: kuso-platform
+      # Init container reads username/password from kuso-postgres-conn
+      # and writes the PgBouncer userlist.txt to a shared emptyDir.
+      # Done at pod start (not via a Secret mount) because PgBouncer's
+      # userlist format is `"user" "md5<hash>"` and CNPG bootstraps
+      # the user with a plaintext password we have to hash. Refreshing
+      # is a pod restart, which is fine — password rotation is a rare
+      # operator action.
+      initContainers:
+        - name: render-userlist
+          image: alpine/k8s:1.30.4
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              set -e
+              user="$(cat /etc/pg-conn/username)"
+              pass="$(cat /etc/pg-conn/password)"
+              if [ -z "$user" ] || [ -z "$pass" ]; then
+                echo "[render-userlist] FATAL: username/password missing from kuso-postgres-conn" >&2
+                exit 1
+              fi
+              # PgBouncer accepts plaintext passwords in userlist.txt too
+              # — auth_type=md5 lets it hash-and-compare on demand. Using
+              # plaintext here avoids re-implementing PostgreSQL's md5
+              # auth derivation (md5("$pass$user") with the salt).
+              printf '"%s" "%s"\n' "$user" "$pass" > /shared/userlist.txt
+              chmod 0440 /shared/userlist.txt
+          volumeMounts:
+            - { name: pg-conn, mountPath: /etc/pg-conn, readOnly: true }
+            - { name: shared, mountPath: /shared }
+      containers:
+        - name: pgbouncer
+          image: edoburu/pgbouncer:1.23.1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: pgbouncer, containerPort: 6432 }
+          # Skip the image's default entrypoint (it tries to render its
+          # own pgbouncer.ini from env vars); we provide a complete
+          # config + userlist via the mounts below. The binary lives
+          # at /usr/bin/pgbouncer in the edoburu image (Alpine apk
+          # install). If this path changes in a future image bump,
+          # `kubectl logs` will show CrashLoopBackoff with the
+          # bad-exec message.
+          command: ["/usr/bin/pgbouncer"]
+          args: ["/etc/pgbouncer/pgbouncer.ini"]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          readinessProbe:
+            tcpSocket: { port: 6432 }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 6432 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          volumeMounts:
+            - { name: config, mountPath: /etc/pgbouncer/pgbouncer.ini, subPath: pgbouncer.ini, readOnly: true }
+            - { name: shared, mountPath: /etc/pgbouncer/userlist.txt, subPath: userlist.txt, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: kuso-pgbouncer-config }
+        - name: pg-conn
+          secret:
+            secretName: kuso-postgres-conn
+            items:
+              - { key: username, path: username }
+              - { key: password, path: password }
+        - name: shared
+          emptyDir: {}
