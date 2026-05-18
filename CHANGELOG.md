@@ -5,6 +5,12 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.12.0] — 2026-05-18
+
+### ✨ Features
+- Feat(ui): /settings/database — first-class cluster Postgres page ([8c792ac](https://github.com/sislelabs/kuso/commit/8c792ac6e948b5f179314aa21830d24e795f29ce))
+- Feat(instance-pg): cluster-shared Postgres as a first-class service ([e288dee](https://github.com/sislelabs/kuso/commit/e288dee94e5ff6b2e4714bac51ff08bb6423b776))
+
 ## [0.11.6] — 2026-05-16
 
 ### 🐛 Bug Fixes
