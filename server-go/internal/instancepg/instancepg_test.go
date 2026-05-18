@@ -1,8 +1,10 @@
 package instancepg
 
 import (
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestBuildAdminDSN pins the DSN composition from the kusoaddon
@@ -207,6 +209,74 @@ func TestCoerceSSLMode(t *testing.T) {
 				t.Errorf("coerceSSLMode(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestHealthSnapshotSurface pins the three states GetStatus must
+// distinguish based on the periodic-probe snapshot:
+//
+//	zero snapshot       → don't flag unhealthy yet (fresh leader,
+//	                      first tick pending)
+//	probed + ok=true    → ready
+//	probed + ok=false   → unhealthy + LastError surfaces
+//
+// We bypass the live SELECT 1 by writing the snapshot directly.
+// Without this, a fresh boot would briefly flag the cluster PG as
+// down before the first Reconcile tick — the zero-snapshot guard
+// in GetStatus prevents that, and this test pins it.
+func TestHealthSnapshotSurface(t *testing.T) {
+	t.Run("zero snapshot stays at ready", func(t *testing.T) {
+		s := &Service{Logger: slog.Default()}
+		snap := s.healthSnapshotCopy()
+		if !snap.checkedAt.IsZero() {
+			t.Fatalf("zero snapshot should have zero checkedAt, got %v", snap.checkedAt)
+		}
+	})
+
+	t.Run("recorded ok stays at ready", func(t *testing.T) {
+		s := &Service{Logger: slog.Default()}
+		s.healthMu.Lock()
+		s.health = healthSnapshot{checkedAt: time.Now(), ok: true}
+		s.healthMu.Unlock()
+		snap := s.healthSnapshotCopy()
+		if !snap.ok || snap.checkedAt.IsZero() {
+			t.Fatalf("expected probed-ok snapshot, got %+v", snap)
+		}
+	})
+
+	t.Run("recorded failure surfaces unhealthy + error", func(t *testing.T) {
+		s := &Service{Logger: slog.Default()}
+		s.healthMu.Lock()
+		s.health = healthSnapshot{checkedAt: time.Now(), ok: false, err: "dial tcp: timeout"}
+		s.healthMu.Unlock()
+		snap := s.healthSnapshotCopy()
+		if snap.ok {
+			t.Fatalf("expected probed-failed snapshot, got ok=true")
+		}
+		if !strings.Contains(snap.err, "timeout") {
+			t.Errorf("err should carry probe error: %q", snap.err)
+		}
+	})
+}
+
+// TestProbeRecordOnFailure verifies probeAndRecord stamps the
+// snapshot even when the DSN points nowhere — best-effort by design.
+// We use a localhost DSN on a port nothing's listening on so pingDSN
+// errors fast (sub-second) and the test stays hermetic.
+func TestProbeRecordOnFailure(t *testing.T) {
+	s := &Service{Logger: slog.Default()}
+	// 127.0.0.1:1 is the unassigned-port convention; lib/pq's Open
+	// itself is lazy, but Ping errors immediately on connect refused.
+	s.probeAndRecord(t.Context(), "postgres://u:p@127.0.0.1:1/postgres?sslmode=disable&connect_timeout=2")
+	snap := s.healthSnapshotCopy()
+	if snap.checkedAt.IsZero() {
+		t.Fatal("checkedAt should be set after probe")
+	}
+	if snap.ok {
+		t.Fatal("probe against 127.0.0.1:1 should fail")
+	}
+	if snap.err == "" {
+		t.Error("err should be populated on probe failure")
 	}
 }
 

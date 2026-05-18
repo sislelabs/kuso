@@ -32,6 +32,7 @@ import (
 	"log/slog"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -78,6 +79,24 @@ type Service struct {
 	Namespace string
 	Secrets   *instancesecrets.Service
 	Logger    *slog.Logger
+
+	// healthMu guards the periodic-probe snapshot. The probe runs on
+	// the Reconcile tick (leader-only); GetStatus reads from any
+	// replica, so the read side must be safe under concurrent writes.
+	healthMu sync.RWMutex
+	health   healthSnapshot
+}
+
+// healthSnapshot is the result of the last `SELECT 1` probe against
+// the admin DSN. Used by GetStatus to fill the `unhealthy` phase +
+// the LastError field documented at Status.Phase. Zero value means
+// "no probe has run yet" — GetStatus treats that as "ready" rather
+// than "unhealthy" so a freshly-booted leader doesn't briefly flag
+// the cluster PG as down before the first tick.
+type healthSnapshot struct {
+	checkedAt time.Time
+	ok        bool
+	err       string
 }
 
 // New constructs a Service. Namespace defaults to "kuso" when empty
@@ -165,8 +184,9 @@ type ConfigureExternalRequest struct {
 // Designed to be hit by a UI poller every few seconds — the call walks
 // at most three kube reads (Secret, addon CR, per-project addon list)
 // plus the in-cluster DSN parse. No network calls to the PG itself
-// (a SELECT 1 would be nice but adds latency to the poll; we capture
-// the most recent connect-time outcome via LastError instead).
+// on the read side — the leader's Reconcile loop owns the periodic
+// SELECT 1 and stamps its outcome into healthSnapshot; GetStatus
+// reads that snapshot under healthMu.
 func (s *Service) GetStatus(ctx context.Context) (Status, error) {
 	out := Status{Mode: ModeNone}
 
@@ -200,7 +220,16 @@ func (s *Service) GetStatus(ctx context.Context) (Status, error) {
 		out.Host = host
 		out.Port = port
 		out.User = user
+		// Default to ready; the health-probe snapshot can downgrade us
+		// to "unhealthy" + populate LastError. A zero snapshot (never
+		// probed yet — fresh leader, first tick still pending) keeps
+		// us at ready rather than flickering "unhealthy" briefly.
 		out.Phase = "ready"
+		snap := s.healthSnapshotCopy()
+		if !snap.checkedAt.IsZero() && !snap.ok {
+			out.Phase = "unhealthy"
+			out.LastError = snap.err
+		}
 	} else if out.Mode == ModeManaged {
 		// Addon exists but no DSN yet — still provisioning. Distinguish
 		// "helm in-flight" from "helm failed" via the addon's status
@@ -442,22 +471,31 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if addon == nil {
-		return nil // nothing to reconcile
-	}
-	// If the admin DSN is already set, nothing to do — the PG is up
-	// and the per-project provisioner has what it needs.
 	dsn, err := s.readAdminDSN(ctx)
 	if err != nil {
 		return err
 	}
-	if dsn != "" {
+	// Path A: no managed addon — only external mode is possible. If
+	// an external DSN is present run a health probe so the unhealthy
+	// phase surfaces in the UI; otherwise nothing to do.
+	if addon == nil {
+		if dsn != "" {
+			s.probeAndRecord(ctx, dsn)
+		}
 		return nil
 	}
+	// Path B: managed addon exists, DSN already registered. Probe to
+	// keep the unhealthy phase honest.
+	if dsn != "" {
+		s.probeAndRecord(ctx, dsn)
+		return nil
+	}
+	// Path C: managed addon exists, DSN not yet harvested. Walk the
+	// conn Secret → DSN → instance-secrets handoff.
+	//
 	// Conn Secret name follows the chart's convention:
 	// "<project>-<addon>-conn". For us that's "__instance__-pg-conn".
-	connSecretName := connSecretName()
-	sec, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Get(ctx, connSecretName, metav1.GetOptions{})
+	sec, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Get(ctx, connSecretName(), metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			// Chart hasn't materialized the Secret yet. Reconciler
@@ -476,7 +514,40 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		return fmt.Errorf("store managed admin dsn: %w", err)
 	}
 	s.Logger.Info("instancepg: managed PG ready, admin DSN registered")
+	// Probe on the same tick so the UI sees "ready" rather than
+	// "unhealthy" the moment the DSN lands — pingDSN's own 5s timeout
+	// bounds the wait.
+	s.probeAndRecord(ctx, adminDSN)
 	return nil
+}
+
+// probeAndRecord runs a single SELECT 1 against the admin DSN and
+// stores the outcome under healthMu. Best-effort: any error becomes
+// the recorded LastError, and the unhealthy phase will surface in the
+// next GetStatus call. The probe itself is bounded by pingDSN's 5s
+// timeout; we never block Reconcile longer than that.
+func (s *Service) probeAndRecord(ctx context.Context, dsn string) {
+	err := pingDSN(ctx, dsn)
+	snap := healthSnapshot{checkedAt: time.Now(), ok: err == nil}
+	if err != nil {
+		snap.err = err.Error()
+	}
+	s.healthMu.Lock()
+	s.health = snap
+	s.healthMu.Unlock()
+	if err != nil {
+		s.Logger.Warn("instancepg: health probe failed", "err", err)
+	}
+}
+
+// healthSnapshotCopy returns a value copy of the current snapshot so
+// GetStatus can read without holding the mutex past its own scope.
+// Zero-value snapshot ("never probed") returns ok=false but the caller
+// distinguishes via the zero checkedAt.
+func (s *Service) healthSnapshotCopy() healthSnapshot {
+	s.healthMu.RLock()
+	defer s.healthMu.RUnlock()
+	return s.health
 }
 
 // Run is a long-lived loop that calls Reconcile every interval.
