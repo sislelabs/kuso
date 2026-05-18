@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.33] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(builds): tighten pending→running chip latency ([6f6c4f8](https://github.com/sislelabs/kuso/commit/6f6c4f80f4d20969510d2af7af32e5e9c77e50f3))
+
 ## [0.9.32] — 2026-05-07
 
 ### 🐛 Bug Fixes
