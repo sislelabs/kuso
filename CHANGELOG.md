@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.5] — 2026-05-18
+
+### 🐛 Bug Fixes
+- Fix(networkpolicy): allow traefik + cert-manager from their own namespaces ([55d91f8](https://github.com/sislelabs/kuso/commit/55d91f87bf992dcc471f651f42e03339d8c281b3))
+
 ## [0.13.4] — 2026-05-18
 
 ### 🐛 Bug Fixes
@@ -463,11 +468,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(logs): copy-friendly build logs ([94534ed](https://github.com/sislelabs/kuso/commit/94534ed3372d0d62d6ac6d6f56981c33b5242caf))
-
-## [0.9.33] — 2026-05-07
-
-### 🐛 Bug Fixes
-- Fix(builds): tighten pending→running chip latency ([6f6c4f8](https://github.com/sislelabs/kuso/commit/6f6c4f80f4d20969510d2af7af32e5e9c77e50f3))
 
 
 ---
