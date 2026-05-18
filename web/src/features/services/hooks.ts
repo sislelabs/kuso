@@ -3,6 +3,8 @@
 import { useEffect, useRef } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  cancelRun,
+  createRun,
   deleteService,
   getDetectedEnv,
   getDrift,
@@ -12,10 +14,13 @@ import {
   listBuilds,
   listErrors,
   listAddonSecretKeys,
+  listRuns,
   patchService,
+  runPhase,
   setServiceEnv,
   triggerBuild,
   wakeService,
+  type CreateRunRequest,
   type PatchServiceBody,
 } from "./api";
 import type { KusoEnvVar } from "@/types/projects";
@@ -208,5 +213,54 @@ export function useAddonSecretKeys(project: string, addon: string) {
     queryFn: () => listAddonSecretKeys(project, addon),
     enabled: !!project && !!addon,
     staleTime: 5 * 60_000,
+  });
+}
+
+// ----- KusoRun hooks ------------------------------------------------------
+
+export const runsQueryKey = (project: string, service: string) =>
+  ["projects", project, "services", service, "runs"] as const;
+
+// useRuns lists the recent KusoRuns for (project, service). Polling
+// cadence mirrors useBuilds: fast (3s) while an in-flight run is
+// observable, slow (15s) when everything is settled. The poller on
+// the server stamps phase annotations every 5s, so 3s on the client
+// catches transitions within one round-trip.
+export function useRuns(project: string, service: string) {
+  return useQuery({
+    queryKey: runsQueryKey(project, service),
+    queryFn: () => listRuns(project, service),
+    enabled: !!project && !!service,
+    refetchInterval: (q) => {
+      const list = q.state.data ?? [];
+      // newest-first by server (List reverses the kube order). Any
+      // in-flight phase keeps us on the fast cadence.
+      for (const r of list.slice(0, 5)) {
+        const p = runPhase(r);
+        if (p === "pending" || p === "running") return 3_000;
+      }
+      return 15_000;
+    },
+    refetchIntervalInBackground: false,
+  });
+}
+
+export function useCreateRun(project: string, service: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (body: CreateRunRequest) => createRun(project, service, body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: runsQueryKey(project, service) });
+    },
+  });
+}
+
+export function useCancelRun(project: string, service: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (runName: string) => cancelRun(project, runName),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: runsQueryKey(project, service) });
+    },
   });
 }

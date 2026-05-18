@@ -173,15 +173,14 @@ The three security items that block scaling up trust in the platform.
 
 ## Phase 6 — New features (big)
 
-- [~] **F2 KusoRun CR.** Now ~complete on the API/CLI/MCP side:
-  CRD + helm chart + watches.yaml + Go types + GVR + CRUD +
-  domain service + HTTP handler + CLI + phase-write poller +
-  MCP `run` tool. The poller watches Jobs for terminal transitions
-  and stamps phase=succeeded/failed/cancelled + completedAt +
-  message annotations onto the CR, leader-gated under
-  startSingletons. **Deferred**: UI panel in the service overlay
-  (Runs tab with status list + inline "fire one off" action). The
-  full backend surface is functional; only the UI tab remains.
+- [x] **F2 KusoRun CR.** End-to-end shipped: CRD + helm chart +
+  watches.yaml + Go types + GVR + CRUD + domain service + HTTP
+  handler + CLI + phase-write poller + MCP `run` tool + UI Runs
+  tab. The Runs tab in ServiceOverlay shows recent runs with phase
+  pills and exposes an inline composer (command argv + KEY=VAL env
+  overlay + timeout) for firing new runs. useRuns polls 3s while
+  pending/running, 15s when settled — mirrors useBuilds. Cancel
+  button shows for in-flight runs to services:write users.
 - [~] **F1 Build dry-run.** Shipped: `KusoBuild.spec.dryRun` flag
   flows from CreateBuildRequest → CR → buildkit args. When true,
   buildkit uses `output=type=image,push=false` and skips

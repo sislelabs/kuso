@@ -12,10 +12,14 @@ export {
   usePatchService,
   useAddonSecretKeys,
   useErrors,
+  useRuns,
+  useCreateRun,
+  useCancelRun,
   serviceQueryKey,
   serviceEnvQueryKey,
   buildsQueryKey,
   errorsQueryKey,
+  runsQueryKey,
 } from "./hooks";
 export {
   listServiceCrons,
@@ -27,6 +31,9 @@ export {
   searchServiceLogs,
   listErrors,
   triggerBuild,
+  runPhase,
+  runMessage,
+  runCompletedAt,
 } from "./api";
 export type {
   BuildSummary,
@@ -36,4 +43,6 @@ export type {
   CreateCronBody,
   LogLine,
   LogSearchResponse,
+  KusoRun,
+  CreateRunRequest,
 } from "./api";

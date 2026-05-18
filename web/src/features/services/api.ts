@@ -364,3 +364,78 @@ export async function searchServiceLogs(
     `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/logs/search${query ? "?" + query : ""}`
   );
 }
+
+// KusoRun — one-shot task pod bound to a service's most-recent
+// succeeded build image. Surfaced in the Runs tab.
+//
+// The server returns the full KusoRun CR (metadata + spec). We type
+// just the fields the UI renders + the run-phase annotation the
+// poller stamps; the rest passes through unobserved so a server
+// schema bump doesn't break the client.
+export interface KusoRun {
+  metadata: {
+    name: string;
+    namespace: string;
+    creationTimestamp?: string;
+    annotations?: Record<string, string>;
+  };
+  spec: {
+    project: string;
+    service: string;          // CR-name shape: <project>-<service>
+    command: string[];
+    env?: { name: string; value: string }[];
+    timeoutSeconds?: number;
+    triggeredBy?: string;     // "user" | "api" | "system"
+    triggeredByUser?: string;
+    done?: boolean;
+    image?: { repository: string; tag: string; pullPolicy?: string };
+  };
+}
+
+// runPhase plucks the phase annotation, defaulting to "pending" so
+// fresh CRs render with the right badge before the poller fires.
+export function runPhase(r: KusoRun): string {
+  return r.metadata.annotations?.["kuso.sislelabs.com/run-phase"] ?? "pending";
+}
+
+// runMessage returns the failure reason the poller stamps on
+// terminal failure. Empty otherwise.
+export function runMessage(r: KusoRun): string {
+  return r.metadata.annotations?.["kuso.sislelabs.com/run-message"] ?? "";
+}
+
+// runCompletedAt returns the RFC3339 completion time the poller
+// stamps. Empty for in-flight runs.
+export function runCompletedAt(r: KusoRun): string {
+  return r.metadata.annotations?.["kuso.sislelabs.com/run-completed-at"] ?? "";
+}
+
+export interface CreateRunRequest {
+  command: string[];
+  env?: { name: string; value: string }[];
+  timeoutSeconds?: number;
+}
+
+export async function listRuns(project: string, service: string): Promise<KusoRun[]> {
+  return api(`/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/runs`);
+}
+
+export async function createRun(
+  project: string,
+  service: string,
+  body: CreateRunRequest,
+): Promise<KusoRun> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/runs`,
+    { method: "POST", body },
+  );
+}
+
+// cancelRun stamps phase=cancelled and tears down the underlying
+// Job. 204 on success; 400 if already terminal; 404 for unknown name.
+export async function cancelRun(project: string, run: string): Promise<void> {
+  await api(
+    `/api/projects/${encodeURIComponent(project)}/runs/${encodeURIComponent(run)}/cancel`,
+    { method: "POST" },
+  );
+}

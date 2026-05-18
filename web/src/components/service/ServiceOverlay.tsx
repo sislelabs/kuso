@@ -12,6 +12,7 @@ import { ServiceDeploymentsPanel } from "./overlay/ServiceDeploymentsPanel";
 import { ServiceVariablesPanel } from "./overlay/ServiceVariablesPanel";
 import { ServiceMetricsPanel } from "./overlay/ServiceMetricsPanel";
 import { ServiceCronsPanel } from "./overlay/ServiceCronsPanel";
+import { ServiceRunsPanel } from "./overlay/ServiceRunsPanel";
 import { ServiceLogsPanel } from "./overlay/ServiceLogsPanel";
 import { ServiceErrorsPanel } from "./overlay/ServiceErrorsPanel";
 import { ServiceSettingsPanel } from "./overlay/ServiceSettingsPanel";
@@ -65,7 +66,7 @@ export function useOverlayDirty(
   }, [api, panelKey, dirty, opts?.onSave, opts?.onDiscard, opts?.saving, opts?.saveError]);
 }
 
-type Tab = "deployments" | "variables" | "metrics" | "logs" | "errors" | "crons" | "settings";
+type Tab = "deployments" | "variables" | "metrics" | "logs" | "errors" | "crons" | "runs" | "settings";
 // Settings is pinned to the right of the strip (rendered outside
 // the scrollable container) because it holds the destructive
 // actions — Delete service, change runtime, change port, change
@@ -80,6 +81,7 @@ const MAIN_TABS: { id: Tab; label: string }[] = [
   { id: "logs", label: "Logs" },
   { id: "errors", label: "Errors" },
   { id: "crons", label: "Crons" },
+  { id: "runs", label: "Runs" },
 ];
 const PINNED_TAB: { id: Tab; label: string } = { id: "settings", label: "Settings" };
 
@@ -492,6 +494,11 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                     {tab === "crons" && (
                       <div className="p-5">
                         <ServiceCronsPanel project={project} service={service ?? ""} />
+                      </div>
+                    )}
+                    {tab === "runs" && (
+                      <div className="p-5">
+                        <ServiceRunsPanel project={project} service={service ?? ""} />
                       </div>
                     )}
                     {tab === "settings" && (
