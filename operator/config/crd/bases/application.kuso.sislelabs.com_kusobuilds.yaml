@@ -104,6 +104,13 @@ spec:
                 done:
                   type: boolean
                   default: false
+                # dryRun runs the build through compile + image-layer
+                # assembly but skips the registry push AND the env
+                # promotion. Surfaces "does this PR build?" feedback
+                # without burning registry storage or rolling prod.
+                dryRun:
+                  type: boolean
+                  default: false
                 # Strategy-specific configuration. Both blocks are
                 # preserve-unknown-fields-friendly since the chart
                 # interprets them; the server only needs to round-trip.

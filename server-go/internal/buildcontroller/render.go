@@ -709,6 +709,12 @@ func renderBuildkitContainer(b *kube.KusoBuild, strategy string, res corev1.Reso
 	image := fmt.Sprintf("%s:%s", b.Spec.Image.Repository, b.Spec.Image.Tag)
 	cache := fmt.Sprintf("%s:buildcache", b.Spec.Image.Repository)
 
+	// DRY_RUN=1 flips buildkit to a parse + compile mode that doesn't
+	// push to the registry and doesn't update the cache. The build
+	// pod still goes through the full Dockerfile evaluation — base
+	// image pull, every COPY/RUN/etc — so a broken stage surfaces
+	// the same error as a real build. The poller checks spec.dryRun
+	// on terminal transition and skips env promotion.
 	script := `CTX="/workspace/src/$REPO_PATH"
 DF=$DOCKERFILE
 IMAGE=$IMAGE_REF
@@ -716,7 +722,7 @@ CACHE=$CACHE_REF
 BUILDKIT_HOST=$BUILDKIT_ADDR
 
 echo "==> buildkit: daemon=$BUILDKIT_HOST"
-echo "==> buildkit: image=$IMAGE cache=$CACHE df=$DF ctx=$CTX"
+echo "==> buildkit: image=$IMAGE cache=$CACHE df=$DF ctx=$CTX dryRun=${DRY_RUN:-0}"
 
 for i in $(seq 1 30); do
   if buildctl --addr "$BUILDKIT_HOST" debug workers >/dev/null 2>&1; then
@@ -725,6 +731,21 @@ for i in $(seq 1 30); do
   echo "==> waiting for buildkitd ($i/30)..."
   sleep 1
 done
+
+if [ "${DRY_RUN:-0}" = "1" ]; then
+  # Dry-run: parse + compile, no push, no cache mutation. The image
+  # is discarded after the buildkit run completes.
+  exec buildctl \
+    --addr "$BUILDKIT_HOST" \
+    build \
+    --frontend dockerfile.v0 \
+    --local context="$CTX" \
+    --local dockerfile="$CTX" \
+    --opt filename="$DF" \
+    --output type=image,name="$IMAGE",push=false,registry.insecure=true \
+    --import-cache type=registry,ref="$CACHE",registry.insecure=true \
+    --progress plain
+fi
 
 exec buildctl \
   --addr "$BUILDKIT_HOST" \
@@ -739,6 +760,10 @@ exec buildctl \
   --progress plain
 `
 
+	dryRun := "0"
+	if b.Spec.DryRun {
+		dryRun = "1"
+	}
 	envs := []corev1.EnvVar{
 		{Name: "HOME", Value: "/tmp"},
 		{Name: "REPO_PATH", Value: path},
@@ -746,6 +771,7 @@ exec buildctl \
 		{Name: "IMAGE_REF", Value: image},
 		{Name: "CACHE_REF", Value: cache},
 		{Name: "BUILDKIT_ADDR", Value: defaultBuildkitHost},
+		{Name: "DRY_RUN", Value: dryRun},
 	}
 	if hasAuthSecret(b) {
 		envs = append(envs, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: "/tmp/.docker"})

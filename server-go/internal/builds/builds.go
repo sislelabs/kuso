@@ -450,6 +450,14 @@ type CreateBuildRequest struct {
 	TriggeredBy     string `json:"-"` // user|webhook|api|system
 	TriggeredByUser string `json:"-"`
 	CommitMessage   string `json:"-"`
+	// DryRun runs the build through compile + image-layer assembly
+	// but skips the registry push and env promotion. The build CR
+	// carries spec.dryRun=true; the buildkit container picks up
+	// `output=type=image,push=false` from that; the poller treats
+	// a successful dry-run as terminal-with-no-promotion. Surfaces
+	// "does this PR build?" feedback without burning registry
+	// storage or rolling prod.
+	DryRun bool `json:"dryRun,omitempty"`
 }
 
 // shaRE matches a full 40-char git SHA.
@@ -740,6 +748,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		Repo:                 &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
 		GithubInstallationID: installationID,
 		Strategy:             strategy,
+		DryRun:               req.DryRun,
 		// Carry strategy-specific configuration from the service
 		// spec onto the build CR so the helm chart can render the
 		// right command line. Empty pointers leave the chart on
@@ -1774,6 +1783,14 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 			DurationMs:  buildDurationMs(b),
 			Fields:      fields,
 		})
+	}
+	// DryRun builds skip env promotion — the image was never pushed,
+	// so pointing the env's image tag at it would just crashloop. The
+	// success notification + log archive above still fire so the
+	// caller can confirm the dry-run completed cleanly.
+	if b.Spec.DryRun {
+		p.logger().Info("dry-run build succeeded; skipping promote", "build", b.Name)
+		return nil
 	}
 	return p.promoteImage(ctx, ns, b)
 }

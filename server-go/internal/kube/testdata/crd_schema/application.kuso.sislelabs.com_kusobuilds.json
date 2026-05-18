@@ -43,6 +43,10 @@
             "default": false,
             "type": "boolean"
           },
+          "dryRun": {
+            "default": false,
+            "type": "boolean"
+          },
           "githubInstallationId": {
             "format": "int64",
             "type": "integer"

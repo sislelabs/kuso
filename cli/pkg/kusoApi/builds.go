@@ -8,6 +8,10 @@ import "github.com/go-resty/resty/v2"
 type CreateBuildRequest struct {
 	Branch string `json:"branch,omitempty"`
 	Ref    string `json:"ref,omitempty"`
+	// DryRun runs compile + image-layer assembly but skips registry
+	// push and env promotion. Use for "does this PR even build?"
+	// without burning storage or rolling prod.
+	DryRun bool `json:"dryRun,omitempty"`
 }
 
 func (k *KusoClient) ListBuilds(project, service string) (*resty.Response, error) {

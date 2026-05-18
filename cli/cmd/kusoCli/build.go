@@ -40,6 +40,7 @@ var buildCmd = &cobra.Command{
 var (
 	buildTriggerBranch string
 	buildTriggerRef    string
+	buildTriggerDryRun bool
 )
 
 var buildTriggerCmd = &cobra.Command{
@@ -51,7 +52,11 @@ var buildTriggerCmd = &cobra.Command{
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		req := kusoApi.CreateBuildRequest{Branch: buildTriggerBranch, Ref: buildTriggerRef}
+		req := kusoApi.CreateBuildRequest{
+			Branch: buildTriggerBranch,
+			Ref:    buildTriggerRef,
+			DryRun: buildTriggerDryRun,
+		}
 		resp, err := api.CreateBuild(args[0], args[1], req)
 		if err != nil {
 			return fmt.Errorf("trigger build: %w", err)
@@ -203,6 +208,7 @@ func init() {
 	buildCmd.AddCommand(buildTriggerCmd)
 	buildTriggerCmd.Flags().StringVar(&buildTriggerBranch, "branch", "", "branch to build (default: project default branch)")
 	buildTriggerCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "specific commit SHA to build")
+	buildTriggerCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "compile + assemble image but skip push and env promotion")
 
 	buildCmd.AddCommand(buildListCmd)
 	buildListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")

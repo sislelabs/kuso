@@ -420,6 +420,14 @@ type KusoBuildSpec struct {
 	// post-restart and OOMKilling the host with two parallel nixpacks
 	// rebuilds.
 	Done bool `json:"done,omitempty"`
+	// DryRun runs the build pipeline through compile + image-layer
+	// assembly but skips the registry push AND the env promotion.
+	// Use for "does this PR even build" feedback without burning
+	// registry storage or rolling production. The poller treats a
+	// DryRun build's success as terminal — no Deployment patch, no
+	// image tag stamp on the env CR. Failed dry-runs surface the
+	// failure reason the same as a regular failed build.
+	DryRun bool `json:"dryRun,omitempty"`
 }
 
 // KusoBuildAuth points the build pod at registry credentials. The
