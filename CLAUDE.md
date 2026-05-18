@@ -33,6 +33,7 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 
 ## Other rules
 
+- **Per-machine test target lives in `agent-target.local.json` (gitignored).** Read this on session start when the user asks you to smoke-test, redeploy, or otherwise interact with a live kuso instance. It carries deploy host + SSH key path + CLI binary path + a disposable project/service to poke at. Don't prompt the user for these values when the file exists. Schema lives in `agent-target.example.json` (committed).
 - Confirm `dist/kuso-darwin-arm64` is up to date before driving it. After server-go changes that affect the API surface, also rebuild the CLI: `cd cli && go build -o /tmp/kuso ./cmd`.
 - Don't mix CLI invocations with raw kubectl in the same diagnostic — pick one and stay there. Mixing buries the actual signal in tooling noise.
 - For e2e validation, the CLI is the contract. If it lies (wrong status, missing fields, decode error), that's a real bug to fix — not something to work around with a kubectl one-liner.

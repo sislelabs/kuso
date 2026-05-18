@@ -70,16 +70,26 @@ export function NetworkingSection({ state, setState, autoHost }: SectionProps) {
             }
             className="group inline-flex shrink-0 cursor-pointer items-center gap-2 whitespace-nowrap text-[12px] outline-none focus-visible:ring-2 focus-visible:ring-[var(--accent)]/40 rounded-md px-1 py-0.5"
           >
+            {/* Track. h-5 (20px) × w-10 (40px). Bumped from w-9
+                because the knob's `translate-x-5` (20px) needs the
+                extra width to fully clear the right edge — under
+                w-9 the absolute-positioned knob whose `left: auto`
+                resolved unpredictably across browsers, producing
+                the "knob overflowing onto the label text" bug. */}
             <span
-              className={`relative h-5 w-9 rounded-full transition-colors ${
+              className={`relative inline-block h-5 w-10 rounded-full transition-colors ${
                 state.internal
                   ? "bg-[var(--accent)]"
                   : "bg-[var(--bg-tertiary)] border border-[var(--border)]"
               }`}
             >
+              {/* Knob. Explicit `left-0` removes the auto-positioning
+                  ambiguity that caused the previous render bug.
+                  Translates from 2px (OFF) → 22px (ON), keeping a
+                  consistent 2px gap from each track edge. */}
               <span
-                className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
-                  state.internal ? "translate-x-4" : "translate-x-0.5"
+                className={`absolute left-0 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+                  state.internal ? "translate-x-[22px]" : "translate-x-[2px]"
                 }`}
               />
             </span>

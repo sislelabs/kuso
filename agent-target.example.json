@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Local-only config for agent feature-testing. Copy this file to",
+    "`agent-target.local.json` and fill in the real values. The .local",
+    "variant is gitignored so per-machine deploy info doesn't leak into",
+    "commits.",
+    "",
+    "Agents running in this repo should read agent-target.local.json",
+    "BEFORE asking the user 'what's your test cluster?' or 'where's your",
+    "ssh key?'. Missing file → fall back to asking; never write back to",
+    "the file."
+  ],
+
+  "deploy": {
+    "host": "kuso.example.com",
+    "ssh_user": "root",
+    "ssh_key": "~/.ssh/keys/example",
+    "kube_namespace": "kuso"
+  },
+
+  "web": {
+    "url": "https://kuso.example.com",
+    "_note": "Used by agents that want to curl the live API or click through to /settings/* in a browser."
+  },
+
+  "cli": {
+    "binary": "dist/kuso-darwin-arm64",
+    "_note": "Path (relative to repo root) of the kuso CLI binary the agent should drive. Per CLAUDE.md, agents should prefer the CLI over raw kubectl."
+  },
+
+  "test": {
+    "project": "papelito",
+    "service": "web",
+    "_note": "A real project+service the agent can poke at when smoke-testing a change. Pick something disposable — agents may trigger redeploys, env changes, etc. against this."
+  }
+}

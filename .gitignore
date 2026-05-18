@@ -6,6 +6,12 @@ Thumbs.db
 # lockfiles + skill caches that are workstation-specific.
 .claude/scheduled_tasks.lock
 
+# Per-machine agent test target (deploy host, ssh key, CLI binary).
+# Agents read this to know "where to smoke-test the feature I just
+# implemented" without prompting the user every session. See
+# agent-target.example.json for the committed template.
+agent-target.local.json
+
 # Editor
 .vscode/
 .idea/
