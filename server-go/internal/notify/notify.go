@@ -59,6 +59,14 @@ const (
 	// edges of the outage.
 	EventNodeUnreachable EventType = "node.unreachable"
 	EventNodeRecovered   EventType = "node.recovered"
+	// Run lifecycle events. Fired when a KusoRun is created (started)
+	// and when the runs poller observes terminal phase transitions
+	// (succeeded / failed). A failed migration on prod is exactly the
+	// kind of event that should ping #incidents — separately from
+	// build / deploy events so operators can subscribe granularly.
+	EventRunStarted   EventType = "run.started"
+	EventRunSucceeded EventType = "run.succeeded"
+	EventRunFailed    EventType = "run.failed"
 	// Diagnostic ping fired from the "send a test message" button on
 	// the notification settings page. Not a real platform event —
 	// don't subscribe to it from alerts.
@@ -78,6 +86,7 @@ var AllEventTypes = []EventType{
 	EventAlertFired,
 	EventBackupOK, EventBackupFailed,
 	EventNodeUnreachable, EventNodeRecovered,
+	EventRunStarted, EventRunSucceeded, EventRunFailed,
 	EventTestPing,
 }
 
@@ -1023,6 +1032,112 @@ func NodeRecovered(node string, downFor time.Duration) Event {
 		Extra:       map[string]string{"node": node},
 		Footer:      "node · " + node,
 	}
+}
+
+// RunStarted fires when a KusoRun CR is created. The run hasn't
+// observed terminal state yet — the poller will fire RunSucceeded
+// or RunFailed once the Job lands. command is truncated for the
+// card so a 5kb argv (rare but possible) doesn't blow up the
+// webhook payload.
+func RunStarted(project, service, runName string, command []string, triggeredByUser string) Event {
+	cmd := strings.Join(command, " ")
+	if len(cmd) > 200 {
+		cmd = cmd[:200] + "…"
+	}
+	by := triggeredByUser
+	if by == "" {
+		by = "system"
+	}
+	return Event{
+		Type:        EventRunStarted,
+		Title:       fmt.Sprintf("▶ Run started · %s / %s", project, service),
+		Description: "`" + cmd + "`",
+		Project:     project,
+		Service:     service,
+		URL:         runEventURL(project, service),
+		Severity:    "info",
+		Fields: []EventField{
+			{Name: "Run", Value: "`" + runName + "`", Inline: true},
+			{Name: "By", Value: by, Inline: true},
+		},
+		Footer: "run · " + runName,
+	}
+}
+
+// RunSucceeded fires when the runs poller observes the Job's
+// JobComplete condition. Same shape as RunStarted; the duration
+// is whatever the poller can compute from the started/completed
+// annotation pair (0 when either is missing).
+func RunSucceeded(project, service, runName string, command []string, durationMs int64) Event {
+	cmd := strings.Join(command, " ")
+	if len(cmd) > 200 {
+		cmd = cmd[:200] + "…"
+	}
+	fields := []EventField{
+		{Name: "Run", Value: "`" + runName + "`", Inline: true},
+	}
+	if durationMs > 0 {
+		fields = append(fields, EventField{
+			Name: "Took", Value: formatShortDuration(time.Duration(durationMs) * time.Millisecond), Inline: true,
+		})
+	}
+	return Event{
+		Type:        EventRunSucceeded,
+		Title:       fmt.Sprintf("✓ Run succeeded · %s / %s", project, service),
+		Description: "`" + cmd + "`",
+		Project:     project,
+		Service:     service,
+		URL:         runEventURL(project, service),
+		Severity:    "info",
+		Fields:      fields,
+		DurationMs:  durationMs,
+		Footer:      "run · " + runName,
+	}
+}
+
+// RunFailed fires on JobFailed terminal transition. message is the
+// Job's failure condition message (typically the kubelet's reason
+// + the container's exit code).
+func RunFailed(project, service, runName string, command []string, message string, durationMs int64) Event {
+	cmd := strings.Join(command, " ")
+	if len(cmd) > 200 {
+		cmd = cmd[:200] + "…"
+	}
+	fields := []EventField{
+		{Name: "Run", Value: "`" + runName + "`", Inline: true},
+	}
+	if durationMs > 0 {
+		fields = append(fields, EventField{
+			Name: "Took", Value: formatShortDuration(time.Duration(durationMs) * time.Millisecond), Inline: true,
+		})
+	}
+	desc := "`" + cmd + "`"
+	if message != "" {
+		desc = "`" + cmd + "`\n" + message
+	}
+	return Event{
+		Type:        EventRunFailed,
+		Title:       fmt.Sprintf("✗ Run failed · %s / %s", project, service),
+		Description: desc,
+		Body:        message,
+		Project:     project,
+		Service:     service,
+		URL:         runEventURL(project, service),
+		Severity:    "error",
+		Fields:      fields,
+		DurationMs:  durationMs,
+		Footer:      "run · " + runName,
+	}
+}
+
+// runEventURL deep-links into the Runs tab of the service overlay.
+// Mirrors serviceURL but pins ?tab=runs so a click from Discord
+// lands on the right surface.
+func runEventURL(project, service string) string {
+	if project == "" || service == "" {
+		return ""
+	}
+	return fmt.Sprintf("/projects/%s?service=%s&tab=runs", project, service)
 }
 
 // formatShortDuration renders a duration compactly: "5m", "1h 24m",

@@ -17,7 +17,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"math/rand"
+	"math/rand/v2"
 	"time"
 
 	"kuso/server/internal/db"
@@ -191,8 +191,8 @@ func outboxBackoff(attempt int) time.Duration {
 	if base <= 0 || base > outboxBackoffMax {
 		base = outboxBackoffMax
 	}
-	jitter := time.Duration(rand.Int63n(int64(base) / 5))
-	if rand.Intn(2) == 0 {
+	jitter := time.Duration(rand.Int64N(int64(base) / 5))
+	if rand.IntN(2) == 0 {
 		return base - jitter
 	}
 	return base + jitter

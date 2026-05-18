@@ -413,6 +413,16 @@ func (s *Service) validatePlacement(ctx context.Context, p *kube.KusoPlacement) 
 	if s.Kube == nil || s.Kube.Clientset == nil {
 		return nil
 	}
+	// Informer cache when warm; live LIST otherwise. Same pattern
+	// as projects.validatePlacement.
+	if cached, ok := s.Kube.Cache.ListNodes(); ok {
+		for _, n := range cached {
+			if placement.Matches(p, n.Name, n.Labels) {
+				return nil
+			}
+		}
+		return fmt.Errorf("%w: no cluster node matches placement (labels=%v nodes=%v)", ErrInvalid, p.Labels, p.Nodes)
+	}
 	nodes, err := s.Kube.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("validate placement: list nodes: %w", err)

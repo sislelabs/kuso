@@ -116,13 +116,21 @@ func (p *Poller) observe(ctx context.Context, ns string, r *kube.KusoRun) error 
 	}
 	if cond := jobTerminalCondition(job); cond != nil {
 		if cond.Type == batchv1.JobComplete {
-			return p.markSucceeded(ctx, ns, r.Name)
+			if err := p.markSucceeded(ctx, ns, r.Name); err != nil {
+				return err
+			}
+			p.emitTerminal(r, "succeeded", "")
+			return nil
 		}
 		msg := cond.Message
 		if msg == "" {
 			msg = "job failed"
 		}
-		return p.markFailed(ctx, ns, r.Name, msg)
+		if err := p.markFailed(ctx, ns, r.Name, msg); err != nil {
+			return err
+		}
+		p.emitTerminal(r, "failed", msg)
+		return nil
 	}
 	// Job exists but isn't terminal yet. Promote phase=pending →
 	// phase=running once the Job has any active pod so the UI
@@ -133,6 +141,68 @@ func (p *Poller) observe(ctx context.Context, ns string, r *kube.KusoRun) error 
 		return p.markRunning(ctx, ns, r.Name)
 	}
 	return nil
+}
+
+// emitTerminal fires a succeeded/failed notify event on terminal
+// transition. Idempotency note: the markSucceeded/markFailed patch
+// runs BEFORE we get here, so a duplicate observe-on-already-done
+// run is filtered out by the isTerminal check in tick() the next
+// time around. But within a single observe call we'd double-emit
+// without this gate — the kube call to get the Job doesn't see the
+// annotation we're about to write. So we read the pre-write phase
+// annotation from r (the cached snapshot) and only emit when it
+// was non-terminal at the start of the observe call.
+func (p *Poller) emitTerminal(r *kube.KusoRun, kind, message string) {
+	if p.Svc == nil || p.Svc.Notifier == nil {
+		return
+	}
+	prev := r.Annotations[annRunPhase]
+	if prev == "succeeded" || prev == "failed" || prev == "cancelled" {
+		return
+	}
+	durationMs := computeRunDurationMs(r.Annotations)
+	p.Svc.Notifier.Emit(RunEvent{
+		Kind:       kind,
+		Project:    r.Spec.Project,
+		Service:    serviceShort(r.Spec.Project, r.Spec.Service),
+		RunName:    r.Name,
+		Command:    r.Spec.Command,
+		UserName:   r.Spec.TriggeredByUser,
+		Message:    message,
+		DurationMs: durationMs,
+	})
+}
+
+// computeRunDurationMs reads start + completed timestamps off the
+// CR's annotations and returns the wall-clock duration in ms. Zero
+// when either stamp is missing (a run that failed before the pod
+// even started). Mirrors builds.buildDurationMs.
+func computeRunDurationMs(annos map[string]string) int64 {
+	start := annos[annRunStartedAt]
+	// completedAt is what markSucceeded/markFailed wrote — but that
+	// patch went out before this function was called and the cached
+	// r.Annotations doesn't reflect it. Use "now" as the close-off
+	// approximation; within sub-second of the actual write so the
+	// duration reads honestly.
+	if start == "" {
+		return 0
+	}
+	startT, err := time.Parse(time.RFC3339, start)
+	if err != nil {
+		return 0
+	}
+	return time.Since(startT).Milliseconds()
+}
+
+// serviceShort strips the project prefix off the CR-name-shape
+// service field so the notify card shows "web" not "alpha-web".
+// Mirrors builds.short logic.
+func serviceShort(project, fqn string) string {
+	prefix := project + "-"
+	if len(fqn) > len(prefix) && fqn[:len(prefix)] == prefix {
+		return fqn[len(prefix):]
+	}
+	return fqn
 }
 
 // jobTerminalCondition is a tiny local copy of builds.completedCondition.

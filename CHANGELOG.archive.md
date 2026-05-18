@@ -1,8 +1,11 @@
 # Changelog archive
 
-Older release entries split out of the main CHANGELOG.md when it grew
-past ~50 releases. New entries land in the main CHANGELOG; once a
-release falls off the recent window it moves here.
+Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
+
+## [0.9.28] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(builds): orphaned cancelled-build pods don't block the cap ([c491067](https://github.com/sislelabs/kuso/commit/c49106721b9ee2a3f5dd2192ea26a7e82efb3e8e))
 
 ## [0.9.27] — 2026-05-07
 

@@ -1230,6 +1230,19 @@ func (s *Service) validatePlacement(ctx context.Context, p *kube.KusoPlacement) 
 		// than synthesize a "no nodes match" error from a nil client.
 		return nil
 	}
+	// Prefer the shared informer's local view. Placement validation
+	// runs on every service Create/Update; on a 50-node cluster the
+	// raw LIST was ~500ms per call. Falls back to the live LIST
+	// during the cold-boot sync window.
+	if cached, ok := s.Kube.Cache.ListNodes(); ok {
+		for _, n := range cached {
+			if placement.Matches(p, n.Name, n.Labels) {
+				return nil
+			}
+		}
+		return fmt.Errorf("%w: no cluster node matches placement (labels=%v nodes=%v) — add a matching node or relax the selector",
+			ErrInvalid, p.Labels, p.Nodes)
+	}
 	nodes, err := s.Kube.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("validate placement: list nodes: %w", err)

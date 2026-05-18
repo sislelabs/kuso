@@ -32,6 +32,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 
 	"kuso/server/internal/kube"
 )
@@ -168,6 +169,21 @@ func (b *buildQueueProbe) refresh() (int, int) {
 	}
 
 	running := 0
+	// Prefer the shared informer's local view — the metrics scrape
+	// runs every 15s, and a cluster-wide LIST per scrape thrashes
+	// the apiserver on big multi-project clusters.
+	sel, _ := labels.Parse("app.kubernetes.io/component=kusobuild")
+	if sel != nil {
+		if pods, ok := b.kc.Cache.ListPodsByLabel(sel); ok {
+			for _, p := range pods {
+				ph := string(p.Status.Phase)
+				if ph == "Running" || ph == "Pending" {
+					running++
+				}
+			}
+			return queue, running
+		}
+	}
 	if pods, err := b.kc.Clientset.CoreV1().Pods("").List(ctx, metav1.ListOptions{
 		LabelSelector: "app.kubernetes.io/component=kusobuild",
 	}); err == nil {

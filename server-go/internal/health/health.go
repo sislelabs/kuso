@@ -154,12 +154,24 @@ func podBadReason(p *corev1.Pod) string {
 // then alerts when used % is past the threshold. Best-effort: any
 // error → skip this tick so a flaky kubelet doesn't spam.
 func (w *Watcher) checkNodes(ctx context.Context) {
-	nodes, err := w.Kube.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
-	if err != nil {
-		return
+	// Prefer the shared informer's local view — health.Watcher ticks
+	// every 60s and the cluster-wide LIST is ~500ms on a 50-node
+	// install. Fall back to a live LIST during the cold-boot sync
+	// window.
+	var nodeList []*corev1.Node
+	if cached, ok := w.Kube.Cache.ListNodes(); ok {
+		nodeList = cached
+	} else {
+		nodes, err := w.Kube.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+		if err != nil {
+			return
+		}
+		nodeList = make([]*corev1.Node, len(nodes.Items))
+		for i := range nodes.Items {
+			nodeList[i] = &nodes.Items[i]
+		}
 	}
-	for i := range nodes.Items {
-		n := &nodes.Items[i]
+	for _, n := range nodeList {
 		// We don't have a direct disk-used metric from kube — the
 		// metrics-server exposes CPU + mem only. We approximate by
 		// reading the node condition list: kubelet sets

@@ -340,6 +340,21 @@ spec:
       targetPort: 6432
   type: ClusterIP
 ---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: kuso-pgbouncer
+  namespace: kuso
+spec:
+  # minAvailable=1 keeps at least one pooler reachable during voluntary
+  # disruptions (node drain, autoscaler-down, the k3s upgrade
+  # controller). Paired with replicas=2 and the anti-affinity below,
+  # a node drain rolls one pooler at a time without taking the whole
+  # DB path down.
+  minAvailable: 1
+  selector:
+    matchLabels: { app.kubernetes.io/name: kuso-pgbouncer }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -348,11 +363,12 @@ metadata:
   labels:
     app.kubernetes.io/name: kuso-pgbouncer
 spec:
-  # Single replica is fine: PgBouncer is sub-ms-latency and a 1-pod
-  # failure window matches kuso-server's tolerance. HA on the pooler
-  # is overkill until ~500 concurrent users; bump to 2+ if you scale
-  # past that and put a Service in front anyway.
-  replicas: 1
+  # 2 replicas because the DSN routes through here by default —
+  # a single-replica pooler is a SPOF in front of CNPG's 3-replica
+  # HA. Anti-affinity below spreads the pair across nodes when
+  # possible. v0.12 shipped this single-replica which was a real
+  # availability regression; v0.13 corrects it.
+  replicas: 2
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -367,6 +383,18 @@ spec:
       # kuso-platform priority so the kubelet picks a workload pod
       # to evict before the pooler.
       priorityClassName: kuso-platform
+      # Prefer to spread the two pooler pods across nodes — when
+      # the cluster is single-node both end up there anyway (soft
+      # preference, ScheduleAnyway via preferredDuringScheduling).
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: kuso-pgbouncer
       # Init container reads username/password from kuso-postgres-conn
       # and writes the PgBouncer userlist.txt to a shared emptyDir.
       # Done at pod start (not via a Secret mount) because PgBouncer's
@@ -387,18 +415,32 @@ spec:
                 echo "[render-userlist] FATAL: username/password missing from kuso-postgres-conn" >&2
                 exit 1
               fi
-              # PgBouncer accepts plaintext passwords in userlist.txt too
-              # — auth_type=md5 lets it hash-and-compare on demand. Using
-              # plaintext here avoids re-implementing PostgreSQL's md5
-              # auth derivation (md5("$pass$user") with the salt).
-              printf '"%s" "%s"\n' "$user" "$pass" > /shared/userlist.txt
+              # PgBouncer's userlist.txt format under auth_type=md5 is
+              # "username" "md5<hex>", where <hex> is md5(password+username).
+              # The previous "plaintext password" approach landed
+              # `pq: password authentication failed (08P01)` on every
+              # client connect because PgBouncer compares the literal
+              # bytes — the plaintext doesn't match the md5 hash the
+              # client computes from its credentials.
+              #
+              # We derive the hash with `md5sum`, which the alpine/k8s
+              # image already has. printf -n is portable here because
+              # we feed the concatenation through a pipe (no shell
+              # newline appended).
+              hash="$(printf '%s%s' "$pass" "$user" | md5sum | awk '{print $1}')"
+              printf '"%s" "md5%s"\n' "$user" "$hash" > /shared/userlist.txt
               chmod 0440 /shared/userlist.txt
           volumeMounts:
             - { name: pg-conn, mountPath: /etc/pg-conn, readOnly: true }
             - { name: shared, mountPath: /shared }
       containers:
         - name: pgbouncer
-          image: edoburu/pgbouncer:1.23.1
+          # edoburu's tag scheme is v<pgbouncer>-p<patch>, NOT <pgbouncer>.
+          # Confirmed against docker.io/edoburu/pgbouncer/tags. The
+          # previous "1.23.1" pulled 404 from the registry and wedged
+          # the v0.13.0 rollout (server-go now routes through this
+          # pooler, so a missing PgBouncer means crashlooping kuso pods).
+          image: edoburu/pgbouncer:v1.25.1-p0
           imagePullPolicy: IfNotPresent
           ports:
             - { name: pgbouncer, containerPort: 6432 }

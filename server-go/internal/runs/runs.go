@@ -57,6 +57,12 @@ type Service struct {
 	// namespace land its run CRs there. Same shape as builds.Service
 	// and addons.Service; nil resolver = use the home namespace.
 	NSResolver namespaceResolver
+
+	// Notifier fans out run lifecycle events (started / succeeded /
+	// failed) to Discord/webhooks via the dispatcher. Optional —
+	// nil emitter is silent. Same shape builds.Service uses to
+	// avoid an import cycle with notify.
+	Notifier EventEmitter
 }
 
 // namespaceResolver mirrors the interface in builds + addons.
@@ -64,6 +70,31 @@ type Service struct {
 // concrete ProjectNamespaceResolver type from kube.
 type namespaceResolver interface {
 	NamespaceFor(ctx context.Context, project string) string
+}
+
+// EventEmitter mirrors notify.Dispatcher.Emit's signature without
+// requiring an import on the notify package (which would invert the
+// layering — notify subscribes to run events, runs shouldn't depend
+// on the dispatcher's full surface).
+//
+// Adapter lives in cmd/kuso-server alongside the existing notify
+// adapter used by builds.
+type EventEmitter interface {
+	Emit(e RunEvent)
+}
+
+// RunEvent is the wire shape the adapter forwards to notify.Event.
+// Field-for-field maps onto notify.Event so the adapter is a
+// straight assignment.
+type RunEvent struct {
+	Kind       string // "started" | "succeeded" | "failed"
+	Project    string
+	Service    string
+	RunName    string
+	Command    []string
+	UserName   string // empty for system / api-triggered runs
+	Message    string // only meaningful on "failed"
+	DurationMs int64  // only meaningful on terminal events
 }
 
 func New(k *kube.Client, namespace string, logger *slog.Logger) *Service {
@@ -182,6 +213,16 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	s.Logger.Info("runs: created",
 		"name", name, "project", project, "service", service,
 		"timeoutSeconds", req.TimeoutSeconds, "command", strings.Join(req.Command, " "))
+	if s.Notifier != nil {
+		s.Notifier.Emit(RunEvent{
+			Kind:     "started",
+			Project:  project,
+			Service:  service,
+			RunName:  name,
+			Command:  req.Command,
+			UserName: req.TriggeredByUser,
+		})
+	}
 	return out, nil
 }
 

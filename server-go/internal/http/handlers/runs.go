@@ -15,12 +15,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 
+	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/runs"
@@ -29,6 +32,7 @@ import (
 type RunsHandler struct {
 	Svc    *runs.Service
 	DB     *db.DB
+	Audit  *audit.Service
 	Logger *slog.Logger
 }
 
@@ -87,6 +91,28 @@ func (h *RunsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "create", err)
 		return
 	}
+	if h.Audit != nil {
+		// Runs execute arbitrary commands inside the production
+		// environment with the service's full env (DATABASE_URL,
+		// API keys, signing secrets). Every fire is privileged and
+		// belongs in the audit trail with the full argv so a future
+		// "who ran `DELETE FROM users`" forensic walk has the
+		// evidence inline rather than requiring kubectl-archaeology
+		// of long-since-GC'd Job pods.
+		cmd := strings.Join(req.Command, " ")
+		if len(cmd) > 512 {
+			cmd = cmd[:512] + "…"
+		}
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "run.create",
+			Pipeline: project,
+			App:      service,
+			Resource: "kusorun",
+			Message:  fmt.Sprintf("ran %q on %s/%s as %s", cmd, project, service, out.Name),
+		})
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -112,9 +138,20 @@ func (h *RunsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
 		return
 	}
-	if err := h.Svc.Cancel(ctx, project, chi.URLParam(r, "run")); err != nil {
+	runName := chi.URLParam(r, "run")
+	if err := h.Svc.Cancel(ctx, project, runName); err != nil {
 		h.fail(w, "cancel", err)
 		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "info",
+			Action:   "run.cancel",
+			Pipeline: project,
+			Resource: "kusorun",
+			Message:  fmt.Sprintf("cancelled run %s in project %q", runName, project),
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

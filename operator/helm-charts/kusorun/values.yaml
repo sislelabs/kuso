@@ -49,10 +49,14 @@ placement: {}
 # cancelled). Required for the same reason builds + addons need it.
 done: false
 
-# securityContext — restricted PSS-friendly defaults. The init
-# container's runtime image is responsible for not assuming root.
+# securityContext — pod-level. Mirrors kusoenvironment: we
+# DELIBERATELY omit runAsNonRoot because the service's Dockerfile
+# may use a named USER (`nextjs`, `node`, `nginx`) and kubelet's
+# runAsNonRoot=true admission rejects images with non-numeric users
+# with "image has non-numeric user, cannot verify user is non-root."
+# Container-level capabilities are dropped below — same blast-radius
+# reduction without breaking real-world images.
 securityContext:
-  runAsNonRoot: true
   seccompProfile:
     type: RuntimeDefault
 

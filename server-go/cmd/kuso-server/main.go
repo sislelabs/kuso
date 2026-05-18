@@ -368,9 +368,42 @@ func main() {
 		// fresh installs but pre-existing namespaces from older kuso
 		// versions never get it, breaking every build after upgrade
 		// with BackoffLimitExceeded and no logs. Cheap, idempotent.
+		//
+		// Since v0.12.x's RBAC split, this call ALSO backfills the
+		// kuso-server-managed-ns RoleBinding (LabelNamespaceManaged
+		// internally calls ensureManagedNSBinding). Without that
+		// binding the kuso-server SA's reduced ClusterRole can't
+		// write Secrets into the home ns.
 		if err := kc.LabelNamespaceManaged(ctx, *namespace); err != nil {
 			logger.Warn("home namespace: label managed-by failed (builds may be blocked by BuildKit NetworkPolicy)",
 				"ns", *namespace, "err", err)
+		}
+		// Backfill the managed-ns RoleBinding for every project
+		// namespace from pre-RBAC-split installs. EnsureNamespace
+		// stamps the binding on Project.Create, but existing project
+		// namespaces never call that code path on upgrade — so
+		// without this sweep, secret writes (env vars, addon password
+		// rotation, etc.) 403 forever after the upgrade.
+		// Best-effort + idempotent: AlreadyExists on the RoleBinding
+		// short-circuits without an error.
+		if projects, err := kc.ListKusoProjects(ctx, *namespace); err == nil {
+			seen := map[string]struct{}{*namespace: {}}
+			for i := range projects {
+				ns := projects[i].Spec.Namespace
+				if ns == "" {
+					continue
+				}
+				if _, dup := seen[ns]; dup {
+					continue
+				}
+				seen[ns] = struct{}{}
+				if err := kc.LabelNamespaceManaged(ctx, ns); err != nil {
+					logger.Warn("project namespace: backfill managed-by failed",
+						"ns", ns, "err", err)
+				}
+			}
+		} else {
+			logger.Warn("project namespace backfill: list projects failed", "err", err)
 		}
 		nsResolver := kube.NewProjectNamespaceResolver(kc, *namespace)
 		projSvc = projects.New(kc, *namespace)
@@ -453,6 +486,7 @@ func main() {
 		cronSvc.NSResolver = nsResolver
 		runSvc = runs.New(kc, *namespace, logger.With("component", "runs"))
 		runSvc.NSResolver = nsResolver
+		runSvc.Notifier = runsNotifyAdapter{notifyDisp}
 		projectSecretSvc = projectsecrets.New(kc, *namespace)
 		projectSecretSvc.NSResolver = nsResolver
 		instanceSecretSvc = instancesecrets.New(kc, *namespace)
@@ -1223,6 +1257,23 @@ func (a notifyAdapter) Emit(e builds.EventEnvelope) {
 		Fields:      fields,
 		Footer:      e.Footer,
 	})
+}
+
+// runsNotifyAdapter satisfies runs.EventEmitter by mapping the
+// kind/project/service tuple to the right notify.RunStarted/
+// RunSucceeded/RunFailed helper and dispatching via the same
+// Dispatcher.Emit path the build adapter uses.
+type runsNotifyAdapter struct{ d *notify.Dispatcher }
+
+func (a runsNotifyAdapter) Emit(e runs.RunEvent) {
+	switch e.Kind {
+	case "started":
+		a.d.Emit(notify.RunStarted(e.Project, e.Service, e.RunName, e.Command, e.UserName))
+	case "succeeded":
+		a.d.Emit(notify.RunSucceeded(e.Project, e.Service, e.RunName, e.Command, e.DurationMs))
+	case "failed":
+		a.d.Emit(notify.RunFailed(e.Project, e.Service, e.RunName, e.Command, e.Message, e.DurationMs))
+	}
 }
 
 // preflightCRDs returns the kuso CRDs that DON'T exist on the cluster.

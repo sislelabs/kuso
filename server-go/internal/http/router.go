@@ -414,7 +414,7 @@ func mountAuthenticatedRoutes(
 				cronsH.Mount(r)
 			}
 			if d.Runs != nil {
-				runsH := &httphandlers.RunsHandler{Svc: d.Runs, DB: d.DB, Logger: d.Logger}
+				runsH := &httphandlers.RunsHandler{Svc: d.Runs, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 				runsH.Mount(r)
 			}
 			if d.ProjectSecrets != nil {
