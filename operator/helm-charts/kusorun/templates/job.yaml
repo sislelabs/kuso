@@ -1,0 +1,83 @@
+{{- if not .Values.done }}
+{{- if .Values.image.tag }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "kusorun.fullname" . }}
+  labels:
+    {{- include "kusorun.labels" . | nindent 4 }}
+spec:
+  {{- if gt (int .Values.timeoutSeconds) 0 }}
+  activeDeadlineSeconds: {{ .Values.timeoutSeconds }}
+  {{- end }}
+  # The kuso runs poller treats the Job's terminal state as the
+  # source of truth for the run's outcome. Once it's done we set
+  # ttlSecondsAfterFinished so the Job (+ pod) is garbage-collected
+  # without operator intervention. The KusoRun CR itself stays for
+  # audit trail.
+  ttlSecondsAfterFinished: 600
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "kusorun.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      {{- with .Values.placement }}
+      {{- if .labels }}
+      nodeSelector:
+        {{- range $k, $v := .labels }}
+        {{ printf "kuso.sislelabs.com/%s" $k }}: {{ $v | quote }}
+        {{- end }}
+      {{- end }}
+      {{- if .nodes }}
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: kubernetes.io/hostname
+                    operator: In
+                    values:
+                      {{- range .nodes }}
+                      - {{ . | quote }}
+                      {{- end }}
+      {{- end }}
+      {{- if .labels.region }}
+      tolerations:
+        - key: kuso.sislelabs.com/region
+          operator: Equal
+          value: {{ .labels.region | quote }}
+          effect: NoSchedule
+      {{- end }}
+      {{- end }}
+      containers:
+        - name: run
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+          command:
+            {{- range .Values.command }}
+            - {{ . | quote }}
+            {{- end }}
+          {{- with .Values.env }}
+          env:
+            {{- range . }}
+            - name: {{ .name | quote }}
+              value: {{ .value | quote }}
+            {{- end }}
+          {{- end }}
+          {{- with .Values.envFromSecrets }}
+          envFrom:
+            {{- range . }}
+            - secretRef:
+                name: {{ . | quote }}
+            {{- end }}
+          {{- end }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+{{- end }}
+{{- end }}

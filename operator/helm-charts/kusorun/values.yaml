@@ -1,0 +1,63 @@
+# Default values for KusoRun CRs. Mirrors KusoRun.spec.
+# The helm-operator copies the CR's spec into these values at
+# reconcile time.
+
+# project / service / command — required, server-stamped.
+project: ""
+service: ""
+command: []
+
+# env — overlays on top of envFromSecrets. Plain key/value only.
+env: []
+
+# timeoutSeconds bounds the Pod via Job.activeDeadlineSeconds.
+# Default 1800 (30 min). Past it the Pod is killed and the run
+# goes phase=failed reason=DeadlineExceeded.
+timeoutSeconds: 1800
+
+# image — the most-recent succeeded build's image for the parent
+# service. The server snapshots this into the CR at create time so
+# a subsequent build doesn't change what an in-flight run executes.
+image:
+  repository: ""
+  tag: ""
+  pullPolicy: IfNotPresent
+
+# envFromSecrets — the service's resolved envFromSecrets list, so
+# the run inherits DATABASE_URL, REDIS_URL, etc.
+envFromSecrets: []
+
+# resources — defaults are conservative; operators with heavier
+# migrations can bump them via the service-spec overrides path
+# (TODO: surface a per-run override too).
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 1000m
+    memory: 1Gi
+
+# placement mirrors the service's placement so the run lands on the
+# same node pool. Empty defaults to anywhere schedulable.
+placement: {}
+
+# done is the chart's no-op gate. When true, every template
+# short-circuits to render zero objects — even if helm-operator's
+# initial cache sync would otherwise re-install the release. Server
+# stamps it true on terminal transition (succeeded / failed /
+# cancelled). Required for the same reason builds + addons need it.
+done: false
+
+# securityContext — restricted PSS-friendly defaults. The init
+# container's runtime image is responsible for not assuming root.
+securityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
+
+# containerSecurityContext — applied to the run container itself.
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]

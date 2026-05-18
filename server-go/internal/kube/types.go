@@ -23,6 +23,7 @@ var (
 	GVRAddons       = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusoaddons"}
 	GVRBuilds       = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusobuilds"}
 	GVRCrons        = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusocrons"}
+	GVRRuns         = schema.GroupVersionResource{Group: GroupName, Version: Version, Resource: "kusoruns"}
 )
 
 // ---- KusoProject ---------------------------------------------------------
@@ -566,6 +567,78 @@ type KusoCronSpec struct {
 	// DisplayName lets the canvas show a friendly label. Optional;
 	// UI falls back to the cron's short name when empty.
 	DisplayName string `json:"displayName,omitempty"`
+}
+
+// ---- KusoRun -------------------------------------------------------------
+
+// KusoRun is a one-shot task pod bound to a service's most-recent
+// built image + env. Closes the "kuso doesn't have a kubectl exec
+// for migrations" gap: `python manage.py migrate`, `rake db:seed`,
+// `bundle exec rails console`, etc.
+//
+// Lifetime: terminal by design. Once the Job exits the CR stays for
+// audit trail (phase=succeeded/failed/cancelled) but spawns no
+// further pods. Re-running = create a new KusoRun. The helm chart
+// renders to a single kube Job with the service's image +
+// envFromSecrets; the run-phase annotation is the source of truth
+// for status (same convention KusoBuild uses).
+type KusoRun struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   KusoRunSpec    `json:"spec,omitempty"`
+	Status map[string]any `json:"status,omitempty"`
+}
+
+type KusoRunSpec struct {
+	Project string `json:"project"`
+	// Service whose latest succeeded build image + resolved env
+	// this run inherits. CR-name shape: <project>-<service>.
+	Service string `json:"service"`
+	// Command is the container argv. Same shape as a Pod
+	// container's command field — argv as a list, no shell.
+	// Use ["sh","-c","my command"] when you need shell expansion.
+	Command []string `json:"command"`
+	// Env overlays on top of the service's resolved env so an
+	// operator can flip a one-off MIGRATE=true without forking the
+	// service spec.
+	Env []KusoRunEnv `json:"env,omitempty"`
+	// Image is the parent service's most-recent succeeded build
+	// image, snapshotted at create time. Doing this at create
+	// time (not reconcile time) means a build that lands while
+	// the run is in-flight doesn't switch the run to a new image
+	// mid-migration.
+	Image *KusoImage `json:"image,omitempty"`
+	// EnvFromSecrets is the parent service's resolved
+	// envFromSecrets list so the run inherits DATABASE_URL,
+	// REDIS_URL, etc. without re-specifying them.
+	EnvFromSecrets []string `json:"envFromSecrets,omitempty"`
+	// Placement inherits from the parent service so a run lands
+	// on the same node pool.
+	Placement *KusoPlacement `json:"placement,omitempty"`
+	// TimeoutSeconds bounds the Pod via the Job's
+	// activeDeadlineSeconds. Past it the Pod is killed and the
+	// run goes phase=failed reason=DeadlineExceeded.
+	// Default 1800 (30 min) at create time; the chart's default
+	// matches.
+	TimeoutSeconds int `json:"timeoutSeconds,omitempty"`
+	// TriggeredBy + TriggeredByUser are stamped from request
+	// context for the audit trail. Treated as immutable post-create.
+	TriggeredBy     string `json:"triggeredBy,omitempty"`
+	TriggeredByUser string `json:"triggeredByUser,omitempty"`
+	// Done is the chart's no-op gate — same shape as
+	// KusoBuild.spec.done. Set to true on terminal transition so
+	// an operator restart's initial cache sync can't resurrect a
+	// finished Job.
+	Done bool `json:"done,omitempty"`
+}
+
+// KusoRunEnv is a single env var overlay. Plain key/value only —
+// SecretKeyRef and ConfigMapRef expressions belong on the service
+// spec, which this run inherits.
+type KusoRunEnv struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 // ---- Kuso (config CRD) ---------------------------------------------------

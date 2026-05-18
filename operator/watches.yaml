@@ -59,4 +59,14 @@
   chart: helm-charts/kusocron
   reconcilePeriod: 3m
   maxConcurrentReconciles: 4
+- group: application.kuso.sislelabs.com
+  version: v1alpha1
+  kind: KusoRun
+  chart: helm-charts/kusorun
+  # Runs are terminal-by-design — once the chart renders the Job
+  # there's nothing for the operator to do until spec.done flips. A
+  # 5m reconcile period is plenty; the run-phase write path goes
+  # through the kuso-server runs poller, not helm-operator.
+  reconcilePeriod: 5m
+  maxConcurrentReconciles: 4
 #+kubebuilder:scaffold:watch

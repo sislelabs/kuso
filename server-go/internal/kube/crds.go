@@ -450,6 +450,28 @@ func (c *Client) DeleteKusoCron(ctx context.Context, namespace, name string) err
 	return deleteCR(ctx, c, GVRCrons, namespace, name)
 }
 
+// ---- KusoRun CRUD ---------------------------------------------------
+//
+// One-shot task pods. Same shape as the other CR wrappers; the
+// run-phase + run-completedAt lifecycle annotations are read by the
+// runs domain service from .metadata.annotations on the live CR.
+
+func (c *Client) ListKusoRuns(ctx context.Context, namespace string) ([]KusoRun, error) {
+	return list[KusoRun](ctx, c, GVRRuns, namespace, metav1.ListOptions{})
+}
+
+func (c *Client) GetKusoRun(ctx context.Context, namespace, name string) (*KusoRun, error) {
+	return get[KusoRun](ctx, c, GVRRuns, namespace, name)
+}
+
+func (c *Client) CreateKusoRun(ctx context.Context, namespace string, k *KusoRun) (*KusoRun, error) {
+	return create[KusoRun](ctx, c, GVRRuns, "KusoRun", namespace, k)
+}
+
+func (c *Client) DeleteKusoRun(ctx context.Context, namespace, name string) error {
+	return deleteCR(ctx, c, GVRRuns, namespace, name)
+}
+
 // UpdateKusoEnvironment replaces an existing KusoEnvironment's spec.
 //
 // NOTE: callers that mutate envFromSecrets values must also bump

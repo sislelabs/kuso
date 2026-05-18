@@ -1,0 +1,140 @@
+---
+# KusoRun — one-shot task pods bound to a service's most-recent
+# built image + env. The shape that closes the "kuso doesn't have a
+# kubectl exec for migrations" gap.
+#
+# Use case: `python manage.py migrate`, `rake db:seed`, `bundle exec
+# rails console`, etc. Same image the service is running, same env,
+# same volumes — fired as a one-off Job, output captured to the
+# control-plane log table (LogLine) so users see it next to their
+# pod logs.
+#
+# Lifetime: a KusoRun is terminal-by-design. Once the Job exits
+# (success, failure, or cancel) it's done — the CR stays for audit
+# trail (with phase=succeeded/failed/cancelled), but no further
+# pods spawn from it. Re-running = create a new KusoRun.
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: kusoruns.application.kuso.sislelabs.com
+spec:
+  group: application.kuso.sislelabs.com
+  scope: Namespaced
+  names:
+    plural: kusoruns
+    singular: kusorun
+    kind: KusoRun
+    shortNames:
+      - krun
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          required: [spec]
+          properties:
+            spec:
+              type: object
+              required: [project, service, command]
+              properties:
+                project:
+                  type: string
+                  description: Project the run belongs to.
+                service:
+                  type: string
+                  description: |
+                    Service whose latest succeeded build image + env this
+                    run inherits. CR name shape: <project>-<service>.
+                command:
+                  type: array
+                  description: |
+                    Command to exec in the run pod. Same shape as a Pod
+                    container's command field — argv as a list, no shell.
+                    Use ["sh","-c","my command"] when you need a shell.
+                  items:
+                    type: string
+                  minItems: 1
+                # env passes through to the run pod. We start from the
+                # service's resolved env (every secretKeyRef / configMap
+                # ref it has) and OVERLAY these on top, so an operator
+                # can tweak DATABASE_URL or set a one-off MIGRATE=true
+                # without forking the service spec.
+                env:
+                  type: array
+                  items:
+                    type: object
+                    required: [name, value]
+                    properties:
+                      name:
+                        type: string
+                      value:
+                        type: string
+                # timeoutSeconds bounds the Pod. The Job's
+                # activeDeadlineSeconds gets set to this value; past
+                # it, the Pod is killed and the run goes
+                # phase=failed reason=DeadlineExceeded.
+                # Default: 1800 (30 min) — enough for most migrations,
+                # short enough that a wedged run doesn't sit consuming
+                # resources forever.
+                timeoutSeconds:
+                  type: integer
+                  minimum: 1
+                  maximum: 86400
+                  default: 1800
+                # triggeredBy + triggeredByUser are stamped by the
+                # server from request context for the audit trail.
+                # Treated as immutable post-create.
+                triggeredBy:
+                  type: string
+                  description: user | webhook | api | system
+                triggeredByUser:
+                  type: string
+                # image is snapshotted from the parent service's
+                # most-recent succeeded build at create time. A
+                # build that lands while the run is in-flight
+                # doesn't switch the run to a new image mid-task.
+                image:
+                  type: object
+                  properties:
+                    repository: { type: string }
+                    tag: { type: string }
+                    pullPolicy: { type: string }
+                # envFromSecrets is the parent service's resolved
+                # envFromSecrets list so the run inherits DB and
+                # cache connection strings.
+                envFromSecrets:
+                  type: array
+                  items:
+                    type: string
+                # placement inherits from the parent service so
+                # the run lands on the same node pool.
+                placement:
+                  type: object
+                  x-kubernetes-preserve-unknown-fields: true
+                # done is the chart's no-op gate — same shape as
+                # KusoBuild.spec.done. Set to true on terminal
+                # transition so an operator restart's initial cache
+                # sync can't resurrect a finished Job.
+                done:
+                  type: boolean
+                  default: false
+            status:
+              type: object
+              x-kubernetes-preserve-unknown-fields: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Project
+          type: string
+          jsonPath: .spec.project
+        - name: Service
+          type: string
+          jsonPath: .spec.service
+        - name: Phase
+          type: string
+          jsonPath: .metadata.annotations['kuso\.sislelabs\.com/run-phase']
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp

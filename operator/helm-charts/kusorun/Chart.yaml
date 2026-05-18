@@ -1,0 +1,10 @@
+apiVersion: v2
+name: kusorun
+description: A one-shot task pod bound to a service's most-recent built image.
+  Renders to a kube Job; reuses the parent service's image + envFromSecrets +
+  placement so the run executes in the same world as the service pod. Used for
+  migrations, seeds, one-off scripts that need the production env without
+  shelling into a live pod.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

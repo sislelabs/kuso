@@ -28,6 +28,7 @@ import (
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	"kuso/server/internal/crons"
+	"kuso/server/internal/runs"
 	"kuso/server/internal/db"
 	"kuso/server/internal/errorscan"
 	ghpkg "kuso/server/internal/github"
@@ -225,6 +226,7 @@ func main() {
 	var statSvc *status.Service
 	var addonSvc *addons.Service
 	var cronSvc *crons.Service
+	var runSvc *runs.Service
 	var projectSecretSvc *projectsecrets.Service
 	var instanceSecretSvc *instancesecrets.Service
 	var instancePGSvc *instancepg.Service
@@ -449,6 +451,8 @@ func main() {
 		addonSvc.NSResolver = nsResolver
 		cronSvc = crons.New(kc, *namespace)
 		cronSvc.NSResolver = nsResolver
+		runSvc = runs.New(kc, *namespace, logger.With("component", "runs"))
+		runSvc.NSResolver = nsResolver
 		projectSecretSvc = projectsecrets.New(kc, *namespace)
 		projectSecretSvc.NSResolver = nsResolver
 		instanceSecretSvc = instancesecrets.New(kc, *namespace)
@@ -706,6 +710,7 @@ func main() {
 		Status:          statSvc,
 		Addons:          addonSvc,
 		Crons:           cronSvc,
+		Runs:            runSvc,
 		ProjectSecrets:  projectSecretSvc,
 		InstanceSecrets: instanceSecretSvc,
 		InstancePG:      instancePGSvc,

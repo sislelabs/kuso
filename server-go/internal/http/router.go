@@ -26,6 +26,7 @@ import (
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	"kuso/server/internal/crons"
+	"kuso/server/internal/runs"
 	"kuso/server/internal/db"
 	"kuso/server/internal/github"
 	httphandlers "kuso/server/internal/http/handlers"
@@ -67,6 +68,7 @@ type Deps struct {
 	Status          *status.Service
 	Addons          *addons.Service
 	Crons           *crons.Service
+	Runs            *runs.Service
 	ProjectSecrets  *projectsecrets.Service
 	InstanceSecrets *instancesecrets.Service
 	InstancePG      *instancepg.Service
@@ -410,6 +412,10 @@ func mountAuthenticatedRoutes(
 			if d.Crons != nil {
 				cronsH := &httphandlers.CronsHandler{Svc: d.Crons, DB: d.DB, Logger: d.Logger}
 				cronsH.Mount(r)
+			}
+			if d.Runs != nil {
+				runsH := &httphandlers.RunsHandler{Svc: d.Runs, DB: d.DB, Logger: d.Logger}
+				runsH.Mount(r)
 			}
 			if d.ProjectSecrets != nil {
 				psH := &httphandlers.ProjectSecretsHandler{Svc: d.ProjectSecrets, DB: d.DB, Logger: d.Logger}

@@ -1,0 +1,99 @@
+{
+  "v1alpha1": {
+    "properties": {
+      "spec": {
+        "properties": {
+          "command": {
+            "description": "Command to exec in the run pod. Same shape as a Pod\ncontainer's command field — argv as a list, no shell.\nUse [\"sh\",\"-c\",\"my command\"] when you need a shell.\n",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1,
+            "type": "array"
+          },
+          "done": {
+            "default": false,
+            "type": "boolean"
+          },
+          "env": {
+            "items": {
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "envFromSecrets": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "image": {
+            "properties": {
+              "pullPolicy": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              },
+              "tag": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "placement": {
+            "type": "object",
+            "x-kubernetes-preserve-unknown-fields": true
+          },
+          "project": {
+            "description": "Project the run belongs to.",
+            "type": "string"
+          },
+          "service": {
+            "description": "Service whose latest succeeded build image + env this\nrun inherits. CR name shape: \u003cproject\u003e-\u003cservice\u003e.\n",
+            "type": "string"
+          },
+          "timeoutSeconds": {
+            "default": 1800,
+            "maximum": 86400,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "triggeredBy": {
+            "description": "user | webhook | api | system",
+            "type": "string"
+          },
+          "triggeredByUser": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "project",
+          "service",
+          "command"
+        ],
+        "type": "object"
+      },
+      "status": {
+        "type": "object",
+        "x-kubernetes-preserve-unknown-fields": true
+      }
+    },
+    "required": [
+      "spec"
+    ],
+    "type": "object"
+  }
+}
