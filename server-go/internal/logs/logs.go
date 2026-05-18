@@ -107,6 +107,22 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 		return []Line{}, env, nil
 	}
 
+	// run:<KusoRun name> — same shape as build:<...> but for one-shot
+	// task pods. The run pod's label kuso.sislelabs.com/run=<name>
+	// (set by the kusorun helm chart's _helpers.tpl) is the selector.
+	// Once the Job's ttlSecondsAfterFinished elapses (~10 min default)
+	// the pod is GC'd; we don't have a persisted-archive fallback the
+	// way builds do, so post-TTL we return empty + the caller's UI
+	// shows "log output no longer available" rather than 404.
+	if strings.HasPrefix(env, "run:") {
+		runName := strings.TrimPrefix(env, "run:")
+		out, err := s.tailRunPods(ctx, ns, runName, lines)
+		if err == nil {
+			return out, env, nil
+		}
+		return []Line{}, env, nil
+	}
+
 	envName := env
 	if !strings.Contains(env, "-") {
 		envName = fqn + "-" + env
@@ -239,6 +255,59 @@ func (s *Service) tailBuildPods(ctx context.Context, ns, buildName string, lines
 			}
 			stream.Close()
 		}
+	}
+	if len(out) > lines {
+		out = out[len(out)-lines:]
+	}
+	return out, nil
+}
+
+// tailRunPods is the run-pod analog of tailBuildPods. Selects on
+// kuso.sislelabs.com/run=<name> (the label the kusorun helm chart
+// stamps via _helpers.tpl). One-shot Jobs only ever produce one
+// pod, so the per-pod balancing the build version does for
+// init-container chains isn't needed; we tail the single container
+// the run-pod has.
+//
+// Returns ([], nil) when no pod is found — typically because the
+// Job's TTL has elapsed and kube garbage-collected the pod. The
+// caller's UI shows "log output no longer available" rather than a
+// confusing error.
+func (s *Service) tailRunPods(ctx context.Context, ns, runName string, lines int) ([]Line, error) {
+	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: kube.LabelSelector(map[string]string{"kuso.sislelabs.com/run": runName}),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list run pods: %w", err)
+	}
+	if len(pods.Items) == 0 {
+		return []Line{}, nil
+	}
+	tail := int64(lines)
+	out := make([]Line, 0, lines)
+	for i := range pods.Items {
+		pod := &pods.Items[i]
+		// Single container per run pod (the kusorun chart renders
+		// `containers: [{name: run, …}]`), so we just GetLogs without
+		// a Container override. If the user's command wrote to stderr
+		// only, kubelet aggregates both streams into the same pipe.
+		req := s.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
+			TailLines: &tail,
+		})
+		stream, err := req.Stream(ctx)
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(stream)
+		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				continue
+			}
+			out = append(out, Line{Pod: pod.Name, Line: line})
+		}
+		stream.Close()
 	}
 	if len(out) > lines {
 		out = out[len(out)-lines:]

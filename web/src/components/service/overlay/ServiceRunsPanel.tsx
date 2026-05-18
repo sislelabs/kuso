@@ -20,7 +20,8 @@ import {
 import { relativeTime } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Play, X, Terminal, AlertCircle } from "lucide-react";
+import { LogStream } from "@/components/logs/LogStream";
+import { Play, X, Terminal, AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -79,6 +80,7 @@ function triggerLabel(r: KusoRun): string {
 export function ServiceRunsPanel({ project, service }: Props) {
   const runs = useRuns(project, service);
   const canRun = useCan(Perms.ServicesWrite);
+  const [openRun, setOpenRun] = useState<string | null>(null);
 
   return (
     <div className="space-y-4">
@@ -103,7 +105,17 @@ export function ServiceRunsPanel({ project, service }: Props) {
       ) : (
         <ul className="space-y-2">
           {(runs.data ?? []).map((r) => (
-            <RunRow key={r.metadata.name} project={project} service={service} run={r} canCancel={canRun} />
+            <RunRow
+              key={r.metadata.name}
+              project={project}
+              service={service}
+              run={r}
+              canCancel={canRun}
+              isOpen={openRun === r.metadata.name}
+              onToggle={() =>
+                setOpenRun((cur) => (cur === r.metadata.name ? null : r.metadata.name))
+              }
+            />
           ))}
         </ul>
       )}
@@ -250,11 +262,15 @@ function RunRow({
   service,
   run,
   canCancel,
+  isOpen,
+  onToggle,
 }: {
   project: string;
   service: string;
   run: KusoRun;
   canCancel: boolean;
+  isOpen: boolean;
+  onToggle: () => void;
 }) {
   const phase = classify(runPhase(run));
   const name = run.metadata.name;
@@ -273,46 +289,76 @@ function RunRow({
         !["failed", "succeeded", "running"].includes(phase) && "border-[var(--border-subtle)]",
       )}
     >
-      <div className="flex items-center gap-3 px-3 py-2.5">
-        {phaseBadge(phase)}
-        <div className="min-w-0 flex-1">
-          <div className="truncate font-mono text-[12px] text-[var(--text-primary)]" title={cmd}>
-            {cmd || <span className="text-[var(--text-tertiary)]">(no command)</span>}
-          </div>
-          <div className="mt-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
-            {created ? relativeTime(created) : "—"}
-            {completed && phase !== "running" && phase !== "pending" && (
-              <>
-                {" · finished "}
-                {relativeTime(completed)}
-              </>
-            )}
-            {triggerLabel(run) && (
-              <>
-                {" · "}
-                <span>{triggerLabel(run)}</span>
-              </>
-            )}
-            {(run.spec.env?.length ?? 0) > 0 && (
-              <>
-                {" · "}
-                <span title={(run.spec.env ?? []).map((e) => `${e.name}=${e.value}`).join(" ")}>
-                  {run.spec.env!.length} env override{run.spec.env!.length === 1 ? "" : "s"}
-                </span>
-              </>
-            )}
-          </div>
-          {phase === "failed" && msg && (
-            <div className="mt-1 flex items-start gap-1 font-mono text-[11px] text-red-300/90" title={msg}>
-              <AlertCircle className="mt-[1px] h-3 w-3 shrink-0" />
-              <span className="truncate">{msg}</span>
+      <div className="flex items-center gap-1 px-3 py-2.5">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex flex-1 items-center gap-3 text-left"
+        >
+          {phaseBadge(phase)}
+          <div className="min-w-0 flex-1">
+            <div className="truncate font-mono text-[12px] text-[var(--text-primary)]" title={cmd}>
+              {cmd || <span className="text-[var(--text-tertiary)]">(no command)</span>}
             </div>
-          )}
-        </div>
+            <div className="mt-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+              {created ? relativeTime(created) : "—"}
+              {completed && phase !== "running" && phase !== "pending" && (
+                <>
+                  {" · finished "}
+                  {relativeTime(completed)}
+                </>
+              )}
+              {triggerLabel(run) && (
+                <>
+                  {" · "}
+                  <span>{triggerLabel(run)}</span>
+                </>
+              )}
+              {(run.spec.env?.length ?? 0) > 0 && (
+                <>
+                  {" · "}
+                  <span title={(run.spec.env ?? []).map((e) => `${e.name}=${e.value}`).join(" ")}>
+                    {run.spec.env!.length} env override{run.spec.env!.length === 1 ? "" : "s"}
+                  </span>
+                </>
+              )}
+            </div>
+            {phase === "failed" && msg && (
+              <div className="mt-1 flex items-start gap-1 font-mono text-[11px] text-red-300/90" title={msg}>
+                <AlertCircle className="mt-[1px] h-3 w-3 shrink-0" />
+                <span className="truncate">{msg}</span>
+              </div>
+            )}
+          </div>
+        </button>
         {inflight && canCancel && (
           <CancelRunButton project={project} service={service} runName={name} />
         )}
+        <button
+          type="button"
+          onClick={onToggle}
+          className="rounded p-1 text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+          title={isOpen ? "Hide logs" : "Show logs"}
+        >
+          {isOpen ? (
+            <ChevronDown className="h-4 w-4 shrink-0" />
+          ) : (
+            <ChevronRight className="h-4 w-4 shrink-0" />
+          )}
+        </button>
       </div>
+      {isOpen && (
+        <div className="min-w-0 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]">
+          <div className="h-[360px]">
+            <LogStream
+              project={project}
+              service={service}
+              env={`run:${name}`}
+              height="100%"
+            />
+          </div>
+        </div>
+      )}
     </li>
   );
 }

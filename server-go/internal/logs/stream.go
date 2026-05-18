@@ -191,6 +191,36 @@ func (s *Service) Stream(ctx context.Context, project, service, env string, tail
 		return env, err
 	}
 
+	// Run-pod stream: env="run:<KusoRun name>". The kusorun helm chart
+	// stamps kuso.sislelabs.com/run=<release-name> on the pod template;
+	// we select on that. One-shot Jobs only ever produce one pod, so
+	// the per-pod fan-out streamPods uses for env-replica counts works
+	// equally well here (with N=1). When the Job's ttlSecondsAfterFinished
+	// has elapsed and kube garbage-collected the pod, we wait briefly
+	// for re-creation (typical bursty-cluster ~2-3s reconcile lag), then
+	// send phase=completed if still empty so the client closes cleanly
+	// instead of timing out.
+	if strings.HasPrefix(env, "run:") {
+		runName := strings.TrimPrefix(env, "run:")
+		pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: "kuso.sislelabs.com/run=" + runName,
+		})
+		if err != nil {
+			return env, fmt.Errorf("list run pods: %w", err)
+		}
+		if len(pods.Items) == 0 {
+			// Pod gone (Job TTL elapsed) — no archive yet for runs.
+			// Send a one-shot info frame so the UI shows "log output
+			// no longer available" rather than spinning forever.
+			_ = sink.Write(Frame{Type: "log", Pod: runName, Line: "── run log no longer available (pod has been garbage-collected) ──"})
+			_ = sink.Write(Frame{Type: "phase", Value: "completed"})
+			return env, nil
+		}
+		err = s.streamPods(ctx, ns, pods.Items, tailLines, sink)
+		_ = sink.Write(Frame{Type: "phase", Value: "completed"})
+		return env, err
+	}
+
 	envName := env
 	if !strings.Contains(env, "-") {
 		envName = fqn + "-" + env

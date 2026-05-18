@@ -78,6 +78,12 @@ func (h *NotificationsHandler) Mount(r chi.Router) {
 		r.Get("/api/notifications/feed/unread-count", h.FeedUnread)
 		r.Post("/api/notifications/feed/read-all", h.FeedReadAll)
 		r.Delete("/api/notifications/feed", h.FeedClear)
+		// Outbox health: pending + dead-letter counts surface a red
+		// badge on the Settings → Notifications card when webhooks
+		// have been failing past the retry cap. Without a UI signal,
+		// operators only learn from kuso_notify_outbox_dead Prometheus
+		// alerts (and most installs don't ship Prom).
+		r.Get("/api/notifications/outbox-stats", h.OutboxStats)
 	})
 }
 
@@ -200,6 +206,27 @@ func (h *NotificationsHandler) FeedClear(w http.ResponseWriter, r *http.Request)
 		h.Logger.Info("notifications feed cleared", "rows", n, "user", auditUser(ctx))
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// OutboxStats returns the pending + dead-letter row counts for the
+// webhook delivery queue. The bell-icon feed bypasses the outbox, so
+// these numbers only reflect external webhook health (Slack, Discord,
+// generic webhook URLs). A non-zero `dead` means at least one channel
+// is permanently misconfigured — the UI badges the card red.
+func (h *NotificationsHandler) OutboxStats(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := notifCtx(r)
+	defer cancel()
+	pending, err := h.DB.CountOutboxPending(ctx)
+	if err != nil {
+		h.fail(w, "outbox pending", err)
+		return
+	}
+	dead, err := h.DB.CountOutboxDead(ctx)
+	if err != nil {
+		h.fail(w, "outbox dead", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"pending": pending, "dead": dead})
 }
 
 // Test sends a synthetic event to the chosen notification config so

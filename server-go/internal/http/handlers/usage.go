@@ -38,6 +38,7 @@ func (h *UsageHandler) Mount(rt interface {
 		return
 	}
 	rt.Get("/api/usage", h.Get)
+	rt.Get("/api/usage/projects", h.GetProjects)
 }
 
 // UsageResponse is the wire shape the /settings/usage page consumes.
@@ -103,6 +104,97 @@ func (h *UsageHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	resp.Projected = project(totals, rates, days)
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// ProjectUsageRow is one project's totals + cost + share-of-cluster.
+// Share is computed against the cluster total (sum across every
+// project) so the UI can render a "% of cluster" column without
+// re-summing client-side.
+type ProjectUsageRow struct {
+	Project       string  `json:"project"`
+	CPUMilliHours int64   `json:"cpuMilliHours"`
+	MemGBHours    float64 `json:"memGBHours"`
+	Cost          float64 `json:"cost"`
+	SharePct      float64 `json:"sharePct"`
+}
+
+// ProjectUsageResponse is the wire shape /settings/usage consumes.
+// Daily exposes the per-(project, day) curve for trend rendering;
+// Projects is the headline table. ClusterTotal is the sum across
+// projects — useful as a sanity check against the per-node total.
+type ProjectUsageResponse struct {
+	Days         int                  `json:"days"`
+	Daily        []db.ProjectCostDay  `json:"daily"`
+	Projects     []ProjectUsageRow    `json:"projects"`
+	ClusterTotal UsageProjection      `json:"clusterTotal"`
+	Rates        UsageRates           `json:"rates"`
+}
+
+// GetProjects handles GET /api/usage/projects?days=N (default 30).
+// Drives the per-project rollup on the rewritten /settings/usage page.
+func (h *UsageHandler) GetProjects(w http.ResponseWriter, r *http.Request) {
+	days := 30
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 365 {
+			days = n
+		}
+	}
+	ctx := r.Context()
+	daily, err := h.DB.ProjectCostRollup(ctx, days)
+	if err != nil {
+		http.Error(w, "project rollup: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	totals, err := h.DB.ProjectCostTotals(ctx, days)
+	if err != nil {
+		http.Error(w, "project totals: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	rates := readRates(h.Cfg)
+
+	scale := 30.0 / float64(days)
+	if days <= 0 {
+		scale = 1
+	}
+	var clusterCPUMilli int64
+	var clusterMemGB float64
+	for _, t := range totals {
+		clusterCPUMilli += t.CPUMilliHours
+		clusterMemGB += t.MemGBHours
+	}
+	projectedCPU := int64(float64(clusterCPUMilli) * scale)
+	projectedMem := clusterMemGB * scale
+	clusterCost := (float64(projectedCPU)/1000.0)*rates.CPUPerHour + projectedMem*rates.MemGBPerHour
+
+	rows := make([]ProjectUsageRow, 0, len(totals))
+	for _, t := range totals {
+		projCPU := int64(float64(t.CPUMilliHours) * scale)
+		projMem := t.MemGBHours * scale
+		cost := (float64(projCPU)/1000.0)*rates.CPUPerHour + projMem*rates.MemGBPerHour
+		share := 0.0
+		if clusterCPUMilli > 0 {
+			share = float64(t.CPUMilliHours) / float64(clusterCPUMilli) * 100
+		}
+		rows = append(rows, ProjectUsageRow{
+			Project:       t.Project,
+			CPUMilliHours: projCPU,
+			MemGBHours:    projMem,
+			Cost:          cost,
+			SharePct:      share,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, ProjectUsageResponse{
+		Days:     days,
+		Daily:    daily,
+		Projects: rows,
+		ClusterTotal: UsageProjection{
+			CPUMilliHours: projectedCPU,
+			MemGBHours:    projectedMem,
+			CostTotal:     clusterCost,
+		},
+		Rates: rates,
+	})
 }
 
 // readRates pulls spec.cost.{cpuPerHour, memGBPerHour, currency} off

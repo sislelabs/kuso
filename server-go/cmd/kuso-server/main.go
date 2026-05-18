@@ -42,6 +42,7 @@ import (
 	"kuso/server/internal/logship"
 	"kuso/server/internal/metrics"
 	"kuso/server/internal/nodemetrics"
+	"kuso/server/internal/projectmetrics"
 	"kuso/server/internal/nodewatch"
 	"kuso/server/internal/notify"
 	"kuso/server/internal/platformharden"
@@ -815,6 +816,8 @@ func main() {
 		startKubeSingletons := func(workCtx context.Context) {
 			sampler := &nodemetrics.Sampler{DB: database, Kube: kubeClient, Logger: logger.With("component", "nodemetrics")}
 			go sampler.Run(workCtx)
+			projectSampler := &projectmetrics.Sampler{DB: database, Kube: kubeClient, Logger: logger.With("component", "projectmetrics")}
+			go projectSampler.Run(workCtx)
 			watcher := &nodewatch.Watcher{
 				Kube:   kubeClient,
 				Notify: notifyDisp,

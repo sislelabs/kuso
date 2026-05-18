@@ -282,6 +282,23 @@ CREATE TABLE IF NOT EXISTS "NodeMetric" (
 CREATE INDEX IF NOT EXISTS "NodeMetric_node_ts_idx" ON "NodeMetric"("node","ts");
 CREATE INDEX IF NOT EXISTS "NodeMetric_ts_idx" ON "NodeMetric"("ts");
 
+-- v0.13.6: per-project resource samples. One row per (project, sample
+-- tick) where the project sampler reads pod metrics from metrics-server
+-- and sums by kuso.sislelabs.com/project label. Drives the per-project
+-- rollup on /settings/usage. Same 5min cadence + 30-day retention as
+-- NodeMetric, so an N-project cluster writes 30·288·N rows over a
+-- month — still small.
+CREATE TABLE IF NOT EXISTS "ProjectMetric" (
+    "id" BIGSERIAL PRIMARY KEY,
+    "project" TEXT NOT NULL,
+    "ts" TIMESTAMPTZ NOT NULL,
+    "cpuMilli" BIGINT NOT NULL DEFAULT 0,
+    "memBytes" BIGINT NOT NULL DEFAULT 0,
+    "podCount" INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS "ProjectMetric_project_ts_idx" ON "ProjectMetric"("project","ts");
+CREATE INDEX IF NOT EXISTS "ProjectMetric_ts_idx" ON "ProjectMetric"("ts");
+
 -- v0.6.23: SSH key library.
 CREATE TABLE IF NOT EXISTS "SSHKey" (
     "id" TEXT PRIMARY KEY,

@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Bell, Plus, Trash2, Send, Webhook } from "lucide-react";
+import { AlertTriangle, Bell, Plus, Trash2, Send, Webhook } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
@@ -63,6 +63,8 @@ export default function NotificationsPage() {
         </div>
       </header>
 
+      <OutboxHealth />
+
       <div className="mb-3 flex items-center justify-end">
         <Button size="sm" onClick={() => setEditing("__new__")}>
           <Plus className="h-3 w-3" />
@@ -95,6 +97,54 @@ export default function NotificationsPage() {
       {editing === "__new__" && (
         <NotificationEditor notification={null} onClose={() => setEditing(null)} />
       )}
+    </div>
+  );
+}
+
+// OutboxHealth banner — pings GET /api/notifications/outbox-stats and
+// renders an amber pending-backlog banner or a red dead-letter banner
+// when webhook delivery is stuck. The bell-icon feed bypasses the
+// outbox, so a red badge here only points to external-webhook
+// misconfiguration (bad URL, revoked token), not in-app event flow.
+function OutboxHealth() {
+  const stats = useQuery({
+    queryKey: ["admin", "notifications", "outbox-stats"],
+    queryFn: () => api<{ pending: number; dead: number }>("/api/notifications/outbox-stats"),
+    refetchInterval: 30_000,
+  });
+  if (stats.isPending || !stats.data) return null;
+  const { pending, dead } = stats.data;
+  if (dead === 0 && pending === 0) return null;
+
+  if (dead > 0) {
+    return (
+      <div className="mb-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-[12px] text-red-200">
+        <div className="flex items-start gap-2">
+          <AlertTriangle className="mt-[1px] h-4 w-4 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <div className="font-mono text-[10px] uppercase tracking-widest text-red-300/80">
+              webhook delivery: dead-letter
+            </div>
+            <div className="mt-0.5 font-mono text-[11px] leading-snug">
+              {dead} delivery{dead === 1 ? "" : "ies"} past retry cap.
+              Inspect the rows with{" "}
+              <code className="rounded bg-black/30 px-1">
+                SELECT * FROM &quot;NotificationOutbox&quot; WHERE &quot;deliveredAt&quot;
+                IS NULL AND &quot;attempts&quot; &gt;= 10
+              </code>{" "}
+              — typically a revoked Slack/Discord URL.
+              {pending > 0 && ` (${pending} also pending retry.)`}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="mb-3 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 font-mono text-[11px] text-amber-200">
+      {pending} webhook deliver{pending === 1 ? "y" : "ies"} pending retry.
+      Transient — Slack throttling or a brief webhook outage usually clears
+      within a few minutes.
     </div>
   );
 }
