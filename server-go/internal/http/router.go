@@ -385,6 +385,11 @@ func mountAuthenticatedRoutes(
 		if d.Config != nil {
 			cfgH := &httphandlers.ConfigHandler{Cfg: d.Config, DB: d.DB, Logger: d.Logger}
 			cfgH.Mount(r)
+			// /api/usage: cost rollup derived from NodeMetric +
+			// the cost rates the operator set in the Kuso CR.
+			// Read-only; defaults safely when rates are unset.
+			usageH := &httphandlers.UsageHandler{DB: d.DB, Cfg: d.Config, Logger: d.Logger}
+			usageH.Mount(r)
 		}
 		if d.Addons != nil {
 			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, DB: d.DB, Audit: d.Audit, Logger: d.Logger}

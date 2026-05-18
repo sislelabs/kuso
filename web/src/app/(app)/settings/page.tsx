@@ -20,6 +20,7 @@ import {
   Search,
   Activity,
   ArrowDown,
+  DollarSign,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +62,7 @@ const CARDS: Card[] = [
   { href: "/settings/builds",           title: "Build resources",  description: "Concurrency cap + per-build memory/CPU limits. Tune to your VM size.", icon: Cpu,         perm: Perms.SettingsAdmin, group: "cluster", keywords: "kaniko buildpacks memory cpu limit concurrent" },
   { href: "/settings/backups",          title: "Backups",          description: "Server backup/restore + S3 credentials for scheduled addon dumps.", icon: HardDrive,    perm: Perms.SettingsAdmin, group: "cluster", keywords: "backup restore s3 dump pg_dump snapshot" },
   { href: "/settings/updates",          title: "Updates",          description: "Self-update the kuso server + operator + CRDs.",                    icon: Package,      perm: Perms.SettingsAdmin, group: "cluster", keywords: "version upgrade release self-update" },
+  { href: "/settings/usage",            title: "Usage + cost",     description: "Per-node CPU + memory rollup with monthly cost projection.",        icon: DollarSign,   perm: Perms.SettingsRead,  group: "cluster", keywords: "cost spend billing dollars cpu memory rollup metrics estimate" },
 
   // Team: users + groups + roles + audit log.
   { href: "/settings/users",    title: "Users",    description: "Local users. OAuth users land here on first login.",                                  icon: Users,        perm: Perms.UserWrite, group: "team", keywords: "user account login oauth invite" },
