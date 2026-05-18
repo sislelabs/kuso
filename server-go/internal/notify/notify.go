@@ -350,6 +350,17 @@ func (d *Dispatcher) dispatch(ctx context.Context, e Event) {
 		d.logger.Warn("notify: list configs", "err", err)
 		return
 	}
+	// Enqueue one outbox row per matching channel. The worker pool
+	// (StartOutboxWorkers, called from cmd/kuso-server's
+	// startSingletons) drains with exponential backoff. This flips
+	// webhook delivery from at-most-once (fire-and-forget on a
+	// bounded channel) to at-least-once (durable until the row is
+	// either delivered or hits the dead-letter cap).
+	payload, perr := db.MarshalOutboxPayload(e)
+	if perr != nil {
+		d.logger.Warn("notify: marshal outbox payload", "err", perr, "type", string(e.Type))
+		return
+	}
 	for _, n := range notifs {
 		if !n.Enabled {
 			continue
@@ -357,20 +368,11 @@ func (d *Dispatcher) dispatch(ctx context.Context, e Event) {
 		if !eventMatches(string(e.Type), n.Events) {
 			continue
 		}
-		switch n.Type {
-		case "discord":
-			url, _ := n.Config["url"].(string)
-			if url == "" {
-				continue
-			}
-			d.sendDiscord(ctx, url, e, mentionFor(e, n.Config))
-		case "webhook":
-			url, _ := n.Config["url"].(string)
-			if url == "" {
-				continue
-			}
-			secret, _ := n.Config["secret"].(string)
-			d.sendWebhook(ctx, url, secret, e)
+		if n.Type != "discord" && n.Type != "webhook" {
+			continue
+		}
+		if _, err := d.db.EnqueueOutbox(ctx, n.ID, string(e.Type), payload); err != nil {
+			d.logger.Warn("notify: enqueue outbox", "err", err, "channel", n.ID, "type", string(e.Type))
 		}
 	}
 }

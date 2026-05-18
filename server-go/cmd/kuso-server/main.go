@@ -243,6 +243,12 @@ func main() {
 	// at boot since version is a build-time constant.
 	notify.SetVersion(version.Version())
 	go notifyDisp.Run(ctx)
+	// Outbox worker pool — drains the NotificationOutbox table with
+	// exponential backoff. The dispatcher's Emit path enqueues one
+	// row per matching channel; workers compete via FOR UPDATE SKIP
+	// LOCKED so the leader gate on each worker keeps fan-out single-
+	// replica without losing parallelism inside that replica.
+	notifyDisp.StartOutboxWorkers(ctx, 0) // 0 = default (10 workers)
 
 	// Login rate-limiter pruner. The DB-backed limiter writes one row
 	// per active source IP; rows past their resetAt window are inert
@@ -875,6 +881,15 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 			logger.Warn("daily-cleanup notify", "err", err)
 		} else if n > 0 {
 			logger.Info("daily-cleanup notify pruned", "rows", n, "days", notifyDays)
+		}
+		// Outbox prune: drop successfully-delivered rows older than the
+		// same window. Dead-letter rows (attempts >= cap, no deliveredAt)
+		// stay forever so operators can audit what was lost — non-zero
+		// dead-letter count is itself the alert.
+		if n, err := database.PruneOutboxDelivered(c, now.AddDate(0, 0, -notifyDays)); err != nil {
+			logger.Warn("daily-cleanup outbox", "err", err)
+		} else if n > 0 {
+			logger.Info("daily-cleanup outbox pruned", "rows", n, "days", notifyDays)
 		}
 		// OAuth states past their TTL are dead weight; drop them
 		// daily. The window is fixed at 24h (way past any realistic

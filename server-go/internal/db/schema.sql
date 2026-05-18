@@ -309,6 +309,44 @@ CREATE TABLE IF NOT EXISTS "NotificationEvent" (
 CREATE INDEX IF NOT EXISTS "NotificationEvent_createdAt_idx" ON "NotificationEvent"("createdAt" DESC);
 CREATE INDEX IF NOT EXISTS "NotificationEvent_readAt_idx" ON "NotificationEvent"("readAt");
 
+-- v0.12: notification outbox for durable webhook delivery.
+--
+-- The in-memory dispatcher channel is best-effort: a bounded buffer
+-- drops events on overflow and a flaky Slack webhook fails-then-
+-- forgets. The outbox makes webhook fan-out at-least-once: Emit
+-- enqueues one row per matching channel, an N-worker pool drains
+-- with exponential backoff, and rows past the retry cap stay in the
+-- table as a dead-letter trail.
+--
+-- The bell-icon feed (NotificationEvent above) is unaffected — it
+-- still gets its own row on every Emit independent of outbox state.
+-- nextAttemptAt: timestamp when the next delivery attempt may begin.
+-- Workers SELECT ... WHERE deliveredAt IS NULL AND nextAttemptAt <=
+-- NOW() FOR UPDATE SKIP LOCKED LIMIT 1.
+CREATE TABLE IF NOT EXISTS "NotificationOutbox" (
+    "id" BIGSERIAL PRIMARY KEY,
+    "notificationId" TEXT NOT NULL,             -- FK Notification.id (channel, string-keyed)
+    "eventType" TEXT NOT NULL,
+    "payload" JSONB NOT NULL,                   -- serialised notify.Event
+    "attempts" INTEGER NOT NULL DEFAULT 0,
+    "lastError" TEXT,
+    "nextAttemptAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "deliveredAt" TIMESTAMPTZ,
+    "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+-- Workers query (deliveredAt IS NULL, nextAttemptAt <= NOW()) and
+-- order by nextAttemptAt — partial index keeps the hot path off the
+-- delivered-tail of the table.
+CREATE INDEX IF NOT EXISTS "NotificationOutbox_pending_idx"
+    ON "NotificationOutbox"("nextAttemptAt")
+    WHERE "deliveredAt" IS NULL;
+-- Dead-letter view: rows past the cap that workers gave up on.
+-- attempts >= 10 is the cap; operators can SELECT * FROM
+-- NotificationOutbox WHERE deliveredAt IS NULL AND attempts >= 10
+-- to see what's stuck.
+CREATE INDEX IF NOT EXISTS "NotificationOutbox_createdAt_idx"
+    ON "NotificationOutbox"("createdAt" DESC);
+
 -- v0.7: searchable logs. Postgres version drops SQLite's FTS5 — log
 -- search is by (project, service, time-range) + LIKE; the working
 -- volume doesn't justify tsvector overhead.

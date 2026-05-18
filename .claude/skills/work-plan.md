@@ -121,27 +121,40 @@ The three security items that block scaling up trust in the platform.
 
 ## Phase 5 — Scalability (heavier)
 
-- [ ] **#6 Async notification webhook delivery.** Two-table outbox
-  + 10-worker pool with exponential backoff. New table
-  `notification_outbox`. Dispatcher enqueues; workers drain. Bell
-  feed unaffected (still goes through `NotificationEvent`).
+- [x] **#6 Async notification webhook delivery.** New
+  `NotificationOutbox` table + 10-worker drain pool. Dispatch path
+  switched from in-memory channel fan-out (at-most-once) to
+  outbox enqueue (at-least-once). Workers use FOR UPDATE SKIP
+  LOCKED + a leader gate via the dispatcher's existing hook.
+  Exponential backoff (5s → 5min cap) with ±20% jitter; dead-letter
+  at 10 attempts. Daily prune sweeps delivered rows; dead-letter
+  stays forever as audit trail. Tests: 4 DB-level (skip without
+  `KUSO_TEST_PG_DSN`) + 2 pure-function backoff tests.
 - [ ] **#7 Partition `log_lines` by day.** Convert to declarative
   partitioning. Migrate via schema bump. Prune becomes
   `DROP PARTITION`. New partitions cut on first insert via the
-  existing daily cleanup tick.
+  existing daily cleanup tick. **Deferred** — non-trivial migration
+  needs a session where it can be tested against real Postgres
+  data.
 - [ ] **#8 Node informer for watcher/sampler.** Switch `nodewatch`
   and `nodemetrics` from `List`-per-tick to a Node informer with
-  event handlers. ~half day.
-- [ ] **#9 Build status SSE.** Replace 2-sec poll in
-  `features/services/hooks.ts:107`-style with SSE over the existing
-  notify event stream. Hardest of the bunch; touches both server
-  and client.
-- [ ] **#10 PgBouncer in deploy bundle.** Add transaction-pooler
-  Deployment + Service to `deploy/postgres.yaml`. Wire `KUSO_DB_DSN`
-  through it by default. Document opt-out for managed-DB users.
-- [ ] **#15 instancepg health probe.** Wire periodic `SELECT 1` in
-  `Reconcile` that stamps `LastError` and flips to `unhealthy` when
-  ping fails. Makes the `unhealthy` phase reachable.
+  event handlers. **Deferred** — half-day refactor of two
+  goroutines; land in its own session.
+- [ ] **#9 Build status SSE.** Replace the 5s poll in
+  `ProjectCanvas`/`useBuilds` with SSE. **Deferred** — hardest
+  item in the phase; touches server + client + needs replay/resume
+  semantics for refresh. Half-day minimum.
+- [x] **#10 PgBouncer in deploy bundle.** ConfigMap + Deployment +
+  Service in `deploy/postgres.yaml`. DSN-stamp Job prefers
+  `kuso-pgbouncer:6432`, falls back to direct rw Service when
+  PgBouncer is absent. Pre-flip audit of DB usage confirmed
+  transaction-pool compatibility.
+- [x] **#15 instancepg health probe.** Periodic `SELECT 1` in
+  Reconcile stamps `healthSnapshot{ok, err, checkedAt}` under
+  `healthMu`. GetStatus reads it and flips Phase ready →
+  unhealthy on failure (zero snapshot stays at "ready" to avoid
+  flickering on fresh-leader first tick). Tests pin the three
+  transitions + the probe-against-bad-DSN path.
 
 ## Phase 6 — New features (big)
 
