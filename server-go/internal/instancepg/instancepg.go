@@ -456,8 +456,19 @@ func (s *Service) Run(ctx context.Context, interval time.Duration) {
 // no managed PG is configured. We look it up by name (deterministic)
 // rather than label-selector because the name is fixed and a name
 // lookup hits the apiserver index — cheaper than a list+filter.
+//
+// NotFound is the "no managed PG configured" state, not an error —
+// callers handle (nil, nil) the same way they handle "external mode"
+// or "nothing yet." Other kube errors propagate.
 func (s *Service) findManagedAddon(ctx context.Context) (*kube.KusoAddon, error) {
-	return s.Kube.GetKusoAddon(ctx, s.Namespace, addonCRName())
+	a, err := s.Kube.GetKusoAddon(ctx, s.Namespace, addonCRName())
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return a, nil
 }
 
 // readAdminDSN reads the admin DSN out of instance-secrets. Returns
