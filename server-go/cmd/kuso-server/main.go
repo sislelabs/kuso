@@ -451,9 +451,10 @@ func main() {
 		// of an external-PG admin DSN. The background Reconcile loop
 		// promotes a freshly-provisioned managed PG from "pending" to
 		// "ready" by harvesting the helm-chart's conn Secret and
-		// writing the admin DSN into instance-secrets.
+		// writing the admin DSN into instance-secrets. The Run loop
+		// is leader-gated below alongside the other singletons so
+		// multi-replica installs don't triple-write the admin DSN.
 		instancePGSvc = instancepg.New(kc, *namespace, instanceSecretSvc, logger)
-		go instancePGSvc.Run(ctx, 0)
 		// Wire the addon→env auto-attach hook so a freshly-created
 		// service env starts with envFromSecrets pre-populated for
 		// every existing project addon. Without this, services added
@@ -587,6 +588,14 @@ func main() {
 					Interval:  30 * time.Second,
 					BatchSize: 500,
 				}).Run(workCtx)
+			}
+			// instance-pg reconciler: harvests the cluster PG addon's
+			// conn Secret and writes the admin DSN into instance-secrets.
+			// Leader-gated because the DSN write races across replicas;
+			// the addon-CR read informs the same managed-addon state for
+			// every replica, so the worker only needs to run once.
+			if os.Getenv("KUSO_INSTANCEPG_DISABLED") != "true" && instancePGSvc != nil {
+				go instancePGSvc.Run(workCtx, 0)
 			}
 		}
 		if os.Getenv("KUSO_DISABLE_LEADER_ELECTION") == "true" {

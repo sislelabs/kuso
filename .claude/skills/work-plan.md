@@ -42,26 +42,28 @@ in code/comments rewritten to standalone prose.
 
 The three security items that block scaling up trust in the platform.
 
-- [ ] **#1 RBAC: scope `secrets` writes per-namespace.** Today
-  `deploy/server-go.yaml` grants `secrets:[create,update,patch,delete]`
-  cluster-wide. Split into:
-  - ClusterRole with `secrets:[get,list,watch]` only (informer reads).
-  - Role template applied to each managed ns at create time
-    (`internal/projects.EnsureNamespace`) with the write verbs.
-  - Bind via RoleBinding at namespace-create time.
-  - Test: confirm a fresh project can still read/write its addon
-    Secrets; confirm a `kubectl auth can-i` against `kube-system`
-    fails for the kuso-server SA.
-- [ ] **#2 instancepg.Run leader gate.** Move
-  `go instancePGSvc.Run(ctx, 0)` (currently in `cmd/kuso-server/main.go:457`
-  outside the leader block) into `startSingletons` so only one
-  replica reconciles the cluster PG. Re-test multi-replica.
-- [ ] **#3 instancepg SSL default.** `ConfigureExternal` should
-  default to `sslmode=require` when caller omits, reject
-  `sslmode=disable` unless host is `127.0.0.1`/`*.svc.cluster.local`.
-  `buildAdminDSN` for managed PG should not hard-code `sslmode=disable`.
-- [ ] Test additions: `instancepg_test.go` for SSL coercion + reject.
-- [ ] Commit: `fix(sec): scope secrets per-ns + instancepg ssl + leader gate`
+- [x] **#1 RBAC: scope `secrets` writes per-namespace.**
+  - ClusterRole `kuso-server` now: `secrets:[get,list,watch]` only;
+    dropped cluster-wide `pods/exec`; `rolebindings:[get,list,create]`
+    added so the stamper can bind into new namespaces.
+  - New ClusterRole `kuso-server-managed-ns` carries
+    `secrets:[create,update,patch,delete]` + `pods/exec:[create]`.
+  - Static RoleBinding stamped into home `kuso` ns by the deploy
+    bundle; `EnsureNamespace` stamps a binding into each project ns;
+    `LabelNamespaceManaged` backfills for upgrade-in-place installs.
+- [x] **#2 instancepg.Run leader gate.** Moved out of the always-on
+  goroutine into `startSingletons` with a `KUSO_INSTANCEPG_DISABLED`
+  env knob. Multi-replica installs no longer race on the admin DSN
+  write.
+- [x] **#3 instancepg SSL default.** New `coerceSSLMode` enforces
+  `sslmode=require` as the default for non-local hosts and rejects
+  explicit `sslmode=disable` for them. `buildAdminDSN` keys SSL off
+  host class (loopback/in-cluster `.svc` → disable; everything else →
+  require). New tests pin `coerceSSLMode`, `isLocalHost`, and the
+  rewritten `buildAdminDSN` table.
+- [x] Tests: `instancepg_test.go` updated with SSL coercion +
+  in-cluster vs public-host policy. `go test ./...` green.
+- [x] Commit: `fix(sec): scope secrets per-ns + instancepg ssl + leader gate`
 
 ## Phase 3 — Mechanical refactors (file splits, no behaviour change)
 

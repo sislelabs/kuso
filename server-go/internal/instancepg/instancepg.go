@@ -319,9 +319,11 @@ func (s *Service) ConfigureExternal(ctx context.Context, req ConfigureExternalRe
 	if !strings.HasPrefix(dsn, "postgres://") && !strings.HasPrefix(dsn, "postgresql://") {
 		return fmt.Errorf("%w: dsn must start with postgres:// or postgresql://", ErrInvalid)
 	}
-	if _, err := url.Parse(dsn); err != nil {
-		return fmt.Errorf("%w: dsn parse: %s", ErrInvalid, err)
+	coerced, cerr := coerceSSLMode(dsn)
+	if cerr != nil {
+		return fmt.Errorf("%w: %s", ErrInvalid, cerr)
 	}
+	dsn = coerced
 	addon, err := s.findManagedAddon(ctx)
 	if err != nil {
 		return err
@@ -337,6 +339,58 @@ func (s *Service) ConfigureExternal(ctx context.Context, req ConfigureExternalRe
 	}
 	s.Logger.Info("instancepg: external PG configured")
 	return nil
+}
+
+// coerceSSLMode enforces SSL defaults on a user-supplied DSN. Rules:
+//
+//   - host is loopback or an in-cluster service: any sslmode is fine
+//     (in-cluster traffic rides the pod-to-pod network; sslmode=disable
+//     is a common pattern for the bundled CNPG cluster).
+//   - any other host (public DNS, RDS, Neon, an IP elsewhere): missing
+//     sslmode defaults to `require`; an explicit sslmode=disable is
+//     rejected as a footgun. The admin DSN is the keys-to-the-kingdom
+//     credential for the per-project provisioner — silently allowing
+//     plaintext over the public internet would be the wrong default.
+//
+// Returns the (possibly rewritten) DSN. Errors only on parse failure
+// or an explicit disable against a non-local host.
+func coerceSSLMode(dsn string) (string, error) {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return "", fmt.Errorf("dsn parse: %s", err)
+	}
+	host := u.Hostname()
+	local := isLocalHost(host)
+	q := u.Query()
+	mode := strings.ToLower(strings.TrimSpace(q.Get("sslmode")))
+	if local {
+		return dsn, nil
+	}
+	if mode == "disable" {
+		return "", fmt.Errorf("sslmode=disable is not allowed for non-local hosts (host=%q); use require/verify-ca/verify-full or run via a private network", host)
+	}
+	if mode == "" {
+		q.Set("sslmode", "require")
+		u.RawQuery = q.Encode()
+		return u.String(), nil
+	}
+	return dsn, nil
+}
+
+// isLocalHost reports whether the named host is loopback or an in-
+// cluster service DNS name. Used by coerceSSLMode to skip the
+// "require sslmode" gate for traffic that never leaves the cluster.
+func isLocalHost(host string) bool {
+	if host == "" {
+		return true // unix-socket DSN or relative — caller's problem, not an SSL one
+	}
+	switch host {
+	case "localhost", "127.0.0.1", "::1":
+		return true
+	}
+	return strings.HasSuffix(host, ".svc") ||
+		strings.HasSuffix(host, ".svc.cluster.local") ||
+		strings.HasSuffix(host, ".cluster.local")
 }
 
 // Disable tears down whichever mode is active. Refuses when any
@@ -547,12 +601,26 @@ func buildAdminDSN(data map[string][]byte) string {
 	if db == "" {
 		db = "postgres"
 	}
+	// SSL mode policy: the managed PG conn Secret addresses the addon
+	// over an in-cluster Service DNS name (`<addon>.<ns>.svc`). That
+	// traffic stays on the pod network and the CNPG chart doesn't
+	// install a CA cert that the lib/pq client could verify against,
+	// so sslmode=disable is intentional and bounded — the same policy
+	// coerceSSLMode applies for external DSNs (any non-local host
+	// must opt in to sslmode=require). If a future managed chart
+	// ships a CA bundle, lift this to sslmode=require.
+	q := url.Values{}
+	if isLocalHost(host) {
+		q.Set("sslmode", "disable")
+	} else {
+		q.Set("sslmode", "require")
+	}
 	u := &url.URL{
 		Scheme:   "postgres",
 		User:     url.UserPassword(user, pw),
 		Host:     host + ":" + port,
 		Path:     "/" + db,
-		RawQuery: "sslmode=disable",
+		RawQuery: q.Encode(),
 	}
 	return u.String()
 }

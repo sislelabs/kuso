@@ -1,30 +1,19 @@
 ---
 # ServiceAccount + RBAC for the kuso-server pod.
-# The previous deploy bundle relied on hack/install.sh inlining these
-# at first install — but anyone running `kubectl apply -f deploy/`
-# directly (e.g. to redeploy server-go without re-running the installer)
-# got a Deployment that hangs forever on `serviceaccount "kuso-server"
-# not found`. Including them here makes the bundle self-sufficient.
 #
-# The cluster-wide grant is tighter than the install.sh historical
-# `cluster-admin` binding: only the verbs the server actually needs,
-# scoped to the resources we manage.
+# Two-tier RBAC: a thin ClusterRole (kuso-server) with read-only verbs
+# on Secrets cluster-wide so the shared informer can see addon conn
+# Secrets in any project namespace; plus a Role (kuso-server-managed-ns)
+# stamped into every managed namespace via RoleBinding for write +
+# exec verbs. The home `kuso` ns gets the binding via the bootstrap
+# step below; each new project ns gets one via EnsureNamespace.
 #
-# FUTURE TIGHTENING (pass-4 Sec F-07/F-08): cluster-wide `secrets:*`
-# is the largest remaining surface — a kuso-server RCE today reads
-# every Secret in every namespace, including kube-system's SA
-# signing key. Kubernetes RBAC doesn't support label-selector
-# scoping, so the real fix is a split:
-#
-#   - Cluster-scope: secrets:get,list,watch (informer reads only)
-#   - Namespace-bound Role: secrets:create,update,patch,delete on
-#     each managed namespace (home `kuso` + each project ns),
-#     bound via a RoleBinding that EnsureNamespace creates.
-#
-# That's a bigger lift (install.sh + EnsureNamespace would have to
-# stamp the RoleBinding); tracked for v0.11. Same shape for
-# pods/exec (only used to talk to addon pods in project namespaces).
-# For now this commit drops the small unused bits.
+# An RCE on kuso-server can still list every Secret in the cluster
+# (read-only is required for the informer to function), but can no
+# longer mutate Secrets in kube-system or any other ns the operator
+# hasn't explicitly given us. pods/exec is similarly limited to
+# managed namespaces — the addon-password-repair path only ever
+# touches postgres addon pods that live there.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -64,9 +53,15 @@ rules:
     # progress-status writes during an in-place upgrade hard-fail with
     # 403. delete is granted so the updater can GC its old status CMs.
     verbs: [get, list, watch, create, update, patch, delete]
+  # Secrets: read-only at cluster scope so the shared informer can
+  # see addon conn Secrets across every project namespace. Writes
+  # (create/update/patch/delete) live on the namespace-scoped Role
+  # below (kuso-server-managed-ns), bound into each managed ns by
+  # EnsureNamespace. An RCE on kuso-server can read Secrets cluster-
+  # wide but cannot mutate them outside managed namespaces.
   - apiGroups: [""]
     resources: [secrets]
-    verbs: [get, list, watch, create, update, patch, delete]
+    verbs: [get, list, watch]
   # serviceaccounts: the in-process buildcontroller (since v0.10, commit
   # be66c12) creates one ServiceAccount per build Job to gate the build
   # pod's identity for admission webhooks (Kyverno/OPA/PSA). The retired
@@ -91,16 +86,15 @@ rules:
   - apiGroups: [""]
     resources: [nodes/status]
     verbs: [get, list, watch]
-  # pods/portforward removed (pass-4 Sec F-07): unused by every
-  # server code path. The CLI runs `kubectl port-forward` locally
-  # using the user's kubeconfig, not via kuso-server.
-  # pods/exec stays — addons.repair.execInPod uses it to push
-  # password resyncs into postgres addon pods (one-shot psql
-  # ALTER ROLE). Scoping to managed namespaces only is the
-  # follow-up tracked above.
+  # pods/log: cluster-wide so the dashboard's log streamer can tail
+  # any project pod. Read-only — log reads can't mutate cluster state.
+  # pods/exec is intentionally NOT here; it lives on the namespace-
+  # scoped Role below so kuso-server can only `kubectl exec` into
+  # pods in managed namespaces (where addon repair runs psql ALTER
+  # ROLE against postgres addon pods).
   - apiGroups: [""]
-    resources: [pods/log, pods/exec]
-    verbs: [get, list, create]
+    resources: [pods/log]
+    verbs: [get, list]
   - apiGroups: [apps]
     resources: [deployments, statefulsets, replicasets]
     verbs: [get, list, watch, patch, update]
@@ -140,6 +134,16 @@ rules:
   - apiGroups: [metrics.k8s.io]
     resources: [nodes, pods]
     verbs: [get, list]
+  # RBAC: kuso-server creates per-project RoleBindings at
+  # EnsureNamespace time so it can mutate Secrets + exec into addon
+  # pods inside the project namespace. get + list let the stamper
+  # check idempotence; create lets it land the binding. delete/patch
+  # are NOT granted — once stamped, bindings are immutable from the
+  # server's view (project deletion drops the whole namespace, which
+  # cascades to the binding).
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [rolebindings]
+    verbs: [get, list, create]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -149,6 +153,46 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: kuso-server
+subjects:
+  - kind: ServiceAccount
+    name: kuso-server
+    namespace: kuso
+---
+# Namespace-scoped Role for the write verbs that don't belong cluster-
+# wide. Every managed namespace (home `kuso` + each project ns) gets a
+# RoleBinding to this Role. EnsureNamespace stamps the binding for new
+# project namespaces; the bootstrap RoleBinding below covers the home
+# `kuso` ns. The ClusterRole template is referenced by RoleBinding (not
+# Role) so we keep one canonical definition.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kuso-server-managed-ns
+rules:
+  # Secret writes — addon conn Secrets, per-service Secrets, GitHub
+  # clone-token Secrets, kuso-server-secrets in the home ns. Scope:
+  # ONLY the managed namespace this Role is bound into.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create, update, patch, delete]
+  # pods/exec: addons.repair execs into postgres addon pods to push
+  # password resyncs via psql ALTER ROLE. Strictly namespace-scoped
+  # to managed project namespaces.
+  - apiGroups: [""]
+    resources: [pods/exec]
+    verbs: [create]
+---
+# Bootstrap binding for the home `kuso` namespace. New project
+# namespaces get their RoleBinding created by EnsureNamespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kuso-server-managed-ns
+  namespace: kuso
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kuso-server-managed-ns
 subjects:
   - kind: ServiceAccount
     name: kuso-server

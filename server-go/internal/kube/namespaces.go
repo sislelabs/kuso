@@ -8,9 +8,22 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+)
+
+// ServerSAName + ServerSANamespace + ManagedNSRoleName name the
+// ServiceAccount and ClusterRole the namespace-scoped RoleBinding
+// stamper wires up. Hard-coded because the deploy bundle's
+// ClusterRole/SA names are the contract — changing them is a
+// breaking deploy-time change, not a config knob.
+const (
+	ServerSAName       = "kuso-server"
+	ServerSANamespace  = "kuso"
+	ManagedNSRoleName  = "kuso-server-managed-ns"
+	managedNSBindingNm = "kuso-server-managed-ns"
 )
 
 // pssLabels are the Pod Security Admission labels stamped on every
@@ -60,18 +73,13 @@ func (c *Client) EnsureNamespace(ctx context.Context, ns string) error {
 			Labels: labels,
 		},
 	}, metav1.CreateOptions{})
-	if err == nil {
-		return nil
-	}
-	if apierrors.IsAlreadyExists(err) {
+	switch {
+	case err == nil:
+		// fall through to RoleBinding stamp.
+	case apierrors.IsAlreadyExists(err):
 		// Patch the PSS labels onto a pre-existing namespace so an
 		// upgrade picks them up without needing the operator to
-		// recreate every project namespace by hand. MergePatch only
-		// touches the keys we own, leaving any operator-overridden
-		// values alone (the patch sets restricted; if the operator
-		// later relaxes to baseline they re-patch and our next
-		// reconcile no-ops because Create-AlreadyExists short-circuits
-		// before we Patch).
+		// recreate every project namespace by hand.
 		patchLabels := map[string]string{ManagedByLabel: ManagedByValue}
 		for k, v := range pssLabels {
 			patchLabels[k] = v
@@ -82,9 +90,47 @@ func (c *Client) EnsureNamespace(ctx context.Context, ns string) error {
 		if _, perr := c.Clientset.CoreV1().Namespaces().Patch(ctx, ns, types.MergePatchType, patch, metav1.PatchOptions{}); perr != nil && !apierrors.IsNotFound(perr) {
 			return fmt.Errorf("kube: patch namespace %q labels: %w", ns, perr)
 		}
+	default:
+		return fmt.Errorf("kube: ensure namespace %q: %w", ns, err)
+	}
+	// Stamp the RoleBinding that lets kuso-server mutate Secrets +
+	// exec into addon pods inside this namespace. Idempotent —
+	// AlreadyExists short-circuits without an error. The home ns
+	// (`kuso`) carries this binding from the static deploy bundle;
+	// every project ns gets it here.
+	if berr := c.ensureManagedNSBinding(ctx, ns); berr != nil {
+		return berr
+	}
+	return nil
+}
+
+// ensureManagedNSBinding creates the RoleBinding that grants the
+// kuso-server ServiceAccount the verbs in the kuso-server-managed-ns
+// ClusterRole inside the named namespace. Idempotent; safe to call
+// every reconcile. AlreadyExists is success.
+func (c *Client) ensureManagedNSBinding(ctx context.Context, ns string) error {
+	rb := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      managedNSBindingNm,
+			Namespace: ns,
+			Labels:    map[string]string{ManagedByLabel: ManagedByValue},
+		},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: "rbac.authorization.k8s.io",
+			Kind:     "ClusterRole",
+			Name:     ManagedNSRoleName,
+		},
+		Subjects: []rbacv1.Subject{{
+			Kind:      "ServiceAccount",
+			Name:      ServerSAName,
+			Namespace: ServerSANamespace,
+		}},
+	}
+	_, err := c.Clientset.RbacV1().RoleBindings(ns).Create(ctx, rb, metav1.CreateOptions{})
+	if err == nil || apierrors.IsAlreadyExists(err) {
 		return nil
 	}
-	return fmt.Errorf("kube: ensure namespace %q: %w", ns, err)
+	return fmt.Errorf("kube: ensure managed-ns binding in %q: %w", ns, err)
 }
 
 // IsManagedNamespace reports whether the named namespace carries
@@ -160,6 +206,12 @@ func (c *Client) LabelNamespaceManaged(ctx context.Context, ns string) error {
 	_, err := c.Clientset.CoreV1().Namespaces().Patch(ctx, ns, types.MergePatchType, patch, metav1.PatchOptions{})
 	if err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("kube: label namespace %q managed-by: %w", ns, err)
+	}
+	// Backfill the managed-ns RoleBinding for pre-RBAC-split installs
+	// upgrading through this version. The static deploy bundle stamps
+	// it for fresh installs; this catches existing ones on first boot.
+	if berr := c.ensureManagedNSBinding(ctx, ns); berr != nil && !apierrors.IsNotFound(berr) {
+		return berr
 	}
 	return nil
 }
