@@ -32,4 +32,5 @@ func Register(server *mcp.Server, cfg *config.Config) {
 	registerUpdateProject(server, client)
 	registerAddService(server, client)
 	registerManageAddon(server, client)
+	registerPlan(server, client)
 }

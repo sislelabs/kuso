@@ -63,6 +63,43 @@ func (c *Client) PostJSON(ctx context.Context, path string, body, out any) error
 	return c.doJSON(ctx, http.MethodPost, path, body, out)
 }
 
+// PostRaw issues a POST with a raw body (e.g. text/yaml) and decodes
+// the JSON response. Read-only mode treats `plan` semantics as
+// read-side: callers pass readOnlyOk=true when the endpoint they
+// hit is non-mutating despite being a POST (e.g. /apply?dryRun=1).
+// Other callers leave readOnlyOk=false and inherit the standard
+// read-only refusal.
+func (c *Client) PostRaw(ctx context.Context, path, contentType string, body []byte, readOnlyOk bool, out any) error {
+	if c.cfg.ReadOnly && !readOnlyOk {
+		return fmt.Errorf("kuso-mcp is in read-only mode; refusing %s %s", http.MethodPost, path)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.URL+path, strings.NewReader(string(body)))
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.cfg.Token)
+	req.Header.Set("Accept", "application/json")
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("kuso server request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return &APIError{Status: resp.StatusCode, Path: path, Body: string(respBody)}
+	}
+	if out == nil || len(respBody) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(respBody, out); err != nil {
+		return fmt.Errorf("decode %s response: %w (body: %s)", path, err, truncate(string(respBody), 200))
+	}
+	return nil
+}
+
 // DeleteJSON issues a DELETE. Refused in read-only mode.
 func (c *Client) DeleteJSON(ctx context.Context, path string) error {
 	if c.cfg.ReadOnly {
