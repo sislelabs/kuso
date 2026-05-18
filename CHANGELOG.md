@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.12.1] — 2026-05-18
+
+### ✨ Features
+- Feat(cli): kuso instance-pg subcommands; fix: NotFound is not an error ([a0d3de7](https://github.com/sislelabs/kuso/commit/a0d3de761ed23250b49e01b1444d7408378d5046))
+
 ## [0.12.0] — 2026-05-18
 
 ### ✨ Features
