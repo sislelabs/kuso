@@ -584,6 +584,23 @@ func main() {
 			if os.Getenv("KUSO_DAILY_CLEANUP_DISABLED") != "true" {
 				go runDailyCleanup(workCtx, database, logDB, kc, buildSvc, *namespace, logger)
 			}
+			// Opt-in: convert the regular LogLine table to daily-
+			// partitioned. Runs once on the leader; subsequent boots
+			// detect the partitioned state and skip. The migration
+			// holds an exclusive lock briefly during the rename + a
+			// data copy in 100k-row batches; operators should set
+			// the flag during a maintenance window. The chunked-DELETE
+			// prune fallback continues to work for installs that
+			// haven't opted in.
+			if os.Getenv("KUSO_LOG_PARTITIONING") == "true" {
+				go func() {
+					mctx, mcancel := context.WithTimeout(workCtx, 30*time.Minute)
+					defer mcancel()
+					if err := database.MigrateLogLineToPartitioned(mctx, logger.With("component", "log-partition")); err != nil {
+						logger.Error("log-partition migration failed", "err", err)
+					}
+				}()
+			}
 			if os.Getenv("KUSO_PLATFORM_HARDEN_DISABLED") != "true" {
 				go platformharden.Run(workCtx, kc, logger)
 			}
@@ -933,10 +950,28 @@ func runDailyCleanup(ctx context.Context, database *db.DB, logDB *db.LogDB, kc *
 			logger.Info("daily-cleanup github-deliveries pruned", "rows", n)
 		}
 		if logDB != nil {
+			// Partition-aware prune: when LogLine is partitioned (opt-in
+			// via KUSO_LOG_PARTITIONING), DROP the day-partitions past
+			// retention — O(1), no lock contention with logship inserts.
+			// PruneLogPartitionsBefore returns (0, nil) when the table
+			// isn't partitioned, so the call is safe on every install
+			// and the chunked DELETE fallback below still runs.
+			if dropped, err := database.PruneLogPartitionsBefore(c, now.AddDate(0, 0, -logDays)); err != nil {
+				logger.Warn("daily-cleanup log-partitions", "err", err)
+			} else if dropped > 0 {
+				logger.Info("daily-cleanup log-partitions dropped", "partitions", dropped, "days", logDays)
+			}
 			if n, err := logDB.PruneLogsOlderThan(c, now.AddDate(0, 0, -logDays)); err != nil {
 				logger.Warn("daily-cleanup logs", "err", err)
 			} else if n > 0 {
 				logger.Info("daily-cleanup logs pruned", "rows", n, "days", logDays)
+			}
+			// Provision the next few daily partitions so writes don't
+			// hit "no partition for row" when the clock crosses
+			// midnight. Idempotent + cheap (one CREATE IF NOT EXISTS
+			// per day in the window). No-op when not partitioned.
+			if err := database.EnsureLogPartitionWindow(c, now, 3); err != nil {
+				logger.Warn("daily-cleanup log-partition-window", "err", err)
 			}
 		}
 		if kc != nil {

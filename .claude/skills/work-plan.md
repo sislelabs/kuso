@@ -130,12 +130,21 @@ The three security items that block scaling up trust in the platform.
   at 10 attempts. Daily prune sweeps delivered rows; dead-letter
   stays forever as audit trail. Tests: 4 DB-level (skip without
   `KUSO_TEST_PG_DSN`) + 2 pure-function backoff tests.
-- [ ] **#7 Partition `log_lines` by day.** Convert to declarative
-  partitioning. Migrate via schema bump. Prune becomes
-  `DROP PARTITION`. New partitions cut on first insert via the
-  existing daily cleanup tick. **Deferred** — non-trivial migration
-  needs a session where it can be tested against real Postgres
-  data.
+- [x] **#7 Partition `log_lines` by day.** Opt-in via
+  `KUSO_LOG_PARTITIONING=true`. New `db/log_partition.go` adds
+  `LogPartitionState`, `EnsureLogPartitionForDay`,
+  `EnsureLogPartitionWindow`, `PruneLogPartitionsBefore`, and
+  `MigrateLogLineToPartitioned`. Daily cleanup now provisions the
+  next-3-days window + drops past-retention partitions before
+  falling through to the existing chunked DELETE (which no-ops on
+  partitioned tables and continues to handle unpartitioned ones).
+  Migration runs leader-only on first boot with the flag: rename
+  legacy → create partitioned with `PRIMARY KEY (id, ts)` → copy
+  in 100k-row batches → drop legacy + reseed BIGSERIAL. Tests:
+  13-case pure parser for partition names + 4 DB-skippable
+  integration tests (state probe, ensure no-op, prune no-op,
+  migration round-trip). New `docs/LOG_PARTITIONING.md` carries
+  the operator-facing maintenance-window procedure + rollback.
 - [x] **#8 Node informer for watcher/sampler.** Added typed Node
   informer to `kube.Cache` alongside the existing Pod / Deployment
   informers. New `Cache.ListNodes()` returns a snapshot from the
