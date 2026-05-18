@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.6] — 2026-05-18
+
+### ✨ Features
+- Feat: run log viewer, outbox health badge, per-project usage rollup ([f368fcc](https://github.com/sislelabs/kuso/commit/f368fccf83a9c80bc01eacac5dc0e8b0d337759c))
+
+### 📝 Docs
+- Docs: AGENT_SMOKE_TEST.md — standardised end-to-end protocol ([8ff43ce](https://github.com/sislelabs/kuso/commit/8ff43ce865acffabf141efffb43e7556fd7720ec))
+
 ## [0.13.5] — 2026-05-18
 
 ### 🐛 Bug Fixes
@@ -463,11 +471,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(builds): chart-level no-op gate stops resurrection of done builds ([255961a](https://github.com/sislelabs/kuso/commit/255961a5be6636058d3da56fdb0e9335386b5de2))
-
-## [0.9.34] — 2026-05-07
-
-### 🐛 Bug Fixes
-- Fix(logs): copy-friendly build logs ([94534ed](https://github.com/sislelabs/kuso/commit/94534ed3372d0d62d6ac6d6f56981c33b5242caf))
 
 
 ---
