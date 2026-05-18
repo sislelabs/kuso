@@ -91,6 +91,33 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
     }
   }, [open]);
 
+  // When the user picks postgres AND there's a cluster-shared PG
+  // registered, default to "instance" mode with the addon pre-selected.
+  // That's the one-click path: pick "postgres" → see the form already
+  // pointed at the cluster PG, just click Create. The user can still
+  // flip back to managed (own StatefulSet) if they want isolation.
+  //
+  // Skipped for non-postgres kinds since instance mode is pg-only.
+  useEffect(() => {
+    if (!open) return;
+    if (kind !== "postgres") return;
+    if (availableInstanceNames.length === 0) return;
+    // Only auto-flip on initial kind-pick. If the user already moved
+    // off "managed" we respect that choice — don't ping-pong their
+    // mode on every re-render.
+    if (mode !== "managed") return;
+    setMode("instance");
+    // Prefer "pg" if registered; else use whatever's first.
+    const preferred = availableInstanceNames.includes("pg") ? "pg" : availableInstanceNames[0];
+    setInstName(preferred);
+    // We intentionally exclude `mode` from deps: re-running the effect
+    // every time the user toggles mode would lock them back into
+    // "instance" the moment they tried to pick another mode. The
+    // length-only dep on availableInstanceNames is enough — by the
+    // time names change, we want to re-evaluate.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, open, availableInstanceNames.length]);
+
   // ESC closes — same affordance as the rest of the overlays.
   useEffect(() => {
     if (!open) return;
