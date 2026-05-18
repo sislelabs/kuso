@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.1] — 2026-05-18
+
+### 🐛 Bug Fixes
+- Fix: post-review P0/P1 cleanup before live ship ([a11f455](https://github.com/sislelabs/kuso/commit/a11f4552792e55fe832f10121debc4c2b45104d7))
+
 ## [0.13.0] — 2026-05-18
 
 ### Other
@@ -462,11 +467,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(settings/builds): preset cards show real headroom math ([70581ac](https://github.com/sislelabs/kuso/commit/70581ac275066fb452c64b51724977deef496823))
-
-## [0.9.29] — 2026-05-07
-
-### 🐛 Bug Fixes
-- Fix(builds): queue at cap-hit instead of returning 409 ([148c9f8](https://github.com/sislelabs/kuso/commit/148c9f8dc7cd36f4062b493de87edc978c39a3f3))
 
 
 ---
