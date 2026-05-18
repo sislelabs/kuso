@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.3] — 2026-05-18
+
+### 🐛 Bug Fixes
+- Fix(notify): outbox SQL UPDATEs go through *Tx, not *sql.Tx ([d442800](https://github.com/sislelabs/kuso/commit/d442800bf82db397e5686213319360b07c63d3ec))
+
 ## [0.13.2] — 2026-05-18
 
 ### 🐛 Bug Fixes
@@ -463,11 +468,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(builds): GitHub installation falls back to service-level ([29f841b](https://github.com/sislelabs/kuso/commit/29f841bdf508ce5bfd8041c336c3ab713f4350ec))
-
-## [0.9.31] — 2026-05-07
-
-### 🐛 Bug Fixes
-- Fix(env-dialog): branch field references the picked service's repo ([a3e8653](https://github.com/sislelabs/kuso/commit/a3e865335c9c8fec76671f4f993b18a0cf874e57))
 
 
 ---
