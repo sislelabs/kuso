@@ -5,6 +5,12 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.2] — 2026-05-18
+
+### 🐛 Bug Fixes
+- Fix(runs): live-smoke regressions before v0.13.1 went out ([5ac0a5f](https://github.com/sislelabs/kuso/commit/5ac0a5f32b95d705991d870bb6e80f38594d3919))
+- Fix(pgbouncer): make userlist world-readable so the pooler can auth ([1dc1855](https://github.com/sislelabs/kuso/commit/1dc18557f1afd1123df5a3e0f9f15ca66efb244d))
+
 ## [0.13.1] — 2026-05-18
 
 ### 🐛 Bug Fixes
@@ -462,11 +468,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env-dialog): branch field references the picked service's repo ([a3e8653](https://github.com/sislelabs/kuso/commit/a3e865335c9c8fec76671f4f993b18a0cf874e57))
-
-## [0.9.30] — 2026-05-07
-
-### 🐛 Bug Fixes
-- Fix(settings/builds): preset cards show real headroom math ([70581ac](https://github.com/sislelabs/kuso/commit/70581ac275066fb452c64b51724977deef496823))
 
 
 ---
