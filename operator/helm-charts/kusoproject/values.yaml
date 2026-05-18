@@ -71,6 +71,17 @@ networkPolicy:
   # Empty by default — single-node k3s installs that bind the
   # apiserver to 127.0.0.1 don't need it.
   extraBlockCIDRs: []
+  # Extra namespaces whose pods may ingress into project pods.
+  # Useful when the cluster's ingress controller or monitoring
+  # tooling lives outside the standard kuso/traefik/cert-manager
+  # set this chart hard-codes. Each entry adds a namespaceSelector
+  # to the allow-platform rule. Empty by default.
+  #
+  # Example:
+  #   extraIngressNamespaces:
+  #     - longhorn-system    # CSI probes
+  #     - grafana            # external monitoring
+  extraIngressNamespaces: []
 
 # Per-project resource ceiling. ResourceQuota caps CPU/memory/object
 # counts so one tenant can't starve the cluster. LimitRange supplies

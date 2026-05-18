@@ -98,6 +98,29 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
+        # k3s default installs traefik into its own `traefik`
+        # namespace, not the kuso platform ns. Without this rule,
+        # every ingress request 502s with traefik unable to reach
+        # the backend pod across the default-deny boundary.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: traefik
+        # cert-manager solves HTTP-01 challenges with pods in its
+        # own ns; the project's Ingress route the challenge through
+        # traefik so the rule above covers it, but cert-manager
+        # itself reaches pods directly (DNS-01 challenge path,
+        # status probes). Allow.
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: cert-manager
+        # Extra trusted namespaces, configurable per install for
+        # operators whose ingress controller / cert tooling lives
+        # somewhere non-standard.
+        {{- range .Values.networkPolicy.extraIngressNamespaces }}
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ . | quote }}
+        {{- end }}
         # Single-namespace tenancy: when kuso shares a ns with the
         # project, traefik / kuso-server come from the same ns, not
         # a labelled neighbour. Allow same-ns pods carrying the

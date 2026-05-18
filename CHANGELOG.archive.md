@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.32] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(builds): GitHub installation falls back to service-level ([29f841b](https://github.com/sislelabs/kuso/commit/29f841bdf508ce5bfd8041c336c3ab713f4350ec))
+
 ## [0.9.31] — 2026-05-07
 
 ### 🐛 Bug Fixes
