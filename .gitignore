@@ -69,3 +69,6 @@ kubeconfig
 !server-go/internal/web/dist/
 server-go/internal/web/dist/*
 !server-go/internal/web/dist/.gitkeep
+
+# Local development worktrees (superpowers)
+.worktrees/
