@@ -1,6 +1,9 @@
 package kube
 
 import (
+	"regexp"
+	"strings"
+
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -56,4 +59,28 @@ func LabelSelector(pairs map[string]string) string {
 // shared secrets (which is exactly the bug this helper fixes).
 func SharedSecretNames(project string) []string {
 	return []string{project + "-shared", "kuso-instance-shared"}
+}
+
+// envSecretNameRE strips characters that aren't valid in a Kubernetes
+// resource-name segment, so an env name can be interpolated into a
+// Secret name safely. Matches secrets.Name's historical sanitization.
+var envSecretNameRE = regexp.MustCompile(`[^a-z0-9-]`)
+
+// ServiceSecretName returns the service-scoped shared secret name:
+// <project>-<service>-secrets. This Secret holds keys set via
+// `kuso secret set <project> <service> KEY VALUE` with no --env scope.
+// Like the project-shared secret it is marked optional:true by the
+// kusoenvironment Helm chart, so referencing it before it exists is safe.
+func ServiceSecretName(project, service string) string {
+	return project + "-" + service + "-secrets"
+}
+
+// EnvSecretName returns the env-scoped secret name:
+// <project>-<service>-<sanitized-env>-secrets. The env name is
+// lowercased and any character outside [a-z0-9-] becomes "-" so the
+// result is a valid Kubernetes resource-name segment. Holds keys set
+// at a specific env scope (e.g. preview-PR overrides).
+func EnvSecretName(project, service, env string) string {
+	safe := envSecretNameRE.ReplaceAllString(strings.ToLower(env), "-")
+	return project + "-" + service + "-" + safe + "-secrets"
 }
