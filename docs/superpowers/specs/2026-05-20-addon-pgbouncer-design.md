@@ -150,9 +150,19 @@ gains three keys **only when `pooler.enabled`**:
 | `POOLER_URL`  | `postgres://kuso:<pw urlquery>@<name>-pooler:6432/<db>?sslmode=disable` |
 
 `DATABASE_URL`, `POSTGRES_HOST`, `POSTGRES_PORT` are **unchanged** — still
-direct at the database `:5432`. Existing consumers are unaffected. When
-`pooler.enabled` is false the three keys are absent, so disabling the pooler
-cleanly removes them.
+direct at the database `:5432`. Existing consumers are unaffected.
+
+The three `POOLER_*` keys are **always present** in the conn Secret; when
+`pooler.enabled` is false their values are the empty string. They are *not*
+conditionally rendered. The reason: the helm-operator's 3-way merge does not
+prune individual `stringData` keys that disappear from the rendered manifest
+between upgrades, so a conditional block would leave a stale `POOLER_URL`
+pointing at a torn-down pooler after the toggle flips off. A stable key set
+with empty values is overwritten cleanly. An app that references
+`${{ <addon>.POOLER_URL }}` while the pooler is disabled resolves to an empty
+string — an honest "not enabled". The pooler Deployment/Service *are*
+conditionally rendered (whole-object deletion prunes correctly; only per-key
+pruning is the helm gap).
 
 ### values.yaml
 
@@ -207,7 +217,7 @@ the UI toggle is sufficient for v1.
   (`kuso shell` into a project pod, `pg_isready -h <name>-pooler -p 6432`, or a
   one-shot psql through `POOLER_URL`).
 - Disable the pooler, reconcile — confirm the Deployment/Service are gone and
-  the `POOLER_*` keys drop from the conn Secret.
+  the `POOLER_*` keys are emptied (present, empty-valued) in the conn Secret.
 
 ## Decisions (locked with the user)
 

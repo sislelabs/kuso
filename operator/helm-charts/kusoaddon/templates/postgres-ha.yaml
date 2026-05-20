@@ -145,10 +145,20 @@ stringData:
   # latency on every connect. Apps that want TLS-in-cluster override
   # DATABASE_URL with sslmode=require.
   DATABASE_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}-rw:5432/{{ $database }}?sslmode=disable"
+  {{- /* Pooler keys are ALWAYS emitted (empty when disabled), not
+         conditionally rendered: helm-operator's 3-way merge does not
+         prune individual stringData keys that vanish between
+         upgrades, so a conditional block leaves stale POOLER_URL
+         values after pooler.enabled flips false. Same rationale as
+         the single-node postgres.yaml chart. */}}
   {{- if and .Values.pooler .Values.pooler.enabled }}
   POOLER_HOST: {{ printf "%s-pooler" $name | quote }}
   POOLER_PORT: "6432"
   POOLER_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}-pooler:6432/{{ $database }}?sslmode=disable"
+  {{- else }}
+  POOLER_HOST: ""
+  POOLER_PORT: ""
+  POOLER_URL: ""
   {{- end }}
   # Read-only fanout. Apps that want to send read traffic to a
   # replica wire READONLY_DATABASE_URL into their pool. Optional —

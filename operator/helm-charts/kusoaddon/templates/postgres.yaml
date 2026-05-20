@@ -179,15 +179,28 @@ stringData:
   # The auto-generated password (randAlphaNum) is safe without it, but
   # passwordSecret-supplied values can be anything.
   DATABASE_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}:5432/{{ $database }}?sslmode=disable"
-  {{- /* Opt-in pooler keys. Additive — DATABASE_URL above stays
-         direct at the StatefulSet so existing consumers are
-         unaffected. Apps opt into pooling with ${{ <addon>.POOLER_URL }}.
-         Rendered only when pooler.enabled; absent otherwise so
-         disabling the pooler cleanly drops the keys. The pooler
-         Deployment/Service themselves live in postgres-pooler.yaml. */}}
+  {{- /* Pooler keys. Additive — DATABASE_URL above stays direct at
+         the StatefulSet so existing consumers are unaffected. Apps
+         opt into pooling with ${{ <addon>.POOLER_URL }}.
+
+         These keys are ALWAYS emitted (empty-valued when the pooler
+         is disabled), NOT conditionally rendered. helm-operator's
+         3-way merge does not prune individual stringData keys that
+         disappear between upgrades — a conditional block would leave
+         stale POOLER_URL values pointing at a torn-down pooler after
+         pooler.enabled flips false. A stable key set with empty
+         values is overwritten cleanly. An app reading POOLER_URL
+         while the pooler is off gets "" — an honest "not enabled".
+         The pooler Deployment/Service live in postgres-pooler.yaml
+         and ARE conditionally rendered (whole-object delete prunes
+         fine; only per-key pruning is the helm gap). */}}
   {{- if and .Values.pooler .Values.pooler.enabled }}
   POOLER_HOST: {{ printf "%s-pooler" $name | quote }}
   POOLER_PORT: "6432"
   POOLER_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}-pooler:6432/{{ $database }}?sslmode=disable"
+  {{- else }}
+  POOLER_HOST: ""
+  POOLER_PORT: ""
+  POOLER_URL: ""
   {{- end }}
 {{- end }}
