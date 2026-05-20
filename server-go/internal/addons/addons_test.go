@@ -95,8 +95,14 @@ func TestAdd_RefreshesEnvSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get env: %v", err)
 	}
-	if len(envCR.Spec.EnvFromSecrets) != 1 || envCR.Spec.EnvFromSecrets[0] != "alpha-pg-conn" {
-		t.Errorf("envFromSecrets not patched: %+v", envCR.Spec.EnvFromSecrets)
+	wantSecrets := []string{"alpha-pg-conn", "alpha-shared", "kuso-instance-shared"}
+	if len(envCR.Spec.EnvFromSecrets) != len(wantSecrets) {
+		t.Fatalf("envFromSecrets = %+v, want %+v", envCR.Spec.EnvFromSecrets, wantSecrets)
+	}
+	for i, want := range wantSecrets {
+		if envCR.Spec.EnvFromSecrets[i] != want {
+			t.Errorf("envFromSecrets[%d] = %q, want %q", i, envCR.Spec.EnvFromSecrets[i], want)
+		}
 	}
 }
 
@@ -148,8 +154,49 @@ func TestDelete_RefreshesEnvSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get env: %v", err)
 	}
-	if len(envCR.Spec.EnvFromSecrets) != 1 || envCR.Spec.EnvFromSecrets[0] != "alpha-redis-conn" {
-		t.Errorf("envFromSecrets after delete: %+v", envCR.Spec.EnvFromSecrets)
+	wantSecrets := []string{"alpha-redis-conn", "alpha-shared", "kuso-instance-shared"}
+	if len(envCR.Spec.EnvFromSecrets) != len(wantSecrets) {
+		t.Fatalf("envFromSecrets after delete = %+v, want %+v", envCR.Spec.EnvFromSecrets, wantSecrets)
+	}
+	for i, want := range wantSecrets {
+		if envCR.Spec.EnvFromSecrets[i] != want {
+			t.Errorf("envFromSecrets[%d] after delete = %q, want %q", i, envCR.Spec.EnvFromSecrets[i], want)
+		}
+	}
+}
+
+func TestRefreshEnvSecrets_KeepsSharedSecrets(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProj("alpha"),
+		seedEnv("alpha", "web", "production", "alpha-web-production"),
+	)
+
+	// Adding an addon triggers RefreshEnvSecrets.
+	if _, err := s.Add(context.Background(), "alpha", CreateAddonRequest{Name: "pg", Kind: "postgres"}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	envCR, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+
+	// The fan-out must keep BOTH shared-secret entries, not just the
+	// addon conn-secret. This is the regression guard for the bug
+	// where envFromSecrets was replaced with addon-conn-secrets only.
+	has := func(name string) bool {
+		for _, s := range envCR.Spec.EnvFromSecrets {
+			if s == name {
+				return true
+			}
+		}
+		return false
+	}
+	for _, want := range []string{"alpha-pg-conn", "alpha-shared", "kuso-instance-shared"} {
+		if !has(want) {
+			t.Errorf("envFromSecrets missing %q: %+v", want, envCR.Spec.EnvFromSecrets)
+		}
 	}
 }
 
