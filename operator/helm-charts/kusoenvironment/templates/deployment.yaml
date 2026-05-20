@@ -39,6 +39,9 @@ spec:
       labels:
         {{- include "kusoenvironment.selectorLabels" . | nindent 8 }}
         {{- include "kusoenvironment.labels" . | nindent 8 }}
+        {{- if not .Values.privateEgress }}
+        kuso.sislelabs.com/network-egress-public: "true"
+        {{- end }}
       {{- with .Values.secretsRev }}
       annotations:
         kuso.sislelabs.com/secrets-rev: {{ . | quote }}

@@ -64,6 +64,14 @@ tlsHosts: []
 # nothing is exposed to traefik. Mirrors KusoService.spec.internal.
 internal: false
 
+# privateEgress: when true, this service's pods are denied public
+# internet egress (sibling pods, DNS, and the in-cluster registry are
+# still reachable). Default false: pods CAN reach the internet. When
+# false, the pod template carries the kuso.sislelabs.com/network-egress-public
+# label, which the kusoproject NetworkPolicy's allow-public-egress rule
+# selects. Mirrors KusoService.spec.privateEgress.
+privateEgress: false
+
 # tlsEnabled: when true, attach cert-manager.io/cluster-issuer annotation and
 # request a per-host cert via Ingress.spec.tls. Defaults to true; override to
 # false on bare-IP installs without cert-manager.
