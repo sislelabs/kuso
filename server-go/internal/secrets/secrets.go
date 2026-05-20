@@ -19,7 +19,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -68,19 +67,15 @@ var (
 	ErrInvalid  = errors.New("secrets: invalid")
 )
 
-// envSafeRE strips characters that aren't valid in a k8s resource name
-// segment so we can interpolate env names into Secret names safely.
-var envSafeRE = regexp.MustCompile(`[^a-z0-9-]`)
-
-// Name returns the per-scope Secret name. env=="" produces the shared
-// name, otherwise the env name is sanitised before appending.
+// Name returns the per-scope Secret name. env=="" produces the
+// service-scoped shared name, otherwise the env-scoped name. Delegates
+// to the kube package so the naming + env-name sanitization has a
+// single implementation shared with addons.RefreshEnvSecrets.
 func Name(project, service, env string) string {
-	base := fmt.Sprintf("%s-%s", project, service)
 	if env == "" {
-		return base + "-secrets"
+		return kube.ServiceSecretName(project, service)
 	}
-	safe := envSafeRE.ReplaceAllString(strings.ToLower(env), "-")
-	return fmt.Sprintf("%s-%s-secrets", base, safe)
+	return kube.EnvSecretName(project, service, env)
 }
 
 // ListKeys returns the keys (NOT values) stored in the secret for the
