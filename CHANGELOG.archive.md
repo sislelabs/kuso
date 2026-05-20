@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.38] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(addons): unbreak helm parse — \${{ }} in comments tripped Go templates ([e45eb61](https://github.com/sislelabs/kuso/commit/e45eb61a48bf176d826a47f67595f5991c9e904f))
+
 ## [0.9.37] — 2026-05-07
 
 ### ✨ Features
