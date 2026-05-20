@@ -145,8 +145,33 @@ stringData:
   # latency on every connect. Apps that want TLS-in-cluster override
   # DATABASE_URL with sslmode=require.
   DATABASE_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}-rw:5432/{{ $database }}?sslmode=disable"
+  {{- if and .Values.pooler .Values.pooler.enabled }}
+  POOLER_HOST: {{ printf "%s-pooler" $name | quote }}
+  POOLER_PORT: "6432"
+  POOLER_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}-pooler:6432/{{ $database }}?sslmode=disable"
+  {{- end }}
   # Read-only fanout. Apps that want to send read traffic to a
   # replica wire READONLY_DATABASE_URL into their pool. Optional —
   # apps that don't care just use DATABASE_URL.
   READONLY_DATABASE_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}-ro:5432/{{ $database }}?sslmode=disable"
+{{- /* Opt-in CNPG-native PgBouncer. CNPG manages the Pooler's own
+       Deployment + a <name>-pooler Service and follows primary
+       failover natively, so HA addons get pooling without a
+       self-rendered Deployment. type: rw fronts the primary. */}}
+{{- if and .Values.pooler .Values.pooler.enabled }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: Pooler
+metadata:
+  name: {{ $name }}-pooler
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  cluster:
+    name: {{ $name }}
+  instances: 1
+  type: rw
+  pgbouncer:
+    poolMode: transaction
+{{- end }}
 {{- end }}
