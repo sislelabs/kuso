@@ -78,6 +78,18 @@ spec:
                 ha:
                   type: boolean
                   default: false
+                pooler:
+                  type: object
+                  description: >-
+                    Opt-in PgBouncer connection pooler in front of a
+                    kind=postgres addon. Reach it via the
+                    POOLER_HOST/POOLER_PORT/POOLER_URL keys in the addon's
+                    <name>-conn Secret; DATABASE_URL stays direct. Ignored
+                    for non-postgres kinds.
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: false
                 storageSize:
                   type: string
                 resources:
