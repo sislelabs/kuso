@@ -42,3 +42,18 @@ func LabelSelector(pairs map[string]string) string {
 	}
 	return labels.SelectorFromSet(clean).String()
 }
+
+// SharedSecretNames returns the two always-present shared-secret
+// entries every KusoEnvironment's spec.envFromSecrets must carry: the
+// project-shared secret (<project>-shared) and the instance-shared
+// secret (kuso-instance-shared). Both are marked optional:true by the
+// kusoenvironment Helm chart, so a pod boots cleanly even when the
+// Secret has not been created yet.
+//
+// Single source of truth: addons.RefreshEnvSecrets and the two env-CR
+// creation paths in the projects package all build envFromSecrets by
+// appending this — so the three sites cannot drift and silently drop
+// shared secrets (which is exactly the bug this helper fixes).
+func SharedSecretNames(project string) []string {
+	return []string{project + "-shared", "kuso-instance-shared"}
+}
