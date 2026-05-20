@@ -42,6 +42,9 @@ func apiv1CreateAddonToDomain(in apiv1.CreateAddonRequest) addons.CreateAddonReq
 			SecretKeys: in.External.SecretKeys,
 		}
 	}
+	if in.Pooler != nil {
+		out.Pooler = &kube.KusoAddonPooler{Enabled: in.Pooler.Enabled}
+	}
 	return out
 }
 
@@ -60,6 +63,9 @@ func apiv1UpdateAddonToDomain(in apiv1.UpdateAddonRequest) addons.UpdateAddonReq
 			Schedule:      in.Backup.Schedule,
 			RetentionDays: in.Backup.RetentionDays,
 		}
+	}
+	if in.Pooler != nil {
+		out.Pooler = &addons.AddonPoolerPatch{Enabled: &in.Pooler.Enabled}
 	}
 	return out
 }
