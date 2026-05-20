@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.8] — 2026-05-20
+
+### 🐛 Bug Fixes
+- Fix(chart): pooler must use scram-sha-256, not md5 ([d31f1c6](https://github.com/sislelabs/kuso/commit/d31f1c69bd56779264472e9fa604b8c7c32ce434))
+
 ## [0.13.7] — 2026-05-20
 
 ### ✨ Features
@@ -486,11 +491,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs: reposition kuso as multi-node, Postgres-backed, HA-capable ([6a8a44b](https://github.com/sislelabs/kuso/commit/6a8a44b4ad2a2e0205a34fb13e2470fa39f61de1))
-
-## [0.9.36] — 2026-05-07
-
-### ✨ Features
-- Feat(ha): kuso-server runs on worker nodes via kuso-k3s-token Secret ([2f793a6](https://github.com/sislelabs/kuso/commit/2f793a68e7262b98fa777002da59a04bc37fbec4))
 
 
 ---
