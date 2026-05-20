@@ -582,6 +582,37 @@ func TestPatchService_DomainsPropagateToEnvironments(t *testing.T) {
 	}
 }
 
+// TestPatchService_PrivateEgressPropagatesToEnvironments verifies that
+// toggling PrivateEgress on a KusoService also writes the new value
+// onto every owned KusoEnvironment. The kusoenvironment chart stamps
+// the public-egress pod label off the env CR's spec.privateEgress
+// field; a service-level toggle that isn't propagated never reaches a
+// running pod (the pod keeps its old label and the network policy stays
+// wrong forever).
+func TestPatchService_PrivateEgressPropagatesToEnvironments(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		// Service starts with PrivateEgress=false (zero value).
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedEnv("alpha", "web", "preview", "feat/x", "alpha-web-pr7"),
+	)
+	enable := true
+	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{PrivateEgress: &enable}); err != nil {
+		t.Fatalf("PatchService: %v", err)
+	}
+	for _, envName := range []string{"alpha-web-production", "alpha-web-pr7"} {
+		env, err := s.GetEnvironment(context.Background(), "alpha", envName)
+		if err != nil {
+			t.Fatalf("GetEnvironment %s: %v", envName, err)
+		}
+		if !env.Spec.PrivateEgress {
+			t.Errorf("env %s: PrivateEgress not propagated: got false, want true", envName)
+		}
+	}
+}
+
 // ---- environment ops ----------------------------------------------------
 
 func TestDeleteEnvironment_RefusesProduction(t *testing.T) {
