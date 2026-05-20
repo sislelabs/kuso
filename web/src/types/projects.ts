@@ -130,6 +130,13 @@ export interface KusoAddonSpec {
     // backup run.
     retentionDays?: number;
   };
+  // pooler: opt-in PgBouncer in front of a kind=postgres addon.
+  // When enabled the addon's <name>-conn Secret gains
+  // POOLER_HOST/POOLER_PORT/POOLER_URL keys; DATABASE_URL stays
+  // direct. Ignored for non-postgres kinds.
+  pooler?: {
+    enabled?: boolean;
+  };
 }
 
 export interface KusoAddon {

@@ -167,8 +167,8 @@ export async function deleteAddon(project: string, addon: string): Promise<void>
 }
 
 // updateAddon applies a partial update to spec.{version,size,ha,
-// storageSize,database,backup}. Pass undefined for fields you don't
-// want to change.
+// storageSize,database,backup,pooler}. Pass undefined for fields you
+// don't want to change.
 export interface UpdateAddonBody {
   version?: string;
   size?: "small" | "medium" | "large";
@@ -181,6 +181,11 @@ export interface UpdateAddonBody {
   backup?: {
     schedule?: string;
     retentionDays?: number;
+  };
+  // pooler.enabled toggles the opt-in PgBouncer pooler (postgres
+  // addons only). Omit to leave the current setting unchanged.
+  pooler?: {
+    enabled: boolean;
   };
 }
 
