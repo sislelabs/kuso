@@ -124,6 +124,15 @@ type KusoServiceSpec struct {
 	// services consumed only by sibling pods. Workers (runtime=
 	// worker) implicitly have no Ingress regardless of this flag.
 	Internal   bool                `json:"internal,omitempty"`
+	// PrivateEgress, when true, denies this service's pods egress to
+	// the public internet — they can still reach sibling pods, DNS,
+	// and the in-cluster registry. Default false: pods CAN reach the
+	// internet (most apps call external APIs). The kusoenvironment
+	// chart stamps the kuso.sislelabs.com/network-egress-public label
+	// on the pod template unless this is true; the kusoproject
+	// NetworkPolicy's allow-public-egress rule keys on that label.
+	// Mirrored onto every KusoEnvironment owned by this service.
+	PrivateEgress bool `json:"privateEgress,omitempty"`
 	Repo       *KusoRepoRef        `json:"repo,omitempty"`
 	Runtime    string              `json:"runtime,omitempty"`
 	Command    []string            `json:"command,omitempty"`
@@ -261,6 +270,11 @@ type KusoEnvironmentSpec struct {
 	// gate Ingress emission off the env CR alone (chart never reads
 	// the service spec). Propagated via propagateInternalToEnvs.
 	Internal         bool                    `json:"internal,omitempty"`
+	// PrivateEgress mirrors KusoService.spec.privateEgress so the
+	// kusoenvironment chart (which reads only the env CR) can gate the
+	// public-egress pod label. Server-managed: propagated from the
+	// service spec by propagateChangedToEnvs.
+	PrivateEgress bool                    `json:"privateEgress,omitempty"`
 	TLSEnabled       bool                    `json:"tlsEnabled,omitempty"`
 	ClusterIssuer    string                  `json:"clusterIssuer,omitempty"`
 	IngressClassName string                  `json:"ingressClassName,omitempty"`
