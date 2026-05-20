@@ -78,6 +78,11 @@ spec:
       labels:
         {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
         {{- include "kusoaddon.labels" . | nindent 8 }}
+        # Discriminates the DB pod from the opt-in pooler Deployment's
+        # pods (postgres-pooler.yaml), which also carry kusoaddon.labels.
+        # The <name> Service below selects on this so :5432 traffic
+        # never lands on a pooler pod (which only listens on :6432).
+        kuso.sislelabs.com/component: postgres
     spec:
       {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
       {{- include "kusoaddon.placement" . | nindent 6 }}
@@ -140,6 +145,9 @@ spec:
   type: ClusterIP
   selector:
     {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+    # Pin to the DB pod — the opt-in pooler Deployment shares
+    # kusoaddon.selectorLabels but is not a Postgres backend.
+    kuso.sislelabs.com/component: postgres
   ports:
     - name: postgres
       port: 5432
@@ -171,4 +179,15 @@ stringData:
   # The auto-generated password (randAlphaNum) is safe without it, but
   # passwordSecret-supplied values can be anything.
   DATABASE_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}:5432/{{ $database }}?sslmode=disable"
+  {{- /* Opt-in pooler keys. Additive — DATABASE_URL above stays
+         direct at the StatefulSet so existing consumers are
+         unaffected. Apps opt into pooling with ${{ <addon>.POOLER_URL }}.
+         Rendered only when pooler.enabled; absent otherwise so
+         disabling the pooler cleanly drops the keys. The pooler
+         Deployment/Service themselves live in postgres-pooler.yaml. */}}
+  {{- if and .Values.pooler .Values.pooler.enabled }}
+  POOLER_HOST: {{ printf "%s-pooler" $name | quote }}
+  POOLER_PORT: "6432"
+  POOLER_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}-pooler:6432/{{ $database }}?sslmode=disable"
+  {{- end }}
 {{- end }}

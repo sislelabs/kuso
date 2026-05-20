@@ -97,12 +97,36 @@ spec:
         {{- include "kusoaddon.labels" . | nindent 8 }}
         kuso.sislelabs.com/component: pooler
     spec:
+      # kuso-platform priority: the kubelet evicts a workload pod
+      # before this pooler when a node goes hot. Matches the addon
+      # StatefulSet and the instance pooler in deploy/postgres.yaml.
+      priorityClassName: kuso-platform
+      # Pod-level hardening. We deliberately do NOT use
+      # kusoaddon.podSecurityContext here: that helper pins
+      # runAsUser to the addon-kind UID (999 for postgres), which is
+      # the Postgres image's user, not the pooler's. Both this pod's
+      # images only touch an emptyDir (init: cat/md5sum/printf into
+      # /shared; pgbouncer: read the world-readable userlist + listen
+      # on :6432) — none of that needs a specific UID, so we pin a
+      # fixed non-root UID for the whole pod. fsGroup makes the
+      # emptyDir group-writable so the init container can create the
+      # userlist regardless of the chosen UID. This satisfies a PSA
+      # `restricted` policy without depending on either image's
+      # baked-in user.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
       {{- include "kusoaddon.placement" . | nindent 6 }}
       # Init container hashes POSTGRES_USER/POSTGRES_PASSWORD from the
       # <name>-conn Secret into PgBouncer's md5 userlist format.
       initContainers:
         - name: render-userlist
           image: alpine/k8s:1.30.4
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           command: [/bin/sh, -ec]
           args:
             - |
@@ -123,6 +147,7 @@ spec:
         - name: pgbouncer
           image: edoburu/pgbouncer:v1.25.1-p0
           imagePullPolicy: IfNotPresent
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           ports:
             - { name: pgbouncer, containerPort: 6432 }
           command: ["/usr/bin/pgbouncer"]

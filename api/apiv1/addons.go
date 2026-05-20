@@ -64,6 +64,13 @@ type UpdateAddonBackup struct {
 
 // AddonPoolerSpec is the opt-in connection-pooler block. Only
 // meaningful for kind=postgres.
+//
+// Enabled is a plain bool, not a pointer: the optionality lives one
+// level up in the *AddonPoolerSpec pointer on Create/UpdateAddonRequest
+// (nil = "leave alone / no pooler"). A present block always carries an
+// explicit enabled value — on the update path the handler maps it to
+// the domain layer's *bool patch, so `{"pooler":{"enabled":false}}`
+// deliberately means "turn the pooler off", not "unspecified".
 type AddonPoolerSpec struct {
 	Enabled bool `json:"enabled"`
 }
