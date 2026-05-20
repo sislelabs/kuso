@@ -5,6 +5,29 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.11] — 2026-05-20
+
+### ✨ Features
+- Feat(kube): add SharedSecretNames helper for envFromSecrets ([9db9435](https://github.com/sislelabs/kuso/commit/9db9435dc2c0e026018bf3b6fc659dee1fdacfe3))
+
+### 🐛 Bug Fixes
+- Fix(addons): keep shared secrets in envFromSecrets fan-out ([f3adede](https://github.com/sislelabs/kuso/commit/f3adede997506cd3ac55e06e926e9a0f5e2d57e1))
+
+### 📝 Docs
+- Docs: envFromSecrets shared-secret drop fix implementation plan ([0131ed0](https://github.com/sislelabs/kuso/commit/0131ed0138a5538d475ac093c1b54bd9e8694b75))
+- Docs: envFromSecrets shared-secret drop fix design spec ([bb5c281](https://github.com/sislelabs/kuso/commit/bb5c2810f8e148eaf25a27ed21db8b2dd90db8a8))
+
+### 🔨 Refactors
+- Refactor(github): build preview envFromSecrets via kube.SharedSecretNames ([a965724](https://github.com/sislelabs/kuso/commit/a965724bd956be827705956ed6139afe4ce802af))
+- Refactor(projects): build envFromSecrets via kube.SharedSecretNames ([8998e4b](https://github.com/sislelabs/kuso/commit/8998e4bea6a8fa13e8d1873672aae565f3a42674))
+
+### 🧪 Tests
+- Test(addons): assert fan-out keeps shared secrets in envFromSecrets ([e9a7f71](https://github.com/sislelabs/kuso/commit/e9a7f7143de7fda1efd29379995107fe150ed00c))
+- Test(kube): cover SharedSecretNames ([ce372c2](https://github.com/sislelabs/kuso/commit/ce372c2c9b5f3524332eb1a6241adc6e86406519))
+
+### 🧹 Chores
+- Chore: archive older changelog entries ([3bb4bc4](https://github.com/sislelabs/kuso/commit/3bb4bc494eeb1dfd4fbca19054d98f6fe6fe7a43))
+
 ## [0.13.10] — 2026-05-20
 
 ### ✨ Features
@@ -490,21 +513,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(deep-review-5): close 22 scalability + UX findings from second deep review ([ad7ffff](https://github.com/sislelabs/kuso/commit/ad7ffffe25c327d94f872ed0f7a01b7cd15b3d33))
-
-## [0.9.39] — 2026-05-07
-
-### ✨ Features
-- Feat(notifications): clear-all button in the bell dropdown ([8208913](https://github.com/sislelabs/kuso/commit/820891342fdc92b595f015f6c31b34cbc83a7532))
-
-### 🐛 Bug Fixes
-- Fix(metrics-scrape): rotate kuso-server too; clamp Prometheus secret mount ([762184d](https://github.com/sislelabs/kuso/commit/762184d9cfbc4d5595e2243f70122d706e1f6cd9))
-- Fix(deep-review-4): close trailing items from the deep-review batch ([28c1ea5](https://github.com/sislelabs/kuso/commit/28c1ea5d5d344a65fc92d02e7632c58172941ada))
-- Fix(deep-review-3): close audit findings from post-batch review ([ebb4b0d](https://github.com/sislelabs/kuso/commit/ebb4b0d920b79d21375e935357c84ed8878600fd))
-- Fix(deep-review-2): CNPG default, real backup/restore, token invalidation, settings UX ([4a6a5ef](https://github.com/sislelabs/kuso/commit/4a6a5efc2c97f785f0d0988a10c194bfeea6cf82))
-- Fix(deep-review): close ~30 audit findings across data, kube, security, UX ([b92cd20](https://github.com/sislelabs/kuso/commit/b92cd207fa81cd9402be554e50c3a16403b1df7f))
-
-### 🧪 Tests
-- Test(kube): refresh CRD golden snapshots for v0.9.39 ([7098b46](https://github.com/sislelabs/kuso/commit/7098b467639a2356091f2e92dcc2289817fdb244))
 
 
 ---
