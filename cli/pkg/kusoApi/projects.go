@@ -157,7 +157,8 @@ type PatchServiceRequest struct {
 	Port        *int32               `json:"port,omitempty"`
 	Runtime     *string              `json:"runtime,omitempty"`
 	Domains     *[]PatchServiceDomain `json:"domains,omitempty"`
-	Internal    *bool                `json:"internal,omitempty"`
+	Internal      *bool                `json:"internal,omitempty"`
+	PrivateEgress *bool                `json:"privateEgress,omitempty"`
 }
 
 // PatchService applies a partial update to a service spec. Mirrors

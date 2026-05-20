@@ -402,7 +402,8 @@ var (
 	serviceSetPort        int32
 	serviceSetRuntime     string
 	serviceSetDomains     string // comma- or newline-separated host list
-	serviceSetInternal    string // "on" | "off" | "" (leave alone)
+	serviceSetInternal       string // "on" | "off" | "" (leave alone)
+	serviceSetPrivateEgress  string // "on" | "off" | "" (leave alone)
 )
 
 var serviceSetCmd = &cobra.Command{
@@ -417,7 +418,9 @@ Settings → Source / Networking flow.
   --runtime nixpacks            # build runtime
   --domains api.example.com,alt.example.com  # custom domains (replaces list)
   --internal=on                 # skip public Ingress (in-cluster only)
-  --internal=off                # re-expose publicly`,
+  --internal=off                # re-expose publicly
+  --private-egress=on           # deny public internet egress
+  --private-egress=off          # allow public internet egress`,
 	Example: `  kuso project service set hui kuso-demo-todo-web --display-name "Todo Web"
   kuso project service set hui kuso-demo-todo-api --port 8080
   kuso project service set hui worker --internal=on
@@ -466,6 +469,16 @@ Settings → Source / Networking flow.
 				req.Internal = kusoApi.BoolPtr(false)
 			default:
 				return fmt.Errorf("--internal must be on|off (got %q)", serviceSetInternal)
+			}
+		}
+		if cmd.Flags().Changed("private-egress") {
+			switch serviceSetPrivateEgress {
+			case "on", "true", "yes":
+				req.PrivateEgress = kusoApi.BoolPtr(true)
+			case "off", "false", "no":
+				req.PrivateEgress = kusoApi.BoolPtr(false)
+			default:
+				return fmt.Errorf("--private-egress must be on|off (got %q)", serviceSetPrivateEgress)
 			}
 		}
 		resp, err := api.PatchService(args[0], args[1], req)
@@ -855,6 +868,7 @@ func init() {
 	serviceSetCmd.Flags().StringVar(&serviceSetRuntime, "runtime", "", "build runtime (dockerfile|nixpacks|buildpacks|static|worker)")
 	serviceSetCmd.Flags().StringVar(&serviceSetDomains, "domains", "", "comma- or space-separated custom domains (replaces list; empty clears)")
 	serviceSetCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
+	serviceSetCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
 
 	projectCmd.AddCommand(projectAddonCmd)
 	projectAddonCmd.AddCommand(addonAddCmd)
@@ -907,6 +921,7 @@ func init() {
 	serviceSetTopCmd.Flags().StringVar(&serviceSetRuntime, "runtime", "", "build runtime (dockerfile|nixpacks|buildpacks|static|worker)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetDomains, "domains", "", "comma- or space-separated custom domains (replaces list; empty clears)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
 }
 
 // serviceSetTopCmd is the top-level `kuso service set` shell. Same
