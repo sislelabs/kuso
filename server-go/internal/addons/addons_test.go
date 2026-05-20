@@ -95,13 +95,27 @@ func TestAdd_RefreshesEnvSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get env: %v", err)
 	}
-	wantSecrets := []string{"alpha-pg-conn", "alpha-shared", "kuso-instance-shared"}
-	if len(envCR.Spec.EnvFromSecrets) != len(wantSecrets) {
-		t.Fatalf("envFromSecrets = %+v, want %+v", envCR.Spec.EnvFromSecrets, wantSecrets)
+	want := []string{
+		"alpha-pg-conn",
+		"alpha-shared",
+		"kuso-instance-shared",
+		"alpha-web-secrets",
+		"alpha-web-production-secrets",
 	}
-	for i, want := range wantSecrets {
-		if envCR.Spec.EnvFromSecrets[i] != want {
-			t.Errorf("envFromSecrets[%d] = %q, want %q", i, envCR.Spec.EnvFromSecrets[i], want)
+	got := envCR.Spec.EnvFromSecrets
+	if len(got) != len(want) {
+		t.Fatalf("envFromSecrets = %+v, want exactly %+v", got, want)
+	}
+	for _, w := range want {
+		found := false
+		for _, g := range got {
+			if g == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("envFromSecrets %+v missing %q", got, w)
 		}
 	}
 }
@@ -154,13 +168,27 @@ func TestDelete_RefreshesEnvSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get env: %v", err)
 	}
-	wantSecrets := []string{"alpha-redis-conn", "alpha-shared", "kuso-instance-shared"}
-	if len(envCR.Spec.EnvFromSecrets) != len(wantSecrets) {
-		t.Fatalf("envFromSecrets after delete = %+v, want %+v", envCR.Spec.EnvFromSecrets, wantSecrets)
+	want := []string{
+		"alpha-redis-conn",
+		"alpha-shared",
+		"kuso-instance-shared",
+		"alpha-web-secrets",
+		"alpha-web-production-secrets",
 	}
-	for i, want := range wantSecrets {
-		if envCR.Spec.EnvFromSecrets[i] != want {
-			t.Errorf("envFromSecrets[%d] after delete = %q, want %q", i, envCR.Spec.EnvFromSecrets[i], want)
+	got := envCR.Spec.EnvFromSecrets
+	if len(got) != len(want) {
+		t.Fatalf("envFromSecrets after delete = %+v, want exactly %+v", got, want)
+	}
+	for _, w := range want {
+		found := false
+		for _, g := range got {
+			if g == w {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("envFromSecrets after delete %+v missing %q", got, w)
 		}
 	}
 }
@@ -193,10 +221,62 @@ func TestRefreshEnvSecrets_KeepsSharedSecrets(t *testing.T) {
 		}
 		return false
 	}
-	for _, want := range []string{"alpha-pg-conn", "alpha-shared", "kuso-instance-shared"} {
+	for _, want := range []string{
+		"alpha-pg-conn",
+		"alpha-shared",
+		"kuso-instance-shared",
+		"alpha-web-secrets",
+		"alpha-web-production-secrets",
+	} {
 		if !has(want) {
 			t.Errorf("envFromSecrets missing %q: %+v", want, envCR.Spec.EnvFromSecrets)
 		}
+	}
+}
+
+func TestRefreshEnvSecrets_PerServiceIsolation(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProj("alpha"),
+		seedEnv("alpha", "web", "production", "alpha-web-production"),
+		seedEnv("alpha", "api", "production", "alpha-api-production"),
+	)
+
+	// Adding an addon triggers RefreshEnvSecrets across every env.
+	if _, err := s.Add(context.Background(), "alpha", CreateAddonRequest{Name: "pg", Kind: "postgres"}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+
+	has := func(list []string, name string) bool {
+		for _, s := range list {
+			if s == name {
+				return true
+			}
+		}
+		return false
+	}
+
+	webEnv, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("get web env: %v", err)
+	}
+	apiEnv, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-api-production")
+	if err != nil {
+		t.Fatalf("get api env: %v", err)
+	}
+
+	// Each env carries ITS OWN service secret, and not the sibling's.
+	if !has(webEnv.Spec.EnvFromSecrets, "alpha-web-secrets") {
+		t.Errorf("web env missing alpha-web-secrets: %+v", webEnv.Spec.EnvFromSecrets)
+	}
+	if has(webEnv.Spec.EnvFromSecrets, "alpha-api-secrets") {
+		t.Errorf("web env wrongly has alpha-api-secrets: %+v", webEnv.Spec.EnvFromSecrets)
+	}
+	if !has(apiEnv.Spec.EnvFromSecrets, "alpha-api-secrets") {
+		t.Errorf("api env missing alpha-api-secrets: %+v", apiEnv.Spec.EnvFromSecrets)
+	}
+	if has(apiEnv.Spec.EnvFromSecrets, "alpha-web-secrets") {
+		t.Errorf("api env wrongly has alpha-web-secrets: %+v", apiEnv.Spec.EnvFromSecrets)
 	}
 }
 
