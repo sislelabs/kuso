@@ -8,8 +8,8 @@ import (
 	"strings"
 
 	"golang.org/x/net/publicsuffix"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
@@ -101,10 +101,10 @@ func validateRepoPath(p string) error {
 // buildpacks.lifecycleImage). The build controller interpolates
 // these into the static-plan init container's heredoc:
 //
-//   cat > .kuso-static.Dockerfile <<EOF
-//   FROM $RUNTIME_IMAGE
-//   COPY $OUTPUT_DIR /usr/share/nginx/html
-//   EOF
+//	cat > .kuso-static.Dockerfile <<EOF
+//	FROM $RUNTIME_IMAGE
+//	COPY $OUTPUT_DIR /usr/share/nginx/html
+//	EOF
 //
 // A value with embedded newlines breaks out of the heredoc and the
 // following lines run as shell commands. Restricting to the OCI
@@ -441,6 +441,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			AdditionalHosts:  domainHosts(created.Spec.Domains),
 			TLSHosts:         computeTLSHosts(defaultHost(req.Name, project, proj.Spec.BaseDomain), domainHosts(created.Spec.Domains)),
 			Internal:         created.Spec.Internal,
+			PrivateEgress:    created.Spec.PrivateEgress,
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
@@ -667,6 +668,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			AdditionalHosts:  domainHosts(svc.Spec.Domains),
 			TLSHosts:         computeTLSHosts(host, domainHosts(svc.Spec.Domains)),
 			Internal:         svc.Spec.Internal,
+			PrivateEgress:    svc.Spec.PrivateEgress,
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
@@ -687,11 +689,11 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 
 // RenameService is implemented as clone-then-delete because kube
 // resource names are immutable. Steps:
-//   1. validate the new name (regex + uniqueness)
-//   2. clone KusoService spec under the new CR name
-//   3. clone the production KusoEnvironment with adjusted host +
-//      ref back to the renamed service
-//   4. delete the old service + its envs
+//  1. validate the new name (regex + uniqueness)
+//  2. clone KusoService spec under the new CR name
+//  3. clone the production KusoEnvironment with adjusted host +
+//     ref back to the renamed service
+//  4. delete the old service + its envs
 //
 // What doesn't transfer:
 //   - per-env Secret CRs (named after the OLD service) — deleted with
@@ -1275,18 +1277,22 @@ type PatchServiceRequest struct {
 	// DisplayName edits the visual label only — fast (one CR patch),
 	// no kube-resource churn. Empty string clears it back to the
 	// slug. Use the Rename flow for a destructive slug change.
-	DisplayName *string                `json:"displayName,omitempty"`
-	Port      *int32                 `json:"port,omitempty"`
-	Runtime   *string                `json:"runtime,omitempty"`
-	Domains   *[]ServiceDomain       `json:"domains,omitempty"`
+	DisplayName *string          `json:"displayName,omitempty"`
+	Port        *int32           `json:"port,omitempty"`
+	Runtime     *string          `json:"runtime,omitempty"`
+	Domains     *[]ServiceDomain `json:"domains,omitempty"`
 	// Internal toggles the public-Ingress gate. true skips the
 	// Ingress entirely (service still has its in-cluster Service so
 	// sibling pods can reach it via ${{ svc.URL }}). Pointer-typed
 	// so a request that omits the key leaves it alone.
-	Internal  *bool                  `json:"internal,omitempty"`
-	Scale     *PatchScaleRequest     `json:"scale,omitempty"`
-	Sleep     *PatchSleepRequest     `json:"sleep,omitempty"`
-	Placement *PatchPlacementRequest `json:"placement,omitempty"`
+	Internal *bool `json:"internal,omitempty"`
+	// PrivateEgress toggles public-internet egress. true = pods are
+	// namespace-internal only; false/unset = pods can reach the
+	// internet. Pointer so "unset" (leave alone) is distinguishable.
+	PrivateEgress *bool                  `json:"privateEgress,omitempty"`
+	Scale         *PatchScaleRequest     `json:"scale,omitempty"`
+	Sleep         *PatchSleepRequest     `json:"sleep,omitempty"`
+	Placement     *PatchPlacementRequest `json:"placement,omitempty"`
 	// Volumes replaces the entire volume list. Pass empty slice to
 	// drop all volumes; nil to leave them as-is. We don't support
 	// per-volume add/remove patches because PVC names are stable —
@@ -1421,6 +1427,11 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		svc.Spec.Internal = *req.Internal
 		internalChanged = true
 	}
+	privateEgressChanged := false
+	if req.PrivateEgress != nil {
+		svc.Spec.PrivateEgress = *req.PrivateEgress
+		privateEgressChanged = true
+	}
 	scaleChanged := false
 	if req.Scale != nil {
 		if svc.Spec.Scale == nil {
@@ -1532,13 +1543,14 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	// service spec — the service is the durable record, and the next
 	// save will retry the propagation.
 	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{
-		Placement: placementChanged,
-		Volumes:   volumesChanged,
-		Port:      portChanged,
-		Scale:     scaleChanged,
-		Domains:   domainsChanged,
-		Internal:  internalChanged,
-		Runtime:   runtimeChanged,
+		Placement:     placementChanged,
+		Volumes:       volumesChanged,
+		Port:          portChanged,
+		Scale:         scaleChanged,
+		Domains:       domainsChanged,
+		Internal:      internalChanged,
+		Runtime:       runtimeChanged,
+		PrivateEgress: privateEgressChanged,
 	}); err != nil {
 		// Match the previous best-effort behaviour: log indirectly
 		// (returned nil; future cleanup adds a logger here) and let
@@ -1628,14 +1640,14 @@ func convertEnvVars(in []EnvVar) []kube.KusoEnvVar {
 // defaultHost computes the auto-generated hostname for a service's
 // production env.
 //
-//   baseDomain unset → cluster default; we prepend project as a
-//                      grouping subdomain (and service in front when
-//                      it differs from the project, otherwise we'd
-//                      get the kuso-hello-go.kuso-hello-go dupe).
-//   baseDomain set   → user owns the domain; we just put the
-//                      service name in front, OR drop straight to
-//                      baseDomain when service == project (a single
-//                      apex-style mapping).
+//	baseDomain unset → cluster default; we prepend project as a
+//	                   grouping subdomain (and service in front when
+//	                   it differs from the project, otherwise we'd
+//	                   get the kuso-hello-go.kuso-hello-go dupe).
+//	baseDomain set   → user owns the domain; we just put the
+//	                   service name in front, OR drop straight to
+//	                   baseDomain when service == project (a single
+//	                   apex-style mapping).
 func defaultHost(service, project, baseDomain string) string {
 	if baseDomain == "" {
 		// Cluster default: project is the user-meaningful slug.
