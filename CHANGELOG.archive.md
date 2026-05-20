@@ -2,6 +2,24 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.37] — 2026-05-07
+
+### ✨ Features
+- Feat(addons): ship Mailpit + NATS + MeiliSearch + ClickHouse ([a040e58](https://github.com/sislelabs/kuso/commit/a040e584fefd452208e8a3018472200384d0542b))
+
+### 📝 Docs
+- Docs: reposition kuso as multi-node, Postgres-backed, HA-capable ([6a8a44b](https://github.com/sislelabs/kuso/commit/6a8a44b4ad2a2e0205a34fb13e2470fa39f61de1))
+
+## [0.9.36] — 2026-05-07
+
+### ✨ Features
+- Feat(ha): kuso-server runs on worker nodes via kuso-k3s-token Secret ([2f793a6](https://github.com/sislelabs/kuso/commit/2f793a68e7262b98fa777002da59a04bc37fbec4))
+
+## [0.9.35] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(builds): chart-level no-op gate stops resurrection of done builds ([255961a](https://github.com/sislelabs/kuso/commit/255961a5be6636058d3da56fdb0e9335386b5de2))
+
 ## [0.9.34] — 2026-05-07
 
 ### 🐛 Bug Fixes
