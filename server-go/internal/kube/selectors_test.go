@@ -14,3 +14,29 @@ func TestSharedSecretNames(t *testing.T) {
 		}
 	}
 }
+
+func TestServiceSecretName(t *testing.T) {
+	got := ServiceSecretName("alpha", "web")
+	if got != "alpha-web-secrets" {
+		t.Errorf("ServiceSecretName = %q, want %q", got, "alpha-web-secrets")
+	}
+}
+
+func TestEnvSecretName(t *testing.T) {
+	cases := []struct {
+		project, service, env, want string
+	}{
+		{"alpha", "web", "production", "alpha-web-production-secrets"},
+		// Mixed case + punctuation must be lowercased and sanitized to
+		// [a-z0-9-] so the result is a valid resource-name segment.
+		{"alpha", "web", "preview/PR-7", "alpha-web-preview-pr-7-secrets"},
+		{"alpha", "api", "Staging Env", "alpha-api-staging-env-secrets"},
+	}
+	for _, c := range cases {
+		got := EnvSecretName(c.project, c.service, c.env)
+		if got != c.want {
+			t.Errorf("EnvSecretName(%q,%q,%q) = %q, want %q",
+				c.project, c.service, c.env, got, c.want)
+		}
+	}
+}
