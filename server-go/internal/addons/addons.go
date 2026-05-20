@@ -491,6 +491,13 @@ func (s *Service) RefreshEnvSecrets(ctx context.Context, project string) error {
 	for _, a := range addons {
 		secrets = append(secrets, connSecretName(a.Name))
 	}
+	// Always carry the project-shared + instance-shared secrets. The
+	// merge-patch below REPLACES spec.envFromSecrets wholesale, so any
+	// entry not in this slice is dropped — omitting the shared secrets
+	// here is the bug that silently stripped auth tokens, Stripe keys
+	// and Discord bot tokens from every service's pods after an addon
+	// add/remove.
+	secrets = append(secrets, kube.SharedSecretNames(project)...)
 	ns := s.nsFor(ctx, project)
 	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
 		kube.LabelProject: project,
