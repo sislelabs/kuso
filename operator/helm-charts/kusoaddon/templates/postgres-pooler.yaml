@@ -1,0 +1,155 @@
+{{- /*
+Opt-in single-node PgBouncer for a kind=postgres addon.
+
+Rendered when:
+  - kind = postgres
+  - pooler.enabled = true
+  - ha = false  (the HA path uses a CNPG-native Pooler CRD, in
+    postgres-ha.yaml)
+  - external / useInstanceAddon both unset (those bypass provisioning)
+
+This mirrors the instance-control-plane pooler in deploy/postgres.yaml:
+a PgBouncer Deployment in transaction-pool mode, fronting the addon
+StatefulSet's Service. One replica — this is a single-node addon, so
+a second pooler replica adds no availability (the DB itself is the
+SPOF). A pooler pod restart briefly drops client connections; that's
+an accepted cost of this opt-in convenience.
+
+The userlist is rendered at pod start from the <name>-conn Secret's
+POSTGRES_USER / POSTGRES_PASSWORD by an init container (PgBouncer's
+md5 userlist format is "user" "md5<hash>", hash = md5(password+user)).
+Password rotation (kuso project addon repair-password) needs a pooler
+pod restart to re-render — rare, operator-driven, acceptable.
+*/}}
+{{- if and (eq .Values.kind "postgres") .Values.pooler .Values.pooler.enabled (not .Values.ha) (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{- $poolerName := printf "%s-pooler" $name -}}
+{{- $connSecret := include "kusoaddon.connSecretName" . -}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $poolerName }}-config
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+data:
+  pgbouncer.ini: |
+    [databases]
+    ; * matches whatever dbname the client connects with, routed at
+    ; the addon's Postgres StatefulSet Service on :5432.
+    * = host={{ $name }} port=5432
+
+    [pgbouncer]
+    listen_addr = 0.0.0.0
+    listen_port = 6432
+    auth_type = md5
+    auth_file = /etc/pgbouncer/userlist.txt
+    pool_mode = transaction
+    max_client_conn = 200
+    default_pool_size = 25
+    reserve_pool_size = 5
+    reserve_pool_timeout = 3
+    query_wait_timeout = 30
+    server_idle_timeout = 600
+    log_connections = 0
+    log_disconnections = 0
+    log_pooler_errors = 1
+    ignore_startup_parameters = extra_float_digits,search_path
+    admin_users = kuso
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $poolerName }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+    kuso.sislelabs.com/component: pooler
+  ports:
+    - name: pgbouncer
+      port: 6432
+      targetPort: 6432
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $poolerName }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  # 1 replica — single-node addon, the DB is the SPOF anyway.
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+      kuso.sislelabs.com/component: pooler
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+        kuso.sislelabs.com/component: pooler
+    spec:
+      {{- include "kusoaddon.placement" . | nindent 6 }}
+      # Init container hashes POSTGRES_USER/POSTGRES_PASSWORD from the
+      # <name>-conn Secret into PgBouncer's md5 userlist format.
+      initContainers:
+        - name: render-userlist
+          image: alpine/k8s:1.30.4
+          command: [/bin/sh, -ec]
+          args:
+            - |
+              set -e
+              user="$(cat /etc/pg-conn/POSTGRES_USER)"
+              pass="$(cat /etc/pg-conn/POSTGRES_PASSWORD)"
+              if [ -z "$user" ] || [ -z "$pass" ]; then
+                echo "[render-userlist] FATAL: POSTGRES_USER/POSTGRES_PASSWORD missing from conn secret" >&2
+                exit 1
+              fi
+              hash="$(printf '%s%s' "$pass" "$user" | md5sum | awk '{print $1}')"
+              printf '"%s" "md5%s"\n' "$user" "$hash" > /shared/userlist.txt
+              chmod 0444 /shared/userlist.txt
+          volumeMounts:
+            - { name: pg-conn, mountPath: /etc/pg-conn, readOnly: true }
+            - { name: shared, mountPath: /shared }
+      containers:
+        - name: pgbouncer
+          image: edoburu/pgbouncer:v1.25.1-p0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - { name: pgbouncer, containerPort: 6432 }
+          command: ["/usr/bin/pgbouncer"]
+          args: ["/etc/pgbouncer/pgbouncer.ini"]
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits:   { cpu: 500m, memory: 256Mi }
+          readinessProbe:
+            tcpSocket: { port: 6432 }
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 6432 }
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          volumeMounts:
+            - { name: config, mountPath: /etc/pgbouncer/pgbouncer.ini, subPath: pgbouncer.ini, readOnly: true }
+            - { name: shared, mountPath: /etc/pgbouncer/userlist.txt, subPath: userlist.txt, readOnly: true }
+      volumes:
+        - name: config
+          configMap: { name: {{ $poolerName }}-config }
+        - name: pg-conn
+          secret:
+            secretName: {{ $connSecret }}
+            items:
+              - { key: POSTGRES_USER, path: POSTGRES_USER }
+              - { key: POSTGRES_PASSWORD, path: POSTGRES_PASSWORD }
+        - name: shared
+          emptyDir: {}
+{{- end }}
