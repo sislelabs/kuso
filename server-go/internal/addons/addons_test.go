@@ -251,3 +251,36 @@ func TestUpdate_BackupRoundTrip(t *testing.T) {
 		}
 	})
 }
+
+// TestUpdate_TogglesPooler covers the opt-in PgBouncer pooler toggle:
+// spec.pooler.enabled is settable via UpdateAddonRequest in both
+// directions, lazy-initialising the pooler block on first set.
+func TestUpdate_TogglesPooler(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProj("alpha"),
+		seedAddon("alpha", "pg", "postgres"),
+	)
+
+	enabled := true
+	got, err := s.Update(context.Background(), "alpha", "pg", UpdateAddonRequest{
+		Pooler: &AddonPoolerPatch{Enabled: &enabled},
+	})
+	if err != nil {
+		t.Fatalf("Update enable: %v", err)
+	}
+	if got.Spec.Pooler == nil || !got.Spec.Pooler.Enabled {
+		t.Errorf("pooler not enabled: %+v", got.Spec.Pooler)
+	}
+
+	disabled := false
+	got, err = s.Update(context.Background(), "alpha", "pg", UpdateAddonRequest{
+		Pooler: &AddonPoolerPatch{Enabled: &disabled},
+	})
+	if err != nil {
+		t.Fatalf("Update disable: %v", err)
+	}
+	if got.Spec.Pooler == nil || got.Spec.Pooler.Enabled {
+		t.Errorf("pooler not disabled: %+v", got.Spec.Pooler)
+	}
+}

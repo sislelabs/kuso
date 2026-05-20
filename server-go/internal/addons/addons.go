@@ -82,6 +82,9 @@ type CreateAddonRequest struct {
 	// INSTANCE_ADDON_<UPPER>_DSN_ADMIN) and writes the per-project
 	// DSN into <name>-conn. No StatefulSet is provisioned.
 	UseInstanceAddon string `json:"useInstanceAddon,omitempty"`
+	// Pooler enables the opt-in PgBouncer pooler at create time.
+	// Nil = no pooler.
+	Pooler *kube.KusoAddonPooler `json:"pooler,omitempty"`
 }
 
 // CRName builds the addon CR name from a project + a name that may
@@ -226,6 +229,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 			Database:         req.Database,
 			External:         req.External,
 			UseInstanceAddon: req.UseInstanceAddon,
+			Pooler:           req.Pooler,
 		},
 	}
 	if req.External != nil && req.External.SecretName != "" && req.UseInstanceAddon != "" {
@@ -275,6 +279,8 @@ type UpdateAddonRequest struct {
 	StorageSize *string             `json:"storageSize,omitempty"`
 	Database    *string             `json:"database,omitempty"`
 	Backup      *UpdateBackupPatch  `json:"backup,omitempty"`
+	// Pooler toggles the opt-in PgBouncer pooler. Nil = leave alone.
+	Pooler *AddonPoolerPatch `json:"pooler,omitempty"`
 }
 
 // UpdateBackupPatch carries the per-addon backup schedule + retention.
@@ -284,6 +290,13 @@ type UpdateAddonRequest struct {
 type UpdateBackupPatch struct {
 	Schedule      *string `json:"schedule,omitempty"`
 	RetentionDays *int    `json:"retentionDays,omitempty"`
+}
+
+// AddonPoolerPatch toggles the opt-in PgBouncer pooler. Enabled is a
+// pointer so a nil AddonPoolerPatch and a {Enabled: nil} are both
+// "leave alone"; callers send {Enabled: &true/&false} to set it.
+type AddonPoolerPatch struct {
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // cronExpr5 matches a standard five-field cron expression. Mirrors
@@ -360,6 +373,15 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 				}
 				addon.Spec.Backup.RetentionDays = d
 			}
+		}
+		if req.Pooler != nil && req.Pooler.Enabled != nil {
+			// Lazy-init so toggling the pooler doesn't disturb other
+			// spec fields. The chart treats a nil pooler block and
+			// {enabled:false} identically (no pooler rendered).
+			if addon.Spec.Pooler == nil {
+				addon.Spec.Pooler = &kube.KusoAddonPooler{}
+			}
+			addon.Spec.Pooler.Enabled = *req.Pooler.Enabled
 		}
 		return nil
 	})
