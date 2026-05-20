@@ -48,10 +48,14 @@ type changedFields struct {
 	// at the service level was silently dropped — the deployment kept
 	// its old probe shape forever and crashlooped headless binaries.
 	Runtime bool
+	// PrivateEgress carries spec.privateEgress changes. The chart
+	// stamps the public-egress pod label off the env CR's value, so a
+	// service-level toggle that isn't propagated never reaches a pod.
+	PrivateEgress bool
 }
 
 func (c changedFields) any() bool {
-	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime
+	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress
 }
 
 // propagateChangedToEnvs is the single chokepoint that mirrors a
@@ -136,6 +140,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			}
 			if changed.Runtime {
 				env.Spec.Runtime = svc.Spec.Runtime
+			}
+			if changed.PrivateEgress {
+				env.Spec.PrivateEgress = svc.Spec.PrivateEgress
 			}
 			return nil
 		})
