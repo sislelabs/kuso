@@ -363,6 +363,20 @@ type KusoAddonSpec struct {
 	// secret keyed INSTANCE_ADDON_<UPPER_NAME>_DSN_ADMIN whose
 	// value is a superuser DSN that can CREATE DATABASE.
 	UseInstanceAddon string `json:"useInstanceAddon,omitempty"`
+	// Pooler enables an opt-in PgBouncer connection pooler in front
+	// of a kind=postgres addon. Nil or {Enabled:false} = no pooler.
+	// Single-node addons get a self-managed PgBouncer Deployment; HA
+	// addons get a CNPG-native Pooler. Consumers reach it via the
+	// additive POOLER_HOST/POOLER_PORT/POOLER_URL keys in <name>-conn;
+	// DATABASE_URL stays direct. See operator/helm-charts/kusoaddon
+	// templates postgres-pooler.yaml and postgres-ha.yaml.
+	Pooler *KusoAddonPooler `json:"pooler,omitempty"`
+}
+
+// KusoAddonPooler is the opt-in connection-pooler block on
+// KusoAddonSpec. Only meaningful for kind=postgres.
+type KusoAddonPooler struct {
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // KusoAddonExternal points at an existing Secret in the project
