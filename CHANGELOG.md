@@ -5,6 +5,28 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.10] — 2026-05-20
+
+### ✨ Features
+- Feat(cli): add --private-egress flag to service set ([3f06e03](https://github.com/sislelabs/kuso/commit/3f06e032c7dfa6733d40acba1cf3ad8cb24e1edb))
+- Feat(crd): add privateEgress to KusoService and KusoEnvironment schemas ([9cf6728](https://github.com/sislelabs/kuso/commit/9cf6728995c5bb85e38d6a2f8f7e3c227ea6bb46))
+- Feat(chart): stamp public-egress pod label unless privateEgress set ([7810988](https://github.com/sislelabs/kuso/commit/78109885d166540247ae39cac93f698b86ad9eb6))
+- Feat(services): wire PrivateEgress through PatchService and env creation ([d8bb14f](https://github.com/sislelabs/kuso/commit/d8bb14ff1a3bc6614fbc905b5fb258230936ac98))
+- Feat(propagate): mirror PrivateEgress onto env CRs ([550fe67](https://github.com/sislelabs/kuso/commit/550fe676964a4e0b662dc6fd7da8f45df54c44f3))
+- Feat(types): add PrivateEgress to KusoService and KusoEnvironment specs ([56ccb55](https://github.com/sislelabs/kuso/commit/56ccb55e802360c88ac85b653f39bc299932866c))
+
+### 📝 Docs
+- Docs: public-egress fix implementation plan ([f3080bc](https://github.com/sislelabs/kuso/commit/f3080bc29b0a76d49448259991b1208fb93849a6))
+- Docs: public-egress fix design spec ([3ca1b02](https://github.com/sislelabs/kuso/commit/3ca1b02c881a17cb9e708ffe45741e2d3bf46211))
+
+### 🧪 Tests
+- Test(chart): cover public-egress label in kusoenvironment render ([c973ee9](https://github.com/sislelabs/kuso/commit/c973ee9b5e29f25f3f00d0ca0d26f27c7d69b905))
+- Test(propagate): cover PrivateEgress service→env propagation ([11bd6f5](https://github.com/sislelabs/kuso/commit/11bd6f5a04461039e96a48d349358e2d875bd1f7))
+
+### 🧹 Chores
+- Chore: archive older changelog entries ([207f7ca](https://github.com/sislelabs/kuso/commit/207f7cafb400139be5090c61caa267a9cbb78c41))
+- Chore: gitignore .worktrees/ ([a28d4ed](https://github.com/sislelabs/kuso/commit/a28d4edaf413ea400544e999ece446d3591aa269))
+
 ## [0.13.9] — 2026-05-20
 
 ### 🐛 Bug Fixes
@@ -483,11 +505,6 @@ messages on every release. The format is loosely based on
 
 ### 🧪 Tests
 - Test(kube): refresh CRD golden snapshots for v0.9.39 ([7098b46](https://github.com/sislelabs/kuso/commit/7098b467639a2356091f2e92dcc2289817fdb244))
-
-## [0.9.38] — 2026-05-07
-
-### 🐛 Bug Fixes
-- Fix(addons): unbreak helm parse — \${{ }} in comments tripped Go templates ([e45eb61](https://github.com/sislelabs/kuso/commit/e45eb61a48bf176d826a47f67595f5991c9e904f))
 
 
 ---
