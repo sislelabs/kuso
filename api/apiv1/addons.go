@@ -25,6 +25,9 @@ type CreateAddonRequest struct {
 	// kuso-instance-shared Secret as INSTANCE_ADDON_<UPPER>_DSN_ADMIN)
 	// and writes the per-project DSN into <name>-conn.
 	UseInstanceAddon string `json:"useInstanceAddon,omitempty"`
+	// Pooler enables an opt-in PgBouncer connection pooler in front
+	// of a kind=postgres addon. Nil = no pooler.
+	Pooler *AddonPoolerSpec `json:"pooler,omitempty"`
 }
 
 // AddonExternalSpec tells the server to skip provisioning and
@@ -45,6 +48,8 @@ type UpdateAddonRequest struct {
 	StorageSize *string             `json:"storageSize,omitempty"`
 	Database    *string             `json:"database,omitempty"`
 	Backup      *UpdateAddonBackup  `json:"backup,omitempty"`
+	// Pooler toggles the opt-in PgBouncer pooler. Nil = leave alone.
+	Pooler *AddonPoolerSpec `json:"pooler,omitempty"`
 }
 
 // UpdateAddonBackup carries the per-addon backup schedule +
@@ -55,4 +60,10 @@ type UpdateAddonRequest struct {
 type UpdateAddonBackup struct {
 	Schedule      *string `json:"schedule,omitempty"`
 	RetentionDays *int    `json:"retentionDays,omitempty"`
+}
+
+// AddonPoolerSpec is the opt-in connection-pooler block. Only
+// meaningful for kind=postgres.
+type AddonPoolerSpec struct {
+	Enabled bool `json:"enabled"`
 }
