@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.9] — 2026-05-20
+
+### 🐛 Bug Fixes
+- Fix(chart): always emit POOLER_* conn keys, empty when disabled ([659e4d1](https://github.com/sislelabs/kuso/commit/659e4d1e1c179ab18cc87c4674ebaaa4c52a3c13))
+
 ## [0.13.8] — 2026-05-20
 
 ### 🐛 Bug Fixes
@@ -483,14 +488,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addons): unbreak helm parse — \${{ }} in comments tripped Go templates ([e45eb61](https://github.com/sislelabs/kuso/commit/e45eb61a48bf176d826a47f67595f5991c9e904f))
-
-## [0.9.37] — 2026-05-07
-
-### ✨ Features
-- Feat(addons): ship Mailpit + NATS + MeiliSearch + ClickHouse ([a040e58](https://github.com/sislelabs/kuso/commit/a040e584fefd452208e8a3018472200384d0542b))
-
-### 📝 Docs
-- Docs: reposition kuso as multi-node, Postgres-backed, HA-capable ([6a8a44b](https://github.com/sislelabs/kuso/commit/6a8a44b4ad2a2e0205a34fb13e2470fa39f61de1))
 
 
 ---
