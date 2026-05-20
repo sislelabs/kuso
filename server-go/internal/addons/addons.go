@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -487,9 +488,9 @@ func (s *Service) RefreshEnvSecrets(ctx context.Context, project string) error {
 	if err != nil {
 		return err
 	}
-	secrets := make([]string, 0, len(addons))
+	baseSecrets := make([]string, 0, len(addons))
 	for _, a := range addons {
-		secrets = append(secrets, connSecretName(a.Name))
+		baseSecrets = append(baseSecrets, connSecretName(a.Name))
 	}
 	// Always carry the project-shared + instance-shared secrets. The
 	// merge-patch below REPLACES spec.envFromSecrets wholesale, so any
@@ -497,7 +498,7 @@ func (s *Service) RefreshEnvSecrets(ctx context.Context, project string) error {
 	// here is the bug that silently stripped auth tokens, Stripe keys
 	// and Discord bot tokens from every service's pods after an addon
 	// add/remove.
-	secrets = append(secrets, kube.SharedSecretNames(project)...)
+	baseSecrets = append(baseSecrets, kube.SharedSecretNames(project)...)
 	ns := s.nsFor(ctx, project)
 	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
 		kube.LabelProject: project,
@@ -506,11 +507,29 @@ func (s *Service) RefreshEnvSecrets(ctx context.Context, project string) error {
 		return fmt.Errorf("list envs: %w", err)
 	}
 	for i := range envs {
-		envName := envs[i].Name
-		patch := buildEnvFromSecretsPatch(secrets)
+		env := &envs[i]
+		// Start from the project-wide base, then add this env's
+		// service- and env-scoped secrets. Clone so each env gets an
+		// independent slice (append on a shared backing array would
+		// cross-contaminate). The merge-patch REPLACES envFromSecrets
+		// wholesale, so the per-env list must be complete.
+		perEnv := slices.Clone(baseSecrets)
+		// The short service name + env name live on labels every
+		// kuso-created env CR carries. A hand-created CR missing the
+		// service label degrades gracefully: it still gets the base
+		// (addon-conn + project-shared) secrets, just not its own
+		// service/env-scoped ones.
+		svc := env.Labels[kube.LabelService]
+		if svc != "" {
+			perEnv = append(perEnv, kube.ServiceSecretName(project, svc))
+			if envName := env.Labels[kube.LabelEnv]; envName != "" {
+				perEnv = append(perEnv, kube.EnvSecretName(project, svc, envName))
+			}
+		}
+		patch := buildEnvFromSecretsPatch(perEnv)
 		if _, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
-			Patch(ctx, envName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("patch env %s: %w", envName, err)
+			Patch(ctx, env.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("patch env %s: %w", env.Name, err)
 		}
 	}
 	return nil
