@@ -119,6 +119,7 @@ function ConfigurationSection({
     ha: !!cr?.spec.ha,
     storageSize: cr?.spec.storageSize ?? "",
     database: cr?.spec.database ?? "",
+    pooler: !!cr?.spec.pooler?.enabled,
   };
 
   const [version, setVersion] = useState(initial.version);
@@ -126,6 +127,7 @@ function ConfigurationSection({
   const [ha, setHa] = useState(initial.ha);
   const [storageSize, setStorageSize] = useState(initial.storageSize);
   const [database, setDatabase] = useState(initial.database);
+  const [pooler, setPooler] = useState(initial.pooler);
 
   // Re-baseline whenever the CR changes (e.g. after a successful save
   // or a parallel edit landed on the server). Without this, the form
@@ -137,13 +139,14 @@ function ConfigurationSection({
     setHa(initial.ha);
     setStorageSize(initial.storageSize);
     setDatabase(initial.database);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    setPooler(initial.pooler);
   }, [
     initial.version,
     initial.size,
     initial.ha,
     initial.storageSize,
     initial.database,
+    initial.pooler,
   ]);
 
   const dirty =
@@ -151,7 +154,8 @@ function ConfigurationSection({
     size !== initial.size ||
     ha !== initial.ha ||
     storageSize !== initial.storageSize ||
-    database !== initial.database;
+    database !== initial.database ||
+    pooler !== initial.pooler;
 
   const save = useMutation({
     mutationFn: () => {
@@ -164,6 +168,7 @@ function ConfigurationSection({
       if (ha !== initial.ha) body.ha = ha;
       if (storageSize !== initial.storageSize) body.storageSize = storageSize.trim();
       if (database !== initial.database) body.database = database.trim();
+      if (pooler !== initial.pooler) body.pooler = { enabled: pooler };
       return updateAddon(project, addon, body);
     },
     onSuccess: () => {
@@ -179,6 +184,7 @@ function ConfigurationSection({
     setHa(initial.ha);
     setStorageSize(initial.storageSize);
     setDatabase(initial.database);
+    setPooler(initial.pooler);
   };
   // Register with the overlay shell so the unified SaveBar at the
   // bottom fires onSave + a tab-switch discards local edits cleanly
@@ -270,19 +276,29 @@ function ConfigurationSection({
             multi-replica · primary/replica streaming
           </span>
         </label>
+        {(cr?.spec.kind ?? "").toLowerCase() === "postgres" && (
+          <label className="flex cursor-pointer items-center gap-2 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2">
+            <input
+              type="checkbox"
+              checked={pooler}
+              onChange={(e) => setPooler(e.target.checked)}
+              className="h-3.5 w-3.5 accent-[var(--accent)]"
+            />
+            <span className="text-[12px] font-medium">
+              Connection pooling (PgBouncer)
+            </span>
+            <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
+              point apps at {"${{ <addon>.POOLER_URL }}"}
+            </span>
+          </label>
+        )}
       </div>
       <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-3 py-2">
         <Button
           size="sm"
           variant="ghost"
           disabled={!dirty || save.isPending}
-          onClick={() => {
-            setVersion(initial.version);
-            setSize(initial.size);
-            setHa(initial.ha);
-            setStorageSize(initial.storageSize);
-            setDatabase(initial.database);
-          }}
+          onClick={reset}
         >
           Reset
         </Button>
