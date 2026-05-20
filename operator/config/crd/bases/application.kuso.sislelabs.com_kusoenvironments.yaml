@@ -112,6 +112,10 @@ spec:
                   type: boolean
                   description: When true, skip the Ingress entirely. Service still exists for in-cluster DNS access; no public domain or TLS. Mirrors KusoService.spec.internal.
                   default: false
+                privateEgress:
+                  type: boolean
+                  description: When true, deny public internet egress for this env's pods. Mirrors KusoService.spec.privateEgress.
+                  default: false
                 tlsEnabled:
                   type: boolean
                   default: true

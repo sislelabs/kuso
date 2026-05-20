@@ -147,6 +147,11 @@
             },
             "type": "object"
           },
+          "privateEgress": {
+            "default": false,
+            "description": "When true, this service's pods are denied public internet egress (sibling pods, DNS and the in-cluster registry stay reachable). Default false — pods can reach the internet. Mirrored onto every KusoEnvironment owned by this service.",
+            "type": "boolean"
+          },
           "project": {
             "type": "string"
           },

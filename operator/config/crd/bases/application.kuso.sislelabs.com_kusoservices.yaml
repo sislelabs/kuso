@@ -85,6 +85,10 @@ spec:
                   type: boolean
                   description: When true, skip the Ingress entirely. The in-cluster Service still exists so sibling pods can reach the service via ${{ svc.URL }}, but no public domain or TLS is provisioned. Mirrored onto every KusoEnvironment owned by this service.
                   default: false
+                privateEgress:
+                  type: boolean
+                  description: When true, this service's pods are denied public internet egress (sibling pods, DNS and the in-cluster registry stay reachable). Default false — pods can reach the internet. Mirrored onto every KusoEnvironment owned by this service.
+                  default: false
                 envVars:
                   # Closed schema — preserve-unknown-fields would let a
                   # tenant slip valueFrom.secretKeyRef in and exfiltrate

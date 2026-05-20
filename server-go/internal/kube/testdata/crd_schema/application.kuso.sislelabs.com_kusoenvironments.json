@@ -157,6 +157,11 @@
             "format": "int32",
             "type": "integer"
           },
+          "privateEgress": {
+            "default": false,
+            "description": "When true, deny public internet egress for this env's pods. Mirrors KusoService.spec.privateEgress.",
+            "type": "boolean"
+          },
           "project": {
             "type": "string"
           },
