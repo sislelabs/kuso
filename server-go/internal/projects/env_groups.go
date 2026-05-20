@@ -432,7 +432,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 	for _, freshShort := range freshAddonRename {
 		addonConnSecrets = append(addonConnSecrets, fmt.Sprintf("%s-%s-conn", project, freshShort))
 	}
-	addonConnSecrets = append(addonConnSecrets, project+"-shared", "kuso-instance-shared")
+	addonConnSecrets = append(addonConnSecrets, kube.SharedSecretNames(project)...)
 
 	// Anchor: the first env CR we create carries the group-level
 	// annotations. Picks the alphabetically-first service so the same
