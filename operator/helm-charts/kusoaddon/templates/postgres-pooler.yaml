@@ -42,7 +42,14 @@ data:
     [pgbouncer]
     listen_addr = 0.0.0.0
     listen_port = 6432
-    auth_type = md5
+    ; scram-sha-256, not md5: the addon's stock postgres:16 image
+    ; defaults password_encryption=scram-sha-256, so the role's
+    ; stored verifier is SCRAM. An md5 auth_type + md5 userlist
+    ; can't authenticate to a SCRAM backend — pgbouncer rejects the
+    ; backend login with "wrong password type". With auth_type
+    ; scram-sha-256 and a plaintext-password userlist, pgbouncer
+    ; runs SCRAM both to the client and to the backend.
+    auth_type = scram-sha-256
     auth_file = /etc/pgbouncer/userlist.txt
     pool_mode = transaction
     max_client_conn = 200
@@ -105,7 +112,7 @@ spec:
       # kusoaddon.podSecurityContext here: that helper pins
       # runAsUser to the addon-kind UID (999 for postgres), which is
       # the Postgres image's user, not the pooler's. Both this pod's
-      # images only touch an emptyDir (init: cat/md5sum/printf into
+      # images only touch an emptyDir (init: cat/sed/printf into
       # /shared; pgbouncer: read the world-readable userlist + listen
       # on :6432) — none of that needs a specific UID, so we pin a
       # fixed non-root UID for the whole pod. fsGroup makes the
@@ -121,8 +128,13 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       {{- include "kusoaddon.placement" . | nindent 6 }}
-      # Init container hashes POSTGRES_USER/POSTGRES_PASSWORD from the
-      # <name>-conn Secret into PgBouncer's md5 userlist format.
+      # Init container writes PgBouncer's userlist.txt from the
+      # <name>-conn Secret. auth_type=scram-sha-256 (see the ConfigMap
+      # comment) takes a PLAINTEXT password entry — pgbouncer derives
+      # the SCRAM exchange for both client and backend from it. Format
+      # is `"user" "password"`; embedded " and \ are doubled per
+      # PgBouncer's userlist quoting rules so passwordSecret-supplied
+      # creds with reserved chars round-trip intact.
       initContainers:
         - name: render-userlist
           image: alpine/k8s:1.30.4
@@ -137,8 +149,11 @@ spec:
                 echo "[render-userlist] FATAL: POSTGRES_USER/POSTGRES_PASSWORD missing from conn secret" >&2
                 exit 1
               fi
-              hash="$(printf '%s%s' "$pass" "$user" | md5sum | awk '{print $1}')"
-              printf '"%s" "md5%s"\n' "$user" "$hash" > /shared/userlist.txt
+              # Double embedded backslash then double-quote — PgBouncer
+              # userlist escaping. Order matters: backslash first.
+              esc_user="$(printf '%s' "$user" | sed -e 's/\\/\\\\/g' -e 's/"/""/g')"
+              esc_pass="$(printf '%s' "$pass" | sed -e 's/\\/\\\\/g' -e 's/"/""/g')"
+              printf '"%s" "%s"\n' "$esc_user" "$esc_pass" > /shared/userlist.txt
               chmod 0444 /shared/userlist.txt
           volumeMounts:
             - { name: pg-conn, mountPath: /etc/pg-conn, readOnly: true }
