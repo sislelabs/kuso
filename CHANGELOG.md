@@ -5,7 +5,7 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [0.13.10] — 2026-05-21
+## [0.13.13] — 2026-05-21
 
 ### ✨ Features
 - Feat(web): blast-radius warnings on service config changes ([b05ddfe](https://github.com/sislelabs/kuso/commit/b05ddfe21cc8983f85ef27829ab72f2979a45fe5))
@@ -82,7 +82,7 @@ messages on every release. The format is loosely based on
 ### 🧹 Chores
 - Chore: archive older changelog entries ([3bb4bc4](https://github.com/sislelabs/kuso/commit/3bb4bc494eeb1dfd4fbca19054d98f6fe6fe7a43))
 
-## [0.13.10] — 2026-05-21
+## [0.13.10] — 2026-05-20
 
 ### ✨ Features
 - Feat(cli): add --private-egress flag to service set ([3f06e03](https://github.com/sislelabs/kuso/commit/3f06e032c7dfa6733d40acba1cf3ad8cb24e1edb))
