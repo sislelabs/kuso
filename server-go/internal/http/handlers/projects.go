@@ -470,6 +470,10 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, plan)
 		return
 	}
+	// Log the plan before executing — if the 30s context fires
+	// mid-apply, the post-apply log line never runs and we'd lose all
+	// trace of what was attempted.
+	h.Logger.Info("apply: planned", "project", f.Project, "plan", plan.Summary())
 	res, err := h.Reconciler.Apply(ctx, plan, f)
 	if err != nil {
 		h.Logger.Error("apply: execute", "err", err)

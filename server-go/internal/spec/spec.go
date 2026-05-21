@@ -1,38 +1,48 @@
 // Package spec is kuso's config-as-code: a YAML schema users check
-// into their repos at kuso.yml, and an Apply that reconciles it
-// against the live KusoProject + KusoService + KusoAddon CRs.
+// into their repos at kuso.yaml, and an Apply that reconciles it
+// against the live KusoProject + KusoService + KusoAddon + KusoCron
+// CRs.
 //
-// Design choices:
-//   - The YAML is the source of truth on every push. Manual UI edits
-//     get overwritten on the next apply (we tag UI-edited services
-//     so the UI can warn "this will be overwritten by kuso.yml").
-//   - Diff-then-apply: we compute create / update / delete sets so
-//     unchanged resources don't churn the operator's reconcile loop.
+// Design:
+//   - apiVersion: kuso/v1. The schema is full-parity — it exposes
+//     every field of the underlying CRs that a user can author, not
+//     a thin subset.
+//   - Declarative semantics: the YAML wins. On every apply each
+//     resource's spec is reset to exactly what the YAML says — an
+//     omitted field resets the live CR back to its default rather
+//     than leaving a stale value. Manual UI edits get overwritten on
+//     the next apply.
+//   - Diff-then-apply: PlanFor computes create / update / delete sets
+//     so unchanged resources don't churn the operator's reconcile
+//     loop; Apply executes the plan.
+//   - Prune-gated deletes: deletions only run when the file sets
+//     prune: true. Otherwise PlanFor moves would-be deletions into an
+//     advisory WouldDelete list, and Apply defensively refuses any
+//     plan that still carries deletions against a prune:false file.
 //   - One Apply per project. Cross-project applies are out of scope
-//     (each project has its own repo, its own kuso.yml).
+//     (each project has its own repo, its own kuso.yaml).
 //
 // File shape:
 //
+//   apiVersion: kuso/v1
 //   project: my-product
 //   baseDomain: my-product.example.com
+//   prune: false
 //   services:
 //     - name: api
 //       repo: https://github.com/me/api
 //       runtime: dockerfile
 //       port: 8080
 //       scale: { min: 1, max: 5, targetCPU: 70 }
-//       domains: [api.my-product.example.com]
+//       domains: [{ host: api.my-product.example.com, tls: true }]
 //       env:
 //         LOG_LEVEL: info
 //       volumes:
 //         - { name: data, mountPath: /var/lib/api, sizeGi: 5 }
 //   addons:
 //     - { name: db, kind: postgres }
-//
-// Anything not covered (placement, sleep, healthchecks) lives on the
-// CR after the apply — the YAML is the *minimum* schema for the user
-// to express "this is the shape of my project". Future iterations
-// add fields without breaking older YAMLs.
+//   crons:
+//     - { name: nightly, kind: service, schedule: "0 3 * * *", service: api }
 package spec
 
 import (

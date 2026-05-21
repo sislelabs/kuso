@@ -78,8 +78,96 @@ func TestApply_PatchServiceIsDeclarativeReset(t *testing.T) {
 	req := fp.patched[0].req
 	if req.Port == nil || req.Internal == nil || req.PrivateEgress == nil ||
 		req.Runtime == nil || req.Domains == nil || req.Scale == nil ||
-		req.Sleep == nil || req.Placement == nil || req.Volumes == nil {
+		req.Sleep == nil || req.Placement == nil || req.Volumes == nil ||
+		req.Static == nil || req.Buildpacks == nil || req.Command == nil {
 		t.Fatalf("declarative reset: every patch field must be non-nil: %+v", req)
+	}
+}
+
+func TestApply_PatchServiceCarriesStaticBuildConfig(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	// A service update where the YAML sets static.buildCmd: the patch
+	// must carry it so a runtime=static service stays in lockstep.
+	f := &File{
+		Project: "shop",
+		Services: []ServiceSpec{{
+			Name: "site", Runtime: "static",
+			Static:  &StaticSpec{BuildCmd: "npm run build", OutputDir: "dist"},
+			Command: []string{"./serve"},
+		}},
+	}
+	plan := &Plan{ServicesToUpdate: []string{"site"}}
+	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	req := fp.patched[0].req
+	if req.Static == nil || req.Static.BuildCmd != "npm run build" || req.Static.OutputDir != "dist" {
+		t.Fatalf("patch must carry static build config: %+v", req.Static)
+	}
+	if req.Command == nil || len(*req.Command) != 1 || (*req.Command)[0] != "./serve" {
+		t.Fatalf("patch must carry command: %+v", req.Command)
+	}
+}
+
+func TestApply_PatchServiceResetsStaticWhenOmitted(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	// A service update where the YAML OMITS the static block: the patch
+	// must still carry a non-nil (reset-to-default) Static so the live
+	// CR's stale static config is cleared.
+	f := &File{
+		Project:  "shop",
+		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
+	}
+	plan := &Plan{ServicesToUpdate: []string{"api"}}
+	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	req := fp.patched[0].req
+	if req.Static == nil || req.Buildpacks == nil {
+		t.Fatalf("omitted static/buildpacks must still patch a non-nil reset: %+v", req)
+	}
+	if req.Static.BuildCmd != "" || req.Static.OutputDir != "" {
+		t.Fatalf("reset Static must be zero-valued: %+v", req.Static)
+	}
+}
+
+func TestApply_SetEnvUnconditionalOnUpdate(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	// A service update with an empty env: block must still call SetEnv
+	// (with an empty slice) so the live CR's env vars are declaratively
+	// reset to zero rather than left stale.
+	f := &File{
+		Project:  "shop",
+		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
+	}
+	plan := &Plan{ServicesToUpdate: []string{"api"}}
+	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(fp.envSet) != 1 {
+		t.Fatalf("SetEnv must be called unconditionally on update: %+v", fp.envSet)
+	}
+	if len(fp.envSet[0].envVars) != 0 {
+		t.Fatalf("empty env: block must produce an empty SetEnv slice: %+v", fp.envSet[0].envVars)
+	}
+}
+
+func TestApply_RefusesDeletionsWhenPruneFalse(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	// A plan carrying ServicesToDelete against a prune:false file is a
+	// caller bug — Apply must refuse before any kube write.
+	f := &File{Project: "shop", Prune: false}
+	plan := &Plan{ServicesToDelete: []string{"old"}}
+	_, err := r.Apply(context.Background(), plan, f)
+	if err == nil {
+		t.Fatalf("Apply must refuse a prune:false plan with deletions")
+	}
+	if len(fp.deleted) != 0 {
+		t.Fatalf("no deletes must execute when Apply refuses: %+v", fp.deleted)
 	}
 }
 

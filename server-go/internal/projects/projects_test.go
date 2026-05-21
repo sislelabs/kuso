@@ -613,6 +613,59 @@ func TestPatchService_PrivateEgressPropagatesToEnvironments(t *testing.T) {
 	}
 }
 
+// TestPatchService_StaticBuildpacksCommand verifies the three
+// config-as-code patch fields land on the KusoService CR: a non-nil
+// Static/Buildpacks pointer replaces the build config, a non-nil
+// Command pointer replaces the run command.
+func TestPatchService_StaticBuildpacksCommand(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{
+			Project: "alpha", Port: 8080,
+			Static:  &kube.KusoStaticSpec{BuildCmd: "old build", OutputDir: "old"},
+			Command: []string{"old"},
+		}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	static := &ServiceStaticSpec{BuildCmd: "npm run build", OutputDir: "dist"}
+	buildpacks := &ServiceBuildpacksSpec{BuilderImage: "paketobuildpacks/builder:base"}
+	command := []string{"./serve", "--port", "8080"}
+	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{
+		Static:     static,
+		Buildpacks: buildpacks,
+		Command:    &command,
+	}); err != nil {
+		t.Fatalf("PatchService: %v", err)
+	}
+	svc, err := s.GetService(context.Background(), "alpha", "web")
+	if err != nil {
+		t.Fatalf("GetService: %v", err)
+	}
+	if svc.Spec.Static == nil || svc.Spec.Static.BuildCmd != "npm run build" || svc.Spec.Static.OutputDir != "dist" {
+		t.Errorf("Static not applied: %+v", svc.Spec.Static)
+	}
+	if svc.Spec.Buildpacks == nil || svc.Spec.Buildpacks.BuilderImage != "paketobuildpacks/builder:base" {
+		t.Errorf("Buildpacks not applied: %+v", svc.Spec.Buildpacks)
+	}
+	if len(svc.Spec.Command) != 3 || svc.Spec.Command[0] != "./serve" {
+		t.Errorf("Command not applied: %+v", svc.Spec.Command)
+	}
+
+	// A non-nil Command pointer to an empty slice clears the command.
+	empty := []string{}
+	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{Command: &empty}); err != nil {
+		t.Fatalf("PatchService clear command: %v", err)
+	}
+	svc2, err := s.GetService(context.Background(), "alpha", "web")
+	if err != nil {
+		t.Fatalf("GetService 2: %v", err)
+	}
+	if len(svc2.Spec.Command) != 0 {
+		t.Errorf("Command not cleared: %+v", svc2.Spec.Command)
+	}
+}
+
 // ---- environment ops ----------------------------------------------------
 
 func TestDeleteEnvironment_RefusesProduction(t *testing.T) {

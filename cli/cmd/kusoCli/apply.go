@@ -14,7 +14,7 @@ var (
 )
 
 func init() {
-	applyCmd.Flags().StringVarP(&applyFile, "file", "f", "kuso.yml", "path to the kuso.yml file")
+	applyCmd.Flags().StringVarP(&applyFile, "file", "f", "kuso.yaml", "path to the kuso.yaml file")
 	applyCmd.Flags().BoolVar(&applyDryRun, "dry-run", false, "show the plan without writing")
 	rootCmd.AddCommand(applyCmd)
 }
@@ -39,8 +39,20 @@ needed.`,
 	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		path := applyFile
+		explicit := cmd.Flags().Changed("file")
 		if len(args) == 1 {
 			path = args[0]
+			explicit = true
+		}
+		// When the user didn't explicitly pick a file and the default
+		// kuso.yaml is absent, fall back to the legacy kuso.yml name
+		// before erroring.
+		if !explicit {
+			if _, statErr := os.Stat(path); os.IsNotExist(statErr) {
+				if _, altErr := os.Stat("kuso.yml"); altErr == nil {
+					path = "kuso.yml"
+				}
+			}
 		}
 		body, err := os.ReadFile(path)
 		if err != nil {

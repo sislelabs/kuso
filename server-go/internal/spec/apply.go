@@ -68,6 +68,14 @@ type StepError struct {
 // is reserved for things that prevent any progress (DB down, kube
 // auth gone).
 func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File) (*ApplyResult, error) {
+	// Defensive prune gate: PlanFor already strips *ToDelete sets when
+	// prune is false, but Apply must not trust the caller to have run
+	// PlanFor with the same File. A plan carrying deletions against a
+	// prune:false file is a bug — refuse before any kube write.
+	if !f.Prune && len(plan.ServicesToDelete)+len(plan.AddonsToDelete)+len(plan.CronsToDelete) > 0 {
+		return nil, fmt.Errorf("%w: plan has deletions but kuso.yaml sets prune:false", ErrInvalid)
+	}
+
 	out := &ApplyResult{Plan: plan}
 
 	desiredAddons := map[string]AddonSpec{}
@@ -114,10 +122,13 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File) (*ApplyResu
 		if _, err := r.Projects.PatchService(ctx, f.Project, name, req); err != nil {
 			out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "update", Message: err.Error()})
 		}
-		if len(desiredSvcs[name].Env) > 0 {
-			if err := r.Projects.SetEnv(ctx, f.Project, name, mapToEnvVars(desiredSvcs[name].Env)); err != nil {
-				out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "env", Message: err.Error()})
-			}
+		// SetEnv unconditionally — an empty/omitted env: block in the
+		// YAML must declaratively reset the service to zero env vars.
+		// mapToEnvVars(nil) returns an empty slice and SetEnv applies
+		// that as a full replace (svc.Spec.EnvVars = []), so omitting
+		// env: clears existing vars rather than leaving them stale.
+		if err := r.Projects.SetEnv(ctx, f.Project, name, mapToEnvVars(desiredSvcs[name].Env)); err != nil {
+			out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "env", Message: err.Error()})
 		}
 	}
 	for _, name := range plan.ServicesToDelete {
@@ -238,6 +249,21 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 		volumes = append(volumes, projects.VolumePatch{Name: v.Name, MountPath: v.MountPath, SizeGi: v.SizeGi})
 	}
 
+	// Static / Buildpacks / Command are set unconditionally — a
+	// non-nil pointer always, even when the YAML omits the block, so
+	// omitting resets the live CR back to chart defaults (declarative
+	// reset, same as the other patch fields).
+	static := &projects.ServiceStaticSpec{}
+	if s.Static != nil {
+		static.BuildCmd = s.Static.BuildCmd
+		static.OutputDir = s.Static.OutputDir
+	}
+	buildpacks := &projects.ServiceBuildpacksSpec{}
+	if s.Buildpacks != nil {
+		buildpacks.BuilderImage = s.Buildpacks.Builder
+	}
+	cmd := s.Command
+
 	return projects.PatchServiceRequest{
 		Port:          &port,
 		Runtime:       &runtime,
@@ -248,6 +274,9 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 		Sleep:         sleep,
 		Placement:     placement,
 		Volumes:       &volumes,
+		Static:        static,
+		Buildpacks:    buildpacks,
+		Command:       &cmd,
 	}
 }
 

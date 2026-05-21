@@ -1309,6 +1309,17 @@ type PatchServiceRequest struct {
 	// when the project toggle is on. Send {"disabled": false} or
 	// previews:null to clear the override.
 	Previews *PatchPreviewsRequest `json:"previews,omitempty"`
+	// Static replaces the static-runtime build config wholesale. nil
+	// leaves it alone; a non-nil pointer (even to a zero-valued spec)
+	// resets it. Used by the config-as-code apply to keep runtime=static
+	// services in lockstep with their kuso.yaml.
+	Static *ServiceStaticSpec `json:"static,omitempty"`
+	// Buildpacks replaces the buildpacks-runtime config wholesale. nil
+	// leaves it alone; a non-nil pointer resets it.
+	Buildpacks *ServiceBuildpacksSpec `json:"buildpacks,omitempty"`
+	// Command replaces the run command. Pointer to a slice so "unset"
+	// (nil, leave alone) is distinguishable from "empty" (clear it).
+	Command *[]string `json:"command,omitempty"`
 }
 
 type PatchPreviewsRequest struct {
@@ -1526,6 +1537,24 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		} else {
 			svc.Spec.Previews = &kube.KusoServicePreviews{Disabled: req.Previews.Disabled}
 		}
+	}
+	if req.Static != nil {
+		// Validate before stamping — the build controller interpolates
+		// these fields into shell contexts (the static heredoc). Mirror
+		// the AddService create path.
+		if err := validateStaticSpec(req.Static); err != nil {
+			return nil, err
+		}
+		svc.Spec.Static = toStaticSpec(req.Static)
+	}
+	if req.Buildpacks != nil {
+		if err := validateBuildpacksSpec(req.Buildpacks); err != nil {
+			return nil, err
+		}
+		svc.Spec.Buildpacks = toBuildpacksSpec(req.Buildpacks)
+	}
+	if req.Command != nil {
+		svc.Spec.Command = *req.Command
 	}
 
 	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)
