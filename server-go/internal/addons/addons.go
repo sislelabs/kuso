@@ -478,19 +478,45 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 }
 
 // RefreshEnvSecrets recomputes the project's addon-conn secret list and
-// merge-patches every env's spec.envFromSecrets to match. Idempotent.
-//
-// The TS comment on this path is load-bearing: PATCH (not delete +
-// create) is required because helm-operator's uninstall finalizer can
-// race with delete and lock the env in "object is being deleted" state.
+// rewrites every env's envFromSecrets. Public entrypoint with a stable
+// signature — callers that have no just-created addon to account for
+// (e.g. the delete path) use this directly.
 func (s *Service) RefreshEnvSecrets(ctx context.Context, project string) error {
+	return s.refreshEnvSecrets(ctx, project)
+}
+
+// refreshEnvSecrets is the core of RefreshEnvSecrets. extraConnSecrets
+// names conn secrets that MUST be included even if the addon
+// label-list does not return them yet.
+//
+// Why extraConnSecrets exists: addons.Add creates the KusoAddon CR and
+// then refreshes env secrets immediately. The addon List() here is a
+// label-selector query served from the eventually-consistent watch
+// cache, so the just-created addon is frequently not yet visible —
+// without an explicit hand-off its conn secret would be silently
+// omitted from every service's envFromSecrets. The Add path passes the
+// new addon's conn-secret name here to close that read-after-write
+// race deterministically.
+func (s *Service) refreshEnvSecrets(ctx context.Context, project string, extraConnSecrets ...string) error {
 	addons, err := s.List(ctx, project)
 	if err != nil {
 		return err
 	}
-	baseSecrets := make([]string, 0, len(addons))
+	// Build baseSecrets, de-duplicated: addon conn secrets, then the
+	// project/instance-shared secrets, then any explicitly-passed
+	// extras. seen guards against listing a conn secret twice when the
+	// label-list DID return an addon that is also in extraConnSecrets.
+	seen := make(map[string]bool)
+	baseSecrets := make([]string, 0, len(addons)+len(extraConnSecrets)+2)
+	addSecret := func(name string) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		baseSecrets = append(baseSecrets, name)
+	}
 	for _, a := range addons {
-		baseSecrets = append(baseSecrets, connSecretName(a.Name))
+		addSecret(connSecretName(a.Name))
 	}
 	// Always carry the project-shared + instance-shared secrets. The
 	// merge-patch below REPLACES spec.envFromSecrets wholesale, so any
@@ -498,7 +524,13 @@ func (s *Service) RefreshEnvSecrets(ctx context.Context, project string) error {
 	// here is the bug that silently stripped auth tokens, Stripe keys
 	// and Discord bot tokens from every service's pods after an addon
 	// add/remove.
-	baseSecrets = append(baseSecrets, kube.SharedSecretNames(project)...)
+	for _, name := range kube.SharedSecretNames(project) {
+		addSecret(name)
+	}
+	// Explicitly-passed conn secrets — the read-after-write hand-off.
+	for _, name := range extraConnSecrets {
+		addSecret(name)
+	}
 	ns := s.nsFor(ctx, project)
 	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
 		kube.LabelProject: project,

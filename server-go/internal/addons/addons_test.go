@@ -144,6 +144,64 @@ func TestAdd_MissingFields(t *testing.T) {
 	}
 }
 
+// TestRefreshEnvSecrets_ExplicitExtraSurvivesStaleList reproduces the
+// addon-add read-after-write race: the addon label-list does not yet
+// return the just-created addon (here: no addon seeded at all), but
+// the explicit extraConnSecrets argument must still land in every
+// env's envFromSecrets.
+func TestRefreshEnvSecrets_ExplicitExtraSurvivesStaleList(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProj("alpha"),
+		seedEnv("alpha", "web", "production", "alpha-web-production"),
+	)
+	if err := s.refreshEnvSecrets(context.Background(), "alpha", "alpha-cache-conn"); err != nil {
+		t.Fatalf("refreshEnvSecrets: %v", err)
+	}
+	envCR, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	found := false
+	for _, g := range envCR.Spec.EnvFromSecrets {
+		if g == "alpha-cache-conn" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("envFromSecrets %+v missing explicitly-passed alpha-cache-conn", envCR.Spec.EnvFromSecrets)
+	}
+}
+
+// TestRefreshEnvSecrets_ExtraNotDuplicated confirms an extra conn
+// secret that the addon list ALSO returns appears exactly once.
+func TestRefreshEnvSecrets_ExtraNotDuplicated(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProj("alpha"),
+		seedEnv("alpha", "web", "production", "alpha-web-production"),
+	)
+	if _, err := s.Add(context.Background(), "alpha", CreateAddonRequest{Name: "pg", Kind: "postgres"}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	if err := s.refreshEnvSecrets(context.Background(), "alpha", "alpha-pg-conn"); err != nil {
+		t.Fatalf("refreshEnvSecrets: %v", err)
+	}
+	envCR, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	count := 0
+	for _, g := range envCR.Spec.EnvFromSecrets {
+		if g == "alpha-pg-conn" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("alpha-pg-conn appears %d times in %+v, want exactly 1", count, envCR.Spec.EnvFromSecrets)
+	}
+}
+
 func TestDelete_RefreshesEnvSecrets(t *testing.T) {
 	t.Parallel()
 	// Two addons; delete one and confirm env secret list shrinks to the
