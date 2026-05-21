@@ -154,25 +154,36 @@ to:
   patch requests already exist; the reconciler passes explicit zero values
   rather than omitting fields.
 
-### 4. Git-push trigger — `server-go/internal/builds` (webhook path)
+### 4. Git-push trigger — `server-go/internal/github/dispatcher.go`
 
-The GitHub webhook handler already fans a push to the build pipeline. A new
-step runs **before** the build is enqueued:
+**Important constraint:** the build pod clones the repo inside an init
+container; the kuso server never has the repo working tree on disk during
+webhook handling. So `kuso.yaml` is fetched via the **GitHub Contents API**,
+not read from a filesystem.
 
-- After the repo is cloned for the build (the build pipeline already has a
-  checkout), check for `kuso.yaml` / `kuso.yml` at the repo root.
-- If present and the push is to the project's default branch, parse it and
-  call `Reconciler.Apply`. The project name in the file must match the project
-  the webhook resolved to (mismatch → skip + audit warning, never apply to a
+`Dispatcher.onPush` already resolves the push to a `KusoProject` and enqueues
+builds. A new step runs **before** the builds are enqueued, for pushes to the
+project's default branch:
+
+- The dispatcher already holds a `*github.Client`. Call the GitHub Contents
+  API — `GET /repos/{owner}/{repo}/contents/kuso.yaml?ref={sha}` — to fetch
+  `kuso.yaml` (fall back to `kuso.yml`) at the pushed commit. A `404` (no file)
+  is the common case → silently skip, no error.
+- If found, base64-decode the content, `spec.Parse` it, and call
+  `Reconciler.Apply`. The project name in the file must match the project the
+  dispatcher resolved (mismatch → skip + audit warning, never apply to a
   different project).
 - Apply runs with `prune` honored from the file. Result is recorded as a
   `NotificationEvent` (`config.applied` / `config.apply_failed`) and audit row.
-- A parse error or apply error does **not** block the build — the build still
-  runs against the (possibly stale) infra; the failure is surfaced via
-  notification. Rationale: a broken `kuso.yaml` shouldn't wedge deploys.
+- A parse error or apply error does **not** block the builds — they still run
+  against the (possibly stale) infra; the failure is surfaced via notification.
+  Rationale: a broken `kuso.yaml` shouldn't wedge deploys.
 - Gated by a project setting `spec.configAsCode.enabled` (default **true** for
-  new projects; the webhook simply no-ops when no `kuso.yaml` exists, so
-  default-on is safe).
+  new projects; the dispatcher simply no-ops on a `404`, so default-on is
+  safe). When the flag is explicitly false, the Contents API call is skipped
+  entirely.
+- The dispatcher gains a `Reconciler *spec.Reconciler` field (nil on kube-less
+  installs → step skipped, same guard as the HTTP handler).
 
 ### 5. CLI + UI
 
@@ -194,17 +205,15 @@ button. Reuses the existing apply + new spec endpoints.
 ## Data flow
 
 ```
-git push ──> GitHub webhook ──> resolve project
+git push ──> GitHub webhook ──> Dispatcher.onPush ──> resolve project
                                       │
-                          repo checkout (build pipeline)
-                                      │
-                          kuso.yaml present at root?
-                                      │ yes
+                          GitHub Contents API: GET kuso.yaml?ref=<sha>
+                                      │ 200 (404 → skip)
                           spec.Parse ──> spec.PlanFor ──> Reconciler.Apply
                                       │                        │
                           audit + NotificationEvent     kube writes
                                       │
-                          build enqueued (unchanged)
+                          builds enqueued (unchanged)
 
 kuso apply kuso.yaml ──> POST /api/projects/{p}/apply ──> same Reconciler
 kuso project export   ──> GET  /api/projects/{p}/spec  ──> live CRs → File → YAML
