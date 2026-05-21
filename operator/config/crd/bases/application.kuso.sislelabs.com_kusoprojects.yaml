@@ -78,6 +78,17 @@ spec:
                     ttlDays:
                       type: integer
                       default: 7
+                configAsCode:
+                  type: object
+                  description: >-
+                    Controls the kuso.yaml-on-push behaviour. When
+                    enabled (default), a push to the default branch
+                    makes kuso fetch kuso.yaml via the GitHub Contents
+                    API and apply it before builds run.
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: true
                 alwaysOn:
                   type: boolean
                   description: |

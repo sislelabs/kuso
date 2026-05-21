@@ -60,7 +60,16 @@ type KusoProjectSpec struct {
 	// of scale-to-zero globally — useful for projects where any cold-
 	// start cost is unacceptable (low-traffic but latency-sensitive,
 	// background processors, etc).
-	AlwaysOn bool `json:"alwaysOn,omitempty"`
+	AlwaysOn     bool                  `json:"alwaysOn,omitempty"`
+	// ConfigAsCode controls kuso.yaml-on-push. Nil = default
+	// (enabled). When Enabled is false, a push never triggers a
+	// config apply.
+	ConfigAsCode *KusoConfigAsCode `json:"configAsCode,omitempty"`
+}
+
+// KusoConfigAsCode is the spec.configAsCode block on KusoProject.
+type KusoConfigAsCode struct {
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // KusoPlacement pins workloads to a subset of cluster nodes. Either

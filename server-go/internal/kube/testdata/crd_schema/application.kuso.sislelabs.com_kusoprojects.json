@@ -22,6 +22,16 @@
             "description": "Domain under which auto-generated service hostnames are emitted.",
             "type": "string"
           },
+          "configAsCode": {
+            "description": "Controls the kuso.yaml-on-push behaviour. When enabled (default), a push to the default branch makes kuso fetch kuso.yaml via the GitHub Contents API and apply it before builds run.",
+            "properties": {
+              "enabled": {
+                "default": true,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
           "defaultRepo": {
             "properties": {
               "defaultBranch": {
