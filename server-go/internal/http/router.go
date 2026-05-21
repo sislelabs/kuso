@@ -284,6 +284,22 @@ func NewRouter(d Deps) http.Handler {
 		wsH.Mount(r)
 	}
 
+	// Browser terminal WS — interactive pod exec proxied through the
+	// kuso server. Mounted on the public router for the same reason
+	// the logs WS is (browsers can't carry an Authorization header on
+	// a WS upgrade); the handler rolls its own JWT + tenancy gate.
+	if d.Projects != nil && d.Kube != nil && d.Issuer != nil {
+		termH := &httphandlers.TerminalWSHandler{
+			Svc:    d.Projects,
+			Kube:   d.Kube,
+			Issuer: d.Issuer,
+			DB:     d.DB,
+			Audit:  d.Audit,
+			Logger: d.Logger,
+		}
+		termH.Mount(r)
+	}
+
 	// Authenticated routes — extracted out of NewRouter so this
 	// function reads as the high-level chain (middleware → public
 	// routes → auth routes → SPA fallback) without sprawling 160

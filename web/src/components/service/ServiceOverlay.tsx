@@ -15,6 +15,7 @@ import { ServiceCronsPanel } from "./overlay/ServiceCronsPanel";
 import { ServiceRunsPanel } from "./overlay/ServiceRunsPanel";
 import { ServiceLogsPanel } from "./overlay/ServiceLogsPanel";
 import { ServiceErrorsPanel } from "./overlay/ServiceErrorsPanel";
+import { ServiceTerminalPanel } from "./overlay/ServiceTerminalPanel";
 import { ServiceSettingsPanel } from "./overlay/ServiceSettingsPanel";
 import { Check, Copy, ExternalLink, X } from "lucide-react";
 import { toast } from "sonner";
@@ -66,7 +67,7 @@ export function useOverlayDirty(
   }, [api, panelKey, dirty, opts?.onSave, opts?.onDiscard, opts?.saving, opts?.saveError]);
 }
 
-type Tab = "deployments" | "variables" | "metrics" | "logs" | "errors" | "crons" | "runs" | "settings";
+type Tab = "deployments" | "variables" | "metrics" | "logs" | "errors" | "shell" | "crons" | "runs" | "settings";
 // Settings is pinned to the right of the strip (rendered outside
 // the scrollable container) because it holds the destructive
 // actions — Delete service, change runtime, change port, change
@@ -80,6 +81,7 @@ const MAIN_TABS: { id: Tab; label: string }[] = [
   { id: "metrics", label: "Metrics" },
   { id: "logs", label: "Logs" },
   { id: "errors", label: "Errors" },
+  { id: "shell", label: "Shell" },
   { id: "crons", label: "Crons" },
   { id: "runs", label: "Runs" },
 ];
@@ -489,6 +491,11 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                     {tab === "errors" && (
                       <div className="p-5">
                         <ServiceErrorsPanel project={project} service={service ?? ""} />
+                      </div>
+                    )}
+                    {tab === "shell" && (
+                      <div className="p-5">
+                        <ServiceTerminalPanel project={project} service={service ?? ""} env={envParam} />
                       </div>
                     )}
                     {tab === "crons" && (
