@@ -508,7 +508,7 @@ func main() {
 		// Spec reconciler — the apply endpoint reuses the same
 		// project + addon services for create/update/delete so the
 		// validation rules stay in one place.
-		specRecon = &spec.Reconciler{Projects: projSvc, Addons: addonSvc}
+		specRecon = &spec.Reconciler{Projects: projSvc, Addons: addonSvc, Crons: cronSvc}
 
 		// Per-replica workers. These are safe to run on every pod —
 		// they don't mutate cluster state or write the same DB rows

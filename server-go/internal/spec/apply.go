@@ -6,14 +6,41 @@ import (
 	"strings"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/crons"
+	"kuso/server/internal/kube"
 	"kuso/server/internal/projects"
 )
 
-// Reconciler bundles the dependencies the Apply needs. Callers
-// construct it once at boot and reuse — no per-request state.
+// projectsReconciler is the slice of projects.Service that Apply
+// uses. A narrow interface so the reconciler is unit-testable.
+type projectsReconciler interface {
+	AddService(ctx context.Context, project string, req projects.CreateServiceRequest) (*kube.KusoService, error)
+	PatchService(ctx context.Context, project, service string, req projects.PatchServiceRequest) (*kube.KusoService, error)
+	DeleteService(ctx context.Context, project, service string) error
+	SetEnv(ctx context.Context, project, service string, envVars []projects.EnvVar) error
+}
+
+// addonsReconciler is the slice of addons.Service that Apply uses.
+type addonsReconciler interface {
+	Add(ctx context.Context, project string, req addons.CreateAddonRequest) (*kube.KusoAddon, error)
+	Update(ctx context.Context, project, name string, req addons.UpdateAddonRequest) (*kube.KusoAddon, error)
+	Delete(ctx context.Context, project, addon string) error
+}
+
+// cronsReconciler is the slice of crons.Service that Apply uses.
+type cronsReconciler interface {
+	AddProject(ctx context.Context, project string, req crons.CreateProjectCronRequest) (*kube.KusoCron, error)
+	UpdateProject(ctx context.Context, project, name string, req crons.UpdateProjectCronRequest) (*kube.KusoCron, error)
+	DeleteProject(ctx context.Context, project, name string) error
+}
+
+// Reconciler bundles the dependencies Apply needs. Callers construct
+// it once at boot and reuse — no per-request state. *projects.Service
+// / *addons.Service / *crons.Service all satisfy these interfaces.
 type Reconciler struct {
-	Projects *projects.Service
-	Addons   *addons.Service
+	Projects projectsReconciler
+	Addons   addonsReconciler
+	Crons    cronsReconciler
 }
 
 // ApplyResult is what the API returns: the plan we executed plus a
@@ -26,7 +53,7 @@ type ApplyResult struct {
 }
 
 type StepError struct {
-	Resource string `json:"resource"` // "service:api" / "addon:db"
+	Resource string `json:"resource"` // "service:api" / "addon:db" / "cron:nightly"
 	Op       string `json:"op"`       // "create" / "update" / "delete"
 	Message  string `json:"message"`
 }
@@ -35,6 +62,7 @@ type StepError struct {
 //   1. addons first (services depend on their secrets via env-from)
 //   2. services next (created → updated → deleted, in that order so
 //      a rename pattern doesn't leave us briefly serviceless)
+//   3. crons last (kind=service crons reference a built service)
 //
 // Returns the executed plan + any per-step failures. Top-level error
 // is reserved for things that prevent any progress (DB down, kube
@@ -50,12 +78,23 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File) (*ApplyResu
 	for _, s := range f.Services {
 		desiredSvcs[s.Name] = s
 	}
+	desiredCrons := map[string]CronSpec{}
+	for _, c := range f.Crons {
+		desiredCrons[c.Name] = c
+	}
 
 	for _, name := range plan.AddonsToCreate {
 		a := desiredAddons[name]
-		_, err := r.Addons.Add(ctx, f.Project, addons.CreateAddonRequest{Name: a.Name, Kind: a.Kind})
-		if err != nil {
+		if _, err := r.Addons.Add(ctx, f.Project, addonCreateReq(a)); err != nil {
 			out.Errors = append(out.Errors, StepError{Resource: "addon:" + name, Op: "create", Message: err.Error()})
+			continue
+		}
+		// CreateAddonRequest carries no backup config — apply it via a
+		// post-create Update when the spec asks for it.
+		if a.Backup != nil {
+			if _, err := r.Addons.Update(ctx, f.Project, name, addonBackupUpdateReq(a)); err != nil {
+				out.Errors = append(out.Errors, StepError{Resource: "addon:" + name, Op: "update", Message: err.Error()})
+			}
 		}
 	}
 	for _, name := range plan.AddonsToDelete {
@@ -65,7 +104,7 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File) (*ApplyResu
 	}
 
 	for _, name := range plan.ServicesToCreate {
-		req := serviceCreateReq(f, desiredSvcs[name])
+		req := serviceCreateReq(desiredSvcs[name])
 		if _, err := r.Projects.AddService(ctx, f.Project, req); err != nil {
 			out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "create", Message: err.Error()})
 		}
@@ -95,52 +134,158 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File) (*ApplyResu
 			out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "env", Message: err.Error()})
 		}
 	}
+
+	for _, name := range plan.CronsToCreate {
+		if _, err := r.Crons.AddProject(ctx, f.Project, cronCreateReq(desiredCrons[name])); err != nil {
+			out.Errors = append(out.Errors, StepError{Resource: "cron:" + name, Op: "create", Message: err.Error()})
+		}
+	}
+	for _, name := range plan.CronsToUpdate {
+		if _, err := r.Crons.UpdateProject(ctx, f.Project, name, cronUpdateReq(desiredCrons[name])); err != nil {
+			out.Errors = append(out.Errors, StepError{Resource: "cron:" + name, Op: "update", Message: err.Error()})
+		}
+	}
+	for _, name := range plan.CronsToDelete {
+		if err := r.Crons.DeleteProject(ctx, f.Project, name); err != nil {
+			out.Errors = append(out.Errors, StepError{Resource: "cron:" + name, Op: "delete", Message: err.Error()})
+		}
+	}
+
 	return out, nil
 }
 
-func serviceCreateReq(f *File, s ServiceSpec) projects.CreateServiceRequest {
+// serviceCreateReq maps a kuso.yaml ServiceSpec to the projects domain
+// create request, covering every field the schema exposes.
+func serviceCreateReq(s ServiceSpec) projects.CreateServiceRequest {
 	repoURL, repoPath := splitRepo(s.Repo, s.Path)
-	req := projects.CreateServiceRequest{Name: s.Name, Runtime: s.Runtime, Port: s.Port}
+	req := projects.CreateServiceRequest{
+		Name:    s.Name,
+		Runtime: s.Runtime,
+		Port:    s.Port,
+		Command: s.Command,
+	}
 	if repoURL != "" {
 		req.Repo = &projects.CreateServiceRepo{URL: repoURL, Path: repoPath}
 	}
 	if s.Scale != nil {
 		req.Scale = &projects.ServiceScale{Min: s.Scale.Min, Max: s.Scale.Max, TargetCPU: s.Scale.TargetCPU}
 	}
-	// TODO(config-as-code task 4): rewritten in task 4 for full parity.
+	if s.Sleep != nil {
+		req.Sleep = &projects.ServiceSleep{Enabled: s.Sleep.Enabled, AfterMinutes: s.Sleep.AfterMinutes}
+	}
+	if s.Static != nil {
+		req.Static = &projects.ServiceStaticSpec{BuildCmd: s.Static.BuildCmd, OutputDir: s.Static.OutputDir}
+	}
+	if s.Buildpacks != nil {
+		req.Buildpacks = &projects.ServiceBuildpacksSpec{BuilderImage: s.Buildpacks.Builder}
+	}
 	for _, d := range s.Domains {
 		req.Domains = append(req.Domains, projects.ServiceDomain{Host: d.Host, TLS: d.TLS})
 	}
-	_ = f
+	if len(s.Env) > 0 {
+		req.EnvVars = mapToEnvVars(s.Env)
+	}
 	return req
 }
 
+// servicePatchReq maps a ServiceSpec to the partial update request.
+// This is the declarative reset: every field is set unconditionally
+// (a pointer to the value, even when zero) so an omitted YAML field
+// resets the live CR back to its default.
 func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
-	req := projects.PatchServiceRequest{}
-	if s.Port > 0 {
-		p := s.Port
-		req.Port = &p
+	port := s.Port
+	runtime := s.Runtime
+	internal := s.Internal
+	privateEgress := s.PrivateEgress
+
+	domains := make([]projects.ServiceDomain, 0, len(s.Domains))
+	for _, d := range s.Domains {
+		domains = append(domains, projects.ServiceDomain{Host: d.Host, TLS: d.TLS})
 	}
-	if s.Runtime != "" {
-		rt := s.Runtime
-		req.Runtime = &rt
-	}
-	// TODO(config-as-code task 4): rewritten in task 4 for full parity.
-	if len(s.Domains) > 0 {
-		ds := make([]projects.ServiceDomain, 0, len(s.Domains))
-		for _, d := range s.Domains {
-			ds = append(ds, projects.ServiceDomain{Host: d.Host, TLS: d.TLS})
-		}
-		req.Domains = &ds
-	}
+
+	scale := &projects.PatchScaleRequest{}
 	if s.Scale != nil {
-		req.Scale = &projects.PatchScaleRequest{
-			Min:       intPtr(s.Scale.Min),
-			Max:       intPtr(s.Scale.Max),
-			TargetCPU: intPtr(s.Scale.TargetCPU),
+		scale.Min = intPtrAlways(s.Scale.Min)
+		scale.Max = intPtrAlways(s.Scale.Max)
+		scale.TargetCPU = intPtrAlways(s.Scale.TargetCPU)
+	} else {
+		zero := 0
+		scale.Min = &zero
+		scale.Max = &zero
+		scale.TargetCPU = &zero
+	}
+
+	sleep := &projects.PatchSleepRequest{}
+	{
+		enabled := false
+		after := 0
+		if s.Sleep != nil {
+			enabled = s.Sleep.Enabled
+			after = s.Sleep.AfterMinutes
 		}
+		sleep.Enabled = &enabled
+		sleep.AfterMinutes = &after
+	}
+
+	placement := &projects.PatchPlacementRequest{}
+	if s.Placement != nil {
+		placement.Labels = s.Placement.Labels
+		placement.Nodes = s.Placement.Nodes
+	}
+
+	volumes := make([]projects.VolumePatch, 0, len(s.Volumes))
+	for _, v := range s.Volumes {
+		volumes = append(volumes, projects.VolumePatch{Name: v.Name, MountPath: v.MountPath, SizeGi: v.SizeGi})
+	}
+
+	return projects.PatchServiceRequest{
+		Port:          &port,
+		Runtime:       &runtime,
+		Internal:      &internal,
+		PrivateEgress: &privateEgress,
+		Domains:       &domains,
+		Scale:         scale,
+		Sleep:         sleep,
+		Placement:     placement,
+		Volumes:       &volumes,
+	}
+}
+
+// addonCreateReq maps a kuso.yaml AddonSpec to the addons domain
+// create request. Backup is not part of CreateAddonRequest — Apply
+// applies it separately via addonBackupUpdateReq.
+func addonCreateReq(a AddonSpec) addons.CreateAddonRequest {
+	req := addons.CreateAddonRequest{
+		Name:             a.Name,
+		Kind:             a.Kind,
+		Version:          a.Version,
+		Size:             a.Size,
+		HA:               a.HA,
+		StorageSize:      a.StorageSize,
+		Database:         a.Database,
+		UseInstanceAddon: a.UseInstanceAddon,
+	}
+	if a.Pooler != nil {
+		req.Pooler = &kube.KusoAddonPooler{Enabled: a.Pooler.Enabled}
+	}
+	if a.External != nil {
+		req.External = &kube.KusoAddonExternal{SecretName: a.External.SecretName}
 	}
 	return req
+}
+
+// addonBackupUpdateReq builds the post-create update that applies an
+// addon's backup schedule + retention. Only called when a.Backup is
+// set.
+func addonBackupUpdateReq(a AddonSpec) addons.UpdateAddonRequest {
+	sched := a.Backup.Schedule
+	retention := a.Backup.RetentionDays
+	return addons.UpdateAddonRequest{
+		Backup: &addons.UpdateBackupPatch{
+			Schedule:      &sched,
+			RetentionDays: &retention,
+		},
+	}
 }
 
 func mapToEnvVars(in map[string]string) []projects.EnvVar {
@@ -161,15 +306,16 @@ func splitRepo(repo, explicitPath string) (string, string) {
 	return repo, explicitPath
 }
 
-func intPtr(i int) *int {
-	if i == 0 {
-		return nil
-	}
-	return &i
+// intPtrAlways returns the address of i unconditionally — used by the
+// declarative-reset patch where a zero value must still be written.
+func intPtrAlways(i int) *int {
+	v := i
+	return &v
 }
 
 func (p *Plan) Summary() string {
-	return fmt.Sprintf("svc +%d ~%d -%d  addons +%d ~%d -%d",
+	return fmt.Sprintf("svc +%d ~%d -%d  addons +%d ~%d -%d  crons +%d ~%d -%d",
 		len(p.ServicesToCreate), len(p.ServicesToUpdate), len(p.ServicesToDelete),
-		len(p.AddonsToCreate), len(p.AddonsToUpdate), len(p.AddonsToDelete))
+		len(p.AddonsToCreate), len(p.AddonsToUpdate), len(p.AddonsToDelete),
+		len(p.CronsToCreate), len(p.CronsToUpdate), len(p.CronsToDelete))
 }
