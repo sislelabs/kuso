@@ -525,6 +525,13 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	if svcCR.Spec.Runtime == "image" {
 		return nil, fmt.Errorf("%w: runtime=image services don't build — change image.tag and save the service spec to redeploy", ErrInvalid)
 	}
+	// A runtime=worker service with FromService set reuses a sibling
+	// service's image — it has nothing of its own to build. Refusing
+	// here (same as runtime=image) keeps KusoBuild CRs only for
+	// services that genuinely produce an image.
+	if svcCR.Spec.Runtime == "worker" && svcCR.Spec.FromService != "" {
+		return nil, fmt.Errorf("%w: worker %q reuses %q's image — trigger a build on %q instead", ErrInvalid, service, svcCR.Spec.FromService, svcCR.Spec.FromService)
+	}
 
 	repoURL := ""
 	repoPath := "."
@@ -652,8 +659,16 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// Strategy mirrors KusoService.spec.runtime. The chart switches on
 	// `strategy: dockerfile|nixpacks` to pick the kaniko args + the
 	// optional nixpacks-plan init container. Empty defaults to dockerfile.
+	//
+	// `worker` is a *runtime*, not a build strategy — it means "run
+	// with a custom command, no Ingress". A worker that builds its own
+	// repo (no FromService — guarded above) still produces an image
+	// from a Dockerfile; the KusoBuild.spec.strategy CRD enum only
+	// accepts dockerfile|nixpacks|buildpacks|static, so mapping the
+	// literal "worker" through here produced an invalid CR and a 500.
+	// Self-building workers build from a Dockerfile.
 	strategy := svcCR.Spec.Runtime
-	if strategy == "" {
+	if strategy == "" || strategy == "worker" {
 		strategy = "dockerfile"
 	}
 

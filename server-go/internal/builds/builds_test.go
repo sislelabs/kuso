@@ -164,6 +164,62 @@ func TestCreate_FullSHARef(t *testing.T) {
 	}
 }
 
+// TestCreate_WorkerRuntimeBuildsAsDockerfile covers the worker-build
+// 500 bug: a runtime=worker service that builds its own repo must map
+// to a valid KusoBuild.spec.strategy. "worker" is a runtime, not a
+// build strategy — the CRD enum only accepts dockerfile|nixpacks|
+// buildpacks|static, so passing "worker" through produced an invalid
+// CR and a 500.
+func TestCreate_WorkerRuntimeBuildsAsDockerfile(t *testing.T) {
+	t.Parallel()
+	const ref = "abcdef0123456789abcdef0123456789abcdef01"
+	worker := &kube.KusoService{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-worker", Namespace: "kuso"},
+		Spec: kube.KusoServiceSpec{
+			Project: "alpha",
+			Runtime: "worker",
+			Repo:    &kube.KusoRepoRef{URL: "https://github.com/example/worker", Path: "."},
+		},
+	}
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		typedSeed(kube.GVRServices, "KusoService", worker),
+	)
+	got, err := s.Create(context.Background(), "alpha", "worker", CreateBuildRequest{Ref: ref})
+	if err != nil {
+		t.Fatalf("Create worker build: %v", err)
+	}
+	if got.Spec.Strategy != "dockerfile" {
+		t.Errorf("worker build strategy: got %q, want dockerfile", got.Spec.Strategy)
+	}
+}
+
+// TestCreate_WorkerWithFromServiceRefuses covers the other worker
+// case: a worker that reuses a sibling's image (FromService set) has
+// nothing of its own to build — Create must refuse with ErrInvalid.
+func TestCreate_WorkerWithFromServiceRefuses(t *testing.T) {
+	t.Parallel()
+	worker := &kube.KusoService{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-bot", Namespace: "kuso"},
+		Spec: kube.KusoServiceSpec{
+			Project:     "alpha",
+			Runtime:     "worker",
+			FromService: "api",
+		},
+	}
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		typedSeed(kube.GVRServices, "KusoService", worker),
+	)
+	_, err := s.Create(context.Background(), "alpha", "bot", CreateBuildRequest{Ref: "abcdef0123456789abcdef0123456789abcdef01"})
+	if err == nil {
+		t.Fatal("expected ErrInvalid for a worker with FromService set")
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("error should wrap ErrInvalid, got: %v", err)
+	}
+}
+
 func TestCreate_BranchOnly_SyntheticRef(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,
