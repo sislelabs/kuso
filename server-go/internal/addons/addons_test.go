@@ -469,3 +469,33 @@ func TestUpdate_TogglesPooler(t *testing.T) {
 		t.Errorf("pooler not disabled: %+v", got.Spec.Pooler)
 	}
 }
+
+// TestAdd_WiresConnSecretViaExplicitHandoff confirms Add wires the new
+// addon's conn secret into existing services even though Add relies on
+// the explicit hand-off rather than the (cache-lagged) addon list.
+func TestAdd_WiresConnSecretViaExplicitHandoff(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProj("alpha"),
+		seedEnv("alpha", "web", "production", "alpha-web-production"),
+		seedEnv("alpha", "api", "production", "alpha-api-production"),
+	)
+	if _, err := s.Add(context.Background(), "alpha", CreateAddonRequest{Name: "cache", Kind: "redis"}); err != nil {
+		t.Fatalf("Add: %v", err)
+	}
+	for _, envName := range []string{"alpha-web-production", "alpha-api-production"} {
+		envCR, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", envName)
+		if err != nil {
+			t.Fatalf("get env %s: %v", envName, err)
+		}
+		found := false
+		for _, g := range envCR.Spec.EnvFromSecrets {
+			if g == "alpha-cache-conn" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("env %s envFromSecrets %+v missing alpha-cache-conn", envName, envCR.Spec.EnvFromSecrets)
+		}
+	}
+}

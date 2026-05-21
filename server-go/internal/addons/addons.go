@@ -261,7 +261,12 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	if err != nil {
 		return nil, err
 	}
-	if err := s.RefreshEnvSecrets(ctx, project); err != nil {
+	// Pass the just-created addon's conn secret explicitly: the addon
+	// List() inside refreshEnvSecrets is served from the watch cache
+	// and frequently does not see this brand-new addon yet. The
+	// explicit hand-off guarantees its conn secret is wired into every
+	// existing service regardless of cache lag.
+	if err := s.refreshEnvSecrets(ctx, project, connSecretName(created.Name)); err != nil {
 		// Best-effort — the addon CR is in place; logs/admin can retry
 		// the env refresh manually if this fails.
 		return created, fmt.Errorf("addon created but env refresh failed: %w", err)
