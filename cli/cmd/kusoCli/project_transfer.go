@@ -24,17 +24,20 @@ var (
 	importPolicy  string
 )
 
-var projectExportCmd = &cobra.Command{
-	Use:   "export <project>",
+var projectExportArchiveCmd = &cobra.Command{
+	Use:   "export-archive <project>",
 	Short: "Download a project's full spec as a tar.gz",
 	Long: `Streams project + services + envs + addons + per-env secret values
 as a tar.gz to --out (or stdout when --out is omitted).
 
 The export is portable across kuso instances of the same major
 version. Live addon data is NOT included; copy that separately with
-` + "`kuso addon-backup`" + ` per addon.`,
-	Example: `  kuso project export shop --out shop.tar.gz
-  kuso project export shop | gzip -d | tar tv     # inspect contents`,
+` + "`kuso addon-backup`" + ` per addon.
+
+For a human-readable, repo-resident config-as-code document instead,
+use ` + "`kuso project export`" + ` (emits kuso.yaml).`,
+	Example: `  kuso project export-archive shop --out shop.tar.gz
+  kuso project export-archive shop | gzip -d | tar tv     # inspect contents`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -137,11 +140,11 @@ you, the operator is expected to plan DNS cutover separately.`,
 }
 
 func init() {
-	projectExportCmd.Flags().StringVarP(&exportOutFile, "out", "o", "", "output file (default: stdout)")
+	projectExportArchiveCmd.Flags().StringVarP(&exportOutFile, "out", "o", "", "output file (default: stdout)")
 	projectImportCmd.Flags().StringVarP(&importInFile, "in", "i", "", "input tarball (default: stdin)")
 	projectImportCmd.Flags().StringVar(&importPolicy, "policy", "error",
 		"conflict handling: error | rename | overwrite")
 
-	projectCmd.AddCommand(projectExportCmd)
+	projectCmd.AddCommand(projectExportArchiveCmd)
 	projectCmd.AddCommand(projectImportCmd)
 }

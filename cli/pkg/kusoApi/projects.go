@@ -274,6 +274,20 @@ func (k *KusoClient) Apply(project string, yamlBody []byte, dryRun bool) (*resty
 	return k.client.Post(url)
 }
 
+// ApplyConfig POSTs a kuso.yaml body to the config-as-code apply
+// endpoint. dryRun adds ?dryRun=1 so the server returns the plan only
+// and writes nothing. Body is sent as application/yaml. This is the
+// config-as-code name for the same call Apply makes.
+func (k *KusoClient) ApplyConfig(project string, body []byte, dryRun bool) (*resty.Response, error) {
+	return k.Apply(project, body, dryRun)
+}
+
+// GetProjectSpec GETs the project's current live state reconstructed
+// as a kuso.yaml document. Returns the raw YAML in resp.Body().
+func (k *KusoClient) GetProjectSpec(project string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/spec")
+}
+
 // GetProjectFull returns the project rollup (Describe) — project +
 // services + envs in one call.
 func (k *KusoClient) GetProjectFull(project string) (*resty.Response, error) {

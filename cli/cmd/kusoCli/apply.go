@@ -24,18 +24,27 @@ func init() {
 // itself (project: <name>) — no flag needed. With --dry-run we just
 // print the plan; otherwise we apply and print any per-step failures.
 var applyCmd = &cobra.Command{
-	Use:   "apply",
+	Use:   "apply [file]",
 	Short: "Apply kuso.yml to the connected kuso instance.",
-	Long: `Reads kuso.yml from the working directory (or --file <path>) and
-sends it to the server, which diffs it against the live project and
-reconciles. With --dry-run the server returns the plan but doesn't
-write anything.`,
+	Long: `Reads kuso.yml from the working directory (or the [file] positional
+arg, or --file <path>) and sends it to the server, which diffs it
+against the live project and reconciles. With --dry-run the server
+returns the plan but doesn't write anything.
+
+The file's "project:" field selects the target project — no flag
+needed.`,
 	Example: `  kuso apply
+  kuso apply kuso.yaml --dry-run
   kuso apply -f config/kuso.yml --dry-run`,
+	Args: cobra.MaximumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
-		body, err := os.ReadFile(applyFile)
+		path := applyFile
+		if len(args) == 1 {
+			path = args[0]
+		}
+		body, err := os.ReadFile(path)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "read %s: %v\n", applyFile, err)
+			fmt.Fprintf(os.Stderr, "read %s: %v\n", path, err)
 			os.Exit(1)
 		}
 
@@ -48,7 +57,7 @@ write anything.`,
 			os.Exit(1)
 		}
 
-		resp, err := api.Apply(project, body, applyDryRun)
+		resp, err := api.ApplyConfig(project, body, applyDryRun)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "apply:", err)
 			os.Exit(1)
@@ -87,6 +96,10 @@ func printApplyResult(body []byte, dryRun bool) {
 			AddonsToCreate   []string `json:"addonsToCreate"`
 			AddonsToUpdate   []string `json:"addonsToUpdate"`
 			AddonsToDelete   []string `json:"addonsToDelete"`
+			CronsToCreate    []string `json:"cronsToCreate"`
+			CronsToUpdate    []string `json:"cronsToUpdate"`
+			CronsToDelete    []string `json:"cronsToDelete"`
+			WouldDelete      []string `json:"wouldDelete"`
 		} `json:"plan"`
 		Errors []struct {
 			Resource string `json:"resource"`
@@ -108,6 +121,8 @@ func printApplyResult(body []byte, dryRun bool) {
 		verb, len(p.ServicesToCreate), len(p.ServicesToUpdate), len(p.ServicesToDelete))
 	fmt.Printf("addons:   %s create %d, update %d, delete %d\n",
 		verb, len(p.AddonsToCreate), len(p.AddonsToUpdate), len(p.AddonsToDelete))
+	fmt.Printf("crons:    %s create %d, update %d, delete %d\n",
+		verb, len(p.CronsToCreate), len(p.CronsToUpdate), len(p.CronsToDelete))
 	for _, n := range p.ServicesToCreate {
 		fmt.Println("  + service", n)
 	}
@@ -120,8 +135,26 @@ func printApplyResult(body []byte, dryRun bool) {
 	for _, n := range p.AddonsToCreate {
 		fmt.Println("  + addon", n)
 	}
+	for _, n := range p.AddonsToUpdate {
+		fmt.Println("  ~ addon", n)
+	}
 	for _, n := range p.AddonsToDelete {
 		fmt.Println("  - addon", n)
+	}
+	for _, n := range p.CronsToCreate {
+		fmt.Println("  + cron", n)
+	}
+	for _, n := range p.CronsToUpdate {
+		fmt.Println("  ~ cron", n)
+	}
+	for _, n := range p.CronsToDelete {
+		fmt.Println("  - cron", n)
+	}
+	if len(p.WouldDelete) > 0 {
+		fmt.Printf("\nnot pruned (set `prune: true` to delete): %d\n", len(p.WouldDelete))
+		for _, n := range p.WouldDelete {
+			fmt.Println("  ! " + n)
+		}
 	}
 	if len(ar.Errors) > 0 {
 		fmt.Fprintln(os.Stderr, "\nERRORS:")
