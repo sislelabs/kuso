@@ -5,6 +5,20 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.14] — 2026-05-21
+
+### 🐛 Bug Fixes
+- Fix(addons): addon-add wires conn secret into existing services (closes watch-cache race) ([d5d150c](https://github.com/sislelabs/kuso/commit/d5d150ca71dec55dd4a53818cf3efc6a761adef5))
+- Fix(addons): refreshEnvSecrets accepts explicit conn secrets ([e4002fe](https://github.com/sislelabs/kuso/commit/e4002fe8cf7b2e002b243eb9e24798570eb2fbf6))
+- Fix(canvas): draw service→service edges for in-cluster DNS refs ([3181a04](https://github.com/sislelabs/kuso/commit/3181a046922a0bd281e81160c186c7b9ed49592e))
+
+### 📝 Docs
+- Docs: addon-add conn-secret race fix implementation plan ([5c54a74](https://github.com/sislelabs/kuso/commit/5c54a7429190dc06db183eecc50c9bc6103fb30d))
+- Docs: addon-add conn-secret read-after-write race fix design ([5217b52](https://github.com/sislelabs/kuso/commit/5217b522c67f483b1edf3d4243a786f4bee45937))
+
+### 🧹 Chores
+- Chore: archive older changelog entries ([3d61102](https://github.com/sislelabs/kuso/commit/3d61102bcc87845068efca54391ada280fd20c2b))
+
 ## [0.13.13] — 2026-05-21
 
 ### ✨ Features
@@ -552,11 +566,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(envs): project-level environment groups with addon mirroring ([efafe68](https://github.com/sislelabs/kuso/commit/efafe6839ca8c40a21a2fe9b3ad1946dd579c4e5))
-
-## [0.9.42] — 2026-05-07
-
-### ✨ Features
-- Feat(settings/github): rich App status with installations + repo coverage ([7aaa5b3](https://github.com/sislelabs/kuso/commit/7aaa5b39c7b43822d16157600ebe3e55aa355bb9))
 
 
 ---
