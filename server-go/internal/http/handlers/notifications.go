@@ -311,7 +311,7 @@ func (h *NotificationsHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !validNotificationType(body.Type) {
-		http.Error(w, "type must be slack, webhook, or discord", http.StatusBadRequest)
+		http.Error(w, "type must be "+notificationTypeList, http.StatusBadRequest)
 		return
 	}
 	if err := validateNotificationConfig(body.Type, body.Config); err != nil {
@@ -346,7 +346,7 @@ func (h *NotificationsHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if body.Type != "" && !validNotificationType(body.Type) {
-		http.Error(w, "type must be slack, webhook, or discord", http.StatusBadRequest)
+		http.Error(w, "type must be "+notificationTypeList, http.StatusBadRequest)
 		return
 	}
 	if body.Type != "" && body.Config != nil {
@@ -414,27 +414,50 @@ func (h *NotificationsHandler) fail(w http.ResponseWriter, op string, err error)
 
 func validNotificationType(t string) bool {
 	switch t {
-	case "slack", "webhook", "discord":
+	case "slack", "webhook", "discord", "mattermost", "telegram", "pushover", "email":
 		return true
 	}
 	return false
 }
 
+// notificationTypeList is the human-readable type list used in the
+// 400 error message — kept in sync with validNotificationType.
+const notificationTypeList = "slack, webhook, discord, mattermost, telegram, pushover, or email"
+
+// validateNotificationConfig checks the per-type required config keys.
+// URL-bearing channels (discord, webhook, slack, mattermost) get the
+// SSRF guard; the API-token channels (telegram, pushover) post to
+// fixed vendor hosts so they need no URL check; email validates the
+// SMTP coordinates.
 func validateNotificationConfig(typ string, cfg map[string]any) error {
 	if cfg == nil {
 		return errors.New("config required")
 	}
-	rawURL, _ := cfg["url"].(string)
-	if rawURL == "" {
-		return errors.New("config.url required")
-	}
-	if err := validateWebhookURL(rawURL); err != nil {
-		return fmt.Errorf("config.url: %w", err)
-	}
-	if typ == "slack" {
-		if ch, _ := cfg["channel"].(string); ch == "" {
-			return errors.New("slack notifications require config.channel")
+	str := func(k string) string { s, _ := cfg[k].(string); return s }
+
+	switch typ {
+	case "discord", "webhook", "slack", "mattermost":
+		rawURL := str("url")
+		if rawURL == "" {
+			return errors.New("config.url required")
 		}
+		if err := validateWebhookURL(rawURL); err != nil {
+			return fmt.Errorf("config.url: %w", err)
+		}
+	case "telegram":
+		if str("botToken") == "" || str("chatId") == "" {
+			return errors.New("telegram notifications require config.botToken and config.chatId")
+		}
+	case "pushover":
+		if str("token") == "" || str("user") == "" {
+			return errors.New("pushover notifications require config.token and config.user")
+		}
+	case "email":
+		if str("host") == "" || str("from") == "" || str("to") == "" {
+			return errors.New("email notifications require config.host, config.from and config.to")
+		}
+	default:
+		return fmt.Errorf("unsupported notification type %q", typ)
 	}
 	return nil
 }

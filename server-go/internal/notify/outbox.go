@@ -218,8 +218,38 @@ func (d *Dispatcher) deliverViaChannel(ctx context.Context, n db.Notification, e
 		}
 		secret, _ := n.Config["secret"].(string)
 		return d.sendWebhookSync(ctx, url, secret, e)
+	case "slack", "mattermost":
+		// Both consume Slack's incoming-webhook JSON shape.
+		url, _ := n.Config["url"].(string)
+		if url == "" {
+			return errors.New("channel has no webhook URL")
+		}
+		return d.sendSlackSync(ctx, url, e)
+	case "telegram":
+		token, _ := n.Config["botToken"].(string)
+		chatID, _ := n.Config["chatId"].(string)
+		return d.sendTelegramSync(ctx, token, chatID, e)
+	case "pushover":
+		token, _ := n.Config["token"].(string)
+		user, _ := n.Config["user"].(string)
+		return d.sendPushoverSync(ctx, token, user, e)
+	case "email":
+		return d.sendEmailSync(ctx, n.Config, e)
 	default:
 		return errors.New("unknown channel type: " + n.Type)
+	}
+}
+
+// deliverableChannel reports whether a channel type has a working
+// delivery path (i.e. deliverViaChannel handles it). The enqueue
+// whitelist uses this so a channel kind with no sender never piles up
+// undeliverable rows in the outbox.
+func deliverableChannel(t string) bool {
+	switch t {
+	case "discord", "webhook", "slack", "mattermost", "telegram", "pushover", "email":
+		return true
+	default:
+		return false
 	}
 }
 

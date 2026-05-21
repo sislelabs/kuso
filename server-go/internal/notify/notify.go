@@ -377,7 +377,7 @@ func (d *Dispatcher) dispatch(ctx context.Context, e Event) {
 		if !eventMatches(string(e.Type), n.Events) {
 			continue
 		}
-		if n.Type != "discord" && n.Type != "webhook" {
+		if !deliverableChannel(n.Type) {
 			continue
 		}
 		if _, err := d.db.EnqueueOutbox(ctx, n.ID, string(e.Type), payload); err != nil {
@@ -398,23 +398,9 @@ func (d *Dispatcher) SendDirect(ctx context.Context, n *db.Notification, e Event
 	if !n.Enabled {
 		return fmt.Errorf("channel %q is disabled", n.Name)
 	}
-	switch n.Type {
-	case "discord":
-		url, _ := n.Config["url"].(string)
-		if url == "" {
-			return fmt.Errorf("channel %q has no webhook URL", n.Name)
-		}
-		return d.sendDiscordSync(ctx, url, e, mentionFor(e, n.Config))
-	case "webhook":
-		url, _ := n.Config["url"].(string)
-		if url == "" {
-			return fmt.Errorf("channel %q has no webhook URL", n.Name)
-		}
-		secret, _ := n.Config["secret"].(string)
-		return d.sendWebhookSync(ctx, url, secret, e)
-	default:
-		return fmt.Errorf("unsupported notification type %q", n.Type)
-	}
+	// Delegate to deliverViaChannel so the Test path and the outbox
+	// retry path render + send identically — one switch, no drift.
+	return d.deliverViaChannel(ctx, *n, e)
 }
 
 // cachedNotifications returns the dispatcher's view of the configured

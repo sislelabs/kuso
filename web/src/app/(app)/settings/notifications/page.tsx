@@ -7,11 +7,143 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { AlertTriangle, Bell, Plus, Trash2, Send, Webhook } from "lucide-react";
+import {
+  AlertTriangle,
+  Bell,
+  BellRing,
+  Mail,
+  MessageSquare,
+  Plus,
+  Trash2,
+  Send,
+  Webhook,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
-type NotifKind = "discord" | "webhook" | "slack";
+type NotifKind =
+  | "discord"
+  | "webhook"
+  | "slack"
+  | "mattermost"
+  | "telegram"
+  | "pushover"
+  | "email";
+
+// NOTIF_KINDS drives the type picker. Each entry lists the config
+// keys its form collects; the editor renders one labelled input per
+// key. urlKind entries also get the SSRF-guarded URL validation
+// server-side.
+const NOTIF_KINDS: {
+  kind: NotifKind;
+  label: string;
+  fields: { key: string; label: string; placeholder: string; hint?: string }[];
+}[] = [
+  {
+    kind: "discord",
+    label: "discord",
+    fields: [
+      {
+        key: "url",
+        label: "discord webhook url",
+        placeholder: "https://discord.com/api/webhooks/...",
+        hint: "Server Settings → Integrations → Webhooks → New Webhook",
+      },
+    ],
+  },
+  {
+    kind: "slack",
+    label: "slack",
+    fields: [
+      {
+        key: "url",
+        label: "slack incoming webhook url",
+        placeholder: "https://hooks.slack.com/services/...",
+        hint: "Slack app → Incoming Webhooks → Add New Webhook",
+      },
+    ],
+  },
+  {
+    kind: "mattermost",
+    label: "mattermost",
+    fields: [
+      {
+        key: "url",
+        label: "mattermost incoming webhook url",
+        placeholder: "https://mattermost.example.com/hooks/...",
+        hint: "Integrations → Incoming Webhooks",
+      },
+    ],
+  },
+  {
+    kind: "webhook",
+    label: "webhook",
+    fields: [
+      {
+        key: "url",
+        label: "webhook url",
+        placeholder: "https://example.com/hooks/kuso",
+        hint: "any URL that accepts a JSON POST",
+      },
+    ],
+  },
+  {
+    kind: "telegram",
+    label: "telegram",
+    fields: [
+      {
+        key: "botToken",
+        label: "bot token",
+        placeholder: "123456:ABC-DEF...",
+        hint: "from @BotFather",
+      },
+      {
+        key: "chatId",
+        label: "chat id",
+        placeholder: "-1001234567890",
+        hint: "the chat/channel to post to",
+      },
+    ],
+  },
+  {
+    kind: "pushover",
+    label: "pushover",
+    fields: [
+      {
+        key: "token",
+        label: "application token",
+        placeholder: "azGDORePK8gMaC0QOYAMyEEuzJnyUi",
+      },
+      {
+        key: "user",
+        label: "user/group key",
+        placeholder: "uQiRzpo4DXghDmr9QzzfQu27cmVRsG",
+      },
+    ],
+  },
+  {
+    kind: "email",
+    label: "email",
+    fields: [
+      { key: "host", label: "smtp host", placeholder: "smtp.example.com" },
+      { key: "port", label: "smtp port", placeholder: "587", hint: "default 587" },
+      { key: "username", label: "smtp username", placeholder: "(optional)" },
+      { key: "password", label: "smtp password", placeholder: "(optional)" },
+      { key: "from", label: "from address", placeholder: "kuso@example.com" },
+      {
+        key: "to",
+        label: "to address(es)",
+        placeholder: "ops@example.com, oncall@example.com",
+        hint: "comma-separated",
+      },
+    ],
+  },
+];
+
+// kindFields returns the config field descriptors for a notif kind.
+function kindFields(kind: NotifKind) {
+  return NOTIF_KINDS.find((k) => k.kind === kind)?.fields ?? [];
+}
 
 interface Notification {
   id: string;
@@ -284,6 +416,18 @@ function KindIcon({ kind }: { kind: NotifKind }) {
       </svg>
     );
   }
+  if (kind === "mattermost") {
+    return <MessageSquare className="h-5 w-5 shrink-0" style={{ color: "#1E325C" }} aria-hidden />;
+  }
+  if (kind === "telegram") {
+    return <Send className="h-5 w-5 shrink-0" style={{ color: "#229ED9" }} aria-hidden />;
+  }
+  if (kind === "pushover") {
+    return <BellRing className="h-5 w-5 shrink-0" style={{ color: "#249DF1" }} aria-hidden />;
+  }
+  if (kind === "email") {
+    return <Mail className="h-5 w-5 shrink-0 text-[var(--text-tertiary)]" aria-hidden />;
+  }
   return <Webhook className="h-5 w-5 shrink-0 text-[var(--text-tertiary)]" />;
 }
 
@@ -299,9 +443,15 @@ function NotificationEditor({
   const [name, setName] = useState(notification?.name ?? "");
   const [type, setType] = useState<NotifKind>(notification?.type ?? "discord");
   const [enabled, setEnabled] = useState(notification?.enabled ?? true);
-  const [url, setUrl] = useState<string>(
-    (notification?.config.url as string | undefined) ?? ""
-  );
+  // cfg holds every per-type config key (url / botToken / host / ...).
+  // Keys not relevant to the current type are simply ignored on save.
+  const [cfg, setCfg] = useState<Record<string, string>>(() => {
+    const c: Record<string, string> = {};
+    for (const [k, v] of Object.entries(notification?.config ?? {})) {
+      if (typeof v === "string") c[k] = v;
+    }
+    return c;
+  });
   const [events, setEvents] = useState<string[]>(notification?.events ?? []);
   // Per-event mention rules. Special key "*" applies to events
   // without an explicit entry. Server-side default (when nothing
@@ -316,10 +466,21 @@ function NotificationEditor({
     setName(notification.name);
     setType(notification.type);
     setEnabled(notification.enabled);
-    setUrl((notification.config.url as string | undefined) ?? "");
+    const c: Record<string, string> = {};
+    for (const [k, v] of Object.entries(notification.config ?? {})) {
+      if (typeof v === "string") c[k] = v;
+    }
+    setCfg(c);
     setEvents(notification.events);
     setMentions((notification.config.mentions as Record<string, string> | undefined) ?? {});
   }, [notification]);
+
+  // optionalConfigKeys are config fields the save button doesn't
+  // require — email's auth + port have sane defaults / can be empty.
+  const optionalConfigKeys = new Set(["port", "username", "password"]);
+  const configComplete = kindFields(type).every(
+    (f) => optionalConfigKeys.has(f.key) || (cfg[f.key] ?? "").trim() !== "",
+  );
 
   const save = useMutation({
     mutationFn: () => {
@@ -329,6 +490,13 @@ function NotificationEditor({
       for (const [k, v] of Object.entries(mentions)) {
         if (v && v !== "none") cleanMentions[k] = v;
       }
+      // Only persist the config keys this channel type actually uses,
+      // so switching type doesn't leave stale keys (a leftover `url`
+      // on a telegram channel, etc.) in the stored config.
+      const typeConfig: Record<string, string> = {};
+      for (const f of kindFields(type)) {
+        if (cfg[f.key]) typeConfig[f.key] = cfg[f.key];
+      }
       const body = {
         name,
         type,
@@ -336,7 +504,9 @@ function NotificationEditor({
         pipelines: [],
         events,
         config: {
-          url,
+          ...typeConfig,
+          // mentions only mean anything for discord, but harmless to
+          // carry; the server ignores them on other channel types.
           ...(Object.keys(cleanMentions).length ? { mentions: cleanMentions } : {}),
         },
       };
@@ -376,7 +546,7 @@ function NotificationEditor({
         </Field>
         <Field label="type">
           <div className="inline-flex flex-wrap gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
-            {(["discord", "webhook"] as NotifKind[]).map((k) => (
+            {NOTIF_KINDS.map(({ kind: k, label }) => (
               <button
                 key={k}
                 type="button"
@@ -389,31 +559,23 @@ function NotificationEditor({
                 )}
               >
                 <KindIcon kind={k} />
-                {k}
+                {label}
               </button>
             ))}
           </div>
         </Field>
-        <Field
-          label={type === "discord" ? "discord webhook url" : "webhook url"}
-          hint={
-            type === "discord"
-              ? "Server Settings → Integrations → Webhooks → New Webhook"
-              : "any URL that accepts a JSON POST"
-          }
-        >
-          <Input
-            value={url}
-            onChange={(e) => setUrl(e.target.value)}
-            placeholder={
-              type === "discord"
-                ? "https://discord.com/api/webhooks/..."
-                : "https://example.com/hooks/kuso"
-            }
-            className="h-8 font-mono text-[12px]"
-            spellCheck={false}
-          />
-        </Field>
+        {kindFields(type).map((f) => (
+          <Field key={f.key} label={f.label} hint={f.hint}>
+            <Input
+              value={cfg[f.key] ?? ""}
+              onChange={(e) => setCfg((c) => ({ ...c, [f.key]: e.target.value }))}
+              placeholder={f.placeholder}
+              type={f.key === "password" ? "password" : "text"}
+              className="h-8 font-mono text-[12px]"
+              spellCheck={false}
+            />
+          </Field>
+        ))}
         <Field
           label="events"
           hint="toggle the events you want; configure per-event Discord mentions on the right"
@@ -520,7 +682,7 @@ function NotificationEditor({
         <Button
           size="sm"
           onClick={() => save.mutate()}
-          disabled={save.isPending || !name || !url}
+          disabled={save.isPending || !name || !configComplete}
         >
           {save.isPending ? "Saving…" : isNew ? "Create" : "Save"}
         </Button>
