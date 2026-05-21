@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	apiv1 "github.com/sislelabs/kuso/api/apiv1"
+	"gopkg.in/yaml.v3"
 
 	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
@@ -196,6 +197,9 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	// Config-as-code: plan/apply a kuso.yml against the project. Body
 	// is the raw YAML; ?dryRun=1 returns the plan without writing.
 	r.Post("/api/projects/{project}/apply", h.Apply)
+	// Config-as-code: export the project's live state as a kuso.yaml
+	// document. The result re-planned against the cluster is a no-op.
+	r.Get("/api/projects/{project}/spec", h.Spec)
 	r.Get("/api/projects/{project}/services/{service}/env", h.GetEnv)
 	r.Post("/api/projects/{project}/services/{service}/env", h.SetEnv)
 	// Env-var detection from the most recent build's source-scan
@@ -474,6 +478,35 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Logger.Info("apply", "project", f.Project, "plan", plan.Summary(), "errs", len(res.Errors))
 	writeJSON(w, http.StatusOK, res)
+}
+
+// Spec returns the project's current state as a kuso.yaml document.
+// GET /api/projects/{project}/spec
+func (h *ProjectsHandler) Spec(w http.ResponseWriter, r *http.Request) {
+	if h.Reconciler == nil {
+		http.Error(w, "config-as-code disabled (kube unavailable)", http.StatusServiceUnavailable)
+		return
+	}
+	project := chi.URLParam(r, "project")
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	f, err := spec.Export(ctx, h.Kube, h.Namespace, project)
+	if err != nil {
+		h.Logger.Error("spec export", "project", project, "err", err)
+		http.Error(w, "export failed", http.StatusInternalServerError)
+		return
+	}
+	out, err := yaml.Marshal(f)
+	if err != nil {
+		http.Error(w, "marshal failed", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/yaml; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(out)
 }
 
 // PatchService accepts a partial KusoService.spec update. Body shape
