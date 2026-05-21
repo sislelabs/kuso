@@ -303,7 +303,19 @@ export function ProjectCanvas({
         if (d?.host) hostToFqn.set(d.host, fqn);
       }
     });
+    // envNameToSvc maps a KusoEnvironment CR name → its service FQN.
+    // The in-cluster Service for an env is named after the ENV CR
+    // (e.g. "distill-api-production"), not the service ("distill-api"),
+    // so an env-var like
+    //   WEB_INTERNAL_BASE_URL = http://distill-api-production.kuso.svc...
+    // resolves via this map back to the service node. Without it the
+    // DNS regex captured "distill-api-production", failed the
+    // service-name lookup, and no service→service edge was drawn.
+    const envNameToSvc = new Map<string, string>();
     envs.forEach((e) => {
+      if (e.metadata?.name && e.spec.service) {
+        envNameToSvc.set(e.metadata.name, e.spec.service);
+      }
       if (!e.spec.host) return;
       // Every env contributes its host → FQN mapping (not just
       // production). Pre-fix this was production-only, so a service
@@ -325,11 +337,21 @@ export function ProjectCanvas({
         if (!ev?.value) continue;
         let targetFqn: string | undefined;
         // 1. In-cluster DNS form (HOST / URL / INTERNAL_URL):
-        //    "<fqn>.<ns>.svc.cluster.local". One regex catches all
-        //    three resolved shapes.
+        //    "<host>.<ns>.svc.cluster.local". <host> is the env CR's
+        //    name (e.g. "distill-api-production"), NOT the service FQN.
+        //    Try a direct service-name match first (covers any future
+        //    service-named Service), then fall back to the env-name →
+        //    service map.
         const dns = ev.value.match(/([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local/);
-        if (dns && services.some((t) => t.metadata.name === dns[1])) {
-          targetFqn = dns[1];
+        if (dns) {
+          if (services.some((t) => t.metadata.name === dns[1])) {
+            targetFqn = dns[1];
+          } else {
+            const viaEnv = envNameToSvc.get(dns[1]);
+            if (viaEnv && services.some((t) => t.metadata.name === viaEnv)) {
+              targetFqn = viaEnv;
+            }
+          }
         }
         // 2. Public-URL form: any of the known public hosts appears
         //    in the value (typically the whole value, e.g.
