@@ -3,6 +3,8 @@ package github
 import (
 	"context"
 	"testing"
+
+	"kuso/server/internal/spec"
 )
 
 func TestApplyConfigFromRepo_SkipsWhenNoFile(t *testing.T) {
@@ -11,7 +13,7 @@ func TestApplyConfigFromRepo_SkipsWhenNoFile(t *testing.T) {
 	fetch := func(ctx context.Context, owner, repo, ref, path string) ([]byte, bool, error) {
 		return nil, false, nil
 	}
-	apply := func(ctx context.Context, raw []byte) error { called = true; return nil }
+	apply := func(ctx context.Context, _ *spec.File) error { called = true; return nil }
 	err := applyConfigFromRepo(context.Background(), fetch, apply, "o", "r", "sha", "proj")
 	if err != nil {
 		t.Fatalf("missing file must not error: %v", err)
@@ -26,7 +28,7 @@ func TestApplyConfigFromRepo_RejectsProjectMismatch(t *testing.T) {
 		return []byte("project: other\n"), true, nil
 	}
 	applied := false
-	apply := func(ctx context.Context, raw []byte) error { applied = true; return nil }
+	apply := func(ctx context.Context, _ *spec.File) error { applied = true; return nil }
 	err := applyConfigFromRepo(context.Background(), fetch, apply, "o", "r", "sha", "proj")
 	if err == nil {
 		t.Fatal("project mismatch must return an error")
@@ -40,13 +42,13 @@ func TestApplyConfigFromRepo_AppliesMatchingFile(t *testing.T) {
 	fetch := func(ctx context.Context, owner, repo, ref, path string) ([]byte, bool, error) {
 		return []byte("project: proj\n"), true, nil
 	}
-	var got []byte
-	apply := func(ctx context.Context, raw []byte) error { got = raw; return nil }
+	var got string
+	apply := func(ctx context.Context, f *spec.File) error { got = f.Project; return nil }
 	if err := applyConfigFromRepo(context.Background(), fetch, apply, "o", "r", "sha", "proj"); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if len(got) == 0 {
-		t.Fatal("apply was not called with the file contents")
+	if got != "proj" {
+		t.Fatalf("apply was not called with the parsed file: got %q", got)
 	}
 }
 
@@ -62,7 +64,7 @@ func TestApplyConfigFromRepo_FallsBackToKusoYml(t *testing.T) {
 		return nil, false, nil
 	}
 	applied := false
-	apply := func(ctx context.Context, raw []byte) error { applied = true; return nil }
+	apply := func(ctx context.Context, _ *spec.File) error { applied = true; return nil }
 	if err := applyConfigFromRepo(context.Background(), fetch, apply, "o", "r", "sha", "proj"); err != nil {
 		t.Fatalf("apply: %v", err)
 	}

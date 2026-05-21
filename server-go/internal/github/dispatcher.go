@@ -228,11 +228,7 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 				fetch := func(ctx context.Context, o, r, rf, path string) ([]byte, bool, error) {
 					return d.Client.GetFile(ctx, installationID, o, r, rf, path)
 				}
-				apply := func(ctx context.Context, body []byte) error {
-					parsed, err := spec.Parse(body)
-					if err != nil {
-						return err
-					}
+				apply := func(ctx context.Context, parsed *spec.File) error {
 					plan, err := spec.PlanFor(ctx, d.Kube, d.nsFor(ctx, proj.Name), parsed)
 					if err != nil {
 						return err

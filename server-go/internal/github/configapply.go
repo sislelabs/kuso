@@ -17,13 +17,17 @@ var configFileNames = []string{"kuso.yaml", "kuso.yml"}
 // file does not exist (a 404) — the common, non-error case.
 type fetchFunc func(ctx context.Context, owner, repo, ref, path string) (content []byte, ok bool, err error)
 
-// applyFunc parses+plans+applies a kuso.yaml body.
-type applyFunc func(ctx context.Context, raw []byte) error
+// applyFunc plans+applies an already-parsed kuso.yaml. applyConfigFromRepo
+// parses (and project-mismatch-checks) the file once and hands the
+// resulting *spec.File here — the closure must not re-parse.
+type applyFunc func(ctx context.Context, f *spec.File) error
 
 // applyConfigFromRepo fetches kuso.yaml (then kuso.yml) from the repo
 // at the pushed ref and applies it. A missing file is not an error.
 // The file's project must match the resolved project — a mismatch is
-// rejected so a webhook can never mutate a different project.
+// rejected so a webhook can never mutate a different project. The file
+// is parsed exactly once here; the apply closure receives the parsed
+// *spec.File.
 func applyConfigFromRepo(ctx context.Context, fetch fetchFunc, apply applyFunc, owner, repo, ref, project string) error {
 	var raw []byte
 	var found bool
@@ -47,7 +51,7 @@ func applyConfigFromRepo(ctx context.Context, fetch fetchFunc, apply applyFunc, 
 	if f.Project != project {
 		return fmt.Errorf("kuso.yaml project %q does not match repo's project %q", f.Project, project)
 	}
-	return apply(ctx, raw)
+	return apply(ctx, f)
 }
 
 // splitFullName splits a GitHub "owner/repo" full name into its two
