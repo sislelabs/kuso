@@ -67,7 +67,7 @@ use ` + "`kuso project export`" + ` (emits kuso.yaml).`,
 
 var projectImportCmd = &cobra.Command{
 	Use:   "import",
-	Short: "Restore a project from a tar.gz produced by `kuso project export`",
+	Short: "Restore a project from a tar.gz produced by `kuso project export-archive`",
 	Long: `Reads the tarball from --in (or stdin when --in is omitted) and
 recreates the project on this kuso instance.
 
