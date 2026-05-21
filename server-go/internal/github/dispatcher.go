@@ -18,6 +18,7 @@ import (
 	"kuso/server/internal/builds"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/secrets"
+	"kuso/server/internal/spec"
 )
 
 // Dispatcher routes verified webhook events to their handlers. Wired
@@ -44,6 +45,11 @@ type Dispatcher struct {
 	// replace the source's in envFromSecrets. nil = previews share
 	// production addons (riskier; prefer wiring this).
 	PreviewDB PreviewDB
+	// Reconciler applies config-as-code: on a push to the default
+	// branch it fetches kuso.yaml via the GitHub Contents API and
+	// applies it before builds run. nil on kube-less installs — the
+	// config-apply step is skipped entirely.
+	Reconciler *spec.Reconciler
 }
 
 // PreviewDB is the surface dispatcher needs from previewdb.Cloner.
@@ -202,6 +208,47 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 			headSHA = p.After
 		}
 		d.Logger.Info("push → trigger builds", "project", proj.Name, "branch", branch, "services", len(raw.Items), "pr", prNumber)
+
+		// Config-as-code: fetch kuso.yaml from the repo at the pushed
+		// ref and apply it before builds run. Best-effort — a parse/
+		// apply error, project mismatch, or missing file logs a
+		// warning and is otherwise ignored; builds still run. Guarded
+		// by d.Reconciler != nil (nil on kube-less installs) and the
+		// per-project configAsCode toggle.
+		if d.Reconciler != nil && d.Client != nil && configAsCodeEnabled(&proj) && headSHA != "" {
+			owner, repoName := splitFullName(repoFullName)
+			installationID := int64(0)
+			if proj.Spec.GitHub != nil {
+				installationID = proj.Spec.GitHub.InstallationID
+			}
+			if owner == "" || repoName == "" || installationID == 0 {
+				d.Logger.Warn("config-as-code skipped: missing owner/repo or installation id",
+					"project", proj.Name, "repo", repoFullName)
+			} else {
+				fetch := func(ctx context.Context, o, r, rf, path string) ([]byte, bool, error) {
+					return d.Client.GetFile(ctx, installationID, o, r, rf, path)
+				}
+				apply := func(ctx context.Context, body []byte) error {
+					parsed, err := spec.Parse(body)
+					if err != nil {
+						return err
+					}
+					plan, err := spec.PlanFor(ctx, d.Kube, d.nsFor(ctx, proj.Name), parsed)
+					if err != nil {
+						return err
+					}
+					_, err = d.Reconciler.Apply(ctx, plan, parsed)
+					return err
+				}
+				if err := applyConfigFromRepo(ctx, fetch, apply, owner, repoName, headSHA, proj.Name); err != nil {
+					// Do NOT return — builds must still run.
+					d.Logger.Warn("config-as-code apply", "project", proj.Name, "err", err)
+				} else {
+					d.Logger.Info("config-as-code applied", "project", proj.Name)
+				}
+			}
+		}
+
 		for i := range raw.Items {
 			fqn := raw.Items[i].GetName()
 			short := strings.TrimPrefix(fqn, proj.Name+"-")

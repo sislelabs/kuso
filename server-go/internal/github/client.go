@@ -162,6 +162,34 @@ func (c *Client) ResolveBranchSHA(ctx context.Context, installationID int64, own
 	return *br.Commit.SHA, nil
 }
 
+// GetFile fetches a single file from a repo at a ref via the GitHub
+// Contents API. Returns ok=false on a 404 (the file does not exist —
+// the common, non-error case). The base64 content is decoded for the
+// caller. A directory path, or any non-2xx other than 404, is an
+// error.
+func (c *Client) GetFile(ctx context.Context, installationID int64, owner, repo, ref, path string) ([]byte, bool, error) {
+	cli, err := c.Installation(installationID)
+	if err != nil {
+		return nil, false, err
+	}
+	fileContent, _, resp, err := cli.Repositories.GetContents(ctx, owner, repo, path, &gogithub.RepositoryContentGetOptions{Ref: ref})
+	if err != nil {
+		if resp != nil && resp.StatusCode == http.StatusNotFound {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("github: get contents %s: %w", path, err)
+	}
+	if fileContent == nil {
+		// path resolved to a directory, not a file.
+		return nil, false, fmt.Errorf("github: %s is not a file", path)
+	}
+	decoded, err := fileContent.GetContent()
+	if err != nil {
+		return nil, false, fmt.Errorf("github: decode contents %s: %w", path, err)
+	}
+	return []byte(decoded), true, nil
+}
+
 // CachedInstallation is the wire shape returned to /api/github/installations.
 type CachedInstallation struct {
 	ID           int64     `json:"id"`

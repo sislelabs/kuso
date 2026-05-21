@@ -704,6 +704,11 @@ func main() {
 				disp := ghpkg.NewDispatcher(kc, buildSvc, *namespace, logger).
 					WithGithubCache(ghCli, ghCache)
 				disp.NSResolver = nsResolver
+				// Wire the spec reconciler so a push to the default
+				// branch fetches kuso.yaml via the GitHub Contents API
+				// and applies it before builds run (config-as-code).
+				// nil when kube is unavailable — the step is skipped.
+				disp.Reconciler = specRecon
 				// Wire secrets so PR-close cleanup wipes per-env
 				// secrets along with the env CR. Without this, every
 				// closed PR leaks <project>-<service>-pr-N-secrets.
