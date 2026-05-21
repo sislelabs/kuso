@@ -417,7 +417,14 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
     const beforeMap = new Map<string, string>();
     for (const v of env.data?.envVars ?? []) {
       if (!v.name) continue;
-      beforeMap.set(v.name, formatEnvForDiff(v));
+      // Run the server's raw env var through the same reversal the
+      // editor applies on read (toRow reverses ${{ addon.KEY }} secret
+      // refs and ${{ svc.URL }} resolved DNS literals; toEnvVar maps
+      // it back to a KusoEnvVar). Without this the "before" side shows
+      // the raw resolved form (<secret> / in-cluster DNS) while the
+      // "after" side shows the ${{ }} ref form — so every untouched
+      // reference env var falsely appears as a change.
+      beforeMap.set(v.name, formatEnvForDiff(toEnvVar(toRow(v, project, addonByConn))));
     }
     const afterMap = new Map<string, string>();
     for (const v of pendingPayload) {
@@ -434,7 +441,7 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
     }
     out.sort((x, y) => x.field.localeCompare(y.field));
     return out;
-  }, [pendingPayload, env.data]);
+  }, [pendingPayload, env.data, project, addonByConn]);
 
   const save = () => {
     const cleaned = cleanRows();
