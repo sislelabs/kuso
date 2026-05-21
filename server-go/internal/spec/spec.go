@@ -36,9 +36,12 @@
 package spec
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"regexp"
 	"sort"
 
 	"gopkg.in/yaml.v3"
@@ -46,26 +49,44 @@ import (
 	"kuso/server/internal/kube"
 )
 
-// File is the deserialised kuso.yml.
+// File is the deserialised kuso.yaml. apiVersion is empty (legacy) or
+// "kuso/v1". prune gates destructive apply: deletions only run when
+// prune is true.
 type File struct {
-	Project    string         `yaml:"project"`
-	BaseDomain string         `yaml:"baseDomain,omitempty"`
-	Services   []ServiceSpec  `yaml:"services,omitempty"`
-	Addons     []AddonSpec    `yaml:"addons,omitempty"`
+	APIVersion string        `yaml:"apiVersion,omitempty"`
+	Project    string        `yaml:"project"`
+	BaseDomain string        `yaml:"baseDomain,omitempty"`
+	Prune      bool          `yaml:"prune,omitempty"`
+	Services   []ServiceSpec `yaml:"services,omitempty"`
+	Addons     []AddonSpec   `yaml:"addons,omitempty"`
+	Crons      []CronSpec    `yaml:"crons,omitempty"`
 }
 
-// ServiceSpec mirrors KusoServiceSpec but flattened for human use.
+// ServiceSpec mirrors KusoServiceSpec, flattened for human authoring.
 type ServiceSpec struct {
-	Name    string            `yaml:"name"`
-	Repo    string            `yaml:"repo,omitempty"`
-	Branch  string            `yaml:"branch,omitempty"`
-	Path    string            `yaml:"path,omitempty"`
-	Runtime string            `yaml:"runtime,omitempty"`
-	Port    int32             `yaml:"port,omitempty"`
-	Domains []string          `yaml:"domains,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
-	Scale   *ScaleSpec        `yaml:"scale,omitempty"`
-	Volumes []VolumeSpec      `yaml:"volumes,omitempty"`
+	Name          string            `yaml:"name"`
+	Repo          string            `yaml:"repo,omitempty"`
+	Branch        string            `yaml:"branch,omitempty"`
+	Path          string            `yaml:"path,omitempty"`
+	Runtime       string            `yaml:"runtime,omitempty"`
+	Port          int32             `yaml:"port,omitempty"`
+	Internal      bool              `yaml:"internal,omitempty"`
+	PrivateEgress bool              `yaml:"privateEgress,omitempty"`
+	Command       []string          `yaml:"command,omitempty"`
+	Domains       []DomainSpec      `yaml:"domains,omitempty"`
+	Env           map[string]string `yaml:"env,omitempty"`
+	Scale         *ScaleSpec        `yaml:"scale,omitempty"`
+	Sleep         *SleepSpec        `yaml:"sleep,omitempty"`
+	Placement     *PlacementSpec    `yaml:"placement,omitempty"`
+	Volumes       []VolumeSpec      `yaml:"volumes,omitempty"`
+	Static        *StaticSpec       `yaml:"static,omitempty"`
+	Buildpacks    *BuildpacksSpec   `yaml:"buildpacks,omitempty"`
+}
+
+// DomainSpec is one custom domain on a service.
+type DomainSpec struct {
+	Host string `yaml:"host"`
+	TLS  bool   `yaml:"tls,omitempty"`
 }
 
 type ScaleSpec struct {
@@ -74,15 +95,72 @@ type ScaleSpec struct {
 	TargetCPU int `yaml:"targetCPU,omitempty"`
 }
 
+type SleepSpec struct {
+	Enabled      bool `yaml:"enabled,omitempty"`
+	AfterMinutes int  `yaml:"afterMinutes,omitempty"`
+}
+
+type PlacementSpec struct {
+	Labels map[string]string `yaml:"labels,omitempty"`
+	Nodes  []string          `yaml:"nodes,omitempty"`
+}
+
 type VolumeSpec struct {
 	Name      string `yaml:"name"`
 	MountPath string `yaml:"mountPath"`
 	SizeGi    int    `yaml:"sizeGi,omitempty"`
 }
 
+type StaticSpec struct {
+	BuildCmd  string `yaml:"buildCmd,omitempty"`
+	OutputDir string `yaml:"outputDir,omitempty"`
+}
+
+type BuildpacksSpec struct {
+	Builder string `yaml:"builder,omitempty"`
+}
+
+// AddonSpec mirrors KusoAddonSpec. external and useInstanceAddon are
+// mutually exclusive with each other and with the native fields.
 type AddonSpec struct {
-	Name string `yaml:"name"`
-	Kind string `yaml:"kind"`
+	Name             string             `yaml:"name"`
+	Kind             string             `yaml:"kind"`
+	Version          string             `yaml:"version,omitempty"`
+	Size             string             `yaml:"size,omitempty"`
+	HA               bool               `yaml:"ha,omitempty"`
+	StorageSize      string             `yaml:"storageSize,omitempty"`
+	Database         string             `yaml:"database,omitempty"`
+	Pooler           *AddonPoolerSpec   `yaml:"pooler,omitempty"`
+	Backup           *AddonBackupSpec   `yaml:"backup,omitempty"`
+	Placement        *PlacementSpec     `yaml:"placement,omitempty"`
+	External         *AddonExternalSpec `yaml:"external,omitempty"`
+	UseInstanceAddon string             `yaml:"useInstanceAddon,omitempty"`
+}
+
+type AddonPoolerSpec struct {
+	Enabled bool `yaml:"enabled,omitempty"`
+}
+
+type AddonBackupSpec struct {
+	Schedule      string `yaml:"schedule,omitempty"`
+	RetentionDays int    `yaml:"retentionDays,omitempty"`
+}
+
+type AddonExternalSpec struct {
+	SecretName string `yaml:"secretName"`
+}
+
+// CronSpec mirrors crons.CreateProjectCronRequest. kind is
+// service|http|command.
+type CronSpec struct {
+	Name     string   `yaml:"name"`
+	Kind     string   `yaml:"kind"`
+	Schedule string   `yaml:"schedule"`
+	Service  string   `yaml:"service,omitempty"` // kind=service
+	URL      string   `yaml:"url,omitempty"`     // kind=http
+	Image    string   `yaml:"image,omitempty"`   // kind=command
+	Command  []string `yaml:"command,omitempty"`
+	Suspend  bool     `yaml:"suspend,omitempty"`
 }
 
 // Errors that can leak to API callers.
@@ -91,33 +169,66 @@ var (
 	ErrProjectMatch = errors.New("spec: project name does not match URL")
 )
 
-// Parse decodes kuso.yml from raw bytes. The validation pass catches
-// the common typos (missing name, services without repo) without
-// wandering into the operator-side schema check, which lives in the
-// CRD validation rules.
+// Parse deserialises and validates kuso.yaml. Unknown fields are
+// rejected so a typo surfaces as an error rather than a silent no-op.
 func Parse(raw []byte) (*File, error) {
 	var f File
-	if err := yaml.Unmarshal(raw, &f); err != nil {
-		return nil, fmt.Errorf("%w: yaml: %w", ErrInvalid, err)
+	dec := yaml.NewDecoder(bytes.NewReader(raw))
+	dec.KnownFields(true)
+	if err := dec.Decode(&f); err != nil {
+		if errors.Is(err, io.EOF) {
+			return nil, fmt.Errorf("%w: empty file", ErrInvalid)
+		}
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
+	}
+	if f.APIVersion != "" && f.APIVersion != "kuso/v1" {
+		return nil, fmt.Errorf("%w: unsupported apiVersion %q (want kuso/v1)", ErrInvalid, f.APIVersion)
 	}
 	if f.Project == "" {
 		return nil, fmt.Errorf("%w: project is required", ErrInvalid)
 	}
-	for i, s := range f.Services {
+	for _, s := range f.Services {
 		if s.Name == "" {
-			return nil, fmt.Errorf("%w: services[%d].name is required", ErrInvalid, i)
+			return nil, fmt.Errorf("%w: every service needs a name", ErrInvalid)
 		}
-		if s.Repo == "" {
-			return nil, fmt.Errorf("%w: services[%d].repo is required", ErrInvalid, i)
+		if s.Runtime != "" && !validRuntime(s.Runtime) {
+			return nil, fmt.Errorf("%w: service %s has invalid runtime %q", ErrInvalid, s.Name, s.Runtime)
 		}
 	}
-	for i, a := range f.Addons {
+	for _, a := range f.Addons {
 		if a.Name == "" || a.Kind == "" {
-			return nil, fmt.Errorf("%w: addons[%d] needs name + kind", ErrInvalid, i)
+			return nil, fmt.Errorf("%w: every addon needs a name and kind", ErrInvalid)
+		}
+		if a.External != nil && a.UseInstanceAddon != "" {
+			return nil, fmt.Errorf("%w: addon %s sets both external and useInstanceAddon", ErrInvalid, a.Name)
+		}
+	}
+	for _, c := range f.Crons {
+		if c.Name == "" {
+			return nil, fmt.Errorf("%w: every cron needs a name", ErrInvalid)
+		}
+		if !cronExpr5.MatchString(c.Schedule) {
+			return nil, fmt.Errorf("%w: cron %s has invalid schedule %q (want 5-field cron)", ErrInvalid, c.Name, c.Schedule)
+		}
+		if c.Kind != "service" && c.Kind != "http" && c.Kind != "command" {
+			return nil, fmt.Errorf("%w: cron %s has invalid kind %q", ErrInvalid, c.Name, c.Kind)
 		}
 	}
 	return &f, nil
 }
+
+// validRuntime reports whether r is a known service runtime.
+func validRuntime(r string) bool {
+	switch r {
+	case "dockerfile", "nixpacks", "buildpacks", "static":
+		return true
+	default:
+		return false
+	}
+}
+
+// cronExpr5 matches a standard five-field cron expression.
+var cronExpr5 = regexp.MustCompile(`^\s*\S+\s+\S+\s+\S+\s+\S+\s+\S+\s*$`)
 
 // Plan is what Apply returns: the sets of resources to create,
 // update, and delete. Surfaced so the API can show a dry-run diff

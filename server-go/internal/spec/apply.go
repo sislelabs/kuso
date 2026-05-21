@@ -107,8 +107,9 @@ func serviceCreateReq(f *File, s ServiceSpec) projects.CreateServiceRequest {
 	if s.Scale != nil {
 		req.Scale = &projects.ServiceScale{Min: s.Scale.Min, Max: s.Scale.Max, TargetCPU: s.Scale.TargetCPU}
 	}
-	for _, host := range s.Domains {
-		req.Domains = append(req.Domains, projects.ServiceDomain{Host: host, TLS: true})
+	// TODO(config-as-code task 4): rewritten in task 4 for full parity.
+	for _, d := range s.Domains {
+		req.Domains = append(req.Domains, projects.ServiceDomain{Host: d.Host, TLS: d.TLS})
 	}
 	_ = f
 	return req
@@ -124,10 +125,11 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 		rt := s.Runtime
 		req.Runtime = &rt
 	}
+	// TODO(config-as-code task 4): rewritten in task 4 for full parity.
 	if len(s.Domains) > 0 {
 		ds := make([]projects.ServiceDomain, 0, len(s.Domains))
-		for _, h := range s.Domains {
-			ds = append(ds, projects.ServiceDomain{Host: h, TLS: true})
+		for _, d := range s.Domains {
+			ds = append(ds, projects.ServiceDomain{Host: d.Host, TLS: d.TLS})
 		}
 		req.Domains = &ds
 	}
