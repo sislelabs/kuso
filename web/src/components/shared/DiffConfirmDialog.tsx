@@ -2,7 +2,9 @@
 
 import { useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, AlertTriangle, Info } from "lucide-react";
+import type { BlastInfo, BlastLevel } from "@/lib/blast-radius";
+import { worstLevel, summaryFor } from "@/lib/blast-radius";
 
 // DiffEntry is a single row in the "you're about to change" list.
 // Callers compose the list — this component doesn't know what
@@ -11,6 +13,9 @@ export interface DiffEntry {
   field: string;          // e.g. "envVars / DRIFT_TEST"
   before?: string;        // missing => addition
   after?: string;         // missing => removal
+  // warning, when set, surfaces the field's blast radius (from
+  // EDIT_SAFETY.md via lib/blast-radius) as a chip under the diff row.
+  warning?: BlastInfo;
 }
 
 interface Props {
@@ -71,6 +76,22 @@ export function DiffConfirmDialog({
             <p className="mt-0.5 text-[12px] text-[var(--text-secondary)]">{description}</p>
           </div>
         </header>
+        {(() => {
+          const warned = entries.map((e) => e.warning ?? null);
+          if (!warned.some(Boolean)) return null;
+          const level = worstLevel(warned);
+          return (
+            <div
+              className={
+                "flex items-start gap-2 border-b border-[var(--border-subtle)] px-5 py-2.5 text-[11px] " +
+                blastChipClass(level)
+              }
+            >
+              <BlastIcon level={level} />
+              <span className="leading-snug">{summaryFor(level)}</span>
+            </div>
+          );
+        })()}
         <div className="max-h-[50vh] overflow-y-auto px-5 py-3">
           {entries.length === 0 ? (
             <p className="py-4 text-center text-[12px] text-[var(--text-tertiary)]">
@@ -107,6 +128,17 @@ export function DiffConfirmDialog({
                       {d.after || "(removed)"}
                     </span>
                   </div>
+                  {d.warning && (
+                    <div
+                      className={
+                        "mt-1.5 flex items-start gap-1.5 rounded px-1.5 py-1 text-[10px] " +
+                        blastChipClass(d.warning.level)
+                      }
+                    >
+                      <BlastIcon level={d.warning.level} />
+                      <span className="leading-snug">{d.warning.message}</span>
+                    </div>
+                  )}
                 </li>
               ))}
             </ul>
@@ -123,4 +155,28 @@ export function DiffConfirmDialog({
       </div>
     </div>
   );
+}
+
+// blastChipClass returns the colour treatment for a blast-radius chip
+// / banner — danger red, warn amber, info muted.
+function blastChipClass(level: BlastLevel): string {
+  switch (level) {
+    case "danger":
+      return "bg-red-500/10 text-red-300";
+    case "warn":
+      return "bg-amber-500/10 text-amber-300";
+    default:
+      return "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]";
+  }
+}
+
+// BlastIcon picks the glyph for a blast level.
+function BlastIcon({ level }: { level: BlastLevel }) {
+  if (level === "danger") {
+    return <AlertTriangle className="mt-px h-3 w-3 shrink-0" />;
+  }
+  if (level === "warn") {
+    return <AlertCircle className="mt-px h-3 w-3 shrink-0" />;
+  }
+  return <Info className="mt-px h-3 w-3 shrink-0" />;
 }

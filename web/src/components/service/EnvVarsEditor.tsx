@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
 import { Button } from "@/components/ui/button";
 import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
+import { serviceBlast } from "@/lib/blast-radius";
 import { Input } from "@/components/ui/input";
 import { Trash2, Plus, Eye, EyeOff, FileText, List, Link2, AlertCircle, Wand2 } from "lucide-react";
 import { useServiceEnv, useSetServiceEnv, useDetectedEnv, useDrift } from "@/features/services";
@@ -433,11 +434,16 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
     }
     const keys = new Set([...beforeMap.keys(), ...afterMap.keys()]);
     const out: DiffEntry[] = [];
+    // Every env-var change re-renders the Deployment → rolling
+    // restart. Surface that blast radius once, on the first row.
+    const envWarning = serviceBlast("envVars") ?? undefined;
+    let first = true;
     for (const k of keys) {
       const b = beforeMap.get(k);
       const a = afterMap.get(k);
       if (b === a) continue;
-      out.push({ field: k, before: b, after: a });
+      out.push({ field: k, before: b, after: a, warning: first ? envWarning : undefined });
+      first = false;
     }
     out.sort((x, y) => x.field.localeCompare(y.field));
     return out;

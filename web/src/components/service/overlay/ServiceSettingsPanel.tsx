@@ -12,6 +12,8 @@ import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin } fr
 import { cn } from "@/lib/utils";
 
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
+import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
+import { serviceBlast } from "@/lib/blast-radius";
 import { fromSvc, isEqual, type FormState } from "./settings/_primitives";
 import { SourceSection } from "./settings/SourceSection";
 import { NetworkingSection } from "./settings/NetworkingSection";
@@ -59,6 +61,9 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   // a domain edit because the toast fell off-screen behind a
   // probe-failure stack — see /domains-add-remove-list change).
   const [saveError, setSaveError] = useState<string | null>(null);
+  // pendingBody holds a built-but-not-yet-applied patch while the
+  // blast-radius confirm dialog is open. null = dialog closed.
+  const [pendingBody, setPendingBody] = useState<PatchServiceBody | null>(null);
   const patch = usePatchService(project, service);
   // Pull the production env's host so the Networking section can
   // surface the auto-domain inline (read-only). The KusoService spec
@@ -221,23 +226,45 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       return;
     }
 
+    // Don't patch straight away — open the blast-radius confirm
+    // dialog so the user sees what each changed field does to the
+    // running workload (rolling restart, TLS re-issue, data orphan…)
+    // before committing. applyPatch (the dialog's confirm) does the
+    // actual mutation.
+    setSaveError(null);
+    setPendingBody(body);
+  };
+
+  // applyPatch commits the body the confirm dialog is showing.
+  const applyPatch = async (body: PatchServiceBody) => {
     setPending(true);
     setSaveError(null);
     try {
       await patch.mutateAsync(body);
       toast.success("Changes saved");
+      setPendingBody(null);
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to save";
       // Both surfaces: toast for momentary visibility, inline
-      // saveError for "where did my changes go" recovery. The
-      // inline one stays until the next save attempt or until the
-      // user clicks Discard.
+      // saveError for "where did my changes go" recovery.
       toast.error(msg);
       setSaveError(msg);
+      setPendingBody(null);
     } finally {
       setPending(false);
     }
   };
+
+  // diffEntries turns the pending patch body into the confirm
+  // dialog's row list, each tagged with its EDIT_SAFETY blast radius.
+  const diffEntries: DiffEntry[] = pendingBody
+    ? Object.keys(pendingBody).map((field) => ({
+        field,
+        before: "current",
+        after: "changed",
+        warning: serviceBlast(field) ?? undefined,
+      }))
+    : [];
 
   const reset = () => {
     setState(baseline);
@@ -333,6 +360,18 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
           </span>
         </div>
       )}
+      <DiffConfirmDialog
+        open={pendingBody !== null}
+        title="Apply service changes?"
+        description="Review the blast radius of each change before it reconciles."
+        entries={diffEntries}
+        confirmLabel="Apply & reconcile"
+        confirming={pending}
+        onCancel={() => setPendingBody(null)}
+        onConfirm={() => {
+          if (pendingBody) void applyPatch(pendingBody);
+        }}
+      />
     </div>
   );
 }
