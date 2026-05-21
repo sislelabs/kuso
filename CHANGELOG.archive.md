@@ -2,6 +2,16 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.41] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(canvas): status border honors prod pod, not pending/queued builds ([3d4f34c](https://github.com/sislelabs/kuso/commit/3d4f34c372686bae84d582c4ed5d646a20b6be14))
+
+## [0.9.40] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(deep-review-5): close 22 scalability + UX findings from second deep review ([ad7ffff](https://github.com/sislelabs/kuso/commit/ad7ffffe25c327d94f872ed0f7a01b7cd15b3d33))
+
 ## [0.9.39] — 2026-05-07
 
 ### ✨ Features
