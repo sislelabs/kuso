@@ -1,4 +1,5 @@
 import { api } from "@/lib/api-client";
+import { env } from "@/lib/env";
 import type {
   KusoAddon,
   KusoEnvironment,
@@ -282,4 +283,85 @@ export async function runSQL(
     `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/query`,
     { method: "POST", body: { query, limit } }
   );
+}
+
+// --- Config-as-code -------------------------------------------------
+//
+// getProjectSpec / applyConfig don't go through the `api()` wrapper:
+// that helper JSON-stringifies every non-FormData body and is built
+// around JSON request/response. The /spec endpoint returns text/yaml
+// and /apply takes a raw application/yaml body. Auth still rides the
+// HttpOnly session cookie exactly like api() — credentials:"include",
+// no Authorization header (see lib/api-client.ts).
+
+// ConfigPlan mirrors spec.Plan on the server — the diff between a
+// kuso.yaml document and the live project. WouldDelete is the advisory
+// list of resources present live but absent from the YAML; the apply
+// path skips deletes by default, so they surface here instead.
+export interface ConfigPlan {
+  servicesToCreate: string[];
+  servicesToUpdate: string[];
+  servicesToDelete: string[];
+  addonsToCreate: string[];
+  addonsToUpdate: string[];
+  addonsToDelete: string[];
+  cronsToCreate: string[];
+  cronsToUpdate: string[];
+  cronsToDelete: string[];
+  wouldDelete?: string[];
+}
+
+// ConfigStepError mirrors spec.StepError — one failed apply step.
+export interface ConfigStepError {
+  resource: string;
+  op: string;
+  message: string;
+}
+
+// ConfigApplyResult mirrors spec.ApplyResult — the executed plan plus
+// any per-step errors. Returned by a non-dry-run apply.
+export interface ConfigApplyResult {
+  plan: ConfigPlan;
+  errors?: ConfigStepError[];
+}
+
+// getProjectSpec fetches the project's current state as a kuso.yaml
+// document (text, not JSON).
+export async function getProjectSpec(project: string): Promise<string> {
+  const res = await fetch(
+    `${env.apiBase}/api/projects/${encodeURIComponent(project)}/spec`,
+    { credentials: "include" },
+  );
+  if (!res.ok) throw new Error((await res.text()) || `export failed: ${res.status}`);
+  return res.text();
+}
+
+// applyConfig POSTs a kuso.yaml body. With dryRun the server returns
+// the bare ConfigPlan; without it, a ConfigApplyResult (plan + errors).
+export async function applyConfig(
+  project: string,
+  body: string,
+  dryRun: true,
+): Promise<ConfigPlan>;
+export async function applyConfig(
+  project: string,
+  body: string,
+  dryRun: false,
+): Promise<ConfigApplyResult>;
+export async function applyConfig(
+  project: string,
+  body: string,
+  dryRun: boolean,
+): Promise<ConfigPlan | ConfigApplyResult> {
+  const res = await fetch(
+    `${env.apiBase}/api/projects/${encodeURIComponent(project)}/apply${dryRun ? "?dryRun=1" : ""}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/yaml" },
+      body,
+      credentials: "include",
+    },
+  );
+  if (!res.ok) throw new Error((await res.text()) || `apply failed: ${res.status}`);
+  return res.json();
 }

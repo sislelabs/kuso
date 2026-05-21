@@ -36,6 +36,8 @@ export {
   createEnvGroup,
   deleteEnvGroup,
   setEnvGroupServiceBranch,
+  getProjectSpec,
+  applyConfig,
 } from "./api";
 export type {
   BackupObject,
@@ -43,6 +45,9 @@ export type {
   SQLQueryResponse,
   UpdateAddonBody,
   EnvGroupSummary,
+  ConfigPlan,
+  ConfigStepError,
+  ConfigApplyResult,
 } from "./api";
 export {
   useUpdateProject,

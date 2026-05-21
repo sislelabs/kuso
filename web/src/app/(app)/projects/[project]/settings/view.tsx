@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useProject, useUpdateProject, useDeleteProject } from "@/features/projects";
 import { SharedSecretsCard } from "@/components/project/SharedSecretsCard";
+import { ConfigTab } from "@/components/project/ConfigTab";
 import { toast } from "sonner";
 import { Trash2, Save, Settings as SettingsIcon, AlertTriangle } from "lucide-react";
 
@@ -241,6 +242,9 @@ export function ProjectSettingsView() {
 
       {/* Project secrets — flat now, no Card wrapper */}
       <SharedSecretsCard project={projectName} />
+
+      {/* Config as code — kuso.yaml export / dry-run / apply */}
+      <ConfigTab project={projectName} />
 
       {/* Danger zone */}
       <section className="space-y-3">
