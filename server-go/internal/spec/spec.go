@@ -230,9 +230,10 @@ func validRuntime(r string) bool {
 // cronExpr5 matches a standard five-field cron expression.
 var cronExpr5 = regexp.MustCompile(`^\s*\S+\s+\S+\s+\S+\s+\S+\s+\S+\s*$`)
 
-// Plan is what Apply returns: the sets of resources to create,
-// update, and delete. Surfaced so the API can show a dry-run diff
-// before actually writing anything.
+// Plan is the diff between kuso.yaml and live state. *ToDelete sets
+// are only populated when the File's prune flag is true; otherwise
+// the would-be deletions are reported in WouldDelete and the apply
+// skips them.
 type Plan struct {
 	ServicesToCreate []string `json:"servicesToCreate"`
 	ServicesToUpdate []string `json:"servicesToUpdate"`
@@ -240,6 +241,13 @@ type Plan struct {
 	AddonsToCreate   []string `json:"addonsToCreate"`
 	AddonsToUpdate   []string `json:"addonsToUpdate"`
 	AddonsToDelete   []string `json:"addonsToDelete"`
+	CronsToCreate    []string `json:"cronsToCreate"`
+	CronsToUpdate    []string `json:"cronsToUpdate"`
+	CronsToDelete    []string `json:"cronsToDelete"`
+	// WouldDelete lists resources that exist live but are absent from
+	// kuso.yaml, when prune is false. Each entry is "kind:name", e.g.
+	// "service:old". Reported, not executed.
+	WouldDelete []string `json:"wouldDelete,omitempty"`
 }
 
 // PlanFor diffs the YAML file against the live project and returns
@@ -312,12 +320,63 @@ func PlanFor(ctx context.Context, k *kube.Client, namespace string, f *File) (*P
 		}
 	}
 
+	// Crons: by name. Cron CRs are named "<project>-<short>", same as
+	// services; strip the prefix before comparing to the YAML name.
+	desiredCrons := map[string]CronSpec{}
+	for _, c := range f.Crons {
+		desiredCrons[c.Name] = c
+	}
+	liveCrons, err := k.ListKusoCrons(ctx, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("list crons: %w", err)
+	}
+	liveCronByName := map[string]bool{}
+	for _, lc := range liveCrons {
+		if lc.Spec.Project != f.Project {
+			continue
+		}
+		short := shortName(f.Project, lc.Name)
+		liveCronByName[short] = true
+		if _, want := desiredCrons[short]; !want {
+			plan.CronsToDelete = append(plan.CronsToDelete, short)
+		} else {
+			plan.CronsToUpdate = append(plan.CronsToUpdate, short)
+		}
+	}
+	for name := range desiredCrons {
+		if !liveCronByName[name] {
+			plan.CronsToCreate = append(plan.CronsToCreate, name)
+		}
+	}
+
 	sort.Strings(plan.ServicesToCreate)
 	sort.Strings(plan.ServicesToUpdate)
 	sort.Strings(plan.ServicesToDelete)
 	sort.Strings(plan.AddonsToCreate)
 	sort.Strings(plan.AddonsToUpdate)
 	sort.Strings(plan.AddonsToDelete)
+	sort.Strings(plan.CronsToCreate)
+	sort.Strings(plan.CronsToUpdate)
+	sort.Strings(plan.CronsToDelete)
+
+	// prune gate: when the file does not opt into pruning, move every
+	// would-be deletion out of the executed *ToDelete sets into the
+	// advisory WouldDelete list.
+	if !f.Prune {
+		for _, n := range plan.ServicesToDelete {
+			plan.WouldDelete = append(plan.WouldDelete, "service:"+n)
+		}
+		for _, n := range plan.AddonsToDelete {
+			plan.WouldDelete = append(plan.WouldDelete, "addon:"+n)
+		}
+		for _, n := range plan.CronsToDelete {
+			plan.WouldDelete = append(plan.WouldDelete, "cron:"+n)
+		}
+		sort.Strings(plan.WouldDelete)
+		plan.ServicesToDelete = nil
+		plan.AddonsToDelete = nil
+		plan.CronsToDelete = nil
+	}
 	return plan, nil
 }
 
