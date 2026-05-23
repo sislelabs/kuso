@@ -5,6 +5,12 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.16] — 2026-05-23
+
+### ✨ Features
+- Feat(addons): opt-in public TCP endpoint (admin-gated) ([8e5a858](https://github.com/sislelabs/kuso/commit/8e5a858708e18a8a7e78f12f72ff78e788cdfad8))
+- Feat: kuso db port-forward / db connect — local tunnels to addons ([61405c8](https://github.com/sislelabs/kuso/commit/61405c8aad8f46a594ad157bde972825275c48c9))
+
 ## [0.13.14] — 2026-05-21
 
 ### 🐛 Bug Fixes
@@ -561,11 +567,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(envs): non-prod banner + per-env branch input + previews copy ([c0d9912](https://github.com/sislelabs/kuso/commit/c0d9912ab820f239322a583a9f3402e33bbce229))
-
-## [0.9.43] — 2026-05-07
-
-### ✨ Features
-- Feat(envs): project-level environment groups with addon mirroring ([efafe68](https://github.com/sislelabs/kuso/commit/efafe6839ca8c40a21a2fe9b3ad1946dd579c4e5))
 
 
 ---
