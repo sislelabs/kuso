@@ -15,6 +15,7 @@ import {
   listErrors,
   listAddonSecretKeys,
   listRuns,
+  listServiceCrons,
   patchService,
   runPhase,
   setServiceEnv,
@@ -220,6 +221,26 @@ export function useAddonSecretKeys(project: string, addon: string) {
 
 export const runsQueryKey = (project: string, service: string) =>
   ["projects", project, "services", service, "runs"] as const;
+
+// Cron-tab visibility in ServiceOverlay needs to know whether the
+// service has at least one cron. The CronsPanel already runs the same
+// listServiceCrons query under the exact key we use below — sharing
+// the key means the overlay shell hits the same cache the panel
+// populates, so opening Crons twice doesn't double-fetch.
+export const cronsQueryKey = (project: string, service: string) =>
+  ["projects", project, "services", service, "crons"] as const;
+
+export function useServiceCrons(project: string, service: string) {
+  return useQuery({
+    queryKey: cronsQueryKey(project, service),
+    queryFn: () => listServiceCrons(project, service),
+    enabled: !!project && !!service,
+    // The overlay shell uses this purely for "is the list empty?".
+    // No need for an aggressive refetch — let it follow the default
+    // staleTime so navigating between services stays cheap.
+    staleTime: 30_000,
+  });
+}
 
 // useRuns lists the recent KusoRuns for (project, service). Polling
 // cadence mirrors useBuilds: fast (3s) while an in-flight run is

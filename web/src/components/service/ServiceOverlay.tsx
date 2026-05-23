@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { useService, useDrift, useBuilds, rollbackBuild } from "@/features/services";
+import { useService, useDrift, useBuilds, rollbackBuild, useServiceCrons, useRuns } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Undo2 } from "lucide-react";
@@ -76,13 +76,19 @@ type Tab = "deployments" | "variables" | "metrics" | "logs" | "errors" | "shell"
 // behind the scroll edge; users had to scroll to discover the
 // most-important destination. Pinning it surfaces the affordance
 // at any viewport.
-const MAIN_TABS: { id: Tab; label: string }[] = [
-  { id: "deployments", label: "Deployments" },
-  { id: "variables", label: "Variables" },
-  { id: "metrics", label: "Metrics" },
-  { id: "logs", label: "Logs" },
-  { id: "errors", label: "Errors" },
-  { id: "shell", label: "Shell" },
+//
+// Crons and Runs are data-driven — they only appear in the strip
+// when the service actually has at least one cron / run. A regular
+// dev poking at their Next.js service shouldn't see "Runs" and
+// wonder what it means; it shows up the moment they create a
+// migration. See useVisibleMainTabs below for the gating logic.
+const ALL_MAIN_TABS: { id: Tab; label: string; alwaysShow?: boolean }[] = [
+  { id: "deployments", label: "Deployments", alwaysShow: true },
+  { id: "variables", label: "Variables", alwaysShow: true },
+  { id: "metrics", label: "Metrics", alwaysShow: true },
+  { id: "logs", label: "Logs", alwaysShow: true },
+  { id: "errors", label: "Errors", alwaysShow: true },
+  { id: "shell", label: "Shell", alwaysShow: true },
   { id: "crons", label: "Crons" },
   { id: "runs", label: "Runs" },
 ];
@@ -191,7 +197,11 @@ export function ServiceOverlay({
   // forced "back to Deployments" reset on every open.
   useEffect(() => {
     if (!service) return;
-    const valid = [...MAIN_TABS, PINNED_TAB].some((t) => t.id === defaultTab);
+    // Validate against the universe of possible tabs. Visibility of
+    // Crons/Runs is enforced separately below — landing on a hidden
+    // tab would mean the active-tab underline has nothing to anchor
+    // to, so we coerce that case back to "deployments".
+    const valid = [...ALL_MAIN_TABS, PINNED_TAB].some((t) => t.id === defaultTab);
     if (valid) {
       setTab(defaultTab as Tab);
       return;
@@ -199,10 +209,11 @@ export function ServiceOverlay({
     let remembered: Tab = "deployments";
     if (typeof window !== "undefined") {
       const v = window.sessionStorage.getItem("kuso-service-overlay-tab");
-      if (v && [...MAIN_TABS, PINNED_TAB].some((t) => t.id === v)) remembered = v as Tab;
+      if (v && [...ALL_MAIN_TABS, PINNED_TAB].some((t) => t.id === v)) remembered = v as Tab;
     }
     setTab(remembered);
   }, [service, defaultTab]);
+
 
   // Remember which tab the failure deep-link routed to, so the
   // FailureBanner only shows on that tab — switching tabs is the
@@ -237,6 +248,37 @@ export function ServiceOverlay({
   const svc = useService(project, service ?? "");
   const drift = useDrift(project, service ?? "");
   const envs = useEnvironments(project);
+  // Data-driven tab visibility: Crons + Runs only show in the strip
+  // when the service actually has at least one of each. The hooks
+  // share their cache key with the panels (CronsPanel + RunsPanel)
+  // so opening the tab doesn't double-fetch. While the count is
+  // unknown (initial load, refetch) we conservatively show the tab —
+  // hiding mid-session would feel like the UI is moving under the
+  // user. Counts > 0 keep the tab; counts === 0 hide it.
+  const crons = useServiceCrons(project, service ?? "");
+  const runs = useRuns(project, service ?? "");
+  const showCrons = (crons.data?.length ?? -1) !== 0;
+  const showRuns = (runs.data?.length ?? -1) !== 0;
+  const MAIN_TABS = useMemo(
+    () =>
+      ALL_MAIN_TABS.filter((t) => {
+        if (t.alwaysShow) return true;
+        if (t.id === "crons") return showCrons;
+        if (t.id === "runs") return showRuns;
+        return true;
+      }),
+    [showCrons, showRuns],
+  );
+
+  // If the visibility-driven tab list drops the current tab (e.g.
+  // user was on Crons and deleted their last cron), fall back to
+  // Deployments so the strip + content stay in sync. Settings is
+  // separate (PINNED_TAB) — it's always visible, so never falls.
+  useEffect(() => {
+    if (tab === "settings") return;
+    if (tab === "crons" && !showCrons) setTab("deployments");
+    if (tab === "runs" && !showRuns) setTab("deployments");
+  }, [tab, showCrons, showRuns]);
   const fqn = service ? project + "-" + service : "";
   const env = (envs.data ?? []).find((e) => {
     if (e.spec.service !== fqn) return false;

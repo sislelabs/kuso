@@ -1,11 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
-import { listServiceCrons, addCron, deleteCron, syncCron } from "@/features/services";
+import { addCron, deleteCron, syncCron, useServiceCrons } from "@/features/services";
 import type { KusoCron } from "@/features/services";
 import { useCan, Perms } from "@/features/auth";
 import { Clock, Plus, Trash2, RefreshCw, X } from "lucide-react";
@@ -30,11 +30,10 @@ export function ServiceCronsPanel({ project, service }: Props) {
   const canWrite = useCan(Perms.ServicesWrite);
   const [adding, setAdding] = useState(false);
 
-  const list = useQuery<KusoCron[]>({
-    queryKey: ["projects", project, "services", service, "crons"],
-    queryFn: () => listServiceCrons(project, service),
-    refetchInterval: 30_000,
-  });
+  // Shared with the overlay shell's tab-visibility logic: same query
+  // key + queryFn, so opening the Crons tab doesn't double-fetch the
+  // list the shell already grabbed to decide whether to show the tab.
+  const list = useServiceCrons(project, service);
 
   return (
     <div className="space-y-3 p-5">

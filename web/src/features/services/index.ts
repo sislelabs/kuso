@@ -15,11 +15,13 @@ export {
   useRuns,
   useCreateRun,
   useCancelRun,
+  useServiceCrons,
   serviceQueryKey,
   serviceEnvQueryKey,
   buildsQueryKey,
   errorsQueryKey,
   runsQueryKey,
+  cronsQueryKey,
 } from "./hooks";
 export {
   listServiceCrons,
