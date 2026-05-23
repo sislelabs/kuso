@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.14.1] — 2026-05-23
+
+### ✨ Features
+- Feat(canvas): add cron / run command entries to service right-click menu ([e9a0c7e](https://github.com/sislelabs/kuso/commit/e9a0c7e34edc3b5d08fb94475178a90223e98676))
+
 ## [0.14.0] — 2026-05-23
 
 ### ✨ Features
@@ -567,11 +572,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(ui): drop discard-changes prompt + plain-button env switcher ([c4246e9](https://github.com/sislelabs/kuso/commit/c4246e967ee783e3040aea2ae26be11b6eaea79f))
-
-## [0.9.47] — 2026-05-08
-
-### 🐛 Bug Fixes
-- Fix(envs): clone service envVars too; switcher click; pulse on running build ([0701d84](https://github.com/sislelabs/kuso/commit/0701d84e45538a492d7662ee40a9c73d4b13160a))
 
 
 ---
