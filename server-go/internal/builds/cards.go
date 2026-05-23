@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
 )
 
@@ -37,6 +38,15 @@ type EventEnvelope struct {
 	DurationMs  int64
 	Fields      []EnvelopeField
 	Footer      string
+
+	// Classification, when non-nil, carries the failure kind + a
+	// deep-link tab hint so the bell-popover row in the web UI can
+	// route the user straight into the right tab of the service
+	// overlay with the failing line highlighted. Only populated for
+	// build.failed events; succeeded / cancelled / superseded leave
+	// it nil and the UI falls back to the existing "open the service
+	// page" behavior. See internal/failures for the kind taxonomy.
+	Classification *failures.Classification
 }
 
 // EnvelopeField mirrors notify.EventField for the same import-boundary

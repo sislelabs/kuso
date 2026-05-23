@@ -42,6 +42,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 
+	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
 )
 
@@ -877,8 +878,21 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 // (archiveLogs) still runs separately for the durable DB snapshot;
 // this is a lightweight read of the tail, not a replacement.
 func (p *Poller) tailBuildLogs(ctx context.Context, ns string, b *kube.KusoBuild, lines int) string {
-	if p == nil || p.Svc == nil || p.Svc.Kube == nil || b == nil || lines <= 0 {
+	out := p.tailBuildLogLines(ctx, ns, b, lines)
+	if len(out) == 0 {
 		return ""
+	}
+	return strings.Join(out, "\n")
+}
+
+// tailBuildLogLines is the slice-returning variant used by the
+// failure classifier. The classifier walks lines in reverse looking
+// for known regex patterns and needs them split, not joined. Same
+// kube-fetching contract as tailBuildLogs (5s timeout, init containers
+// fallback when the main container has no logs).
+func (p *Poller) tailBuildLogLines(ctx context.Context, ns string, b *kube.KusoBuild, lines int) []string {
+	if p == nil || p.Svc == nil || p.Svc.Kube == nil || b == nil || lines <= 0 {
+		return nil
 	}
 	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -886,7 +900,7 @@ func (p *Poller) tailBuildLogs(ctx context.Context, ns string, b *kube.KusoBuild
 		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": b.Name}),
 	})
 	if err != nil || len(pods.Items) == 0 {
-		return ""
+		return nil
 	}
 	// Sort: most-recently-created pod first. Failed builds with retries
 	// can leave older pods behind, and the latest one is where the
@@ -925,16 +939,50 @@ func (p *Poller) tailBuildLogs(ctx context.Context, ns string, b *kube.KusoBuild
 		stream.Close()
 		s := strings.TrimSpace(string(data))
 		if s != "" {
-			// One last defensive trim: if the container streamed more
-			// than `lines` lines (rare; happens when a single log line
-			// is broken into many small writes), keep just the tail.
-			if ls := strings.Split(s, "\n"); len(ls) > lines {
-				s = strings.Join(ls[len(ls)-lines:], "\n")
+			ls := strings.Split(s, "\n")
+			if len(ls) > lines {
+				ls = ls[len(ls)-lines:]
 			}
-			return s
+			return ls
 		}
 	}
-	return ""
+	return nil
+}
+
+// joinLastN joins the last n lines (or all of them if fewer) with
+// newlines. Used to turn the classifier's tail slice back into the
+// short string the Discord card embeds — keeping the slice as the
+// source of truth means the card and the classifier never disagree
+// about what "the tail" was.
+func joinLastN(lines []string, n int) string {
+	if len(lines) == 0 || n <= 0 {
+		return ""
+	}
+	if n > len(lines) {
+		n = len(lines)
+	}
+	return strings.Join(lines[len(lines)-n:], "\n")
+}
+
+// buildFailureURL composes the failed-build deep-link. Same shape as
+// buildEventURL but appends a tab hint so the click lands the user
+// directly inside the right tab of the service overlay (Variables for
+// missing-env, Logs for build_command_failed, Settings for image-pull).
+// Empty project/service falls back to "" — the popover row renders a
+// non-clickable card in that case.
+func buildFailureURL(project, service string, c failures.Classification) string {
+	base := buildEventURL(project, service)
+	if base == "" {
+		return ""
+	}
+	if c.Tab == "" {
+		return base
+	}
+	url := base + "&tab=" + string(c.Tab) + "&kind=" + string(c.Kind)
+	if c.LineNum > 0 {
+		url += "&highlight=" + strconv.Itoa(c.LineNum)
+	}
+	return url
 }
 
 
@@ -1830,27 +1878,39 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 	p.queueArchive(ctx, ns, b, "failed")
 	if p.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
-		// Pull the last 5 lines of the build pod's logs so the Discord
-		// card includes a code-fenced excerpt of the actual error.
-		// Cheap (5s timeout, single pod list + log stream); failure
-		// just yields no log tail — the rest of the card still renders.
-		logTail := p.tailBuildLogs(ctx, ns, b, 5)
-		// No site URL on failure: the prior image is still live; a
-		// click-through would land on an already-running version that
-		// has nothing to do with this card's failed build.
+		// Pull the last 50 lines for classification — the Discord
+		// card only renders 5 (logTail), but the classifier walks the
+		// tail in reverse looking for a known failure regex and a
+		// 5-line window misses errors that print 10-30 lines before
+		// the end of buildpacks / nixpacks output.
+		classifyLines := p.tailBuildLogLines(ctx, ns, b, 50)
+		// Discord-card tail is still the last 5 — keep the card tight.
+		logTail := joinLastN(classifyLines, 5)
+		// Classify the failure so the bell-popover row deep-links the
+		// user into the right overlay tab (Variables for missing-env,
+		// Logs for build_command_failed, etc.). Build pods don't have a
+		// kube pod-status reason like a runtime crash does — we only
+		// pass log lines, which is enough for build-specific patterns.
+		classification := failures.Classify(classifyLines, failures.Signal{})
+		// Build-failed events never have a healthy site URL to link to
+		// (the prior image is still live but unrelated). Build the
+		// deep-link with ?tab=<hint> instead so the click lands the
+		// user directly inside the service overlay.
+		deepLink := buildFailureURL(b.Spec.Project, short, classification)
 		title, desc, fields := buildRichCard(b, short, "failed", msg, "")
 		p.Notifier.Emit(EventEnvelope{
-			Type:        eventBuildFailed,
-			Title:       title,
-			Description: desc,
-			Body:        msg, // kept for back-compat sinks (raw webhook)
-			LogTail:     logTail,
-			Project:     b.Spec.Project,
-			Service:     short,
-			URL:         buildEventURL(b.Spec.Project, short),
-			Severity:    "error",
-			DurationMs:  buildDurationMs(b),
-			Fields:      fields,
+			Type:           eventBuildFailed,
+			Title:          title,
+			Description:    desc,
+			Body:           msg, // kept for back-compat sinks (raw webhook)
+			LogTail:        logTail,
+			Project:        b.Spec.Project,
+			Service:        short,
+			URL:            deepLink,
+			Severity:       "error",
+			DurationMs:     buildDurationMs(b),
+			Fields:         fields,
+			Classification: &classification,
 		})
 	}
 	return nil

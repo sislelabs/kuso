@@ -36,6 +36,7 @@ import (
 	"time"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/failures"
 	"kuso/server/internal/httpx"
 )
 
@@ -135,6 +136,13 @@ type Event struct {
 	// Footer is an optional override for the default footer (which is
 	// "<project> · <kuso version>"). Empty = use default.
 	Footer string `json:"footer,omitempty"`
+	// Classification, when populated on failure events, tells the web
+	// UI which overlay tab to open + which log line to highlight when
+	// the user clicks the bell-popover row. nil for non-failure events
+	// and for legacy emit sites that don't populate it yet — the UI
+	// falls back to "open the service page". See internal/failures
+	// for the kind taxonomy + per-kind summary text.
+	Classification *failures.Classification `json:"classification,omitempty"`
 }
 
 // EventField is one row in the rich-card 2-column field block. Mirrors
@@ -285,15 +293,26 @@ func (d *Dispatcher) Emit(e Event) {
 			}
 			persistCtx, cancel := context.WithTimeout(parent, 2*time.Second)
 			defer cancel()
+			// Serialise the classification (if any) so the bell-icon
+			// list endpoint can hand the raw JSON to the browser without
+			// re-encoding on every read. nil/empty stays NULL in DB and
+			// omitempty in the wire payload.
+			var classification json.RawMessage
+			if e.Classification != nil {
+				if b, mErr := json.Marshal(e.Classification); mErr == nil {
+					classification = b
+				}
+			}
 			if err := d.db.InsertNotificationEvent(persistCtx, db.NotificationEvent{
-				Type:     string(e.Type),
-				Title:    e.Title,
-				Body:     e.Body,
-				Severity: e.Severity,
-				Project:  e.Project,
-				Service:  e.Service,
-				URL:      e.URL,
-				Extra:    e.Extra,
+				Type:           string(e.Type),
+				Title:          e.Title,
+				Body:           e.Body,
+				Severity:       e.Severity,
+				Project:        e.Project,
+				Service:        e.Service,
+				URL:            e.URL,
+				Extra:          e.Extra,
+				Classification: classification,
 			}); err != nil && d.logger != nil {
 				d.logger.Warn("notify: persist event", "err", err, "type", string(e.Type))
 			}
@@ -926,7 +945,13 @@ func BuildFailed(project, service, ref, reason string) Event {
 // logTail is the last few lines of the previous container's logs (may
 // be empty when no prior container exists — first-boot ImagePullBackOff
 // produces no logs to tail).
-func PodCrashed(project, service, podName, reason, envKind, logTail string, restarts int) Event {
+//
+// classification, when non-nil, deep-links the bell-popover row into
+// the right overlay tab (Logs for CrashLoop, Settings for image-pull,
+// Variables for ContainerConfigError) and surfaces a one-line human
+// summary in the popover subtitle. Pass nil when the caller hasn't
+// classified yet — the UI then falls back to the default service URL.
+func PodCrashed(project, service, podName, reason, envKind, logTail string, restarts int, classification *failures.Classification) Event {
 	// Crashes → service overlay (Logs tab in particular is what the
 	// user wants next, but the overlay router defaults to Logs when
 	// the service has crashed pods, so a single deep-link works).
@@ -948,18 +973,32 @@ func PodCrashed(project, service, podName, reason, envKind, logTail string, rest
 	if envKind != "" {
 		fields = append(fields, EventField{Name: "Env", Value: envKind, Inline: true})
 	}
+	// Build the deep-link. When we have a classification, append the
+	// tab/kind/highlight params so the row lands the user inside the
+	// right tab of the service overlay instead of the canvas.
+	url := serviceURL(project, service)
+	// serviceURL already includes a "?service=..." query, so the tab
+	// hint appends with "&". If serviceURL is empty (no project) we
+	// don't add anything — there's nowhere to deep-link to.
+	if url != "" && classification != nil && classification.Tab != "" {
+		url = url + "&tab=" + string(classification.Tab) + "&kind=" + string(classification.Kind)
+		if classification.LineNum > 0 {
+			url = url + "&highlight=" + strconv.Itoa(classification.LineNum)
+		}
+	}
 	return Event{
-		Type:        EventPodCrashed,
-		Title:       title,
-		Description: desc,
-		LogTail:     logTail,
-		Body:        reason, // back-compat for raw-webhook consumers
-		Project:     project,
-		Service:     service,
-		URL:         serviceURL(project, service),
-		Severity:    "warn",
-		Extra:       map[string]string{"pod": podName},
-		Fields:      fields,
+		Type:           EventPodCrashed,
+		Title:          title,
+		Description:    desc,
+		LogTail:        logTail,
+		Body:           reason, // back-compat for raw-webhook consumers
+		Project:        project,
+		Service:        service,
+		URL:            url,
+		Severity:       "warn",
+		Extra:          map[string]string{"pod": podName},
+		Fields:         fields,
+		Classification: classification,
 	}
 }
 

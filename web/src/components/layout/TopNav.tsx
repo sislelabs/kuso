@@ -435,6 +435,18 @@ interface FeedEvent {
   url?: string;
   createdAt: string;
   readAt?: string | null;
+  // classification rides on failure events (build.failed, pod.crashed)
+  // when the server's internal/failures package matched a known kind.
+  // Surfaces the human one-liner as the row subtitle so the popover
+  // tells the user *why* something failed instead of just "Build
+  // failed". Optional — older rows and non-failure events skip it.
+  classification?: {
+    kind?: string;
+    tab?: string;
+    summary?: string;
+    lineHint?: string;
+    lineNum?: number;
+  };
 }
 
 function NotificationsButton() {
@@ -600,20 +612,33 @@ function NotificationRow({ event, onClose }: { event: FeedEvent; onClose: () => 
         aria-hidden
         className={cn(
           "mt-1 inline-block h-1.5 w-1.5 shrink-0 rounded-full",
+          // Use the design-token severity colors so the popover stays
+          // in sync with the rest of the UI when the theme switches.
+          // The previous hardcoded Tailwind (red-400/amber-400/
+          // emerald-400) drifted from --error/--warning/--success in
+          // dark mode, where the tokens use bolder hues for contrast.
           event.severity === "error"
-            ? "bg-red-400"
+            ? "bg-[var(--error)]"
             : event.severity === "warn"
-              ? "bg-amber-400"
-              : "bg-emerald-400"
+              ? "bg-[var(--warning)]"
+              : "bg-[var(--success)]"
         )}
       />
       <div className="min-w-0 flex-1">
         <p className="truncate text-[12px] font-medium">{event.title}</p>
-        {event.body && (
+        {/* Prefer the classifier's human summary over the raw body
+            when both are present. The summary reads "Missing env var:
+            DATABASE_URL"; the raw body would say "build pod exited
+            with code 1" which doesn't tell the user what to fix. */}
+        {event.classification?.summary ? (
+          <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--text-secondary)]">
+            {event.classification.summary}
+          </p>
+        ) : event.body ? (
           <p className="mt-0.5 line-clamp-2 text-[11px] text-[var(--text-secondary)]">
             {event.body}
           </p>
-        )}
+        ) : null}
         <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
           {event.type}
           {event.project && ` · ${event.project}`}

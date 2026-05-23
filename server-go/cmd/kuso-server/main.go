@@ -1251,19 +1251,20 @@ func (a notifyAdapter) Emit(e builds.EventEnvelope) {
 		fields = append(fields, notify.EnvelopeField{Name: f.Name, Value: f.Value, Inline: f.Inline})
 	}
 	a.d.EmitEnvelope(notify.EmitEnvelope{
-		Type:        e.Type,
-		Title:       e.Title,
-		Body:        e.Body,
-		Project:     e.Project,
-		Service:     e.Service,
-		URL:         e.URL,
-		Severity:    e.Severity,
-		Extra:       e.Extra,
-		Description: e.Description,
-		LogTail:     e.LogTail,
-		DurationMs:  e.DurationMs,
-		Fields:      fields,
-		Footer:      e.Footer,
+		Type:           e.Type,
+		Title:          e.Title,
+		Body:           e.Body,
+		Project:        e.Project,
+		Service:        e.Service,
+		URL:            e.URL,
+		Severity:       e.Severity,
+		Extra:          e.Extra,
+		Description:    e.Description,
+		LogTail:        e.LogTail,
+		DurationMs:     e.DurationMs,
+		Fields:         fields,
+		Footer:         e.Footer,
+		Classification: e.Classification,
 	})
 }
 

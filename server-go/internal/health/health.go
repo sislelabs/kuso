@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
 )
@@ -111,12 +112,29 @@ func (w *Watcher) checkPods(ctx context.Context) {
 		service := p.Labels["app.kubernetes.io/instance"]
 		envKind := p.Labels["kuso.sislelabs.com/env-kind"]
 		restarts := containerRestartTotal(p)
-		// Best-effort: pull the previous container's tail. We're inside
-		// the tick loop so this should be fast and bounded — the helper
-		// timeouts at 5s per call. Failures yield "" which the renderer
-		// drops cleanly.
-		logTail := w.previousLogTail(p, reason)
-		w.Notify.Emit(notify.PodCrashed(project, service, p.Name, reason, envKind, logTail, restarts))
+		// Pull 50 lines for the classifier; the Discord card still only
+		// shows the last 5 (joined via previousLogTail). The classifier
+		// walks the larger window in reverse to find the regex that
+		// matches the failure — 5 lines is too small when nixpacks /
+		// buildpacks chatter after the actual error.
+		logLines := w.previousLogLines(p, reason, 50)
+		// Derive the short tail from the same slice so card + classifier
+		// can't disagree about what "the tail" was.
+		logTail := ""
+		if n := len(logLines); n > 0 {
+			start := n - 5
+			if start < 0 {
+				start = 0
+			}
+			logTail = strings.Join(logLines[start:], "\n")
+		}
+		// Stripping "init:" off the reason for the classifier — the
+		// signal taxonomy doesn't distinguish init vs main containers
+		// (the user cares about "image-pull failed", not "image pull
+		// failed in init container").
+		sigReason := strings.TrimPrefix(reason, "init:")
+		classification := failures.Classify(logLines, failures.Signal{Reason: sigReason})
+		w.Notify.Emit(notify.PodCrashed(project, service, p.Name, reason, envKind, logTail, restarts, &classification))
 	}
 	// Garbage-collect stale alerts so a recovered pod can re-alert
 	// later.
@@ -229,14 +247,28 @@ func containerRestartTotal(p *corev1.Pod) int {
 // no previous run exists (first-boot ImagePullBackOff yields nothing
 // to tail anyway). The notify renderer drops empty log tails cleanly.
 func (w *Watcher) previousLogTail(p *corev1.Pod, reason string) string {
-	if w == nil || w.Kube == nil || p == nil {
+	lines := w.previousLogLines(p, reason, 5)
+	if len(lines) == 0 {
 		return ""
+	}
+	return strings.Join(lines, "\n")
+}
+
+// previousLogLines is the slice-returning primitive that backs
+// previousLogTail and the failure classifier. The classifier walks
+// the slice in reverse looking for known regex patterns; the Discord
+// card joins the last 5 lines for embedding. Same kube-fetching
+// contract: 5s timeout, init-container fallback, empty result on
+// any error (the renderer + classifier both tolerate it).
+func (w *Watcher) previousLogLines(p *corev1.Pod, reason string, n int) []string {
+	if w == nil || w.Kube == nil || p == nil || n <= 0 {
+		return nil
 	}
 	// ImagePullBackOff has no prior container — skip the log read.
 	if reason == "ImagePullBackOff" || reason == "ErrImagePull" ||
 		reason == "CreateContainerConfigError" || reason == "init:ImagePullBackOff" ||
 		reason == "init:ErrImagePull" {
-		return ""
+		return nil
 	}
 	// Find the first container with restart history. Main containers
 	// take priority over init containers since runtime crashes are
@@ -257,11 +289,11 @@ func (w *Watcher) previousLogTail(p *corev1.Pod, reason string) string {
 		}
 	}
 	if cName == "" {
-		return ""
+		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	tail := int64(5)
+	tail := int64(n)
 	prev := true
 	req := w.Kube.Clientset.CoreV1().Pods(p.Namespace).GetLogs(p.Name, &corev1.PodLogOptions{
 		Container: cName,
@@ -270,7 +302,7 @@ func (w *Watcher) previousLogTail(p *corev1.Pod, reason string) string {
 	})
 	stream, err := req.Stream(ctx)
 	if err != nil {
-		return ""
+		return nil
 	}
 	defer stream.Close()
 	buf := make([]byte, 4096)
@@ -284,5 +316,13 @@ func (w *Watcher) previousLogTail(p *corev1.Pod, reason string) string {
 			break
 		}
 	}
-	return strings.TrimSpace(string(data))
+	s := strings.TrimSpace(string(data))
+	if s == "" {
+		return nil
+	}
+	ls := strings.Split(s, "\n")
+	if len(ls) > n {
+		ls = ls[len(ls)-n:]
+	}
+	return ls
 }

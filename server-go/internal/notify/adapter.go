@@ -1,5 +1,7 @@
 package notify
 
+import "kuso/server/internal/failures"
+
 // EmitEnvelope accepts the lightweight envelope shape that
 // dependency-light packages (e.g. internal/builds) emit. We translate
 // to a full Event here so notify keeps its richer typed interface
@@ -24,6 +26,11 @@ type EmitEnvelope struct {
 	DurationMs  int64
 	Fields      []EnvelopeField
 	Footer      string
+
+	// Classification, when non-nil, attaches a failure-kind + deep-
+	// link tab hint to the event. Forwarded as-is to Event so the
+	// bell-popover JSON + persisted feed row both carry it.
+	Classification *failures.Classification
 }
 
 // EnvelopeField mirrors EventField for callers that don't import
@@ -44,18 +51,19 @@ func (d *Dispatcher) EmitEnvelope(env EmitEnvelope) {
 		fields = append(fields, EventField{Name: f.Name, Value: f.Value, Inline: f.Inline})
 	}
 	d.Emit(Event{
-		Type:        EventType(env.Type),
-		Title:       env.Title,
-		Body:        env.Body,
-		Project:     env.Project,
-		Service:     env.Service,
-		URL:         env.URL,
-		Severity:    env.Severity,
-		Extra:       env.Extra,
-		Description: env.Description,
-		LogTail:     env.LogTail,
-		DurationMs:  env.DurationMs,
-		Fields:      fields,
-		Footer:      env.Footer,
+		Type:           EventType(env.Type),
+		Title:          env.Title,
+		Body:           env.Body,
+		Project:        env.Project,
+		Service:        env.Service,
+		URL:            env.URL,
+		Severity:       env.Severity,
+		Extra:          env.Extra,
+		Description:    env.Description,
+		LogTail:        env.LogTail,
+		DurationMs:     env.DurationMs,
+		Fields:         fields,
+		Footer:         env.Footer,
+		Classification: env.Classification,
 	})
 }

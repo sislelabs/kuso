@@ -41,6 +41,14 @@ export function ProjectDetailView() {
   const [selectedServiceTab, setSelectedServiceTab] = useState<string | undefined>(undefined);
   const [selectedAddon, setSelectedAddon] = useState<string | null>(null);
   const [selectedAddonTab, setSelectedAddonTab] = useState<string | undefined>(undefined);
+  // Failure deep-link state: when a bell-popover row carries
+  // ?kind=missing_env (etc.), the ServiceOverlay renders a FailureBanner
+  // at the top of the routed tab. The matching ?highlight=<n> param
+  // is also parsed below but not yet plumbed into the FTS-backed Logs
+  // viewer; that follow-up needs a line-anchor surface in the log
+  // table so the viewer can scroll-to + flash a specific row. Cleared
+  // on overlay close so re-opening doesn't resurrect a stale banner.
+  const [failureKind, setFailureKind] = useState<string | undefined>(undefined);
   // Add-addon dialog: opened from the empty-state CTA so a user who
   // wants to start with a managed DB doesn't need to discover the
   // canvas right-click menu. Closed by AddAddonDialog on success.
@@ -67,6 +75,7 @@ export function ProjectDetailView() {
     const svc = search?.get("service");
     const addon = search?.get("addon");
     const tab = search?.get("tab") ?? undefined;
+    const kind = search?.get("kind") ?? undefined;
     if (svc) {
       setSelectedService(stripPrefix(svc));
       // cmd-K palette and bell-icon notifications encode a deep-link
@@ -75,6 +84,13 @@ export function ProjectDetailView() {
       // default Deployments tab. Set unconditionally — the overlay
       // falls back to its own default when undefined.
       setSelectedServiceTab(tab);
+      // Bell-popover deep-links for *failure* events also carry
+      // ?kind=<failures.Kind>. Surface it to ServiceOverlay so it
+      // can render the FailureBanner at the top of the routed tab.
+      // Clear back to undefined when the URL has no failure params —
+      // otherwise a second notification click would re-show the prior
+      // banner.
+      setFailureKind(kind);
     }
     if (addon) {
       setSelectedAddon(stripPrefix(addon));
@@ -211,9 +227,11 @@ export function ProjectDetailView() {
         service={selectedService}
         env={selectedEnv}
         defaultTab={selectedServiceTab}
+        failureKind={failureKind}
         onClose={() => {
           setSelectedService(null);
           setSelectedServiceTab(undefined);
+          setFailureKind(undefined);
         }}
       />
 

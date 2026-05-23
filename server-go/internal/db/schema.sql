@@ -642,3 +642,14 @@ CREATE TABLE IF NOT EXISTS "LoginAttempt" (
 );
 CREATE INDEX IF NOT EXISTS "LoginAttempt_resetAt_idx"
     ON "LoginAttempt"("resetAt");
+
+-- v0.14: notification events carry an optional classification blob so
+-- the bell-popover row can deep-link the user into the right service-
+-- overlay tab (Logs / Variables / Settings) with the offending log
+-- line highlighted, instead of dumping them on the canvas to figure
+-- out where the failure lives. JSON shape matches notify.Event's
+-- Classification field; see internal/failures for the kind taxonomy.
+-- Nullable so non-failure events (build.started, build.succeeded,
+-- node.recovered, etc.) skip the field entirely.
+ALTER TABLE "NotificationEvent"
+    ADD COLUMN IF NOT EXISTS "classification" JSONB;

@@ -17,6 +17,7 @@ import { ServiceLogsPanel } from "./overlay/ServiceLogsPanel";
 import { ServiceErrorsPanel } from "./overlay/ServiceErrorsPanel";
 import { ServiceTerminalPanel } from "./overlay/ServiceTerminalPanel";
 import { ServiceSettingsPanel } from "./overlay/ServiceSettingsPanel";
+import { FailureBanner } from "./overlay/FailureBanner";
 import { Check, Copy, ExternalLink, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -95,6 +96,15 @@ interface Props {
   // tab (Logs, Errors, …). Undefined falls back to the per-service
   // default of "deployments".
   defaultTab?: string;
+  // Failure deep-link signal from the bell-popover. When set, a
+  // FailureBanner renders at the top of the routed tab with the
+  // kind-specific copy. The kind→tab mapping is decided server-side
+  // by internal/failures and arrives as the matching ?tab= param.
+  // (?highlight=<n> from the same URL is parsed by view.tsx but not
+  // yet plumbed into the FTS-search-based Logs tab — best-effort
+  // scroll-to-line will land in a follow-up once the viewer has a
+  // line-anchor surface.)
+  failureKind?: string;
   onClose: () => void;
 }
 
@@ -103,7 +113,14 @@ interface Props {
 // ESC closes it. Slides in from the right with a spring; the dimmed
 // backdrop is its own click target so peripheral clicks dismiss the
 // panel without bubbling into canvas pan/drag.
-export function ServiceOverlay({ project, service, env: envParam = "production", defaultTab, onClose }: Props) {
+export function ServiceOverlay({
+  project,
+  service,
+  env: envParam = "production",
+  defaultTab,
+  failureKind,
+  onClose,
+}: Props) {
   const open = !!service;
   const [tab, setTab] = useState<Tab>("deployments");
   const panelRef = useRef<HTMLDivElement>(null);
@@ -186,6 +203,13 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
     }
     setTab(remembered);
   }, [service, defaultTab]);
+
+  // Remember which tab the failure deep-link routed to, so the
+  // FailureBanner only shows on that tab — switching tabs is the
+  // user telling us they're done with the hint. Captured once per
+  // open: re-derives from defaultTab when the user re-opens via a
+  // different notification.
+  const failureTab = failureKind ? (defaultTab as Tab | undefined) : undefined;
 
   // Persist tab selection so the next open in this session lands on
   // the same place. SessionStorage (not localStorage) so a new tab/
@@ -468,6 +492,17 @@ export function ServiceOverlay({ project, service, env: envParam = "production",
                     transition={{ duration: 0.12 }}
                     className="h-full overflow-y-auto"
                   >
+                    {/* FailureBanner: rendered above the routed-tab
+                        content when the bell-popover deep-linked us
+                        into a classified failure AND the user is on
+                        the tab the classifier picked. Switching tabs
+                        is treated as dismissal — the user has moved
+                        on from the hint. */}
+                    {failureKind && tab === failureTab && (
+                      <div className="px-5 pt-5">
+                        <FailureBanner kind={failureKind} />
+                      </div>
+                    )}
                     {tab === "deployments" && (
                       <div className="p-5">
                         <ServiceDeploymentsPanel project={project} service={service ?? ""} env={env} />

@@ -30,6 +30,14 @@ type NotificationEvent struct {
 	Extra     map[string]string `json:"extra,omitempty"`
 	CreatedAt time.Time         `json:"createdAt"`
 	ReadAt    *time.Time        `json:"readAt,omitempty"`
+	// Classification is the wire shape from internal/failures, kept
+	// here as a json.RawMessage so the db package doesn't depend on
+	// failures (which would invert the layering — db is below domain
+	// code). The notify dispatcher serialises the typed Classification
+	// before insert; the bell-icon handler passes the raw JSON to the
+	// browser, where the TypeScript types decode it. Nil when the
+	// event isn't a classified failure.
+	Classification json.RawMessage `json:"classification,omitempty"`
 }
 
 const notificationEventCap = 200
@@ -82,10 +90,18 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 		return fmt.Errorf("begin notification tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// Classification rides through as a JSONB column when present.
+	// Stored as the typed wire shape (kind/tab/summary/lineHint/lineNum)
+	// so the browser handler doesn't need to re-derive it on every
+	// list call.
+	var classification any // any → driver picks string OR nil for NULL
+	if len(e.Classification) > 0 {
+		classification = string(e.Classification)
+	}
 	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO "NotificationEvent" ("type","title","body","severity","project","service","url","extra")
-		VALUES (?,?,?,?,?,?,?,?)`,
-		e.Type, e.Title, e.Body, e.Severity, e.Project, e.Service, e.URL, extraJSON,
+		INSERT INTO "NotificationEvent" ("type","title","body","severity","project","service","url","extra","classification")
+		VALUES (?,?,?,?,?,?,?,?,?)`,
+		e.Type, e.Title, e.Body, e.Severity, e.Project, e.Service, e.URL, extraJSON, classification,
 	); err != nil {
 		return fmt.Errorf("insert notification event: %w", err)
 	}
@@ -126,7 +142,7 @@ func (d *DB) ListNotificationEvents(ctx context.Context, limit int, unreadOnly b
 	if limit <= 0 || limit > notificationEventCap {
 		limit = notificationEventCap
 	}
-	q := `SELECT "id","type","title","body","severity","project","service","url","extra","createdAt","readAt"
+	q := `SELECT "id","type","title","body","severity","project","service","url","extra","createdAt","readAt","classification"
 	      FROM "NotificationEvent"`
 	if unreadOnly {
 		q += ` WHERE "readAt" IS NULL`
@@ -140,10 +156,10 @@ func (d *DB) ListNotificationEvents(ctx context.Context, limit int, unreadOnly b
 	out := []NotificationEvent{}
 	for rows.Next() {
 		var e NotificationEvent
-		var body, project, service, url, extra sql.NullString
+		var body, project, service, url, extra, classification sql.NullString
 		var created, read sql.NullTime
 		if err := rows.Scan(&e.ID, &e.Type, &e.Title, &body, &e.Severity,
-			&project, &service, &url, &extra, &created, &read); err != nil {
+			&project, &service, &url, &extra, &created, &read, &classification); err != nil {
 			return nil, fmt.Errorf("scan notification event: %w", err)
 		}
 		e.Body = body.String
@@ -152,6 +168,9 @@ func (d *DB) ListNotificationEvents(ctx context.Context, limit int, unreadOnly b
 		e.URL = url.String
 		if extra.Valid && extra.String != "" {
 			_ = json.Unmarshal([]byte(extra.String), &e.Extra)
+		}
+		if classification.Valid && classification.String != "" {
+			e.Classification = json.RawMessage(classification.String)
 		}
 		if created.Valid {
 			e.CreatedAt = created.Time
@@ -203,7 +222,7 @@ func (d *DB) ListNotificationEventsForProjects(ctx context.Context, limit int, p
 	}
 	args = append(args, limit)
 	q := fmt.Sprintf(`
-		SELECT "id","type","title","body","severity","project","service","url","extra","createdAt","readAt"
+		SELECT "id","type","title","body","severity","project","service","url","extra","createdAt","readAt","classification"
 		FROM "NotificationEvent"
 		WHERE "project" IN (%s)
 		ORDER BY "id" DESC
@@ -217,10 +236,10 @@ func (d *DB) ListNotificationEventsForProjects(ctx context.Context, limit int, p
 	out := []NotificationEvent{}
 	for rows.Next() {
 		var e NotificationEvent
-		var body, project, service, url, extra sql.NullString
+		var body, project, service, url, extra, classification sql.NullString
 		var created, read sql.NullTime
 		if err := rows.Scan(&e.ID, &e.Type, &e.Title, &body, &e.Severity,
-			&project, &service, &url, &extra, &created, &read); err != nil {
+			&project, &service, &url, &extra, &created, &read, &classification); err != nil {
 			return nil, fmt.Errorf("scan notification event: %w", err)
 		}
 		e.Body = body.String
@@ -229,6 +248,9 @@ func (d *DB) ListNotificationEventsForProjects(ctx context.Context, limit int, p
 		e.URL = url.String
 		if extra.Valid && extra.String != "" {
 			_ = json.Unmarshal([]byte(extra.String), &e.Extra)
+		}
+		if classification.Valid && classification.String != "" {
+			e.Classification = json.RawMessage(classification.String)
 		}
 		if created.Valid {
 			e.CreatedAt = created.Time
