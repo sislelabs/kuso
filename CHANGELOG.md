@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.17] — 2026-05-23
+
+### ✨ Features
+- Feat(web): UI toggle for the addon Public TCP endpoint ([b3f368d](https://github.com/sislelabs/kuso/commit/b3f368d0a949ef075bb31d935ec2ab4286ed0a75))
+
 ## [0.13.16] — 2026-05-23
 
 ### ✨ Features
@@ -562,11 +567,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(envs): clone sibling URLs + image, dedupe env CR name + host ([7568864](https://github.com/sislelabs/kuso/commit/7568864ad6cfb976d312b95065c7d2d4d7e8363a))
-
-## [0.9.44] — 2026-05-07
-
-### ✨ Features
-- Feat(envs): non-prod banner + per-env branch input + previews copy ([c0d9912](https://github.com/sislelabs/kuso/commit/c0d9912ab820f239322a583a9f3402e33bbce229))
 
 
 ---
