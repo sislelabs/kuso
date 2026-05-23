@@ -394,12 +394,30 @@ type KusoAddonSpec struct {
 	// DATABASE_URL stays direct. See operator/helm-charts/kusoaddon
 	// templates postgres-pooler.yaml and postgres-ha.yaml.
 	Pooler *KusoAddonPooler `json:"pooler,omitempty"`
+	// PublicTCP enables an opt-in public TCP endpoint for the addon.
+	// When enabled and the cluster has a Traefik TCP entrypoint pool,
+	// kuso allocates one port from the pool and renders a Traefik
+	// IngressRouteTCP that exposes the addon on the cluster's public
+	// IP. Admin-only — a public database is a real attack surface.
+	PublicTCP *KusoAddonPublicTCP `json:"publicTCP,omitempty"`
 }
 
 // KusoAddonPooler is the opt-in connection-pooler block on
 // KusoAddonSpec. Only meaningful for kind=postgres.
 type KusoAddonPooler struct {
 	Enabled bool `json:"enabled,omitempty"`
+}
+
+// KusoAddonPublicTCP is the opt-in public-TCP block on KusoAddonSpec.
+// Only Enabled is user-settable; the allocated port lives in
+// status.publicTCPPort and is stamped by the kuso server's port
+// allocator after the chart renders the IngressRouteTCP.
+type KusoAddonPublicTCP struct {
+	Enabled bool `json:"enabled,omitempty"`
+	// Port, when stamped by the allocator, is the public TCP port the
+	// addon is reachable on. The helm chart reads this to render the
+	// matching Traefik entrypoint binding. Zero = unallocated.
+	Port int32 `json:"port,omitempty"`
 }
 
 // KusoAddonExternal points at an existing Secret in the project

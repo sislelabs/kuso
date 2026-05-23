@@ -90,6 +90,27 @@ spec:
                     enabled:
                       type: boolean
                       default: false
+                publicTCP:
+                  type: object
+                  description: >-
+                    Opt-in public TCP endpoint. When enabled and the
+                    cluster's Traefik install has a configured TCP
+                    entrypoint pool, kuso allocates one port from the
+                    pool, renders a Traefik IngressRouteTCP, and the
+                    addon becomes reachable on the cluster's public IP
+                    at that port. Admin-only — a public database is a
+                    real attack surface. The allocated port lives in
+                    spec.publicTCP.port (server-stamped).
+                  properties:
+                    enabled:
+                      type: boolean
+                      default: false
+                    port:
+                      type: integer
+                      description: >-
+                        Server-allocated TCP port from the configured
+                        pool. 0 = unallocated. Set by the kuso server;
+                        do not edit by hand.
                 storageSize:
                   type: string
                 resources:

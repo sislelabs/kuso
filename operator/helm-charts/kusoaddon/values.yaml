@@ -96,3 +96,11 @@ useInstanceAddon: ""
 # DATABASE_URL stays direct. Ignored for non-postgres kinds.
 pooler:
   enabled: false
+
+# publicTCP: opt-in public TCP endpoint for the addon. enabled is the
+# user toggle; port is server-allocated from the cluster's configured
+# pool (KUSO_TCP_PROXY_PORTS on kuso-server). The chart renders a
+# Traefik IngressRouteTCP only when BOTH are set. Default off.
+publicTCP:
+  enabled: false
+  port: 0

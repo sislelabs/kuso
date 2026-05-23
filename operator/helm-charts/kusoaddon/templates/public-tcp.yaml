@@ -1,0 +1,54 @@
+{{- /*
+Opt-in public TCP endpoint for an addon.
+
+Rendered when:
+  - publicTCP.enabled = true
+  - publicTCP.port    > 0  (server-allocated)
+
+The Traefik install hosts a configurable pool of TCP entrypoints
+named `tcp-<port>` (e.g. tcp-30000, tcp-30001, …) — see hack/install.sh
+KUSO_TCP_PROXY_PORTS. This template binds ONE of those entrypoints to
+the addon's primary Service. HostSNI(`*`) means plain L4 with no SNI
+routing; the addon's own auth is the only access gate. The kuso server's
+port allocator ensures no two addons share an entrypoint.
+*/}}
+{{- if and .Values.publicTCP .Values.publicTCP.enabled (gt (int .Values.publicTCP.port) 0) (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{- $port := int .Values.publicTCP.port -}}
+{{- $svcPort := 0 -}}
+{{- if eq .Values.kind "postgres" -}}{{- $svcPort = 5432 -}}{{- end -}}
+{{- if eq .Values.kind "redis" -}}{{- $svcPort = 6379 -}}{{- end -}}
+{{- if eq .Values.kind "mongodb" -}}{{- $svcPort = 27017 -}}{{- end -}}
+{{- if eq .Values.kind "mysql" -}}{{- $svcPort = 3306 -}}{{- end -}}
+{{- if eq .Values.kind "clickhouse" -}}{{- $svcPort = 9000 -}}{{- end -}}
+{{- if eq .Values.kind "nats" -}}{{- $svcPort = 4222 -}}{{- end -}}
+{{- if eq .Values.kind "meilisearch" -}}{{- $svcPort = 7700 -}}{{- end -}}
+{{- if eq .Values.kind "s3" -}}{{- $svcPort = 9000 -}}{{- end -}}
+{{- if eq $svcPort 0 -}}
+{{- fail (printf "kusoaddon: publicTCP not yet supported for kind=%s — open an issue with the addon's primary port" .Values.kind) -}}
+{{- end -}}
+apiVersion: traefik.io/v1alpha1
+kind: IngressRouteTCP
+metadata:
+  name: {{ $name }}-public-tcp
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  entryPoints:
+    # Pool entrypoint name must match what hack/install.sh added to
+    # Traefik (--set ports.tcp-<port>...). When the cluster's Traefik
+    # install lacks this entrypoint the route is created but Traefik
+    # ignores it — the kuso server's allocator only hands out ports
+    # from the configured pool, so this mismatch shouldn't happen in
+    # practice.
+    - tcp-{{ $port }}
+  routes:
+    # HostSNI(`*`) = plain L4, no SNI/TLS routing. Addons authenticate
+    # at their own protocol layer (Postgres SCRAM, Redis ACL, …); kuso
+    # adds no extra auth here, hence the admin-gated allocator + the
+    # destructive-action confirm in the UI.
+    - match: HostSNI(`*`)
+      services:
+        - name: {{ $name }}
+          port: {{ $svcPort }}
+{{- end }}

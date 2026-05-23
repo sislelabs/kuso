@@ -102,6 +102,70 @@ func (h *AddonsHandler) Mount(r chi.Router) {
 	// Recover from the helm-chart password drift bug: ALTER USER
 	// inside the running postgres pod to match the conn secret.
 	r.Post("/api/projects/{project}/addons/{addon}/repair-password", h.RepairPassword)
+	// Opt-in public TCP endpoint. POST allocates a port from the
+	// configured pool and stamps spec.publicTCP; DELETE frees it.
+	// Admin-only — a public database is an attack surface.
+	r.Post("/api/projects/{project}/addons/{addon}/public-tcp", h.EnablePublicTCP)
+	r.Delete("/api/projects/{project}/addons/{addon}/public-tcp", h.DisablePublicTCP)
+}
+
+// EnablePublicTCP opts the addon into a public TCP endpoint,
+// allocating a port from the cluster's configured pool. Returns
+// {port: <N>} on success. Admin-gated.
+func (h *AddonsHandler) EnablePublicTCP(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := addonsCtx(r)
+	defer cancel()
+	if !requireAdmin(w, r) {
+		return
+	}
+	project := chi.URLParam(r, "project")
+	name := chi.URLParam(r, "addon")
+	port, err := h.Svc.EnablePublicTCP(ctx, project, name)
+	if err != nil {
+		h.fail(w, "enable public-tcp", err)
+		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "addon.public_tcp_enable",
+			Pipeline: project,
+			App:      name,
+			Resource: "kusoaddon",
+			Message:  fmt.Sprintf("addon %s/%s exposed on public TCP port %d", project, name, port),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"port": port})
+}
+
+// DisablePublicTCP frees the addon's allocated TCP port back to the
+// pool and removes the Traefik IngressRouteTCP on the next reconcile.
+// Admin-gated. Idempotent.
+func (h *AddonsHandler) DisablePublicTCP(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := addonsCtx(r)
+	defer cancel()
+	if !requireAdmin(w, r) {
+		return
+	}
+	project := chi.URLParam(r, "project")
+	name := chi.URLParam(r, "addon")
+	if err := h.Svc.DisablePublicTCP(ctx, project, name); err != nil {
+		h.fail(w, "disable public-tcp", err)
+		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "info",
+			Action:   "addon.public_tcp_disable",
+			Pipeline: project,
+			App:      name,
+			Resource: "kusoaddon",
+			Message:  fmt.Sprintf("addon %s/%s public TCP endpoint removed", project, name),
+		})
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // RepairPassword resyncs the running postgres user's password to
