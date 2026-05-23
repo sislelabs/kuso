@@ -23,6 +23,8 @@ export {
   resyncExternalAddon,
   resyncInstanceAddon,
   repairAddonPassword,
+  enableAddonPublicTCP,
+  disableAddonPublicTCP,
   deleteAddon,
   updateAddon,
   setAddonPlacement,

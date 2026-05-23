@@ -137,6 +137,14 @@ export interface KusoAddonSpec {
   pooler?: {
     enabled?: boolean;
   };
+  // publicTCP: opt-in public TCP endpoint for the addon. enabled is
+  // the user toggle; port is server-allocated from the cluster's
+  // configured pool (KUSO_TCP_PROXY_PORTS) and stamped here once the
+  // POST /public-tcp endpoint runs. Admin-only.
+  publicTCP?: {
+    enabled?: boolean;
+    port?: number;
+  };
 }
 
 export interface KusoAddon {

@@ -156,6 +156,33 @@ export async function repairAddonPassword(
   );
 }
 
+// enableAddonPublicTCP allocates a port from the cluster's configured
+// pool, flips spec.publicTCP on the addon, and returns the allocated
+// port. Admin-only server-side. Idempotent: re-enabling returns the
+// existing port unchanged.
+export async function enableAddonPublicTCP(
+  project: string,
+  addon: string,
+): Promise<{ port: number }> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/public-tcp`,
+    { method: "POST" },
+  );
+}
+
+// disableAddonPublicTCP frees the addon's allocated port back to the
+// pool and the operator unrenders the IngressRouteTCP on next
+// reconcile. Admin-only, idempotent.
+export async function disableAddonPublicTCP(
+  project: string,
+  addon: string,
+): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/public-tcp`,
+    { method: "DELETE" },
+  );
+}
+
 export async function deleteAddon(project: string, addon: string): Promise<void> {
   // ?confirm=<addon> is required server-side to acknowledge data
   // loss. The UI's confirm dialog already has the user type the

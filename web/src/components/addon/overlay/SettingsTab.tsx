@@ -4,6 +4,8 @@ import { useEffect, useState } from "react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import {
   deleteAddon,
+  disableAddonPublicTCP,
+  enableAddonPublicTCP,
   setAddonPlacement,
   updateAddon,
   type UpdateAddonBody,
@@ -11,11 +13,21 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api-client";
-import { Settings, MapPin, Plus, X, Trash2, RefreshCw } from "lucide-react";
+import {
+  AlertTriangle,
+  Globe,
+  MapPin,
+  Plus,
+  RefreshCw,
+  Settings,
+  Trash2,
+  X,
+} from "lucide-react";
 import type { NodeSummary } from "@/components/layout/ServersPopover";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { useAddonOverlayDirty } from "@/components/addon/AddonOverlay";
+import { useCan, Perms } from "@/features/auth";
 
 export function SettingsTab({
   project,
@@ -45,6 +57,7 @@ export function SettingsTab({
     <div className="space-y-4 p-5">
       <ConfigurationSection project={project} addon={addon} cr={cr} />
       <PlacementSection project={project} addon={addon} cr={cr} />
+      <PublicTCPSection project={project} addon={addon} cr={cr} />
       <RepairPasswordSection project={project} addon={addon} cr={cr} />
       <section className="rounded-md border border-red-500/30 bg-red-500/5 p-4">
         <h4 className="text-sm font-semibold">Delete addon</h4>
@@ -654,6 +667,154 @@ function RepairPasswordSection({
         <RefreshCw className="h-3.5 w-3.5" />
         {repair.isPending ? "Resyncing…" : "Resync password"}
       </Button>
+    </section>
+  );
+}
+
+// PublicTCPSection toggles the opt-in public TCP endpoint on the
+// addon. Admin-only: a public database is a real attack surface, and
+// the server enforces settings:admin on the matching endpoint, so we
+// hide the toggle entirely from non-admins (no dead control). The
+// section reads spec.publicTCP from the CR and POSTs/DELETEs the
+// /public-tcp endpoint; the server runs the allocator and stamps
+// spec.publicTCP.port back onto the CR, which we observe by
+// invalidating the addons query on mutation success.
+function PublicTCPSection({
+  project,
+  addon,
+  cr,
+}: {
+  project: string;
+  addon: string;
+  cr?: import("@/types/projects").KusoAddon;
+}) {
+  const qc = useQueryClient();
+  const isAdmin = useCan(Perms.SettingsAdmin);
+
+  const pt = cr?.spec.publicTCP;
+  const enabled = !!pt?.enabled && (pt?.port ?? 0) > 0;
+  const port = pt?.port ?? 0;
+
+  // Cluster public host — best-effort derived from the browser's
+  // current origin. The user opened kuso at this host, so DNS that
+  // resolves it from their machine almost certainly resolves the
+  // cluster's public IP too. Stripping the port leaves the bare
+  // host (e.g. "kuso.sislelabs.com" → connect to host:30005).
+  const host =
+    typeof window !== "undefined" ? window.location.hostname : "<your-cluster-host>";
+
+  const [confirming, setConfirming] = useState(false);
+
+  const enableM = useMutation({
+    mutationFn: () => enableAddonPublicTCP(project, addon),
+    onSuccess: (res) => {
+      toast.success(`Public TCP port ${res.port} allocated`);
+      qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+    },
+    onError: (e) =>
+      toast.error(e instanceof Error ? e.message : "Failed to enable public TCP"),
+  });
+
+  const disableM = useMutation({
+    mutationFn: () => disableAddonPublicTCP(project, addon),
+    onSuccess: () => {
+      toast.success("Public TCP endpoint removed");
+      qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+      setConfirming(false);
+    },
+    onError: (e) =>
+      toast.error(e instanceof Error ? e.message : "Failed to disable public TCP"),
+  });
+
+  // Hide entirely for non-admins. Showing a disabled toggle would
+  // misleadingly suggest a viewer could enable it with a permission
+  // bump — admin-only is the design. (Conditional return goes AFTER
+  // all hooks per the rules-of-hooks contract.)
+  if (!isAdmin) return null;
+
+  return (
+    <section className="overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+      <header className="flex items-center justify-between border-b border-[var(--border-subtle)] px-3 py-2">
+        <div className="flex items-center gap-2">
+          <Globe className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
+          <h4 className="text-sm font-semibold">Public TCP endpoint</h4>
+        </div>
+        <span
+          className={cn(
+            "font-mono text-[10px]",
+            enabled
+              ? "text-amber-300"
+              : "text-[var(--text-tertiary)]",
+          )}
+        >
+          {enabled ? `live on :${port}` : "disabled"}
+        </span>
+      </header>
+      <div className="space-y-3 p-3">
+        <p className="text-[11px] text-[var(--text-secondary)]">
+          Expose this addon on a raw TCP port reachable from the public
+          internet. The addon&apos;s own protocol auth (Postgres SCRAM,
+          Redis ACL, etc.) is the only access gate — kuso adds none.
+          Admin-only.
+        </p>
+        {enabled ? (
+          <div className="space-y-2">
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-3.5 w-3.5 text-amber-300" />
+                <span className="text-[11px] font-medium text-amber-300">
+                  Reachable from the public internet
+                </span>
+              </div>
+              <div className="mt-2 font-mono text-[12px] text-[var(--text-primary)]">
+                {host}:{port}
+              </div>
+              <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+                Connect with the credentials from the Overview tab.
+              </p>
+            </div>
+            {!confirming ? (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirming(true)}
+                disabled={disableM.isPending}
+              >
+                <X className="h-3.5 w-3.5" />
+                Disable public access
+              </Button>
+            ) : (
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => disableM.mutate()}
+                  disabled={disableM.isPending}
+                >
+                  {disableM.isPending ? "Removing…" : "Confirm disable"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setConfirming(false)}
+                  disabled={disableM.isPending}
+                >
+                  Cancel
+                </Button>
+              </div>
+            )}
+          </div>
+        ) : (
+          <Button
+            size="sm"
+            onClick={() => enableM.mutate()}
+            disabled={enableM.isPending}
+          >
+            <Globe className="h-3.5 w-3.5" />
+            {enableM.isPending ? "Allocating…" : "Enable public TCP endpoint"}
+          </Button>
+        )}
+      </div>
     </section>
   );
 }
