@@ -18,6 +18,7 @@ import { ServiceErrorsPanel } from "./overlay/ServiceErrorsPanel";
 import { ServiceTerminalPanel } from "./overlay/ServiceTerminalPanel";
 import { ServiceSettingsPanel } from "./overlay/ServiceSettingsPanel";
 import { FailureBanner } from "./overlay/FailureBanner";
+import { FirstDeployCoachmark } from "./overlay/FirstDeployCoachmark";
 import { Check, Copy, ExternalLink, X } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -257,6 +258,24 @@ export function ServiceOverlay({
   // user. Counts > 0 keep the tab; counts === 0 hide it.
   const crons = useServiceCrons(project, service ?? "");
   const runs = useRuns(project, service ?? "");
+  // First-deploy coachmark gating: show only when the service has
+  // exactly one successful build AND it finished within the last 60s.
+  // That's a tighter "your very first deploy just landed" signal than
+  // "any recent green build" — re-opening the overlay 5 minutes later
+  // (or after a 2nd deploy) won't re-trigger it. The coachmark itself
+  // also gates on localStorage so even within the 60s window a user
+  // who dismissed before never sees it again.
+  const builds = useBuilds(project, service ?? "");
+  const firstDeployJustLanded = useMemo(() => {
+    const list = builds.data ?? [];
+    const succeeded = list.filter((b) => (b.status ?? "").toLowerCase() === "succeeded");
+    if (succeeded.length !== 1) return false;
+    const finishedAt = succeeded[0].finishedAt;
+    if (!finishedAt) return false;
+    const ms = Date.parse(finishedAt);
+    if (!Number.isFinite(ms)) return false;
+    return Date.now() - ms < 60_000;
+  }, [builds.data]);
   const showCrons = (crons.data?.length ?? -1) !== 0;
   const showRuns = (runs.data?.length ?? -1) !== 0;
   const MAIN_TABS = useMemo(
@@ -544,6 +563,15 @@ export function ServiceOverlay({
                       <div className="px-5 pt-5">
                         <FailureBanner kind={failureKind} />
                       </div>
+                    )}
+                    {/* First-deploy coachmark — fires on the user's
+                        very first green build (1 succeeded build,
+                        finished within the last 60s) and only on the
+                        Deployments tab (where they'll naturally land
+                        after a deploy). Self-gates on localStorage so
+                        re-opens after dismissal stay quiet. */}
+                    {tab === "deployments" && (
+                      <FirstDeployCoachmark shouldShow={firstDeployJustLanded} />
                     )}
                     {tab === "deployments" && (
                       <div className="p-5">

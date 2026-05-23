@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
 import { Button } from "@/components/ui/button";
 import { DiffConfirmDialog, type DiffEntry } from "@/components/shared/DiffConfirmDialog";
@@ -266,6 +266,12 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
   const canWrite = useCan(Perms.SecretsWrite);
   const [rows, setRows] = useState<Row[]>([]);
   const [dirty, setDirty] = useState(false);
+  // Type-ahead: when the user types "${{" into a row's value, open
+  // the ReferencePicker for that row so they can pick a service/addon
+  // without hunting for the icon button. One row at a time; the
+  // picker resets the latch via onForceCloseConsumed when it closes
+  // so a second edit on the same row can re-trigger.
+  const [pickerOpenForIndex, setPickerOpenForIndex] = useState<number | null>(null);
   // Register dirty + save with the overlay shell so the unified
   // SaveBar fires onSave for this panel. The previous version only
   // registered dirty (for the ESC-prompt) but kept its own inline
@@ -377,6 +383,19 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
   };
 
   const update = (idx: number, patch: Partial<Row>) => {
+    // Type-ahead trigger: detect the moment the user just typed
+    // "${{" into a value (not present in the prior value, present
+    // now). Opens the ReferencePicker so they can pick a target
+    // without reaching for the icon button. Comparing against the
+    // prior value rather than just checking the new value means
+    // editing an existing ${{ ref }} doesn't re-open the picker on
+    // every keystroke.
+    if (typeof patch.value === "string") {
+      const prevValue = rows[idx]?.value ?? "";
+      if (!prevValue.includes("${{") && patch.value.includes("${{")) {
+        setPickerOpenForIndex(idx);
+      }
+    }
     setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
     setDirty(true);
   };
@@ -631,6 +650,8 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
                 excludeService={service}
                 onPick={(ref) => update(i, { value: ref, visible: true })}
                 disabled={r.fromSecret}
+                forceOpen={pickerOpenForIndex === i}
+                onForceCloseConsumed={() => setPickerOpenForIndex(null)}
               />
               <button
                 type="button"
@@ -733,13 +754,32 @@ function ReferencePicker({
   excludeService,
   onPick,
   disabled,
+  forceOpen,
+  onForceCloseConsumed,
 }: {
   project: string;
   excludeService: string;
   onPick: (ref: string) => void;
   disabled?: boolean;
+  // forceOpen lets the parent (e.g. the value input's `${{ ` type-
+  // ahead detector) open the picker programmatically. The picker
+  // calls onForceCloseConsumed when the user closes it so the parent
+  // can reset its internal "user just typed ${{" latch — otherwise
+  // a second edit on the same row would re-open the picker forever.
+  forceOpen?: boolean;
+  onForceCloseConsumed?: () => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Honour external open requests. When the parent flips forceOpen
+  // true we open; the closing flow notifies the parent so it can flip
+  // the trigger back off.
+  useEffect(() => {
+    if (forceOpen) setOpen(true);
+  }, [forceOpen]);
+  const close = useCallback(() => {
+    setOpen(false);
+    onForceCloseConsumed?.();
+  }, [onForceCloseConsumed]);
   return (
     <div className="relative">
       <button
@@ -758,9 +798,9 @@ function ReferencePicker({
           excludeService={excludeService}
           onPick={(ref) => {
             onPick(ref);
-            setOpen(false);
+            close();
           }}
-          onClose={() => setOpen(false)}
+          onClose={close}
         />
       )}
     </div>
