@@ -42,6 +42,21 @@ func New(k *kube.Client, namespace string) *Service {
 	return &Service{Kube: k, Namespace: namespace}
 }
 
+// NamespaceFor is the exported view of nsFor — handlers that need
+// the project's execution namespace (e.g. the addon port-forward
+// WebSocket) reach it via this method instead of replicating the
+// per-project-namespace fallback themselves.
+func (s *Service) NamespaceFor(ctx context.Context, project string) string {
+	return s.nsFor(ctx, project)
+}
+
+// AddonFQN returns the CR name for an addon. Mirrors the unexported
+// addonCRName helper; exported for handlers (port-forward) that need
+// to look up an addon's Service by name.
+func (s *Service) AddonFQN(project, addon string) string {
+	return addonCRName(project, addon)
+}
+
 // nsFor returns the execution namespace for project, defaulting to home.
 func (s *Service) nsFor(ctx context.Context, project string) string {
 	if s.NSResolver == nil || project == "" {

@@ -300,6 +300,24 @@ func NewRouter(d Deps) http.Handler {
 		termH.Mount(r)
 	}
 
+	// Addon port-forward WS — admin-gated TCP tunnel from the CLI
+	// through the kuso server to an addon pod, so developers can
+	// run psql / TablePlus / pg_dump against a cluster-internal
+	// database without it being publicly reachable. Same public-
+	// router rationale as the terminal WS; the handler does its own
+	// JWT + settings:admin gate.
+	if d.Addons != nil && d.Kube != nil && d.Issuer != nil {
+		pfH := &httphandlers.PortForwardWSHandler{
+			Svc:    d.Addons,
+			Kube:   d.Kube,
+			Issuer: d.Issuer,
+			DB:     d.DB,
+			Audit:  d.Audit,
+			Logger: d.Logger,
+		}
+		pfH.Mount(r)
+	}
+
 	// Authenticated routes — extracted out of NewRouter so this
 	// function reads as the high-level chain (middleware → public
 	// routes → auth routes → SPA fallback) without sprawling 160
