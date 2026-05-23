@@ -5,6 +5,16 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.14.0] — 2026-05-23
+
+### ✨ Features
+- Feat(env): unit C — ref-picker type-ahead + first-deploy coachmark ([38130ea](https://github.com/sislelabs/kuso/commit/38130ea25d7249568c14e77ea2cd196651859515))
+- Feat(overlay): unit B — data-driven Crons/Runs tab visibility ([ab77080](https://github.com/sislelabs/kuso/commit/ab77080fae32806d5ba957c32e1e4f88a6840961))
+- Feat(failures): unit A — server-side failure classifier + bell deep-links ([edebde1](https://github.com/sislelabs/kuso/commit/edebde193ae568f38691960fb8b6bbda6d129973))
+
+### 📝 Docs
+- Docs: spec for UX deep-dive top-5 fix bundle ([a859fdc](https://github.com/sislelabs/kuso/commit/a859fdceea1bf2924368df1730787f6582d6d601))
+
 ## [0.13.18] — 2026-05-23
 
 ### ✨ Features
@@ -562,11 +572,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(envs): clone service envVars too; switcher click; pulse on running build ([0701d84](https://github.com/sislelabs/kuso/commit/0701d84e45538a492d7662ee40a9c73d4b13160a))
-
-## [0.9.46] — 2026-05-08
-
-### 🐛 Bug Fixes
-- Fix(envs): cloned env CR uses -production suffix, not bare service name ([410161e](https://github.com/sislelabs/kuso/commit/410161e32c5f4605f7fbc52363706982755e1f38))
 
 
 ---
