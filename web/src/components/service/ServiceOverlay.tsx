@@ -278,25 +278,38 @@ export function ServiceOverlay({
   }, [builds.data]);
   const showCrons = (crons.data?.length ?? -1) !== 0;
   const showRuns = (runs.data?.length ?? -1) !== 0;
+  // Build the visible tab list. Crons/Runs are normally hidden when
+  // empty (v0.14.0 audit fix), but we always show whichever one the
+  // user is currently looking at — without this the active-tab
+  // underline has nothing to anchor to when someone deep-links via
+  // the right-click "Add cron…" / "Run command…" menu on a service
+  // with no existing crons/runs yet.
   const MAIN_TABS = useMemo(
     () =>
       ALL_MAIN_TABS.filter((t) => {
         if (t.alwaysShow) return true;
-        if (t.id === "crons") return showCrons;
-        if (t.id === "runs") return showRuns;
+        if (t.id === "crons") return showCrons || tab === "crons";
+        if (t.id === "runs") return showRuns || tab === "runs";
         return true;
       }),
-    [showCrons, showRuns],
+    [showCrons, showRuns, tab],
   );
 
   // If the visibility-driven tab list drops the current tab (e.g.
   // user was on Crons and deleted their last cron), fall back to
-  // Deployments so the strip + content stay in sync. Settings is
-  // separate (PINNED_TAB) — it's always visible, so never falls.
+  // Deployments so the strip + content stay in sync. Only fires on
+  // the true→false edge: a user who explicitly deep-linked into
+  // Crons-with-zero-crons (right-click "Add cron…" on a service with
+  // none) stays on the tab so they can add their first one. Settings
+  // is separate (PINNED_TAB) — always visible, never falls.
+  const prevShowCrons = useRef(showCrons);
+  const prevShowRuns = useRef(showRuns);
   useEffect(() => {
     if (tab === "settings") return;
-    if (tab === "crons" && !showCrons) setTab("deployments");
-    if (tab === "runs" && !showRuns) setTab("deployments");
+    if (tab === "crons" && prevShowCrons.current && !showCrons) setTab("deployments");
+    if (tab === "runs" && prevShowRuns.current && !showRuns) setTab("deployments");
+    prevShowCrons.current = showCrons;
+    prevShowRuns.current = showRuns;
   }, [tab, showCrons, showRuns]);
   const fqn = service ? project + "-" + service : "";
   const env = (envs.data ?? []).find((e) => {
@@ -605,7 +618,19 @@ export function ServiceOverlay({
                     )}
                     {tab === "crons" && (
                       <div className="p-5">
-                        <ServiceCronsPanel project={project} service={service ?? ""} />
+                        <ServiceCronsPanel
+                          project={project}
+                          service={service ?? ""}
+                          // Auto-expand the create form when the user
+                          // routes to Crons on a service with none.
+                          // Reaching this tab with an empty list is
+                          // an explicit intent to add one (the canvas
+                          // right-click "Add cron…" entry is the only
+                          // way to surface the hidden tab); skipping
+                          // the extra "Add cron" button click matches
+                          // that intent.
+                          defaultAdding={!showCrons}
+                        />
                       </div>
                     )}
                     {tab === "runs" && (

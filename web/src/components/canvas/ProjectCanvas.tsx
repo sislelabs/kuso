@@ -56,6 +56,8 @@ import {
   Database,
   HardDrive,
   Settings as SettingsIcon,
+  Clock,
+  Terminal,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -679,6 +681,30 @@ export function ProjectCanvas({
           } catch (err) {
             toast.error(err instanceof Error ? err.message : "Failed to trigger build");
           }
+        },
+      },
+      // Crons + Runs deep-links. The service-overlay panels for both
+      // tabs render their create-composer at the top of the panel
+      // (CronsPanel has an "Add cron" button; RunsPanel always shows
+      // NewRunComposer when the user has services:write), so landing
+      // on the tab is enough — no separate dialog needed. The overlay
+      // surfaces these tabs even when empty if the user explicitly
+      // routed to them (see MAIN_TABS in ServiceOverlay) so the
+      // strip stays in sync.
+      {
+        id: "add-cron",
+        label: "Add cron…",
+        icon: Clock,
+        onSelect: () => {
+          onSelectService?.(short, "crons");
+        },
+      },
+      {
+        id: "run-command",
+        label: "Run command…",
+        icon: Terminal,
+        onSelect: () => {
+          onSelectService?.(short, "runs");
         },
       },
       { id: "sep2", kind: "separator" },

@@ -16,6 +16,11 @@ import { cn } from "@/lib/utils";
 interface Props {
   project: string;
   service: string;
+  // defaultAdding=true makes the panel mount with the create form
+  // already expanded — used when the user arrived here via the
+  // canvas right-click "Add cron…" menu item, so they don't have to
+  // click the "Add cron" button after just clicking "Add cron…".
+  defaultAdding?: boolean;
 }
 
 // ServiceCronsPanel — list + create + delete + sync crons attached to
@@ -25,10 +30,10 @@ interface Props {
 // time so every cron run has the same connection envs as the live
 // service pod. "Sync" re-resolves after a redeploy so the cron picks
 // up the new image.
-export function ServiceCronsPanel({ project, service }: Props) {
+export function ServiceCronsPanel({ project, service, defaultAdding }: Props) {
   const qc = useQueryClient();
   const canWrite = useCan(Perms.ServicesWrite);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState(!!defaultAdding && canWrite);
 
   // Shared with the overlay shell's tab-visibility logic: same query
   // key + queryFn, so opening the Crons tab doesn't double-fetch the
