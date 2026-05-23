@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.13.18] — 2026-05-23
+
+### ✨ Features
+- Feat(web): surface public-TCP state on the addon Connection card ([51f5d26](https://github.com/sislelabs/kuso/commit/51f5d2656a6881da2c0eafb120574a1f6a4d9c37))
+
 ## [0.13.17] — 2026-05-23
 
 ### ✨ Features
@@ -562,11 +567,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(envs): cloned env CR uses -production suffix, not bare service name ([410161e](https://github.com/sislelabs/kuso/commit/410161e32c5f4605f7fbc52363706982755e1f38))
-
-## [0.9.45] — 2026-05-07
-
-### 🐛 Bug Fixes
-- Fix(envs): clone sibling URLs + image, dedupe env CR name + host ([7568864](https://github.com/sislelabs/kuso/commit/7568864ad6cfb976d312b95065c7d2d4d7e8363a))
 
 
 ---
