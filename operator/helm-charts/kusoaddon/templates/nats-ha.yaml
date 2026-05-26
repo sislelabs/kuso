@@ -1,23 +1,31 @@
-{{- if and (eq .Values.kind "nats") (not .Values.ha) (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- if and (eq .Values.kind "nats") .Values.ha (not .Values.external) (not .Values.useInstanceAddon) -}}
 {{- $version := .Values.version | default "2.10-alpine" -}}
 {{- $name := include "kusoaddon.fullname" . -}}
 {{- $secretName := include "kusoaddon.connSecretName" . -}}
 {{/*
-  NATS with JetStream. Single-binary Go MQ + pub/sub, ~10 MB idle.
-  Indie use cases:
-    - Background job queues (replace Sidekiq / Bull / Celery with
-      NATS JetStream consumers — durable, replayable).
-    - Webhook fan-out (one publisher → many subscribers).
-    - Event sourcing for small services (the Streams API).
-  Picked NATS over RabbitMQ deliberately: RabbitMQ's Erlang VM
-  costs ~150 MB idle and brings a lot of operational knobs that
-  indies don't need. NATS is cheaper to run + simpler to reason
-  about. RabbitMQ stays out-of-scope; users who really need it
-  can BYO via raw Helm.
+  NATS JetStream HA — 3-replica clustered StatefulSet.
 
-  Auth: a single auth token stored in the conn secret. NATS
-  supports more (NKEYS, JWT, mTLS) but the token model is the
-  simplest match for the existing addon-conn-secret pattern.
+  Why: the single-pod NATS chart loses in-flight messages on pod
+  delete / node failure until kube reschedules and JetStream
+  redelivers. For payment platforms, ticketing, anything where
+  emails/PDFs/payouts queue through the message bus, that's the
+  wrong story. A 3-replica cluster with JetStream replicas: 3
+  survives a single node loss with zero message loss.
+
+  Mechanics:
+    - Headless Service `<name>-cluster` for pod-to-pod routing
+      (the cluster gossip protocol needs stable DNS per replica).
+    - Public Service `<name>` clients connect to; load-balances
+      across the 3 pods.
+    - StatefulSet replicas: 3, each with its own PVC.
+    - nats.conf cluster block declares routes nats-route://0:6222 →
+      <name>-0…2.<name>-cluster (the headless service auto-emits
+      `<pod-name>.<service-name>` DNS).
+    - JetStream stream defaults (when users `nats stream add`)
+      should specify --replicas 3 to get the HA guarantee. We do
+      NOT enforce that at addon level — it's a stream-creation-
+      time setting that depends on stream policy. Documented in
+      the addon CTA.
 */}}
 {{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
 {{- $existingTok := "" -}}
@@ -33,36 +41,51 @@ metadata:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 data:
   nats.conf: |
-    # NATS server config. Authoritative source — anything in
-    # spec.config from the CR could be plumbed through here later.
     port: 4222
     http_port: 8222
-    server_name: {{ $name }}
+    server_name: $POD_NAME
 
-    # Single-token auth. Tokens travel in CONNECT frames in cleartext
-    # over the cluster network; that's fine for in-namespace traffic
-    # since kube traffic between pods is generally trusted. For
-    # cross-cluster / external NATS exposure the user should switch
-    # to TLS + NKEYS, which we don't render today.
     authorization {
       token: "$NATS_TOKEN_PLACEHOLDER"
     }
 
-    # JetStream: persistent streams + consumers. Without this NATS
-    # is core (in-memory) only — every restart wipes pending work.
-    # JetStream survives pod restarts and gives at-least-once
-    # delivery. File store on the data PVC.
+    cluster {
+      name: {{ $name }}
+      listen: 0.0.0.0:6222
+      routes = [
+        nats-route://{{ $name }}-0.{{ $name }}-cluster:6222
+        nats-route://{{ $name }}-1.{{ $name }}-cluster:6222
+        nats-route://{{ $name }}-2.{{ $name }}-cluster:6222
+      ]
+    }
+
     jetstream {
       store_dir: /data/jetstream
-      # Cap to avoid runaway disk on a misconfigured stream.
       max_file_store: 1GB
       max_memory_store: 64MB
     }
 ---
-# nats expects the auth token literal in the config file; we render
-# the placeholder above and then sed-substitute at boot from env.
-# Avoids baking the token into the configmap (which would be readable
-# without the conn-secret RBAC).
+# Headless service for pod-to-pod gossip. Each pod gets a stable
+# DNS name <pod>.<service>.<ns>.svc.cluster.local that the cluster
+# block references — without this, routes resolve to ClusterIPs that
+# don't survive pod restarts.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-cluster
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: cluster
+      port: 6222
+      targetPort: cluster
+---
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -70,8 +93,9 @@ metadata:
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 spec:
-  serviceName: {{ $name }}
-  replicas: 1
+  serviceName: {{ $name }}-cluster
+  replicas: 3
+  podManagementPolicy: Parallel
   selector:
     matchLabels:
       {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
@@ -83,11 +107,17 @@ spec:
     spec:
       {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
       {{- include "kusoaddon.placement" . | nindent 6 }}
+      # Spread replicas across nodes — without this, kube can stack
+      # all 3 on the same host and a node failure takes the whole
+      # cluster down (defeating the point of HA).
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "kusoaddon.selectorLabels" . | nindent 14 }}
       initContainers:
-        # Substitute the token into the config at pod start. nats can
-        # read $VAR in its conf since 2.9, but only for top-level
-        # values — we want the token inline in `authorization { ... }`
-        # which doesn't expand env. Pre-process to /etc/nats/nats.conf.
         - name: render-conf
           image: alpine:3.20
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
@@ -113,10 +143,19 @@ spec:
           image: "nats:{{ $version }}"
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           imagePullPolicy: IfNotPresent
-          args: ["-c", "/etc/nats/nats.conf"]
+          # POD_NAME is interpolated into server_name so each replica
+          # registers a distinct identity in the cluster.
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          args: ["--name", "$(POD_NAME)", "-c", "/etc/nats/nats.conf"]
           ports:
             - name: client
               containerPort: 4222
+            - name: cluster
+              containerPort: 6222
             - name: monitor
               containerPort: 8222
           volumeMounts:
@@ -146,6 +185,10 @@ spec:
           requests:
             storage: {{ include "kusoaddon.storageSize" . }}
 ---
+# Public client service. Round-robins across the 3 pods. Clients
+# can connect to any one; NATS clients auto-discover the cluster
+# topology from the server's INFO message and reconnect to a
+# different replica on pod-loss.
 apiVersion: v1
 kind: Service
 metadata:
@@ -175,10 +218,8 @@ stringData:
   NATS_HOST: {{ $name | quote }}
   NATS_PORT: "4222"
   NATS_TOKEN: {{ $token | quote }}
-  # Most NATS client libs accept a single URL with the token inline,
-  # which is the easiest thing to wire into the dollar-brace addon
-  # reference syntax (NATS_URL surfaces as the canonical client DSN).
-  NATS_URL: "nats://:{{ $token }}@{{ $name }}:4222"
-  # Monitor URL — nats-top, the web monitor at /varz, etc.
+  # HA-aware URL with comma-separated seeds so clients failing over
+  # don't depend on the ClusterIP service alone resolving.
+  NATS_URL: "nats://:{{ $token }}@{{ $name }}-0.{{ $name }}-cluster:4222,nats://:{{ $token }}@{{ $name }}-1.{{ $name }}-cluster:4222,nats://:{{ $token }}@{{ $name }}-2.{{ $name }}-cluster:4222"
   NATS_MONITOR_URL: "http://{{ $name }}:8222"
 {{- end }}
