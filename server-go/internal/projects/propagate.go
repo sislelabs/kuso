@@ -52,10 +52,14 @@ type changedFields struct {
 	// stamps the public-egress pod label off the env CR's value, so a
 	// service-level toggle that isn't propagated never reaches a pod.
 	PrivateEgress bool
+	// Release carries spec.release changes. The build poller reads
+	// it off the env CR (which is already in its hot-path GET) when
+	// deciding whether to run a release Job before promoting an image.
+	Release bool
 }
 
 func (c changedFields) any() bool {
-	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress
+	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.Release
 }
 
 // propagateChangedToEnvs is the single chokepoint that mirrors a
@@ -143,6 +147,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			}
 			if changed.PrivateEgress {
 				env.Spec.PrivateEgress = svc.Spec.PrivateEgress
+			}
+			if changed.Release {
+				env.Spec.Release = svc.Spec.Release
 			}
 			return nil
 		})

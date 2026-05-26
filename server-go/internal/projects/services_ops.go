@@ -1320,6 +1320,20 @@ type PatchServiceRequest struct {
 	// Command replaces the run command. Pointer to a slice so "unset"
 	// (nil, leave alone) is distinguishable from "empty" (clear it).
 	Command *[]string `json:"command,omitempty"`
+	// Release configures the pre-deploy release hook (migrations etc).
+	// Pointer so omitting the key leaves it as-is; sending {"clear": true}
+	// removes the hook entirely; otherwise the command + timeout replace
+	// whatever was there.
+	Release *PatchReleaseRequest `json:"release,omitempty"`
+}
+
+// PatchReleaseRequest is the wire shape for editing the release hook.
+// Clear=true drops the release block (deploys skip the hook). Otherwise
+// Command replaces the argv and TimeoutSeconds the cap.
+type PatchReleaseRequest struct {
+	Command        []string `json:"command,omitempty"`
+	TimeoutSeconds int      `json:"timeoutSeconds,omitempty"`
+	Clear          bool     `json:"clear,omitempty"`
 }
 
 type PatchPreviewsRequest struct {
@@ -1556,6 +1570,26 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	if req.Command != nil {
 		svc.Spec.Command = *req.Command
 	}
+	releaseChanged := false
+	if req.Release != nil {
+		if req.Release.Clear {
+			svc.Spec.Release = nil
+		} else if len(req.Release.Command) == 0 {
+			// Empty command treated as "clear" — there's no
+			// such thing as a release hook with no argv.
+			svc.Spec.Release = nil
+		} else {
+			timeout := req.Release.TimeoutSeconds
+			if timeout <= 0 {
+				timeout = 900
+			}
+			svc.Spec.Release = &kube.KusoReleaseSpec{
+				Command:        req.Release.Command,
+				TimeoutSeconds: timeout,
+			}
+		}
+		releaseChanged = true
+	}
 
 	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)
 	if err != nil {
@@ -1580,6 +1614,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		Internal:      internalChanged,
 		Runtime:       runtimeChanged,
 		PrivateEgress: privateEgressChanged,
+		Release:       releaseChanged,
 	}); err != nil {
 		// Match the previous best-effort behaviour: log indirectly
 		// (returned nil; future cleanup adds a logger here) and let

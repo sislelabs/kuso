@@ -180,6 +180,25 @@ type KusoServiceSpec struct {
 	// internal-only services that don't make sense as throwaway URLs.
 	// Nil = inherit project setting.
 	Previews *KusoServicePreviews `json:"previews,omitempty"`
+	// Release configures a release hook that runs as a Job BEFORE
+	// the new image is promoted onto the env's deployment. Heroku-
+	// style: typically `./bin/migrate` or `npx prisma migrate deploy`.
+	// On non-zero exit the build is marked release-failed and the
+	// env's image tag is NOT patched — existing pods keep running
+	// on the previous image. Mirrored onto every owned env so the
+	// build poller can read it off either CR.
+	Release *KusoReleaseSpec `json:"release,omitempty"`
+}
+
+// KusoReleaseSpec configures a release hook. The Job uses the new
+// build's image, the env's effective envVars + envFromSecrets, and
+// runs Command. TimeoutSeconds caps the Job; on timeout it's marked
+// release-failed and the deployment never rolls. Empty Command means
+// "no release hook" — the field's presence with empty Command is
+// equivalent to the field being absent.
+type KusoReleaseSpec struct {
+	Command        []string `json:"command,omitempty"`
+	TimeoutSeconds int      `json:"timeoutSeconds,omitempty"`
 }
 
 // KusoServicePreviews carries the per-service preview opt-out. Disabled
@@ -306,6 +325,11 @@ type KusoEnvironmentSpec struct {
 	// Command is the argv override for worker runtimes. Ignored
 	// when runtime != "worker".
 	Command []string `json:"command,omitempty"`
+	// Release mirrors KusoServiceSpec.Release so the build poller
+	// can read the hook config off the env CR (which it already has
+	// loaded for the image-patch step) without a second GET. Server-
+	// managed: propagated from the service spec.
+	Release *KusoReleaseSpec `json:"release,omitempty"`
 }
 
 type KusoPullRequest struct {

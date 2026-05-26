@@ -168,6 +168,21 @@ spec:
                   type: array
                   items: { type: string }
                   description: argv override; only used when runtime == "worker".
+                release:
+                  type: object
+                  description: |
+                    Pre-deploy release hook mirrored from
+                    KusoService.spec.release by the server. The build
+                    poller reads this off the env CR (already in its
+                    hot path) when deciding whether to run a release
+                    Job before promoting an image.
+                  properties:
+                    command:
+                      type: array
+                      items: { type: string }
+                    timeoutSeconds:
+                      type: integer
+                      default: 900
                 placement:
                   type: object
                   description: Inherits the parent service placement so the env-helm chart can render nodeSelector + topologySpread. Pruning was the v0.7.x silent-data-loss bug — schema now covers what server-go writes.

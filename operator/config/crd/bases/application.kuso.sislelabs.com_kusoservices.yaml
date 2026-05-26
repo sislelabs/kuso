@@ -236,6 +236,35 @@ spec:
                     disabled:
                       type: boolean
                       default: false
+                release:
+                  type: object
+                  description: |
+                    Pre-deploy release hook. When set, the build poller
+                    runs `command` as a Job using the NEW build's image
+                    + this env's effective envVars/envFromSecrets BEFORE
+                    promoting the image onto the deployment. Heroku-
+                    style — typical use is `./bin/migrate` or
+                    `npx prisma migrate deploy`.
+
+                    On non-zero exit (or timeout) the build is marked
+                    release-failed and the image tag is NOT patched —
+                    existing pods keep running on the previous image.
+                    A notify event fires so a failed migration doesn't
+                    silently bury itself in the build history.
+
+                    The Job is named `<env>-release-<short-image-tag>`,
+                    so re-deploying the same tag is a no-op (Job exists,
+                    already succeeded). Mirrored onto every
+                    KusoEnvironment owned by this service.
+                  properties:
+                    command:
+                      type: array
+                      description: argv for the release Job container. Empty list = no release hook (equivalent to omitting the release block).
+                      items: { type: string }
+                    timeoutSeconds:
+                      type: integer
+                      description: Hard cap on the Job. On timeout the build is marked release-failed. Default 900s (15min).
+                      default: 900
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

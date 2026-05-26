@@ -44,6 +44,7 @@ import (
 
 	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/releaserun"
 )
 
 // TokenMinter mints a short-lived GitHub installation token used by the
@@ -1006,6 +1007,12 @@ type Poller struct {
 	// terminal phase. Optional: nil → no archive (pod logs vanish on
 	// TTL as before).
 	LogArchive LogArchiver
+	// ReleaseRunner runs the pre-deploy release Job (KusoService.spec.
+	// release.command) before promoting the new image tag onto an env's
+	// deployment. Optional: nil → release hooks are silently skipped
+	// (test fixtures, legacy main.go). Production wires this from
+	// releaserun.New(kube.Client).
+	ReleaseRunner ReleaseRunner
 
 	// fairnessCursor remembers, per namespace, the last project we
 	// promoted from. Next tick, dispatchQueued starts the round at
@@ -2057,6 +2064,35 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 				"env", e.Name, "build", b.Name, "buildTrigger", bTrigger, "envPromotedAt", prev)
 			continue
 		}
+		// Release-hook gate: if the env carries a release command,
+		// run it as a Job against the NEW image BEFORE patching the
+		// env's image tag. On non-zero exit (or timeout) the build
+		// is marked release-failed, no patch happens, existing pods
+		// keep running on the previous image, and we emit a notify
+		// event so the failure doesn't bury itself.
+		//
+		// Idempotency: the Job name is per-(env, image-tag), so a
+		// re-deploy of the same tag is a no-op (Job exists, already
+		// succeeded). See releaserun.JobName.
+		if e.Spec.Release != nil && len(e.Spec.Release.Command) > 0 && p.ReleaseRunner != nil {
+			res, rerr := p.ReleaseRunner.Run(ctx, ns, &e, b.Spec.Image)
+			if rerr != nil {
+				// Infra error talking to kube — log + skip this env
+				// rather than promoting silently. The next poller
+				// tick will retry.
+				p.logger().Error("release hook run failed (infra error)",
+					"env", e.Name, "build", b.Name, "err", rerr)
+				continue
+			}
+			if res.Outcome != releaserun.OutcomeSucceeded {
+				p.logger().Warn("release hook failed — skipping image promote",
+					"env", e.Name, "build", b.Name, "outcome", res.Outcome, "job", res.JobName, "msg", res.Message)
+				p.markReleaseFailed(ctx, ns, b, &e, res)
+				continue
+			}
+			p.logger().Info("release hook succeeded",
+				"env", e.Name, "build", b.Name, "job", res.JobName)
+		}
 		patch := fmt.Sprintf(
 			`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}},"metadata":{"annotations":{%q:%q,%q:%q}}}`,
 			b.Spec.Image.Repository, b.Spec.Image.Tag,
@@ -2078,6 +2114,80 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 			"service", b.Spec.Service, "branch", b.Spec.Branch, "tag", b.Spec.Image.Tag)
 	}
 	return nil
+}
+
+// ReleaseRunner is the interface the build poller calls into for the
+// pre-deploy release Job. Defined locally so the builds package
+// doesn't import releaserun directly — keeps the import graph one-
+// way (main.go wires the concrete type in).
+type ReleaseRunner interface {
+	Run(ctx context.Context, ns string, env *kube.KusoEnvironment, image *kube.KusoImage) (releaserun.Result, error)
+}
+
+// markReleaseFailed stamps the build CR with phase=release-failed and
+// a human-readable message, and fires a notify event so the failure
+// is surfaced through the bell + webhook channels instead of buried
+// in the deployments tab. Best-effort: a kube write failure here only
+// affects the surfacing, not the gate (the image tag is still NOT
+// patched).
+func (p *Poller) markReleaseFailed(ctx context.Context, ns string, b *kube.KusoBuild, e *kube.KusoEnvironment, res releaserun.Result) {
+	now := time.Now().UTC().Format(time.RFC3339)
+	msg := res.Message
+	if msg == "" {
+		msg = string(res.Outcome)
+	}
+	// Stamp the build with the failure so the UI's deployments tab can
+	// render "Release failed" + a deep-link to the Job logs without
+	// inferring it from the env CR.
+	patch := fmt.Sprintf(
+		`{"metadata":{"annotations":{%q:"release-failed",%q:%q,%q:%q,%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
+		annPhase,
+		annCompletedAt, now,
+		annMessage, msg,
+		"kuso.sislelabs.com/release-job", res.JobName,
+	)
+	if _, perr := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {
+		p.logger().Warn("mark release-failed: patch build", "err", perr, "build", b.Name)
+	}
+	if p.Notifier != nil {
+		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
+		title := fmt.Sprintf("Release hook failed for %s/%s", b.Spec.Project, short)
+		desc := fmt.Sprintf("release command exited with %s — image was NOT promoted, existing pods unchanged. job=%s", res.Outcome, res.JobName)
+		fields := map[string]string{
+			"env":     e.Name,
+			"image":   fmt.Sprintf("%s:%s", b.Spec.Image.Repository, b.Spec.Image.Tag),
+			"job":     res.JobName,
+			"outcome": string(res.Outcome),
+		}
+		// Reuse the eventBuildFailed channel so existing webhook
+		// subscribers pick this up — release failures are a flavour
+		// of build-failure as far as alert routing is concerned.
+		p.Notifier.Emit(EventEnvelope{
+			Type:        eventBuildFailed,
+			Title:       title,
+			Description: desc,
+			Project:     b.Spec.Project,
+			Service:     short,
+			URL:         buildEventURL(b.Spec.Project, short),
+			Severity:    "warning",
+			Fields:      flattenFields(fields),
+		})
+	}
+}
+
+// flattenFields converts a map[string]string into the []EnvelopeField
+// shape the notify dispatcher expects. Tiny helper; lives here because
+// markReleaseFailed is the only caller.
+func flattenFields(m map[string]string) []EnvelopeField {
+	if len(m) == 0 {
+		return nil
+	}
+	out := make([]EnvelopeField, 0, len(m))
+	for k, v := range m {
+		out = append(out, EnvelopeField{Name: k, Value: v, Inline: true})
+	}
+	return out
 }
 
 // asUnstructured is a small helper to build the unstructured shape for

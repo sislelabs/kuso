@@ -30,6 +30,7 @@ import (
 	"kuso/server/internal/crons"
 	"kuso/server/internal/runs"
 	"kuso/server/internal/db"
+	"kuso/server/internal/releaserun"
 	"kuso/server/internal/errorscan"
 	ghpkg "kuso/server/internal/github"
 	"kuso/server/internal/health"
@@ -598,10 +599,11 @@ func main() {
 					// and the rare 8-min nixpacks build sees the
 					// status badge update within seconds of going
 					// running.
-					Interval:   5 * time.Second,
-					Logger:     logger,
-					Notifier:   notifyAdapter{notifyDisp},
-					LogArchive: database,
+					Interval:      5 * time.Second,
+					Logger:        logger,
+					Notifier:      notifyAdapter{notifyDisp},
+					LogArchive:    database,
+					ReleaseRunner: releaserun.New(kc),
 				}).Run(workCtx)
 			}
 			if os.Getenv("KUSO_HEALTH_DISABLED") != "true" {
