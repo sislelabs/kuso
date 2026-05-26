@@ -126,6 +126,110 @@ spec:
 {{- end }}
 
 {{- /*
+External Postgres backup (PlanetScale / Hetzner / Neon / Supabase / RDS).
+Runs pg_dump against the external DSN that the user provided via
+spec.external.secretName and uploads to the cluster-wide kuso-backup-s3
+bucket. Same key shape as the native postgres backup so restores into
+either path work the same way.
+
+Why this exists separately: the in-cluster postgres backup speaks to
+<release>-postgresql:5432 with a local user; external addons have a
+fully-qualified DSN with TLS, a remote host, and provider-specific
+auth. pg_dump "$DATABASE_URL" handles all of that natively — no need
+to parse the DSN apart.
+
+The conn secret synthesized from spec.external.secretName MUST carry
+DATABASE_URL (kuso's convention for postgres conn secrets). Providers
+that hand you separate host/user/pass keys need the user to compose
+DATABASE_URL=postgres://... in their source Secret. Documented in
+docs/EXTERNAL_DB_BACKUPS.md.
+*/ -}}
+{{- if and .Values.backup.schedule (eq .Values.kind "postgres") .Values.external }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ printf "%s-backup" (include "kusoaddon.fullname" .) | quote }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+    kuso.sislelabs.com/role: backup
+    kuso.sislelabs.com/external: "true"
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            kuso.sislelabs.com/role: backup
+            kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
+            kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
+            # External backups need outbound to the managed provider —
+            # they're not talking to an in-cluster Service. Stamp the
+            # public-egress label so the project NetworkPolicy allows it.
+            kuso.sislelabs.com/network-egress-public: "true"
+        spec:
+          restartPolicy: OnFailure
+          {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
+          containers:
+            - name: dump
+              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
+              imagePullPolicy: IfNotPresent
+              command: [sh, -c]
+              args:
+                - |
+                  set -eu
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
+                  PREFIX="${PROJECT}/${ADDON}/"
+                  echo "==> dumping external ${ADDON} → s3://${BUCKET}/${KEY}"
+                  # --no-owner / --no-acl: managed providers usually
+                  # disallow GRANT/REVOKE commands in dumps, which makes
+                  # an unfiltered pg_dump fail at restore time. Match
+                  # what PlanetScale / Neon / Supabase docs recommend.
+                  pg_dump --no-owner --no-acl "${DATABASE_URL}" \
+                    | gzip \
+                    | aws s3 cp --endpoint-url "${S3_ENDPOINT}" - "s3://${BUCKET}/${KEY}"
+                  echo "==> upload done"
+
+                  if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
+                    CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
+                             || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
+                    echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
+                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                      | awk '{print $1, $2, $4}' \
+                      | while read date time name; do
+                          [ -z "${name}" ] && continue
+                          obj_ts=$(date -u -d "${date}T${time}Z" +%s 2>/dev/null || echo 0)
+                          if [ "${obj_ts}" -gt 0 ] && [ "${obj_ts}" -lt "${CUTOFF}" ]; then
+                            echo "    rm s3://${BUCKET}/${PREFIX}${name}"
+                            aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
+                          fi
+                        done
+                  fi
+                  echo "==> done"
+              env:
+                - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
+                - { name: ADDON,   value: {{ .Release.Name | quote }} }
+                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ printf "%s-conn" (include "kusoaddon.fullname" .) | quote }}
+                      key: DATABASE_URL
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey } } }
+                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region }, optional: true } }
+{{- end }}
+
+{{- /*
 Redis backup. Runs `redis-cli --rdb /tmp/dump.rdb` against the addon's
 in-cluster Service, then uploads the dump to S3 with the same
 project/addon/timestamp.rdb.gz key shape as Postgres backups. Pruning
