@@ -124,3 +124,200 @@ spec:
                 - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey } } }
                 - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region }, optional: true } }
 {{- end }}
+
+{{- /*
+Redis backup. Runs `redis-cli --rdb /tmp/dump.rdb` against the addon's
+in-cluster Service, then uploads the dump to S3 with the same
+project/addon/timestamp.rdb.gz key shape as Postgres backups. Pruning
+mirrors the Postgres prune step.
+
+Why --rdb (not BGSAVE + scp from the StatefulSet pod): --rdb runs a
+SAVE-equivalent on the server and streams the snapshot down to the
+client; we never need to copy a file out of the addon pod, so this
+works even when the addon is on a different node.
+*/ -}}
+{{- if and .Values.backup.schedule (eq .Values.kind "redis") (not .Values.external) (not .Values.useInstanceAddon) }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ printf "%s-backup" (include "kusoaddon.fullname" .) | quote }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+    kuso.sislelabs.com/role: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            kuso.sislelabs.com/role: backup
+            kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
+            kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
+        spec:
+          restartPolicy: OnFailure
+          {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
+          containers:
+            - name: dump
+              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
+              imagePullPolicy: IfNotPresent
+              command: [sh, -c]
+              args:
+                - |
+                  set -eu
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  KEY="${PROJECT}/${ADDON}/${TS}.rdb.gz"
+                  PREFIX="${PROJECT}/${ADDON}/"
+                  echo "==> snapshotting ${ADDON} → s3://${BUCKET}/${KEY}"
+                  redis-cli -h "${REDIS_HOST}" -a "${REDIS_PASSWORD}" --no-auth-warning --rdb /tmp/dump.rdb
+                  gzip -c /tmp/dump.rdb \
+                    | aws s3 cp --endpoint-url "${S3_ENDPOINT}" - "s3://${BUCKET}/${KEY}"
+                  rm -f /tmp/dump.rdb
+                  echo "==> upload done"
+
+                  if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
+                    CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
+                             || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
+                    echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
+                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                      | awk '{print $1, $2, $4}' \
+                      | while read date time name; do
+                          [ -z "${name}" ] && continue
+                          obj_ts=$(date -u -d "${date}T${time}Z" +%s 2>/dev/null || echo 0)
+                          if [ "${obj_ts}" -gt 0 ] && [ "${obj_ts}" -lt "${CUTOFF}" ]; then
+                            echo "    rm s3://${BUCKET}/${PREFIX}${name}"
+                            aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
+                          fi
+                        done
+                  fi
+                  echo "==> done"
+              env:
+                - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
+                - { name: ADDON,   value: {{ .Release.Name | quote }} }
+                - { name: REDIS_HOST, value: {{ include "kusoaddon.fullname" . | quote }} }
+                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
+                - name: REDIS_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ printf "%s-conn" (include "kusoaddon.fullname" .) | quote }}
+                      key: REDIS_PASSWORD
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey } } }
+                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region }, optional: true } }
+{{- end }}
+
+{{- /*
+S3/MinIO bucket backup. Mirrors the entire in-cluster bucket to the
+cluster-wide backup bucket under <project>/<addon>/<utc-iso>/. Uses
+`aws s3 sync` with `--delete` against a per-run timestamp prefix so
+each backup is a self-contained point-in-time snapshot (not a moving
+mirror that loses history on a tenant-side delete).
+
+Retention prunes whole timestamped prefixes older than RETENTION_DAYS.
+*/ -}}
+{{- if and .Values.backup.schedule (eq .Values.kind "s3") (not .Values.external) (not .Values.useInstanceAddon) }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ printf "%s-backup" (include "kusoaddon.fullname" .) | quote }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+    kuso.sislelabs.com/role: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            kuso.sislelabs.com/role: backup
+            kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
+            kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
+        spec:
+          restartPolicy: OnFailure
+          {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
+          containers:
+            - name: sync
+              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
+              imagePullPolicy: IfNotPresent
+              command: [sh, -c]
+              args:
+                - |
+                  set -eu
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  DEST="s3://${BUCKET}/${PROJECT}/${ADDON}/${TS}/"
+                  PREFIX="${PROJECT}/${ADDON}/"
+                  echo "==> syncing s3://${SRC_BUCKET}/ → ${DEST}"
+                  AWS_ACCESS_KEY_ID="${SRC_ACCESS_KEY}" \
+                  AWS_SECRET_ACCESS_KEY="${SRC_SECRET_KEY}" \
+                    aws s3 sync --endpoint-url "${SRC_ENDPOINT}" "s3://${SRC_BUCKET}/" /tmp/src/
+                  aws s3 sync --endpoint-url "${S3_ENDPOINT}" /tmp/src/ "${DEST}"
+                  rm -rf /tmp/src
+                  echo "==> sync done"
+
+                  if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
+                    CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
+                             || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
+                    echo "==> pruning snapshots older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
+                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                      | awk '/PRE / {print $2}' \
+                      | while read ts; do
+                          [ -z "${ts}" ] && continue
+                          ts_clean=${ts%/}
+                          # ts looks like 20260101T020000Z; convert.
+                          d=${ts_clean%T*}
+                          t=${ts_clean#*T}
+                          obj_ts=$(date -u -d "${d:0:4}-${d:4:2}-${d:6:2}T${t:0:2}:${t:2:2}:${t:4:2}Z" +%s 2>/dev/null || echo 0)
+                          if [ "${obj_ts}" -gt 0 ] && [ "${obj_ts}" -lt "${CUTOFF}" ]; then
+                            echo "    rm -r s3://${BUCKET}/${PREFIX}${ts}"
+                            aws s3 rm --endpoint-url "${S3_ENDPOINT}" --recursive "s3://${BUCKET}/${PREFIX}${ts}" || true
+                          fi
+                        done
+                  fi
+                  echo "==> done"
+              env:
+                - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
+                - { name: ADDON,   value: {{ .Release.Name | quote }} }
+                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
+                # Source bucket: the in-cluster MinIO that this addon manages.
+                - name: SRC_BUCKET
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ printf "%s-conn" (include "kusoaddon.fullname" .) | quote }}
+                      key: S3_BUCKET
+                - name: SRC_ENDPOINT
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ printf "%s-conn" (include "kusoaddon.fullname" .) | quote }}
+                      key: S3_ENDPOINT
+                - name: SRC_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ printf "%s-conn" (include "kusoaddon.fullname" .) | quote }}
+                      key: S3_ACCESS_KEY_ID
+                - name: SRC_SECRET_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ printf "%s-conn" (include "kusoaddon.fullname" .) | quote }}
+                      key: S3_SECRET_ACCESS_KEY
+                # Destination: cluster-wide backup bucket.
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey } } }
+                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region }, optional: true } }
+{{- end }}
