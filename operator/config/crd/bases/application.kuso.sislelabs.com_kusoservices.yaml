@@ -149,6 +149,13 @@ spec:
                     retry timeout, producing duplicate or late
                     deliveries. Safe for backoffice tools, internal
                     dashboards, and preview environments.
+
+                    For services that mix callbacks with other traffic,
+                    set wakeOn.excludePaths so the deployment stays
+                    warm even when sleep.enabled is true. Note: the
+                    semantic is "if any path matters, the whole
+                    deployment stays warm" — kube can't route per-path
+                    inside one Deployment.
                   properties:
                     enabled:
                       type: boolean
@@ -156,6 +163,21 @@ spec:
                     afterMinutes:
                       type: integer
                       default: 30
+                    wakeOn:
+                      type: object
+                      description: |
+                        Must-stay-warm signals. When excludePaths is
+                        non-empty, the operator keeps the deployment
+                        at min 1 even when scale.Min=0 would otherwise
+                        idle it. Tickero's payment-callback use case:
+                        wakeOn.excludePaths: ["/api/v1/payments/notify"]
+                        means /api/v1/payments/notify is reachable 24/7
+                        and the rest of the service stays warm too
+                        (per-path isolation needs a service split).
+                      properties:
+                        excludePaths:
+                          type: array
+                          items: { type: string }
                 # Strategy-specific build config. Only consulted when
                 # spec.runtime matches; fields and defaults documented
                 # in the kusobuild helm chart's values.yaml.

@@ -38,7 +38,8 @@ Edits to `KusoService` propagate down to every `KusoEnvironment` owned by that s
 | `envVars` | ✅ Yes | Propagates. Rolling restart of every env. |
 | `port` | ⚠️ With caveat | Propagates. Same caveat as env-level. |
 | `scale.*` | ✅ Yes | Propagates to env `autoscaling`. |
-| `sleep` | ⚠️ Yes, with caveat | Operator pauses pods after `afterMinutes`; first request wakes them. **Do not enable on services that receive third-party webhooks or payment callbacks** (Stripe, ePay, GitHub, Slack, etc.) — cold-start can exceed the sender's retry timeout, producing duplicate or late deliveries. Sleep is safe for backoffice tools, internal dashboards, and preview environments. |
+| `sleep` | ⚠️ Yes, with caveat | Operator pauses pods after `afterMinutes`; first request wakes them. **Do not enable on services that receive third-party webhooks or payment callbacks** (Stripe, ePay, GitHub, Slack, etc.) — cold-start can exceed the sender's retry timeout, producing duplicate or late deliveries. Sleep is safe for backoffice tools, internal dashboards, and preview environments. **`sleep.wakeOn.excludePaths`** keeps the deployment warm when any listed path must stay reachable (whole-deployment, not per-path routing). |
+| `release` | ✅ Yes, on next deploy | Pre-deploy hook (`spec.release.command`) takes effect at next build. Existing pods keep their image until the release Job succeeds; on Job failure the image is NOT promoted. Removing the field disables the hook on next deploy. |
 | `placement` | ⚠️ Triggers reschedule | Propagates to envs that don't have their own override. |
 | `volumes` | ❌ Add only | Same as env-level: removal orphans data. |
 | `runtime` | ❌ Don't change live | Same as env-level. |

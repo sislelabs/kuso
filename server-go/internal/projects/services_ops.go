@@ -631,10 +631,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	if port == 0 {
 		port = 8080
 	}
-	scaleMin := 1
-	if svc.Spec.Scale != nil && svc.Spec.Scale.Min > 0 {
-		scaleMin = svc.Spec.Scale.Min
-	}
+	scaleMin := effectiveScaleMin(svc)
 
 	// Same addon-attach as AddService — keep custom envs reachable to
 	// project addons from boot. Plus the shared project secret.
@@ -1169,6 +1166,47 @@ func (s *Service) buildServiceResolver(ctx context.Context, project, ns string) 
 	}, nil
 }
 
+// effectiveScaleMin computes the env's replicaCount from the service's
+// scale + sleep.wakeOn config. When wakeOn.ExcludePaths is non-empty,
+// scale-to-zero is silently disabled: the deployment stays at min 1
+// even if the user set scale.Min=0. This is the v1 of per-path
+// wakeOn — we can't route per-path inside a single deployment without
+// extra ingress plumbing, so the semantic is "if any path matters,
+// the whole deployment stays warm."
+//
+// Tickero use-case: keep /api/v1/payments/notify always-warm without
+// disabling sleep on every backoffice / preview env.
+func effectiveScaleMin(svc *kube.KusoService) int {
+	min := 1
+	if svc != nil && svc.Spec.Scale != nil && svc.Spec.Scale.Min > 0 {
+		min = svc.Spec.Scale.Min
+	}
+	if svc != nil && svc.Spec.Scale != nil && svc.Spec.Scale.Min == 0 {
+		// User asked for scale-to-zero. Honour unless wakeOn says
+		// otherwise.
+		if hasWakeOnExcludePaths(svc) {
+			return 1
+		}
+		return 0
+	}
+	return min
+}
+
+// hasWakeOnExcludePaths reports whether the service has any
+// wakeOn.ExcludePaths configured — the signal for "this deployment
+// MUST stay reachable, do not scale to zero."
+func hasWakeOnExcludePaths(svc *kube.KusoService) bool {
+	if svc == nil || svc.Spec.Sleep == nil || svc.Spec.Sleep.WakeOn == nil {
+		return false
+	}
+	for _, p := range svc.Spec.Sleep.WakeOn.ExcludePaths {
+		if strings.TrimSpace(p) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // autoscalingFromScale derives the env-CR autoscaling block from the
 // service-level KusoScaleSpec. The chart's HPA template renders an
 // HPA only when .Values.autoscaling.enabled — we set Enabled=true
@@ -1386,6 +1424,18 @@ type PatchScaleRequest struct {
 type PatchSleepRequest struct {
 	Enabled      *bool `json:"enabled,omitempty"`
 	AfterMinutes *int  `json:"afterMinutes,omitempty"`
+	// WakeOn carries the must-stay-warm signal for services that
+	// receive third-party callbacks (Stripe, ePay, GitHub, Slack).
+	// When ExcludePaths is non-empty the deployment stays at min 1
+	// regardless of scale.Min. Send wakeOn:null to clear it.
+	WakeOn *PatchWakeOnRequest `json:"wakeOn,omitempty"`
+}
+
+// PatchWakeOnRequest mirrors kube.KusoServiceWake on the wire.
+// Clear=true drops the override (deployment can scale to zero again).
+type PatchWakeOnRequest struct {
+	ExcludePaths []string `json:"excludePaths,omitempty"`
+	Clear        bool     `json:"clear,omitempty"`
 }
 
 // PatchService applies the partial update from PatchServiceRequest to
@@ -1482,6 +1532,28 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		}
 		if req.Sleep.AfterMinutes != nil {
 			svc.Spec.Sleep.AfterMinutes = *req.Sleep.AfterMinutes
+		}
+		if req.Sleep.WakeOn != nil {
+			if req.Sleep.WakeOn.Clear {
+				svc.Spec.Sleep.WakeOn = nil
+				scaleChanged = true
+			} else if len(req.Sleep.WakeOn.ExcludePaths) > 0 {
+				cleaned := make([]string, 0, len(req.Sleep.WakeOn.ExcludePaths))
+				for _, p := range req.Sleep.WakeOn.ExcludePaths {
+					if p = strings.TrimSpace(p); p != "" {
+						cleaned = append(cleaned, p)
+					}
+				}
+				if len(cleaned) == 0 {
+					svc.Spec.Sleep.WakeOn = nil
+				} else {
+					svc.Spec.Sleep.WakeOn = &kube.KusoServiceWake{ExcludePaths: cleaned}
+				}
+				// Changing wakeOn affects effective replicaCount —
+				// treat as a scale change so propagation re-stamps
+				// env.spec.replicaCount.
+				scaleChanged = true
+			}
 		}
 	}
 	volumesChanged := false

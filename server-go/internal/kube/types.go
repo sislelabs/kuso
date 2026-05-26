@@ -253,8 +253,21 @@ type KusoScaleSpec struct {
 }
 
 type KusoServiceSleep struct {
-	Enabled      bool `json:"enabled,omitempty"`
-	AfterMinutes int  `json:"afterMinutes,omitempty"`
+	Enabled      bool             `json:"enabled,omitempty"`
+	AfterMinutes int              `json:"afterMinutes,omitempty"`
+	WakeOn       *KusoServiceWake `json:"wakeOn,omitempty"`
+}
+
+// KusoServiceWake configures wake-on signals that should keep the
+// deployment warm even when sleep would otherwise idle it. v1 ships
+// ExcludePaths only: if any path on the service must always be reachable
+// (third-party webhooks, payment callbacks), set it here and the whole
+// deployment stays at min replicas. We can't route per-path inside a
+// single deployment without extra ingress complexity, so the semantic
+// is "if any path matters, the deployment stays warm." For per-path
+// isolation, split into two services.
+type KusoServiceWake struct {
+	ExcludePaths []string `json:"excludePaths,omitempty"`
 }
 
 // ---- KusoEnvironment -----------------------------------------------------

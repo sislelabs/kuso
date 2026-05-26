@@ -127,11 +127,7 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			}
 			if changed.Scale {
 				auto := autoscalingFromScale(svc.Spec.Scale)
-				replicaCount := 1
-				if svc.Spec.Scale != nil && svc.Spec.Scale.Min > 0 {
-					replicaCount = svc.Spec.Scale.Min
-				}
-				env.Spec.ReplicaCount = replicaCount
+				env.Spec.ReplicaCount = effectiveScaleMin(svc)
 				env.Spec.Autoscaling = auto
 			}
 			if changed.Domains {
