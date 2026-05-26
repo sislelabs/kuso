@@ -138,6 +138,17 @@ spec:
                       default: 70
                 sleep:
                   type: object
+                  description: |
+                    Cold-pause behaviour. When enabled, the operator scales
+                    the deployment to 0 after `afterMinutes` of no inbound
+                    traffic; the first request wakes it back up.
+
+                    DO NOT enable for services that receive third-party
+                    webhooks or payment callbacks (Stripe, ePay, GitHub,
+                    Slack, etc.). Cold-start can exceed the sender's
+                    retry timeout, producing duplicate or late
+                    deliveries. Safe for backoffice tools, internal
+                    dashboards, and preview environments.
                   properties:
                     enabled:
                       type: boolean
