@@ -108,6 +108,35 @@ spec:
                     nodes:
                       type: array
                       items: { type: string }
+                onFailure:
+                  type: object
+                  description: |
+                    Optional notification hook fired when a scheduled Job
+                    exits non-zero. The cron watcher POSTs a JSON body
+                    `{project, service, cron, jobName, exitCode,
+                    startedAt, finishedAt, logsURL}` to webhookURL. When
+                    secretRef is set, the body is HMAC-SHA256 signed
+                    with the secret's value under the
+                    `X-Kuso-Signature` header.
+
+                    Without this, a silently-failing cron only surfaces
+                    in the deployments tab — users with reminders,
+                    refund deadlines, or expiry sweeps want active
+                    alerting.
+                  properties:
+                    webhookURL:
+                      type: string
+                      description: HTTPS endpoint to POST failure events to.
+                    secretRef:
+                      type: object
+                      description: Reference to a Secret whose value is the HMAC signing key.
+                      required: [name, key]
+                      properties:
+                        name:
+                          type: string
+                          pattern: "^[a-z0-9][a-z0-9-]*-conn$"
+                        key:
+                          type: string
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true
