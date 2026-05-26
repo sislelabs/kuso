@@ -2,6 +2,36 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.47] — 2026-05-08
+
+### 🐛 Bug Fixes
+- Fix(envs): clone service envVars too; switcher click; pulse on running build ([0701d84](https://github.com/sislelabs/kuso/commit/0701d84e45538a492d7662ee40a9c73d4b13160a))
+
+## [0.9.46] — 2026-05-08
+
+### 🐛 Bug Fixes
+- Fix(envs): cloned env CR uses -production suffix, not bare service name ([410161e](https://github.com/sislelabs/kuso/commit/410161e32c5f4605f7fbc52363706982755e1f38))
+
+## [0.9.45] — 2026-05-07
+
+### 🐛 Bug Fixes
+- Fix(envs): clone sibling URLs + image, dedupe env CR name + host ([7568864](https://github.com/sislelabs/kuso/commit/7568864ad6cfb976d312b95065c7d2d4d7e8363a))
+
+## [0.9.44] — 2026-05-07
+
+### ✨ Features
+- Feat(envs): non-prod banner + per-env branch input + previews copy ([c0d9912](https://github.com/sislelabs/kuso/commit/c0d9912ab820f239322a583a9f3402e33bbce229))
+
+## [0.9.43] — 2026-05-07
+
+### ✨ Features
+- Feat(envs): project-level environment groups with addon mirroring ([efafe68](https://github.com/sislelabs/kuso/commit/efafe6839ca8c40a21a2fe9b3ad1946dd579c4e5))
+
+## [0.9.42] — 2026-05-07
+
+### ✨ Features
+- Feat(settings/github): rich App status with installations + repo coverage ([7aaa5b3](https://github.com/sislelabs/kuso/commit/7aaa5b39c7b43822d16157600ebe3e55aa355bb9))
+
 ## [0.9.41] — 2026-05-07
 
 ### 🐛 Bug Fixes
