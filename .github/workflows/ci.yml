@@ -92,6 +92,12 @@ jobs:
           wait: 90s
       - name: apply CRDs and dry-run all sample CRs
         run: |
+          # Sample CRs declare `namespace: kuso` (the standard install
+          # namespace); without it the server-side dry-run fails with
+          # "namespaces 'kuso' not found" even though the CR validation
+          # itself would pass. Create it up front so the loop tests
+          # what we actually care about: CR schema validity.
+          kubectl create namespace kuso --dry-run=client -o yaml | kubectl apply -f -
           kubectl apply -f operator/config/crd/bases/
           fail=0
           for f in operator/config/samples/application_v1alpha1_*.yaml; do
