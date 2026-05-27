@@ -2113,6 +2113,97 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		p.logger().Warn("build succeeded but no env matched for promotion",
 			"service", b.Spec.Service, "branch", b.Spec.Branch, "tag", b.Spec.Image.Tag)
 	}
+
+	// runtime=worker services use FromService to point at a sibling whose
+	// image they reuse. When the sibling builds, those workers also need
+	// the new tag — otherwise the worker env sits at the old image (or
+	// the default empty image=":latest" InvalidImageName state on a
+	// brand-new service). The first promotion loop above keyed by
+	// e.Spec.Service so it can't reach the workers; this second loop
+	// walks the same namespace and patches every env whose owning
+	// service has FromService == shortService.
+	if err := p.promoteToFromServiceConsumers(ctx, ns, b, shortService, bTrigger); err != nil {
+		// Workers being stale is a real bug but not worth failing the
+		// whole promotion over — the api/web env did get patched and
+		// users see traffic. Log and move on; the next reconcile picks
+		// up the worker.
+		p.logger().Warn("promote to fromService consumers failed",
+			"service", b.Spec.Service, "err", err)
+	}
+	return nil
+}
+
+// promoteToFromServiceConsumers patches the image tag onto every env
+// owned by a service whose Spec.FromService matches the just-built
+// service. This is the runtime=worker / fromService pattern: the
+// worker has no repo of its own and inherits the sibling's image.
+//
+// Walks the namespace's KusoServices first to find names with the
+// matching FromService field, then walks envs filtered by that
+// service. Branch and last-trigger guards mirror the main promote
+// loop so a worker doesn't get pinned to an older tag.
+func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b *kube.KusoBuild, sourceShortName, bTrigger string) error {
+	if b.Spec.Image == nil {
+		return nil
+	}
+	// List every KusoService in the namespace. At the scale of one
+	// kuso install (single-team) this is dozens of services, not
+	// thousands; an unindexed scan is fine and avoids a labels-on-CR
+	// migration just for this lookup.
+	rawSvcs, err := p.Svc.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).
+		List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("list services: %w", err)
+	}
+	for i := range rawSvcs.Items {
+		var s kube.KusoService
+		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(rawSvcs.Items[i].Object, &s); err != nil {
+			continue
+		}
+		if s.Spec.FromService != sourceShortName {
+			continue
+		}
+		// Find this service's envs and patch each.
+		workerSelector := kube.LabelSelector(map[string]string{
+			kube.LabelProject: b.Spec.Project,
+			kube.LabelService: strings.TrimPrefix(s.Name, b.Spec.Project+"-"),
+		})
+		rawEnvs, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+			List(ctx, metav1.ListOptions{LabelSelector: workerSelector})
+		if err != nil {
+			p.logger().Warn("list worker envs failed", "service", s.Name, "err", err)
+			continue
+		}
+		for j := range rawEnvs.Items {
+			var e kube.KusoEnvironment
+			if err := runtime.DefaultUnstructuredConverter.FromUnstructured(rawEnvs.Items[j].Object, &e); err != nil {
+				continue
+			}
+			if b.Spec.Branch != "" && e.Spec.Branch != "" && e.Spec.Branch != b.Spec.Branch {
+				continue
+			}
+			if prev := e.Annotations[annPromotedAt]; prev != "" && bTrigger != "" && prev > bTrigger {
+				continue
+			}
+			patch := fmt.Sprintf(
+				`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}},"metadata":{"annotations":{%q:%q,%q:%q}}}`,
+				b.Spec.Image.Repository, b.Spec.Image.Tag,
+				annPromotedBuild, b.Name,
+				annPromotedAt, bTrigger,
+			)
+			if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+				Patch(ctx, e.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				p.logger().Warn("patch worker env failed",
+					"env", e.Name, "err", err)
+				continue
+			}
+			p.logger().Info("worker env promoted via fromService",
+				"env", e.Name, "fromService", sourceShortName, "tag", b.Spec.Image.Tag)
+		}
+	}
 	return nil
 }
 
