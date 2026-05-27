@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.16.2] — 2026-05-27
+
+### 🐛 Bug Fixes
+- Fix(env): KusoEnvironmentSpec.ReplicaCount is *int — same omitempty bug ([8ca0bb5](https://github.com/sislelabs/kuso/commit/8ca0bb5df41dfeb4ec3e97c76bd6e39c6d9b6326))
+
 ## [0.16.1] — 2026-05-27
 
 ### 🐛 Bug Fixes
@@ -584,11 +589,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env-switcher): always set ?env=<name>, even for production ([b855bdd](https://github.com/sislelabs/kuso/commit/b855bdd34e8d19bc78ef982edf6f0574cfc33f65))
-
-## [0.9.50] — 2026-05-08
-
-### 🐛 Bug Fixes
-- Fix(env-switcher): rows are real <a href> links ([4709b67](https://github.com/sislelabs/kuso/commit/4709b674578446891b986cf4f39705ebac673e8c))
 
 
 ---
