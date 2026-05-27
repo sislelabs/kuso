@@ -687,15 +687,32 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			// env into the production tab (and switching the URL to
 			// ?env=staging would render an empty project view because
 			// the switcher's filter then matches zero envs).
-			Kind:             "custom",
-			Branch:           req.Branch,
-			Port:             port,
-			ReplicaCount:     intPtr(scaleMin),
-			Autoscaling:      autoscalingFromScale(svc.Spec.Scale),
-			Host:             host,
-			AdditionalHosts:  domainHosts(svc.Spec.Domains),
-			TLSHosts:         computeTLSHosts(host, domainHosts(svc.Spec.Domains)),
-			Internal:         svc.Spec.Internal,
+			Kind:         "custom",
+			Branch:       req.Branch,
+			Port:         port,
+			ReplicaCount: intPtr(scaleMin),
+			Autoscaling:  autoscalingFromScale(svc.Spec.Scale),
+			Host:         host,
+			// Custom envs (staging, qa, client-demo) get ONLY their
+			// own host — never the service-level custom domains.
+			// Those domains belong to production; copying them onto
+			// staging causes two harms:
+			//   1. Host collision: a request to tickero.bg could land
+			//      on the staging Deployment if its Ingress is
+			//      reconciled after production's. Routing becomes
+			//      non-deterministic.
+			//   2. cert-manager issues an extra-cert for each shared
+			//      host on each env; staging then races production
+			//      for the same Let's Encrypt cert, hitting rate
+			//      limits without giving the user anything.
+			//
+			// Users who want a staging-specific extra domain
+			// (staging.example.com mirrored at qa.example.com) can
+			// add it via `kuso domains add` after env creation —
+			// that's an explicit opt-in, not silent inheritance.
+			AdditionalHosts: nil,
+			TLSHosts:        computeTLSHosts(host, nil),
+			Internal:        svc.Spec.Internal,
 			PrivateEgress:    svc.Spec.PrivateEgress,
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
