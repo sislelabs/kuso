@@ -40,10 +40,26 @@
        produces a usable Ingress.
      */ -}}
 {{- $tlsHosts := list -}}
+{{- /* Intersect any server-stamped tlsHosts with the currently-rendered
+       $hosts: a host pinned in .Values.tlsHosts that's no longer in
+       primary/additionalHosts is stale (the user removed the domain or
+       the env's Host got patched out-of-band by `kubectl edit`).
+       Keeping stale entries would mint extra Let's Encrypt certs for
+       domains the Ingress doesn't actually serve anymore.
+
+       Falls through to the TLD-suffix filter when tlsHosts is empty —
+       legacy CRs that predate the server-stamping (pre-v0.9.5) or
+       offline-rendered charts. */ -}}
+{{- $reservedSuffix := list "local" "internal" "localhost" "test" "example" "invalid" "arpa" -}}
 {{- if .Values.tlsHosts -}}
-  {{- $tlsHosts = .Values.tlsHosts -}}
+  {{- $hostSet := dict -}}
+  {{- range $hosts -}}{{- $_ := set $hostSet . true -}}{{- end -}}
+  {{- range .Values.tlsHosts -}}
+    {{- if hasKey $hostSet . -}}
+      {{- $tlsHosts = append $tlsHosts . -}}
+    {{- end -}}
+  {{- end -}}
 {{- else -}}
-  {{- $reservedSuffix := list "local" "internal" "localhost" "test" "example" "invalid" "arpa" -}}
   {{- range $hosts -}}
     {{- $h := . -}}
     {{- $parts := splitList "." $h -}}
@@ -51,6 +67,24 @@
       {{- $tld := lower (index $parts (sub (len $parts) 1)) -}}
       {{- if and (ge (len $tld) 2) (not (has $tld $reservedSuffix)) -}}
         {{- $tlsHosts = append $tlsHosts $h -}}
+      {{- end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- /* Belt-and-braces: always include the primary host if it passes
+       the same TLD filter, even when tlsHosts was server-stamped
+       without it (happens when env.spec.host was patched via kubectl
+       after env-create and the server didn't propagate the update).
+       Without this the Ingress's PRIMARY host gets no tls entry,
+       traefik falls back to its default self-signed cert, and the
+       browser's HSTS error fires. */ -}}
+{{- if and $primary .Values.tlsEnabled -}}
+  {{- $primaryParts := splitList "." $primary -}}
+  {{- if gt (len $primaryParts) 1 -}}
+    {{- $primaryTLD := lower (index $primaryParts (sub (len $primaryParts) 1)) -}}
+    {{- if and (ge (len $primaryTLD) 2) (not (has $primaryTLD $reservedSuffix)) -}}
+      {{- if not (has $primary $tlsHosts) -}}
+        {{- $tlsHosts = prepend $tlsHosts $primary -}}
       {{- end -}}
     {{- end -}}
   {{- end -}}
