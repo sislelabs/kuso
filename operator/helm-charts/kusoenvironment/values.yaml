@@ -6,7 +6,10 @@
 project: ""
 service: ""
 
-# kind: production | preview
+# kind: production | preview | custom
+# production: always-on env auto-created with each KusoService
+# preview:    PR-driven ephemeral (managed by kuso-server's GH dispatcher)
+# custom:     user-created long-lived (staging, qa, demo)
 kind: production
 
 # branch: git ref this env tracks. For production envs this is the project

@@ -55,7 +55,16 @@ spec:
                   type: string
                 kind:
                   type: string
-                  enum: [production, preview]
+                  # production: the always-on env auto-created with each
+                  #   KusoService. Exactly one per service.
+                  # preview:    ephemeral, PR-driven (kuso-server's GH
+                  #             dispatcher manages lifecycle).
+                  # custom:     user-created long-lived env (staging,
+                  #             qa, demo). Same chart shape as
+                  #             production; distinguished here so the
+                  #             dashboard's env-switcher can group +
+                  #             list them separately.
+                  enum: [production, preview, custom]
                   default: production
                 branch:
                   type: string
