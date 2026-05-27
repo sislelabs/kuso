@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.48] — 2026-05-08
+
+### 🐛 Bug Fixes
+- Fix(ui): drop discard-changes prompt + plain-button env switcher ([c4246e9](https://github.com/sislelabs/kuso/commit/c4246e967ee783e3040aea2ae26be11b6eaea79f))
+
 ## [0.9.47] — 2026-05-08
 
 ### 🐛 Bug Fixes
