@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.16.1] — 2026-05-27
+
+### 🐛 Bug Fixes
+- Fix(scale): KusoScaleSpec.Min is *int — omitempty was dropping min=0 ([2eb6771](https://github.com/sislelabs/kuso/commit/2eb6771c2e1152b5e6275cf210572d8f3f73bb2e))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries ([e1aa859](https://github.com/sislelabs/kuso/commit/e1aa8599b61c296f12c16dd349b5f9f17c73f470))
+
 ## [0.16.0] — 2026-05-27
 
 ### ✨ Features
@@ -581,11 +589,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env-switcher): rows are real <a href> links ([4709b67](https://github.com/sislelabs/kuso/commit/4709b674578446891b986cf4f39705ebac673e8c))
-
-## [0.9.49] — 2026-05-08
-
-### 🐛 Bug Fixes
-- Fix(env-switcher): roll-our-own dropdown, both directions work ([a0a8df3](https://github.com/sislelabs/kuso/commit/a0a8df35e52ac54e12a948a61c535814be5c742f))
 
 
 ---
