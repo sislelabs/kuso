@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.16.4] — 2026-05-27
+
+### 🐛 Bug Fixes
+- Fix: node-bootstrap and addon defaults — TLS pg, NATS auth, worker fromService (#3) ([065a0ca](https://github.com/sislelabs/kuso/commit/065a0ca487cf1e9da59da704319dc3dbdf144a21))
+
 ## [0.16.3] — 2026-05-27
 
 ### 🐛 Bug Fixes
@@ -590,11 +595,6 @@ messages on every release. The format is loosely based on
 
 ### Other
 - Ux: deep review pass — 20 fixes across surface ([6ba8cbf](https://github.com/sislelabs/kuso/commit/6ba8cbf19094732e5bebf9de2eab2dd1d2dc0016))
-
-## [0.9.52] — 2026-05-08
-
-### 👷 CI
-- Ci: register react-hooks plugin + fix 22 lint errors ([e403395](https://github.com/sislelabs/kuso/commit/e40339555eb80d6b8039ece743d4c44fa12f2352))
 
 
 ---

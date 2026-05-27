@@ -64,8 +64,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.16.3}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.16.3}"
+KUSO_VERSION="${KUSO_VERSION:-v0.16.4}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.16.4}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 
@@ -881,28 +881,9 @@ kubectl delete clusterrolebinding kuso-server-cluster-admin --ignore-not-found 2
 # rewrite to whatever the user requested via --server-version. The
 # regex matches `kuso-server-go:vX.Y.Z` regardless of the embedded
 # tag so an upgrade-via-install works without surgery on the YAML.
-SERVER_MANIFEST=$(curl -sfL "${KUSO_RAW}/deploy/server-go.yaml" \
-  | sed -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${KUSO_SERVER_VERSION}|g")
-
-# When the Postgres backend is 3-replica HA, single-pod kuso-server
-# is the weakest link — a node drain or pod restart blocks API
-# traffic for ~30s even though the database stays up. Bump to 2
-# replicas so a rolling restart (or a node drain that picks the
-# server's node) always leaves a pod serving. Postgres-backed
-# state means the two server pods are interchangeable — no need
-# for leader election, sticky sessions, or per-pod work queues.
-#
-# Without KUSO_POSTGRES_HA the database is single-pod too; in
-# that case replicas: 2 on kuso-server doesn't help (the database
-# is the SPOF and a node loss takes both down anyway), and it
-# doubles the resource footprint of the control plane on a
-# 4Gi-RAM Hetzner box. Leave it at 1.
-if [[ "${KUSO_POSTGRES_HA:-0}" == "1" || "${KUSO_POSTGRES_HA:-false}" == "true" ]]; then
-  log "KUSO_POSTGRES_HA: scaling kuso-server Deployment to 2 replicas"
-  SERVER_MANIFEST=$(echo "$SERVER_MANIFEST" \
-    | sed -E '/^kind: Deployment$/,/^---/ s|^  replicas: 1$|  replicas: 2|')
-fi
-echo "$SERVER_MANIFEST" | kubectl apply -f - >/dev/null
+curl -sfL "${KUSO_RAW}/deploy/server-go.yaml" \
+  | sed -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
+  | kubectl apply -f - >/dev/null
 
 kubectl apply -f - <<EOF >/dev/null
 # kuso-server's ServiceAccount + RBAC are owned by deploy/server-go.yaml
