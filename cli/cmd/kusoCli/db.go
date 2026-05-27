@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -368,9 +369,15 @@ func runClientFor(kind, dsn string) error {
 // waitListening dials the local port repeatedly until it accepts a
 // connection — a short bounded wait for the listener to come up.
 // 50 × 20ms = 1s — plenty for an in-process listener.
+//
+// `net.JoinHostPort` over `fmt.Sprintf("%s:%d", ...)` because the
+// host can be an IPv6 literal ("::1", "fd00::1") and the printf form
+// produces `::1:5432` which is a single ambiguous address, not host
+// + port. JoinHostPort wraps IPv6 literals in brackets correctly.
 func waitListening(host string, port int) error {
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	for i := 0; i < 50; i++ {
-		c, err := net.Dial("tcp", fmt.Sprintf("%s:%d", host, port))
+		c, err := net.Dial("tcp", addr)
 		if err == nil {
 			_ = c.Close()
 			return nil
