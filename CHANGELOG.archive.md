@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.50] — 2026-05-08
+
+### 🐛 Bug Fixes
+- Fix(env-switcher): rows are real <a href> links ([4709b67](https://github.com/sislelabs/kuso/commit/4709b674578446891b986cf4f39705ebac673e8c))
+
 ## [0.9.49] — 2026-05-08
 
 ### 🐛 Bug Fixes
