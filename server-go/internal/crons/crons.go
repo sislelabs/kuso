@@ -117,6 +117,20 @@ type UpdateProjectCronRequest struct {
 	Command               []string        `json:"command,omitempty"`
 	ConcurrencyPolicy     *string         `json:"concurrencyPolicy,omitempty"`
 	ActiveDeadlineSeconds *int            `json:"activeDeadlineSeconds,omitempty"`
+	// OnFailure: nil = leave alone. Send a non-nil struct with
+	// Clear=true to drop the webhook entirely.
+	OnFailure *OnFailureUpdate `json:"onFailure,omitempty"`
+}
+
+// OnFailureUpdate is the wire shape for editing a cron's failure
+// webhook. WebhookURL replaces the URL; SecretRef replaces the
+// signing key reference. Clear=true takes precedence — drops the
+// webhook entirely so the cron silently fails into the deployments
+// tab again.
+type OnFailureUpdate struct {
+	WebhookURL string                 `json:"webhookURL,omitempty"`
+	SecretRef  *kube.KusoSecretKeyRef `json:"secretRef,omitempty"`
+	Clear      bool                   `json:"clear,omitempty"`
 }
 
 // 5-field cron expression: m h dom mon dow. Plus the * / , - ranges
@@ -503,6 +517,16 @@ func (s *Service) UpdateProject(ctx context.Context, project, name string, req U
 		}
 		if req.ActiveDeadlineSeconds != nil {
 			cr.Spec.ActiveDeadlineSeconds = *req.ActiveDeadlineSeconds
+		}
+		if req.OnFailure != nil {
+			if req.OnFailure.Clear {
+				cr.Spec.OnFailure = nil
+			} else if req.OnFailure.WebhookURL != "" {
+				cr.Spec.OnFailure = &kube.KusoCronOnFailure{
+					WebhookURL: req.OnFailure.WebhookURL,
+					SecretRef:  req.OnFailure.SecretRef,
+				}
+			}
 		}
 		return nil
 	})

@@ -659,6 +659,19 @@ type KusoCronSpec struct {
 	// DisplayName lets the canvas show a friendly label. Optional;
 	// UI falls back to the cron's short name when empty.
 	DisplayName string `json:"displayName,omitempty"`
+	// OnFailure configures an HTTPS webhook that fires when a
+	// scheduled Job exits non-zero. The cronwatch.Watcher polls
+	// Jobs labeled kuso.sislelabs.com/cron, detects new failures,
+	// and POSTs a signed payload to WebhookURL.
+	OnFailure *KusoCronOnFailure `json:"onFailure,omitempty"`
+}
+
+// KusoCronOnFailure is the wire shape for the cron failure webhook.
+// SecretRef is optional — when set the body is HMAC-SHA256 signed
+// with the resolved secret value under X-Kuso-Signature: sha256=<hex>.
+type KusoCronOnFailure struct {
+	WebhookURL string            `json:"webhookURL,omitempty"`
+	SecretRef  *KusoSecretKeyRef `json:"secretRef,omitempty"`
 }
 
 // ---- KusoRun -------------------------------------------------------------

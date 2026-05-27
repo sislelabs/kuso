@@ -27,6 +27,7 @@ import (
 	"kuso/server/internal/buildcontroller"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
+	"kuso/server/internal/cronwatch"
 	"kuso/server/internal/crons"
 	"kuso/server/internal/runs"
 	"kuso/server/internal/db"
@@ -831,6 +832,18 @@ func main() {
 				Logger: logger.With("component", "nodewatch"),
 			}
 			go watcher.Run(workCtx)
+			// Cron failure detector — watches Job objects labeled
+			// kuso.sislelabs.com/cron and dispatches the per-cron
+			// onFailure webhook + a notify event on failure. Cluster-
+			// singleton via the same leader gate so duplicate alerts
+			// don't fire from multiple replicas.
+			cwatcher := &cronwatch.Watcher{
+				Kube:    kubeClient,
+				Notify:  notifyDisp,
+				Logger:  logger.With("component", "cronwatch"),
+				BaseURL: os.Getenv("KUSO_PUBLIC_URL"),
+			}
+			go cwatcher.Run(workCtx)
 			if os.Getenv("KUSO_LOGSHIP_DISABLED") != "true" && logDB != nil {
 				ls := logship.New(logDB, kubeClient, *namespace, logger.With("component", "logship"))
 				go ls.Run(workCtx)

@@ -68,6 +68,12 @@ const (
 	EventRunStarted   EventType = "run.started"
 	EventRunSucceeded EventType = "run.succeeded"
 	EventRunFailed    EventType = "run.failed"
+	// Cron lifecycle events. Fired by the cronwatch goroutine when a
+	// scheduled KusoCron Job exits non-zero. Separate from the run/
+	// build events because crons fail silently into the deployments
+	// tab by default — refund-deadline sweeps, voucher expiry, etc.
+	// need to ping an oncall channel directly.
+	EventCronFailed EventType = "cron.failed"
 	// Diagnostic ping fired from the "send a test message" button on
 	// the notification settings page. Not a real platform event —
 	// don't subscribe to it from alerts.
@@ -88,6 +94,7 @@ var AllEventTypes = []EventType{
 	EventBackupOK, EventBackupFailed,
 	EventNodeUnreachable, EventNodeRecovered,
 	EventRunStarted, EventRunSucceeded, EventRunFailed,
+	EventCronFailed,
 	EventTestPing,
 }
 
