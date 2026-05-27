@@ -134,20 +134,36 @@ export function ProjectDetailView() {
   const allEnvs = data.environments;
   const allAddons = addons.data ?? [];
 
-  // Narrow services + envs + addons to the picked env-group. Group
-  // membership lives on the kuso.sislelabs.com/env label —
-  // "production" matches services/addons with no label OR
-  // label=production; any other value (staging, client-demo,
-  // preview-pr-N) matches an exact label.
+  // Narrow envs + addons to the picked env-group, but show every
+  // service. Group membership lives on the kuso.sislelabs.com/env
+  // label — "production" matches with no label OR label=production;
+  // any other value (staging, client-demo, preview-pr-N) matches
+  // exactly.
+  //
+  // SERVICES are intentionally NOT filtered by env label. A
+  // KusoService is env-independent: one CR per app, with N
+  // KusoEnvironment CRs (one per env-group) referencing it. The
+  // filter that used to live here checked s.metadata.labels[env]
+  // — but services don't carry that label, so any selectedEnv
+  // other than "production" filtered out every service and the
+  // canvas rendered "Empty project". Show the same service list
+  // for every env; the env-scoped view comes from picking the
+  // right KusoEnvironment for each service downstream (URL,
+  // replicas, latest build).
   const envLabel = "kuso.sislelabs.com/env";
   const inGroup = (labels: Record<string, string> | undefined) => {
     const v = labels?.[envLabel];
     if (selectedEnv === "production") return !v || v === "production";
     return v === selectedEnv;
   };
-  const services = allServices.filter((s) => inGroup(s.metadata.labels));
   const envs = allEnvs.filter((e) => inGroup(e.metadata.labels));
   const addonsList = allAddons.filter((a) => inGroup(a.metadata.labels));
+  // When the selected env exists at all (i.e. has at least one env
+  // CR or addon), show every service so the canvas matches the
+  // shape of the project. If the env-group has zero envs AND zero
+  // addons, treat the project as empty in that env.
+  const envExists = envs.length > 0 || addonsList.length > 0;
+  const services = envExists ? allServices : [];
   const onProduction = selectedEnv === "production";
 
   if (services.length === 0 && addonsList.length === 0) {

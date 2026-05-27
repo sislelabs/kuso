@@ -132,9 +132,14 @@ export function ProjectCanvas({
   const initialNodes: Node[] = useMemo(() => {
     const out: Node[] = [];
     services.forEach((s) => {
-      const env = envs.find(
-        (e) => e.spec.service === s.metadata.name && e.spec.kind === "production"
-      );
+      // Match by service short-name only. The `envs` slice has
+      // already been filtered upstream to the selected env-group
+      // (production / staging / preview-pr-N), so the first match
+      // here is the env we want. The old code also gated on
+      // `e.spec.kind === "production"`, which broke the canvas
+      // when staging/qa envs were selected — those carry
+      // kind="custom" since v0.16.4.
+      const env = envs.find((e) => e.spec.service === s.metadata.name);
       // serviceShortName strips the "<project>-" prefix the server
       // uses for the FQ name; the latest-builds endpoint returns the
       // map keyed by the same short name so direct lookup works.
