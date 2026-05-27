@@ -408,13 +408,35 @@ func (h *NodeBootstrapHandler) RegisterNode(w http.ResponseWriter, r *http.Reque
 //
 // Preference order:
 //   1. KUSO_PUBLIC_URL env (when set) — operator's source of truth.
-//   2. X-Forwarded-{Proto,Host} headers, but ONLY when the request
-//      arrived from a peer in KUSO_TRUSTED_PROXIES. Without that
-//      gate, an attacker who can hit the mint endpoint (admin
-//      session compromise) could spoof the host and produce a
-//      one-liner pointing at their own server — the new VM would
-//      then post its facts to the attacker.
-//   3. r.TLS + r.Host as the last resort (direct caller, no proxy).
+//   2. X-Forwarded-{Proto,Host} headers when the request arrived from
+//      a peer in KUSO_TRUSTED_PROXIES (operator-configured, fully
+//      trusts the proxy to set host + scheme).
+//   3. X-Forwarded-Proto from any peer (scheme-only) — see "Scheme
+//      heuristic" below; never reads X-Forwarded-Host from untrusted
+//      peers to avoid Host-spoofing.
+//   4. r.TLS + r.Host as the last resort (direct caller, no proxy).
+//
+// # Scheme heuristic
+//
+// In the common install path, kuso-server sits behind Traefik (or any
+// ingress controller) that terminates TLS and forwards plain HTTP to
+// the pod. The operator hits https://kuso.example.com in their browser
+// — but inside the cluster r.TLS is nil. Without KUSO_PUBLIC_URL or
+// KUSO_TRUSTED_PROXIES set, the old code returned http:// in that
+// configuration, which baked an http:// URL into the bootstrap script.
+// The script's POST to that URL then got a 308 redirect from the
+// ingress and curl -fsS treats 3xx as a failure (no -L flag).
+//
+// We now read X-Forwarded-Proto from any peer for the scheme decision
+// only. The threat model accepts this: an attacker who can set
+// X-Forwarded-Proto can change the script's KUSO_URL scheme, but they
+// can't change the host (we still use r.Host for unauthenticated
+// peers), and the only thing the script does with that URL is POST
+// the bootstrap token back to the same kuso server. Misdirecting the
+// POST to https://kuso.example.com when the operator wanted http://
+// is harmless; misdirecting to an attacker's host would require
+// setting X-Forwarded-Host, which we still gate behind the trusted-
+// proxy check.
 func publicBaseURL(r *http.Request) string {
 	if v := strings.TrimSpace(os.Getenv("KUSO_PUBLIC_URL")); v != "" {
 		return strings.TrimRight(v, "/")
@@ -424,10 +446,12 @@ func publicBaseURL(r *http.Request) string {
 		scheme = "http"
 	}
 	host := r.Host
-	if peerIsTrustedProxy(remoteHost(r)) {
-		if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
-			scheme = proto
-		}
+	trustedProxy := peerIsTrustedProxy(remoteHost(r))
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		// Scheme can be read from any peer — see header doc above.
+		scheme = proto
+	}
+	if trustedProxy {
 		if forwarded := r.Header.Get("X-Forwarded-Host"); forwarded != "" {
 			host = forwarded
 		}

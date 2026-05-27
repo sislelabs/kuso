@@ -27,8 +27,15 @@ func BuildInstallCommand(k3sURL, k3sToken string, labels map[string]string, node
 	// this into a terminal won't leak the bootstrap token through
 	// their shell scrollback file. The `set +o history` covers shells
 	// that don't honour HISTCONTROL=ignorespace.
+	//
+	// The `|| true` after `set +o history` is load-bearing: dash (the
+	// default /bin/sh on Debian/Ubuntu) rejects `set -o history` with
+	// a non-zero exit, and the bootstrap script runs the install command
+	// with `set -eu` so an unguarded `set` failure aborts the entire
+	// install before curl even runs. The redirect alone doesn't help —
+	// it suppresses stderr but the exit code still trips `-e`.
 	return fmt.Sprintf(
-		`unset HISTFILE; set +o history 2>/dev/null; curl -sfL https://get.k3s.io | K3S_URL=%s K3S_TOKEN=%s INSTALL_K3S_EXEC=%s sh -`,
+		`unset HISTFILE; set +o history 2>/dev/null || true; curl -sfL https://get.k3s.io | K3S_URL=%s K3S_TOKEN=%s INSTALL_K3S_EXEC=%s sh -`,
 		shEscape(k3sURL), shEscape(k3sToken), shEscape(execArg),
 	)
 }
