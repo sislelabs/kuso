@@ -193,7 +193,8 @@
               "nixpacks",
               "buildpacks",
               "static",
-              "worker"
+              "worker",
+              "image"
             ],
             "type": "string"
           },
