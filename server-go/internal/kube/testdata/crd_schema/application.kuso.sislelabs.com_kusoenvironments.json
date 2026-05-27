@@ -131,7 +131,8 @@
             "default": "production",
             "enum": [
               "production",
-              "preview"
+              "preview",
+              "custom"
             ],
             "type": "string"
           },
