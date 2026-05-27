@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.16.6] — 2026-05-27
+
+### 🐛 Bug Fixes
+- Fix(env): custom envs get own hosts; chart prunes stale tlsHosts (#5) ([9bf320f](https://github.com/sislelabs/kuso/commit/9bf320f210fb6abfab32a6654a7101ef3c7fed7c))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (from v0.16.5 ship) ([98cfb8a](https://github.com/sislelabs/kuso/commit/98cfb8aa64264520586f0ffae339d5a96848bc8d))
+
 ## [0.16.5] — 2026-05-27
 
 ### 🐛 Bug Fixes
@@ -593,11 +601,6 @@ messages on every release. The format is loosely based on
 
 ### Other
 - Ux: drop redeploy split-button + widen settings rows ([71559a8](https://github.com/sislelabs/kuso/commit/71559a881db905e1ab78430d301d21e48521df18))
-
-## [0.9.54] — 2026-05-08
-
-### Other
-- Gh: smarter, more resilient build-trigger flow ([a366108](https://github.com/sislelabs/kuso/commit/a3661088d909cbc897035c7a4bd2add19ee4e2be))
 
 
 ---
