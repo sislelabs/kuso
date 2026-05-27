@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.53] — 2026-05-08
+
+### Other
+- Ux: deep review pass — 20 fixes across surface ([6ba8cbf](https://github.com/sislelabs/kuso/commit/6ba8cbf19094732e5bebf9de2eab2dd1d2dc0016))
+
 ## [0.9.52] — 2026-05-08
 
 ### 👷 CI
