@@ -2,6 +2,16 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.52] — 2026-05-08
+
+### 👷 CI
+- Ci: register react-hooks plugin + fix 22 lint errors ([e403395](https://github.com/sislelabs/kuso/commit/e40339555eb80d6b8039ece743d4c44fa12f2352))
+
+## [0.9.51] — 2026-05-08
+
+### 🐛 Bug Fixes
+- Fix(env-switcher): always set ?env=<name>, even for production ([b855bdd](https://github.com/sislelabs/kuso/commit/b855bdd34e8d19bc78ef982edf6f0574cfc33f65))
+
 ## [0.9.50] — 2026-05-08
 
 ### 🐛 Bug Fixes
