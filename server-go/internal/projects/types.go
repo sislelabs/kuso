@@ -69,8 +69,15 @@ type CreateServiceRequest struct {
 	Repo       *CreateServiceRepo     `json:"repo,omitempty"`
 	Runtime    string                 `json:"runtime,omitempty"`
 	// Command is the argv for runtime=worker. Ignored otherwise.
-	Command    []string               `json:"command,omitempty"`
-	Port       int32                  `json:"port,omitempty"`
+	Command []string `json:"command,omitempty"`
+	// FromService is the sibling service whose built image this
+	// service reuses. Only valid (and required) when
+	// Runtime=="worker": the worker has no repo of its own and
+	// inherits the sibling's image on every build promote (see
+	// promoteToFromServiceConsumers in internal/builds/builds.go).
+	// Pair with Command to set the worker's argv.
+	FromService string                 `json:"fromService,omitempty"`
+	Port        int32                  `json:"port,omitempty"`
 	Domains    []ServiceDomain        `json:"domains,omitempty"`
 	EnvVars    []EnvVar               `json:"envVars,omitempty"`
 	Scale      *ServiceScale          `json:"scale,omitempty"`

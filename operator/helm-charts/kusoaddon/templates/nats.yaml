@@ -178,7 +178,14 @@ stringData:
   # Most NATS client libs accept a single URL with the token inline,
   # which is the easiest thing to wire into the dollar-brace addon
   # reference syntax (NATS_URL surfaces as the canonical client DSN).
-  NATS_URL: "nats://:{{ $token }}@{{ $name }}:4222"
+  #
+  # IMPORTANT: NATS token-auth wants `nats://<token>@host:port`, NOT
+  # `nats://:<token>@host:port`. The leading colon makes the server
+  # interpret the URL as user="" + password="<token>" and refuse the
+  # connection with "Authorization Violation" — NATS only accepts the
+  # password split when user-auth (not token-auth) is configured.
+  # nats.go parses single-segment userinfo as the token.
+  NATS_URL: "nats://{{ $token }}@{{ $name }}:4222"
   # Monitor URL — nats-top, the web monitor at /varz, etc.
   NATS_MONITOR_URL: "http://{{ $name }}:8222"
 {{- end }}

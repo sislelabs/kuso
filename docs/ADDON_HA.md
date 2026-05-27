@@ -6,7 +6,8 @@ StatefulSet" to a replicated, failover-capable variant. As of v0.10:
 | Engine | HA implementation | Replicas | Failover |
 |---|---|---|---|
 | postgres | CloudNativePG Cluster | 3 | automatic, ~30s |
-| redis | sentinel mode | 3 | automatic |
+| redis | Sentinel quorum (3 Redis + 3 Sentinel) | 3 + 3 | automatic, ~10s |
+| nats | Clustered JetStream | 3 | automatic; **streams must be created with `--replicas 3`** for HA writes |
 | others | (no-op — falls back to single-node) | — | — |
 
 This page is about the **postgres** path. CNPG is a one-shot operator

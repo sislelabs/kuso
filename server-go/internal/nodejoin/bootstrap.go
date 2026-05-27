@@ -315,7 +315,12 @@ while [ "$ATTEMPT" -lt "$MAX_ATTEMPTS" ]; do
   ATTEMPT=$((ATTEMPT + 1))
   log "registering with kuso (attempt $ATTEMPT/$MAX_ATTEMPTS)"
   TMPF=$(mktemp)
-  HTTP_CODE=$(curl -fsS -o "$TMPF" -w '%{http_code}' \
+  # -L follows redirects, including 307/308 which preserve POST. This
+  # is belt-and-braces for the case where KUSO_PUBLIC_URL or the host
+  # the operator hit ends up baked in as http:// but the cluster's
+  # ingress redirects to https://. Server-side fix is in publicBaseURL;
+  # this catches the same problem if a sysadmin pins the wrong scheme.
+  HTTP_CODE=$(curl -fsSL -o "$TMPF" -w '%{http_code}' \
     -X POST -H 'Content-Type: application/json' \
     --max-time 30 \
     --data "$PAYLOAD" \

@@ -159,6 +159,16 @@ type PatchServiceRequest struct {
 	Domains     *[]PatchServiceDomain `json:"domains,omitempty"`
 	Internal      *bool                `json:"internal,omitempty"`
 	PrivateEgress *bool                `json:"privateEgress,omitempty"`
+	Scale         *PatchScaleRequest   `json:"scale,omitempty"`
+}
+
+// PatchScaleRequest mirrors the server's projects.PatchScaleRequest.
+// Each field is a pointer so unset is distinguishable from zero — Min=0
+// is a valid request that means "scale to zero between requests".
+type PatchScaleRequest struct {
+	Min       *int `json:"min,omitempty"`
+	Max       *int `json:"max,omitempty"`
+	TargetCPU *int `json:"targetCPU,omitempty"`
 }
 
 // PatchService applies a partial update to a service spec. Mirrors
@@ -203,12 +213,32 @@ func (k *KusoClient) UnsetEnvVar(project, service, name string) (*resty.Response
 
 // Environments
 
+// CreateEnvRequest mirrors the server's projects.CreateEnvRequest.
+// Kept CLI-local rather than aliasing the server type because the
+// server type lives in an internal package; the JSON wire-shape is
+// the contract and matches field-for-field.
+type CreateEnvRequest struct {
+	Name         string `json:"name"`
+	Branch       string `json:"branch"`
+	HostOverride string `json:"host,omitempty"`
+}
+
 func (k *KusoClient) GetEnvironments(project string) (*resty.Response, error) {
 	return k.client.Get("/api/projects/" + esc(project) + "/envs")
 }
 
 func (k *KusoClient) GetEnvironment(project, env string) (*resty.Response, error) {
 	return k.client.Get("/api/projects/" + esc(project) + "/envs/" + env)
+}
+
+// AddEnvironment creates a custom environment (e.g. "staging", "qa")
+// on a service. "production" and "pr-*" are reserved server-side. The
+// new env inherits the service's envFromSecrets, addons, and port; the
+// caller can override the host via req.HostOverride to point at a
+// different DNS name than the auto-generated "<env>.<service>.<base>".
+func (k *KusoClient) AddEnvironment(project, service string, req CreateEnvRequest) (*resty.Response, error) {
+	k.client.SetBody(req)
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/envs")
 }
 
 func (k *KusoClient) DeleteEnvironment(project, env string) (*resty.Response, error) {

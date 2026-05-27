@@ -1,0 +1,39 @@
+{{- /*
+  PodDisruptionBudget — protects the env from going to zero pods
+  during voluntary disruptions (node drain on upgrade, kubectl
+  drain for hardware swap, cluster autoscaler scale-down).
+
+  Render only when there's actually something to protect: at
+  least 2 replicas. Two cases produce that:
+
+    - replicaCount > 1 explicitly set on the env
+    - autoscaling.enabled with maxReplicas > 1 (we use maxReplicas
+      because HPA can scale the deployment any time; basing the
+      budget on min would mean a drain during off-peak hours can
+      still take everything down)
+
+  For single-replica envs (replicaCount: 1 and autoscaling off),
+  a PDB doesn't help — there's no second pod to keep up. Skipping
+  the PDB lets node drains evict the lone pod cleanly; kubelet
+  reschedules within seconds.
+
+  minAvailable: 1 is the safe default. Drains block while only one
+  pod is up but allow normal rolling updates (which create a new
+  pod before evicting the old one, so the budget stays satisfied
+  throughout the rollout).
+*/}}
+{{- $hasReplicas := gt (int .Values.replicaCount) 1 -}}
+{{- $hasHPA := and .Values.autoscaling .Values.autoscaling.enabled (gt (int .Values.autoscaling.maxReplicas) 1) -}}
+{{- if or $hasReplicas $hasHPA }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "kusoenvironment.fullname" . }}
+  labels:
+    {{- include "kusoenvironment.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      {{- include "kusoenvironment.selectorLabels" . | nindent 6 }}
+{{- end }}

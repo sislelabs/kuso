@@ -82,7 +82,14 @@ export interface KusoService {
 export interface KusoEnvironmentSpec {
   project: string;
   service: string;
-  kind: "production" | "preview";
+  // production: the always-on env auto-created with each KusoService
+  // preview:    PR-driven ephemeral (managed by kuso-server's GH
+  //             dispatcher)
+  // custom:     user-created long-lived (staging, qa, demo). Added in
+  //             v0.16.4 so the env-switcher could distinguish these
+  //             from production in the UI without breaking helm chart
+  //             value defaults.
+  kind: "production" | "preview" | "custom";
   branch?: string;
   pullRequest?: { number?: number; headRef?: string };
   ttl?: { expiresAt?: string };

@@ -241,6 +241,13 @@ var (
 	serviceAddPort        int
 	serviceAddImageRepo   string
 	serviceAddImageTag    string
+	serviceAddFromService string
+	serviceAddCommand     []string
+	// --replicas: HPA min. 0 = use chart default (1). Setting this to
+	// 2 is the cheapest way to get rolling updates without a request
+	// gap, and the cheapest way to survive a node drain.
+	serviceAddMinReplicas int
+	serviceAddMaxReplicas int
 )
 
 var projectServiceCmd = &cobra.Command{
@@ -269,6 +276,24 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 		Runtime: serviceAddRuntime,
 		Port:    int32(serviceAddPort),
 		Repo:    &kusoApi.ServiceRepoSpec{Path: serviceAddPath},
+		Command: serviceAddCommand,
+	}
+	// Build a ServiceScale only when the user actually set a flag —
+	// passing an all-zero struct would clobber the chart's defaults
+	// (Min=1, Max=5) with explicit 0s, which the operator interprets
+	// as "scale to zero", which is almost never what `--replicas 0`
+	// would mean to a user typing the flag.
+	if serviceAddMinReplicas > 0 || serviceAddMaxReplicas > 0 {
+		req.Scale = &kusoApi.ServiceScale{
+			Min: serviceAddMinReplicas,
+			Max: serviceAddMaxReplicas,
+		}
+		// If only min is set, default max to min so the autoscaler
+		// doesn't render a Max < Min and refuse to schedule. Mirrors
+		// what `kuso service set` does on a partial update.
+		if serviceAddMaxReplicas == 0 {
+			req.Scale.Max = serviceAddMinReplicas
+		}
 	}
 	// runtime=image: point kuso at a pre-built image instead of a
 	// repo. The server requires image.repository when runtime is
@@ -284,6 +309,24 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 		}
 	} else if serviceAddImageRepo != "" || serviceAddImageTag != "" {
 		return fmt.Errorf("--image-repo / --image-tag only valid with --runtime=image")
+	}
+	// runtime=worker: no repo of its own, inherits the sibling's
+	// image. Friendly client-side check so the user sees a clear
+	// message; the server enforces the same constraint server-side.
+	if serviceAddRuntime == "worker" {
+		if serviceAddFromService == "" {
+			return fmt.Errorf("--runtime=worker requires --from-service (the sibling service whose image to reuse)")
+		}
+		req.FromService = serviceAddFromService
+		// Workers don't build independently. Drop the default "."
+		// repo path so the server-side spec stays clean (the worker
+		// CR has no Repo block at all).
+		req.Repo = nil
+		if len(serviceAddCommand) == 0 {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: --runtime=worker without --command runs the image's default ENTRYPOINT; usually you want --command ./worker (or similar)\n")
+		}
+	} else if serviceAddFromService != "" {
+		return fmt.Errorf("--from-service only valid with --runtime=worker (got runtime=%q)", serviceAddRuntime)
 	}
 	resp, err := api.AddService(args[0], req)
 	if err != nil {
@@ -404,6 +447,8 @@ var (
 	serviceSetDomains     string // comma- or newline-separated host list
 	serviceSetInternal       string // "on" | "off" | "" (leave alone)
 	serviceSetPrivateEgress  string // "on" | "off" | "" (leave alone)
+	serviceSetMinReplicas    int
+	serviceSetMaxReplicas    int
 )
 
 var serviceSetCmd = &cobra.Command{
@@ -481,6 +526,18 @@ Settings → Source / Networking flow.
 				return fmt.Errorf("--private-egress must be on|off (got %q)", serviceSetPrivateEgress)
 			}
 		}
+		if cmd.Flags().Changed("replicas") || cmd.Flags().Changed("max-replicas") {
+			scale := &kusoApi.PatchScaleRequest{}
+			if cmd.Flags().Changed("replicas") {
+				v := serviceSetMinReplicas
+				scale.Min = &v
+			}
+			if cmd.Flags().Changed("max-replicas") {
+				v := serviceSetMaxReplicas
+				scale.Max = &v
+			}
+			req.Scale = scale
+		}
 		resp, err := api.PatchService(args[0], args[1], req)
 		if err != nil {
 			return fmt.Errorf("patch service: %w", err)
@@ -529,6 +586,27 @@ var addonAddCmd = &cobra.Command{
 		}
 		if !contains(supportedAddonKinds, addonAddKind) {
 			return fmt.Errorf("--kind must be one of: %s", strings.Join(supportedAddonKinds, ", "))
+		}
+		// Loud warnings for known-fragile single-pod defaults. These
+		// addons are easy to provision but lose data or messages on
+		// pod loss, and the failure mode is silent until something
+		// dies. Surfacing it at add-time gives the operator one chance
+		// to add --ha before any app starts depending on the addon.
+		// stderr (not stdout) so scripts that parse `addon add` output
+		// stay clean.
+		if !addonAddHA {
+			switch addonAddKind {
+			case "nats":
+				fmt.Fprintln(cmd.ErrOrStderr(), "warning: NATS addon defaulting to single pod — pod loss or node failure DROPS in-flight JetStream messages")
+				fmt.Fprintln(cmd.ErrOrStderr(), "         payment / ticketing / billing workloads should pass --ha for a 3-replica clustered StatefulSet")
+				fmt.Fprintln(cmd.ErrOrStderr(), "         (even with --ha, streams must be created with `--replicas 3` for HA writes — see docs/ADDON_HA.md)")
+			case "redis":
+				fmt.Fprintln(cmd.ErrOrStderr(), "warning: Redis addon defaulting to single pod — pod loss = ~30-60s of failed reads/writes until reschedule")
+				fmt.Fprintln(cmd.ErrOrStderr(), "         apps using Redis for session state, rate limiting, or seat-hold counters should pass --ha (3 Redis + 3 Sentinel)")
+			case "postgres":
+				fmt.Fprintln(cmd.ErrOrStderr(), "note: Postgres addon defaulting to single pod — pass --ha for a 3-replica CloudNativePG Cluster with ~30s automatic failover")
+				fmt.Fprintln(cmd.ErrOrStderr(), "      (requires cert-manager + the CNPG operator preinstalled — see docs/ADDON_HA.md)")
+			}
 		}
 		req := kusoApi.CreateAddonRequest{
 			Name:    args[1],
@@ -858,6 +936,10 @@ func init() {
 	serviceAddCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	serviceAddCmd.Flags().StringVar(&serviceAddImageRepo, "image-repo", "", "(runtime=image) registry image, e.g. ghcr.io/owner/app")
 	serviceAddCmd.Flags().StringVar(&serviceAddImageTag, "image-tag", "", "(runtime=image) tag — defaults to 'latest' server-side")
+	serviceAddCmd.Flags().StringVar(&serviceAddFromService, "from-service", "", "(runtime=worker) sibling service whose image to reuse, e.g. api")
+	serviceAddCmd.Flags().StringSliceVar(&serviceAddCommand, "command", nil, "(runtime=worker) container argv, e.g. --command ./worker")
+	serviceAddCmd.Flags().IntVar(&serviceAddMinReplicas, "replicas", 0, "minimum replica count (HPA min). Defaults to 1; set 2+ for rolling-update gap-free + node-drain survival.")
+	serviceAddCmd.Flags().IntVar(&serviceAddMaxReplicas, "max-replicas", 0, "maximum replica count (HPA max). Defaults to 5, or --replicas value if higher.")
 	projectServiceCmd.AddCommand(serviceDeleteCmd)
 	serviceDeleteCmd.Flags().BoolVarP(&serviceDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	projectServiceCmd.AddCommand(serviceRenameCmd)
@@ -869,6 +951,8 @@ func init() {
 	serviceSetCmd.Flags().StringVar(&serviceSetDomains, "domains", "", "comma- or space-separated custom domains (replaces list; empty clears)")
 	serviceSetCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
+	serviceSetCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
+	serviceSetCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
 
 	projectCmd.AddCommand(projectAddonCmd)
 	projectAddonCmd.AddCommand(addonAddCmd)
@@ -911,6 +995,10 @@ func init() {
 	serviceAddTopCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddImageRepo, "image-repo", "", "(runtime=image) registry image, e.g. ghcr.io/owner/app")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddImageTag, "image-tag", "", "(runtime=image) tag — defaults to 'latest' server-side")
+	serviceAddTopCmd.Flags().StringVar(&serviceAddFromService, "from-service", "", "(runtime=worker) sibling service whose image to reuse, e.g. api")
+	serviceAddTopCmd.Flags().StringSliceVar(&serviceAddCommand, "command", nil, "(runtime=worker) container argv, e.g. --command ./worker")
+	serviceAddTopCmd.Flags().IntVar(&serviceAddMinReplicas, "replicas", 0, "minimum replica count (HPA min). Defaults to 1; set 2+ for rolling-update gap-free + node-drain survival.")
+	serviceAddTopCmd.Flags().IntVar(&serviceAddMaxReplicas, "max-replicas", 0, "maximum replica count (HPA max). Defaults to 5, or --replicas value if higher.")
 	// Top-level alias `kuso service set` mirrors the long form. Cobra
 	// commands can't have two parents, so we mint a fresh shell and
 	// dispatch to the same RunE + share the flag vars (already
@@ -922,6 +1010,8 @@ func init() {
 	serviceSetTopCmd.Flags().StringVar(&serviceSetDomains, "domains", "", "comma- or space-separated custom domains (replaces list; empty clears)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
+	serviceSetTopCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
+	serviceSetTopCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
 }
 
 // serviceSetTopCmd is the top-level `kuso service set` shell. Same
