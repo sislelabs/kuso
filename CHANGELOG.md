@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.16.5] — 2026-05-27
+
+### 🐛 Bug Fixes
+- Fix(web): project-shared addons render under every env tab (#4) ([25a79cb](https://github.com/sislelabs/kuso/commit/25a79cb2ec300107e6e0513ef5909a1b983073af))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (from v0.16.4 ship) ([3b2e93e](https://github.com/sislelabs/kuso/commit/3b2e93ee1d83a87de6a48e019532373bd48bca18))
+
 ## [0.16.4] — 2026-05-27
 
 ### 🐛 Bug Fixes
@@ -590,11 +598,6 @@ messages on every release. The format is loosely based on
 
 ### Other
 - Gh: smarter, more resilient build-trigger flow ([a366108](https://github.com/sislelabs/kuso/commit/a3661088d909cbc897035c7a4bd2add19ee4e2be))
-
-## [0.9.53] — 2026-05-08
-
-### Other
-- Ux: deep review pass — 20 fixes across surface ([6ba8cbf](https://github.com/sislelabs/kuso/commit/6ba8cbf19094732e5bebf9de2eab2dd1d2dc0016))
 
 
 ---
