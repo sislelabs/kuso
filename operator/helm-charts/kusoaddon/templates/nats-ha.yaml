@@ -220,6 +220,12 @@ stringData:
   NATS_TOKEN: {{ $token | quote }}
   # HA-aware URL with comma-separated seeds so clients failing over
   # don't depend on the ClusterIP service alone resolving.
-  NATS_URL: "nats://:{{ $token }}@{{ $name }}-0.{{ $name }}-cluster:4222,nats://:{{ $token }}@{{ $name }}-1.{{ $name }}-cluster:4222,nats://:{{ $token }}@{{ $name }}-2.{{ $name }}-cluster:4222"
+  #
+  # IMPORTANT: token-auth wants `nats://<token>@host`, NOT
+  # `nats://:<token>@host`. The leading colon makes the server
+  # interpret it as user="" + password=token and return
+  # "Authorization Violation". Same bug + fix as the single-pod
+  # nats.yaml.
+  NATS_URL: "nats://{{ $token }}@{{ $name }}-0.{{ $name }}-cluster:4222,nats://{{ $token }}@{{ $name }}-1.{{ $name }}-cluster:4222,nats://{{ $token }}@{{ $name }}-2.{{ $name }}-cluster:4222"
   NATS_MONITOR_URL: "http://{{ $name }}:8222"
 {{- end }}

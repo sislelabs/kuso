@@ -1,4 +1,4 @@
-{{- if and (eq .Values.kind "redis") (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- if and (eq .Values.kind "redis") (not .Values.ha) (not .Values.external) (not .Values.useInstanceAddon) -}}
 {{- $version := .Values.version | default "7" -}}
 {{- $name := include "kusoaddon.fullname" . -}}
 {{- $secretName := include "kusoaddon.connSecretName" . -}}

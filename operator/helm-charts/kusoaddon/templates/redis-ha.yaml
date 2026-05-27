@@ -1,0 +1,356 @@
+{{- if and (eq .Values.kind "redis") .Values.ha (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- $version := .Values.version | default "7" -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{- $secretName := include "kusoaddon.connSecretName" . -}}
+{{/*
+  Redis HA — 3-replica Redis StatefulSet + 3-replica Sentinel
+  Deployment. Sentinel monitors the masters and elects a new one on
+  failure; clients that speak the sentinel:// protocol get the live
+  master address back, with no DNS/config churn during failover.
+
+  Why: the single-pod redis chart loses the entire dataset on pod
+  delete / node failure until kube reschedules. For session stores,
+  seat-hold counters, rate-limiting buckets — anything where 30s of
+  flapping = real user impact — that's the wrong story. A
+  Sentinel-fronted 1-primary + 2-replica setup survives a single node
+  loss with ~10s of write blocking during the election.
+
+  Architecture (and why):
+    - Headless service `<name>` so each Redis pod gets stable DNS
+      `<pod>.<name>.<ns>.svc.cluster.local`. The Sentinel quorum and
+      replica RESLAVEOF commands need the per-pod DNS to survive pod
+      restarts.
+    - 3 Redis pods, each starts as a replica of <name>-0 (the seed
+      primary). Sentinel takes over master election after that.
+    - 3 Sentinel pods (separate Deployment, not StatefulSet — they're
+      stateless quorum participants, restart-friendly). Quorum is 2.
+    - REDIS_URL surfaces as `redis://...` for clients that don't speak
+      Sentinel; REDIS_SENTINEL_URL surfaces as `sentinel://...` for
+      clients that do. Both auth with the same password. Apps SHOULD
+      prefer the sentinel:// URL for failover correctness — the plain
+      redis:// URL only points at the seed pod, which will lag during
+      failover if it's no longer master.
+    - AOF persistence (--appendonly yes) so a pod restart doesn't
+      flush its dataset; replication catches it up to the master.
+    - pod anti-affinity via topologySpreadConstraints — without it,
+      kube can stack all 3 Redis pods on one node, defeating HA.
+*/}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $existingPw := "" -}}
+{{- if and $existing $existing.data (index $existing.data "REDIS_PASSWORD") -}}
+  {{- $existingPw = (index $existing.data "REDIS_PASSWORD" | b64dec) -}}
+{{- end -}}
+{{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+---
+# Per-replica config rendered at pod start. Each pod runs the same
+# script — pod 0 starts as the seed primary; pods 1+ start as
+# replicas of <name>-0. After Sentinel runs an election the topology
+# can flip; the script doesn't need to know about that because
+# `replicaof no one` is just an initial-state instruction.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-conf
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+data:
+  redis.conf: |
+    port 6379
+    appendonly yes
+    requirepass REDIS_PW_PLACEHOLDER
+    masterauth REDIS_PW_PLACEHOLDER
+    # Replica-only knobs (no-ops on primary):
+    replica-announce-ip POD_FQDN_PLACEHOLDER
+    replica-read-only yes
+  sentinel.conf: |
+    port 26379
+    sentinel resolve-hostnames yes
+    sentinel announce-hostnames yes
+    # 2-of-3 quorum so a single Sentinel network blip doesn't trigger
+    # a spurious failover.
+    sentinel monitor {{ $name }} {{ $name }}-0.{{ $name }} 6379 2
+    sentinel down-after-milliseconds {{ $name }} 5000
+    sentinel failover-timeout {{ $name }} 30000
+    sentinel parallel-syncs {{ $name }} 1
+    sentinel auth-pass {{ $name }} REDIS_PW_PLACEHOLDER
+    requirepass REDIS_PW_PLACEHOLDER
+---
+# Headless service for the Redis pods — each pod gets its own DNS
+# name. Sentinel and replicas both reference these.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+    kuso.sislelabs.com/component: redis
+  ports:
+    - name: redis
+      port: 6379
+      targetPort: redis
+---
+# ClusterIP service for Sentinel quorum endpoints. Clients use
+# sentinel://<user>:<pw>@<this>:26379/<master-name> to discover the
+# current master.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}-sentinel
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+    kuso.sislelabs.com/component: sentinel
+  ports:
+    - name: sentinel
+      port: 26379
+      targetPort: sentinel
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 3
+  # OrderedReady (the default) so pod 0 is up + replicating before
+  # 1 + 2 try to RESLAVEOF it. This matters on first boot; once
+  # Sentinel is monitoring, pod restart order is irrelevant.
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+      kuso.sislelabs.com/component: redis
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+        kuso.sislelabs.com/component: redis
+    spec:
+      {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
+      {{- include "kusoaddon.placement" . | nindent 6 }}
+      # Spread Redis replicas across nodes. Without this, kube can
+      # stack all 3 on the same host and a node failure takes the
+      # whole cluster down.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "kusoaddon.selectorLabels" . | nindent 14 }}
+              kuso.sislelabs.com/component: redis
+      initContainers:
+        # Substitute the password and per-pod FQDN into redis.conf at
+        # pod start. Redis can't read env vars in directives like
+        # `requirepass`; sed is the standard workaround.
+        - name: render-conf
+          image: "redis:{{ $version }}-alpine"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              FQDN="${POD_NAME}.{{ $name }}"
+              sed -e "s#REDIS_PW_PLACEHOLDER#${REDIS_PASSWORD}#g" \
+                  -e "s#POD_FQDN_PLACEHOLDER#${FQDN}#g" \
+                  /raw/redis.conf > /conf/redis.conf
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: REDIS_PASSWORD
+          volumeMounts:
+            - name: raw-conf
+              mountPath: /raw
+            - name: conf
+              mountPath: /conf
+      containers:
+        - name: redis
+          image: "redis:{{ $version }}-alpine"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
+          # Pod 0 starts as the primary; pods 1+ start as replicas of
+          # pod 0. Sentinel takes over election after the cluster
+          # converges. The `--replicaof` flag on pod 0 is a no-op
+          # because we override below.
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              if [ "${HOSTNAME##*-}" = "0" ]; then
+                exec redis-server /conf/redis.conf
+              else
+                exec redis-server /conf/redis.conf \
+                  --replicaof {{ $name }}-0.{{ $name }} 6379
+              fi
+          ports:
+            - name: redis
+              containerPort: 6379
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: REDIS_PASSWORD
+          volumeMounts:
+            - name: conf
+              mountPath: /conf
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -a \"$REDIS_PASSWORD\" ping | grep -q PONG"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: raw-conf
+          configMap:
+            name: {{ $name }}-conf
+        - name: conf
+          emptyDir: {}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        annotations:
+          # Match the single-pod chart's behavior: keep the PVC on
+          # KusoAddon delete so an accidental `kuso addon rm` doesn't
+          # nuke session data.
+          helm.sh/resource-policy: keep
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ include "kusoaddon.storageSize" . }}
+---
+# Sentinel quorum. Deployment (not StatefulSet) — Sentinels are
+# stateless and find each other through the configured master.
+# 3 replicas with anti-affinity across nodes for the standard 2-of-3
+# quorum. Sentinels write small state files but lose nothing of
+# importance on restart.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}-sentinel
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+      kuso.sislelabs.com/component: sentinel
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+        kuso.sislelabs.com/component: sentinel
+    spec:
+      {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
+      {{- include "kusoaddon.placement" . | nindent 6 }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              {{- include "kusoaddon.selectorLabels" . | nindent 14 }}
+              kuso.sislelabs.com/component: sentinel
+      initContainers:
+        - name: render-conf
+          image: "redis:{{ $version }}-alpine"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
+          command: ["/bin/sh", "-c"]
+          # Sentinel rewrites its own config file at runtime (adds
+          # `sentinel known-replica` lines, etc.), so we copy the
+          # template to a writable emptyDir instead of running it
+          # from the read-only configMap mount.
+          args:
+            - |
+              set -e
+              sed "s#REDIS_PW_PLACEHOLDER#${REDIS_PASSWORD}#g" \
+                /raw/sentinel.conf > /conf/sentinel.conf
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: REDIS_PASSWORD
+          volumeMounts:
+            - name: raw-conf
+              mountPath: /raw
+            - name: conf
+              mountPath: /conf
+      containers:
+        - name: sentinel
+          image: "redis:{{ $version }}-alpine"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
+          command: ["redis-sentinel", "/conf/sentinel.conf"]
+          ports:
+            - name: sentinel
+              containerPort: 26379
+          volumeMounts:
+            - name: conf
+              mountPath: /conf
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "redis-cli -p 26379 ping | grep -q PONG"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: raw-conf
+          configMap:
+            name: {{ $name }}-conf
+        - name: conf
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kusoaddon.connSecretName" . }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  # Per-pod hosts in case a sophisticated client wants to wire its own
+  # discovery instead of relying on Sentinel. Most apps should use
+  # REDIS_SENTINEL_URL or REDIS_URL.
+  REDIS_HOST: {{ printf "%s-0.%s" $name $name | quote }}
+  REDIS_PORT: "6379"
+  REDIS_PASSWORD: {{ $password | quote }}
+  REDIS_MASTER_NAME: {{ $name | quote }}
+  REDIS_SENTINEL_HOST: {{ printf "%s-sentinel" $name | quote }}
+  REDIS_SENTINEL_PORT: "26379"
+  # Plain redis:// URL points at the seed pod. Correct at boot, BUT
+  # stale after a failover — clients that read this without
+  # re-resolving will write to a replica (which rejects with READONLY)
+  # until they reconnect. Prefer REDIS_SENTINEL_URL for new code; this
+  # is kept for compatibility with libraries that only speak
+  # redis:// and can't be reconfigured.
+  REDIS_URL: "redis://default:{{ $password }}@{{ $name }}-0.{{ $name }}:6379"
+  # Sentinel-aware DSN. Clients that recognise sentinel:// (ioredis,
+  # redis-py >=4.4, lettuce, etc.) will discover the live master and
+  # reconnect transparently on failover. The `<master>` path segment
+  # at the end tells the client which monitored master to ask for.
+  REDIS_SENTINEL_URL: "redis-sentinel://default:{{ $password }}@{{ $name }}-sentinel:26379/{{ $name }}"
+{{- end }}
