@@ -349,6 +349,20 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	// waiting for a kaniko build to land. Validation: Repository is
 	// required; Tag defaults to "latest" (with the usual mutable-tag
 	// caveat — users can redeploy with a fresh ref to roll forward).
+	// runtime=worker semantics. FromService is required (the worker
+	// has no repo of its own) and Command should usually be set
+	// (otherwise the pod runs the image's default ENTRYPOINT, which
+	// for most apps is the web server). We don't enforce Command —
+	// some images do dispatch on argv-zero and the user might know
+	// what they're doing — but we require FromService.
+	if req.Runtime == "worker" {
+		if strings.TrimSpace(req.FromService) == "" {
+			return nil, fmt.Errorf("%w: runtime=worker requires fromService (the sibling service whose image to reuse)", ErrInvalid)
+		}
+	} else if strings.TrimSpace(req.FromService) != "" {
+		return nil, fmt.Errorf("%w: fromService is only valid with runtime=worker (got runtime=%q)", ErrInvalid, req.Runtime)
+	}
+
 	var imgSpec *kube.KusoImage
 	if req.Runtime == "image" {
 		if req.Image == nil || strings.TrimSpace(req.Image.Repository) == "" {
@@ -378,6 +392,14 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Repo:        &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
 			Runtime:     req.Runtime,
 			Command:     req.Command,
+			// FromService: only meaningful for runtime=worker, where
+			// the worker reuses a sibling's built image. The build
+			// poller's promoteToFromServiceConsumers walks this field
+			// on every successful build to propagate the new image
+			// tag. Set blindly here; the create validator above is
+			// responsible for catching combinations that don't make
+			// sense (e.g. fromService set with runtime=dockerfile).
+			FromService: req.FromService,
 			Port:        req.Port,
 			Domains:     convertDomains(req.Domains),
 			EnvVars:     convertEnvVars(req.EnvVars),
@@ -655,9 +677,17 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			OwnerReferences: []metav1.OwnerReference{kube.OwnerRefForService(svc)},
 		},
 		Spec: kube.KusoEnvironmentSpec{
-			Project:          project,
-			Service:          svc.Name,
-			Kind:             "production",
+			Project: project,
+			Service: svc.Name,
+			// User-created envs (staging, qa, demo) carry Kind="custom".
+			// "production" is reserved for the auto-created env in
+			// CreateService; "preview" for PR-driven ephemerals. The
+			// dashboard's env-switcher filters by this field, so
+			// setting it to "production" here would route a staging
+			// env into the production tab (and switching the URL to
+			// ?env=staging would render an empty project view because
+			// the switcher's filter then matches zero envs).
+			Kind:             "custom",
 			Branch:           req.Branch,
 			Port:             port,
 			ReplicaCount:     intPtr(scaleMin),

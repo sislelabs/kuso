@@ -241,6 +241,8 @@ var (
 	serviceAddPort        int
 	serviceAddImageRepo   string
 	serviceAddImageTag    string
+	serviceAddFromService string
+	serviceAddCommand     []string
 )
 
 var projectServiceCmd = &cobra.Command{
@@ -269,6 +271,7 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 		Runtime: serviceAddRuntime,
 		Port:    int32(serviceAddPort),
 		Repo:    &kusoApi.ServiceRepoSpec{Path: serviceAddPath},
+		Command: serviceAddCommand,
 	}
 	// runtime=image: point kuso at a pre-built image instead of a
 	// repo. The server requires image.repository when runtime is
@@ -284,6 +287,24 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 		}
 	} else if serviceAddImageRepo != "" || serviceAddImageTag != "" {
 		return fmt.Errorf("--image-repo / --image-tag only valid with --runtime=image")
+	}
+	// runtime=worker: no repo of its own, inherits the sibling's
+	// image. Friendly client-side check so the user sees a clear
+	// message; the server enforces the same constraint server-side.
+	if serviceAddRuntime == "worker" {
+		if serviceAddFromService == "" {
+			return fmt.Errorf("--runtime=worker requires --from-service (the sibling service whose image to reuse)")
+		}
+		req.FromService = serviceAddFromService
+		// Workers don't build independently. Drop the default "."
+		// repo path so the server-side spec stays clean (the worker
+		// CR has no Repo block at all).
+		req.Repo = nil
+		if len(serviceAddCommand) == 0 {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: --runtime=worker without --command runs the image's default ENTRYPOINT; usually you want --command ./worker (or similar)\n")
+		}
+	} else if serviceAddFromService != "" {
+		return fmt.Errorf("--from-service only valid with --runtime=worker (got runtime=%q)", serviceAddRuntime)
 	}
 	resp, err := api.AddService(args[0], req)
 	if err != nil {
@@ -858,6 +879,8 @@ func init() {
 	serviceAddCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	serviceAddCmd.Flags().StringVar(&serviceAddImageRepo, "image-repo", "", "(runtime=image) registry image, e.g. ghcr.io/owner/app")
 	serviceAddCmd.Flags().StringVar(&serviceAddImageTag, "image-tag", "", "(runtime=image) tag — defaults to 'latest' server-side")
+	serviceAddCmd.Flags().StringVar(&serviceAddFromService, "from-service", "", "(runtime=worker) sibling service whose image to reuse, e.g. api")
+	serviceAddCmd.Flags().StringSliceVar(&serviceAddCommand, "command", nil, "(runtime=worker) container argv, e.g. --command ./worker")
 	projectServiceCmd.AddCommand(serviceDeleteCmd)
 	serviceDeleteCmd.Flags().BoolVarP(&serviceDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	projectServiceCmd.AddCommand(serviceRenameCmd)
@@ -911,6 +934,8 @@ func init() {
 	serviceAddTopCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddImageRepo, "image-repo", "", "(runtime=image) registry image, e.g. ghcr.io/owner/app")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddImageTag, "image-tag", "", "(runtime=image) tag — defaults to 'latest' server-side")
+	serviceAddTopCmd.Flags().StringVar(&serviceAddFromService, "from-service", "", "(runtime=worker) sibling service whose image to reuse, e.g. api")
+	serviceAddTopCmd.Flags().StringSliceVar(&serviceAddCommand, "command", nil, "(runtime=worker) container argv, e.g. --command ./worker")
 	// Top-level alias `kuso service set` mirrors the long form. Cobra
 	// commands can't have two parents, so we mint a fresh shell and
 	// dispatch to the same RunE + share the flag vars (already
