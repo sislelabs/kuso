@@ -2,6 +2,22 @@
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
 
+# replicaCount controls how many kuso-server pods run.
+#
+# Default 1 because the kuso-managed Postgres backend defaults to a
+# single-pod StatefulSet — running 2 server pods against a single-pod
+# DB doesn't buy HA (the DB is the SPOF, both servers go down with
+# the node it lives on) and doubles control-plane RAM on small
+# Hetzner boxes.
+#
+# When KUSO_POSTGRES_HA=1 is set at install time, the install script
+# scales the kuso-postgres Cluster to 3 instances AND bumps this
+# Deployment to replicas: 2 — the server is stateless above the DB,
+# so two pods are interchangeable (no leader election, no sticky
+# sessions, no per-pod work queues). Set to 2 here too if you're
+# pointing kuso-server at an external HA Postgres
+# (RDS / Crunchy Bridge / Supabase) without going through the
+# install script.
 replicaCount: 1
 
 image:
