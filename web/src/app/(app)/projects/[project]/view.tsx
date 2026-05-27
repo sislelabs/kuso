@@ -157,12 +157,31 @@ export function ProjectDetailView() {
     return v === selectedEnv;
   };
   const envs = allEnvs.filter((e) => inGroup(e.metadata.labels));
-  const addonsList = allAddons.filter((a) => inGroup(a.metadata.labels));
+  // Addons are project-shared by default. An addon with no env label
+  // serves every env-group (its conn-secret is auto-injected into every
+  // KusoEnvironment in the project — staging apps already connect to
+  // the same Postgres as production). Show such addons under every env
+  // tab so the canvas matches the data plane.
+  //
+  // An addon explicitly scoped to one env (label
+  // kuso.sislelabs.com/env=staging) is the "true isolation" case —
+  // those render ONLY under their tab and not under production. This
+  // matches kuso's `--env <name>` scoping pattern used elsewhere
+  // (secrets, env-group-specific addons created via the env-group API).
+  const addonsList = allAddons.filter((a) => {
+    const v = a.metadata.labels?.[envLabel];
+    if (!v) return true; // project-shared: visible everywhere
+    return v === selectedEnv;
+  });
   // When the selected env exists at all (i.e. has at least one env
-  // CR or addon), show every service so the canvas matches the
-  // shape of the project. If the env-group has zero envs AND zero
-  // addons, treat the project as empty in that env.
-  const envExists = envs.length > 0 || addonsList.length > 0;
+  // CR or env-scoped addon), show every service so the canvas
+  // matches the shape of the project. If the env-group has zero
+  // envs AND zero env-scoped addons, treat the project as empty in
+  // that env. Project-shared addons alone don't constitute an env —
+  // a service-less env-group is still empty from the user's POV.
+  const envExists =
+    envs.length > 0 ||
+    allAddons.some((a) => a.metadata.labels?.[envLabel] === selectedEnv);
   const services = envExists ? allServices : [];
   const onProduction = selectedEnv === "production";
 

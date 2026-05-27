@@ -104,20 +104,34 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
   const status = statusFor(data.env, data.latestBuild);
   const zoom = useStore((s) => s.transform[2]);
   const showFooter = zoom >= FOOTER_HIDE_BELOW_ZOOM;
-  // Visibility:
-  //   internal=true → no Ingress; show "internal only" chip.
-  //   custom domain set → use it (with the user's tls flag).
-  //   else → env.status.url, the auto-domain.
+  // Visibility, in priority order:
+  //   internal=true        → no Ingress; show "internal only" chip.
+  //   env.spec.host        → the env-scoped hostname (where the
+  //                           Ingress actually routes for this env).
+  //                           Critical for staging/preview tabs — the
+  //                           service's `domains` list is project-
+  //                           level and points at production hosts;
+  //                           rendering it on a staging node would
+  //                           misdirect the user to the prod URL.
+  //   custom domain set    → fall back to the user's project-level
+  //                           custom domain (with their tls flag).
+  //                           Hit when env.spec.host is unset (rare —
+  //                           operator-side default fills it).
+  //   else                 → env.status.url, the auto-domain.
   const internal =
     !!(data.service.spec as { internal?: boolean } | undefined)?.internal;
+  const envHost = data.env?.spec?.host;
+  const envTLS = data.env?.spec?.tlsEnabled ?? true;
   const customDomain = data.service.spec.domains?.find((d) => d?.host)?.host;
   const customTLS =
     data.service.spec.domains?.find((d) => d?.host)?.tls ?? true;
   const url = internal
     ? undefined
-    : customDomain
-      ? `${customTLS ? "https" : "http"}://${customDomain}`
-      : (data.env?.status?.url as string | undefined);
+    : envHost
+      ? `${envTLS ? "https" : "http"}://${envHost}`
+      : customDomain
+        ? `${customTLS ? "https" : "http"}://${customDomain}`
+        : (data.env?.status?.url as string | undefined);
   const replicas = replicasFor(data.env);
   // Display the user-supplied label when set; fall back to the slug
   // for back-compat with services created before v0.7.43 (no
