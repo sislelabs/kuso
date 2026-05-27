@@ -290,8 +290,8 @@ func TestAddService_AutoCreatesProductionEnv(t *testing.T) {
 	if env.Spec.Host != "web.alpha.example.com" {
 		t.Errorf("host: got %q", env.Spec.Host)
 	}
-	if env.Spec.Port != 3000 || env.Spec.ReplicaCount != 1 {
-		t.Errorf("port/replicas: %d/%d", env.Spec.Port, env.Spec.ReplicaCount)
+	if env.Spec.Port != 3000 || env.Spec.ReplicaCountValue() != 1 {
+		t.Errorf("port/replicas: %d/%d", env.Spec.Port, env.Spec.ReplicaCountValue())
 	}
 }
 

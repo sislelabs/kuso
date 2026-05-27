@@ -577,7 +577,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				Kind:             "production", // chart-side semantics: "always-on env"
 				Branch:           coalesce(item.svc.Spec.Repo).DefaultBranch,
 				Port:             port,
-				ReplicaCount:     scaleMin,
+				ReplicaCount:     intPtr(scaleMin),
 				Autoscaling:      autoscalingFromScale(item.svc.Spec.Scale),
 				Host:             host,
 				AdditionalHosts:  domainHosts(item.svc.Spec.Domains),

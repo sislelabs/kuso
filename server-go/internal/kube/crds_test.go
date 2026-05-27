@@ -122,8 +122,8 @@ func TestListKusoEnvironments_DecodesTypedFields(t *testing.T) {
 	if env.Spec.SecretsRev != "rev-1" {
 		t.Errorf("secretsRev: got %q, want rev-1", env.Spec.SecretsRev)
 	}
-	if env.Spec.ReplicaCount != 2 {
-		t.Errorf("replicaCount: got %d, want 2", env.Spec.ReplicaCount)
+	if env.Spec.ReplicaCountValue() != 2 {
+		t.Errorf("replicaCount: got %d, want 2", env.Spec.ReplicaCountValue())
 	}
 	if env.Spec.Image == nil || env.Spec.Image.Tag != "abc123def456" {
 		t.Errorf("image.tag: %+v", env.Spec.Image)

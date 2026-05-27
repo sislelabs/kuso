@@ -352,8 +352,8 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 	// replicaCount drift comes off the Deployment, not pods (HPA can
 	// scale outside spec; we already exempt that case).
 	dep, derr := s.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, env.Name, metav1.GetOptions{})
-	if derr == nil && env.Spec.ReplicaCount > 0 && dep.Spec.Replicas != nil &&
-		int32(env.Spec.ReplicaCount) != *dep.Spec.Replicas {
+	if derr == nil && env.Spec.ReplicaCount != nil && dep.Spec.Replicas != nil &&
+		int32(env.Spec.ReplicaCountValue()) != *dep.Spec.Replicas {
 		if dep.Annotations["autoscaling.alpha.kubernetes.io/conditions"] == "" {
 			out = append(out, "replicas")
 		}
@@ -401,8 +401,8 @@ func compareDeploymentTemplateToEnv(ctx context.Context, s *Service, ns string, 
 			out = append(out, "image")
 		}
 	}
-	if env.Spec.ReplicaCount > 0 && dep.Spec.Replicas != nil &&
-		int32(env.Spec.ReplicaCount) != *dep.Spec.Replicas {
+	if env.Spec.ReplicaCount != nil && dep.Spec.Replicas != nil &&
+		int32(env.Spec.ReplicaCountValue()) != *dep.Spec.Replicas {
 		if dep.Annotations["autoscaling.alpha.kubernetes.io/conditions"] == "" {
 			out = append(out, "replicas")
 		}

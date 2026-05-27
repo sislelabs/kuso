@@ -311,7 +311,11 @@ type KusoEnvironmentSpec struct {
 	TTL              *KusoTTL                `json:"ttl,omitempty"`
 	Image            *KusoImage              `json:"image,omitempty"`
 	Port             int32                   `json:"port,omitempty"`
-	ReplicaCount     int                     `json:"replicaCount,omitempty"`
+	// ReplicaCount: pointer so JSON marshal includes the field even at
+	// zero (omitempty would drop replicaCount=0, causing the CRD's
+	// `default: 1` to silently clobber scale-to-zero on env writes).
+	// Use Spec.ReplicaCountValue() to read with the nil→1 fallback.
+	ReplicaCount     *int                    `json:"replicaCount,omitempty"`
 	Autoscaling      *KusoAutoscaling        `json:"autoscaling,omitempty"`
 	Sleep            *KusoEnvSleep           `json:"sleep,omitempty"`
 	Host             string                  `json:"host,omitempty"`
@@ -364,6 +368,20 @@ type KusoEnvironmentSpec struct {
 	// loaded for the image-patch step) without a second GET. Server-
 	// managed: propagated from the service spec.
 	Release *KusoReleaseSpec `json:"release,omitempty"`
+}
+
+// ReplicaCountValue returns spec.ReplicaCount as an int, falling back
+// to the CRD default of 1 when the pointer is nil.
+func (s *KusoEnvironmentSpec) ReplicaCountValue() int {
+	if s == nil || s.ReplicaCount == nil {
+		return 1
+	}
+	return *s.ReplicaCount
+}
+
+// SetReplicaCount sets spec.ReplicaCount via the pointer.
+func (s *KusoEnvironmentSpec) SetReplicaCount(v int) {
+	s.ReplicaCount = &v
 }
 
 type KusoPullRequest struct {

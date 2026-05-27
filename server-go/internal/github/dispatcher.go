@@ -498,7 +498,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			},
 			TTL:              &kube.KusoTTL{ExpiresAt: expiresAt},
 			Port:             port,
-			ReplicaCount:     1,
+			ReplicaCount:     func() *int { v := 1; return &v }(),
 			Host:             fmt.Sprintf("%s-pr-%d.%s", short, pr.Number, baseDomain),
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",

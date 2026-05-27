@@ -436,7 +436,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Kind:             "production",
 			Branch:           defaultBranch,
 			Port:             port,
-			ReplicaCount:     scale.MinValue(),
+			ReplicaCount:     intPtr(scale.MinValue()),
 			Autoscaling:      autoscalingFromScale(scale),
 			Host:             defaultHost(req.Name, project, proj.Spec.BaseDomain),
 			AdditionalHosts:  domainHosts(created.Spec.Domains),
@@ -660,7 +660,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			Kind:             "production",
 			Branch:           req.Branch,
 			Port:             port,
-			ReplicaCount:     scaleMin,
+			ReplicaCount:     intPtr(scaleMin),
 			Autoscaling:      autoscalingFromScale(svc.Spec.Scale),
 			Host:             host,
 			AdditionalHosts:  domainHosts(svc.Spec.Domains),
@@ -1192,6 +1192,10 @@ func effectiveScaleMin(svc *kube.KusoService) int {
 	}
 	return min
 }
+
+// intPtr is the obvious helper for int → *int. Used so JSON marshal
+// emits zero values (omitempty drops bare 0).
+func intPtr(v int) *int { return &v }
 
 // hasWakeOnExcludePaths reports whether the service has any
 // wakeOn.ExcludePaths configured — the signal for "this deployment
