@@ -159,6 +159,16 @@ type PatchServiceRequest struct {
 	Domains     *[]PatchServiceDomain `json:"domains,omitempty"`
 	Internal      *bool                `json:"internal,omitempty"`
 	PrivateEgress *bool                `json:"privateEgress,omitempty"`
+	Scale         *PatchScaleRequest   `json:"scale,omitempty"`
+}
+
+// PatchScaleRequest mirrors the server's projects.PatchScaleRequest.
+// Each field is a pointer so unset is distinguishable from zero — Min=0
+// is a valid request that means "scale to zero between requests".
+type PatchScaleRequest struct {
+	Min       *int `json:"min,omitempty"`
+	Max       *int `json:"max,omitempty"`
+	TargetCPU *int `json:"targetCPU,omitempty"`
 }
 
 // PatchService applies a partial update to a service spec. Mirrors
