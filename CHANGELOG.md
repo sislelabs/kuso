@@ -5,6 +5,17 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.16.3] — 2026-05-27
+
+### 🐛 Bug Fixes
+- Fix(crd): add 'image' to KusoService.spec.runtime enum ([f35dfca](https://github.com/sislelabs/kuso/commit/f35dfcae41bc66e070b1551f2774c47dad9bd21b))
+
+### 📝 Docs
+- Docs(skill): refresh kuso skill for v0.16.x ([807cc15](https://github.com/sislelabs/kuso/commit/807cc1521d61239c94f0cc135cde126a0880c999))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries ([9b72e47](https://github.com/sislelabs/kuso/commit/9b72e47e88a5bb264ab75960d9c935173eb6f1b9))
+
 ## [0.16.2] — 2026-05-27
 
 ### 🐛 Bug Fixes
@@ -584,11 +595,6 @@ messages on every release. The format is loosely based on
 
 ### 👷 CI
 - Ci: register react-hooks plugin + fix 22 lint errors ([e403395](https://github.com/sislelabs/kuso/commit/e40339555eb80d6b8039ece743d4c44fa12f2352))
-
-## [0.9.51] — 2026-05-08
-
-### 🐛 Bug Fixes
-- Fix(env-switcher): always set ?env=<name>, even for production ([b855bdd](https://github.com/sislelabs/kuso/commit/b855bdd34e8d19bc78ef982edf6f0574cfc33f65))
 
 
 ---
