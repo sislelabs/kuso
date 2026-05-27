@@ -247,9 +247,30 @@ type KusoEnvVar struct {
 }
 
 type KusoScaleSpec struct {
-	Min       int `json:"min,omitempty"`
-	Max       int `json:"max,omitempty"`
-	TargetCPU int `json:"targetCPU,omitempty"`
+	// Min: scale.min replicas. Pointer so JSON marshal includes the
+	// field even when zero (omitempty would drop min=0, causing the
+	// CRD's `default: 1` to kick in and silently clobber the user's
+	// scale-to-zero intent). All readers handle nil as "use the
+	// CRD default" so existing callers keep working.
+	Min       *int `json:"min,omitempty"`
+	Max       int  `json:"max,omitempty"`
+	TargetCPU int  `json:"targetCPU,omitempty"`
+}
+
+// MinValue returns scale.Min as an int, falling back to the CRD default
+// of 1 when the pointer is nil. All hot-path code reads through this
+// helper so a nil/0 ambiguity can never produce the wrong replicaCount.
+func (s *KusoScaleSpec) MinValue() int {
+	if s == nil || s.Min == nil {
+		return 1
+	}
+	return *s.Min
+}
+
+// SetMin sets scale.Min via the pointer. Convenience for callers that
+// don't want to allocate the int themselves.
+func (s *KusoScaleSpec) SetMin(v int) {
+	s.Min = &v
 }
 
 type KusoServiceSleep struct {

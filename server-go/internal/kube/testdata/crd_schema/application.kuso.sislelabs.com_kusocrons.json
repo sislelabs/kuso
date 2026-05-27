@@ -73,6 +73,33 @@
             ],
             "type": "string"
           },
+          "onFailure": {
+            "description": "Optional notification hook fired when a scheduled Job\nexits non-zero. The cron watcher POSTs a JSON body\n`{project, service, cron, jobName, exitCode,\nstartedAt, finishedAt, logsURL}` to webhookURL. When\nsecretRef is set, the body is HMAC-SHA256 signed\nwith the secret's value under the\n`X-Kuso-Signature` header.\n\nWithout this, a silently-failing cron only surfaces\nin the deployments tab — users with reminders,\nrefund deadlines, or expiry sweeps want active\nalerting.\n",
+            "properties": {
+              "secretRef": {
+                "description": "Reference to a Secret whose value is the HMAC signing key.",
+                "properties": {
+                  "key": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "pattern": "^[a-z0-9][a-z0-9-]*-conn$",
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "key"
+                ],
+                "type": "object"
+              },
+              "webhookURL": {
+                "description": "HTTPS endpoint to POST failure events to.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "placement": {
             "properties": {
               "labels": {

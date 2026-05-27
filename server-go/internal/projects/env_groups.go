@@ -548,10 +548,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		if port == 0 {
 			port = 8080
 		}
-		scaleMin := 1
-		if item.svc.Spec.Scale != nil && item.svc.Spec.Scale.Min > 0 {
-			scaleMin = item.svc.Spec.Scale.Min
-		}
+		scaleMin := effectiveScaleMin(item.svc)
 		anchor := idx == 0
 		annot := map[string]string{
 			"kuso.sislelabs.com/env-group-source-service": item.fqn,

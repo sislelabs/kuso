@@ -48,9 +48,12 @@ func (s *Service) WakeService(ctx context.Context, project, service string) erro
 		return fmt.Errorf("get production env: %w", err)
 	}
 
-	min := 1
-	if svc.Spec.Scale != nil && svc.Spec.Scale.Min > 0 {
-		min = svc.Spec.Scale.Min
+	// Wake always brings replicas to at least 1 — even if the user
+	// asked for scale-to-zero, a manual wake means they want it
+	// running now.
+	min := svc.Spec.Scale.MinValue()
+	if min < 1 {
+		min = 1
 	}
 
 	// Stamp desired replicas onto status.wakeReplicas — the operator's

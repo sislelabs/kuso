@@ -96,7 +96,7 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 	}
 	if cr.Spec.Scale != nil {
 		s.Scale = &ScaleSpec{
-			Min:       cr.Spec.Scale.Min,
+			Min:       cr.Spec.Scale.MinValue(),
 			Max:       cr.Spec.Scale.Max,
 			TargetCPU: cr.Spec.Scale.TargetCPU,
 		}

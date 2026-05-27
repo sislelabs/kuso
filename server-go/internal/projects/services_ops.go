@@ -300,10 +300,11 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		repoURL = proj.Spec.DefaultRepo.URL
 	}
 
-	scale := &kube.KusoScaleSpec{Min: 1, Max: 5, TargetCPU: 70}
+	scale := &kube.KusoScaleSpec{Max: 5, TargetCPU: 70}
+	scale.SetMin(1)
 	if req.Scale != nil {
 		if req.Scale.Min > 0 {
-			scale.Min = req.Scale.Min
+			scale.SetMin(req.Scale.Min)
 		}
 		if req.Scale.Max > 0 {
 			scale.Max = req.Scale.Max
@@ -435,7 +436,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Kind:             "production",
 			Branch:           defaultBranch,
 			Port:             port,
-			ReplicaCount:     scale.Min,
+			ReplicaCount:     scale.MinValue(),
 			Autoscaling:      autoscalingFromScale(scale),
 			Host:             defaultHost(req.Name, project, proj.Spec.BaseDomain),
 			AdditionalHosts:  domainHosts(created.Spec.Domains),
@@ -1177,11 +1178,11 @@ func (s *Service) buildServiceResolver(ctx context.Context, project, ns string) 
 // Tickero use-case: keep /api/v1/payments/notify always-warm without
 // disabling sleep on every backoffice / preview env.
 func effectiveScaleMin(svc *kube.KusoService) int {
-	min := 1
-	if svc != nil && svc.Spec.Scale != nil && svc.Spec.Scale.Min > 0 {
-		min = svc.Spec.Scale.Min
+	if svc == nil || svc.Spec.Scale == nil {
+		return 1
 	}
-	if svc != nil && svc.Spec.Scale != nil && svc.Spec.Scale.Min == 0 {
+	min := svc.Spec.Scale.MinValue()
+	if min == 0 {
 		// User asked for scale-to-zero. Honour unless wakeOn says
 		// otherwise.
 		if hasWakeOnExcludePaths(svc) {
@@ -1224,7 +1225,8 @@ func autoscalingFromScale(scale *kube.KusoScaleSpec) *kube.KusoAutoscaling {
 	if scale == nil {
 		return nil
 	}
-	if scale.Max <= scale.Min {
+	minVal := scale.MinValue()
+	if scale.Max <= minVal {
 		// No headroom requested. Leave HPA off; the chart renders a
 		// static-replica Deployment.
 		return nil
@@ -1233,13 +1235,12 @@ func autoscalingFromScale(scale *kube.KusoScaleSpec) *kube.KusoAutoscaling {
 	if target <= 0 {
 		target = 70
 	}
-	min := scale.Min
-	if min <= 0 {
-		min = 1
+	if minVal <= 0 {
+		minVal = 1
 	}
 	return &kube.KusoAutoscaling{
 		Enabled:                        true,
-		MinReplicas:                    min,
+		MinReplicas:                    minVal,
 		MaxReplicas:                    scale.Max,
 		TargetCPUUtilizationPercentage: target,
 	}
@@ -1513,7 +1514,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			svc.Spec.Scale = &kube.KusoScaleSpec{}
 		}
 		if req.Scale.Min != nil {
-			svc.Spec.Scale.Min = *req.Scale.Min
+			svc.Spec.Scale.SetMin(*req.Scale.Min)
 		}
 		if req.Scale.Max != nil {
 			svc.Spec.Scale.Max = *req.Scale.Max

@@ -155,6 +155,24 @@
           "project": {
             "type": "string"
           },
+          "release": {
+            "description": "Pre-deploy release hook. When set, the build poller\nruns `command` as a Job using the NEW build's image\n+ this env's effective envVars/envFromSecrets BEFORE\npromoting the image onto the deployment. Heroku-\nstyle — typical use is `./bin/migrate` or\n`npx prisma migrate deploy`.\n\nOn non-zero exit (or timeout) the build is marked\nrelease-failed and the image tag is NOT patched —\nexisting pods keep running on the previous image.\nA notify event fires so a failed migration doesn't\nsilently bury itself in the build history.\n\nThe Job is named `\u003cenv\u003e-release-\u003cshort-image-tag\u003e`,\nso re-deploying the same tag is a no-op (Job exists,\nalready succeeded). Mirrored onto every\nKusoEnvironment owned by this service.\n",
+            "properties": {
+              "command": {
+                "description": "argv for the release Job container. Empty list = no release hook (equivalent to omitting the release block).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "timeoutSeconds": {
+                "default": 900,
+                "description": "Hard cap on the Job. On timeout the build is marked release-failed. Default 900s (15min).",
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
           "repo": {
             "properties": {
               "path": {
@@ -197,6 +215,7 @@
             "type": "object"
           },
           "sleep": {
+            "description": "Cold-pause behaviour. When enabled, the operator scales\nthe deployment to 0 after `afterMinutes` of no inbound\ntraffic; the first request wakes it back up.\n\nDO NOT enable for services that receive third-party\nwebhooks or payment callbacks (Stripe, ePay, GitHub,\nSlack, etc.). Cold-start can exceed the sender's\nretry timeout, producing duplicate or late\ndeliveries. Safe for backoffice tools, internal\ndashboards, and preview environments.\n\nFor services that mix callbacks with other traffic,\nset wakeOn.excludePaths so the deployment stays\nwarm even when sleep.enabled is true. Note: the\nsemantic is \"if any path matters, the whole\ndeployment stays warm\" — kube can't route per-path\ninside one Deployment.\n",
             "properties": {
               "afterMinutes": {
                 "default": 30,
@@ -205,6 +224,18 @@
               "enabled": {
                 "default": false,
                 "type": "boolean"
+              },
+              "wakeOn": {
+                "description": "Must-stay-warm signals. When excludePaths is\nnon-empty, the operator keeps the deployment\nat min 1 even when scale.Min=0 would otherwise\nidle it. Tickero's payment-callback use case:\nwakeOn.excludePaths: [\"/api/v1/payments/notify\"]\nmeans /api/v1/payments/notify is reachable 24/7\nand the rest of the service stays warm too\n(per-path isolation needs a service split).\n",
+                "properties": {
+                  "excludePaths": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
               }
             },
             "type": "object"

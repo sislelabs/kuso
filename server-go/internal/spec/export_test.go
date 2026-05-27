@@ -22,7 +22,7 @@ func seedFullService(project, service string) planSeed {
 			PrivateEgress: true,
 			Repo:          &kube.KusoRepoRef{URL: "https://github.com/me/api", DefaultBranch: "main"},
 			Domains:       []kube.KusoDomain{{Host: "api.shop.example.com", TLS: true}},
-			Scale:         &kube.KusoScaleSpec{Min: 2, Max: 6, TargetCPU: 65},
+			Scale:         func() *kube.KusoScaleSpec { s := &kube.KusoScaleSpec{Max: 6, TargetCPU: 65}; s.SetMin(2); return s }(),
 			Sleep:         &kube.KusoServiceSleep{Enabled: true, AfterMinutes: 20},
 			Placement:     &kube.KusoPlacement{Labels: map[string]string{"region": "eu"}},
 			Volumes:       []kube.KusoVolume{{Name: "data", MountPath: "/data", SizeGi: 5}},
