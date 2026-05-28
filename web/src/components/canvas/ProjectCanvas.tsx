@@ -390,19 +390,21 @@ export function ProjectCanvas({
       //    secrets), inferring from the value is impossible — but the
       //    KEY name is observable and most apps follow the convention
       //    `<SERVICE>_URL`. Match the leading SERVICE token (case-
-      //    insensitive) against sibling service short names; tie-
-      //    breaking by longest match so SUPABASE_URL doesn't snag the
-      //    "supa" service over the "supabase" one.
+      //    insensitive) against sibling service short names.
+      //
+      // Strict matching: require token === short OR token ends with
+      // "_<short>". Bare substring suffix (e.g. "backend".endsWith
+      // ("end") for service named "end") was the v0.17.0 false-
+      // positive that drew spurious edges (B4.3 from the audit).
       const urlMatch = name.match(/^([A-Z][A-Z0-9]*?)_(URL|HOST|BASE_URL|API_URL|INTERNAL_URL|PUBLIC_URL)$/);
       if (urlMatch) {
         const token = urlMatch[1].toLowerCase();
-        // Candidates: services whose short name appears in the token.
         const candidates = services
           .map((svc) => ({
             fqn: svc.metadata.name,
             short: serviceShortName(project, svc.metadata.name),
           }))
-          .filter((c) => token === c.short || token.endsWith("_" + c.short) || token.endsWith(c.short))
+          .filter((c) => token === c.short || token.endsWith("_" + c.short))
           .sort((a, b) => b.short.length - a.short.length);
         if (candidates.length > 0) return candidates[0].fqn;
       }
@@ -420,15 +422,34 @@ export function ProjectCanvas({
     envs.forEach((e) => {
       if (e.spec.service) envBySvcFqn.set(e.spec.service, e);
     });
+    // Recognize shared-secret names so we can SKIP env-name-heuristic
+    // matching on valueFrom entries pointing at them. Without this
+    // skip, a subscribed key like API_URL whose valueFrom points at
+    // <project>-shared draws a false-positive edge to a sibling
+    // service named "api" — but the value is a generic URL the user
+    // configured in the shared secret, not necessarily a
+    // service-to-service call (B4.4 from v0.17.0 audit).
+    const sharedSecretNames = new Set([
+      `${project}-shared`,
+      "kuso-instance-shared",
+    ]);
     services.forEach((s) => {
       const ownFqn = s.metadata.name;
       const allEnvVars: { name: string; value?: string }[] = [];
       for (const ev of s.spec.envVars ?? []) {
-        if (ev?.name) allEnvVars.push({ name: ev.name, value: ev.value });
+        if (!ev?.name) continue;
+        // Skip shared-secret-backed entries when applying the
+        // key-name heuristic — see comment above.
+        const ref = (ev.valueFrom as { secretKeyRef?: { name?: string } } | undefined)?.secretKeyRef;
+        if (ref?.name && sharedSecretNames.has(ref.name)) continue;
+        allEnvVars.push({ name: ev.name, value: ev.value });
       }
       const envCR = envBySvcFqn.get(ownFqn);
       for (const ev of envCR?.spec.envVars ?? []) {
-        if (ev?.name) allEnvVars.push({ name: ev.name, value: ev.value });
+        if (!ev?.name) continue;
+        const ref = (ev.valueFrom as { secretKeyRef?: { name?: string } } | undefined)?.secretKeyRef;
+        if (ref?.name && sharedSecretNames.has(ref.name)) continue;
+        allEnvVars.push({ name: ev.name, value: ev.value });
       }
       for (const ev of allEnvVars) {
         const targetFqn = inferTargetFromEnvVar(ev.name, ev.value);

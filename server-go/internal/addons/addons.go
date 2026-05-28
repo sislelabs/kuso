@@ -494,7 +494,67 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 		Delete(ctx, fqn, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete addon: %w", err)
 	}
+	// Un-subscribe every service in the project from this addon
+	// (B3.2 from v0.17.0 audit). Without this, a stale subscription
+	// survives addon deletion and auto-re-attaches if the same name
+	// is re-added later. Best-effort: a partial failure here doesn't
+	// roll back the delete.
+	s.unsubscribeFromAddon(ctx, ns, project, name)
 	return s.RefreshEnvSecrets(ctx, project)
+}
+
+// unsubscribeFromAddon walks every KusoService in the project and
+// drops the addon short name from spec.SubscribedAddons. Idempotent
+// — services that weren't subscribed are left alone. Mirrored on the
+// child env CRs so the helm chart sees a consistent view.
+//
+// Lives in the addons package to keep the delete path self-contained;
+// see B3.2 audit note. A future refactor could route through
+// projects.UnsubscribeAddon to centralise the per-service lock; for
+// now we do a best-effort merge-patch each service.
+func (s *Service) unsubscribeFromAddon(ctx context.Context, ns, project, addonShort string) {
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).
+		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: project})})
+	if err != nil {
+		return
+	}
+	for i := range raw.Items {
+		svcU := &raw.Items[i]
+		current, found, _ := unstructured.NestedStringSlice(svcU.Object, "spec", "subscribedAddons")
+		if !found {
+			continue
+		}
+		filtered := make([]string, 0, len(current))
+		changed := false
+		for _, sub := range current {
+			// Match short ("pg") AND fully-qualified ("tickero-pg")
+			// shape so a service that recorded its subscription as
+			// the FQN gets cleaned up too.
+			if sub == addonShort || sub == project+"-"+addonShort {
+				changed = true
+				continue
+			}
+			filtered = append(filtered, sub)
+		}
+		if !changed {
+			continue
+		}
+		patch := []byte(fmt.Sprintf(`{"spec":{"subscribedAddons":%s}}`, mustJSON(filtered)))
+		_, _ = s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).
+			Patch(ctx, svcU.GetName(), types.MergePatchType, patch, metav1.PatchOptions{})
+	}
+}
+
+// mustJSON serializes a string slice to JSON for inclusion in a
+// merge-patch body. Empty slice serializes to `[]` so the patch
+// keeps the field as an explicit (non-nil) empty list rather than
+// silently re-entering legacy mount-all mode.
+func mustJSON(v []string) string {
+	if v == nil {
+		v = []string{}
+	}
+	b, _ := json.Marshal(v)
+	return string(b)
 }
 
 // RefreshEnvSecrets recomputes the project's addon-conn secret list and
@@ -558,33 +618,84 @@ func (s *Service) refreshEnvSecrets(ctx context.Context, project string, extraCo
 	if err != nil {
 		return fmt.Errorf("list envs: %w", err)
 	}
+	// Pre-compute the addon-conn allow-list per service so we can apply
+	// the v0.16.23 subscription guarantee even on addon-add/-delete
+	// paths (B3.1 from the v0.17.0 audit). Pre-fix this function
+	// blanket-mounted every addon's conn-secret on every env regardless
+	// of spec.SubscribedAddons; the subscription filter only ran on the
+	// next propagateChangedToEnvs (i.e. silently violated until the
+	// next user save).
+	projectAddonConns := make([]string, 0, len(addons))
+	for _, a := range addons {
+		projectAddonConns = append(projectAddonConns, connSecretName(a.Name))
+	}
 	for i := range envs {
 		env := &envs[i]
-		// Start from the project-wide base, then add this env's
-		// service- and env-scoped secrets. Clone so each env gets an
-		// independent slice (append on a shared backing array would
-		// cross-contaminate). The merge-patch REPLACES envFromSecrets
-		// wholesale, so the per-env list must be complete.
-		perEnv := slices.Clone(baseSecrets)
-		// The short service name + env name live on labels every
-		// kuso-created env CR carries. A hand-created CR missing the
-		// service label degrades gracefully: it still gets the base
-		// (addon-conn + project-shared) secrets, just not its own
-		// service/env-scoped ones.
-		svc := env.Labels[kube.LabelService]
-		if svc != "" {
-			perEnv = append(perEnv, kube.ServiceSecretName(project, svc))
-			if envName := env.Labels[kube.LabelEnv]; envName != "" {
-				perEnv = append(perEnv, kube.EnvSecretName(project, svc, envName))
+		// Use the retry-on-conflict RMW path so concurrent writes from
+		// the projects package (SetEnv / SetSharedEnvKeys / Patch
+		// Service / SetSubscribedAddons) don't race us — pre-v0.17.1
+		// the merge-patch here lost subscription state if another
+		// write landed between our List and Patch.
+		_, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(live *kube.KusoEnvironment) error {
+			perEnv := slices.Clone(baseSecrets)
+			// Apply the per-service addon subscription filter when the
+			// env CR carries one. nil = legacy mount-all.
+			if live.Spec.SubscribedAddons != nil {
+				perEnv = filterAddonConnsBySubscription(perEnv, projectAddonConns, live.Spec.SubscribedAddons, project)
 			}
-		}
-		patch := buildEnvFromSecretsPatch(perEnv)
-		if _, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
-			Patch(ctx, env.Name, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("patch env %s: %w", env.Name, err)
+			// The short service name + env name live on labels every
+			// kuso-created env CR carries. A hand-created CR missing
+			// the service label degrades gracefully.
+			svc := live.Labels[kube.LabelService]
+			if svc != "" {
+				perEnv = append(perEnv, kube.ServiceSecretName(project, svc))
+				if envName := live.Labels[kube.LabelEnv]; envName != "" {
+					perEnv = append(perEnv, kube.EnvSecretName(project, svc, envName))
+				}
+			}
+			live.Spec.EnvFromSecrets = perEnv
+			return nil
+		})
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("update env %s: %w", env.Name, err)
 		}
 	}
 	return nil
+}
+
+// filterAddonConnsBySubscription mirrors filterEnvFromForSubscription
+// from the projects package — duplicated here (small helper, no
+// inter-package cycle) so addons.refreshEnvSecrets can apply the
+// per-service subscription without taking a dep on internal/projects.
+// Keep the two implementations in sync.
+//
+// Allow-set accepts both short ("pg") and FQ ("tickero-pg") forms of
+// addon names. Non-addon entries pass through unchanged (per-service
+// secrets, shared secrets, user-named secrets that happen to end in
+// "-conn" but aren't project addons).
+func filterAddonConnsBySubscription(envFromSecrets, projectAddonConns, subscribedAddons []string, project string) []string {
+	allow := make(map[string]bool, len(subscribedAddons))
+	for _, name := range subscribedAddons {
+		allow[name+"-conn"] = true
+		if project != "" {
+			allow[project+"-"+name+"-conn"] = true
+		}
+	}
+	projectAddonSet := make(map[string]bool, len(projectAddonConns))
+	for _, name := range projectAddonConns {
+		projectAddonSet[name] = true
+	}
+	out := make([]string, 0, len(envFromSecrets))
+	for _, sec := range envFromSecrets {
+		if !projectAddonSet[sec] {
+			out = append(out, sec)
+			continue
+		}
+		if allow[sec] {
+			out = append(out, sec)
+		}
+	}
+	return out
 }
 
 // createAddon is the typed-write wrapper for addons.

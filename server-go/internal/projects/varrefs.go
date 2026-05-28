@@ -110,6 +110,16 @@ type ServiceRef struct {
 	NS         string
 	PublicHost string
 	PublicTLS  bool
+	// EnvScope is the env-group short name of the env doing the
+	// referencing (production, staging, preview-pr-N). Empty defaults
+	// to "production" for pre-v0.17.1 callers. Used by ExpandServiceKey
+	// to land in-cluster HOST/URL/INTERNAL_URL on the matching env's
+	// kube Service: a staging service that says ${{ api.URL }} resolves
+	// to <project>-api-staging.<ns>.svc.cluster.local, not the
+	// production sibling (which used to be the hardcoded behavior and
+	// silently leaked staging traffic to production — B4.1/B4.2 from
+	// the v0.17.0 audit).
+	EnvScope string
 }
 
 // ServiceRefResolver looks up service connection details by short
@@ -146,7 +156,11 @@ type AddonRefResolver func(name string) (connSecretName string, ok bool)
 // production sibling, which is the safer default (matches "preview
 // reads against prod data" expectation).
 func ExpandServiceKey(ref ServiceRef, key string) string {
-	host := ref.FQN + "-production." + ref.NS + ".svc.cluster.local"
+	envScope := ref.EnvScope
+	if envScope == "" {
+		envScope = "production"
+	}
+	host := ref.FQN + "-" + envScope + "." + ref.NS + ".svc.cluster.local"
 	switch key {
 	case "HOST":
 		return host

@@ -58,25 +58,60 @@ func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request)
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
+	// Env-aware filter (B1.2 from v0.17.0 audit). Pre-fix the handler
+	// returned the newest build globally per service, so a staging
+	// build that landed after a production build masked production's
+	// status on the canvas. Now an `?env=<name>` query param filters
+	// to the env-group's branch (production = the project's default
+	// branch; staging = `staging` by convention; preview-pr-N = the
+	// matching pr-N build). Empty env = legacy "newest globally"
+	// behaviour preserved for any external caller that hasn't been
+	// updated.
+	envFilter := r.URL.Query().Get("env")
+
 	raw, err := h.Svc.List(ctx, project, "")
 	if err != nil {
 		h.fail(w, "list project builds", err)
 		return
 	}
+	// Build the branch-allow predicate. Production envs use the
+	// project's default branch; staging envs use "staging"; preview
+	// builds carry a numeric PR suffix on the branch name.
+	branchAllowed := func(_ string) bool { return true }
+	if envFilter != "" {
+		switch envFilter {
+		case "production":
+			// Default-branch-only when known. Best-effort: if the
+			// project's DefaultRepo is unset we fall through to
+			// "match anything" rather than returning empty.
+			proj, perr := h.Svc.Kube.GetKusoProject(ctx, h.Svc.Namespace, project)
+			defaultBranch := "main"
+			if perr == nil && proj != nil && proj.Spec.DefaultRepo != nil && proj.Spec.DefaultRepo.DefaultBranch != "" {
+				defaultBranch = proj.Spec.DefaultRepo.DefaultBranch
+			}
+			branchAllowed = func(b string) bool { return b == defaultBranch || b == "" }
+		default:
+			// Custom envs / preview envs: match builds whose branch
+			// equals the env name (staging→staging branch). Falls
+			// through to match-anything when the build has no branch.
+			expect := envFilter
+			branchAllowed = func(b string) bool { return b == expect || b == "" }
+		}
+	}
 	// Newest-first ordering already enforced by Service.List, so the
-	// first build we see for a given service IS the latest. Skip
-	// duplicates.
+	// first matching build we see for a given service IS the latest.
 	seen := map[string]bool{}
 	out := map[string]buildSummary{}
 	for _, b := range raw {
-		// b.Spec.Service is the FQ name "<project>-<service>". The
-		// canvas keys by short name, so strip the prefix.
 		fq := b.Spec.Service
 		short := fq
 		if prefix := project + "-"; len(fq) > len(prefix) && fq[:len(prefix)] == prefix {
 			short = fq[len(prefix):]
 		}
 		if seen[short] {
+			continue
+		}
+		if !branchAllowed(b.Spec.Branch) {
 			continue
 		}
 		seen[short] = true

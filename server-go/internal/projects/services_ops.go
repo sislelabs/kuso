@@ -443,6 +443,29 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	// exist yet — the env helm chart marks the entry optional:true so
 	// the pod boots cleanly even when no shared secret has been set.
 	envFromSecrets = append(envFromSecrets, kube.SharedSecretNames(project)...)
+	// Apply subscription filters at create time (B2.1+B3.1 from the
+	// v0.17.0 audit). Pre-v0.17.1 the production env was created with
+	// every addon-conn + both shared secrets blanket-mounted, and the
+	// subscription guarantee only kicked in on the next save. New
+	// services were silently over-subscribed until then.
+	if created.Spec.SubscribedAddons != nil {
+		projectAddons := s.listProjectAddonConnSecrets(ctx, project)
+		envFromSecrets = filterEnvFromForSubscription(envFromSecrets, created.Spec.SubscribedAddons, projectAddons, project)
+	}
+	prodEnvVars := created.Spec.EnvVars
+	if created.Spec.SharedEnvKeys != nil {
+		merged, prunedFrom, err := s.resolveSharedEnvKeysForEnv(
+			ctx, ns, project,
+			created.Spec.SharedEnvKeys,
+			created.Spec.EnvVars,
+			nil,
+			envFromSecrets,
+		)
+		if err == nil {
+			prodEnvVars = merged
+			envFromSecrets = prunedFrom
+		}
+	}
 	// Workers have no HTTP surface — the env chart drops the
 	// Service+Ingress for runtime=worker. Stamping a Host anyway
 	// produces a dangling KusoEnvironment.spec.host that some chart
@@ -490,7 +513,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			// time, contrary to a stale comment in values.yaml). Any
 			// later SetEnv / PatchService call propagates updates via
 			// propagateChangedToEnvs to keep them in lockstep.
-			EnvVars: created.Spec.EnvVars,
+			EnvVars:          prodEnvVars,
+			SharedEnvKeys:    created.Spec.SharedEnvKeys,
+			SubscribedAddons: created.Spec.SubscribedAddons,
 			// Effective placement: service overrides project. Both
 			// nil = schedule anywhere (chart leaves nodeSelector
 			// blank, no affinity).
@@ -698,7 +723,12 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	scaleMin := effectiveScaleMin(svc)
 
 	// Same addon-attach as AddService — keep custom envs reachable to
-	// project addons from boot. Plus the shared project secret.
+	// project addons from boot. Plus the shared project secret. Then
+	// filter by the service's SubscribedAddons (v0.16.23+) so a new
+	// env doesn't blanket-mount every addon when the service has
+	// opted into a subset. Without this filter, AddEnvironment used
+	// to bypass the entire subscription guarantee on day-1 of every
+	// staging/qa env (B2.1+B3.1 from the v0.17.0 audit).
 	var envFromSecrets []string
 	if s.AddonConnSecrets != nil {
 		if secs, err := s.AddonConnSecrets(ctx, project); err == nil {
@@ -706,6 +736,28 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		}
 	}
 	envFromSecrets = append(envFromSecrets, kube.SharedSecretNames(project)...)
+	if svc.Spec.SubscribedAddons != nil {
+		projectAddons := s.listProjectAddonConnSecrets(ctx, project)
+		envFromSecrets = filterEnvFromForSubscription(envFromSecrets, svc.Spec.SubscribedAddons, projectAddons, project)
+	}
+	// Same treatment for inline envVars: expand the subscription into
+	// explicit valueFrom entries + drop shared-secret names from
+	// envFromSecrets so per-key gating actually works at create
+	// time, not just on the next propagation save.
+	mergedEnvVars := svc.Spec.EnvVars
+	if svc.Spec.SharedEnvKeys != nil {
+		merged, prunedFrom, err := s.resolveSharedEnvKeysForEnv(
+			ctx, ns, project,
+			svc.Spec.SharedEnvKeys,
+			svc.Spec.EnvVars,
+			nil, // no existing env entries to preserve — this is create
+			envFromSecrets,
+		)
+		if err == nil {
+			mergedEnvVars = merged
+			envFromSecrets = prunedFrom
+		}
+	}
 
 	env := &kube.KusoEnvironment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -759,7 +811,9 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
 			EnvFromSecrets:   envFromSecrets,
-			EnvVars:          svc.Spec.EnvVars,
+			EnvVars:          mergedEnvVars,
+			SharedEnvKeys:    svc.Spec.SharedEnvKeys,
+			SubscribedAddons: svc.Spec.SubscribedAddons,
 			Placement:        ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement),
 			Volumes:          svc.Spec.Volumes,
 			Runtime:          svc.Spec.Runtime,

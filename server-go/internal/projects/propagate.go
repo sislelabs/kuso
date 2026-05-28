@@ -26,6 +26,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"kuso/server/internal/kube"
 )
@@ -133,10 +134,22 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				// without re-resolving the service spec.
 				env.Spec.SharedEnvKeys = svc.Spec.SharedEnvKeys
 				env.Spec.SubscribedAddons = svc.Spec.SubscribedAddons
+				// Rewrite service-ref literals to the env-scoped form.
+				// svc.Spec.EnvVars carries production-scoped literals
+				// (set by buildServiceResolver at SetEnv time); per-
+				// env propagation re-targets them so a staging-scoped
+				// envVar lands at <fqn>-staging.<ns>.svc.cluster.local,
+				// not the production sibling (B4.1/B4.2 from v0.17.0
+				// audit).
+				envScope := env.Labels[labelEnv]
+				if envScope == "" {
+					envScope = "production"
+				}
+				rescopedSvcEnvVars := rescopeServiceRefLiterals(svc.Spec.EnvVars, ns, envScope)
 				merged, prunedFrom, err := s.resolveSharedEnvKeysForEnv(
 					ctx, ns, project,
 					svc.Spec.SharedEnvKeys,
-					svc.Spec.EnvVars,
+					rescopedSvcEnvVars,
 					env.Spec.EnvVars, // preserve per-env overrides (R-bug)
 					env.Spec.EnvFromSecrets,
 				)
@@ -250,4 +263,40 @@ func (s *Service) propagateBaseDomain(ctx context.Context, project, oldBase, new
 		}
 	}
 	return nil
+}
+
+// rescopeServiceRefLiterals walks every envVar value looking for the
+// in-cluster DNS form "<fqn>-production.<ns>.svc.cluster.local" and
+// rewrites the "-production" segment to the target env's short name.
+// Production envs (envScope=="production") pass through unchanged.
+// Worker envs / non-production envs get their staging-scoped sibling.
+//
+// Why string-substitute instead of re-resolving via the resolver:
+// the resolver requires the project's service list + each env's
+// host data which the propagation hot-loop doesn't carry. The
+// production-scoped literal already stored on svc.Spec.EnvVars
+// follows a deterministic shape (set by ExpandServiceKey), so a
+// targeted regex rewrite is safe and cheap.
+func rescopeServiceRefLiterals(in []kube.KusoEnvVar, ns, envScope string) []kube.KusoEnvVar {
+	if envScope == "" || envScope == "production" || len(in) == 0 {
+		return in
+	}
+	suffix := ".svc.cluster.local"
+	prodSeg := "-production." + ns + suffix
+	envSeg := "-" + envScope + "." + ns + suffix
+	out := make([]kube.KusoEnvVar, len(in))
+	for i, e := range in {
+		if e.Value == "" || e.ValueFrom != nil {
+			out[i] = e
+			continue
+		}
+		if !strings.Contains(e.Value, prodSeg) {
+			out[i] = e
+			continue
+		}
+		copy := e
+		copy.Value = strings.ReplaceAll(e.Value, prodSeg, envSeg)
+		out[i] = copy
+	}
+	return out
 }
