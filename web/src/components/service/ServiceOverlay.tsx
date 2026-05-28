@@ -312,11 +312,22 @@ export function ServiceOverlay({
     prevShowRuns.current = showRuns;
   }, [tab, showCrons, showRuns]);
   const fqn = service ? project + "-" + service : "";
+  // Find the env CR matching (service, envParam). The previous
+  // split("-").slice(-2) heuristic produced "frontend-staging" for
+  // an env CR named "tickero-frontend-staging" — comparing that
+  // against envParam="staging" returned no match, so the overlay
+  // fell back to the service-level domains list (production URL)
+  // on every non-production tab. Use the kuso.sislelabs.com/env
+  // label which is the canonical env short-name, with a single-
+  // segment fallback for legacy CRs without the label.
   const env = (envs.data ?? []).find((e) => {
     if (e.spec.service !== fqn) return false;
     if (envParam === "production") return e.spec.kind === "production";
-    const short = e.metadata.name.split("-").slice(-2).join("-");
-    return short === envParam;
+    const envLabel = (e.metadata.labels ?? {})["kuso.sislelabs.com/env"];
+    if (envLabel) return envLabel === envParam;
+    // Fallback: last segment of the CR name (tickero-frontend-staging → staging).
+    const parts = e.metadata.name.split("-");
+    return parts[parts.length - 1] === envParam;
   });
 
   // URL fallback chain — mirrors ServiceNode.tsx so the overlay
