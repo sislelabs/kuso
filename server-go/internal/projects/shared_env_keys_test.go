@@ -22,24 +22,35 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 		wantValues  map[string]string
 	}{
 		{
-			name: "env has overrides + mirrors",
+			name: "env has shadow overrides + per-env-only entries + mirrors",
 			svc: []kube.KusoEnvVar{
 				{Name: "NEXT_PUBLIC_API_URL", Value: "https://api.tickero.bg"},
 				{Name: "NEXT_PUBLIC_ENVIRONMENT", Value: "production"},
+				{Name: "MIRROR_ME", Value: "same-everywhere"},
 			},
 			env: []kube.KusoEnvVar{
-				// per-env override of a service var — must NOT be
-				// counted as env-only (svc has it). It'll be re-stamped
-				// from svc, which is the intended behaviour for a
-				// service-managed var.
+				// SHADOW OVERRIDE: same name as svc, different value.
+				// Must survive (user staged this for staging).
 				{Name: "NEXT_PUBLIC_API_URL", Value: "https://api-staging.tickero.bg"},
-				// per-env-only var — must survive
+				// SHADOW OVERRIDE.
+				{Name: "NEXT_PUBLIC_ENVIRONMENT", Value: "staging"},
+				// MIRROR: identical to svc value — drop, propagation
+				// will re-stamp from svc anyway.
+				{Name: "MIRROR_ME", Value: "same-everywhere"},
+				// PER-ENV-ONLY: net-new on this env.
 				{Name: "NEXT_PUBLIC_SITE_URL", Value: "https://staging.tickero.bg"},
-				// per-env-only var — must survive
 				{Name: "API_URL", Value: "http://tickero-api-staging.kuso.svc.cluster.local"},
 			},
-			wantNames:  []string{"NEXT_PUBLIC_SITE_URL", "API_URL"},
-			wantValues: map[string]string{"NEXT_PUBLIC_SITE_URL": "https://staging.tickero.bg", "API_URL": "http://tickero-api-staging.kuso.svc.cluster.local"},
+			wantNames: []string{
+				"NEXT_PUBLIC_API_URL", "NEXT_PUBLIC_ENVIRONMENT",
+				"NEXT_PUBLIC_SITE_URL", "API_URL",
+			},
+			wantValues: map[string]string{
+				"NEXT_PUBLIC_API_URL":     "https://api-staging.tickero.bg",
+				"NEXT_PUBLIC_ENVIRONMENT": "staging",
+				"NEXT_PUBLIC_SITE_URL":    "https://staging.tickero.bg",
+				"API_URL":                 "http://tickero-api-staging.kuso.svc.cluster.local",
+			},
 		},
 		{
 			name: "no env entries",
@@ -47,16 +58,29 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 			env:  nil,
 		},
 		{
-			name: "all env entries shadowed by service",
+			name: "env mirrors service exactly — all entries drop",
+			svc: []kube.KusoEnvVar{
+				{Name: "FOO", Value: "shared-value"},
+				{Name: "BAR", Value: "shared-value"},
+			},
+			env: []kube.KusoEnvVar{
+				{Name: "FOO", Value: "shared-value"},
+				{Name: "BAR", Value: "shared-value"},
+			},
+			wantNames: nil,
+		},
+		{
+			name: "all env entries shadow service with different values — all survive",
 			svc: []kube.KusoEnvVar{
 				{Name: "FOO", Value: "svc"},
 				{Name: "BAR", Value: "svc"},
 			},
 			env: []kube.KusoEnvVar{
-				{Name: "FOO", Value: "env"},
-				{Name: "BAR", Value: "env"},
+				{Name: "FOO", Value: "env-staged"},
+				{Name: "BAR", Value: "env-staged"},
 			},
-			wantNames: nil,
+			wantNames:  []string{"FOO", "BAR"},
+			wantValues: map[string]string{"FOO": "env-staged", "BAR": "env-staged"},
 		},
 	}
 	for _, tc := range cases {

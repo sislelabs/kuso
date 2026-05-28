@@ -135,11 +135,19 @@ export function ProjectCanvas({
       // Match by service short-name only. The `envs` slice has
       // already been filtered upstream to the selected env-group
       // (production / staging / preview-pr-N), so the first match
-      // here is the env we want. The old code also gated on
-      // `e.spec.kind === "production"`, which broke the canvas
-      // when staging/qa envs were selected — those carry
-      // kind="custom" since v0.16.4.
-      const env = envs.find((e) => e.spec.service === s.metadata.name);
+      // Prefer the production env when one exists — the canvas node
+      // is the visual "this service" tile, not the per-env tile.
+      // Without a preference, .find() returned whichever env was
+      // indexed first (staging-then-production was the observed
+      // order on tickero), so the chip URL showed staging.tickero.bg
+      // for a service whose canonical URL is frontend.tickero.bg.
+      //
+      // Fallback to ANY env when there's no production one — covers
+      // preview-only / staging-only setups.
+      const allForService = envs.filter((e) => e.spec.service === s.metadata.name);
+      const env =
+        allForService.find((e) => e.spec.kind === "production") ??
+        allForService[0];
       // serviceShortName strips the "<project>-" prefix the server
       // uses for the FQ name; the latest-builds endpoint returns the
       // map keyed by the same short name so direct lookup works.

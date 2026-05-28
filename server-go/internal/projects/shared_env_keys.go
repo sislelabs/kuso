@@ -19,6 +19,7 @@ package projects
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 
@@ -187,29 +188,92 @@ func (s *Service) resolveSharedEnvKeysForEnv(
 	return merged, pruned, nil
 }
 
-// extractEnvOnlyOverrides returns the env's envVar entries whose names
-// don't exist on the parent service. Those entries are the per-env
-// overrides the user set explicitly through the dashboard's "edit on
-// this env only" path; they must survive any service-level write.
+// extractEnvOnlyOverrides returns env envVar entries that should
+// survive propagation as per-env overrides. Two flavours qualify:
 //
-// Service-level envVar with the same name = the env is just mirroring
-// the service; nothing to preserve since propagation will re-stamp
-// the (possibly newer) service value anyway.
+//  1. **Net-new on this env** — name doesn't exist on the service at
+//     all. These are obviously per-env (e.g. NEXT_PUBLIC_SITE_URL
+//     defined only on the staging env).
+//
+//  2. **Shadow overrides** — name exists on the service but with a
+//     DIFFERENT value/valueFrom shape. The user set this env's value
+//     deliberately (staging overrides production's
+//     NEXT_PUBLIC_API_URL); it must NOT get re-stamped to the
+//     service default.
+//
+// Service-mirrored entries (same name AND identical value) drop out
+// — propagation will re-stamp them from the (possibly newer) service
+// value anyway. That keeps the env CR from accumulating stale copies
+// of every service var.
 func extractEnvOnlyOverrides(svcExplicit, envExplicit []kube.KusoEnvVar) []kube.KusoEnvVar {
 	if len(envExplicit) == 0 {
 		return nil
 	}
-	svcNames := make(map[string]bool, len(svcExplicit))
+	svcByName := make(map[string]kube.KusoEnvVar, len(svcExplicit))
 	for _, e := range svcExplicit {
-		svcNames[e.Name] = true
+		svcByName[e.Name] = e
 	}
 	out := make([]kube.KusoEnvVar, 0, len(envExplicit))
 	for _, e := range envExplicit {
-		if !svcNames[e.Name] {
+		svcEntry, exists := svcByName[e.Name]
+		if !exists {
+			// Net-new.
+			out = append(out, e)
+			continue
+		}
+		if !envVarsEqual(svcEntry, e) {
+			// Shadow override — env value differs from service.
 			out = append(out, e)
 		}
 	}
 	return out
+}
+
+// envVarsEqual reports whether two KusoEnvVar entries carry the same
+// payload (name + value + valueFrom shape). Used by extractEnv
+// OnlyOverrides to tell mirrors from shadow overrides. Comparison
+// is conservative: anything not byte-identical is considered an
+// override (a user who reformats valueFrom shouldn't lose their
+// edit either).
+func envVarsEqual(a, b kube.KusoEnvVar) bool {
+	if a.Name != b.Name || a.Value != b.Value {
+		return false
+	}
+	// ValueFrom is a free-form map (we don't lose secretKeyRef on
+	// round-trip). Compare via reflect-style key set equality —
+	// can't reach in for typed fields without an import dance.
+	if len(a.ValueFrom) != len(b.ValueFrom) {
+		return false
+	}
+	for k, av := range a.ValueFrom {
+		bv, ok := b.ValueFrom[k]
+		if !ok {
+			return false
+		}
+		// ValueFrom values are themselves nested maps (secretKeyRef
+		// is {name, key}). JSON-roundtrip equality is the simplest
+		// safe comparison.
+		if !deepEqualJSON(av, bv) {
+			return false
+		}
+	}
+	return true
+}
+
+// deepEqualJSON compares two values via JSON marshal — handles nested
+// maps without pulling in reflect.DeepEqual surprises (NaN, function
+// values). The inputs come from JSON parsing originally so this
+// round-trip is loss-free.
+func deepEqualJSON(a, b any) bool {
+	ja, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	jb, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+	return string(ja) == string(jb)
 }
 
 // mergeExplicitOverrides layers env-level overrides on top of an
