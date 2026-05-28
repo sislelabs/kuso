@@ -5,12 +5,13 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [0.16.19] — 2026-05-28
+## [0.16.20] — 2026-05-28
 
 ### ✨ Features
 - Feat: per-env custom domains (server-side) + fix auto-host for user baseDomain ([83af977](https://github.com/sislelabs/kuso/commit/83af977e63a611bb8482c9f6633663706adc2d0b))
 
 ### 🐛 Bug Fixes
+- Fix(overlay): use env label to match env CR — staging tab no longer shows production URL ([497dcd9](https://github.com/sislelabs/kuso/commit/497dcd92edc3a9078480b8424086c52bc45123dd))
 - Fix(ui): NetworkingSection binds to env-scoped custom domains ([a7da957](https://github.com/sislelabs/kuso/commit/a7da957ea83f4739ce4119fa6506c140e2d55a33))
 - Fix: always-visible canvas footer, per-env auto-domain, drift superset, eye-toggle dirty ([f0b5e91](https://github.com/sislelabs/kuso/commit/f0b5e917b9e32d9b4c34123b8f0222123e85983c))
 

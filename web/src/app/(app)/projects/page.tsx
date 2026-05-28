@@ -121,7 +121,16 @@ export default function ProjectsPage() {
       )}
 
       {!isPending && !isError && data && data.length > 0 && (
-        <ProjectsGrid projects={data} />
+        // Stable alphabetical order by name. The server returns
+        // KusoProject CRs in whatever order the kube apiserver
+        // returns them (last-modified-ish, ETCD-internal), which
+        // shuffles the grid every time you visit. Alpha by name is
+        // predictable + deterministic across refreshes.
+        <ProjectsGrid
+          projects={[...data].sort((a, b) =>
+            a.metadata.name.localeCompare(b.metadata.name),
+          )}
+        />
       )}
     </div>
   );
