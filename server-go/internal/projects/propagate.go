@@ -25,6 +25,7 @@ package projects
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"kuso/server/internal/kube"
 )
@@ -82,6 +83,18 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 	})
 	if err != nil {
 		return fmt.Errorf("list envs for propagation: %w", err)
+	}
+	// Debug: surface the count + names so we can tell from the logs
+	// whether propagation actually walked both envs of a service.
+	{
+		names := make([]string, 0, len(envs))
+		for i := range envs {
+			names = append(names, envs[i].Name)
+		}
+		slog.InfoContext(ctx, "propagate: envs matched",
+			"project", project, "service", service,
+			"count", len(envs), "envs", names,
+			"changed_envvars", changed.EnvVars)
 	}
 	// Resolve the effective placement once before the loop when
 	// Placement is changed — calling GetKusoProject inside the loop
@@ -169,8 +182,11 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			return nil
 		})
 		if err != nil {
+			slog.WarnContext(ctx, "propagate: update env failed",
+				"env", envName, "err", err)
 			return fmt.Errorf("update env %s: %w", envName, err)
 		}
+		slog.InfoContext(ctx, "propagate: env updated", "env", envName)
 	}
 	return nil
 }

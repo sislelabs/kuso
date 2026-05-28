@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strings"
 
@@ -1113,12 +1114,14 @@ func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, e
 		return fmt.Errorf("update service env: %w", err)
 	}
 	// Propagate to envs — the chart reads from the env CR, not the
-	// service CR (see propagateChangedToEnvs). Best-effort:
-	// the service-level save succeeded and is the source of truth, so
-	// a transient kube error here doesn't fail the request.
+	// service CR (see propagateChangedToEnvs). Best-effort: a kube
+	// error here doesn't fail the user-facing save, but we log it
+	// loudly because the env CRs ARE the source of truth for what
+	// the pod sees; a silent propagation skip = drift the user can't
+	// see in the UI without inspecting the env CR by hand.
 	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{EnvVars: true}); err != nil {
-		// Logged via the caller's wrapped error; the service spec is
-		// the durable record that next reconcile/edit will retry from.
+		slog.WarnContext(ctx, "SetEnv: env propagation failed",
+			"project", project, "service", service, "err", err)
 		return nil
 	}
 	return nil
