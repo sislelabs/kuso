@@ -221,6 +221,14 @@ func (s *Service) resolveSharedEnvKeysForEnv(
 		if isUnsubscribedSharedSecretRef(e, sharedSet, sharedSecretNames) {
 			continue
 		}
+		// Also drop shared-secret refs whose KEY has a per-env Secret
+		// override. Otherwise the leftover valueFrom-to-tickero-shared
+		// gets re-applied as a "net-new env override" by
+		// extractEnvOnlyOverrides — which puts the production value
+		// back even though the user set a per-env staging value.
+		if isSharedSecretRefWithOverride(e, sharedSecretNames, overrideKeys) {
+			continue
+		}
 		filteredEnvExplicit = append(filteredEnvExplicit, e)
 	}
 	envOverrides := extractEnvOnlyOverrides(svcExplicitEnvVars, filteredEnvExplicit)
@@ -271,6 +279,28 @@ func (s *Service) collectEnvFromOverrideKeys(ctx context.Context, ns, project st
 		}
 	}
 	return out
+}
+
+// isSharedSecretRefWithOverride returns true when an env's envVar
+// entry is a valueFrom.secretKeyRef into a project-shared/instance-
+// shared secret AND the key is also present in a per-env Secret
+// (overrideKeys). The shared-secret ref must be dropped so the
+// per-env Secret's value can reach the pod via envFrom (explicit
+// env: would otherwise win over envFrom:).
+func isSharedSecretRefWithOverride(e kube.KusoEnvVar, sharedSecretNames, overrideKeys map[string]bool) bool {
+	if e.ValueFrom == nil || !overrideKeys[e.Name] {
+		return false
+	}
+	refRaw, ok := e.ValueFrom["secretKeyRef"]
+	if !ok {
+		return false
+	}
+	refMap, ok := refRaw.(map[string]any)
+	if !ok {
+		return false
+	}
+	name, _ := refMap["name"].(string)
+	return sharedSecretNames[name]
 }
 
 // isUnsubscribedSharedSecretRef returns true when an env's envVar
