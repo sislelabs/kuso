@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { ExternalLink, Check, AlertCircle, X as XIcon } from "lucide-react";
 
 // Public reviewer page (v0.17.0 Phase 2). Unauthenticated — the URL
@@ -9,6 +9,12 @@ import { ExternalLink, Check, AlertCircle, X as XIcon } from "lucide-react";
 // to open the link, see "what is this", click the preview to test
 // it, and submit one of three verdicts. No nav chrome, no kuso
 // account prompt, no upsell.
+//
+// Token comes from URL hash (#<token>) instead of a path segment so
+// the page can ship under `output: export` (Next.js static export
+// can't pre-render dynamic [param] routes). Same UX, just hash-
+// suffix instead of slash-suffix:
+//   https://<kuso-domain>/r/#abc123...
 //
 // Backend: GET /api/reviews/<token> + POST /api/reviews/<token>/decision
 
@@ -30,8 +36,8 @@ interface ReviewerView {
   closed: boolean;
 }
 
-export default function ReviewerPage({ params }: { params: Promise<{ token: string }> }) {
-  const { token } = use(params);
+export default function ReviewerPage() {
+  const [token, setToken] = useState<string>("");
   const [view, setView] = useState<ReviewerView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -39,7 +45,18 @@ export default function ReviewerPage({ params }: { params: Promise<{ token: stri
   const [reviewerEmail, setReviewerEmail] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // Read token from URL hash. Falls back to "" so an empty hash
+  // shows the "link not found" state instead of trying to fetch.
   useEffect(() => {
+    const t = window.location.hash.replace(/^#/, "");
+    setToken(t);
+  }, []);
+
+  useEffect(() => {
+    if (!token) {
+      setLoading(false);
+      return;
+    }
     void fetchReview();
     // Re-fetch every 10s while seedPhase != succeeded so the reviewer
     // sees "seeding…" flip to "ready" automatically. Once the
@@ -54,6 +71,7 @@ export default function ReviewerPage({ params }: { params: Promise<{ token: stri
   }, [token]);
 
   async function fetchReview() {
+    if (!token) return;
     try {
       const res = await fetch(`/api/reviews/${token}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -96,7 +114,7 @@ export default function ReviewerPage({ params }: { params: Promise<{ token: stri
       </div>
     );
   }
-  if (error || !view) {
+  if (!token || error || !view) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-[#0a0a0a] text-neutral-400">
         <div className="max-w-md text-center">

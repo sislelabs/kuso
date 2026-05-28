@@ -913,7 +913,10 @@ func (d *Dispatcher) ensureReviewerSurface(ctx context.Context, proj *kube.KusoP
 			"project", proj.Name, "pr", pr.Number)
 		return
 	}
-	reviewURL := strings.TrimRight(d.ReviewBaseURL, "/") + "/" + row.Token
+	// Hash-form URL (kuso/web ships under output:export which can't
+	// pre-render dynamic [param] routes). The reviewer page reads the
+	// hash client-side and fetches /api/reviews/<token>.
+	reviewURL := strings.TrimRight(d.ReviewBaseURL, "/") + "#" + row.Token
 	body := fmt.Sprintf(`🔍 **Preview ready for review**
 
 Reviewer URL (share with the client): %s

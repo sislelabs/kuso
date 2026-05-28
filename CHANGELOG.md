@@ -5,9 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [0.16.27] — 2026-05-28
+## [0.17.0] — 2026-05-28
 
 ### ✨ Features
+- Feat(previews): reviewer page + seed Job + PR-comment integration ([7780126](https://github.com/sislelabs/kuso/commit/7780126d2c080be7b7e69a1bb78bc5b01efe9014))
+- Feat(previews): trigger gating + env-var inheritance from base env ([7f0c83b](https://github.com/sislelabs/kuso/commit/7f0c83ba63219d014b78155c35bfd4f005d4f478))
 - Feat: per-service addon-mount subscription (auto-migrate from legacy) ([89525af](https://github.com/sislelabs/kuso/commit/89525af747589259692fb8e48485db48b16199a8))
 - Feat: per-env custom domains (server-side) + fix auto-host for user baseDomain ([83af977](https://github.com/sislelabs/kuso/commit/83af977e63a611bb8482c9f6633663706adc2d0b))
 
