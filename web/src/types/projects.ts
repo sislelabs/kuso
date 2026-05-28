@@ -110,6 +110,12 @@ export interface KusoEnvironmentSpec {
   // time, so the canvas can detect "service has access to addon X"
   // even when the user never wrote an explicit ${{ x.URL }} ref.
   envFromSecrets?: string[];
+  // envVars: the propagated env-var list (svc.spec.envVars merged
+  // with subscribed shared-secret valueFrom entries + per-env
+  // overrides). The canvas reads this to detect service-to-service
+  // edges that come from URL-shaped key names mounted via
+  // valueFrom.secretKeyRef (no literal value visible client-side).
+  envVars?: KusoEnvVar[];
 }
 
 export interface KusoEnvironment {

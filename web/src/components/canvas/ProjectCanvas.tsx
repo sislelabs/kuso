@@ -352,41 +352,86 @@ export function ProjectCanvas({
     });
     const sortedHosts = [...hostToFqn.keys()].sort((a, b) => b.length - a.length);
 
-    const seenRefEdges = new Set<string>();
-    services.forEach((s) => {
-      const ownFqn = s.metadata.name;
-      for (const ev of s.spec.envVars ?? []) {
-        if (!ev?.value) continue;
-        let targetFqn: string | undefined;
-        // 1. In-cluster DNS form (HOST / URL / INTERNAL_URL):
-        //    "<host>.<ns>.svc.cluster.local". <host> is the env CR's
-        //    name (e.g. "distill-api-production"), NOT the service FQN.
-        //    Try a direct service-name match first (covers any future
-        //    service-named Service), then fall back to the env-name →
-        //    service map.
-        const dns = ev.value.match(/([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local/);
+    // Helper: try to match an env var entry (by name OR string value)
+    // to a sibling service. Returns the target service FQN, or
+    // undefined. Used both for service-spec envVars AND the env-CR's
+    // expanded envVars (which include valueFrom.secretKeyRef entries
+    // for subscribed shared-secret keys we can't peek into directly).
+    const inferTargetFromEnvVar = (name: string, value: string | undefined): string | undefined => {
+      // 1. In-cluster DNS form (HOST / URL / INTERNAL_URL):
+      //    "<host>.<ns>.svc.cluster.local". <host> is the env CR's
+      //    name (e.g. "distill-api-production"), NOT the service FQN.
+      //    Try a direct service-name match first (covers any future
+      //    service-named Service), then fall back to the env-name →
+      //    service map.
+      if (value) {
+        const dns = value.match(/([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local/);
         if (dns) {
           if (services.some((t) => t.metadata.name === dns[1])) {
-            targetFqn = dns[1];
-          } else {
-            const viaEnv = envNameToSvc.get(dns[1]);
-            if (viaEnv && services.some((t) => t.metadata.name === viaEnv)) {
-              targetFqn = viaEnv;
-            }
+            return dns[1];
+          }
+          const viaEnv = envNameToSvc.get(dns[1]);
+          if (viaEnv && services.some((t) => t.metadata.name === viaEnv)) {
+            return viaEnv;
           }
         }
         // 2. Public-URL form: any of the known public hosts appears
         //    in the value (typically the whole value, e.g.
         //    "https://api.proj.example.com" — but a manually-typed
         //    health probe URL like ".../healthz" should also match).
-        if (!targetFqn) {
-          for (const h of sortedHosts) {
-            if (ev.value.includes(h)) {
-              targetFqn = hostToFqn.get(h);
-              break;
-            }
+        for (const h of sortedHosts) {
+          if (value.includes(h)) {
+            return hostToFqn.get(h);
           }
         }
+      }
+      // 3. Key-name heuristic. When the value lives in a secret we
+      //    can't read (shared-secret subscriptions, per-env override
+      //    secrets), inferring from the value is impossible — but the
+      //    KEY name is observable and most apps follow the convention
+      //    `<SERVICE>_URL`. Match the leading SERVICE token (case-
+      //    insensitive) against sibling service short names; tie-
+      //    breaking by longest match so SUPABASE_URL doesn't snag the
+      //    "supa" service over the "supabase" one.
+      const urlMatch = name.match(/^([A-Z][A-Z0-9]*?)_(URL|HOST|BASE_URL|API_URL|INTERNAL_URL|PUBLIC_URL)$/);
+      if (urlMatch) {
+        const token = urlMatch[1].toLowerCase();
+        // Candidates: services whose short name appears in the token.
+        const candidates = services
+          .map((svc) => ({
+            fqn: svc.metadata.name,
+            short: serviceShortName(project, svc.metadata.name),
+          }))
+          .filter((c) => token === c.short || token.endsWith("_" + c.short) || token.endsWith(c.short))
+          .sort((a, b) => b.short.length - a.short.length);
+        if (candidates.length > 0) return candidates[0].fqn;
+      }
+      return undefined;
+    };
+
+    const seenRefEdges = new Set<string>();
+    // Build a quick lookup from service FQN → that service's env CR
+    // (for the active env-group, since envs is already filtered).
+    // We scan both the service spec envVars AND the env CR's envVars
+    // — the latter carries valueFrom.secretKeyRef entries that the
+    // service spec never sees (subscribed shared-secret keys), and
+    // those drive the API_URL → api edge we'd otherwise miss.
+    const envBySvcFqn = new Map<string, KusoEnvironment>();
+    envs.forEach((e) => {
+      if (e.spec.service) envBySvcFqn.set(e.spec.service, e);
+    });
+    services.forEach((s) => {
+      const ownFqn = s.metadata.name;
+      const allEnvVars: { name: string; value?: string }[] = [];
+      for (const ev of s.spec.envVars ?? []) {
+        if (ev?.name) allEnvVars.push({ name: ev.name, value: ev.value });
+      }
+      const envCR = envBySvcFqn.get(ownFqn);
+      for (const ev of envCR?.spec.envVars ?? []) {
+        if (ev?.name) allEnvVars.push({ name: ev.name, value: ev.value });
+      }
+      for (const ev of allEnvVars) {
+        const targetFqn = inferTargetFromEnvVar(ev.name, ev.value);
         if (!targetFqn) continue;
         if (targetFqn === ownFqn) continue;
         const edgeKey = `${targetFqn}->${ownFqn}`;
