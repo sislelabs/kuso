@@ -152,6 +152,15 @@ export interface KusoAddonSpec {
     enabled?: boolean;
     port?: number;
   };
+  // webUI: opt-in reverse-proxy access to the addon's built-in web
+  // console (mailpit's mail viewer, NATS monitor, ...). When enabled
+  // the kuso server proxies the addon's HTTP UI at
+  // /api/projects/<p>/addons/<a>/webui/ — no new ingress, no
+  // per-UI password (session-gated). Kinds without a known UI port
+  // silently no-op.
+  webUI?: {
+    enabled?: boolean;
+  };
 }
 
 export interface KusoAddon {

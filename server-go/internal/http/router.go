@@ -430,6 +430,8 @@ func mountAuthenticatedRoutes(
 		if d.Addons != nil {
 			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			addonsH.Mount(r)
+			webuiH := &httphandlers.AddonWebUIHandler{Svc: d.Addons, DB: d.DB, Logger: d.Logger}
+			webuiH.Mount(r)
 			if d.Projects != nil {
 				exportH := &httphandlers.ExportHandler{
 					Projects:       d.Projects,

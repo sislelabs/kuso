@@ -6,7 +6,7 @@ import { useAddons } from "@/features/projects";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
 import { useCan, Perms } from "@/features/auth";
-import { X, Database, HardDrive, Settings, Info } from "lucide-react";
+import { X, Database, HardDrive, Settings, Info, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { OverviewTab } from "./overlay/OverviewTab";
@@ -199,6 +199,24 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
                   <span>project {project}</span>
                 </div>
               </div>
+              {/* Open Web UI: only renders when the addon's spec.webUI
+                  is enabled (the kuso server only proxies kinds with
+                  a known UI port, mailpit/nats today). The endpoint
+                  itself requires an authenticated kuso session, so
+                  the new-tab open inherits whatever cookie/session
+                  the dashboard is already using. */}
+              {data?.spec.webUI?.enabled && (
+                <a
+                  href={`/api/projects/${project}/addons/${addon}/webui/`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2.5 text-[11px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-secondary)] hover:text-[var(--text-primary)]"
+                  title="Open the addon's built-in web console"
+                >
+                  Open Web UI
+                  <ExternalLink className="h-3 w-3" />
+                </a>
+              )}
               <button
                 type="button"
                 onClick={guardedClose}

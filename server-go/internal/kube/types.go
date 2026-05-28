@@ -476,6 +476,12 @@ type KusoAddonSpec struct {
 	// IngressRouteTCP that exposes the addon on the cluster's public
 	// IP. Admin-only — a public database is a real attack surface.
 	PublicTCP *KusoAddonPublicTCP `json:"publicTCP,omitempty"`
+	// WebUI exposes the addon's built-in web console (mailpit's mail
+	// viewer, NATS monitor, ...) through the kuso server as an
+	// authenticated reverse proxy. No new ingress, no per-UI password
+	// — access is gated by the caller's kuso session. Kinds without
+	// a known UI port silently ignore the flag.
+	WebUI *KusoAddonWebUI `json:"webUI,omitempty"`
 }
 
 // KusoAddonPooler is the opt-in connection-pooler block on
@@ -494,6 +500,16 @@ type KusoAddonPublicTCP struct {
 	// addon is reachable on. The helm chart reads this to render the
 	// matching Traefik entrypoint binding. Zero = unallocated.
 	Port int32 `json:"port,omitempty"`
+}
+
+// KusoAddonWebUI is the opt-in web-console block on KusoAddonSpec.
+// When Enabled the kuso server reverse-proxies the addon's built-in
+// HTTP UI (kind-specific: mailpit → :8025, nats → :8222) at
+// /api/projects/<p>/addons/<a>/webui/. No new ingress, no separate
+// password — the existing session auth gates access. Kinds without
+// a known UI port silently no-op.
+type KusoAddonWebUI struct {
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // KusoAddonExternal points at an existing Secret in the project
