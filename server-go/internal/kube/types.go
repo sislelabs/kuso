@@ -151,6 +151,22 @@ type KusoServiceSpec struct {
 	Port       int32               `json:"port,omitempty"`
 	Domains    []KusoDomain        `json:"domains,omitempty"`
 	EnvVars    []KusoEnvVar        `json:"envVars,omitempty"`
+	// SharedEnvKeys is the per-service opt-in list of keys to inherit
+	// from project-shared + instance-shared secrets. Empty list +
+	// nil are distinct: nil means "legacy, mount all keys" (preserved
+	// for pre-v0.16.10 services on upgrade); a non-nil empty list
+	// means "inherit nothing." Operator chart renders one env entry
+	// per key (with valueFrom.secretKeyRef) rather than an envFrom
+	// blanket mount, so adding a new key to the shared secret does
+	// not silently leak into services that didn't subscribe.
+	//
+	// Wire: kuso env share/unshare commands; dashboard chip toggle
+	// in the Variables tab. Migration: on first reconcile after
+	// upgrade, the server populates this list with whatever keys the
+	// service's most recent build's env-detect scan saw, falling back
+	// to "all current project-shared keys" when the build never ran
+	// env-detect (zero-pod-restart safe).
+	SharedEnvKeys []string `json:"sharedEnvKeys,omitempty"`
 	Scale      *KusoScaleSpec      `json:"scale,omitempty"`
 	Sleep      *KusoServiceSleep   `json:"sleep,omitempty"`
 	Static     *KusoStaticSpec     `json:"static,omitempty"`
@@ -346,6 +362,13 @@ type KusoEnvironmentSpec struct {
 	IngressClassName string                  `json:"ingressClassName,omitempty"`
 	EnvVars          []KusoEnvVar            `json:"envVars,omitempty"`
 	EnvFromSecrets   []string                `json:"envFromSecrets,omitempty"`
+	// SharedEnvKeys mirrors KusoService.spec.sharedEnvKeys so the
+	// kusoenvironment chart can render per-key env entries (one
+	// secretKeyRef per subscribed key) instead of the legacy blanket
+	// envFromSecrets mount of project/instance shared secrets.
+	// nil = legacy (chart keeps blanket mount); non-nil = explicit
+	// subscription.
+	SharedEnvKeys    []string                `json:"sharedEnvKeys,omitempty"`
 	SecretsRev       string                  `json:"secretsRev,omitempty"`
 	Resources        map[string]any          `json:"resources,omitempty"`
 	// Placement is the resolved (effective) placement for this env,

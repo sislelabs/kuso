@@ -5,11 +5,19 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [0.16.8] — 2026-05-28
+## [0.16.9] — 2026-05-28
+
+### ✨ Features
+- Feat(addon): opt-in WebUI proxy + dashboard chip for mailpit/nats consoles ([9ffdb3c](https://github.com/sislelabs/kuso/commit/9ffdb3c869dce20633f0f94dd4c6005be8922a16))
 
 ### 🐛 Bug Fixes
+- Fix(cron): use curlimages/curl for kind=http probes (was missing curl) ([9720d0e](https://github.com/sislelabs/kuso/commit/9720d0ed91c73e926a58c603c5773a263501c131))
 - Fix: prevent worker ingresses + bound rollout history ([b698dbd](https://github.com/sislelabs/kuso/commit/b698dbdc29acc4580d26e2b0dac6725231a62ca1))
 - Fix(install): bump fs.inotify limits to avoid silent pod failures ([05d2676](https://github.com/sislelabs/kuso/commit/05d267664a93f52d9ef5ae2425925ec60cb35f5f))
+
+### 📝 Docs
+- Docs: clarify per-env override path for build-time-inlined frontend envs ([80ee524](https://github.com/sislelabs/kuso/commit/80ee52450f62a25d545e7b764a7a8f6691b7199a))
+- Docs: how to handle NEXT_PUBLIC_* (build-time-inlined) frontend envs ([b9a4d56](https://github.com/sislelabs/kuso/commit/b9a4d56d663fcf154aaccb2c757e2c0626caba19))
 
 ## [0.16.6] — 2026-05-27
 
