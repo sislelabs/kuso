@@ -656,12 +656,31 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	if host == "" {
 		base := proj.Spec.BaseDomain
 		if base == "" {
+			// Cluster-default domain: the user doesn't own a custom
+			// suffix, so we group by project to avoid name collisions
+			// across the cluster. Format:
+			//   service==project:  <env>-<project>.<cluster>
+			//   else:              <service>-<env>.<project>.<cluster>
 			base = "kuso.sislelabs.com"
-		}
-		if service == project {
-			host = fmt.Sprintf("%s-%s.%s", req.Name, project, base)
+			if service == project {
+				host = fmt.Sprintf("%s-%s.%s", req.Name, project, base)
+			} else {
+				host = fmt.Sprintf("%s-%s.%s.%s", service, req.Name, project, base)
+			}
 		} else {
-			host = fmt.Sprintf("%s-%s.%s.%s", service, req.Name, project, base)
+			// User-supplied baseDomain (the project's BaseDomain field
+			// — e.g. "tickero.bg"). User owns the eTLD+1, so we just
+			// stamp the env-scoped subdomain on top. No project name
+			// in the host; if they wanted that they would have set
+			// baseDomain = "kuso.tickero.bg".
+			//   service==project: <env>.<baseDomain>  e.g. staging.tickero.bg
+			//   else:             <service>-<env>.<baseDomain>
+			//                     e.g. frontend-staging.tickero.bg
+			if service == project {
+				host = fmt.Sprintf("%s.%s", req.Name, base)
+			} else {
+				host = fmt.Sprintf("%s-%s.%s", service, req.Name, base)
+			}
 		}
 	}
 	// Workers have no HTTP surface — strip any computed/override host

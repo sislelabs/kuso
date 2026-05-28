@@ -56,6 +56,11 @@ type ProjectsAPI interface {
 	// projects.shared_env_ops.go for the rationale.
 	ListSubscribableSharedKeys(ctx context.Context, project, service string) (*projects.SubscribableSharedKeys, error)
 	SetSharedEnvKeys(ctx context.Context, project, service string, keys []string) (*kube.KusoService, error)
+	// Per-env custom domains (v0.16.19). Replaces the service-level
+	// spec.domains propagation that used to clobber sibling envs.
+	AddEnvDomain(ctx context.Context, project, service, envName, host string) (*kube.KusoEnvironment, error)
+	RemoveEnvDomain(ctx context.Context, project, service, envName, host string) (*kube.KusoEnvironment, error)
+	SetEnvDomains(ctx context.Context, project, service, envName string, hosts []string) (*kube.KusoEnvironment, error)
 
 	// Environments
 	ListEnvironments(ctx context.Context, project string) ([]kube.KusoEnvironment, error)

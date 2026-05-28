@@ -212,6 +212,11 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	// subscription. PUT replaces the subscription list outright.
 	r.Get("/api/projects/{project}/services/{service}/shared-env-keys", h.GetSharedEnvKeys)
 	r.Put("/api/projects/{project}/services/{service}/shared-env-keys", h.SetSharedEnvKeys)
+	// Per-env custom domains (v0.16.19). Edits are scoped to the
+	// addressed env; no propagation to sibling envs.
+	r.Put("/api/projects/{project}/services/{service}/envs/{env}/domains", h.SetEnvDomains)
+	r.Post("/api/projects/{project}/services/{service}/envs/{env}/domains", h.AddEnvDomain)
+	r.Delete("/api/projects/{project}/services/{service}/envs/{env}/domains/{host}", h.RemoveEnvDomain)
 	// Drift report — pending-changes surface for the service overlay.
 	// Returns the list of fields that differ between the saved
 	// service spec and the running env CR, plus a boolean for

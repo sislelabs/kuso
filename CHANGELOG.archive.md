@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.57] — 2026-05-08
+
+### 🐛 Bug Fixes
+- Fix two regressions ([595caec](https://github.com/sislelabs/kuso/commit/595caecc71611a722c68453dcb165274fbed57fb))
+
 ## [0.9.56] — 2026-05-08
 
 ### Other

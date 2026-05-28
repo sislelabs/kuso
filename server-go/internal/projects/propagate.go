@@ -164,9 +164,21 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				env.Spec.Autoscaling = auto
 			}
 			if changed.Domains {
-				hosts := domainHosts(svc.Spec.Domains)
-				env.Spec.AdditionalHosts = hosts
-				env.Spec.TLSHosts = computeTLSHosts(env.Spec.Host, hosts)
+				// Custom domains are now per-env (env.Spec.AdditionalHosts).
+				// Stop overwriting them from the service-level template;
+				// otherwise a Networking save on production silently
+				// clobbers staging's custom domains (or worse, makes
+				// staging start serving tickero.bg → Ingress conflict
+				// with production).
+				//
+				// The chart still reads env.Spec.AdditionalHosts as the
+				// source of truth. To edit per-env hosts, go through
+				// the env-scoped PATCH endpoint (or the dashboard's
+				// Networking section, which is bound to the env CR
+				// post-v0.16.19). The service-level spec.domains field
+				// is now only used as a seed template at AddEnvironment
+				// time.
+				_ = svc
 			}
 			if changed.Internal {
 				env.Spec.Internal = svc.Spec.Internal

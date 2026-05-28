@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.16.18] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix: always-visible canvas footer, per-env auto-domain, drift superset, eye-toggle dirty ([f0b5e91](https://github.com/sislelabs/kuso/commit/f0b5e917b9e32d9b4c34123b8f0222123e85983c))
+
 ## [0.16.17] — 2026-05-28
 
 ### 🐛 Bug Fixes
@@ -617,11 +622,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs: surface "set your app's URL env var" hint on custom-domains ([90c6d5f](https://github.com/sislelabs/kuso/commit/90c6d5f1903c6ec94ecb91c70a844ad5245ce038))
-
-## [0.9.57] — 2026-05-08
-
-### 🐛 Bug Fixes
-- Fix two regressions ([595caec](https://github.com/sislelabs/kuso/commit/595caecc71611a722c68453dcb165274fbed57fb))
 
 
 ---

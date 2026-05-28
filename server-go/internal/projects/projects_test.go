@@ -537,14 +537,18 @@ func TestPatchService_PortPropagatesToEnvironments(t *testing.T) {
 	}
 }
 
-// TestPatchService_DomainsPropagateToEnvironments asserts that a
-// domains edit on KusoService rewrites each owned env's
-// spec.additionalHosts. The kusoenvironment chart reads only the
-// env CR for ingress hosts, so without propagation a user adds
-// "api.example.com" → service spec saves → no Ingress rule for it
-// → Bad Gateway. Empty domains list clears AdditionalHosts so
-// removing a custom domain actually removes the route.
-func TestPatchService_DomainsPropagateToEnvironments(t *testing.T) {
+// TestPatchService_DomainsDoNotPropagateToEnvironments asserts that
+// editing the service-level spec.domains field DOES NOT touch existing
+// envs' AdditionalHosts. v0.16.19 made spec.domains a seed-only
+// template — once an env exists, custom domains live exclusively on
+// the env CR. The propagation that used to mirror the field caused
+// production tab → staging Ingress claiming the same hostname →
+// cross-env Ingress conflict.
+//
+// Per-env edits go through AddEnvDomain / RemoveEnvDomain /
+// SetEnvDomains; those write directly to env.Spec.AdditionalHosts and
+// are covered by env_domains_test.go.
+func TestPatchService_DomainsDoNotPropagateToEnvironments(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,
 		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
@@ -562,23 +566,10 @@ func TestPatchService_DomainsPropagateToEnvironments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetEnvironment: %v", err)
 	}
-	if len(env.Spec.AdditionalHosts) != 2 ||
-		env.Spec.AdditionalHosts[0] != "api.example.com" ||
-		env.Spec.AdditionalHosts[1] != "alt.example.com" {
-		t.Errorf("after add: %+v, want [api.example.com alt.example.com]", env.Spec.AdditionalHosts)
-	}
-
-	// Now clear: empty slice means "drop all custom domains."
-	clear := []ServiceDomain{}
-	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{Domains: &clear}); err != nil {
-		t.Fatalf("PatchService clear domains: %v", err)
-	}
-	env2, err := s.GetEnvironment(context.Background(), "alpha", "alpha-web-production")
-	if err != nil {
-		t.Fatalf("GetEnvironment 2: %v", err)
-	}
-	if len(env2.Spec.AdditionalHosts) != 0 {
-		t.Errorf("after clear: %+v, want empty", env2.Spec.AdditionalHosts)
+	// Env's AdditionalHosts is whatever it was seeded with at create
+	// time (empty here); the new service-level domains do NOT leak.
+	if len(env.Spec.AdditionalHosts) != 0 {
+		t.Errorf("after svc-level PatchService domains: env.AdditionalHosts=%+v, want empty (svc spec.domains is no longer propagated)", env.Spec.AdditionalHosts)
 	}
 }
 
