@@ -385,6 +385,22 @@ if [ -z "$INSTALL_CMD" ]; then
   exit 5
 fi
 
+# ---------- kernel tuning ----------
+# k3s + workload pods + Promtail + helm operator etc. each allocate
+# inotify watchers. Distro defaults (max_user_instances=128) get
+# exhausted around ~30 pods, producing silent "failed to create
+# fsnotify watcher: too many open files" failures inside pods (config
+# reloaders, Next.js servers, etc). Bump before the agent starts so
+# the new node lands with workable limits. Persisted to sysctl.d so
+# it survives reboot. Matches the same tuning applied on the control
+# plane by install.sh.
+log "tuning kernel limits (fs.inotify) for k3s + many pods"
+cat > /etc/sysctl.d/99-kuso-inotify.conf <<SYSCTL_EOF
+fs.inotify.max_user_instances = 8192
+fs.inotify.max_user_watches = 524288
+SYSCTL_EOF
+sysctl -p /etc/sysctl.d/99-kuso-inotify.conf >/dev/null 2>&1 || true
+
 # ---------- run k3s install ----------
 log "joining cluster as ${NODE_NAME_VAL:-$HOSTNAME}"
 if [ -x /usr/local/bin/k3s ]; then
