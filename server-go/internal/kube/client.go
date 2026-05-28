@@ -63,6 +63,19 @@ func NewClientFromKubeconfig(path string) (*Client, error) {
 }
 
 func newClientFromConfig(cfg *rest.Config) (*Client, error) {
+	// Bump default QPS/burst. client-go ships with 5 QPS / 10 burst,
+	// fine for a CLI but way too tight for a long-running control-
+	// plane that fans out spec writes across N envs in tight loops
+	// (propagation, migration, addon-conn refresh). Real-world failure
+	// mode: SetSharedEnvKeys triggers propagateChangedToEnvs → per-env
+	// secret reads → rate-limit Wait > context deadline → propagation
+	// silently no-ops and the env CR is never updated. 50 QPS / 100
+	// burst leaves plenty of headroom without flooding the apiserver
+	// (k3s default qps-limit is 200; we sit well under that).
+	if cfg.QPS == 0 {
+		cfg.QPS = 50
+		cfg.Burst = 100
+	}
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("kube: typed clientset: %w", err)
