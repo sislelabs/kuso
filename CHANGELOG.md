@@ -5,7 +5,7 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [0.16.15] — 2026-05-28
+## [0.16.16] — 2026-05-28
 
 ### Other
 - Debug: log env-propagation walk + per-env outcome ([04abfe5](https://github.com/sislelabs/kuso/commit/04abfe5a21e4972ef4e7171e8c6b3e033fe4ecff))
@@ -17,6 +17,8 @@ messages on every release. The format is loosely based on
 - Feat(addon): opt-in WebUI proxy + dashboard chip for mailpit/nats consoles ([9ffdb3c](https://github.com/sislelabs/kuso/commit/9ffdb3c869dce20633f0f94dd4c6005be8922a16))
 
 ### 🐛 Bug Fixes
+- Fix(propagate): preserve per-env envVar overrides; fix overlay URL ([3a041ae](https://github.com/sislelabs/kuso/commit/3a041ae4250ebd000798e5a016135d6171da575d))
+- Fix(crd): allow project-shared/instance-shared secrets in valueFrom.secretKeyRef ([fae6355](https://github.com/sislelabs/kuso/commit/fae635578bc6983b188c8317c8272493f6cede3e))
 - Fix(kube): bump default QPS/burst — propagation was rate-limited to 0 ([97ac356](https://github.com/sislelabs/kuso/commit/97ac3564a90ef9956ae1c8b1734500acecd11b16))
 - Fix(ui): chip toggle silently no-op'd — api() double-stringified the body ([5107577](https://github.com/sislelabs/kuso/commit/5107577e8431904a741682a0ce5ae5c20819c15f))
 - Fix(migration): use short service name for GetService/lockService ([8395600](https://github.com/sislelabs/kuso/commit/839560036cccf4eaa46aab58c4c6ee8087a3835b))
