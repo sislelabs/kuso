@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -174,6 +175,25 @@ func (s *Service) resolveSharedEnvKeysForEnv(
 	if err != nil {
 		return nil, nil, err
 	}
+	// Drop subscribed-key envVars whose KEY is already overridden by
+	// a per-env / per-service Secret in envFromSecrets. Explicit `env`
+	// entries (which is what subscribed valueFrom produces) ALWAYS win
+	// over `envFrom` in k8s, so leaving the shared-secret valueFrom
+	// here would mask the per-env override and the pod would see
+	// production values on staging. Looking ahead in envFromSecrets:
+	// any non-shared secret whose key set includes one of our
+	// subscribed names = "user has a per-env override; let envFrom
+	// deliver it, drop this entry from envVars".
+	overrideKeys := s.collectEnvFromOverrideKeys(ctx, ns, project, envFromSecrets)
+	if len(overrideKeys) > 0 {
+		filteredSubscribed := subscribed[:0]
+		for _, e := range subscribed {
+			if !overrideKeys[e.Name] {
+				filteredSubscribed = append(filteredSubscribed, e)
+			}
+		}
+		subscribed = filteredSubscribed
+	}
 	// Identify env-level overrides — env envVar entries whose name
 	// is NOT on the service. Those are the user's per-env explicit
 	// edits and must survive propagation, otherwise re-saving any
@@ -210,6 +230,47 @@ func (s *Service) resolveSharedEnvKeysForEnv(
 	pruned := pruneSharedSecretsFromEnvFrom(project, envFromSecrets)
 	_ = corev1.SecretTypeOpaque // silence unused import
 	return merged, pruned, nil
+}
+
+// collectEnvFromOverrideKeys returns the set of keys present in any
+// envFromSecrets entry that's NOT a project-shared / instance-shared
+// secret. These are per-service / per-env Secrets the user has set
+// up explicitly; their keys must override any subscribed shared-secret
+// valueFrom (which would otherwise win because explicit env: beats
+// envFrom: in k8s).
+//
+// Errors are swallowed: missing secrets contribute zero keys, which
+// preserves the prior behavior. A real secret-read failure would
+// also fall through; in that case the worst case is the override
+// gets masked, which the user can recover from by re-saving.
+func (s *Service) collectEnvFromOverrideKeys(ctx context.Context, ns, project string, envFromSecrets []string) map[string]bool {
+	if len(envFromSecrets) == 0 {
+		return nil
+	}
+	sharedNames := map[string]bool{}
+	for _, n := range kube.SharedSecretNames(project) {
+		sharedNames[n] = true
+	}
+	out := map[string]bool{}
+	for _, name := range envFromSecrets {
+		if sharedNames[name] {
+			continue
+		}
+		// Skip addon conn-secrets too — they belong to addons, not
+		// user overrides, and their keys (DATABASE_URL etc) shouldn't
+		// shadow a user's explicit shared subscription.
+		if strings.HasSuffix(name, "-conn") {
+			continue
+		}
+		sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			continue
+		}
+		for k := range sec.Data {
+			out[k] = true
+		}
+	}
+	return out
 }
 
 // isUnsubscribedSharedSecretRef returns true when an env's envVar
