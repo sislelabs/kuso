@@ -62,13 +62,18 @@ spec:
                 allowPrivilegeEscalation: false
                 capabilities:
                   drop: ["ALL"]
-              {{- /* kind=http synthesises the curl runtime — image
-                     comes from kuso-backup (which has curl) and the
-                     command is auto-generated. kind=service /
-                     kind=command honour what the server stamped on
-                     the spec. */}}
+              {{- /* kind=http synthesises a curl probe. Image is
+                     curlimages/curl — a 5MB scratch+curl image with
+                     no other tools, which means no stray sh, no
+                     package manager, minimal CVE surface. Pinned by
+                     digest-friendly tag rather than :latest so two
+                     cron firings on a fast-changing :latest can't
+                     pull different code mid-rollout.
+
+                     kind=service / kind=command honour what the
+                     server stamped on the spec. */}}
               {{- if eq (default "service" .Values.kind) "http" }}
-              image: "ghcr.io/sislelabs/kuso-backup:latest"
+              image: "curlimages/curl:8.10.1"
               imagePullPolicy: IfNotPresent
               command: ["sh", "-c"]
               args:
