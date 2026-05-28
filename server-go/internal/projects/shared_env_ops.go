@@ -25,18 +25,14 @@ import (
 // the per-secret breakdown. The dashboard renders one section per
 // secret (matching the chip layout) so we keep them separated rather
 // than flatten upfront.
+//
+// Post-v0.16.11 there is no legacy mode: every service has an
+// explicit (possibly empty) subscription list. The startup migration
+// seeds existing services from their currently-mounted keys.
 type SubscribableSharedKeys struct {
 	// Subscribed is the service's current subscription list (copied
-	// from spec.sharedEnvKeys). nil means "legacy mode: all keys
-	// implicitly mounted" and the UI should render an "Opt into
-	// explicit mode" CTA rather than checkboxes.
-	Subscribed []string `json:"subscribed,omitempty"`
-	// LegacyMode = (spec.sharedEnvKeys == nil). When true, the chart
-	// blanket-mounts every shared secret on the pod and the chip
-	// toggle is disabled. UI can prompt to switch to explicit mode,
-	// at which point all currently-mounted keys become the initial
-	// subscription (no behavior change on the flip).
-	LegacyMode bool `json:"legacyMode"`
+	// from spec.sharedEnvKeys). Always non-nil after migration.
+	Subscribed []string `json:"subscribed"`
 	// Sources groups available keys by the secret they live in.
 	// Order matches kube.SharedSecretNames(): project first,
 	// instance second.
@@ -61,10 +57,13 @@ func (s *Service) ListSubscribableSharedKeys(ctx context.Context, project, servi
 	if err != nil {
 		return nil, err
 	}
-	out := &SubscribableSharedKeys{
-		Subscribed: svc.Spec.SharedEnvKeys,
-		LegacyMode: svc.Spec.SharedEnvKeys == nil,
+	subscribed := svc.Spec.SharedEnvKeys
+	if subscribed == nil {
+		// Should not happen post-migration; coerce to [] so the wire
+		// shape stays stable and the UI doesn't trip on null.
+		subscribed = []string{}
 	}
+	out := &SubscribableSharedKeys{Subscribed: subscribed}
 	for _, name := range kube.SharedSecretNames(project) {
 		keys, err := s.listSecretKeys(ctx, ns, name)
 		if err != nil {
@@ -97,17 +96,11 @@ func (s *Service) listSecretKeys(ctx context.Context, ns, name string) ([]string
 	return keys, nil
 }
 
-// SetSharedEnvKeys replaces the subscription list outright. Callers
-// that want incremental adds/removes should fetch via
-// ListSubscribableSharedKeys, mutate locally, and call this with the
-// new list. Passing an empty slice (non-nil) means "subscribe to
-// nothing" — the chart will mount neither shared secret. Passing
-// nil here is rejected: services move from legacy mode to explicit
-// mode via SetSharedEnvKeys with the current effective set; nil
-// would silently revert them to legacy.
+// SetSharedEnvKeys replaces the subscription list outright. Pass []
+// (or nil — coerced to [] internally) to subscribe to nothing.
 func (s *Service) SetSharedEnvKeys(ctx context.Context, project, service string, keys []string) (*kube.KusoService, error) {
 	if keys == nil {
-		return nil, fmt.Errorf("%w: sharedEnvKeys cannot be nil (pass [] to subscribe to nothing)", ErrInvalid)
+		keys = []string{}
 	}
 	mu := s.lockService(project, service)
 	defer mu.Unlock()

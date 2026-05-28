@@ -5,12 +5,15 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [0.16.9] — 2026-05-28
+## [0.16.10] — 2026-05-28
 
 ### ✨ Features
+- Feat: per-service opt-in subscription for project + instance shared secrets ([f30f9fa](https://github.com/sislelabs/kuso/commit/f30f9fa3074ae83241e320269d7a2cff88239559))
+- Feat(crd): KusoService.spec.sharedEnvKeys + Env mirror (no behavior change yet) ([a9c45a2](https://github.com/sislelabs/kuso/commit/a9c45a2995379cc64b54d5a224edac135e7a04b1))
 - Feat(addon): opt-in WebUI proxy + dashboard chip for mailpit/nats consoles ([9ffdb3c](https://github.com/sislelabs/kuso/commit/9ffdb3c869dce20633f0f94dd4c6005be8922a16))
 
 ### 🐛 Bug Fixes
+- Fix(ui): non-prod banner padding + canvas stops drawing implicit addon edges ([7db78f6](https://github.com/sislelabs/kuso/commit/7db78f6d0a52b7f1313589c021c3f3259aa3e481))
 - Fix(cron): use curlimages/curl for kind=http probes (was missing curl) ([9720d0e](https://github.com/sislelabs/kuso/commit/9720d0ed91c73e926a58c603c5773a263501c131))
 - Fix: prevent worker ingresses + bound rollout history ([b698dbd](https://github.com/sislelabs/kuso/commit/b698dbdc29acc4580d26e2b0dac6725231a62ca1))
 - Fix(install): bump fs.inotify limits to avoid silent pod failures ([05d2676](https://github.com/sislelabs/kuso/commit/05d267664a93f52d9ef5ae2425925ec60cb35f5f))

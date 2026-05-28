@@ -42,12 +42,12 @@ func (k *KusoClient) SetEnv(project, service string, req SetEnvRequest) (*resty.
 // GetSharedEnvKeys returns the available keys (grouped by source
 // secret) + the service's current subscription. Body shape:
 //
-//	{ "subscribed": ["KEY1", ...], "legacyMode": bool, "sources":
+//	{ "subscribed": ["KEY1", ...], "sources":
 //	  [ { "secret": "<project>-shared", "keys": [...] }, ... ] }
 //
-// LegacyMode = true means the server's reading nil sharedEnvKeys and
-// the chart still blanket-mounts; the CLI's share/unshare commands
-// auto-flip to explicit mode by seeding from the available keys.
+// Post-v0.16.11 every service has an explicit subscription (the
+// startup migration seeds existing services from their currently-
+// mounted keys), so the subscribed list is always authoritative.
 func (k *KusoClient) GetSharedEnvKeys(project, service string) (*resty.Response, error) {
 	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/shared-env-keys")
 }

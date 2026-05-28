@@ -228,23 +228,36 @@ export function ProjectCanvas({
         }
       }
     });
-    // (Implicit auto-injected addon edges removed in v0.16.10.)
-    // Previously we scanned each env's envFromSecrets and drew a
-    // dashed line for every addon-conn secret that was blanket-
-    // mounted on the pod. The problem: every kuso addon is
-    // auto-injected into every env by default, so on a 5-service /
-    // 5-addon project the canvas drew 25 lines, almost all of them
-    // false signal ("the secret is mounted but nothing reads it").
+    // Addon-conn auto-mount edges. Kuso auto-mounts every addon's
+    // <addon>-conn secret onto every env via envFromSecrets. That
+    // means apps that read e.g. DATABASE_URL from process.env have
+    // an implicit-but-real dependency on the addon, with no
+    // ${{ }} ref to detect. We surface those edges as dashed lines
+    // so the user sees "pg is wired to api" without the explicit-
+    // ref's solid line confusing them about whether it's referenced
+    // by name.
     //
-    // New rule: addon→service edges only render for *explicit*
-    // refs — either an unresolved `${{addon.KEY}}` in spec.envVars
-    // or a server-resolved valueFrom.secretKeyRef pointing at the
-    // addon's conn-secret. That set is computed above in
-    // explicitUsedAddons, so this loop has nothing to do anymore.
-    //
-    // The mount itself still happens (auto-mounting is the kuso
-    // contract, on the way out via spec.sharedEnvKeys subscription);
-    // the canvas just stops drawing lines for it.
+    // Deduped per (service, addon) — we look at any one env's
+    // envFromSecrets, not all of them, so a 5-service / 5-addon
+    // project draws at most one edge per addon→service pair
+    // instead of N² across envs.
+    const implicitUsedAddons = new Set<string>();
+    const seenSvcAddon = new Set<string>();
+    envs.forEach((e) => {
+      const svcFQN = e.spec.service;
+      const secrets = e.spec.envFromSecrets ?? [];
+      for (const secretName of secrets) {
+        if (!secretName.endsWith("-conn")) continue;
+        const addonFQN = secretName.slice(0, -"-conn".length);
+        if (!addons.some((a) => a.metadata.name === addonFQN)) continue;
+        const dedupeKey = `${svcFQN}|${addonFQN}`;
+        if (seenSvcAddon.has(dedupeKey)) continue;
+        seenSvcAddon.add(dedupeKey);
+        if (!explicitUsedAddons.has(dedupeKey)) {
+          implicitUsedAddons.add(dedupeKey);
+        }
+      }
+    });
     explicitUsedAddons.forEach((key) => {
       const [svcFQN, addonFQN] = key.split("|");
       out.push({
@@ -262,9 +275,22 @@ export function ProjectCanvas({
         style: { stroke: "rgb(245 158 11)", strokeWidth: 1.5, opacity: 0.85 },
       });
     });
-    // (Implicit dashed-edge render block deleted with the
-    // implicitUsedAddons set above — see the comment in the
-    // envs.forEach block for the rationale.)
+    implicitUsedAddons.forEach((key) => {
+      const [svcFQN, addonFQN] = key.split("|");
+      out.push({
+        id: `e:auto:${addonFQN}->${svcFQN}`,
+        source: `addon:${addonFQN}`,
+        target: `svc:${svcFQN}`,
+        animated: false,
+        data: { kind: "addon" },
+        style: {
+          stroke: "rgb(245 158 11)",
+          strokeWidth: 1.25,
+          strokeDasharray: "4 4",
+          opacity: 0.4,
+        },
+      });
+    });
     // Service → service edges from env-var refs. The server resolves
     // `${{ x.URL }}` to a literal in-cluster DNS string at SetEnv
     // time, so by the time the canvas reads spec.envVars the ref is

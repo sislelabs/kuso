@@ -1081,8 +1081,7 @@ function DetectedEnvBanner({
 }
 
 interface SubscribableShape {
-  subscribed: string[] | null;
-  legacyMode: boolean;
+  subscribed: string[];
   sources: { secret: string; keys: string[] }[];
 }
 
@@ -1095,7 +1094,7 @@ function InheritedSection({ project, service }: { project: string; service: stri
         `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys`,
       ).catch((e: unknown) =>
         e instanceof ApiError && e.status === 403
-          ? { subscribed: [], legacyMode: false, sources: [] }
+          ? { subscribed: [], sources: [] }
           : Promise.reject(e),
       ),
     staleTime: 30_000,
@@ -1114,7 +1113,6 @@ function InheritedSection({ project, service }: { project: string; service: stri
 
   const sources = sub.data?.sources ?? [];
   const subscribed = new Set(sub.data?.subscribed ?? []);
-  const legacy = sub.data?.legacyMode ?? false;
   const totalAvailable = sources.reduce((n, s) => n + s.keys.length, 0);
 
   if (totalAvailable === 0) {
@@ -1141,32 +1139,10 @@ function InheritedSection({ project, service }: { project: string; service: stri
     );
   }
 
-  // Effective-mount preview: in legacy mode every available key is
-  // mounted; in explicit mode only the subscribed set is mounted.
-  // We show the chip in two states: "mounted" (solid) vs.
-  // "available, not mounted" (outline). Clicking toggles.
-  const effective = legacy ? new Set(sources.flatMap((s) => s.keys)) : subscribed;
-  const mountedCount = effective.size;
-
-  // Toggle expands the current subscription. In legacy mode the
-  // first click flips to explicit mode by seeding the full current
-  // mount set, then applies the user's change atomically. After
-  // that, simple add/remove.
   const toggle = (key: string) => {
-    let next: Set<string>;
-    if (legacy) {
-      next = new Set(sources.flatMap((s) => s.keys));
-      // Click in legacy mode = "I want exactly the current set
-      // *minus* this key" if it's already mounted, or "*plus*"
-      // otherwise. (In legacy mode everything is already mounted,
-      // so a click is always a remove.)
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-    } else {
-      next = new Set(subscribed);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-    }
+    const next = new Set(subscribed);
+    if (next.has(key)) next.delete(key);
+    else next.add(key);
     mut.mutate(Array.from(next).sort());
   };
   const addAll = () => {
@@ -1182,12 +1158,7 @@ function InheritedSection({ project, service }: { project: string; service: stri
     >
       <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
         <span>
-          inherited env vars · {mountedCount}/{totalAvailable} subscribed
-          {legacy && (
-            <span className="ml-2 rounded border border-amber-500/40 px-1.5 py-px text-[9px] text-amber-300">
-              legacy mode
-            </span>
-          )}
+          inherited env vars · {subscribed.size}/{totalAvailable} subscribed
         </span>
         <span className="flex items-center gap-2">
           <button
@@ -1228,18 +1199,11 @@ function InheritedSection({ project, service }: { project: string; service: stri
                 : `/projects/${encodeURIComponent(project)}/settings`
             }
             keys={src.keys}
-            effective={effective}
+            effective={subscribed}
             onToggle={toggle}
             saving={mut.isPending}
           />
         ))}
-        {legacy && (
-          <p className="font-mono text-[10px] leading-relaxed text-[var(--text-tertiary)]">
-            This service is in <strong>legacy mode</strong> — every available
-            key is auto-mounted. Click a key to switch to explicit
-            subscription (mounts will not change until you do).
-          </p>
-        )}
       </div>
     </details>
   );

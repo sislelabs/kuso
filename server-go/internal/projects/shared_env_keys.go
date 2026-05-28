@@ -132,14 +132,9 @@ func mergeSubscribedEnvVars(explicit, subscribed []kube.KusoEnvVar) []kube.KusoE
 }
 
 // pruneSharedSecretsFromEnvFrom strips project + instance shared
-// secret names from envFromSecrets when sharedEnvKeys is non-nil
-// (explicit subscription mode). Addon conn-secrets stay because
-// they're still auto-mounted today. nil sharedEnvKeys = legacy
-// blanket-mount; we leave envFromSecrets untouched.
-func pruneSharedSecretsFromEnvFrom(project string, envFromSecrets []string, sharedKeysIsNil bool) []string {
-	if sharedKeysIsNil {
-		return envFromSecrets
-	}
+// secret names from envFromSecrets. Addon conn-secrets stay because
+// they're still blanket-mounted as part of the addon contract.
+func pruneSharedSecretsFromEnvFrom(project string, envFromSecrets []string) []string {
 	stripSet := make(map[string]bool, 2)
 	for _, n := range kube.SharedSecretNames(project) {
 		stripSet[n] = true
@@ -154,11 +149,10 @@ func pruneSharedSecretsFromEnvFrom(project string, envFromSecrets []string, shar
 }
 
 // resolveSharedEnvKeysForEnv computes the merged envVars + filtered
-// envFromSecrets for a single environment, given the service's
-// declared subscription. Caller stamps the returned values onto
-// env.spec.envVars + env.spec.envFromSecrets before writing back.
-// When sharedEnvKeys is nil the function is a no-op pass-through:
-// callers get back exactly what they passed in.
+// envFromSecrets for a single environment. Subscribed keys become
+// explicit valueFrom entries on envVars; the two well-known shared
+// secret names are stripped from envFromSecrets so adding a new key
+// to a shared secret doesn't silently leak into unsubscribed services.
 func (s *Service) resolveSharedEnvKeysForEnv(
 	ctx context.Context,
 	ns, project string,
@@ -166,21 +160,12 @@ func (s *Service) resolveSharedEnvKeysForEnv(
 	explicitEnvVars []kube.KusoEnvVar,
 	envFromSecrets []string,
 ) (mergedEnvVars []kube.KusoEnvVar, prunedEnvFromSecrets []string, err error) {
-	if sharedEnvKeys == nil {
-		// Legacy mode: leave both lists alone.
-		return explicitEnvVars, envFromSecrets, nil
-	}
 	subscribed, _, err := s.expandSharedEnvKeysToEnvVars(ctx, ns, project, sharedEnvKeys)
 	if err != nil {
 		return nil, nil, err
 	}
 	merged := mergeSubscribedEnvVars(explicitEnvVars, subscribed)
-	pruned := pruneSharedSecretsFromEnvFrom(project, envFromSecrets, false)
-	// Helper variable for clarity in the env-CR write path: subscribed
-	// keys are now in envVars (explicit valueFrom refs), shared
-	// secrets are out of envFromSecrets. New keys added to the
-	// project-shared secret later don't reach this pod unless the
-	// subscription is updated.
-	_ = corev1.SecretTypeOpaque // silence unused import when we later use it for validation
+	pruned := pruneSharedSecretsFromEnvFrom(project, envFromSecrets)
+	_ = corev1.SecretTypeOpaque // silence unused import
 	return merged, pruned, nil
 }

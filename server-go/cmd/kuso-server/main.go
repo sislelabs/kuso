@@ -646,6 +646,20 @@ func main() {
 			if os.Getenv("KUSO_PLATFORM_HARDEN_DISABLED") != "true" {
 				go platformharden.Run(workCtx, kc, logger)
 			}
+			// Per-service shared-secret subscription migration
+			// (v0.16.11). Seeds spec.sharedEnvKeys for any service
+			// still on the legacy "nil = mount all" path; idempotent
+			// + bounded — finishes in seconds even for large clusters
+			// since it only touches services where the field is nil.
+			// Best-effort: failure on any one service doesn't fail the
+			// migration; we just log and move on.
+			if os.Getenv("KUSO_SHARED_ENV_KEYS_MIGRATION_DISABLED") != "true" {
+				go func() {
+					mctx, mcancel := context.WithTimeout(workCtx, 10*time.Minute)
+					defer mcancel()
+					projSvc.MigrateLegacySharedEnvKeys(mctx, logger.With("component", "shared-env-keys-migration"))
+				}()
+			}
 			if os.Getenv("KUSO_ERRORSCAN_DISABLED") != "true" {
 				go (&errorscan.Scanner{
 					DB:        database,
