@@ -298,8 +298,13 @@ function NonProdBanner({ project, env }: { project: string; env: string }) {
   const label = isPreview ? "preview env" : "non-production env";
   return (
     <div className={`shrink-0 border-b ${cls}`}>
-      <div className="flex items-start gap-3 px-4 py-2 text-[12px]">
-        <span className="mt-0.5 inline-flex h-4 items-center rounded border border-current px-1.5 font-mono text-[9px] uppercase tracking-widest">
+      {/* Outer padding matches the canvas header (px-6) so the pill
+          isn't flush to the viewport edge. Items-center keeps the
+          label vertically aligned with the (single-line) text on
+          wide screens; on narrow screens the text wraps under and
+          the label keeps its position. */}
+      <div className="flex items-center gap-3 px-6 py-2 text-[12px]">
+        <span className="shrink-0 inline-flex h-4 items-center rounded border border-current px-1.5 font-mono text-[9px] uppercase tracking-widest">
           {label}
         </span>
         <p className="flex-1 leading-snug text-[var(--text-secondary)]">
@@ -312,18 +317,23 @@ function NonProdBanner({ project, env }: { project: string; env: string }) {
             <>
               This env was cloned from production. Env vars were copied verbatim;{" "}
               <span className="font-medium">addon refs were rewritten only for &quot;fresh&quot; addons</span>
-              <details className="mt-1 inline-block align-baseline">
-                <summary className="inline cursor-pointer font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]">
-                  what&apos;s a &quot;fresh&quot; addon?
-                </summary>
-                <div className="mt-1 max-w-prose rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/60 p-2 font-mono text-[11px] text-[var(--text-secondary)]">
-                  When you cloned production, any addons that already lived in
-                  this env are <em>fresh</em>: their conn-secrets point at the
-                  cloned env&apos;s own databases. Addons the new env <em>didn&apos;t</em>{" "}
-                  have were inherited — those still point at production data.
-                  Inherited addons read fine but are dangerous to write to.
-                </div>
-              </details>
+              {/* Popover is position:absolute so opening it doesn't
+                  push siblings down (the inline-block <details>
+                  default re-flowed the banner and broke the layout). */}
+              <span className="relative inline-block align-baseline ml-1">
+                <details className="group">
+                  <summary className="cursor-pointer list-none font-mono text-[10px] text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]">
+                    what&apos;s a &quot;fresh&quot; addon?
+                  </summary>
+                  <div className="absolute left-0 top-full z-20 mt-1 w-[28rem] max-w-[80vw] rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-2 font-mono text-[11px] leading-relaxed text-[var(--text-secondary)] shadow-lg">
+                    When you cloned production, any addons that already lived in
+                    this env are <em>fresh</em>: their conn-secrets point at the
+                    cloned env&apos;s own databases. Addons the new env <em>didn&apos;t</em>{" "}
+                    have were inherited — those still point at production data.
+                    Inherited addons read fine but are dangerous to write to.
+                  </div>
+                </details>
+              </span>
               . Open each service&apos;s <span className="font-mono">Variables</span> tab and confirm
               they point at the right secrets before sharing the URL.
             </>

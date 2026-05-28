@@ -196,7 +196,6 @@ export function ProjectCanvas({
     // look like the addon was disconnected from the rest of the
     // project.
     const explicitUsedAddons = new Set<string>(); // "<svc-fqn>|<addon-fqn>"
-    const implicitUsedAddons = new Set<string>(); // same shape
     services.forEach((s) => {
       for (const ev of s.spec.envVars ?? []) {
         // valueFrom path: server-resolved addon refs land here.
@@ -229,25 +228,23 @@ export function ProjectCanvas({
         }
       }
     });
-    // Auto-injected edges: scan the matching env CR's envFromSecrets.
-    // The conn-secret naming convention "<addon-fqn>-conn" is the
-    // same as the explicit path above; we just discover it via the
-    // env CR's mount list rather than an env-var ref.
-    envs.forEach((e) => {
-      const svcFQN = e.spec.service;
-      const secrets = e.spec.envFromSecrets ?? [];
-      for (const secretName of secrets) {
-        if (!secretName.endsWith("-conn")) continue;
-        const addonFQN = secretName.slice(0, -"-conn".length);
-        if (!addons.some((a) => a.metadata.name === addonFQN)) continue;
-        // Don't downgrade an explicit edge — if the service already
-        // has a hard ref, the amber-solid edge wins.
-        const key = `${svcFQN}|${addonFQN}`;
-        if (!explicitUsedAddons.has(key)) {
-          implicitUsedAddons.add(key);
-        }
-      }
-    });
+    // (Implicit auto-injected addon edges removed in v0.16.10.)
+    // Previously we scanned each env's envFromSecrets and drew a
+    // dashed line for every addon-conn secret that was blanket-
+    // mounted on the pod. The problem: every kuso addon is
+    // auto-injected into every env by default, so on a 5-service /
+    // 5-addon project the canvas drew 25 lines, almost all of them
+    // false signal ("the secret is mounted but nothing reads it").
+    //
+    // New rule: addon→service edges only render for *explicit*
+    // refs — either an unresolved `${{addon.KEY}}` in spec.envVars
+    // or a server-resolved valueFrom.secretKeyRef pointing at the
+    // addon's conn-secret. That set is computed above in
+    // explicitUsedAddons, so this loop has nothing to do anymore.
+    //
+    // The mount itself still happens (auto-mounting is the kuso
+    // contract, on the way out via spec.sharedEnvKeys subscription);
+    // the canvas just stops drawing lines for it.
     explicitUsedAddons.forEach((key) => {
       const [svcFQN, addonFQN] = key.split("|");
       out.push({
@@ -265,25 +262,9 @@ export function ProjectCanvas({
         style: { stroke: "rgb(245 158 11)", strokeWidth: 1.5, opacity: 0.85 },
       });
     });
-    implicitUsedAddons.forEach((key) => {
-      const [svcFQN, addonFQN] = key.split("|");
-      out.push({
-        id: `e:auto:${addonFQN}->${svcFQN}`,
-        source: `addon:${addonFQN}`,
-        target: `svc:${svcFQN}`,
-        animated: false,
-        // Same edge category ("addon") so the filter chip toggles
-        // both kinds together. Dashed + dimmer to read as "wired
-        // but not actively referenced" at a glance.
-        data: { kind: "addon" },
-        style: {
-          stroke: "rgb(245 158 11)",
-          strokeWidth: 1.25,
-          strokeDasharray: "4 4",
-          opacity: 0.4,
-        },
-      });
-    });
+    // (Implicit dashed-edge render block deleted with the
+    // implicitUsedAddons set above — see the comment in the
+    // envs.forEach block for the rationale.)
     // Service → service edges from env-var refs. The server resolves
     // `${{ x.URL }}` to a literal in-cluster DNS string at SetEnv
     // time, so by the time the canvas reads spec.envVars the ref is
