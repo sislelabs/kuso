@@ -98,6 +98,11 @@ export interface KusoEnvironmentSpec {
   // contains the env's host. Optional because preview envs may lack
   // an ingress.
   host?: string;
+  // additionalHosts: per-env custom domains. v0.16.19+ this is the
+  // sole source of truth for non-primary hostnames; service-level
+  // spec.domains no longer propagates here. The chart renders one
+  // Ingress rule per (host, ...additionalHosts).
+  additionalHosts?: string[];
   tlsEnabled?: boolean;
   // envFromSecrets is the list of Kubernetes Secret names that get
   // envFrom-mounted into every pod for this env. The server stamps

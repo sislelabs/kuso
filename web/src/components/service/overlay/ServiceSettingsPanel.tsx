@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { usePatchService, type PatchServiceBody } from "@/features/services";
 import { useCan, Perms } from "@/features/auth";
-import { useEnvironments, setEnvGroupServiceBranch } from "@/features/projects";
+import { useEnvironments, setEnvGroupServiceBranch, envsQueryKey } from "@/features/projects";
 import { useQueryClient } from "@tanstack/react-query";
+import { api } from "@/lib/api-client";
 import type { KusoService } from "@/types/projects";
 import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -52,7 +53,43 @@ const SECTIONS = [
 // the form state, the dirty/save bar, and the section-anchor nav.
 export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   const onProduction = !env || env === "production";
-  const baseline = useMemo(() => fromSvc(svc), [svc]);
+  // Hoisted up from below so the env-domains save path inside onSave
+  // can invalidate the envs cache after a successful PUT.
+  const qcForPanel = useQueryClient();
+  // Resolve the active env CR so we can show env-scoped state
+  // (custom domains live here, not on the service spec). useEnvironments
+  // is cached + shared with the canvas, so this doesn't add a network
+  // round-trip beyond what the page already does.
+  const envsForActive = useEnvironments(project);
+  const activeEnv = useMemo(() => {
+    const list = envsForActive.data ?? [];
+    const matchesService = (e: typeof list[number]) =>
+      e.spec.service === service ||
+      e.spec.service === `${project}-${service}`;
+    const envName = env || "production";
+    return (
+      list.find(
+        (e) =>
+          matchesService(e) &&
+          (e.spec.kind === envName ||
+            (e.metadata.labels &&
+              e.metadata.labels["kuso.sislelabs.com/env"] === envName)),
+      ) ?? list.find(matchesService)
+    );
+  }, [envsForActive.data, project, service, env]);
+  // baseline = service spec (most fields) + env CR AdditionalHosts
+  // (the domains list, which is per-env post-v0.16.19). The override
+  // means the Networking section shows what's actually serving on
+  // THIS env — staging's tickero.bg vs production's tickero.bg — and
+  // saving routes through the env endpoint, not svc PATCH.
+  const baseline = useMemo(() => {
+    const fromService = fromSvc(svc);
+    if (activeEnv) {
+      const envHosts = activeEnv.spec.additionalHosts ?? [];
+      return { ...fromService, domains: envHosts.join("\n") };
+    }
+    return fromService;
+  }, [svc, activeEnv]);
   const [state, setState] = useState<FormState>(baseline);
   const [pending, setPending] = useState(false);
   // saveError surfaces the last save failure inline next to the
@@ -143,10 +180,40 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       const a = norm(state.domains);
       const b = norm(baseline.domains);
       if (a !== b) {
-        body.domains = a
-          .split("\n")
-          .filter(Boolean)
-          .map((host) => ({ host, tls: true }));
+        // Per-env scope (v0.16.19): the form binds to the env CR's
+        // AdditionalHosts, and saves go to the env endpoint so the
+        // change doesn't leak to sibling envs. We fire this BEFORE
+        // the svc PATCH so a failure (e.g. cross-env conflict)
+        // surfaces without partially-applying other svc fields.
+        if (activeEnv) {
+          const envName = env || "production";
+          const hosts = a.split("\n").filter(Boolean);
+          try {
+            await api<unknown>(
+              `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/envs/${encodeURIComponent(envName)}/domains`,
+              { method: "PUT", body: { hosts } },
+            );
+            // Invalidate envs cache so the next render reads fresh
+            // AdditionalHosts (otherwise baseline stays stale and
+            // the dirty flag re-fires).
+            await qcForPanel.invalidateQueries({ queryKey: envsQueryKey(project) });
+          } catch (err) {
+            toast.error(
+              err instanceof Error
+                ? `Save domains: ${err.message}`
+                : "Save domains failed",
+            );
+            return;
+          }
+        } else {
+          // No active env CR resolved (legacy fallback): use the old
+          // svc-level path. spec.domains becomes a seed-only template
+          // post-v0.16.19, so this is harmless for new envs.
+          body.domains = a
+            .split("\n")
+            .filter(Boolean)
+            .map((host) => ({ host, tls: true }));
+        }
       }
     }
     if (state.internal !== baseline.internal) {
