@@ -1100,10 +1100,14 @@ function InheritedSection({ project, service }: { project: string; service: stri
     staleTime: 30_000,
   });
   const mut = useMutation({
+    // api() stringifies opts.body itself — pass the object, not a
+    // JSON string. Double-stringifying produced `"{\"keys\":[...]}"`
+    // which the server rejected as malformed JSON (400), making the
+    // chip clicks silently no-op in the UI.
     mutationFn: (keys: string[]) =>
       api<unknown>(
         `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys`,
-        { method: "PUT", body: JSON.stringify({ keys }) },
+        { method: "PUT", body: { keys } },
       ),
     onSuccess: () =>
       qc.invalidateQueries({
