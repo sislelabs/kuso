@@ -28,19 +28,23 @@ import (
 // project owns" from "some other -conn secret" (e.g. a user's
 // external Secret named foo-conn). Without that, the filter would
 // accidentally strip user-created secrets.
-func filterEnvFromForSubscription(envFromSecrets []string, subscribedAddons []string, projectAddons []string) []string {
+func filterEnvFromForSubscription(envFromSecrets []string, subscribedAddons []string, projectAddons []string, project string) []string {
 	if subscribedAddons == nil {
 		return envFromSecrets
 	}
 	// Build the allow-set of conn-secret names from subscribed addon
-	// short names. Conn secrets follow the "<addon-fqn>-conn"
-	// convention (services_ops.go:AddonConnSecrets).
+	// short names. Conn secrets follow the "<project>-<addon>-conn"
+	// convention (services_ops.go:AddonConnSecrets), so we accept BOTH
+	// shapes the user might write: short ("pg" → "<project>-pg-conn")
+	// and FQ ("tickero-pg" → "tickero-pg-conn").
 	allow := make(map[string]bool, len(subscribedAddons))
 	for _, name := range subscribedAddons {
-		// subscribedAddons can carry either the short name ("pg") or
-		// the FQ name ("tickero-pg"). Both shapes resolve to the
-		// same conn secret name; we accept both for flexibility.
+		// FQ form: already has the project prefix.
 		allow[name+"-conn"] = true
+		// Short form: needs the project prefix.
+		if project != "" {
+			allow[project+"-"+name+"-conn"] = true
+		}
 	}
 	// Set of all project-owned conn-secret names. Anything NOT in
 	// this set passes through unchanged.

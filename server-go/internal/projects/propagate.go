@@ -150,7 +150,7 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				// list keep their conn-secret mount.
 				if svc.Spec.SubscribedAddons != nil {
 					projectAddons := s.listProjectAddonConnSecrets(ctx, project)
-					prunedFrom = filterEnvFromForSubscription(prunedFrom, svc.Spec.SubscribedAddons, projectAddons)
+					prunedFrom = filterEnvFromForSubscription(prunedFrom, svc.Spec.SubscribedAddons, projectAddons, project)
 				}
 				env.Spec.EnvFromSecrets = prunedFrom
 			}
