@@ -158,7 +158,15 @@ spec:
                             properties:
                               name:
                                 type: string
-                                pattern: "^[a-z0-9][a-z0-9-]*-conn$"
+                                # Allow the addon convention (<addon>-conn) AND
+                                # the two well-known shared secret names so the
+                                # sharedEnvKeys expansion (server-rewritten
+                                # explicit valueFrom for project + instance
+                                # shared keys) passes the same admission check.
+                                # Cluster-wide secrets (kuso-server-secrets,
+                                # kuso-postgres-conn, kuso-github-app, etc.)
+                                # remain unreferencable from a tenant CR.
+                                pattern: "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$"
                               key:
                                 type: string
                 envFromSecrets:

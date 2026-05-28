@@ -60,7 +60,7 @@
                           "type": "string"
                         },
                         "name": {
-                          "pattern": "^[a-z0-9][a-z0-9-]*-conn$",
+                          "pattern": "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$",
                           "type": "string"
                         }
                       },

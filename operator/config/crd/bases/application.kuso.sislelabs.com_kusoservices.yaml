@@ -131,13 +131,14 @@ spec:
                             properties:
                               name:
                                 type: string
-                                # The `<addon>-conn` suffix is the
-                                # convention every kuso-managed addon
-                                # secret follows. Tenants who try to
-                                # reference cluster-wide secrets
-                                # (kuso-server-secrets, kuso-postgres-
-                                # conn) get rejected at admission.
-                                pattern: "^[a-z0-9][a-z0-9-]*-conn$"
+                                # Allowed names: addon conn-secrets
+                                # (<addon>-conn) and the two well-known
+                                # shared-secret names (<project>-shared,
+                                # kuso-instance-shared) so sharedEnvKeys
+                                # expansion passes the same admission
+                                # check. Cluster-wide secrets like
+                                # kuso-server-secrets remain unreferencable.
+                                pattern: "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$"
                               key:
                                 type: string
                 scale:
