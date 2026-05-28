@@ -153,19 +153,82 @@ func pruneSharedSecretsFromEnvFrom(project string, envFromSecrets []string) []st
 // explicit valueFrom entries on envVars; the two well-known shared
 // secret names are stripped from envFromSecrets so adding a new key
 // to a shared secret doesn't silently leak into unsubscribed services.
+//
+// Precedence on name collision (last wins): subscribed shared-secret
+// keys < service-level explicit envVars < env-level explicit overrides.
+// A per-env NEXT_PUBLIC_API_URL=api-staging.tickero.bg wins over the
+// service-level NEXT_PUBLIC_API_URL=api.tickero.bg every time.
+//
+// Pass envExplicitEnvVars = nil for the AddService / first-env path
+// where there's no existing env yet to preserve.
 func (s *Service) resolveSharedEnvKeysForEnv(
 	ctx context.Context,
 	ns, project string,
 	sharedEnvKeys []string,
-	explicitEnvVars []kube.KusoEnvVar,
+	svcExplicitEnvVars []kube.KusoEnvVar,
+	envExplicitEnvVars []kube.KusoEnvVar,
 	envFromSecrets []string,
 ) (mergedEnvVars []kube.KusoEnvVar, prunedEnvFromSecrets []string, err error) {
 	subscribed, _, err := s.expandSharedEnvKeysToEnvVars(ctx, ns, project, sharedEnvKeys)
 	if err != nil {
 		return nil, nil, err
 	}
-	merged := mergeSubscribedEnvVars(explicitEnvVars, subscribed)
+	// Identify env-level overrides — env envVar entries whose name
+	// is NOT on the service. Those are the user's per-env explicit
+	// edits and must survive propagation, otherwise re-saving any
+	// service-level field (placement, port, sharedEnvKeys, …)
+	// silently flattens them back to service defaults.
+	envOverrides := extractEnvOnlyOverrides(svcExplicitEnvVars, envExplicitEnvVars)
+	// Build merged envVars: subscribed (base) ← svc-explicit ← env-overrides.
+	merged := mergeSubscribedEnvVars(svcExplicitEnvVars, subscribed)
+	merged = mergeExplicitOverrides(merged, envOverrides)
 	pruned := pruneSharedSecretsFromEnvFrom(project, envFromSecrets)
 	_ = corev1.SecretTypeOpaque // silence unused import
 	return merged, pruned, nil
+}
+
+// extractEnvOnlyOverrides returns the env's envVar entries whose names
+// don't exist on the parent service. Those entries are the per-env
+// overrides the user set explicitly through the dashboard's "edit on
+// this env only" path; they must survive any service-level write.
+//
+// Service-level envVar with the same name = the env is just mirroring
+// the service; nothing to preserve since propagation will re-stamp
+// the (possibly newer) service value anyway.
+func extractEnvOnlyOverrides(svcExplicit, envExplicit []kube.KusoEnvVar) []kube.KusoEnvVar {
+	if len(envExplicit) == 0 {
+		return nil
+	}
+	svcNames := make(map[string]bool, len(svcExplicit))
+	for _, e := range svcExplicit {
+		svcNames[e.Name] = true
+	}
+	out := make([]kube.KusoEnvVar, 0, len(envExplicit))
+	for _, e := range envExplicit {
+		if !svcNames[e.Name] {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// mergeExplicitOverrides layers env-level overrides on top of an
+// already-merged envVars list. On name collision the override wins.
+// Used so per-env edits beat service-level + subscribed defaults.
+func mergeExplicitOverrides(base, overrides []kube.KusoEnvVar) []kube.KusoEnvVar {
+	if len(overrides) == 0 {
+		return base
+	}
+	overrideNames := make(map[string]bool, len(overrides))
+	for _, e := range overrides {
+		overrideNames[e.Name] = true
+	}
+	out := make([]kube.KusoEnvVar, 0, len(base)+len(overrides))
+	for _, e := range base {
+		if !overrideNames[e.Name] {
+			out = append(out, e)
+		}
+	}
+	out = append(out, overrides...)
+	return out
 }

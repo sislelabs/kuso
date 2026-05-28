@@ -136,6 +136,7 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 					ctx, ns, project,
 					svc.Spec.SharedEnvKeys,
 					svc.Spec.EnvVars,
+					env.Spec.EnvVars, // preserve per-env overrides (R-bug)
 					env.Spec.EnvFromSecrets,
 				)
 				if err != nil {

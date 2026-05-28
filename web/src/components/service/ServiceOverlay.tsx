@@ -319,7 +319,32 @@ export function ServiceOverlay({
     return short === envParam;
   });
 
-  const url = env?.status?.url as string | undefined;
+  // URL fallback chain — mirrors ServiceNode.tsx so the overlay
+  // header and the canvas chip agree.
+  //
+  // Pre-fix this read only env.status.url which the operator never
+  // populates today, so every overlay header said "no URL yet" even
+  // for envs with a host. The canvas already had the fallback; we
+  // were just missing the same chain here. Order:
+  //   internal=true   → no public URL (Service exists, no Ingress)
+  //   env.spec.host   → the env's primary host (auto-domain OR custom)
+  //   service custom  → service-level domains[0] when env.host is empty
+  //   env.status.url  → legacy fallback for old data
+  const svcInternal = !!(svc.data?.spec as { internal?: boolean } | undefined)?.internal;
+  const envHost = env?.spec?.host;
+  const envTLS = (env?.spec as { tlsEnabled?: boolean } | undefined)?.tlsEnabled ?? true;
+  const customDomain = (svc.data?.spec as { domains?: { host?: string; tls?: boolean }[] } | undefined)
+    ?.domains?.find((d) => d?.host)?.host;
+  const customTLS =
+    (svc.data?.spec as { domains?: { host?: string; tls?: boolean }[] } | undefined)
+      ?.domains?.find((d) => d?.host)?.tls ?? true;
+  const url = svcInternal
+    ? undefined
+    : envHost
+      ? `${envTLS ? "https" : "http"}://${envHost}`
+      : customDomain
+        ? `${customTLS ? "https" : "http"}://${customDomain}`
+        : (env?.status?.url as string | undefined);
   const ready = !!env?.status?.ready;
   const phase = (env?.status?.phase as string | undefined)?.toLowerCase();
   // "rolling" is a real running state, not a diagnostic — the
