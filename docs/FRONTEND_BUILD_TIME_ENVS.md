@@ -88,18 +88,30 @@ done
 exec node server.js
 ```
 
-### Configure kuso env vars normally
+### Configure kuso env vars per environment
 
-In your kuso service spec or via the dashboard, set the env vars per
-environment:
+`kuso env set` writes to the service spec and propagates to every
+env, so it can't differentiate prod from staging. For per-env
+overrides use `kuso secret set --env <name>` — the value is stored
+in a kube Secret scoped to that env only, and your container reads
+it via `process.env.NEXT_PUBLIC_API_URL` exactly the same way:
 
 ```
-production:  NEXT_PUBLIC_API_URL=https://api.example.com
-staging:     NEXT_PUBLIC_API_URL=https://api-staging.example.com
+# baseline (applied to every env)
+kuso env set hello web NEXT_PUBLIC_API_URL=https://api.example.com
+
+# staging override (per-env secret, takes precedence)
+kuso secret set hello web NEXT_PUBLIC_API_URL https://api-staging.example.com --env staging
 ```
 
-The runtime script picks them up on container start. No rebuild
-needed when values change — `kuso secret set` / `kuso env set` and
+The "secret" label is a wire-format detail — there's nothing actually
+secret about a public URL. Treat per-env secrets as "per-env env
+vars" for the purposes of NEXT_PUBLIC_*. The pod env-merge order
+puts env-scoped Secret values after service-level env vars, so the
+override wins. The runtime substitute script doesn't care which
+source provided the value; it just reads `printenv`.
+
+No rebuild needed when values change — `kuso secret set --env …` and
 let the pod restart.
 
 ## Why not pass `--build-arg` per env?
