@@ -271,6 +271,14 @@ func NewRouter(d Deps) http.Handler {
 		bootstrapH.MountPublic(r)
 	}
 
+	// Public reviewer-page endpoints (v0.17.0). The token in the URL
+	// IS the credential — no kuso auth required. Mount BEFORE the
+	// bearer-gated subrouter below.
+	if d.DB != nil {
+		reviewH := &httphandlers.PreviewReviewHandler{DB: d.DB, Kube: d.Kube}
+		reviewH.Mount(r)
+	}
+
 	// WebSocket log tail. Auth is handled inside the handler (the bearer
 	// arrives in the Sec-WebSocket-Protocol header, which middleware
 	// can't see), so this route is mounted on the public router.

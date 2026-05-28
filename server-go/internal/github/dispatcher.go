@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"kuso/server/internal/builds"
+	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/spec"
@@ -50,6 +51,17 @@ type Dispatcher struct {
 	// applies it before builds run. nil on kube-less installs — the
 	// config-apply step is skipped entirely.
 	Reconciler *spec.Reconciler
+	// DB is the kuso server's postgres handle. Used to create
+	// PreviewReview rows on PR open (v0.17.0 Phase 2). nil = reviewer
+	// page integration is disabled; previews still spawn, just without
+	// the public review URL.
+	DB *db.DB
+	// ReviewBaseURL is the prefix kuso prepends to /<token> when
+	// rendering the reviewer URL in PR comments + emails. Typically
+	// "https://kuso.sislelabs.com/r" (note: not /api — the page is
+	// a Next.js route, the API is /api/reviews/<token>). Empty = no
+	// review comment is posted.
+	ReviewBaseURL string
 }
 
 // PreviewDB is the surface dispatcher needs from previewdb.Cloner.
@@ -364,6 +376,14 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 					d.Logger.Warn("ensure preview env", "service", services.Items[i].GetName(), "pr", pr.Number, "err", err)
 				}
 			}
+			// Reviewer page (v0.17.0 Phase 2). Only fires on `opened`
+			// — we don't re-post the URL on every push to the same PR
+			// (would spam the conversation). Idempotent at the DB
+			// layer: CreatePreviewReview returns the existing row on
+			// (project, prNumber) collision.
+			if pr.Action == "opened" {
+				d.ensureReviewerSurface(ctx, &proj, pr)
+			}
 		case "closed":
 			for i := range services.Items {
 				// Always attempt deletion on close — even for opted-out
@@ -383,6 +403,8 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 					d.Logger.Warn("delete pr addons", "project", proj.Name, "pr", pr.Number, "err", err)
 				}
 			}
+			// Close the reviewer row (audit history stays).
+			d.closeReviewerSurface(ctx, proj.Name, pr.Number)
 		}
 	}
 	return nil
@@ -634,8 +656,67 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			}
 		}
 	}
+	// User-defined seed command (v0.17.0 Phase 2). Runs as a one-shot
+	// kube Job in a clone of the build image so it has access to the
+	// app's package scripts / vendored deps. Uses the same envFromSecrets
+	// + envVars the runtime pod will, so DATABASE_URL etc. resolve
+	// correctly. Best-effort: a seed-job submission failure logs but
+	// doesn't fail the dispatch — the preview pod still comes up;
+	// reviewer sees "seed failed" on the reviewer page.
+	if parentSvc != nil && parentSvc.Spec.Previews != nil && parentSvc.Spec.Previews.Seed != "" {
+		buildImage := previewBuildImage(proj.Name, short, pr.PullRequest.Head.SHA)
+		seedEnvVars := envVarsForSeed(mergedEnvVars)
+		if err := d.runPreviewSeedJob(ctx, proj.Name, envName, buildImage, parentSvc.Spec.Previews.Seed, envFromSecrets, seedEnvVars); err != nil {
+			d.Logger.Warn("preview seed job", "env", envName, "err", err)
+		}
+	}
 	d.Logger.Info("PR preview env ready", "env", envName, "pr", pr.Number)
 	return nil
+}
+
+// previewBuildImage returns the image tag the preview build will
+// produce. Mirrors the convention in services_ops / builds:
+//
+//	kuso-registry.kuso.svc.cluster.local:5000/<project>/<service>:<sha12>
+//
+// The 12-char SHA prefix is what builds.ImageTag returns for a SHA-
+// shaped ref. We can't call builds.ImageTag directly without an
+// import cycle, so the function lives here as a one-liner mirror.
+func previewBuildImage(project, service, sha string) string {
+	tag := sha
+	if len(sha) >= 12 {
+		tag = sha[:12]
+	}
+	return fmt.Sprintf("kuso-registry.kuso.svc.cluster.local:5000/%s/%s:%s", project, service, tag)
+}
+
+// envVarsForSeed converts the merged baseEnv + previewEnvVars list
+// (kube.KusoEnvVar shape, with map[string]any ValueFrom) into the
+// preview_seed.envVar shape used to render a corev1.Container env.
+// Drops entries that have neither a literal Value nor a recognisable
+// secretKeyRef — the seed Job can't use them anyway.
+func envVarsForSeed(in []kube.KusoEnvVar) []envVar {
+	out := make([]envVar, 0, len(in))
+	for _, e := range in {
+		if e.Value != "" {
+			out = append(out, envVar{name: e.Name, value: e.Value})
+			continue
+		}
+		if e.ValueFrom == nil {
+			continue
+		}
+		ref, ok := e.ValueFrom["secretKeyRef"].(map[string]any)
+		if !ok {
+			continue
+		}
+		sn, _ := ref["name"].(string)
+		k, _ := ref["key"].(string)
+		if sn == "" || k == "" {
+			continue
+		}
+		out = append(out, envVar{name: e.Name, secretRef: &envVarSecretRef{secretName: sn, key: k}})
+	}
+	return out
 }
 
 func (d *Dispatcher) deletePreviewEnv(ctx context.Context, project, serviceFQN string, prNumber int) error {
@@ -781,4 +862,79 @@ func mergePreviewEnvVars(base, overrides []kube.KusoEnvVar) []kube.KusoEnvVar {
 		}
 	}
 	return out
+}
+
+// ensureReviewerSurface creates a PreviewReview row (idempotent on
+// project + PR number) and posts the magic-link reviewer URL as a
+// GitHub PR comment. Best-effort: any failure logs but doesn't
+// propagate — the preview env is already up and serving, the
+// missing reviewer URL is a UX regression not a correctness one.
+//
+// reviewerEmail picking order: PR label `reviewer:<email>` → project
+// defaultReviewerEmail → "" (no email sent; URL still posted as PR
+// comment so authors with repo access can copy + send it manually).
+func (d *Dispatcher) ensureReviewerSurface(ctx context.Context, proj *kube.KusoProject, pr prEvent) {
+	if d.DB == nil || d.ReviewBaseURL == "" {
+		return
+	}
+	reviewerEmail := ""
+	for _, lbl := range pr.PullRequest.Labels {
+		if strings.HasPrefix(lbl.Name, "reviewer:") {
+			reviewerEmail = strings.TrimSpace(strings.TrimPrefix(lbl.Name, "reviewer:"))
+			break
+		}
+	}
+	if reviewerEmail == "" && proj.Spec.Previews != nil {
+		reviewerEmail = proj.Spec.Previews.DefaultReviewerEmail
+	}
+	row, err := d.DB.CreatePreviewReview(ctx, db.PreviewReview{
+		Project:       proj.Name,
+		PRNumber:      pr.Number,
+		PRTitle:       pr.PullRequest.Title,
+		PRBody:        pr.PullRequest.Body,
+		PRAuthor:      pr.PullRequest.User.Login,
+		BaseRef:       pr.PullRequest.Base.Ref,
+		HeadRef:       pr.PullRequest.Head.Ref,
+		ReviewerEmail: reviewerEmail,
+	})
+	if err != nil {
+		d.Logger.Warn("preview review row", "project", proj.Name, "pr", pr.Number, "err", err)
+		return
+	}
+	if d.Client == nil {
+		return
+	}
+	installationID := int64(0)
+	if proj.Spec.GitHub != nil {
+		installationID = proj.Spec.GitHub.InstallationID
+	}
+	if installationID == 0 {
+		d.Logger.Debug("preview review: no GH installation, skipping PR comment",
+			"project", proj.Name, "pr", pr.Number)
+		return
+	}
+	reviewURL := strings.TrimRight(d.ReviewBaseURL, "/") + "/" + row.Token
+	body := fmt.Sprintf(`🔍 **Preview ready for review**
+
+Reviewer URL (share with the client): %s
+
+This link lets the reviewer open the preview, leave a comment, and approve / request changes / deny without a kuso account. The decision posts back to this PR.
+
+_Auto-generated by kuso v0.17 preview reviewer._`, reviewURL)
+	if err := d.Client.PostPRComment(ctx, installationID, pr.Repository.FullName, pr.Number, body); err != nil {
+		d.Logger.Warn("preview review: PR comment",
+			"project", proj.Name, "pr", pr.Number, "err", err)
+	}
+}
+
+// closeReviewerSurface stamps closedAt on the PreviewReview row so
+// it drops out of the active-reviews list. Called from the PR-close
+// branch. Doesn't delete — the row stays as audit history.
+func (d *Dispatcher) closeReviewerSurface(ctx context.Context, project string, prNumber int) {
+	if d.DB == nil {
+		return
+	}
+	if err := d.DB.ClosePreviewReview(ctx, project, prNumber); err != nil {
+		d.Logger.Warn("preview review close", "project", project, "pr", prNumber, "err", err)
+	}
 }

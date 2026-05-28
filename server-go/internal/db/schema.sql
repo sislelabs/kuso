@@ -653,3 +653,39 @@ CREATE INDEX IF NOT EXISTS "LoginAttempt_resetAt_idx"
 -- node.recovered, etc.) skip the field entirely.
 ALTER TABLE "NotificationEvent"
     ADD COLUMN IF NOT EXISTS "classification" JSONB;
+
+-- v0.17.0: per-PR reviewer page state.
+--
+-- Each preview env that has at least one service flagged
+-- spec.previews.reviewUrl=true gets a row here on PR open. The
+-- token is the unguessable URL segment kuso embeds in the GitHub PR
+-- comment + (optionally) emails to defaultReviewerEmail. Decision +
+-- comment land here when the reviewer clicks one of the three
+-- buttons; the dispatcher reads from here when posting the GH PR
+-- comment that closes the review loop.
+--
+-- Row stays after PR merge/close so the audit history (who approved
+-- what, when, with what comment) survives the env CR cleanup.
+CREATE TABLE IF NOT EXISTS "PreviewReview" (
+    "id"               TEXT PRIMARY KEY,
+    "project"          TEXT NOT NULL,
+    "prNumber"         INTEGER NOT NULL,
+    "prTitle"          TEXT NOT NULL DEFAULT '',
+    "prBody"           TEXT NOT NULL DEFAULT '',
+    "prAuthor"         TEXT NOT NULL DEFAULT '',
+    "baseRef"          TEXT NOT NULL DEFAULT '',
+    "headRef"          TEXT NOT NULL DEFAULT '',
+    "token"            TEXT NOT NULL UNIQUE,
+    "reviewerEmail"    TEXT NOT NULL DEFAULT '',
+    -- decision: '' (pending) | 'approved' | 'changes_requested' | 'denied'
+    "decision"         TEXT NOT NULL DEFAULT '',
+    "decisionComment"  TEXT NOT NULL DEFAULT '',
+    "decidedAt"        TIMESTAMPTZ,
+    "decidedBy"        TEXT NOT NULL DEFAULT '',
+    "createdAt"        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    "closedAt"         TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS "PreviewReview_project_pr_idx"
+    ON "PreviewReview"("project", "prNumber");
+CREATE INDEX IF NOT EXISTS "PreviewReview_token_idx"
+    ON "PreviewReview"("token");

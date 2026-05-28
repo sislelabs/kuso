@@ -743,6 +743,18 @@ func main() {
 				// secrets along with the env CR. Without this, every
 				// closed PR leaks <project>-<service>-pr-N-secrets.
 				disp.Secrets = secSvc
+				// v0.17.0 Phase 2: reviewer-page integration. DB +
+				// the public base URL the reviewer page is mounted
+				// under. Defaults to KUSO_DOMAIN/r so PR comments
+				// link at https://<kuso-domain>/r/<token>.
+				if database != nil {
+					disp.DB = database
+					reviewBase := os.Getenv("KUSO_REVIEW_BASE_URL")
+					if reviewBase == "" && os.Getenv("KUSO_DOMAIN") != "" {
+						reviewBase = "https://" + os.Getenv("KUSO_DOMAIN") + "/r"
+					}
+					disp.ReviewBaseURL = reviewBase
+				}
 				// Pre-populate preview envs with the project's addon
 				// connection secrets so the pod boots with DATABASE_URL
 				// + REDIS_URL + every other addon-conn env. The shared
