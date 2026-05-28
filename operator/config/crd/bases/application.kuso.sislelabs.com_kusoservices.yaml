@@ -105,6 +105,18 @@ spec:
                     the dashboard chip toggle to edit.
                   items:
                     type: string
+                subscribedAddons:
+                  type: array
+                  description: >-
+                    Per-service opt-in list of project addon short
+                    names whose <addon>-conn secret gets mounted on
+                    this service's pods. nil = legacy auto-mount-all
+                    (pre-v0.16.23); non-nil = explicit subscription.
+                    Same opt-in model as sharedEnvKeys, but for
+                    addon conn-secrets (DATABASE_URL, REDIS_URL,
+                    NATS_URL etc).
+                  items:
+                    type: string
                 envVars:
                   # Closed schema — preserve-unknown-fields would let a
                   # tenant slip valueFrom.secretKeyRef in and exfiltrate

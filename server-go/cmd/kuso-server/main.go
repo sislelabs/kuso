@@ -660,6 +660,19 @@ func main() {
 					projSvc.MigrateLegacySharedEnvKeys(mctx, logger.With("component", "shared-env-keys-migration"))
 				}()
 			}
+			// Addon-mount subscription migration (v0.16.23). Seeds
+			// spec.SubscribedAddons for any service still on the
+			// legacy auto-mount-all path. Same shape as the shared-
+			// env-keys migration — idempotent + bounded — runs after
+			// the shared-env-keys one so both fields settle before the
+			// env-CR pod rolls.
+			if os.Getenv("KUSO_SUBSCRIBED_ADDONS_MIGRATION_DISABLED") != "true" {
+				go func() {
+					mctx, mcancel := context.WithTimeout(workCtx, 10*time.Minute)
+					defer mcancel()
+					projSvc.MigrateLegacySubscribedAddons(mctx, logger.With("component", "subscribed-addons-migration"))
+				}()
+			}
 			if os.Getenv("KUSO_ERRORSCAN_DISABLED") != "true" {
 				go (&errorscan.Scanner{
 					DB:        database,

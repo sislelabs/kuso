@@ -132,6 +132,7 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				// list so the dashboard's per-env view can read it
 				// without re-resolving the service spec.
 				env.Spec.SharedEnvKeys = svc.Spec.SharedEnvKeys
+				env.Spec.SubscribedAddons = svc.Spec.SubscribedAddons
 				merged, prunedFrom, err := s.resolveSharedEnvKeysForEnv(
 					ctx, ns, project,
 					svc.Spec.SharedEnvKeys,
@@ -143,6 +144,14 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 					return fmt.Errorf("resolve sharedEnvKeys for env %s: %w", envName, err)
 				}
 				env.Spec.EnvVars = merged
+				// Filter the propagated envFromSecrets by the addon
+				// subscription. nil SubscribedAddons = legacy auto-
+				// mount-all (no change); non-nil = only addons in the
+				// list keep their conn-secret mount.
+				if svc.Spec.SubscribedAddons != nil {
+					projectAddons := s.listProjectAddonConnSecrets(ctx, project)
+					prunedFrom = filterEnvFromForSubscription(prunedFrom, svc.Spec.SubscribedAddons, projectAddons)
+				}
 				env.Spec.EnvFromSecrets = prunedFrom
 			}
 			if changed.Placement {

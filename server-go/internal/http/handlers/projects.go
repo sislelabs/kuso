@@ -212,6 +212,9 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	// subscription. PUT replaces the subscription list outright.
 	r.Get("/api/projects/{project}/services/{service}/shared-env-keys", h.GetSharedEnvKeys)
 	r.Put("/api/projects/{project}/services/{service}/shared-env-keys", h.SetSharedEnvKeys)
+	// Per-service addon-conn subscription (v0.16.23).
+	r.Get("/api/projects/{project}/services/{service}/subscribed-addons", h.GetSubscribedAddons)
+	r.Put("/api/projects/{project}/services/{service}/subscribed-addons", h.SetSubscribedAddons)
 	// Per-env custom domains (v0.16.19). Edits are scoped to the
 	// addressed env; no propagation to sibling envs.
 	r.Put("/api/projects/{project}/services/{service}/envs/{env}/domains", h.SetEnvDomains)

@@ -252,6 +252,13 @@
             "type": "object",
             "x-kubernetes-preserve-unknown-fields": true
           },
+          "subscribedAddons": {
+            "description": "Per-service opt-in list of project addon short names whose \u003caddon\u003e-conn secret gets mounted on this service's pods. nil = legacy auto-mount-all (pre-v0.16.23); non-nil = explicit subscription. Same opt-in model as sharedEnvKeys, but for addon conn-secrets (DATABASE_URL, REDIS_URL, NATS_URL etc).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "volumes": {
             "description": "Persistent volumes to mount into every env's pod. Each entry maps to a PVC + a volumeMount. Declared explicitly so the apiserver doesn't prune them on write.",
             "items": {

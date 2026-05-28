@@ -227,6 +227,13 @@
             },
             "type": "object"
           },
+          "subscribedAddons": {
+            "description": "Mirrored from the parent KusoService.spec.subscribedAddons. nil = legacy auto-mount-all addon-conn secrets; non-nil = operator only includes the listed addons' conn-secrets in envFromSecrets.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "tlsEnabled": {
             "default": true,
             "type": "boolean"
