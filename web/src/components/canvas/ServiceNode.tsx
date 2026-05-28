@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Handle, Position, useStore } from "@xyflow/react";
+import { Handle, Position } from "@xyflow/react";
 import { Check, Copy, ExternalLink, MoreHorizontal } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import type { BuildSummary } from "@/features/services/api";
@@ -93,17 +93,17 @@ function replicasFor(env?: KusoEnvironment): Replicas | null {
   return { ready: r.ready ?? 0, max: ceil, cpuPct: cpu };
 }
 
-// Sub-70% zoom level — at smaller scales, the 10px footer text
-// (replicas + build sha + uptime) compresses into illegible blur and
-// drowns out the load-bearing card border colour. We hide it below
-// this threshold so the card reads as a status tile from far out and
-// reveals detail when the user zooms in.
-const FOOTER_HIDE_BELOW_ZOOM = 0.7;
+// Footer is always visible so the status line + build sha are
+// discoverable from any zoom level. The previous 0.7 cutoff hid it
+// for users who fit the whole project in viewport (most common
+// default) and required them to zoom in just to see "is this service
+// healthy?" — the answer they came here for. The 10px text reads as
+// fuzzy at extreme zoom-out but the row layout still signals "ready
+// N/M" at a glance.
 
 export function ServiceNode({ data }: { data: ServiceNodeData }) {
   const status = statusFor(data.env, data.latestBuild);
-  const zoom = useStore((s) => s.transform[2]);
-  const showFooter = zoom >= FOOTER_HIDE_BELOW_ZOOM;
+  const showFooter = true;
   // Visibility, in priority order:
   //   internal=true        → no Ingress; show "internal only" chip.
   //   env.spec.host        → the env-scoped hostname (where the

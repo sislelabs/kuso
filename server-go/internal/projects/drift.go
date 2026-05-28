@@ -179,7 +179,36 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	// propagateChangedToEnvs (the unified chokepoint) actually
 	// keeps in sync — drift on a non-propagated field would be
 	// expected (e.g. svc.Spec.Repo doesn't get stamped on the env).
-	if !reflect.DeepEqual(envVarsForCompare(svc.Spec.EnvVars), envVarsForCompare(env.Spec.EnvVars)) {
+	//
+	// envVars: env.Spec.EnvVars is a SUPERSET of svc.Spec.EnvVars
+	// (it has subscribed shared-secret keys + per-env overrides).
+	// Drift exists when an svc envVar isn't reflected on the env
+	// (server hasn't propagated yet) OR sharedEnvKeys aren't mirrored.
+	// Plain DeepEqual would flag every env as drifting permanently.
+	envByName := map[string]kube.KusoEnvVar{}
+	for _, e := range env.Spec.EnvVars {
+		envByName[e.Name] = e
+	}
+	envVarsDrifting := false
+	for _, sv := range svc.Spec.EnvVars {
+		ev, ok := envByName[sv.Name]
+		if !ok {
+			envVarsDrifting = true
+			break
+		}
+		// Per-env overrides are allowed to differ in value; we only
+		// flag drift when the env entry is *missing*, not when it has
+		// been intentionally overridden. A user-visible "pending"
+		// here would only confuse: the override is the desired state.
+		_ = ev
+	}
+	// Mirror check for sharedEnvKeys: env.Spec.SharedEnvKeys should
+	// match svc.Spec.SharedEnvKeys. Different list = propagation
+	// pending.
+	if !envVarsDrifting && !reflect.DeepEqual(svc.Spec.SharedEnvKeys, env.Spec.SharedEnvKeys) {
+		envVarsDrifting = true
+	}
+	if envVarsDrifting {
 		out.SpecPending = append(out.SpecPending, "envVars")
 	}
 	if !reflect.DeepEqual(domainHosts(svc.Spec.Domains), env.Spec.AdditionalHosts) {

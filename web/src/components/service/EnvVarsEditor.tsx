@@ -397,7 +397,16 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
       }
     }
     setRows((prev) => prev.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
-    setDirty(true);
+    // Only mark dirty when an actually-persisted field changed. The
+    // visible flag is a UI-only "show/hide value" toggle; clicking
+    // the eye should not pop the save bar. Keys to ignore: `visible`,
+    // `id` (internal row identity).
+    const persistedKeys = Object.keys(patch).filter(
+      (k) => k !== "visible" && k !== "id",
+    );
+    if (persistedKeys.length > 0) {
+      setDirty(true);
+    }
   };
   const remove = (idx: number) => {
     setRows((prev) => prev.filter((_, i) => i !== idx));

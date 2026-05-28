@@ -65,20 +65,34 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   // blast-radius confirm dialog is open. null = dialog closed.
   const [pendingBody, setPendingBody] = useState<PatchServiceBody | null>(null);
   const patch = usePatchService(project, service);
-  // Pull the production env's host so the Networking section can
+  // Pull the active env's host so the Networking section can
   // surface the auto-domain inline (read-only). The KusoService spec
   // doesn't carry the rendered hostname — that's stamped on the
   // KusoEnvironment at create time — so we have to reach over here.
+  //
+  // Scope to the env the user is actually viewing (env-group name from
+  // the URL ?env= param, defaulted to "production"). Otherwise the
+  // staging tab would show production.tickero.bg in the Networking
+  // section because list.find() returned whichever env happened to be
+  // indexed first.
   const envs = useEnvironments(project);
   const autoHost = useMemo(() => {
     const list = envs.data ?? [];
-    const prod = list.find(
+    const matchesService = (e: typeof list[number]) =>
+      e.spec.service === service ||
+      e.spec.service === `${project}-${service}`;
+    const envName = env || "production";
+    const forActiveEnv = list.find(
       (e) =>
-        e.spec.service === service ||
-        e.spec.service === `${project}-${service}`,
+        matchesService(e) &&
+        (e.spec.kind === envName ||
+          (e.metadata.labels &&
+            e.metadata.labels["kuso.sislelabs.com/env"] === envName)),
     );
-    return prod?.spec.host;
-  }, [envs.data, project, service]);
+    // Fallback to ANY env of this service so legacy projects with no
+    // kind label still get a host rendered.
+    return (forActiveEnv ?? list.find(matchesService))?.spec.host;
+  }, [envs.data, project, service, env]);
   // Gate the floating save bar on services:write — viewers can scroll
   // through the panel but can't edit. Inputs are still editable to
   // preserve copy/paste affordance, just not committable.
