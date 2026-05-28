@@ -5,9 +5,21 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strings"
 
 	"kuso/server/internal/kube"
 )
+
+// shortServiceName strips the "<project>-" prefix from a KusoService
+// CR name so GetService / lockService (which take the short name)
+// don't 404. Mirrors the convention used elsewhere in this package.
+func shortServiceName(project, fqn string) string {
+	prefix := project + "-"
+	if strings.HasPrefix(fqn, prefix) {
+		return strings.TrimPrefix(fqn, prefix)
+	}
+	return fqn
+}
 
 // MigrateLegacySharedEnvKeys walks every service in every project and
 // seeds spec.sharedEnvKeys for services where it is still nil
@@ -63,7 +75,8 @@ func (s *Service) MigrateLegacySharedEnvKeys(ctx context.Context, logger *slog.L
 				skipped++
 				continue
 			}
-			if _, err := s.migrateOneService(ctx, ns, p.Name, svc, availableKeys); err != nil {
+			short := shortServiceName(p.Name, svc.Name)
+			if _, err := s.migrateOneService(ctx, ns, p.Name, short, availableKeys); err != nil {
 				failed++
 				logger.WarnContext(ctx, "shared-env-keys migration: service failed",
 					"project", p.Name, "service", svc.Name, "err", err)
@@ -102,13 +115,15 @@ func (s *Service) collectAvailableSharedKeys(ctx context.Context, ns, project st
 
 // migrateOneService patches svc.Spec.SharedEnvKeys to keys + runs the
 // usual env propagation. Holds the per-service lock so a concurrent
-// SetEnv / PatchService doesn't race.
-func (s *Service) migrateOneService(ctx context.Context, ns, project string, svc *kube.KusoService, keys []string) (*kube.KusoService, error) {
-	mu := s.lockService(project, svc.Name)
+// SetEnv / PatchService doesn't race. shortService is the user-facing
+// short name (no "<project>-" prefix), required by GetService and
+// lockService.
+func (s *Service) migrateOneService(ctx context.Context, ns, project, shortService string, keys []string) (*kube.KusoService, error) {
+	mu := s.lockService(project, shortService)
 	defer mu.Unlock()
 
 	// Re-fetch under the lock so we don't write a stale spec back.
-	fresh, err := s.GetService(ctx, project, svc.Name)
+	fresh, err := s.GetService(ctx, project, shortService)
 	if err != nil {
 		return nil, fmt.Errorf("re-fetch service: %w", err)
 	}
@@ -121,10 +136,9 @@ func (s *Service) migrateOneService(ctx context.Context, ns, project string, svc
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
 	}
-	if err := s.propagateChangedToEnvs(ctx, ns, project, svc.Name, updated, changedFields{EnvVars: true}); err != nil {
+	if err := s.propagateChangedToEnvs(ctx, ns, project, shortService, updated, changedFields{EnvVars: true}); err != nil {
 		// Best-effort: service spec is the source of truth, next
-		// edit will retry propagation. Log already happens in
-		// propagateChangedToEnvs.
+		// edit will retry propagation.
 		return updated, nil
 	}
 	return updated, nil

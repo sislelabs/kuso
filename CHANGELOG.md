@@ -5,9 +5,10 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [0.16.10] — 2026-05-28
+## [0.16.11] — 2026-05-28
 
 ### ✨ Features
+- Feat: remove legacy mode for shared-secret subscription; auto-migrate on startup ([ab48328](https://github.com/sislelabs/kuso/commit/ab48328f9f2146a959fd8eb897ff3b9df7196717))
 - Feat: per-service opt-in subscription for project + instance shared secrets ([f30f9fa](https://github.com/sislelabs/kuso/commit/f30f9fa3074ae83241e320269d7a2cff88239559))
 - Feat(crd): KusoService.spec.sharedEnvKeys + Env mirror (no behavior change yet) ([a9c45a2](https://github.com/sislelabs/kuso/commit/a9c45a2995379cc64b54d5a224edac135e7a04b1))
 - Feat(addon): opt-in WebUI proxy + dashboard chip for mailpit/nats consoles ([9ffdb3c](https://github.com/sislelabs/kuso/commit/9ffdb3c869dce20633f0f94dd4c6005be8922a16))
