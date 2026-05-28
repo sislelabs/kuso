@@ -110,7 +110,26 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 		// that needs RMW.
 		_, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envName, func(env *kube.KusoEnvironment) error {
 			if changed.EnvVars {
-				env.Spec.EnvVars = svc.Spec.EnvVars
+				// Per-key shared-secret subscription: when the parent
+				// service has spec.sharedEnvKeys set (non-nil), expand
+				// each key into a valueFrom.secretKeyRef and merge with
+				// the service's explicit envVars. nil sharedEnvKeys =
+				// legacy chart-blanket-mount path; we pass through
+				// untouched. The env CR also mirrors the subscription
+				// list so the dashboard's per-env view can read it
+				// without re-resolving the service spec.
+				env.Spec.SharedEnvKeys = svc.Spec.SharedEnvKeys
+				merged, prunedFrom, err := s.resolveSharedEnvKeysForEnv(
+					ctx, ns, project,
+					svc.Spec.SharedEnvKeys,
+					svc.Spec.EnvVars,
+					env.Spec.EnvFromSecrets,
+				)
+				if err != nil {
+					return fmt.Errorf("resolve sharedEnvKeys for env %s: %w", envName, err)
+				}
+				env.Spec.EnvVars = merged
+				env.Spec.EnvFromSecrets = prunedFrom
 			}
 			if changed.Placement {
 				env.Spec.Placement = effectivePlacement

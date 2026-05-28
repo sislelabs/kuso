@@ -52,6 +52,10 @@ type ProjectsAPI interface {
 	SetEnvWithOpts(ctx context.Context, project, service string, envVars []projects.EnvVar, opts projects.SetEnvOpts) error
 	GetDetectedEnv(ctx context.Context, project, service string) ([]string, string, error)
 	GetDrift(ctx context.Context, project, service string) (*projects.DriftReport, error)
+	// Per-service shared-secret subscription. See
+	// projects.shared_env_ops.go for the rationale.
+	ListSubscribableSharedKeys(ctx context.Context, project, service string) (*projects.SubscribableSharedKeys, error)
+	SetSharedEnvKeys(ctx context.Context, project, service string, keys []string) (*kube.KusoService, error)
 
 	// Environments
 	ListEnvironments(ctx context.Context, project string) ([]kube.KusoEnvironment, error)

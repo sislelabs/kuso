@@ -207,6 +207,11 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	// of the build that produced them — UI flags any name that's
 	// referenced in source but missing from the saved env.
 	r.Get("/api/projects/{project}/services/{service}/env/detected", h.GetDetectedEnv)
+	// Per-service shared-secret subscription (v0.16.10). GET returns
+	// the available keys grouped by source secret + the current
+	// subscription. PUT replaces the subscription list outright.
+	r.Get("/api/projects/{project}/services/{service}/shared-env-keys", h.GetSharedEnvKeys)
+	r.Put("/api/projects/{project}/services/{service}/shared-env-keys", h.SetSharedEnvKeys)
 	// Drift report — pending-changes surface for the service overlay.
 	// Returns the list of fields that differ between the saved
 	// service spec and the running env CR, plus a boolean for

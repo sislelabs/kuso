@@ -39,6 +39,29 @@ func (k *KusoClient) SetEnv(project, service string, req SetEnvRequest) (*resty.
 	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env")
 }
 
+// GetSharedEnvKeys returns the available keys (grouped by source
+// secret) + the service's current subscription. Body shape:
+//
+//	{ "subscribed": ["KEY1", ...], "legacyMode": bool, "sources":
+//	  [ { "secret": "<project>-shared", "keys": [...] }, ... ] }
+//
+// LegacyMode = true means the server's reading nil sharedEnvKeys and
+// the chart still blanket-mounts; the CLI's share/unshare commands
+// auto-flip to explicit mode by seeding from the available keys.
+func (k *KusoClient) GetSharedEnvKeys(project, service string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/shared-env-keys")
+}
+
+// SetSharedEnvKeys replaces the subscription list. Empty (non-nil)
+// slice = subscribe to nothing.
+func (k *KusoClient) SetSharedEnvKeys(project, service string, keys []string) (*resty.Response, error) {
+	if keys == nil {
+		keys = []string{}
+	}
+	k.client.SetBody(map[string]any{"keys": keys})
+	return k.client.Put("/api/projects/" + esc(project) + "/services/" + esc(service) + "/shared-env-keys")
+}
+
 // envQuery returns "?env=<name>" or "" — kept inline rather than using
 // resty's QueryParam to avoid leaking state into later requests on the
 // shared client.

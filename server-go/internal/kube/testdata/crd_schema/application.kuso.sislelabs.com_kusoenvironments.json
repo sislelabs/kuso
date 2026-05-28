@@ -211,6 +211,13 @@
           "service": {
             "type": "string"
           },
+          "sharedEnvKeys": {
+            "description": "Mirrored from the parent KusoService.spec.sharedEnvKeys by the kuso server's propagation step. nil = legacy (chart falls back to envFromSecrets blanket mount); non-nil = chart renders individual env entries per key (per-service opt-in).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "sleep": {
             "properties": {
               "enabled": {

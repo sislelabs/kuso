@@ -147,6 +147,16 @@
           },
           "version": {
             "type": "string"
+          },
+          "webUI": {
+            "description": "Opt-in: expose the addon's built-in web console (mailpit's mail viewer, NATS monitor, …) through the kuso server as an authenticated reverse proxy at /api/projects/\u003cp\u003e/addons/\u003ca\u003e/webui/. No new ingress, no per-UI password — access is gated by the caller's kuso session. Kinds without a known UI port silently no-op.",
+            "properties": {
+              "enabled": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
           }
         },
         "required": [

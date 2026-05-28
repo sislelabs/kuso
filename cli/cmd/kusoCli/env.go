@@ -342,9 +342,149 @@ var secretUnsetCmd = &cobra.Command{
 	},
 }
 
+var envShareCmd = &cobra.Command{
+	Use:   "share <project> <service> KEY [KEY ...]",
+	Short: "Subscribe a service to one or more keys from project/instance shared secrets",
+	Long: `Subscribe a service to specific keys from the project-shared and instance-shared
+secrets. Until now every service implicitly inherited every key from those
+secrets (blanket envFrom mount); v0.16.10+ lets services opt in to specific
+keys, so a newly-added shared secret doesn't silently leak everywhere.
+
+The first call on a legacy service migrates it from "inherit all" to
+"inherit only what you list" — pass every key the service actually needs in
+that first call (use 'kuso env list <project> <service>' to see what's
+currently inherited).
+
+Examples:
+  kuso env share myproj api DATABASE_URL JWT_SECRET
+  kuso env share myproj worker DATABASE_URL          # narrow to just one key
+  kuso env unshare myproj api JWT_SECRET             # remove a subscription`,
+	Args: cobra.MinimumNArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		project, service, addKeys := args[0], args[1], args[2:]
+		// Fetch current subscription (or full available set if legacy) so
+		// the PUT replaces the right baseline. Server treats nil as
+		// "legacy mode" and rejects nil writes; we always send a
+		// non-nil list, even when the user "subscribes" while in
+		// legacy mode (in which case we seed from currently-mounted
+		// keys = every available key from both shared secrets).
+		cur, err := api.GetSharedEnvKeys(project, service)
+		if err != nil {
+			return fmt.Errorf("read current subscription: %w", err)
+		}
+		if cur.StatusCode() >= 300 {
+			return fmt.Errorf("read current subscription: server returned %d: %s",
+				cur.StatusCode(), string(cur.Body()))
+		}
+		var existing struct {
+			Subscribed []string `json:"subscribed"`
+			LegacyMode bool     `json:"legacyMode"`
+			Sources    []struct {
+				Keys []string `json:"keys"`
+			} `json:"sources"`
+		}
+		if err := json.Unmarshal(cur.Body(), &existing); err != nil {
+			return fmt.Errorf("decode subscription: %w", err)
+		}
+		// Baseline: legacy services start from "every available key"
+		// so the explicit-mode flip is no-op on existing pods.
+		baseline := existing.Subscribed
+		if existing.LegacyMode {
+			seen := map[string]bool{}
+			for _, src := range existing.Sources {
+				for _, k := range src.Keys {
+					if !seen[k] {
+						seen[k] = true
+						baseline = append(baseline, k)
+					}
+				}
+			}
+		}
+		seen := map[string]bool{}
+		for _, k := range baseline {
+			seen[k] = true
+		}
+		for _, k := range addKeys {
+			if !seen[k] {
+				seen[k] = true
+				baseline = append(baseline, k)
+			}
+		}
+		resp, err := api.SetSharedEnvKeys(project, service, baseline)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("subscribed %s/%s to %d key(s) (total: %d)\n", project, service, len(addKeys), len(baseline))
+		return nil
+	},
+}
+
+var envUnshareCmd = &cobra.Command{
+	Use:   "unshare <project> <service> KEY [KEY ...]",
+	Short: "Remove keys from a service's shared-secret subscription",
+	Args:  cobra.MinimumNArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		project, service, drop := args[0], args[1], args[2:]
+		cur, err := api.GetSharedEnvKeys(project, service)
+		if err != nil {
+			return fmt.Errorf("read current subscription: %w", err)
+		}
+		if cur.StatusCode() >= 300 {
+			return fmt.Errorf("read current subscription: server returned %d: %s",
+				cur.StatusCode(), string(cur.Body()))
+		}
+		var existing struct {
+			Subscribed []string `json:"subscribed"`
+			LegacyMode bool     `json:"legacyMode"`
+			Sources    []struct {
+				Keys []string `json:"keys"`
+			} `json:"sources"`
+		}
+		if err := json.Unmarshal(cur.Body(), &existing); err != nil {
+			return fmt.Errorf("decode subscription: %w", err)
+		}
+		// In legacy mode the user wants to *narrow* — flip to explicit
+		// mode first by seeding from currently-mounted keys, then drop.
+		baseline := existing.Subscribed
+		if existing.LegacyMode {
+			for _, src := range existing.Sources {
+				baseline = append(baseline, src.Keys...)
+			}
+		}
+		dropSet := map[string]bool{}
+		for _, k := range drop {
+			dropSet[k] = true
+		}
+		next := baseline[:0]
+		for _, k := range baseline {
+			if !dropSet[k] {
+				next = append(next, k)
+			}
+		}
+		resp, err := api.SetSharedEnvKeys(project, service, next)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("unsubscribed %s/%s from %d key(s) (remaining: %d)\n", project, service, len(drop), len(next))
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(envCmd)
-	envCmd.AddCommand(envListCmd, envSetCmd, envUnsetCmd)
+	envCmd.AddCommand(envListCmd, envSetCmd, envUnsetCmd, envShareCmd, envUnshareCmd)
 	envCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 
 	rootCmd.AddCommand(secretCmd)

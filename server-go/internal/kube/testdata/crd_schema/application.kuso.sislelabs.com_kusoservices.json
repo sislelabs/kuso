@@ -215,6 +215,13 @@
             },
             "type": "object"
           },
+          "sharedEnvKeys": {
+            "description": "Per-service opt-in list of keys to inherit from project-shared (\u003cproject\u003e-shared) and instance- shared (kuso-instance-shared) Secrets. Operator chart mounts only these keys via individual env entries (no blanket envFrom), so adding a new key to a shared secret does not silently leak into services that did not subscribe. nil (omitted) = legacy behavior: mount all keys (preserved for pre-v0.16.10 services on upgrade). Empty list = inherit nothing. Use `kuso env share/unshare` or the dashboard chip toggle to edit.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "sleep": {
             "description": "Cold-pause behaviour. When enabled, the operator scales\nthe deployment to 0 after `afterMinutes` of no inbound\ntraffic; the first request wakes it back up.\n\nDO NOT enable for services that receive third-party\nwebhooks or payment callbacks (Stripe, ePay, GitHub,\nSlack, etc.). Cold-start can exceed the sender's\nretry timeout, producing duplicate or late\ndeliveries. Safe for backoffice tools, internal\ndashboards, and preview environments.\n\nFor services that mix callbacks with other traffic,\nset wakeOn.excludePaths so the deployment stays\nwarm even when sleep.enabled is true. Note: the\nsemantic is \"if any path matters, the whole\ndeployment stays warm\" — kube can't route per-path\ninside one Deployment.\n",
             "properties": {

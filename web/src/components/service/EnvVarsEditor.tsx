@@ -11,7 +11,7 @@ import { useServiceEnv, useSetServiceEnv, useDetectedEnv, useDrift } from "@/fea
 import type { DetectedEnv } from "@/features/services/api";
 import { listAddonSecretKeys } from "@/features/services/api";
 import { useProject, useAddons } from "@/features/projects";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCan, Perms } from "@/features/auth";
 import { api, ApiError } from "@/lib/api-client";
 import type { KusoEnvVar } from "@/types/projects";
@@ -560,7 +560,7 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
           service has DATABASE_URL or SENTRY_DSN without having defined
           it locally. Show even when empty so the affordance is
           discoverable on day 1. */}
-      <InheritedSection project={project} />
+      <InheritedSection project={project} service={service} />
 
       {/* Status banner — single source of truth derived from kube
           timestamps. Replaces the previous 3-state chip
@@ -1080,39 +1080,48 @@ function DetectedEnvBanner({
   );
 }
 
-function InheritedSection({ project }: { project: string }) {
-  // Use the shared api() wrapper for the 401 path so an expired
-  // session bounces to /login. 403 (admin-only endpoints) still
-  // soft-falls to the empty shape since non-admins legitimately
-  // see no instance-level inherited vars.
-  const projectKeys = useQuery<{ keys: string[] }>({
-    queryKey: ["projects", project, "shared-secrets"],
+interface SubscribableShape {
+  subscribed: string[] | null;
+  legacyMode: boolean;
+  sources: { secret: string; keys: string[] }[];
+}
+
+function InheritedSection({ project, service }: { project: string; service: string }) {
+  const qc = useQueryClient();
+  const sub = useQuery<SubscribableShape>({
+    queryKey: ["projects", project, "services", service, "shared-env-keys"],
     queryFn: () =>
-      api<{ keys: string[] }>(
-        `/api/projects/${encodeURIComponent(project)}/shared-secrets`,
+      api<SubscribableShape>(
+        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys`,
       ).catch((e: unknown) =>
-        e instanceof ApiError && e.status === 403 ? { keys: [] } : Promise.reject(e),
+        e instanceof ApiError && e.status === 403
+          ? { subscribed: [], legacyMode: false, sources: [] }
+          : Promise.reject(e),
       ),
-    staleTime: 60_000,
+    staleTime: 30_000,
   });
-  const instanceKeys = useQuery<{ keys: string[] }>({
-    queryKey: ["instance-secrets"],
-    queryFn: () =>
-      api<{ keys: string[] }>(`/api/instance-secrets`).catch((e: unknown) =>
-        // Non-admins get 403; treat as empty rather than error.
-        e instanceof ApiError && e.status === 403 ? { keys: [] } : Promise.reject(e),
+  const mut = useMutation({
+    mutationFn: (keys: string[]) =>
+      api<unknown>(
+        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/shared-env-keys`,
+        { method: "PUT", body: JSON.stringify({ keys }) },
       ),
-    staleTime: 60_000,
-    retry: false,
-    throwOnError: false,
+    onSuccess: () =>
+      qc.invalidateQueries({
+        queryKey: ["projects", project, "services", service, "shared-env-keys"],
+      }),
   });
-  const pk = projectKeys.data?.keys ?? [];
-  const ik = instanceKeys.data?.keys ?? [];
-  if (pk.length === 0 && ik.length === 0) {
+
+  const sources = sub.data?.sources ?? [];
+  const subscribed = new Set(sub.data?.subscribed ?? []);
+  const legacy = sub.data?.legacyMode ?? false;
+  const totalAvailable = sources.reduce((n, s) => n + s.keys.length, 0);
+
+  if (totalAvailable === 0) {
     return (
       <details className="group rounded-md border border-dashed border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-1.5">
         <summary className="cursor-pointer list-none font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]">
-          inherited env vars · 0 from project · 0 from instance
+          inherited env vars · none available
         </summary>
         <p className="mt-2 font-mono text-[10px] text-[var(--text-tertiary)]">
           Project-level vars are configured in{" "}
@@ -1131,6 +1140,41 @@ function InheritedSection({ project }: { project: string }) {
       </details>
     );
   }
+
+  // Effective-mount preview: in legacy mode every available key is
+  // mounted; in explicit mode only the subscribed set is mounted.
+  // We show the chip in two states: "mounted" (solid) vs.
+  // "available, not mounted" (outline). Clicking toggles.
+  const effective = legacy ? new Set(sources.flatMap((s) => s.keys)) : subscribed;
+  const mountedCount = effective.size;
+
+  // Toggle expands the current subscription. In legacy mode the
+  // first click flips to explicit mode by seeding the full current
+  // mount set, then applies the user's change atomically. After
+  // that, simple add/remove.
+  const toggle = (key: string) => {
+    let next: Set<string>;
+    if (legacy) {
+      next = new Set(sources.flatMap((s) => s.keys));
+      // Click in legacy mode = "I want exactly the current set
+      // *minus* this key" if it's already mounted, or "*plus*"
+      // otherwise. (In legacy mode everything is already mounted,
+      // so a click is always a remove.)
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+    } else {
+      next = new Set(subscribed);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+    }
+    mut.mutate(Array.from(next).sort());
+  };
+  const addAll = () => {
+    const all = sources.flatMap((s) => s.keys);
+    mut.mutate(Array.from(new Set(all)).sort());
+  };
+  const clearAll = () => mut.mutate([]);
+
   return (
     <details
       open
@@ -1138,36 +1182,83 @@ function InheritedSection({ project }: { project: string }) {
     >
       <summary className="flex cursor-pointer list-none items-center justify-between px-3 py-1.5 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
         <span>
-          inherited env vars · {pk.length} from project · {ik.length} from instance
+          inherited env vars · {mountedCount}/{totalAvailable} subscribed
+          {legacy && (
+            <span className="ml-2 rounded border border-amber-500/40 px-1.5 py-px text-[9px] text-amber-300">
+              legacy mode
+            </span>
+          )}
         </span>
-        <span className="text-[var(--text-tertiary)] group-open:rotate-90 transition-transform">
-          ›
+        <span className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              addAll();
+            }}
+            className="rounded px-1.5 py-0.5 text-[10px] text-[var(--accent)] hover:bg-[var(--bg-tertiary)]"
+            title="Subscribe to every available key"
+          >
+            +all
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              clearAll();
+            }}
+            className="rounded px-1.5 py-0.5 text-[10px] text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+            title="Unsubscribe from every key"
+          >
+            clear
+          </button>
+          <span className="text-[var(--text-tertiary)] group-open:rotate-90 transition-transform">
+            ›
+          </span>
         </span>
       </summary>
       <div className="space-y-2 border-t border-[var(--border-subtle)] px-3 py-2">
-        <InheritedGroup
-          label={`from ${project}-shared`}
-          editHref={`/projects/${encodeURIComponent(project)}/settings`}
-          keys={pk}
-        />
-        <InheritedGroup
-          label="from kuso-instance-shared"
-          editHref="/settings/instance-secrets"
-          keys={ik}
-        />
+        {sources.map((src) => (
+          <SubscribableGroup
+            key={src.secret}
+            label={`from ${src.secret}`}
+            editHref={
+              src.secret === "kuso-instance-shared"
+                ? "/settings/instance-secrets"
+                : `/projects/${encodeURIComponent(project)}/settings`
+            }
+            keys={src.keys}
+            effective={effective}
+            onToggle={toggle}
+            saving={mut.isPending}
+          />
+        ))}
+        {legacy && (
+          <p className="font-mono text-[10px] leading-relaxed text-[var(--text-tertiary)]">
+            This service is in <strong>legacy mode</strong> — every available
+            key is auto-mounted. Click a key to switch to explicit
+            subscription (mounts will not change until you do).
+          </p>
+        )}
       </div>
     </details>
   );
 }
 
-function InheritedGroup({
+function SubscribableGroup({
   label,
   editHref,
   keys,
+  effective,
+  onToggle,
+  saving,
 }: {
   label: string;
   editHref: string;
   keys: string[];
+  effective: Set<string>;
+  onToggle: (key: string) => void;
+  saving: boolean;
 }) {
   return (
     <div>
@@ -1177,7 +1268,7 @@ function InheritedGroup({
           href={editHref}
           className="font-mono text-[10px] text-[var(--accent)] hover:underline"
         >
-          edit →
+          edit source →
         </a>
       </div>
       {keys.length === 0 ? (
@@ -1186,16 +1277,26 @@ function InheritedGroup({
         </p>
       ) : (
         <div className="mt-1 flex flex-wrap gap-1">
-          {keys.sort().map((k) => (
-            <span
-              key={k}
-              className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-0.5 font-mono text-[10px]"
-              title="read-only — edit at the source"
-            >
-              <span className="text-[var(--text-tertiary)]">🔒</span>
-              {k}
-            </span>
-          ))}
+          {[...keys].sort().map((k) => {
+            const on = effective.has(k);
+            return (
+              <button
+                key={k}
+                type="button"
+                disabled={saving}
+                onClick={() => onToggle(k)}
+                className={
+                  on
+                    ? "inline-flex items-center gap-1 rounded-md border border-[var(--accent)]/60 bg-[var(--accent)]/15 px-2 py-0.5 font-mono text-[10px] text-[var(--text-primary)] hover:bg-[var(--accent)]/25 disabled:opacity-60"
+                    : "inline-flex items-center gap-1 rounded-md border border-dashed border-[var(--border-subtle)] bg-transparent px-2 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)] hover:border-[var(--text-secondary)] hover:text-[var(--text-secondary)] disabled:opacity-60"
+                }
+                title={on ? "Click to unsubscribe" : "Click to subscribe"}
+              >
+                <span>{on ? "✓" : "+"}</span>
+                {k}
+              </button>
+            );
+          })}
         </div>
       )}
     </div>
