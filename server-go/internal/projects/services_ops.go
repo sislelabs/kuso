@@ -1252,6 +1252,17 @@ func (s *Service) buildAddonResolver(ctx context.Context, project string) AddonR
 //     rewriter emits an empty PUBLIC_URL in that case (see
 //     ExpandServiceKey) which is the right signal vs. falling back
 //     to in-cluster DNS that a browser can't reach.
+//
+// B4.2 limitation: PublicHost is resolved against the PRODUCTION env
+// only. A ${{ otherSvc.PUBLIC_URL }} in a staging env's envVars will
+// expand to production's public URL — the staging-host case isn't
+// handled here. The in-cluster DNS rescope handled by
+// rescopeServiceRefLiterals (propagate.go) covers the HOST/URL/
+// INTERNAL_URL forms across envs; PublicHost across envs requires
+// storing service refs as placeholder tokens (not literals) so the
+// per-env propagation can re-expand. That refactor is deferred —
+// in practice cross-env public-URL refs are rare (siblings use
+// in-cluster DNS).
 func (s *Service) buildServiceResolver(ctx context.Context, project, ns string) (ServiceRefResolver, error) {
 	services, err := s.listServicesForProject(ctx, project)
 	if err != nil {

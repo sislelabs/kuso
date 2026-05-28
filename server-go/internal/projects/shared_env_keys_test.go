@@ -82,6 +82,46 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 			wantNames:  []string{"FOO", "BAR"},
 			wantValues: map[string]string{"FOO": "env-staged", "BAR": "env-staged"},
 		},
+		{
+			// B2.5 regression: a literal-value env override for a key
+			// that's subscribed via sharedEnvKeys (not present on the
+			// svc.spec.envVars list) is the canonical "I want to
+			// override the shared default per-env without creating a
+			// per-env Secret" case. extractEnvOnlyOverrides MUST treat
+			// it as a net-new override so mergeExplicitOverrides can
+			// later strip the subscribed valueFrom in favour of this
+			// literal — otherwise the pod sees the shared default and
+			// the user's edit silently disappears.
+			name: "literal env override for subscribed-only key",
+			svc:  nil, // svc.spec.envVars empty; key lives in sharedEnvKeys
+			env: []kube.KusoEnvVar{
+				{Name: "API_URL", Value: "https://api-staging.tickero.bg"},
+			},
+			wantNames:  []string{"API_URL"},
+			wantValues: map[string]string{"API_URL": "https://api-staging.tickero.bg"},
+		},
+		{
+			// B2.5 regression (mirror case): an env-level entry that
+			// re-stamps the subscribed valueFrom (legacy state from
+			// propagation when valueFrom was written to env.spec.envVars
+			// directly) must also survive as "net-new" — the dedupe in
+			// mergeSubscribedEnvVars/mergeExplicitOverrides handles the
+			// duplicate downstream.
+			name: "valueFrom env override for subscribed-only key (legacy stamp)",
+			svc:  nil,
+			env: []kube.KusoEnvVar{
+				{
+					Name: "API_URL",
+					ValueFrom: map[string]any{
+						"secretKeyRef": map[string]any{
+							"name": "myproject-shared",
+							"key":  "API_URL",
+						},
+					},
+				},
+			},
+			wantNames: []string{"API_URL"},
+		},
 	}
 	for _, tc := range cases {
 		tc := tc

@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -42,6 +43,21 @@ type Service struct {
 	Kube       *kube.Client
 	Namespace  string
 	NSResolver *kube.ProjectNamespaceResolver
+
+	// serviceLocks serializes SetKey/UnsetKey calls per (project,
+	// service) so the read-then-attach sequence inside
+	// upsertKey + attachToEnv can't race a concurrent unset of the
+	// same key (B2.4 from v0.17.0 audit). Without this lock,
+	// attachToEnv read a stale envFromSecrets snapshot and the
+	// PATCH could re-add a secret name that was just detached, or
+	// drop a name that was just attached.
+	//
+	// The lock is intentionally NOT shared with projects.Service:
+	// per-secret writes are short and an outer projects lock would
+	// deadlock when the secret op is called from within an existing
+	// project lock holder.
+	serviceLocksMu sync.Mutex
+	serviceLocks   map[string]*sync.Mutex
 }
 
 // New constructs a Service. namespace defaults to "kuso".
@@ -49,7 +65,30 @@ func New(k *kube.Client, namespace string) *Service {
 	if namespace == "" {
 		namespace = "kuso"
 	}
-	return &Service{Kube: k, Namespace: namespace}
+	return &Service{
+		Kube:         k,
+		Namespace:    namespace,
+		serviceLocks: map[string]*sync.Mutex{},
+	}
+}
+
+// lockService returns the per-(project, service) mutex used to
+// serialize attach/detach sequences. Held only across the
+// upsertKey→attachToEnv→bumpRev path (and the mirror for unset) so
+// callers don't need to know it exists.
+func (s *Service) lockService(project, service string) *sync.Mutex {
+	key := project + "/" + service
+	s.serviceLocksMu.Lock()
+	defer s.serviceLocksMu.Unlock()
+	if s.serviceLocks == nil {
+		s.serviceLocks = map[string]*sync.Mutex{}
+	}
+	mu, ok := s.serviceLocks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		s.serviceLocks[key] = mu
+	}
+	return mu
 }
 
 // nsFor returns the execution namespace for project. Falls back to the
@@ -140,6 +179,14 @@ func (s *Service) SetKeyOpts(ctx context.Context, project, service, env, key, va
 			return shadow
 		}
 	}
+	// Serialize the upsert→attach→bumpRev sequence per (project,
+	// service). Without this lock the attach step reads a stale
+	// envFromSecrets snapshot if another SetKey/UnsetKey landed
+	// between our upsertKey and attachToEnv (B2.4 audit finding).
+	mu := s.lockService(project, service)
+	mu.Lock()
+	defer mu.Unlock()
+
 	name := Name(project, service, env)
 	if err := s.upsertKey(ctx, ns, name, key, value); err != nil {
 		return err
@@ -167,6 +214,14 @@ func (s *Service) UnsetKey(ctx context.Context, project, service, env, key strin
 	if key == "" {
 		return fmt.Errorf("%w: key is required", ErrInvalid)
 	}
+	// Same per-(project, service) serialization as SetKey — the
+	// remove→detach→bumpRev sequence is symmetric and racing it
+	// against a SetKey for the same secret name would leak orphan
+	// envFromSecrets entries (B2.4).
+	mu := s.lockService(project, service)
+	mu.Lock()
+	defer mu.Unlock()
+
 	ns := s.nsFor(ctx, project)
 	name := Name(project, service, env)
 	res, err := s.removeKey(ctx, ns, name, key)

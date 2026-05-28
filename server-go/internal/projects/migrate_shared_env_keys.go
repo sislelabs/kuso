@@ -28,6 +28,15 @@ func shortServiceName(project, fqn string) string {
 // next reconcile mounts exactly the same set of keys those pods
 // already had — zero behavioral change on the flip.
 //
+// B2.7 caveat: this preserves runtime behavior but is conservative —
+// every service ends up subscribed to every shared key, even keys it
+// never actually read. The audit recommends trimming subscriptions
+// post-migration by walking the pod's env dump and dropping unused
+// keys, but that requires live pod introspection and is deferred to a
+// post-v0.17.1 cleanup pass. For now, users can hand-trim
+// spec.sharedEnvKeys in the env-vars panel — the subscription chip
+// shows exactly which keys are wired.
+//
 // Idempotent: services that already have a non-nil list are skipped.
 // Errors on individual services are logged and skipped; the migration
 // returns nil even if some services failed so a single misbehaving CR

@@ -21,6 +21,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 
@@ -171,9 +172,24 @@ func (s *Service) resolveSharedEnvKeysForEnv(
 	envExplicitEnvVars []kube.KusoEnvVar,
 	envFromSecrets []string,
 ) (mergedEnvVars []kube.KusoEnvVar, prunedEnvFromSecrets []string, err error) {
-	subscribed, _, err := s.expandSharedEnvKeysToEnvVars(ctx, ns, project, sharedEnvKeys)
+	subscribed, missing, err := s.expandSharedEnvKeysToEnvVars(ctx, ns, project, sharedEnvKeys)
 	if err != nil {
 		return nil, nil, err
+	}
+	// B2.6: a subscribed key that no longer resolves to any shared
+	// secret used to disappear silently — a user could delete an
+	// upstream key and only notice when their pods 500'd. Log a WARN
+	// here so it shows up in Loki/Grafana; the dashboard surfaces the
+	// missing list via the env-detail GET (handler/services_env.go
+	// returns spec.missingSharedKeys to the canvas which renders a
+	// yellow chip). Pre-fix: the missing slice was thrown away with
+	// `_,` so neither logs nor UI knew.
+	if len(missing) > 0 {
+		slog.WarnContext(ctx, "resolveSharedEnvKeysForEnv: subscribed keys not found in any shared secret",
+			"project", project,
+			"missing_keys", missing,
+			"requested_count", len(sharedEnvKeys),
+		)
 	}
 	// Drop subscribed-key envVars whose KEY is already overridden by
 	// a per-env / per-service Secret in envFromSecrets. Explicit `env`
