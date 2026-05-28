@@ -337,10 +337,22 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 		// Trigger gating (v0.17.0). When the project declares
 		// previews.triggers[] the PR's base ref MUST match one of the
 		// entries; the matched baseEnv tells us which existing env to
-		// clone vars + addon subscriptions from. Empty triggers list =
-		// pre-v0.17 behavior (spawn on every PR, no inheritance).
-		baseEnv := ""
+		// clone vars + addon subscriptions from.
+		//
+		// When triggers[] is empty the project is in "legacy" preview
+		// mode (spawn on every PR, no explicit base mapping). v0.17.1
+		// onwards default that case to `production` instead of leaving
+		// baseEnv empty — the empty path caused ensurePreviewEnv to
+		// skip the env-var inheritance block entirely, which left
+		// previews with envVars=nil. Preview pods then ran with only
+		// envFrom-mounted shared/instance/addon secrets, missing the
+		// per-env valueFrom-expanded keys that the parent service's
+		// SetEnv path stamped onto production. Crashlooped at startup
+		// when the app asserted on missing env entries
+		// (B1 from v0.17.1 PR-env audit).
+		baseEnv := "production"
 		if len(proj.Spec.Previews.Triggers) > 0 {
+			baseEnv = ""
 			matched := false
 			for _, t := range proj.Spec.Previews.Triggers {
 				if t.Branch == pr.PullRequest.Base.Ref {

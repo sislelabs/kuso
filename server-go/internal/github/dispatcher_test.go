@@ -226,6 +226,90 @@ func TestDispatch_PRPreviewsDisabledSkipped(t *testing.T) {
 	}
 }
 
+// TestDispatch_PROpened_LegacyMode_InheritsFromProduction locks in
+// the v0.17.1 fix for the preview-env env-var inheritance bug.
+//
+// Symptom: tickero PR-35's api preview env spawned with envVars=null
+// even though production carried 11 valueFrom-expanded subscribed
+// keys. The api pod crashlooped because JWT_SECRET / EPAY_SECRET etc.
+// were never available as explicit env: entries (only via envFrom
+// shared blanket-mount, which the app didn't read).
+//
+// Root cause: dispatcher.go set `baseEnv = ""` whenever the project
+// had no previews.triggers[] configured (legacy mode). ensurePreviewEnv
+// then skipped the entire baseEnvVars clone block. The fix defaults
+// baseEnv to "production" in legacy mode so previews always inherit.
+//
+// This test seeds a production env with one envVar, fires PR opened
+// against a project with NO triggers, and asserts the preview env CR
+// carries that envVar through.
+func TestDispatch_PROpened_LegacyMode_InheritsFromProduction(t *testing.T) {
+	t.Parallel()
+
+	prodEnv := &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alpha-web-production",
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": "alpha",
+				"kuso.sislelabs.com/service": "web",
+				"kuso.sislelabs.com/env":     "production",
+			},
+		},
+		Spec: kube.KusoEnvironmentSpec{
+			Project: "alpha",
+			Service: "alpha-web",
+			Kind:    "production",
+			EnvVars: []kube.KusoEnvVar{
+				{
+					Name: "JWT_SECRET",
+					ValueFrom: map[string]any{
+						"secretKeyRef": map[string]any{
+							"name": "alpha-shared",
+							"key":  "JWT_SECRET",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		seedSvc("alpha", "web"),
+		typedSeed(kube.GVREnvironments, "KusoEnvironment", prodEnv),
+	)
+
+	body := []byte(`{
+		"action": "opened",
+		"number": 42,
+		"pull_request": {
+			"head": {"ref": "feat/x", "sha": "abcdef0123456789abcdef0123456789abcdef01"},
+			"base": {"ref": "main"},
+			"state": "open"
+		},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch pr: %v", err)
+	}
+
+	envCR, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-42")
+	if err != nil {
+		t.Fatalf("preview env not created: %v", err)
+	}
+	if len(envCR.Spec.EnvVars) != 1 {
+		t.Fatalf("preview envVars not inherited: got %d, want 1 (cloned from production)", len(envCR.Spec.EnvVars))
+	}
+	if envCR.Spec.EnvVars[0].Name != "JWT_SECRET" {
+		t.Errorf("preview envVar name: %q, want JWT_SECRET", envCR.Spec.EnvVars[0].Name)
+	}
+	ref, _ := envCR.Spec.EnvVars[0].ValueFrom["secretKeyRef"].(map[string]any)
+	if ref == nil || ref["name"] != "alpha-shared" {
+		t.Errorf("preview envVar valueFrom not preserved: %+v", envCR.Spec.EnvVars[0].ValueFrom)
+	}
+}
+
 func TestDispatch_UnknownEvent(t *testing.T) {
 	t.Parallel()
 	d := newDispatcher(t)
