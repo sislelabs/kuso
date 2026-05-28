@@ -321,10 +321,16 @@ export async function syncCron(project: string, service: string, name: string): 
 export async function rollbackBuild(
   project: string,
   service: string,
-  build: string
+  build: string,
+  env?: string,
 ): Promise<unknown> {
+  // Scope rollback to the active env. Defaults to production server-
+  // side when omitted; the overlay's caller passes the env-switcher
+  // value so rolling back a staging deployment doesn't accidentally
+  // re-point production at the staging image.
+  const qs = env ? `?env=${encodeURIComponent(env)}` : "";
   return api(
-    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/builds/${encodeURIComponent(build)}/rollback`,
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/builds/${encodeURIComponent(build)}/rollback${qs}`,
     { method: "POST" }
   );
 }

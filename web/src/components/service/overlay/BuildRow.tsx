@@ -74,6 +74,10 @@ function triggerLabel(b: BuildSummary): string {
 export interface BuildRowProps {
   project: string;
   service: string;
+  // env-group short name (production / staging / preview-pr-N) so
+  // the rollback POST scopes to the right env CR. Empty defaults
+  // to production server-side (pre-v0.17.1 behaviour).
+  env: string;
   build: BuildSummary;
   status: BuildRowStatus;
   duration: string;
@@ -85,6 +89,7 @@ export interface BuildRowProps {
 export function BuildRow({
   project,
   service,
+  env,
   build: b,
   status: s,
   duration,
@@ -149,7 +154,7 @@ export function BuildRow({
           </div>
         </button>
         {s === "superseded" && canDeploy && (
-          <RollbackButton project={project} service={service} buildId={b.id} sha={sha} />
+          <RollbackButton project={project} service={service} env={env} buildId={b.id} sha={sha} />
         )}
         {(s === "running" || s === "pending" || s === "queued") && canDeploy && (
           <CancelButton project={project} service={service} buildId={b.id} />
@@ -260,18 +265,20 @@ function CancelButton({
 function RollbackButton({
   project,
   service,
+  env,
   buildId,
   sha,
 }: {
   project: string;
   service: string;
+  env: string;
   buildId: string;
   sha: string;
 }) {
   const qc = useQueryClient();
   const [confirming, setConfirming] = useState(false);
   const m = useMutation({
-    mutationFn: () => rollbackBuild(project, service, buildId),
+    mutationFn: () => rollbackBuild(project, service, buildId, env),
     onSuccess: () => {
       toast.success(`Rolled back to ${sha || buildId}`);
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });

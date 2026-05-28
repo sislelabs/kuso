@@ -14,6 +14,7 @@ messages on every release. The format is loosely based on
 - Feat: per-env custom domains (server-side) + fix auto-host for user baseDomain ([83af977](https://github.com/sislelabs/kuso/commit/83af977e63a611bb8482c9f6633663706adc2d0b))
 
 ### 🐛 Bug Fixes
+- Fix(previews/web): hash-route reviewer page so kuso/web static-export builds ([8d4b146](https://github.com/sislelabs/kuso/commit/8d4b1465a10c4c207bd174e04e1f2ccb44a36527))
 - Fix(propagate): drop env's shared-secret refs when a per-env override exists ([1d75716](https://github.com/sislelabs/kuso/commit/1d757164fd80ae9937c38e99b799746469f7e9ce))
 - Fix(propagate): per-env Secret overrides win over subscribed shared keys ([0243cd9](https://github.com/sislelabs/kuso/commit/0243cd99ba42f9c8f7397043a4d4e2de11c2f39a))
 - Fix(canvas): infer service→service edges from URL-named env keys ([f9ef9b1](https://github.com/sislelabs/kuso/commit/f9ef9b153396b19b84a92a0bc1bf31b9691f75e3))

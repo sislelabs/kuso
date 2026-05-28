@@ -223,6 +223,15 @@ function BuildsList({
             key={b.id}
             project={project}
             service={service}
+            env={
+              // Prefer the env-group label (production / staging /
+              // preview-pr-N) so the rollback API addresses the
+              // right CR. Falls back to "production" on legacy
+              // env CRs without the label.
+              env?.metadata?.labels?.["kuso.sislelabs.com/env"] ??
+              env?.spec?.kind ??
+              "production"
+            }
             build={b}
             status={s}
             duration={buildDuration(b, s)}

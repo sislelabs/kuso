@@ -105,7 +105,11 @@ func (h *BuildsHandler) Rollback(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
 		return
 	}
-	out, err := h.Svc.Rollback(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "build"))
+	// Env scope from ?env=<name>. Empty defaults to "production" in
+	// the service layer, matching pre-v0.17.1 callers that always
+	// rolled back the production env.
+	envName := r.URL.Query().Get("env")
+	out, err := h.Svc.Rollback(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), envName, chi.URLParam(r, "build"))
 	if err != nil {
 		// Reuse the existing fail() — handles phase + missing-image
 		// errors as 400, missing build as 404.

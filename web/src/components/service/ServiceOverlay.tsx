@@ -507,6 +507,7 @@ export function ServiceOverlay({
                       project={project}
                       service={service}
                       envFailed={status === "failed"}
+                      env={envParam}
                     />
                   ) : null}
                 </div>
@@ -778,10 +779,12 @@ function HeaderRollbackChip({
   project,
   service,
   envFailed,
+  env,
 }: {
   project: string;
   service: string;
   envFailed: boolean;
+  env: string;
 }) {
   const builds = useBuilds(project, service);
   const [confirming, setConfirming] = useState(false);
@@ -820,7 +823,7 @@ function HeaderRollbackChip({
     return succeeded[1] ?? succeeded[0];
   }, [trigger, recentFailed, sorted]);
   const m = useMutation({
-    mutationFn: (buildId: string) => rollbackBuild(project, service, buildId),
+    mutationFn: (buildId: string) => rollbackBuild(project, service, buildId, env),
     onSuccess: () => {
       toast.success(`Rolled back to ${target?.commitSha?.slice(0, 7) ?? target?.id ?? "previous build"}`);
       qc.invalidateQueries({ queryKey: ["projects", project, "services", service, "builds"] });

@@ -92,10 +92,21 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 	return nil
 }
 
-// Rollback re-points the production env at a previous build's image
-// tag. The build must be in phase=succeeded — rolling to a failed
-// build would land a broken pod. Returns the patched env.
-func (s *Service) Rollback(ctx context.Context, project, service, buildName string) (*kube.KusoEnvironment, error) {
+// Rollback re-points an env at a previous build's image tag. The
+// build must be in phase=succeeded — rolling to a failed build would
+// land a broken pod. envName is the env short name (e.g. "production",
+// "staging"); empty defaults to "production" for backward compat with
+// pre-v0.17.1 callers. Returns the patched env.
+//
+// Pre-v0.17.1 the envName was hardcoded to "production" — rolling
+// back staging was either impossible (no UI path) OR if the caller
+// passed a staging build name it silently patched production with
+// staging code. The handler now passes the env from the URL so
+// rolling back staging affects staging only.
+func (s *Service) Rollback(ctx context.Context, project, service, envName, buildName string) (*kube.KusoEnvironment, error) {
+	if envName == "" {
+		envName = "production"
+	}
 	ns := s.nsFor(ctx, project)
 	bRaw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).Get(ctx, buildName, metav1.GetOptions{})
 	if err != nil {
@@ -111,13 +122,13 @@ func (s *Service) Rollback(ctx context.Context, project, service, buildName stri
 	if b.Spec.Image == nil {
 		return nil, fmt.Errorf("build %s has no image to roll back to", buildName)
 	}
-	// Patch the production env's image to the build's image. Stamp
+	// Patch the addressed env's image to the build's image. Stamp
 	// promotedAt to *now* (not the build's createdAt) so a stray
 	// concurrent auto-promote of an older build can't silently
 	// overwrite the user's rollback decision — last-trigger-wins
 	// would otherwise let a stale auto-promote shadow the manual
 	// rollback if its build CR happened to have a newer createdAt.
-	envName := project + "-" + service + "-production"
+	envCRName := project + "-" + service + "-" + envName
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	patch := fmt.Sprintf(
 		`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}},"metadata":{"annotations":{%q:%q,%q:%q}}}`,
@@ -126,16 +137,16 @@ func (s *Service) Rollback(ctx context.Context, project, service, buildName stri
 		annPromotedAt, now,
 	)
 	if _, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
-		Patch(ctx, envName, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
-		return nil, fmt.Errorf("patch env %s: %w", envName, err)
+		Patch(ctx, envCRName, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		return nil, fmt.Errorf("patch env %s: %w", envCRName, err)
 	}
-	envRaw, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).Get(ctx, envName, metav1.GetOptions{})
+	envRaw, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).Get(ctx, envCRName, metav1.GetOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("re-read env: %w", err)
 	}
 	var e kube.KusoEnvironment
 	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(envRaw.Object, &e); err != nil {
-		return nil, fmt.Errorf("decode rolled-back env %s: %w", envName, err)
+		return nil, fmt.Errorf("decode rolled-back env %s: %w", envCRName, err)
 	}
 	return &e, nil
 }
