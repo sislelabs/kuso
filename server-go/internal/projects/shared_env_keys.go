@@ -179,13 +179,64 @@ func (s *Service) resolveSharedEnvKeysForEnv(
 	// edits and must survive propagation, otherwise re-saving any
 	// service-level field (placement, port, sharedEnvKeys, …)
 	// silently flattens them back to service defaults.
-	envOverrides := extractEnvOnlyOverrides(svcExplicitEnvVars, envExplicitEnvVars)
+	//
+	// Crucially: drop any env entry that's a valueFrom.secretKeyRef
+	// pointing at a project-shared/instance-shared secret AND whose
+	// key is no longer in the current sharedEnvKeys subscription.
+	// Those are leftover stamps from a previous propagation when the
+	// subscription was wider; without this filter, unsubscribing
+	// from a key on the service spec leaves the env still mounting
+	// it (because the old valueFrom looks like a "user override" to
+	// the diff against svcExplicitEnvVars, which never had the key).
+	sharedSet := make(map[string]bool, len(sharedEnvKeys))
+	for _, k := range sharedEnvKeys {
+		sharedSet[k] = true
+	}
+	sharedSecretNames := make(map[string]bool, 2)
+	for _, n := range kube.SharedSecretNames(project) {
+		sharedSecretNames[n] = true
+	}
+	filteredEnvExplicit := make([]kube.KusoEnvVar, 0, len(envExplicitEnvVars))
+	for _, e := range envExplicitEnvVars {
+		if isUnsubscribedSharedSecretRef(e, sharedSet, sharedSecretNames) {
+			continue
+		}
+		filteredEnvExplicit = append(filteredEnvExplicit, e)
+	}
+	envOverrides := extractEnvOnlyOverrides(svcExplicitEnvVars, filteredEnvExplicit)
 	// Build merged envVars: subscribed (base) ← svc-explicit ← env-overrides.
 	merged := mergeSubscribedEnvVars(svcExplicitEnvVars, subscribed)
 	merged = mergeExplicitOverrides(merged, envOverrides)
 	pruned := pruneSharedSecretsFromEnvFrom(project, envFromSecrets)
 	_ = corev1.SecretTypeOpaque // silence unused import
 	return merged, pruned, nil
+}
+
+// isUnsubscribedSharedSecretRef returns true when an env's envVar
+// entry is a valueFrom.secretKeyRef into a project-shared/instance-
+// shared secret AND that key is no longer on the active subscription.
+// Those entries are propagation leftovers that should be dropped so
+// the pod stops seeing the key after an unsubscribe.
+//
+// Plain `value` entries (no valueFrom) are never matched — those are
+// genuine user overrides regardless of name overlap with shared keys.
+func isUnsubscribedSharedSecretRef(e kube.KusoEnvVar, sharedSet, sharedSecretNames map[string]bool) bool {
+	if e.ValueFrom == nil {
+		return false
+	}
+	refRaw, ok := e.ValueFrom["secretKeyRef"]
+	if !ok {
+		return false
+	}
+	refMap, ok := refRaw.(map[string]any)
+	if !ok {
+		return false
+	}
+	name, _ := refMap["name"].(string)
+	if !sharedSecretNames[name] {
+		return false
+	}
+	return !sharedSet[e.Name]
 }
 
 // extractEnvOnlyOverrides returns env envVar entries that should
