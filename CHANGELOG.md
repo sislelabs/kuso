@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.16.7] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(install): bump fs.inotify limits to avoid silent pod failures ([05d2676](https://github.com/sislelabs/kuso/commit/05d267664a93f52d9ef5ae2425925ec60cb35f5f))
+
 ## [0.16.6] — 2026-05-27
 
 ### 🐛 Bug Fixes
@@ -596,11 +601,6 @@ messages on every release. The format is loosely based on
 
 ### Other
 - Build: lighter kaniko + capture OOMKilled in failure reason ([fc6e587](https://github.com/sislelabs/kuso/commit/fc6e58729bb177a69607b86102d845c9dc0c42a0))
-
-## [0.9.55] — 2026-05-08
-
-### Other
-- Ux: drop redeploy split-button + widen settings rows ([71559a8](https://github.com/sislelabs/kuso/commit/71559a881db905e1ab78430d301d21e48521df18))
 
 
 ---

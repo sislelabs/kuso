@@ -16,6 +16,18 @@ spec:
   {{- if not (and .Values.autoscaling .Values.autoscaling.enabled) }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
+  {{/*
+    Bounded rollout history. Default is 10. When a rollout wedges (new
+    image crashloops while the cluster still keeps the last-Ready RS
+    around, e.g. placeholder DATABASE_URL → instant exit), kuso users
+    can pile up 20+ orphan ReplicaSets on a single service in an hour
+    of secret editing. They cost ~nothing operationally but they
+    clutter `kubectl get rs` and the kuso UI's deployment view. Three
+    is enough for "roll back the last bad push" + one in flight.
+    Override via .Values.revisionHistoryLimit if a user needs deeper
+    rollback (forensic audits, regulated environments).
+  */}}
+  revisionHistoryLimit: {{ .Values.revisionHistoryLimit | default 3 }}
   {{- /*
     Zero-downtime rolling update. maxSurge=1 + maxUnavailable=0 means
     kube ALWAYS brings up a new pod and waits for it to be Ready

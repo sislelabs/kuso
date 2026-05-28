@@ -64,8 +64,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.16.6}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.16.6}"
+KUSO_VERSION="${KUSO_VERSION:-v0.16.7}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.16.7}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 
@@ -195,24 +195,6 @@ fail, but you'll be on your own for diagnosis)."
     fi
   fi
 fi
-
-# -------- 0. kernel tuning --------
-# k3s + workload pods + helm operator + Promtail + cert-manager each
-# allocate inotify watchers. Distro defaults (Ubuntu/Debian ship
-# max_user_instances=128) get exhausted around ~30 pods, producing
-# silent failures like "failed to create fsnotify watcher: too many
-# open files" — config reloaders stop watching, hot-reload tooling
-# breaks, and Next.js dev/prod servers crash mid-render. Bump to the
-# values upstream k3s + kind recommend; cheap to do, no runtime cost
-# beyond a few KB of kernel state per active watcher. Persisted to
-# sysctl.d so it survives reboot. Idempotent: re-running the
-# installer overwrites the file rather than appending.
-log "tuning kernel limits (fs.inotify) for k3s + many pods"
-cat > /etc/sysctl.d/99-kuso-inotify.conf <<EOF
-fs.inotify.max_user_instances = 8192
-fs.inotify.max_user_watches = 524288
-EOF
-sysctl -p /etc/sysctl.d/99-kuso-inotify.conf >/dev/null 2>&1 || true
 
 # -------- 1. k3s --------
 if [[ "${KUSO_SKIP_K3S:-0}" != "1" ]] && ! command -v k3s >/dev/null 2>&1; then

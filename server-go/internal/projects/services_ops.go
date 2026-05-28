@@ -442,6 +442,20 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	// exist yet — the env helm chart marks the entry optional:true so
 	// the pod boots cleanly even when no shared secret has been set.
 	envFromSecrets = append(envFromSecrets, kube.SharedSecretNames(project)...)
+	// Workers have no HTTP surface — the env chart drops the
+	// Service+Ingress for runtime=worker. Stamping a Host anyway
+	// produces a dangling KusoEnvironment.spec.host that some chart
+	// paths still emit ingresses + certs for; cert-manager then tries
+	// to mint LE certs for a hostname nothing answers on. Leave
+	// Host/TLSHosts empty for workers; computed for every other runtime.
+	envHost := defaultHost(req.Name, project, proj.Spec.BaseDomain)
+	envAdditionalHosts := domainHosts(created.Spec.Domains)
+	envTLSHosts := computeTLSHosts(envHost, envAdditionalHosts)
+	if created.Spec.Runtime == "worker" {
+		envHost = ""
+		envAdditionalHosts = nil
+		envTLSHosts = nil
+	}
 	env := &kube.KusoEnvironment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: productionEnvName(project, req.Name),
@@ -460,9 +474,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Port:             port,
 			ReplicaCount:     intPtr(scale.MinValue()),
 			Autoscaling:      autoscalingFromScale(scale),
-			Host:             defaultHost(req.Name, project, proj.Spec.BaseDomain),
-			AdditionalHosts:  domainHosts(created.Spec.Domains),
-			TLSHosts:         computeTLSHosts(defaultHost(req.Name, project, proj.Spec.BaseDomain), domainHosts(created.Spec.Domains)),
+			Host:             envHost,
+			AdditionalHosts:  envAdditionalHosts,
+			TLSHosts:         envTLSHosts,
 			Internal:         created.Spec.Internal,
 			PrivateEgress:    created.Spec.PrivateEgress,
 			TLSEnabled:       true,
@@ -648,6 +662,13 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		} else {
 			host = fmt.Sprintf("%s-%s.%s.%s", service, req.Name, project, base)
 		}
+	}
+	// Workers have no HTTP surface — strip any computed/override host
+	// so we don't ship a dangling KusoEnvironment.spec.host (would
+	// trigger LE cert orders for a hostname nothing answers on). The
+	// production-env path does the same in AddService.
+	if svc.Spec.Runtime == "worker" {
+		host = ""
 	}
 
 	port := svc.Spec.Port

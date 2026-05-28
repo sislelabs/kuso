@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.9.55] — 2026-05-08
+
+### Other
+- Ux: drop redeploy split-button + widen settings rows ([71559a8](https://github.com/sislelabs/kuso/commit/71559a881db905e1ab78430d301d21e48521df18))
+
 ## [0.9.54] — 2026-05-08
 
 ### Other
