@@ -5,13 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [0.16.26] — 2026-05-28
+## [0.16.27] — 2026-05-28
 
 ### ✨ Features
 - Feat: per-service addon-mount subscription (auto-migrate from legacy) ([89525af](https://github.com/sislelabs/kuso/commit/89525af747589259692fb8e48485db48b16199a8))
 - Feat: per-env custom domains (server-side) + fix auto-host for user baseDomain ([83af977](https://github.com/sislelabs/kuso/commit/83af977e63a611bb8482c9f6633663706adc2d0b))
 
 ### 🐛 Bug Fixes
+- Fix(propagate): drop env's shared-secret refs when a per-env override exists ([1d75716](https://github.com/sislelabs/kuso/commit/1d757164fd80ae9937c38e99b799746469f7e9ce))
 - Fix(propagate): per-env Secret overrides win over subscribed shared keys ([0243cd9](https://github.com/sislelabs/kuso/commit/0243cd99ba42f9c8f7397043a4d4e2de11c2f39a))
 - Fix(canvas): infer service→service edges from URL-named env keys ([f9ef9b1](https://github.com/sislelabs/kuso/commit/f9ef9b153396b19b84a92a0bc1bf31b9691f75e3))
 - Fix(subscribed-addons): respect project prefix on conn-secret allow-list ([3f628e7](https://github.com/sislelabs/kuso/commit/3f628e73a1ace7c47fed83eb2438dc4813152089))

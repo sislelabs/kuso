@@ -138,11 +138,56 @@
             "type": "integer"
           },
           "previews": {
-            "description": "Per-service preview opt-out. When disabled=true the\nservice is excluded from PR previews even when the\nproject-level toggle is on. Useful for shared\nworkers, crons, internal-only services that don't\nmake sense as throwaway URLs. Nil = inherit the\nproject setting.\n",
+            "description": "Per-service preview config. `disabled` excludes the\nservice from PR previews entirely (workers, crons,\ninternal-only services). `reviewUrl` flags this\nservice as a reviewer-facing surface so kuso emits\nits preview URL on the reviewer page + the magic-\nlink email. `seed` runs once after addons reach\nReady (typical: `npm run db:seed`). `previewEnvVars`\noverlays preview-only env vars on top of whatever\nis inherited from the baseEnv.\n",
             "properties": {
               "disabled": {
                 "default": false,
                 "type": "boolean"
+              },
+              "previewEnvVars": {
+                "items": {
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "valueFrom": {
+                      "properties": {
+                        "secretKeyRef": {
+                          "properties": {
+                            "key": {
+                              "type": "string"
+                            },
+                            "name": {
+                              "pattern": "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$",
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "name",
+                            "key"
+                          ],
+                          "type": "object"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  },
+                  "required": [
+                    "name"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "reviewUrl": {
+                "default": false,
+                "type": "boolean"
+              },
+              "seed": {
+                "type": "string"
               }
             },
             "type": "object"

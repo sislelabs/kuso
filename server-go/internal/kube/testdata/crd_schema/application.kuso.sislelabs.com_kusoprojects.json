@@ -82,9 +82,32 @@
           },
           "previews": {
             "properties": {
+              "defaultReviewerEmail": {
+                "description": "Address kuso sends the magic-link reviewer URL to when the PR has no `reviewer:\u003cemail\u003e` label. Empty = no email; operator gets the URL only from the dashboard + GitHub PR comment.",
+                "type": "string"
+              },
               "enabled": {
                 "default": false,
                 "type": "boolean"
+              },
+              "triggers": {
+                "description": "Gate preview-env spawn on PR target branch. Empty = pre-v0.17 behavior (spawn on every PR). Non-empty = only PRs targeting one of the listed branches spawn a preview; the matched entry's baseEnv selects which existing env to clone env-vars and addon subscriptions from.",
+                "items": {
+                  "properties": {
+                    "baseEnv": {
+                      "type": "string"
+                    },
+                    "branch": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "branch",
+                    "baseEnv"
+                  ],
+                  "type": "object"
+                },
+                "type": "array"
               },
               "ttlDays": {
                 "default": 7,

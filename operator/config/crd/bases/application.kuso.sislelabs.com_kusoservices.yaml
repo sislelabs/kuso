@@ -277,16 +277,46 @@ spec:
                 previews:
                   type: object
                   description: |
-                    Per-service preview opt-out. When disabled=true the
-                    service is excluded from PR previews even when the
-                    project-level toggle is on. Useful for shared
-                    workers, crons, internal-only services that don't
-                    make sense as throwaway URLs. Nil = inherit the
-                    project setting.
+                    Per-service preview config. `disabled` excludes the
+                    service from PR previews entirely (workers, crons,
+                    internal-only services). `reviewUrl` flags this
+                    service as a reviewer-facing surface so kuso emits
+                    its preview URL on the reviewer page + the magic-
+                    link email. `seed` runs once after addons reach
+                    Ready (typical: `npm run db:seed`). `previewEnvVars`
+                    overlays preview-only env vars on top of whatever
+                    is inherited from the baseEnv.
                   properties:
                     disabled:
                       type: boolean
                       default: false
+                    reviewUrl:
+                      type: boolean
+                      default: false
+                    seed:
+                      type: string
+                    previewEnvVars:
+                      type: array
+                      items:
+                        type: object
+                        required: [name]
+                        properties:
+                          name:
+                            type: string
+                          value:
+                            type: string
+                          valueFrom:
+                            type: object
+                            properties:
+                              secretKeyRef:
+                                type: object
+                                required: [name, key]
+                                properties:
+                                  name:
+                                    type: string
+                                    pattern: "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$"
+                                  key:
+                                    type: string
                 release:
                   type: object
                   description: |

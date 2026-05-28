@@ -143,6 +143,7 @@ type prEvent struct {
 	PullRequest struct {
 		State string `json:"state"`
 		Title string `json:"title"`
+		Body  string `json:"body"`
 		User  struct {
 			Login string `json:"login"`
 		} `json:"user"`
@@ -150,6 +151,12 @@ type prEvent struct {
 			Ref string `json:"ref"`
 			SHA string `json:"sha"`
 		} `json:"head"`
+		Base struct {
+			Ref string `json:"ref"`
+		} `json:"base"`
+		Labels []struct {
+			Name string `json:"name"`
+		} `json:"labels"`
 	} `json:"pull_request"`
 	Repository struct {
 		FullName string `json:"full_name"`
@@ -315,6 +322,28 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 		if !repoMatches(repoURL, repoFullName) {
 			continue
 		}
+		// Trigger gating (v0.17.0). When the project declares
+		// previews.triggers[] the PR's base ref MUST match one of the
+		// entries; the matched baseEnv tells us which existing env to
+		// clone vars + addon subscriptions from. Empty triggers list =
+		// pre-v0.17 behavior (spawn on every PR, no inheritance).
+		baseEnv := ""
+		if len(proj.Spec.Previews.Triggers) > 0 {
+			matched := false
+			for _, t := range proj.Spec.Previews.Triggers {
+				if t.Branch == pr.PullRequest.Base.Ref {
+					baseEnv = t.BaseEnv
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				d.Logger.Info("preview skipped: PR base branch not in triggers",
+					"project", proj.Name, "pr", pr.Number,
+					"base", pr.PullRequest.Base.Ref)
+				continue
+			}
+		}
 		services, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.nsFor(ctx, proj.Name)).
 			List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: proj.Name})})
 		if err != nil {
@@ -331,7 +360,7 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 				if svcPreviewsDisabled(&services.Items[i]) {
 					continue
 				}
-				if err := d.ensurePreviewEnv(ctx, &proj, services.Items[i].GetName(), pr); err != nil {
+				if err := d.ensurePreviewEnv(ctx, &proj, services.Items[i].GetName(), pr, baseEnv); err != nil {
 					d.Logger.Warn("ensure preview env", "service", services.Items[i].GetName(), "pr", pr.Number, "err", err)
 				}
 			}
@@ -415,7 +444,7 @@ func svcPreviewsDisabled(u *unstructured.Unstructured) bool {
 
 // ensurePreviewEnv creates (or recreates) the preview KusoEnvironment
 // for service+PR and triggers a build off the PR head ref.
-func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProject, serviceFQN string, pr prEvent) error {
+func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProject, serviceFQN string, pr prEvent, baseEnvName string) error {
 	envName := fmt.Sprintf("%s-pr-%d", serviceFQN, pr.Number)
 	short := strings.TrimPrefix(serviceFQN, proj.Name+"-")
 	if short == "" {
@@ -465,6 +494,9 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	var svcRuntime string
 	var svcCommand []string
 	var parentSvc *kube.KusoService
+	var svcPreviewEnvVars []kube.KusoEnvVar
+	var svcSharedEnvKeys []string
+	var svcSubscribedAddons []string
 	if svc, err := d.Kube.GetKusoService(ctx, ns, serviceFQN); err == nil && svc != nil {
 		if svc.Spec.Port > 0 {
 			port = svc.Spec.Port
@@ -472,7 +504,45 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		svcRuntime = svc.Spec.Runtime
 		svcCommand = svc.Spec.Command
 		parentSvc = svc
+		// Capture subscription state for inheritance into the preview
+		// env. nil = inherit-all (legacy mount-everything); non-nil
+		// passes through verbatim so the preview pod sees exactly the
+		// same shared-secret keys + addon-conn secrets the production
+		// pod sees.
+		svcSharedEnvKeys = svc.Spec.SharedEnvKeys
+		svcSubscribedAddons = svc.Spec.SubscribedAddons
+		if svc.Spec.Previews != nil {
+			svcPreviewEnvVars = svc.Spec.Previews.PreviewEnvVars
+		}
 	}
+	// Inherit env vars from the matched baseEnv (post-v0.17.0). The
+	// previous behaviour stamped no inline EnvVars on the preview,
+	// which meant per-env URL overrides like NEXT_PUBLIC_API_URL never
+	// reached the reviewer's browser. Now: clone the baseEnv's EnvVars
+	// outright as the foundation. Per-service previewEnvVars overlay
+	// on top so "DEMO_MODE=true" survives every resync.
+	var baseEnvVars []kube.KusoEnvVar
+	if baseEnvName != "" {
+		baseEnvCRName := fmt.Sprintf("%s-%s", serviceFQN, baseEnvName)
+		if baseEnv, err := d.Kube.GetKusoEnvironment(ctx, ns, baseEnvCRName); err == nil && baseEnv != nil {
+			baseEnvVars = append(baseEnvVars, baseEnv.Spec.EnvVars...)
+			// If the service has nil SharedEnvKeys (legacy mount-all),
+			// fall back to whatever the baseEnv carries explicitly so
+			// the preview matches what the reviewer sees on the base
+			// env URL. Same for SubscribedAddons.
+			if svcSharedEnvKeys == nil && baseEnv.Spec.SharedEnvKeys != nil {
+				svcSharedEnvKeys = baseEnv.Spec.SharedEnvKeys
+			}
+			if svcSubscribedAddons == nil && baseEnv.Spec.SubscribedAddons != nil {
+				svcSubscribedAddons = baseEnv.Spec.SubscribedAddons
+			}
+		} else if err != nil && !apierrors.IsNotFound(err) {
+			d.Logger.Warn("preview baseEnv fetch", "baseEnv", baseEnvName, "err", err)
+		}
+	}
+	// Merge in previewEnvVars: by name, preview overrides win over
+	// the baseEnv copy. Empty list = no overrides (most common).
+	mergedEnvVars := mergePreviewEnvVars(baseEnvVars, svcPreviewEnvVars)
 
 	objMeta := metav1.ObjectMeta{
 		Name: envName,
@@ -504,6 +574,17 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
 			EnvFromSecrets:   envFromSecrets,
+			// Cloned from baseEnv + per-service previewEnvVars overlay.
+			// nil when no baseEnv was matched (triggers list empty) and
+			// no previewEnvVars are defined — preserves legacy zero-
+			// vars behavior for projects that haven't opted into the
+			// new model.
+			EnvVars: mergedEnvVars,
+			// Inherit subscription state so the preview pod sees the
+			// same shared-secret keys + addon-conn secrets the base
+			// pod does. nil means legacy mount-all (pre-v0.16.10).
+			SharedEnvKeys:    svcSharedEnvKeys,
+			SubscribedAddons: svcSubscribedAddons,
 			// Mirror the parent service's runtime+command so worker
 			// services get their proper command override on previews.
 			Runtime: svcRuntime,
@@ -661,6 +742,42 @@ func swapPGCloneSecrets(source []string, cloneSecrets []string, prNumber int) []
 			out[i] = clone
 		} else {
 			out[i] = s
+		}
+	}
+	return out
+}
+
+
+// mergePreviewEnvVars overlays per-service preview overrides on top of
+// the baseEnv-inherited envVars list. By name: an entry in overrides
+// with the same Name as one in base replaces the base entry; net-new
+// entries in overrides are appended. Empty overrides = base verbatim;
+// nil base + non-empty overrides = overrides verbatim. Stable order
+// matters for downstream propagation comparisons (extractEnvOnlyOverrides
+// in projects.shared_env_keys does name-equality, so we preserve the
+// base-then-overrides ordering instead of sorting).
+func mergePreviewEnvVars(base, overrides []kube.KusoEnvVar) []kube.KusoEnvVar {
+	if len(overrides) == 0 {
+		return base
+	}
+	overrideByName := make(map[string]kube.KusoEnvVar, len(overrides))
+	for _, e := range overrides {
+		overrideByName[e.Name] = e
+	}
+	seen := make(map[string]bool, len(base)+len(overrides))
+	out := make([]kube.KusoEnvVar, 0, len(base)+len(overrides))
+	for _, e := range base {
+		if rep, ok := overrideByName[e.Name]; ok {
+			out = append(out, rep)
+			seen[e.Name] = true
+			continue
+		}
+		out = append(out, e)
+		seen[e.Name] = true
+	}
+	for _, e := range overrides {
+		if !seen[e.Name] {
+			out = append(out, e)
 		}
 	}
 	return out

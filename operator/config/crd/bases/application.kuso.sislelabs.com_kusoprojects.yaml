@@ -78,6 +78,30 @@ spec:
                     ttlDays:
                       type: integer
                       default: 7
+                    triggers:
+                      type: array
+                      description: >-
+                        Gate preview-env spawn on PR target branch.
+                        Empty = pre-v0.17 behavior (spawn on every PR).
+                        Non-empty = only PRs targeting one of the listed
+                        branches spawn a preview; the matched entry's
+                        baseEnv selects which existing env to clone
+                        env-vars and addon subscriptions from.
+                      items:
+                        type: object
+                        required: [branch, baseEnv]
+                        properties:
+                          branch:
+                            type: string
+                          baseEnv:
+                            type: string
+                    defaultReviewerEmail:
+                      type: string
+                      description: >-
+                        Address kuso sends the magic-link reviewer URL
+                        to when the PR has no `reviewer:<email>` label.
+                        Empty = no email; operator gets the URL only
+                        from the dashboard + GitHub PR comment.
                 configAsCode:
                   type: object
                   description: >-

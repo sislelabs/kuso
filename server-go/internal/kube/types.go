@@ -105,6 +105,36 @@ type KusoProjectGithubSpec struct {
 type KusoPreviewsSpec struct {
 	Enabled bool `json:"enabled,omitempty"`
 	TTLDays int  `json:"ttlDays,omitempty"`
+	// Triggers gates preview-env spawn on the PR's target branch.
+	// Empty list (legacy) = spawn on EVERY PR regardless of base
+	// branch (pre-v0.17.0 behavior). Non-empty = only spawn when
+	// the PR's base ref matches one of the entries; the matched
+	// trigger's BaseEnv name selects which existing env to clone
+	// env-vars + addon subscriptions from.
+	//
+	// Typical config:
+	//   triggers:
+	//     - branch: main      # PR → main inherits production
+	//       baseEnv: production
+	//     - branch: staging   # PR → staging inherits staging
+	//       baseEnv: staging
+	// PRs targeting branches NOT listed (e.g. feature → other-feature)
+	// silently produce no preview, which is the desired behavior:
+	// previews are reviewer-facing artifacts, not dev-branch noise.
+	Triggers []KusoPreviewTrigger `json:"triggers,omitempty"`
+	// DefaultReviewerEmail is the address kuso sends the magic-link
+	// reviewer URL to when the PR has no `reviewer:<email>` label.
+	// Empty = no email sent (operator gets the URL only via dashboard
+	// + GitHub PR comment).
+	DefaultReviewerEmail string `json:"defaultReviewerEmail,omitempty"`
+}
+
+// KusoPreviewTrigger pairs a PR target branch with the env whose
+// config (env vars, addon subscriptions) becomes the preview's
+// baseline.
+type KusoPreviewTrigger struct {
+	Branch  string `json:"branch"`
+	BaseEnv string `json:"baseEnv"`
 }
 
 // ---- KusoService ---------------------------------------------------------
@@ -230,12 +260,34 @@ type KusoReleaseSpec struct {
 	TimeoutSeconds int      `json:"timeoutSeconds,omitempty"`
 }
 
-// KusoServicePreviews carries the per-service preview opt-out. Disabled
-// is set explicitly by the user; nil pointer = no override. We don't
-// model "Enabled" here because the source of truth for ON is the
-// project-level toggle — services can only OFF themselves out of it.
+// KusoServicePreviews carries the per-service preview opt-out + the
+// reviewer-facing flags that turn a preview into a client-review URL.
+// Disabled / ReviewURL are explicit user toggles; nil pointer = all
+// defaults. We don't model "Enabled" here because the source of truth
+// for ON is the project-level toggle — services can only OFF themselves
+// out of it.
 type KusoServicePreviews struct {
 	Disabled bool `json:"disabled,omitempty"`
+	// ReviewURL marks this service as a reviewer surface. When true,
+	// kuso emits this service's preview URL on the reviewer page +
+	// includes it in the magic-link email. Multiple services can flip
+	// this on; reviewer sees all of them (typical: frontend yes,
+	// backoffice maybe, api/worker no — they're consumed via the
+	// frontend, not directly).
+	ReviewURL bool `json:"reviewUrl,omitempty"`
+	// Seed is an optional shell command run as a one-shot Job after
+	// the preview's addons reach Ready, before the reviewer URL goes
+	// live. Runs in a clone of the build image with the same env vars
+	// the runtime pod would see. Use it to populate a fresh DB:
+	//   previews: { seed: "npm run db:seed" }
+	// Failure surfaces on the reviewer page as "seed failed — retry?"
+	// rather than crashlooping the app.
+	Seed string `json:"seed,omitempty"`
+	// PreviewEnvVars overlay on top of whatever is inherited from
+	// the baseEnv (production / staging). Common use: feature flags
+	// only meaningful in preview ("DEMO_MODE=true"), reviewer-only
+	// instrumentation. Empty = inherit baseEnv unchanged.
+	PreviewEnvVars []KusoEnvVar `json:"previewEnvVars,omitempty"`
 }
 
 // KusoServiceGithubSpec is the per-service variant of the project-
