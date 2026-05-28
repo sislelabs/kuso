@@ -74,29 +74,54 @@ func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request)
 		h.fail(w, "list project builds", err)
 		return
 	}
-	// Build the branch-allow predicate. Production envs use the
-	// project's default branch; staging envs use "staging"; preview
-	// builds carry a numeric PR suffix on the branch name.
-	branchAllowed := func(_ string) bool { return true }
-	if envFilter != "" {
-		switch envFilter {
-		case "production":
-			// Default-branch-only when known. Best-effort: if the
-			// project's DefaultRepo is unset we fall through to
-			// "match anything" rather than returning empty.
-			proj, perr := h.Svc.Kube.GetKusoProject(ctx, h.Svc.Namespace, project)
-			defaultBranch := "main"
-			if perr == nil && proj != nil && proj.Spec.DefaultRepo != nil && proj.Spec.DefaultRepo.DefaultBranch != "" {
-				defaultBranch = proj.Spec.DefaultRepo.DefaultBranch
-			}
-			branchAllowed = func(b string) bool { return b == defaultBranch || b == "" }
-		default:
-			// Custom envs / preview envs: match builds whose branch
-			// equals the env name (staging→staging branch). Falls
-			// through to match-anything when the build has no branch.
-			expect := envFilter
-			branchAllowed = func(b string) bool { return b == expect || b == "" }
+	// Build the branch-allow predicate, per service. Production uses
+	// the project's default branch; preview-pr-N looks up each
+	// service's env CR and uses its spec.branch (the PR's head ref);
+	// custom envs (staging, qa, ...) use the env CR's branch when set
+	// or fall back to matching the env name as the branch.
+	//
+	// Per-service because different services within the same env can
+	// (in theory) track different branches — buildAllowedByService
+	// caches the answer per service FQN so we make at most one env
+	// fetch per service in the loop, not N×M.
+	type predFn func(branch string) bool
+	allowAny := func(_ string) bool { return true }
+	branchAllowed := allowAny
+	var defaultBranch string
+	if envFilter == "production" {
+		proj, perr := h.Svc.Kube.GetKusoProject(ctx, h.Svc.Namespace, project)
+		defaultBranch = "main"
+		if perr == nil && proj != nil && proj.Spec.DefaultRepo != nil && proj.Spec.DefaultRepo.DefaultBranch != "" {
+			defaultBranch = proj.Spec.DefaultRepo.DefaultBranch
 		}
+		expect := defaultBranch
+		branchAllowed = func(b string) bool { return b == expect || b == "" }
+	}
+	// For non-production filters we resolve per service inside the
+	// loop. Cache: serviceFQN → predicate.
+	serviceBranchAllowed := map[string]predFn{}
+	resolveForService := func(serviceFQN string) predFn {
+		if envFilter == "" || envFilter == "production" {
+			return branchAllowed
+		}
+		if cached, ok := serviceBranchAllowed[serviceFQN]; ok {
+			return cached
+		}
+		envName := serviceFQN + "-" + envFilter
+		env, _ := h.Svc.Kube.GetKusoEnvironment(ctx, h.Svc.Namespace, envName)
+		var pred predFn
+		if env != nil && env.Spec.Branch != "" {
+			expect := env.Spec.Branch
+			pred = func(b string) bool { return b == expect || b == "" }
+		} else {
+			// Env CR missing or branch unset — fall back to matching
+			// the env name as the branch (staging env tracking the
+			// "staging" branch is the common case).
+			expect := envFilter
+			pred = func(b string) bool { return b == expect || b == "" }
+		}
+		serviceBranchAllowed[serviceFQN] = pred
+		return pred
 	}
 	// Newest-first ordering already enforced by Service.List, so the
 	// first matching build we see for a given service IS the latest.
@@ -111,7 +136,8 @@ func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request)
 		if seen[short] {
 			continue
 		}
-		if !branchAllowed(b.Spec.Branch) {
+		pred := resolveForService(fq)
+		if !pred(b.Spec.Branch) {
 			continue
 		}
 		seen[short] = true

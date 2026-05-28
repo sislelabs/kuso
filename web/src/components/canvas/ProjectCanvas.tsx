@@ -69,6 +69,12 @@ const nodeTypes = {
 
 interface Props {
   project: string;
+  // Env-group scope the parent view is showing (production / staging /
+  // preview-pr-N / custom). Drives the per-tile "latest build" query
+  // so a preview env tile shows the PR-branch build, not main's
+  // newest build (B1.2 from v0.17.0 audit, completed in v0.17.2 by
+  // wiring the web side too).
+  selectedEnv: string;
   services: KusoService[];
   addons: KusoAddon[];
   envs: KusoEnvironment[];
@@ -89,21 +95,26 @@ interface ContextState {
 
 export function ProjectCanvas({
   project,
+  selectedEnv,
   services,
   addons,
   envs,
   onSelectService,
   onSelectAddon,
 }: Props) {
-  // Latest build per service in this project. Powers the service
-  // node's status — when the latest build is pending/running/failed,
-  // we color the canvas card accordingly even if env.status.phase is
-  // stale (which it routinely is — helm-operator doesn't write
-  // phase=failed back to the env CR when a build fails). 5s refetch
-  // so a "redeploy" → "pending" transition is visible quickly.
+  // Latest build per service in this project, filtered to the
+  // selected env-group's branch. The server (v0.17.1+) groups builds
+  // by branch — production = the project's default branch, custom
+  // env names match the branch name, preview-pr-N matches builds for
+  // the PR's head ref. Without the env filter, a staging build that
+  // landed seconds after main's build would render under production's
+  // service tile and flicker between the two on each 5s poll tick.
   const latestBuilds = useQuery<Record<string, BuildSummary>>({
-    queryKey: ["projects", project, "builds", "latest"],
-    queryFn: () => api(`/api/projects/${encodeURIComponent(project)}/builds/latest`),
+    queryKey: ["projects", project, "builds", "latest", selectedEnv],
+    queryFn: () =>
+      api(
+        `/api/projects/${encodeURIComponent(project)}/builds/latest?env=${encodeURIComponent(selectedEnv)}`,
+      ),
     // Pre-v0.9.38 had refetchInterval=5s and staleTime=2s, which on
     // a busy multi-user dashboard meant 12 fetches/min/project of a
     // payload that rarely changes. Match staleTime to interval so a

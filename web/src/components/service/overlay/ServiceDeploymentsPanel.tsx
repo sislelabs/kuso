@@ -122,7 +122,11 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
           )}
         </div>
         {canDeploy ? (
-          <Button size="sm" onClick={() => onRedeploy({})} disabled={trigger.isPending}>
+          <Button
+            size="sm"
+            onClick={() => onRedeploy(env?.spec?.branch ? { branch: env.spec.branch } : {})}
+            disabled={trigger.isPending}
+          >
             <RotateCcw className="h-3.5 w-3.5" />
             {trigger.isPending ? "Triggering…" : "Redeploy"}
           </Button>

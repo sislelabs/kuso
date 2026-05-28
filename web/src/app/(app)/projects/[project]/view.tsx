@@ -243,6 +243,7 @@ export function ProjectDetailView() {
         )}
         <ProjectCanvas
           project={projectName}
+          selectedEnv={selectedEnv}
           services={services}
           addons={addonsList}
           envs={envs}
