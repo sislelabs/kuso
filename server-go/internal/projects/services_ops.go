@@ -1799,8 +1799,10 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		}
 		svc.Spec.Buildpacks = toBuildpacksSpec(req.Buildpacks)
 	}
+	commandChanged := false
 	if req.Command != nil {
 		svc.Spec.Command = *req.Command
+		commandChanged = true
 	}
 	releaseChanged := false
 	if req.Release != nil {
@@ -1847,6 +1849,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		Runtime:       runtimeChanged,
 		PrivateEgress: privateEgressChanged,
 		Release:       releaseChanged,
+		Command:       commandChanged,
 	}); err != nil {
 		// Match the previous best-effort behaviour: log indirectly
 		// (returned nil; future cleanup adds a logger here) and let

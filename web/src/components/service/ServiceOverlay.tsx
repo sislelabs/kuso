@@ -630,7 +630,22 @@ export function ServiceOverlay({
                     )}
                     {tab === "variables" && (
                       <div className="p-5">
-                        <ServiceVariablesPanel project={project} service={service ?? ""} />
+                        <ServiceVariablesPanel
+                          project={project}
+                          service={service ?? ""}
+                          // Resolve env-group short name from the env CR's
+                          // canonical label (production / staging /
+                          // preview-pr-N / custom). Fall back to "production"
+                          // when no env is selected yet so the panel still
+                          // has a valid scope to query per-env secrets
+                          // against. Mirrors ServiceDeploymentsPanel which
+                          // derives env scope from the same label.
+                          env={
+                            env?.metadata?.labels?.["kuso.sislelabs.com/env"] ??
+                            env?.spec?.kind ??
+                            "production"
+                          }
+                        />
                       </div>
                     )}
                     {tab === "metrics" && (

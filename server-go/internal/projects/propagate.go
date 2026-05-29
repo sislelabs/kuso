@@ -58,10 +58,16 @@ type changedFields struct {
 	// it off the env CR (which is already in its hot-path GET) when
 	// deciding whether to run a release Job before promoting an image.
 	Release bool
+	// Command carries spec.command changes. The chart's Deployment
+	// template renders args off the env CR's command field; without
+	// propagation a `kuso service set --command` change updates the
+	// service spec but the running pod keeps the old argv (worker
+	// services in particular fail to come up when this is missed).
+	Command bool
 }
 
 func (c changedFields) any() bool {
-	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.Release
+	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.Release || c.Command
 }
 
 // propagateChangedToEnvs is the single chokepoint that mirrors a
@@ -213,6 +219,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			}
 			if changed.Release {
 				env.Spec.Release = svc.Spec.Release
+			}
+			if changed.Command {
+				env.Spec.Command = svc.Spec.Command
 			}
 			return nil
 		})

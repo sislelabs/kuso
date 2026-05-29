@@ -7,7 +7,21 @@ import { EnvVarsEditor } from "@/components/service/EnvVarsEditor";
 import { AddOauthAppDialog } from "@/components/service/overlay/AddOauthAppDialog";
 import { useEnvironments } from "@/features/projects";
 
-export function ServiceVariablesPanel({ project, service }: { project: string; service: string }) {
+export function ServiceVariablesPanel({
+  project,
+  service,
+  env,
+}: {
+  project: string;
+  service: string;
+  // env-group scope from the overlay header (production / staging /
+  // preview-pr-N). Drives the per-env secret-key fetch in
+  // EnvVarsEditor — without it, the editor only sees shared-secret
+  // subscriptions + spec.envVars, so per-env NEXT_PUBLIC_* keys mounted
+  // via envFromSecrets get flagged as "referenced but not set" even
+  // when they're actually live on the pod.
+  env: string;
+}) {
   // Pull the production env's host so the OAuth-app helper knows what
   // to register as the callback URL with GitHub. Same lookup pattern
   // as Settings → Networking (production env carries the rendered
@@ -53,7 +67,7 @@ export function ServiceVariablesPanel({ project, service }: { project: string; s
         </div>
       )}
 
-      <EnvVarsEditor project={project} service={service} />
+      <EnvVarsEditor project={project} service={service} env={env} />
 
       <AddOauthAppDialog
         open={oauthOpen}

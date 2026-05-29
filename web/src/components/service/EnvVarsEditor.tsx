@@ -245,12 +245,41 @@ function dotenvToRows(text: string, prevSecrets: Row[]): Row[] {
   return out;
 }
 
-export function EnvVarsEditor({ project, service }: { project: string; service: string }) {
+export function EnvVarsEditor({
+  project,
+  service,
+  env: envScope,
+}: {
+  project: string;
+  service: string;
+  // env-group scope the parent overlay is showing. Used to fetch
+  // per-env Secret keys so DetectedEnvBanner doesn't mark them as
+  // "missing" (they're mounted on the pod via envFromSecrets) and
+  // so the new InheritedPerEnvSection can surface them.
+  env: string;
+}) {
   const env = useServiceEnv(project, service);
   const setEnv = useSetServiceEnv(project, service);
   const detected = useDetectedEnv(project, service);
   const drift = useDrift(project, service);
   const addons = useAddons(project);
+  // Per-env Secret keys. Powers the new "From per-env secret" group
+  // in InheritedSection AND the haveSet filter in DetectedEnvBanner
+  // so keys actually mounted (just via per-env Secret, not via
+  // shared subscription or spec.envVars) don't get flagged as
+  // "referenced in source but not set". Returns {keys: [...], env}.
+  const perEnvSecrets = useQuery<{ keys: string[]; env: string | null }>({
+    queryKey: ["projects", project, "services", service, "secrets", envScope],
+    queryFn: () =>
+      api<{ keys: string[]; env: string | null }>(
+        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/secrets?env=${encodeURIComponent(envScope)}`,
+      ).catch((e: unknown) =>
+        e instanceof ApiError && e.status === 403
+          ? { keys: [], env: envScope }
+          : Promise.reject(e),
+      ),
+    staleTime: 15_000,
+  });
   // Memoised so the toRow effect below only re-runs when the addon set
   // (or its connectionSecret status fields) actually changes. Without
   // memo, every re-render rebuilds the map and the effect's dep array
@@ -571,6 +600,22 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
           discoverable on day 1. */}
       <InheritedSection project={project} service={service} />
 
+      {/* Per-env secret keys mounted via envFromSecrets — these are
+          set via `kuso secret set <p> <s> KEY VAL --env <env>` (or
+          the per-env Settings panel) and reach the pod's environment
+          even though they're invisible to the shared-secret
+          subscription list above. Show the keys so users don't
+          accidentally believe their per-env NEXT_PUBLIC_* edits were
+          lost. Empty group = no per-env secret exists yet (most
+          services); we still render the affordance because the
+          discoverability story matters. */}
+      <PerEnvSecretsSection
+        project={project}
+        service={service}
+        env={envScope}
+        keys={perEnvSecrets.data?.keys ?? []}
+      />
+
       {/* Status banner — single source of truth derived from kube
           timestamps. Replaces the previous 3-state chip
           (rolling/stale/saved) which flickered between states during
@@ -590,6 +635,13 @@ export function EnvVarsEditor({ project, service }: { project: string; service: 
       <DetectedEnvBanner
         detected={detected.data}
         rows={rows}
+        // Keys present in the per-env Secret count as "set" — they're
+        // mounted on the pod via envFromSecrets, just not via the
+        // shared subscription or spec.envVars that the editor manages
+        // directly. Without this, the banner flags every per-env
+        // NEXT_PUBLIC_* as "referenced in source but not set" even
+        // when the pod has them in process.env.
+        extraSetNames={perEnvSecrets.data?.keys ?? []}
         onAdd={(names) => {
           // Append empty rows for each missing name. dedupe against
           // existing entries (case-insensitive — env vars are
@@ -995,14 +1047,24 @@ function AddonRefRow({
 function DetectedEnvBanner({
   detected,
   rows,
+  extraSetNames,
   onAdd,
 }: {
   detected: DetectedEnv | undefined;
   rows: Row[];
+  // Additional key names that count as "satisfied" but live OUTSIDE
+  // the editor's row list — typically the keys in a per-env Secret
+  // mounted via envFromSecrets. The editor's rows + extraSetNames
+  // together form the full "is this key actually set on the pod?"
+  // signal.
+  extraSetNames?: string[];
   onAdd: (names: string[]) => void;
 }) {
   if (!detected) return null;
   const haveSet = new Set(rows.map((r) => r.name.toUpperCase()).filter(Boolean));
+  for (const n of extraSetNames ?? []) {
+    if (n) haveSet.add(n.toUpperCase());
+  }
   const missing = (detected.names ?? []).filter(
     (n) => n && !haveSet.has(n.toUpperCase()),
   );
@@ -1219,6 +1281,68 @@ function InheritedSection({ project, service }: { project: string; service: stri
         ))}
       </div>
     </details>
+  );
+}
+
+// PerEnvSecretsSection shows the keys held by the per-env Secret
+// (<project>-<service>-<env>-secrets) — set via
+// `kuso secret set <p> <s> KEY VAL --env <env>` or the per-env
+// Settings panel. These keys reach the pod through envFromSecrets
+// but are invisible to the editor's row list AND to the shared-
+// secret subscription chip above; without this section, users
+// edit a NEXT_PUBLIC_* per-env secret, see it nowhere on the
+// Variables tab, assume it didn't save, and over-shadow it with a
+// shared subscription. Values are write-only on the server; we
+// show keys only.
+function PerEnvSecretsSection({
+  project,
+  service,
+  env,
+  keys,
+}: {
+  project: string;
+  service: string;
+  env: string;
+  keys: string[];
+}) {
+  // Hide when there's nothing AND we don't have a clear env scope —
+  // the empty-state affordance under "INHERITED ENV VARS" is enough.
+  // When env IS set, show even when empty so the user knows the
+  // feature exists.
+  if (!env && keys.length === 0) return null;
+  const sorted = [...keys].sort();
+  return (
+    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-[12px]">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">
+          Per-env secrets · {env || "production"} · {sorted.length}{" "}
+          {sorted.length === 1 ? "key" : "keys"}
+        </span>
+        <span
+          className="font-mono text-[10px] text-[var(--text-tertiary)]"
+          title={`Mounted as envFrom on this env's pods. Edit via: kuso secret set ${project} ${service} KEY VALUE --env ${env}`}
+        >
+          envFrom
+        </span>
+      </div>
+      {sorted.length === 0 ? (
+        <div className="font-mono text-[10px] text-[var(--text-tertiary)]">
+          (none — set with `kuso secret set {project} {service} KEY VALUE --env {env}`)
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-1">
+          {sorted.map((k) => (
+            <span
+              key={k}
+              className="rounded bg-[var(--bg-tertiary)]/60 px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]"
+              title={`Set via kuso secret on env=${env}`}
+            >
+              {k}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 
