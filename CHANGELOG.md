@@ -5,6 +5,12 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.24] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(previews): stop addon over-mount into preview + production envs ([1085649](https://github.com/sislelabs/kuso/commit/1085649c68282cc0f9bcfc0f1c0ff97bf44d717a))
+- Fix(crd): add previews.baseDomain to KusoProject CRD schema ([2a6f03a](https://github.com/sislelabs/kuso/commit/2a6f03ab9b40cbb57d8011e8ea4ca6b4085fb4c3))
+
 ## [0.17.23] — 2026-05-29
 
 ### ✨ Features
@@ -285,14 +291,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env): KusoEnvironmentSpec.ReplicaCount is *int — same omitempty bug ([8ca0bb5](https://github.com/sislelabs/kuso/commit/8ca0bb5df41dfeb4ec3e97c76bd6e39c6d9b6326))
-
-## [0.16.1] — 2026-05-27
-
-### 🐛 Bug Fixes
-- Fix(scale): KusoScaleSpec.Min is *int — omitempty was dropping min=0 ([2eb6771](https://github.com/sislelabs/kuso/commit/2eb6771c2e1152b5e6275cf210572d8f3f73bb2e))
-
-### 🧹 Chores
-- Chore: archive promoted CHANGELOG entries ([e1aa859](https://github.com/sislelabs/kuso/commit/e1aa8599b61c296f12c16dd349b5f9f17c73f470))
 
 
 ---
