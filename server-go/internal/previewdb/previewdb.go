@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"regexp"
 	"strings"
 	"time"
 
@@ -34,6 +35,19 @@ import (
 	"kuso/server/internal/addons"
 	"kuso/server/internal/kube"
 )
+
+// previewCloneNameRE matches addon short names that follow the
+// "<source>-pr-<N>" convention used by EnsurePRAddons. Matches both
+// well-formed clones (tickero-pg-pr-35) and the broken accumulated
+// names from pre-v0.17.6 sync runs (tickero-pg-pr-35-pr-35-pr-35).
+var previewCloneNameRE = regexp.MustCompile(`-pr-\d+(?:-pr-\d+)*$`)
+
+// isPreviewCloneName returns true when shortName ends in a
+// "-pr-<N>" segment (possibly repeated). Used to skip addons that
+// are themselves preview clones during sync.
+func isPreviewCloneName(shortName string) bool {
+	return previewCloneNameRE.MatchString(shortName)
+}
 
 type Cloner struct {
 	Kube      *kube.Client
@@ -83,6 +97,20 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 		// (cache), and seeding it would mean RDB snapshot transfer.
 		// Out of scope.
 		if s.Spec.Kind != "postgres" {
+			continue
+		}
+		// Skip addons that are themselves preview clones. The
+		// preview-pr label is the canonical marker (stamped by
+		// ExtraLabels below on every clone we make); we also accept
+		// the legacy *-pr-<N> name suffix for clones created before
+		// the label was added. Without this filter, EnsurePRAddons
+		// would clone its own clones each sync —
+		// "tickero-pg-pr-35-pr-35-pr-35" accumulating per resync.
+		if s.Labels["kuso.sislelabs.com/preview-pr"] != "" {
+			continue
+		}
+		shortName := addons.ShortName(project, s.Name)
+		if isPreviewCloneName(shortName) {
 			continue
 		}
 		// Instance-pg addons (project consumes the cluster-shared PG
