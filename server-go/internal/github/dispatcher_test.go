@@ -190,6 +190,43 @@ func TestDispatch_PROpened_CreatesPreviewEnvAndBuild(t *testing.T) {
 	}
 }
 
+// TestDispatch_PROpened_PreviewsBaseDomain is the regression test for the
+// custom preview-domain feature: when previews.baseDomain is set, preview
+// hosts derive from it (web-pr-42.tickero.bg) instead of the project's
+// baseDomain (web-pr-42.alpha.example.com).
+func TestDispatch_PROpened_PreviewsBaseDomain(t *testing.T) {
+	t.Parallel()
+	proj := &kube.KusoProject{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "kuso"},
+		Spec: kube.KusoProjectSpec{
+			DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/example/alpha", DefaultBranch: "main"},
+			BaseDomain:  "alpha.example.com",
+			// previews pinned to a custom base domain.
+			Previews: &kube.KusoPreviewsSpec{Enabled: true, TTLDays: 5, BaseDomain: "tickero.bg"},
+		},
+	}
+	d := newDispatcher(t,
+		typedSeed(kube.GVRProjects, "KusoProject", proj),
+		seedSvc("alpha", "web"),
+	)
+	body := []byte(`{
+		"action": "opened",
+		"number": 42,
+		"pull_request": {"head": {"ref": "feat/x", "sha": "abcdef0123456789abcdef0123456789abcdef01"}, "state": "open"},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch pr: %v", err)
+	}
+	envCR, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-42")
+	if err != nil {
+		t.Fatalf("preview env not created: %v", err)
+	}
+	if envCR.Spec.Host != "web-pr-42.tickero.bg" {
+		t.Errorf("preview host should use previews.baseDomain, got %q (want web-pr-42.tickero.bg)", envCR.Spec.Host)
+	}
+}
+
 func TestDispatch_PRClosed_DeletesPreviewEnv(t *testing.T) {
 	t.Parallel()
 	d := newDispatcher(t,

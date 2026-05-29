@@ -105,6 +105,15 @@ type KusoProjectGithubSpec struct {
 type KusoPreviewsSpec struct {
 	Enabled bool `json:"enabled,omitempty"`
 	TTLDays int  `json:"ttlDays,omitempty"`
+	// BaseDomain overrides the domain used to build preview hosts.
+	// When set, previews are <short>-pr-<N>.<BaseDomain> (e.g.
+	// frontend-pr-35.tickero.bg) instead of using the project's
+	// spec.baseDomain (typically the kuso-managed *.sislelabs.com
+	// base). Lets previews live under the same custom domain
+	// production serves on. Requires wildcard DNS for *.<BaseDomain>
+	// + a working cert-manager HTTP-01 issuer (preview certs are
+	// minted per-host from env.spec.host, no chart change needed).
+	BaseDomain string `json:"baseDomain,omitempty"`
 	// Triggers gates preview-env spawn on the PR's target branch.
 	// Empty list (legacy) = spawn on EVERY PR regardless of base
 	// branch (pre-v0.17.0 behavior). Non-empty = only spawn when

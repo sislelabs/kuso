@@ -236,6 +236,21 @@ func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN
 		c.Logger.Warn("preview db clone never reached ready", "clone", cloneFQN)
 		return
 	}
+	// Align the clone role's password to its conn secret before seeding.
+	// The kusoaddon chart can leave the conn-secret POSTGRES_PASSWORD out
+	// of sync with the password the role actually has (the same drift
+	// `kuso project addon repair-password` recovers from) — the clone is
+	// especially exposed because it's created + reconciled in rapid
+	// succession by this background goroutine. On drift, the seed Job's
+	// destination psql SASL-fails AND every preview pod that reads the
+	// conn secret can't reach its DB ("password authentication failed for
+	// user kuso"). RepairPassword runs ALTER USER over the local trust
+	// socket; idempotent when already aligned. Non-fatal — if no drift
+	// occurred the seed + pods work regardless.
+	cloneShort := addons.ShortName(project, cloneFQN)
+	if err := c.Addons.RepairPassword(ctx, project, cloneShort); err != nil {
+		c.Logger.Warn("preview db clone repair-password", "clone", cloneFQN, "err", err)
+	}
 	if err := c.runSeedJob(ctx, ns, project, sourceFQN, cloneFQN); err != nil {
 		c.Logger.Warn("preview db seed job", "clone", cloneFQN, "err", err)
 		return

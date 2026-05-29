@@ -485,7 +485,16 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	if short == "" {
 		short = serviceFQN
 	}
+	// Preview hosts default to the project's baseDomain (the kuso-managed
+	// *.sislelabs.com base), but a project can pin previews under its own
+	// custom domain via previews.baseDomain (e.g. frontend-pr-35.tickero.bg
+	// instead of …tickero.sislelabs.com). This flows through to both the
+	// env's Host and buildPreviewHostRewrite below, which are parameterized
+	// on baseDomain.
 	baseDomain := proj.Spec.BaseDomain
+	if proj.Spec.Previews != nil && proj.Spec.Previews.BaseDomain != "" {
+		baseDomain = proj.Spec.Previews.BaseDomain
+	}
 	if baseDomain == "" {
 		baseDomain = proj.Name + ".kuso.sislelabs.com"
 	}

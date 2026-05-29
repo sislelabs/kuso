@@ -25,12 +25,12 @@ var projectCmd = &cobra.Command{
 // ---------------- project create ----------------
 
 var (
-	projectCreateRepo            string
-	projectCreateBranch          string
-	projectCreateDomain          string
-	projectCreatePreviews        bool
-	projectCreateInstallationID  int64
-	projectCreateNamespace       string
+	projectCreateRepo           string
+	projectCreateBranch         string
+	projectCreateDomain         string
+	projectCreatePreviews       bool
+	projectCreateInstallationID int64
+	projectCreateNamespace      string
 )
 
 var projectCreateCmd = &cobra.Command{
@@ -74,15 +74,16 @@ var projectCreateCmd = &cobra.Command{
 // ---------------- project update ----------------
 
 var (
-	projectUpdateBranch        string
-	projectUpdateRepo          string
-	projectUpdateDomain        string
-	projectUpdateDescription   string
-	projectUpdateInstallation  int64
-	projectUpdateInstallReset  bool
-	projectUpdatePreviews      string // "on" | "off" | "" (leave alone)
-	projectUpdatePreviewsTTL   int
-	projectUpdateAlwaysOn      string // "on" | "off" | "" (leave alone)
+	projectUpdateBranch         string
+	projectUpdateRepo           string
+	projectUpdateDomain         string
+	projectUpdateDescription    string
+	projectUpdateInstallation   int64
+	projectUpdateInstallReset   bool
+	projectUpdatePreviews       string // "on" | "off" | "" (leave alone)
+	projectUpdatePreviewsTTL    int
+	projectUpdatePreviewsDomain string // base domain for preview hosts, "" = leave alone
+	projectUpdateAlwaysOn       string // "on" | "off" | "" (leave alone)
 )
 
 var projectUpdateCmd = &cobra.Command{
@@ -119,7 +120,7 @@ installation use --github-installation-clear (sets installationId to 0).`,
 		} else if cmd.Flags().Changed("github-installation") {
 			req.GitHub = &kusoApi.GitHubInstallationRef{InstallationID: projectUpdateInstallation}
 		}
-		if cmd.Flags().Changed("previews") || cmd.Flags().Changed("previews-ttl") {
+		if cmd.Flags().Changed("previews") || cmd.Flags().Changed("previews-ttl") || cmd.Flags().Changed("previews-domain") {
 			pv := &kusoApi.PreviewsPatch{}
 			switch projectUpdatePreviews {
 			case "on", "true", "yes":
@@ -133,6 +134,9 @@ installation use --github-installation-clear (sets installationId to 0).`,
 			}
 			if cmd.Flags().Changed("previews-ttl") {
 				pv.TTLDays = kusoApi.IntPtr(projectUpdatePreviewsTTL)
+			}
+			if cmd.Flags().Changed("previews-domain") {
+				pv.BaseDomain = kusoApi.StringPtr(projectUpdatePreviewsDomain)
 			}
 			req.Previews = pv
 		}
@@ -462,16 +466,16 @@ resource names are immutable, so the operation has real cost:
 // ---------------- project service set ----------------
 
 var (
-	serviceSetDisplayName string
-	serviceSetPort        int32
-	serviceSetRuntime     string
-	serviceSetDomains     string // comma- or newline-separated host list
-	serviceSetInternal       string // "on" | "off" | "" (leave alone)
-	serviceSetPrivateEgress  string // "on" | "off" | "" (leave alone)
-	serviceSetMinReplicas    int
-	serviceSetMaxReplicas    int
-	serviceSetPath           string // monorepo subpath (relative to repo root)
-	serviceSetBranch         string // git branch override
+	serviceSetDisplayName   string
+	serviceSetPort          int32
+	serviceSetRuntime       string
+	serviceSetDomains       string // comma- or newline-separated host list
+	serviceSetInternal      string // "on" | "off" | "" (leave alone)
+	serviceSetPrivateEgress string // "on" | "off" | "" (leave alone)
+	serviceSetMinReplicas   int
+	serviceSetMaxReplicas   int
+	serviceSetPath          string // monorepo subpath (relative to repo root)
+	serviceSetBranch        string // git branch override
 )
 
 var serviceSetCmd = &cobra.Command{
@@ -992,6 +996,7 @@ func init() {
 	projectUpdateCmd.Flags().BoolVar(&projectUpdateInstallReset, "github-installation-clear", false, "detach the project from any GitHub App installation")
 	projectUpdateCmd.Flags().StringVar(&projectUpdatePreviews, "previews", "", "enable/disable preview envs (on|off)")
 	projectUpdateCmd.Flags().IntVar(&projectUpdatePreviewsTTL, "previews-ttl", 0, "preview env TTL in days")
+	projectUpdateCmd.Flags().StringVar(&projectUpdatePreviewsDomain, "previews-domain", "", "base domain for preview hosts, e.g. tickero.bg (previews become <svc>-pr-N.<domain>); needs wildcard DNS for *.<domain>")
 	projectUpdateCmd.Flags().StringVar(&projectUpdateAlwaysOn, "always-on", "", "force every service to never scale to zero (on|off)")
 	projectCmd.AddCommand(projectDescribeCmd)
 	projectDescribeCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")

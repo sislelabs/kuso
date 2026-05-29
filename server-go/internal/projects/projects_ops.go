@@ -205,6 +205,9 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 		if req.Previews.TTLDays != nil && *req.Previews.TTLDays > 0 {
 			cur.Spec.Previews.TTLDays = *req.Previews.TTLDays
 		}
+		if req.Previews.BaseDomain != nil {
+			cur.Spec.Previews.BaseDomain = strings.TrimSpace(*req.Previews.BaseDomain)
+		}
 	}
 	if req.AlwaysOn != nil {
 		cur.Spec.AlwaysOn = *req.AlwaysOn

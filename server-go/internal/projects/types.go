@@ -28,8 +28,9 @@ type CreateProjectGithubSpec struct {
 }
 
 type CreateProjectPreviewsSpec struct {
-	Enabled bool `json:"enabled,omitempty"`
-	TTLDays int  `json:"ttlDays,omitempty"`
+	Enabled    bool   `json:"enabled,omitempty"`
+	TTLDays    int    `json:"ttlDays,omitempty"`
+	BaseDomain string `json:"baseDomain,omitempty"`
 }
 
 // UpdateProjectRequest is the body of PATCH /api/projects/:name.
@@ -52,8 +53,9 @@ type UpdateProjectRequest struct {
 }
 
 type UpdateProjectPreviewsSpec struct {
-	Enabled *bool `json:"enabled,omitempty"`
-	TTLDays *int  `json:"ttlDays,omitempty"`
+	Enabled    *bool   `json:"enabled,omitempty"`
+	TTLDays    *int    `json:"ttlDays,omitempty"`
+	BaseDomain *string `json:"baseDomain,omitempty"`
 }
 
 // CreateServiceRequest is the body of POST /api/projects/:project/services.

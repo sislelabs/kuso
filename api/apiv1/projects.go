@@ -48,15 +48,17 @@ type GitHubInstallationRef struct {
 
 // PreviewsSettings is the create-time shape.
 type PreviewsSettings struct {
-	Enabled bool `json:"enabled"`
-	TTLDays int  `json:"ttlDays,omitempty"`
+	Enabled    bool   `json:"enabled"`
+	TTLDays    int    `json:"ttlDays,omitempty"`
+	BaseDomain string `json:"baseDomain,omitempty"`
 }
 
 // PreviewsPatch is the update-time shape — pointer fields so callers
 // can flip Enabled without resetting TTLDays.
 type PreviewsPatch struct {
-	Enabled *bool `json:"enabled,omitempty"`
-	TTLDays *int  `json:"ttlDays,omitempty"`
+	Enabled    *bool   `json:"enabled,omitempty"`
+	TTLDays    *int    `json:"ttlDays,omitempty"`
+	BaseDomain *string `json:"baseDomain,omitempty"`
 }
 
 // Helpers for building pointer literals tersely. Go 1.21+ has

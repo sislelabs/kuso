@@ -787,6 +787,28 @@ func TestUpdate_TogglesPreviews(t *testing.T) {
 	}
 }
 
+func TestUpdate_SetsPreviewsBaseDomain(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"},
+		Previews:    &kube.KusoPreviewsSpec{Enabled: true, TTLDays: 7},
+	}))
+	dom := "tickero.bg"
+	got, err := s.Update(context.Background(), "alpha", UpdateProjectRequest{
+		Previews: &UpdateProjectPreviewsSpec{BaseDomain: &dom},
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if got.Spec.Previews == nil || got.Spec.Previews.BaseDomain != "tickero.bg" {
+		t.Errorf("previews baseDomain not set: %+v", got.Spec.Previews)
+	}
+	// Setting baseDomain must not clobber enabled/ttl.
+	if !got.Spec.Previews.Enabled || got.Spec.Previews.TTLDays != 7 {
+		t.Errorf("baseDomain set clobbered other previews fields: %+v", got.Spec.Previews)
+	}
+}
+
 func TestUpdate_ClearsGitHubInstallation(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{

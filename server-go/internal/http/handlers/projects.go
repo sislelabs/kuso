@@ -50,8 +50,9 @@ func apiv1CreateToDomain(in apiv1.CreateProjectRequest) projects.CreateProjectRe
 	}
 	if in.Previews != nil {
 		out.Previews = &projects.CreateProjectPreviewsSpec{
-			Enabled: in.Previews.Enabled,
-			TTLDays: in.Previews.TTLDays,
+			Enabled:    in.Previews.Enabled,
+			TTLDays:    in.Previews.TTLDays,
+			BaseDomain: in.Previews.BaseDomain,
 		}
 	}
 	return out
@@ -145,8 +146,9 @@ func apiv1UpdateToDomain(in apiv1.UpdateProjectRequest) projects.UpdateProjectRe
 	}
 	if in.Previews != nil {
 		out.Previews = &projects.UpdateProjectPreviewsSpec{
-			Enabled: in.Previews.Enabled,
-			TTLDays: in.Previews.TTLDays,
+			Enabled:    in.Previews.Enabled,
+			TTLDays:    in.Previews.TTLDays,
+			BaseDomain: in.Previews.BaseDomain,
 		}
 	}
 	return out
