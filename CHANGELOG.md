@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.20] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix: env-unset data loss, ghcr tag pagination, updater image fallback, env-scoped domains CLI ([c255bdc](https://github.com/sislelabs/kuso/commit/c255bdcf430dedc1762a36a5cd1e117d457de6c8))
+
 ## [0.17.19] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -304,11 +309,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs: spec for UX deep-dive top-5 fix bundle ([a859fdc](https://github.com/sislelabs/kuso/commit/a859fdceea1bf2924368df1730787f6582d6d601))
-
-## [0.13.18] — 2026-05-23
-
-### ✨ Features
-- Feat(web): surface public-TCP state on the addon Connection card ([51f5d26](https://github.com/sislelabs/kuso/commit/51f5d2656a6881da2c0eafb120574a1f6a4d9c37))
 
 
 ---
