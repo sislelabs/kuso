@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.14] — 2026-05-29
+
+### ✨ Features
+- Feat(web): per-env secrets are editable; subscribed keys count as set ([efd1730](https://github.com/sislelabs/kuso/commit/efd173030d119d8082732b87d05cc0182fb4a3c1))
+
 ## [0.17.13] — 2026-05-29
 
 ### ✨ Features
@@ -341,28 +346,6 @@ messages on every release. The format is loosely based on
 
 ### 🔨 Refactors
 - Refactor(github): parse kuso.yaml once in applyConfigFromRepo ([c00088d](https://github.com/sislelabs/kuso/commit/c00088ded25dab7bd0f4d7da7a50457370669c83))
-
-## [0.13.12] — 2026-05-20
-
-### ✨ Features
-- Feat(kube): add ServiceSecretName and EnvSecretName helpers ([d278bfc](https://github.com/sislelabs/kuso/commit/d278bfc8d16a7977a17b52245a39fc442867016a))
-
-### 🐛 Bug Fixes
-- Fix(addons): keep per-service and per-env secrets in envFromSecrets fan-out ([40ff006](https://github.com/sislelabs/kuso/commit/40ff0066c6bc4968f372293b02220ea60874409d))
-
-### 📝 Docs
-- Docs: envFromSecrets per-service/per-env drop fix implementation plan ([649dcd1](https://github.com/sislelabs/kuso/commit/649dcd13662ae943c8f2da1fa30268a72dc0e900))
-- Docs: envFromSecrets per-service/per-env drop fix design spec ([745eab3](https://github.com/sislelabs/kuso/commit/745eab333ab862d1da23066e6b281244deba87be))
-
-### 🔨 Refactors
-- Refactor(secrets): delegate Name to kube secret-name helpers ([e75b138](https://github.com/sislelabs/kuso/commit/e75b1382d8bfbf0f5b58a0ab59fd4a42cbcd6cd5))
-
-### 🧪 Tests
-- Test(addons): assert fan-out keeps per-service and per-env secrets ([d05a059](https://github.com/sislelabs/kuso/commit/d05a059bbf5c941f8f12becb9bcbbcf2ff6bb903))
-- Test(kube): cover ServiceSecretName and EnvSecretName ([d1b99a5](https://github.com/sislelabs/kuso/commit/d1b99a5d3dcb98b13ceca932c99b63422f138dd8))
-
-### 🧹 Chores
-- Chore: archive older changelog entries ([fd726e2](https://github.com/sislelabs/kuso/commit/fd726e2261609f5a1d3399de055f208dd2059901))
 
 
 ---
