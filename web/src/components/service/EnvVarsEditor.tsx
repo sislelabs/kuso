@@ -619,21 +619,17 @@ export function EnvVarsEditor({
           discoverable on day 1. */}
       <InheritedSection project={project} service={service} />
 
-      {/* Per-env secret keys mounted via envFromSecrets — these are
-          set via `kuso secret set <p> <s> KEY VAL --env <env>` (or
-          the per-env Settings panel) and reach the pod's environment
-          even though they're invisible to the shared-secret
-          subscription list above. Show the keys so users don't
-          accidentally believe their per-env NEXT_PUBLIC_* edits were
-          lost. Empty group = no per-env secret exists yet (most
-          services); we still render the affordance because the
-          discoverability story matters. */}
-      <PerEnvSecretsSection
-        project={project}
-        service={service}
-        env={envScope}
-        keys={perEnvSecrets.data?.keys ?? []}
-      />
+      {/* Per-env Secrets (kuso secret set --env <env>) were
+          previously surfaced here as a separate section, but they're
+          a low-level escape hatch — the primary primitive for any
+          env var, sensitive or not, is the row editor below
+          (kuso env set). We still consume the per-env Secret KEY
+          list as an extraSetNames signal in DetectedEnvBanner so
+          legacy entries don't get flagged as missing, but we no
+          longer render them as a separate UI section. Users who
+          want to view legacy per-env Secret keys can grep them via
+          `kuso secret list <p> <s> --env <env>` from the CLI;
+          everything new should go through the row editor. */}
 
       {/* Status banner — single source of truth derived from kube
           timestamps. Replaces the previous 3-state chip
@@ -1307,204 +1303,6 @@ function InheritedSection({ project, service }: { project: string; service: stri
   );
 }
 
-// PerEnvSecretsSection lets the user view + rotate + delete keys in
-// the per-env Secret (<project>-<service>-<env>-secrets). Values are
-// write-only on the server — we can never display the current value;
-// the masked input is purely an affordance for entering a NEW value
-// to overwrite the existing one (or leaving it blank to mean "keep
-// as-is, only the metadata refreshes"). Add-new row at the bottom
-// for keys that don't exist yet.
-//
-// Why mutate from inside the Variables panel: the previous answer was
-// "shell out to `kuso secret set` from a terminal," but users browsing
-// the UI shouldn't context-switch to a CLI for an edit they can see is
-// missing/wrong. Per-env Secrets are first-class env config; they
-// deserve the same row-editor as everything else on this tab.
-function PerEnvSecretsSection({
-  project,
-  service,
-  env,
-  keys,
-}: {
-  project: string;
-  service: string;
-  env: string;
-  keys: string[];
-}) {
-  const qc = useQueryClient();
-  const canWrite = useCan(Perms.SecretsWrite);
-
-  // Local input state per key (the NEW value the user is typing).
-  // Empty string means no pending change — the row's "Save" button
-  // stays disabled.
-  const [pending, setPending] = useState<Record<string, string>>({});
-  // Add-new row state. Two inputs (key + value), only submits when
-  // both are non-empty.
-  const [newKey, setNewKey] = useState("");
-  const [newValue, setNewValue] = useState("");
-  // Per-key visibility toggle. Since values are write-only the
-  // toggle only affects the input rendering — not whether we can
-  // actually show the existing value (we never can).
-  const [visible, setVisible] = useState<Record<string, boolean>>({});
-
-  const setSecret = useMutation({
-    mutationFn: async ({ key, value }: { key: string; value: string }) => {
-      const resp = await api(
-        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/secrets`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ key, value, env, force: true }),
-        },
-      );
-      return resp;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({
-        queryKey: ["projects", project, "services", service, "secrets", env],
-      });
-    },
-  });
-  const unsetSecret = useMutation({
-    mutationFn: async (key: string) => {
-      const resp = await api(
-        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/secrets/${encodeURIComponent(key)}?env=${encodeURIComponent(env)}`,
-        { method: "DELETE" },
-      );
-      return resp;
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({
-        queryKey: ["projects", project, "services", service, "secrets", env],
-      });
-    },
-  });
-
-  if (!env && keys.length === 0) return null;
-  const sorted = [...keys].sort();
-
-  return (
-    <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2 text-[12px]">
-      <div className="mb-2 flex items-center justify-between gap-2">
-        <span className="font-mono text-[10px] uppercase tracking-wider text-[var(--text-tertiary)]">
-          Per-env secrets · {env || "production"} · {sorted.length}{" "}
-          {sorted.length === 1 ? "key" : "keys"}
-        </span>
-        <span
-          className="font-mono text-[10px] text-[var(--text-tertiary)]"
-          title={`Mounted as envFrom on this env's pods. Values are write-only on the server.`}
-        >
-          envFrom · values write-only
-        </span>
-      </div>
-
-      {sorted.length === 0 && (
-        <div className="mb-2 font-mono text-[10px] text-[var(--text-tertiary)]">
-          (none yet — add one below)
-        </div>
-      )}
-
-      <div className="space-y-1.5">
-        {sorted.map((k) => {
-          const pendingVal = pending[k] ?? "";
-          const isVisible = visible[k] ?? false;
-          const hasPending = pendingVal !== "";
-          return (
-            <div key={k} className="flex items-center gap-1">
-              <input
-                type="text"
-                value={k}
-                readOnly
-                className="w-[40%] rounded border border-[var(--border-subtle)] bg-[var(--bg-tertiary)]/40 px-2 py-1 font-mono text-[11px] text-[var(--text-secondary)]"
-              />
-              <input
-                type={isVisible ? "text" : "password"}
-                value={pendingVal}
-                onChange={(e) => setPending((p) => ({ ...p, [k]: e.target.value }))}
-                placeholder="•••• (write-only — type to rotate)"
-                disabled={!canWrite}
-                className="flex-1 rounded border border-[var(--border-subtle)] bg-[var(--bg-tertiary)]/40 px-2 py-1 font-mono text-[11px] text-[var(--text-primary)] placeholder-[var(--text-tertiary)] focus:border-[var(--accent)] focus:outline-none disabled:opacity-50"
-              />
-              <button
-                type="button"
-                onClick={() => setVisible((v) => ({ ...v, [k]: !v[k] }))}
-                className="rounded p-1 text-[var(--text-tertiary)] hover:text-[var(--text-primary)]"
-                title={isVisible ? "Hide" : "Show typed value"}
-              >
-                <Eye className="h-3.5 w-3.5" />
-              </button>
-              <button
-                type="button"
-                disabled={!canWrite || !hasPending || setSecret.isPending}
-                onClick={async () => {
-                  await setSecret.mutateAsync({ key: k, value: pendingVal });
-                  setPending((p) => {
-                    const next = { ...p };
-                    delete next[k];
-                    return next;
-                  });
-                  toast.success(`Rotated ${k}`);
-                }}
-                className="rounded border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-40"
-                title="Save new value"
-              >
-                Save
-              </button>
-              <button
-                type="button"
-                disabled={!canWrite || unsetSecret.isPending}
-                onClick={async () => {
-                  if (!window.confirm(`Delete ${k} from per-env secret? This is irreversible.`)) return;
-                  await unsetSecret.mutateAsync(k);
-                  toast.success(`Deleted ${k}`);
-                }}
-                className="rounded p-1 text-[var(--text-tertiary)] hover:text-red-400 disabled:opacity-40"
-                title="Delete this key from the per-env secret"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
-            </div>
-          );
-        })}
-
-        {/* Add-new row. Keeps the same visual rhythm as the existing
-            rows so the "this is editable" affordance is consistent. */}
-        {canWrite && (
-          <div className="flex items-center gap-1 pt-1">
-            <input
-              type="text"
-              value={newKey}
-              onChange={(e) => setNewKey(e.target.value.toUpperCase())}
-              placeholder="NEW_KEY"
-              className="w-[40%] rounded border border-dashed border-[var(--border-subtle)] bg-transparent px-2 py-1 font-mono text-[11px] text-[var(--text-primary)] placeholder-[var(--text-tertiary)] focus:border-[var(--accent)] focus:outline-none"
-            />
-            <input
-              type="password"
-              value={newValue}
-              onChange={(e) => setNewValue(e.target.value)}
-              placeholder="value"
-              className="flex-1 rounded border border-dashed border-[var(--border-subtle)] bg-transparent px-2 py-1 font-mono text-[11px] text-[var(--text-primary)] placeholder-[var(--text-tertiary)] focus:border-[var(--accent)] focus:outline-none"
-            />
-            <button
-              type="button"
-              disabled={!newKey || !newValue || setSecret.isPending}
-              onClick={async () => {
-                await setSecret.mutateAsync({ key: newKey, value: newValue });
-                setNewKey("");
-                setNewValue("");
-                toast.success(`Added ${newKey}`);
-              }}
-              className="rounded border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-1 font-mono text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] disabled:opacity-40"
-            >
-              <Plus className="h-3 w-3" />
-              Add
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
 
 function SubscribableGroup({
   label,
