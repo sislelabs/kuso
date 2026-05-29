@@ -41,16 +41,26 @@ write_status "rolling-server" "${KUSO_SERVER_IMAGE}"
 kubectl set image -n "$NS" deploy/kuso-server "server=${KUSO_SERVER_IMAGE}" >/dev/null
 kubectl rollout status -n "$NS" deploy/kuso-server --timeout=180s
 
-write_status "rolling-operator" "${KUSO_OPERATOR_IMAGE}"
-OP_NS="${KUSO_OPERATOR_NS:-kuso-operator-system}"
-for d in kuso-operator-controller-manager kuso-operator; do
-  if kubectl get -n "$OP_NS" "deploy/$d" >/dev/null 2>&1; then
-    kubectl set image -n "$OP_NS" "deploy/$d" "manager=${KUSO_OPERATOR_IMAGE}" >/dev/null \
-      || kubectl set image -n "$OP_NS" "deploy/$d" "*=${KUSO_OPERATOR_IMAGE}" >/dev/null
-    kubectl rollout status -n "$OP_NS" "deploy/$d" --timeout=180s
-    break
-  fi
-done
+# Guard against a manifest with no operator image. Under `set -e` an empty
+# KUSO_OPERATOR_IMAGE would make `set image …manager=` fail and abort the
+# whole Job AFTER the server already rolled — leaving a half-applied upgrade.
+# The server-side fetchVersion now falls back to a version-tagged default so
+# this should never be empty, but skip-with-status here is the safety net.
+if [ -z "${KUSO_OPERATOR_IMAGE:-}" ]; then
+  write_status "rolling-operator" "no operator image in manifest — skipping operator roll"
+  echo "==> WARNING: no operator image in manifest; server rolled, operator left unchanged"
+else
+  write_status "rolling-operator" "${KUSO_OPERATOR_IMAGE}"
+  OP_NS="${KUSO_OPERATOR_NS:-kuso-operator-system}"
+  for d in kuso-operator-controller-manager kuso-operator; do
+    if kubectl get -n "$OP_NS" "deploy/$d" >/dev/null 2>&1; then
+      kubectl set image -n "$OP_NS" "deploy/$d" "manager=${KUSO_OPERATOR_IMAGE}" >/dev/null \
+        || kubectl set image -n "$OP_NS" "deploy/$d" "*=${KUSO_OPERATOR_IMAGE}" >/dev/null
+      kubectl rollout status -n "$OP_NS" "deploy/$d" --timeout=180s
+      break
+    fi
+  done
+fi
 
 write_status "done" "upgraded to ${KUSO_TARGET_VERSION}"
 echo "==> upgrade to ${KUSO_TARGET_VERSION} complete"

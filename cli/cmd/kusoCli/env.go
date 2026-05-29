@@ -186,11 +186,25 @@ var envUnsetCmd = &cobra.Command{
 			drop[k] = true
 		}
 		out := make([]map[string]any, 0, len(existing.EnvVars))
+		removed := 0
 		for _, e := range existing.EnvVars {
 			if drop[asString(e["name"])] {
+				removed++
 				continue
 			}
-			out = append(out, map[string]any{"name": e["name"], "value": e["value"]})
+			// Preserve the FULL surviving entry — especially valueFrom.
+			// Rebuilding as {name,value} only would emit value:nil for a
+			// secretKeyRef var, which the server then prunes, silently
+			// deleting every secret-backed env var on the service. Mirror
+			// the valueFrom-preserving shape `env set` uses above.
+			row := map[string]any{"name": e["name"]}
+			if v, ok := e["value"]; ok && v != nil {
+				row["value"] = v
+			}
+			if vf, ok := e["valueFrom"]; ok && vf != nil {
+				row["valueFrom"] = vf
+			}
+			out = append(out, row)
 		}
 		resp, err := api.SetEnv(project, service, kusoApi.SetEnvRequest{EnvVars: out})
 		if err != nil {
@@ -199,7 +213,9 @@ var envUnsetCmd = &cobra.Command{
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
-		fmt.Printf("unset %d env var(s) on %s/%s\n", len(keys), project, service)
+		// Report what actually changed, not what was requested — some of
+		// the named keys may not have existed.
+		fmt.Printf("unset %d env var(s) on %s/%s\n", removed, project, service)
 		return nil
 	},
 }
@@ -408,9 +424,27 @@ Examples:
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
-		fmt.Printf("subscribed %s/%s to %d key(s) (total: %d)\n", project, service, len(addKeys), len(baseline))
+		// Report the server's authoritative resulting subscription, not the
+		// locally-computed intent — so a silent revert (or a server-side
+		// dedupe) is visible instead of a misleading count.
+		fmt.Printf("subscribed %s/%s — now subscribed to %d shared key(s)\n", project, service, serverSharedKeyCount(resp.Body(), len(baseline)))
 		return nil
 	},
+}
+
+// serverSharedKeyCount decodes spec.sharedEnvKeys from a KusoService PUT
+// response and returns its length. Falls back to `fallback` if the body
+// can't be decoded (older server, non-JSON).
+func serverSharedKeyCount(body []byte, fallback int) int {
+	var sj struct {
+		Spec struct {
+			SharedEnvKeys []string `json:"sharedEnvKeys"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(body, &sj); err != nil || sj.Spec.SharedEnvKeys == nil {
+		return fallback
+	}
+	return len(sj.Spec.SharedEnvKeys)
 }
 
 var envUnshareCmd = &cobra.Command{
@@ -443,7 +477,7 @@ var envUnshareCmd = &cobra.Command{
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
-		fmt.Printf("unsubscribed %s/%s from %d key(s) (remaining: %d)\n", project, service, len(drop), len(next))
+		fmt.Printf("unsubscribed %s/%s — now subscribed to %d shared key(s)\n", project, service, serverSharedKeyCount(resp.Body(), len(next)))
 		return nil
 	},
 }

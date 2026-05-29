@@ -30,17 +30,68 @@ Use 'kuso project update <project> --domain <baseDomain>' to change
 the auto-domain for every service in the project at once.`,
 }
 
-var domainsListOutput string
+var (
+	domainsListOutput string
+	// domainsEnv scopes the domain verbs to a single environment. Empty =
+	// service-level: add/remove operate on spec.domains and the server
+	// mirrors them to the PRODUCTION env. Set (e.g. "staging",
+	// "preview-pr-7") = per-env: operate directly on that env's
+	// additionalHosts, so staging can serve its own hostname without
+	// production claiming it.
+	domainsEnv string
+)
+
+// envCRName mirrors the server's envCRNameFor: <project>-<short-svc>-<env>.
+func envCRName(project, service, env string) string {
+	short := strings.TrimPrefix(service, project+"-")
+	return project + "-" + short + "-" + env
+}
 
 var domainsListCmd = &cobra.Command{
 	Use:   "list <project> <service>",
-	Short: "List custom domains on a service",
+	Short: "List custom domains on a service (or one env with --env)",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.GetService(args[0], args[1])
+		project, service := args[0], args[1]
+
+		// --env: read the env CR's host + additionalHosts directly (no
+		// service-level spec.domains involved).
+		if domainsEnv != "" {
+			resp, err := api.GetEnvironment(project, envCRName(project, service, domainsEnv))
+			if err != nil {
+				return fmt.Errorf("get environment: %w", err)
+			}
+			if resp.StatusCode() >= 300 {
+				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			}
+			var env struct {
+				Spec struct {
+					Host            string   `json:"host"`
+					AdditionalHosts []string `json:"additionalHosts"`
+				} `json:"spec"`
+			}
+			if err := json.Unmarshal(resp.Body(), &env); err != nil {
+				return fmt.Errorf("decode environment: %w", err)
+			}
+			if domainsListOutput == "json" {
+				b, _ := json.MarshalIndent(env.Spec.AdditionalHosts, "", "  ")
+				fmt.Println(string(b))
+				return nil
+			}
+			fmt.Printf("%s\t(auto-domain)\n", env.Spec.Host)
+			for _, h := range env.Spec.AdditionalHosts {
+				fmt.Printf("%s\t(custom, env=%s)\n", h, domainsEnv)
+			}
+			if len(env.Spec.AdditionalHosts) == 0 {
+				fmt.Printf("no custom domains on %s/%s env=%s\n", project, service, domainsEnv)
+			}
+			return nil
+		}
+
+		resp, err := api.GetService(project, service)
 		if err != nil {
 			return fmt.Errorf("get service: %w", err)
 		}
@@ -84,10 +135,6 @@ var domainsListCmd = &cobra.Command{
 	},
 }
 
-func init() {
-	domainsListCmd.Flags().StringVarP(&domainsListOutput, "output", "o", "table", "output format: table | json")
-}
-
 var (
 	domainsAddNoTLS bool
 )
@@ -112,15 +159,30 @@ Adds are idempotent: duplicate (host, tls) returns 409 with no change.`,
 		if host == "" {
 			return fmt.Errorf("host must be non-empty")
 		}
+		project, service := args[0], args[1]
+
+		// --env: bind directly to that environment's additionalHosts.
+		if domainsEnv != "" {
+			resp, err := api.AddEnvDomain(project, service, domainsEnv, host)
+			if err != nil {
+				return fmt.Errorf("add env domain: %w", err)
+			}
+			if resp.StatusCode() >= 300 {
+				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			}
+			fmt.Printf("bound %s to %s/%s env=%s — point DNS A-record at the cluster IP if you haven't already\n", host, project, service, domainsEnv)
+			return nil
+		}
+
 		req := kusoApi.AddDomainRequest{Host: host, TLS: !domainsAddNoTLS}
-		resp, err := api.AddDomain(args[0], args[1], req)
+		resp, err := api.AddDomain(project, service, req)
 		if err != nil {
 			return fmt.Errorf("add domain: %w", err)
 		}
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
-		fmt.Printf("bound %s to %s/%s — point DNS A-record at the cluster IP if you haven't already\n", host, args[0], args[1])
+		fmt.Printf("bound %s to %s/%s — point DNS A-record at the cluster IP if you haven't already\n", host, project, service)
 		return nil
 	},
 }
@@ -134,23 +196,41 @@ var domainsRemoveCmd = &cobra.Command{
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.RemoveDomain(args[0], args[1], args[2])
+		project, service, host := args[0], args[1], args[2]
+
+		if domainsEnv != "" {
+			resp, err := api.RemoveEnvDomain(project, service, domainsEnv, host)
+			if err != nil {
+				return fmt.Errorf("remove env domain: %w", err)
+			}
+			if resp.StatusCode() >= 300 {
+				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+			}
+			fmt.Printf("unbound %s from %s/%s env=%s\n", host, project, service, domainsEnv)
+			return nil
+		}
+
+		resp, err := api.RemoveDomain(project, service, host)
 		if err != nil {
 			return fmt.Errorf("remove domain: %w", err)
 		}
 		if resp.StatusCode() == 404 {
-			return fmt.Errorf("%s is not bound to %s/%s", args[2], args[0], args[1])
+			return fmt.Errorf("%s is not bound to %s/%s", host, project, service)
 		}
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
-		fmt.Printf("unbound %s from %s/%s\n", args[2], args[0], args[1])
+		fmt.Printf("unbound %s from %s/%s\n", host, project, service)
 		return nil
 	},
 }
 
 func init() {
 	domainsAddCmd.Flags().BoolVar(&domainsAddNoTLS, "no-tls", false, "skip the cert-manager TLS entry (HTTP-only host)")
+	// --env on the group: scope add/remove/list to one environment. Empty
+	// (default) = service-level (the server mirrors to production).
+	domainsCmd.PersistentFlags().StringVar(&domainsEnv, "env", "",
+		"scope to one environment (e.g. staging, preview-pr-7); empty = service-level + production mirror")
 	domainsCmd.AddCommand(domainsListCmd, domainsAddCmd, domainsRemoveCmd)
 	rootCmd.AddCommand(domainsCmd)
 }

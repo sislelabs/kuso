@@ -156,9 +156,46 @@ latest_ghcr_tag() {
   tok="$(curl -sf "https://ghcr.io/token?scope=repository:${repo}:pull&service=ghcr.io" \
     | python3 -c 'import sys,json; print(json.load(sys.stdin).get("token",""))' 2>/dev/null || true)"
   [[ -z "$tok" ]] && return 0
-  curl -sf -H "Authorization: Bearer $tok" \
-    "https://ghcr.io/v2/${repo}/tags/list" 2>/dev/null \
-    | python3 "$script" 2>/dev/null || true
+  # GHCR's /tags/list returns tags OLDEST-first and, without ?n=, only a
+  # bounded first page. A naive single fetch on a repo with many tags
+  # returns only the oldest page, so the "latest" picker lands on a stale
+  # tag (this is how release.json once pinned the operator to an OLD
+  # version → a downgrade). Walk every page via the RFC 5988
+  # `Link: …; rel="next"` header, merge all tags into one JSON blob, then
+  # let the python sorter pick the highest semver. `?n=1000` also keeps
+  # the page count tiny for the foreseeable tag volume.
+  python3 - "$repo" "$tok" "$script" <<'PYGHCR' 2>/dev/null || true
+import json, re, subprocess, sys, urllib.request
+
+repo, tok, script = sys.argv[1], sys.argv[2], sys.argv[3]
+tags, url = [], f"https://ghcr.io/v2/{repo}/tags/list?n=1000"
+seen_pages = 0
+while url and seen_pages < 50:  # 50-page hard stop guards a pathological loop
+    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {tok}"})
+    try:
+        resp = urllib.request.urlopen(req, timeout=15)
+    except Exception:
+        break
+    body = resp.read()
+    try:
+        tags.extend(json.loads(body).get("tags", []) or [])
+    except json.JSONDecodeError:
+        break
+    seen_pages += 1
+    # Follow Link: <…>; rel="next" if present.
+    link = resp.headers.get("Link", "")
+    m = re.search(r'<([^>]+)>;\s*rel="next"', link)
+    if not m:
+        break
+    nxt = m.group(1)
+    url = nxt if nxt.startswith("http") else f"https://ghcr.io{nxt}"
+
+# Hand the merged tag list to the existing semver sorter so the picking
+# logic stays in one place.
+proc = subprocess.run(["python3", script], input=json.dumps({"tags": tags}).encode(),
+                      capture_output=True)
+sys.stdout.write(proc.stdout.decode())
+PYGHCR
 }
 dry()  { printf '\033[1;35m[DRY-RUN]\033[0m %s\n' "$*"; }
 

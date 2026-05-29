@@ -224,6 +224,22 @@ func (k *KusoClient) RemoveDomain(project, service, host string) (*resty.Respons
 	return k.client.Delete("/api/projects/" + esc(project) + "/services/" + esc(service) + "/domains/" + esc(host))
 }
 
+// AddEnvDomain binds a host to ONE environment's additionalHosts (per-env
+// routing). Unlike the service-level AddDomain — which mirrors to the
+// production env — this targets the named env exactly (staging,
+// preview-pr-N, ...). 409 if another env in the project already claims the
+// host.
+func (k *KusoClient) AddEnvDomain(project, service, env, host string) (*resty.Response, error) {
+	k.client.SetBody(map[string]string{"host": host})
+	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/envs/" + esc(env) + "/domains")
+}
+
+// RemoveEnvDomain drops a host from one environment's additionalHosts.
+// Idempotent — removing an absent host is a no-op 200.
+func (k *KusoClient) RemoveEnvDomain(project, service, env, host string) (*resty.Response, error) {
+	return k.client.Delete("/api/projects/" + esc(project) + "/services/" + esc(service) + "/envs/" + esc(env) + "/domains/" + esc(host))
+}
+
 // SetEnvVarSecretRefBody is the legacy alias for apiv1.SecretRefBody.
 // Kept for one release so external import paths still resolve; new
 // code should use SecretRefBody directly.

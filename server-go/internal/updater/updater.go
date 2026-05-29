@@ -436,6 +436,18 @@ func (s *Service) fetchVersion(ctx context.Context, version string) (*Manifest, 
 	if m.Notes == "" {
 		m.Notes = rel.Body
 	}
+	// Defensive: a malformed/partial manifest that omits a component image
+	// must not blank the corresponding Deployment image on roll. Fall back
+	// to the version-tagged default (same shape as the synthesized-manifest
+	// path above). This closes the empty-image hole; it does NOT correct a
+	// wrong-but-present tag — that's release-time's job (the ghcr pagination
+	// fix in hack/release.sh). Belt-and-braces against a future bad release.
+	if m.Components.Server.Image == "" {
+		m.Components.Server.Image = fmt.Sprintf("ghcr.io/sislelabs/kuso-server-go:%s", m.Version)
+	}
+	if m.Components.Operator.Image == "" {
+		m.Components.Operator.Image = fmt.Sprintf("ghcr.io/sislelabs/kuso-operator:%s", m.Version)
+	}
 	return &m, nil
 }
 
