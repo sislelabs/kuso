@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.8] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(previews): scope addons via canonical env label, not bespoke marker ([d651fec](https://github.com/sislelabs/kuso/commit/d651fecbce6a7c7bd2c059f260863870cc9461ca))
+
 ## [0.17.7] — 2026-05-29
 
 ### ✨ Features
@@ -413,14 +418,6 @@ messages on every release. The format is loosely based on
 
 ### 🧪 Tests
 - Test: refresh kusoaddons CRD schema golden for spec.pooler ([36a8004](https://github.com/sislelabs/kuso/commit/36a8004e4fd9b1b348078aa65c88ea9c9f2a9f7a))
-
-## [0.13.6] — 2026-05-18
-
-### ✨ Features
-- Feat: run log viewer, outbox health badge, per-project usage rollup ([f368fcc](https://github.com/sislelabs/kuso/commit/f368fccf83a9c80bc01eacac5dc0e8b0d337759c))
-
-### 📝 Docs
-- Docs: AGENT_SMOKE_TEST.md — standardised end-to-end protocol ([8ff43ce](https://github.com/sislelabs/kuso/commit/8ff43ce865acffabf141efffb43e7556fd7720ec))
 
 
 ---
