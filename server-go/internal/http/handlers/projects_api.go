@@ -66,6 +66,8 @@ type ProjectsAPI interface {
 	AddEnvDomain(ctx context.Context, project, service, envName, host string) (*kube.KusoEnvironment, error)
 	RemoveEnvDomain(ctx context.Context, project, service, envName, host string) (*kube.KusoEnvironment, error)
 	SetEnvDomains(ctx context.Context, project, service, envName string, hosts []string) (*kube.KusoEnvironment, error)
+	SetEnvScopedVar(ctx context.Context, project, service, envName, name string, req projects.SetEnvVarRequest) (*kube.KusoEnvironment, error)
+	UnsetEnvScopedVar(ctx context.Context, project, service, envName, name string) (*kube.KusoEnvironment, error)
 
 	// Environments
 	ListEnvironments(ctx context.Context, project string) ([]kube.KusoEnvironment, error)

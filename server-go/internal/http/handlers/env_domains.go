@@ -5,8 +5,10 @@ import (
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
+	apiv1 "github.com/sislelabs/kuso/api/apiv1"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/projects"
 )
 
 // PUT /api/projects/{project}/services/{service}/envs/{env}/domains
@@ -77,4 +79,47 @@ func (h *ProjectsHandler) RemoveEnvDomain(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, updated)
+}
+
+// PUT /api/projects/{project}/services/{service}/envs/{env}/env-vars/{name}
+// Body: {value} XOR {secretRef:{name,key}}. Sets a per-env override that
+// wins over the service-level value for the same key (see SetEnvScopedVar).
+func (h *ProjectsHandler) SetEnvScopedVar(w http.ResponseWriter, r *http.Request) {
+	var wire apiv1.SetEnvVarRequest
+	if err := json.NewDecoder(r.Body).Decode(&wire); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+		return
+	}
+	req := projects.SetEnvVarRequest{Value: wire.Value}
+	if wire.SecretRef != nil {
+		req.SecretRef = &projects.SetEnvVarSecretRefBody{Name: wire.SecretRef.Name, Key: wire.SecretRef.Key}
+	}
+	out, err := h.Svc.SetEnvScopedVar(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "env"), chi.URLParam(r, "name"), req)
+	if err != nil {
+		h.fail(w, "set env-scoped var", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// DELETE /api/projects/{project}/services/{service}/envs/{env}/env-vars/{name}
+func (h *ProjectsHandler) UnsetEnvScopedVar(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+		return
+	}
+	out, err := h.Svc.UnsetEnvScopedVar(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "env"), chi.URLParam(r, "name"))
+	if err != nil {
+		h.fail(w, "unset env-scoped var", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, out)
 }

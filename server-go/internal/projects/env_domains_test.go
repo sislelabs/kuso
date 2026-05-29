@@ -8,6 +8,125 @@ import (
 	"kuso/server/internal/kube"
 )
 
+// envVarValue finds an env var by name in an env CR, returning its literal
+// Value (empty if absent or valueFrom-backed).
+func envVarValue(env *kube.KusoEnvironment, name string) (string, bool) {
+	for _, e := range env.Spec.EnvVars {
+		if e.Name == name {
+			return e.Value, true
+		}
+	}
+	return "", false
+}
+
+// TestAddEnvironment_RescopesServiceRefLiterals is the regression test for
+// the staging-API_URL bug: a new env must NOT inherit the production-scoped
+// in-cluster service URL. AddEnvironment rescopes <svc>-production refs to
+// <svc>-<env>.
+func TestAddEnvironment_RescopesServiceRefLiterals(t *testing.T) {
+	t.Parallel()
+	// Service whose API_URL was resolved against production (the shape
+	// SetEnv produces from ${{ api.URL }}).
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{
+			Project: "alpha",
+			EnvVars: []kube.KusoEnvVar{
+				{Name: "API_URL", Value: "http://alpha-api-production.kuso.svc.cluster.local"},
+				{Name: "NEXT_PUBLIC_ENVIRONMENT", Value: "production"},
+			},
+		}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+
+	env, err := s.AddEnvironment(context.Background(), "alpha", "web", CreateEnvRequest{Name: "staging", Branch: "stage"})
+	if err != nil {
+		t.Fatalf("AddEnvironment: %v", err)
+	}
+	got, _ := envVarValue(env, "API_URL")
+	if got != "http://alpha-api-staging.kuso.svc.cluster.local" {
+		t.Errorf("staging API_URL should be rescoped to the staging api service, got %q", got)
+	}
+}
+
+// TestSetEnvScopedVar_OverridesAndUnsets covers the per-env override write
+// path: set an override on one env, upsert it, then unset it.
+func TestSetEnvScopedVar_OverridesAndUnsets(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha",
+			EnvVars: []kube.KusoEnvVar{{Name: "NEXT_PUBLIC_ENVIRONMENT", Value: "production"}}}),
+		seedEnv("alpha", "web", "staging", "stage", "alpha-web-staging"),
+	)
+
+	env, err := s.SetEnvScopedVar(context.Background(), "alpha", "web", "staging",
+		"NEXT_PUBLIC_ENVIRONMENT", SetEnvVarRequest{Value: "staging"})
+	if err != nil {
+		t.Fatalf("SetEnvScopedVar: %v", err)
+	}
+	if v, _ := envVarValue(env, "NEXT_PUBLIC_ENVIRONMENT"); v != "staging" {
+		t.Errorf("override should be staging, got %q", v)
+	}
+	// Upsert (no duplicate).
+	env, _ = s.SetEnvScopedVar(context.Background(), "alpha", "web", "staging",
+		"NEXT_PUBLIC_ENVIRONMENT", SetEnvVarRequest{Value: "staging2"})
+	n := 0
+	for _, e := range env.Spec.EnvVars {
+		if e.Name == "NEXT_PUBLIC_ENVIRONMENT" {
+			n++
+		}
+	}
+	if n != 1 {
+		t.Errorf("upsert should not duplicate, found %d", n)
+	}
+	// Unset.
+	env, err = s.UnsetEnvScopedVar(context.Background(), "alpha", "web", "staging", "NEXT_PUBLIC_ENVIRONMENT")
+	if err != nil {
+		t.Fatalf("UnsetEnvScopedVar: %v", err)
+	}
+	if _, ok := envVarValue(env, "NEXT_PUBLIC_ENVIRONMENT"); ok {
+		t.Error("override should be removed after unset")
+	}
+	// Unset absent → ErrNotFound.
+	if _, err := s.UnsetEnvScopedVar(context.Background(), "alpha", "web", "staging", "NOPE"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("unset absent should be ErrNotFound, got %v", err)
+	}
+}
+
+// TestSetEnvScopedVar_SurvivesServicePropagation is the crux: a per-env
+// override must survive a subsequent service-level env write (the merge
+// layers env over service, env wins). Without this the override would be
+// flattened back to the service value on the next `env set`.
+func TestSetEnvScopedVar_SurvivesServicePropagation(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha",
+			EnvVars: []kube.KusoEnvVar{{Name: "NEXT_PUBLIC_ENVIRONMENT", Value: "production"}}}),
+		seedEnv("alpha", "web", "staging", "stage", "alpha-web-staging"),
+	)
+
+	// Set the staging override.
+	if _, err := s.SetEnvScopedVar(context.Background(), "alpha", "web", "staging",
+		"NEXT_PUBLIC_ENVIRONMENT", SetEnvVarRequest{Value: "staging"}); err != nil {
+		t.Fatalf("SetEnvScopedVar: %v", err)
+	}
+	// Now do a service-level env write (triggers propagateChangedToEnvs).
+	if _, err := s.SetEnvVar(context.Background(), "alpha", "web", "SOMETHING_ELSE",
+		SetEnvVarRequest{Value: "x"}); err != nil {
+		t.Fatalf("service SetEnvVar: %v", err)
+	}
+	// The staging env's override must still be "staging", not flattened.
+	env, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-staging")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if v, _ := envVarValue(env, "NEXT_PUBLIC_ENVIRONMENT"); v != "staging" {
+		t.Errorf("override must survive service propagation, got %q (flattened to service value?)", v)
+	}
+}
+
 func TestAddEnvDomain_AppendsAndComputesTLS(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,

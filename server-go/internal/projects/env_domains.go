@@ -177,6 +177,100 @@ func (s *Service) SetEnvDomains(ctx context.Context, project, service, envName s
 	return updated, nil
 }
 
+// SetEnvScopedVar upserts a single env var directly on ONE environment's
+// CR (env.Spec.EnvVars). Unlike the service-level SetEnvVar — which writes
+// the service spec and propagates to every env — this writes the env CR
+// leaf the chart reads, so the value applies ONLY to that env. It survives
+// later service-level propagation as a per-env override: the merge in
+// resolveSharedEnvKeysForEnv layers env.Spec.EnvVars on top of the service
+// vars (env wins for a duplicate key), so e.g. a staging env can hold
+// NEXT_PUBLIC_ENVIRONMENT=staging while production stays =production.
+//
+// No propagation call: the env CR is the leaf (mirrors AddEnvDomain).
+func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName, name string, req SetEnvVarRequest) (*kube.KusoEnvironment, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("%w: env var name required", ErrInvalid)
+	}
+	if !validEnvVarName(name) {
+		return nil, fmt.Errorf("%w: env var name %q must match [A-Za-z_][A-Za-z0-9_]*", ErrInvalid, name)
+	}
+	hasValue := req.Value != ""
+	hasRef := req.SecretRef != nil && req.SecretRef.Name != "" && req.SecretRef.Key != ""
+	if hasValue == hasRef {
+		return nil, fmt.Errorf("%w: exactly one of value or secretRef must be set", ErrInvalid)
+	}
+
+	mu := s.lockService(project, service)
+	defer mu.Unlock()
+
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	envCRName := envCRNameFor(project, service, envName)
+
+	next := kube.KusoEnvVar{Name: name}
+	if hasValue {
+		next.Value = req.Value
+	} else {
+		next.ValueFrom = map[string]any{
+			"secretKeyRef": map[string]any{"name": req.SecretRef.Name, "key": req.SecretRef.Key},
+		}
+	}
+
+	return s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envCRName, func(env *kube.KusoEnvironment) error {
+		for i := range env.Spec.EnvVars {
+			if env.Spec.EnvVars[i].Name == name {
+				env.Spec.EnvVars[i] = next
+				return nil
+			}
+		}
+		env.Spec.EnvVars = append(env.Spec.EnvVars, next)
+		return nil
+	})
+}
+
+// UnsetEnvScopedVar removes a per-env override from one env CR. ErrNotFound
+// when the var isn't present on that env (distinguishes idempotent retry
+// from a typo).
+func (s *Service) UnsetEnvScopedVar(ctx context.Context, project, service, envName, name string) (*kube.KusoEnvironment, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("%w: env var name required", ErrInvalid)
+	}
+	mu := s.lockService(project, service)
+	defer mu.Unlock()
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil, err
+	}
+	envCRName := envCRNameFor(project, service, envName)
+	var notFound bool
+	updated, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envCRName, func(env *kube.KusoEnvironment) error {
+		notFound = false
+		out := make([]kube.KusoEnvVar, 0, len(env.Spec.EnvVars))
+		found := false
+		for _, e := range env.Spec.EnvVars {
+			if e.Name == name {
+				found = true
+				continue
+			}
+			out = append(out, e)
+		}
+		if !found {
+			notFound = true
+			return kube.ErrAbortRetry
+		}
+		env.Spec.EnvVars = out
+		return nil
+	})
+	if notFound {
+		return nil, fmt.Errorf("%w: env var %q", ErrNotFound, name)
+	}
+	return updated, err
+}
+
 // envCRNameFor returns the kube CR name for a (project, service, env)
 // tuple. Production = "<project>-<service>-production"; custom envs
 // follow the same shape. Mirror of the construction in AddService.

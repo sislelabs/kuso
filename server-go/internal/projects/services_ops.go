@@ -740,16 +740,25 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		projectAddons := s.listProjectAddonConnSecrets(ctx, project)
 		envFromSecrets = filterEnvFromForSubscription(envFromSecrets, svc.Spec.SubscribedAddons, projectAddons, project)
 	}
+	// Re-scope service-ref literals to THIS env before adopting them.
+	// svc.Spec.EnvVars carries production-scoped resolved values (e.g.
+	// API_URL=http://<svc>-production.<ns>.svc...), set at SetEnv time
+	// against the production env. Without rescoping, a new staging env
+	// would inherit the PRODUCTION service URL and its SSR calls would
+	// hit the production sibling. Mirror propagate.go's rescope so a
+	// staging env's API_URL targets <svc>-staging instead. (production
+	// is a no-op in rescopeServiceRefLiterals.)
+	scopedSvcEnvVars := rescopeServiceRefLiterals(svc.Spec.EnvVars, ns, req.Name)
 	// Same treatment for inline envVars: expand the subscription into
 	// explicit valueFrom entries + drop shared-secret names from
 	// envFromSecrets so per-key gating actually works at create
 	// time, not just on the next propagation save.
-	mergedEnvVars := svc.Spec.EnvVars
+	mergedEnvVars := scopedSvcEnvVars
 	if svc.Spec.SharedEnvKeys != nil {
 		merged, prunedFrom, err := s.resolveSharedEnvKeysForEnv(
 			ctx, ns, project,
 			svc.Spec.SharedEnvKeys,
-			svc.Spec.EnvVars,
+			scopedSvcEnvVars,
 			nil, // no existing env entries to preserve — this is create
 			envFromSecrets,
 		)

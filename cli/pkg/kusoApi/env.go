@@ -39,6 +39,31 @@ func (k *KusoClient) SetEnv(project, service string, req SetEnvRequest) (*resty.
 	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/env")
 }
 
+// EnvVarRequest is the wire shape for a per-env override write:
+// {value} XOR {secretRef:{name,key}}.
+type EnvVarRequest struct {
+	Value     string            `json:"value,omitempty"`
+	SecretRef *EnvVarSecretRef  `json:"secretRef,omitempty"`
+}
+
+type EnvVarSecretRef struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
+
+// SetEnvScopedVar writes a per-env override onto ONE environment's CR. It
+// wins over the service-level value for the same key and survives
+// service-level propagation (the env CR is the merge leaf).
+func (k *KusoClient) SetEnvScopedVar(project, service, env, name string, req EnvVarRequest) (*resty.Response, error) {
+	k.client.SetBody(req)
+	return k.client.Put("/api/projects/" + esc(project) + "/services/" + esc(service) + "/envs/" + esc(env) + "/env-vars/" + esc(name))
+}
+
+// UnsetEnvScopedVar removes a per-env override. 404 when absent on that env.
+func (k *KusoClient) UnsetEnvScopedVar(project, service, env, name string) (*resty.Response, error) {
+	return k.client.Delete("/api/projects/" + esc(project) + "/services/" + esc(service) + "/envs/" + esc(env) + "/env-vars/" + esc(name))
+}
+
 // GetSharedEnvKeys returns the available keys (grouped by source
 // secret) + the service's current subscription. Body shape:
 //

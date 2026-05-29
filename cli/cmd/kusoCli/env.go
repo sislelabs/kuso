@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
@@ -32,6 +33,12 @@ var envCmd = &cobra.Command{
 	Use:   "env",
 	Short: "Manage plain environment variables on a service",
 }
+
+// envScopeFlag scopes `env set`/`env unset` to a single environment. Empty
+// = service-level (the value applies to every env via propagation). Set
+// (e.g. "staging") = a per-env override written onto that env's CR, which
+// wins over the service-level value for the same key.
+var envScopeFlag string
 
 var envListCmd = &cobra.Command{
 	Use:     "list <project> <service>",
@@ -86,6 +93,27 @@ var envSetCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		project, service, kvs := args[0], args[1], args[2:]
+
+		// --env: write per-env overrides directly onto ONE env CR. Each
+		// KEY=VALUE is an idempotent per-key upsert (the server merges it
+		// over the service-level value), so no read-merge-whole-list dance.
+		if envScopeFlag != "" {
+			for _, kv := range kvs {
+				eq := strings.IndexByte(kv, '=')
+				if eq <= 0 {
+					return fmt.Errorf("argument %q is not KEY=VALUE", kv)
+				}
+				resp, err := api.SetEnvScopedVar(project, service, envScopeFlag, kv[:eq], kusoApi.EnvVarRequest{Value: kv[eq+1:]})
+				if err != nil {
+					return err
+				}
+				if resp.StatusCode() >= 300 {
+					return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+				}
+			}
+			fmt.Printf("set %d env override(s) on %s/%s [env=%s]\n", len(kvs), project, service, envScopeFlag)
+			return nil
+		}
 
 		// Read current env so we can merge — set should add/update, not replace.
 		// Existing valueFrom-backed entries (secret refs) are preserved.
@@ -163,6 +191,25 @@ var envUnsetCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		project, service, keys := args[0], args[1], args[2:]
+
+		// --env: remove per-env overrides directly from ONE env CR.
+		if envScopeFlag != "" {
+			for _, k := range keys {
+				resp, err := api.UnsetEnvScopedVar(project, service, envScopeFlag, k)
+				if err != nil {
+					return err
+				}
+				if resp.StatusCode() == 404 {
+					return fmt.Errorf("%s is not an override on %s/%s [env=%s]", k, project, service, envScopeFlag)
+				}
+				if resp.StatusCode() >= 300 {
+					return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+				}
+			}
+			fmt.Printf("unset %d env override(s) on %s/%s [env=%s]\n", len(keys), project, service, envScopeFlag)
+			return nil
+		}
+
 		// Same precaution as set: status-check before unmarshal so a
 		// 401 doesn't silently empty the env list and the write doesn't
 		// wipe everything.
@@ -486,6 +533,10 @@ func init() {
 	rootCmd.AddCommand(envCmd)
 	envCmd.AddCommand(envListCmd, envSetCmd, envUnsetCmd, envShareCmd, envUnshareCmd)
 	envCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	// --env on set/unset: write a per-env override instead of a service-level
+	// var. Empty keeps the service-level (all-envs) behavior.
+	envSetCmd.Flags().StringVar(&envScopeFlag, "env", "", "scope to one environment (e.g. staging); empty = service-level (all envs)")
+	envUnsetCmd.Flags().StringVar(&envScopeFlag, "env", "", "scope to one environment (e.g. staging); empty = service-level (all envs)")
 
 	rootCmd.AddCommand(secretCmd)
 	secretCmd.AddCommand(secretListCmd, secretSetCmd, secretUnsetCmd)
