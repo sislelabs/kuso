@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.16] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(addons): stop perpetual helm-operator reconcile churn + gate release-hook promotion ([f86205b](https://github.com/sislelabs/kuso/commit/f86205b745f7474844660e2f2b11d3fcd799ca4f))
+
 ## [0.17.15] — 2026-05-29
 
 ### Other
@@ -305,20 +310,6 @@ messages on every release. The format is loosely based on
 ### ✨ Features
 - Feat(addons): opt-in public TCP endpoint (admin-gated) ([8e5a858](https://github.com/sislelabs/kuso/commit/8e5a858708e18a8a7e78f12f72ff78e788cdfad8))
 - Feat: kuso db port-forward / db connect — local tunnels to addons ([61405c8](https://github.com/sislelabs/kuso/commit/61405c8aad8f46a594ad157bde972825275c48c9))
-
-## [0.13.14] — 2026-05-21
-
-### 🐛 Bug Fixes
-- Fix(addons): addon-add wires conn secret into existing services (closes watch-cache race) ([d5d150c](https://github.com/sislelabs/kuso/commit/d5d150ca71dec55dd4a53818cf3efc6a761adef5))
-- Fix(addons): refreshEnvSecrets accepts explicit conn secrets ([e4002fe](https://github.com/sislelabs/kuso/commit/e4002fe8cf7b2e002b243eb9e24798570eb2fbf6))
-- Fix(canvas): draw service→service edges for in-cluster DNS refs ([3181a04](https://github.com/sislelabs/kuso/commit/3181a046922a0bd281e81160c186c7b9ed49592e))
-
-### 📝 Docs
-- Docs: addon-add conn-secret race fix implementation plan ([5c54a74](https://github.com/sislelabs/kuso/commit/5c54a7429190dc06db183eecc50c9bc6103fb30d))
-- Docs: addon-add conn-secret read-after-write race fix design ([5217b52](https://github.com/sislelabs/kuso/commit/5217b522c67f483b1edf3d4243a786f4bee45937))
-
-### 🧹 Chores
-- Chore: archive older changelog entries ([3d61102](https://github.com/sislelabs/kuso/commit/3d61102bcc87845068efca54391ada280fd20c2b))
 
 
 ---
