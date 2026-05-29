@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.23] — 2026-05-29
+
+### ✨ Features
+- Feat(previews): custom preview base domain + fix preview-DB-clone password drift ([f85fc4c](https://github.com/sislelabs/kuso/commit/f85fc4c353ff00e0dcf4c0233df4cb59e4bb755c))
+
 ## [0.17.22] — 2026-05-29
 
 ### ✨ Features
@@ -288,25 +293,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive promoted CHANGELOG entries ([e1aa859](https://github.com/sislelabs/kuso/commit/e1aa8599b61c296f12c16dd349b5f9f17c73f470))
-
-## [0.16.0] — 2026-05-27
-
-### ✨ Features
-- Feat(crons): cronwatch.Watcher dispatches per-cron onFailure webhook ([7987d95](https://github.com/sislelabs/kuso/commit/7987d9596b302db4b70cc94dfcb9a27c10c9d92c))
-- Feat(sleep): wakeOn.excludePaths keeps callback paths warm ([1dc06f7](https://github.com/sislelabs/kuso/commit/1dc06f7ed293e1c26b5716dce9bea32adaca809c))
-- Feat(backups): external Postgres backup branch (PlanetScale / Neon / RDS) ([b55f388](https://github.com/sislelabs/kuso/commit/b55f388fdb00e785826239dc04d7dca2ac209e3b))
-- Feat(release): KusoService.spec.release.command — Heroku-style hook ([ac30b83](https://github.com/sislelabs/kuso/commit/ac30b83ab4720baddec9da8cc664f70bbb7a8e97))
-- Feat(addons): NATS JetStream HA — 3-replica clustered StatefulSet ([4bb6052](https://github.com/sislelabs/kuso/commit/4bb605282804c55e5000ac340002e5db5ac98e4e))
-- Feat(addons): Redis + S3/MinIO scheduled backups to cluster S3 ([42dbf75](https://github.com/sislelabs/kuso/commit/42dbf75610fc23f649de9bd1b8ff6402eb68e0fa))
-- Feat(crons): KusoCron.spec.onFailure CRD field (webhook + HMAC) ([0bbc670](https://github.com/sislelabs/kuso/commit/0bbc670d30a2642a6cf754968d78013e8244e51d))
-
-### 📝 Docs
-- Docs(plan): v0.16.0 — Tickero migration readiness ([4155546](https://github.com/sislelabs/kuso/commit/4155546c04b320c87576f5d83f3330330ac3db3b))
-- Docs(specs): release hooks, wildcard certs, Loki log-sink designs ([f32561f](https://github.com/sislelabs/kuso/commit/f32561fb25670e172d03acd6e3aa8e44fd2f7ae2))
-- Docs(sleep): warn against enabling sleep on webhook/callback services ([31729ae](https://github.com/sislelabs/kuso/commit/31729ae35910b783c405b1036f46a92811be316e))
-
-### 🧹 Chores
-- Chore: archive promoted CHANGELOG entries (v0.9.42-v0.9.47) ([6e5db69](https://github.com/sislelabs/kuso/commit/6e5db69406a953bcfd6ee82fc7a3cf84883234d3))
 
 
 ---
