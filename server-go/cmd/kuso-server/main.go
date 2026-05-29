@@ -762,12 +762,13 @@ func main() {
 				if addonSvc != nil {
 					disp.AddonConnSecrets = addonSvc.ConnSecretsForProject
 					// Per-PR postgres clones so reviewers don't share
-					// production data. Default OFF since pg_dump|psql
-					// per spawn easily saturates a 2-core box; opt in
-					// with KUSO_PREVIEW_DB_ENABLED=true. The shared-
-					// prod fallback (every preview reads/writes the
-					// production DB) is the safer indie default.
-					if os.Getenv("KUSO_PREVIEW_DB_ENABLED") == "true" {
+					// production data. Default ON as of v0.17.4 — the
+					// shared-prod fallback (every preview reads/writes
+					// the production DB) was too easy to footgun for
+					// users who didn't know it existed. Opt out with
+					// KUSO_PREVIEW_DB_DISABLED=true for clusters where
+					// pg_dump|psql per spawn saturates capacity.
+					if os.Getenv("KUSO_PREVIEW_DB_DISABLED") != "true" {
 						disp.PreviewDB = previewdb.New(ctx, kc, addonSvc, *namespace, logger.With("component", "previewdb"))
 					}
 				}
