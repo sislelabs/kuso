@@ -296,6 +296,14 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 	// behind each KusoAddon CR; deleting the CR triggers the helm
 	// release uninstall which cascades all three. Without this, a
 	// project delete leaves zombie postgres/redis pods + their PVCs.
+	//
+	// Capture the addon FQNs (deletedAddons) while we have them — the
+	// PurgeData PVC sweep below uses them as label-selector hints
+	// (app.kubernetes.io/instance=<addonFQN>) because the addon helm
+	// chart's volumeClaimTemplates don't carry the project label, so
+	// a project-label-only PVC list would miss every StatefulSet
+	// data PVC.
+	var deletedAddons []string
 	if addonsList, lerr := s.Kube.ListKusoAddons(ctx, ns); lerr != nil {
 		return fmt.Errorf("list addons: %w", lerr)
 	} else {
@@ -303,6 +311,7 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 			if a.Labels["kuso.sislelabs.com/project"] != name {
 				continue
 			}
+			deletedAddons = append(deletedAddons, a.Name)
 			if derr := s.Kube.DeleteKusoAddon(ctx, ns, a.Name); derr != nil && !apierrors.IsNotFound(derr) {
 				return fmt.Errorf("delete addon %s: %w", a.Name, derr)
 			}
@@ -329,25 +338,55 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 	if err := s.Kube.DeleteKusoProject(ctx, s.Namespace, name); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete project: %w", err)
 	}
-	// Optional destructive PVC sweep. Addon PVCs are project-labeled
-	// by the helm chart, so a single LabelSelector List finds every
-	// disk owned by any of this project's addons. We delete them
-	// AFTER the addon CRs (and their cascading helm releases) are
-	// gone so the helm uninstall doesn't try to mount a PVC that's
-	// in deletion. NotFound is fine (PVC was never created, or the
-	// finalizer-removal sweep beat us to it).
+	// Optional destructive PVC sweep. Two passes because the kusoaddon
+	// helm chart's volumeClaimTemplates don't propagate the project
+	// label — StatefulSet-generated PVCs only carry app.kubernetes.io/
+	// instance=<addon-fqn>. So a single LabelSelector by project would
+	// miss every postgres/redis/nats data PVC (chart bug, deferred to
+	// a chart fix that requires an operator roll). The pass-by-instance
+	// fallback catches the StatefulSet PVCs by walking the addon list
+	// snapshot we captured before the project CRs were deleted.
+	//
+	// Both passes run AFTER the addon CRs (and their cascading helm
+	// releases) are gone so the helm uninstall doesn't try to mount a
+	// PVC that's in deletion. NotFound is fine (PVC was never created,
+	// or the finalizer-removal sweep beat us to it).
 	if opts.PurgeData {
 		if s.Kube.Clientset == nil {
 			return fmt.Errorf("purge-data: typed kube client not wired")
 		}
+		seen := map[string]bool{}
+		// Pass 1: project-label sweep. Catches non-StatefulSet PVCs
+		// (chart Deployments + future addons that DO propagate the
+		// project label).
 		pvcs, err := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
 			LabelSelector: labelSelector(map[string]string{labelProject: name}),
 		})
 		if err != nil {
-			return fmt.Errorf("purge-data: list pvcs: %w", err)
+			return fmt.Errorf("purge-data: list pvcs by project label: %w", err)
 		}
 		for i := range pvcs.Items {
-			pvcName := pvcs.Items[i].Name
+			seen[pvcs.Items[i].Name] = true
+		}
+		// Pass 2: per-addon instance-label sweep. We captured the
+		// addon FQNs during the addon-delete loop above; walk each
+		// one and sweep PVCs that match its instance label. Empty
+		// list = no addons existed in the project, which is fine.
+		for _, addonFQN := range deletedAddons {
+			subPvcs, err := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
+				LabelSelector: "app.kubernetes.io/instance=" + addonFQN,
+			})
+			if err != nil {
+				return fmt.Errorf("purge-data: list pvcs for addon %s: %w", addonFQN, err)
+			}
+			for i := range subPvcs.Items {
+				seen[subPvcs.Items[i].Name] = true
+			}
+		}
+		// Delete the union. Best-effort: a 409 (PVC still mounted)
+		// stamps a deletionTimestamp and lets kube cascade the unmount
+		// then GC. Return on the first hard error.
+		for pvcName := range seen {
 			if derr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcName, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
 				return fmt.Errorf("purge-data: delete pvc %s: %w", pvcName, derr)
 			}
@@ -355,6 +394,7 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 	}
 	return nil
 }
+
 
 // listServicesForProject filters by label rather than relying on
 // spec.project so we use indexed lookups. Routes through the project's
