@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.13] — 2026-05-29
+
+### ✨ Features
+- Feat(web/server): show per-env secrets in Variables tab + Command propagation ([434611f](https://github.com/sislelabs/kuso/commit/434611f590eda4bef4e5bafedf6def7fb633c63e))
+
 ## [0.17.12] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -358,29 +363,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive older changelog entries ([fd726e2](https://github.com/sislelabs/kuso/commit/fd726e2261609f5a1d3399de055f208dd2059901))
-
-## [0.13.11] — 2026-05-20
-
-### ✨ Features
-- Feat(kube): add SharedSecretNames helper for envFromSecrets ([9db9435](https://github.com/sislelabs/kuso/commit/9db9435dc2c0e026018bf3b6fc659dee1fdacfe3))
-
-### 🐛 Bug Fixes
-- Fix(addons): keep shared secrets in envFromSecrets fan-out ([f3adede](https://github.com/sislelabs/kuso/commit/f3adede997506cd3ac55e06e926e9a0f5e2d57e1))
-
-### 📝 Docs
-- Docs: envFromSecrets shared-secret drop fix implementation plan ([0131ed0](https://github.com/sislelabs/kuso/commit/0131ed0138a5538d475ac093c1b54bd9e8694b75))
-- Docs: envFromSecrets shared-secret drop fix design spec ([bb5c281](https://github.com/sislelabs/kuso/commit/bb5c2810f8e148eaf25a27ed21db8b2dd90db8a8))
-
-### 🔨 Refactors
-- Refactor(github): build preview envFromSecrets via kube.SharedSecretNames ([a965724](https://github.com/sislelabs/kuso/commit/a965724bd956be827705956ed6139afe4ce802af))
-- Refactor(projects): build envFromSecrets via kube.SharedSecretNames ([8998e4b](https://github.com/sislelabs/kuso/commit/8998e4bea6a8fa13e8d1873672aae565f3a42674))
-
-### 🧪 Tests
-- Test(addons): assert fan-out keeps shared secrets in envFromSecrets ([e9a7f71](https://github.com/sislelabs/kuso/commit/e9a7f7143de7fda1efd29379995107fe150ed00c))
-- Test(kube): cover SharedSecretNames ([ce372c2](https://github.com/sislelabs/kuso/commit/ce372c2c9b5f3524332eb1a6241adc6e86406519))
-
-### 🧹 Chores
-- Chore: archive older changelog entries ([3bb4bc4](https://github.com/sislelabs/kuso/commit/3bb4bc494eeb1dfd4fbca19054d98f6fe6fe7a43))
 
 
 ---
