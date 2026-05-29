@@ -359,11 +359,21 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 		}
 		// Label sweep: catches any other secret that carries the project
 		// label (belt-and-braces for future project-scoped secrets).
-		if derr := s.Kube.Clientset.CoreV1().Secrets(ns).DeleteCollection(ctx,
-			metav1.DeleteOptions{},
-			metav1.ListOptions{LabelSelector: labelSelector(map[string]string{labelProject: name})},
-		); derr != nil && !apierrors.IsNotFound(derr) {
-			return fmt.Errorf("delete project-scoped secrets: %w", derr)
+		// List + delete-each rather than DeleteCollection: the kuso-server
+		// ServiceAccount is granted `list` + `delete` on secrets but NOT
+		// `deletecollection`, so a DeleteCollection 403s and fails the whole
+		// project delete. Per-name delete uses the verbs we actually have.
+		if labelled, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: labelSelector(map[string]string{labelProject: name}),
+		}); lerr != nil {
+			return fmt.Errorf("list project-scoped secrets: %w", lerr)
+		} else {
+			for i := range labelled.Items {
+				if derr := s.Kube.Clientset.CoreV1().Secrets(ns).
+					Delete(ctx, labelled.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+					return fmt.Errorf("delete project-scoped secret %s: %w", labelled.Items[i].Name, derr)
+				}
+			}
 		}
 		// Name-derived deletes for the unlabelled per-service / per-env
 		// secrets.
