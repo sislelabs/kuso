@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.5] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(previews): default per-PR Postgres clones to ON ([42dcc33](https://github.com/sislelabs/kuso/commit/42dcc333733296cec1ed2c42803d17604c873d0a))
+
 ## [0.17.4] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -416,11 +421,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(networkpolicy): build pods can reach buildkit + github ([b0d858c](https://github.com/sislelabs/kuso/commit/b0d858c6bb606010f278a94870b844643b8dfc1a))
-
-## [0.13.3] — 2026-05-18
-
-### 🐛 Bug Fixes
-- Fix(notify): outbox SQL UPDATEs go through *Tx, not *sql.Tx ([d442800](https://github.com/sislelabs/kuso/commit/d442800bf82db397e5686213319360b07c63d3ec))
 
 
 ---
