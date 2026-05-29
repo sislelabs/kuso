@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.9] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(api): worker service creation drops FromService field ([ee53d4a](https://github.com/sislelabs/kuso/commit/ee53d4a9e49f622abeae13f7ef3dcbf6394d85ff))
+
 ## [0.17.8] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -393,31 +398,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(chart): pooler must use scram-sha-256, not md5 ([d31f1c6](https://github.com/sislelabs/kuso/commit/d31f1c69bd56779264472e9fa604b8c7c32ce434))
-
-## [0.13.7] — 2026-05-20
-
-### ✨ Features
-- Feat(web): pooler toggle in addon configuration settings ([83dda5a](https://github.com/sislelabs/kuso/commit/83dda5a8fbce714914827b53b4301bcfe9d9d8ee))
-- Feat(web): add pooler to KusoAddonSpec and UpdateAddonBody types ([4e6ed4a](https://github.com/sislelabs/kuso/commit/4e6ed4aff78456f57476aafca8ff4ce8556dc32f))
-- Feat(http): wire pooler field through addon create/update handlers ([4572f52](https://github.com/sislelabs/kuso/commit/4572f52e434110a608aeee7391c744a1b3c777df))
-- Feat(addons): apply spec.pooler in Add and Update ([cef0493](https://github.com/sislelabs/kuso/commit/cef04936ff2eb25561eb8825ae240e0cb1384ef7))
-- Feat(apiv1): add pooler field to addon create/update requests ([6d6d5cc](https://github.com/sislelabs/kuso/commit/6d6d5ccf9bd4b8b0ab1eb65aa4a64d03a5ac85c3))
-- Feat: add KusoAddonPooler to KusoAddonSpec ([7c51be7](https://github.com/sislelabs/kuso/commit/7c51be7a14790861cfd55accb20415d20f9706b9))
-- Feat(chart): CNPG Pooler + POOLER_* conn keys for HA postgres addon ([3db1db2](https://github.com/sislelabs/kuso/commit/3db1db230d15616a6b972636b65e38c490ebc662))
-- Feat(chart): single-node PgBouncer template for postgres addon ([4f109c7](https://github.com/sislelabs/kuso/commit/4f109c7b1d6a015c68885e6a6ea23c96a4fd3e85))
-- Feat(chart): add pooler.enabled default to kusoaddon values ([c8cf76d](https://github.com/sislelabs/kuso/commit/c8cf76d1c6da53a6a743eab153960a38872f42f2))
-- Feat(crd): add spec.pooler.enabled to KusoAddon ([d7c585f](https://github.com/sislelabs/kuso/commit/d7c585fe1050ada4817d72fa710a21b681c9f4ec))
-- Feat(postgres): default kuso-postgres to 1 instance, HA opt-in ([32131d6](https://github.com/sislelabs/kuso/commit/32131d655f100c925925a9dd083b890a5f065ebc))
-
-### 🐛 Bug Fixes
-- Fix(chart): address pooler code-review findings ([91af22b](https://github.com/sislelabs/kuso/commit/91af22be28b75695c27e5184000679f3fb5c2182))
-
-### 📝 Docs
-- Docs: implementation plan for opt-in addon PgBouncer ([f5f0725](https://github.com/sislelabs/kuso/commit/f5f0725ff90cd35190ad7e99776cd74d025c95eb))
-- Docs: spec for opt-in PgBouncer on addon Postgres ([3713bdb](https://github.com/sislelabs/kuso/commit/3713bdb378a9cc67d8b6fbfd32451f53ba3d0370))
-
-### 🧪 Tests
-- Test: refresh kusoaddons CRD schema golden for spec.pooler ([36a8004](https://github.com/sislelabs/kuso/commit/36a8004e4fd9b1b348078aa65c88ea9c9f2a9f7a))
 
 
 ---
