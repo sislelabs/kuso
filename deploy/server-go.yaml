@@ -341,7 +341,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: server
-          image: ghcr.io/sislelabs/kuso-server-go:v0.17.3
+          image: ghcr.io/sislelabs/kuso-server-go:v0.17.4
           imagePullPolicy: IfNotPresent
           # Burstable QoS. Setting requests below limits puts us in
           # Burstable — survives host pressure without pre-allocating
@@ -383,6 +383,13 @@ spec:
             - { name: KUSO_ADMIN_PASSWORD_FILE, value: /etc/kuso/admin/password }
             - { name: KUSO_AUDIT, value: "true" }
             - { name: KUSO_TEMPLATES_ENABLED, value: "false" }
+            # Per-PR Postgres clones. Each preview env gets its own
+            # addon (cloned from the source via pg_dump|psql) so a
+            # reviewer can break the schema without breaking prod.
+            # Heavier than the shared-prod fallback (one new STS +
+            # PVC per PR) but the safer default for any cluster that
+            # actually uses preview envs for write-heavy testing.
+            - { name: KUSO_PREVIEW_DB_ENABLED, value: "true" }
           envFrom:
             - secretRef: { name: kuso-server-secrets }
             - secretRef: { name: kuso-github-app, optional: true }

@@ -11,8 +11,9 @@ import (
 	"strings"
 	"time"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"kuso/server/internal/builds"
@@ -556,10 +557,17 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// outright as the foundation. Per-service previewEnvVars overlay
 	// on top so "DEMO_MODE=true" survives every resync.
 	var baseEnvVars []kube.KusoEnvVar
+	var baseEnvFromSecrets []string
 	if baseEnvName != "" {
 		baseEnvCRName := fmt.Sprintf("%s-%s", serviceFQN, baseEnvName)
 		if baseEnv, err := d.Kube.GetKusoEnvironment(ctx, ns, baseEnvCRName); err == nil && baseEnv != nil {
 			baseEnvVars = append(baseEnvVars, baseEnv.Spec.EnvVars...)
+			// Also clone EnvFromSecrets so per-env secret mounts come
+			// across. The per-env Secret names get swapped to per-PR
+			// names by clonePerEnvSecretsForPreview below; shared
+			// addon-conn / project-shared secret references are
+			// preserved as-is (they live above env scope).
+			baseEnvFromSecrets = append([]string(nil), baseEnv.Spec.EnvFromSecrets...)
 			// If the service has nil SharedEnvKeys (legacy mount-all),
 			// fall back to whatever the baseEnv carries explicitly so
 			// the preview matches what the reviewer sees on the base
@@ -574,9 +582,53 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			d.Logger.Warn("preview baseEnv fetch", "baseEnv", baseEnvName, "err", err)
 		}
 	}
+	// Union the cloned baseEnv envFromSecrets with the addon-conn +
+	// shared list we built up earlier. The clone goes first so the
+	// per-env secret (which will be swapped to its pr-N name) is
+	// mounted before the broader shared secrets — kube's envFrom
+	// merge semantics make later entries win on key collision, which
+	// is wrong for our case (we want per-env values to override
+	// shared defaults). dedupe handles the project-shared name
+	// appearing in both lists.
+	envFromSecrets = dedupePreserveOrder(append(baseEnvFromSecrets, envFromSecrets...))
 	// Merge in previewEnvVars: by name, preview overrides win over
 	// the baseEnv copy. Empty list = no overrides (most common).
 	mergedEnvVars := mergePreviewEnvVars(baseEnvVars, svcPreviewEnvVars)
+
+	// Per-preview URL rewrite (v0.17.4). The cloned envVars carry
+	// production URLs (NEXT_PUBLIC_API_URL=https://api.tickero.bg) —
+	// reviewing PR-35 the browser CSP allows only the preview's own
+	// connect-src, and the API on api.tickero.bg won't accept the
+	// preview's auth cookies anyway. Build a {prodHost → prHost}
+	// map from every service in the project, then rewrite literal
+	// envVar values + per-env Secret contents.
+	//
+	// The map is built per call so it can't be stale across PR sync
+	// events; project + service list is already cached by the
+	// kube informer so this is a slice walk, not new API calls.
+	hostRewrite := d.buildPreviewHostRewrite(ctx, proj, pr.Number, baseDomain)
+	mergedEnvVars = rewriteEnvVarValues(mergedEnvVars, hostRewrite)
+
+	// Clone any per-env-scoped Secret values from the baseEnv into a
+	// per-PR Secret, with URL rewrites applied. This is the only way
+	// preview pods get correct NEXT_PUBLIC_* values — they're set
+	// per-env via the Secret, not via shared. Also swaps every
+	// reference to the source Secret name (in envFromSecrets and in
+	// envVars[].valueFrom.secretKeyRef.name) to point at the new
+	// per-PR Secret.
+	if baseEnvName != "" {
+		swapped, err := d.clonePerEnvSecretsForPreview(
+			ctx, ns, proj.Name, short, baseEnvName, pr.Number,
+			envFromSecrets, mergedEnvVars, hostRewrite,
+		)
+		if err != nil {
+			d.Logger.Warn("preview per-env secret clone",
+				"service", short, "pr", pr.Number, "err", err)
+		} else {
+			envFromSecrets = swapped.envFromSecrets
+			mergedEnvVars = swapped.envVars
+		}
+	}
 
 	objMeta := metav1.ObjectMeta{
 		Name: envName,
@@ -952,4 +1004,346 @@ func (d *Dispatcher) closeReviewerSurface(ctx context.Context, project string, p
 	if err := d.DB.ClosePreviewReview(ctx, project, prNumber); err != nil {
 		d.Logger.Warn("preview review close", "project", project, "pr", prNumber, "err", err)
 	}
+}
+
+// ---- preview URL rewriting (v0.17.4) ------------------------------------
+
+// buildPreviewHostRewrite walks every service in the project and
+// builds a {production-host → preview-host} substitution map.
+// Production hosts come from three sources:
+//
+//  1. KusoService.Spec.Domains[0].Host — the service's user-set
+//     custom domain (e.g. "tickero.bg", "api.tickero.bg")
+//  2. The auto-domain "<short>.<baseDomain>" — the kuso-stamped
+//     production host for services with no custom domain
+//  3. The bare baseDomain — when the project's frontend uses the
+//     apex (NEXT_PUBLIC_SITE_URL=https://alpha.example.com), the
+//     rewrite has to catch the apex too. Mapped to the frontend
+//     service's preview host when there's one obvious frontend
+//     service; otherwise to the first non-api service.
+//
+// Each production host maps to the preview's own auto-domain
+// "<short>-pr-<N>.<baseDomain>". Both http:// and https:// prefixes
+// get rewritten; bare-host references (no scheme) work too.
+func (d *Dispatcher) buildPreviewHostRewrite(ctx context.Context, proj *kube.KusoProject, prNumber int, baseDomain string) map[string]string {
+	out := map[string]string{}
+	if d.Kube == nil {
+		return out
+	}
+	ns := d.nsFor(ctx, proj.Name)
+	services, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).
+		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: proj.Name})})
+	if err != nil {
+		return out
+	}
+	prefix := proj.Name + "-"
+	var frontendCandidate string
+	var firstNonAPI string
+	for i := range services.Items {
+		u := &services.Items[i]
+		fqn := u.GetName()
+		short := strings.TrimPrefix(fqn, prefix)
+		if short == "" {
+			short = fqn
+		}
+		previewHost := fmt.Sprintf("%s-pr-%d.%s", short, prNumber, baseDomain)
+		out[fmt.Sprintf("%s.%s", short, baseDomain)] = previewHost
+		// Custom domain (spec.domains[0].host). Unstructured walk so we
+		// don't need a typed decode here.
+		if domains, found, _ := unstructured.NestedSlice(u.Object, "spec", "domains"); found && len(domains) > 0 {
+			if first, ok := domains[0].(map[string]any); ok {
+				if host, _ := first["host"].(string); host != "" {
+					out[host] = previewHost
+				}
+			}
+		}
+		// Track a frontend-likely service for the apex rewrite. The
+		// "frontend" / "web" / "www" names are conventional; falling
+		// back to the first non-api service catches projects that
+		// pick less standard names.
+		switch short {
+		case "frontend", "web", "www":
+			frontendCandidate = previewHost
+		}
+		if firstNonAPI == "" && short != "api" && short != "worker" && short != "backoffice" {
+			firstNonAPI = previewHost
+		}
+	}
+	apexPreview := frontendCandidate
+	if apexPreview == "" {
+		apexPreview = firstNonAPI
+	}
+	if apexPreview != "" {
+		out[baseDomain] = apexPreview
+	}
+	return out
+}
+
+// dedupePreserveOrder returns in with duplicate entries removed,
+// preserving first-seen order. Used to merge per-env + project-shared
+// secret name lists without changing the precedence semantics
+// (later entries win on conflict in kube envFrom).
+func dedupePreserveOrder(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+// rewriteHostInValue replaces every prod host (key in rewrite) with
+// its preview counterpart (value) inside s. Single-pass, longest-
+// match wins, host-boundary aware so "alpha.example.com" doesn't
+// match inside "api.alpha.example.com" (which has its own dedicated
+// rewrite entry, applied separately).
+//
+// Boundary rule: a host match must be preceded by a non-host char
+// (start-of-string, "://", "@", ",", space) and followed by a
+// non-host char (end, ":", "/", "?", "#", ",", space, quote). This
+// prevents the apex baseDomain rewrite from triggering inside
+// subdomain hosts.
+func rewriteHostInValue(s string, rewrite map[string]string) string {
+	if s == "" || len(rewrite) == 0 {
+		return s
+	}
+	type pair struct{ from, to string }
+	pairs := make([]pair, 0, len(rewrite))
+	for k, v := range rewrite {
+		pairs = append(pairs, pair{k, v})
+	}
+	// Sort by descending length so longest-host-wins inside a single
+	// scan position.
+	for i := 0; i < len(pairs); i++ {
+		for j := i + 1; j < len(pairs); j++ {
+			if len(pairs[j].from) > len(pairs[i].from) {
+				pairs[i], pairs[j] = pairs[j], pairs[i]
+			}
+		}
+	}
+	isHostChar := func(b byte) bool {
+		return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') ||
+			(b >= '0' && b <= '9') || b == '-' || b == '.'
+	}
+	var out strings.Builder
+	out.Grow(len(s))
+	i := 0
+	for i < len(s) {
+		matched := false
+		for _, p := range pairs {
+			if !strings.HasPrefix(s[i:], p.from) {
+				continue
+			}
+			// Right boundary: char after the match must not be a host
+			// char (otherwise we're matching a prefix of a longer
+			// hostname like "alpha.example.com" inside
+			// "api.alpha.example.com").
+			end := i + len(p.from)
+			if end < len(s) && isHostChar(s[end]) {
+				continue
+			}
+			// Left boundary: char before the match must not be a host
+			// char either (prevents matching a suffix inside
+			// "myalpha.example.com").
+			if i > 0 && isHostChar(s[i-1]) {
+				continue
+			}
+			out.WriteString(p.to)
+			i = end
+			matched = true
+			break
+		}
+		if !matched {
+			out.WriteByte(s[i])
+			i++
+		}
+	}
+	return out.String()
+}
+
+// rewriteEnvVarValues walks envVars and rewrites every literal value
+// (entries with `Value` set; valueFrom entries are untouched — the
+// rewrite for those happens via clonePerEnvSecretsForPreview's
+// Secret content rewrite).
+func rewriteEnvVarValues(in []kube.KusoEnvVar, rewrite map[string]string) []kube.KusoEnvVar {
+	if len(in) == 0 || len(rewrite) == 0 {
+		return in
+	}
+	out := make([]kube.KusoEnvVar, len(in))
+	for i, e := range in {
+		if e.Value == "" || e.ValueFrom != nil {
+			out[i] = e
+			continue
+		}
+		rewritten := rewriteHostInValue(e.Value, rewrite)
+		if rewritten == e.Value {
+			out[i] = e
+			continue
+		}
+		copy := e
+		copy.Value = rewritten
+		out[i] = copy
+	}
+	return out
+}
+
+// secretSwapResult carries the rewritten envFromSecrets list and the
+// envVars list with valueFrom.secretKeyRef.name pointers updated to
+// the new per-PR Secret names.
+type secretSwapResult struct {
+	envFromSecrets []string
+	envVars        []kube.KusoEnvVar
+}
+
+// clonePerEnvSecretsForPreview reads every per-env Secret that's
+// scoped to the baseEnv (name pattern "<project>-<service>-<baseEnv>-secrets"),
+// copies its contents to a per-PR Secret with URL rewrites applied,
+// and swaps every reference to the source Secret name (in
+// envFromSecrets and in envVars[].valueFrom.secretKeyRef.name) to
+// point at the new per-PR Secret.
+//
+// Secrets that aren't per-env-scoped (project-shared, addon-conn,
+// instance-shared) pass through untouched — they live above the env
+// scope and don't carry env-specific URL values.
+//
+// Best-effort: a single Secret clone failure doesn't abort the whole
+// preview spawn. The preview pod boots with whatever Secrets did
+// clone successfully; missing ones surface as missing-env errors at
+// app startup, which the user can fix via redeploy.
+func (d *Dispatcher) clonePerEnvSecretsForPreview(
+	ctx context.Context,
+	ns, project, serviceShort, baseEnv string,
+	prNumber int,
+	envFromSecrets []string,
+	envVars []kube.KusoEnvVar,
+	hostRewrite map[string]string,
+) (*secretSwapResult, error) {
+	if d.Kube == nil || d.Kube.Clientset == nil {
+		return &secretSwapResult{envFromSecrets: envFromSecrets, envVars: envVars}, nil
+	}
+	baseSecretName := fmt.Sprintf("%s-%s-%s-secrets", project, serviceShort, baseEnv)
+	prSecretName := fmt.Sprintf("%s-%s-pr-%d-secrets", project, serviceShort, prNumber)
+
+	src, err := d.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, baseSecretName, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// No per-env Secret on baseEnv = nothing to clone, but
+			// still swap any stale envFromSecrets references in case
+			// a previous spawn attempt left them dangling.
+			return &secretSwapResult{
+				envFromSecrets: swapSecretNameInList(envFromSecrets, baseSecretName, prSecretName),
+				envVars:        swapSecretNameInEnvVars(envVars, baseSecretName, prSecretName),
+			}, nil
+		}
+		return nil, fmt.Errorf("get source secret %s: %w", baseSecretName, err)
+	}
+
+	// Build the per-PR Secret with rewritten values. Iterating .Data
+	// gives base64-decoded bytes already (k8s decodes on Get).
+	prData := make(map[string][]byte, len(src.Data))
+	for k, v := range src.Data {
+		rewritten := rewriteHostInValue(string(v), hostRewrite)
+		prData[k] = []byte(rewritten)
+	}
+	prSec := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      prSecretName,
+			Namespace: ns,
+			Labels: map[string]string{
+				kube.LabelProject:               project,
+				"kuso.sislelabs.com/service":    serviceShort,
+				"kuso.sislelabs.com/env":        fmt.Sprintf("preview-pr-%d", prNumber),
+				"kuso.sislelabs.com/source-env": baseEnv,
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: prData,
+	}
+	// Upsert: create on first spawn, patch on subsequent syncs.
+	existing, gerr := d.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, prSecretName, metav1.GetOptions{})
+	switch {
+	case gerr != nil && apierrors.IsNotFound(gerr):
+		if _, err := d.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, prSec, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+			return nil, fmt.Errorf("create pr secret %s: %w", prSecretName, err)
+		}
+	case gerr != nil:
+		return nil, fmt.Errorf("get existing pr secret %s: %w", prSecretName, gerr)
+	default:
+		existing.Data = prData
+		if _, err := d.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, existing, metav1.UpdateOptions{}); err != nil {
+			return nil, fmt.Errorf("update pr secret %s: %w", prSecretName, err)
+		}
+	}
+
+	return &secretSwapResult{
+		envFromSecrets: swapSecretNameInList(envFromSecrets, baseSecretName, prSecretName),
+		envVars:        swapSecretNameInEnvVars(envVars, baseSecretName, prSecretName),
+	}, nil
+}
+
+// swapSecretNameInList replaces every occurrence of from with to in
+// a string slice. Idempotent: a list that doesn't contain from is
+// returned unchanged.
+func swapSecretNameInList(in []string, from, to string) []string {
+	if from == to {
+		return in
+	}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s == from {
+			out = append(out, to)
+		} else {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// swapSecretNameInEnvVars rewrites envVars[i].valueFrom.secretKeyRef.name
+// from→to. Other valueFrom shapes (configMapKeyRef, fieldRef) pass
+// through untouched.
+func swapSecretNameInEnvVars(in []kube.KusoEnvVar, from, to string) []kube.KusoEnvVar {
+	if from == to || len(in) == 0 {
+		return in
+	}
+	out := make([]kube.KusoEnvVar, len(in))
+	for i, e := range in {
+		if e.ValueFrom == nil {
+			out[i] = e
+			continue
+		}
+		refRaw, ok := e.ValueFrom["secretKeyRef"]
+		if !ok {
+			out[i] = e
+			continue
+		}
+		refMap, ok := refRaw.(map[string]any)
+		if !ok {
+			out[i] = e
+			continue
+		}
+		if name, _ := refMap["name"].(string); name == from {
+			// Deep-copy the ref so we don't mutate the source map.
+			newRef := map[string]any{}
+			for k, v := range refMap {
+				newRef[k] = v
+			}
+			newRef["name"] = to
+			newValueFrom := map[string]any{}
+			for k, v := range e.ValueFrom {
+				newValueFrom[k] = v
+			}
+			newValueFrom["secretKeyRef"] = newRef
+			copy := e
+			copy.ValueFrom = newValueFrom
+			out[i] = copy
+			continue
+		}
+		out[i] = e
+	}
+	return out
 }

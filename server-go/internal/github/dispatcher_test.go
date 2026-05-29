@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -307,6 +308,143 @@ func TestDispatch_PROpened_LegacyMode_InheritsFromProduction(t *testing.T) {
 	ref, _ := envCR.Spec.EnvVars[0].ValueFrom["secretKeyRef"].(map[string]any)
 	if ref == nil || ref["name"] != "alpha-shared" {
 		t.Errorf("preview envVar valueFrom not preserved: %+v", envCR.Spec.EnvVars[0].ValueFrom)
+	}
+}
+
+// TestDispatch_PROpened_ClonesPerEnvSecretWithRewrittenURLs locks
+// in the v0.17.4 fix. Production carries NEXT_PUBLIC_API_URL in a
+// per-env Secret tickero-frontend-production-secrets. Without
+// cloning + rewriting, preview pods inherit the production URL,
+// CSP blocks fetches to api-pr-N, page renders empty.
+//
+// This test seeds a production env that references a per-env
+// Secret holding NEXT_PUBLIC_API_URL=https://api.alpha.example.com,
+// then fires a PR-open and asserts the per-PR Secret
+// alpha-web-pr-42-secrets exists with the URL rewritten to
+// https://api-pr-42.alpha.example.com.
+func TestDispatch_PROpened_ClonesPerEnvSecretWithRewrittenURLs(t *testing.T) {
+	t.Parallel()
+
+	// Two services so we have multiple prod hosts to rewrite —
+	// "web" + "api". The "api" service exists purely so the
+	// hostRewrite map carries an api.alpha.example.com entry to
+	// substitute inside web's per-env secret.
+	prodEnvWeb := &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alpha-web-production",
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": "alpha",
+				"kuso.sislelabs.com/service": "web",
+				"kuso.sislelabs.com/env":     "production",
+			},
+		},
+		Spec: kube.KusoEnvironmentSpec{
+			Project:        "alpha",
+			Service:        "alpha-web",
+			Kind:           "production",
+			EnvFromSecrets: []string{"alpha-web-production-secrets"},
+			EnvVars: []kube.KusoEnvVar{
+				{
+					Name: "NEXT_PUBLIC_API_URL",
+					ValueFrom: map[string]any{
+						"secretKeyRef": map[string]any{
+							"name": "alpha-web-production-secrets",
+							"key":  "NEXT_PUBLIC_API_URL",
+						},
+					},
+				},
+			},
+		},
+	}
+	prodSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alpha-web-production-secrets",
+			Namespace: "kuso",
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"NEXT_PUBLIC_API_URL":  []byte("https://api.alpha.example.com"),
+			"NEXT_PUBLIC_SITE_URL": []byte("https://alpha.example.com"),
+		},
+	}
+
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		seedSvc("alpha", "web"),
+		seedSvc("alpha", "api"),
+		typedSeed(kube.GVREnvironments, "KusoEnvironment", prodEnvWeb),
+	)
+	// Seed the source Secret into the typed Clientset.
+	if _, err := d.Kube.Clientset.CoreV1().Secrets("kuso").Create(context.Background(), prodSecret, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed prod secret: %v", err)
+	}
+
+	body := []byte(`{
+		"action": "opened",
+		"number": 42,
+		"pull_request": {
+			"head": {"ref": "feat/x", "sha": "abcdef0123456789abcdef0123456789abcdef01"},
+			"base": {"ref": "main"},
+			"state": "open"
+		},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch pr: %v", err)
+	}
+
+	// Per-PR Secret should now exist with URLs rewritten to the
+	// preview hosts.
+	prSec, err := d.Kube.Clientset.CoreV1().Secrets("kuso").Get(context.Background(), "alpha-web-pr-42-secrets", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("pr secret not created: %v", err)
+	}
+	gotAPI := string(prSec.Data["NEXT_PUBLIC_API_URL"])
+	if gotAPI != "https://api-pr-42.alpha.example.com" {
+		t.Errorf("NEXT_PUBLIC_API_URL not rewritten: got %q, want https://api-pr-42.alpha.example.com", gotAPI)
+	}
+	gotSite := string(prSec.Data["NEXT_PUBLIC_SITE_URL"])
+	if gotSite != "https://web-pr-42.alpha.example.com" {
+		t.Errorf("NEXT_PUBLIC_SITE_URL not rewritten: got %q, want https://web-pr-42.alpha.example.com", gotSite)
+	}
+
+	// The preview env CR's envFromSecrets should reference the new
+	// per-PR Secret, not the production one.
+	envCR, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-42")
+	if err != nil {
+		t.Fatalf("preview env not created: %v", err)
+	}
+	sawPR, sawProd := false, false
+	for _, s := range envCR.Spec.EnvFromSecrets {
+		if s == "alpha-web-pr-42-secrets" {
+			sawPR = true
+		}
+		if s == "alpha-web-production-secrets" {
+			sawProd = true
+		}
+	}
+	if !sawPR {
+		t.Errorf("envFromSecrets missing alpha-web-pr-42-secrets: %v", envCR.Spec.EnvFromSecrets)
+	}
+	if sawProd {
+		t.Errorf("envFromSecrets still references production-scoped secret: %v", envCR.Spec.EnvFromSecrets)
+	}
+
+	// envVars[].valueFrom.secretKeyRef.name should point at the
+	// per-PR Secret, not the production one.
+	for _, e := range envCR.Spec.EnvVars {
+		if e.Name != "NEXT_PUBLIC_API_URL" || e.ValueFrom == nil {
+			continue
+		}
+		ref, _ := e.ValueFrom["secretKeyRef"].(map[string]any)
+		if ref == nil {
+			t.Errorf("NEXT_PUBLIC_API_URL valueFrom shape: %+v", e.ValueFrom)
+			continue
+		}
+		if ref["name"] != "alpha-web-pr-42-secrets" {
+			t.Errorf("NEXT_PUBLIC_API_URL secretKeyRef.name = %v, want alpha-web-pr-42-secrets", ref["name"])
+		}
 	}
 }
 
