@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.22] — 2026-05-29
+
+### ✨ Features
+- Feat(env): per-env env-var overrides + fix AddEnvironment service-ref rescope ([148ae71](https://github.com/sislelabs/kuso/commit/148ae711ded25824e8ee6bbef1a5d0a31b58da79))
+
+### 🐛 Bug Fixes
+- Fix(rbac): grant kuso-server delete on PVCs so `project delete --purge-data` works ([4b42e12](https://github.com/sislelabs/kuso/commit/4b42e12f57795146f48ed5b6decd5b357cde3ab6))
+
 ## [0.17.21] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -299,11 +307,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive promoted CHANGELOG entries (v0.9.42-v0.9.47) ([6e5db69](https://github.com/sislelabs/kuso/commit/6e5db69406a953bcfd6ee82fc7a3cf84883234d3))
-
-## [0.14.1] — 2026-05-23
-
-### ✨ Features
-- Feat(canvas): add cron / run command entries to service right-click menu ([e9a0c7e](https://github.com/sislelabs/kuso/commit/e9a0c7e34edc3b5d08fb94475178a90223e98676))
 
 
 ---
