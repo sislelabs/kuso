@@ -89,9 +89,11 @@ metadata:
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 type: Opaque
-stringData:
-  REDIS_HOST: {{ $name | quote }}
-  REDIS_PORT: "6379"
-  REDIS_PASSWORD: {{ $password | quote }}
-  REDIS_URL: "redis://default:{{ $password }}@{{ $name }}:6379"
+# base64 `data:` not `stringData:` — see postgres.yaml conn Secret comment
+# (stringData triggers perpetual helm-operator reconcile churn).
+data:
+  REDIS_HOST: {{ $name | b64enc | quote }}
+  REDIS_PORT: {{ "6379" | b64enc | quote }}
+  REDIS_PASSWORD: {{ $password | b64enc | quote }}
+  REDIS_URL: {{ printf "redis://default:%s@%s:6379" $password $name | b64enc | quote }}
 {{- end }}

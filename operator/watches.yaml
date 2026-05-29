@@ -38,7 +38,17 @@
   version: v1alpha1
   kind: KusoAddon
   chart: helm-charts/kusoaddon
-  reconcilePeriod: 3m
+  # Addons are stateful and rarely change after creation; spec edits still
+  # reconcile immediately via the watch. The periodic resync only exists to
+  # self-heal drift, so a slow cadence is plenty. Crucially it bounds the
+  # blast radius of any residual render-vs-stored mismatch: every periodic
+  # reconcile that decides to `helm upgrade` re-applies the addon Service,
+  # and a Service re-apply makes the CNI reprogram iptables — a brief window
+  # where the addon ClusterIP refuses connections. The conn-Secret base64
+  # `data:` fix removes the usual mismatch; this longer period is the
+  # belt-and-braces so a future drift source can't churn datastores every
+  # 3 minutes and flake migration release Jobs / `kuso run`.
+  reconcilePeriod: 30m
   maxConcurrentReconciles: 4
 # KusoBuild was removed from the operator's watch list as of v0.10.
 # Builds are now rendered to Jobs in-process by the kuso-server

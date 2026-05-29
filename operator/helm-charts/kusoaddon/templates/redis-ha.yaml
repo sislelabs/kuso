@@ -331,26 +331,27 @@ metadata:
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 type: Opaque
-stringData:
+# base64 data: not stringData: — avoids perpetual helm-operator reconcile churn (see postgres.yaml conn Secret comment).
+data:
   # Per-pod hosts in case a sophisticated client wants to wire its own
   # discovery instead of relying on Sentinel. Most apps should use
   # REDIS_SENTINEL_URL or REDIS_URL.
-  REDIS_HOST: {{ printf "%s-0.%s" $name $name | quote }}
-  REDIS_PORT: "6379"
-  REDIS_PASSWORD: {{ $password | quote }}
-  REDIS_MASTER_NAME: {{ $name | quote }}
-  REDIS_SENTINEL_HOST: {{ printf "%s-sentinel" $name | quote }}
-  REDIS_SENTINEL_PORT: "26379"
+  REDIS_HOST: {{ printf "%s-0.%s" $name $name | b64enc | quote }}
+  REDIS_PORT: {{ "6379" | b64enc | quote }}
+  REDIS_PASSWORD: {{ $password | b64enc | quote }}
+  REDIS_MASTER_NAME: {{ $name | b64enc | quote }}
+  REDIS_SENTINEL_HOST: {{ printf "%s-sentinel" $name | b64enc | quote }}
+  REDIS_SENTINEL_PORT: {{ "26379" | b64enc | quote }}
   # Plain redis:// URL points at the seed pod. Correct at boot, BUT
   # stale after a failover — clients that read this without
   # re-resolving will write to a replica (which rejects with READONLY)
   # until they reconnect. Prefer REDIS_SENTINEL_URL for new code; this
   # is kept for compatibility with libraries that only speak
   # redis:// and can't be reconfigured.
-  REDIS_URL: "redis://default:{{ $password }}@{{ $name }}-0.{{ $name }}:6379"
+  REDIS_URL: {{ printf "redis://default:%s@%s-0.%s:6379" $password $name $name | b64enc | quote }}
   # Sentinel-aware DSN. Clients that recognise sentinel:// (ioredis,
   # redis-py >=4.4, lettuce, etc.) will discover the live master and
   # reconnect transparently on failover. The `<master>` path segment
   # at the end tells the client which monitored master to ask for.
-  REDIS_SENTINEL_URL: "redis-sentinel://default:{{ $password }}@{{ $name }}-sentinel:26379/{{ $name }}"
+  REDIS_SENTINEL_URL: {{ printf "redis-sentinel://default:%s@%s-sentinel:26379/%s" $password $name $name | b64enc | quote }}
 {{- end }}

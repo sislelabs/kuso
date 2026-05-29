@@ -29,6 +29,7 @@
   password into it. Mounting the secret as a file into ClickHouse's
   /etc/clickhouse-server/users.d/ overrides the built-in defaults.
 */}}
+{{- $defaultUserXml := printf "<?xml version=\"1.0\"?>\n<clickhouse>\n  <users>\n    <default>\n      <password>%s</password>\n      <networks>\n        <ip>::/0</ip>\n      </networks>\n      <profile>default</profile>\n      <quota>default</quota>\n      <access_management>1</access_management>\n    </default>\n  </users>\n</clickhouse>\n" $password -}}
 apiVersion: v1
 kind: Secret
 metadata:
@@ -36,22 +37,9 @@ metadata:
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 type: Opaque
-stringData:
-  default-user.xml: |
-    <?xml version="1.0"?>
-    <clickhouse>
-      <users>
-        <default>
-          <password>{{ $password }}</password>
-          <networks>
-            <ip>::/0</ip>
-          </networks>
-          <profile>default</profile>
-          <quota>default</quota>
-          <access_management>1</access_management>
-        </default>
-      </users>
-    </clickhouse>
+# base64 data: not stringData: — avoids perpetual helm-operator reconcile churn (see postgres.yaml conn Secret comment).
+data:
+  default-user.xml: {{ $defaultUserXml | b64enc | quote }}
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -157,15 +145,16 @@ metadata:
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 type: Opaque
-stringData:
-  CLICKHOUSE_HOST: {{ $name | quote }}
-  CLICKHOUSE_HTTP_PORT: "8123"
-  CLICKHOUSE_NATIVE_PORT: "9000"
-  CLICKHOUSE_USER: "default"
-  CLICKHOUSE_PASSWORD: {{ $password | quote }}
-  CLICKHOUSE_DATABASE: {{ $database | quote }}
+# base64 data: not stringData: — avoids perpetual helm-operator reconcile churn (see postgres.yaml conn Secret comment).
+data:
+  CLICKHOUSE_HOST: {{ $name | b64enc | quote }}
+  CLICKHOUSE_HTTP_PORT: {{ "8123" | b64enc | quote }}
+  CLICKHOUSE_NATIVE_PORT: {{ "9000" | b64enc | quote }}
+  CLICKHOUSE_USER: {{ "default" | b64enc | quote }}
+  CLICKHOUSE_PASSWORD: {{ $password | b64enc | quote }}
+  CLICKHOUSE_DATABASE: {{ $database | b64enc | quote }}
   # HTTP URL — most TS/Python clients accept this form. Native URL
   # for the higher-perf clickhouse-driver / clickhouse-go SDKs.
-  CLICKHOUSE_URL: "http://default:{{ $password }}@{{ $name }}:8123/{{ $database }}"
-  CLICKHOUSE_NATIVE_URL: "clickhouse://default:{{ $password }}@{{ $name }}:9000/{{ $database }}"
+  CLICKHOUSE_URL: {{ printf "http://default:%s@%s:8123/%s" $password $name $database | b64enc | quote }}
+  CLICKHOUSE_NATIVE_URL: {{ printf "clickhouse://default:%s@%s:9000/%s" $password $name $database | b64enc | quote }}
 {{- end }}

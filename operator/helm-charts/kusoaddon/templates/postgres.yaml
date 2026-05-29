@@ -258,12 +258,20 @@ metadata:
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 type: Opaque
-stringData:
-  POSTGRES_HOST: {{ $name | quote }}
-  POSTGRES_PORT: "5432"
-  POSTGRES_USER: kuso
-  POSTGRES_PASSWORD: {{ $password | quote }}
-  POSTGRES_DB: {{ $database | quote }}
+# Rendered as base64 `data:` (NOT `stringData:`) on purpose. The apiserver
+# write-translates stringData → base64 data and nulls stringData on the
+# stored object, so a stringData-rendered Secret never byte-matches what the
+# helm-operator reads back — it then runs `helm upgrade` on EVERY 3-minute
+# reconcile, bumping the release revision forever and re-applying the addon
+# Service (kube-router reprograms iptables → brief connection-refused windows
+# that break migration release Jobs and `kuso run`). Emitting base64 data
+# makes render == stored, so the reconcile is a true no-op.
+data:
+  POSTGRES_HOST: {{ $name | b64enc | quote }}
+  POSTGRES_PORT: {{ "5432" | b64enc | quote }}
+  POSTGRES_USER: {{ "kuso" | b64enc | quote }}
+  POSTGRES_PASSWORD: {{ $password | b64enc | quote }}
+  POSTGRES_DB: {{ $database | b64enc | quote }}
   # sslmode=require: the postgres container serves TLS via the
   # self-signed cert in <name>-tls. Apps' production strictness checks
   # (Tickero, Rails RAILS_ENV=production, etc.) accept this without
@@ -277,14 +285,14 @@ stringData:
   # (`@`, `:`, `/`, `?`, `#`, `%`) don't corrupt the connection string.
   # The auto-generated password (randAlphaNum) is safe without it, but
   # passwordSecret-supplied values can be anything.
-  DATABASE_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}:5432/{{ $database }}?sslmode=require"
+  DATABASE_URL: {{ printf "postgres://kuso:%s@%s:5432/%s?sslmode=require" ($password | urlquery) $name $database | b64enc | quote }}
   {{- /* Pooler keys. Additive — DATABASE_URL above stays direct at
          the StatefulSet so existing consumers are unaffected. Apps
          opt into pooling with ${{ <addon>.POOLER_URL }}.
 
          These keys are ALWAYS emitted (empty-valued when the pooler
          is disabled), NOT conditionally rendered. helm-operator's
-         3-way merge does not prune individual stringData keys that
+         3-way merge does not prune individual data keys that
          disappear between upgrades — a conditional block would leave
          stale POOLER_URL values pointing at a torn-down pooler after
          pooler.enabled flips false. A stable key set with empty
@@ -294,12 +302,12 @@ stringData:
          and ARE conditionally rendered (whole-object delete prunes
          fine; only per-key pruning is the helm gap). */}}
   {{- if and .Values.pooler .Values.pooler.enabled }}
-  POOLER_HOST: {{ printf "%s-pooler" $name | quote }}
-  POOLER_PORT: "6432"
-  POOLER_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}-pooler:6432/{{ $database }}?sslmode=require"
+  POOLER_HOST: {{ printf "%s-pooler" $name | b64enc | quote }}
+  POOLER_PORT: {{ "6432" | b64enc | quote }}
+  POOLER_URL: {{ printf "postgres://kuso:%s@%s-pooler:6432/%s?sslmode=require" ($password | urlquery) $name $database | b64enc | quote }}
   {{- else }}
-  POOLER_HOST: ""
-  POOLER_PORT: ""
-  POOLER_URL: ""
+  POOLER_HOST: {{ "" | b64enc | quote }}
+  POOLER_PORT: {{ "" | b64enc | quote }}
+  POOLER_URL: {{ "" | b64enc | quote }}
   {{- end }}
 {{- end }}

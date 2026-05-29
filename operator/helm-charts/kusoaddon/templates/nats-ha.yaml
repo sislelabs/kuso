@@ -214,10 +214,11 @@ metadata:
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 type: Opaque
-stringData:
-  NATS_HOST: {{ $name | quote }}
-  NATS_PORT: "4222"
-  NATS_TOKEN: {{ $token | quote }}
+# base64 data: not stringData: — avoids perpetual helm-operator reconcile churn (see postgres.yaml conn Secret comment).
+data:
+  NATS_HOST: {{ $name | b64enc | quote }}
+  NATS_PORT: {{ "4222" | b64enc | quote }}
+  NATS_TOKEN: {{ $token | b64enc | quote }}
   # HA-aware URL with comma-separated seeds so clients failing over
   # don't depend on the ClusterIP service alone resolving.
   #
@@ -226,6 +227,6 @@ stringData:
   # interpret it as user="" + password=token and return
   # "Authorization Violation". Same bug + fix as the single-pod
   # nats.yaml.
-  NATS_URL: "nats://{{ $token }}@{{ $name }}-0.{{ $name }}-cluster:4222,nats://{{ $token }}@{{ $name }}-1.{{ $name }}-cluster:4222,nats://{{ $token }}@{{ $name }}-2.{{ $name }}-cluster:4222"
-  NATS_MONITOR_URL: "http://{{ $name }}:8222"
+  NATS_URL: {{ printf "nats://%s@%s-0.%s-cluster:4222,nats://%s@%s-1.%s-cluster:4222,nats://%s@%s-2.%s-cluster:4222" $token $name $name $token $name $name $token $name $name | b64enc | quote }}
+  NATS_MONITOR_URL: {{ printf "http://%s:8222" $name | b64enc | quote }}
 {{- end }}

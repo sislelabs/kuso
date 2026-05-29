@@ -110,20 +110,21 @@ metadata:
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 type: Opaque
-stringData:
+# base64 data: not stringData: — avoids perpetual helm-operator reconcile churn (see postgres.yaml conn Secret comment).
+data:
   # SMTP_* are the canonical names most node/python/ruby/go mailers
   # read. MAIL_* aliases for the Laravel / Rails / general crowd.
-  SMTP_HOST: {{ $name | quote }}
-  SMTP_PORT: "1025"
-  SMTP_FROM: "no-reply@kuso.local"
-  MAIL_HOST: {{ $name | quote }}
-  MAIL_PORT: "1025"
-  MAIL_USERNAME: ""
-  MAIL_PASSWORD: ""
-  MAIL_ENCRYPTION: "none"
+  SMTP_HOST: {{ $name | b64enc | quote }}
+  SMTP_PORT: {{ "1025" | b64enc | quote }}
+  SMTP_FROM: {{ "no-reply@kuso.local" | b64enc | quote }}
+  MAIL_HOST: {{ $name | b64enc | quote }}
+  MAIL_PORT: {{ "1025" | b64enc | quote }}
+  MAIL_USERNAME: {{ "" | b64enc | quote }}
+  MAIL_PASSWORD: {{ "" | b64enc | quote }}
+  MAIL_ENCRYPTION: {{ "none" | b64enc | quote }}
   # Web inbox URL — services can render a "open inbox" link in dev
   # error pages or admin UIs by reading this. Internal cluster DNS;
   # the user's browser reaches it via kubectl port-forward or by
   # exposing through an Ingress separately.
-  MAILPIT_UI_URL: "http://{{ $name }}:8025"
+  MAILPIT_UI_URL: {{ printf "http://%s:8025" $name | b64enc | quote }}
 {{- end }}

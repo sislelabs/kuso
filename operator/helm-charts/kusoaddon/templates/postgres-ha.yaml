@@ -73,9 +73,10 @@ metadata:
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 type: kubernetes.io/basic-auth
-stringData:
-  username: kuso
-  password: {{ $password | quote }}
+# base64 data: not stringData: — avoids perpetual helm-operator reconcile churn (see postgres.yaml conn Secret comment).
+data:
+  username: {{ "kuso" | b64enc | quote }}
+  password: {{ $password | b64enc | quote }}
 ---
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
@@ -134,17 +135,18 @@ metadata:
     # Same retain-on-uninstall trick as the single-node chart's PVC.
     "helm.sh/resource-policy": keep
 type: Opaque
-stringData:
-  POSTGRES_HOST: {{ printf "%s-rw" $name | quote }}
-  POSTGRES_PORT: "5432"
-  POSTGRES_USER: kuso
-  POSTGRES_PASSWORD: {{ $password | quote }}
-  POSTGRES_DB: {{ $database | quote }}
+# base64 data: not stringData: — avoids perpetual helm-operator reconcile churn (see postgres.yaml conn Secret comment).
+data:
+  POSTGRES_HOST: {{ printf "%s-rw" $name | b64enc | quote }}
+  POSTGRES_PORT: {{ "5432" | b64enc | quote }}
+  POSTGRES_USER: {{ "kuso" | b64enc | quote }}
+  POSTGRES_PASSWORD: {{ $password | b64enc | quote }}
+  POSTGRES_DB: {{ $database | b64enc | quote }}
   # CNPG serves TLS by default but we connect via the in-cluster
   # Service ClusterIP, so plaintext is fine and avoids cert-handshake
   # latency on every connect. Apps that want TLS-in-cluster override
   # DATABASE_URL with sslmode=require.
-  DATABASE_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}-rw:5432/{{ $database }}?sslmode=disable"
+  DATABASE_URL: {{ printf "postgres://kuso:%s@%s-rw:5432/%s?sslmode=disable" ($password | urlquery) $name $database | b64enc | quote }}
   {{- /* Pooler keys are ALWAYS emitted (empty when disabled), not
          conditionally rendered: helm-operator's 3-way merge does not
          prune individual stringData keys that vanish between
@@ -152,18 +154,18 @@ stringData:
          values after pooler.enabled flips false. Same rationale as
          the single-node postgres.yaml chart. */}}
   {{- if and .Values.pooler .Values.pooler.enabled }}
-  POOLER_HOST: {{ printf "%s-pooler" $name | quote }}
-  POOLER_PORT: "6432"
-  POOLER_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}-pooler:6432/{{ $database }}?sslmode=disable"
+  POOLER_HOST: {{ printf "%s-pooler" $name | b64enc | quote }}
+  POOLER_PORT: {{ "6432" | b64enc | quote }}
+  POOLER_URL: {{ printf "postgres://kuso:%s@%s-pooler:6432/%s?sslmode=disable" ($password | urlquery) $name $database | b64enc | quote }}
   {{- else }}
-  POOLER_HOST: ""
-  POOLER_PORT: ""
-  POOLER_URL: ""
+  POOLER_HOST: {{ "" | b64enc | quote }}
+  POOLER_PORT: {{ "" | b64enc | quote }}
+  POOLER_URL: {{ "" | b64enc | quote }}
   {{- end }}
   # Read-only fanout. Apps that want to send read traffic to a
   # replica wire READONLY_DATABASE_URL into their pool. Optional —
   # apps that don't care just use DATABASE_URL.
-  READONLY_DATABASE_URL: "postgres://kuso:{{ $password | urlquery }}@{{ $name }}-ro:5432/{{ $database }}?sslmode=disable"
+  READONLY_DATABASE_URL: {{ printf "postgres://kuso:%s@%s-ro:5432/%s?sslmode=disable" ($password | urlquery) $name $database | b64enc | quote }}
 {{- /* Opt-in CNPG-native PgBouncer. CNPG manages the Pooler's own
        Deployment + a <name>-pooler Service and follows primary
        failover natively, so HA addons get pooling without a

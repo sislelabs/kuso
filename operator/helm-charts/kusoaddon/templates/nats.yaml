@@ -171,10 +171,12 @@ metadata:
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 type: Opaque
-stringData:
-  NATS_HOST: {{ $name | quote }}
-  NATS_PORT: "4222"
-  NATS_TOKEN: {{ $token | quote }}
+# base64 `data:` not `stringData:` — see postgres.yaml conn Secret comment
+# (stringData triggers perpetual helm-operator reconcile churn).
+data:
+  NATS_HOST: {{ $name | b64enc | quote }}
+  NATS_PORT: {{ "4222" | b64enc | quote }}
+  NATS_TOKEN: {{ $token | b64enc | quote }}
   # Most NATS client libs accept a single URL with the token inline,
   # which is the easiest thing to wire into the dollar-brace addon
   # reference syntax (NATS_URL surfaces as the canonical client DSN).
@@ -185,7 +187,7 @@ stringData:
   # connection with "Authorization Violation" — NATS only accepts the
   # password split when user-auth (not token-auth) is configured.
   # nats.go parses single-segment userinfo as the token.
-  NATS_URL: "nats://{{ $token }}@{{ $name }}:4222"
+  NATS_URL: {{ printf "nats://%s@%s:4222" $token $name | b64enc | quote }}
   # Monitor URL — nats-top, the web monitor at /varz, etc.
-  NATS_MONITOR_URL: "http://{{ $name }}:8222"
+  NATS_MONITOR_URL: {{ printf "http://%s:8222" $name | b64enc | quote }}
 {{- end }}

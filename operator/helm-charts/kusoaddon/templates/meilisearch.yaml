@@ -110,11 +110,12 @@ metadata:
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 type: Opaque
-stringData:
-  MEILI_HOST: {{ $name | quote }}
-  MEILI_PORT: "7700"
-  MEILI_MASTER_KEY: {{ $masterKey | quote }}
+# base64 data: not stringData: — avoids perpetual helm-operator reconcile churn (see postgres.yaml conn Secret comment).
+data:
+  MEILI_HOST: {{ $name | b64enc | quote }}
+  MEILI_PORT: {{ "7700" | b64enc | quote }}
+  MEILI_MASTER_KEY: {{ $masterKey | b64enc | quote }}
   # Most client SDKs accept either a host+key pair or a full URL —
   # the URL form drops cleanly into MEILI_URL=… in app env.
-  MEILI_URL: "http://{{ $name }}:7700"
+  MEILI_URL: {{ printf "http://%s:7700" $name | b64enc | quote }}
 {{- end }}

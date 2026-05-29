@@ -120,20 +120,23 @@ metadata:
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 type: Opaque
-stringData:
+# base64 `data:` not `stringData:` — see the postgres.yaml conn Secret
+# comment: stringData never byte-matches the apiserver-stored object, which
+# makes the helm-operator re-upgrade on every reconcile (perpetual churn).
+data:
   # Standard names so the kuso-backup CronJob env wiring works
   # without provider-specific renames (it already keys on
   # S3_ENDPOINT / accessKeyId / secretAccessKey).
-  S3_ENDPOINT: "http://{{ $name }}:9000"
-  S3_REGION: "us-east-1"
-  S3_BUCKET: {{ $bucket | quote }}
-  S3_ACCESS_KEY_ID: {{ $accessKey | quote }}
-  S3_SECRET_ACCESS_KEY: {{ $secretKey | quote }}
+  S3_ENDPOINT: {{ printf "http://%s:9000" $name | b64enc | quote }}
+  S3_REGION: {{ "us-east-1" | b64enc | quote }}
+  S3_BUCKET: {{ $bucket | b64enc | quote }}
+  S3_ACCESS_KEY_ID: {{ $accessKey | b64enc | quote }}
+  S3_SECRET_ACCESS_KEY: {{ $secretKey | b64enc | quote }}
   # Aliases for apps that read AWS_*-prefixed names directly.
-  AWS_ACCESS_KEY_ID: {{ $accessKey | quote }}
-  AWS_SECRET_ACCESS_KEY: {{ $secretKey | quote }}
-  AWS_DEFAULT_REGION: "us-east-1"
-  AWS_REGION: "us-east-1"
+  AWS_ACCESS_KEY_ID: {{ $accessKey | b64enc | quote }}
+  AWS_SECRET_ACCESS_KEY: {{ $secretKey | b64enc | quote }}
+  AWS_DEFAULT_REGION: {{ "us-east-1" | b64enc | quote }}
+  AWS_REGION: {{ "us-east-1" | b64enc | quote }}
 ---
 {{/*
   One-shot init Job: creates the bucket on first boot. Idempotent

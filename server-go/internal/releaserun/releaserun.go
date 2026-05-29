@@ -52,6 +52,70 @@ type Result struct {
 	Message  string
 }
 
+// waitForAddonsScript is the wait-for-addons initContainer body. It
+// derives host:port from whichever of DATABASE_URL / REDIS_URL / NATS_URL
+// are present in the release env and TCP-waits (busybox `nc -z`) until each
+// accepts a connection, up to ~120s. This rides out the window where a
+// freshly-provisioned addon is still bootstrapping, or where an addon
+// reconcile briefly re-applies its Service. A var that is unset or has no
+// derivable host:port is skipped (not every app uses every datastore).
+// Exits non-zero only if a present addon never comes up within the budget —
+// that's a real failure worth surfacing, distinct from a transient blip.
+const waitForAddonsScript = `set -u
+# host_port_from_url <url> -> prints "host port" parsed from a
+# scheme://[user[:pass]]@host[:port]/... connection string, or nothing.
+host_port_from_url() {
+  u=$1
+  # NATS HA seeds are comma-separated (nats://a@h1,nats://a@h2); keep
+  # only the first seed so the rest of the parse sees one authority.
+  first=$(printf '%s' "$u" | sed -e 's#,.*$##')
+  # drop the scheme.
+  rest=$(printf '%s' "$first" | sed -e 's#^[a-zA-Z][a-zA-Z0-9+.-]*://##')
+  # authority is everything before the first / or ? (the path/query).
+  authority=$(printf '%s' "$rest" | sed -e 's#[/?].*$##')
+  # strip userinfo up to the LAST @ (passwords can contain @, e.g.
+  # postgres://user:p@ss@host:5432) so we keep only host[:port].
+  case "$authority" in
+    *@*) hostport=$(printf '%s' "$authority" | sed -e 's#^.*@##') ;;
+    *)   hostport=$authority ;;
+  esac
+  host=$(printf '%s' "$hostport" | sed -e 's#:.*$##')
+  port=$(printf '%s' "$hostport" | sed -n 's#^[^:]*:\([0-9][0-9]*\).*$#\1#p')
+  [ -z "$host" ] && return 0
+  printf '%s %s' "$host" "$port"
+}
+
+wait_one() {
+  name=$1; host=$2; port=$3
+  [ -z "$host" ] && return 0
+  [ -z "$port" ] && port=$4
+  echo "wait-for-addons: waiting for $name at $host:$port"
+  i=0
+  while [ "$i" -lt 60 ]; do
+    if nc -z -w 2 "$host" "$port" 2>/dev/null; then
+      echo "wait-for-addons: $name reachable at $host:$port"
+      return 0
+    fi
+    i=$((i+1))
+    sleep 2
+  done
+  echo "wait-for-addons: $name at $host:$port not reachable after 120s" >&2
+  return 1
+}
+
+rc=0
+if [ -n "${DATABASE_URL:-}" ]; then
+  set -- $(host_port_from_url "$DATABASE_URL"); wait_one postgres "${1:-}" "${2:-}" 5432 || rc=1
+fi
+if [ -n "${REDIS_URL:-}" ]; then
+  set -- $(host_port_from_url "$REDIS_URL"); wait_one redis "${1:-}" "${2:-}" 6379 || rc=1
+fi
+if [ -n "${NATS_URL:-}" ]; then
+  set -- $(host_port_from_url "$NATS_URL"); wait_one nats "${1:-}" "${2:-}" 4222 || rc=1
+fi
+exit $rc
+`
+
 // Runner runs release Jobs. Created once per server boot; reused
 // across calls. The Kube client + project namespace resolver are
 // shared with the rest of the server.
@@ -206,6 +270,44 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
 					AutomountServiceAccountToken: ptrBool(false),
+					// wait-for-addons: a freshly-provisioned project addon
+					// (postgres/redis/nats) may still be bootstrapping when
+					// the build finishes and this release Job fires — and an
+					// addon reconcile can briefly re-apply its Service (kube
+					// reprograms iptables) so the ClusterIP momentarily
+					// refuses connections. With backoffLimit=0 (we never
+					// retry a genuinely-failed migration) a transient
+					// not-ready DB would permanently fail the deploy. This
+					// initContainer TCP-waits on the addon endpoints derived
+					// from the release env (DATABASE_URL / REDIS_URL /
+					// NATS_URL) so the migration only runs once the data
+					// stores actually accept connections. Bounded by the
+					// Job's activeDeadlineSeconds, so it can't hang forever.
+					InitContainers: []corev1.Container{
+						{
+							Name:    "wait-for-addons",
+							Image:   "busybox:1.36",
+							Env:     envVars,
+							EnvFrom: envFrom,
+							Command: []string{"sh", "-c", waitForAddonsScript},
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: ptrBool(false),
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+								},
+							},
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("10m"),
+									corev1.ResourceMemory: resource.MustParse("16Mi"),
+								},
+								Limits: corev1.ResourceList{
+									corev1.ResourceCPU:    resource.MustParse("100m"),
+									corev1.ResourceMemory: resource.MustParse("64Mi"),
+								},
+							},
+						},
+					},
 					Containers: []corev1.Container{
 						{
 							Name:    "release",

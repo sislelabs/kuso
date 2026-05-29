@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/releaserun"
 )
 
 func fakeService(t *testing.T, seeds ...seed) *Service {
@@ -918,5 +919,174 @@ func TestCursor_RoundRobin(t *testing.T) {
 	p.setCursor("kuso", "deleted-project")
 	if got := p.nextCursorIndex("kuso", projects); got != 0 {
 		t.Errorf("missing cursor target: got %d want 0", got)
+	}
+}
+
+// ---- release-gate / fromService promotion (Bug A) ------------------------
+
+// fakeReleaseRunner is a ReleaseRunner stub that returns a fixed outcome.
+type fakeReleaseRunner struct {
+	outcome releaserun.Outcome
+	calls   int
+}
+
+func (f *fakeReleaseRunner) Run(_ context.Context, _ string, _ *kube.KusoEnvironment, _ *kube.KusoImage) (releaserun.Result, error) {
+	f.calls++
+	return releaserun.Result{Outcome: f.outcome, JobName: "rel-job"}, nil
+}
+
+// seedEnvWithRelease seeds a production env that carries a release command,
+// so the build poller runs the release gate before promoting.
+func seedEnvWithRelease(project, service string, cmd []string) seed {
+	e := &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      project + "-" + service + "-production",
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": project,
+				"kuso.sislelabs.com/service": service,
+				"kuso.sislelabs.com/env":     "production",
+			},
+		},
+		Spec: kube.KusoEnvironmentSpec{
+			Project: project,
+			Service: project + "-" + service,
+			Kind:    "production",
+			Release: &kube.KusoReleaseSpec{Command: cmd},
+		},
+	}
+	return typedSeed(kube.GVREnvironments, "KusoEnvironment", e)
+}
+
+// seedWorkerService seeds a runtime=worker KusoService that reuses a
+// sibling's image via FromService.
+func seedWorkerService(project, service, fromService string) seed {
+	s := &kube.KusoService{
+		ObjectMeta: metav1.ObjectMeta{Name: project + "-" + service, Namespace: "kuso"},
+		Spec: kube.KusoServiceSpec{
+			Project:     project,
+			Runtime:     "worker",
+			FromService: fromService,
+		},
+	}
+	return typedSeed(kube.GVRServices, "KusoService", s)
+}
+
+// TestPoller_ReleaseFailedDoesNotPromoteFromServiceConsumers is the
+// regression test for Bug A: when the source service's release hook fails,
+// the build is release-failed and its (un-migrated) image must NOT be
+// propagated to fromService consumers (runtime=worker siblings). Before the
+// fix, the worker env got the image even though the api env correctly
+// refused it — leaving the worker running against a schema the migration
+// never created.
+func TestPoller_ReleaseFailedDoesNotPromoteFromServiceConsumers(t *testing.T) {
+	t.Parallel()
+	build := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-api-abc", Namespace: "kuso"},
+		Spec: kube.KusoBuildSpec{
+			Project: "alpha",
+			Service: "alpha-api",
+			Ref:     "abc",
+			Image:   &kube.KusoImage{Repository: "registry/alpha/api", Tag: "abc"},
+		},
+	}
+	s := fakeService(t,
+		seedBuild(build),
+		seedService("alpha", "api"),
+		seedEnvWithRelease("alpha", "api", []string{"sh", "-c", "migrate up"}),
+		seedWorkerService("alpha", "worker", "api"),
+		seedProductionEnv("alpha", "worker"),
+	)
+	// Seed the completed kaniko Job so the build is "succeeded" before the
+	// release gate runs.
+	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Create(context.Background(), &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-api-abc", Namespace: "kuso"},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: "True"}},
+		},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	rr := &fakeReleaseRunner{outcome: releaserun.OutcomeFailed}
+	p := &Poller{Svc: s, Interval: time.Hour, ReleaseRunner: rr}
+	if err := p.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	if rr.calls == 0 {
+		t.Fatal("expected the release runner to be invoked")
+	}
+
+	// The api (source) env must NOT have been promoted.
+	apiEnv, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-api-production")
+	if err != nil {
+		t.Fatalf("get api env: %v", err)
+	}
+	if apiEnv.Spec.Image != nil {
+		t.Errorf("api env should NOT be promoted on release failure, got image %+v", apiEnv.Spec.Image)
+	}
+
+	// The worker (fromService consumer) must NOT have been promoted either.
+	workerEnv, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-worker-production")
+	if err != nil {
+		t.Fatalf("get worker env: %v", err)
+	}
+	if workerEnv.Spec.Image != nil {
+		t.Errorf("worker env must NOT receive the image when the source release hook failed, got %+v", workerEnv.Spec.Image)
+	}
+
+	// And the build must be marked release-failed.
+	gotBuild, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-api-abc")
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	if gotBuild.Annotations[annPhase] != "release-failed" {
+		t.Errorf("build phase = %q, want release-failed", gotBuild.Annotations[annPhase])
+	}
+}
+
+// TestPoller_ReleaseSucceededPromotesFromServiceConsumers is the positive
+// control: a passing release hook DOES propagate the image to the worker.
+func TestPoller_ReleaseSucceededPromotesFromServiceConsumers(t *testing.T) {
+	t.Parallel()
+	build := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-api-def", Namespace: "kuso"},
+		Spec: kube.KusoBuildSpec{
+			Project: "alpha",
+			Service: "alpha-api",
+			Ref:     "def",
+			Image:   &kube.KusoImage{Repository: "registry/alpha/api", Tag: "def"},
+		},
+	}
+	s := fakeService(t,
+		seedBuild(build),
+		seedService("alpha", "api"),
+		seedEnvWithRelease("alpha", "api", []string{"sh", "-c", "migrate up"}),
+		seedWorkerService("alpha", "worker", "api"),
+		seedProductionEnv("alpha", "worker"),
+	)
+	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Create(context.Background(), &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-api-def", Namespace: "kuso"},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: "True"}},
+		},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	rr := &fakeReleaseRunner{outcome: releaserun.OutcomeSucceeded}
+	p := &Poller{Svc: s, Interval: time.Hour, ReleaseRunner: rr}
+	if err := p.tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+
+	apiEnv, _ := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-api-production")
+	if apiEnv.Spec.Image == nil || apiEnv.Spec.Image.Tag != "def" {
+		t.Errorf("api env should be promoted on release success, got %+v", apiEnv.Spec.Image)
+	}
+	workerEnv, _ := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-worker-production")
+	if workerEnv.Spec.Image == nil || workerEnv.Spec.Image.Tag != "def" {
+		t.Errorf("worker env should inherit the image on release success, got %+v", workerEnv.Spec.Image)
 	}
 }

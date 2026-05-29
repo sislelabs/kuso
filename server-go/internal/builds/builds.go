@@ -2045,6 +2045,14 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	}
 	bTrigger := buildTriggerTimestamp(b)
 	matched := 0
+	// releaseBlocked records whether a release hook (migration) failed or
+	// errored for ANY of this build's source envs. When it did, the build's
+	// image is unverified (migrations didn't apply), so we must NOT promote
+	// it — neither to the source env (handled per-env via `continue` below)
+	// NOR to fromService consumers (runtime=worker siblings). Without this
+	// flag the second promote loop would push the un-migrated image to the
+	// worker even though the api env correctly refused it.
+	releaseBlocked := false
 	for i := range raw.Items {
 		var e kube.KusoEnvironment
 		if err := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &e); err != nil {
@@ -2079,12 +2087,15 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 			if rerr != nil {
 				// Infra error talking to kube — log + skip this env
 				// rather than promoting silently. The next poller
-				// tick will retry.
+				// tick will retry. The image is unverified, so block
+				// fromService propagation too.
+				releaseBlocked = true
 				p.logger().Error("release hook run failed (infra error)",
 					"env", e.Name, "build", b.Name, "err", rerr)
 				continue
 			}
 			if res.Outcome != releaserun.OutcomeSucceeded {
+				releaseBlocked = true
 				p.logger().Warn("release hook failed — skipping image promote",
 					"env", e.Name, "build", b.Name, "outcome", res.Outcome, "job", res.JobName, "msg", res.Message)
 				p.markReleaseFailed(ctx, ns, b, &e, res)
@@ -2122,6 +2133,17 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	// e.Spec.Service so it can't reach the workers; this second loop
 	// walks the same namespace and patches every env whose owning
 	// service has FromService == shortService.
+	//
+	// BUT: only propagate when the source build's release hook(s) passed.
+	// A release-failed build's image has un-applied migrations; pushing it
+	// to a worker (which has no release hook of its own to gate on) would
+	// run the worker against a schema the migration never created. The
+	// worker stays on its previous image until a build's release succeeds.
+	if releaseBlocked {
+		p.logger().Warn("release hook blocked promotion — not propagating image to fromService consumers",
+			"service", b.Spec.Service, "build", b.Name)
+		return nil
+	}
 	if err := p.promoteToFromServiceConsumers(ctx, ns, b, shortService, bTrigger); err != nil {
 		// Workers being stale is a real bug but not worth failing the
 		// whole promotion over — the api/web env did get patched and
