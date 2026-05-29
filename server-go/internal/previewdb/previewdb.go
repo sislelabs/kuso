@@ -99,14 +99,20 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 		if s.Spec.Kind != "postgres" {
 			continue
 		}
-		// Skip addons that are themselves preview clones. The
-		// preview-pr label is the canonical marker (stamped by
-		// ExtraLabels below on every clone we make); we also accept
-		// the legacy *-pr-<N> name suffix for clones created before
-		// the label was added. Without this filter, EnsurePRAddons
-		// would clone its own clones each sync —
-		// "tickero-pg-pr-35-pr-35-pr-35" accumulating per resync.
-		if s.Labels["kuso.sislelabs.com/preview-pr"] != "" {
+		// Skip env-scoped addons. The kuso.sislelabs.com/env label
+		// marks an addon as belonging to one specific env (preview,
+		// staging, etc.) rather than being part of the project's
+		// source addon set — we use the same label everywhere else
+		// in kuso for env scoping, so reading it here keeps the
+		// invariant single-source. Without this filter EnsurePRAddons
+		// would clone its own clones each sync, producing
+		// "tickero-pg-pr-35-pr-35-pr-35" growth per resync.
+		//
+		// The name-suffix fallback (isPreviewCloneName) catches
+		// pre-v0.17.7 clones that were stamped with the bespoke
+		// "preview-pr" label instead of the canonical env label;
+		// the env-label code-path takes precedence on new clones.
+		if s.Labels[kube.LabelEnv] != "" {
 			continue
 		}
 		shortName := addons.ShortName(project, s.Name)
@@ -148,9 +154,17 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 				StorageSize: s.Spec.StorageSize,
 				Database:    s.Spec.Database,
 				ExtraLabels: map[string]string{
-					// Stamp the PR ref so the env-delete sweep can find
-					// every clone owned by the closing preview without
-					// guessing names.
+					// Use the canonical env-scope label that the rest of
+					// kuso reads (envs, per-env Secrets, the addon-list
+					// filter above). Setting it here means EnsurePRAddons
+					// won't try to re-clone its own output on the next
+					// sync, AND the env-delete sweep can find every
+					// clone via a single label-selector List query.
+					kube.LabelEnv:                       fmt.Sprintf("preview-pr-%d", prNumber),
+					// Source-tracking label is preview-specific (the
+					// canonical env label can't carry both env + source
+					// in one field); keeps the preview-delete sweep
+					// independent of name parsing.
 					"kuso.sislelabs.com/preview-pr":     fmt.Sprintf("%d", prNumber),
 					"kuso.sislelabs.com/preview-source": shortSrc,
 				},
