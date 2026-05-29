@@ -78,8 +78,12 @@ rules:
     resources: [events]
     verbs: [get, list, watch]
   - apiGroups: [""]
+    # delete: required by `kuso project delete --purge-data`, which wipes
+    # each addon's data PVC for a clean-slate recreate. Without it the
+    # purge path 403s ("cannot delete persistentvolumeclaims") and the
+    # whole project-delete fails after the CRs are already gone.
     resources: [persistentvolumeclaims]
-    verbs: [get, list, watch, create]
+    verbs: [get, list, watch, create, delete]
   - apiGroups: [""]
     resources: [nodes]
     verbs: [get, list, watch, patch, delete]
