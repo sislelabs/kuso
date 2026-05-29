@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.21] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(projects): use list+delete for project-scoped secret cleanup (no deletecollection RBAC) ([cc0f1b5](https://github.com/sislelabs/kuso/commit/cc0f1b5af305984feae20c58e97881b6be835b29))
+
 ## [0.17.20] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -299,16 +304,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(canvas): add cron / run command entries to service right-click menu ([e9a0c7e](https://github.com/sislelabs/kuso/commit/e9a0c7e34edc3b5d08fb94475178a90223e98676))
-
-## [0.14.0] — 2026-05-23
-
-### ✨ Features
-- Feat(env): unit C — ref-picker type-ahead + first-deploy coachmark ([38130ea](https://github.com/sislelabs/kuso/commit/38130ea25d7249568c14e77ea2cd196651859515))
-- Feat(overlay): unit B — data-driven Crons/Runs tab visibility ([ab77080](https://github.com/sislelabs/kuso/commit/ab77080fae32806d5ba957c32e1e4f88a6840961))
-- Feat(failures): unit A — server-side failure classifier + bell deep-links ([edebde1](https://github.com/sislelabs/kuso/commit/edebde193ae568f38691960fb8b6bbda6d129973))
-
-### 📝 Docs
-- Docs: spec for UX deep-dive top-5 fix bundle ([a859fdc](https://github.com/sislelabs/kuso/commit/a859fdceea1bf2924368df1730787f6582d6d601))
 
 
 ---
