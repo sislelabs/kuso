@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.10] — 2026-05-29
+
+### ✨ Features
+- Feat(cli): kuso service set --path / --branch ([4e2de50](https://github.com/sislelabs/kuso/commit/4e2de504cc06db5052b8049343b1236a467c3d04))
+
 ## [0.17.9] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -393,11 +398,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(chart): always emit POOLER_* conn keys, empty when disabled ([659e4d1](https://github.com/sislelabs/kuso/commit/659e4d1e1c179ab18cc87c4674ebaaa4c52a3c13))
-
-## [0.13.8] — 2026-05-20
-
-### 🐛 Bug Fixes
-- Fix(chart): pooler must use scram-sha-256, not md5 ([d31f1c6](https://github.com/sislelabs/kuso/commit/d31f1c69bd56779264472e9fa604b8c7c32ce434))
 
 
 ---
