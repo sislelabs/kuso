@@ -186,7 +186,13 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				}
 				env.Spec.Port = port
 			}
-			if changed.Scale {
+			if changed.Scale && env.Spec.Kind != "preview" {
+				// Preview envs are pinned to a single replica with no HPA
+				// (see ensurePreviewEnv). A production scale change (e.g.
+				// min 2 / max 5) must NOT bleed its HPA into live preview
+				// envs — this loop lists envs by {project,service} with no
+				// kind filter, so without this guard every open PR preview
+				// would silently scale to production's minReplicas.
 				auto := autoscalingFromScale(svc.Spec.Scale)
 				env.Spec.SetReplicaCount(effectiveScaleMin(svc))
 				env.Spec.Autoscaling = auto

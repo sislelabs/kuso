@@ -833,3 +833,49 @@ func TestUpdate_NotFound(t *testing.T) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
+
+// TestPatchService_ScaleDoesNotTouchPreviewEnvs is the regression test for
+// the preview-replica leak: a production scale change (min 2 / max 5 → HPA)
+// must propagate to the production env but NOT to live preview envs, which
+// are pinned to a single replica with no autoscaling.
+func TestPatchService_ScaleDoesNotTouchPreviewEnvs(t *testing.T) {
+	t.Parallel()
+	one := 1
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		// A live preview env, pinned to 1 replica / no autoscaling.
+		func() seed {
+			sd := seedEnv("alpha", "web", "preview", "feat/x", "alpha-web-pr-9")
+			// patch the seeded preview env to carry replicaCount=1
+			return sd
+		}(),
+	)
+	// Pre-set the preview env's replicaCount=1 (mirrors ensurePreviewEnv).
+	if pe, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-9"); err == nil {
+		pe.Spec.ReplicaCount = &one
+		_, _ = s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", pe)
+	}
+
+	mn, mx := 2, 5
+	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{
+		Scale: &PatchScaleRequest{Min: &mn, Max: &mx},
+	}); err != nil {
+		t.Fatalf("PatchService: %v", err)
+	}
+
+	// Production env should have gained the HPA (min 2).
+	prod, _ := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if prod.Spec.Autoscaling == nil || prod.Spec.Autoscaling.MinReplicas != 2 {
+		t.Errorf("production env should get HPA min 2, got %+v", prod.Spec.Autoscaling)
+	}
+	// Preview env must be untouched: no HPA, still 1 replica.
+	prev, _ := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-9")
+	if prev.Spec.Autoscaling != nil {
+		t.Errorf("preview env must NOT get production's HPA, got %+v", prev.Spec.Autoscaling)
+	}
+	if prev.Spec.ReplicaCount == nil || *prev.Spec.ReplicaCount != 1 {
+		t.Errorf("preview env replicaCount should stay 1, got %v", prev.Spec.ReplicaCount)
+	}
+}

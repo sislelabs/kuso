@@ -15,6 +15,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/builds"
 	"kuso/server/internal/db"
@@ -676,9 +677,15 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 				Number:  pr.Number,
 				HeadRef: pr.PullRequest.Head.Ref,
 			},
-			TTL:              &kube.KusoTTL{ExpiresAt: expiresAt},
-			Port:             port,
+			TTL:  &kube.KusoTTL{ExpiresAt: expiresAt},
+			Port: port,
+			// Previews are always a single replica with NO autoscaling —
+			// they're throwaway review envs, not production. Pin both
+			// explicitly so a baseEnv clone or a future scale propagation
+			// can't give a preview production's HPA (min 2+). The
+			// propagate.go scale block also skips Kind=="preview".
 			ReplicaCount:     func() *int { v := 1; return &v }(),
+			Autoscaling:      nil,
 			Host:             fmt.Sprintf("%s-pr-%d.%s", short, pr.Number, baseDomain),
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
@@ -744,6 +751,13 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			}
 		}
 	}
+	// Self-heal the close→reopen case: the env CR was recreated empty, but
+	// the SHA-keyed build is terminal (done=true) so the poller never
+	// re-promotes its image to the new env → InvalidImageName. If a
+	// succeeded build for this service+SHA already exists, stamp its image
+	// straight onto the freshly-created env. No-op on a genuine first open
+	// (no prior build) — the trigger above builds + promotes normally.
+	d.stampExistingBuildImage(ctx, ns, proj.Name, short, parentSvc, pr.PullRequest.Head.SHA, envName)
 	// User-defined seed command (v0.17.0 Phase 2). Runs as a one-shot
 	// kube Job in a clone of the build image so it has access to the
 	// app's package scripts / vendored deps. Uses the same envFromSecrets
@@ -846,8 +860,10 @@ func repoMatches(configuredURL, fullName string) bool {
 
 // extractMergedPR digs the PR number out of a merge commit message.
 // GitHub uses two formats:
-//   "Merge pull request #42 from owner/branch\n\n…"     (merge commit)
-//   "Title of the PR (#42)\n\n…"                         (squash)
+//
+//	"Merge pull request #42 from owner/branch\n\n…"     (merge commit)
+//	"Title of the PR (#42)\n\n…"                         (squash)
+//
 // Returns 0 when no PR number is found (e.g. a direct push to main).
 // firstLine returns just the first newline-delimited line of a commit
 // message. The deployments tab UI surfaces this in a single row so a
@@ -885,6 +901,42 @@ var (
 	mergeCommitRE  = regexp.MustCompile(`^Merge pull request #(\d+)\b`)
 	squashCommitRE = regexp.MustCompile(`\(#(\d+)\)\s*$`)
 )
+
+// stampExistingBuildImage patches spec.image onto a (possibly recreated)
+// preview env when a SUCCEEDED build already exists for this service+SHA.
+// Covers PR close→reopen: the env CR is recreated with an empty image, but
+// the SHA-keyed build is terminal (done=true) and the poller never
+// re-promotes a finished build to an env that appeared after it completed.
+// For a runtime=worker service (FromService set) the worker has no build of
+// its own — stamp the parent (api) service's build image, mirroring what
+// promoteToFromServiceConsumers would have done.
+func (d *Dispatcher) stampExistingBuildImage(ctx context.Context, ns, project, short string, parentSvc *kube.KusoService, sha, envName string) {
+	buildService := short
+	if parentSvc != nil && parentSvc.Spec.FromService != "" {
+		buildService = parentSvc.Spec.FromService // worker reuses the source service's image
+	}
+	buildName := fmt.Sprintf("%s-%s-%s", project, buildService, builds.ImageTag(sha))
+	b, err := d.Kube.GetKusoBuild(ctx, ns, buildName)
+	if err != nil || b == nil || b.Spec.Image == nil || b.Spec.DryRun {
+		return // no prior real build → the trigger builds + promotes normally
+	}
+	if b.Annotations["kuso.sislelabs.com/build-phase"] != "succeeded" {
+		return // build exists but didn't produce a promotable image
+	}
+	patch := fmt.Sprintf(
+		`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}}}`,
+		b.Spec.Image.Repository, b.Spec.Image.Tag,
+	)
+	if _, err := d.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+		Patch(ctx, envName, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		if !apierrors.IsNotFound(err) {
+			d.Logger.Warn("preview image stamp from existing build", "env", envName, "build", buildName, "err", err)
+		}
+		return
+	}
+	d.Logger.Info("preview env image stamped from existing succeeded build",
+		"env", envName, "build", buildName, "tag", b.Spec.Image.Tag)
+}
 
 // previewSubscribedAddons returns the parent service's SubscribedAddons
 // (nil = legacy mount-all). Read from the service CR so the preview env
@@ -959,7 +1011,6 @@ func swapPGCloneSecrets(source []string, cloneSecrets []string, prNumber int) []
 	}
 	return out
 }
-
 
 // mergePreviewEnvVars overlays per-service preview overrides on top of
 // the baseEnv-inherited envVars list. By name: an entry in overrides

@@ -311,6 +311,129 @@ func TestDispatch_PROpened_RespectsSubscribedAddons(t *testing.T) {
 	}
 }
 
+// seedSucceededBuild seeds a terminal (done) succeeded KusoBuild with an
+// image, as left behind after a first PR open.
+func seedSucceededBuild(project, service, sha, repo, tag string) seed {
+	b := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      project + "-" + service + "-" + sha[:12],
+			Namespace: "kuso",
+			Annotations: map[string]string{
+				"kuso.sislelabs.com/build-phase": "succeeded",
+			},
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": project,
+				"kuso.sislelabs.com/service": service,
+			},
+		},
+		Spec: kube.KusoBuildSpec{
+			Project: project, Service: project + "-" + service, Ref: sha,
+			Done:  true,
+			Image: &kube.KusoImage{Repository: repo, Tag: tag},
+		},
+	}
+	return typedSeed(kube.GVRBuilds, "KusoBuild", b)
+}
+
+// TestDispatch_PRReopened_StampsExistingBuildImage is the regression test
+// for the close→reopen promote-gap: a recreated preview env whose SHA-keyed
+// build already succeeded must get the existing image stamped (no
+// InvalidImageName, no manual build deletion).
+func TestDispatch_PRReopened_StampsExistingBuildImage(t *testing.T) {
+	t.Parallel()
+	const sha = "abcdef0123456789abcdef0123456789abcdef01"
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		seedSvc("alpha", "web"),
+		seedSucceededBuild("alpha", "web", sha, "registry/alpha/web", sha[:12]),
+	)
+	body := []byte(`{
+		"action": "reopened",
+		"number": 42,
+		"pull_request": {"head": {"ref": "feat/x", "sha": "` + sha + `"}, "state": "open"},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	env, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-42")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if env.Spec.Image == nil || env.Spec.Image.Tag != sha[:12] {
+		t.Errorf("preview env image not stamped from existing build: %+v", env.Spec.Image)
+	}
+}
+
+// TestDispatch_PROpened_NoExistingBuild_LeavesImageEmpty is the negative
+// control: a genuine first open (no prior build) must NOT stamp anything —
+// the normal build trigger handles it.
+func TestDispatch_PROpened_NoExistingBuild_LeavesImageEmpty(t *testing.T) {
+	t.Parallel()
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		seedSvc("alpha", "web"),
+	)
+	body := []byte(`{
+		"action": "opened",
+		"number": 43,
+		"pull_request": {"head": {"ref": "feat/y", "sha": "1111111111111111111111111111111111111111"}, "state": "open"},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	env, _ := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-43")
+	if env.Spec.Image != nil {
+		t.Errorf("first-open preview env should have empty image (trigger builds it), got %+v", env.Spec.Image)
+	}
+}
+
+// TestDispatch_PROpened_PreviewIsSingleReplica is the regression test for
+// the replica fix: a preview env is always 1 replica with NO autoscaling,
+// even when the base/production service carries an HPA-producing scale.
+func TestDispatch_PROpened_PreviewIsSingleReplica(t *testing.T) {
+	t.Parallel()
+	// Service with a scale that would produce an HPA (min 2, max 5).
+	min2 := 2
+	svc := &kube.KusoService{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alpha-web",
+			Namespace: "kuso",
+			Labels:    map[string]string{"kuso.sislelabs.com/project": "alpha", "kuso.sislelabs.com/service": "web"},
+		},
+		Spec: kube.KusoServiceSpec{
+			Project: "alpha",
+			Repo:    &kube.KusoRepoRef{URL: "https://github.com/example/web", Path: "."},
+			Port:    3000,
+			Scale:   &kube.KusoScaleSpec{Min: &min2, Max: 5},
+		},
+	}
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		typedSeed(kube.GVRServices, "KusoService", svc),
+	)
+	body := []byte(`{
+		"action": "opened",
+		"number": 44,
+		"pull_request": {"head": {"ref": "feat/z", "sha": "2222222222222222222222222222222222222222"}, "state": "open"},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	env, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-44")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if env.Spec.ReplicaCount == nil || *env.Spec.ReplicaCount != 1 {
+		t.Errorf("preview replicaCount should be 1, got %v", env.Spec.ReplicaCount)
+	}
+	if env.Spec.Autoscaling != nil {
+		t.Errorf("preview must have NO autoscaling, got %+v", env.Spec.Autoscaling)
+	}
+}
+
 func TestDispatch_PRClosed_DeletesPreviewEnv(t *testing.T) {
 	t.Parallel()
 	d := newDispatcher(t,
