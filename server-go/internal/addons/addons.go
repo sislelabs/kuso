@@ -276,6 +276,18 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	if err != nil {
 		return nil, err
 	}
+	// Env-scoped addons (preview-DB clones, which carry a preview-pr env
+	// label) must NOT be fanned out project-wide. refreshEnvSecrets walks
+	// every env in the project, and the clone's conn secret isn't in the
+	// subscription allow-set the filter knows about, so it gets passed
+	// through onto EVERY env — leaking e.g. db-pr-35-conn into production
+	// frontend and into services that don't subscribe to the db addon.
+	// The clone is env-scoped: the PR-N preview envs wire its conn
+	// themselves (the dispatcher's swapPGCloneSecrets), so leave placement
+	// to that path and skip the project-wide refresh here.
+	if created.Labels[kube.LabelEnv] != "" {
+		return created, nil
+	}
 	// Pass the just-created addon's conn secret explicitly: the addon
 	// List() inside refreshEnvSecrets is served from the watch cache
 	// and frequently does not see this brand-new addon yet. The

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"strconv"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -224,6 +225,89 @@ func TestDispatch_PROpened_PreviewsBaseDomain(t *testing.T) {
 	}
 	if envCR.Spec.Host != "web-pr-42.tickero.bg" {
 		t.Errorf("preview host should use previews.baseDomain, got %q (want web-pr-42.tickero.bg)", envCR.Spec.Host)
+	}
+}
+
+// seedSvcWithSubscription seeds a service with an explicit subscribedAddons
+// list (non-nil = only those addons' conns mount).
+func seedSvcWithSubscription(project, service string, subscribedAddons []string) seed {
+	s := &kube.KusoService{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      project + "-" + service,
+			Namespace: "kuso",
+			Labels:    map[string]string{"kuso.sislelabs.com/project": project, "kuso.sislelabs.com/service": service},
+		},
+		Spec: kube.KusoServiceSpec{
+			Project:          project,
+			Repo:             &kube.KusoRepoRef{URL: "https://github.com/example/" + service, Path: "."},
+			Port:             3000,
+			SubscribedAddons: subscribedAddons,
+		},
+	}
+	return typedSeed(kube.GVRServices, "KusoService", s)
+}
+
+func connsOnly(envFrom []string) []string {
+	var out []string
+	for _, s := range envFrom {
+		if strings.HasSuffix(s, "-conn") {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// TestDispatch_PROpened_RespectsSubscribedAddons is the regression test for
+// the preview-env over-mount bug: a preview env must mount only the addon
+// conn secrets the parent service subscribes to — NOT every project addon.
+// frontend (subscribes to nothing) must get zero addon conns; backoffice
+// (storage only) gets storage; api (all) gets all.
+func TestDispatch_PROpened_RespectsSubscribedAddons(t *testing.T) {
+	t.Parallel()
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		seedSvcWithSubscription("alpha", "frontend", []string{}),          // none
+		seedSvcWithSubscription("alpha", "backoffice", []string{"storage"}), // storage only
+		seedSvcWithSubscription("alpha", "api", []string{"cache", "db", "queue", "storage"}),
+	)
+	// Stub the project's addon-conn list (4 addons).
+	d.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) {
+		return []string{"alpha-cache-conn", "alpha-db-conn", "alpha-queue-conn", "alpha-storage-conn"}, nil
+	}
+	body := []byte(`{
+		"action": "opened",
+		"number": 7,
+		"pull_request": {"head": {"ref": "feat/x", "sha": "abcdef0123456789abcdef0123456789abcdef01"}, "state": "open"},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+
+	cases := map[string][]string{
+		"frontend":   {},                  // no addon conns
+		"backoffice": {"alpha-storage-conn"},
+		"api":        {"alpha-cache-conn", "alpha-db-conn", "alpha-queue-conn", "alpha-storage-conn"},
+	}
+	for svc, want := range cases {
+		env, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-"+svc+"-pr-7")
+		if err != nil {
+			t.Fatalf("get %s preview env: %v", svc, err)
+		}
+		got := connsOnly(env.Spec.EnvFromSecrets)
+		gotSet := map[string]bool{}
+		for _, g := range got {
+			gotSet[g] = true
+		}
+		if len(got) != len(want) {
+			t.Errorf("%s-pr-7 addon conns = %v, want %v", svc, got, want)
+			continue
+		}
+		for _, w := range want {
+			if !gotSet[w] {
+				t.Errorf("%s-pr-7 missing expected conn %q (got %v)", svc, w, got)
+			}
+		}
 	}
 }
 

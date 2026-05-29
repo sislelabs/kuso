@@ -499,3 +499,36 @@ func TestAdd_WiresConnSecretViaExplicitHandoff(t *testing.T) {
 		}
 	}
 }
+
+// TestAdd_EnvScopedClone_DoesNotLeakIntoProjectEnvs is the regression test
+// for the preview-DB-clone leak: an addon created with an env label (a
+// preview-pr-N clone) must NOT be fanned out project-wide. The clone conn
+// would otherwise land on every env — including production frontend and
+// services that don't subscribe to it.
+func TestAdd_EnvScopedClone_DoesNotLeakIntoProjectEnvs(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProj("alpha"),
+		seedEnv("alpha", "web", "production", "alpha-web-production"),
+		seedEnv("alpha", "api", "production", "alpha-api-production"),
+	)
+	// Create a preview-DB clone (env-scoped via the preview-pr env label).
+	if _, err := s.Add(context.Background(), "alpha", CreateAddonRequest{
+		Name: "db-pr-35", Kind: "postgres",
+		ExtraLabels: map[string]string{kube.LabelEnv: "preview-pr-35"},
+	}); err != nil {
+		t.Fatalf("Add clone: %v", err)
+	}
+	// Neither production env should have gained the clone's conn secret.
+	for _, envName := range []string{"alpha-web-production", "alpha-api-production"} {
+		envCR, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", envName)
+		if err != nil {
+			t.Fatalf("get env %s: %v", envName, err)
+		}
+		for _, g := range envCR.Spec.EnvFromSecrets {
+			if g == "alpha-db-pr-35-conn" {
+				t.Errorf("env %s leaked the env-scoped clone conn alpha-db-pr-35-conn: %+v", envName, envCR.Spec.EnvFromSecrets)
+			}
+		}
+	}
+}

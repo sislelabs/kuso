@@ -519,13 +519,28 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			envFromSecrets = secs
 		}
 	}
+	// Snapshot the canonical (pre-clone-swap) project addon-conn list so
+	// the subscription filter below sees "<project>-<addon>-conn" names.
+	projectAddonConns := append([]string(nil), envFromSecrets...)
+	// Filter the addon-conn list by the PARENT service's subscribedAddons
+	// BEFORE cloning + the swap, exactly like the production env path
+	// (services_ops/propagate apply filterEnvFromForSubscription). Without
+	// this, preview envs blanket-mount every addon's conn regardless of
+	// subscription — leaking db/redis/nats creds into a public frontend
+	// preview pod (frontend subscribes to none; backoffice to storage
+	// only). nil subscription = legacy mount-all (unchanged).
+	if subs := previewSubscribedAddons(ctx, d, ns, serviceFQN); subs != nil {
+		envFromSecrets = filterConnsBySubscription(envFromSecrets, subs, projectAddonConns, proj.Name)
+	}
 	// Per-PR clones of every postgres addon. The clone's conn
 	// secrets REPLACE the source's so the preview pod talks to the
 	// fresh DB instead of production. Best-effort: a clone failure
 	// falls back to the source secret (preview pod still boots, just
 	// against shared data — same as the v0.7.0 behaviour). Non-
 	// postgres addons (Redis etc.) keep the source secret regardless;
-	// cloning Redis state is rarely useful.
+	// cloning Redis state is rarely useful. The clone only survives the
+	// swap when db-conn survived the subscription filter above, so a
+	// frontend preview (no db subscription) correctly gets no clone conn.
 	if d.PreviewDB != nil {
 		if cloneSecrets, err := d.PreviewDB.EnsurePRAddons(ctx, proj.Name, pr.Number); err == nil {
 			envFromSecrets = swapPGCloneSecrets(envFromSecrets, cloneSecrets, pr.Number)
@@ -870,6 +885,50 @@ var (
 	mergeCommitRE  = regexp.MustCompile(`^Merge pull request #(\d+)\b`)
 	squashCommitRE = regexp.MustCompile(`\(#(\d+)\)\s*$`)
 )
+
+// previewSubscribedAddons returns the parent service's SubscribedAddons
+// (nil = legacy mount-all). Read from the service CR so the preview env
+// inherits the same addon-subscription gate the production env applies.
+func previewSubscribedAddons(ctx context.Context, d *Dispatcher, ns, serviceFQN string) []string {
+	svc, err := d.Kube.GetKusoService(ctx, ns, serviceFQN)
+	if err != nil || svc == nil {
+		return nil
+	}
+	return svc.Spec.SubscribedAddons
+}
+
+// filterConnsBySubscription mirrors projects.filterEnvFromForSubscription
+// (and addons.filterAddonConnsBySubscription) — duplicated here because the
+// github package can't import internal/projects without a cycle (see the
+// comment on this file's package). Keeps preview envFromSecrets gated by
+// the parent service's addon subscription so a frontend preview (subscribes
+// to no addons) doesn't blanket-mount db/redis/nats conns. Non-addon names
+// (per-env / shared secrets) pass through unchanged. Keep in sync with the
+// other two copies.
+func filterConnsBySubscription(envFromSecrets, subscribedAddons, projectAddonConns []string, project string) []string {
+	allow := make(map[string]bool, len(subscribedAddons))
+	for _, name := range subscribedAddons {
+		allow[name+"-conn"] = true
+		if project != "" {
+			allow[project+"-"+name+"-conn"] = true
+		}
+	}
+	projectAddonSet := make(map[string]bool, len(projectAddonConns))
+	for _, name := range projectAddonConns {
+		projectAddonSet[name] = true
+	}
+	out := make([]string, 0, len(envFromSecrets))
+	for _, sec := range envFromSecrets {
+		if !projectAddonSet[sec] {
+			out = append(out, sec) // non-addon secret — always keep
+			continue
+		}
+		if allow[sec] {
+			out = append(out, sec)
+		}
+	}
+	return out
+}
 
 // swapPGCloneSecrets replaces every "<source>-conn" entry whose
 // matching "<source>-pr-<N>-conn" exists in cloneSecrets. Source
