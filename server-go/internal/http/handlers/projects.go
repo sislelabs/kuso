@@ -67,6 +67,14 @@ func apiv1CreateServiceToDomain(in apiv1.CreateServiceRequest) projects.CreateSe
 		Runtime:     in.Runtime,
 		Command:     in.Command,
 		Port:        in.Port,
+		// FromService is required for runtime=worker (sibling service
+		// whose image the worker reuses). Pre-fix this field was
+		// silently dropped during apiv1 → domain conversion, so every
+		// `kuso project service add ... --runtime worker --from-service
+		// X` request hit the server's "fromService required" check
+		// because the field never crossed the wire. Worker creation
+		// has been broken via the API since the apiv1 split.
+		FromService: in.FromService,
 	}
 	if in.Repo != nil {
 		out.Repo = &projects.CreateServiceRepo{URL: in.Repo.URL, Path: in.Repo.Path}
