@@ -196,7 +196,13 @@ type KusoServiceSpec struct {
 	// service's most recent build's env-detect scan saw, falling back
 	// to "all current project-shared keys" when the build never ran
 	// env-detect (zero-pod-restart safe).
-	SharedEnvKeys []string `json:"sharedEnvKeys,omitempty"`
+	//
+	// NOTE: NO omitempty. nil and []string{} are semantically distinct
+	// (nil = legacy mount-all, empty = inherit-nothing), and omitempty
+	// would drop a non-nil empty slice on the wire — collapsing empty
+	// back to nil and silently re-subscribing the service to every key.
+	// That broke `kuso env unshare`-to-zero. Keep it explicit.
+	SharedEnvKeys []string `json:"sharedEnvKeys"`
 	// SubscribedAddons is the per-service opt-in list of project addon
 	// short names whose <addon>-conn secret gets mounted into this
 	// service's pods. nil = legacy (every project addon auto-mounted,
@@ -209,7 +215,12 @@ type KusoServiceSpec struct {
 	// services with every project addon so the upgrade is zero-churn.
 	// Wire: future kuso addon subscribe/unsubscribe commands +
 	// dashboard chip toggle alongside the SharedEnvKeys chips.
-	SubscribedAddons []string `json:"subscribedAddons,omitempty"`
+	//
+	// NO omitempty, same reason as SharedEnvKeys: an empty list must
+	// survive the wire so "subscribe to no addons" (e.g. a public
+	// frontend that must not hold DATABASE_URL) doesn't collapse to nil
+	// and re-mount every addon.
+	SubscribedAddons []string `json:"subscribedAddons"`
 	Scale      *KusoScaleSpec      `json:"scale,omitempty"`
 	Sleep      *KusoServiceSleep   `json:"sleep,omitempty"`
 	Static     *KusoStaticSpec     `json:"static,omitempty"`
@@ -433,12 +444,18 @@ type KusoEnvironmentSpec struct {
 	// envFromSecrets mount of project/instance shared secrets.
 	// nil = legacy (chart keeps blanket mount); non-nil = explicit
 	// subscription.
-	SharedEnvKeys    []string                `json:"sharedEnvKeys,omitempty"`
+	//
+	// NO omitempty: an empty subscription must round-trip as []string{}
+	// (subscribe-nothing), not collapse to nil (legacy mount-all). See
+	// KusoServiceSpec.SharedEnvKeys.
+	SharedEnvKeys    []string                `json:"sharedEnvKeys"`
 	// SubscribedAddons mirrors KusoService.spec.subscribedAddons so
 	// the kusoenvironment chart's envFromSecrets list contains only
 	// the addon-conn secrets the service actually wants. nil = legacy
 	// auto-mount-all; non-nil = explicit subscription.
-	SubscribedAddons []string                `json:"subscribedAddons,omitempty"`
+	//
+	// NO omitempty, same empty≠nil reason as above.
+	SubscribedAddons []string                `json:"subscribedAddons"`
 	SecretsRev       string                  `json:"secretsRev,omitempty"`
 	Resources        map[string]any          `json:"resources,omitempty"`
 	// Placement is the resolved (effective) placement for this env,

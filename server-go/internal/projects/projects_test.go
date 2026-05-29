@@ -5,11 +5,14 @@ import (
 	"errors"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
 
 	"kuso/server/internal/kube"
 )
@@ -256,6 +259,71 @@ func TestDelete_CascadesEnvsAndServices(t *testing.T) {
 	envs, _ := s.ListEnvironments(context.Background(), "alpha")
 	if len(envs) != 0 {
 		t.Errorf("envs not cascaded: %+v", envs)
+	}
+}
+
+// TestDelete_CleansProjectScopedSecrets is the regression test for the
+// orphaned-secret bug: project delete must remove the imperatively-created
+// Secrets (<project>-shared, <project>-<svc>-secrets, env-scoped) that no
+// helm chart owns. Otherwise they linger in the shared `kuso` namespace and
+// a same-named project recreated later inherits the dead project's stale
+// (often placeholder) values.
+func TestDelete_CleansProjectScopedSecrets(t *testing.T) {
+	t.Parallel()
+
+	// Typed clientset seeded with the three orphan-prone Secret shapes.
+	cs := k8sfake.NewSimpleClientset(
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name: "alpha-shared", Namespace: "kuso",
+			Labels: map[string]string{labelProject: "alpha"},
+		}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name: kube.ServiceSecretName("alpha", "web"), Namespace: "kuso",
+		}},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name: kube.EnvSecretName("alpha", "web", "production"), Namespace: "kuso",
+		}},
+		// A DIFFERENT project's shared secret must survive (no over-delete).
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+			Name: "beta-shared", Namespace: "kuso",
+			Labels: map[string]string{labelProject: "beta"},
+		}},
+	)
+
+	scheme := runtime.NewScheme()
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
+		kube.GVRKuso: "KusoList", kube.GVRProjects: "KusoProjectList",
+		kube.GVRServices: "KusoServiceList", kube.GVREnvironments: "KusoEnvironmentList",
+		kube.GVRAddons: "KusoAddonList", kube.GVRBuilds: "KusoBuildList",
+	})
+	for _, sd := range []seed{
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	} {
+		if err := dyn.Tracker().Create(sd.gvr, sd.obj, sd.obj.GetNamespace()); err != nil {
+			t.Fatalf("seed %s: %v", sd.obj.GetName(), err)
+		}
+	}
+	s := New(&kube.Client{Dynamic: dyn, Clientset: cs}, "kuso")
+
+	if err := s.Delete(context.Background(), "alpha"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	gone := []string{
+		"alpha-shared",
+		kube.ServiceSecretName("alpha", "web"),
+		kube.EnvSecretName("alpha", "web", "production"),
+	}
+	for _, n := range gone {
+		if _, err := cs.CoreV1().Secrets("kuso").Get(context.Background(), n, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+			t.Errorf("secret %s should be deleted, got err=%v", n, err)
+		}
+	}
+	// beta's shared secret must remain untouched.
+	if _, err := cs.CoreV1().Secrets("kuso").Get(context.Background(), "beta-shared", metav1.GetOptions{}); err != nil {
+		t.Errorf("beta-shared should survive alpha's delete, got err=%v", err)
 	}
 }
 

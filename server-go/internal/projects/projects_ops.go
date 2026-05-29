@@ -335,6 +335,62 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 			}
 		}
 	}
+	// Project-scoped Secrets created imperatively by kuso-server (NOT by
+	// any helm chart, so the operator's CR-delete cascade never reaches
+	// them). Left behind, they orphan in the shared `kuso` namespace and
+	// — because every project shares that namespace — a same-named
+	// project recreated later silently inherits the dead project's stale
+	// values (this is exactly how a deleted `tickero` re-seeded a fresh
+	// one with a placeholder JWT_SECRET + old email settings). Clean them
+	// up before the project CR goes:
+	//   - <project>-shared            (project shared secrets; project-labelled)
+	//   - <project>-<svc>-secrets     (service-scoped `kuso secret set`)
+	//   - <project>-<svc>-<env>-secrets (env-scoped secrets / preview overrides)
+	// The first is label-swept; the per-service/env ones carry no label,
+	// so derive their deterministic names from the service + env lists we
+	// already fetched above. NotFound is fine (never created).
+	if s.Kube.Clientset != nil {
+		// The <project>-shared secret has a deterministic name; delete it
+		// explicitly (not just via the label sweep below) so cleanup is
+		// robust even if the label is ever missing.
+		if derr := s.Kube.Clientset.CoreV1().Secrets(ns).
+			Delete(ctx, name+"-shared", metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+			return fmt.Errorf("delete project-shared secret: %w", derr)
+		}
+		// Label sweep: catches any other secret that carries the project
+		// label (belt-and-braces for future project-scoped secrets).
+		if derr := s.Kube.Clientset.CoreV1().Secrets(ns).DeleteCollection(ctx,
+			metav1.DeleteOptions{},
+			metav1.ListOptions{LabelSelector: labelSelector(map[string]string{labelProject: name})},
+		); derr != nil && !apierrors.IsNotFound(derr) {
+			return fmt.Errorf("delete project-scoped secrets: %w", derr)
+		}
+		// Name-derived deletes for the unlabelled per-service / per-env
+		// secrets.
+		for _, svc := range services {
+			short := shortServiceName(name, svc.Name)
+			if derr := s.Kube.Clientset.CoreV1().Secrets(ns).
+				Delete(ctx, kube.ServiceSecretName(name, short), metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				return fmt.Errorf("delete service secret for %s: %w", svc.Name, derr)
+			}
+			for _, e := range envs {
+				if e.Spec.Service != svc.Name {
+					continue
+				}
+				envKind := e.Spec.Kind
+				if envKind == "" {
+					envKind = e.Labels[kube.LabelEnv]
+				}
+				if envKind == "" {
+					continue
+				}
+				if derr := s.Kube.Clientset.CoreV1().Secrets(ns).
+					Delete(ctx, kube.EnvSecretName(name, short, envKind), metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+					return fmt.Errorf("delete env secret for %s/%s: %w", svc.Name, envKind, derr)
+				}
+			}
+		}
+	}
 	if err := s.Kube.DeleteKusoProject(ctx, s.Namespace, name); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete project: %w", err)
 	}
