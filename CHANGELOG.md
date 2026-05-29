@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.19] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(domains): `kuso domains add` propagates to the production env (ingress + cert) ([4000a98](https://github.com/sislelabs/kuso/commit/4000a98fbd262a2282c82b207dfdafe132619e39))
+
 ## [0.17.17] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -304,11 +309,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(web): surface public-TCP state on the addon Connection card ([51f5d26](https://github.com/sislelabs/kuso/commit/51f5d2656a6881da2c0eafb120574a1f6a4d9c37))
-
-## [0.13.17] — 2026-05-23
-
-### ✨ Features
-- Feat(web): UI toggle for the addon Public TCP endpoint ([b3f368d](https://github.com/sislelabs/kuso/commit/b3f368d0a949ef075bb31d935ec2ab4286ed0a75))
 
 
 ---
