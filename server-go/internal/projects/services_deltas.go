@@ -26,8 +26,11 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
+
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"kuso/server/internal/kube"
 )
@@ -95,8 +98,24 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
 	}
-	if perr := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{Domains: true}); perr != nil {
-		return updated, fmt.Errorf("propagate domains to envs: %w", perr)
+	// Mirror the domain onto the PRODUCTION env so it actually reaches
+	// the Ingress + TLS cert. The chart renders hosts/certs from the env
+	// CR's host + additionalHosts + tlsHosts — NOT from service.spec.
+	// domains — so a service-level write alone is invisible to routing
+	// (the changed.Domains propagation branch is a deliberate no-op since
+	// v0.16.19). We target production ONLY: staging/custom envs serve
+	// different hostnames and must not auto-inherit (that mirror-to-every-
+	// env behavior is exactly what v0.16.19 removed to stop staging from
+	// claiming production's domain). AddEnvDomain is idempotent + reuses
+	// the cross-env conflict check + computeTLSHosts. For TLS=false hosts
+	// it still routes (additionalHosts) but won't be added to tlsHosts.
+	if _, perr := s.AddEnvDomain(ctx, project, service, "production", host); perr != nil {
+		// A missing production env (rare: service mid-create) shouldn't
+		// fail the service-level write — the domain is recorded on the
+		// service and a later env reconcile/redeploy can re-mirror it.
+		if !errors.Is(perr, ErrNotFound) && !apierrors.IsNotFound(perr) {
+			return updated, fmt.Errorf("mirror domain to production env: %w", perr)
+		}
 	}
 	return updated, nil
 }
@@ -154,8 +173,13 @@ func (s *Service) RemoveDomain(ctx context.Context, project, service, host strin
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
 	}
-	if perr := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{Domains: true}); perr != nil {
-		return updated, fmt.Errorf("propagate domains to envs: %w", perr)
+	// Mirror the removal onto the production env (see AddDomain). Idempotent
+	// — RemoveEnvDomain on an absent host is a no-op, so this is safe even
+	// if the host was never mirrored.
+	if _, perr := s.RemoveEnvDomain(ctx, project, service, "production", host); perr != nil {
+		if !errors.Is(perr, ErrNotFound) && !apierrors.IsNotFound(perr) {
+			return updated, fmt.Errorf("mirror domain removal to production env: %w", perr)
+		}
 	}
 	return updated, nil
 }

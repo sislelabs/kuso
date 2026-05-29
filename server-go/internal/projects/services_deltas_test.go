@@ -29,6 +29,57 @@ func TestAddDomain_AppendsToEmptyList(t *testing.T) {
 	}
 }
 
+// TestAddDomain_PropagatesToProductionEnv is the regression test for the
+// custom-domain bug: `kuso domains add` must reach the production env's
+// AdditionalHosts/TLSHosts (which is what the chart renders the Ingress +
+// TLS cert from). A service-level spec.domains write alone is invisible to
+// routing.
+func TestAddDomain_PropagatesToProductionEnv(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+
+	if _, err := s.AddDomain(context.Background(), "alpha", "web", AddDomainRequest{
+		Host: "shop.example.com",
+		TLS:  true,
+	}); err != nil {
+		t.Fatalf("AddDomain: %v", err)
+	}
+
+	env, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if !containsHost(env.Spec.AdditionalHosts, "shop.example.com") {
+		t.Errorf("production env AdditionalHosts should contain the custom domain, got %v", env.Spec.AdditionalHosts)
+	}
+	// TLS=true + public FQDN → must be in TLSHosts so a cert is minted.
+	if !containsHost(env.Spec.TLSHosts, "shop.example.com") {
+		t.Errorf("production env TLSHosts should contain the custom domain, got %v", env.Spec.TLSHosts)
+	}
+
+	// Removing it must clean both lists.
+	if _, err := s.RemoveDomain(context.Background(), "alpha", "web", "shop.example.com"); err != nil {
+		t.Fatalf("RemoveDomain: %v", err)
+	}
+	env, _ = s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if containsHost(env.Spec.AdditionalHosts, "shop.example.com") || containsHost(env.Spec.TLSHosts, "shop.example.com") {
+		t.Errorf("after RemoveDomain the production env should drop the host, got additional=%v tls=%v", env.Spec.AdditionalHosts, env.Spec.TLSHosts)
+	}
+}
+
+func containsHost(hosts []string, h string) bool {
+	for _, x := range hosts {
+		if x == h {
+			return true
+		}
+	}
+	return false
+}
+
 func TestAddDomain_DuplicateReturnsConflict(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,
