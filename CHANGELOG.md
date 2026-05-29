@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.7] — 2026-05-29
+
+### ✨ Features
+- Feat(cli): kuso run --follow; fix(previews): drop service-name guessing ([633ade5](https://github.com/sislelabs/kuso/commit/633ade51ab34879a9330721c358d3387801efb7a))
+
 ## [0.17.6] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -416,11 +421,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs: AGENT_SMOKE_TEST.md — standardised end-to-end protocol ([8ff43ce](https://github.com/sislelabs/kuso/commit/8ff43ce865acffabf141efffb43e7556fd7720ec))
-
-## [0.13.5] — 2026-05-18
-
-### 🐛 Bug Fixes
-- Fix(networkpolicy): allow traefik + cert-manager from their own namespaces ([55d91f8](https://github.com/sislelabs/kuso/commit/55d91f87bf992dcc471f651f42e03339d8c281b3))
 
 
 ---
