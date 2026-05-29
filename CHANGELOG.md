@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.17] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(projects): empty subscription persists + project delete cleans orphaned secrets ([0cbce7f](https://github.com/sislelabs/kuso/commit/0cbce7fbd49a42e69d629c1d66d370737c9cb515))
+
 ## [0.17.16] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -304,12 +309,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(web): UI toggle for the addon Public TCP endpoint ([b3f368d](https://github.com/sislelabs/kuso/commit/b3f368d0a949ef075bb31d935ec2ab4286ed0a75))
-
-## [0.13.16] — 2026-05-23
-
-### ✨ Features
-- Feat(addons): opt-in public TCP endpoint (admin-gated) ([8e5a858](https://github.com/sislelabs/kuso/commit/8e5a858708e18a8a7e78f12f72ff78e788cdfad8))
-- Feat: kuso db port-forward / db connect — local tunnels to addons ([61405c8](https://github.com/sislelabs/kuso/commit/61405c8aad8f46a594ad157bde972825275c48c9))
 
 
 ---
