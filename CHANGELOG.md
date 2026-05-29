@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.25] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(previews): self-heal recreated preview env image + pin previews to 1 replica ([e260538](https://github.com/sislelabs/kuso/commit/e26053820c65a792402782ff7cf6780b0ca9b0bb))
+
 ## [0.17.24] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -286,11 +291,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive promoted CHANGELOG entries ([9b72e47](https://github.com/sislelabs/kuso/commit/9b72e47e88a5bb264ab75960d9c935173eb6f1b9))
-
-## [0.16.2] — 2026-05-27
-
-### 🐛 Bug Fixes
-- Fix(env): KusoEnvironmentSpec.ReplicaCount is *int — same omitempty bug ([8ca0bb5](https://github.com/sislelabs/kuso/commit/8ca0bb5df41dfeb4ec3e97c76bd6e39c6d9b6326))
 
 
 ---
