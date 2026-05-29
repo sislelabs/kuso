@@ -449,6 +449,8 @@ var (
 	serviceSetPrivateEgress  string // "on" | "off" | "" (leave alone)
 	serviceSetMinReplicas    int
 	serviceSetMaxReplicas    int
+	serviceSetPath           string // monorepo subpath (relative to repo root)
+	serviceSetBranch         string // git branch override
 )
 
 var serviceSetCmd = &cobra.Command{
@@ -537,6 +539,49 @@ Settings → Source / Networking flow.
 				scale.Max = &v
 			}
 			req.Scale = scale
+		}
+		if cmd.Flags().Changed("path") || cmd.Flags().Changed("branch") {
+			// Server-side semantic: PatchRepoRequest with empty URL
+			// CLEARS the repo block entirely (intentional, for the
+			// "this is the new source" use case). So changing just
+			// path/branch has to round-trip the existing URL through
+			// a fetch-then-patch sequence — otherwise we'd silently
+			// nuke the service's connection to its source repo.
+			cur, err := api.GetService(args[0], args[1])
+			if err != nil {
+				return fmt.Errorf("fetch current service spec: %w", err)
+			}
+			if cur.StatusCode() >= 300 {
+				return fmt.Errorf("fetch current service spec: server %d", cur.StatusCode())
+			}
+			var curWire struct {
+				Spec struct {
+					Repo *struct {
+						URL           string `json:"url"`
+						DefaultBranch string `json:"defaultBranch"`
+						Path          string `json:"path"`
+					} `json:"repo"`
+				} `json:"spec"`
+			}
+			if err := json.Unmarshal(cur.Body(), &curWire); err != nil {
+				return fmt.Errorf("decode current service: %w", err)
+			}
+			rp := &kusoApi.PatchRepoRequest{}
+			if curWire.Spec.Repo != nil {
+				rp.URL = curWire.Spec.Repo.URL
+				rp.Branch = curWire.Spec.Repo.DefaultBranch
+				rp.Path = curWire.Spec.Repo.Path
+			}
+			if rp.URL == "" {
+				return fmt.Errorf("--path/--branch require an existing repo URL on the service; use `kuso service add` to set one")
+			}
+			if cmd.Flags().Changed("path") {
+				rp.Path = serviceSetPath
+			}
+			if cmd.Flags().Changed("branch") {
+				rp.Branch = serviceSetBranch
+			}
+			req.Repo = rp
 		}
 		resp, err := api.PatchService(args[0], args[1], req)
 		if err != nil {
@@ -953,6 +998,8 @@ func init() {
 	serviceSetCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
 	serviceSetCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
 	serviceSetCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
+	serviceSetCmd.Flags().StringVar(&serviceSetPath, "path", "", "monorepo subpath relative to repo root (e.g. apps/api)")
+	serviceSetCmd.Flags().StringVar(&serviceSetBranch, "branch", "", "git branch override (empty = follow project default)")
 
 	projectCmd.AddCommand(projectAddonCmd)
 	projectAddonCmd.AddCommand(addonAddCmd)
@@ -1012,6 +1059,8 @@ func init() {
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetPath, "path", "", "monorepo subpath relative to repo root (e.g. apps/api)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetBranch, "branch", "", "git branch override (empty = follow project default)")
 }
 
 // serviceSetTopCmd is the top-level `kuso service set` shell. Same

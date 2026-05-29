@@ -160,6 +160,18 @@ type PatchServiceRequest struct {
 	Internal      *bool                `json:"internal,omitempty"`
 	PrivateEgress *bool                `json:"privateEgress,omitempty"`
 	Scale         *PatchScaleRequest   `json:"scale,omitempty"`
+	Repo          *PatchRepoRequest    `json:"repo,omitempty"`
+}
+
+// PatchRepoRequest mirrors the server's projects.PatchRepoRequest.
+// Server semantics: empty URL clears the repo block entirely — so any
+// CLI surface that lets the user change ONE field (path, branch, etc.)
+// MUST fetch the current repo first and resend the URL alongside.
+type PatchRepoRequest struct {
+	URL            string `json:"url,omitempty"`
+	Branch         string `json:"branch,omitempty"`
+	Path           string `json:"path,omitempty"`
+	InstallationID int64  `json:"installationId,omitempty"`
 }
 
 // PatchScaleRequest mirrors the server's projects.PatchScaleRequest.
