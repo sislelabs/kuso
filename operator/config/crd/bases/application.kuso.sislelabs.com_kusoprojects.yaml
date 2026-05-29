@@ -78,6 +78,14 @@ spec:
                     ttlDays:
                       type: integer
                       default: 7
+                    baseDomain:
+                      type: string
+                      description: >-
+                        Base domain for preview hosts. When set, previews
+                        are <short>-pr-<N>.<baseDomain> (e.g.
+                        frontend-pr-35.tickero.bg) instead of the project's
+                        spec.baseDomain. Requires wildcard DNS for
+                        *.<baseDomain> + a cert-manager HTTP-01 issuer.
                     triggers:
                       type: array
                       description: >-
