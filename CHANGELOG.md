@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.6] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(previews): break addon-clone idempotency loop ([d070e4c](https://github.com/sislelabs/kuso/commit/d070e4caf75c6b9c88888fa72579407b94c89654))
+
 ## [0.17.5] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -416,11 +421,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(networkpolicy): allow traefik + cert-manager from their own namespaces ([55d91f8](https://github.com/sislelabs/kuso/commit/55d91f87bf992dcc471f651f42e03339d8c281b3))
-
-## [0.13.4] — 2026-05-18
-
-### 🐛 Bug Fixes
-- Fix(networkpolicy): build pods can reach buildkit + github ([b0d858c](https://github.com/sislelabs/kuso/commit/b0d858c6bb606010f278a94870b844643b8dfc1a))
 
 
 ---
