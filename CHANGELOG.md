@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.26] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(projects): base-domain change now rewrites env hosts (FQN→short bug) ([f023dbf](https://github.com/sislelabs/kuso/commit/f023dbf42ccb081f2747dff10777779c5a1e285f))
+
 ## [0.17.25] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -280,17 +285,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix: node-bootstrap and addon defaults — TLS pg, NATS auth, worker fromService (#3) ([065a0ca](https://github.com/sislelabs/kuso/commit/065a0ca487cf1e9da59da704319dc3dbdf144a21))
-
-## [0.16.3] — 2026-05-27
-
-### 🐛 Bug Fixes
-- Fix(crd): add 'image' to KusoService.spec.runtime enum ([f35dfca](https://github.com/sislelabs/kuso/commit/f35dfcae41bc66e070b1551f2774c47dad9bd21b))
-
-### 📝 Docs
-- Docs(skill): refresh kuso skill for v0.16.x ([807cc15](https://github.com/sislelabs/kuso/commit/807cc1521d61239c94f0cc135cde126a0880c999))
-
-### 🧹 Chores
-- Chore: archive promoted CHANGELOG entries ([9b72e47](https://github.com/sislelabs/kuso/commit/9b72e47e88a5bb264ab75960d9c935173eb6f1b9))
 
 
 ---
