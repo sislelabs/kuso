@@ -32,6 +32,7 @@ type ProjectsAPI interface {
 	Describe(ctx context.Context, name string) (*projects.DescribeResponse, error)
 	Update(ctx context.Context, name string, req projects.UpdateProjectRequest) (*kube.KusoProject, error)
 	Delete(ctx context.Context, name string) error
+	DeleteWithOptions(ctx context.Context, name string, opts projects.DeleteProjectOptions) error
 
 	// Service CRUD + queries
 	ListServices(ctx context.Context, project string) ([]kube.KusoService, error)

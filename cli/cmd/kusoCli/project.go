@@ -160,29 +160,50 @@ installation use --github-installation-clear (sets installationId to 0).`,
 
 // ---------------- project delete ----------------
 
-var projectDeleteYes bool
+var (
+	projectDeleteYes       bool
+	projectDeletePurgeData bool
+)
 
 var projectDeleteCmd = &cobra.Command{
 	Use:     "delete <name>",
 	Aliases: []string{"rm"},
-	Short:   "Delete a project (cascades to services, envs, addons)",
-	Args:    cobra.ExactArgs(1),
+	Short:   "Delete a project (cascades to services, envs, addons; PVCs are KEPT unless --purge-data)",
+	Long: `Delete a kuso project and every owned resource (services, envs,
+addons, builds, secrets).
+
+Addon PVCs are KEPT by default. The helm-operator stamps
+"helm.sh/resource-policy: keep" on every addon PVC so an accidental
+project delete doesn't turn into accidental data loss. Pass
+--purge-data to also wipe the PVCs — required when you actually
+want a clean slate. Without it, a delete+recreate cycle inherits
+the OLD postgres data dir AND the OLD password from disk, while
+the new addon spec generates a new password, and pods crashloop
+with SASL auth failures.`,
+	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		if err := confirmDestructive(projectDeleteYes,
-			fmt.Sprintf("Delete project %q (cascades to services, envs, addons)?", args[0])); err != nil {
+		msg := fmt.Sprintf("Delete project %q (cascades to services, envs, addons)?", args[0])
+		if projectDeletePurgeData {
+			msg = fmt.Sprintf("Delete project %q AND PURGE ALL DATA (PVCs)? This is irreversible.", args[0])
+		}
+		if err := confirmDestructive(projectDeleteYes, msg); err != nil {
 			return err
 		}
-		resp, err := api.DeleteProject(args[0])
+		resp, err := api.DeleteProjectOpts(args[0], kusoApi.DeleteProjectOptions{PurgeData: projectDeletePurgeData})
 		if err != nil {
 			return fmt.Errorf("delete: %w", err)
 		}
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
-		fmt.Printf("project %s deleted\n", args[0])
+		suffix := ""
+		if projectDeletePurgeData {
+			suffix = " (PVCs purged)"
+		}
+		fmt.Printf("project %s deleted%s\n", args[0], suffix)
 		return nil
 	},
 }
@@ -961,6 +982,7 @@ func init() {
 
 	projectCmd.AddCommand(projectDeleteCmd)
 	projectDeleteCmd.Flags().BoolVarP(&projectDeleteYes, "yes", "y", false, "skip the confirmation prompt")
+	projectDeleteCmd.Flags().BoolVar(&projectDeletePurgeData, "purge-data", false, "also delete every addon PVC labeled with this project (default keeps PVCs)")
 	projectCmd.AddCommand(projectUpdateCmd)
 	projectUpdateCmd.Flags().StringVar(&projectUpdateDescription, "description", "", "new description")
 	projectUpdateCmd.Flags().StringVar(&projectUpdateDomain, "domain", "", "new base domain")

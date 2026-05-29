@@ -99,6 +99,23 @@ func (k *KusoClient) DeleteProject(name string) (*resty.Response, error) {
 	return k.client.Delete("/api/projects/" + esc(name))
 }
 
+// DeleteProjectOptions toggles destructive behavior on the delete
+// endpoint. PurgeData=true ALSO wipes every PVC labeled with this
+// project — required when the caller wants a clean slate, not just
+// a CR delete. Default false preserves data per
+// helm.sh/resource-policy: keep semantics.
+type DeleteProjectOptions struct {
+	PurgeData bool
+}
+
+func (k *KusoClient) DeleteProjectOpts(name string, opts DeleteProjectOptions) (*resty.Response, error) {
+	url := "/api/projects/" + esc(name)
+	if opts.PurgeData {
+		url += "?purgeData=true"
+	}
+	return k.client.Delete(url)
+}
+
 func (k *KusoClient) UpdateProject(name string, req UpdateProjectRequest) (*resty.Response, error) {
 	k.client.SetBody(req)
 	return k.client.Patch("/api/projects/" + esc(name))

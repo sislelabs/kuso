@@ -375,7 +375,16 @@ func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
 		return
 	}
-	if err := h.Svc.Delete(ctx, project); err != nil {
+	// ?purgeData=true also wipes every PVC labeled with this
+	// project — addons keep their PVCs on uninstall by default
+	// (resource-policy: keep) so accidental project delete doesn't
+	// turn into accidental data loss. Caller has to opt in
+	// explicitly with ?purgeData=true; in the UI this maps to the
+	// "delete data too" toggle in the confirm dialog.
+	opts := projects.DeleteProjectOptions{
+		PurgeData: r.URL.Query().Get("purgeData") == "true",
+	}
+	if err := h.Svc.DeleteWithOptions(ctx, project, opts); err != nil {
 		h.fail(w, "delete project", err)
 		return
 	}
@@ -384,13 +393,17 @@ func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		// fans out to every service, env, addon, build, and secret.
 		// Critical-severity so an alert wired to high-severity audit
 		// pages someone immediately.
+		msg := fmt.Sprintf("deleted project %q", project)
+		if opts.PurgeData {
+			msg += " (PVCs purged)"
+		}
 		h.Audit.Log(ctx, audit.Entry{
 			User:     auditUser(ctx),
 			Severity: "critical",
 			Action:   "project.delete",
 			Pipeline: project,
 			Resource: "kusoproject",
-			Message:  fmt.Sprintf("deleted project %q", project),
+			Message:  msg,
 		})
 	}
 	w.WriteHeader(http.StatusNoContent)

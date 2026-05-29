@@ -245,6 +245,27 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 // CR (KusoProject.spec.namespace) so we resolve once and route every
 // listing + delete through that.
 func (s *Service) Delete(ctx context.Context, name string) error {
+	return s.DeleteWithOptions(ctx, name, DeleteProjectOptions{})
+}
+
+// DeleteProjectOptions controls Delete behavior. PurgeData additionally
+// wipes every PVC labeled with the project — addons set
+// helm.sh/resource-policy: keep on their PVCs to protect against
+// accidental data loss, but that means a delete+recreate cycle
+// inherits the OLD postgres data dir AND the OLD password from disk,
+// while the new addon spec generates a new password. The pod
+// crashloops with SASL auth failure that looks like "the new addon
+// is broken" but is actually "old data, new credentials, no match."
+// PurgeData = explicit opt-in to the destructive wipe, which is
+// what's wanted for "delete this project and start fresh".
+type DeleteProjectOptions struct {
+	PurgeData bool
+}
+
+// DeleteWithOptions is the configurable variant of Delete. Plain
+// Delete keeps the addon PVCs around (safe default); pass
+// PurgeData=true when the caller really wants the data gone too.
+func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts DeleteProjectOptions) error {
 	if _, err := s.Get(ctx, name); err != nil {
 		return err
 	}
@@ -307,6 +328,30 @@ func (s *Service) Delete(ctx context.Context, name string) error {
 	}
 	if err := s.Kube.DeleteKusoProject(ctx, s.Namespace, name); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete project: %w", err)
+	}
+	// Optional destructive PVC sweep. Addon PVCs are project-labeled
+	// by the helm chart, so a single LabelSelector List finds every
+	// disk owned by any of this project's addons. We delete them
+	// AFTER the addon CRs (and their cascading helm releases) are
+	// gone so the helm uninstall doesn't try to mount a PVC that's
+	// in deletion. NotFound is fine (PVC was never created, or the
+	// finalizer-removal sweep beat us to it).
+	if opts.PurgeData {
+		if s.Kube.Clientset == nil {
+			return fmt.Errorf("purge-data: typed kube client not wired")
+		}
+		pvcs, err := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: labelSelector(map[string]string{labelProject: name}),
+		})
+		if err != nil {
+			return fmt.Errorf("purge-data: list pvcs: %w", err)
+		}
+		for i := range pvcs.Items {
+			pvcName := pvcs.Items[i].Name
+			if derr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcName, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+				return fmt.Errorf("purge-data: delete pvc %s: %w", pvcName, derr)
+			}
+		}
 	}
 	return nil
 }
