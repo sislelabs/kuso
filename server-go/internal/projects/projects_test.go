@@ -834,6 +834,44 @@ func TestUpdate_NotFound(t *testing.T) {
 	}
 }
 
+// TestUpdate_BaseDomainRewritesEnvHosts is the regression test for the
+// propagateBaseDomain FQN bug: changing a project's base domain must rewrite
+// each env's default auto-host. The bug passed env.Spec.Service (the FQN
+// "alpha-web") to defaultHost, which expects the short name "web", so
+// `expected` never matched the stored "web.old.example.com" and the rewrite
+// was silently skipped.
+func TestUpdate_BaseDomainRewritesEnvHosts(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{
+			DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"},
+			BaseDomain:  "old.example.com",
+		}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	// Set the env's host to the OLD default (what AddService would stamp).
+	if e, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production"); err == nil {
+		e.Spec.Host = "web.old.example.com"
+		e.Spec.AdditionalHosts = []string{"custom.example.org"} // custom host must survive
+		_, _ = s.Kube.UpdateKusoEnvironment(context.Background(), "kuso", e)
+	}
+
+	newBase := "new.example.com"
+	if _, err := s.Update(context.Background(), "alpha", UpdateProjectRequest{BaseDomain: &newBase}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	env, _ := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if env.Spec.Host != "web.new.example.com" {
+		t.Errorf("env host should be rewritten to web.new.example.com, got %q", env.Spec.Host)
+	}
+	// tlsHosts must include the new host AND keep the custom additionalHost.
+	if !containsHost(env.Spec.TLSHosts, "web.new.example.com") || !containsHost(env.Spec.TLSHosts, "custom.example.org") {
+		t.Errorf("tlsHosts wrong after base-domain change: %v", env.Spec.TLSHosts)
+	}
+}
+
 // TestPatchService_ScaleDoesNotTouchPreviewEnvs is the regression test for
 // the preview-replica leak: a production scale change (min 2 / max 5 → HPA)
 // must propagate to the production env but NOT to live preview envs, which
