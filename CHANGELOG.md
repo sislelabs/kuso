@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.11] — 2026-05-29
+
+### ✨ Features
+- Feat(projects): kuso project delete --purge-data ([3da1299](https://github.com/sislelabs/kuso/commit/3da1299768ba29bd7f742c2593c6bb4f69706967))
+
 ## [0.17.10] — 2026-05-29
 
 ### ✨ Features
@@ -393,11 +398,6 @@ messages on every release. The format is loosely based on
 ### 🧹 Chores
 - Chore: archive older changelog entries ([207f7ca](https://github.com/sislelabs/kuso/commit/207f7cafb400139be5090c61caa267a9cbb78c41))
 - Chore: gitignore .worktrees/ ([a28d4ed](https://github.com/sislelabs/kuso/commit/a28d4edaf413ea400544e999ece446d3591aa269))
-
-## [0.13.9] — 2026-05-20
-
-### 🐛 Bug Fixes
-- Fix(chart): always emit POOLER_* conn keys, empty when disabled ([659e4d1](https://github.com/sislelabs/kuso/commit/659e4d1e1c179ab18cc87c4674ebaaa4c52a3c13))
 
 
 ---
