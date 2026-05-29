@@ -1010,21 +1010,20 @@ func (d *Dispatcher) closeReviewerSurface(ctx context.Context, project string, p
 
 // buildPreviewHostRewrite walks every service in the project and
 // builds a {production-host → preview-host} substitution map.
-// Production hosts come from three sources:
+// Production hosts come from two sources, both pulled off the
+// KusoService spec — no service-name guessing:
 //
-//  1. KusoService.Spec.Domains[0].Host — the service's user-set
-//     custom domain (e.g. "tickero.bg", "api.tickero.bg")
+//  1. spec.domains[].host — every user-configured custom domain
+//     (apex like "tickero.bg" or subdomain like "api.tickero.bg")
 //  2. The auto-domain "<short>.<baseDomain>" — the kuso-stamped
-//     production host for services with no custom domain
-//  3. The bare baseDomain — when the project's frontend uses the
-//     apex (NEXT_PUBLIC_SITE_URL=https://alpha.example.com), the
-//     rewrite has to catch the apex too. Mapped to the frontend
-//     service's preview host when there's one obvious frontend
-//     service; otherwise to the first non-api service.
+//     production host for services without a custom domain
 //
 // Each production host maps to the preview's own auto-domain
-// "<short>-pr-<N>.<baseDomain>". Both http:// and https:// prefixes
-// get rewritten; bare-host references (no scheme) work too.
+// "<short>-pr-<N>.<baseDomain>". The apex case (frontend using
+// "tickero.bg" with no subdomain) is handled by the custom-domain
+// branch — that service has the apex on spec.domains and its
+// preview's host comes through naturally. No hardcoded "frontend"
+// / "web" / "www" assumption needed.
 func (d *Dispatcher) buildPreviewHostRewrite(ctx context.Context, proj *kube.KusoProject, prNumber int, baseDomain string) map[string]string {
 	out := map[string]string{}
 	if d.Kube == nil {
@@ -1037,8 +1036,6 @@ func (d *Dispatcher) buildPreviewHostRewrite(ctx context.Context, proj *kube.Kus
 		return out
 	}
 	prefix := proj.Name + "-"
-	var frontendCandidate string
-	var firstNonAPI string
 	for i := range services.Items {
 		u := &services.Items[i]
 		fqn := u.GetName()
@@ -1048,33 +1045,19 @@ func (d *Dispatcher) buildPreviewHostRewrite(ctx context.Context, proj *kube.Kus
 		}
 		previewHost := fmt.Sprintf("%s-pr-%d.%s", short, prNumber, baseDomain)
 		out[fmt.Sprintf("%s.%s", short, baseDomain)] = previewHost
-		// Custom domain (spec.domains[0].host). Unstructured walk so we
-		// don't need a typed decode here.
-		if domains, found, _ := unstructured.NestedSlice(u.Object, "spec", "domains"); found && len(domains) > 0 {
-			if first, ok := domains[0].(map[string]any); ok {
-				if host, _ := first["host"].(string); host != "" {
-					out[host] = previewHost
+		// Custom domains (spec.domains[].host). All of them, not just
+		// the first — services with both an apex (tickero.bg) and a
+		// www subdomain (www.tickero.bg) need both rewritten.
+		// Unstructured walk so we don't need a typed decode here.
+		if domains, found, _ := unstructured.NestedSlice(u.Object, "spec", "domains"); found {
+			for _, dRaw := range domains {
+				if dm, ok := dRaw.(map[string]any); ok {
+					if host, _ := dm["host"].(string); host != "" {
+						out[host] = previewHost
+					}
 				}
 			}
 		}
-		// Track a frontend-likely service for the apex rewrite. The
-		// "frontend" / "web" / "www" names are conventional; falling
-		// back to the first non-api service catches projects that
-		// pick less standard names.
-		switch short {
-		case "frontend", "web", "www":
-			frontendCandidate = previewHost
-		}
-		if firstNonAPI == "" && short != "api" && short != "worker" && short != "backoffice" {
-			firstNonAPI = previewHost
-		}
-	}
-	apexPreview := frontendCandidate
-	if apexPreview == "" {
-		apexPreview = firstNonAPI
-	}
-	if apexPreview != "" {
-		out[baseDomain] = apexPreview
 	}
 	return out
 }

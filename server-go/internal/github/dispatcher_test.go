@@ -56,6 +56,10 @@ func seedProj(name, repoURL, defaultBranch string, previewsEnabled bool, ttlDays
 }
 
 func seedSvc(project, service string) seed {
+	return seedSvcWithDomains(project, service, nil)
+}
+
+func seedSvcWithDomains(project, service string, domains []kube.KusoDomain) seed {
 	s := &kube.KusoService{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      project + "-" + service,
@@ -66,6 +70,7 @@ func seedSvc(project, service string) seed {
 			Project: project,
 			Repo:    &kube.KusoRepoRef{URL: "https://github.com/example/" + service, Path: "."},
 			Port:    3000,
+			Domains: domains,
 		},
 	}
 	return typedSeed(kube.GVRServices, "KusoService", s)
@@ -371,7 +376,10 @@ func TestDispatch_PROpened_ClonesPerEnvSecretWithRewrittenURLs(t *testing.T) {
 
 	d := newDispatcher(t,
 		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
-		seedSvc("alpha", "web"),
+		// web carries the apex baseDomain as a custom domain — the
+		// configured-domain branch in buildPreviewHostRewrite catches
+		// the apex naturally; no service-name guessing.
+		seedSvcWithDomains("alpha", "web", []kube.KusoDomain{{Host: "alpha.example.com", TLS: true}}),
 		seedSvc("alpha", "api"),
 		typedSeed(kube.GVREnvironments, "KusoEnvironment", prodEnvWeb),
 	)
