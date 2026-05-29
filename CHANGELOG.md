@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.15] — 2026-05-29
+
+### Other
+- Revert(web): drop per-env Secrets section from Variables editor ([cae09b9](https://github.com/sislelabs/kuso/commit/cae09b91da6819f417fc956d6bd5737f8602c3c6))
+
 ## [0.17.14] — 2026-05-29
 
 ### ✨ Features
@@ -314,38 +319,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive older changelog entries ([3d61102](https://github.com/sislelabs/kuso/commit/3d61102bcc87845068efca54391ada280fd20c2b))
-
-## [0.13.13] — 2026-05-21
-
-### ✨ Features
-- Feat(web): blast-radius warnings on service config changes ([b05ddfe](https://github.com/sislelabs/kuso/commit/b05ddfe21cc8983f85ef27829ab72f2979a45fe5))
-- Feat: browser terminal — interactive pod shell in the web UI ([2010779](https://github.com/sislelabs/kuso/commit/2010779416db28a8e31ac8ff857ed285197306b7))
-- Feat(notify): Slack, Mattermost, Telegram, Pushover, Email channels ([039094d](https://github.com/sislelabs/kuso/commit/039094daaa693e68e49aeb08f6cbfc26787b73c1))
-- Feat(github): apply kuso.yaml on push via GitHub Contents API ([1e80d0e](https://github.com/sislelabs/kuso/commit/1e80d0e7f78b512a9f275d37938f92a1389a9ea0))
-- Feat(crd): KusoProject.spec.configAsCode.enabled ([e3ff9e6](https://github.com/sislelabs/kuso/commit/e3ff9e6fb7a052fc62d460d7e90ea318636c8041))
-- Feat(web): config-as-code tab on the project view ([335fc17](https://github.com/sislelabs/kuso/commit/335fc178097cfc4d46bf020559e501f75f1ebaf6))
-- Feat(cli): kuso apply and kuso project export ([a99f9d6](https://github.com/sislelabs/kuso/commit/a99f9d66e9ee494be92e8d1fbc8ad7dda0baef8b))
-- Feat(http): GET /api/projects/{p}/spec export; wire crons into reconciler ([4fa233b](https://github.com/sislelabs/kuso/commit/4fa233b5a30b5313111a7d197c3e0ee9ef50ecad))
-- Feat(spec): export live project state to kuso.yaml ([d71f42b](https://github.com/sislelabs/kuso/commit/d71f42b0f066643dda3a176adde37c9fba507acc))
-- Feat(spec): reconciler applies full field set + crons ([21706ff](https://github.com/sislelabs/kuso/commit/21706ff75cd74a980ab547352dcbf091256e2431))
-- Feat(spec): cron request mapping helpers for apply ([448a6cd](https://github.com/sislelabs/kuso/commit/448a6cd5d51a3412bc6f655438634916139ff342))
-- Feat(spec): plan diffs crons and gates deletes behind prune ([4858c1f](https://github.com/sislelabs/kuso/commit/4858c1f439bc177d1fd5d973bb0c934545276705))
-- Feat(spec): full-parity kuso.yaml schema (apiVersion, prune, crons) ([1d5a2bf](https://github.com/sislelabs/kuso/commit/1d5a2bf45ffa03983f1da2729e96650b2ce8d6a0))
-
-### 🐛 Bug Fixes
-- Fix(builds): worker-runtime services no longer 500 on build trigger ([5c062dc](https://github.com/sislelabs/kuso/commit/5c062dc117b34adebc2aa68275340604fdd1f77f))
-- Fix(web): env-var diff no longer shows phantom changes for refs ([b603769](https://github.com/sislelabs/kuso/commit/b60376947e1e8043e65a416f885dd57d26fc3435))
-- Fix(config-as-code): address code-review findings ([76e0421](https://github.com/sislelabs/kuso/commit/76e0421ef7d96212f5dd2019ddb41ede0e5527e9))
-- Fix(cli): import help text references export-archive after rename ([ae71045](https://github.com/sislelabs/kuso/commit/ae71045ae85ea2fc63159b3e2552476def936e9c))
-
-### 📝 Docs
-- Docs: specs for TCP proxy, Postgres PITR, build vuln scanning ([af70854](https://github.com/sislelabs/kuso/commit/af70854d1951af113bfb92fb6139bb40ab92b58e))
-- Docs: implementation plan for config-as-code (kuso.yaml) ([893e6aa](https://github.com/sislelabs/kuso/commit/893e6aaacc2538dc2053d1c6d45eea0a3fd155df))
-- Docs: config-as-code spec — fetch kuso.yaml via GitHub Contents API ([1a2dadc](https://github.com/sislelabs/kuso/commit/1a2dadce674637e5d9ab799db8fceba526126a4e))
-- Docs: spec for config-as-code (kuso.yaml) ([0e7b9a6](https://github.com/sislelabs/kuso/commit/0e7b9a66798f10f5ade4bb7401c0632ae68e37f5))
-
-### 🔨 Refactors
-- Refactor(github): parse kuso.yaml once in applyConfigFromRepo ([c00088d](https://github.com/sislelabs/kuso/commit/c00088ded25dab7bd0f4d7da7a50457370669c83))
 
 
 ---
