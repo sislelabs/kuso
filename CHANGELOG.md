@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.2] — 2026-05-30
+
+### 🐛 Bug Fixes
+- Fix(notifications): persist per-event Discord mention rules server-side ([b0e72d0](https://github.com/sislelabs/kuso/commit/b0e72d03940ed98f141646e325d1709355eab658))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.2 ship) ([2d7f1a9](https://github.com/sislelabs/kuso/commit/2d7f1a911b91595327bf3744eeefb7b39c434761))
+
 ## [0.18.1] — 2026-05-30
 
 ### 🐛 Bug Fixes
@@ -308,18 +316,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(ui): non-prod banner padding + canvas stops drawing implicit addon edges ([7db78f6](https://github.com/sislelabs/kuso/commit/7db78f6d0a52b7f1313589c021c3f3259aa3e481))
-
-## [0.16.9] — 2026-05-28
-
-### ✨ Features
-- Feat(addon): opt-in WebUI proxy + dashboard chip for mailpit/nats consoles ([9ffdb3c](https://github.com/sislelabs/kuso/commit/9ffdb3c869dce20633f0f94dd4c6005be8922a16))
-
-### 🐛 Bug Fixes
-- Fix(cron): use curlimages/curl for kind=http probes (was missing curl) ([9720d0e](https://github.com/sislelabs/kuso/commit/9720d0ed91c73e926a58c603c5773a263501c131))
-
-### 📝 Docs
-- Docs: clarify per-env override path for build-time-inlined frontend envs ([80ee524](https://github.com/sislelabs/kuso/commit/80ee52450f62a25d545e7b764a7a8f6691b7199a))
-- Docs: how to handle NEXT_PUBLIC_* (build-time-inlined) frontend envs ([b9a4d56](https://github.com/sislelabs/kuso/commit/b9a4d56d663fcf154aaccb2c757e2c0626caba19))
 
 
 ---
