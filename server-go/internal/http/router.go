@@ -26,7 +26,6 @@ import (
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
 	"kuso/server/internal/crons"
-	"kuso/server/internal/runs"
 	"kuso/server/internal/db"
 	"kuso/server/internal/github"
 	httphandlers "kuso/server/internal/http/handlers"
@@ -39,6 +38,7 @@ import (
 	"kuso/server/internal/notify"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/projectsecrets"
+	"kuso/server/internal/runs"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/serverstate"
 	"kuso/server/internal/spa"
@@ -331,8 +331,8 @@ func NewRouter(d Deps) http.Handler {
 	// routes → auth routes → SPA fallback) without sprawling 160
 	// lines of handler wiring inline. The auth group itself is
 	// still one block with conditional gates per handler — collapsing
-		// still one block with conditional gates per handler — collapsing
-		// further requires per-handler Module constructors (deferred).
+	// still one block with conditional gates per handler — collapsing
+	// further requires per-handler Module constructors (deferred).
 	mountAuthenticatedRoutes(r, d, authH, ghHandler, bootstrapH)
 
 	// Public install scripts. Mounted before the SPA fallback so the
@@ -419,6 +419,8 @@ func mountAuthenticatedRoutes(
 			rolesH.Mount(r)
 			groupsH := &httphandlers.GroupsHandler{DB: d.DB, Logger: d.Logger}
 			groupsH.Mount(r)
+			grantsH := &httphandlers.GrantsHandler{DB: d.DB, Logger: d.Logger}
+			grantsH.Mount(r)
 			invitesH := &httphandlers.InvitesHandler{DB: d.DB, Issuer: d.Issuer, Logger: d.Logger}
 			invitesH.Mount(r)
 			notifH := &httphandlers.NotificationsHandler{DB: d.DB, Logger: d.Logger, Notify: d.Notify}
