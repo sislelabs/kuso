@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.4] — 2026-05-30
+
+### 🐛 Bug Fixes
+- Fix(access): click-to-add multi-select popovers for members + grants ([2861c18](https://github.com/sislelabs/kuso/commit/2861c185d04c41e924bf61dee6546065b341a5c8))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.4 ship) ([e7e754b](https://github.com/sislelabs/kuso/commit/e7e754b642dce73e038036b66be15d6717265ded))
+
 ## [0.18.3] — 2026-05-30
 
 ### ✨ Features
@@ -314,11 +322,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(migration): use short service name for GetService/lockService ([8395600](https://github.com/sislelabs/kuso/commit/839560036cccf4eaa46aab58c4c6ee8087a3835b))
-
-## [0.16.11] — 2026-05-28
-
-### ✨ Features
-- Feat: remove legacy mode for shared-secret subscription; auto-migrate on startup ([ab48328](https://github.com/sislelabs/kuso/commit/ab48328f9f2146a959fd8eb897ff3b9df7196717))
 
 
 ---
