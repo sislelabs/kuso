@@ -9,7 +9,7 @@ import { useCan, Perms } from "@/features/auth";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, MemoryStick } from "lucide-react";
+import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, MemoryStick, Settings } from "lucide-react";
 import { relativeTime } from "@/lib/format";
 import { useQueries } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
@@ -292,6 +292,9 @@ function ProjectsGrid({
 }: {
   projects: ReadonlyArray<{ metadata: { name: string; uid?: string; creationTimestamp?: string }; spec: { defaultRepo?: { url?: string }; baseDomain?: string; description?: string } }>;
 }) {
+  // Gates the per-card settings shortcut — only instance admins manage
+  // project settings.
+  const canManage = useCan(Perms.SettingsAdmin);
   const queries = useQueries({
     queries: projects.map((p) => ({
       queryKey: ["projects", p.metadata.name, "describe-summary"],
@@ -447,13 +450,30 @@ function ProjectsGrid({
                       </p>
                     )}
                   </div>
-                  {/* The arrow signals the whole card is a link into
-                      kuso. The overlay <Link> handles the actual
-                      nav; this is purely affordance. */}
-                  <ArrowUpRight
-                    aria-hidden
-                    className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--accent)]"
-                  />
+                  <div className="flex shrink-0 items-center gap-1.5">
+                    {/* Settings shortcut. Sits above the overlay <Link>
+                        (pointer-events-auto + higher z) so it navigates
+                        to the project's settings instead of the card's
+                        default "open project" target. */}
+                    {canManage && (
+                      <Link
+                        href={`/projects/${name}/settings`}
+                        aria-label={`Settings for ${name}`}
+                        title="Project settings"
+                        onClick={(e) => e.stopPropagation()}
+                        className="pointer-events-auto relative z-30 inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                      >
+                        <Settings className="h-3.5 w-3.5" />
+                      </Link>
+                    )}
+                    {/* The arrow signals the whole card is a link into
+                        kuso. The overlay <Link> handles the actual
+                        nav; this is purely affordance. */}
+                    <ArrowUpRight
+                      aria-hidden
+                      className="h-3.5 w-3.5 text-[var(--text-tertiary)] transition-colors group-hover:text-[var(--accent)]"
+                    />
+                  </div>
                 </div>
                 <dl className="mt-3 space-y-1 text-[11px]">
                   {repo && <Row icon={GitBranch} value={repo} href={repoURL ?? undefined} />}
@@ -461,12 +481,19 @@ function ProjectsGrid({
                     <Row
                       icon={Globe}
                       value={domain}
-                      // Prefer the resolved live-service URL (correct
-                      // scheme + host). Fall back to https://<domain>
-                      // only when domain is a real host — guards against
-                      // the old "https://undefined" when baseDomain was
-                      // null and no service URL resolved.
-                      href={publicURL ?? (domain ? `https://${domain}` : undefined)}
+                      // The link must match the text. When the card shows
+                      // the project's BASE domain, link there directly —
+                      // not to publicURL (the first live service's host,
+                      // e.g. api.<base>), which sent "distill.sislelabs.com"
+                      // to "api.distill.sislelabs.com". publicURL is only
+                      // the right target when the displayed domain came
+                      // from a service host (baseless projects), where it
+                      // and the service URL are the same host.
+                      href={
+                        p.spec.baseDomain
+                          ? `https://${p.spec.baseDomain}`
+                          : publicURL ?? (domain ? `https://${domain}` : undefined)
+                      }
                     />
                   )}
                 </dl>
