@@ -148,6 +148,28 @@ func callerCanReadSecrets(ctx context.Context, dbConn *db.DB, project string) bo
 	return auth.HasProjectPerm(auth.ProjectRoleFor(tenancy, project), auth.PermSecretsRead)
 }
 
+// callerCanRunSQL reports whether the request's caller may use the SQL
+// browser (list tables / run SELECT) against the project's databases.
+// Admin-only in v2 — a SELECT can read any secret-bearing app table.
+// Fail-closed.
+func callerCanRunSQL(ctx context.Context, dbConn *db.DB, project string) bool {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok {
+		return false
+	}
+	if auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+		return true
+	}
+	if dbConn == nil {
+		return false
+	}
+	tenancy, err := dbConn.ListUserTenancyCached(ctx, claims.UserID)
+	if err != nil {
+		return false
+	}
+	return auth.HasProjectPerm(auth.ProjectRoleFor(tenancy, project), auth.PermSQLRead)
+}
+
 // maskEnvValues returns a copy of the env-var slice with every Value
 // replaced by a sentinel, used when the caller may write but not read
 // env values. Names + valueFrom refs are preserved so the editor UI can

@@ -172,45 +172,100 @@ func (d *DB) SetGroupTenancy(ctx context.Context, groupID string, t GroupTenancy
 	return nil
 }
 
-// ListUserTenancy walks every group a user belongs to and returns
-// the union of project memberships + the highest instance role.
-// Used by the auth flow to build the JWT permission claim.
+// ListUserTenancy resolves a user's full effective tenancy for the auth
+// layer (role system v2). It unions:
 //
-// Highest-wins on instance role: admin > billing > viewer > member > pending.
-// On project role: owner > deployer > viewer (per-project).
+//   - the user's DIRECT instance role (User.instanceRole) + every group's
+//     instance role → highest-wins.
+//   - every ProjectGrant addressing the user directly OR via a group they
+//     belong to → per-project effective role.
+//
+// Per-project effective role for one grant = its roleOverride if set,
+// else the user's resolved instance role (inherited), else viewer (an
+// explicit grant always confers ≥ read). Across multiple grants on the
+// same project, highest-wins.
+//
+// The legacy UserGroup.projectMemberships JSON is no longer read.
 func (d *DB) ListUserTenancy(ctx context.Context, userID string) (GroupTenancy, error) {
-	rows, err := d.QueryContext(ctx, `
-SELECT g."instanceRole", g."projectMemberships"
+	// 1. Highest-wins instance role across the user's direct role + groups.
+	bestInstance := InstanceRole("")
+	consider := func(r InstanceRole) {
+		if rankInstance(r) > rankInstance(bestInstance) {
+			bestInstance = r
+		}
+	}
+
+	var directRole sql.NullString
+	if err := d.QueryRowContext(ctx,
+		`SELECT "instanceRole" FROM "User" WHERE id = ?`, userID).Scan(&directRole); err != nil {
+		if !errors.Is(err, sql.ErrNoRows) {
+			return GroupTenancy{}, fmt.Errorf("db: user instance role: %w", err)
+		}
+	}
+	if directRole.Valid {
+		consider(InstanceRole(directRole.String))
+	}
+
+	grpRows, err := d.QueryContext(ctx, `
+SELECT g."instanceRole"
 FROM "UserGroup" g
 JOIN "_UserToUserGroup" m ON m."B" = g.id
 WHERE m."A" = ?`, userID)
 	if err != nil {
-		return GroupTenancy{}, fmt.Errorf("db: list user tenancy: %w", err)
+		return GroupTenancy{}, fmt.Errorf("db: list user groups: %w", err)
 	}
-	defer rows.Close()
-
-	bestInstance := InstanceRolePending
-	memByProject := map[string]ProjectRole{}
-	for rows.Next() {
-		var role, memJSON string
-		if err := rows.Scan(&role, &memJSON); err != nil {
+	for grpRows.Next() {
+		var role sql.NullString
+		if err := grpRows.Scan(&role); err != nil {
+			grpRows.Close()
 			return GroupTenancy{}, err
 		}
-		if rankInstance(InstanceRole(role)) > rankInstance(bestInstance) {
-			bestInstance = InstanceRole(role)
+		consider(InstanceRole(role.String))
+	}
+	grpRows.Close()
+	if err := grpRows.Err(); err != nil {
+		return GroupTenancy{}, err
+	}
+
+	// 2. Project grants: direct user grants + grants on the user's groups.
+	//    Each grant resolves to override, else inherited instance role,
+	//    else viewer. Highest-wins per project.
+	pgRows, err := d.QueryContext(ctx, `
+SELECT pg.project, pg."roleOverride"
+FROM "ProjectGrant" pg
+WHERE pg."userId" = ?
+   OR pg."groupId" IN (SELECT m."B" FROM "_UserToUserGroup" m WHERE m."A" = ?)`,
+		userID, userID)
+	if err != nil {
+		return GroupTenancy{}, fmt.Errorf("db: list project grants: %w", err)
+	}
+	defer pgRows.Close()
+
+	inherited := ProjectRole(bestInstance) // instance role as a project level
+	memByProject := map[string]ProjectRole{}
+	for pgRows.Next() {
+		var project string
+		var override sql.NullString
+		if err := pgRows.Scan(&project, &override); err != nil {
+			return GroupTenancy{}, err
 		}
-		if memJSON != "" {
-			var mems []ProjectMembership
-			if err := json.Unmarshal([]byte(memJSON), &mems); err != nil {
-				continue
-			}
-			for _, m := range mems {
-				if rankProject(m.Role) > rankProject(memByProject[m.Project]) {
-					memByProject[m.Project] = m.Role
-				}
-			}
+		role := ProjectRole(override.String)
+		if role == "" {
+			role = inherited
+		}
+		if role == "" {
+			// Inherited instance role is also absent → an explicit grant
+			// still confers at least read.
+			role = ProjectRoleViewer
+		}
+		if rankProject(role) > rankProject(memByProject[project]) {
+			memByProject[project] = role
 		}
 	}
+	if err := pgRows.Err(); err != nil {
+		return GroupTenancy{}, err
+	}
+
 	out := GroupTenancy{InstanceRole: bestInstance}
 	for project, role := range memByProject {
 		out.ProjectMemberships = append(out.ProjectMemberships, ProjectMembership{Project: project, Role: role})

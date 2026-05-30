@@ -83,13 +83,19 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing project", http.StatusBadRequest)
 		return
 	}
-	// Export reads everything in the project including the resolved
-	// secret values, so gate on Deployer-or-higher. Viewer would also
-	// be defensible but secret values are the kind of thing a viewer
-	// shouldn't be able to siphon out in one round-trip.
+	// Export tars the WHOLE project including resolved secret values +
+	// inline env-var values — a one-shot mass credential exfiltration
+	// surface. In role-system v2 that's admin-only (the same boundary as
+	// reading any single secret value, and matching Import, which is
+	// already admin-gated). callerCanReadSecrets is the project-scoped
+	// admin check.
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	if !callerCanReadSecrets(ctx, h.DB, project) {
+		http.Error(w, "forbidden: exporting a project (which includes secret values) requires the admin role", http.StatusForbidden)
 		return
 	}
 	if h.Projects == nil || h.Addons == nil || h.Kube == nil {
@@ -627,7 +633,9 @@ func applyProjectRename(meta *metav1.ObjectMeta, specProject *string, renameMap 
 // thin wrappers around strings.* — kept local so the import code is
 // self-contained and reads top-to-bottom without an import bounce.
 func pathHasPrefix(s, prefix string) bool { return len(s) >= len(prefix) && s[:len(prefix)] == prefix }
-func pathHasSuffix(s, suffix string) bool { return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix }
+func pathHasSuffix(s, suffix string) bool {
+	return len(s) >= len(suffix) && s[len(s)-len(suffix):] == suffix
+}
 func pathTrimPrefix(s, prefix string) string {
 	if pathHasPrefix(s, prefix) {
 		return s[len(prefix):]

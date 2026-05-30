@@ -222,12 +222,20 @@ func (h *AddonsHandler) ResyncExternal(w http.ResponseWriter, r *http.Request) {
 func (h *AddonsHandler) Secret(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
-	// Plaintext connection values — Deployer minimum so Viewers don't
-	// see DB passwords.
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
+	project := chi.URLParam(r, "project")
+	// Plaintext connection values (DB passwords, DATABASE_URL, etc.) are
+	// secret VALUES — admin-only in role-system v2, the same boundary as
+	// reading env values / opening a shell. Editors can manage the addon
+	// but must not siphon its credentials. SecretKeys (names only) stays
+	// at viewer.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
-	values, err := h.Svc.SecretValues(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"))
+	if !callerCanReadSecrets(ctx, h.DB, project) {
+		http.Error(w, "forbidden: reading addon connection values requires the admin role", http.StatusForbidden)
+		return
+	}
+	values, err := h.Svc.SecretValues(ctx, project, chi.URLParam(r, "addon"))
 	if err != nil {
 		h.fail(w, "addon secret", err)
 		return

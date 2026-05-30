@@ -228,19 +228,13 @@ VALUES (?, ?, ?, 'h', false, true, 'local', NOW(), NOW())`,
 	}
 }
 
+// seedUserWithProjectRole gives the user a direct ProjectGrant on the
+// project with an explicit role override — the role-system-v2 path
+// (the legacy projectMemberships JSON is no longer read by the resolver).
 func seedUserWithProjectRole(t *testing.T, d *db.DB, userID, project string, role db.ProjectRole) {
 	t.Helper()
 	seedUserNoGroup(t, d, userID)
-	groupID := userID + "-g"
-	if _, err := d.ExecContext(context.Background(), `
-INSERT INTO "UserGroup" (id, name, description, "instanceRole", "projectMemberships", "createdAt", "updatedAt")
-VALUES (?, ?, '', 'member', ?, NOW(), NOW())`,
-		groupID, groupID,
-		`[{"project":"`+project+`","role":"`+string(role)+`"}]`); err != nil {
-		t.Fatalf("seed group: %v", err)
-	}
-	if _, err := d.ExecContext(context.Background(), `
-INSERT INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`, userID, groupID); err != nil {
-		t.Fatalf("seed membership: %v", err)
+	if _, err := d.AddProjectGrant(context.Background(), project, userID, "", role); err != nil {
+		t.Fatalf("seed project grant: %v", err)
 	}
 }

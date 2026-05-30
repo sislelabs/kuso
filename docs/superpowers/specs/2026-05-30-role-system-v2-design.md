@@ -152,6 +152,31 @@ viewer/editor access to users and groups, and add users/groups to projects, in t
 (`shell:exec` is a **new** permission gating the terminal/exec websocket — previously
 ungated-by-perm or tied to project access.)
 
+### Admin-only secret-bearing surfaces (full list)
+
+The "editor can't read secret values" rule is only meaningful if **every** surface that
+reveals a secret value (or lets you trivially read one) is admin-gated. The complete set,
+all enforced via `callerCanReadSecrets` / `callerCanRunSQL` (instance-admin OR effective
+project role == admin):
+
+1. **Env var values** — `GetEnv` / `GetService` (values masked with `••••••••` for non-admins).
+2. **Pod shell / exec** — `terminal_ws` (a shell can `printenv`).
+3. **SQL browser** — `backups.SQLTables` / `backups.SQLQuery` (a `SELECT` reads any table).
+4. **Addon connection values** — `addons.Secret` (DATABASE_URL, DB passwords).
+5. **Project export** — `export.Export` (tars resolved secrets + inline env values; mass
+   exfiltration — matches Import, already admin-only).
+6. **Trigger a run** — `runs.Create` (runs an arbitrary command in the prod pod with the
+   service's full env; equivalent to a shell).
+
+Editors retain the *write* / *manage* counterparts: set env vars (blind), manage addons,
+restore a DB backup (destructive write, returns no data), cancel/delete runs, deploy, scale.
+Keys-only / metadata surfaces (`secrets.List`, `addons.SecretKeys`, `backups.List`) stay at
+viewer/editor since they expose no values.
+
+> These six were the subjects of an automated security-review pass after the initial bulk
+> role-rename mechanically preserved the *old* (lower) trust level on them. Caught and raised
+> to admin before merge.
+
 Instance-level `viewer`/`editor` carry NO permissions on their own; permissions are
 always computed in the context of a project the user can see, at their effective role
 there. Instance pages (settings, users, audit, billing) require `admin`.

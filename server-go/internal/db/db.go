@@ -93,6 +93,12 @@ func Open(dsn string) (*DB, error) {
 		_ = d.Close()
 		return nil, err
 	}
+	// One-shot role-system-v2 wipe-and-re-grant. Marker-guarded; no-op
+	// after the first boot on the new schema.
+	if err := d.migrateRoleSystemV2(context.Background()); err != nil {
+		_ = d.Close()
+		return nil, err
+	}
 	return d, nil
 }
 
@@ -215,8 +221,8 @@ func rewriteQuery(q string) string {
 
 // rewriteUpsert turns SQLite-only INSERT shapes into Postgres ones:
 //
-//   INSERT OR IGNORE INTO X (...)  →  INSERT INTO X (...) ... ON CONFLICT DO NOTHING
-//   INSERT OR REPLACE INTO X (...) →  INSERT INTO X (...) ... ON CONFLICT DO UPDATE SET ...
+//	INSERT OR IGNORE INTO X (...)  →  INSERT INTO X (...) ... ON CONFLICT DO NOTHING
+//	INSERT OR REPLACE INTO X (...) →  INSERT INTO X (...) ... ON CONFLICT DO UPDATE SET ...
 //
 // The IGNORE form is trivial — append the ON CONFLICT clause if not
 // already present and strip the OR-clause. The REPLACE form is more

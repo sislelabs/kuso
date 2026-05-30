@@ -182,10 +182,11 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	addon := chi.URLParam(r, "addon")
 	ctx, cancel := backupCtx(r)
 	defer cancel()
-	// Restoring/listing/querying an addon's data needs project Owner —
-	// not Deployer, since SQL access can read passwords / PII / billing
-	// records that even a deploy-permissioned teammate shouldn't see.
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+	// Listing an addon's backups returns only S3 object metadata (keys,
+	// sizes, timestamps) — not the data itself — so editor is enough.
+	// The data-revealing surfaces (SQL browser, secret values) are
+	// separately admin-gated in role-system v2.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
 
@@ -251,9 +252,11 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := backupCtx(r)
 	defer cancel()
-	// Owner-only — Restore overwrites the live DB with a snapshot
-	// (destructive) and a Deployer-level user shouldn't be able to
-	// roll back data without the project owner signing off.
+	// Editor — Restore overwrites the live DB with a snapshot
+	// (destructive write). It does not return data to the caller, so it's
+	// a write-grade action, not a secret-read one; editor (the v2 write
+	// role) is the right bar. The data-READING surfaces (SQL browser,
+	// secret values, export) are separately admin-gated.
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
@@ -314,11 +317,11 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 			Name:      jobName,
 			Namespace: h.Namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/managed-by":      "kuso-server",
-				"kuso.sislelabs.com/role":           "restore",
-				"kuso.sislelabs.com/project":        project,
-				"kuso.sislelabs.com/addon":          destAddon,
-				"kuso.sislelabs.com/source-addon":   addon,
+				"app.kubernetes.io/managed-by":    "kuso-server",
+				"kuso.sislelabs.com/role":         "restore",
+				"kuso.sislelabs.com/project":      project,
+				"kuso.sislelabs.com/addon":        destAddon,
+				"kuso.sislelabs.com/source-addon": addon,
 			},
 		},
 		Spec: batchv1.JobSpec{
@@ -524,8 +527,14 @@ func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
 	addon := chi.URLParam(r, "addon")
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	// SQL browser reaches the user's data — Owner-only.
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+	// The SQL browser can SELECT any row — including secret-bearing app
+	// tables (users.password_hash, tokens, etc.). That's the same class
+	// of leak as reading env values, so it's ADMIN-ONLY in role-system v2.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	if !callerCanRunSQL(ctx, h.DB, project) {
+		http.Error(w, "forbidden: the SQL browser requires the admin role", http.StatusForbidden)
 		return
 	}
 
@@ -609,10 +618,10 @@ type SQLQueryRequest struct {
 // driver type ambiguity. Trade-off: bigints lose precision in JSON,
 // but the user is browsing, not aggregating.
 type SQLQueryResponse struct {
-	Columns  []string   `json:"columns"`
-	Rows     [][]string `json:"rows"`
-	Truncated bool      `json:"truncated"`
-	Elapsed  string     `json:"elapsed"`
+	Columns   []string   `json:"columns"`
+	Rows      [][]string `json:"rows"`
+	Truncated bool       `json:"truncated"`
+	Elapsed   string     `json:"elapsed"`
 }
 
 func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
@@ -635,9 +644,14 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	// Owner-only — read-only is enforced inside the tx, but a
-	// SELECT on `users.password_hash` is plenty bad on its own.
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+	// Admin-only — read-only is enforced inside the tx, but a
+	// SELECT on `users.password_hash` is plenty bad on its own. Same
+	// secret-bearing-read boundary as env values / shell in v2.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	if !callerCanRunSQL(ctx, h.DB, project) {
+		http.Error(w, "forbidden: the SQL browser requires the admin role", http.StatusForbidden)
 		return
 	}
 	// Reject queries that hit Postgres' file/network/process built-ins.

@@ -77,7 +77,16 @@ func (h *RunsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+	// Triggering a run executes an ARBITRARY command inside the prod pod
+	// with the service's full env (DATABASE_URL, secrets) — equivalent to
+	// a pod shell, so it's ADMIN-ONLY in role-system v2 (an editor could
+	// otherwise `printenv` past the env-value + shell restrictions). The
+	// read-only run endpoints (Get/List/logs) stay at viewer/editor.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	if !callerCanReadSecrets(ctx, h.DB, project) {
+		http.Error(w, "forbidden: triggering a run requires the admin role", http.StatusForbidden)
 		return
 	}
 	if claims, ok := auth.ClaimsFromContext(ctx); ok && claims != nil {

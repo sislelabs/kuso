@@ -689,3 +689,35 @@ CREATE INDEX IF NOT EXISTS "PreviewReview_project_pr_idx"
     ON "PreviewReview"("project", "prNumber");
 CREATE INDEX IF NOT EXISTS "PreviewReview_token_idx"
     ON "PreviewReview"("token");
+
+-- v0.17.x: role system v2. Three roles (admin/editor/viewer) grantable
+-- to both users and groups.
+--
+-- (1) A user can carry an instance role directly (not only via groups).
+--     NULL = no direct instance role; the effective instance role is the
+--     highest of this + every group the user is in.
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "instanceRole" TEXT;
+
+-- (2) ProjectGrant — first-class per-project access. Each row grants ONE
+--     grantee (a user XOR a group) access to ONE project, optionally with
+--     a roleOverride; NULL override = inherit the grantee's instance role
+--     (falling back to viewer). This replaces the JSON projectMemberships
+--     blob on UserGroup, which is left in place but no longer read.
+CREATE TABLE IF NOT EXISTS "ProjectGrant" (
+    "id"           TEXT PRIMARY KEY,
+    "project"      TEXT NOT NULL,
+    "userId"       TEXT,
+    "groupId"      TEXT,
+    "roleOverride" TEXT,
+    "createdAt"    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT "ProjectGrant_user_fk"  FOREIGN KEY ("userId")  REFERENCES "User"("id")      ON DELETE CASCADE,
+    CONSTRAINT "ProjectGrant_group_fk" FOREIGN KEY ("groupId") REFERENCES "UserGroup"("id") ON DELETE CASCADE,
+    -- exactly one of userId / groupId must be set
+    CONSTRAINT "ProjectGrant_one_grantee" CHECK (("userId" IS NOT NULL) <> ("groupId" IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS "ProjectGrant_project_idx" ON "ProjectGrant"("project");
+CREATE INDEX IF NOT EXISTS "ProjectGrant_user_idx"  ON "ProjectGrant"("userId")  WHERE "userId"  IS NOT NULL;
+CREATE INDEX IF NOT EXISTS "ProjectGrant_group_idx" ON "ProjectGrant"("groupId") WHERE "groupId" IS NOT NULL;
+-- at most one grant per (project, grantee)
+CREATE UNIQUE INDEX IF NOT EXISTS "ProjectGrant_user_uq"  ON "ProjectGrant"("project","userId")  WHERE "userId"  IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS "ProjectGrant_group_uq" ON "ProjectGrant"("project","groupId") WHERE "groupId" IS NOT NULL;
