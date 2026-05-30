@@ -106,6 +106,17 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
   const showFooter = true;
   // Visibility, in priority order:
   //   internal=true        → no Ingress; show "internal only" chip.
+  //   env.spec.additionalHosts[0]
+  //                        → the env-scoped custom domain. v0.16.19+
+  //                           per-env custom domains live here (NOT in
+  //                           the project-level service.spec.domains),
+  //                           so this is safe to surface on any env's
+  //                           node — a preview env that has no custom
+  //                           domain simply has an empty list and
+  //                           falls through to its own scoped host.
+  //                           This is the user's canonical public URL
+  //                           (e.g. tickero.bg), so prefer it over the
+  //                           auto-generated host (frontend.tickero.bg).
   //   env.spec.host        → the env-scoped hostname (where the
   //                           Ingress actually routes for this env).
   //                           Critical for staging/preview tabs — the
@@ -122,16 +133,22 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
     !!(data.service.spec as { internal?: boolean } | undefined)?.internal;
   const envHost = data.env?.spec?.host;
   const envTLS = data.env?.spec?.tlsEnabled ?? true;
+  // The env's custom domain wins over its auto-host. Same TLS flag as
+  // the primary host — additionalHosts share the env's ingress, which
+  // is provisioned with a single tls config.
+  const envCustomHost = data.env?.spec?.additionalHosts?.find((h) => !!h);
   const customDomain = data.service.spec.domains?.find((d) => d?.host)?.host;
   const customTLS =
     data.service.spec.domains?.find((d) => d?.host)?.tls ?? true;
   const url = internal
     ? undefined
-    : envHost
-      ? `${envTLS ? "https" : "http"}://${envHost}`
-      : customDomain
-        ? `${customTLS ? "https" : "http"}://${customDomain}`
-        : (data.env?.status?.url as string | undefined);
+    : envCustomHost
+      ? `${envTLS ? "https" : "http"}://${envCustomHost}`
+      : envHost
+        ? `${envTLS ? "https" : "http"}://${envHost}`
+        : customDomain
+          ? `${customTLS ? "https" : "http"}://${customDomain}`
+          : (data.env?.status?.url as string | undefined);
   const replicas = replicasFor(data.env);
   // Display the user-supplied label when set; fall back to the slug
   // for back-compat with services created before v0.7.43 (no

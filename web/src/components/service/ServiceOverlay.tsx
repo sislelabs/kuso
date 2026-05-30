@@ -337,13 +337,19 @@ export function ServiceOverlay({
   // populates today, so every overlay header said "no URL yet" even
   // for envs with a host. The canvas already had the fallback; we
   // were just missing the same chain here. Order:
-  //   internal=true   → no public URL (Service exists, no Ingress)
-  //   env.spec.host   → the env's primary host (auto-domain OR custom)
-  //   service custom  → service-level domains[0] when env.host is empty
-  //   env.status.url  → legacy fallback for old data
+  //   internal=true        → no public URL (Service exists, no Ingress)
+  //   env.additionalHosts  → the env's custom domain (v0.16.19+ per-env
+  //                           custom domains; canonical public URL, so
+  //                           prefer it over the auto-host). Mirrors
+  //                           the canvas ServiceNode resolution.
+  //   env.spec.host        → the env's primary host (auto-domain)
+  //   service custom       → service-level domains[0] when env.host is empty
+  //   env.status.url       → legacy fallback for old data
   const svcInternal = !!(svc.data?.spec as { internal?: boolean } | undefined)?.internal;
   const envHost = env?.spec?.host;
   const envTLS = (env?.spec as { tlsEnabled?: boolean } | undefined)?.tlsEnabled ?? true;
+  const envCustomHost = (env?.spec as { additionalHosts?: string[] } | undefined)
+    ?.additionalHosts?.find((h) => !!h);
   const customDomain = (svc.data?.spec as { domains?: { host?: string; tls?: boolean }[] } | undefined)
     ?.domains?.find((d) => d?.host)?.host;
   const customTLS =
@@ -351,11 +357,13 @@ export function ServiceOverlay({
       ?.domains?.find((d) => d?.host)?.tls ?? true;
   const url = svcInternal
     ? undefined
-    : envHost
-      ? `${envTLS ? "https" : "http"}://${envHost}`
-      : customDomain
-        ? `${customTLS ? "https" : "http"}://${customDomain}`
-        : (env?.status?.url as string | undefined);
+    : envCustomHost
+      ? `${envTLS ? "https" : "http"}://${envCustomHost}`
+      : envHost
+        ? `${envTLS ? "https" : "http"}://${envHost}`
+        : customDomain
+          ? `${customTLS ? "https" : "http"}://${customDomain}`
+          : (env?.status?.url as string | undefined);
   const ready = !!env?.status?.ready;
   const phase = (env?.status?.phase as string | undefined)?.toLowerCase();
   // "rolling" is a real running state, not a diagnostic — the
