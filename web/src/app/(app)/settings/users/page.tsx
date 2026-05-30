@@ -20,6 +20,9 @@ interface UserRow {
   isActive: boolean;
   provider?: string;
   roleName?: string;
+  // v2 direct instance role: "admin" | "editor" | "viewer" | "" (inherit
+  // from groups). Admin-editable; "admin" lets the user see every project.
+  instanceRole?: string;
   createdAt?: string;
   lastLogin?: string;
   groups?: string[];
@@ -407,6 +410,27 @@ function UserRowItem({
       }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["admin", "users"] }),
   });
+  // Instance role: the user's default access level across the instance.
+  // "admin" sees every project; editor/viewer set the baseline on
+  // granted projects; "" inherits from the user's groups. Server
+  // reissues the user's tokens on change so it takes effect on their
+  // next request.
+  const setInstanceRole = useMutation({
+    mutationFn: (role: string) =>
+      api(`/api/users/${encodeURIComponent(u.id)}/instance-role`, {
+        method: "PUT",
+        body: { role },
+      }),
+    onSuccess: (_d, role) => {
+      toast.success(
+        role
+          ? `${u.username} is now ${role}`
+          : `${u.username} now inherits from groups`
+      );
+      qc.invalidateQueries({ queryKey: ["admin", "users"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Role change failed"),
+  });
   return (
     <div className="flex items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3">
       <span
@@ -442,6 +466,22 @@ function UserRowItem({
       </div>
       {canWrite && (
         <>
+          <label className="flex shrink-0 items-center gap-1.5" title="Instance role — admin sees every project; editor/viewer set the default on granted projects; inherit uses the user's groups.">
+            <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              role
+            </span>
+            <select
+              value={u.instanceRole ?? ""}
+              disabled={setInstanceRole.isPending}
+              onChange={(e) => setInstanceRole.mutate(e.target.value)}
+              className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)]"
+            >
+              <option value="">inherit (groups)</option>
+              <option value="admin">admin</option>
+              <option value="editor">editor</option>
+              <option value="viewer">viewer</option>
+            </select>
+          </label>
           <button
             type="button"
             onClick={() => toggleActive.mutate(!u.isActive)}

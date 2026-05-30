@@ -17,12 +17,16 @@ type UserSummary struct {
 	LastName  sql.NullString
 	IsActive  bool
 	RoleName  sql.NullString
+	// InstanceRole is the v2 direct instance role (admin/editor/viewer),
+	// NULL/"" when the user inherits from their groups. Distinct from
+	// RoleName (the legacy Role join) — the admin UI edits this.
+	InstanceRole sql.NullString
 }
 
 // ListUsers returns the slim admin-list shape.
 func (d *DB) ListUsers(ctx context.Context) ([]UserSummary, error) {
 	rows, err := d.QueryContext(ctx, `
-SELECT u.id, u.username, u.email, u."firstName", u."lastName", u."isActive", r.name
+SELECT u.id, u.username, u.email, u."firstName", u."lastName", u."isActive", r.name, u."instanceRole"
 FROM "User" u LEFT JOIN "Role" r ON r.id = u."roleId"
 ORDER BY u.username`)
 	if err != nil {
@@ -32,7 +36,7 @@ ORDER BY u.username`)
 	var out []UserSummary
 	for rows.Next() {
 		var u UserSummary
-		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.FirstName, &u.LastName, &u.IsActive, &u.RoleName); err != nil {
+		if err := rows.Scan(&u.ID, &u.Username, &u.Email, &u.FirstName, &u.LastName, &u.IsActive, &u.RoleName, &u.InstanceRole); err != nil {
 			return nil, fmt.Errorf("db: scan user: %w", err)
 		}
 		out = append(out, u)

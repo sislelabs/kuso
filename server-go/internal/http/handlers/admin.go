@@ -365,6 +365,10 @@ func summariseUsers(in []db.UserSummary) []map[string]any {
 			"lastName":  nullStr(u.LastName),
 			"isActive":  u.IsActive,
 			"role":      nullStr(u.RoleName),
+			// v2 direct instance role (admin/editor/viewer or "" =
+			// inherit from groups). The Users admin UI edits this via
+			// PUT /api/users/:id/instance-role.
+			"instanceRole": nullStr(u.InstanceRole),
 		})
 	}
 	return out
