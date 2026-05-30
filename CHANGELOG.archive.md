@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.16.8] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix: prevent worker ingresses + bound rollout history ([b698dbd](https://github.com/sislelabs/kuso/commit/b698dbdc29acc4580d26e2b0dac6725231a62ca1))
+
 ## [0.16.7] — 2026-05-28
 
 ### 🐛 Bug Fixes
