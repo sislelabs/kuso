@@ -5,6 +5,15 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.5] — 2026-05-30
+
+### 🐛 Bug Fixes
+- Fix(projects): card domain links to the base domain + add settings shortcut ([db84a2f](https://github.com/sislelabs/kuso/commit/db84a2f1aaa15318820ad6a8a8cb45fb3895ebef))
+- Fix(auth): don't log out the admin when they change a group they're in ([a982977](https://github.com/sislelabs/kuso/commit/a98297778d8f96afb5691e3bcea7f15e5a102331))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.5 ship) ([5e63f1d](https://github.com/sislelabs/kuso/commit/5e63f1df259f6bc3451e277ec92b6a7c5645816f))
+
 ## [0.18.4] — 2026-05-30
 
 ### 🐛 Bug Fixes
@@ -317,11 +326,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(ui): chip toggle silently no-op'd — api() double-stringified the body ([5107577](https://github.com/sislelabs/kuso/commit/5107577e8431904a741682a0ce5ae5c20819c15f))
-
-## [0.16.12] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(migration): use short service name for GetService/lockService ([8395600](https://github.com/sislelabs/kuso/commit/839560036cccf4eaa46aab58c4c6ee8087a3835b))
 
 
 ---
