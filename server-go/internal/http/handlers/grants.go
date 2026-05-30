@@ -138,7 +138,7 @@ func (h *GrantsHandler) SetGroupInstanceRole(w http.ResponseWriter, r *http.Requ
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	if n, err := h.DB.InvalidateUsersByGroup(ctx, groupID, "group.instance-role.update"); err != nil {
+	if n, err := h.DB.InvalidateUsersByGroup(ctx, groupID, "group.instance-role.update", actingUserID(r)); err != nil {
 		h.Logger.Warn("set group role: invalidate tokens", "group", groupID, "err", err)
 	} else if n > 0 {
 		h.Logger.Info("set group role: invalidated tokens", "group", groupID, "users", n)
@@ -200,7 +200,7 @@ func (h *GrantsHandler) AddGrant(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	h.invalidateGrantee(ctx, body.UserID, body.GroupID, "project.grant.add")
+	h.invalidateGrantee(ctx, body.UserID, body.GroupID, "project.grant.add", actingUserID(r))
 	writeJSON(w, http.StatusOK, map[string]any{"id": id})
 }
 
@@ -234,13 +234,18 @@ func (h *GrantsHandler) RemoveGrant(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
-	h.invalidateGrantee(ctx, userID, groupID, "project.grant.remove")
+	h.invalidateGrantee(ctx, userID, groupID, "project.grant.remove", actingUserID(r))
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // invalidateGrantee bumps token watermarks for whichever principal a
-// grant change touched, so the access change is immediate.
-func (h *GrantsHandler) invalidateGrantee(ctx context.Context, userID, groupID, reason string) {
+// grant change touched, so the access change is immediate. actingUser
+// is spared the group-path invalidation so an admin granting a group
+// they're in access to a project doesn't log themselves out (their own
+// project access re-resolves fresh per-request). The user-path is a
+// single explicit principal, so it's left as-is — if an admin changes a
+// grant targeting their OWN user, the reissue-on-next-login is expected.
+func (h *GrantsHandler) invalidateGrantee(ctx context.Context, userID, groupID, reason, actingUser string) {
 	if userID != "" {
 		if err := h.DB.InvalidateUserTokens(ctx, userID, reason, time.Now()); err != nil {
 			h.Logger.Warn("grant change: invalidate user tokens", "user", userID, "err", err)
@@ -248,7 +253,7 @@ func (h *GrantsHandler) invalidateGrantee(ctx context.Context, userID, groupID, 
 		return
 	}
 	if groupID != "" {
-		if _, err := h.DB.InvalidateUsersByGroup(ctx, groupID, reason); err != nil {
+		if _, err := h.DB.InvalidateUsersByGroup(ctx, groupID, reason, actingUser); err != nil {
 			h.Logger.Warn("grant change: invalidate group tokens", "group", groupID, "err", err)
 		}
 	}

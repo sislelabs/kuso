@@ -141,8 +141,10 @@ func (h *GroupsHandler) PutTenancy(w http.ResponseWriter, r *http.Request) {
 	}
 	// Tenancy edit changes effective permissions for every member of
 	// the group. Bump their watermarks so the new shape takes effect
-	// immediately instead of waiting for token expiry.
-	if n, err := h.DB.InvalidateUsersByGroup(ctx, chi.URLParam(r, "id"), "group.tenancy.update"); err != nil {
+	// immediately instead of waiting for token expiry. Spare the acting
+	// admin so editing a group they belong to doesn't log them out
+	// (their own perms re-resolve fresh per-request from the new DB).
+	if n, err := h.DB.InvalidateUsersByGroup(ctx, chi.URLParam(r, "id"), "group.tenancy.update", actingUserID(r)); err != nil {
 		h.Logger.Warn("put tenancy: invalidate user tokens", "group", chi.URLParam(r, "id"), "err", err)
 	} else if n > 0 {
 		h.Logger.Info("put tenancy: invalidated user tokens", "group", chi.URLParam(r, "id"), "users", n)
@@ -218,8 +220,9 @@ func (h *GroupsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	groupID := chi.URLParam(r, "id")
 	// Bump every member's watermark BEFORE the cascade DELETE wipes
 	// the pivot rows — InvalidateUsersByGroup wouldn't find them
-	// after.
-	if n, err := h.DB.InvalidateUsersByGroup(ctx, groupID, "group.delete"); err != nil {
+	// after. Spare the acting admin so deleting a group they're in
+	// doesn't log them out.
+	if n, err := h.DB.InvalidateUsersByGroup(ctx, groupID, "group.delete", actingUserID(r)); err != nil {
 		h.Logger.Warn("delete group: invalidate user tokens", "group", groupID, "err", err)
 	} else if n > 0 {
 		h.Logger.Info("delete group: invalidated user tokens", "group", groupID, "users", n)

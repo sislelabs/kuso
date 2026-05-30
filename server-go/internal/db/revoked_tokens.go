@@ -182,7 +182,14 @@ ON CONFLICT ("userId") DO UPDATE SET
 // InvalidateUsersByGroup is the group-membership analogue. Called
 // when a UserGroup's projectMemberships JSON is edited or the group
 // itself is deleted.
-func (d *DB) InvalidateUsersByGroup(ctx context.Context, groupID, reason string) (int64, error) {
+//
+// exceptUserID, when non-empty, is spared the invalidation — used to
+// keep the acting admin logged in when they change a group they're a
+// member of. Their own access is re-resolved fresh per-request from the
+// (now-updated) DB anyway, and the JWT only carries instance-level
+// perms; only the OTHER members hold stale JWTs that need revoking.
+// Pass "" to invalidate every member (e.g. system-initiated changes).
+func (d *DB) InvalidateUsersByGroup(ctx context.Context, groupID, reason, exceptUserID string) (int64, error) {
 	if groupID == "" {
 		return 0, nil
 	}
@@ -191,12 +198,12 @@ func (d *DB) InvalidateUsersByGroup(ctx context.Context, groupID, reason string)
 INSERT INTO "UserTokenInvalidation" ("userId", "invalidatedBefore", "reason", "updatedAt")
 SELECT m."A", $1, $2, $3
 FROM "_UserToUserGroup" m
-WHERE m."B" = $4
+WHERE m."B" = $4 AND ($5 = '' OR m."A" <> $5)
 ON CONFLICT ("userId") DO UPDATE SET
   "invalidatedBefore" = excluded."invalidatedBefore",
   "reason" = excluded."reason",
   "updatedAt" = excluded."updatedAt"`,
-		now, reason, now, groupID,
+		now, reason, now, groupID, exceptUserID,
 	)
 	if err != nil {
 		return 0, fmt.Errorf("db: invalidate users by group: %w", err)

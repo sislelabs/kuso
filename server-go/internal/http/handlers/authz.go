@@ -52,6 +52,17 @@ func requireAdmin(w http.ResponseWriter, r *http.Request) bool {
 	return requirePerm(w, r, auth.PermSettingsAdmin)
 }
 
+// actingUserID returns the ID of the authenticated caller, or "" if no
+// claims are present. Used to spare the acting admin from bulk token
+// invalidations they themselves triggered (so editing a group you're
+// in doesn't log you out).
+func actingUserID(r *http.Request) string {
+	if claims, ok := auth.ClaimsFromContext(r.Context()); ok {
+		return claims.UserID
+	}
+	return ""
+}
+
 // AdminOnly is the middleware form of requireAdmin — wrap a chi.Group
 // with it to gate every route inside in one place. Cuts the
 // "did I forget the gate on this method" footgun that produced the
