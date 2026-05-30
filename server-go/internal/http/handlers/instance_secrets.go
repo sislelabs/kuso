@@ -72,7 +72,15 @@ func (h *InstanceSecretsHandler) ListAddons(w http.ResponseWriter, r *http.Reque
 // layer rather than at the service layer so the privileged endpoint
 // can keep the same struct.
 func (h *InstanceSecretsHandler) ListAddonNames(w http.ResponseWriter, r *http.Request) {
-	if !requirePerm(w, r, auth.PermAddonsWrite) {
+	// Any authenticated user may read this picker. It returns only
+	// non-sensitive {name, kind} pairs (no DSN/host/port/password — see
+	// the response-layer drop below), and actually attaching one of these
+	// to a project is separately gated by the project-scoped addon-create
+	// endpoint. Pre-v2 this gated on addons:write, but that's a
+	// project-scoped perm no longer present in the JWT, so it would now
+	// 403 everyone — wrong for a names-only picker.
+	if _, ok := auth.ClaimsFromContext(r.Context()); !ok {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
 	ctx, cancel := instanceSecretsCtx(r)
