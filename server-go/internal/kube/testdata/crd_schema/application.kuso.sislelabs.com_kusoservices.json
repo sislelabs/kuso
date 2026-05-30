@@ -230,6 +230,11 @@
             },
             "type": "object"
           },
+          "resources": {
+            "description": "Pod CPU/memory requests+limits, k8s ResourceRequirements shape ({requests:{cpu,memory}, limits:{cpu,memory}}). Propagated to every owned KusoEnvironment.",
+            "type": "object",
+            "x-kubernetes-preserve-unknown-fields": true
+          },
           "runtime": {
             "description": "Build/runtime mode. \"worker\" is special — same image as\na sibling web service, but no ingress and a custom\ncommand. Pair it with spec.command and spec.fromService\npointing at the web sibling whose image to reuse.\n",
             "enum": [

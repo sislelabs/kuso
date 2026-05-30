@@ -120,22 +120,16 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 		if isPreviewCloneName(shortName) {
 			continue
 		}
-		// Instance-pg addons (project consumes the cluster-shared PG
-		// via spec.useInstanceAddon=pg) aren't cloneable by the
-		// CR-duplication path used below — there's no per-project
-		// StatefulSet to spin up; everyone shares one Postgres. The
-		// correct shape is to CREATE DATABASE inside the cluster PG +
-		// pg_dump | pg_restore against the cluster's admin DSN +
-		// emit a synthetic conn Secret for the new DB. Tracked as a
-		// follow-up — for now we skip these with a loud log so the
-		// PR preview falls back to sharing the cluster PG's main DB
-		// (which a reviewer can break, so use cautiously).
-		if s.Spec.UseInstanceAddon != "" {
-			c.Logger.Warn("preview db: instance-pg addon clone not yet implemented; skipping",
-				"addon", s.Name, "project", project, "pr", prNumber,
-				"hint", "preview env will share the cluster PG's source database")
-			continue
-		}
+		// Instance-pg addons (project consumes the cluster-shared PG via
+		// spec.useInstanceAddon) clone differently from native ones:
+		// there's no StatefulSet to spin up. Instead addons.Add provisions
+		// a SEPARATE per-PR database on the shared server (CREATE DATABASE
+		// "<project>_<addon>_pr_N" + a role) and writes a <clone>-conn
+		// secret — so the preview gets an isolated DB a reviewer can't use
+		// to corrupt prod. The seed Job then pg_dump|psql's the source DB
+		// into it, same as native clones (it reads host/db/user from the
+		// conn secrets, which are reachable shared-server endpoints).
+		instancePG := s.Spec.UseInstanceAddon != ""
 		shortSrc := addons.ShortName(project, s.Name)
 		cloneShort := fmt.Sprintf("%s-pr-%d", shortSrc, prNumber)
 		cloneFQN := addons.CRName(project, cloneShort)
@@ -154,6 +148,10 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 				HA:          false,
 				StorageSize: s.Spec.StorageSize,
 				Database:    s.Spec.Database,
+				// Carry the instance-addon mode so the clone provisions a
+				// per-PR database on the shared server instead of a
+				// StatefulSet. Empty for native addons (unchanged path).
+				UseInstanceAddon: s.Spec.UseInstanceAddon,
 				ExtraLabels: map[string]string{
 					// Use the canonical env-scope label that the rest of
 					// kuso reads (envs, per-env Secrets, the addon-list
@@ -183,10 +181,10 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 		// 30-min cap is plenty for any production-sized DB clone;
 		// past that the operator probably wants to know.
 		seedCtx, cancel := context.WithTimeout(c.BaseCtx, 30*time.Minute)
-		go func(src, clone string) {
+		go func(src, clone string, isInstancePG bool) {
 			defer cancel()
-			c.seedAsync(seedCtx, ns, project, src, clone)
-		}(addons.CRName(project, s.Name), cloneFQN)
+			c.seedAsync(seedCtx, ns, project, src, clone, isInstancePG)
+		}(addons.CRName(project, s.Name), cloneFQN, instancePG)
 	}
 	return connSecrets, nil
 }
@@ -225,16 +223,29 @@ func (c *Cloner) DeletePRAddons(ctx context.Context, project string, prNumber in
 // spawns a Job that pg_dumps from the source into the clone. Best-
 // effort: failures are logged; the preview env still boots, just
 // with an empty DB.
-func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN string) {
+func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN string, instancePG bool) {
 	deadline := time.Now().Add(5 * time.Minute)
 	for time.Now().Before(deadline) {
-		if c.cloneReady(ctx, ns, cloneFQN) {
+		if c.cloneReady(ctx, ns, cloneFQN, instancePG) {
 			break
 		}
 		time.Sleep(5 * time.Second)
 	}
-	if !c.cloneReady(ctx, ns, cloneFQN) {
+	if !c.cloneReady(ctx, ns, cloneFQN, instancePG) {
 		c.Logger.Warn("preview db clone never reached ready", "clone", cloneFQN)
+		return
+	}
+	// Instance-pg clones provision their DB + role synchronously in
+	// addons.Add (against the shared server's admin DSN), so the conn
+	// secret's password is already correct — there's no StatefulSet pod
+	// with a local trust socket to RepairPassword against. Skip the
+	// repair step (which targets native-addon pods) for them.
+	if instancePG {
+		if err := c.runSeedJob(ctx, ns, project, sourceFQN, cloneFQN); err != nil {
+			c.Logger.Warn("preview db seed job (instance-pg)", "clone", cloneFQN, "err", err)
+			return
+		}
+		c.Logger.Info("preview db clone seeded (instance-pg)", "clone", cloneFQN)
 		return
 	}
 	// Align the clone role's password to its conn secret before seeding.
@@ -259,14 +270,21 @@ func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN
 	c.Logger.Info("preview db clone seeded", "clone", cloneFQN)
 }
 
-func (c *Cloner) cloneReady(ctx context.Context, ns, cloneFQN string) bool {
-	// The kusoaddon helm chart names the StatefulSet "<release>" and
-	// the conn-secret "<release>-conn". Both must exist before we
-	// run pg_dump | psql against it.
+func (c *Cloner) cloneReady(ctx context.Context, ns, cloneFQN string, instancePG bool) bool {
+	// The conn-secret "<release>-conn" must exist either way — that's
+	// what the seed Job + preview pods read.
 	connName := addons.ConnSecretName(cloneFQN)
 	if _, err := c.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, connName, metav1.GetOptions{}); err != nil {
 		return false
 	}
+	// Instance-pg clones have NO StatefulSet — the DB lives on the
+	// shared server, provisioned synchronously by addons.Add. The conn
+	// secret existing is sufficient readiness.
+	if instancePG {
+		return true
+	}
+	// Native clones: the kusoaddon chart names the StatefulSet
+	// "<release>"; wait for a ready replica before pg_dump | psql.
 	ss, err := c.Kube.Clientset.AppsV1().StatefulSets(ns).Get(ctx, cloneFQN, metav1.GetOptions{})
 	if err != nil {
 		return false

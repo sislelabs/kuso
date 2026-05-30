@@ -202,6 +202,40 @@ func pgIdentifier(project, addon string) string {
 	return id[:63-9] + "_" + hashSuffix
 }
 
+// dropInstanceAddonDB drops the per-project database + role on the
+// shared server. DESTRUCTIVE — only called for ephemeral preview-clone
+// addons (labelled kuso.sislelabs.com/preview-pr), never for a real
+// project addon (those retain data on delete, like native-addon PVCs).
+// Terminates open connections first so DROP DATABASE doesn't fail with
+// "database is being accessed by other users". Best-effort per
+// statement; returns the first hard error.
+func (s *Service) dropInstanceAddonDB(adminDSN, project, addonShort string) error {
+	dbName := pgIdentifier(project, addonShort)
+	userName := dbName
+
+	db, err := sql.Open("postgres", adminDSN)
+	if err != nil {
+		return fmt.Errorf("open admin: %w", err)
+	}
+	defer db.Close()
+
+	// Boot any open connections so DROP DATABASE can proceed.
+	_, _ = db.Exec(
+		`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
+		dbName)
+	if _, err := db.Exec(fmt.Sprintf(`DROP DATABASE IF EXISTS %q`, dbName)); err != nil {
+		return fmt.Errorf("drop db %s: %w", dbName, err)
+	}
+	// Role drop is best-effort — it can fail if the role still owns
+	// objects in OTHER databases (shouldn't for a per-PR clone role, but
+	// don't let it block the DB drop's success).
+	if _, err := db.Exec(fmt.Sprintf(`DROP ROLE IF EXISTS %q`, userName)); err != nil {
+		// Not fatal: the DB (the space-consuming part) is already gone.
+		return nil
+	}
+	return nil
+}
+
 // randPassword returns 24 random hex chars (96 bits of entropy).
 func randPassword() (string, error) {
 	b := make([]byte, 12)

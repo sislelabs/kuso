@@ -523,11 +523,30 @@ func (s *Service) validatePlacement(ctx context.Context, p *kube.KusoPlacement) 
 func (s *Service) Delete(ctx context.Context, project, name string) error {
 	ns := s.nsFor(ctx, project)
 	fqn := addonCRName(project, name)
-	if _, err := s.Kube.GetKusoAddon(ctx, ns, fqn); err != nil {
+	cr, err := s.Kube.GetKusoAddon(ctx, ns, fqn)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
 			return ErrNotFound
 		}
 		return err
+	}
+	// Ephemeral preview-clone DB cleanup. A per-PR instance-pg clone
+	// (labelled preview-pr) lives as a database on the SHARED server, so
+	// deleting the CR alone would orphan it there forever — unbounded
+	// growth across PRs. Drop the DB + role BEFORE the CR delete (we
+	// still have its spec). This is gated on the preview-pr label so a
+	// REAL project's instance-pg addon is never dropped (those retain
+	// data on delete, matching native-addon PVC retain semantics).
+	if cr.Spec.UseInstanceAddon != "" && cr.Labels["kuso.sislelabs.com/preview-pr"] != "" {
+		if adminDSN, derr := s.instanceAdminDSN(ctx, cr.Spec.UseInstanceAddon); derr == nil {
+			if err := s.dropInstanceAddonDB(adminDSN, project, ShortName(project, fqn)); err != nil {
+				// Non-fatal: log via the orphan-trail mechanism below; the
+				// CR delete still proceeds so the preview teardown isn't
+				// wedged. An operator can reclaim the DB manually.
+				slog.Default().Warn("preview clone: drop instance-pg DB failed (orphaned on shared server)",
+					"project", project, "addon", name, "err", err)
+			}
+		}
 	}
 	if err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).
 		Delete(ctx, fqn, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
