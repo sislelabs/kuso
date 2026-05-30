@@ -163,8 +163,9 @@ export function ServiceTerminalPanel({
         className="h-[420px] w-full overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[#0b0e14] p-2"
       />
       <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-        Interactive shell in the service&apos;s pod. Requires the deployer role.
-        The session ends when you leave this tab.
+        Interactive shell in the service&apos;s pod. Requires the admin role
+        (a shell can read every secret via the environment). The session
+        ends when you leave this tab.
       </p>
     </div>
   );

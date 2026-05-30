@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
-import { useProjects } from "@/features/projects";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -17,9 +16,14 @@ interface Group {
   description?: string;
 }
 
+type InstanceRoleValue = "admin" | "editor" | "viewer" | "";
+
 interface GroupTenancy {
-  instanceRole: "admin" | "member" | "viewer" | "billing" | "pending" | "";
-  projectMemberships: { project: string; role: "owner" | "deployer" | "viewer" }[];
+  instanceRole: InstanceRoleValue;
+  // Legacy field — still returned by GET /tenancy but no longer the
+  // source of project access in role-system v2. Project access is
+  // managed per-project via the project Access panel (ProjectGrant).
+  projectMemberships?: { project: string; role: string }[];
 }
 
 interface UserRow {
@@ -28,15 +32,12 @@ interface UserRow {
   email?: string;
 }
 
-const INSTANCE_ROLES: { value: GroupTenancy["instanceRole"]; label: string; hint: string }[] = [
-  { value: "admin",   label: "admin",   hint: "everything; bypasses project filters" },
-  { value: "billing", label: "billing", hint: "read settings + view billing" },
-  { value: "viewer",  label: "viewer",  hint: "read-only across the instance" },
-  { value: "member",  label: "member",  hint: "no instance perms; only project memberships count" },
-  { value: "pending", label: "pending", hint: "no perms; user lands in awaiting-access" },
+const INSTANCE_ROLES: { value: InstanceRoleValue; label: string; hint: string }[] = [
+  { value: "admin",  label: "admin",  hint: "full access to everything, all projects, all settings" },
+  { value: "editor", label: "editor", hint: "default level on granted projects: read+write (no env values / shell / SQL)" },
+  { value: "viewer", label: "viewer", hint: "default level on granted projects: read-only" },
+  { value: "",       label: "none",   hint: "no access until added to a project" },
 ];
-
-const PROJECT_ROLES = ["owner", "deployer", "viewer"] as const;
 
 // /settings/groups — admins manage who can do what.
 export default function GroupsSettingsPage() {
@@ -197,7 +198,6 @@ function GroupEditor({ groupId }: { groupId: string }) {
     queryKey: ["admin", "groups", groupId, "tenancy"],
     queryFn: () => api<GroupTenancy>(`/api/groups/${encodeURIComponent(groupId)}/tenancy`),
   });
-  const projects = useProjects();
   const users = useQuery({
     queryKey: ["admin", "users"],
     queryFn: async () => {
@@ -217,10 +217,14 @@ function GroupEditor({ groupId }: { groupId: string }) {
   }
 
   const save = useMutation({
+    // v2: set just the instance role via the dedicated endpoint. Project
+    // access is no longer edited here — it lives on each project's Access
+    // panel (ProjectGrant). The legacy projectMemberships JSON is left
+    // untouched (the resolver ignores it).
     mutationFn: (body: GroupTenancy) =>
-      api(`/api/groups/${encodeURIComponent(groupId)}/tenancy`, {
+      api(`/api/groups/${encodeURIComponent(groupId)}/instance-role`, {
         method: "PUT",
-        body,
+        body: { role: body.instanceRole },
       }),
     onSuccess: () => {
       toast.success("Saved");
@@ -235,7 +239,6 @@ function GroupEditor({ groupId }: { groupId: string }) {
   }
 
   const dirty = JSON.stringify(form) !== JSON.stringify(baseline);
-  const projectNames = (projects.data ?? []).map((p) => p.metadata.name);
 
   return (
     <div className="space-y-4">
@@ -270,101 +273,19 @@ function GroupEditor({ groupId }: { groupId: string }) {
         </div>
       </section>
 
-      {/* Project memberships */}
+      {/* Project access (v2): managed per-project, not here. */}
       <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         <header className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
-          <h3 className="text-sm font-semibold tracking-tight">Project memberships</h3>
-          <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
-            {form.projectMemberships.length} entries
-          </span>
+          <h3 className="text-sm font-semibold tracking-tight">Project access</h3>
         </header>
-        {form.projectMemberships.length === 0 ? (
-          <p className="px-3 py-2.5 text-[11px] text-[var(--text-tertiary)]">
-            No project memberships. Add one to grant this group access to a specific project.
-          </p>
-        ) : (
-          <ul>
-            {form.projectMemberships.map((m, i) => (
-              <li
-                key={i}
-                className="grid grid-cols-[1fr_140px_28px] items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-b-0"
-              >
-                <select
-                  value={m.project}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      projectMemberships: form.projectMemberships.map((x, j) =>
-                        j === i ? { ...x, project: e.target.value } : x
-                      ),
-                    })
-                  }
-                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
-                >
-                  <option value="">(pick a project)</option>
-                  {projectNames.map((p) => (
-                    <option key={p} value={p}>
-                      {p}
-                    </option>
-                  ))}
-                  {/* Allow keeping a memorized project that's been deleted. */}
-                  {m.project && !projectNames.includes(m.project) && (
-                    <option value={m.project}>{m.project} (missing)</option>
-                  )}
-                </select>
-                <select
-                  value={m.role}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      projectMemberships: form.projectMemberships.map((x, j) =>
-                        j === i ? { ...x, role: e.target.value as typeof m.role } : x
-                      ),
-                    })
-                  }
-                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
-                >
-                  {PROJECT_ROLES.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setForm({
-                      ...form,
-                      projectMemberships: form.projectMemberships.filter((_, j) => j !== i),
-                    })
-                  }
-                  aria-label="Remove"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <button
-          type="button"
-          onClick={() =>
-            setForm({
-              ...form,
-              projectMemberships: [
-                ...form.projectMemberships,
-                {
-                  project: projectNames[0] ?? "",
-                  role: "viewer",
-                },
-              ],
-            })
-          }
-          className="flex w-full items-center gap-1.5 border-t border-[var(--border-subtle)] px-3 py-2 text-left text-[11px] text-[var(--accent)] hover:bg-[var(--bg-tertiary)]/40"
-        >
-          <Plus className="h-3 w-3" /> add project membership
-        </button>
+        <p className="px-3 py-2.5 text-[11px] leading-relaxed text-[var(--text-tertiary)]">
+          Projects are invisible to non-admins until this group is granted access on the
+          project itself. Open a project, then use its{" "}
+          <span className="text-[var(--text-secondary)]">Access</span> panel to add this group
+          (with an optional per-project role that overrides the instance role above). The
+          instance role here is the default level applied on every project the group is
+          granted.
+        </p>
       </section>
 
       {/* Members — listed users + add/remove (rough first cut: chip

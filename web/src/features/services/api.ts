@@ -5,7 +5,15 @@ export async function getService(project: string, service: string): Promise<Kuso
   return api(`/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}`);
 }
 
-export async function getServiceEnv(project: string, service: string): Promise<{ envVars: KusoEnvVar[] }> {
+// masked=true means the caller isn't allowed to read env VALUES
+// (role-system v2: values are admin-only). The server returns the keys
+// with values replaced by a sentinel; the editor must render read-only
+// so a non-admin can't accidentally save the sentinel back over real
+// values.
+export async function getServiceEnv(
+  project: string,
+  service: string
+): Promise<{ envVars: KusoEnvVar[]; masked?: boolean }> {
   return api(`/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/env`);
 }
 

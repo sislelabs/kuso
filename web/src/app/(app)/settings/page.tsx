@@ -66,7 +66,7 @@ const CARDS: Card[] = [
 
   // Team: users + groups + roles + audit log.
   { href: "/settings/users",    title: "Users",    description: "Local users. OAuth users land here on first login.",                                  icon: Users,        perm: Perms.UserWrite, group: "team", keywords: "user account login oauth invite" },
-  { href: "/settings/groups",   title: "Groups",   description: "Tenancy: instance roles + project memberships.",                                      icon: UsersRound,   perm: Perms.UserWrite, group: "team", keywords: "group role permission tenancy member" },
+  { href: "/settings/groups",   title: "Groups",   description: "Instance roles for groups; project access is granted per-project.",                  icon: UsersRound,   perm: Perms.UserWrite, group: "team", keywords: "group role permission tenancy member" },
   // /settings/activity is gated on audit:read, not settings:admin. The
   // page itself supports a non-admin "set the project filter" path
   // so users with audit:read can pull a project's audit log even

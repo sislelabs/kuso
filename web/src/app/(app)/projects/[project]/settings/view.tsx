@@ -10,8 +10,10 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useProject, useUpdateProject, useDeleteProject } from "@/features/projects";
 import { SharedSecretsCard } from "@/components/project/SharedSecretsCard";
 import { ConfigTab } from "@/components/project/ConfigTab";
+import { ProjectAccessPanel } from "@/components/project/ProjectAccessPanel";
+import { useCan, Perms } from "@/features/auth/hooks";
 import { toast } from "sonner";
-import { Trash2, Save, Settings as SettingsIcon, AlertTriangle } from "lucide-react";
+import { Trash2, Save, Settings as SettingsIcon, AlertTriangle, Users as UsersIcon } from "lucide-react";
 
 // Project settings — flat layout, sections separated by horizontal
 // rules + small uppercase headers. Mirrors the polish of /settings
@@ -23,6 +25,7 @@ export function ProjectSettingsView() {
   const project = useProject(projectName);
   const update = useUpdateProject(projectName);
   const del = useDeleteProject();
+  const isAdmin = useCan(Perms.SettingsAdmin);
 
   const [description, setDescription] = useState("");
   const [baseDomain, setBaseDomain] = useState("");
@@ -242,6 +245,19 @@ export function ProjectSettingsView() {
 
       {/* Project secrets — flat now, no Card wrapper */}
       <SharedSecretsCard project={projectName} />
+
+      {/* Access — who can see/act on this project (admin-only). */}
+      {isAdmin && (
+        <section className="space-y-3">
+          <header className="flex items-center gap-2">
+            <UsersIcon className="h-4 w-4 text-[var(--text-tertiary)]" />
+            <h2 className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              access
+            </h2>
+          </header>
+          <ProjectAccessPanel project={projectName} />
+        </section>
+      )}
 
       {/* Config as code — kuso.yaml export / dry-run / apply */}
       <ConfigTab project={projectName} />

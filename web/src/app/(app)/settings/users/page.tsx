@@ -332,10 +332,8 @@ function CreateInviteDialog({ onClose }: { onClose: () => void }) {
           >
             <option value="">— use group default —</option>
             <option value="admin">admin</option>
-            <option value="member">member</option>
+            <option value="editor">editor</option>
             <option value="viewer">viewer</option>
-            <option value="billing">billing</option>
-            <option value="pending">pending</option>
           </select>
         </Field>
         <Field label="expires in" hint="duration like 24h, 168h (7d), 720h (30d). empty = never">

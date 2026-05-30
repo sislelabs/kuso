@@ -308,10 +308,15 @@ export function EnvVarsEditor({
     [addons.data, project]
   );
   // secrets:write gates the Save + the per-row destructive
-  // affordances. We intentionally KEEP the values visible (env vars
-  // are already fetched here; if the user can't see them they
-  // shouldn't be in this tab) — this is purely about mutation.
-  const canWrite = useCan(Perms.SecretsWrite);
+  // affordances.
+  //
+  // role-system v2: the server MASKS env values for non-admins (returns
+  // a "••••••••" sentinel + masked:true). If we let a masked session
+  // save, the sentinel would overwrite the real values — so masked ⇒
+  // read-only. Editors who need to CHANGE a value use the per-key blind
+  // set (kuso env set), not this whole-list editor.
+  const masked = env.data?.masked ?? false;
+  const canWrite = useCan(Perms.SecretsWrite) && !masked;
   const [rows, setRows] = useState<Row[]>([]);
   const [dirty, setDirty] = useState(false);
   // Type-ahead: when the user types "${{" into a row's value, open
@@ -610,6 +615,19 @@ export function EnvVarsEditor({
           {visibleCount} {visibleCount === 1 ? "var" : "vars"}
         </span>
       </div>
+
+      {/* Masked-values banner — non-admins (viewer/editor) can see which
+          env keys exist but not their values, which the server replaces
+          with a sentinel. The editor is read-only in this mode so the
+          sentinel can't be saved over the real values. */}
+      {masked && (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] leading-relaxed text-amber-300/90">
+          Env var <span className="font-semibold">values are hidden</span> — reading them
+          requires the admin role. You can see the keys but the values are masked, and this
+          editor is read-only. To change a value without seeing the current one, an admin can
+          grant access or use a blind per-key set.
+        </div>
+      )}
 
       {/* Inherited env vars — keys that flow in from project-level
           and instance-level shared secrets. Read-only display with a
