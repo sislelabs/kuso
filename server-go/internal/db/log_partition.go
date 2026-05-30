@@ -216,11 +216,11 @@ func dayPartitionEnd(name string) (time.Time, bool) {
 //
 // The migration shape:
 //
-//	1. Rename "LogLine" → "LogLine_legacy".
-//	2. Create the new partitioned "LogLine" with PRIMARY KEY (id, ts).
-//	3. Provision partitions covering the legacy data + a future window.
-//	4. Copy legacy rows into the new table in 100k-row batches.
-//	5. Drop the legacy table.
+//  1. Rename "LogLine" → "LogLine_legacy".
+//  2. Create the new partitioned "LogLine" with PRIMARY KEY (id, ts).
+//  3. Provision partitions covering the legacy data + a future window.
+//  4. Copy legacy rows into the new table in 100k-row batches.
+//  5. Drop the legacy table.
 //
 // Holds an EXCLUSIVE lock on the legacy table for the rename + drop —
 // brief (<1s). The copy phase runs in batches outside any explicit
@@ -248,6 +248,23 @@ func (d *DB) MigrateLogLineToPartitioned(ctx context.Context, logger *slog.Logge
 		return fmt.Errorf("rename legacy: %w", err)
 	}
 	logger.Info("log-partition: renamed LogLine → LogLine_legacy")
+	// Postgres carries the table's indexes along with the RENAME, keeping
+	// their ORIGINAL names — so "LogLine_project_service_ts_idx" et al.
+	// now sit on LogLine_legacy. Index names are schema-global, so the
+	// CREATE INDEX calls below (same names, new partitioned table) would
+	// collide with "relation already exists". Drop them now: the legacy
+	// table is read only via SELECT MIN/MAX + a PK-ordered batched copy
+	// (the PK index survives), then dropped entirely at the end, so its
+	// secondary indexes are dead weight from this point on.
+	for _, idx := range []string{
+		"LogLine_project_service_ts_idx",
+		"LogLine_ts_idx",
+		"LogLine_line_trgm_idx",
+	} {
+		if _, err := d.ExecContext(ctx, `DROP INDEX IF EXISTS "`+idx+`"`); err != nil {
+			return fmt.Errorf("drop legacy index %s: %w", idx, err)
+		}
+	}
 	// 2. Create the new partitioned table. The PK must include the
 	// partition key (ts) — Postgres rule for partitioned tables.
 	if _, err := d.ExecContext(ctx, `
