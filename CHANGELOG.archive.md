@@ -2,6 +2,27 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.16.6] — 2026-05-27
+
+### 🐛 Bug Fixes
+- Fix(env): custom envs get own hosts; chart prunes stale tlsHosts (#5) ([9bf320f](https://github.com/sislelabs/kuso/commit/9bf320f210fb6abfab32a6654a7101ef3c7fed7c))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (from v0.16.5 ship) ([98cfb8a](https://github.com/sislelabs/kuso/commit/98cfb8aa64264520586f0ffae339d5a96848bc8d))
+
+## [0.16.5] — 2026-05-27
+
+### 🐛 Bug Fixes
+- Fix(web): project-shared addons render under every env tab (#4) ([25a79cb](https://github.com/sislelabs/kuso/commit/25a79cb2ec300107e6e0513ef5909a1b983073af))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (from v0.16.4 ship) ([3b2e93e](https://github.com/sislelabs/kuso/commit/3b2e93ee1d83a87de6a48e019532373bd48bca18))
+
+## [0.16.4] — 2026-05-27
+
+### 🐛 Bug Fixes
+- Fix: node-bootstrap and addon defaults — TLS pg, NATS auth, worker fromService (#3) ([065a0ca](https://github.com/sislelabs/kuso/commit/065a0ca487cf1e9da59da704319dc3dbdf144a21))
+
 ## [0.16.3] — 2026-05-27
 
 ### 🐛 Bug Fixes
