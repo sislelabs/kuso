@@ -591,6 +591,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				Image:            inheritImage,
 				Placement:        ResolvePlacement(proj.Spec.Placement, item.svc.Spec.Placement),
 				Volumes:          item.svc.Spec.Volumes,
+				Resources:        item.svc.Spec.Resources,
 				Runtime:          item.svc.Spec.Runtime,
 				Command:          item.svc.Spec.Command,
 			},

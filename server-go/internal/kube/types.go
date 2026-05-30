@@ -60,7 +60,7 @@ type KusoProjectSpec struct {
 	// of scale-to-zero globally — useful for projects where any cold-
 	// start cost is unacceptable (low-traffic but latency-sensitive,
 	// background processors, etc).
-	AlwaysOn     bool                  `json:"alwaysOn,omitempty"`
+	AlwaysOn bool `json:"alwaysOn,omitempty"`
 	// ConfigAsCode controls kuso.yaml-on-push. Nil = default
 	// (enabled). When Enabled is false, a push never triggers a
 	// config apply.
@@ -158,20 +158,20 @@ type KusoService struct {
 }
 
 type KusoServiceSpec struct {
-	Project    string              `json:"project"`
+	Project string `json:"project"`
 	// DisplayName is a free-form label shown in the UI (canvas
 	// label, overlay header). Decoupled from the CR name + URL slug
 	// so renaming the visual label is fast (one PATCH) and doesn't
 	// recreate kube resources. Empty = UI falls back to the slug.
 	// Validation: letters/numbers/spaces/hyphens, max 60 chars.
-	DisplayName string              `json:"displayName,omitempty"`
+	DisplayName string `json:"displayName,omitempty"`
 	// Internal=true skips the Ingress + TLS for this service. The
 	// in-cluster Service still exists, so other pods can reach it
 	// via ${{ svc.URL }}, but no Ingress rule is rendered + no
 	// public DNS / cert is provisioned. Useful for backend
 	// services consumed only by sibling pods. Workers (runtime=
 	// worker) implicitly have no Ingress regardless of this flag.
-	Internal   bool                `json:"internal,omitempty"`
+	Internal bool `json:"internal,omitempty"`
 	// PrivateEgress, when true, denies this service's pods egress to
 	// the public internet — they can still reach sibling pods, DNS,
 	// and the in-cluster registry. Default false: pods CAN reach the
@@ -180,16 +180,16 @@ type KusoServiceSpec struct {
 	// on the pod template unless this is true; the kusoproject
 	// NetworkPolicy's allow-public-egress rule keys on that label.
 	// Mirrored onto every KusoEnvironment owned by this service.
-	PrivateEgress bool `json:"privateEgress,omitempty"`
-	Repo       *KusoRepoRef        `json:"repo,omitempty"`
-	Runtime    string              `json:"runtime,omitempty"`
-	Command    []string            `json:"command,omitempty"`
+	PrivateEgress bool         `json:"privateEgress,omitempty"`
+	Repo          *KusoRepoRef `json:"repo,omitempty"`
+	Runtime       string       `json:"runtime,omitempty"`
+	Command       []string     `json:"command,omitempty"`
 	// FromService — for runtime=worker, the sibling service whose
 	// image to reuse. Empty = the worker has its own repo + builds.
-	FromService string             `json:"fromService,omitempty"`
-	Port       int32               `json:"port,omitempty"`
-	Domains    []KusoDomain        `json:"domains,omitempty"`
-	EnvVars    []KusoEnvVar        `json:"envVars,omitempty"`
+	FromService string       `json:"fromService,omitempty"`
+	Port        int32        `json:"port,omitempty"`
+	Domains     []KusoDomain `json:"domains,omitempty"`
+	EnvVars     []KusoEnvVar `json:"envVars,omitempty"`
 	// SharedEnvKeys is the per-service opt-in list of keys to inherit
 	// from project-shared + instance-shared secrets. Empty list +
 	// nil are distinct: nil means "legacy, mount all keys" (preserved
@@ -229,9 +229,15 @@ type KusoServiceSpec struct {
 	// survive the wire so "subscribe to no addons" (e.g. a public
 	// frontend that must not hold DATABASE_URL) doesn't collapse to nil
 	// and re-mount every addon.
-	SubscribedAddons []string `json:"subscribedAddons"`
-	Scale      *KusoScaleSpec      `json:"scale,omitempty"`
-	Sleep      *KusoServiceSleep   `json:"sleep,omitempty"`
+	SubscribedAddons []string          `json:"subscribedAddons"`
+	Scale            *KusoScaleSpec    `json:"scale,omitempty"`
+	Sleep            *KusoServiceSleep `json:"sleep,omitempty"`
+	// Resources is the pod CPU/memory requests+limits, shaped exactly
+	// like a k8s ResourceRequirements ({"requests":{...},"limits":{...}}).
+	// Free-form map so the chart's `toYaml .Values.resources` renders it
+	// verbatim. Propagated onto every owned KusoEnvironment (the env
+	// chart already consumes .Values.resources). Nil = chart default.
+	Resources  map[string]any      `json:"resources,omitempty"`
 	Static     *KusoStaticSpec     `json:"static,omitempty"`
 	Buildpacks *KusoBuildpacksSpec `json:"buildpacks,omitempty"`
 	// Image is set on runtime=image services to point at an existing
@@ -239,7 +245,7 @@ type KusoServiceSpec struct {
 	// KusoEnvironment so the chart pulls the image directly without a
 	// build. Other runtimes leave this nil; the build poller writes
 	// the env's Image after a successful kaniko run.
-	Image      *KusoImage          `json:"image,omitempty"`
+	Image *KusoImage `json:"image,omitempty"`
 	// Placement overrides the project-level placement for this
 	// service. Nil falls through to the project's placement; empty
 	// (non-nil) explicitly clears it.
@@ -404,49 +410,49 @@ type KusoEnvironment struct {
 }
 
 type KusoEnvironmentSpec struct {
-	Project          string                  `json:"project"`
-	Service          string                  `json:"service"`
-	Kind             string                  `json:"kind,omitempty"`
-	Branch           string                  `json:"branch,omitempty"`
-	PullRequest      *KusoPullRequest        `json:"pullRequest,omitempty"`
-	TTL              *KusoTTL                `json:"ttl,omitempty"`
-	Image            *KusoImage              `json:"image,omitempty"`
-	Port             int32                   `json:"port,omitempty"`
+	Project     string           `json:"project"`
+	Service     string           `json:"service"`
+	Kind        string           `json:"kind,omitempty"`
+	Branch      string           `json:"branch,omitempty"`
+	PullRequest *KusoPullRequest `json:"pullRequest,omitempty"`
+	TTL         *KusoTTL         `json:"ttl,omitempty"`
+	Image       *KusoImage       `json:"image,omitempty"`
+	Port        int32            `json:"port,omitempty"`
 	// ReplicaCount: pointer so JSON marshal includes the field even at
 	// zero (omitempty would drop replicaCount=0, causing the CRD's
 	// `default: 1` to silently clobber scale-to-zero on env writes).
 	// Use Spec.ReplicaCountValue() to read with the nil→1 fallback.
-	ReplicaCount     *int                    `json:"replicaCount,omitempty"`
-	Autoscaling      *KusoAutoscaling        `json:"autoscaling,omitempty"`
-	Sleep            *KusoEnvSleep           `json:"sleep,omitempty"`
-	Host             string                  `json:"host,omitempty"`
+	ReplicaCount *int             `json:"replicaCount,omitempty"`
+	Autoscaling  *KusoAutoscaling `json:"autoscaling,omitempty"`
+	Sleep        *KusoEnvSleep    `json:"sleep,omitempty"`
+	Host         string           `json:"host,omitempty"`
 	// AdditionalHosts mirrors KusoService.spec.domains[].host onto the
 	// env CR so the kusoenvironment chart's Ingress template can emit
 	// one rule per host (the chart reads ONLY the env CR — there's no
 	// merge step that pulls service-level domains in). Server-managed
 	// via propagateDomainsToEnvs; user edits flow through PatchService.
-	AdditionalHosts  []string                `json:"additionalHosts,omitempty"`
+	AdditionalHosts []string `json:"additionalHosts,omitempty"`
 	// TLSHosts is the subset of {Host, AdditionalHosts...} that the
 	// server has flagged as eligible for a Let's Encrypt cert (real
 	// FQDN, not a reserved suffix, optionally DNS-resolves to the
 	// cluster). The chart's Ingress template reads ONLY this — hosts
 	// that aren't listed here get an HTTP-only rule. Empty = no tls
 	// block at all.
-	TLSHosts         []string                `json:"tlsHosts,omitempty"`
+	TLSHosts []string `json:"tlsHosts,omitempty"`
 	// Internal=true mirrors KusoService.spec.internal so the chart can
 	// gate Ingress emission off the env CR alone (chart never reads
 	// the service spec). Propagated via propagateInternalToEnvs.
-	Internal         bool                    `json:"internal,omitempty"`
+	Internal bool `json:"internal,omitempty"`
 	// PrivateEgress mirrors KusoService.spec.privateEgress so the
 	// kusoenvironment chart (which reads only the env CR) can gate the
 	// public-egress pod label. Server-managed: propagated from the
 	// service spec by propagateChangedToEnvs.
-	PrivateEgress bool                    `json:"privateEgress,omitempty"`
-	TLSEnabled       bool                    `json:"tlsEnabled,omitempty"`
-	ClusterIssuer    string                  `json:"clusterIssuer,omitempty"`
-	IngressClassName string                  `json:"ingressClassName,omitempty"`
-	EnvVars          []KusoEnvVar            `json:"envVars,omitempty"`
-	EnvFromSecrets   []string                `json:"envFromSecrets,omitempty"`
+	PrivateEgress    bool         `json:"privateEgress,omitempty"`
+	TLSEnabled       bool         `json:"tlsEnabled,omitempty"`
+	ClusterIssuer    string       `json:"clusterIssuer,omitempty"`
+	IngressClassName string       `json:"ingressClassName,omitempty"`
+	EnvVars          []KusoEnvVar `json:"envVars,omitempty"`
+	EnvFromSecrets   []string     `json:"envFromSecrets,omitempty"`
 	// SharedEnvKeys mirrors KusoService.spec.sharedEnvKeys so the
 	// kusoenvironment chart can render per-key env entries (one
 	// secretKeyRef per subscribed key) instead of the legacy blanket
@@ -457,16 +463,16 @@ type KusoEnvironmentSpec struct {
 	// NO omitempty: an empty subscription must round-trip as []string{}
 	// (subscribe-nothing), not collapse to nil (legacy mount-all). See
 	// KusoServiceSpec.SharedEnvKeys.
-	SharedEnvKeys    []string                `json:"sharedEnvKeys"`
+	SharedEnvKeys []string `json:"sharedEnvKeys"`
 	// SubscribedAddons mirrors KusoService.spec.subscribedAddons so
 	// the kusoenvironment chart's envFromSecrets list contains only
 	// the addon-conn secrets the service actually wants. nil = legacy
 	// auto-mount-all; non-nil = explicit subscription.
 	//
 	// NO omitempty, same empty≠nil reason as above.
-	SubscribedAddons []string                `json:"subscribedAddons"`
-	SecretsRev       string                  `json:"secretsRev,omitempty"`
-	Resources        map[string]any          `json:"resources,omitempty"`
+	SubscribedAddons []string       `json:"subscribedAddons"`
+	SecretsRev       string         `json:"secretsRev,omitempty"`
+	Resources        map[string]any `json:"resources,omitempty"`
 	// Placement is the resolved (effective) placement for this env,
 	// computed as: env > service > project. The operator's helm chart
 	// reads it directly to render nodeSelector/affinity/tolerations.
@@ -799,16 +805,16 @@ type KusoCronSpec struct {
 	//                argv. Image must be set; Service is unused.
 	// Empty defaults to "service" for back-compat with crons created
 	// before v0.8 (they all had Service set).
-	Kind                       string         `json:"kind,omitempty"`
+	Kind string `json:"kind,omitempty"`
 	// Service is the parent service for kind=service crons. Empty for
 	// kind=http and kind=command — those run as project-scoped jobs
 	// independent of any service.
-	Service                    string         `json:"service,omitempty"`
+	Service string `json:"service,omitempty"`
 	// URL is the HTTP target for kind=http crons. The runtime image
 	// (kuso-backup, which has curl) hits this URL and exits non-zero
 	// on a non-2xx response. Ignored for other kinds.
-	URL                        string         `json:"url,omitempty"`
-	Schedule                   string         `json:"schedule"`
+	URL      string `json:"url,omitempty"`
+	Schedule string `json:"schedule"`
 	// Command's interpretation depends on Kind:
 	//   service / command → argv for the container.
 	//   http              → unused; the chart synthesises curl args.

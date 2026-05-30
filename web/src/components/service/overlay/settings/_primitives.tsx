@@ -34,6 +34,12 @@ export interface FormState {
   scaleMin: string;
   scaleMax: string;
   scaleCPU: string;
+  // Resources (pod CPU/memory requests+limits). Empty string = unset
+  // (chart default). e.g. cpuRequest "100m", memRequest "128Mi".
+  cpuRequest: string;
+  cpuLimit: string;
+  memRequest: string;
+  memLimit: string;
   // Build
   runtime: string;
   // Storage
@@ -87,6 +93,10 @@ export function fromSvc(svc?: KusoService): FormState {
     scaleMin: String(svc?.spec.scale?.min ?? 1),
     scaleMax: String(svc?.spec.scale?.max ?? 5),
     scaleCPU: String(svc?.spec.scale?.targetCPU ?? 70),
+    cpuRequest: svc?.spec.resources?.requests?.cpu ?? "",
+    cpuLimit: svc?.spec.resources?.limits?.cpu ?? "",
+    memRequest: svc?.spec.resources?.requests?.memory ?? "",
+    memLimit: svc?.spec.resources?.limits?.memory ?? "",
     runtime: svc?.spec.runtime ?? "dockerfile",
     volumes: (svc?.spec.volumes ?? []).map((v: KusoVolume) => ({
       name: v.name,

@@ -58,6 +58,52 @@ export function ScaleSection({ state, setState }: SectionProps) {
             <span className="font-mono text-[11px] text-[var(--text-tertiary)]">%</span>
           </div>
         }
+      />
+      {/* Pod resources. Blank = chart default. Request = guaranteed
+          floor (drives scheduling + HPA %); limit = hard ceiling
+          (OOM-kill / CPU-throttle past it). k8s quantity syntax:
+          cpu "100m"/"0.5"/"2", memory "128Mi"/"1Gi". */}
+      <Row
+        label="cpu request / limit"
+        hint='guaranteed / max — e.g. "100m" / "1"'
+        control={
+          <div className="inline-flex items-center gap-1.5">
+            <Input
+              value={state.cpuRequest}
+              onChange={(e) => setState((s) => ({ ...s, cpuRequest: e.target.value }))}
+              placeholder="auto"
+              className="h-7 w-20 font-mono text-[12px]"
+            />
+            <span className="font-mono text-[11px] text-[var(--text-tertiary)]">/</span>
+            <Input
+              value={state.cpuLimit}
+              onChange={(e) => setState((s) => ({ ...s, cpuLimit: e.target.value }))}
+              placeholder="auto"
+              className="h-7 w-20 font-mono text-[12px]"
+            />
+          </div>
+        }
+      />
+      <Row
+        label="memory request / limit"
+        hint='guaranteed / max — e.g. "128Mi" / "512Mi"'
+        control={
+          <div className="inline-flex items-center gap-1.5">
+            <Input
+              value={state.memRequest}
+              onChange={(e) => setState((s) => ({ ...s, memRequest: e.target.value }))}
+              placeholder="auto"
+              className="h-7 w-20 font-mono text-[12px]"
+            />
+            <span className="font-mono text-[11px] text-[var(--text-tertiary)]">/</span>
+            <Input
+              value={state.memLimit}
+              onChange={(e) => setState((s) => ({ ...s, memLimit: e.target.value }))}
+              placeholder="auto"
+              className="h-7 w-20 font-mono text-[12px]"
+            />
+          </div>
+        }
         last
       />
     </Section>

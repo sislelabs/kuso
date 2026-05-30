@@ -214,6 +214,9 @@ export interface PatchServiceBody {
   runtime?: string;
   domains?: { host: string; tls?: boolean }[];
   scale?: { min?: number; max?: number; targetCPU?: number };
+  // Pod CPU/memory requests+limits (k8s ResourceRequirements shape).
+  // Empty object clears (chart default); absent leaves unchanged.
+  resources?: Record<string, unknown>;
   sleep?: { enabled?: boolean; afterMinutes?: number };
   volumes?: VolumePatch[];
   placement?: PlacementPatch;

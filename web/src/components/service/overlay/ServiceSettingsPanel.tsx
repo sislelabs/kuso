@@ -238,6 +238,26 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       // timeout the user had configured elsewhere.
       body.sleep = { enabled: min === 0 };
     }
+    if (
+      state.cpuRequest !== baseline.cpuRequest ||
+      state.cpuLimit !== baseline.cpuLimit ||
+      state.memRequest !== baseline.memRequest ||
+      state.memLimit !== baseline.memLimit
+    ) {
+      // Build a k8s ResourceRequirements map, omitting blank fields.
+      // All-blank → send an empty object to CLEAR resources (chart
+      // default). The server validates quantities at apply time.
+      const req: Record<string, string> = {};
+      const lim: Record<string, string> = {};
+      if (state.cpuRequest.trim()) req.cpu = state.cpuRequest.trim();
+      if (state.memRequest.trim()) req.memory = state.memRequest.trim();
+      if (state.cpuLimit.trim()) lim.cpu = state.cpuLimit.trim();
+      if (state.memLimit.trim()) lim.memory = state.memLimit.trim();
+      const resources: Record<string, unknown> = {};
+      if (Object.keys(req).length) resources.requests = req;
+      if (Object.keys(lim).length) resources.limits = lim;
+      body.resources = resources;
+    }
     if (state.runtime !== baseline.runtime) {
       body.runtime = state.runtime;
     }

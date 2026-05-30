@@ -47,6 +47,11 @@ export interface KusoServiceSpec {
   domains?: { host?: string; tls?: boolean }[];
   envVars?: KusoEnvVar[];
   scale?: { min?: number; max?: number; targetCPU?: number };
+  // Pod CPU/memory requests+limits (k8s ResourceRequirements shape).
+  resources?: {
+    requests?: { cpu?: string; memory?: string };
+    limits?: { cpu?: string; memory?: string };
+  };
   sleep?: { enabled?: boolean; afterMinutes?: number };
   static?: {
     builderImage?: string;

@@ -165,6 +165,13 @@ spec:
                     targetCPU:
                       type: integer
                       default: 70
+                resources:
+                  type: object
+                  description: >-
+                    Pod CPU/memory requests+limits, k8s ResourceRequirements
+                    shape ({requests:{cpu,memory}, limits:{cpu,memory}}).
+                    Propagated to every owned KusoEnvironment.
+                  x-kubernetes-preserve-unknown-fields: true
                 sleep:
                   type: object
                   description: |

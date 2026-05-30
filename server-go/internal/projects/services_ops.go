@@ -812,9 +812,9 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			// (staging.example.com mirrored at qa.example.com) can
 			// add it via `kuso domains add` after env creation —
 			// that's an explicit opt-in, not silent inheritance.
-			AdditionalHosts: nil,
-			TLSHosts:        computeTLSHosts(host, nil),
-			Internal:        svc.Spec.Internal,
+			AdditionalHosts:  nil,
+			TLSHosts:         computeTLSHosts(host, nil),
+			Internal:         svc.Spec.Internal,
 			PrivateEgress:    svc.Spec.PrivateEgress,
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
@@ -825,6 +825,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			SubscribedAddons: svc.Spec.SubscribedAddons,
 			Placement:        ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement),
 			Volumes:          svc.Spec.Volumes,
+			Resources:        svc.Spec.Resources,
 			Runtime:          svc.Spec.Runtime,
 			Command:          svc.Spec.Command,
 		},
@@ -1506,6 +1507,10 @@ type PatchServiceRequest struct {
 	// a "remove volume X" via partial diff would be ambiguous when
 	// the user also renamed Y to X.
 	Volumes *[]VolumePatch `json:"volumes,omitempty"`
+	// Resources sets pod CPU/memory requests+limits (k8s
+	// ResourceRequirements shape). Pointer so "field absent" (leave
+	// alone) is distinct from an empty map (clear → chart default).
+	Resources *map[string]any `json:"resources,omitempty"`
 	// Repo lets a user re-point the service at a different repository
 	// (or change the path/branch). InstallationID is required when the
 	// new repo is private and behind a different GitHub App
@@ -1766,6 +1771,20 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		svc.Spec.Volumes = next
 		volumesChanged = true
 	}
+	resourcesChanged := false
+	if req.Resources != nil {
+		// Replace verbatim. An empty/nil map clears resources (chart
+		// falls back to its default). The map is the k8s
+		// ResourceRequirements shape; we don't validate the inner
+		// quantities here — kube rejects a malformed quantity at apply
+		// time with a clear error, and the UI sends well-formed values.
+		if len(*req.Resources) == 0 {
+			svc.Spec.Resources = nil
+		} else {
+			svc.Spec.Resources = *req.Resources
+		}
+		resourcesChanged = true
+	}
 	placementChanged := false
 	if req.Placement != nil {
 		if req.Placement.Clear {
@@ -1859,6 +1878,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		PrivateEgress: privateEgressChanged,
 		Release:       releaseChanged,
 		Command:       commandChanged,
+		Resources:     resourcesChanged,
 	}); err != nil {
 		// Match the previous best-effort behaviour: log indirectly
 		// (returned nil; future cleanup adds a logger here) and let

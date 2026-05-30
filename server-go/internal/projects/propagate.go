@@ -64,10 +64,14 @@ type changedFields struct {
 	// service spec but the running pod keeps the old argv (worker
 	// services in particular fail to come up when this is missed).
 	Command bool
+	// Resources carries spec.resources (pod CPU/memory requests+limits)
+	// changes. The env chart renders `toYaml .Values.resources`, so a
+	// service-level resource change must reach the env CR to take effect.
+	Resources bool
 }
 
 func (c changedFields) any() bool {
-	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.Release || c.Command
+	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.Release || c.Command || c.Resources
 }
 
 // propagateChangedToEnvs is the single chokepoint that mirrors a
@@ -178,6 +182,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			}
 			if changed.Volumes {
 				env.Spec.Volumes = svc.Spec.Volumes
+			}
+			if changed.Resources {
+				env.Spec.Resources = svc.Spec.Resources
 			}
 			if changed.Port {
 				port := svc.Spec.Port
