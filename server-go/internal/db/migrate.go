@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Versioned, ordered, recorded schema migrations.
@@ -209,6 +210,19 @@ type MigrationStatus struct {
 	Pending         int    `json:"pending"`
 	LatestVersion   int    `json:"latestVersion"`
 	LatestName      string `json:"latestName,omitempty"`
+}
+
+// MigrationCounts is the metrics-probe view of MigrationState: applied
+// + pending, errors swallowed to 0 (a scrape must never fail). Satisfies
+// metrics.MigrationProbe without pulling the metrics package in here.
+func (d *DB) MigrationCounts() (applied, pending int) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	st, err := d.MigrationState(ctx)
+	if err != nil {
+		return 0, 0
+	}
+	return st.Applied, st.Pending
 }
 
 // MigrationState reports how many migrations are applied vs pending.

@@ -44,6 +44,7 @@ import (
 
 	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/metrics"
 	"kuso/server/internal/releaserun"
 	"kuso/server/internal/serverstate"
 )
@@ -514,7 +515,9 @@ func (s *Service) List(ctx context.Context, project, service string) ([]kube.Kus
 // The KusoBuild CR carries the resolved image repository + tag. The
 // operator's helm-charts/kusobuild chart renders the kaniko Job; the
 // poller picks up its outcome.
-func (s *Service) Create(ctx context.Context, project, service string, req CreateBuildRequest) (*kube.KusoBuild, error) {
+func (s *Service) Create(ctx context.Context, project, service string, req CreateBuildRequest) (_ *kube.KusoBuild, err error) {
+	start := time.Now()
+	defer func() { metrics.ObserveBuildCreate(start, err) }()
 	fqn := project + "-" + service
 	ns := s.nsFor(ctx, project)
 	svcCR, err := s.Kube.GetKusoService(ctx, ns, fqn)
@@ -1281,37 +1284,7 @@ func (p *Poller) tick(ctx context.Context) error {
 	// list into an indexed scan over the few in-flight rows — and
 	// matches what the operator side already does.
 	for _, ns := range p.Svc.ScanNamespaces(ctx) {
-		// All builds in the namespace via the informer cache; we filter
-		// out done ones in code (the cache helper takes equality maps
-		// only, can't express `!build-state`). The active-build set is
-		// small relative to historical builds, so the scan cost is fine.
-		raw, err := p.Svc.Kube.ListKusoBuildsByLabels(ctx, ns, nil)
-		if err != nil {
-			p.Logger.Warn("build poller list", "ns", ns, "err", err)
-			continue
-		}
-		for i := range raw {
-			b := &raw[i]
-			if b.Labels["kuso.sislelabs.com/build-state"] == "done" {
-				continue
-			}
-			// Defensive: the selector excludes done builds, but a
-			// build mid-mark could land here on a race. Keep the
-			// in-memory phase check so we skip it cleanly.
-			phase := buildPhase(b)
-			if phase == "succeeded" || phase == "failed" {
-				continue
-			}
-			if err := p.checkBuild(ctx, ns, b); err != nil && !apierrors.IsNotFound(err) {
-				p.Logger.Warn("build poller checkBuild", "build", b.Name, "ns", ns, "err", err)
-			}
-		}
-		// Queue dispatcher: promote the oldest queued build per service
-		// when no active (running/pending) build exists for it. Runs
-		// after the activeBuilds sweep so a build that finished THIS
-		// tick has its queued sibling promoted on the next one — keeps
-		// the state machine simple at the cost of one tick of latency.
-		p.dispatchQueued(ctx, ns)
+		p.observeNamespace(ctx, ns)
 	}
 	// Per-service retention sweep. Throttled to once every
 	// `capTickInterval` poller ticks (~6min at the default 5s cadence)
@@ -1360,6 +1333,49 @@ func (p *Poller) tick(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// observeNamespace is one poller observe pass over a single namespace:
+// list the in-flight builds, advance each through checkBuild, then run
+// the queue dispatcher. Extracted from tick so its latency can be
+// timed as a unit (kuso_reconcile_observe_duration_seconds) — a
+// regression here (a slow apiserver, a checkBuild that started blocking
+// on log tailing) shows up as a p99 climb on this histogram.
+func (p *Poller) observeNamespace(ctx context.Context, ns string) {
+	start := time.Now()
+	// All builds in the namespace via the informer cache; we filter
+	// out done ones in code (the cache helper takes equality maps
+	// only, can't express `!build-state`). The active-build set is
+	// small relative to historical builds, so the scan cost is fine.
+	raw, err := p.Svc.Kube.ListKusoBuildsByLabels(ctx, ns, nil)
+	if err != nil {
+		p.Logger.Warn("build poller list", "ns", ns, "err", err)
+		metrics.ObserveReconcileObserve(start, err)
+		return
+	}
+	for i := range raw {
+		b := &raw[i]
+		if b.Labels["kuso.sislelabs.com/build-state"] == "done" {
+			continue
+		}
+		// Defensive: the selector excludes done builds, but a
+		// build mid-mark could land here on a race. Keep the
+		// in-memory phase check so we skip it cleanly.
+		phase := buildPhase(b)
+		if phase == "succeeded" || phase == "failed" {
+			continue
+		}
+		if err := p.checkBuild(ctx, ns, b); err != nil && !apierrors.IsNotFound(err) {
+			p.Logger.Warn("build poller checkBuild", "build", b.Name, "ns", ns, "err", err)
+		}
+	}
+	// Queue dispatcher: promote the oldest queued build per service
+	// when no active (running/pending) build exists for it. Runs
+	// after the activeBuilds sweep so a build that finished THIS
+	// tick has its queued sibling promoted on the next one — keeps
+	// the state machine simple at the cost of one tick of latency.
+	p.dispatchQueued(ctx, ns)
+	metrics.ObserveReconcileObserve(start, nil)
 }
 
 // dispatchQueued promotes queued builds to running, in round-robin

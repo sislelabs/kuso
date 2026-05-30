@@ -20,6 +20,7 @@ import (
 	"kuso/server/internal/builds"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/metrics"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/spec"
 )
@@ -104,7 +105,15 @@ func (d *Dispatcher) WithGithubCache(c *Client, cache CacheStore) *Dispatcher {
 
 // Dispatch parses the GitHub webhook payload and routes it to the right
 // handler. Unknown events log at debug and return nil.
-func (d *Dispatcher) Dispatch(ctx context.Context, event string, body []byte) error {
+func (d *Dispatcher) Dispatch(ctx context.Context, event string, body []byte) (err error) {
+	// Only the handled events carry meaningful work — don't pollute the
+	// histogram with the no-op default branch (its near-zero samples
+	// would skew p50 toward zero and hide the real dispatch latency).
+	switch event {
+	case "push", "pull_request", "installation", "installation_repositories":
+		start := time.Now()
+		defer func() { metrics.ObserveWebhookDispatch(event, start, err) }()
+	}
 	switch event {
 	case "push":
 		return d.onPush(ctx, body)

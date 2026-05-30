@@ -291,7 +291,7 @@ func main() {
 		// (sql.DB.Stats); build stats come from a cluster-wide list
 		// cached for 10s so each Prometheus scrape doesn't issue two
 		// list calls. Idempotent — registers once per process.
-		metrics.Register(database.DB, kc, 10*time.Second)
+		metrics.RegisterWithMigrations(database.DB, database, kc, 10*time.Second)
 		// CRD preflight: if any of the six kuso CRDs is missing the
 		// helm-operator silently no-ops on every reconcile and
 		// rendered Ingress / Service / StatefulSet never appears.
