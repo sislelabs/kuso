@@ -169,7 +169,10 @@ function Row({
         // interactive child; this puts it back into the click flow
         // (and above the overlay via z-30) so the user can click
         // straight to the live site.
-        className="pointer-events-auto relative z-30 inline-flex w-fit items-center gap-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--accent)]"
+        // `flex w-fit` (not inline-flex) so each row is its own block and
+        // the <dl>'s space-y stacks them vertically — inline-flex made
+        // two linked rows (repo + domain) sit side-by-side on one line.
+        className="pointer-events-auto relative z-30 flex w-fit items-center gap-1.5 text-[var(--text-tertiary)] transition-colors hover:text-[var(--accent)]"
       >
         {body}
       </a>
@@ -233,6 +236,19 @@ function distinctServiceRepo(services: ReadonlyArray<KusoService>): string | und
     if (u) urls.add(u);
   }
   return urls.size === 1 ? [...urls][0] : undefined;
+}
+
+// distinctServiceDomain returns the single primary custom domain shared
+// across a project's services (or the lone service's domain), or
+// undefined when services disagree / none have one. Used as the card's
+// display-domain fallback when the project has no baseDomain.
+function distinctServiceDomain(services: ReadonlyArray<KusoService>): string | undefined {
+  const hosts = new Set<string>();
+  for (const s of services) {
+    const h = s.spec.domains?.[0]?.host;
+    if (h) hosts.add(h);
+  }
+  return hosts.size === 1 ? [...hosts][0] : undefined;
 }
 
 function repoWebURL(raw?: string): string | null {
@@ -301,19 +317,20 @@ function ProjectsGrid({
     <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {projects.map((p, i) => {
         const name = p.metadata.name;
-        // Display domain. We only show a domain when the project has
-        // an explicit baseDomain. The previous "infer from
-        // window.location.host" fallback printed the kuso server's
-        // hostname (often a reverse-proxy / VPN-only one) on every
-        // card with no baseDomain, which was confusing — a card
-        // saying "myapp.kuso-internal.local" doesn't tell the user
-        // anything useful about where their app lives.
-        const domain = p.spec.baseDomain;
         const created = p.metadata.creationTimestamp
           ? relativeTime(p.metadata.creationTimestamp)
           : null;
         const summary = queries[i]?.data;
         const services = summary?.services ?? [];
+        // Display domain. Prefer the project baseDomain; when a project
+        // has none (service-first projects like nev-abrom), fall back to
+        // a service's own primary custom domain so the card still shows
+        // where the app lives. distinctServiceDomain returns the single
+        // host shared across services (or the lone service's host), or
+        // undefined for a multi-domain project (we don't guess). We no
+        // longer infer from window.location.host (that printed the kuso
+        // server's own hostname on every baseless card — confusing).
+        const domain = p.spec.baseDomain ?? distinctServiceDomain(services);
         // Effective repo for the card. Prefer the project's defaultRepo;
         // when it has none (single-service / service-first projects where
         // the repo lives on the service), fall back to the services' own
@@ -444,7 +461,12 @@ function ProjectsGrid({
                     <Row
                       icon={Globe}
                       value={domain}
-                      href={publicURL ?? `https://${domain}`}
+                      // Prefer the resolved live-service URL (correct
+                      // scheme + host). Fall back to https://<domain>
+                      // only when domain is a real host — guards against
+                      // the old "https://undefined" when baseDomain was
+                      // null and no service URL resolved.
+                      href={publicURL ?? (domain ? `https://${domain}` : undefined)}
                     />
                   )}
                 </dl>
