@@ -484,11 +484,22 @@ function NotificationEditor({
 
   const save = useMutation({
     mutationFn: () => {
-      // Strip empty/none mention rules before save — they're the
-      // implicit default and clutter the stored config otherwise.
+      // Persist only mention rules that DIFFER from the event's
+      // server-side default. "" means "use the default" → never
+      // stored. "none" is an EXPLICIT opt-out and MUST be stored
+      // when the default is a ping (error-severity events default to
+      // @here) — previously we stripped "none" unconditionally, so
+      // disabling @here on backup.failed silently reverted to the
+      // @here default on reload. A redundant rule (e.g. "none" on an
+      // event whose default is already none) is still dropped to keep
+      // the stored config clean.
       const cleanMentions: Record<string, string> = {};
       for (const [k, v] of Object.entries(mentions)) {
-        if (v && v !== "none") cleanMentions[k] = v;
+        if (!v) continue; // "" = use default
+        const def = defaultMentionFor(k); // "@here" or ""
+        const effective = v === "none" ? "" : v;
+        if (effective === def) continue; // matches default → redundant
+        cleanMentions[k] = v;
       }
       // Only persist the config keys this channel type actually uses,
       // so switching type doesn't leave stale keys (a leftover `url`
