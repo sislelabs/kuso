@@ -11,6 +11,8 @@ import {
   AlertTriangle,
   Bell,
   BellRing,
+  Check,
+  ChevronDown,
   Mail,
   MessageSquare,
   Plus,
@@ -20,6 +22,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 type NotifKind =
   | "discord"
@@ -733,6 +736,13 @@ function Field({
 // options: server default (which is @here for outage events,
 // nothing otherwise), explicit none, @here, @everyone, custom role.
 //
+// It's a Popover (not a native <select>) because a native select
+// closes the moment you pick an option, and per-event tuning across a
+// list of events reads better when the panel stays open until you
+// click away — pick a rule, see it apply, move on or change your mind.
+// Base-ui Popover closes on outside-click / Esc and does NOT close on
+// an in-panel click, which is exactly the behaviour we want.
+//
 // The custom-role path needs a Discord role ID — which means right-
 // clicking the role in Discord and picking "Copy Role ID" in dev
 // mode. We don't try to fetch the guild's roles because the bot
@@ -749,10 +759,9 @@ function MentionPicker({
   disabled?: boolean;
 }) {
   // value is one of: "" (use default), "none", "@here", "@everyone",
-  // "role:<id>", or any other custom string. We map to a select on
-  // the common cases + an inline input when "role:" is picked.
-  const [showRole, setShowRole] = useState(value.startsWith("role:"));
-  const roleID = value.startsWith("role:") ? value.slice("role:".length) : "";
+  // "role:<id>", or any other custom string.
+  const isRole = value.startsWith("role:");
+  const roleID = isRole ? value.slice("role:".length) : "";
 
   const options: { v: string; label: string }[] = [
     { v: "", label: defaultMention ? `default (${defaultMention})` : "default (none)" },
@@ -761,40 +770,65 @@ function MentionPicker({
     { v: "@everyone", label: "@everyone" },
     { v: "role:", label: "role…" },
   ];
+
+  // Label shown on the trigger button mirrors the old <select> display.
+  const current = isRole ? "role…" : options.find((o) => o.v === value);
+  const triggerLabel = isRole ? "role…" : (current as { label: string }).label;
+  // Which option row is "selected" for the check mark.
+  const selectedV = isRole ? "role:" : value;
+
   return (
-    <div className={cn("flex items-center gap-1", disabled && "pointer-events-none opacity-40")}>
-      <select
-        value={showRole ? "role:" : value}
-        onChange={(e) => {
-          const v = e.target.value;
-          if (v === "role:") {
-            setShowRole(true);
-            onChange("role:" + roleID);
-          } else {
-            setShowRole(false);
-            onChange(v);
-          }
-        }}
+    <Popover>
+      <PopoverTrigger
         disabled={disabled}
-        className="h-6 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1 font-mono text-[10px] text-[var(--text-primary)]"
+        className={cn(
+          "inline-flex h-6 w-full items-center justify-between gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 font-mono text-[10px] text-[var(--text-primary)]",
+          "hover:border-[var(--border-strong)] data-[popup-open]:border-[var(--border-strong)]",
+          disabled && "pointer-events-none opacity-40"
+        )}
+      >
+        <span className="truncate">{triggerLabel}</span>
+        <ChevronDown className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={4}
+        className="w-44 gap-0.5 rounded-md p-1"
       >
         {options.map((o) => (
-          <option key={o.v} value={o.v}>
-            {o.label}
-          </option>
+          <button
+            key={o.v}
+            type="button"
+            onClick={() => onChange(o.v === "role:" ? "role:" + roleID : o.v)}
+            className={cn(
+              "flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left font-mono text-[11px]",
+              "hover:bg-[var(--bg-tertiary)]",
+              o.v === selectedV ? "text-[var(--text-primary)]" : "text-[var(--text-secondary)]"
+            )}
+          >
+            <Check
+              className={cn(
+                "h-3 w-3 shrink-0",
+                o.v === selectedV ? "opacity-100" : "opacity-0"
+              )}
+            />
+            <span className="truncate">{o.label}</span>
+          </button>
         ))}
-      </select>
-      {showRole && (
-        <input
-          value={roleID}
-          onChange={(e) => onChange("role:" + e.target.value)}
-          placeholder="role ID"
-          disabled={disabled}
-          className="h-6 w-28 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 font-mono text-[10px]"
-          spellCheck={false}
-        />
-      )}
-    </div>
+        {isRole && (
+          <input
+            value={roleID}
+            onChange={(e) => onChange("role:" + e.target.value)}
+            placeholder="role ID"
+            className="mt-1 h-6 w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 font-mono text-[10px]"
+            spellCheck={false}
+            // Keep clicks/keystrokes in the input from bubbling to the
+            // option buttons; the popover itself stays open regardless.
+            onClick={(e) => e.stopPropagation()}
+          />
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 
