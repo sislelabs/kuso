@@ -61,6 +61,17 @@ func seedSvc(project, service string) seed {
 }
 
 func seedSvcWithDomains(project, service string, domains []kube.KusoDomain) seed {
+	// No per-service repo → the service inherits the project's
+	// defaultRepo (the common single-repo-project shape). Multi-repo
+	// tests use seedSvcWithRepo to pin a distinct repo.
+	return seedSvcWithRepo(project, service, "", domains)
+}
+
+func seedSvcWithRepo(project, service, repoURL string, domains []kube.KusoDomain) seed {
+	var repo *kube.KusoRepoRef
+	if repoURL != "" {
+		repo = &kube.KusoRepoRef{URL: repoURL, Path: "."}
+	}
 	s := &kube.KusoService{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      project + "-" + service,
@@ -69,7 +80,7 @@ func seedSvcWithDomains(project, service string, domains []kube.KusoDomain) seed
 		},
 		Spec: kube.KusoServiceSpec{
 			Project: project,
-			Repo:    &kube.KusoRepoRef{URL: "https://github.com/example/" + service, Path: "."},
+			Repo:    repo,
 			Port:    3000,
 			Domains: domains,
 		},
@@ -156,6 +167,86 @@ func TestDispatch_PushUnknownRepoSkips(t *testing.T) {
 	}
 }
 
+// --- multi-repo project routing (per-service repo matching) ----------
+
+// A project with two services on two different repos: a push to repo A
+// must build ONLY service A, not service B.
+func TestDispatch_PushMultiRepo_BuildsOnlyMatchingService(t *testing.T) {
+	t.Parallel()
+	d := newDispatcher(t,
+		// Project default repo = the "api" repo; "web" overrides to its own.
+		seedProj("alpha", "https://github.com/example/api", "main", false, 0),
+		seedSvcWithRepo("alpha", "web", "https://github.com/example/web", nil),
+		seedSvc("alpha", "api"), // inherits example/api
+	)
+	// Push to the web repo.
+	body := []byte(`{
+		"ref": "refs/heads/main",
+		"repository": {"full_name": "example/web", "default_branch": "main"}
+	}`)
+	if err := d.Dispatch(context.Background(), "push", body); err != nil {
+		t.Fatalf("Dispatch push: %v", err)
+	}
+	webBuilds, _ := d.Builds.List(context.Background(), "alpha", "web")
+	apiBuilds, _ := d.Builds.List(context.Background(), "alpha", "api")
+	if len(webBuilds) != 1 {
+		t.Errorf("web (repo matched) should have 1 build, got %d", len(webBuilds))
+	}
+	if len(apiBuilds) != 0 {
+		t.Errorf("api (different repo) should NOT build on a web-repo push, got %d", len(apiBuilds))
+	}
+}
+
+// A service whose repo lives only on the service (project defaultRepo
+// empty) must still build on a push to that repo. This is the nev-abrom
+// shape — pre-fix it matched nothing because routing only looked at the
+// project default.
+func TestDispatch_PushServiceRepoNoProjectDefault_Builds(t *testing.T) {
+	t.Parallel()
+	d := newDispatcher(t,
+		seedProj("nevabrom", "", "", false, 0), // no project default repo
+		seedSvcWithRepo("nevabrom", "site", "https://github.com/biznesguys/nev-abrom", nil),
+	)
+	body := []byte(`{
+		"ref": "refs/heads/main",
+		"repository": {"full_name": "biznesguys/nev-abrom", "default_branch": "main"}
+	}`)
+	if err := d.Dispatch(context.Background(), "push", body); err != nil {
+		t.Fatalf("Dispatch push: %v", err)
+	}
+	bs, _ := d.Builds.List(context.Background(), "nevabrom", "site")
+	if len(bs) != 1 {
+		t.Errorf("service-repo push (no project default) should build, got %d", len(bs))
+	}
+}
+
+// A PR on repo A in a two-repo project must spin up a preview only for
+// service A, not service B (which tracks repo B).
+func TestDispatch_PRMultiRepo_PreviewsOnlyMatchingService(t *testing.T) {
+	t.Parallel()
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/api", "main", true, 5),
+		seedSvcWithRepo("alpha", "web", "https://github.com/example/web", nil),
+		seedSvc("alpha", "api"),
+	)
+	body := []byte(`{
+		"action": "opened",
+		"number": 9,
+		"pull_request": {"head": {"ref": "feat/x", "sha": "1111111111111111111111111111111111111111"}, "base": {"ref": "main"}, "state": "open"},
+		"repository": {"full_name": "example/web"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch pull_request: %v", err)
+	}
+	// web preview env should exist; api should not.
+	if _, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-9"); err != nil {
+		t.Errorf("web preview env should exist for a web-repo PR: %v", err)
+	}
+	if _, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-api-pr-9"); err == nil {
+		t.Error("api preview env should NOT exist for a web-repo PR (different repo)")
+	}
+}
+
 func TestDispatch_PROpened_CreatesPreviewEnvAndBuild(t *testing.T) {
 	t.Parallel()
 	d := newDispatcher(t,
@@ -239,7 +330,6 @@ func seedSvcWithSubscription(project, service string, subscribedAddons []string)
 		},
 		Spec: kube.KusoServiceSpec{
 			Project:          project,
-			Repo:             &kube.KusoRepoRef{URL: "https://github.com/example/" + service, Path: "."},
 			Port:             3000,
 			SubscribedAddons: subscribedAddons,
 		},
@@ -266,7 +356,7 @@ func TestDispatch_PROpened_RespectsSubscribedAddons(t *testing.T) {
 	t.Parallel()
 	d := newDispatcher(t,
 		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
-		seedSvcWithSubscription("alpha", "frontend", []string{}),          // none
+		seedSvcWithSubscription("alpha", "frontend", []string{}),            // none
 		seedSvcWithSubscription("alpha", "backoffice", []string{"storage"}), // storage only
 		seedSvcWithSubscription("alpha", "api", []string{"cache", "db", "queue", "storage"}),
 	)
@@ -285,7 +375,7 @@ func TestDispatch_PROpened_RespectsSubscribedAddons(t *testing.T) {
 	}
 
 	cases := map[string][]string{
-		"frontend":   {},                  // no addon conns
+		"frontend":   {}, // no addon conns
 		"backoffice": {"alpha-storage-conn"},
 		"api":        {"alpha-cache-conn", "alpha-db-conn", "alpha-queue-conn", "alpha-storage-conn"},
 	}
@@ -404,7 +494,6 @@ func TestDispatch_PROpened_PreviewIsSingleReplica(t *testing.T) {
 		},
 		Spec: kube.KusoServiceSpec{
 			Project: "alpha",
-			Repo:    &kube.KusoRepoRef{URL: "https://github.com/example/web", Path: "."},
 			Port:    3000,
 			Scale:   &kube.KusoScaleSpec{Min: &min2, Max: 5},
 		},

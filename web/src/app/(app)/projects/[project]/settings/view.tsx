@@ -29,6 +29,8 @@ export function ProjectSettingsView() {
 
   const [description, setDescription] = useState("");
   const [baseDomain, setBaseDomain] = useState("");
+  const [repoURL, setRepoURL] = useState("");
+  const [repoBranch, setRepoBranch] = useState("");
   const [previewsEnabled, setPreviewsEnabled] = useState(false);
   const [previewsTtl, setPreviewsTtl] = useState<number>(7);
   const [alwaysOn, setAlwaysOn] = useState(false);
@@ -39,6 +41,8 @@ export function ProjectSettingsView() {
       const s = project.data.project.spec;
       setDescription(s.description ?? "");
       setBaseDomain(s.baseDomain ?? "");
+      setRepoURL(s.defaultRepo?.url ?? "");
+      setRepoBranch(s.defaultRepo?.defaultBranch ?? "");
       setPreviewsEnabled(!!s.previews?.enabled);
       setPreviewsTtl(s.previews?.ttlDays ?? 7);
       setAlwaysOn(!!s.alwaysOn);
@@ -69,6 +73,13 @@ export function ProjectSettingsView() {
       await update.mutateAsync({
         description: description || null,
         baseDomain: baseDomain || null,
+        // Default repo: services with no spec.repo inherit this. Only
+        // sent when a URL is present — the server's PATCH sets-when-
+        // -non-empty (it doesn't clear), so an empty field is a no-op,
+        // not a removal. Setting/changing the repo is the supported op.
+        ...(repoURL.trim()
+          ? { defaultRepo: { url: repoURL.trim(), defaultBranch: repoBranch.trim() || undefined } }
+          : {}),
         previews: { enabled: previewsEnabled, ttlDays: previewsTtl },
         alwaysOn,
       });
@@ -133,6 +144,31 @@ export function ProjectSettingsView() {
               <code className="rounded bg-[var(--bg-tertiary)] px-1">
                 &lt;service&gt;.{baseDomain || "<base>"}
               </code>
+            </p>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="repoURL">Default repository</Label>
+            <div className="flex gap-2">
+              <Input
+                id="repoURL"
+                value={repoURL}
+                onChange={(e) => setRepoURL(e.target.value)}
+                placeholder="https://github.com/org/repo"
+                className="font-mono flex-1"
+              />
+              <Input
+                id="repoBranch"
+                value={repoBranch}
+                onChange={(e) => setRepoBranch(e.target.value)}
+                placeholder="main"
+                className="font-mono w-32"
+                aria-label="Default branch"
+              />
+            </div>
+            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+              Services without their own repository inherit this one. Pushes and PRs on it
+              trigger builds and preview envs. Leave blank if every service sets its own repo.
             </p>
           </div>
         </div>

@@ -197,24 +197,31 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 		return fmt.Errorf("list projects: %w", err)
 	}
 	for _, proj := range projects {
-		repoURL := ""
-		defaultBranch := "main"
-		if proj.Spec.DefaultRepo != nil {
-			repoURL = proj.Spec.DefaultRepo.URL
-			if proj.Spec.DefaultRepo.DefaultBranch != "" {
-				defaultBranch = proj.Spec.DefaultRepo.DefaultBranch
-			}
-		}
-		if !repoMatches(repoURL, repoFullName) || branch != defaultBranch {
-			continue
-		}
-		// Trigger a build for every service in the project. Services
-		// live in the project's execution namespace, which may differ
-		// from the home ns when KusoProject.spec.namespace is set.
+		// Repo matching is now PER-SERVICE (multi-repo projects): a
+		// service's effective repo is its spec.repo.url, falling back to
+		// the project defaultRepo. We list services first, then build
+		// only those whose effective repo+branch matches this push.
+		// Services live in the project's execution namespace, which may
+		// differ from the home ns when KusoProject.spec.namespace is set.
 		raw, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.nsFor(ctx, proj.Name)).
 			List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: proj.Name})})
 		if err != nil {
 			d.Logger.Error("list services for push", "project", proj.Name, "err", err)
+			continue
+		}
+		// Skip the whole project unless at least one of its services
+		// tracks this repo (cheap pre-filter so we don't fetch
+		// config-as-code or log for irrelevant projects). The
+		// project-default-repo match is implied because services fall
+		// back to it in serviceRepoMatches.
+		anyMatch := false
+		for i := range raw.Items {
+			if serviceRepoMatches(&raw.Items[i], &proj, repoFullName) {
+				anyMatch = true
+				break
+			}
+		}
+		if !anyMatch {
 			continue
 		}
 		// Detect PR-merge pushes so the build name reads as
@@ -275,6 +282,17 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 			if d.Builds == nil {
 				continue
 			}
+			// Per-service gate: build only services that track THIS repo
+			// and whose default branch is the pushed branch. In a single-
+			// repo project every service's effective repo is the project
+			// default, so this preserves the old "build all on default-
+			// branch push" behaviour; in a multi-repo project a push to
+			// repo X builds only X's services (and skips services on
+			// other repos or other branches).
+			svcRepo, svcBranch := serviceEffectiveRepo(&raw.Items[i], &proj)
+			if !repoMatches(svcRepo, repoFullName) || branch != svcBranch {
+				continue
+			}
 			// For a PR-merge push, prefer the head SHA (so the build
 			// CR carries a real ref instead of the synthetic
 			// "<branch>-<unix-ms>"). For a regular push, also prefer
@@ -329,11 +347,25 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 		if proj.Spec.Previews == nil || !proj.Spec.Previews.Enabled {
 			continue
 		}
-		repoURL := ""
-		if proj.Spec.DefaultRepo != nil {
-			repoURL = proj.Spec.DefaultRepo.URL
+		// List services up front so repo matching can be PER-SERVICE
+		// (multi-repo projects): a PR on repo X previews only the
+		// services that track repo X, not every service in the project.
+		services, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.nsFor(ctx, proj.Name)).
+			List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: proj.Name})})
+		if err != nil {
+			d.Logger.Error("list services for pr", "project", proj.Name, "err", err)
+			continue
 		}
-		if !repoMatches(repoURL, repoFullName) {
+		// Skip the project unless at least one service tracks this repo
+		// (the project-default-repo match is implied via fallback).
+		anyMatch := false
+		for i := range services.Items {
+			if serviceRepoMatches(&services.Items[i], &proj, repoFullName) {
+				anyMatch = true
+				break
+			}
+		}
+		if !anyMatch {
 			continue
 		}
 		// Trigger gating (v0.17.0). When the project declares
@@ -370,15 +402,15 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 				continue
 			}
 		}
-		services, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.nsFor(ctx, proj.Name)).
-			List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: proj.Name})})
-		if err != nil {
-			d.Logger.Error("list services for pr", "project", proj.Name, "err", err)
-			continue
-		}
 		switch pr.Action {
 		case "opened", "reopened", "synchronize":
 			for i := range services.Items {
+				// Per-service repo gate: only preview services that track
+				// the PR's repo. A multi-repo project's PR on repo X
+				// shouldn't spin up preview envs for services on repo Y.
+				if !serviceRepoMatches(&services.Items[i], &proj, repoFullName) {
+					continue
+				}
 				// Per-service opt-out: a service can set
 				// spec.previews.disabled to skip PR previews even when
 				// the project toggle is on. Useful for internal
@@ -476,6 +508,43 @@ func svcPreviewsDisabled(u *unstructured.Unstructured) bool {
 		return false
 	}
 	return disabled
+}
+
+// serviceEffectiveRepo returns a service's effective repo URL + default
+// branch: its own spec.repo.{url,defaultBranch}, each falling back to the
+// project's defaultRepo when unset. Mirrors the build layer's resolution
+// (builds.go) and reads off the unstructured service to avoid importing
+// the projects package (like svcPreviewsDisabled).
+func serviceEffectiveRepo(u *unstructured.Unstructured, proj *kube.KusoProject) (repoURL, branch string) {
+	if u != nil {
+		if v, found, err := unstructured.NestedString(u.Object, "spec", "repo", "url"); err == nil && found {
+			repoURL = v
+		}
+		if v, found, err := unstructured.NestedString(u.Object, "spec", "repo", "defaultBranch"); err == nil && found {
+			branch = v
+		}
+	}
+	if proj.Spec.DefaultRepo != nil {
+		if repoURL == "" {
+			repoURL = proj.Spec.DefaultRepo.URL
+		}
+		if branch == "" {
+			branch = proj.Spec.DefaultRepo.DefaultBranch
+		}
+	}
+	if branch == "" {
+		branch = "main"
+	}
+	return repoURL, branch
+}
+
+// serviceRepoMatches reports whether the service's EFFECTIVE repo matches
+// the incoming webhook repo (owner/name). This is what makes multi-repo
+// projects work: a push/PR on repo X builds/previews only the services
+// that actually track repo X, not every service in the project.
+func serviceRepoMatches(u *unstructured.Unstructured, proj *kube.KusoProject, repoFullName string) bool {
+	repoURL, _ := serviceEffectiveRepo(u, proj)
+	return repoMatches(repoURL, repoFullName)
 }
 
 // ensurePreviewEnv creates (or recreates) the preview KusoEnvironment

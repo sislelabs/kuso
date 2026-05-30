@@ -221,6 +221,20 @@ function formatBytes(b: number): string {
 //   https://github.com/org/repo(.git)   → as-is, .git stripped
 //   git@github.com:org/repo(.git)        → https://github.com/org/repo
 //   github.com/org/repo(.git)            → https://github.com/org/repo
+// distinctServiceRepo returns the single repo URL shared by all of a
+// project's services that declare one, or undefined when there are none
+// or they disagree (a genuine multi-repo project — the card then shows
+// no repo rather than picking arbitrarily). Used as the card's repo
+// fallback when the project has no defaultRepo.
+function distinctServiceRepo(services: ReadonlyArray<KusoService>): string | undefined {
+  const urls = new Set<string>();
+  for (const s of services) {
+    const u = s.spec.repo?.url;
+    if (u) urls.add(u);
+  }
+  return urls.size === 1 ? [...urls][0] : undefined;
+}
+
 function repoWebURL(raw?: string): string | null {
   if (!raw) return null;
   let s = raw.trim();
@@ -287,13 +301,6 @@ function ProjectsGrid({
     <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {projects.map((p, i) => {
         const name = p.metadata.name;
-        const repo = p.spec.defaultRepo?.url?.replace(/^https?:\/\/(www\.)?/, "");
-        // Clickable web URL for the repo row. Normalises the stored
-        // clone URL (https://…, git@host:…, or bare host/path, with or
-        // without a trailing .git) to an https:// browser link. Returns
-        // null when we can't form a confident URL so the row stays
-        // plain text rather than linking somewhere wrong.
-        const repoURL = repoWebURL(p.spec.defaultRepo?.url);
         // Display domain. We only show a domain when the project has
         // an explicit baseDomain. The previous "infer from
         // window.location.host" fallback printed the kuso server's
@@ -307,6 +314,21 @@ function ProjectsGrid({
           : null;
         const summary = queries[i]?.data;
         const services = summary?.services ?? [];
+        // Effective repo for the card. Prefer the project's defaultRepo;
+        // when it has none (single-service / service-first projects where
+        // the repo lives on the service), fall back to the services' own
+        // repos — but only when unambiguous (every service that has a
+        // repo points at the SAME one). A multi-repo project shows no
+        // repo row rather than arbitrarily picking one.
+        const effectiveRepoRaw =
+          p.spec.defaultRepo?.url ?? distinctServiceRepo(services);
+        const repo = effectiveRepoRaw?.replace(/^https?:\/\/(www\.)?/, "");
+        // Clickable web URL for the repo row. Normalises the stored
+        // clone URL (https://…, git@host:…, or bare host/path, with or
+        // without a trailing .git) to an https:// browser link. Returns
+        // null when we can't form a confident URL so the row stays
+        // plain text rather than linking somewhere wrong.
+        const repoURL = repoWebURL(effectiveRepoRaw);
         const envs = summary?.environments ?? [];
         const addons = summary?.addons ?? [];
         // "Live" = a production env with at least one pod actually
