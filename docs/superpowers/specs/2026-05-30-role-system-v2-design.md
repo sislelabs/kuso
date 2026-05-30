@@ -146,7 +146,7 @@ viewer/editor access to users and groups, and add users/groups to projects, in t
 | `secrets:write` (set env, blind) | | ✓ | ✓ |
 | `secrets:read` (read env values) | | | ✓ |
 | `shell:exec` (pod shell/terminal) | | | ✓ |
-| `sql:read` | | ✓ | ✓ |
+| `sql:read` (SQL console / DB browser) | | | ✓ |
 | instance: `settings:admin`, `user:write`, `audit:read`, `system:update`, `billing:read` | | | ✓ |
 
 (`shell:exec` is a **new** permission gating the terminal/exec websocket — previously
@@ -199,7 +199,8 @@ there. Instance pages (settings, users, audit, billing) require `admin`.
 - **Unit (db pkg):** `ProjectGrant` CRUD, `ListUserTenancy` union (highest-wins across
   direct + group, override vs inherit), migration wipe-and-re-grant idempotency.
 - **Handler-level:** `secrets:read` 403 for editor on env read; `secrets:write` 200 for editor;
-  `shell:exec` 403 for non-admin; project invisibility (404/filtered) for ungranted non-admin.
+  `shell:exec` 403 for non-admin; `sql:read` 403 for editor; project invisibility (404/filtered)
+  for ungranted non-admin.
 - **Migration:** apply against a seeded old-model DB; assert only admins retain access.
 
 ## Rollout
