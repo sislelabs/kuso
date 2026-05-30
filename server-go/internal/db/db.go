@@ -89,7 +89,10 @@ func Open(dsn string) (*DB, error) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	d := &DB{DB: sqldb, tenancy: newTenancyCache()}
-	if err := d.applySchema(); err != nil {
+	// Apply the baseline schema (idempotent) + any pending versioned
+	// migrations, in order, recorded in SchemaMigration. runMigrations
+	// calls applySchema internally for the baseline.
+	if err := d.runMigrations(context.Background()); err != nil {
 		_ = d.Close()
 		return nil, err
 	}

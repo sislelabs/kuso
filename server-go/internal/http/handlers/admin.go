@@ -54,7 +54,26 @@ func (h *AdminHandler) DBStats(w http.ResponseWriter, r *http.Request) {
 	if !requireAdmin(w, r) {
 		return
 	}
-	writeJSON(w, http.StatusOK, h.DB.GetStats())
+	ctx, cancel := adminCtx(r)
+	defer cancel()
+	// Marshal the flat StatsSnapshot (writeErrors/poolOpen/...) and
+	// splice in a `migrations` field, keeping the existing top-level
+	// shape backward-compatible with the web tile + the CLI.
+	snap := h.DB.GetStats()
+	b, _ := json.Marshal(snap)
+	var resp map[string]any
+	_ = json.Unmarshal(b, &resp)
+	if resp == nil {
+		resp = map[string]any{}
+	}
+	// Schema-migration state — applied/pending versions. A nonzero
+	// Pending means the running binary expects migrations that haven't
+	// applied (shouldn't happen: runMigrations runs at boot and fails
+	// loud, but surfacing it makes a stuck/partial state visible).
+	if st, err := h.DB.MigrationState(ctx); err == nil {
+		resp["migrations"] = st
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 func adminCtx(r *http.Request) (context.Context, context.CancelFunc) {

@@ -1,0 +1,13 @@
+-- 0001: index the per-project audit query.
+--
+-- The Audit table only had a (timestamp DESC) index from the baseline,
+-- but the per-project activity view (handlers/audit.go) filters by the
+-- "pipeline" (project) column and orders newest-first — a full scan
+-- without this. As the audit table grows (every mutation appends a row)
+-- the project-scoped view degrades. This composite index serves the
+-- WHERE pipeline = $1 ORDER BY id DESC access path directly.
+--
+-- First real versioned migration: validates the runner end-to-end.
+-- CREATE INDEX IF NOT EXISTS keeps it safe even if a hand-applied copy
+-- already exists on some cluster.
+CREATE INDEX IF NOT EXISTS "Audit_pipeline_id_idx" ON "Audit" ("pipeline", "id" DESC);
