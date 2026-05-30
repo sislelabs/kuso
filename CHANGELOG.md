@@ -5,6 +5,19 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.1] — 2026-05-30
+
+### 🐛 Bug Fixes
+- Fix(db): drop carried-over indexes before recreating in LogLine partition migration ([146f16c](https://github.com/sislelabs/kuso/commit/146f16c1fc5a8030207fcaaab3753878bce98820))
+- Fix(notifications): persist explicit "none" Discord mention over @here default ([3208b14](https://github.com/sislelabs/kuso/commit/3208b14d916ebb071cb7091c0e3c8fd0b82ded61))
+
+### 🔨 Refactors
+- Refactor: decouple served-app domain from the kuso.sislelabs.com literal ([04c3609](https://github.com/sislelabs/kuso/commit/04c3609d382b4f02b62adf8c5077446c72884977))
+- Refactor(db): purge SQLite dialect — native Postgres $N + ON CONFLICT ([a9561c0](https://github.com/sislelabs/kuso/commit/a9561c00a4285c35d8e222755d8e0a454a9ea41b))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.1 ship) ([74c6ba9](https://github.com/sislelabs/kuso/commit/74c6ba9204e6d3b3677f950828a569f8460f43af))
+
 ## [0.18.0] — 2026-05-30
 
 ### Other
@@ -307,11 +320,6 @@ messages on every release. The format is loosely based on
 ### 📝 Docs
 - Docs: clarify per-env override path for build-time-inlined frontend envs ([80ee524](https://github.com/sislelabs/kuso/commit/80ee52450f62a25d545e7b764a7a8f6691b7199a))
 - Docs: how to handle NEXT_PUBLIC_* (build-time-inlined) frontend envs ([b9a4d56](https://github.com/sislelabs/kuso/commit/b9a4d56d663fcf154aaccb2c757e2c0626caba19))
-
-## [0.16.8] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix: prevent worker ingresses + bound rollout history ([b698dbd](https://github.com/sislelabs/kuso/commit/b698dbdc29acc4580d26e2b0dac6725231a62ca1))
 
 
 ---
