@@ -5,6 +5,19 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.0] — 2026-05-30
+
+### Other
+- M3: latency histograms + schema-migration gauges on /metrics ([2ef8384](https://github.com/sislelabs/kuso/commit/2ef8384b1a553e3c12a4d8bcf9c845857691cb25))
+- M2: reconciler tests for the load-bearing untested paths ([4967bed](https://github.com/sislelabs/kuso/commit/4967bed39c91e820ad583aa9744b042e8a1d653e))
+- M1: versioned DB migrations (runner + first migration + ops surfacing) ([afe5eb2](https://github.com/sislelabs/kuso/commit/afe5eb294b240bd69875f576a6a21f86bbe81a49))
+
+### 🐛 Bug Fixes
+- Fix(web): project card — stack repo/domain rows + service-domain fallback + correct link ([7d39973](https://github.com/sislelabs/kuso/commit/7d39973bda814ab358693470b033031d2b06cd39))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.0 ship) ([ec9e3d9](https://github.com/sislelabs/kuso/commit/ec9e3d905a7b781167079def9be376d489ecf2fd))
+
 ## [0.17.29] — 2026-05-30
 
 ### ✨ Features
@@ -299,11 +312,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix: prevent worker ingresses + bound rollout history ([b698dbd](https://github.com/sislelabs/kuso/commit/b698dbdc29acc4580d26e2b0dac6725231a62ca1))
-
-## [0.16.7] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(install): bump fs.inotify limits to avoid silent pod failures ([05d2676](https://github.com/sislelabs/kuso/commit/05d267664a93f52d9ef5ae2425925ec60cb35f5f))
 
 
 ---
