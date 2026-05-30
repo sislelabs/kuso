@@ -311,13 +311,26 @@ function GroupEditor({ groupId }: { groupId: string }) {
 }
 
 function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] }) {
-  // We don't yet have a "members of this group" list endpoint —
-  // the user → group join is one-way through /api/users/profile.
-  // Workaround: surface the `add a user` action and trust the
-  // invalidation to refresh on next page load. A future endpoint
-  // /api/groups/{id}/members would close this loop.
   const qc = useQueryClient();
+  const membersKey = ["admin", "group-members", groupId] as const;
+
+  // The roster, straight from the group → members endpoint (added so
+  // the UI can show who's in a group, not just blindly add/remove).
+  const members = useQuery({
+    queryKey: membersKey,
+    queryFn: async () => {
+      const res = await api<{ data?: UserRow[] }>(
+        `/api/groups/${encodeURIComponent(groupId)}/members`
+      );
+      return res.data ?? [];
+    },
+  });
+
   const [picked, setPicked] = useState<string>("");
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: membersKey });
+    qc.invalidateQueries({ queryKey: ["admin", "users"] });
+  };
   const add = useMutation({
     mutationFn: (userId: string) =>
       api(
@@ -326,8 +339,8 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
       ),
     onSuccess: () => {
       toast.success("Member added");
-      qc.invalidateQueries({ queryKey: ["admin", "users"] });
       setPicked("");
+      invalidate();
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "add failed"),
   });
@@ -339,52 +352,83 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
       ),
     onSuccess: () => {
       toast.success("Member removed");
-      qc.invalidateQueries({ queryKey: ["admin", "users"] });
+      invalidate();
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "remove failed"),
   });
+
+  const roster = members.data ?? [];
+  const memberIds = new Set(roster.map((m) => m.id));
+  const addable = users.filter((u) => !memberIds.has(u.id));
+
   return (
     <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
       <header className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-2">
         <h3 className="text-sm font-semibold tracking-tight">Members</h3>
+        <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
+          {roster.length} {roster.length === 1 ? "member" : "members"}
+        </span>
       </header>
-      <div className="space-y-2 p-3">
-        <div className="flex items-center gap-2">
-          <select
-            value={picked}
-            onChange={(e) => setPicked(e.target.value)}
-            className="h-7 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
-          >
-            <option value="">(pick a user to add)</option>
-            {users.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.username} {u.email ? `· ${u.email}` : ""}
-              </option>
-            ))}
-          </select>
-          <Button
-            size="sm"
-            type="button"
-            disabled={!picked || add.isPending}
-            onClick={() => picked && add.mutate(picked)}
-          >
-            <Plus className="h-3 w-3" /> Add
-          </Button>
-        </div>
-        <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-          Removing a member uses the same dropdown — pick a user and click Remove.
+
+      {/* Roster — one row per member with an inline remove. */}
+      {members.isPending ? (
+        <p className="px-3 py-2.5 text-[11px] text-[var(--text-tertiary)]">Loading members…</p>
+      ) : roster.length === 0 ? (
+        <p className="px-3 py-2.5 text-[11px] text-[var(--text-tertiary)]">
+          No members yet. Add a user below.
         </p>
-        <div className="flex items-center gap-2">
-          <Button
-            size="sm"
-            variant="outline"
-            type="button"
-            disabled={!picked || remove.isPending}
-            onClick={() => picked && remove.mutate(picked)}
-          >
-            <X className="h-3 w-3" /> Remove
-          </Button>
-        </div>
+      ) : (
+        <ul>
+          {roster.map((m) => (
+            <li
+              key={m.id}
+              className="flex items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-b-0"
+            >
+              <Users className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+              <span className="truncate font-mono text-[12px]">{m.username}</span>
+              {m.email && (
+                <span className="truncate text-[10px] text-[var(--text-tertiary)]">{m.email}</span>
+              )}
+              <button
+                type="button"
+                onClick={() => remove.mutate(m.id)}
+                disabled={remove.isPending}
+                aria-label={`Remove ${m.username}`}
+                title={`Remove ${m.username} from group`}
+                className="ml-auto inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Add row — only offers users not already in the group. */}
+      <div className="flex items-center gap-2 border-t border-[var(--border-subtle)] px-3 py-2">
+        <select
+          value={picked}
+          onChange={(e) => setPicked(e.target.value)}
+          disabled={addable.length === 0}
+          className="h-7 min-w-0 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
+        >
+          <option value="">
+            {addable.length === 0 ? "(all users are members)" : "(pick a user to add)"}
+          </option>
+          {addable.map((u) => (
+            <option key={u.id} value={u.id}>
+              {u.username} {u.email ? `· ${u.email}` : ""}
+            </option>
+          ))}
+        </select>
+        <Button
+          size="sm"
+          type="button"
+          disabled={!picked || add.isPending}
+          onClick={() => picked && add.mutate(picked)}
+        >
+          <Plus className="h-3 w-3" /> Add
+        </Button>
       </div>
     </section>
   );

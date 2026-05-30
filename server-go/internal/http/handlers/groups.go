@@ -33,6 +33,7 @@ func (h *GroupsHandler) Mount(r chi.Router) {
 	r.Get("/api/groups/{id}/tenancy", h.GetTenancy)
 	r.Put("/api/groups/{id}/tenancy", h.PutTenancy)
 	// Membership management — admins assign users to groups here.
+	r.Get("/api/groups/{id}/members", h.ListMembers)
 	r.Post("/api/groups/{id}/members/{userId}", h.AddMember)
 	r.Delete("/api/groups/{id}/members/{userId}", h.RemoveMember)
 }
@@ -149,8 +150,27 @@ func (h *GroupsHandler) PutTenancy(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// ListMembers returns the users in a group. Admin-only — the member
+// list is part of access management. Returns {data:[{id,username,
+// email}]} so the admin UI can render + manage the roster instead of
+// the old write-only add/remove-by-dropdown flow.
+func (h *GroupsHandler) ListMembers(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	ctx, cancel := groupsCtx(r)
+	defer cancel()
+	members, err := h.DB.ListGroupMembers(ctx, chi.URLParam(r, "id"))
+	if err != nil {
+		h.Logger.Error("list group members", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": members})
+}
+
 // AddMember attaches a user to a group. Idempotent — re-adding a
-// member is a no-op via INSERT OR IGNORE under the hood.
+// member is a no-op via ON CONFLICT DO NOTHING under the hood.
 func (h *GroupsHandler) AddMember(w http.ResponseWriter, r *http.Request) {
 	if !requireUserWrite(w, r) {
 		return

@@ -6,7 +6,8 @@ import { api } from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Plus, X, Users as UsersIcon, User as UserIcon } from "lucide-react";
+import { Plus, X, Users as UsersIcon, User as UserIcon, ChevronRight } from "lucide-react";
+import { cn } from "@/lib/utils";
 
 // ProjectAccessPanel — the role-system-v2 per-project access list.
 // Admins add users or groups to a project, each with an optional role
@@ -128,43 +129,13 @@ export function ProjectAccessPanel({ project }: { project: string }) {
         ) : (
           <ul>
             {rows.map((g) => (
-              <li
+              <GrantRow
                 key={g.id}
-                className="grid grid-cols-[1fr_180px_28px] items-center gap-2 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-b-0"
-              >
-                <span className="flex items-center gap-1.5 truncate text-[12px]">
-                  {g.kind === "group" ? (
-                    <UsersIcon className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
-                  ) : (
-                    <UserIcon className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
-                  )}
-                  <span className="truncate font-mono">
-                    {g.kind === "group" ? groupName(g.groupId) : userName(g.userId)}
-                  </span>
-                  <span className="text-[10px] text-[var(--text-tertiary)]">{g.kind}</span>
-                </span>
-                <select
-                  value={g.roleOverride}
-                  onChange={(e) =>
-                    setOverride.mutate({ ...g, roleOverride: e.target.value as ProjectRole })
-                  }
-                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
-                >
-                  {OVERRIDE_OPTIONS.map((o) => (
-                    <option key={o.value} value={o.value}>
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  onClick={() => remove.mutate(g.id)}
-                  aria-label="Remove access"
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
-                >
-                  <X className="h-3 w-3" />
-                </button>
-              </li>
+                grant={g}
+                label={g.kind === "group" ? groupName(g.groupId) : userName(g.userId)}
+                onRoleChange={(role) => setOverride.mutate({ ...g, roleOverride: role })}
+                onRemove={() => remove.mutate(g.id)}
+              />
             ))}
           </ul>
         )}
@@ -184,6 +155,121 @@ export function ProjectAccessPanel({ project }: { project: string }) {
         and triggering runs are admin-only regardless of override.
       </p>
     </div>
+  );
+}
+
+interface Member {
+  id: string;
+  username: string;
+  email?: string;
+}
+
+// GrantRow renders one access grant. For a GROUP grant the name is a
+// disclosure toggle: clicking it fetches + reveals the group's members
+// so an admin can see who a group-scoped grant actually covers without
+// leaving the project. User grants render the same minus the toggle.
+function GrantRow({
+  grant,
+  label,
+  onRoleChange,
+  onRemove,
+}: {
+  grant: Grant;
+  label: string;
+  onRoleChange: (role: ProjectRole) => void;
+  onRemove: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const isGroup = grant.kind === "group";
+
+  // Members load lazily on first expand (enabled-gated), cached after.
+  const members = useQuery({
+    queryKey: ["admin", "group-members", grant.groupId],
+    queryFn: async () => {
+      const res = await api<{ data?: Member[] }>(
+        `/api/groups/${encodeURIComponent(grant.groupId ?? "")}/members`
+      );
+      return res.data ?? [];
+    },
+    enabled: isGroup && open && !!grant.groupId,
+  });
+
+  return (
+    <li className="border-b border-[var(--border-subtle)] last:border-b-0">
+      <div className="grid grid-cols-[1fr_180px_28px] items-center gap-2 px-3 py-1.5">
+        {isGroup ? (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="flex items-center gap-1.5 truncate text-left text-[12px]"
+            title={open ? "Hide members" : "Show members"}
+          >
+            <ChevronRight
+              className={cn(
+                "h-3 w-3 shrink-0 text-[var(--text-tertiary)] transition-transform",
+                open && "rotate-90"
+              )}
+            />
+            <UsersIcon className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+            <span className="truncate font-mono">{label}</span>
+            <span className="text-[10px] text-[var(--text-tertiary)]">group</span>
+          </button>
+        ) : (
+          <span className="flex items-center gap-1.5 truncate pl-[18px] text-[12px]">
+            <UserIcon className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+            <span className="truncate font-mono">{label}</span>
+            <span className="text-[10px] text-[var(--text-tertiary)]">user</span>
+          </span>
+        )}
+        <select
+          value={grant.roleOverride}
+          onChange={(e) => onRoleChange(e.target.value as ProjectRole)}
+          className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
+        >
+          {OVERRIDE_OPTIONS.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label="Remove access"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+      {isGroup && open && (
+        <div className="border-t border-[var(--border-subtle)]/50 bg-[var(--bg-primary)]/40 px-3 py-1.5 pl-[34px]">
+          {members.isPending ? (
+            <p className="text-[10px] text-[var(--text-tertiary)]">Loading members…</p>
+          ) : (members.data ?? []).length === 0 ? (
+            <p className="text-[10px] text-[var(--text-tertiary)]">
+              No members. Add users to this group in Settings → Groups.
+            </p>
+          ) : (
+            <ul className="space-y-0.5">
+              {(members.data ?? []).map((m) => (
+                <li
+                  key={m.id}
+                  className="flex items-center gap-1.5 truncate text-[11px] text-[var(--text-secondary)]"
+                >
+                  <UserIcon className="h-2.5 w-2.5 shrink-0 text-[var(--text-tertiary)]" />
+                  <span className="truncate font-mono">{m.username}</span>
+                  {m.email && (
+                    <span className="truncate text-[10px] text-[var(--text-tertiary)]">
+                      {m.email}
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </li>
   );
 }
 

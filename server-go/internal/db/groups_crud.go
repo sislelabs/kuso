@@ -327,6 +327,40 @@ DELETE FROM "_UserToUserGroup" WHERE "A" = $1 AND "B" = $2`, userID, groupID)
 	return nil
 }
 
+// GroupMember is one user belonging to a group, for the admin
+// member-list view.
+type GroupMember struct {
+	ID       string `json:"id"`
+	Username string `json:"username"`
+	Email    string `json:"email"`
+}
+
+// ListGroupMembers returns the users in a group, ordered by username.
+// Closes the long-standing gap where the UI could add/remove members
+// but never list them (membership was a one-way join through the user
+// profile). Used by GET /api/groups/{id}/members.
+func (d *DB) ListGroupMembers(ctx context.Context, groupID string) ([]GroupMember, error) {
+	rows, err := d.QueryContext(ctx, `
+SELECT u.id, u.username, u.email
+FROM "_UserToUserGroup" m
+JOIN "User" u ON u.id = m."A"
+WHERE m."B" = $1
+ORDER BY u.username`, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("db: list group members: %w", err)
+	}
+	defer rows.Close()
+	out := []GroupMember{}
+	for rows.Next() {
+		var g GroupMember
+		if err := rows.Scan(&g.ID, &g.Username, &g.Email); err != nil {
+			return nil, fmt.Errorf("db: scan group member: %w", err)
+		}
+		out = append(out, g)
+	}
+	return out, rows.Err()
+}
+
 // DeleteGroup removes a group + its membership pivot rows.
 func (d *DB) DeleteGroup(ctx context.Context, id string) error {
 	tx, err := d.BeginTx(ctx, nil)
