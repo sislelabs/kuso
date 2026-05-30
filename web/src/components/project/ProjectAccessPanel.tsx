@@ -3,11 +3,11 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
-import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Plus, X, Users as UsersIcon, User as UserIcon, ChevronRight } from "lucide-react";
+import { X, Users as UsersIcon, User as UserIcon, ChevronRight, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 // ProjectAccessPanel — the role-system-v2 per-project access list.
 // Admins add users or groups to a project, each with an optional role
@@ -286,70 +286,73 @@ function AddGrantRow({
   onAdd: (body: { userId?: string; groupId?: string; role: ProjectRole }) => void;
   pending: boolean;
 }) {
-  const [kind, setKind] = useState<"user" | "group">("user");
-  const [granteeId, setGranteeId] = useState("");
-  const [role, setRole] = useState<ProjectRole>("");
-
+  // One popover lists every grantable user AND group (already-granted
+  // ones filtered out). Clicking a row grants it immediately at the
+  // default "inherit" role and keeps the panel open, so an admin can
+  // add several grantees in one go; the per-row role override is then
+  // tuned in the list above. No kind toggle, no separate role select,
+  // no add button — the icon distinguishes user from group.
   const grantedUserIds = new Set(existing.filter((g) => g.kind === "user").map((g) => g.userId));
   const grantedGroupIds = new Set(existing.filter((g) => g.kind === "group").map((g) => g.groupId));
   const availUsers = users.filter((u) => !grantedUserIds.has(u.id));
   const availGroups = groups.filter((g) => !grantedGroupIds.has(g.id));
-
-  const submit = () => {
-    if (!granteeId) {
-      toast.error("Pick a user or group");
-      return;
-    }
-    onAdd(kind === "user" ? { userId: granteeId, role } : { groupId: granteeId, role });
-    setGranteeId("");
-    setRole("");
-  };
+  const nothingToAdd = availUsers.length === 0 && availGroups.length === 0;
 
   return (
-    <div className="flex flex-wrap items-center gap-2 border-t border-[var(--border-subtle)] px-3 py-2">
-      <select
-        value={kind}
-        onChange={(e) => {
-          setKind(e.target.value as "user" | "group");
-          setGranteeId("");
-        }}
-        className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-[11px]"
-      >
-        <option value="user">user</option>
-        <option value="group">group</option>
-      </select>
-      <select
-        value={granteeId}
-        onChange={(e) => setGranteeId(e.target.value)}
-        className="h-7 min-w-[140px] flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
-      >
-        <option value="">(pick a {kind})</option>
-        {kind === "user"
-          ? availUsers.map((u) => (
-              <option key={u.id} value={u.id}>
-                {u.username}
-              </option>
-            ))
-          : availGroups.map((g) => (
-              <option key={g.id} value={g.id}>
-                {g.name}
-              </option>
-            ))}
-      </select>
-      <select
-        value={role}
-        onChange={(e) => setRole(e.target.value as ProjectRole)}
-        className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
-      >
-        {OVERRIDE_OPTIONS.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-      <Button size="sm" variant="secondary" disabled={pending} onClick={submit}>
-        <Plus className="h-3 w-3" /> add
-      </Button>
+    <div className="border-t border-[var(--border-subtle)] px-3 py-2">
+      <Popover>
+        <PopoverTrigger
+          disabled={pending || nothingToAdd}
+          className={cn(
+            "inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-[11px] text-[var(--text-secondary)]",
+            "hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] data-[popup-open]:border-[var(--border-strong)]",
+            (pending || nothingToAdd) && "pointer-events-none opacity-40"
+          )}
+        >
+          <UserPlus className="h-3 w-3" />
+          {nothingToAdd ? "everyone has access" : "add access"}
+        </PopoverTrigger>
+        <PopoverContent
+          align="start"
+          sideOffset={4}
+          className="max-h-72 w-64 gap-0.5 overflow-y-auto rounded-md p-1"
+        >
+          {availGroups.length > 0 && (
+            <div className="px-1.5 pb-0.5 pt-1 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              groups
+            </div>
+          )}
+          {availGroups.map((g) => (
+            <button
+              key={g.id}
+              type="button"
+              onClick={() => onAdd({ groupId: g.id, role: "" })}
+              disabled={pending}
+              className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+            >
+              <UsersIcon className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+              <span className="truncate font-mono">{g.name}</span>
+            </button>
+          ))}
+          {availUsers.length > 0 && (
+            <div className="px-1.5 pb-0.5 pt-1 font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              users
+            </div>
+          )}
+          {availUsers.map((u) => (
+            <button
+              key={u.id}
+              type="button"
+              onClick={() => onAdd({ userId: u.id, role: "" })}
+              disabled={pending}
+              className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+            >
+              <UserIcon className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+              <span className="truncate font-mono">{u.username}</span>
+            </button>
+          ))}
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }

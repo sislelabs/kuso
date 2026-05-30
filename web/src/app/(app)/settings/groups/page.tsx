@@ -7,8 +7,9 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Users, Plus, X, Save, ShieldCheck, Check } from "lucide-react";
+import { Users, Plus, X, Save, ShieldCheck, Check, UserPlus } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 interface Group {
   id: string;
@@ -326,7 +327,6 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
     },
   });
 
-  const [picked, setPicked] = useState<string>("");
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: membersKey });
     qc.invalidateQueries({ queryKey: ["admin", "users"] });
@@ -339,7 +339,6 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
       ),
     onSuccess: () => {
       toast.success("Member added");
-      setPicked("");
       invalidate();
     },
     onError: (e) => toast.error(e instanceof Error ? e.message : "add failed"),
@@ -404,31 +403,40 @@ function MembersSection({ groupId, users }: { groupId: string; users: UserRow[] 
         </ul>
       )}
 
-      {/* Add row — only offers users not already in the group. */}
-      <div className="flex items-center gap-2 border-t border-[var(--border-subtle)] px-3 py-2">
-        <select
-          value={picked}
-          onChange={(e) => setPicked(e.target.value)}
-          disabled={addable.length === 0}
-          className="h-7 min-w-0 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px]"
-        >
-          <option value="">
-            {addable.length === 0 ? "(all users are members)" : "(pick a user to add)"}
-          </option>
-          {addable.map((u) => (
-            <option key={u.id} value={u.id}>
-              {u.username} {u.email ? `· ${u.email}` : ""}
-            </option>
-          ))}
-        </select>
-        <Button
-          size="sm"
-          type="button"
-          disabled={!picked || add.isPending}
-          onClick={() => picked && add.mutate(picked)}
-        >
-          <Plus className="h-3 w-3" /> Add
-        </Button>
+      {/* Add row — a popover of non-members; clicking one adds it
+          immediately and keeps the panel open so several can be added
+          in a row (no Add button, no close-on-select). */}
+      <div className="border-t border-[var(--border-subtle)] px-3 py-2">
+        <Popover>
+          <PopoverTrigger
+            disabled={addable.length === 0}
+            className={cn(
+              "inline-flex h-7 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 text-[11px] text-[var(--text-secondary)]",
+              "hover:border-[var(--border-strong)] hover:text-[var(--text-primary)] data-[popup-open]:border-[var(--border-strong)]",
+              addable.length === 0 && "pointer-events-none opacity-40"
+            )}
+          >
+            <UserPlus className="h-3 w-3" />
+            {addable.length === 0 ? "all users are members" : "add member"}
+          </PopoverTrigger>
+          <PopoverContent align="start" sideOffset={4} className="max-h-72 w-64 gap-0.5 overflow-y-auto rounded-md p-1">
+            {addable.map((u) => (
+              <button
+                key={u.id}
+                type="button"
+                onClick={() => add.mutate(u.id)}
+                disabled={add.isPending}
+                className="flex w-full items-center gap-1.5 rounded px-1.5 py-1 text-left text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+              >
+                <Plus className="h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+                <span className="truncate font-mono">{u.username}</span>
+                {u.email && (
+                  <span className="truncate text-[10px] text-[var(--text-tertiary)]">{u.email}</span>
+                )}
+              </button>
+            ))}
+          </PopoverContent>
+        </Popover>
       </div>
     </section>
   );
