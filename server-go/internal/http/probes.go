@@ -86,6 +86,23 @@ func readyz(d Deps) http.HandlerFunc {
 			ready = false
 		}
 
+		// Build-poller liveness — only meaningful on the leader (only the
+		// leader runs the poller). A dead/panicked poller goroutine stops
+		// stamping its heartbeat; the leader then goes unready so the LB
+		// drains it and it's eventually recycled, releasing the lease to
+		// a healthy replica. maxStale = 6× the 5s tick: tolerant of a
+		// slow tick / brief apiserver hiccup, fast enough to catch a
+		// genuinely stuck poller within ~30s. Non-leaders always pass.
+		if healthy, leading := serverstate.PollerHealthy(30 * time.Second); leading && !healthy {
+			checks["buildPoller"] = "stalled"
+			ready = false
+			if d.Logger != nil {
+				d.Logger.Error("readyz: build poller heartbeat stale — leader poller may be dead")
+			}
+		} else if leading {
+			checks["buildPoller"] = "ok"
+		}
+
 		status := "ok"
 		code := http.StatusOK
 		if !ready {

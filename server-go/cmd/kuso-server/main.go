@@ -587,11 +587,20 @@ func main() {
 
 		startSingletons := func(workCtx context.Context) {
 			leaderActive.Store(true)
+			// Tell readyz this pod is leading AND running the poller, so
+			// it enforces the poller heartbeat. Only set when the poller
+			// is actually enabled — otherwise readyz would expect a beat
+			// that never comes. Cleared on lease loss.
+			pollerEnabled := os.Getenv("KUSO_BUILD_POLLER_DISABLED") != "true"
+			if pollerEnabled {
+				serverstate.SetLeading(true)
+			}
 			go func() {
 				<-workCtx.Done()
 				leaderActive.Store(false)
+				serverstate.SetLeading(false)
 			}()
-			if os.Getenv("KUSO_BUILD_POLLER_DISABLED") != "true" {
+			if pollerEnabled {
 				go (&builds.Poller{
 					Svc: buildSvc,
 					// 5s tick. With BuildKit's warm-cache path

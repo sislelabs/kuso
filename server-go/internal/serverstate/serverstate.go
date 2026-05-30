@@ -14,6 +14,7 @@ package serverstate
 
 import (
 	"sync"
+	"time"
 )
 
 // CRDStaleInfo is the set of expected-but-missing field paths the
@@ -26,7 +27,63 @@ type CRDStaleInfo struct {
 var (
 	mu       sync.RWMutex
 	crdStale *CRDStaleInfo
+
+	// leading is true while THIS pod holds the leader lease (and thus
+	// runs the singleton workers — build poller, etc.). readyz only
+	// enforces the poller heartbeat when leading, so a non-leader pod
+	// (which never runs the poller) doesn't fail readiness.
+	leading bool
+	// pollerBeat is the time of the build poller's last completed tick.
+	// readyz treats a stale beat (while leading) as "the poller
+	// goroutine died silently" → fail readyz → the LB drains + the pod
+	// is eventually restarted, releasing leadership to a healthy pod.
+	pollerBeat time.Time
 )
+
+// SetLeading records whether this pod currently holds leadership. Wired
+// from the leader-election OnStartedLeading / OnStoppedLeading hooks.
+func SetLeading(v bool) {
+	mu.Lock()
+	leading = v
+	if !v {
+		// Reset the beat on losing leadership so a stale timestamp from
+		// a previous tenure can't make a re-elected pod look unhealthy
+		// before its poller has ticked again.
+		pollerBeat = time.Time{}
+	}
+	mu.Unlock()
+}
+
+// PollerHeartbeat stamps the current time as the build poller's last
+// successful tick. Called from the poller loop.
+func PollerHeartbeat() {
+	mu.Lock()
+	pollerBeat = time.Now()
+	mu.Unlock()
+}
+
+// PollerHealthy reports whether the build poller looks alive. Returns
+// (healthy, leading). When not leading, healthy is always true (this pod
+// doesn't run the poller). When leading, it's healthy iff the last beat
+// is within maxStale — with a grace window after becoming leader before
+// the first beat lands (caller passes the grace via firstBeatBy).
+func PollerHealthy(maxStale time.Duration) (healthy, isLeading bool) {
+	mu.RLock()
+	defer mu.RUnlock()
+	if !leading {
+		return true, false
+	}
+	// Leading but the poller has never beat yet: treat as healthy
+	// (grace) — the poller starts a moment after leadership and the
+	// first tick is ~5s out. A genuinely dead poller is caught once a
+	// beat lands and then goes stale, or never lands and the next check
+	// after maxStale-from-leadership flags it. We keep it simple: a
+	// zero beat is "warming up", healthy.
+	if pollerBeat.IsZero() {
+		return true, true
+	}
+	return time.Since(pollerBeat) <= maxStale, true
+}
 
 // SetCRDStale records the preflight result. Call once at boot.
 // nil clears (the server became healthy; not used today but a

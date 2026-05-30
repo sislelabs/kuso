@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   useConfigureGithub,
   useSetupStatus,
@@ -215,6 +215,14 @@ function ConfiguredPanel({
   const qc = useQueryClient();
   const installs = useInstallations();
   const [openInstall, setOpenInstall] = useState<number | null>(null);
+  const webhookHealth = useQuery({
+    queryKey: ["admin", "github", "webhook-health"],
+    queryFn: () =>
+      api<{ configured: boolean; lastDeliveryAt?: string; lastDeliveryEvent?: string }>(
+        "/api/github/webhook-health"
+      ),
+    refetchInterval: 30_000,
+  });
   const refresh = useMutation({
     mutationFn: () => api("/api/github/installations/refresh", { method: "POST" }),
     onSuccess: () => {
@@ -361,25 +369,46 @@ function ConfiguredPanel({
         )}
       </section>
 
-      {/* Webhook health hint. We don't have a "last received at" feed
-          yet (would need a notify event mirror), so for now point
-          users at the GitHub App's recent deliveries page so they
-          can verify webhook traffic from the source of truth. */}
-      {appSlug && (
-        <p className="text-[12px] text-[var(--text-tertiary)]">
-          To verify webhooks are reaching kuso, check the{" "}
-          <a
-            href={`https://github.com/settings/apps/${appSlug}/advanced`}
-            target="_blank"
-            rel="noreferrer"
-            className="text-[var(--accent)] hover:underline"
-          >
-            Recent Deliveries
-          </a>{" "}
-          tab on the App&apos;s GitHub admin page. Failed deliveries (red) usually mean kuso&apos;s
-          public URL is unreachable from GitHub or the webhook secret drifted.
-        </p>
-      )}
+      {/* Webhook health — surfaced in-product from the last verified
+          delivery kuso stamped (Setting github.lastDeliveryAt), so an
+          operator can confirm pushes/PRs are actually reaching kuso
+          without leaving for GitHub. The deliveries link stays as the
+          source of truth for per-delivery detail. */}
+      <div className="space-y-1.5 text-[12px] text-[var(--text-secondary)]">
+        {webhookHealth.data?.lastDeliveryAt ? (
+          <p>
+            <span className="text-[var(--text-tertiary)]">Last webhook received:</span>{" "}
+            <span className="font-mono">
+              {new Date(webhookHealth.data.lastDeliveryAt).toLocaleString()}
+            </span>
+            {webhookHealth.data.lastDeliveryEvent && (
+              <span className="text-[var(--text-tertiary)]">
+                {" "}({webhookHealth.data.lastDeliveryEvent})
+              </span>
+            )}
+          </p>
+        ) : (
+          <p className="text-amber-300/90">
+            No webhook delivery has reached kuso yet. Push to a connected repo (or check the
+            deliveries tab below) — if pushes never arrive, kuso&apos;s public URL may be
+            unreachable from GitHub or the webhook secret drifted.
+          </p>
+        )}
+        {appSlug && (
+          <p className="text-[var(--text-tertiary)]">
+            Per-delivery detail (incl. failures) lives on the App&apos;s{" "}
+            <a
+              href={`https://github.com/settings/apps/${appSlug}/advanced`}
+              target="_blank"
+              rel="noreferrer"
+              className="text-[var(--accent)] hover:underline"
+            >
+              Recent Deliveries
+            </a>{" "}
+            tab.
+          </p>
+        )}
+      </div>
     </section>
   );
 }

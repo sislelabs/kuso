@@ -139,9 +139,34 @@ func (d *DB) SetBuildSettings(ctx context.Context, in BuildSettings, updatedBy s
 func quote(s string) string   { b, _ := json.Marshal(s); return string(b) }
 func unquote(s string) string { var v string; _ = json.Unmarshal([]byte(s), &v); return v }
 
-// silence unused-import on sql when this file is compiled in
-// isolation (errors handles ErrNoRows-style sentinels in callers).
-var (
-	_ = sql.ErrNoRows
-	_ = errors.New
-)
+// GetSetting reads a single Setting row's raw value. Returns ("", nil)
+// when the key doesn't exist — callers treat absence as "unset". The
+// value is stored verbatim (no JSON quoting); callers that want a typed
+// value encode/decode themselves.
+func (d *DB) GetSetting(ctx context.Context, key string) (string, error) {
+	var v string
+	err := d.QueryRowContext(ctx, `SELECT value FROM "Setting" WHERE key = ?`, key).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("GetSetting %s: %w", key, err)
+	}
+	return v, nil
+}
+
+// SetSetting upserts a single Setting key/value (raw, no JSON quoting).
+func (d *DB) SetSetting(ctx context.Context, key, value, updatedBy string) error {
+	_, err := d.ExecContext(ctx, `
+		INSERT INTO "Setting" (key, value, "updatedAt", "updatedBy")
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT (key) DO UPDATE
+		   SET value = EXCLUDED.value,
+		       "updatedAt" = EXCLUDED."updatedAt",
+		       "updatedBy" = EXCLUDED."updatedBy"`,
+		key, value, time.Now().UTC(), updatedBy)
+	if err != nil {
+		return fmt.Errorf("SetSetting %s: %w", key, err)
+	}
+	return nil
+}

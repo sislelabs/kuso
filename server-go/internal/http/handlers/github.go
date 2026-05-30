@@ -41,8 +41,8 @@ type GithubHandler struct {
 	// installationLimiter token-buckets webhook accepts per
 	// installation id so a leaked secret can't trigger unbounded
 	// preview-env spam. Lazy-init on first webhook.
-	limiterMu        sync.Mutex
-	installLimiters  map[int64]*ghTokenBucket
+	limiterMu       sync.Mutex
+	installLimiters map[int64]*ghTokenBucket
 }
 
 // ghTokenBucket is a tiny per-installation token bucket. 60 tokens,
@@ -167,6 +167,7 @@ func (h *GithubHandler) MountAuthed(r chi.Router) {
 	r.Get("/api/github/installations/{id}/repos/{owner}/{repo}/tree", h.RepoTree)
 	r.Post("/api/github/detect-runtime", h.DetectRuntime)
 	r.Post("/api/github/scan-addons", h.ScanAddons)
+	r.Get("/api/github/webhook-health", h.WebhookHealth)
 	// Repo accessibility probe — used by the service-settings UI to
 	// validate "can the App actually read this repo before I save?".
 	// Same code path as the build-trigger preflight, exposed so the
@@ -326,6 +327,19 @@ func (h *GithubHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Stamp "last verified webhook received" so the GitHub settings page
+	// can show webhook health in-product instead of punting to GitHub's
+	// deliveries page. Best-effort, fire-and-forget — never blocks or
+	// fails the delivery.
+	if h.DB != nil {
+		go func(ev string) {
+			sctx, scancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer scancel()
+			now := time.Now().UTC().Format(time.RFC3339)
+			_ = h.DB.SetSetting(sctx, githubLastDeliveryAtKey, now, "webhook")
+			_ = h.DB.SetSetting(sctx, githubLastDeliveryEventKey, ev, "webhook")
+		}(event)
+	}
 	if h.Dispatcher == nil {
 		// Verified but nowhere to dispatch — just 204 so GitHub stops
 		// retrying. Logged for ops.
@@ -360,6 +374,43 @@ func (h *GithubHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 		}
 	}(event, append([]byte(nil), body...))
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Setting keys for webhook-health surfacing (stamped by Webhook).
+const (
+	githubLastDeliveryAtKey    = "github.lastDeliveryAt"
+	githubLastDeliveryEventKey = "github.lastDeliveryEvent"
+	// webhookStaleAfter: GitHub deliveries are bursty (only on push/PR),
+	// so there's no "expected cadence" to measure against. We surface
+	// the timestamp + event verbatim and let the operator judge; we
+	// don't mark it stale/unhealthy on a quiet repo. The "configured"
+	// signal (is the App + webhook secret set up) is the actionable bit.
+)
+
+// WebhookHealth implements GET /api/github/webhook-health — surfaces
+// whether the GitHub App is configured and when the last verified
+// webhook delivery landed, so an operator can confirm pushes are
+// actually reaching kuso without leaving for GitHub's deliveries page.
+func (h *GithubHandler) WebhookHealth(w http.ResponseWriter, r *http.Request) {
+	if !requireAdmin(w, r) {
+		return
+	}
+	resp := map[string]any{
+		// Configured = the App's webhook secret is set (without it the
+		// Webhook handler 503s every delivery).
+		"configured": h.Cfg != nil && h.Cfg.WebhookSecret != "",
+	}
+	if h.DB != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		defer cancel()
+		if at, _ := h.DB.GetSetting(ctx, githubLastDeliveryAtKey); at != "" {
+			resp["lastDeliveryAt"] = at
+		}
+		if ev, _ := h.DB.GetSetting(ctx, githubLastDeliveryEventKey); ev != "" {
+			resp["lastDeliveryEvent"] = ev
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // SetupCallback handles the redirect that GitHub fires after a user

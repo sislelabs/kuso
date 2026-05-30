@@ -9,39 +9,27 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
 import { Save, HardDrive, Check, ShieldAlert, ShieldCheck } from "lucide-react";
 
-interface BackupHealth {
-  configured: boolean;
-  cronJobPresent: boolean;
-  suspended: boolean;
+interface HealthEntry {
+  healthy: boolean;
   schedule?: string;
   lastSuccessAt?: string;
-  lastFailureAt?: string;
-  stale: boolean;
-  healthy: boolean;
   detail: string;
 }
+interface BackupHealthResp {
+  backup: HealthEntry;
+  registryGC: HealthEntry;
+}
 
-// ControlPlaneBackupBanner surfaces the health of the kuso DB
-// (control-plane) backup — separate from the addon-backup S3 config
-// below. The control-plane backup is opt-in and self-suspends silently;
-// this banner makes "your kuso DB isn't being backed up" visible.
-function ControlPlaneBackupBanner() {
-  const health = useQuery({
-    queryKey: ["admin", "backup-health"],
-    queryFn: () => api<BackupHealth>("/api/admin/backup-health"),
-    refetchInterval: 60_000,
-  });
-  if (health.isPending || !health.data) return null;
-  const h = health.data;
+function HealthBanner({ title, h }: { title: string; h: HealthEntry }) {
   const tone = h.healthy
     ? "border-green-500/30 bg-green-500/5 text-green-300/90"
     : "border-amber-500/40 bg-amber-500/10 text-amber-200";
   const Icon = h.healthy ? ShieldCheck : ShieldAlert;
   return (
-    <div className={`mb-6 flex items-start gap-2.5 rounded-md border px-3 py-2.5 text-[12px] leading-relaxed ${tone}`}>
+    <div className={`flex items-start gap-2.5 rounded-md border px-3 py-2.5 text-[12px] leading-relaxed ${tone}`}>
       <Icon className="mt-0.5 h-4 w-4 shrink-0" />
       <div className="min-w-0">
-        <p className="font-semibold">Control-plane database backup</p>
+        <p className="font-semibold">{title}</p>
         <p className="mt-0.5">{h.detail}</p>
         {h.lastSuccessAt && (
           <p className="mt-0.5 font-mono text-[10px] opacity-80">
@@ -50,6 +38,27 @@ function ControlPlaneBackupBanner() {
           </p>
         )}
       </div>
+    </div>
+  );
+}
+
+// MaintenanceHealthBanners surfaces the health of the two silent
+// cluster-maintenance jobs: the control-plane DB backup (opt-in, self-
+// suspends silently) and the registry GC (whose failure fills the
+// registry PVC until builds break). Separate from the addon-backup S3
+// config form below.
+function MaintenanceHealthBanners() {
+  const health = useQuery({
+    queryKey: ["admin", "backup-health"],
+    queryFn: () => api<BackupHealthResp>("/api/admin/backup-health"),
+    refetchInterval: 60_000,
+  });
+  if (health.isPending || !health.data) return null;
+  const { backup, registryGC } = health.data;
+  return (
+    <div className="mb-6 space-y-2.5">
+      <HealthBanner title="Control-plane database backup" h={backup} />
+      <HealthBanner title="Registry garbage-collection" h={registryGC} />
     </div>
   );
 }
@@ -112,7 +121,7 @@ export default function BackupSettingsPage() {
         </div>
       </header>
 
-      <ControlPlaneBackupBanner />
+      <MaintenanceHealthBanners />
 
       {settings.isPending ? (
         <Skeleton className="h-72 w-full rounded-md" />

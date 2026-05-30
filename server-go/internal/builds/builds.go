@@ -45,6 +45,7 @@ import (
 	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/releaserun"
+	"kuso/server/internal/serverstate"
 )
 
 // TokenMinter mints a short-lived GitHub installation token used by the
@@ -1254,6 +1255,12 @@ func (p *Poller) Run(ctx context.Context) error {
 		if err := p.tick(ctx); err != nil && !errors.Is(err, context.Canceled) {
 			p.Logger.Warn("build poller tick", "err", err)
 		}
+		// Heartbeat after every tick (even a tick that logged an error —
+		// the loop is alive, which is what readyz cares about). A poller
+		// goroutine that dies/panics stops stamping; readyz on the
+		// leader then goes unready and the pod is recycled, releasing
+		// leadership to a healthy replica.
+		serverstate.PollerHeartbeat()
 		select {
 		case <-ctx.Done():
 			return ctx.Err()

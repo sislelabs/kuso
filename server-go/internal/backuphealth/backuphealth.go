@@ -179,9 +179,17 @@ func (w *Watcher) Run(ctx context.Context) {
 func (w *Watcher) tick(ctx context.Context) {
 	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	s := Compute(cctx, w.Kube, w.Namespace)
+	gc := RegistryGC(cctx, w.Kube, w.Namespace)
 	cancel()
 
-	unhealthy := !s.Healthy
+	// Either subsystem being unhealthy trips the alert; the detail
+	// names whichever is wrong (backup is the more severe, so it wins
+	// the message when both are bad).
+	unhealthy := !s.Healthy || !gc.Healthy
+	detailMsg := s.Detail
+	if s.Healthy && !gc.Healthy {
+		detailMsg = gc.Detail
+	}
 	// Only emit on a state change (or the first observation of an
 	// unhealthy state). evaluated guards the very first tick so we don't
 	// double-fire.
@@ -197,25 +205,113 @@ func (w *Watcher) tick(ctx context.Context) {
 	}
 	switch {
 	case unhealthy:
+		title := "Control-plane backup unhealthy"
+		if s.Healthy && !gc.Healthy {
+			title = "Registry garbage-collection unhealthy"
+		}
 		w.Notify.Emit(notify.Event{
 			Type:        notify.EventBackupFailed,
 			Timestamp:   time.Now().UTC(),
-			Title:       "Control-plane backup unhealthy",
-			Body:        s.Detail,
-			Description: s.Detail,
+			Title:       title,
+			Body:        detailMsg,
+			Description: detailMsg,
 			Severity:    "error",
 		})
-		w.Logger.Warn("backup health: unhealthy", "detail", s.Detail)
+		w.Logger.Warn("backup/registry health: unhealthy", "detail", detailMsg)
 	case prevUnhealthy:
-		// Recovered (was unhealthy, now healthy).
+		// Recovered (both healthy again).
 		w.Notify.Emit(notify.Event{
 			Type:      notify.EventBackupOK,
 			Timestamp: time.Now().UTC(),
-			Title:     "Control-plane backup recovered",
-			Body:      s.Detail,
+			Title:     "Backup / registry maintenance recovered",
+			Body:      "Control-plane backups and registry GC are healthy again.",
 			Severity:  "info",
 		})
-		w.Logger.Info("backup health: recovered")
+		w.Logger.Info("backup/registry health: recovered")
+	}
+}
+
+// RegistryGCStatus reports the health of the weekly registry garbage-
+// collection CronJob (deploy/registry.yaml). When the GC stops
+// succeeding, the in-cluster registry PVC grows unbounded and builds
+// eventually fail with an opaque "no space left on device" — this turns
+// that into an early signal. Mirrors the backup status shape.
+type RegistryGCStatus struct {
+	CronJobPresent bool   `json:"cronJobPresent"`
+	Suspended      bool   `json:"suspended"`
+	Schedule       string `json:"schedule,omitempty"`
+	LastSuccessAt  string `json:"lastSuccessAt,omitempty"`
+	LastFailureAt  string `json:"lastFailureAt,omitempty"`
+	// Stale: no success within ~9 days (the job is weekly; 9d tolerates
+	// one missed run + slack before flagging).
+	Stale   bool   `json:"stale"`
+	Healthy bool   `json:"healthy"`
+	Detail  string `json:"detail"`
+}
+
+const (
+	registryGCCronJobName = "kuso-registry-gc"
+	registryGCJobLabel    = "app.kubernetes.io/name=kuso-registry-gc"
+	// registryGCStaleAfter: the GC is weekly, so tolerate one missed
+	// run (14d) plus a couple days of slack before flagging — a single
+	// skipped Sunday isn't an emergency, two in a row is.
+	registryGCStaleAfter = 16 * 24 * time.Hour
+)
+
+// RegistryGC computes the registry-GC verdict from the GC CronJob + its
+// recent Jobs. Two cheap kube reads.
+func RegistryGC(ctx context.Context, kc *kube.Client, namespace string) RegistryGCStatus {
+	var s RegistryGCStatus
+	if kc == nil {
+		s.Detail = registryGCDetail(s)
+		return s
+	}
+	if cj, err := kc.Clientset.BatchV1().CronJobs(namespace).
+		Get(ctx, registryGCCronJobName, metav1.GetOptions{}); err == nil {
+		s.CronJobPresent = true
+		s.Schedule = cj.Spec.Schedule
+		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
+			s.Suspended = true
+		}
+	}
+	if jobs, err := kc.Clientset.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: registryGCJobLabel,
+	}); err == nil {
+		success, failure := newestTerminalTimes(jobs.Items)
+		if !success.IsZero() {
+			s.LastSuccessAt = success.UTC().Format(time.RFC3339)
+		}
+		if !failure.IsZero() {
+			s.LastFailureAt = failure.UTC().Format(time.RFC3339)
+		}
+		// A GC that has never run yet (fresh install, first Sunday not
+		// reached) is NOT stale — only flag once it's had a chance and
+		// then lapsed. So: stale iff there's a success that's now old,
+		// OR there's a failure but no success.
+		switch {
+		case !success.IsZero():
+			s.Stale = time.Since(success) > registryGCStaleAfter
+		case !failure.IsZero():
+			s.Stale = true // failing with no success ever
+		default:
+			s.Stale = false // never run yet — warming up
+		}
+	}
+	s.Healthy = s.CronJobPresent && !s.Suspended && !s.Stale
+	s.Detail = registryGCDetail(s)
+	return s
+}
+
+func registryGCDetail(s RegistryGCStatus) string {
+	switch {
+	case !s.CronJobPresent:
+		return "Registry garbage-collection CronJob not found — the build-image registry will grow unbounded and eventually fill its disk."
+	case s.Suspended:
+		return "Registry garbage-collection is suspended — reclaimed image space will stop being freed."
+	case s.Stale:
+		return "Registry garbage-collection hasn't succeeded recently — the registry PVC may be filling. Check the kuso-registry-gc CronJob."
+	default:
+		return "Registry garbage-collection healthy."
 	}
 }
 
