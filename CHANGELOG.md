@@ -5,6 +5,17 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.27] — 2026-05-30
+
+### ✨ Features
+- Feat(canvas): surface per-env custom domain on node + overlay URL ([9288cc8](https://github.com/sislelabs/kuso/commit/9288cc8a6c91201097cb0360b65cd730619951cb))
+
+### 🐛 Bug Fixes
+- Fix(previews): seed Job DNS/db-name + cascade-delete on PR close ([2f2f042](https://github.com/sislelabs/kuso/commit/2f2f042144c682c5fe75b5124228fdf2d5a2cadf))
+
+### 📝 Docs
+- Docs(skill): rewrite env/secrets handling + add domains/previews; full review ([403e184](https://github.com/sislelabs/kuso/commit/403e1849634e302620d2d0fef45678d6c46f9765))
+
 ## [0.17.26] — 2026-05-29
 
 ### 🐛 Bug Fixes
@@ -280,11 +291,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive promoted CHANGELOG entries (from v0.16.4 ship) ([3b2e93e](https://github.com/sislelabs/kuso/commit/3b2e93ee1d83a87de6a48e019532373bd48bca18))
-
-## [0.16.4] — 2026-05-27
-
-### 🐛 Bug Fixes
-- Fix: node-bootstrap and addon defaults — TLS pg, NATS auth, worker fromService (#3) ([065a0ca](https://github.com/sislelabs/kuso/commit/065a0ca487cf1e9da59da704319dc3dbdf144a21))
 
 
 ---
