@@ -206,6 +206,20 @@ type Service struct {
 	// Optional: nil → silent. The Poller has its own Notifier slot
 	// for build.{succeeded,failed} events.
 	Notifier EventEmitter
+
+	// RecordLookup resolves an archived build summary when the live
+	// KusoBuild CR has been GC'd by retention — lets Rollback target a
+	// build whose CR is gone but whose image still exists in the
+	// registry (within imageRetentionWindow). Optional: nil → rollback
+	// only works against live CRs (pre-v0.17.x behaviour).
+	RecordLookup BuildRecordLookup
+}
+
+// BuildRecordLookup fetches one archived build's roll-back-relevant
+// fields by CR name. Implemented by an adapter over db.DB. Returns
+// ok=false when no record exists.
+type BuildRecordLookup interface {
+	GetBuildImage(ctx context.Context, project, buildName string) (repo, tag, phase string, ok bool, err error)
 }
 
 // inFlightEntry is the value side of inFlight: a channel that closes
@@ -1036,6 +1050,15 @@ type Poller struct {
 	// releaserun.New(kube.Client).
 	ReleaseRunner ReleaseRunner
 
+	// ImageDeleter unties registry image tags for builds that age out of
+	// the rollback window (imageRetentionWindow). ImageRecords supplies
+	// archived build summaries so the window spans builds whose CR is
+	// already gone. Both optional: nil → image-retention sweep is
+	// skipped (CR/log retention still runs). Wired in main.go to the
+	// in-cluster registry + db adapter.
+	ImageDeleter ImageDeleter
+	ImageRecords ImageRecordLister
+
 	// fairnessCursor remembers, per namespace, the last project we
 	// promoted from. Next tick, dispatchQueued starts the round at
 	// the *next* project in alphabetical order. Without this, Go's
@@ -1079,6 +1102,15 @@ const capTickInterval = 72
 // History panel" use case plus comfortable headroom. Overridable via
 // KUSO_BUILD_RETENTION_PER_SERVICE for clusters that want to see more.
 const capBuildsPerServiceMax = 50
+
+// imageRetentionWindow is how many of the most-recent SUCCEEDED builds
+// per service keep their registry image — the "rollback depth". Older
+// builds remain in the Deployments list (DB record) but their image tag
+// is pruned, so they can't be rolled back to and don't consume registry
+// space. Distinct from capBuildsPerServiceMax (which bounds CR count /
+// reconcile cost): this bounds registry storage + rollback depth.
+// Overridable via KUSO_BUILD_IMAGE_RETENTION.
+const imageRetentionWindow = 5
 
 // archiveTask is one queued snapshot job. The full ctx is captured
 // rather than the request ctx because the worker outlives the
@@ -1295,11 +1327,28 @@ func (p *Poller) tick(ctx context.Context) error {
 				max = n
 			}
 		}
+		imgKeep := imageRetentionWindow
+		if v := os.Getenv("KUSO_BUILD_IMAGE_RETENTION"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				imgKeep = n
+			}
+		}
 		for _, ns := range p.Svc.ScanNamespaces(ctx) {
 			if n, err := CapBuildsPerService(ctx, p.Svc.Kube, ns, max, LogAdapter(p.Logger)); err != nil {
 				p.Logger.Warn("build retention sweep", "ns", ns, "err", err)
 			} else if n > 0 {
 				p.Logger.Info("build retention swept", "ns", ns, "deleted", n, "cap", max)
+			}
+			// Image-retention sweep: untag images past the rollback
+			// window so the registry doesn't grow unbounded. Skipped when
+			// the deleter isn't wired (e.g. external-registry clusters or
+			// stripped test setups).
+			if p.ImageDeleter != nil {
+				if n, err := SweepImagesPastWindow(ctx, p.Svc.Kube, ns, p.ImageRecords, p.ImageDeleter, imgKeep, LogAdapter(p.Logger)); err != nil {
+					p.Logger.Warn("image retention sweep", "ns", ns, "err", err)
+				} else if n > 0 {
+					p.Logger.Info("image retention swept", "ns", ns, "untagged", n, "keep", imgKeep)
+				}
 			}
 		}
 	}

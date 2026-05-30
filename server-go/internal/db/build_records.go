@@ -11,6 +11,8 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -98,6 +100,78 @@ func (d *DB) ListBuildRecords(ctx context.Context, project, service string) ([]B
 		out = append(out, r)
 	}
 	return out, rows.Err()
+}
+
+// GetBuildImage returns the archived service short-name + image tag +
+// status for one build, for the rollback fallback when the live CR is
+// gone. ok=false when no record exists. The caller reconstructs the
+// full image repo from "<registry>/<project>/<service>".
+func (d *DB) GetBuildImage(ctx context.Context, project, buildName string) (service, tag, phase string, ok bool, err error) {
+	row := d.QueryRowContext(ctx,
+		`SELECT "service","imageTag","status" FROM "BuildRecord" WHERE "buildName"=? AND "project"=?`,
+		buildName, project)
+	if scanErr := row.Scan(&service, &tag, &phase); scanErr != nil {
+		if errors.Is(scanErr, sql.ErrNoRows) {
+			return "", "", "", false, nil
+		}
+		return "", "", "", false, fmt.Errorf("GetBuildImage: %w", scanErr)
+	}
+	return service, tag, phase, true, nil
+}
+
+// ListArchivedImages returns one row per archived build in a project (or
+// all projects when project==""), carrying the fields the image-
+// retention sweep needs. Used to extend the rollback-window sweep over
+// builds whose CR is already GC'd.
+func (d *DB) ListArchivedImages(ctx context.Context, project string) ([]ArchivedImage, error) {
+	var rows *sql.Rows
+	var err error
+	if project == "" {
+		rows, err = d.QueryContext(ctx, `
+			SELECT "buildName","project","service","imageTag","status","createdAt"
+			  FROM "BuildRecord" WHERE "imageTag" <> ''`)
+	} else {
+		rows, err = d.QueryContext(ctx, `
+			SELECT "buildName","project","service","imageTag","status","createdAt"
+			  FROM "BuildRecord" WHERE "project"=? AND "imageTag" <> ''`, project)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("ListArchivedImages: %w", err)
+	}
+	defer rows.Close()
+	var out []ArchivedImage
+	for rows.Next() {
+		var a ArchivedImage
+		if err := rows.Scan(&a.BuildName, &a.Project, &a.Service, &a.ImageTag, &a.Status, &a.CreatedAt); err != nil {
+			return nil, fmt.Errorf("ListArchivedImages scan: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ArchivedImage is the image-retention projection of a BuildRecord.
+type ArchivedImage struct {
+	BuildName string
+	Project   string
+	Service   string
+	ImageTag  string
+	Status    string
+	CreatedAt time.Time
+}
+
+// ClearImageTag blanks the imageTag on a record after its registry
+// image has been pruned (aged past the rollback window). The record
+// stays in the Deployments list as history, but a cleared imageTag
+// signals "no longer rollback-able" to the UI and the rollback handler.
+func (d *DB) ClearImageTag(ctx context.Context, project, buildName string) error {
+	_, err := d.ExecContext(ctx,
+		`UPDATE "BuildRecord" SET "imageTag"='' WHERE "project"=? AND "buildName"=?`,
+		project, buildName)
+	if err != nil {
+		return fmt.Errorf("ClearImageTag: %w", err)
+	}
+	return nil
 }
 
 // DeleteBuildRecordsForService removes archived summaries for a service

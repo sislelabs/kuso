@@ -140,6 +140,179 @@ func CapBuildsPerService(ctx context.Context, kc *kube.Client, namespace string,
 	return deleted, nil
 }
 
+// imageRetentionRecord is the internal shape the sweep reasons over.
+// Live KusoBuild CRs and archived ArchivedImageRecords both project onto
+// this so the window spans the full history, not just live CRs.
+type imageRetentionRecord struct {
+	buildName string
+	project   string
+	service   string // short name
+	imageTag  string
+	createdAt time.Time
+	succeeded bool
+}
+
+// ArchivedImageRecord is the exported shape main.go's db adapter hands
+// to the sweep for builds whose CR is already GC'd. (Mirror of
+// db.ArchivedImage so the builds package doesn't import db.)
+type ArchivedImageRecord struct {
+	BuildName string
+	Project   string
+	Service   string
+	ImageTag  string
+	Status    string
+	CreatedAt time.Time
+}
+
+// ImageRecordLister supplies archived (CR-gone) build summaries for a
+// namespace so the sweep can see builds whose CR is already deleted, and
+// lets the sweep blank a record's imageTag once its registry image is
+// pruned (so the UI stops offering rollback for it). Exported so main.go
+// can wire a db-backed adapter.
+type ImageRecordLister interface {
+	ListArchivedImages(ctx context.Context, namespace string) ([]ArchivedImageRecord, error)
+	ClearImageTag(ctx context.Context, project, buildName string) error
+}
+
+// SweepImagesPastWindow keeps the `keep` most-recent SUCCEEDED builds
+// per service (by createdAt, across live CRs + archived records) and
+// deletes the registry image TAG of every older succeeded build, so the
+// registry doesn't grow unbounded. The DB record is left intact — the
+// Deployments tab still lists the build; it just can't be rolled back to
+// once its image is gone, and the next weekly registry GC reclaims the
+// now-untagged blobs.
+//
+// Only the default in-cluster registry is pruned (the caller passes a
+// del that no-ops for external registries). Untagging is idempotent
+// (404 → nil), so a re-run is safe. Mirrors CapBuildsPerService's
+// namespace-listing shape. Errors per-image are logged and counted but
+// don't abort the sweep.
+func SweepImagesPastWindow(
+	ctx context.Context,
+	kc *kube.Client,
+	namespace string,
+	lister ImageRecordLister,
+	del ImageDeleter,
+	keep int,
+	logFn func(msg string, kv ...any),
+) (int, error) {
+	if keep <= 0 || del == nil {
+		return 0, nil
+	}
+	list, err := kc.ListKusoBuildsByLabels(ctx, namespace, map[string]string{
+		"kuso.sislelabs.com/build-state": "done",
+	})
+	if err != nil {
+		return 0, fmt.Errorf("image-sweep list builds: %w", err)
+	}
+
+	// Group succeeded, image-bearing builds by (project, service). A live
+	// CR wins over an archived record of the same build name.
+	byKey := map[svcKey][]imageRetentionRecord{}
+	seen := map[string]bool{}
+	add := func(project string, r imageRetentionRecord) {
+		if r.imageTag == "" || !r.succeeded || seen[r.buildName] {
+			return
+		}
+		seen[r.buildName] = true
+		byKey[svcKey{project, r.service}] = append(byKey[svcKey{project, r.service}], r)
+	}
+	for i := range list {
+		b := &list[i]
+		if b.Spec.Image == nil || buildPhase(b) != "succeeded" {
+			continue
+		}
+		add(b.Spec.Project, imageRetentionRecord{
+			buildName: b.Name,
+			service:   strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-"),
+			imageTag:  b.Spec.Image.Tag,
+			createdAt: b.CreationTimestamp.Time,
+			succeeded: true,
+		})
+	}
+	if lister != nil {
+		archived, lerr := lister.ListArchivedImages(ctx, namespace)
+		if lerr != nil {
+			if logFn != nil {
+				logFn("image-sweep: list archived", "ns", namespace, "err", lerr)
+			}
+		} else {
+			for _, a := range archived {
+				add(a.Project, imageRetentionRecord{
+					buildName: a.BuildName,
+					project:   a.Project,
+					service:   a.Service,
+					imageTag:  a.ImageTag,
+					createdAt: a.CreatedAt,
+					succeeded: a.Status == "succeeded",
+				})
+			}
+		}
+	}
+
+	targets := imagesToUntag(byKey, keep)
+	deleted := 0
+	for _, t := range targets {
+		if err := del.DeleteImageTag(ctx, t.repo, t.tag); err != nil {
+			if logFn != nil {
+				logFn("image-sweep: delete tag", "repo", t.repo, "tag", t.tag, "err", err)
+			}
+			continue
+		}
+		deleted++
+		// Blank the archived record's imageTag so the Deployments tab
+		// stops offering rollback for it (the image is gone). Best-effort
+		// — on failure the rollback handler still rejects the pruned
+		// image with a clear error, so the UI is just slightly stale.
+		if lister != nil {
+			if err := lister.ClearImageTag(ctx, t.project, t.buildName); err != nil && logFn != nil {
+				logFn("image-sweep: clear record tag", "project", t.project, "build", t.buildName, "err", err)
+			}
+		}
+	}
+	return deleted, nil
+}
+
+// svcKey groups builds by project + service short-name.
+type svcKey struct{ project, service string }
+
+// untagTarget is one image the sweep should delete + the record to clear.
+type untagTarget struct {
+	repo      string
+	tag       string
+	project   string
+	buildName string
+}
+
+// imagesToUntag is the pure decision: per (project, service) group, keep
+// the `keep` newest records and return the untag targets for every older
+// one. Extracted from SweepImagesPastWindow so the windowing logic is
+// unit-testable without a cluster or registry.
+func imagesToUntag(byKey map[svcKey][]imageRetentionRecord, keep int) []untagTarget {
+	var out []untagTarget
+	for k, recs := range byKey {
+		if len(recs) <= keep {
+			continue
+		}
+		sortRecordsNewestFirst(recs)
+		repo := fmt.Sprintf("%s/%s", k.project, k.service)
+		for _, r := range recs[keep:] {
+			out = append(out, untagTarget{repo: repo, tag: r.imageTag, project: k.project, buildName: r.buildName})
+		}
+	}
+	return out
+}
+
+func sortRecordsNewestFirst(recs []imageRetentionRecord) {
+	for i := 1; i < len(recs); i++ {
+		j := i
+		for j > 0 && recs[j].createdAt.After(recs[j-1].createdAt) {
+			recs[j], recs[j-1] = recs[j-1], recs[j]
+			j--
+		}
+	}
+}
+
 // SweepOrphanHelmReleases removes Secrets named
 // sh.helm.release.v1.<release>.v<rev> whose corresponding kuso CR no
 // longer exists in the namespace. We restrict the sweep to releases

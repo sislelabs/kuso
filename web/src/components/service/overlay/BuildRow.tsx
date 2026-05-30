@@ -153,7 +153,11 @@ export function BuildRow({
             </div>
           </div>
         </button>
-        {s === "superseded" && canDeploy && (
+        {/* Rollback needs the build's image. Once it ages past the
+            image-retention window the sweep prunes the registry tag and
+            blanks b.imageTag, so we hide the chip — the build stays
+            listed as history but can't be rolled back to. */}
+        {s === "superseded" && canDeploy && !!b.imageTag && (
           <RollbackButton project={project} service={service} env={env} buildId={b.id} sha={sha} />
         )}
         {(s === "running" || s === "pending" || s === "queued") && canDeploy && (

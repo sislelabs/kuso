@@ -108,19 +108,43 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 		envName = "production"
 	}
 	ns := s.nsFor(ctx, project)
+	// Resolve the build's image. Prefer the live CR; if retention has
+	// GC'd it, fall back to the archived BuildRecord (whose image may
+	// still exist in the registry within imageRetentionWindow). Either
+	// path yields (repo, tag) for a SUCCEEDED build, or an error.
+	var imageRepo, imageTag string
 	bRaw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).Get(ctx, buildName, metav1.GetOptions{})
-	if err != nil {
+	switch {
+	case err == nil:
+		var b kube.KusoBuild
+		if derr := runtime.DefaultUnstructuredConverter.FromUnstructured(bRaw.Object, &b); derr != nil {
+			return nil, fmt.Errorf("decode build: %w", derr)
+		}
+		if buildPhase(&b) != "succeeded" {
+			return nil, fmt.Errorf("build %s is in phase %q, not succeeded — refuse to roll back to a non-succeeded build", buildName, buildPhase(&b))
+		}
+		if b.Spec.Image == nil {
+			return nil, fmt.Errorf("build %s has no image to roll back to", buildName)
+		}
+		imageRepo, imageTag = b.Spec.Image.Repository, b.Spec.Image.Tag
+	case apierrors.IsNotFound(err) && s.RecordLookup != nil:
+		// CR gone — try the archive.
+		repo, tag, phase, ok, lerr := s.RecordLookup.GetBuildImage(ctx, project, buildName)
+		if lerr != nil {
+			return nil, fmt.Errorf("get build record: %w", lerr)
+		}
+		if !ok {
+			return nil, fmt.Errorf("%w: build %s not found", ErrNotFound, buildName)
+		}
+		if phase != "succeeded" {
+			return nil, fmt.Errorf("build %s is in phase %q, not succeeded — refuse to roll back to a non-succeeded build", buildName, phase)
+		}
+		if tag == "" {
+			return nil, fmt.Errorf("build %s has no archived image to roll back to (image was pruned past the retention window)", buildName)
+		}
+		imageRepo, imageTag = repo, tag
+	default:
 		return nil, fmt.Errorf("get build: %w", err)
-	}
-	var b kube.KusoBuild
-	if err := runtime.DefaultUnstructuredConverter.FromUnstructured(bRaw.Object, &b); err != nil {
-		return nil, fmt.Errorf("decode build: %w", err)
-	}
-	if buildPhase(&b) != "succeeded" {
-		return nil, fmt.Errorf("build %s is in phase %q, not succeeded — refuse to roll back to a non-succeeded build", buildName, buildPhase(&b))
-	}
-	if b.Spec.Image == nil {
-		return nil, fmt.Errorf("build %s has no image to roll back to", buildName)
 	}
 	// Patch the addressed env's image to the build's image. Stamp
 	// promotedAt to *now* (not the build's createdAt) so a stray
@@ -132,8 +156,8 @@ func (s *Service) Rollback(ctx context.Context, project, service, envName, build
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	patch := fmt.Sprintf(
 		`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}},"metadata":{"annotations":{%q:%q,%q:%q}}}`,
-		b.Spec.Image.Repository, b.Spec.Image.Tag,
-		annPromotedBuild, b.Name,
+		imageRepo, imageTag,
+		annPromotedBuild, buildName,
 		annPromotedAt, now,
 	)
 	if _, err := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).

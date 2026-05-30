@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -467,6 +468,10 @@ func main() {
 		// The Poller has its own Notifier slot for build.{succeeded,
 		// failed} events.
 		buildSvc.Notifier = notifyAdapter{notifyDisp}
+		// Rollback fallback: when retention has GC'd a build's CR, resolve
+		// its image from the archived BuildRecord so rollback still works
+		// for builds within the image-retention window.
+		buildSvc.RecordLookup = buildRecordLookupAdapter{database}
 		// GC the per-(project,service) lock map every 15min. Without
 		// this, ephemeral preview-env services (created/torn down on
 		// every PR) leave one mutex pointer behind forever — slow
@@ -605,6 +610,12 @@ func main() {
 					Notifier:      notifyAdapter{notifyDisp},
 					LogArchive:    buildArchiveAdapter{database},
 					ReleaseRunner: releaserun.New(kc),
+					// Image-retention sweep: untag build images past the
+					// rollback window so the registry doesn't grow
+					// unbounded. NewInClusterImageDeleter returns nil for
+					// external-registry clusters → sweep self-disables.
+					ImageDeleter: builds.NewInClusterImageDeleter(builds.RegistryHost),
+					ImageRecords: imageRecordsAdapter{database},
 				}).Run(workCtx)
 			}
 			if os.Getenv("KUSO_HEALTH_DISABLED") != "true" {
@@ -1349,6 +1360,44 @@ func (a buildArchiveAdapter) SaveBuildRecord(ctx context.Context, r builds.Build
 		TriggeredByUser: r.TriggeredByUser,
 		ErrorMessage:    r.ErrorMessage,
 	})
+}
+
+// imageRecordsAdapter projects db.ArchivedImage rows to the builds
+// package shape so the image-retention sweep spans CR-gone builds.
+type imageRecordsAdapter struct{ d *db.DB }
+
+func (a imageRecordsAdapter) ListArchivedImages(ctx context.Context, _ string) ([]builds.ArchivedImageRecord, error) {
+	// One kuso namespace today; list all archived images and let the
+	// sweep group by project/service.
+	rows, err := a.d.ListArchivedImages(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	out := make([]builds.ArchivedImageRecord, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, builds.ArchivedImageRecord{
+			BuildName: r.BuildName, Project: r.Project, Service: r.Service,
+			ImageTag: r.ImageTag, Status: r.Status, CreatedAt: r.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
+func (a imageRecordsAdapter) ClearImageTag(ctx context.Context, project, buildName string) error {
+	return a.d.ClearImageTag(ctx, project, buildName)
+}
+
+// buildRecordLookupAdapter satisfies builds.BuildRecordLookup for the
+// rollback fallback, reconstructing the image repo from the canonical
+// "<RegistryHost>/<project>/<service>" convention.
+type buildRecordLookupAdapter struct{ d *db.DB }
+
+func (a buildRecordLookupAdapter) GetBuildImage(ctx context.Context, project, buildName string) (repo, tag, phase string, ok bool, err error) {
+	svc, tag, phase, ok, err := a.d.GetBuildImage(ctx, project, buildName)
+	if err != nil || !ok {
+		return "", "", "", ok, err
+	}
+	return fmt.Sprintf("%s/%s/%s", builds.RegistryHost, project, svc), tag, phase, true, nil
 }
 
 // runsNotifyAdapter satisfies runs.EventEmitter by mapping the
