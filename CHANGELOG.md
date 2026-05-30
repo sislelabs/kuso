@@ -5,6 +5,24 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.17.28] — 2026-05-30
+
+### ✨ Features
+- Feat(builds): rollback window — keep last N images, prune older, records persist ([c3002ed](https://github.com/sislelabs/kuso/commit/c3002ed242fb46d5bdefd755060019c6be307bb6))
+- Feat(builds): archive build summaries so deployment history survives cleanup ([315535e](https://github.com/sislelabs/kuso/commit/315535ec49c8ead24f8caa849dfcb65a47a2e1f6))
+- Feat(web): role v2 UI — 3-role pickers, project access panel, env masking (phase 5) ([bc7f971](https://github.com/sislelabs/kuso/commit/bc7f9717107b943ec6294a2466df82a346047753))
+- Feat(authz): role v2 grant-management API (phase 4) ([1bcbbd0](https://github.com/sislelabs/kuso/commit/1bcbbd0ea87419b49a42c1d47cedbff5288b3e81))
+- Feat(authz): role v2 data model — ProjectGrant + user roles + migration (phase 2) ([09c5a55](https://github.com/sislelabs/kuso/commit/09c5a5577efe9bb4fa46c250a016a51588e210ee))
+- Feat(authz): role system v2 core — viewer/editor/admin (phase 1+3) ([eeb9f47](https://github.com/sislelabs/kuso/commit/eeb9f47ef49b34f2de7fb6c735bbcfc6be47a10f))
+
+### 🐛 Bug Fixes
+- Fix(authz): instance-addon picker gate — addons:write → authenticated ([8aa5d9b](https://github.com/sislelabs/kuso/commit/8aa5d9b216daab8bbe99456d3a9c99baec3787c0))
+- Fix(authz): close role-v2 client + stale-gate gaps from code review ([9e1fe6e](https://github.com/sislelabs/kuso/commit/9e1fe6e3d19463caba477065e827198318312e76))
+
+### 📝 Docs
+- Docs(spec): role v2 — sql console + null-inherit clarifications ([181cf7d](https://github.com/sislelabs/kuso/commit/181cf7d543b5784be592eb16dba5703e97f9ddee))
+- Docs(spec): role system v2 design (viewer/editor/admin, hybrid grants) ([74edc97](https://github.com/sislelabs/kuso/commit/74edc9712c9ac28bae9ac54ff1c172e9ca3ac8ae))
+
 ## [0.17.27] — 2026-05-30
 
 ### ✨ Features
@@ -283,14 +301,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive promoted CHANGELOG entries (from v0.16.5 ship) ([98cfb8a](https://github.com/sislelabs/kuso/commit/98cfb8aa64264520586f0ffae339d5a96848bc8d))
-
-## [0.16.5] — 2026-05-27
-
-### 🐛 Bug Fixes
-- Fix(web): project-shared addons render under every env tab (#4) ([25a79cb](https://github.com/sislelabs/kuso/commit/25a79cb2ec300107e6e0513ef5909a1b983073af))
-
-### 🧹 Chores
-- Chore: archive promoted CHANGELOG entries (from v0.16.4 ship) ([3b2e93e](https://github.com/sislelabs/kuso/commit/3b2e93ee1d83a87de6a48e019532373bd48bca18))
 
 
 ---
