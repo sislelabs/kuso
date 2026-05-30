@@ -99,6 +99,24 @@ func featuresFromEnv() Features {
 	}
 }
 
+// fallbackBaseDomain is the last-ditch served-app domain used only
+// when KUSO_DOMAIN is unset. It matches the historical hardcoded
+// literal so behaviour is byte-identical on the original install; a
+// correctly-installed cluster always has KUSO_DOMAIN set (install.sh
+// requires --domain and the deploy manifest injects it) and never
+// reaches this value.
+const fallbackBaseDomain = "kuso.sislelabs.com"
+
+// DefaultBaseDomain returns the instance's default served-app domain —
+// the suffix used to build "<service>.<project>.<domain>" hosts for any
+// project that hasn't set its own spec.baseDomain. Sourced from the
+// KUSO_DOMAIN env var (set at install, injected into the server pod),
+// so a cluster installed on apps.example.com serves apps there with no
+// code changes. Falls back to the legacy literal only if unset.
+func DefaultBaseDomain() string {
+	return firstNonEmpty(os.Getenv("KUSO_DOMAIN"), fallbackBaseDomain)
+}
+
 // firstNonEmpty returns the first non-empty string from its args.
 // Local copy (auth package has the same helper); kept private so the
 // config package has no auth dependency.

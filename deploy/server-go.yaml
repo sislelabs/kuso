@@ -376,7 +376,7 @@ spec:
                   key: dsn
             - { name: KUSO_NAMESPACE, value: kuso }
             - { name: KUSO_ADMIN_USERNAME, value: admin }
-            - { name: KUSO_ADMIN_EMAIL, value: admin@kuso.sislelabs.com }
+            - { name: KUSO_ADMIN_EMAIL, value: admin@example.com }
             # Admin password is now sourced from a mounted file (see
             # volumeMounts below) instead of the envFrom-loaded
             # kuso-server-secrets. The file path is read on first

@@ -114,3 +114,19 @@ func TestFeaturesFromEnv(t *testing.T) {
 		t.Error("OAuth2Auth should be false without OAUTH2 envs")
 	}
 }
+
+// TestDefaultBaseDomain verifies the served-app domain comes from
+// KUSO_DOMAIN, with the legacy literal only as the unset fallback —
+// the decoupling that lets a fresh install serve apps on its own
+// domain without code changes. t.Setenv forbids t.Parallel.
+func TestDefaultBaseDomain(t *testing.T) {
+	t.Setenv("KUSO_DOMAIN", "apps.example.com")
+	if got := DefaultBaseDomain(); got != "apps.example.com" {
+		t.Errorf("with KUSO_DOMAIN set: got %q, want apps.example.com", got)
+	}
+
+	t.Setenv("KUSO_DOMAIN", "")
+	if got := DefaultBaseDomain(); got != fallbackBaseDomain {
+		t.Errorf("with KUSO_DOMAIN unset: got %q, want fallback %q", got, fallbackBaseDomain)
+	}
+}

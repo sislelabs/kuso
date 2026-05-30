@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"kuso/server/internal/config"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/placement"
 )
@@ -681,12 +682,12 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	if host == "" {
 		base := proj.Spec.BaseDomain
 		if base == "" {
-			// Cluster-default domain: the user doesn't own a custom
-			// suffix, so we group by project to avoid name collisions
-			// across the cluster. Format:
-			//   service==project:  <env>-<project>.<cluster>
-			//   else:              <service>-<env>.<project>.<cluster>
-			base = "kuso.sislelabs.com"
+			// Instance-default domain (KUSO_DOMAIN): the user doesn't
+			// own a custom suffix, so we group by project to avoid name
+			// collisions across the cluster. Format:
+			//   service==project:  <env>-<project>.<instance-domain>
+			//   else:              <service>-<env>.<project>.<instance-domain>
+			base = config.DefaultBaseDomain()
 			if service == project {
 				host = fmt.Sprintf("%s-%s.%s", req.Name, project, base)
 			} else {
@@ -1978,11 +1979,13 @@ func convertEnvVars(in []EnvVar) []kube.KusoEnvVar {
 //	                   apex-style mapping).
 func defaultHost(service, project, baseDomain string) string {
 	if baseDomain == "" {
-		// Cluster default: project is the user-meaningful slug.
+		// No per-project base domain → fall back to the instance
+		// default (KUSO_DOMAIN). project is the user-meaningful slug.
+		base := config.DefaultBaseDomain()
 		if service == project {
-			return fmt.Sprintf("%s.%s", project, "kuso.sislelabs.com")
+			return fmt.Sprintf("%s.%s", project, base)
 		}
-		return fmt.Sprintf("%s.%s.%s", service, project, "kuso.sislelabs.com")
+		return fmt.Sprintf("%s.%s.%s", service, project, base)
 	}
 	if service == project {
 		return baseDomain

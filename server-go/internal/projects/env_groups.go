@@ -32,6 +32,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"kuso/server/internal/config"
 	"kuso/server/internal/kube"
 )
 
@@ -844,7 +845,7 @@ func cloneServiceSpec(in kube.KusoServiceSpec, project string) kube.KusoServiceS
 // rule the production hosts follow.
 func buildEnvHost(baseDomain, project, serviceShort, env string) string {
 	if baseDomain == "" {
-		baseDomain = "kuso.sislelabs.com"
+		baseDomain = config.DefaultBaseDomain()
 	}
 	// If the basedomain already starts with "<project>." the project
 	// scope is implicit; just emit "<svc>-<env>.<basedomain>".

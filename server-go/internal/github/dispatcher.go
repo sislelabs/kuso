@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/builds"
+	"kuso/server/internal/config"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/metrics"
@@ -575,7 +576,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		baseDomain = proj.Spec.Previews.BaseDomain
 	}
 	if baseDomain == "" {
-		baseDomain = proj.Name + ".kuso.sislelabs.com"
+		baseDomain = proj.Name + "." + config.DefaultBaseDomain()
 	}
 	ttlDays := 7
 	if proj.Spec.Previews != nil && proj.Spec.Previews.TTLDays > 0 {

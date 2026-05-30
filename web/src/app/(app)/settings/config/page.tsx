@@ -15,7 +15,7 @@ interface SettingsResp {
 }
 
 const FIELDS: { key: string; label: string; hint: string; placeholder?: string }[] = [
-  { key: "baseDomain",       label: "Base domain",         hint: "default suffix for service URLs (e.g. apps.example.com)", placeholder: "kuso.sislelabs.com" },
+  { key: "baseDomain",       label: "Base domain",         hint: "default suffix for service URLs (e.g. apps.example.com)", placeholder: "apps.example.com" },
   { key: "clusterIssuer",    label: "ClusterIssuer",       hint: "cert-manager issuer used for auto-TLS",                  placeholder: "letsencrypt-prod" },
   { key: "ingressClass",     label: "Ingress class",       hint: "ingressClassName the chart stamps on each Ingress",      placeholder: "traefik" },
   { key: "letsEncryptEmail", label: "Let's Encrypt email", hint: "operator contact for cert renewal warnings",             placeholder: "you@example.com" },

@@ -72,7 +72,7 @@ func renderInitYAML(project, service, repo, runtime string, port int) string {
 	} else {
 		repoLine = "    # repo: https://github.com/owner/repo\n"
 	}
-	return fmt.Sprintf(`# kuso.yml — config-as-code for kuso (https://kuso.sislelabs.com)
+	return fmt.Sprintf(`# kuso.yml — config-as-code for kuso (https://github.com/sislelabs/kuso)
 # This file is the source of truth on every push: the UI is read-only
 # for fields managed here.
 
