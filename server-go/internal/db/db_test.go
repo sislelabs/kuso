@@ -70,17 +70,17 @@ func TestUserLookup_RoundTrip(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	if _, err := d.ExecContext(ctx, `
 INSERT INTO "Role" (id, name, description, "createdAt", "updatedAt")
-VALUES ('r1', 'admin', 'admin role', ?, ?)`, now, now); err != nil {
+VALUES ('r1', 'admin', 'admin role', $1, $2)`, now, now); err != nil {
 		t.Fatalf("insert role: %v", err)
 	}
 	if _, err := d.ExecContext(ctx, `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", "roleId", provider, "createdAt", "updatedAt")
-VALUES ('u1', 'admin', 'admin@example.com', 'hash', false, true, 'r1', 'local', ?, ?)`, now, now); err != nil {
+VALUES ('u1', 'admin', 'admin@example.com', 'hash', false, true, 'r1', 'local', $1, $2)`, now, now); err != nil {
 		t.Fatalf("insert user: %v", err)
 	}
 	if _, err := d.ExecContext(ctx, `
 INSERT INTO "Permission" (id, resource, action, namespace, "createdAt", "updatedAt")
-VALUES ('p1', 'app', 'read', NULL, ?, ?), ('p2', 'app', 'write', NULL, ?, ?)`, now, now, now, now); err != nil {
+VALUES ('p1', 'app', 'read', NULL, $1, $2), ('p2', 'app', 'write', NULL, $3, $4)`, now, now, now, now); err != nil {
 		t.Fatalf("insert permission: %v", err)
 	}
 	if _, err := d.ExecContext(ctx, `
@@ -132,7 +132,7 @@ func TestUpdateUserLogin_Persists(t *testing.T) {
 	now := time.Now().UTC().Truncate(time.Second)
 	if _, err := d.ExecContext(ctx, `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", provider, "createdAt", "updatedAt")
-VALUES ('u1', 'admin', 'a@b', 'h', false, true, 'local', ?, ?)`, now, now); err != nil {
+VALUES ('u1', 'admin', 'a@b', 'h', false, true, 'local', $1, $2)`, now, now); err != nil {
 		t.Fatalf("seed: %v", err)
 	}
 	if err := d.UpdateUserLogin(ctx, "u1", "10.0.0.1", now); err != nil {

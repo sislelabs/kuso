@@ -47,7 +47,7 @@ func (d *DB) RevokeToken(ctx context.Context, jti, userID, reason string, expire
 	}
 	_, err := d.ExecContext(ctx, `
 INSERT INTO "RevokedToken" ("jti", "userId", "reason", "expiresAt")
-VALUES (?, ?, ?, ?)
+VALUES ($1, $2, $3, $4)
 ON CONFLICT ("jti") DO UPDATE SET
   "reason" = excluded."reason",
   "expiresAt" = excluded."expiresAt"`,
@@ -73,7 +73,7 @@ func (d *DB) IsTokenRevoked(ctx context.Context, jti string) (bool, error) {
 	}
 	var present int
 	err := d.QueryRowContext(ctx,
-		`SELECT 1 FROM "RevokedToken" WHERE "jti" = ? LIMIT 1`, jti,
+		`SELECT 1 FROM "RevokedToken" WHERE "jti" = $1 LIMIT 1`, jti,
 	).Scan(&present)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -104,7 +104,7 @@ func (d *DB) InvalidateUserTokens(ctx context.Context, userID, reason string, at
 	}
 	_, err := d.ExecContext(ctx, `
 INSERT INTO "UserTokenInvalidation" ("userId", "invalidatedBefore", "reason", "updatedAt")
-VALUES (?, ?, ?, ?)
+VALUES ($1, $2, $3, $4)
 ON CONFLICT ("userId") DO UPDATE SET
   "invalidatedBefore" = excluded."invalidatedBefore",
   "reason" = excluded."reason",
@@ -134,7 +134,7 @@ func (d *DB) UserTokenWatermark(ctx context.Context, userID string) (time.Time, 
 	}
 	var t sql.NullTime
 	err := d.QueryRowContext(ctx,
-		`SELECT "invalidatedBefore" FROM "UserTokenInvalidation" WHERE "userId" = ?`,
+		`SELECT "invalidatedBefore" FROM "UserTokenInvalidation" WHERE "userId" = $1`,
 		userID,
 	).Scan(&t)
 	if err != nil {
@@ -160,9 +160,9 @@ func (d *DB) InvalidateUsersByRole(ctx context.Context, roleID, reason string) (
 	now := time.Now().UTC()
 	res, err := d.ExecContext(ctx, `
 INSERT INTO "UserTokenInvalidation" ("userId", "invalidatedBefore", "reason", "updatedAt")
-SELECT u."id", ?, ?, ?
+SELECT u."id", $1, $2, $3
 FROM "User" u
-WHERE u."roleId" = ?
+WHERE u."roleId" = $4
 ON CONFLICT ("userId") DO UPDATE SET
   "invalidatedBefore" = excluded."invalidatedBefore",
   "reason" = excluded."reason",
@@ -189,9 +189,9 @@ func (d *DB) InvalidateUsersByGroup(ctx context.Context, groupID, reason string)
 	now := time.Now().UTC()
 	res, err := d.ExecContext(ctx, `
 INSERT INTO "UserTokenInvalidation" ("userId", "invalidatedBefore", "reason", "updatedAt")
-SELECT m."A", ?, ?, ?
+SELECT m."A", $1, $2, $3
 FROM "_UserToUserGroup" m
-WHERE m."B" = ?
+WHERE m."B" = $4
 ON CONFLICT ("userId") DO UPDATE SET
   "invalidatedBefore" = excluded."invalidatedBefore",
   "reason" = excluded."reason",
@@ -212,7 +212,7 @@ ON CONFLICT ("userId") DO UPDATE SET
 // Called from the daily cleanup goroutine.
 func (d *DB) PruneRevokedTokens(ctx context.Context) (int64, error) {
 	res, err := d.ExecContext(ctx,
-		`DELETE FROM "RevokedToken" WHERE "expiresAt" < ?`, time.Now().UTC(),
+		`DELETE FROM "RevokedToken" WHERE "expiresAt" < $1`, time.Now().UTC(),
 	)
 	if err != nil {
 		return 0, fmt.Errorf("db: prune revoked tokens: %w", err)

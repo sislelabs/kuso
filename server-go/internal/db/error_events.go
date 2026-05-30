@@ -45,7 +45,7 @@ func (d *DB) InsertErrorEvent(ctx context.Context, e ErrorEvent) error {
 	_, err := d.ExecContext(ctx, `
 		INSERT INTO "ErrorEvent"
 		    ("project","service","env","pod","fingerprint","message","rawLine","ts")
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		e.Project, e.Service, e.Env, e.Pod, e.Fingerprint, e.Message, e.RawLine, e.Ts.UTC(),
 	)
 	if err != nil {
@@ -86,10 +86,10 @@ func (d *DB) ListErrorGroups(ctx context.Context, project, service string, since
 		           AND e4.fingerprint = e.fingerprint
 		         ORDER BY ts DESC LIMIT 1) AS sample_pod
 		FROM "ErrorEvent" e
-		WHERE project = ? AND service = ? AND ts >= ?
+		WHERE project = $1 AND service = $2 AND ts >= $3
 		GROUP BY project, service, fingerprint
 		ORDER BY last_seen DESC
-		LIMIT ?`,
+		LIMIT $4`,
 		project, service, since.UTC(), limit,
 	)
 	if err != nil {
@@ -122,7 +122,7 @@ func (d *DB) ListErrorGroups(ctx context.Context, project, service string, since
 func (d *DB) ScannerWatermark(ctx context.Context, key string) (int64, error) {
 	var v int64
 	err := d.QueryRowContext(ctx,
-		`SELECT value FROM "ErrorScannerState" WHERE key = ?`, key,
+		`SELECT value FROM "ErrorScannerState" WHERE key = $1`, key,
 	).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return 0, nil
@@ -137,7 +137,7 @@ func (d *DB) ScannerWatermark(ctx context.Context, key string) (int64, error) {
 func (d *DB) SaveScannerWatermark(ctx context.Context, key string, value int64) error {
 	_, err := d.ExecContext(ctx, `
 		INSERT INTO "ErrorScannerState" (key, value, "updatedAt")
-		VALUES (?, ?, ?)
+		VALUES ($1, $2, $3)
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = EXCLUDED."updatedAt"`,
 		key, value, time.Now().UTC(),
 	)
@@ -150,7 +150,7 @@ func (d *DB) SaveScannerWatermark(ctx context.Context, key string, value int64) 
 // PruneErrorEvents drops rows older than `before`. Called from the
 // daily cleanup goroutine.
 func (d *DB) PruneErrorEvents(ctx context.Context, before time.Time) (int, error) {
-	res, err := d.ExecContext(ctx, `DELETE FROM "ErrorEvent" WHERE ts < ?`, before.UTC())
+	res, err := d.ExecContext(ctx, `DELETE FROM "ErrorEvent" WHERE ts < $1`, before.UTC())
 	if err != nil {
 		return 0, fmt.Errorf("PruneErrorEvents: %w", err)
 	}

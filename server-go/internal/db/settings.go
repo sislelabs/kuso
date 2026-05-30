@@ -119,7 +119,7 @@ func (d *DB) SetBuildSettings(ctx context.Context, in BuildSettings, updatedBy s
 	for _, p := range pairs {
 		_, err := d.ExecContext(ctx, `
 			INSERT INTO "Setting" (key, value, "updatedAt", "updatedBy")
-			VALUES (?, ?, ?, ?)
+			VALUES ($1, $2, $3, $4)
 			ON CONFLICT (key) DO UPDATE
 			   SET value = EXCLUDED.value,
 			       "updatedAt" = EXCLUDED."updatedAt",
@@ -145,7 +145,7 @@ func unquote(s string) string { var v string; _ = json.Unmarshal([]byte(s), &v);
 // value encode/decode themselves.
 func (d *DB) GetSetting(ctx context.Context, key string) (string, error) {
 	var v string
-	err := d.QueryRowContext(ctx, `SELECT value FROM "Setting" WHERE key = ?`, key).Scan(&v)
+	err := d.QueryRowContext(ctx, `SELECT value FROM "Setting" WHERE key = $1`, key).Scan(&v)
 	if errors.Is(err, sql.ErrNoRows) {
 		return "", nil
 	}
@@ -159,7 +159,7 @@ func (d *DB) GetSetting(ctx context.Context, key string) (string, error) {
 func (d *DB) SetSetting(ctx context.Context, key, value, updatedBy string) error {
 	_, err := d.ExecContext(ctx, `
 		INSERT INTO "Setting" (key, value, "updatedAt", "updatedBy")
-		VALUES (?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (key) DO UPDATE
 		   SET value = EXCLUDED.value,
 		       "updatedAt" = EXCLUDED."updatedAt",

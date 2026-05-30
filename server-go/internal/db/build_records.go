@@ -50,7 +50,7 @@ func (d *DB) SaveBuildRecord(ctx context.Context, r BuildRecord) error {
 			"buildName","project","service","branch","commitSha","commitMessage",
 			"imageTag","status","startedAt","finishedAt","triggeredBy",
 			"triggeredByUser","errorMessage")
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
 		ON CONFLICT("buildName") DO UPDATE SET
 			"project"=excluded."project",
 			"service"=excluded."service",
@@ -82,7 +82,7 @@ func (d *DB) ListBuildRecords(ctx context.Context, project, service string) ([]B
 		       "imageTag","status","startedAt","finishedAt","triggeredBy",
 		       "triggeredByUser","errorMessage","createdAt"
 		  FROM "BuildRecord"
-		 WHERE "project"=? AND "service"=?
+		 WHERE "project"=$1 AND "service"=$2
 		 ORDER BY "createdAt" DESC`, project, service)
 	if err != nil {
 		return nil, fmt.Errorf("ListBuildRecords: %w", err)
@@ -108,7 +108,7 @@ func (d *DB) ListBuildRecords(ctx context.Context, project, service string) ([]B
 // full image repo from "<registry>/<project>/<service>".
 func (d *DB) GetBuildImage(ctx context.Context, project, buildName string) (service, tag, phase string, ok bool, err error) {
 	row := d.QueryRowContext(ctx,
-		`SELECT "service","imageTag","status" FROM "BuildRecord" WHERE "buildName"=? AND "project"=?`,
+		`SELECT "service","imageTag","status" FROM "BuildRecord" WHERE "buildName"=$1 AND "project"=$2`,
 		buildName, project)
 	if scanErr := row.Scan(&service, &tag, &phase); scanErr != nil {
 		if errors.Is(scanErr, sql.ErrNoRows) {
@@ -133,7 +133,7 @@ func (d *DB) ListArchivedImages(ctx context.Context, project string) ([]Archived
 	} else {
 		rows, err = d.QueryContext(ctx, `
 			SELECT "buildName","project","service","imageTag","status","createdAt"
-			  FROM "BuildRecord" WHERE "project"=? AND "imageTag" <> ''`, project)
+			  FROM "BuildRecord" WHERE "project"=$1 AND "imageTag" <> ''`, project)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("ListArchivedImages: %w", err)
@@ -166,7 +166,7 @@ type ArchivedImage struct {
 // signals "no longer rollback-able" to the UI and the rollback handler.
 func (d *DB) ClearImageTag(ctx context.Context, project, buildName string) error {
 	_, err := d.ExecContext(ctx,
-		`UPDATE "BuildRecord" SET "imageTag"='' WHERE "project"=? AND "buildName"=?`,
+		`UPDATE "BuildRecord" SET "imageTag"='' WHERE "project"=$1 AND "buildName"=$2`,
 		project, buildName)
 	if err != nil {
 		return fmt.Errorf("ClearImageTag: %w", err)
@@ -179,7 +179,7 @@ func (d *DB) ClearImageTag(ctx context.Context, project, buildName string) error
 // Mirrors DeleteBuildLogsForService.
 func (d *DB) DeleteBuildRecordsForService(ctx context.Context, project, service string) error {
 	_, err := d.ExecContext(ctx,
-		`DELETE FROM "BuildRecord" WHERE "project"=? AND "service"=?`,
+		`DELETE FROM "BuildRecord" WHERE "project"=$1 AND "service"=$2`,
 		project, service)
 	if err != nil {
 		return fmt.Errorf("DeleteBuildRecordsForService: %w", err)

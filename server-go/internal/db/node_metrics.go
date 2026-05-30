@@ -3,7 +3,7 @@
 // goroutine) and writes one row per node per tick. The settings/nodes
 // drill-down renders 7 days of these as sparklines.
 //
-// Why SQLite instead of Prometheus: a one-box kuso install is
+// Why the control-plane DB instead of Prometheus: a one-box kuso install is
 // expected to have a handful of nodes; 7d × 48 samples/day × 5 nodes
 // = 1,680 rows. Trivial to query, no extra infra to deploy. When a
 // fleet outgrows that we'll wire a real TSDB.
@@ -40,7 +40,7 @@ func (d *DB) InsertNodeMetric(ctx context.Context, m NodeMetric) error {
 	_, err := d.ExecContext(ctx, `
 		INSERT INTO "NodeMetric"
 		  ("node","ts","cpuUsedMilli","cpuCapacityMilli","memUsedBytes","memCapacityBytes","diskAvailBytes","diskCapacityBytes")
-		VALUES (?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		m.Node, m.Ts.UTC(),
 		m.CPUUsedMilli, m.CPUCapacityMilli,
 		m.MemUsedBytes, m.MemCapacityBytes,
@@ -61,7 +61,7 @@ func (d *DB) ListNodeMetrics(ctx context.Context, node string, since time.Time) 
 	rows, err := d.QueryContext(ctx, `
 		SELECT "node","ts","cpuUsedMilli","cpuCapacityMilli","memUsedBytes","memCapacityBytes","diskAvailBytes","diskCapacityBytes"
 		FROM "NodeMetric"
-		WHERE "node" = ? AND "ts" >= ?
+		WHERE "node" = $1 AND "ts" >= $2
 		ORDER BY "ts" ASC`,
 		node, since.UTC(),
 	)
@@ -92,7 +92,7 @@ func (d *DB) ListNodeMetrics(ctx context.Context, node string, since time.Time) 
 // Called on a slow ticker (e.g. once per sample tick) so the table
 // stays around 7d × 48 samples/day × N nodes.
 func (d *DB) PruneNodeMetricsOlderThan(ctx context.Context, before time.Time) (int64, error) {
-	res, err := d.ExecContext(ctx, `DELETE FROM "NodeMetric" WHERE "ts" < ?`, before.UTC())
+	res, err := d.ExecContext(ctx, `DELETE FROM "NodeMetric" WHERE "ts" < $1`, before.UTC())
 	if err != nil {
 		return 0, fmt.Errorf("prune node metrics: %w", err)
 	}

@@ -69,7 +69,7 @@ func (d *DB) CostRollup(ctx context.Context, days int) ([]CostRollupDay, error) 
 		  COALESCE(SUM("memUsedBytes" / 1e9) * (5.0/60.0), 0)::FLOAT AS mem_gb_hours,
 		  COUNT(*) AS sample_count
 		FROM "NodeMetric"
-		WHERE "ts" >= ?
+		WHERE "ts" >= $1
 		GROUP BY "node", date_trunc('day', "ts")
 		ORDER BY day ASC, "node" ASC
 	`, since)
@@ -113,7 +113,7 @@ func (d *DB) CostTotals(ctx context.Context, days int) ([]CostTotal, error) {
 		  COALESCE(SUM("cpuUsedMilli") * (5.0/60.0), 0)::BIGINT     AS cpu_milli_hours,
 		  COALESCE(SUM("memUsedBytes" / 1e9) * (5.0/60.0), 0)::FLOAT AS mem_gb_hours
 		FROM "NodeMetric"
-		WHERE "ts" >= ?
+		WHERE "ts" >= $1
 		GROUP BY "node"
 		ORDER BY cpu_milli_hours DESC
 	`, since)

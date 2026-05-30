@@ -9,14 +9,14 @@ import (
 
 // CreateUserInput is the field set the create-user handler accepts.
 type CreateUserInput struct {
-	ID            string
-	Username      string
-	Email         string
-	FirstName     string
-	LastName      string
-	PasswordHash  string
-	RoleID        string
-	IsActive      bool
+	ID           string
+	Username     string
+	Email        string
+	FirstName    string
+	LastName     string
+	PasswordHash string
+	RoleID       string
+	IsActive     bool
 }
 
 // CreateUser inserts a new user. PasswordHash must already be bcrypted —
@@ -35,7 +35,7 @@ func (d *DB) CreateUser(ctx context.Context, in CreateUserInput) error {
 	}
 	_, err := d.ExecContext(ctx, `
 INSERT INTO "User" (id, username, email, "firstName", "lastName", password, "twoFaEnabled", "isActive", "roleId", provider, "createdAt", "updatedAt")
-VALUES (?, ?, ?, ?, ?, ?, false, ?, ?, 'local', ?, ?)`,
+VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8, 'local', $9, $10)`,
 		in.ID, in.Username, in.Email, sqlNullable(in.FirstName), sqlNullable(in.LastName),
 		in.PasswordHash, in.IsActive, roleID, now, now,
 	)
@@ -59,38 +59,38 @@ type UpdateUserInput struct {
 // UpdateUser applies the non-nil fields. Returns ErrNotFound when no row
 // matches.
 func (d *DB) UpdateUser(ctx context.Context, id string, in UpdateUserInput) error {
-	sets := []string{`"updatedAt" = ?`}
 	args := []any{prismaNow()}
+	sets := []string{fmt.Sprintf(`"updatedAt" = $%d`, len(args))}
 	if in.FirstName != nil {
-		sets = append(sets, `"firstName" = ?`)
 		args = append(args, sqlNullable(*in.FirstName))
+		sets = append(sets, fmt.Sprintf(`"firstName" = $%d`, len(args)))
 	}
 	if in.LastName != nil {
-		sets = append(sets, `"lastName" = ?`)
 		args = append(args, sqlNullable(*in.LastName))
+		sets = append(sets, fmt.Sprintf(`"lastName" = $%d`, len(args)))
 	}
 	if in.Email != nil {
-		sets = append(sets, `email = ?`)
 		args = append(args, *in.Email)
+		sets = append(sets, fmt.Sprintf(`email = $%d`, len(args)))
 	}
 	if in.RoleID != nil {
 		if *in.RoleID == "" {
 			sets = append(sets, `"roleId" = NULL`)
 		} else {
-			sets = append(sets, `"roleId" = ?`)
 			args = append(args, *in.RoleID)
+			sets = append(sets, fmt.Sprintf(`"roleId" = $%d`, len(args)))
 		}
 	}
 	if in.IsActive != nil {
-		sets = append(sets, `"isActive" = ?`)
 		args = append(args, *in.IsActive)
+		sets = append(sets, fmt.Sprintf(`"isActive" = $%d`, len(args)))
 	}
 	if in.Image != nil {
-		sets = append(sets, `image = ?`)
 		args = append(args, sqlNullable(*in.Image))
+		sets = append(sets, fmt.Sprintf(`image = $%d`, len(args)))
 	}
 	args = append(args, id)
-	q := `UPDATE "User" SET ` + joinComma(sets) + ` WHERE id = ?`
+	q := `UPDATE "User" SET ` + joinComma(sets) + fmt.Sprintf(` WHERE id = $%d`, len(args))
 	res, err := d.ExecContext(ctx, q, args...)
 	if err != nil {
 		return fmt.Errorf("db: update user: %w", err)
@@ -115,17 +115,17 @@ func (d *DB) DeleteUser(ctx context.Context, id string) error {
 		return fmt.Errorf("db: begin: %w", err)
 	}
 	for _, q := range []string{
-		`DELETE FROM "Audit" WHERE "user" = ?`,
-		`DELETE FROM "Token" WHERE "userId" = ?`,
-		`DELETE FROM "_UserToUserGroup" WHERE "A" = ?`,
-		`DELETE FROM "GithubUserLink" WHERE "userId" = ?`,
+		`DELETE FROM "Audit" WHERE "user" = $1`,
+		`DELETE FROM "Token" WHERE "userId" = $1`,
+		`DELETE FROM "_UserToUserGroup" WHERE "A" = $1`,
+		`DELETE FROM "GithubUserLink" WHERE "userId" = $1`,
 	} {
 		if _, err := tx.ExecContext(ctx, q, id); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("db: delete user fks: %w", err)
 		}
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM "User" WHERE id = ?`, id)
+	res, err := tx.ExecContext(ctx, `DELETE FROM "User" WHERE id = $1`, id)
 	if err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("db: delete user: %w", err)
@@ -139,7 +139,7 @@ func (d *DB) DeleteUser(ctx context.Context, id string) error {
 
 // UpdateUserPassword writes a new password hash, bumping updatedAt.
 func (d *DB) UpdateUserPassword(ctx context.Context, id, hash string) error {
-	res, err := d.ExecContext(ctx, `UPDATE "User" SET password = ?, "updatedAt" = ? WHERE id = ?`,
+	res, err := d.ExecContext(ctx, `UPDATE "User" SET password = $1, "updatedAt" = $2 WHERE id = $3`,
 		hash, prismaNow(), id)
 	if err != nil {
 		return fmt.Errorf("db: update password: %w", err)

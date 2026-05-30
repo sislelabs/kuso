@@ -5,7 +5,7 @@
 //
 // Search uses LIKE over the (project, service, ts) index. If
 // full-text ever becomes a need, swap the LIKE for
-// `to_tsvector('english', line) @@ plainto_tsquery(?)` plus a
+// `to_tsvector('english', line) @@ plainto_tsquery($1)` plus a
 // generated column + GIN index.
 
 package db
@@ -96,6 +96,7 @@ func (d *LogDB) SearchLogs(ctx context.Context, req SearchLogsRequest) ([]LogLin
 	q := strings.TrimSpace(req.Query)
 	var sqlStr strings.Builder
 	args := []any{}
+	n := 0
 	sqlStr.WriteString(`SELECT id, ts, pod, project, service, env, line FROM "LogLine" WHERE 1=1`)
 	if q != "" {
 		// Case-insensitive LIKE. Postgres ILIKE is the cheap path; if
@@ -104,30 +105,37 @@ func (d *LogDB) SearchLogs(ctx context.Context, req SearchLogsRequest) ([]LogLin
 		// "100%" matches every line containing "100" (the % becomes
 		// the wildcard) and "user_id" wildcards every char between
 		// "user" and "id".
-		sqlStr.WriteString(` AND line ILIKE ? ESCAPE '\'`)
+		n++
+		fmt.Fprintf(&sqlStr, ` AND line ILIKE $%d ESCAPE '\'`, n)
 		args = append(args, "%"+escapeLike(q)+"%")
 	}
 	if req.Project != "" {
-		sqlStr.WriteString(` AND project = ?`)
+		n++
+		fmt.Fprintf(&sqlStr, ` AND project = $%d`, n)
 		args = append(args, req.Project)
 	}
 	if req.Service != "" {
-		sqlStr.WriteString(` AND service = ?`)
+		n++
+		fmt.Fprintf(&sqlStr, ` AND service = $%d`, n)
 		args = append(args, req.Service)
 	}
 	if req.Env != "" {
-		sqlStr.WriteString(` AND env = ?`)
+		n++
+		fmt.Fprintf(&sqlStr, ` AND env = $%d`, n)
 		args = append(args, req.Env)
 	}
 	if !req.Since.IsZero() {
-		sqlStr.WriteString(` AND ts >= ?`)
+		n++
+		fmt.Fprintf(&sqlStr, ` AND ts >= $%d`, n)
 		args = append(args, req.Since.UTC())
 	}
 	if !req.Until.IsZero() {
-		sqlStr.WriteString(` AND ts < ?`)
+		n++
+		fmt.Fprintf(&sqlStr, ` AND ts < $%d`, n)
 		args = append(args, req.Until.UTC())
 	}
-	sqlStr.WriteString(` ORDER BY id DESC LIMIT ?`)
+	n++
+	fmt.Fprintf(&sqlStr, ` ORDER BY id DESC LIMIT $%d`, n)
 	args = append(args, limit)
 
 	rows, err := d.QueryContext(ctx, sqlStr.String(), args...)
@@ -167,22 +175,27 @@ func (d *LogDB) CountLogMatches(ctx context.Context, project, service, query str
 		since = cutoff
 	}
 	args := []any{}
+	p := 0
 	var sqlStr strings.Builder
 	sqlStr.WriteString(`SELECT COUNT(*) FROM "LogLine" WHERE 1=1`)
 	if q != "" {
-		sqlStr.WriteString(` AND line ILIKE ? ESCAPE '\'`)
+		p++
+		fmt.Fprintf(&sqlStr, ` AND line ILIKE $%d ESCAPE '\'`, p)
 		args = append(args, "%"+escapeLike(q)+"%")
 	}
 	if project != "" {
-		sqlStr.WriteString(` AND project = ?`)
+		p++
+		fmt.Fprintf(&sqlStr, ` AND project = $%d`, p)
 		args = append(args, project)
 	}
 	if service != "" {
-		sqlStr.WriteString(` AND service = ?`)
+		p++
+		fmt.Fprintf(&sqlStr, ` AND service = $%d`, p)
 		args = append(args, service)
 	}
 	if !since.IsZero() {
-		sqlStr.WriteString(` AND ts >= ?`)
+		p++
+		fmt.Fprintf(&sqlStr, ` AND ts >= $%d`, p)
 		args = append(args, since.UTC())
 	}
 	row := d.QueryRowContext(ctx, sqlStr.String(), args...)
@@ -222,8 +235,8 @@ func (d *LogDB) PruneLogsOlderThan(ctx context.Context, before time.Time) (int64
 DELETE FROM "LogLine"
 WHERE ctid IN (
   SELECT ctid FROM "LogLine"
-  WHERE ts < ?
-  LIMIT ?
+  WHERE ts < $1
+  LIMIT $2
 )`, before.UTC(), chunk)
 		if err != nil {
 			return total, fmt.Errorf("prune logs: %w", err)

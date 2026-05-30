@@ -31,7 +31,7 @@ func (d *DB) SeenGithubDelivery(ctx context.Context, deliveryID, event string, i
 	}
 	res, err := d.ExecContext(ctx, `
 INSERT INTO "GithubWebhookDelivery" ("deliveryId", "installationId", "event")
-VALUES (?, ?, ?)
+VALUES ($1, $2, $3)
 ON CONFLICT ("deliveryId") DO NOTHING`,
 		deliveryID, installationID, event,
 	)
@@ -46,7 +46,7 @@ ON CONFLICT ("deliveryId") DO NOTHING`,
 // Called from the daily cleanup goroutine.
 func (d *DB) PruneGithubDeliveries(ctx context.Context, before time.Time) (int64, error) {
 	res, err := d.ExecContext(ctx,
-		`DELETE FROM "GithubWebhookDelivery" WHERE "receivedAt" < ?`,
+		`DELETE FROM "GithubWebhookDelivery" WHERE "receivedAt" < $1`,
 		before.UTC(),
 	)
 	if err != nil {

@@ -67,7 +67,7 @@ func (d *DB) CreateInvite(ctx context.Context, in CreateInviteInput) error {
 	_, err := d.ExecContext(ctx,
 		`INSERT INTO "Invite"
 			("id","token","groupId","instanceRole","createdBy","expiresAt","maxUses","note")
-		 VALUES (?,?,?,?,?,?,?,?)`,
+		 VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		in.ID, in.Token,
 		nullStringFromPtr(in.GroupID),
 		nullStringFromPtr(in.InstanceRole),
@@ -90,7 +90,7 @@ func (d *DB) FindInviteByToken(ctx context.Context, token string) (*Invite, erro
 		`SELECT id, token, "groupId", "instanceRole", "createdBy",
 		        "createdAt", "expiresAt", "maxUses", "usedCount",
 		        "revokedAt", note
-		 FROM "Invite" WHERE token = ?`, token)
+		 FROM "Invite" WHERE token = $1`, token)
 	var inv Invite
 	err := row.Scan(&inv.ID, &inv.Token, &inv.GroupID, &inv.InstanceRole,
 		&inv.CreatedBy, &inv.CreatedAt, &inv.ExpiresAt,
@@ -134,7 +134,7 @@ func (d *DB) ListInvites(ctx context.Context) ([]Invite, error) {
 // who joined via a since-revoked link.
 func (d *DB) RevokeInvite(ctx context.Context, id string) error {
 	res, err := d.ExecContext(ctx,
-		`UPDATE "Invite" SET "revokedAt" = CURRENT_TIMESTAMP WHERE id = ? AND "revokedAt" IS NULL`,
+		`UPDATE "Invite" SET "revokedAt" = CURRENT_TIMESTAMP WHERE id = $1 AND "revokedAt" IS NULL`,
 		id)
 	if err != nil {
 		return fmt.Errorf("db: revoke invite: %w", err)
@@ -150,7 +150,7 @@ func (d *DB) RevokeInvite(ctx context.Context, id string) error {
 // redemption rows cascade away too. Most flows should prefer
 // RevokeInvite.
 func (d *DB) DeleteInvite(ctx context.Context, id string) error {
-	res, err := d.ExecContext(ctx, `DELETE FROM "Invite" WHERE id = ?`, id)
+	res, err := d.ExecContext(ctx, `DELETE FROM "Invite" WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("db: delete invite: %w", err)
 	}
@@ -184,7 +184,7 @@ func (d *DB) RedeemInvite(ctx context.Context, token string) (*Invite, error) {
 		`SELECT id, token, "groupId", "instanceRole", "createdBy",
 		        "createdAt", "expiresAt", "maxUses", "usedCount",
 		        "revokedAt", note
-		 FROM "Invite" WHERE token = ?`, token)
+		 FROM "Invite" WHERE token = $1`, token)
 	var inv Invite
 	err = row.Scan(&inv.ID, &inv.Token, &inv.GroupID, &inv.InstanceRole,
 		&inv.CreatedBy, &inv.CreatedAt, &inv.ExpiresAt,
@@ -205,7 +205,7 @@ func (d *DB) RedeemInvite(ctx context.Context, token string) (*Invite, error) {
 		return nil, ErrInviteExhausted
 	}
 	if _, err := tx.ExecContext(ctx,
-		`UPDATE "Invite" SET "usedCount" = "usedCount" + 1 WHERE id = ?`, inv.ID); err != nil {
+		`UPDATE "Invite" SET "usedCount" = "usedCount" + 1 WHERE id = $1`, inv.ID); err != nil {
 		return nil, fmt.Errorf("db: bump usedCount: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -219,7 +219,7 @@ func (d *DB) RedeemInvite(ctx context.Context, token string) (*Invite, error) {
 // the user row + group attachment succeeded.
 func (d *DB) RecordRedemption(ctx context.Context, inviteID, userID string) error {
 	_, err := d.ExecContext(ctx,
-		`INSERT INTO "InviteRedemption" ("inviteId","userId") VALUES (?, ?)`,
+		`INSERT INTO "InviteRedemption" ("inviteId","userId") VALUES ($1, $2)`,
 		inviteID, userID)
 	if err != nil {
 		return fmt.Errorf("db: record redemption: %w", err)

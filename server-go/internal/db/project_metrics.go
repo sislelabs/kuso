@@ -41,7 +41,7 @@ func (d *DB) InsertProjectMetric(ctx context.Context, m ProjectMetric) error {
 	_, err := d.ExecContext(ctx, `
 		INSERT INTO "ProjectMetric"
 		  ("project","ts","cpuMilli","memBytes","podCount")
-		VALUES (?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5)`,
 		m.Project, m.Ts.UTC(),
 		m.CPUMilli, m.MemBytes, m.PodCount,
 	)
@@ -55,7 +55,7 @@ func (d *DB) InsertProjectMetric(ctx context.Context, m ProjectMetric) error {
 // Same retention semantics as NodeMetric — the sampler piggy-backs a
 // prune call on every tick so the table stays bounded.
 func (d *DB) PruneProjectMetricsOlderThan(ctx context.Context, before time.Time) (int64, error) {
-	res, err := d.ExecContext(ctx, `DELETE FROM "ProjectMetric" WHERE "ts" < ?`, before.UTC())
+	res, err := d.ExecContext(ctx, `DELETE FROM "ProjectMetric" WHERE "ts" < $1`, before.UTC())
 	if err != nil {
 		return 0, fmt.Errorf("prune project metrics: %w", err)
 	}
@@ -88,7 +88,7 @@ func (d *DB) ProjectCostRollup(ctx context.Context, days int) ([]ProjectCostDay,
 		  COALESCE(SUM("memBytes" / 1e9) * (5.0/60.0), 0)::FLOAT AS mem_gb_hours,
 		  COUNT(*) AS sample_count
 		FROM "ProjectMetric"
-		WHERE "ts" >= ?
+		WHERE "ts" >= $1
 		GROUP BY "project", date_trunc('day', "ts")
 		ORDER BY day ASC, "project" ASC
 	`, since)
@@ -130,7 +130,7 @@ func (d *DB) ProjectCostTotals(ctx context.Context, days int) ([]ProjectCostTota
 		  COALESCE(SUM("cpuMilli") * (5.0/60.0), 0)::BIGINT     AS cpu_milli_hours,
 		  COALESCE(SUM("memBytes" / 1e9) * (5.0/60.0), 0)::FLOAT AS mem_gb_hours
 		FROM "ProjectMetric"
-		WHERE "ts" >= ?
+		WHERE "ts" >= $1
 		GROUP BY "project"
 		ORDER BY cpu_milli_hours DESC
 	`, since)

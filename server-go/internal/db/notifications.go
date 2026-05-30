@@ -12,15 +12,15 @@ import (
 // Notification mirrors the on-disk Notification row plus a typed config
 // payload derived from the type-specific columns.
 type Notification struct {
-	ID            string         `json:"id"`
-	Name          string         `json:"name"`
-	Enabled       bool           `json:"enabled"`
-	Type          string         `json:"type"`
-	Pipelines     []string       `json:"pipelines"`
-	Events        []string       `json:"events"`
-	Config        map[string]any `json:"config"`
-	CreatedAt     time.Time      `json:"createdAt"`
-	UpdatedAt     time.Time      `json:"updatedAt"`
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Enabled   bool           `json:"enabled"`
+	Type      string         `json:"type"`
+	Pipelines []string       `json:"pipelines"`
+	Events    []string       `json:"events"`
+	Config    map[string]any `json:"config"`
+	CreatedAt time.Time      `json:"createdAt"`
+	UpdatedAt time.Time      `json:"updatedAt"`
 }
 
 // ListNotifications returns every notification config.
@@ -51,7 +51,7 @@ func (d *DB) FindNotification(ctx context.Context, id string) (*Notification, er
 SELECT id, name, enabled, type, pipelines, events,
   "webhookUrl", "webhookSecret", "slackUrl", "slackChannel", "discordUrl",
   "createdAt", "updatedAt"
-FROM "Notification" WHERE id = ?`, id)
+FROM "Notification" WHERE id = $1`, id)
 	n, err := scanNotification(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -72,7 +72,7 @@ func (d *DB) CreateNotification(ctx context.Context, n *Notification) error {
 INSERT INTO "Notification" (id, name, enabled, type, pipelines, events,
   "webhookUrl", "webhookSecret", "slackUrl", "slackChannel", "discordUrl",
   "createdAt", "updatedAt")
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
 		n.ID, n.Name, n.Enabled, n.Type, string(pj), string(ej),
 		cfg.webhookURL, cfg.webhookSecret, cfg.slackURL, cfg.slackChannel, cfg.discordURL,
 		now, now,
@@ -93,10 +93,10 @@ func (d *DB) UpdateNotification(ctx context.Context, n *Notification) error {
 	ej, _ := json.Marshal(coalesceStringSlice(n.Events))
 	cfg := configCols(n.Type, n.Config)
 	res, err := d.ExecContext(ctx, `
-UPDATE "Notification" SET name = ?, enabled = ?, type = ?, pipelines = ?, events = ?,
-  "webhookUrl" = ?, "webhookSecret" = ?, "slackUrl" = ?, "slackChannel" = ?, "discordUrl" = ?,
-  "updatedAt" = ?
-WHERE id = ?`,
+UPDATE "Notification" SET name = $1, enabled = $2, type = $3, pipelines = $4, events = $5,
+  "webhookUrl" = $6, "webhookSecret" = $7, "slackUrl" = $8, "slackChannel" = $9, "discordUrl" = $10,
+  "updatedAt" = $11
+WHERE id = $12`,
 		n.Name, n.Enabled, n.Type, string(pj), string(ej),
 		cfg.webhookURL, cfg.webhookSecret, cfg.slackURL, cfg.slackChannel, cfg.discordURL,
 		prismaNow(), n.ID,
@@ -112,7 +112,7 @@ WHERE id = ?`,
 
 // DeleteNotification removes a row.
 func (d *DB) DeleteNotification(ctx context.Context, id string) error {
-	res, err := d.ExecContext(ctx, `DELETE FROM "Notification" WHERE id = ?`, id)
+	res, err := d.ExecContext(ctx, `DELETE FROM "Notification" WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("db: delete notification: %w", err)
 	}

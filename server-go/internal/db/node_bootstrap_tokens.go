@@ -23,9 +23,9 @@ import (
 )
 
 // HashJTI returns the storage form of a cleartext bootstrap-token jti.
-// We store sha256hex(jti) as the PK so a SQLite leak (backup file
-// theft, container escape, hostPath mount) doesn't hand the attacker
-// every live cluster-join credential. Cleartext jti only ever exists
+// We store sha256hex(jti) as the PK so a DB leak (backup theft, dump
+// exfiltration, replica compromise) doesn't hand the attacker every
+// live cluster-join credential. Cleartext jti only ever exists
 // on the wire and in memory at mint/redeem time.
 //
 // HashJTI is deterministic (same input → same hash) so lookups remain
@@ -118,7 +118,7 @@ func (d *DB) MintNodeBootstrapToken(ctx context.Context, t NodeBootstrapToken) e
 	_, err := d.ExecContext(ctx,
 		`INSERT INTO "NodeBootstrapToken"
 		   (jti, "createdAt", "expiresAt", "labelsJson", "nodeName", "createdBy")
-		 VALUES (?, ?, ?, ?, ?, ?)`,
+		 VALUES ($1, $2, $3, $4, $5, $6)`,
 		hashed, createdAt, t.ExpiresAt.UTC(), labelsJSON, nullableStr(t.NodeName), nullableStr(t.CreatedBy),
 	)
 	if err != nil {
@@ -139,7 +139,7 @@ func (d *DB) PeekNodeBootstrapToken(ctx context.Context, jti string) (*NodeBoots
 		        "revokedAt", "labelsJson", COALESCE("nodeName", ''), COALESCE("createdBy", ''),
 		        COALESCE("joinedNodeName", ''), "joinedAt"
 		   FROM "NodeBootstrapToken"
-		  WHERE jti = ?`, HashJTI(jti))
+		  WHERE jti = $1`, HashJTI(jti))
 	t, err := scanBootstrapToken(row)
 	if err != nil {
 		return nil, err
@@ -170,11 +170,11 @@ func (d *DB) ConsumeNodeBootstrapToken(ctx context.Context, jti, fromIP string) 
 	hashed := HashJTI(jti)
 	res, err := d.ExecContext(ctx,
 		`UPDATE "NodeBootstrapToken"
-		    SET "consumedAt" = ?, "consumedFromIp" = ?
-		  WHERE jti = ?
+		    SET "consumedAt" = $1, "consumedFromIp" = $2
+		  WHERE jti = $3
 		    AND "consumedAt" IS NULL
 		    AND "revokedAt"  IS NULL
-		    AND "expiresAt"  > ?`,
+		    AND "expiresAt"  > $4`,
 		now, fromIP, hashed, now,
 	)
 	if err != nil {
@@ -209,8 +209,8 @@ func (d *DB) ConsumeNodeBootstrapToken(ctx context.Context, jti, fromIP string) 
 func (d *DB) MarkNodeBootstrapJoined(ctx context.Context, jti, nodeName string) error {
 	_, err := d.ExecContext(ctx,
 		`UPDATE "NodeBootstrapToken"
-		    SET "joinedNodeName" = ?, "joinedAt" = ?
-		  WHERE jti = ?`,
+		    SET "joinedNodeName" = $1, "joinedAt" = $2
+		  WHERE jti = $3`,
 		nodeName, time.Now().UTC(), HashJTI(jti),
 	)
 	if err != nil {
@@ -242,7 +242,7 @@ func (d *DB) RevokeNodeBootstrapToken(ctx context.Context, jtiHashPrefix string)
 	}
 	// Resolve the prefix to a unique full hash.
 	rows, err := d.QueryContext(ctx,
-		`SELECT jti FROM "NodeBootstrapToken" WHERE jti LIKE ? || '%' LIMIT 2`,
+		`SELECT jti FROM "NodeBootstrapToken" WHERE jti LIKE $1 || '%' LIMIT 2`,
 		jtiHashPrefix,
 	)
 	if err != nil {
@@ -272,8 +272,8 @@ func (d *DB) RevokeNodeBootstrapToken(ctx context.Context, jtiHashPrefix string)
 	full := matches[0]
 	res, err := d.ExecContext(ctx,
 		`UPDATE "NodeBootstrapToken"
-		    SET "revokedAt" = ?
-		  WHERE jti = ?
+		    SET "revokedAt" = $1
+		  WHERE jti = $2
 		    AND "revokedAt" IS NULL`,
 		time.Now().UTC(), full,
 	)
@@ -296,7 +296,7 @@ func (d *DB) ListPendingNodeBootstrapTokens(ctx context.Context) ([]NodeBootstra
 		        "revokedAt", "labelsJson", COALESCE("nodeName", ''), COALESCE("createdBy", ''),
 		        COALESCE("joinedNodeName", ''), "joinedAt"
 		   FROM "NodeBootstrapToken"
-		  WHERE "consumedAt" IS NULL AND "revokedAt" IS NULL AND "expiresAt" > ?
+		  WHERE "consumedAt" IS NULL AND "revokedAt" IS NULL AND "expiresAt" > $1
 		  ORDER BY "createdAt" DESC
 		  LIMIT 200`,
 		time.Now().UTC(),
@@ -321,7 +321,7 @@ func (d *DB) ListPendingNodeBootstrapTokens(ctx context.Context) ([]NodeBootstra
 // stay around for the audit trail until the cleanup runs.
 func (d *DB) PruneNodeBootstrapTokens(ctx context.Context, before time.Time) (int, error) {
 	res, err := d.ExecContext(ctx,
-		`DELETE FROM "NodeBootstrapToken" WHERE "expiresAt" < ?`,
+		`DELETE FROM "NodeBootstrapToken" WHERE "expiresAt" < $1`,
 		before.UTC(),
 	)
 	if err != nil {
@@ -342,7 +342,7 @@ func (d *DB) peekRawByHash(ctx context.Context, jtiHash string) (*NodeBootstrapT
 		        "revokedAt", "labelsJson", COALESCE("nodeName", ''), COALESCE("createdBy", ''),
 		        COALESCE("joinedNodeName", ''), "joinedAt"
 		   FROM "NodeBootstrapToken"
-		  WHERE jti = ?`, jtiHash)
+		  WHERE jti = $1`, jtiHash)
 	return scanBootstrapToken(row)
 }
 

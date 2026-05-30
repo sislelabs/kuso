@@ -8,8 +8,8 @@
 // One row per build, keyed on the KusoBuild CR name (stable, unique
 // per build). `logs` is the joined tail; ~200 lines × ~120 chars each
 // caps each row at ~25 KB. With cluster-cap 50 active services × 100
-// builds retained, total worst-case is ~125 MB — well within the
-// SQLite file's lifecycle.
+// builds retained, total worst-case is ~125 MB — trivial for the
+// Postgres control-plane DB.
 
 package db
 
@@ -28,7 +28,7 @@ func (d *DB) SaveBuildLog(ctx context.Context, buildName, project, service, phas
 	}
 	_, err := d.ExecContext(ctx, `
 		INSERT INTO "BuildLog"("buildName","project","service","phase","logs")
-		VALUES(?, ?, ?, ?, ?)
+		VALUES($1, $2, $3, $4, $5)
 		ON CONFLICT("buildName") DO UPDATE SET
 			"project"=excluded."project",
 			"service"=excluded."service",
@@ -47,7 +47,7 @@ func (d *DB) SaveBuildLog(ctx context.Context, buildName, project, service, phas
 func (d *DB) GetBuildLog(ctx context.Context, buildName string) (string, error) {
 	var logs string
 	err := d.QueryRowContext(ctx,
-		`SELECT "logs" FROM "BuildLog" WHERE "buildName"=?`, buildName,
+		`SELECT "logs" FROM "BuildLog" WHERE "buildName"=$1`, buildName,
 	).Scan(&logs)
 	if err == sql.ErrNoRows {
 		return "", nil
@@ -63,7 +63,7 @@ func (d *DB) GetBuildLog(ctx context.Context, buildName string) (string, error) 
 // pointing at a service the user has forgotten about.
 func (d *DB) DeleteBuildLogsForService(ctx context.Context, project, service string) error {
 	_, err := d.ExecContext(ctx,
-		`DELETE FROM "BuildLog" WHERE "project"=? AND "service"=?`,
+		`DELETE FROM "BuildLog" WHERE "project"=$1 AND "service"=$2`,
 		project, service,
 	)
 	if err != nil {
@@ -81,7 +81,7 @@ func (d *DB) DeleteBuildLogsForService(ctx context.Context, project, service str
 // window are not actionable).
 func (d *DB) PruneBuildLogs(ctx context.Context, before time.Time) (int, error) {
 	res, err := d.ExecContext(ctx,
-		`DELETE FROM "BuildLog" WHERE "createdAt" < ?`,
+		`DELETE FROM "BuildLog" WHERE "createdAt" < $1`,
 		before.UTC(),
 	)
 	if err != nil {

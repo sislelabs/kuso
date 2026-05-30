@@ -60,7 +60,7 @@ func (d *DB) permissionsForRole(ctx context.Context, roleID string) ([]Permissio
 SELECT p.id, p.resource, p.action
 FROM "_PermissionToRole" pr
 JOIN "Permission" p ON p.id = pr."A"
-WHERE pr."B" = ? ORDER BY p.resource, p.action`, roleID)
+WHERE pr."B" = $1 ORDER BY p.resource, p.action`, roleID)
 	if err != nil {
 		return nil, err
 	}
@@ -99,7 +99,7 @@ func (d *DB) CreateRole(ctx context.Context, id, name, description string, perms
 		return fmt.Errorf("db: begin: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx, `
-INSERT INTO "Role" (id, name, description, "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?)`,
+INSERT INTO "Role" (id, name, description, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5)`,
 		id, name, sqlNullable(description), now, now); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("db: insert role: %w", err)
@@ -119,7 +119,7 @@ func (d *DB) UpdateRole(ctx context.Context, id, name, description string, perms
 		return fmt.Errorf("db: begin: %w", err)
 	}
 	res, err := tx.ExecContext(ctx, `
-UPDATE "Role" SET name = ?, description = ?, "updatedAt" = ? WHERE id = ?`,
+UPDATE "Role" SET name = $1, description = $2, "updatedAt" = $3 WHERE id = $4`,
 		name, sqlNullable(description), now, id)
 	if err != nil {
 		_ = tx.Rollback()
@@ -131,7 +131,7 @@ UPDATE "Role" SET name = ?, description = ?, "updatedAt" = ? WHERE id = ?`,
 	}
 	// Drop existing pivot rows + the orphan permission rows. This
 	// matches Prisma's deleteMany then recreate behaviour.
-	if _, err := tx.ExecContext(ctx, `DELETE FROM "_PermissionToRole" WHERE "B" = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM "_PermissionToRole" WHERE "B" = $1`, id); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("db: clear permissions pivot: %w", err)
 	}
@@ -148,11 +148,11 @@ func (d *DB) DeleteRole(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("db: begin: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM "_PermissionToRole" WHERE "B" = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM "_PermissionToRole" WHERE "B" = $1`, id); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("db: clear pivot: %w", err)
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM "Role" WHERE id = ?`, id)
+	res, err := tx.ExecContext(ctx, `DELETE FROM "Role" WHERE id = $1`, id)
 	if err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("db: delete role: %w", err)
@@ -176,12 +176,12 @@ func insertRolePermissions(ctx context.Context, tx *Tx, roleID string, perms []P
 		}
 		permID := mustRandomID()
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO "Permission" (id, resource, action, "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?)`,
+INSERT INTO "Permission" (id, resource, action, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5)`,
 			permID, p.Resource, p.Action, now, now); err != nil {
 			return fmt.Errorf("db: insert permission: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO "_PermissionToRole" ("A", "B") VALUES (?, ?)`, permID, roleID); err != nil {
+INSERT INTO "_PermissionToRole" ("A", "B") VALUES ($1, $2)`, permID, roleID); err != nil {
 			return fmt.Errorf("db: link permission: %w", err)
 		}
 	}

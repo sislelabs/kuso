@@ -15,10 +15,10 @@ import (
 // AlertRule kinds. We keep this list short on purpose — every kind
 // needs corresponding eval logic in the alert engine.
 const (
-	AlertKindLogMatch  = "log_match"  // count log lines matching .Query >= ThresholdInt
-	AlertKindNodeCPU   = "node_cpu"   // any node CPU > ThresholdFloat (%)
-	AlertKindNodeMem   = "node_mem"   // any node mem > ThresholdFloat (%)
-	AlertKindNodeDisk  = "node_disk"  // any node disk > ThresholdFloat (%)
+	AlertKindLogMatch = "log_match" // count log lines matching .Query >= ThresholdInt
+	AlertKindNodeCPU  = "node_cpu"  // any node CPU > ThresholdFloat (%)
+	AlertKindNodeMem  = "node_mem"  // any node mem > ThresholdFloat (%)
+	AlertKindNodeDisk = "node_disk" // any node disk > ThresholdFloat (%)
 )
 
 type AlertRule struct {
@@ -45,7 +45,7 @@ func (d *DB) CreateAlertRule(ctx context.Context, r AlertRule) error {
 	_, err := d.ExecContext(ctx, `
 		INSERT INTO "AlertRule"
 		  ("id","name","enabled","kind","project","service","query","thresholdInt","thresholdFloat","windowSeconds","severity","throttleSeconds")
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
 		r.ID, r.Name, r.Enabled, r.Kind, r.Project, r.Service, r.Query,
 		nullableInt(r.ThresholdInt), nullableFloat(r.ThresholdFloat),
 		r.WindowSeconds, r.Severity, r.ThrottleSeconds,
@@ -100,7 +100,7 @@ func (d *DB) ListAlertRules(ctx context.Context) ([]AlertRule, error) {
 }
 
 func (d *DB) DeleteAlertRule(ctx context.Context, id string) error {
-	res, err := d.ExecContext(ctx, `DELETE FROM "AlertRule" WHERE "id" = ?`, id)
+	res, err := d.ExecContext(ctx, `DELETE FROM "AlertRule" WHERE "id" = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete alert rule: %w", err)
 	}
@@ -112,7 +112,7 @@ func (d *DB) DeleteAlertRule(ctx context.Context, id string) error {
 
 // MarkAlertFired stamps lastFiredAt for throttling.
 func (d *DB) MarkAlertFired(ctx context.Context, id string, at time.Time) error {
-	_, err := d.ExecContext(ctx, `UPDATE "AlertRule" SET "lastFiredAt" = ?, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ?`, at.UTC(), id)
+	_, err := d.ExecContext(ctx, `UPDATE "AlertRule" SET "lastFiredAt" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = $2`, at.UTC(), id)
 	if err != nil {
 		return fmt.Errorf("mark fired: %w", err)
 	}
@@ -121,7 +121,7 @@ func (d *DB) MarkAlertFired(ctx context.Context, id string, at time.Time) error 
 
 // SetAlertEnabled toggles without rewriting other fields.
 func (d *DB) SetAlertEnabled(ctx context.Context, id string, on bool) error {
-	res, err := d.ExecContext(ctx, `UPDATE "AlertRule" SET "enabled" = ?, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = ?`, on, id)
+	res, err := d.ExecContext(ctx, `UPDATE "AlertRule" SET "enabled" = $1, "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = $2`, on, id)
 	if err != nil {
 		return fmt.Errorf("toggle alert: %w", err)
 	}

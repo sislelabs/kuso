@@ -43,7 +43,7 @@ func (d *DB) BootstrapAdmin(ctx context.Context, username, email, passwordHash s
 	roleID := mustRandomID()
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO "Role" (id, name, description, "createdAt", "updatedAt")
-VALUES (?, 'admin', 'Full access (auto-seeded on first boot)', ?, ?)`,
+VALUES ($1, 'admin', 'Full access (auto-seeded on first boot)', $2, $3)`,
 		roleID, now, now); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("db: bootstrap: insert role: %w", err)
@@ -71,13 +71,13 @@ VALUES (?, 'admin', 'Full access (auto-seeded on first boot)', ?, ?)`,
 	for _, p := range wildcard {
 		permID := mustRandomID()
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO "Permission" (id, resource, action, "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?)`,
+INSERT INTO "Permission" (id, resource, action, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5)`,
 			permID, p.Resource, p.Action, now, now); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("db: bootstrap: insert permission: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `
-INSERT INTO "_PermissionToRole" ("A", "B") VALUES (?, ?)`, permID, roleID); err != nil {
+INSERT INTO "_PermissionToRole" ("A", "B") VALUES ($1, $2)`, permID, roleID); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("db: bootstrap: link permission: %w", err)
 		}
@@ -86,7 +86,7 @@ INSERT INTO "_PermissionToRole" ("A", "B") VALUES (?, ?)`, permID, roleID); err 
 	userID := mustRandomID()
 	if _, err := tx.ExecContext(ctx, `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", "roleId", provider, "createdAt", "updatedAt")
-VALUES (?, ?, ?, ?, false, true, ?, 'local', ?, ?)`,
+VALUES ($1, $2, $3, $4, false, true, $5, 'local', $6, $7)`,
 		userID, username, email, passwordHash, roleID, now, now); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("db: bootstrap: insert user: %w", err)
@@ -116,8 +116,8 @@ func (d *DB) EnsureAdminGroup(ctx context.Context, seedUsername string) error {
 		groupID = "grp-bootstrap-admins"
 		now := prismaNow()
 		if _, err := d.ExecContext(ctx, `
-INSERT OR IGNORE INTO "UserGroup" (id, name, description, "instanceRole", "projectMemberships", "createdAt", "updatedAt")
-VALUES (?, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]', ?, ?)`,
+INSERT INTO "UserGroup" (id, name, description, "instanceRole", "projectMemberships", "createdAt", "updatedAt")
+VALUES ($1, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]', $2, $3) ON CONFLICT DO NOTHING`,
 			groupID, now, now); err != nil {
 			return fmt.Errorf("db: ensure admin group: %w", err)
 		}
@@ -128,16 +128,16 @@ VALUES (?, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]
 	// 2. If the group is empty AND a seed user exists, attach them.
 	var memberCount int
 	if err := d.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM "_UserToUserGroup" WHERE "B" = ?`, groupID).Scan(&memberCount); err != nil {
+		`SELECT COUNT(*) FROM "_UserToUserGroup" WHERE "B" = $1`, groupID).Scan(&memberCount); err != nil {
 		return fmt.Errorf("db: count admin group members: %w", err)
 	}
 	if memberCount == 0 && seedUsername != "" {
 		var seedID string
 		err := d.QueryRowContext(ctx,
-			`SELECT id FROM "User" WHERE username = ?`, seedUsername).Scan(&seedID)
+			`SELECT id FROM "User" WHERE username = $1`, seedUsername).Scan(&seedID)
 		if err == nil {
 			if _, err := d.ExecContext(ctx,
-				`INSERT OR IGNORE INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`,
+				`INSERT INTO "_UserToUserGroup" ("A", "B") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 				seedID, groupID); err != nil {
 				return fmt.Errorf("db: attach seed admin: %w", err)
 			}
@@ -206,7 +206,7 @@ WHERE g."instanceRole" = 'admin'
 		now := prismaNow()
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO "UserGroup" (id, name, description, "instanceRole", "projectMemberships", "createdAt", "updatedAt")
-VALUES (?, 'kuso-admins', 'instance administrators (auto-created on first login)', 'admin', '[]', ?, ?)`,
+VALUES ($1, 'kuso-admins', 'instance administrators (auto-created on first login)', 'admin', '[]', $2, $3)`,
 			groupID, now, now); err != nil {
 			return false, fmt.Errorf("db: promote: create group: %w", err)
 		}
@@ -214,7 +214,7 @@ VALUES (?, 'kuso-admins', 'instance administrators (auto-created on first login)
 		return false, fmt.Errorf("db: promote: find group: %w", err)
 	}
 	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`,
+		`INSERT INTO "_UserToUserGroup" ("A", "B") VALUES ($1, $2)`,
 		userID, groupID); err != nil {
 		return false, fmt.Errorf("db: promote: attach: %w", err)
 	}
@@ -237,7 +237,7 @@ func (d *DB) PromoteUsernameToAdmin(ctx context.Context, username string) error 
 	}
 	var userID string
 	if err := d.QueryRowContext(ctx,
-		`SELECT id FROM "User" WHERE username = ?`, username).Scan(&userID); err != nil {
+		`SELECT id FROM "User" WHERE username = $1`, username).Scan(&userID); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("db: promote: user %q not found", username)
 		}
@@ -254,14 +254,14 @@ func (d *DB) PromoteUsernameToAdmin(ctx context.Context, username string) error 
 		adminGroupID = "grp-bootstrap-admins"
 		now := prismaNow()
 		if _, err := d.ExecContext(ctx, `
-INSERT OR IGNORE INTO "UserGroup" (id, name, description, "instanceRole", "projectMemberships", "createdAt", "updatedAt")
-VALUES (?, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]', ?, ?)`,
+INSERT INTO "UserGroup" (id, name, description, "instanceRole", "projectMemberships", "createdAt", "updatedAt")
+VALUES ($1, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]', $2, $3) ON CONFLICT DO NOTHING`,
 			adminGroupID, now, now); err != nil {
 			return fmt.Errorf("db: promote: create admin group: %w", err)
 		}
 	}
 	if _, err := d.ExecContext(ctx,
-		`INSERT OR IGNORE INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`,
+		`INSERT INTO "_UserToUserGroup" ("A", "B") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
 		userID, adminGroupID); err != nil {
 		return fmt.Errorf("db: promote: attach to admin: %w", err)
 	}
@@ -271,7 +271,7 @@ VALUES (?, 'kuso-admins', 'instance administrators (auto-created)', 'admin', '[]
 	// could confuse them. Belt-and-suspenders: drop the pending row.
 	if _, err := d.ExecContext(ctx, `
 DELETE FROM "_UserToUserGroup"
-WHERE "A" = ?
+WHERE "A" = $1
 AND "B" IN (SELECT id FROM "UserGroup" WHERE "instanceRole" = 'pending')`,
 		userID); err != nil {
 		return fmt.Errorf("db: promote: clear pending: %w", err)
@@ -288,7 +288,7 @@ AND "B" IN (SELECT id FROM "UserGroup" WHERE "instanceRole" = 'pending')`,
 func (d *DB) EnsureAdminPassword(ctx context.Context, username, passwordHash string) (when time.Time, err error) {
 	now := prismaNow()
 	res, err := d.ExecContext(ctx, `
-UPDATE "User" SET password = ?, "updatedAt" = ? WHERE username = ?`, passwordHash, now, username)
+UPDATE "User" SET password = $1, "updatedAt" = $2 WHERE username = $3`, passwordHash, now, username)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("db: ensure admin password: %w", err)
 	}

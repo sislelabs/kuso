@@ -33,7 +33,7 @@ const roleV2MigrationKey = "migration.roleSystemV2"
 func (d *DB) migrateRoleSystemV2(ctx context.Context) error {
 	var done string
 	err := d.QueryRowContext(ctx,
-		`SELECT value FROM "Setting" WHERE key = ?`, roleV2MigrationKey).Scan(&done)
+		`SELECT value FROM "Setting" WHERE key = $1`, roleV2MigrationKey).Scan(&done)
 	if err == nil {
 		return nil // already migrated
 	}
@@ -66,7 +66,7 @@ func (d *DB) migrateRoleSystemV2(ctx context.Context) error {
 	// Mark done so this never re-wipes a re-granted instance.
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO "Setting" (key, value, "updatedAt", "updatedBy")
-		VALUES (?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4)
 		ON CONFLICT (key) DO NOTHING`,
 		roleV2MigrationKey, "true", time.Now().UTC(), "role-system-v2"); err != nil {
 		return fmt.Errorf("db: role-v2 mark: %w", err)
@@ -129,7 +129,7 @@ func (d *DB) AddProjectGrant(ctx context.Context, project, userID, groupID strin
 	}
 	q := fmt.Sprintf(`
 		INSERT INTO "ProjectGrant" (id, project, "userId", "groupId", "roleOverride", "createdAt")
-		VALUES (?, ?, ?, ?, ?, ?)
+		VALUES ($1, $2, $3, $4, $5, $6)
 		ON CONFLICT %s DO UPDATE SET "roleOverride" = EXCLUDED."roleOverride"
 		RETURNING id`, conflict)
 	row := d.QueryRowContext(ctx, q, id, project, uid, gid, ovr, time.Now().UTC())
@@ -146,8 +146,8 @@ func (d *DB) RemoveProjectGrant(ctx context.Context, id string) error {
 	// Capture grantee for cache eviction before deleting.
 	var uid, gid sql.NullString
 	_ = d.QueryRowContext(ctx,
-		`SELECT "userId", "groupId" FROM "ProjectGrant" WHERE id = ?`, id).Scan(&uid, &gid)
-	res, err := d.ExecContext(ctx, `DELETE FROM "ProjectGrant" WHERE id = ?`, id)
+		`SELECT "userId", "groupId" FROM "ProjectGrant" WHERE id = $1`, id).Scan(&uid, &gid)
+	res, err := d.ExecContext(ctx, `DELETE FROM "ProjectGrant" WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("db: remove project grant: %w", err)
 	}
@@ -162,7 +162,7 @@ func (d *DB) RemoveProjectGrant(ctx context.Context, id string) error {
 func (d *DB) ListProjectGrants(ctx context.Context, project string) ([]ProjectGrant, error) {
 	rows, err := d.QueryContext(ctx, `
 		SELECT id, project, "userId", "groupId", "roleOverride", "createdAt"
-		  FROM "ProjectGrant" WHERE project = ? ORDER BY "createdAt"`, project)
+		  FROM "ProjectGrant" WHERE project = $1 ORDER BY "createdAt"`, project)
 	if err != nil {
 		return nil, fmt.Errorf("db: list project grants: %w", err)
 	}
@@ -191,7 +191,7 @@ func (d *DB) ListProjectGrants(ctx context.Context, project string) ([]ProjectGr
 // role. Evicts the user's tenancy cache.
 func (d *DB) SetUserInstanceRole(ctx context.Context, userID string, role InstanceRole) error {
 	res, err := d.ExecContext(ctx,
-		`UPDATE "User" SET "instanceRole" = ?, "updatedAt" = ? WHERE id = ?`,
+		`UPDATE "User" SET "instanceRole" = $1, "updatedAt" = $2 WHERE id = $3`,
 		sqlNullable(string(role)), prismaNow(), userID)
 	if err != nil {
 		return fmt.Errorf("db: set user instance role: %w", err)

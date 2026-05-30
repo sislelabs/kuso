@@ -30,7 +30,7 @@ func (d *DB) MintOAuthState(ctx context.Context, state, redirectTo string) error
 	}
 	_, err := d.ExecContext(ctx,
 		`INSERT INTO "OAuthState" (state, "createdAt", consumed, "redirectTo")
-		 VALUES (?, ?, false, ?)`,
+		 VALUES ($1, $2, false, $3)`,
 		state, time.Now().UTC(), redirectTo,
 	)
 	if err != nil {
@@ -58,9 +58,9 @@ func (d *DB) ConsumeOAuthState(ctx context.Context, state string, maxAge time.Du
 	res, err := d.ExecContext(ctx,
 		`UPDATE "OAuthState"
 		   SET consumed = true
-		 WHERE state = ?
+		 WHERE state = $1
 		   AND consumed = false
-		   AND "createdAt" >= ?`,
+		   AND "createdAt" >= $2`,
 		state, cutoff,
 	)
 	if err != nil {
@@ -79,7 +79,7 @@ func (d *DB) ConsumeOAuthState(ctx context.Context, state string, maxAge time.Du
 // PruneOAuthStates deletes rows older than `before`. Called from the
 // daily cleanup goroutine to keep the table small.
 func (d *DB) PruneOAuthStates(ctx context.Context, before time.Time) (int, error) {
-	res, err := d.ExecContext(ctx, `DELETE FROM "OAuthState" WHERE "createdAt" < ?`, before.UTC())
+	res, err := d.ExecContext(ctx, `DELETE FROM "OAuthState" WHERE "createdAt" < $1`, before.UTC())
 	if err != nil {
 		return 0, fmt.Errorf("PruneOAuthStates: %w", err)
 	}

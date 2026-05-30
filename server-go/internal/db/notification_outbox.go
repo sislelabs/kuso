@@ -59,7 +59,7 @@ func (d *DB) EnqueueOutbox(ctx context.Context, notificationID string, eventType
 	err := d.QueryRowContext(ctx, `
 		INSERT INTO "NotificationOutbox"
 			("notificationId", "eventType", "payload")
-		VALUES (?, ?, ?)
+		VALUES ($1, $2, $3)
 		RETURNING "id"
 	`, notificationID, eventType, payload).Scan(&id)
 	if err != nil {
@@ -91,7 +91,7 @@ func (d *DB) ClaimOutboxRow(ctx context.Context) (*Tx, *OutboxRow, error) {
 		FROM "NotificationOutbox"
 		WHERE "deliveredAt" IS NULL
 		  AND "nextAttemptAt" <= CURRENT_TIMESTAMP
-		  AND "attempts" < ?
+		  AND "attempts" < $1
 		ORDER BY "nextAttemptAt" ASC
 		LIMIT 1
 		FOR UPDATE SKIP LOCKED
@@ -117,16 +117,15 @@ func (d *DB) ClaimOutboxRow(ctx context.Context) (*Tx, *OutboxRow, error) {
 // commit the row stays in the table (operators can audit successful
 // deliveries) until the daily cleanup goroutine prunes it.
 //
-// Receives the kuso wrapper *Tx (not *sql.Tx) so its ExecContext
-// hits the SQLite→Postgres `?`→`$N` placeholder rewriter — without
-// that, the `WHERE "id" = ?` here lands as `WHERE "id" = ?` and
-// lib/pq errors with "syntax error at end of input".
+// Receives the kuso wrapper *Tx (not *sql.Tx); either works now that
+// queries are native `$N`, but the wrapper keeps the write-error
+// counter consistent with the rest of the package.
 func (d *DB) MarkOutboxDelivered(ctx context.Context, tx *Tx, id int64) error {
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE "NotificationOutbox"
 		SET "deliveredAt" = CURRENT_TIMESTAMP,
 		    "lastError" = NULL
-		WHERE "id" = ?
+		WHERE "id" = $1
 	`, id); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("mark delivered: %w", err)
@@ -141,9 +140,9 @@ func (d *DB) MarkOutboxAttempt(ctx context.Context, tx *Tx, id int64, errMsg str
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE "NotificationOutbox"
 		SET "attempts" = "attempts" + 1,
-		    "lastError" = ?,
-		    "nextAttemptAt" = ?
-		WHERE "id" = ?
+		    "lastError" = $1,
+		    "nextAttemptAt" = $2
+		WHERE "id" = $3
 	`, errMsg, nextAttemptAt.UTC().Format("2006-01-02 15:04:05.999999"), id); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("mark attempt: %w", err)
@@ -159,7 +158,7 @@ func (d *DB) PruneOutboxDelivered(ctx context.Context, before time.Time) (int64,
 	res, err := d.ExecContext(ctx, `
 		DELETE FROM "NotificationOutbox"
 		WHERE "deliveredAt" IS NOT NULL
-		  AND "deliveredAt" < ?
+		  AND "deliveredAt" < $1
 	`, before.UTC().Format("2006-01-02 15:04:05"))
 	if err != nil {
 		return 0, fmt.Errorf("prune outbox: %w", err)
@@ -177,7 +176,7 @@ func (d *DB) CountOutboxPending(ctx context.Context) (int, error) {
 	row := d.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM "NotificationOutbox"
 		WHERE "deliveredAt" IS NULL
-		  AND "attempts" < ?
+		  AND "attempts" < $1
 	`, MaxOutboxAttempts)
 	var n int
 	if err := row.Scan(&n); err != nil {
@@ -193,7 +192,7 @@ func (d *DB) CountOutboxDead(ctx context.Context) (int, error) {
 	row := d.QueryRowContext(ctx, `
 		SELECT COUNT(*) FROM "NotificationOutbox"
 		WHERE "deliveredAt" IS NULL
-		  AND "attempts" >= ?
+		  AND "attempts" >= $1
 	`, MaxOutboxAttempts)
 	var n int
 	if err := row.Scan(&n); err != nil {

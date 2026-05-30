@@ -126,7 +126,7 @@ func (d *DB) ListAudit(ctx context.Context, limit int) ([]AuditEntry, error) {
 	// Quoted ("user") references the column.
 	rows, err := d.QueryContext(ctx, `
 SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
-FROM "Audit" ORDER BY id DESC LIMIT ?`, limit)
+FROM "Audit" ORDER BY id DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, fmt.Errorf("db: list audit: %w", err)
 	}
@@ -145,4 +145,3 @@ FROM "Audit" ORDER BY id DESC LIMIT ?`, limit)
 	}
 	return out, rows.Err()
 }
-

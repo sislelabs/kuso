@@ -4,10 +4,12 @@
 // and we use the matching private half to connect. Same key can be
 // reused across multiple node joins.
 //
-// Why store the private key in SQLite instead of a kube Secret: kuso-
-// server is single-replica + has its own SQLite PVC; the keys live on
-// the same node anyway. A kube Secret would add a hop without changing
-// the security model.
+// Why store the private key in the control-plane DB instead of a kube
+// Secret: kuso-server already holds every other join credential
+// (bootstrap-token hashes, installation tokens) in Postgres, so the
+// blast radius is identical — a DB compromise already owns the
+// cluster. A kube Secret would add a hop without changing the security
+// model.
 
 package db
 
@@ -33,7 +35,7 @@ type SSHKey struct {
 func (d *DB) CreateSSHKey(ctx context.Context, k SSHKey) error {
 	_, err := d.ExecContext(ctx, `
 		INSERT INTO "SSHKey" ("id","name","publicKey","privateKey","fingerprint")
-		VALUES (?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5)`,
 		k.ID, k.Name, k.PublicKey, k.PrivateKey, k.Fingerprint,
 	)
 	if err != nil {
@@ -72,7 +74,7 @@ func (d *DB) ListSSHKeys(ctx context.Context) ([]SSHKey, error) {
 func (d *DB) GetSSHKey(ctx context.Context, id string) (*SSHKey, error) {
 	row := d.QueryRowContext(ctx, `
 		SELECT "id","name","publicKey","privateKey","fingerprint","createdAt"
-		FROM "SSHKey" WHERE "id" = ?`, id)
+		FROM "SSHKey" WHERE "id" = $1`, id)
 	var k SSHKey
 	var ts sql.NullTime
 	if err := row.Scan(&k.ID, &k.Name, &k.PublicKey, &k.PrivateKey, &k.Fingerprint, &ts); err != nil {
@@ -90,7 +92,7 @@ func (d *DB) GetSSHKey(ctx context.Context, id string) (*SSHKey, error) {
 // DeleteSSHKey removes a key. Doesn't cascade — joined nodes don't
 // need the key after install (k3s agent has its own kube creds).
 func (d *DB) DeleteSSHKey(ctx context.Context, id string) error {
-	res, err := d.ExecContext(ctx, `DELETE FROM "SSHKey" WHERE "id" = ?`, id)
+	res, err := d.ExecContext(ctx, `DELETE FROM "SSHKey" WHERE "id" = $1`, id)
 	if err != nil {
 		return fmt.Errorf("delete ssh key: %w", err)
 	}

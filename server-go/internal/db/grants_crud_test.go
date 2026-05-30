@@ -10,7 +10,7 @@ func seedUser(t *testing.T, d *DB, id string) {
 	t.Helper()
 	if _, err := d.ExecContext(context.Background(), `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", provider, "createdAt", "updatedAt")
-VALUES (?, ?, ?, 'h', false, true, 'local', NOW(), NOW())`, id, id, id+"@x"); err != nil {
+VALUES ($1, $2, $3, 'h', false, true, 'local', NOW(), NOW())`, id, id, id+"@x"); err != nil {
 		t.Fatalf("seed user %s: %v", id, err)
 	}
 }
@@ -191,7 +191,7 @@ func TestRoleV2Migration_WipesNonAdmins(t *testing.T) {
 
 	// openTestDB already ran the migration once (marker is set). Reset the
 	// marker so we can drive the migration against seeded legacy data.
-	if _, err := d.ExecContext(ctx, `DELETE FROM "Setting" WHERE key = ?`, roleV2MigrationKey); err != nil {
+	if _, err := d.ExecContext(ctx, `DELETE FROM "Setting" WHERE key = $1`, roleV2MigrationKey); err != nil {
 		t.Fatalf("clear marker: %v", err)
 	}
 	seedGroupWithRole(t, d, "admins", InstanceRoleAdmin)

@@ -11,13 +11,13 @@ import (
 
 // GithubInstallation mirrors the Prisma GithubInstallation model.
 type GithubInstallation struct {
-	ID              int64
-	AccountLogin    string
-	AccountType     string
-	AccountID       int64
+	ID               int64
+	AccountLogin     string
+	AccountType      string
+	AccountID        int64
 	RepositoriesJSON string // JSON-encoded []GithubRepo
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // GithubRepo is the cached repo shape stored in
@@ -55,7 +55,7 @@ func (d *DB) UpsertGithubInstallation(ctx context.Context, in GithubInstallation
 	}
 	_, err := d.ExecContext(ctx, `
 INSERT INTO "GithubInstallation" (id, "accountLogin", "accountType", "accountId", "repositoriesJson", "createdAt", "updatedAt")
-VALUES (?, ?, ?, ?, ?, ?, ?)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT(id) DO UPDATE SET
   "accountLogin" = excluded."accountLogin",
   "accountType" = excluded."accountType",
@@ -81,7 +81,7 @@ func (d *DB) SetGithubInstallationRepos(ctx context.Context, id int64, repos []G
 		return fmt.Errorf("db: encode repos: %w", err)
 	}
 	res, err := d.ExecContext(ctx, `
-UPDATE "GithubInstallation" SET "repositoriesJson" = ?, "updatedAt" = ? WHERE id = ?`,
+UPDATE "GithubInstallation" SET "repositoriesJson" = $1, "updatedAt" = $2 WHERE id = $3`,
 		string(body), prismaNow(), id)
 	if err != nil {
 		return fmt.Errorf("db: set installation repos: %w", err)
@@ -94,7 +94,7 @@ UPDATE "GithubInstallation" SET "repositoriesJson" = ?, "updatedAt" = ? WHERE id
 
 // DeleteGithubInstallation removes an installation row.
 func (d *DB) DeleteGithubInstallation(ctx context.Context, id int64) error {
-	if _, err := d.ExecContext(ctx, `DELETE FROM "GithubInstallation" WHERE id = ?`, id); err != nil {
+	if _, err := d.ExecContext(ctx, `DELETE FROM "GithubInstallation" WHERE id = $1`, id); err != nil {
 		return fmt.Errorf("db: delete github installation: %w", err)
 	}
 	return nil
@@ -126,7 +126,7 @@ FROM "GithubInstallation" ORDER BY "accountLogin"`)
 // GithubInstallationRepos returns the cached repos for one installation.
 func (d *DB) GithubInstallationRepos(ctx context.Context, id int64) ([]GithubRepo, error) {
 	var raw string
-	err := d.QueryRowContext(ctx, `SELECT "repositoriesJson" FROM "GithubInstallation" WHERE id = ?`, id).Scan(&raw)
+	err := d.QueryRowContext(ctx, `SELECT "repositoriesJson" FROM "GithubInstallation" WHERE id = $1`, id).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -154,7 +154,7 @@ func (d *DB) UpsertGithubUserLink(ctx context.Context, link GithubUserLink) erro
 	}
 	_, err := d.ExecContext(ctx, `
 INSERT INTO "GithubUserLink" (id, "userId", "githubLogin", "githubId", "accessToken", "createdAt", "updatedAt")
-VALUES (?, ?, ?, ?, ?, ?, ?)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
 ON CONFLICT("userId") DO UPDATE SET
   "githubLogin" = excluded."githubLogin",
   "githubId" = excluded."githubId",

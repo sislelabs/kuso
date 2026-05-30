@@ -102,7 +102,7 @@ func (d *DB) runpackPhase(ctx context.Context, id string) (*RunpackPhase, error)
 	var secID string
 	err := d.QueryRowContext(ctx, `
 SELECT id, repository, tag, command, "readOnlyAppStorage", "securityContextId"
-FROM "RunpackPhase" WHERE id = ?`, id).Scan(&p.ID, &p.Repository, &p.Tag, &p.Command, &p.ReadOnlyAppStorage, &secID)
+FROM "RunpackPhase" WHERE id = $1`, id).Scan(&p.ID, &p.Repository, &p.Tag, &p.Command, &p.ReadOnlyAppStorage, &secID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -121,7 +121,7 @@ func (d *DB) securityContext(ctx context.Context, id string) (*RunpackSecurityCo
 	var c RunpackSecurityContext
 	err := d.QueryRowContext(ctx, `
 SELECT id, "runAsUser", "runAsGroup", "runAsNonRoot", "readOnlyRootFilesystem", "allowPrivilegeEscalation"
-FROM "SecurityContext" WHERE id = ?`, id).Scan(&c.ID, &c.RunAsUser, &c.RunAsGroup, &c.RunAsNonRoot, &c.ReadOnlyRootFilesystem, &c.AllowPrivilegeEscalation)
+FROM "SecurityContext" WHERE id = $1`, id).Scan(&c.ID, &c.RunAsUser, &c.RunAsGroup, &c.RunAsNonRoot, &c.ReadOnlyRootFilesystem, &c.AllowPrivilegeEscalation)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
@@ -136,7 +136,7 @@ FROM "SecurityContext" WHERE id = ?`, id).Scan(&c.ID, &c.RunAsUser, &c.RunAsGrou
 SELECT ca.value
 FROM "Capability" cap
 JOIN "CapabilityAdd" ca ON ca."capabilityId" = cap.id
-WHERE cap."securityCtxId" = ?`, id)
+WHERE cap."securityCtxId" = $1`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -152,7 +152,7 @@ WHERE cap."securityCtxId" = ?`, id)
 SELECT cd.value
 FROM "Capability" cap
 JOIN "CapabilityDrop" cd ON cd."capabilityId" = cap.id
-WHERE cap."securityCtxId" = ?`, id)
+WHERE cap."securityCtxId" = $1`, id)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +172,7 @@ WHERE cap."securityCtxId" = ?`, id)
 // land per-row to keep the foreign keys quiet.
 func (d *DB) DeleteRunpack(ctx context.Context, id string) error {
 	var fetchID, buildID, runID string
-	err := d.QueryRowContext(ctx, `SELECT "fetchId", "buildId", "runId" FROM "Runpack" WHERE id = ?`, id).
+	err := d.QueryRowContext(ctx, `SELECT "fetchId", "buildId", "runId" FROM "Runpack" WHERE id = $1`, id).
 		Scan(&fetchID, &buildID, &runID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
@@ -180,11 +180,11 @@ func (d *DB) DeleteRunpack(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("db: read runpack: %w", err)
 	}
-	if _, err := d.ExecContext(ctx, `DELETE FROM "Runpack" WHERE id = ?`, id); err != nil {
+	if _, err := d.ExecContext(ctx, `DELETE FROM "Runpack" WHERE id = $1`, id); err != nil {
 		return fmt.Errorf("db: delete runpack: %w", err)
 	}
 	for _, pid := range []string{fetchID, buildID, runID} {
-		_, _ = d.ExecContext(ctx, `DELETE FROM "RunpackPhase" WHERE id = ?`, pid)
+		_, _ = d.ExecContext(ctx, `DELETE FROM "RunpackPhase" WHERE id = $1`, pid)
 	}
 	return nil
 }
@@ -217,7 +217,7 @@ func (d *DB) CreatePodSize(ctx context.Context, p *PodSize) error {
 	now := prismaNow()
 	_, err := d.ExecContext(ctx, `
 INSERT INTO "PodSize" (id, name, "cpuLimit", "memoryLimit", "cpuRequest", "memoryRequest", description, "createdAt", "updatedAt")
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		p.ID, p.Name, p.CPULimit, p.MemoryLimit, p.CPURequest, p.MemoryRequest, p.Description, now, now,
 	)
 	if err != nil {
@@ -230,8 +230,8 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 func (d *DB) UpdatePodSize(ctx context.Context, p *PodSize) error {
 	now := prismaNow()
 	res, err := d.ExecContext(ctx, `
-UPDATE "PodSize" SET name = ?, "cpuLimit" = ?, "memoryLimit" = ?, "cpuRequest" = ?, "memoryRequest" = ?, description = ?, "updatedAt" = ?
-WHERE id = ?`,
+UPDATE "PodSize" SET name = $1, "cpuLimit" = $2, "memoryLimit" = $3, "cpuRequest" = $4, "memoryRequest" = $5, description = $6, "updatedAt" = $7
+WHERE id = $8`,
 		p.Name, p.CPULimit, p.MemoryLimit, p.CPURequest, p.MemoryRequest, p.Description, now, p.ID,
 	)
 	if err != nil {
@@ -245,7 +245,7 @@ WHERE id = ?`,
 
 // DeletePodSize removes a PodSize.
 func (d *DB) DeletePodSize(ctx context.Context, id string) error {
-	res, err := d.ExecContext(ctx, `DELETE FROM "PodSize" WHERE id = ?`, id)
+	res, err := d.ExecContext(ctx, `DELETE FROM "PodSize" WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("db: delete pod size: %w", err)
 	}

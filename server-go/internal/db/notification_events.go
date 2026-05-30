@@ -3,7 +3,7 @@
 // recent N entries — independent of whether the operator wired up a
 // webhook / Discord / Slack sink. Retention is rows-not-time: prune
 // the oldest beyond a cap so a noisy cluster doesn't unboundedly
-// grow the SQLite file.
+// grow the table.
 
 package db
 
@@ -50,7 +50,7 @@ const notificationEventCap = 200
 // rows on a long-running cluster with low event volume.
 func (d *DB) PruneNotificationEvents(ctx context.Context, before time.Time) (int64, error) {
 	res, err := d.ExecContext(ctx,
-		`DELETE FROM "NotificationEvent" WHERE "createdAt" < ?`,
+		`DELETE FROM "NotificationEvent" WHERE "createdAt" < $1`,
 		before.UTC().Format("2006-01-02 15:04:05"),
 	)
 	if err != nil {
@@ -100,7 +100,7 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO "NotificationEvent" ("type","title","body","severity","project","service","url","extra","classification")
-		VALUES (?,?,?,?,?,?,?,?,?)`,
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
 		e.Type, e.Title, e.Body, e.Severity, e.Project, e.Service, e.URL, extraJSON, classification,
 	); err != nil {
 		return fmt.Errorf("insert notification event: %w", err)
@@ -119,7 +119,7 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 		WHERE "id" < (
 			SELECT "id" FROM "NotificationEvent"
 			ORDER BY "id" DESC
-			LIMIT 1 OFFSET ?
+			LIMIT 1 OFFSET $1
 		)`, notificationEventCap); err != nil {
 		// Don't roll back over a pruning failure — the INSERT is the
 		// load-bearing part. Commit what we have and accept the
@@ -147,7 +147,7 @@ func (d *DB) ListNotificationEvents(ctx context.Context, limit int, unreadOnly b
 	if unreadOnly {
 		q += ` WHERE "readAt" IS NULL`
 	}
-	q += ` ORDER BY "id" DESC LIMIT ?`
+	q += ` ORDER BY "id" DESC LIMIT $1`
 	rows, err := d.QueryContext(ctx, q, limit)
 	if err != nil {
 		return nil, fmt.Errorf("list notification events: %w", err)

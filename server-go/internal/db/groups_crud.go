@@ -15,7 +15,7 @@ func (d *DB) CreateGroup(ctx context.Context, id, name, description string) erro
 	}
 	now := prismaNow()
 	_, err := d.ExecContext(ctx, `
-INSERT INTO "UserGroup" (id, name, description, "createdAt", "updatedAt") VALUES (?, ?, ?, ?, ?)`,
+INSERT INTO "UserGroup" (id, name, description, "createdAt", "updatedAt") VALUES ($1, $2, $3, $4, $5)`,
 		id, name, sqlNullable(description), now, now,
 	)
 	if err != nil {
@@ -30,7 +30,7 @@ INSERT INTO "UserGroup" (id, name, description, "createdAt", "updatedAt") VALUES
 // in queries.go.
 func (d *DB) GetGroup(ctx context.Context, id string) (*Group, error) {
 	row := d.QueryRowContext(ctx,
-		`SELECT id, name, description FROM "UserGroup" WHERE id = ?`, id)
+		`SELECT id, name, description FROM "UserGroup" WHERE id = $1`, id)
 	var g Group
 	if err := row.Scan(&g.ID, &g.Name, &g.Description); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -58,7 +58,7 @@ func (d *DB) AddUserToPendingGroup(ctx context.Context, userID string) error {
 // UpdateGroup replaces name + description.
 func (d *DB) UpdateGroup(ctx context.Context, id, name, description string) error {
 	res, err := d.ExecContext(ctx, `
-UPDATE "UserGroup" SET name = ?, description = ?, "updatedAt" = ? WHERE id = ?`,
+UPDATE "UserGroup" SET name = $1, description = $2, "updatedAt" = $3 WHERE id = $4`,
 		name, sqlNullable(description), prismaNow(), id,
 	)
 	if err != nil {
@@ -127,7 +127,7 @@ func (d *DB) GetGroupTenancy(ctx context.Context, groupID string) (*GroupTenancy
 	var role string
 	var memJSON string
 	err := d.QueryRowContext(ctx,
-		`SELECT "instanceRole", "projectMemberships" FROM "UserGroup" WHERE id = ?`, groupID).
+		`SELECT "instanceRole", "projectMemberships" FROM "UserGroup" WHERE id = $1`, groupID).
 		Scan(&role, &memJSON)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -155,7 +155,7 @@ func (d *DB) SetGroupTenancy(ctx context.Context, groupID string, t GroupTenancy
 		return fmt.Errorf("db: encode projectMemberships: %w", err)
 	}
 	res, err := d.ExecContext(ctx,
-		`UPDATE "UserGroup" SET "instanceRole" = ?, "projectMemberships" = ?, "updatedAt" = ? WHERE id = ?`,
+		`UPDATE "UserGroup" SET "instanceRole" = $1, "projectMemberships" = $2, "updatedAt" = $3 WHERE id = $4`,
 		string(t.InstanceRole), string(memBytes), prismaNow(), groupID)
 	if err != nil {
 		return fmt.Errorf("db: set group tenancy: %w", err)
@@ -197,7 +197,7 @@ func (d *DB) ListUserTenancy(ctx context.Context, userID string) (GroupTenancy, 
 
 	var directRole sql.NullString
 	if err := d.QueryRowContext(ctx,
-		`SELECT "instanceRole" FROM "User" WHERE id = ?`, userID).Scan(&directRole); err != nil {
+		`SELECT "instanceRole" FROM "User" WHERE id = $1`, userID).Scan(&directRole); err != nil {
 		if !errors.Is(err, sql.ErrNoRows) {
 			return GroupTenancy{}, fmt.Errorf("db: user instance role: %w", err)
 		}
@@ -210,7 +210,7 @@ func (d *DB) ListUserTenancy(ctx context.Context, userID string) (GroupTenancy, 
 SELECT g."instanceRole"
 FROM "UserGroup" g
 JOIN "_UserToUserGroup" m ON m."B" = g.id
-WHERE m."A" = ?`, userID)
+WHERE m."A" = $1`, userID)
 	if err != nil {
 		return GroupTenancy{}, fmt.Errorf("db: list user groups: %w", err)
 	}
@@ -233,8 +233,8 @@ WHERE m."A" = ?`, userID)
 	pgRows, err := d.QueryContext(ctx, `
 SELECT pg.project, pg."roleOverride"
 FROM "ProjectGrant" pg
-WHERE pg."userId" = ?
-   OR pg."groupId" IN (SELECT m."B" FROM "_UserToUserGroup" m WHERE m."A" = ?)`,
+WHERE pg."userId" = $1
+   OR pg."groupId" IN (SELECT m."B" FROM "_UserToUserGroup" m WHERE m."A" = $2)`,
 		userID, userID)
 	if err != nil {
 		return GroupTenancy{}, fmt.Errorf("db: list project grants: %w", err)
@@ -307,7 +307,7 @@ func rankProject(r ProjectRole) int {
 // pending group without caring whether the row already exists.
 func (d *DB) AddUserToGroup(ctx context.Context, userID, groupID string) error {
 	_, err := d.ExecContext(ctx, `
-INSERT OR IGNORE INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`, userID, groupID)
+INSERT INTO "_UserToUserGroup" ("A", "B") VALUES ($1, $2) ON CONFLICT DO NOTHING`, userID, groupID)
 	if err != nil {
 		return fmt.Errorf("db: add user %s to group %s: %w", userID, groupID, err)
 	}
@@ -319,7 +319,7 @@ INSERT OR IGNORE INTO "_UserToUserGroup" ("A", "B") VALUES (?, ?)`, userID, grou
 // "remove from group" in the UI editor.
 func (d *DB) RemoveUserFromGroup(ctx context.Context, userID, groupID string) error {
 	_, err := d.ExecContext(ctx, `
-DELETE FROM "_UserToUserGroup" WHERE "A" = ? AND "B" = ?`, userID, groupID)
+DELETE FROM "_UserToUserGroup" WHERE "A" = $1 AND "B" = $2`, userID, groupID)
 	if err != nil {
 		return fmt.Errorf("db: remove user %s from group %s: %w", userID, groupID, err)
 	}
@@ -333,11 +333,11 @@ func (d *DB) DeleteGroup(ctx context.Context, id string) error {
 	if err != nil {
 		return fmt.Errorf("db: begin: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM "_UserToUserGroup" WHERE "B" = ?`, id); err != nil {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM "_UserToUserGroup" WHERE "B" = $1`, id); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("db: clear membership: %w", err)
 	}
-	res, err := tx.ExecContext(ctx, `DELETE FROM "UserGroup" WHERE id = ?`, id)
+	res, err := tx.ExecContext(ctx, `DELETE FROM "UserGroup" WHERE id = $1`, id)
 	if err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("db: delete group: %w", err)

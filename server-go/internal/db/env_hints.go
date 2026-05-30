@@ -33,7 +33,7 @@ func (d *DB) UpsertEnvHints(ctx context.Context, hints []EnvHint) error {
 	defer tx.Rollback()
 	stmt, err := tx.PrepareContext(ctx, `
 INSERT INTO "EnvHint" ("project","service","name","lastLine","lastSeen")
-VALUES (?, ?, ?, ?, ?)
+VALUES ($1, $2, $3, $4, $5)
 ON CONFLICT ("project","service","name") DO UPDATE SET
   "lastLine" = EXCLUDED."lastLine",
   "lastSeen" = EXCLUDED."lastSeen"`)
@@ -56,7 +56,7 @@ func (d *DB) ListEnvHints(ctx context.Context, project, service string) ([]EnvHi
 	rows, err := d.QueryContext(ctx, `
 SELECT "project", "service", "name", "lastLine", "lastSeen"
 FROM "EnvHint"
-WHERE "project" = ? AND "service" = ?
+WHERE "project" = $1 AND "service" = $2
 ORDER BY "lastSeen" DESC
 LIMIT 50`, project, service)
 	if err != nil {
@@ -78,7 +78,7 @@ LIMIT 50`, project, service)
 // var (so the badge clears immediately) or dismisses it explicitly.
 func (d *DB) DeleteEnvHint(ctx context.Context, project, service, name string) error {
 	_, err := d.ExecContext(ctx, `
-DELETE FROM "EnvHint" WHERE "project" = ? AND "service" = ? AND "name" = ?`,
+DELETE FROM "EnvHint" WHERE "project" = $1 AND "service" = $2 AND "name" = $3`,
 		project, service, name)
 	if err != nil {
 		return fmt.Errorf("db: delete env hint: %w", err)

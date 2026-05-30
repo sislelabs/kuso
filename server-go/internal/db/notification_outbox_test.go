@@ -75,7 +75,7 @@ func TestOutboxAttemptBumpsScheduling(t *testing.T) {
 	}
 
 	// Verify the row state via a manual SELECT.
-	row2 := d.QueryRowContext(ctx, `SELECT "attempts", "lastError" FROM "NotificationOutbox" WHERE "id" = ?`, id)
+	row2 := d.QueryRowContext(ctx, `SELECT "attempts", "lastError" FROM "NotificationOutbox" WHERE "id" = $1`, id)
 	var attempts int
 	var lastErr string
 	if err := row2.Scan(&attempts, &lastErr); err != nil {
