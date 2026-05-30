@@ -282,23 +282,70 @@ func toBuildSummary(b kube.KusoBuild) buildSummary {
 	return out
 }
 
-// List returns the builds for a service, newest first.
+// List returns the builds for a service, newest first. It unions the
+// live KusoBuild CRs with the durable BuildRecord archive so the
+// Deployments tab still shows past builds after the retention cleanup
+// deletes their CRs. A live CR always wins over an archived record with
+// the same build name (it's the fresher source — phase may have
+// advanced since the archive snapshot). CRs are inherently newest, so
+// they sort to the top; archived-only records follow, ordered by the
+// archive's createdAt DESC.
 func (h *BuildsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := buildsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+	project := chi.URLParam(r, "project")
+	service := chi.URLParam(r, "service")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
-	raw, err := h.Svc.List(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"))
+	raw, err := h.Svc.List(ctx, project, service)
 	if err != nil {
 		h.fail(w, "list builds", err)
 		return
 	}
 	out := make([]buildSummary, 0, len(raw))
+	live := make(map[string]bool, len(raw))
 	for _, b := range raw {
 		out = append(out, toBuildSummary(b))
+		live[b.Name] = true
+	}
+	// Backfill from the archive: any record whose CR is gone. Best-effort
+	// — if the DB read fails we still return the live builds rather than
+	// erroring the whole tab. h.DB may be nil in stripped test wiring.
+	if h.DB != nil {
+		records, rerr := h.DB.ListBuildRecords(ctx, project, service)
+		if rerr != nil {
+			h.Logger.Warn("list builds: archive read", "project", project, "service", service, "err", rerr)
+		} else {
+			for _, rec := range records {
+				if live[rec.BuildName] {
+					continue // live CR is authoritative
+				}
+				out = append(out, recordToSummary(rec))
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// recordToSummary maps an archived db.BuildRecord to the same wire shape
+// a live CR produces, so the client can't tell a backfilled build from
+// a live one.
+func recordToSummary(r db.BuildRecord) buildSummary {
+	return buildSummary{
+		ID:              r.BuildName,
+		ServiceName:     r.Service,
+		Branch:          r.Branch,
+		CommitSha:       r.CommitSha,
+		CommitMessage:   r.CommitMessage,
+		ImageTag:        r.ImageTag,
+		Status:          r.Status,
+		StartedAt:       r.StartedAt,
+		FinishedAt:      r.FinishedAt,
+		TriggeredBy:     r.TriggeredBy,
+		TriggeredByUser: r.TriggeredByUser,
+		ErrorMessage:    r.ErrorMessage,
+	}
 }
 
 // Create triggers a new build for the service. Body: {branch?, ref?}.

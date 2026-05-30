@@ -27,11 +27,9 @@ import (
 	"kuso/server/internal/buildcontroller"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
-	"kuso/server/internal/cronwatch"
 	"kuso/server/internal/crons"
-	"kuso/server/internal/runs"
+	"kuso/server/internal/cronwatch"
 	"kuso/server/internal/db"
-	"kuso/server/internal/releaserun"
 	"kuso/server/internal/errorscan"
 	ghpkg "kuso/server/internal/github"
 	"kuso/server/internal/health"
@@ -44,13 +42,15 @@ import (
 	"kuso/server/internal/logship"
 	"kuso/server/internal/metrics"
 	"kuso/server/internal/nodemetrics"
-	"kuso/server/internal/projectmetrics"
 	"kuso/server/internal/nodewatch"
 	"kuso/server/internal/notify"
 	"kuso/server/internal/platformharden"
 	"kuso/server/internal/previewdb"
+	"kuso/server/internal/projectmetrics"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/projectsecrets"
+	"kuso/server/internal/releaserun"
+	"kuso/server/internal/runs"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/serverstate"
 	"kuso/server/internal/spec"
@@ -603,7 +603,7 @@ func main() {
 					Interval:      5 * time.Second,
 					Logger:        logger,
 					Notifier:      notifyAdapter{notifyDisp},
-					LogArchive:    database,
+					LogArchive:    buildArchiveAdapter{database},
 					ReleaseRunner: releaserun.New(kc),
 				}).Run(workCtx)
 			}
@@ -1320,6 +1320,34 @@ func (a notifyAdapter) Emit(e builds.EventEnvelope) {
 		Fields:         fields,
 		Footer:         e.Footer,
 		Classification: e.Classification,
+	})
+}
+
+// buildArchiveAdapter satisfies builds.LogArchiver by delegating to the
+// DB. SaveBuildLog passes through; SaveBuildRecord converts the
+// builds-package record shape to db.BuildRecord (the two packages can't
+// share the type without a dependency cycle).
+type buildArchiveAdapter struct{ d *db.DB }
+
+func (a buildArchiveAdapter) SaveBuildLog(ctx context.Context, buildName, project, service, phase, logs string) error {
+	return a.d.SaveBuildLog(ctx, buildName, project, service, phase, logs)
+}
+
+func (a buildArchiveAdapter) SaveBuildRecord(ctx context.Context, r builds.BuildArchiveRecord) error {
+	return a.d.SaveBuildRecord(ctx, db.BuildRecord{
+		BuildName:       r.BuildName,
+		Project:         r.Project,
+		Service:         r.Service,
+		Branch:          r.Branch,
+		CommitSha:       r.CommitSha,
+		CommitMessage:   r.CommitMessage,
+		ImageTag:        r.ImageTag,
+		Status:          r.Status,
+		StartedAt:       r.StartedAt,
+		FinishedAt:      r.FinishedAt,
+		TriggeredBy:     r.TriggeredBy,
+		TriggeredByUser: r.TriggeredByUser,
+		ErrorMessage:    r.ErrorMessage,
 	})
 }
 

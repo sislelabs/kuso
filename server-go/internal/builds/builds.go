@@ -89,11 +89,11 @@ const RegistryHost = "kuso-registry.kuso.svc.cluster.local:5000"
 // reconcile. Keys are namespaced under kuso.sislelabs.com/build-* so
 // they don't collide with anything else that ends up on the object.
 const (
-	annPhase         = "kuso.sislelabs.com/build-phase"
-	annCompletedAt   = "kuso.sislelabs.com/build-completed-at"
-	annStartedAt     = "kuso.sislelabs.com/build-started-at"
-	annMessage       = "kuso.sislelabs.com/build-message"
-	annSupersededBy  = "kuso.sislelabs.com/superseded-by"
+	annPhase        = "kuso.sislelabs.com/build-phase"
+	annCompletedAt  = "kuso.sislelabs.com/build-completed-at"
+	annStartedAt    = "kuso.sislelabs.com/build-started-at"
+	annMessage      = "kuso.sislelabs.com/build-message"
+	annSupersededBy = "kuso.sislelabs.com/superseded-by"
 	// detectedEnv carries a JSON-encoded []string of env-var names
 	// the build-time scanner surfaced from the source repo. UI uses
 	// this to flag "you reference X but it isn't set" at the
@@ -850,7 +850,6 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	return s.Kube.CreateKusoBuild(ctx, ns, build)
 }
 
-
 // ImageTag returns the canonical image tag for a ref: 12-char SHA prefix
 // for full SHAs, otherwise the ref verbatim. Exported for the GitHub
 // webhook handler in Phase 6.
@@ -868,7 +867,6 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 // calls when a build transitions. Kept as an interface here so the
 // builds package doesn't pull in notify (avoids an import cycle if
 // notify ever wants build types). Nil emitter = silent.
-
 
 // tailBuildLogs grabs the last `lines` log lines from the build's
 // container pods. Used by the failed-build notification path to
@@ -986,14 +984,38 @@ func buildFailureURL(project, service string, c failures.Classification) string 
 	return url
 }
 
-
-// LogArchiver persists the last N lines of a build pod's logs at
-// terminal-phase transition so the deployments-tab can show them
-// after the kaniko Job pod has been GC'd by its TTL. Implemented by
-// db.DB; kept as a small interface to avoid pulling the db package
-// into builds (which would force every test to spin up SQLite).
+// LogArchiver persists, at terminal-phase transition, the artifacts the
+// deployments-tab needs to survive KusoBuild CR + pod GC:
+//   - SaveBuildLog: the last N lines of the build pod's logs.
+//   - SaveBuildRecord: the build SUMMARY (commit/image/status/timing/
+//     who) so the tab still lists the build after retention deletes the
+//     CR. Takes the already-derived summary fields so builds doesn't
+//     import the db package's record type.
+//
+// Implemented by db.DB; kept as a small interface so tests don't have to
+// spin up Postgres.
 type LogArchiver interface {
 	SaveBuildLog(ctx context.Context, buildName, project, service, phase, logs string) error
+	SaveBuildRecord(ctx context.Context, r BuildArchiveRecord) error
+}
+
+// BuildArchiveRecord is the summary the poller hands to the archive. A
+// builds-package-local mirror of db.BuildRecord so the LogArchiver
+// interface doesn't drag the db package into builds.
+type BuildArchiveRecord struct {
+	BuildName       string
+	Project         string
+	Service         string
+	Branch          string
+	CommitSha       string
+	CommitMessage   string
+	ImageTag        string
+	Status          string
+	StartedAt       string
+	FinishedAt      string
+	TriggeredBy     string
+	TriggeredByUser string
+	ErrorMessage    string
 }
 
 type Poller struct {
@@ -1119,6 +1141,13 @@ func (p *Poller) queueArchive(ctx context.Context, ns string, b *kube.KusoBuild,
 	if p.LogArchive == nil {
 		return
 	}
+	// Archive the build SUMMARY synchronously here (cheap, no I/O beyond
+	// one upsert) so deployment history survives the CR's eventual
+	// retention delete. Done at the terminal edge regardless of whether
+	// the log-stream snapshot below succeeds — a build whose pods are
+	// already GC'd still gets its record. Best-effort; a failure just
+	// means the tab won't backfill this build after the CR is gone.
+	p.archiveRecord(ctx, b, phase)
 	p.startArchiveWorkers(ctx)
 	t := archiveTask{ns: ns, build: b, phase: phase}
 	select {
@@ -1127,6 +1156,43 @@ func (p *Poller) queueArchive(ctx context.Context, ns string, b *kube.KusoBuild,
 		slog.Default().Warn("builds: archive queue saturated; running inline",
 			"build", b.Name, "phase", phase, "depth", len(p.archiveQueue))
 		p.archiveLogs(ctx, ns, b, phase)
+	}
+}
+
+// archiveRecord snapshots the build's summary into the durable
+// BuildRecord store at terminal phase, so the deployments tab can list
+// the build after retention deletes its KusoBuild CR. Field extraction
+// mirrors the handler's toBuildSummary (spec + annotation reads) so a
+// record-derived row is indistinguishable from a live-CR-derived one.
+func (p *Poller) archiveRecord(ctx context.Context, b *kube.KusoBuild, phase string) {
+	ann := b.Annotations
+	get := func(k string) string {
+		if ann == nil {
+			return ""
+		}
+		return ann[k]
+	}
+	rec := BuildArchiveRecord{
+		BuildName:       b.Name,
+		Project:         b.Spec.Project,
+		Service:         strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-"),
+		Branch:          b.Spec.Branch,
+		CommitSha:       b.Spec.Ref,
+		CommitMessage:   get(annCommitMessage),
+		Status:          phase,
+		StartedAt:       get(annStartedAt),
+		FinishedAt:      get(annCompletedAt),
+		TriggeredBy:     get(annTriggerSource),
+		TriggeredByUser: get(annTriggerUser),
+		ErrorMessage:    get(annMessage),
+	}
+	if b.Spec.Image != nil {
+		rec.ImageTag = b.Spec.Image.Tag
+	}
+	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := p.LogArchive.SaveBuildRecord(rctx, rec); err != nil {
+		slog.Default().Warn("builds: archive record", "err", err, "build", b.Name)
 	}
 }
 

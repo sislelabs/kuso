@@ -423,6 +423,32 @@ CREATE TABLE IF NOT EXISTS "BuildLog" (
 );
 CREATE INDEX IF NOT EXISTS "BuildLog_project_service_idx" ON "BuildLog"("project","service");
 
+-- v0.17.x: build SUMMARY archive (deployment history). The retention
+-- cleanup deletes finished KusoBuild CRs (they cost helm-operator
+-- reconcile CPU + datastore space), which used to erase the
+-- Deployments tab too — the CR was the only record of the build
+-- metadata. We now snapshot the summary at terminal phase (alongside
+-- BuildLog) so the tab can show past deployments after the CR is GC'd.
+-- The Deployments list reads live CRs UNION these archived records,
+-- deduped by buildName. Mirrors the BuildLog archive pattern.
+CREATE TABLE IF NOT EXISTS "BuildRecord" (
+    "buildName"       TEXT PRIMARY KEY,
+    "project"         TEXT NOT NULL DEFAULT '',
+    "service"         TEXT NOT NULL DEFAULT '',
+    "branch"          TEXT NOT NULL DEFAULT '',
+    "commitSha"       TEXT NOT NULL DEFAULT '',
+    "commitMessage"   TEXT NOT NULL DEFAULT '',
+    "imageTag"        TEXT NOT NULL DEFAULT '',
+    "status"          TEXT NOT NULL DEFAULT '',
+    "startedAt"       TEXT NOT NULL DEFAULT '',
+    "finishedAt"      TEXT NOT NULL DEFAULT '',
+    "triggeredBy"     TEXT NOT NULL DEFAULT '',
+    "triggeredByUser" TEXT NOT NULL DEFAULT '',
+    "errorMessage"    TEXT NOT NULL DEFAULT '',
+    "createdAt"       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+CREATE INDEX IF NOT EXISTS "BuildRecord_project_service_idx" ON "BuildRecord"("project","service");
+
 -- v0.7: alert rules.
 CREATE TABLE IF NOT EXISTS "AlertRule" (
     "id" TEXT PRIMARY KEY,
