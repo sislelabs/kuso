@@ -89,7 +89,7 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 	// shouldn't be able to siphon out in one round-trip.
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	if h.Projects == nil || h.Addons == nil || h.Kube == nil {

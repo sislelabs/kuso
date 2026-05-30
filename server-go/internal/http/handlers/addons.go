@@ -175,7 +175,7 @@ func (h *AddonsHandler) DisablePublicTCP(w http.ResponseWriter, r *http.Request)
 func (h *AddonsHandler) RepairPassword(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	if err := h.Svc.RepairPassword(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
@@ -190,7 +190,7 @@ func (h *AddonsHandler) RepairPassword(w http.ResponseWriter, r *http.Request) {
 func (h *AddonsHandler) ResyncInstance(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	if err := h.Svc.ResyncInstanceAddon(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
@@ -205,7 +205,7 @@ func (h *AddonsHandler) ResyncInstance(w http.ResponseWriter, r *http.Request) {
 func (h *AddonsHandler) ResyncExternal(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	if err := h.Svc.ResyncExternal(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
@@ -224,7 +224,7 @@ func (h *AddonsHandler) Secret(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	// Plaintext connection values — Deployer minimum so Viewers don't
 	// see DB passwords.
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	values, err := h.Svc.SecretValues(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"))
@@ -278,7 +278,7 @@ func (h *AddonsHandler) Add(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	project := chi.URLParam(r, "project")
@@ -316,7 +316,7 @@ func (h *AddonsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"), apiv1UpdateAddonToDomain(wire))
@@ -338,7 +338,7 @@ func (h *AddonsHandler) Placement(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	// Pass nil when both fields are empty so the server stores no
@@ -361,7 +361,7 @@ func (h *AddonsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	project := chi.URLParam(r, "project")
 	addon := chi.URLParam(r, "addon")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	// Typed-confirmation guard: caller must echo the addon name in

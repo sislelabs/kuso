@@ -117,7 +117,7 @@ func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request)
 	// effectively cross-project mutation. Gate on Deployer-or-higher
 	// on the revision's project; 404 (not 403) so probing for revision
 	// IDs doesn't leak existence.
-	if !requireProjectAccess(ctx, w, h.DB, rev.Project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, rev.Project, db.ProjectRoleEditor) {
 		return
 	}
 	switch rev.Kind {

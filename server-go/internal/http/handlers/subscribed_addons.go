@@ -41,7 +41,7 @@ func (h *ProjectsHandler) SetSubscribedAddons(w http.ResponseWriter, r *http.Req
 	ctx, cancel := projectCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	updated, err := h.Svc.SetSubscribedAddons(ctx, project, chi.URLParam(r, "service"), body.Addons)

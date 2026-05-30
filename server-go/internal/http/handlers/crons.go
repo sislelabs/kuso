@@ -50,7 +50,7 @@ func (h *CronsHandler) AddProject(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	var req crons.CreateProjectCronRequest
@@ -73,7 +73,7 @@ func (h *CronsHandler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	project := chi.URLParam(r, "project")
 	name := chi.URLParam(r, "name")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	var req crons.UpdateProjectCronRequest
@@ -96,7 +96,7 @@ func (h *CronsHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	project := chi.URLParam(r, "project")
 	name := chi.URLParam(r, "name")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	if err := h.Svc.DeleteProject(ctx, project, name); err != nil {
@@ -109,7 +109,7 @@ func (h *CronsHandler) DeleteProject(w http.ResponseWriter, r *http.Request) {
 func (h *CronsHandler) Sync(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	out, err := h.Svc.SyncFromService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "name"))
@@ -174,7 +174,7 @@ func (h *CronsHandler) Add(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	out, err := h.Svc.Add(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
@@ -193,7 +193,7 @@ func (h *CronsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "name"), req)
@@ -207,7 +207,7 @@ func (h *CronsHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *CronsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	if err := h.Svc.Delete(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "name")); err != nil {

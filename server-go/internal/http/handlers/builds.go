@@ -149,7 +149,7 @@ func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request)
 func (h *BuildsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := buildsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	err := h.Svc.Cancel(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "build"))
@@ -163,7 +163,7 @@ func (h *BuildsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 func (h *BuildsHandler) Rollback(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := buildsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	// Env scope from ?env=<name>. Empty defaults to "production" in
@@ -314,7 +314,7 @@ func (h *BuildsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := buildsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	// Stamp trigger context: who clicked Redeploy. The github webhook

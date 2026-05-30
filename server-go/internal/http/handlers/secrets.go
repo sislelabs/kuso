@@ -45,7 +45,7 @@ func (h *SecretsHandler) List(w http.ResponseWriter, r *http.Request) {
 	env := r.URL.Query().Get("env")
 	ctx, cancel := secretsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	keys, err := h.Svc.ListKeys(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), env)
@@ -87,7 +87,7 @@ func (h *SecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := secretsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	project := chi.URLParam(r, "project")
@@ -119,7 +119,7 @@ func (h *SecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
 	key := chi.URLParam(r, "key")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	if err := h.Svc.UnsetKey(ctx, project, service, env, key); err != nil {

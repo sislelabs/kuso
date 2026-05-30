@@ -70,26 +70,41 @@ UPDATE "UserGroup" SET name = ?, description = ?, "updatedAt" = ? WHERE id = ?`,
 	return nil
 }
 
-// InstanceRole is the cluster-wide role a Group carries. Distinct
-// from project_role (per-project, in the JSON column) because some
-// permissions don't fit a project — billing, settings, audit, etc.
+// InstanceRole is the cluster-wide role a principal (user or group)
+// carries — the *access level* they act with. Role system v2 collapsed
+// the old admin/member/viewer/billing/pending set to three:
+//
+//	admin  — full access to everything, all projects, all instance settings.
+//	editor — full project read+write incl. writing env vars, but no env
+//	         value read, no pod shell, no SQL console; no instance-admin.
+//	viewer — read-only.
+//
+// The instance role grants no project visibility on its own (except
+// admin, who sees all); visibility comes from ProjectGrant rows. Empty
+// string ("") means "no instance role" — a logged-in principal with no
+// role and no grants sees nothing (the old "pending" state).
 type InstanceRole string
 
 const (
-	InstanceRoleAdmin   InstanceRole = "admin"
-	InstanceRoleMember  InstanceRole = "member"
-	InstanceRoleViewer  InstanceRole = "viewer"
-	InstanceRoleBilling InstanceRole = "billing"
+	InstanceRoleAdmin  InstanceRole = "admin"
+	InstanceRoleEditor InstanceRole = "editor"
+	InstanceRoleViewer InstanceRole = "viewer"
+	// InstanceRolePending is retained ONLY so legacy rows / invite flows
+	// that still write "pending" resolve to "no access" rather than an
+	// unknown role. New code should use "" (empty) for no-access.
 	InstanceRolePending InstanceRole = "pending"
 )
 
-// ProjectRole is per-project. owner > deployer > viewer.
+// ProjectRole is the effective role a principal has ON a specific
+// project. Same three-role vocabulary as InstanceRole — admin > editor
+// > viewer. A ProjectGrant may carry an explicit override; absent an
+// override the grant inherits the principal's instance role.
 type ProjectRole string
 
 const (
-	ProjectRoleOwner    ProjectRole = "owner"
-	ProjectRoleDeployer ProjectRole = "deployer"
-	ProjectRoleViewer   ProjectRole = "viewer"
+	ProjectRoleAdmin  ProjectRole = "admin"
+	ProjectRoleEditor ProjectRole = "editor"
+	ProjectRoleViewer ProjectRole = "viewer"
 )
 
 // ProjectMembership is one entry in UserGroup.projectMemberships
@@ -132,9 +147,9 @@ func (d *DB) GetGroupTenancy(ctx context.Context, groupID string) (*GroupTenancy
 // SetGroupTenancy replaces both tenancy columns atomically. Pass
 // nil/empty to clear projectMemberships.
 func (d *DB) SetGroupTenancy(ctx context.Context, groupID string, t GroupTenancy) error {
-	if t.InstanceRole == "" {
-		t.InstanceRole = InstanceRoleMember
-	}
+	// Empty instance role = "no access" in v2 (was the removed "member"
+	// default). A group with no role and no grants confers nothing; an
+	// admin must explicitly set viewer/editor/admin.
 	memBytes, err := json.Marshal(t.ProjectMemberships)
 	if err != nil {
 		return fmt.Errorf("db: encode projectMemberships: %w", err)
@@ -203,15 +218,15 @@ WHERE m."A" = ?`, userID)
 	return out, nil
 }
 
+// rankInstance orders instance roles for highest-wins union across a
+// principal's groups + direct role. admin > editor > viewer > none.
 func rankInstance(r InstanceRole) int {
 	switch r {
 	case InstanceRoleAdmin:
-		return 5
-	case InstanceRoleBilling:
 		return 4
-	case InstanceRoleViewer:
+	case InstanceRoleEditor:
 		return 3
-	case InstanceRoleMember:
+	case InstanceRoleViewer:
 		return 2
 	case InstanceRolePending, "":
 		return 1
@@ -219,11 +234,12 @@ func rankInstance(r InstanceRole) int {
 	return 0
 }
 
+// rankProject orders effective project roles. admin > editor > viewer.
 func rankProject(r ProjectRole) int {
 	switch r {
-	case ProjectRoleOwner:
+	case ProjectRoleAdmin:
 		return 3
-	case ProjectRoleDeployer:
+	case ProjectRoleEditor:
 		return 2
 	case ProjectRoleViewer:
 		return 1

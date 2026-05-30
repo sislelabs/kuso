@@ -116,7 +116,7 @@ func TestRequireProjectAccess_AdminBypasses(t *testing.T) {
 	rr := httptest.NewRecorder()
 	c := &auth.Claims{UserID: "u1", Permissions: []string{string(auth.PermSettingsAdmin)}}
 	ctx := auth.WithClaimsForTest(context.Background(), c)
-	if !requireProjectAccess(ctx, rr, d, "any-project", db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, rr, d, "any-project", db.ProjectRoleEditor) {
 		t.Errorf("admin should bypass project access; got body=%s", rr.Body.String())
 	}
 }
@@ -129,7 +129,7 @@ func TestRequireProjectAccess_NilDB_FailsClosed(t *testing.T) {
 	rr := httptest.NewRecorder()
 	c := &auth.Claims{UserID: "u1", Permissions: []string{}}
 	ctx := auth.WithClaimsForTest(context.Background(), c)
-	if requireProjectAccess(ctx, rr, nil, "p1", db.ProjectRoleOwner) {
+	if requireProjectAccess(ctx, rr, nil, "p1", db.ProjectRoleEditor) {
 		t.Errorf("nil DB should fail closed; got pass with code=%d", rr.Code)
 	}
 	if rr.Code != http.StatusForbidden {
@@ -157,7 +157,7 @@ func TestRequireProjectAccess_RoleTooLow_403(t *testing.T) {
 	rr := httptest.NewRecorder()
 	c := &auth.Claims{UserID: "u1", Permissions: []string{}}
 	ctx := auth.WithClaimsForTest(context.Background(), c)
-	if requireProjectAccess(ctx, rr, d, "p1", db.ProjectRoleOwner) {
+	if requireProjectAccess(ctx, rr, d, "p1", db.ProjectRoleEditor) {
 		t.Fatal("viewer should not pass owner gate")
 	}
 	if rr.Code != http.StatusForbidden {
@@ -167,18 +167,18 @@ func TestRequireProjectAccess_RoleTooLow_403(t *testing.T) {
 
 func TestRequireProjectAccess_RoleSufficient(t *testing.T) {
 	d := openTestDB(t)
-	seedUserWithProjectRole(t, d, "u1", "p1", db.ProjectRoleOwner)
+	seedUserWithProjectRole(t, d, "u1", "p1", db.ProjectRoleEditor)
 	rr := httptest.NewRecorder()
 	c := &auth.Claims{UserID: "u1", Permissions: []string{}}
 	ctx := auth.WithClaimsForTest(context.Background(), c)
-	if !requireProjectAccess(ctx, rr, d, "p1", db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, rr, d, "p1", db.ProjectRoleEditor) {
 		t.Errorf("owner should satisfy deployer gate; body=%s", rr.Body.String())
 	}
 }
 
 func TestRequireProjectAccess_DifferentProject_403(t *testing.T) {
 	d := openTestDB(t)
-	seedUserWithProjectRole(t, d, "u1", "p1", db.ProjectRoleOwner)
+	seedUserWithProjectRole(t, d, "u1", "p1", db.ProjectRoleEditor)
 	rr := httptest.NewRecorder()
 	c := &auth.Claims{UserID: "u1", Permissions: []string{}}
 	ctx := auth.WithClaimsForTest(context.Background(), c)
@@ -197,12 +197,12 @@ func TestRoleAtLeast(t *testing.T) {
 		want   db.ProjectRole
 		expect bool
 	}{
-		{"owner>=viewer", db.ProjectRoleOwner, db.ProjectRoleViewer, true},
-		{"owner>=deployer", db.ProjectRoleOwner, db.ProjectRoleDeployer, true},
-		{"owner>=owner", db.ProjectRoleOwner, db.ProjectRoleOwner, true},
-		{"deployer>=viewer", db.ProjectRoleDeployer, db.ProjectRoleViewer, true},
-		{"deployer<owner", db.ProjectRoleDeployer, db.ProjectRoleOwner, false},
-		{"viewer<deployer", db.ProjectRoleViewer, db.ProjectRoleDeployer, false},
+		{"admin>=viewer", db.ProjectRoleAdmin, db.ProjectRoleViewer, true},
+		{"admin>=editor", db.ProjectRoleAdmin, db.ProjectRoleEditor, true},
+		{"admin>=admin", db.ProjectRoleAdmin, db.ProjectRoleAdmin, true},
+		{"editor>=viewer", db.ProjectRoleEditor, db.ProjectRoleViewer, true},
+		{"editor<admin", db.ProjectRoleEditor, db.ProjectRoleAdmin, false},
+		{"viewer<editor", db.ProjectRoleViewer, db.ProjectRoleEditor, false},
 		{"empty<viewer", db.ProjectRole(""), db.ProjectRoleViewer, false},
 	}
 	for _, tc := range cases {

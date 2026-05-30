@@ -45,7 +45,7 @@ func projectSecretsCtx(r *http.Request) (context.Context, context.CancelFunc) {
 func (h *ProjectSecretsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectSecretsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	keys, err := h.Svc.ListKeys(ctx, chi.URLParam(r, "project"))
@@ -77,7 +77,7 @@ func (h *ProjectSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := projectSecretsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	rolled, err := h.Svc.SetKey(ctx, chi.URLParam(r, "project"), body.Key, body.Value, projectsecrets.SetOptions{Force: body.Force})
@@ -95,7 +95,7 @@ func (h *ProjectSecretsHandler) Set(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectSecretsHandler) Unset(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectSecretsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	rolled, err := h.Svc.UnsetKey(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "key"))

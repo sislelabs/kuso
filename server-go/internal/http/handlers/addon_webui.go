@@ -11,7 +11,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"kuso/server/internal/addons"
-	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 )
@@ -78,16 +77,13 @@ func (h *AddonWebUIHandler) Proxy(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	addon := chi.URLParam(r, "addon")
 
-	// Permission: addons:read is enough — viewing the mail catcher
-	// or NATS monitor is a read operation. Writes happen against the
-	// addon itself (a mail being received, a stream being published),
-	// not against kuso state.
-	claims, _ := auth.ClaimsFromContext(ctx)
-	if claims == nil || !auth.Has(claims.Permissions, auth.PermAddonsRead) {
-		http.Error(w, "forbidden: requires addons:read", http.StatusForbidden)
-		return
-	}
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	// Permission: viewing the mail catcher / NATS monitor is a read
+	// operation, so viewer-on-the-project is enough. (The two web UIs
+	// this proxy serves — mailpit, nats — expose no app secrets the way
+	// a DB browser would, so they are NOT admin-gated.) The JWT carries
+	// no project perms in v2; requireProjectAccess re-resolves the
+	// caller's effective role from the DB and is the real gate.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
 

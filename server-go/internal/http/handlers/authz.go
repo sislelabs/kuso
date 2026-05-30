@@ -27,6 +27,7 @@ import (
 
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
+	"kuso/server/internal/projects"
 )
 
 // requirePerm 401s requests with no claims and 403s requests whose
@@ -122,14 +123,58 @@ func requireProjectAccess(
 	return true
 }
 
+// callerCanReadSecrets reports whether the request's caller may see env
+// var VALUES on the named project. In role-system v2 this is admin-only
+// (effective project role == admin, which instance admins always have).
+// Editors can write env vars but must not read existing values, so env
+// read endpoints mask values when this returns false.
+//
+// Fail-closed: any resolution error → false (mask).
+func callerCanReadSecrets(ctx context.Context, dbConn *db.DB, project string) bool {
+	claims, ok := auth.ClaimsFromContext(ctx)
+	if !ok {
+		return false
+	}
+	if auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+		return true // instance admin → admin on every project
+	}
+	if dbConn == nil {
+		return false
+	}
+	tenancy, err := dbConn.ListUserTenancyCached(ctx, claims.UserID)
+	if err != nil {
+		return false
+	}
+	return auth.HasProjectPerm(auth.ProjectRoleFor(tenancy, project), auth.PermSecretsRead)
+}
+
+// maskEnvValues returns a copy of the env-var slice with every Value
+// replaced by a sentinel, used when the caller may write but not read
+// env values. Names + valueFrom refs are preserved so the editor UI can
+// still show which keys exist and write new values blind.
+func maskEnvValues(in []projects.EnvVar) []projects.EnvVar {
+	out := make([]projects.EnvVar, len(in))
+	for i, e := range in {
+		out[i] = e
+		if e.Value != "" {
+			out[i].Value = envMaskSentinel
+		}
+	}
+	return out
+}
+
+// envMaskSentinel is what editors see instead of a secret value. Chosen
+// so it's visibly a mask, not a plausible real value.
+const envMaskSentinel = "••••••••"
+
 // roleAtLeast returns true when have grants at least the want level.
-// Owner > Deployer > Viewer.
+// admin > editor > viewer.
 func roleAtLeast(have, want db.ProjectRole) bool {
 	rank := func(r db.ProjectRole) int {
 		switch r {
-		case db.ProjectRoleOwner:
+		case db.ProjectRoleAdmin:
 			return 3
-		case db.ProjectRoleDeployer:
+		case db.ProjectRoleEditor:
 			return 2
 		case db.ProjectRoleViewer:
 			return 1

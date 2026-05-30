@@ -77,19 +77,13 @@ func (h *TerminalWSHandler) Terminal(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
 
-	// Tenancy gate. A browser shell into a pod is a deployer-grade
-	// capability — viewers must not get a root shell in production.
-	// Admins (settings:admin) bypass the per-project role check.
-	isAdmin := auth.Has(claims.Permissions, auth.PermSettingsAdmin)
-	if !isAdmin && h.DB != nil {
-		tctx, tcancel := context.WithTimeout(r.Context(), 5*time.Second)
-		tenancy, terr := h.DB.ListUserTenancyCached(tctx, claims.UserID)
-		tcancel()
-		role := auth.ProjectRoleFor(tenancy, project)
-		if terr != nil || (role != db.ProjectRoleDeployer && role != db.ProjectRoleOwner) {
-			http.Error(w, "forbidden: shell access requires the deployer role", http.StatusForbidden)
-			return
-		}
+	// Tenancy gate. A browser shell into a pod can `printenv` every
+	// secret value, so in role-system v2 it is ADMIN-ONLY — the same
+	// line we draw for reading env values and the SQL console. Editors
+	// can deploy and manage but cannot open a shell.
+	if !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+		http.Error(w, "forbidden: shell access requires the admin role", http.StatusForbidden)
+		return
 	}
 
 	if !h.acquireSlot(claims.UserID) {

@@ -185,7 +185,7 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	// Restoring/listing/querying an addon's data needs project Owner —
 	// not Deployer, since SQL access can read passwords / PII / billing
 	// records that even a deploy-permissioned teammate shouldn't see.
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 
@@ -254,7 +254,7 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	// Owner-only — Restore overwrites the live DB with a snapshot
 	// (destructive) and a Deployer-level user shouldn't be able to
 	// roll back data without the project owner signing off.
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	// Cross-tenant key guard: req.Key arrives from the client and is
@@ -525,7 +525,7 @@ func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 	// SQL browser reaches the user's data — Owner-only.
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 
@@ -637,7 +637,7 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	// Owner-only — read-only is enforced inside the tx, but a
 	// SELECT on `users.password_hash` is plenty bad on its own.
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	// Reject queries that hit Postgres' file/network/process built-ins.

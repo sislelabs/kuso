@@ -77,7 +77,7 @@ func (h *RunsHandler) Create(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	if claims, ok := auth.ClaimsFromContext(ctx); ok && claims != nil {
@@ -135,7 +135,7 @@ func (h *RunsHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runsCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	runName := chi.URLParam(r, "run")
@@ -160,7 +160,7 @@ func (h *RunsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := runsCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	if err := h.Svc.Delete(ctx, project, chi.URLParam(r, "run")); err != nil {

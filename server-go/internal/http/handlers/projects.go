@@ -364,7 +364,7 @@ func (h *ProjectsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), apiv1UpdateToDomain(wire))
@@ -379,7 +379,7 @@ func (h *ProjectsHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	// ?purgeData=true also wipes every PVC labeled with this
@@ -438,7 +438,7 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	out, err := h.Svc.AddService(ctx, chi.URLParam(r, "project"), apiv1CreateServiceToDomain(wire))
@@ -452,13 +452,25 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) GetService(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
-	out, err := h.Svc.GetService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"))
+	out, err := h.Svc.GetService(ctx, project, chi.URLParam(r, "service"))
 	if err != nil {
 		h.fail(w, "get service", err)
 		return
+	}
+	// The service spec carries env-var VALUES. Mask them for any caller
+	// who can't read secrets (editor/viewer) — admin only sees the real
+	// values. Mutates the returned CR copy in place; GetService returns a
+	// fresh decode per call so this doesn't poison a cache.
+	if out != nil && !callerCanReadSecrets(ctx, h.DB, project) {
+		for i := range out.Spec.EnvVars {
+			if out.Spec.EnvVars[i].Value != "" {
+				out.Spec.EnvVars[i].Value = envMaskSentinel
+			}
+		}
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -497,7 +509,7 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 
@@ -564,7 +576,7 @@ func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	out, err := h.Svc.PatchService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
@@ -586,7 +598,7 @@ func (h *ProjectsHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	out, err := h.Svc.AddDomain(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"),
@@ -603,7 +615,7 @@ func (h *ProjectsHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) RemoveDomain(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	out, err := h.Svc.RemoveDomain(ctx,
@@ -627,7 +639,7 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	project := chi.URLParam(r, "project")
@@ -654,7 +666,7 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) UnsetEnvVar(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	out, err := h.Svc.UnsetEnvVar(ctx,
@@ -673,7 +685,7 @@ func (h *ProjectsHandler) DeleteService(w http.ResponseWriter, r *http.Request) 
 	defer cancel()
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	if err := h.Svc.DeleteService(ctx, project, service); err != nil {
@@ -710,7 +722,7 @@ func (h *ProjectsHandler) RenameService(w http.ResponseWriter, r *http.Request) 
 	// it a longer budget than projectCtx default.
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	out, err := h.Svc.RenameService(ctx,
@@ -728,17 +740,25 @@ func (h *ProjectsHandler) RenameService(w http.ResponseWriter, r *http.Request) 
 func (h *ProjectsHandler) GetEnv(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	// Env vars are a Deployer concern (they affect runtime behaviour).
-	// Viewers shouldn't see secrets even when fully resolved.
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	project := chi.URLParam(r, "project")
+	// Editor-or-above may LIST env vars (they need the key names to set
+	// values), but only admin may see the VALUES — editors get masked
+	// values. requireProjectAccess admits viewer too; we still mask for
+	// any non-admin, so viewer sees masked values as well.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
-	out, err := h.Svc.GetEnv(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"))
+	out, err := h.Svc.GetEnv(ctx, project, chi.URLParam(r, "service"))
 	if err != nil {
 		h.fail(w, "get env", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"envVars": out})
+	masked := false
+	if !callerCanReadSecrets(ctx, h.DB, project) {
+		out = maskEnvValues(out)
+		masked = true
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"envVars": out, "masked": masked})
 }
 
 // GetDrift returns the pending-changes summary for a service. Used
@@ -762,23 +782,24 @@ func (h *ProjectsHandler) GetDrift(w http.ResponseWriter, r *http.Request) {
 // GetDetectedEnv returns env-var names kuso detected as referenced
 // but possibly missing. Two sources, merged into one response:
 //
-//   1. Build-time scan: names surfaced from .env.example + source
-//      grep by the env-detect init container on the most recent
-//      build. High signal but stale until the next build.
-//   2. Runtime crash hints: names extracted from the log shipper's
-//      regex match on common "missing env" error messages
-//      (KeyError, panic: missing X env, etc). Real-time.
+//  1. Build-time scan: names surfaced from .env.example + source
+//     grep by the env-detect init container on the most recent
+//     build. High signal but stale until the next build.
+//  2. Runtime crash hints: names extracted from the log shipper's
+//     regex match on common "missing env" error messages
+//     (KeyError, panic: missing X env, etc). Real-time.
 //
 // UI flags any name (from either source) that isn't in the saved
 // env list, with a "Add" button to seed it. Returns:
-//   { names: ["DATABASE_URL", ...], detectedAt: "2026-...",
-//     hints: [{name, lastLine, lastSeen}, ...] }
+//
+//	{ names: ["DATABASE_URL", ...], detectedAt: "2026-...",
+//	  hints: [{name, lastLine, lastSeen}, ...] }
 func (h *ProjectsHandler) GetDetectedEnv(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	names, ts, err := h.Svc.GetDetectedEnv(ctx, project, service)
@@ -802,7 +823,7 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	project := chi.URLParam(r, "project")
@@ -887,7 +908,7 @@ func (h *ProjectsHandler) ListPods(w http.ResponseWriter, r *http.Request) {
 func (h *ProjectsHandler) Wake(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	if err := h.Svc.WakeService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service")); err != nil {
@@ -923,7 +944,7 @@ func (h *ProjectsHandler) AddEnvironment(w http.ResponseWriter, r *http.Request)
 	}
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	out, err := h.Svc.AddEnvironment(ctx,
@@ -955,7 +976,7 @@ func (h *ProjectsHandler) GetEnvironment(w http.ResponseWriter, r *http.Request)
 func (h *ProjectsHandler) DeleteEnvironment(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
 	if err := h.Svc.DeleteEnvironment(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "env")); err != nil {
@@ -1005,7 +1026,7 @@ func (h *ProjectsHandler) CreateEnvGroup(w http.ResponseWriter, r *http.Request)
 	project := chi.URLParam(r, "project")
 	// Cloning every service + addon is a structural project mutation;
 	// require admin rather than viewer/deployer.
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	var body projects.CreateEnvGroupRequest
@@ -1029,7 +1050,7 @@ func (h *ProjectsHandler) DeleteEnvGroup(w http.ResponseWriter, r *http.Request)
 	ctx, cancel := projectCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleOwner) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	name := chi.URLParam(r, "name")
@@ -1050,7 +1071,7 @@ func (h *ProjectsHandler) SetEnvGroupServiceBranch(w http.ResponseWriter, r *htt
 	ctx, cancel := projectCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	var body struct {

@@ -27,81 +27,99 @@ type Permission string
 // (resource:action) so the UI can match prefixes for "show any
 // settings:* affordance" checks.
 const (
-	PermSettingsAdmin     Permission = "settings:admin"
-	PermSettingsRead      Permission = "settings:read"
-	PermAuditRead         Permission = "audit:read"
-	PermUserWrite         Permission = "user:write"
-	PermBillingRead       Permission = "billing:read"
-	PermProjectWrite      Permission = "project:write"
-	PermProjectRead       Permission = "project:read"
-	PermServicesWrite     Permission = "services:write"
-	PermServicesRead      Permission = "services:read"
-	PermSecretsWrite      Permission = "secrets:write"
-	PermSecretsRead       Permission = "secrets:read"
-	PermSQLRead           Permission = "sql:read"
-	PermAddonsWrite       Permission = "addons:write"
-	PermAddonsRead        Permission = "addons:read"
-	PermSystemUpdate      Permission = "system:update"
+	// Instance-level permissions — admin-only. These are the perms baked
+	// into the JWT by Compute(); a non-admin's JWT carries none of them.
+	PermSettingsAdmin Permission = "settings:admin"
+	PermSettingsRead  Permission = "settings:read"
+	PermAuditRead     Permission = "audit:read"
+	PermUserWrite     Permission = "user:write"
+	PermBillingRead   Permission = "billing:read"
+	PermSystemUpdate  Permission = "system:update"
+
+	// Project-scoped permissions. NOT baked into the JWT — resolved
+	// fresh per-request from the caller's effective role on the target
+	// project (see PermsForProjectRole + requireProjectAccess). Listed
+	// here as the canonical permission vocabulary the UI matches on.
+	PermProjectWrite  Permission = "project:write"
+	PermProjectRead   Permission = "project:read"
+	PermServicesWrite Permission = "services:write"
+	PermServicesRead  Permission = "services:read"
+	PermSecretsWrite  Permission = "secrets:write" // set env vars (editor+)
+	PermSecretsRead   Permission = "secrets:read"  // read env VALUES (admin only)
+	PermShellExec     Permission = "shell:exec"    // pod shell / exec (admin only)
+	PermSQLRead       Permission = "sql:read"      // SQL console / DB browser (admin only)
+	PermAddonsWrite   Permission = "addons:write"
+	PermAddonsRead    Permission = "addons:read"
 )
 
-// Compute returns the union permission set for a given tenancy.
+// Compute returns the INSTANCE-level permission set baked into a
+// principal's JWT. In role-system v2, only admins carry instance perms;
+// viewer/editor get nothing here — their project access is resolved
+// fresh per-request from PermsForProjectRole, not from the token.
+//
 // Pure function — easy to test without DB.
 func Compute(t db.GroupTenancy) []string {
+	if t.InstanceRole != db.InstanceRoleAdmin {
+		// Non-admins carry NO instance-level perms. They authenticate,
+		// but every project-scoped check re-resolves their effective
+		// role from the DB against the specific project being accessed.
+		return []string{}
+	}
+	// Admins get every instance perm. Project perms are granted
+	// implicitly: requireProjectAccess + PermsForProjectRole treat an
+	// admin as admin-on-every-project, and ProjectsAccessible returns
+	// nil ("no filter — all projects").
+	perms := []Permission{
+		PermSettingsAdmin, PermSettingsRead, PermAuditRead, PermUserWrite,
+		PermBillingRead, PermSystemUpdate,
+	}
+	out := make([]string, 0, len(perms))
+	for _, p := range perms {
+		out = append(out, string(p))
+	}
+	return out
+}
+
+// PermsForProjectRole returns the permission set a principal holds on a
+// project given their EFFECTIVE role there (already resolved via
+// ProjectRoleFor, which applies admin > override > inherited-instance).
+// This is the project-scoped half of the matrix — resolved per request,
+// never cached in the JWT.
+//
+//	viewer → read-only (project/services/addons read)
+//	editor → + write (project/services/addons), + secrets:write (set env blind)
+//	admin  → + secrets:read (env values), shell:exec, sql:read
+//
+// secrets:read / shell:exec / sql:read are the three "read arbitrary
+// secret-bearing data" surfaces, deliberately admin-only.
+func PermsForProjectRole(role db.ProjectRole) []string {
 	set := map[Permission]struct{}{}
 	add := func(p Permission) { set[p] = struct{}{} }
 
-	switch t.InstanceRole {
-	case db.InstanceRoleAdmin:
-		// Admins get everything plus the system-level perms; project
-		// perms inherit from project membership, but admins also see
-		// every project (handled in the API list filter, not here).
+	switch role {
+	case db.ProjectRoleAdmin:
 		for _, p := range []Permission{
-			PermSettingsAdmin, PermSettingsRead, PermAuditRead, PermUserWrite,
-			PermBillingRead, PermProjectWrite, PermProjectRead,
-			PermServicesWrite, PermServicesRead, PermSecretsWrite, PermSecretsRead,
-			PermSQLRead, PermAddonsWrite, PermAddonsRead, PermSystemUpdate,
+			PermProjectRead, PermServicesRead, PermAddonsRead,
+			PermProjectWrite, PermServicesWrite, PermAddonsWrite, PermSecretsWrite,
+			PermSecretsRead, PermShellExec, PermSQLRead,
 		} {
 			add(p)
 		}
-	case db.InstanceRoleBilling:
-		add(PermBillingRead)
-		add(PermSettingsRead)
-	case db.InstanceRoleViewer:
-		add(PermSettingsRead)
-		add(PermProjectRead)
-		add(PermServicesRead)
-		add(PermAddonsRead)
-	case db.InstanceRoleMember:
-		// No instance-level perms; perms come from project membership.
-	case db.InstanceRolePending, "":
-		// No perms at all — user can authenticate but can't see
-		// anything until an admin assigns them a group.
-		return []string{}
-	}
-
-	for _, m := range t.ProjectMemberships {
-		switch m.Role {
-		case db.ProjectRoleOwner:
-			add(PermProjectWrite)
-			add(PermProjectRead)
-			add(PermServicesWrite)
-			add(PermServicesRead)
-			add(PermSecretsWrite)
-			add(PermSecretsRead)
-			add(PermSQLRead)
-			add(PermAddonsWrite)
-			add(PermAddonsRead)
-		case db.ProjectRoleDeployer:
-			add(PermProjectRead)
-			add(PermServicesWrite)
-			add(PermServicesRead)
-			add(PermSecretsRead)
-			add(PermAddonsRead)
-		case db.ProjectRoleViewer:
-			add(PermProjectRead)
-			add(PermServicesRead)
-			add(PermAddonsRead)
+	case db.ProjectRoleEditor:
+		for _, p := range []Permission{
+			PermProjectRead, PermServicesRead, PermAddonsRead,
+			PermProjectWrite, PermServicesWrite, PermAddonsWrite, PermSecretsWrite,
+		} {
+			add(p)
 		}
+	case db.ProjectRoleViewer:
+		for _, p := range []Permission{
+			PermProjectRead, PermServicesRead, PermAddonsRead,
+		} {
+			add(p)
+		}
+	default:
+		return []string{}
 	}
 
 	out := make([]string, 0, len(set))
@@ -109,6 +127,13 @@ func Compute(t db.GroupTenancy) []string {
 		out = append(out, string(p))
 	}
 	return out
+}
+
+// HasProjectPerm reports whether the effective project role grants want.
+// Convenience over PermsForProjectRole for single-perm checks in
+// project-scoped handlers (env read, shell, sql).
+func HasProjectPerm(role db.ProjectRole, want Permission) bool {
+	return Has(PermsForProjectRole(role), want)
 }
 
 // Has returns true when the session carries the requested permission.
@@ -172,19 +197,48 @@ func ProjectsAccessible(t db.GroupTenancy) []string {
 	return out
 }
 
-// ProjectRoleFor returns the user's effective role on a specific
-// project, taking instance-admin into account (admins are always
-// owners). Empty string means "no access."
+// ProjectRoleFor returns the principal's EFFECTIVE role on a specific
+// project. Empty string means "no access / project invisible."
+//
+// Resolution (role-system v2):
+//  1. Instance admin → admin on every project.
+//  2. Otherwise, among the principal's grants applying to this project,
+//     each grant's level = its explicit override, else the principal's
+//     instance role (inherited), else viewer (an explicit grant always
+//     confers at least read). Effective role = highest of those.
+//  3. No applicable grant → "" (invisible).
+//
+// t.ProjectMemberships carries the already-resolved grants for this
+// principal (the DB layer flattens ProjectGrant rows + the inherit/
+// override + instance-role defaulting into m.Role before we get here),
+// so this function stays a pure highest-wins pick.
 func ProjectRoleFor(t db.GroupTenancy, project string) db.ProjectRole {
 	if t.InstanceRole == db.InstanceRoleAdmin {
-		return db.ProjectRoleOwner
+		return db.ProjectRoleAdmin
+	}
+	best := db.ProjectRole("")
+	bestRank := 0
+	rank := func(r db.ProjectRole) int {
+		switch r {
+		case db.ProjectRoleAdmin:
+			return 3
+		case db.ProjectRoleEditor:
+			return 2
+		case db.ProjectRoleViewer:
+			return 1
+		}
+		return 0
 	}
 	for _, m := range t.ProjectMemberships {
-		if m.Project == project {
-			return m.Role
+		if m.Project != project {
+			continue
+		}
+		if rk := rank(m.Role); rk > bestRank {
+			bestRank = rk
+			best = m.Role
 		}
 	}
-	return ""
+	return best
 }
 
 // ErrPending is returned by the login flow when a user has been
@@ -193,18 +247,19 @@ func ProjectRoleFor(t db.GroupTenancy, project string) db.ProjectRole {
 // instead of looping back to /login.
 var ErrPending = errors.New("auth: account pending admin approval")
 
-// IsPending decides whether a user with this tenancy should be
-// treated as "awaiting access" by login. Empty memberships AND
-// pending instance role both qualify.
+// IsPending decides whether a user with this tenancy should be treated
+// as "awaiting access" by login — routed to /awaiting-access instead of
+// the dashboard. In role-system v2 a principal is pending when they have
+// no usable access at all: not an admin, and no project grants AND no
+// usable instance role.
+//
+// A viewer/editor instance role WITH at least one project grant is not
+// pending. A viewer/editor with zero grants still sees nothing useful,
+// so we treat them as pending too (they can authenticate but have no
+// visible projects until an admin grants one).
 func IsPending(t db.GroupTenancy) bool {
 	if t.InstanceRole == db.InstanceRoleAdmin {
 		return false
 	}
-	if t.InstanceRole == db.InstanceRolePending {
-		return true
-	}
-	if t.InstanceRole == db.InstanceRoleMember && len(t.ProjectMemberships) == 0 {
-		return true
-	}
-	return false
+	return len(t.ProjectMemberships) == 0
 }

@@ -30,7 +30,7 @@ func (h *ProjectsHandler) SetEnvDomains(w http.ResponseWriter, r *http.Request) 
 	ctx, cancel := projectCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	updated, err := h.Svc.SetEnvDomains(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "env"), body.Hosts)
@@ -54,7 +54,7 @@ func (h *ProjectsHandler) AddEnvDomain(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	updated, err := h.Svc.AddEnvDomain(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "env"), body.Host)
@@ -70,7 +70,7 @@ func (h *ProjectsHandler) RemoveEnvDomain(w http.ResponseWriter, r *http.Request
 	ctx, cancel := projectCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	updated, err := h.Svc.RemoveEnvDomain(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "env"), chi.URLParam(r, "host"))
@@ -93,7 +93,7 @@ func (h *ProjectsHandler) SetEnvScopedVar(w http.ResponseWriter, r *http.Request
 	ctx, cancel := projectCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	req := projects.SetEnvVarRequest{Value: wire.Value}
@@ -113,7 +113,7 @@ func (h *ProjectsHandler) UnsetEnvScopedVar(w http.ResponseWriter, r *http.Reque
 	ctx, cancel := projectCtx(r)
 	defer cancel()
 	project := chi.URLParam(r, "project")
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleDeployer) {
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
 	out, err := h.Svc.UnsetEnvScopedVar(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "env"), chi.URLParam(r, "name"))
