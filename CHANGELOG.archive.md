@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.16.7] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(install): bump fs.inotify limits to avoid silent pod failures ([05d2676](https://github.com/sislelabs/kuso/commit/05d267664a93f52d9ef5ae2425925ec60cb35f5f))
+
 ## [0.16.6] — 2026-05-27
 
 ### 🐛 Bug Fixes
