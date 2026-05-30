@@ -5,6 +5,18 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.3] — 2026-05-30
+
+### ✨ Features
+- Feat(groups): show + manage group members (roster, not blind add/remove) ([2694dc4](https://github.com/sislelabs/kuso/commit/2694dc4f04339b5fb3fb38a905ad309bb6a030f9))
+- Feat(users): admin can set a user's instance role from the Users page ([fedb1eb](https://github.com/sislelabs/kuso/commit/fedb1ebf2a935bc308e3e061026f4a4f2784e071))
+
+### 🐛 Bug Fixes
+- Fix(notifications): keep the Discord mention picker open on select ([ccc15f8](https://github.com/sislelabs/kuso/commit/ccc15f834ca907ecccba1bd0ad53065375399edf))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.3 ship) ([360e721](https://github.com/sislelabs/kuso/commit/360e7218e2ccd2c93ac74dac597f388f17be638e))
+
 ## [0.18.2] — 2026-05-30
 
 ### 🐛 Bug Fixes
@@ -307,15 +319,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat: remove legacy mode for shared-secret subscription; auto-migrate on startup ([ab48328](https://github.com/sislelabs/kuso/commit/ab48328f9f2146a959fd8eb897ff3b9df7196717))
-
-## [0.16.10] — 2026-05-28
-
-### ✨ Features
-- Feat: per-service opt-in subscription for project + instance shared secrets ([f30f9fa](https://github.com/sislelabs/kuso/commit/f30f9fa3074ae83241e320269d7a2cff88239559))
-- Feat(crd): KusoService.spec.sharedEnvKeys + Env mirror (no behavior change yet) ([a9c45a2](https://github.com/sislelabs/kuso/commit/a9c45a2995379cc64b54d5a224edac135e7a04b1))
-
-### 🐛 Bug Fixes
-- Fix(ui): non-prod banner padding + canvas stops drawing implicit addon edges ([7db78f6](https://github.com/sislelabs/kuso/commit/7db78f6d0a52b7f1313589c021c3f3259aa3e481))
 
 
 ---
