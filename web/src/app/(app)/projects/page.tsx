@@ -213,6 +213,35 @@ function formatBytes(b: number): string {
   return `${Math.round(b / MiB)} MiB`;
 }
 
+// repoWebURL normalises a stored git clone URL to a browser-openable
+// https:// link, or null when it can't form a confident one (so the
+// repo row stays plain text instead of linking somewhere wrong).
+//
+// Handles the three shapes kuso stores:
+//   https://github.com/org/repo(.git)   → as-is, .git stripped
+//   git@github.com:org/repo(.git)        → https://github.com/org/repo
+//   github.com/org/repo(.git)            → https://github.com/org/repo
+function repoWebURL(raw?: string): string | null {
+  if (!raw) return null;
+  let s = raw.trim();
+  if (!s) return null;
+  // scp-style SSH: git@host:org/repo → host/org/repo
+  const scp = s.match(/^[\w.-]+@([\w.-]+):(.+)$/);
+  if (scp) {
+    s = `${scp[1]}/${scp[2]}`;
+  } else {
+    // strip any scheme (https://, http://, ssh://, git://)
+    s = s.replace(/^[a-z]+:\/\//i, "");
+  }
+  // drop a userinfo@ prefix if a scheme carried one (ssh://git@host/…)
+  s = s.replace(/^[^/@]+@/, "");
+  s = s.replace(/\.git$/, "").replace(/\/+$/, "");
+  // Require a host/path shape (at least "host/owner/repo"-ish). Bail on
+  // anything without a dot-bearing host + a path segment.
+  if (!/^[\w.-]+\.[\w.-]+\/.+/.test(s)) return null;
+  return `https://${s}`;
+}
+
 interface DescribeResp {
   project: { metadata: { name: string }; spec?: { baseDomain?: string } };
   services: KusoService[];
@@ -259,6 +288,12 @@ function ProjectsGrid({
       {projects.map((p, i) => {
         const name = p.metadata.name;
         const repo = p.spec.defaultRepo?.url?.replace(/^https?:\/\/(www\.)?/, "");
+        // Clickable web URL for the repo row. Normalises the stored
+        // clone URL (https://…, git@host:…, or bare host/path, with or
+        // without a trailing .git) to an https:// browser link. Returns
+        // null when we can't form a confident URL so the row stays
+        // plain text rather than linking somewhere wrong.
+        const repoURL = repoWebURL(p.spec.defaultRepo?.url);
         // Display domain. We only show a domain when the project has
         // an explicit baseDomain. The previous "infer from
         // window.location.host" fallback printed the kuso server's
@@ -382,7 +417,7 @@ function ProjectsGrid({
                   />
                 </div>
                 <dl className="mt-3 space-y-1 text-[11px]">
-                  {repo && <Row icon={GitBranch} value={repo} />}
+                  {repo && <Row icon={GitBranch} value={repo} href={repoURL ?? undefined} />}
                   {domain && (
                     <Row
                       icon={Globe}
