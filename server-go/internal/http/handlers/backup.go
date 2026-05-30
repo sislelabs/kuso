@@ -102,6 +102,7 @@ func (h *BackupHandler) Mount(r chi.Router) {
 	r.Get("/api/admin/backup", h.Download)
 	r.Post("/api/admin/restore", h.Upload)
 	r.Get("/api/admin/restore/{jobName}", h.RestoreStatus)
+	r.Get("/api/admin/backup-health", h.BackupHealth)
 }
 
 // Download streams `pg_dump --format=plain --no-owner --no-acl --clean
@@ -520,6 +521,6 @@ func (h *BackupHandler) markRolloutTriggered(ctx context.Context, jobName string
 // Tiny pointer helpers — kube types want *bool, *int32, *int64 in
 // SecurityContext/SeccompProfile/etc. Inline-allocating addresses of
 // literals isn't allowed; these stay alongside the only caller.
-func ptrBool(b bool) *bool       { return &b }
-func ptrInt32(i int32) *int32    { return &i }
-func ptrInt64(i int64) *int64    { return &i }
+func ptrBool(b bool) *bool    { return &b }
+func ptrInt32(i int32) *int32 { return &i }
+func ptrInt64(i int64) *int64 { return &i }

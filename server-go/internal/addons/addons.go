@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"slices"
 	"strings"
@@ -306,12 +307,12 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 // uses this for the addon Settings tab — version bump, size change,
 // HA toggle, storage resize, backup schedule.
 type UpdateAddonRequest struct {
-	Version     *string             `json:"version,omitempty"`
-	Size        *string             `json:"size,omitempty"`
-	HA          *bool               `json:"ha,omitempty"`
-	StorageSize *string             `json:"storageSize,omitempty"`
-	Database    *string             `json:"database,omitempty"`
-	Backup      *UpdateBackupPatch  `json:"backup,omitempty"`
+	Version     *string            `json:"version,omitempty"`
+	Size        *string            `json:"size,omitempty"`
+	HA          *bool              `json:"ha,omitempty"`
+	StorageSize *string            `json:"storageSize,omitempty"`
+	Database    *string            `json:"database,omitempty"`
+	Backup      *UpdateBackupPatch `json:"backup,omitempty"`
 	// Pooler toggles the opt-in PgBouncer pooler. Nil = leave alone.
 	Pooler *AddonPoolerPatch `json:"pooler,omitempty"`
 }
@@ -506,6 +507,18 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 		Delete(ctx, fqn, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete addon: %w", err)
 	}
+	// Data-safety trail: the addon's StatefulSet PVCs carry
+	// helm.sh/resource-policy=keep, so deleting the addon does NOT
+	// delete its data — the PVC is RETAINED. That's deliberate (an
+	// accidental delete shouldn't nuke a production DB), but it's a
+	// silent orphan: nothing else records which project owned it, and
+	// re-adding an addon with the same name will REUSE the old PVC's
+	// stale data. Log it loudly so an operator has a trail to either
+	// reclaim the space or know the data will come back on re-add.
+	if pvcs := s.retainedPVCsForAddon(ctx, ns, fqn); len(pvcs) > 0 {
+		slog.Default().Warn("addon deleted; data PVC(s) RETAINED (resource-policy=keep) — delete manually to reclaim, or re-adding this addon name will reuse the old data",
+			"project", project, "addon", name, "fqn", fqn, "pvcs", pvcs)
+	}
 	// Un-subscribe every service in the project from this addon
 	// (B3.2 from v0.17.0 audit). Without this, a stale subscription
 	// survives addon deletion and auto-re-attaches if the same name
@@ -513,6 +526,29 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 	// roll back the delete.
 	s.unsubscribeFromAddon(ctx, ns, project, name)
 	return s.RefreshEnvSecrets(ctx, project)
+}
+
+// retainedPVCsForAddon returns the names of PVCs that will survive the
+// addon's deletion (StatefulSet data PVCs carry resource-policy=keep).
+// Best-effort: a list error returns nil — the warning it feeds is
+// advisory, not load-bearing.
+func (s *Service) retainedPVCsForAddon(ctx context.Context, ns, fqn string) []string {
+	// Clientset is nil in unit tests that only wire the dynamic client
+	// (and on kube-less installs). The PVC trail is advisory, so skip.
+	if s.Kube == nil || s.Kube.Clientset == nil {
+		return nil
+	}
+	list, err := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: "app.kubernetes.io/instance=" + fqn,
+	})
+	if err != nil || list == nil {
+		return nil
+	}
+	out := make([]string, 0, len(list.Items))
+	for i := range list.Items {
+		out = append(out, list.Items[i].Name)
+	}
+	return out
 }
 
 // unsubscribeFromAddon walks every KusoService in the project and
@@ -782,8 +818,8 @@ func (s *Service) mirrorExternalSecret(ctx context.Context, ns, addonFQN string,
 			Name:      connName,
 			Namespace: ns,
 			Labels: map[string]string{
-				"kuso.sislelabs.com/addon-conn":     "true",
-				"kuso.sislelabs.com/external":       "true",
+				"kuso.sislelabs.com/addon-conn":      "true",
+				"kuso.sislelabs.com/external":        "true",
 				"kuso.sislelabs.com/external-source": ext.SecretName,
 			},
 		},

@@ -7,7 +7,52 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Save, HardDrive, Check } from "lucide-react";
+import { Save, HardDrive, Check, ShieldAlert, ShieldCheck } from "lucide-react";
+
+interface BackupHealth {
+  configured: boolean;
+  cronJobPresent: boolean;
+  suspended: boolean;
+  schedule?: string;
+  lastSuccessAt?: string;
+  lastFailureAt?: string;
+  stale: boolean;
+  healthy: boolean;
+  detail: string;
+}
+
+// ControlPlaneBackupBanner surfaces the health of the kuso DB
+// (control-plane) backup — separate from the addon-backup S3 config
+// below. The control-plane backup is opt-in and self-suspends silently;
+// this banner makes "your kuso DB isn't being backed up" visible.
+function ControlPlaneBackupBanner() {
+  const health = useQuery({
+    queryKey: ["admin", "backup-health"],
+    queryFn: () => api<BackupHealth>("/api/admin/backup-health"),
+    refetchInterval: 60_000,
+  });
+  if (health.isPending || !health.data) return null;
+  const h = health.data;
+  const tone = h.healthy
+    ? "border-green-500/30 bg-green-500/5 text-green-300/90"
+    : "border-amber-500/40 bg-amber-500/10 text-amber-200";
+  const Icon = h.healthy ? ShieldCheck : ShieldAlert;
+  return (
+    <div className={`mb-6 flex items-start gap-2.5 rounded-md border px-3 py-2.5 text-[12px] leading-relaxed ${tone}`}>
+      <Icon className="mt-0.5 h-4 w-4 shrink-0" />
+      <div className="min-w-0">
+        <p className="font-semibold">Control-plane database backup</p>
+        <p className="mt-0.5">{h.detail}</p>
+        {h.lastSuccessAt && (
+          <p className="mt-0.5 font-mono text-[10px] opacity-80">
+            last success {new Date(h.lastSuccessAt).toLocaleString()}
+            {h.schedule ? ` · schedule ${h.schedule}` : ""}
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
 
 interface BackupSettings {
   bucket: string;
@@ -66,6 +111,8 @@ export default function BackupSettingsPage() {
           </p>
         </div>
       </header>
+
+      <ControlPlaneBackupBanner />
 
       {settings.isPending ? (
         <Skeleton className="h-72 w-full rounded-md" />

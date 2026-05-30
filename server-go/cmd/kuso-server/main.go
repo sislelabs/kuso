@@ -25,6 +25,7 @@ import (
 	"kuso/server/internal/alerts"
 	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
+	"kuso/server/internal/backuphealth"
 	"kuso/server/internal/buildcontroller"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/config"
@@ -901,6 +902,16 @@ func main() {
 			}
 			ae := alerts.New(database, logDB, kubeClient, notifyDisp, logger.With("component", "alerts"))
 			go ae.Run(workCtx)
+			// Control-plane backup health watcher: fires a one-shot
+			// notify event on the healthy↔unhealthy edge so a silently-
+			// stopped (or never-configured) kuso-DB backup doesn't stay
+			// invisible until restore time.
+			go (&backuphealth.Watcher{
+				Kube:      kubeClient,
+				Notify:    notifyDisp,
+				Namespace: *namespace,
+				Logger:    logger.With("component", "backupwatch"),
+			}).Run(workCtx)
 		}
 		if os.Getenv("KUSO_DISABLE_LEADER_ELECTION") == "true" {
 			startKubeSingletons(ctx)
