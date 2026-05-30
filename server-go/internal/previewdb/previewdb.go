@@ -31,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/kube"
@@ -160,7 +161,7 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 					// won't try to re-clone its own output on the next
 					// sync, AND the env-delete sweep can find every
 					// clone via a single label-selector List query.
-					kube.LabelEnv:                       fmt.Sprintf("preview-pr-%d", prNumber),
+					kube.LabelEnv: fmt.Sprintf("preview-pr-%d", prNumber),
 					// Source-tracking label is preview-specific (the
 					// canonical env label can't carry both env + source
 					// in one field); keeps the preview-delete sweep
@@ -274,28 +275,86 @@ func (c *Cloner) cloneReady(ctx context.Context, ns, cloneFQN string) bool {
 }
 
 func (c *Cloner) runSeedJob(ctx context.Context, ns, project, sourceFQN, cloneFQN string) error {
-	jobName := fmt.Sprintf("%s-seed-from-%s-%d", cloneFQN, addons.ShortName(project, sourceFQN), time.Now().Unix())
+	// Own the Job by the clone addon CR so kube-GC cascades the delete
+	// when DeletePRAddons drops the clone on PR-close (mirrors how
+	// addons.Add owns each addon by its KusoProject). Best-effort: if the
+	// clone CR lookup fails we still create the Job (the TTL inside
+	// buildSeedJob is the fallback reaper), we just lose the cascade.
+	var ownerUID types.UID
+	if clone, err := c.Kube.GetKusoAddon(ctx, ns, cloneFQN); err == nil && clone != nil {
+		ownerUID = clone.UID
+	}
+
+	job := buildSeedJob(ns, project, sourceFQN, cloneFQN, ownerUID, time.Now().Unix())
+	if _, err := c.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return nil // re-running for the same PR; previous Job
+			// either succeeded or is still in flight.
+		}
+		return fmt.Errorf("create seed job: %w", err)
+	}
+	return nil
+}
+
+// buildSeedJob renders the pg_dump|psql seed Job that clones a source
+// postgres addon into a per-PR clone. Pure (no I/O) so the env-var
+// sourcing, owner cascade, and TTL stay unit-testable — these are
+// exactly the fields that broke (the "-postgresql" host suffix +
+// hardcoded "kuso" DB caused every seed to fail DNS resolution, and a
+// missing owner/TTL orphaned 27 Failed Jobs). ownerUID empty → no
+// owner ref (cascade lost, TTL still reaps). nowUnix makes the Job
+// name deterministic in tests.
+func buildSeedJob(ns, project, sourceFQN, cloneFQN string, ownerUID types.UID, nowUnix int64) *batchv1.Job {
+	jobName := fmt.Sprintf("%s-seed-from-%s-%d", cloneFQN, addons.ShortName(project, sourceFQN), nowUnix)
 	if len(jobName) > 63 {
 		jobName = jobName[:63]
 	}
 	one := int32(1)
 	zero := int32(0)
-	job := &batchv1.Job{
+	// TTL-reap the Job (and its pod) 1h after it finishes — success or
+	// failure. Without this a Failed seed Job sits forever; we saw 27
+	// orphaned Failed Jobs accumulate across a PR's resyncs because
+	// nothing GC'd them. The ownerReference below cascades the delete on
+	// PR-close; this TTL handles the stale-resync case while the PR is
+	// still open.
+	ttl := int32(3600)
+
+	var owners []metav1.OwnerReference
+	if ownerUID != "" {
+		// BlockOwnerDeletion / Controller=false for the same reasons as
+		// addons.Add: don't deadlock the clone addon's helm-uninstall
+		// finalizer behind Job GC, and let helm-operator stay the
+		// reconcile controller.
+		blockFalse := false
+		controllerFalse := false
+		owners = append(owners, metav1.OwnerReference{
+			APIVersion:         "application.kuso.sislelabs.com/v1alpha1",
+			Kind:               "KusoAddon",
+			Name:               cloneFQN,
+			UID:                ownerUID,
+			BlockOwnerDeletion: &blockFalse,
+			Controller:         &controllerFalse,
+		})
+	}
+
+	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      jobName,
-			Namespace: ns,
+			Name:            jobName,
+			Namespace:       ns,
+			OwnerReferences: owners,
 			Labels: map[string]string{
-				"app.kubernetes.io/managed-by":  "kuso-server",
-				"kuso.sislelabs.com/role":       "preview-seed",
-				"kuso.sislelabs.com/project":    project,
+				"app.kubernetes.io/managed-by":    "kuso-server",
+				"kuso.sislelabs.com/role":         "preview-seed",
+				"kuso.sislelabs.com/project":      project,
 				"kuso.sislelabs.com/source-addon": addons.ShortName(project, sourceFQN),
 				"kuso.sislelabs.com/clone-addon":  addons.ShortName(project, cloneFQN),
 			},
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit: &zero,
-			Completions:  &one,
-			Parallelism:  &one,
+			BackoffLimit:            &zero,
+			Completions:             &one,
+			Parallelism:             &one,
+			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				Spec: corev1.PodSpec{
 					RestartPolicy: corev1.RestartPolicyNever,
@@ -319,14 +378,24 @@ PGPASSWORD="${SRC_PASSWORD}" pg_dump --no-owner --no-acl --clean --if-exists \
   -h "${DST_HOST}" -U "${DST_USER}" "${DST_DB}"
 echo "==> done"
 `},
+						// Source HOST/USER/DB from each addon's -conn Secret
+						// rather than constructing them. The Service name is
+						// just the addon CR name (HA writes "<name>-rw" into
+						// POSTGRES_HOST), and the DB name falls back to the
+						// project name — NOT a literal "kuso". The old
+						// "<name>-postgresql" host + hardcoded "kuso" DB was
+						// the same bug the backup CronJob already fixed (see
+						// kusoaddon/templates/backup-cronjob.yaml v0.7.x note):
+						// every seed Job failed with "could not translate host
+						// name ... Name does not resolve".
 						Env: []corev1.EnvVar{
-							{Name: "SRC_HOST", Value: sourceFQN + "-postgresql"},
-							{Name: "SRC_USER", Value: "kuso"},
-							{Name: "SRC_DB", Value: "kuso"},
+							envFromSecret("SRC_HOST", addons.ConnSecretName(sourceFQN), "POSTGRES_HOST"),
+							envFromSecret("SRC_USER", addons.ConnSecretName(sourceFQN), "POSTGRES_USER"),
+							envFromSecret("SRC_DB", addons.ConnSecretName(sourceFQN), "POSTGRES_DB"),
 							envFromSecret("SRC_PASSWORD", addons.ConnSecretName(sourceFQN), "POSTGRES_PASSWORD"),
-							{Name: "DST_HOST", Value: cloneFQN + "-postgresql"},
-							{Name: "DST_USER", Value: "kuso"},
-							{Name: "DST_DB", Value: "kuso"},
+							envFromSecret("DST_HOST", addons.ConnSecretName(cloneFQN), "POSTGRES_HOST"),
+							envFromSecret("DST_USER", addons.ConnSecretName(cloneFQN), "POSTGRES_USER"),
+							envFromSecret("DST_DB", addons.ConnSecretName(cloneFQN), "POSTGRES_DB"),
 							envFromSecret("DST_PASSWORD", addons.ConnSecretName(cloneFQN), "POSTGRES_PASSWORD"),
 						},
 					}},
@@ -334,14 +403,6 @@ echo "==> done"
 			},
 		},
 	}
-	if _, err := c.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return nil // re-running for the same PR; previous Job
-			           // either succeeded or is still in flight.
-		}
-		return fmt.Errorf("create seed job: %w", err)
-	}
-	return nil
 }
 
 func (c *Cloner) namespaceFor(ctx context.Context, project string) string {

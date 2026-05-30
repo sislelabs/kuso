@@ -93,18 +93,24 @@ func (d *Dispatcher) runPreviewSeedJob(ctx context.Context, project, envCRName, 
 	// stuck seed (migration deadlock, queryland infinite loop). Better
 	// to fail loudly than to silently chew compute.
 	deadline := int64(10 * 60)
+	// TTL-reap the Job 1h after it finishes. watchSeedJob polls for
+	// completion, but that goroutine dies on a server restart — without
+	// a TTL a finished (especially Failed) Job lingers forever, the same
+	// orphan class as the previewdb clone-seed Jobs.
+	ttl := int32(3600)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: jobName,
 			Labels: map[string]string{
-				"kuso.sislelabs.com/project":         project,
-				"kuso.sislelabs.com/preview-seed":    envCRName,
-				"app.kubernetes.io/managed-by":       "kuso-preview-seed",
+				"kuso.sislelabs.com/project":      project,
+				"kuso.sislelabs.com/preview-seed": envCRName,
+				"app.kubernetes.io/managed-by":    "kuso-preview-seed",
 			},
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit:          &backoff,
-			ActiveDeadlineSeconds: &deadline,
+			BackoffLimit:            &backoff,
+			ActiveDeadlineSeconds:   &deadline,
+			TTLSecondsAfterFinished: &ttl,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
