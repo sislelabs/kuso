@@ -4,6 +4,8 @@ export {
   useLogin,
   useSignOut,
   useCan,
+  useCanOnProject,
+  useProjectRole,
   usePending,
   Perms,
   sessionQueryKey,

@@ -319,9 +319,12 @@ func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ProjectsHandler) Create(w http.ResponseWriter, r *http.Request) {
-	// Project creation is an instance-level action — only admins (or
-	// users with project:write). Non-admins can't conjure new projects.
-	if !requirePerm(w, r, auth.PermProjectWrite) {
+	// Project creation is an instance-level action. In role-system v2
+	// project:write is a per-PROJECT perm not present in any JWT, so we
+	// gate creation on instance admin (settings:admin) — you must be an
+	// admin to conjure a brand-new project; editors are added to
+	// existing projects via grants.
+	if !requireAdmin(w, r) {
 		return
 	}
 	var wire apiv1.CreateProjectRequest
@@ -829,6 +832,22 @@ func (h *ProjectsHandler) SetEnv(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
 	envVars := apiv1EnvVarsToDomain(wire.EnvVars)
+	// Mask-sentinel guard (defense in depth). GetEnv returns masked
+	// values ("••••••••") to non-admins. A read-modify-write client (web
+	// editor, `kuso env set`, third-party) that didn't strip the mask
+	// would echo the sentinel back here and clobber the real value. We
+	// refuse any literal value equal to the sentinel rather than persist
+	// it — the caller must either omit the key (leave it unchanged) or
+	// supply a real value. Protects every client, not just the ones we
+	// patched.
+	for _, v := range envVars {
+		if v.Value == envMaskSentinel {
+			http.Error(w,
+				fmt.Sprintf("refusing to write masked sentinel value for %q — env values are admin-only; omit the key to leave it unchanged or supply a real value", v.Name),
+				http.StatusBadRequest)
+			return
+		}
+	}
 	if err := h.Svc.SetEnvWithOpts(ctx,
 		project,
 		service,

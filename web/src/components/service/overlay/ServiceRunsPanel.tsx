@@ -7,7 +7,7 @@
 // consistently.
 
 import { useState } from "react";
-import { useCan, Perms } from "@/features/auth";
+import { useCanOnProject, Perms } from "@/features/auth";
 import {
   useRuns,
   useCreateRun,
@@ -79,7 +79,7 @@ function triggerLabel(r: KusoRun): string {
 
 export function ServiceRunsPanel({ project, service }: Props) {
   const runs = useRuns(project, service);
-  const canRun = useCan(Perms.ServicesWrite);
+  const canRun = useCanOnProject(project, Perms.ServicesWrite);
   const [openRun, setOpenRun] = useState<string | null>(null);
 
   return (

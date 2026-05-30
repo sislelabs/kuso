@@ -149,11 +149,11 @@ func (h *InvitesHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var instanceRole *string
 	if req.InstanceRole != "" {
 		switch req.InstanceRole {
-		case "admin", "member", "viewer", "billing", "pending":
+		case "admin", "editor", "viewer":
 			ir := req.InstanceRole
 			instanceRole = &ir
 		default:
-			http.Error(w, "instanceRole: must be admin/member/viewer/billing/pending", http.StatusBadRequest)
+			http.Error(w, "instanceRole: must be admin, editor, or viewer", http.StatusBadRequest)
 			return
 		}
 	}

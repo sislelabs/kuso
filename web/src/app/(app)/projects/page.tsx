@@ -22,10 +22,11 @@ import type { KusoEnvironment, KusoService, KusoAddon } from "@/types/projects";
 export default function ProjectsPage() {
   const router = useRouter();
   const { data, isPending, isError, error, refetch } = useProjects();
-  // project:write gates project creation. Users without it can still
-  // see + open projects they belong to (the server already filters
-  // /api/projects to their memberships).
-  const canCreate = useCan(Perms.ProjectWrite);
+  // Project creation is an instance-admin action in role-system v2
+  // (editors are granted access to EXISTING projects; only admins make
+  // new ones). Non-admins still see + open projects they're granted —
+  // the server filters /api/projects to their grants.
+  const canCreate = useCan(Perms.SettingsAdmin);
   const installations = useInstallations();
 
   // First-run redirect: a freshly-logged-in user landing on /projects

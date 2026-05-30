@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { addCron, deleteCron, syncCron, useServiceCrons } from "@/features/services";
 import type { KusoCron } from "@/features/services";
-import { useCan, Perms } from "@/features/auth";
+import { useCanOnProject, Perms } from "@/features/auth";
 import { Clock, Plus, Trash2, RefreshCw, X } from "lucide-react";
 import { toast } from "sonner";
 import { CronPicker } from "@/components/shared/CronPicker";
@@ -32,7 +32,7 @@ interface Props {
 // up the new image.
 export function ServiceCronsPanel({ project, service, defaultAdding }: Props) {
   const qc = useQueryClient();
-  const canWrite = useCan(Perms.ServicesWrite);
+  const canWrite = useCanOnProject(project, Perms.ServicesWrite);
   const [adding, setAdding] = useState(!!defaultAdding && canWrite);
 
   // Shared with the overlay shell's tab-visibility logic: same query

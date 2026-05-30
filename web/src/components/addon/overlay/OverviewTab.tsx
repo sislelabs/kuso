@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Copy, Eye, EyeOff, Check } from "lucide-react";
 import { addonSecret } from "@/features/projects";
 import { Button } from "@/components/ui/button";
-import { useCan, Perms } from "@/features/auth";
+import { useCanOnProject, Perms } from "@/features/auth";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -36,7 +36,7 @@ export function OverviewTab({
   kind: string;
   cr?: import("@/types/projects").KusoAddon;
 }) {
-  const canReadSecrets = useCan(Perms.SecretsRead);
+  const canReadSecrets = useCanOnProject(project, Perms.SecretsRead);
   // The connection secret is provisioned async by helm-operator; it
   // can take a few seconds after the addon is created. Refetch slowly
   // when it isn't ready yet so the panel auto-fills.

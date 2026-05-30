@@ -10,7 +10,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 )
 
@@ -97,9 +96,12 @@ func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "revisions disabled", http.StatusServiceUnavailable)
 		return
 	}
-	if !requirePerm(w, r, auth.PermServicesWrite) {
-		return
-	}
+	// No JWT-perm pre-gate here: in role-system v2 services:write is a
+	// per-project perm not present in any token, so a requirePerm check
+	// would block everyone. The authoritative gate is the project-scoped
+	// requireProjectAccess(...Editor) below, once we know the revision's
+	// project. Revision IDs are opaque and we 404 on not-found, so
+	// loading the revision before the gate doesn't leak.
 	ctx, cancel := projectCtx(r)
 	defer cancel()
 	id := chi.URLParam(r, "id")

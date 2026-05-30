@@ -78,10 +78,13 @@ func (h *TerminalWSHandler) Terminal(w http.ResponseWriter, r *http.Request) {
 	service := chi.URLParam(r, "service")
 
 	// Tenancy gate. A browser shell into a pod can `printenv` every
-	// secret value, so in role-system v2 it is ADMIN-ONLY — the same
-	// line we draw for reading env values and the SQL console. Editors
-	// can deploy and manage but cannot open a shell.
-	if !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
+	// secret value, so in role-system v2 it requires the ADMIN role —
+	// the same boundary as reading env values and the SQL console. This
+	// is satisfied by an instance admin OR a project-admin on THIS
+	// project (granted via a ProjectGrant with override=admin), resolved
+	// the same way as callerCanReadSecrets — so the three secret-bearing
+	// surfaces stay consistent.
+	if !callerHasProjectPerm(r.Context(), h.DB, project, auth.PermShellExec) {
 		http.Error(w, "forbidden: shell access requires the admin role", http.StatusForbidden)
 		return
 	}

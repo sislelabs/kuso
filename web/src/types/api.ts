@@ -36,4 +36,15 @@ export interface UserProfile {
   userGroups: string[];
   permissions: string[];
   image?: string | null;
+  // Role-system v2: instance perms live in `permissions` (admin-only);
+  // project access is resolved server-side and surfaced here so the
+  // client can gate per-project affordances without project perms in
+  // the JWT.
+  instanceRole?: "admin" | "editor" | "viewer" | "";
+  // adminAll = instance admin: sees/acts on every project as admin.
+  adminAll?: boolean;
+  // projectRoles maps a visible project name → the user's effective
+  // role there. Empty/absent for ungranted projects. Irrelevant when
+  // adminAll is true.
+  projectRoles?: Record<string, "admin" | "editor" | "viewer">;
 }

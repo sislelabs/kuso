@@ -108,16 +108,39 @@ func (h *AdminHandler) Profile(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "profile", err)
 		return
 	}
+	// Role-system v2: the JWT only carries instance-level perms, so the
+	// client can't derive project access from claims.Permissions alone.
+	// Resolve the caller's effective tenancy and expose:
+	//   - instanceRole: admin|editor|viewer|"" (the user's level)
+	//   - projectRoles: { <project>: admin|editor|viewer } for every
+	//     project the user can see (admins → all-access flag instead).
+	// The web useCan()/usePending() consume these to gate per-project
+	// affordances correctly. Best-effort: on a resolution error we fall
+	// back to empty (the server gates still enforce; UI just hides).
+	instanceRole := ""
+	projectRoles := map[string]string{}
+	adminAll := auth.Has(claims.Permissions, auth.PermSettingsAdmin)
+	if tenancy, terr := h.DB.ListUserTenancyCached(ctx, claims.UserID); terr == nil {
+		instanceRole = string(tenancy.InstanceRole)
+		for _, m := range tenancy.ProjectMemberships {
+			projectRoles[m.Project] = string(m.Role)
+		}
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"id":          u.ID,
-		"username":    u.Username,
-		"email":       u.Email,
-		"firstName":   nullStr(u.FirstName),
-		"lastName":    nullStr(u.LastName),
-		"image":       nullStr(u.Image),
-		"role":        claims.Role,
-		"userGroups":  claims.UserGroups,
-		"permissions": claims.Permissions,
+		"id":           u.ID,
+		"username":     u.Username,
+		"email":        u.Email,
+		"firstName":    nullStr(u.FirstName),
+		"lastName":     nullStr(u.LastName),
+		"image":        nullStr(u.Image),
+		"role":         claims.Role,
+		"userGroups":   claims.UserGroups,
+		"permissions":  claims.Permissions,
+		"instanceRole": instanceRole,
+		// adminAll=true means "sees every project as admin" (instance
+		// admin); the per-project map is then irrelevant to the client.
+		"adminAll":     adminAll,
+		"projectRoles": projectRoles,
 	})
 }
 

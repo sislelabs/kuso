@@ -676,6 +676,13 @@ export function ProjectCanvas({
       // anything else. getServiceEnv returns secret-backed vars in
       // their valueFrom form; we re-send them untouched.
       const current = await getServiceEnv(project, plan.targetService);
+      // Role-system v2: masked values (non-admin) would be re-sent as
+      // the sentinel and clobber the target's real env. Refuse. (Server
+      // rejects the sentinel too.)
+      if (current.masked) {
+        toast.error("Env values are admin-only for your role — can't wire this connection without seeing the target's env.");
+        return;
+      }
       const existing = current.envVars ?? [];
       const sameName = existing.find((v) => v.name === plan.varName);
       if (sameName) {

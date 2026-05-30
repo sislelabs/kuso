@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useBuilds, useTriggerBuild } from "@/features/services";
-import { useCan, Perms } from "@/features/auth";
+import { useCanOnProject, Perms } from "@/features/auth";
 import type { BuildSummary } from "@/features/services/api";
 import type { KusoEnvironment } from "@/types/projects";
 import { RotateCcw, ExternalLink } from "lucide-react";
@@ -83,7 +83,7 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
   const builds = useBuilds(project, service);
   const trigger = useTriggerBuild(project, service);
   const [expanded, setExpanded] = useState<string | null>(null);
-  const canDeploy = useCan(Perms.ServicesWrite);
+  const canDeploy = useCanOnProject(project, Perms.ServicesWrite);
   // Re-render every second while at least one build is running so
   // the in-flight duration display ticks visibly.
   const anyRunning = (builds.data ?? []).some(

@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from "motion/react";
 import { useAddons } from "@/features/projects";
 import { Skeleton } from "@/components/ui/skeleton";
 import { AddonIcon, addonLabel } from "@/components/addon/AddonIcon";
-import { useCan, Perms } from "@/features/auth";
+import { useCanOnProject, Perms } from "@/features/auth";
 import { X, Database, HardDrive, Settings, Info, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -160,8 +160,8 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
   const data = (addons.data ?? []).find((a) => a.metadata.name === addon);
   const kind = data?.spec.kind ?? "";
   const isPostgres = kind === "postgres";
-  const canSQL = useCan(Perms.SQLRead);
-  const canWriteAddon = useCan(Perms.AddonsWrite);
+  const canSQL = useCanOnProject(project, Perms.SQLRead);
+  const canWriteAddon = useCanOnProject(project, Perms.AddonsWrite);
 
   return (
     <AnimatePresence>

@@ -123,14 +123,13 @@ func requireProjectAccess(
 	return true
 }
 
-// callerCanReadSecrets reports whether the request's caller may see env
-// var VALUES on the named project. In role-system v2 this is admin-only
-// (effective project role == admin, which instance admins always have).
-// Editors can write env vars but must not read existing values, so env
-// read endpoints mask values when this returns false.
-//
-// Fail-closed: any resolution error → false (mask).
-func callerCanReadSecrets(ctx context.Context, dbConn *db.DB, project string) bool {
+// callerHasProjectPerm reports whether the request's caller holds a
+// project-scoped permission on the named project. It's the single
+// resolution path behind the project-scoped secret-bearing gates:
+// instance admin → always true; otherwise resolve the caller's
+// effective project role (override / inherited / viewer-floor) and check
+// the role's perm set. Fail-closed: any resolution error → false.
+func callerHasProjectPerm(ctx context.Context, dbConn *db.DB, project string, want auth.Permission) bool {
 	claims, ok := auth.ClaimsFromContext(ctx)
 	if !ok {
 		return false
@@ -145,29 +144,20 @@ func callerCanReadSecrets(ctx context.Context, dbConn *db.DB, project string) bo
 	if err != nil {
 		return false
 	}
-	return auth.HasProjectPerm(auth.ProjectRoleFor(tenancy, project), auth.PermSecretsRead)
+	return auth.HasProjectPerm(auth.ProjectRoleFor(tenancy, project), want)
 }
 
-// callerCanRunSQL reports whether the request's caller may use the SQL
-// browser (list tables / run SELECT) against the project's databases.
-// Admin-only in v2 — a SELECT can read any secret-bearing app table.
-// Fail-closed.
+// callerCanReadSecrets — may the caller see env VALUES / addon
+// connection values / export a project? Admin-only (secrets:read).
+func callerCanReadSecrets(ctx context.Context, dbConn *db.DB, project string) bool {
+	return callerHasProjectPerm(ctx, dbConn, project, auth.PermSecretsRead)
+}
+
+// callerCanRunSQL — may the caller use the SQL browser (list tables /
+// run SELECT)? Admin-only (sql:read) — a SELECT can read any
+// secret-bearing app table.
 func callerCanRunSQL(ctx context.Context, dbConn *db.DB, project string) bool {
-	claims, ok := auth.ClaimsFromContext(ctx)
-	if !ok {
-		return false
-	}
-	if auth.Has(claims.Permissions, auth.PermSettingsAdmin) {
-		return true
-	}
-	if dbConn == nil {
-		return false
-	}
-	tenancy, err := dbConn.ListUserTenancyCached(ctx, claims.UserID)
-	if err != nil {
-		return false
-	}
-	return auth.HasProjectPerm(auth.ProjectRoleFor(tenancy, project), auth.PermSQLRead)
+	return callerHasProjectPerm(ctx, dbConn, project, auth.PermSQLRead)
 }
 
 // maskEnvValues returns a copy of the env-var slice with every Value

@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { useCan, Perms } from "@/features/auth";
+import { useCanOnProject, Perms } from "@/features/auth";
 import { api } from "@/lib/api-client";
 import { Section, Row, type SectionProps } from "./_primitives";
 
@@ -150,7 +150,7 @@ export function SourceSection({
 function RenameRow({ project, service }: { project: string; service: string }) {
   const router = useRouter();
   const qc = useQueryClient();
-  const canWrite = useCan(Perms.ServicesWrite);
+  const canWrite = useCanOnProject(project, Perms.ServicesWrite);
   const [revealed, setRevealed] = useState(false);
   const [open, setOpen] = useState(false);
   const [newName, setNewName] = useState(service);

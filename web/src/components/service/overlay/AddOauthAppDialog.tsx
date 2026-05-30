@@ -105,7 +105,15 @@ export function AddOauthAppDialog({
       // forgetting to merge would wipe DATABASE_URL etc. We skip any
       // entry without a name (shouldn't happen, but KusoEnvVar.name
       // is typed optional).
-      const { envVars } = await getServiceEnv(project, service);
+      const { envVars, masked } = await getServiceEnv(project, service);
+      // Role-system v2: if values are masked (non-admin), this
+      // read-modify-write would write the mask sentinel over every
+      // existing var. Refuse rather than corrupt. (The server also
+      // rejects the sentinel as a backstop.)
+      if (masked) {
+        toast.error("Env values are admin-only for your role — can't add an OAuth app without seeing existing values.");
+        return;
+      }
       const byName = new Map<string, KusoEnvVar>();
       for (const e of envVars) {
         if (e.name) byName.set(e.name, e);

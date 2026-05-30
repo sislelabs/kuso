@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { toast } from "sonner";
 import { usePatchService, type PatchServiceBody } from "@/features/services";
-import { useCan, Perms } from "@/features/auth";
+import { useCanOnProject, Perms } from "@/features/auth";
 import { useEnvironments, setEnvGroupServiceBranch, envsQueryKey } from "@/features/projects";
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
@@ -133,7 +133,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
   // Gate the floating save bar on services:write — viewers can scroll
   // through the panel but can't edit. Inputs are still editable to
   // preserve copy/paste affordance, just not committable.
-  const canWrite = useCan(Perms.ServicesWrite);
+  const canWrite = useCanOnProject(project, Perms.ServicesWrite);
 
   // Whenever the upstream service changes (refetch lands fresh data),
   // re-baseline so the dirty flag clears. We only do this when the

@@ -19,6 +19,9 @@ export interface SessionShape {
   session: {
     permissions: string[];
     userGroups: string[];
+    instanceRole: "admin" | "editor" | "viewer" | "";
+    adminAll: boolean;
+    projectRoles: Record<string, "admin" | "editor" | "viewer">;
   };
 }
 
@@ -41,6 +44,9 @@ export function useSession() {
           session: {
             permissions: p.permissions ?? [],
             userGroups: p.userGroups ?? [],
+            instanceRole: p.instanceRole ?? "",
+            adminAll: p.adminAll ?? false,
+            projectRoles: p.projectRoles ?? {},
           },
         };
       } catch (e) {
@@ -115,8 +121,14 @@ export function useSignOut() {
 // the initial session fetch so we err on the side of hiding stuff
 // (better than flashing an unauthorized control then yanking it).
 //
-// Pass an array to OR multiple perms ("settings:admin OR
-// settings:read" pattern for read-mostly UIs).
+// useCan checks an INSTANCE-level permission against the JWT-baked perm
+// set (settings:admin, user:write, audit:read, billing:read,
+// system:update, settings:read). In role-system v2 these are the only
+// perms in the token; PROJECT-scoped affordances must use
+// useCanOnProject instead — useCan will (correctly) return false for a
+// project perm because non-admins don't carry them in the JWT.
+//
+// Pass an array to OR multiple perms.
 export function useCan(perm: string | string[]): boolean {
   const { data } = useSession();
   if (!data) return false;
@@ -126,6 +138,48 @@ export function useCan(perm: string | string[]): boolean {
     if (have.includes(w)) return true;
   }
   return false;
+}
+
+// permsForProjectRole mirrors server auth.PermsForProjectRole — the
+// project-scoped half of the matrix. Keep in lockstep with
+// server-go/internal/auth/permissions.go.
+function permsForProjectRole(role: "admin" | "editor" | "viewer" | ""): Set<string> {
+  const read = ["project:read", "services:read", "addons:read"];
+  const write = ["project:write", "services:write", "addons:write", "secrets:write"];
+  const adminOnly = ["secrets:read", "shell:exec", "sql:read"];
+  switch (role) {
+    case "admin":
+      return new Set([...read, ...write, ...adminOnly]);
+    case "editor":
+      return new Set([...read, ...write]);
+    case "viewer":
+      return new Set(read);
+    default:
+      return new Set();
+  }
+}
+
+// useProjectRole returns the caller's effective role on a project
+// ("admin" for instance admins via adminAll), or "" if the project is
+// invisible to them.
+export function useProjectRole(project: string): "admin" | "editor" | "viewer" | "" {
+  const { data } = useSession();
+  if (!data) return "";
+  if (data.session.adminAll) return "admin";
+  return data.session.projectRoles?.[project] ?? "";
+}
+
+// useCanOnProject gates a PROJECT-scoped affordance by resolving the
+// caller's effective role on `project` and checking the role's perm set
+// — the client-side analog of the server's requireProjectAccess +
+// PermsForProjectRole. Use for Save/Deploy/Run/env/addon/SQL/shell
+// buttons inside a project. Pass an array to OR.
+export function useCanOnProject(project: string, perm: string | string[]): boolean {
+  const role = useProjectRole(project);
+  if (role === "") return false;
+  const have = permsForProjectRole(role);
+  const wants = Array.isArray(perm) ? perm : [perm];
+  return wants.some((w) => have.has(w));
 }
 
 // Common permission strings — match what server/internal/auth/permissions.go
@@ -148,11 +202,19 @@ export const Perms = {
   SystemUpdate: "system:update",
 } as const;
 
-// usePending returns true when the session exists but the user has
-// no perms (pending admin approval). Drives the redirect to
-// /awaiting-access.
+// usePending returns true when the session exists but the user has no
+// usable access yet (awaiting an admin grant). Mirrors server
+// auth.IsPending in role-system v2: an instance admin is never pending;
+// anyone else is pending iff they can see zero projects. Drives the
+// redirect to /awaiting-access.
+//
+// NOTE: must NOT key off permissions.length===0 anymore — in v2 every
+// non-admin has an empty JWT perm set, which previously bounced every
+// editor/viewer to awaiting-access even with valid project grants.
 export function usePending(): boolean {
   const { data } = useSession();
   if (!data) return false;
-  return (data.session.permissions ?? []).length === 0;
+  const s = data.session;
+  if (s.adminAll) return false;
+  return Object.keys(s.projectRoles ?? {}).length === 0;
 }

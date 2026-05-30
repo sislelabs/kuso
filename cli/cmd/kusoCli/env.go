@@ -134,9 +134,18 @@ var envSetCmd = &cobra.Command{
 		}
 		var existing struct {
 			EnvVars []map[string]any `json:"envVars"`
+			Masked  bool             `json:"masked"`
 		}
 		if err := json.Unmarshal(current.Body(), &existing); err != nil {
 			return fmt.Errorf("decode current env: %w", err)
+		}
+		// Role-system v2: non-admins get MASKED values from GetEnv. This
+		// is a read-modify-write of the full list, so proceeding would
+		// echo the mask sentinel back over untouched vars and destroy the
+		// real values. Refuse — needs the admin role to see/merge values.
+		if existing.Masked {
+			return fmt.Errorf("env values are hidden for your role (admin-only); " +
+				"this command can't safely merge masked values — ask an admin")
 		}
 
 		// Build a map for easy update. Preserve valueFrom on existing
@@ -223,9 +232,18 @@ var envUnsetCmd = &cobra.Command{
 		}
 		var existing struct {
 			EnvVars []map[string]any `json:"envVars"`
+			Masked  bool             `json:"masked"`
 		}
 		if err := json.Unmarshal(current.Body(), &existing); err != nil {
 			return fmt.Errorf("decode current env: %w", err)
+		}
+		// Role-system v2: non-admins get MASKED values from GetEnv. This
+		// is a read-modify-write of the full list, so proceeding would
+		// echo the mask sentinel back over untouched vars and destroy the
+		// real values. Refuse — needs the admin role to see/merge values.
+		if existing.Masked {
+			return fmt.Errorf("env values are hidden for your role (admin-only); " +
+				"this command can't safely merge masked values — ask an admin")
 		}
 
 		drop := map[string]bool{}

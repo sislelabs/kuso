@@ -12,7 +12,7 @@ import type { DetectedEnv } from "@/features/services/api";
 import { listAddonSecretKeys } from "@/features/services/api";
 import { useProject, useAddons } from "@/features/projects";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCan, Perms } from "@/features/auth";
+import { useCanOnProject, Perms } from "@/features/auth";
 import { api, ApiError } from "@/lib/api-client";
 import type { KusoEnvVar } from "@/types/projects";
 import { toast } from "sonner";
@@ -316,7 +316,7 @@ export function EnvVarsEditor({
   // read-only. Editors who need to CHANGE a value use the per-key blind
   // set (kuso env set), not this whole-list editor.
   const masked = env.data?.masked ?? false;
-  const canWrite = useCan(Perms.SecretsWrite) && !masked;
+  const canWrite = useCanOnProject(project, Perms.SecretsWrite) && !masked;
   const [rows, setRows] = useState<Row[]>([]);
   const [dirty, setDirty] = useState(false);
   // Type-ahead: when the user types "${{" into a row's value, open
