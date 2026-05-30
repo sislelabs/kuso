@@ -178,9 +178,16 @@ CREATE TABLE IF NOT EXISTS "Notification" (
     "slackUrl" TEXT,
     "slackChannel" TEXT,
     "discordUrl" TEXT,
+    -- Per-event Discord mention rules, JSON-encoded map[event]rule
+    -- (e.g. {"backup.failed":"none"}). Distinct from the typed URL
+    -- columns above because it's an open-ended map; "none" here is an
+    -- explicit opt-out that must survive a round-trip (an error event's
+    -- default is @here, so a missing rule reverts to the ping).
+    "mentions" TEXT,
     "createdAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+ALTER TABLE "Notification" ADD COLUMN IF NOT EXISTS "mentions" TEXT;
 
 CREATE TABLE IF NOT EXISTS "GithubInstallation" (
     "id" BIGSERIAL PRIMARY KEY,

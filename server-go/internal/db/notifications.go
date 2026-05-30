@@ -28,7 +28,7 @@ func (d *DB) ListNotifications(ctx context.Context) ([]Notification, error) {
 	rows, err := d.QueryContext(ctx, `
 SELECT id, name, enabled, type, pipelines, events,
   "webhookUrl", "webhookSecret", "slackUrl", "slackChannel", "discordUrl",
-  "createdAt", "updatedAt"
+  "mentions", "createdAt", "updatedAt"
 FROM "Notification" ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("db: list notifications: %w", err)
@@ -50,7 +50,7 @@ func (d *DB) FindNotification(ctx context.Context, id string) (*Notification, er
 	row := d.QueryRowContext(ctx, `
 SELECT id, name, enabled, type, pipelines, events,
   "webhookUrl", "webhookSecret", "slackUrl", "slackChannel", "discordUrl",
-  "createdAt", "updatedAt"
+  "mentions", "createdAt", "updatedAt"
 FROM "Notification" WHERE id = $1`, id)
 	n, err := scanNotification(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -71,11 +71,11 @@ func (d *DB) CreateNotification(ctx context.Context, n *Notification) error {
 	_, err := d.ExecContext(ctx, `
 INSERT INTO "Notification" (id, name, enabled, type, pipelines, events,
   "webhookUrl", "webhookSecret", "slackUrl", "slackChannel", "discordUrl",
-  "createdAt", "updatedAt")
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+  "mentions", "createdAt", "updatedAt")
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		n.ID, n.Name, n.Enabled, n.Type, string(pj), string(ej),
 		cfg.webhookURL, cfg.webhookSecret, cfg.slackURL, cfg.slackChannel, cfg.discordURL,
-		now, now,
+		cfg.mentions, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("db: create notification: %w", err)
@@ -95,11 +95,11 @@ func (d *DB) UpdateNotification(ctx context.Context, n *Notification) error {
 	res, err := d.ExecContext(ctx, `
 UPDATE "Notification" SET name = $1, enabled = $2, type = $3, pipelines = $4, events = $5,
   "webhookUrl" = $6, "webhookSecret" = $7, "slackUrl" = $8, "slackChannel" = $9, "discordUrl" = $10,
-  "updatedAt" = $11
-WHERE id = $12`,
+  "mentions" = $11, "updatedAt" = $12
+WHERE id = $13`,
 		n.Name, n.Enabled, n.Type, string(pj), string(ej),
 		cfg.webhookURL, cfg.webhookSecret, cfg.slackURL, cfg.slackChannel, cfg.discordURL,
-		prismaNow(), n.ID,
+		cfg.mentions, prismaNow(), n.ID,
 	)
 	if err != nil {
 		return fmt.Errorf("db: update notification: %w", err)
@@ -128,12 +128,12 @@ func scanNotification(s interface {
 }) (*Notification, error) {
 	var n Notification
 	var pipelines, events string
-	var webhookURL, webhookSecret, slackURL, slackChannel, discordURL sql.NullString
+	var webhookURL, webhookSecret, slackURL, slackChannel, discordURL, mentions sql.NullString
 	var createdAt, updatedAt prismaTime
 	if err := s.Scan(
 		&n.ID, &n.Name, &n.Enabled, &n.Type, &pipelines, &events,
 		&webhookURL, &webhookSecret, &slackURL, &slackChannel, &discordURL,
-		&createdAt, &updatedAt,
+		&mentions, &createdAt, &updatedAt,
 	); err != nil {
 		return nil, err
 	}
@@ -161,6 +161,16 @@ func scanNotification(s interface {
 		if discordURL.Valid {
 			n.Config["url"] = discordURL.String
 		}
+		// Rehydrate per-event mention rules. The web editor reads
+		// Config.mentions to render each event's picker; without this
+		// an explicit "none" (or a custom role) saved earlier would
+		// come back empty and revert to the event default on reload.
+		if mentions.Valid && mentions.String != "" {
+			var m map[string]any
+			if err := json.Unmarshal([]byte(mentions.String), &m); err == nil && len(m) > 0 {
+				n.Config["mentions"] = m
+			}
+		}
 	}
 	return &n, nil
 }
@@ -171,6 +181,7 @@ type notifConfigCols struct {
 	slackURL      sql.NullString
 	slackChannel  sql.NullString
 	discordURL    sql.NullString
+	mentions      sql.NullString // JSON map[event]rule, discord only
 }
 
 func configCols(typ string, cfg map[string]any) notifConfigCols {
@@ -194,6 +205,17 @@ func configCols(typ string, cfg map[string]any) notifConfigCols {
 		out.slackChannel = getString("channel")
 	case "discord":
 		out.discordURL = getString("url")
+		// Per-event mention rules are an open-ended map, so they don't
+		// fit a typed column — JSON-encode the whole thing. Previously
+		// dropped entirely, which is why an explicit "none" never
+		// persisted and reverted to the @here default for error events.
+		// Stored only when non-empty (empty = all defaults; the web
+		// layer strips rules that match the event default).
+		if m, ok := cfg["mentions"].(map[string]any); ok && len(m) > 0 {
+			if b, err := json.Marshal(m); err == nil {
+				out.mentions = sql.NullString{String: string(b), Valid: true}
+			}
+		}
 	}
 	return out
 }

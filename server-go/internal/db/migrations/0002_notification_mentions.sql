@@ -1,0 +1,12 @@
+-- 0002: persist per-event Discord mention rules.
+--
+-- The Notification config was stored in typed per-key columns
+-- (webhookUrl, discordUrl, …), which silently dropped the open-ended
+-- `mentions` map — so selecting "none" for an error-severity event
+-- (whose default is @here) never persisted and reverted on reload.
+-- Add a JSON column to carry map[event]rule.
+--
+-- The baseline schema.sql also ADDs this column IF NOT EXISTS for fresh
+-- installs; this migration covers already-running clusters and records
+-- the change in SchemaMigration.
+ALTER TABLE "Notification" ADD COLUMN IF NOT EXISTS "mentions" TEXT;
