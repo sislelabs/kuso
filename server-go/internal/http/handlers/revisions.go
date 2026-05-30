@@ -129,8 +129,25 @@ func (h *ProjectsHandler) RevertRevision(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "reverted", "kind": "service"})
+	case "addon":
+		if h.AddonReverter == nil {
+			http.Error(w, "addon revert unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		var snap struct {
+			Patch json.RawMessage `json:"patch"`
+		}
+		if err := json.Unmarshal(rev.Snapshot, &snap); err != nil {
+			h.fail(w, "decode addon revision", err)
+			return
+		}
+		if err := h.AddonReverter.RevertAddon(ctx, rev.Project, rev.Name, snap.Patch); err != nil {
+			h.fail(w, "revert addon", err)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "reverted", "kind": "addon"})
 	default:
-		http.Error(w, "revert: only kind=service is supported today", http.StatusNotImplemented)
+		http.Error(w, "revert: only kind=service and kind=addon are supported", http.StatusNotImplemented)
 	}
 }
 

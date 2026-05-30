@@ -33,6 +33,11 @@ type Service struct {
 	Kube       *kube.Client
 	Namespace  string
 	NSResolver *kube.ProjectNamespaceResolver
+	// RecordRevision, when set, is called after a successful Update with
+	// the original patch body so the History tab can render addon config
+	// changes and revert them. Same hook shape as projects.Service.
+	// Optional: nil → no history recorded (CLI / tests).
+	RecordRevision func(ctx context.Context, project, kind, name, summary string, snapshot []byte)
 }
 
 // New constructs a Service. namespace defaults to "kuso".
@@ -427,7 +432,28 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 		}
 		return nil, fmt.Errorf("update addon: %w", err)
 	}
+	// Record a revision so the History tab can render + revert addon
+	// config changes. Best-effort (the kube write already succeeded);
+	// snapshot the patch body wrapped as {"patch": req}, matching the
+	// service-revision shape so RevertAddon peels it the same way.
+	if s.RecordRevision != nil {
+		if snap, merr := json.Marshal(map[string]any{"patch": req}); merr == nil {
+			s.RecordRevision(ctx, project, "addon", ShortName(project, name), "patch", snap)
+		}
+	}
 	return updated, nil
+}
+
+// RevertAddon replays a stored addon-patch snapshot through Update. The
+// snapshot is the {"patch": <UpdateAddonRequest>} shape RecordRevision
+// stored. Used by the revisions revert handler.
+func (s *Service) RevertAddon(ctx context.Context, project, name string, patch json.RawMessage) error {
+	var req UpdateAddonRequest
+	if err := json.Unmarshal(patch, &req); err != nil {
+		return fmt.Errorf("%w: decode addon revert patch: %v", ErrInvalid, err)
+	}
+	_, err := s.Update(ctx, project, name, req)
+	return err
 }
 
 // SetPlacement replaces the addon's placement block. Pass nil to

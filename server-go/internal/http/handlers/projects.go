@@ -175,6 +175,17 @@ type ProjectsHandler struct {
 	// service deletes, role grants). Optional — when nil the audit
 	// calls no-op so an audit-disabled deploy still works.
 	Audit *audit.Service
+	// AddonReverter replays a stored addon-patch snapshot (the
+	// revisions revert path for kind=addon). Optional — when nil,
+	// addon revert returns 501. Satisfied by *addons.Service.
+	AddonReverter AddonReverter
+}
+
+// AddonReverter is the slice of addons.Service the revisions revert
+// handler needs — kept as an interface so the projects handler doesn't
+// import the addons package wholesale.
+type AddonReverter interface {
+	RevertAddon(ctx context.Context, project, name string, patch json.RawMessage) error
 }
 
 // Mount registers all /api/projects/* routes onto the given router.

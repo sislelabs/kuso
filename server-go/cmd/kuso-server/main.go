@@ -491,6 +491,20 @@ func main() {
 		statSvc = status.New(kc, 5*time.Minute)
 		addonSvc = addons.New(kc, *namespace)
 		addonSvc.NSResolver = nsResolver
+		// Record addon config changes to the revision history (same sink
+		// as service revisions) so the History tab can show + revert them.
+		if database != nil {
+			addonSvc.RecordRevision = func(ctx context.Context, project, kind, name, summary string, snapshot []byte) {
+				actor := ""
+				if claims, ok := auth.ClaimsFromContext(ctx); ok {
+					actor = claims.UserID
+				}
+				_ = database.InsertRevision(ctx, db.Revision{
+					Project: project, Kind: kind, Name: name,
+					Actor: actor, Summary: summary, Snapshot: snapshot,
+				})
+			}
+		}
 		cronSvc = crons.New(kc, *namespace)
 		cronSvc.NSResolver = nsResolver
 		runSvc = runs.New(kc, *namespace, logger.With("component", "runs"))

@@ -390,6 +390,12 @@ func mountAuthenticatedRoutes(
 				DB:         d.DB,
 				Audit:      d.Audit,
 			}
+			// Only wire the addon reverter when the addon service exists —
+			// assigning a nil *addons.Service to the interface would make
+			// a non-nil interface value that panics on call.
+			if d.Addons != nil {
+				projH.AddonReverter = d.Addons
+			}
 			projH.Mount(r)
 		}
 		if d.Secrets != nil {
