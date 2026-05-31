@@ -105,3 +105,60 @@ func TestWatcherEdgeTriggers(t *testing.T) {
 		t.Errorf("edge sequence wrong: %+v", emits)
 	}
 }
+
+// TestAlertSeverity pins the warn-vs-error split that controls whether
+// the Discord alert @here-pings: a never-configured backup/GC is a warn
+// nudge (no ping, no paging on every restart); a configured-then-broken
+// one is an error (pings). This is the fix for the "@here on every
+// release roll" noise on an unconfigured control-plane backup.
+func TestAlertSeverity(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		s    Status
+		gc   RegistryGCStatus
+		want string
+	}{
+		{
+			name: "backup never configured → warn",
+			s:    Status{Configured: false, CronJobPresent: false, Healthy: false},
+			gc:   RegistryGCStatus{CronJobPresent: true, Healthy: true},
+			want: "warn",
+		},
+		{
+			name: "backup CronJob present but no secret → warn",
+			s:    Status{Configured: false, CronJobPresent: true, Healthy: false},
+			gc:   RegistryGCStatus{CronJobPresent: true, Healthy: true},
+			want: "warn",
+		},
+		{
+			name: "backup configured but stale → error",
+			s:    Status{Configured: true, CronJobPresent: true, Stale: true, Healthy: false},
+			gc:   RegistryGCStatus{CronJobPresent: true, Healthy: true},
+			want: "error",
+		},
+		{
+			name: "backup configured but suspended → error",
+			s:    Status{Configured: true, CronJobPresent: true, Suspended: true, Healthy: false},
+			gc:   RegistryGCStatus{CronJobPresent: true, Healthy: true},
+			want: "error",
+		},
+		{
+			name: "GC never configured (backup healthy) → warn",
+			s:    Status{Configured: true, CronJobPresent: true, Healthy: true},
+			gc:   RegistryGCStatus{CronJobPresent: false, Healthy: false},
+			want: "warn",
+		},
+		{
+			name: "GC configured but stale (backup healthy) → error",
+			s:    Status{Configured: true, CronJobPresent: true, Healthy: true},
+			gc:   RegistryGCStatus{CronJobPresent: true, Stale: true, Healthy: false},
+			want: "error",
+		},
+	}
+	for _, tc := range cases {
+		if got := alertSeverity(tc.s, tc.gc); got != tc.want {
+			t.Errorf("%s: alertSeverity = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}

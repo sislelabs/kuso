@@ -190,6 +190,7 @@ func (w *Watcher) tick(ctx context.Context) {
 	if s.Healthy && !gc.Healthy {
 		detailMsg = gc.Detail
 	}
+	severity := alertSeverity(s, gc)
 	// Only emit on a state change (or the first observation of an
 	// unhealthy state). evaluated guards the very first tick so we don't
 	// double-fire.
@@ -215,9 +216,9 @@ func (w *Watcher) tick(ctx context.Context) {
 			Title:       title,
 			Body:        detailMsg,
 			Description: detailMsg,
-			Severity:    "error",
+			Severity:    severity,
 		})
-		w.Logger.Warn("backup/registry health: unhealthy", "detail", detailMsg)
+		w.Logger.Warn("backup/registry health: unhealthy", "detail", detailMsg, "severity", severity)
 	case prevUnhealthy:
 		// Recovered (both healthy again).
 		w.Notify.Emit(notify.Event{
@@ -313,6 +314,26 @@ func registryGCDetail(s RegistryGCStatus) string {
 	default:
 		return "Registry garbage-collection healthy."
 	}
+}
+
+// alertSeverity decides the notify severity for an unhealthy verdict,
+// which in turn gates the Discord @here mention (error pings, warn
+// doesn't — see notify.mentionFor). The split: a subsystem that was
+// never configured (no Secret / no CronJob) is a `warn` nudge — an
+// operator who hasn't set up off-cluster backups shouldn't get @here-
+// paged on every kuso-server restart. A subsystem that WAS configured
+// and then suspended or went stale is a real regression → `error`
+// (+ @here). Caller only invokes this when something is unhealthy.
+func alertSeverity(s Status, gc RegistryGCStatus) string {
+	backupConfigured := s.Configured && s.CronJobPresent
+	gcConfigured := gc.CronJobPresent
+	if !s.Healthy && backupConfigured {
+		return "error" // backup was set up and broke
+	}
+	if s.Healthy && !gc.Healthy && gcConfigured {
+		return "error" // GC was set up and broke
+	}
+	return "warn" // unconfigured / never-set-up — informational
 }
 
 func detail(s Status) string {
