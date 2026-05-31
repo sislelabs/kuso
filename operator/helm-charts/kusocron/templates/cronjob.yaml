@@ -21,10 +21,30 @@ spec:
             {{- include "kusocron.labels" . | nindent 12 }}
         spec:
           restartPolicy: OnFailure
+          {{- /* Pod securityContext is kind-dependent:
+
+                 kind=http uses our own curlimages/curl image, whose
+                 USER is the NON-NUMERIC name "curl_user" (UID 100).
+                 kubelet's runAsNonRoot=true gate can't verify a named
+                 user is non-root and rejects the pod with
+                 CreateContainerConfigError — so we pin runAsUser:100
+                 (curl's UID) to make the non-root proof numeric.
+
+                 kind=service/command run the USER's own image, which
+                 may declare its own named user (node, nginx, …). Same
+                 reason kusoenvironment doesn't set runAsNonRoot pod-
+                 wide: pinning a UID there would break those images.
+                 Hardening still comes from the container's
+                 capabilities.drop:ALL + allowPrivilegeEscalation:false
+                 below. */}}
           securityContext:
-            runAsNonRoot: true
             seccompProfile:
               type: RuntimeDefault
+            {{- if eq (default "service" .Values.kind) "http" }}
+            runAsNonRoot: true
+            runAsUser: 100
+            runAsGroup: 100
+            {{- end }}
           {{- /* Placement — same model as services + addons. region
                  label gets a matching toleration so the cron lands on
                  the right node when a region taint exists. */}}
