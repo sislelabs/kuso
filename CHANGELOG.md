@@ -5,6 +5,23 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.6] — 2026-06-01
+
+### Other
+- Feat(pkg-updates) phase 3+4: apply patches + reboot orchestration ([a6430aa](https://github.com/sislelabs/kuso/commit/a6430aa0a97bbc98aa6c1a50435f466cec8a9fe5))
+- Feat(pkg-updates) phase 2: advisory surface + notify ([e4ea1fd](https://github.com/sislelabs/kuso/commit/e4ea1fdfe4842ce30cb26fc8c6a079d5c6b4ae4b))
+- Feat(pkg-updates) phase 1: host package-update probe DaemonSet ([47d2baf](https://github.com/sislelabs/kuso/commit/47d2baf9fa65d1f8fb8580d1d2f4ce14538a1fa3))
+
+### 🐛 Bug Fixes
+- Fix(backuphealth): don't @here-page when backups were never configured ([edd17c8](https://github.com/sislelabs/kuso/commit/edd17c8ba385fe2ca8211224ccc951b3057ada78))
+- Fix(cron): http crons crashloop with CreateContainerConfigError ([3cdb1ec](https://github.com/sislelabs/kuso/commit/3cdb1ec4f6e399c1b13821a45947881d1671883c))
+
+### 📝 Docs
+- Docs(spec): host package-update advisory + patch orchestration ([4d8ec48](https://github.com/sislelabs/kuso/commit/4d8ec489573bea460101f65d8da92866b5bd4a46))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.6 ship) ([64c3815](https://github.com/sislelabs/kuso/commit/64c3815d8ce31bb1d0f9ef076cd993b983035755))
+
 ## [0.18.5] — 2026-05-30
 
 ### 🐛 Bug Fixes
@@ -321,11 +338,6 @@ messages on every release. The format is loosely based on
 
 ### Other
 - Debug: log env-propagation walk + per-env outcome ([04abfe5](https://github.com/sislelabs/kuso/commit/04abfe5a21e4972ef4e7171e8c6b3e033fe4ecff))
-
-## [0.16.13] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(ui): chip toggle silently no-op'd — api() double-stringified the body ([5107577](https://github.com/sislelabs/kuso/commit/5107577e8431904a741682a0ce5ae5c20819c15f))
 
 
 ---
