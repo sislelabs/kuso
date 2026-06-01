@@ -53,6 +53,9 @@ func (h *KubernetesHandler) Mount(rt interface {
 	// Backed by the SQLite NodeMetric table populated by the sampler
 	// goroutine — point-in-time data lives on the Nodes() endpoint.
 	rt.Get("/api/kubernetes/nodes/{name}/history", h.NodeHistory)
+	// Host package-update advisory per node (count, reboot-needed,
+	// sample). Backed by the pkg-probe DaemonSet's node annotations.
+	rt.Get("/api/kubernetes/nodes/updates", h.NodeUpdates)
 	// Single endpoint, simple semantics: replace the kuso labels for
 	// this node with the body. Server expands kuso conventions (region
 	// → matching NoSchedule taint) under the hood.

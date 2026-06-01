@@ -8,15 +8,28 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
-import { Server, Plus, X, Save, MapPin, Tag, Trash2 } from "lucide-react";
+import { Server, Plus, X, Save, MapPin, Tag, Trash2, Package, RotateCcw } from "lucide-react";
 // X is already imported above; the modal close button reuses it.
 import { cn } from "@/lib/utils";
+import { relativeTime } from "@/lib/format";
 import type { NodeSummary } from "@/components/layout/ServersPopover";
 import { DbHealthTile } from "@/components/shared/DbHealthTile";
 
 interface Label {
   key: string;
   value: string;
+}
+
+// NodeUpdateAdvisory mirrors the server's pkgupdates.Advisory — the
+// host package-update summary the pkg-probe DaemonSet writes per node.
+interface NodeUpdateAdvisory {
+  node: string;
+  count: number;
+  rebootRequired: boolean;
+  pkgMgr: string;
+  sample: string[];
+  checkedAt: string;
+  present: boolean;
 }
 
 // Common label keys — used as quick-add suggestions in the inline
@@ -55,6 +68,16 @@ export function NodesView() {
     queryKey: ["kubernetes", "nodes"],
     queryFn: () => api<NodeSummary[]>("/api/kubernetes/nodes"),
   });
+  // Host package-update advisory per node (from the pkg-probe DaemonSet
+  // annotations). Separate query so a slow/absent probe never blocks the
+  // node list. Keyed by node name for per-card lookup.
+  const updates = useQuery({
+    queryKey: ["kubernetes", "node-updates"],
+    queryFn: () =>
+      api<{ data: NodeUpdateAdvisory[] }>("/api/kubernetes/nodes/updates").then((r) => r.data ?? []),
+    staleTime: 60_000,
+  });
+  const advisoryByNode = new Map((updates.data ?? []).map((a) => [a.node, a]));
 
   const [addOpen, setAddOpen] = useState(false);
   // Cleanup mutation — deletes finished pods + jobs across the
@@ -224,6 +247,7 @@ export function NodesView() {
               labels={labelsFor(n)}
               onChange={(next) => setLabels(n, next)}
               isDirty={n.name in edits}
+              advisory={advisoryByNode.get(n.name)}
             />
           ))}
         </ul>
@@ -294,11 +318,13 @@ function NodeCard({
   labels,
   onChange,
   isDirty,
+  advisory,
 }: {
   node: NodeSummary;
   labels: Label[];
   onChange: (next: Label[]) => void;
   isDirty: boolean;
+  advisory?: NodeUpdateAdvisory;
 }) {
   return (
     <li
@@ -350,11 +376,77 @@ function NodeCard({
 
       <NodeStats node={node} />
 
+      <PackageUpdates advisory={advisory} />
+
       {/* The chip strip is the entire label UI now. No header label,
           no separate "Labels" section — the chips ARE the labels.
           Adding/removing happens here too. */}
       <ChipStrip labels={labels} onChange={onChange} />
     </li>
+  );
+}
+
+// PackageUpdates renders the per-node host package-update advisory.
+// Read-only in this phase (apply action lands in a later phase). States:
+// not-yet-probed, unsupported OS, up-to-date, and updates-available.
+function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
+  if (!advisory || !advisory.present) {
+    return (
+      <div className="mt-3 flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+        <Package className="h-3 w-3" /> package updates: checking…
+      </div>
+    );
+  }
+  if (advisory.pkgMgr === "unsupported" || advisory.pkgMgr === "") {
+    return (
+      <div className="mt-3 flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+        <Package className="h-3 w-3" /> package updates: unsupported OS
+      </div>
+    );
+  }
+  const checked = advisory.checkedAt ? relativeTime(advisory.checkedAt) : "—";
+  if (advisory.count === 0) {
+    return (
+      <div className="mt-3 flex items-center gap-1.5 font-mono text-[10px] text-emerald-400/80">
+        <Package className="h-3 w-3" /> up to date
+        <span className="text-[var(--text-tertiary)]">· checked {checked}</span>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-3 rounded-md border border-amber-500/20 bg-amber-500/[0.03] px-3 py-2">
+      <div className="flex items-center gap-2 text-[11px]">
+        <Package className="h-3.5 w-3.5 shrink-0 text-amber-400" />
+        <span className="font-medium text-amber-300">
+          {advisory.count} package update{advisory.count === 1 ? "" : "s"} available
+        </span>
+        {advisory.rebootRequired && (
+          <span
+            className="inline-flex items-center gap-1 rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-widest text-amber-300"
+            title="A host reboot is required to fully apply these updates."
+          >
+            <RotateCcw className="h-2.5 w-2.5" /> reboot needed
+          </span>
+        )}
+        <span className="ml-auto font-mono text-[9px] text-[var(--text-tertiary)]">
+          {advisory.pkgMgr} · checked {checked}
+        </span>
+      </div>
+      {advisory.sample.length > 0 && (
+        <ul className="mt-1.5 space-y-0.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+          {advisory.sample.map((s) => (
+            <li key={s} className="truncate">
+              {s}
+            </li>
+          ))}
+          {advisory.count > advisory.sample.length && (
+            <li className="text-[var(--text-tertiary)]/70">
+              …and {advisory.count - advisory.sample.length} more
+            </li>
+          )}
+        </ul>
+      )}
+    </div>
   );
 }
 

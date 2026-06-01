@@ -46,6 +46,7 @@ import (
 	"kuso/server/internal/nodemetrics"
 	"kuso/server/internal/nodewatch"
 	"kuso/server/internal/notify"
+	"kuso/server/internal/pkgupdates"
 	"kuso/server/internal/platformharden"
 	"kuso/server/internal/previewdb"
 	"kuso/server/internal/projectmetrics"
@@ -907,6 +908,18 @@ func main() {
 				Logger: logger.With("component", "nodewatch"),
 			}
 			go watcher.Run(workCtx)
+			// Host package-update advisory — reads the pkg-probe
+			// DaemonSet's node annotations and notifies (warn, edge-
+			// triggered, restart-safe via the Setting kv) when a node
+			// gains fresh available updates. Leader-gated so only one
+			// replica notifies.
+			pkgWatcher := &pkgupdates.Watcher{
+				DB:     database,
+				Kube:   kubeClient,
+				Notify: notifyDisp,
+				Logger: logger.With("component", "pkgupdates"),
+			}
+			go pkgWatcher.Run(workCtx)
 			// Cron failure detector — watches Job objects labeled
 			// kuso.sislelabs.com/cron and dispatches the per-cron
 			// onFailure webhook + a notify event on failure. Cluster-

@@ -60,6 +60,11 @@ const (
 	// edges of the outage.
 	EventNodeUnreachable EventType = "node.unreachable"
 	EventNodeRecovered   EventType = "node.recovered"
+	// Host package-update advisory. Fired by the pkgupdates watcher when
+	// a node gains a fresh advisory (the probe DaemonSet found available
+	// host-OS package updates). Informational (warn severity, no @here);
+	// the operator applies patches from the nodes page.
+	EventNodeUpdatesAvailable EventType = "node.updates-available"
 	// Run lifecycle events. Fired when a KusoRun is created (started)
 	// and when the runs poller observes terminal phase transitions
 	// (succeeded / failed). A failed migration on prod is exactly the
@@ -92,7 +97,7 @@ var AllEventTypes = []EventType{
 	EventPodCrashed,
 	EventAlertFired,
 	EventBackupOK, EventBackupFailed,
-	EventNodeUnreachable, EventNodeRecovered,
+	EventNodeUnreachable, EventNodeRecovered, EventNodeUpdatesAvailable,
 	EventRunStarted, EventRunSucceeded, EventRunFailed,
 	EventCronFailed,
 	EventTestPing,
