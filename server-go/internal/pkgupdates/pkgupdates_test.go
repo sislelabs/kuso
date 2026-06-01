@@ -103,3 +103,17 @@ func indexOf(s, sub string) int {
 	}
 	return -1
 }
+
+func TestParseApplyState(t *testing.T) {
+	t.Parallel()
+	if s := parseApplyState(""); s.Phase != "" {
+		t.Errorf("empty → %+v, want zero", s)
+	}
+	if s := parseApplyState("{garbage"); s.Phase != "" {
+		t.Errorf("malformed → %+v, want zero", s)
+	}
+	s := parseApplyState(`{"phase":"rebooting","at":"2026-06-01T00:00:00Z","log":"patched"}`)
+	if s.Phase != "rebooting" || s.Log != "patched" {
+		t.Errorf("parse: %+v", s)
+	}
+}

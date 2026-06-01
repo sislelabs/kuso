@@ -12,6 +12,7 @@ import { Server, Plus, X, Save, MapPin, Tag, Trash2, Package, RotateCcw } from "
 // X is already imported above; the modal close button reuses it.
 import { cn } from "@/lib/utils";
 import { relativeTime } from "@/lib/format";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import type { NodeSummary } from "@/components/layout/ServersPopover";
 import { DbHealthTile } from "@/components/shared/DbHealthTile";
 
@@ -30,6 +31,7 @@ interface NodeUpdateAdvisory {
   sample: string[];
   checkedAt: string;
   present: boolean;
+  apply: { phase: string; at: string; log: string };
 }
 
 // Common label keys — used as quick-add suggestions in the inline
@@ -386,10 +388,41 @@ function NodeCard({
   );
 }
 
-// PackageUpdates renders the per-node host package-update advisory.
-// Read-only in this phase (apply action lands in a later phase). States:
-// not-yet-probed, unsupported OS, up-to-date, and updates-available.
+// PackageUpdates renders the per-node host package-update advisory plus
+// the apply action. States: not-yet-probed, unsupported OS, up-to-date,
+// updates-available (with Apply), and an in-flight apply banner
+// (running/rebooting/failed) that polls until terminal.
 function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
+  const qc = useQueryClient();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const phase = advisory?.apply?.phase ?? "";
+  const inFlight = phase === "running" || phase === "rebooting";
+
+  const apply = useMutation({
+    mutationFn: (allowReboot: boolean) =>
+      api(`/api/kubernetes/nodes/${encodeURIComponent(advisory!.node)}/apply-updates`, {
+        method: "POST",
+        body: { allowReboot },
+      }),
+    onSuccess: () => {
+      toast.success(`Applying updates on ${advisory!.node}…`);
+      setConfirmOpen(false);
+      qc.invalidateQueries({ queryKey: ["kubernetes", "node-updates"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Apply failed"),
+  });
+
+  // While an apply is in flight, poll the advisory so phase transitions
+  // (running → rebooting → done) surface without a manual refresh.
+  useEffect(() => {
+    if (!inFlight) return;
+    const t = setInterval(
+      () => qc.invalidateQueries({ queryKey: ["kubernetes", "node-updates"] }),
+      8000
+    );
+    return () => clearInterval(t);
+  }, [inFlight, qc]);
+
   if (!advisory || !advisory.present) {
     return (
       <div className="mt-3 flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
@@ -410,6 +443,23 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
       <div className="mt-3 flex items-center gap-1.5 font-mono text-[10px] text-emerald-400/80">
         <Package className="h-3 w-3" /> up to date
         <span className="text-[var(--text-tertiary)]">· checked {checked}</span>
+        {phase === "done" && advisory.apply.at && (
+          <span className="text-[var(--text-tertiary)]">· patched {relativeTime(advisory.apply.at)}</span>
+        )}
+      </div>
+    );
+  }
+  // In-flight apply banner — shown while a patch/reboot is running.
+  if (inFlight) {
+    return (
+      <div className="mt-3 flex items-center gap-1.5 rounded-md border border-sky-500/20 bg-sky-500/[0.04] px-3 py-2 text-[11px] text-sky-300">
+        <RotateCcw className="h-3.5 w-3.5 shrink-0 animate-spin" />
+        {phase === "rebooting"
+          ? "Patched — rebooting node to finish…"
+          : "Applying host package updates…"}
+        <span className="ml-auto font-mono text-[9px] text-[var(--text-tertiary)]">
+          {advisory.apply.at ? relativeTime(advisory.apply.at) : ""}
+        </span>
       </div>
     );
   }
@@ -446,6 +496,45 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
           )}
         </ul>
       )}
+      {phase === "failed" && (
+        <p className="mt-1.5 truncate font-mono text-[10px] text-red-400" title={advisory.apply.log}>
+          last apply failed: {advisory.apply.log || "see server logs"}
+        </p>
+      )}
+      <div className="mt-2 flex justify-end">
+        <button
+          type="button"
+          onClick={() => setConfirmOpen(true)}
+          disabled={apply.isPending}
+          className="inline-flex h-7 items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 text-[11px] font-medium text-amber-200 hover:bg-amber-500/20 disabled:opacity-50"
+        >
+          <Package className="h-3 w-3" /> Apply updates
+        </button>
+      </div>
+      <ConfirmDialog
+        open={confirmOpen}
+        title={`Apply ${advisory.count} update${advisory.count === 1 ? "" : "s"} on ${advisory.node}?`}
+        body={
+          <div className="space-y-2">
+            <p>
+              Runs <span className="font-mono">apt-get upgrade</span> on the host{" "}
+              <span className="font-mono">{advisory.node}</span>.
+            </p>
+            {advisory.rebootRequired && (
+              <p className="text-amber-300">
+                These updates require a <strong>reboot</strong>. Confirming will patch and then
+                reboot the node — workloads on it restart, and if this is the control-plane node
+                the kuso UI will briefly disconnect until it comes back.
+              </p>
+            )}
+          </div>
+        }
+        confirmLabel={advisory.rebootRequired ? "Patch + reboot" : "Apply updates"}
+        destructive={advisory.rebootRequired}
+        pending={apply.isPending}
+        onConfirm={() => apply.mutate(advisory.rebootRequired)}
+        onCancel={() => setConfirmOpen(false)}
+      />
     </div>
   );
 }

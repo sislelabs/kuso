@@ -19,6 +19,9 @@ package pkgupdates
 import (
 	"encoding/json"
 	"strings"
+	"time"
+
+	"kuso/server/internal/notify"
 )
 
 // Annotation is the node annotation key the probe writes.
@@ -41,6 +44,10 @@ type Advisory struct {
 	// hasn't run, or node just joined). The UI renders this as
 	// "checking…" rather than "0 updates".
 	Present bool `json:"present"`
+	// Apply is the in-flight/last apply lifecycle for this node (empty
+	// Phase when no apply has run). Lets the UI show running/rebooting/
+	// done/failed and gate a second apply.
+	Apply ApplyState `json:"apply"`
 }
 
 // HasUpdates reports whether this advisory represents actionable
@@ -108,6 +115,37 @@ func notifyTitleBody(a Advisory) (title, body string) {
 		body += " e.g. " + strings.Join(a.Sample, ", ")
 	}
 	return title, body
+}
+
+// ApplyState is the parsed pkg-apply-state annotation: where a node is
+// in the patch/reboot lifecycle. Phase ∈ running|rebooting|done|failed.
+type ApplyState struct {
+	Phase string `json:"phase"`
+	At    string `json:"at"`
+	Log   string `json:"log"`
+}
+
+// parseApplyState decodes the apply-state annotation; empty/malformed →
+// zero ApplyState (Phase "").
+func parseApplyState(raw string) ApplyState {
+	var s ApplyState
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return s
+	}
+	_ = json.Unmarshal([]byte(raw), &s)
+	return s
+}
+
+// notifyApplyDone builds the "patch+reboot finished" notification.
+func notifyApplyDone(node string) notify.Event {
+	return notify.Event{
+		Type:      notify.EventNodeUpdatesAvailable,
+		Timestamp: time.Now().UTC(),
+		Title:     "Host patches applied",
+		Body:      "Node " + node + " finished applying host package updates and is back online.",
+		Severity:  "info",
+	}
 }
 
 // itoa is a tiny strconv.Itoa to avoid the import for one call.

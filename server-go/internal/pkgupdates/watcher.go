@@ -59,8 +59,13 @@ func (w *Watcher) Run(ctx context.Context) {
 	}
 }
 
-// tick reads every node's advisory and notifies on fresh ones.
+// tick reads every node's advisory and notifies on fresh ones, then
+// finalizes any node that finished a patch+reboot.
 func (w *Watcher) tick(ctx context.Context, logger *slog.Logger) {
+	// Finalize patch+reboot first so a node that rebooted between ticks
+	// gets uncordoned promptly.
+	w.reconcileReboots(ctx, logger)
+
 	advisories, err := w.List(ctx)
 	if err != nil {
 		logger.Warn("pkgupdates: list nodes", "err", err)
@@ -110,7 +115,11 @@ func (w *Watcher) List(ctx context.Context) ([]Advisory, error) {
 	out := make([]Advisory, 0, len(nodes.Items))
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
-		out = append(out, ParseAnnotation(n.Name, n.Annotations[Annotation]))
+		a := ParseAnnotation(n.Name, n.Annotations[Annotation])
+		// Attach in-flight apply status so the UI can show running/
+		// rebooting/done/failed + disable a second apply.
+		a.Apply = parseApplyState(n.Annotations[ApplyStateAnnotation])
+		out = append(out, a)
 	}
 	return out, nil
 }

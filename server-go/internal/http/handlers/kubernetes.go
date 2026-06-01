@@ -56,6 +56,10 @@ func (h *KubernetesHandler) Mount(rt interface {
 	// Host package-update advisory per node (count, reboot-needed,
 	// sample). Backed by the pkg-probe DaemonSet's node annotations.
 	rt.Get("/api/kubernetes/nodes/updates", h.NodeUpdates)
+	// Apply host package updates on a node (privileged Job). Body:
+	// {"allowReboot":bool}. allowReboot=true runs the cordon/drain/
+	// reboot orchestration when a restart is required.
+	rt.Post("/api/kubernetes/nodes/{name}/apply-updates", h.ApplyNodeUpdates)
 	// Single endpoint, simple semantics: replace the kuso labels for
 	// this node with the body. Server expands kuso conventions (region
 	// → matching NoSchedule taint) under the hood.
