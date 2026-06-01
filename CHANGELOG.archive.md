@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.16.12] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(migration): use short service name for GetService/lockService ([8395600](https://github.com/sislelabs/kuso/commit/839560036cccf4eaa46aab58c4c6ee8087a3835b))
+
 ## [0.16.11] — 2026-05-28
 
 ### ✨ Features
