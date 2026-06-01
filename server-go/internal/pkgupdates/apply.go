@@ -121,7 +121,13 @@ func (w *Watcher) reconcileReboots(ctx context.Context, logger *slog.Logger) {
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
 		st := parseApplyState(n.Annotations[ApplyStateAnnotation])
-		if st.Phase != "rebooting" {
+		// Act on a node mid-reboot (phase=rebooting) OR any node still
+		// carrying OUR cordon marker (defense in depth: if a post-reboot
+		// race overwrote the apply-state, the marker is the durable
+		// signal that we cordoned this node for a patch and owe it an
+		// uncordon). Skip nodes we don't own.
+		ours := n.Annotations[CordonAnnotation] == "true"
+		if st.Phase != "rebooting" && !ours {
 			continue
 		}
 		if !nodeReady(n) {
@@ -180,7 +186,13 @@ func (w *Watcher) buildApplyJob(node, pkgMgr string, allowReboot bool) *batchv1.
 	privileged := true
 	hostPID := true
 	var ttl int32 = 3600
-	var backoff int32 = 1
+	// BackoffLimit MUST be 0: the reboot branch kills this pod when the
+	// node goes down, which the Job controller would otherwise read as a
+	// failure and RE-RUN the Job on the rebooted node. That re-run finds
+	// nothing left to upgrade, overwrites apply-state rebooting→done, and
+	// defeats the reconcileReboots uncordon (the node stays cordoned).
+	// The reboot IS the success; never retry.
+	var backoff int32 = 0
 	rebootFlag := "false"
 	if allowReboot {
 		rebootFlag = "true"
