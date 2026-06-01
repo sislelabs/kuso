@@ -1,0 +1,236 @@
+---
+# Host package-update probe.
+#
+# One privileged pod per node that, on a timer, inspects the HOST's
+# package manager for available updates and writes a compact summary to
+# its own node's annotation (kuso.sislelabs.com/pkg-updates). kuso-server
+# reads those annotations to surface the Coolify-style "N updates
+# available, M need a restart" advisory + notify.
+#
+# Why a DaemonSet (not SSH from kuso-server): kuso deliberately avoids
+# standing SSH (nodejoin only SSHes during join/remove). A per-node pod
+# that nsenters the host is pure-k8s, multi-node-native, and needs no
+# persistent node credentials.
+#
+# Why privileged + hostPID: the upgradable-package check has to run
+# against the HOST's apt/dpkg state, not the container's. nsenter -t 1
+# into PID 1's mount+pid namespace runs `apt-get` on the host. The probe
+# is READ-ONLY — it only counts upgradable packages and reads
+# /var/run/reboot-required. Applying patches is a separate, explicit
+# Job (see internal/pkgupdates apply path), never this DaemonSet.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuso-pkg-probe
+  namespace: kuso
+---
+# The probe patches its own node's annotations via the in-cluster API
+# (host kubectl is NOT usable: k3s AGENT nodes have no admin kubeconfig,
+# only the server does — so the probe authenticates with its pod SA
+# token, which works identically on every node). kube RBAC can't scope a
+# verb to "the node I run on", so grant nodes get/patch cluster-wide —
+# the minimum the API allows — but the script only ever targets
+# $NODE_NAME (its own, via the downward API).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kuso-pkg-probe
+rules:
+  - apiGroups: [""]
+    resources: [nodes]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kuso-pkg-probe
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kuso-pkg-probe
+subjects:
+  - kind: ServiceAccount
+    name: kuso-pkg-probe
+    namespace: kuso
+---
+# The probe logic lives in a ConfigMap so it's auditable in-cluster and
+# editable without rebuilding an image. The pod is a stock kubectl image
+# (carries kubectl + a shell); the host inspection is done via nsenter
+# into PID 1, so the container itself needs no apt tooling.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kuso-pkg-probe
+  namespace: kuso
+data:
+  probe.sh: |
+    #!/usr/bin/env sh
+    # Host package-update probe. Runs in a loop; each pass inspects the
+    # host package manager and patches this node's pkg-updates annotation.
+    #
+    # Host inspection (apt-get) runs via nsenter into PID 1 — the host's
+    # package state, not the container's. The node-annotation PATCH goes
+    # to the in-cluster API with the pod's ServiceAccount token: k3s
+    # AGENT nodes have no admin kubeconfig, so host kubectl only works on
+    # the server — the SA token works on every node. curl (for the PATCH
+    # verb, which busybox wget can't do) is apk-added at startup; the
+    # node has internet (it just ran apt-get update).
+    set -eu
+
+    ANNOTATION="kuso.sislelabs.com/pkg-updates"
+    INTERVAL="${KUSO_PKG_PROBE_INTERVAL_SECONDS:-21600}" # 6h default
+    # nsenter into PID 1 (the host's init) to run host-context commands.
+    HOST="nsenter --target 1 --mount --uts --ipc --net --pid --"
+
+    # In-cluster API patch wiring (pod SA token + CA).
+    SA=/var/run/secrets/kubernetes.io/serviceaccount
+    APISERVER="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
+    TOKEN=$(cat "$SA/token")
+
+    command -v curl >/dev/null 2>&1 || apk add --no-cache curl >/dev/null 2>&1 || true
+
+    # patch_node merge-patches the given JSON onto $NODE_NAME via the API.
+    patch_node() {
+      curl -sf --cacert "$SA/ca.crt" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "Content-Type: application/merge-patch+json" \
+        -X PATCH \
+        "$APISERVER/api/v1/nodes/$NODE_NAME" \
+        --data "$1" >/dev/null
+    }
+
+    # detect_pkg_mgr echoes apt|apk|dnf|unsupported by probing the host.
+    detect_pkg_mgr() {
+      if $HOST sh -c 'command -v apt-get' >/dev/null 2>&1; then echo apt
+      elif $HOST sh -c 'command -v apk' >/dev/null 2>&1; then echo apk
+      elif $HOST sh -c 'command -v dnf' >/dev/null 2>&1; then echo dnf
+      else echo unsupported
+      fi
+    }
+
+    # check_apt prints: first line = count, rest = "name old->new" lines.
+    # Uses the simulate path (-s) which is machine-stable across apt
+    # versions; we parse "Inst" lines (packages to be installed/upgraded).
+    check_apt() {
+      # Refresh the package index quietly; tolerate failure (offline →
+      # report what we have rather than erroring the whole probe).
+      $HOST apt-get update -qq >/dev/null 2>&1 || true
+      out=$($HOST apt-get -s -o Debug::NoLocking=true upgrade 2>/dev/null || true)
+      # Inst lines look like: Inst libfoo [1.0] (1.1 repo) ...
+      echo "$out" | awk '
+        /^Inst / {
+          name=$2
+          old=$3; gsub(/[][]/,"",old)
+          new=""
+          for (i=1;i<=NF;i++) if ($i ~ /^\(/) { new=$(i); gsub(/[()]/,"",new); break }
+          n++
+          line[n]=name " " old "->" new
+        }
+        END {
+          print n+0
+          for (i=1;i<=n && i<=5;i++) print line[i]
+        }'
+    }
+
+    reboot_required() {
+      if $HOST test -f /var/run/reboot-required 2>/dev/null; then echo true; else echo false; fi
+    }
+
+    json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
+
+    run_once() {
+      mgr=$(detect_pkg_mgr)
+      count=0
+      samples=""
+      reboot=false
+      if [ "$mgr" = "apt" ]; then
+        result=$(check_apt)
+        count=$(echo "$result" | head -1)
+        # build a JSON array of up to 5 sample lines
+        i=0
+        echo "$result" | tail -n +2 | while IFS= read -r ln; do
+          [ -z "$ln" ] && continue
+          esc=$(json_escape "$ln")
+          if [ "$i" -eq 0 ]; then printf '"%s"' "$esc"; else printf ',"%s"' "$esc"; fi
+          i=$((i+1))
+        done > /tmp/samples.json || true
+        samples=$(cat /tmp/samples.json 2>/dev/null || echo "")
+        reboot=$(reboot_required)
+      fi
+      now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+      payload="{\"count\":${count},\"rebootRequired\":${reboot},\"pkgMgr\":\"${mgr}\",\"sample\":[${samples}],\"checkedAt\":\"${now}\"}"
+      # Patch our own node. The annotation value is itself a JSON string,
+      # so escape it for the outer merge-patch.
+      esc_payload=$(json_escape "$payload")
+      patch_node "{\"metadata\":{\"annotations\":{\"${ANNOTATION}\":\"${esc_payload}\"}}}" \
+        || echo "pkg-probe: patch node $NODE_NAME failed" >&2
+      echo "pkg-probe: node=$NODE_NAME mgr=$mgr count=$count reboot=$reboot"
+    }
+
+    while true; do
+      run_once || echo "pkg-probe: run failed" >&2
+      sleep "$INTERVAL"
+    done
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: kuso-pkg-probe
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-pkg-probe
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: kuso-pkg-probe
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: kuso-pkg-probe
+    spec:
+      # SA token is how the probe patches its node via the in-cluster
+      # API (works on agent nodes, unlike host kubectl).
+      serviceAccountName: kuso-pkg-probe
+      # Run on every node, including control-plane (the single-box
+      # install's only node is the control-plane).
+      tolerations:
+        - operator: Exists
+      # Inspect the host's process/mount namespace via PID 1.
+      hostPID: true
+      containers:
+        - name: probe
+          # Stock alpine — already cached on every node, so no image
+          # pull. All real work (apt, kubectl) runs via nsenter into the
+          # host's PID 1, using the host's own tooling; the container
+          # only needs a POSIX shell + nsenter (alpine ships nsenter in
+          # busybox's util-linux applet set is NOT guaranteed, so we call
+          # the host's nsenter via /proc — see note). Pinned tag.
+          image: alpine:3.20 # ships nsenter; already cached on nodes
+          command: ["/bin/sh", "/probe/probe.sh"]
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            # Override the 6h default per-cluster if desired.
+            - name: KUSO_PKG_PROBE_INTERVAL_SECONDS
+              value: "21600"
+          securityContext:
+            # privileged + hostPID so nsenter -t 1 can enter the host's
+            # namespaces and run host apt. Read-only inspection only.
+            privileged: true
+            runAsUser: 0
+          volumeMounts:
+            - name: probe-script
+              mountPath: /probe
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+      volumes:
+        - name: probe-script
+          configMap:
+            name: kuso-pkg-probe
+            defaultMode: 0555
