@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.16.14] — 2026-05-28
+
+### Other
+- Debug: log env-propagation walk + per-env outcome ([04abfe5](https://github.com/sislelabs/kuso/commit/04abfe5a21e4972ef4e7171e8c6b3e033fe4ecff))
+
 ## [0.16.13] — 2026-05-28
 
 ### 🐛 Bug Fixes
