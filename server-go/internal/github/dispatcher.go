@@ -621,8 +621,13 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// cloning Redis state is rarely useful. The clone only survives the
 	// swap when db-conn survived the subscription filter above, so a
 	// frontend preview (no db subscription) correctly gets no clone conn.
+	// pgCloneByOrigin maps source addon-conn → per-PR clone-conn; captured
+	// here so the SAME swap applies to envVars' secretKeyRefs below
+	// (DATABASE_READ_URL etc.), not just the envFromSecrets list.
+	var pgCloneMap map[string]string
 	if d.PreviewDB != nil {
 		if cloneSecrets, err := d.PreviewDB.EnsurePRAddons(ctx, proj.Name, pr.Number); err == nil {
+			pgCloneMap = pgCloneByOrigin(cloneSecrets, pr.Number)
 			envFromSecrets = swapPGCloneSecrets(envFromSecrets, cloneSecrets, pr.Number)
 		} else {
 			d.Logger.Warn("preview db clone", "project", proj.Name, "pr", pr.Number, "err", err)
@@ -712,6 +717,10 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// kube informer so this is a slice walk, not new API calls.
 	hostRewrite := d.buildPreviewHostRewrite(ctx, proj, pr.Number, baseDomain)
 	mergedEnvVars = rewriteEnvVarValues(mergedEnvVars, hostRewrite)
+	// Repoint any envVar secretKeyRef that targets a source addon-conn
+	// Secret (e.g. DATABASE_READ_URL → tickero-db-conn) to the per-PR
+	// clone, so a preview reads from its OWN database, not prod.
+	mergedEnvVars = swapPGCloneSecretRefsInEnvVars(mergedEnvVars, pgCloneMap)
 
 	// Clone any per-env-scoped Secret values from the baseEnv into a
 	// per-PR Secret, with URL rewrites applied. This is the only way
@@ -1066,27 +1075,72 @@ func filterConnsBySubscription(envFromSecrets, subscribedAddons, projectAddonCon
 // secrets without a clone (Redis etc.) are kept verbatim. The
 // result preserves the source ordering of envFromSecrets.
 func swapPGCloneSecrets(source []string, cloneSecrets []string, prNumber int) []string {
-	if len(cloneSecrets) == 0 {
+	m := pgCloneByOrigin(cloneSecrets, prNumber)
+	if len(m) == 0 {
 		return source
-	}
-	prSuffix := fmt.Sprintf("-pr-%d-conn", prNumber)
-	cloneByOrigin := map[string]string{}
-	for _, c := range cloneSecrets {
-		// Clone secrets are named "<source>-pr-<N>-conn"; strip the
-		// "-pr-<N>-conn" suffix back to the origin to build the map.
-		if !strings.HasSuffix(c, prSuffix) {
-			continue
-		}
-		origin := strings.TrimSuffix(c, prSuffix) + "-conn"
-		cloneByOrigin[origin] = c
 	}
 	out := make([]string, len(source))
 	for i, s := range source {
-		if clone, ok := cloneByOrigin[s]; ok {
+		if clone, ok := m[s]; ok {
 			out[i] = clone
 		} else {
 			out[i] = s
 		}
+	}
+	return out
+}
+
+// pgCloneByOrigin maps each source addon-conn Secret name to its per-PR
+// clone ("<source>-conn" → "<source>-pr-<N>-conn"). cloneSecrets are the
+// "<source>-pr-<N>-conn" names returned by EnsurePRAddons.
+func pgCloneByOrigin(cloneSecrets []string, prNumber int) map[string]string {
+	prSuffix := fmt.Sprintf("-pr-%d-conn", prNumber)
+	m := map[string]string{}
+	for _, c := range cloneSecrets {
+		if !strings.HasSuffix(c, prSuffix) {
+			continue
+		}
+		origin := strings.TrimSuffix(c, prSuffix) + "-conn"
+		m[origin] = c
+	}
+	return m
+}
+
+// swapPGCloneSecretRefsInEnvVars repoints any envVar whose
+// valueFrom.secretKeyRef.name targets a source addon-conn Secret to the
+// per-PR clone. This is the envVar analogue of swapPGCloneSecrets (which
+// only handles the envFromSecrets list) — without it a preview's
+// DATABASE_READ_URL (an explicit secretKeyRef to <db>-conn) kept reading
+// from the SOURCE/prod DB while DATABASE_URL pointed at the clone.
+func swapPGCloneSecretRefsInEnvVars(vars []kube.KusoEnvVar, cloneByOrigin map[string]string) []kube.KusoEnvVar {
+	if len(cloneByOrigin) == 0 || len(vars) == 0 {
+		return vars
+	}
+	out := make([]kube.KusoEnvVar, len(vars))
+	for i, v := range vars {
+		out[i] = v
+		ref, ok := v.ValueFrom["secretKeyRef"].(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := ref["name"].(string)
+		clone, hit := cloneByOrigin[name]
+		if !hit {
+			continue
+		}
+		// Deep-copy the valueFrom so we don't mutate the shared baseEnv
+		// map; rewrite just the secret name.
+		newRef := map[string]any{}
+		for k, val := range ref {
+			newRef[k] = val
+		}
+		newRef["name"] = clone
+		newVF := map[string]any{}
+		for k, val := range v.ValueFrom {
+			newVF[k] = val
+		}
+		newVF["secretKeyRef"] = newRef
+		out[i].ValueFrom = newVF
 	}
 	return out
 }

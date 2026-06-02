@@ -809,3 +809,47 @@ func TestDispatch_BadJSON(t *testing.T) {
 		t.Error("expected error for malformed body")
 	}
 }
+
+// TestSwapPGCloneSecretRefsInEnvVars is the regression guard for the
+// preview DATABASE_READ_URL bug: an envVar whose secretKeyRef points at
+// a source addon-conn Secret must be repointed to the per-PR clone, so
+// a preview reads from its own DB, not prod. Non-matching refs + literal
+// envVars are untouched, and the input slice is not mutated.
+func TestSwapPGCloneSecretRefsInEnvVars(t *testing.T) {
+	cloneByOrigin := map[string]string{"tickero-db-conn": "tickero-db-pr-36-conn"}
+
+	vars := []kube.KusoEnvVar{
+		{Name: "DATABASE_URL", ValueFrom: map[string]any{
+			"secretKeyRef": map[string]any{"name": "tickero-db-pr-36-conn", "key": "DATABASE_URL"}}}, // already clone
+		{Name: "DATABASE_READ_URL", ValueFrom: map[string]any{
+			"secretKeyRef": map[string]any{"name": "tickero-db-conn", "key": "DATABASE_URL"}}}, // → must swap
+		{Name: "OTHER", ValueFrom: map[string]any{
+			"secretKeyRef": map[string]any{"name": "tickero-api-secrets", "key": "X"}}}, // unrelated
+		{Name: "PLAIN", Value: "literal"}, // no valueFrom
+	}
+
+	out := swapPGCloneSecretRefsInEnvVars(vars, cloneByOrigin)
+
+	readRef := out[1].ValueFrom["secretKeyRef"].(map[string]any)
+	if readRef["name"] != "tickero-db-pr-36-conn" {
+		t.Errorf("DATABASE_READ_URL not repointed: %v", readRef["name"])
+	}
+	if readRef["key"] != "DATABASE_URL" {
+		t.Errorf("DATABASE_READ_URL lost its key: %v", readRef["key"])
+	}
+	if out[2].ValueFrom["secretKeyRef"].(map[string]any)["name"] != "tickero-api-secrets" {
+		t.Error("unrelated secretKeyRef should be untouched")
+	}
+	if out[3].Value != "literal" {
+		t.Error("literal envVar should be untouched")
+	}
+	// Input not mutated (deep-copy on swap).
+	if vars[1].ValueFrom["secretKeyRef"].(map[string]any)["name"] != "tickero-db-conn" {
+		t.Error("input slice was mutated — must deep-copy")
+	}
+
+	// Empty map → identity (returns input unchanged).
+	if got := swapPGCloneSecretRefsInEnvVars(vars, nil); len(got) != len(vars) {
+		t.Error("nil map should return input")
+	}
+}
