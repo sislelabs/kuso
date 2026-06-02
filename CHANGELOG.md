@@ -5,6 +5,24 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.7] — 2026-06-02
+
+### ✨ Features
+- Feat(ha): resolve + stamp spreadPolicy from live node count ([0af23eb](https://github.com/sislelabs/kuso/commit/0af23ebeba5f069532b313476c8551587fe4fac6))
+- Feat(ha): spreadPolicy field + chart hard/soft topology spread ([119e53c](https://github.com/sislelabs/kuso/commit/119e53c9e4ec1d839efa0195bf8ba74d10390a70))
+
+### 🐛 Bug Fixes
+- Fix(pkg-updates): reboot path left node cordoned (post-reboot Job re-run) ([d072e56](https://github.com/sislelabs/kuso/commit/d072e561c372491ebc9a09093d07ac6f33f21041))
+
+### 📝 Docs
+- Docs(spec): guaranteed replica spread across nodes (HA) ([e74ae4b](https://github.com/sislelabs/kuso/commit/e74ae4b526125e58505d8d5bdddc519b262f689a))
+
+### 🧪 Tests
+- Test(ha): chart-render assertions for spreadPolicy ([a2258de](https://github.com/sislelabs/kuso/commit/a2258deb4d294583a2baf116e040aabc846511d0))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.7 ship) ([2685176](https://github.com/sislelabs/kuso/commit/2685176bad6ca9d98068bf8dde47d9c6fa132370))
+
 ## [0.18.6] — 2026-06-01
 
 ### Other
@@ -333,11 +351,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(kube): bump default QPS/burst — propagation was rate-limited to 0 ([97ac356](https://github.com/sislelabs/kuso/commit/97ac3564a90ef9956ae1c8b1734500acecd11b16))
-
-## [0.16.14] — 2026-05-28
-
-### Other
-- Debug: log env-propagation walk + per-env outcome ([04abfe5](https://github.com/sislelabs/kuso/commit/04abfe5a21e4972ef4e7171e8c6b3e033fe4ecff))
 
 
 ---
