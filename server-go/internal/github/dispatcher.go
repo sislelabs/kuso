@@ -641,6 +641,7 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	var svcPreviewEnvVars []kube.KusoEnvVar
 	var svcSharedEnvKeys []string
 	var svcSubscribedAddons []string
+	var svcRelease *kube.KusoReleaseSpec
 	if svc, err := d.Kube.GetKusoService(ctx, ns, serviceFQN); err == nil && svc != nil {
 		if svc.Spec.Port > 0 {
 			port = svc.Spec.Port
@@ -648,6 +649,13 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		svcRuntime = svc.Spec.Runtime
 		svcCommand = svc.Spec.Command
 		parentSvc = svc
+		// Carry the service's release hook (e.g. `migrate up`) onto the
+		// preview env so the build poller runs the SAME release Job for
+		// the preview against the per-PR clone DB before promote. Without
+		// this, a PR that adds a migration boots its preview against the
+		// cloned-but-un-migrated schema and 500s. The release Job uses the
+		// PR's image, so the PR's own migrations run.
+		svcRelease = svc.Spec.Release
 		// Capture subscription state for inheritance into the preview
 		// env. nil = inherit-all (legacy mount-everything); non-nil
 		// passes through verbatim so the preview pod sees exactly the
@@ -686,6 +694,12 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			}
 			if svcSubscribedAddons == nil && baseEnv.Spec.SubscribedAddons != nil {
 				svcSubscribedAddons = baseEnv.Spec.SubscribedAddons
+			}
+			// Fall back to the baseEnv's release hook when the service
+			// itself carries none, so a preview inherits whatever the
+			// reviewer's base env (typically production) runs at promote.
+			if svcRelease == nil && baseEnv.Spec.Release != nil {
+				svcRelease = baseEnv.Spec.Release
 			}
 		} else if err != nil && !apierrors.IsNotFound(err) {
 			d.Logger.Warn("preview baseEnv fetch", "baseEnv", baseEnvName, "err", err)
@@ -794,6 +808,10 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			// services get their proper command override on previews.
 			Runtime: svcRuntime,
 			Command: svcCommand,
+			// Carry the release hook so the build poller runs migrations
+			// against the per-PR clone before promote. nil for services
+			// without a release hook (most) — a no-op, unchanged behaviour.
+			Release: svcRelease,
 		},
 	}
 

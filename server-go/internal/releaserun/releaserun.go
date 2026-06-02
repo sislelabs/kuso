@@ -121,11 +121,25 @@ exit $rc
 // shared with the rest of the server.
 type Runner struct {
 	Kube *kube.Client
+
+	// seed-wait knobs (preview envs only). Defaulted in New; overridden
+	// in tests so they don't sleep for real. See waitForSeed.
+	seedPollInterval time.Duration
+	seedGrace        time.Duration
+	seedTimeout      time.Duration
 }
 
 // New constructs a Runner. Kube is required.
 func New(k *kube.Client) *Runner {
-	return &Runner{Kube: k}
+	return &Runner{
+		Kube:             k,
+		seedPollInterval: 3 * time.Second,
+		// Grace: how long to look for a seed Job before concluding this
+		// preview has no clone (frontend previews subscribe to no DB).
+		seedGrace: 30 * time.Second,
+		// Total budget to wait for a found seed Job to complete.
+		seedTimeout: 5 * time.Minute,
+	}
 }
 
 // Run executes the release hook for one env + image. It's synchronous
@@ -161,6 +175,14 @@ func (r *Runner) Run(ctx context.Context, ns string, env *kube.KusoEnvironment, 
 	}
 	if !apierrors.IsNotFound(gerr) {
 		return Result{JobName: jobName}, fmt.Errorf("get release job: %w", gerr)
+	}
+
+	// For preview envs with a cloned DB, gate the release on the seed
+	// having finished — otherwise `migrate up` can race the seed's
+	// `pg_dump --clean` and get its tables dropped. No-op for production
+	// envs and for previews without a clone (frontend, no DB subscription).
+	if err := r.waitForSeed(ctx, ns, env); err != nil {
+		return Result{JobName: jobName}, err
 	}
 
 	job := r.buildJob(env, image, jobName, int32(timeout))

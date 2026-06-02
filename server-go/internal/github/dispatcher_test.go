@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -520,6 +521,120 @@ func TestDispatch_PROpened_PreviewIsSingleReplica(t *testing.T) {
 	}
 	if env.Spec.Autoscaling != nil {
 		t.Errorf("preview must have NO autoscaling, got %+v", env.Spec.Autoscaling)
+	}
+}
+
+// seedSvcWithRelease seeds a service carrying a release hook (e.g. a
+// `migrate up` command) so preview-env propagation of spec.release can
+// be asserted.
+func seedSvcWithRelease(project, service string, command []string) seed {
+	s := &kube.KusoService{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      project + "-" + service,
+			Namespace: "kuso",
+			Labels:    map[string]string{"kuso.sislelabs.com/project": project, "kuso.sislelabs.com/service": service},
+		},
+		Spec: kube.KusoServiceSpec{
+			Project: project,
+			Port:    3000,
+			Release: &kube.KusoReleaseSpec{Command: command},
+		},
+	}
+	return typedSeed(kube.GVRServices, "KusoService", s)
+}
+
+// TestDispatch_PROpened_PropagatesReleaseHook is the regression test for the
+// preview-migration bug: a PR that adds a DB migration boots its preview
+// against the cloned-but-un-migrated schema and 500s. The fix carries the
+// parent service's spec.release onto the preview env so the release Job
+// (migrations) runs against the preview DB before promote.
+func TestDispatch_PROpened_PropagatesReleaseHook(t *testing.T) {
+	t.Parallel()
+	cmd := []string{"sh", "-c", "migrate up"}
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		seedSvcWithRelease("alpha", "api", cmd),
+	)
+	body := []byte(`{
+		"action": "opened",
+		"number": 51,
+		"pull_request": {"head": {"ref": "feat/migrate", "sha": "5151515151515151515151515151515151515151"}, "state": "open"},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch pr: %v", err)
+	}
+	env, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-api-pr-51")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if env.Spec.Release == nil {
+		t.Fatalf("preview env should carry the parent service's release hook, got nil")
+	}
+	if got := env.Spec.Release.Command; !reflect.DeepEqual(got, cmd) {
+		t.Errorf("release command: got %v, want %v", got, cmd)
+	}
+}
+
+// TestDispatch_PROpened_NoReleaseHook_LeavesReleaseNil confirms a service
+// without a release hook yields a preview with no release (no-op, unchanged
+// behaviour — most services don't migrate).
+func TestDispatch_PROpened_NoReleaseHook_LeavesReleaseNil(t *testing.T) {
+	t.Parallel()
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		seedSvc("alpha", "web"),
+	)
+	body := []byte(`{
+		"action": "opened",
+		"number": 52,
+		"pull_request": {"head": {"ref": "feat/x", "sha": "5252525252525252525252525252525252525252"}, "state": "open"},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch pr: %v", err)
+	}
+	env, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-52")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if env.Spec.Release != nil {
+		t.Errorf("preview env should have nil release for a service without a release hook, got %+v", env.Spec.Release)
+	}
+}
+
+// TestDispatch_PRSynced_RestampsReleaseHook guards the update path: a later
+// push to an existing preview PR must re-stamp the release hook (the update
+// branch otherwise only carries over EnvFromSecrets, which would drop the
+// release on resync and silently regress migrations).
+func TestDispatch_PRSynced_RestampsReleaseHook(t *testing.T) {
+	t.Parallel()
+	cmd := []string{"sh", "-c", "migrate up"}
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		seedSvcWithRelease("alpha", "api", cmd),
+		// Pre-existing preview env with NO release (simulates one created
+		// before the fix, or a bare resync target).
+		seedPreviewEnv("alpha", "api", 53, "feat/migrate"),
+	)
+	body := []byte(`{
+		"action": "synchronize",
+		"number": 53,
+		"pull_request": {"head": {"ref": "feat/migrate", "sha": "5353535353535353535353535353535353535353"}, "state": "open"},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch pr: %v", err)
+	}
+	env, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-api-pr-53")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if env.Spec.Release == nil {
+		t.Fatalf("resynced preview env should re-stamp the release hook, got nil")
+	}
+	if got := env.Spec.Release.Command; !reflect.DeepEqual(got, cmd) {
+		t.Errorf("release command after resync: got %v, want %v", got, cmd)
 	}
 }
 
