@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.12] — 2026-06-02
+
+### 🐛 Bug Fixes
+- Fix(previews): rewrite in-cluster service DNS so preview frontend SSRs its OWN API ([37f3122](https://github.com/sislelabs/kuso/commit/37f312200e8a05a0e28f687f80d2550d19f278a0))
+
 ## [0.18.11] — 2026-06-02
 
 ### 🐛 Bug Fixes
@@ -359,14 +364,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(overlay): use env label to match env CR — staging tab no longer shows production URL ([497dcd9](https://github.com/sislelabs/kuso/commit/497dcd92edc3a9078480b8424086c52bc45123dd))
-
-## [0.16.19] — 2026-05-28
-
-### ✨ Features
-- Feat: per-env custom domains (server-side) + fix auto-host for user baseDomain ([83af977](https://github.com/sislelabs/kuso/commit/83af977e63a611bb8482c9f6633663706adc2d0b))
-
-### 🐛 Bug Fixes
-- Fix(ui): NetworkingSection binds to env-scoped custom domains ([a7da957](https://github.com/sislelabs/kuso/commit/a7da957ea83f4739ce4119fa6506c140e2d55a33))
 
 
 ---
