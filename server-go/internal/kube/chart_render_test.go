@@ -155,3 +155,47 @@ func TestKusoEnvironmentChart_SpreadPolicy(t *testing.T) {
 		})
 	}
 }
+
+// TestKusoEnvironmentChart_HPACPURequest verifies the env chart
+// guarantees a CPU request when autoscaling is on — without one a
+// CPU-target HPA reports <unknown> and never scales past minReplicas.
+func TestKusoEnvironmentChart_HPACPURequest(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		sets       []string
+		wantCPUReq string // substring that must appear in resources; "" = no injected request
+	}{
+		{
+			name:       "autoscaling_on_no_resources_injects_default_cpu",
+			sets:       []string{"autoscaling.enabled=true"},
+			wantCPUReq: "cpu: 100m",
+		},
+		{
+			name:       "autoscaling_on_user_cpu_preserved",
+			sets:       []string{"autoscaling.enabled=true", "resources.requests.cpu=500m"},
+			wantCPUReq: "cpu: 500m",
+		},
+		{
+			name:       "autoscaling_off_no_injected_request",
+			sets:       nil,
+			wantCPUReq: "", // resources stay {} — no request forced
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := helmTemplate(t, "test-env", tc.sets...)
+			if tc.wantCPUReq == "" {
+				if strings.Contains(out, "cpu: 100m") {
+					t.Errorf("did not expect an injected cpu request when autoscaling off:\n%s", out)
+				}
+				return
+			}
+			if !strings.Contains(out, tc.wantCPUReq) {
+				t.Errorf("expected resources to contain %q, got:\n%s", tc.wantCPUReq, out)
+			}
+		})
+	}
+}

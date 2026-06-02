@@ -233,8 +233,27 @@ spec:
             timeoutSeconds: 2
             failureThreshold: 60
           {{- end }}
+          {{- /*
+            A CPU-target HPA computes utilization as a percentage of the
+            container's CPU *request* — with no request, the HPA reports
+            cpu:<unknown>, ScalingActive=False, and the deployment is
+            stuck at minReplicas forever (it can never scale up). So when
+            autoscaling is enabled we GUARANTEE a CPU request: use the
+            user's resources verbatim if they set requests.cpu, otherwise
+            merge in a small default floor (100m) so the HPA can compute.
+            When autoscaling is off, resources pass through untouched
+            (empty {} is fine — no HPA depends on a request).
+          */}}
+          {{- $res := .Values.resources | default dict }}
+          {{- if and .Values.autoscaling .Values.autoscaling.enabled }}
+          {{- $req := (get $res "requests") | default dict }}
+          {{- if not (get $req "cpu") }}
+          {{- $req = merge (dict "cpu" "100m") $req }}
+          {{- $res = merge (dict "requests" $req) $res }}
+          {{- end }}
+          {{- end }}
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- toYaml $res | nindent 12 }}
           {{- with .Values.volumes }}
           volumeMounts:
             {{- range . }}
