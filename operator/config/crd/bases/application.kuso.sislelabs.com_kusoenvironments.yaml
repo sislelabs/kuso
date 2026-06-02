@@ -96,6 +96,13 @@ spec:
                 replicaCount:
                   type: integer
                   default: 1
+                spreadPolicy:
+                  type: string
+                  description: >-
+                    How multi-replica pods spread across nodes. "hard" =
+                    topologySpreadConstraints DoNotSchedule (replicas forced onto
+                    distinct nodes); "soft"/"" = ScheduleAnyway (single-node safe).
+                    Server-managed from the live schedulable-node count.
                 autoscaling:
                   type: object
                   properties:
