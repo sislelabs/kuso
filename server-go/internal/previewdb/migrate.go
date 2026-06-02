@@ -14,6 +14,7 @@ import (
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/kube"
+	"kuso/server/internal/releaserun"
 )
 
 // selectMigratableEnvs picks the preview env CRs that should run a migration
@@ -126,6 +127,14 @@ func buildMigrateJob(ns, project, cloneFQN string, env *kube.KusoEnvironment, ow
 				Spec: corev1.PodSpec{
 					RestartPolicy:                corev1.RestartPolicyNever,
 					AutomountServiceAccountToken: ptrBool(false),
+					// TCP-wait on the clone DB before migrating — the clone
+					// StatefulSet's ClusterIP transiently refuses connections
+					// while it comes up / reconciles its Service. With
+					// backoffLimit=0 a connection-refused would otherwise
+					// permanently fail the migrate. Shared with the release Job.
+					InitContainers: []corev1.Container{
+						releaserun.WaitForAddonsInitContainer(envVars, envFrom),
+					},
 					Containers: []corev1.Container{
 						{
 							Name:    "migrate",

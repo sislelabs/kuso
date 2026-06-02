@@ -99,6 +99,29 @@ func TestBuildMigrateJob_RunsReleaseCmdAgainstClone(t *testing.T) {
 	if !sawConn {
 		t.Errorf("migrate container must mount the clone conn secret %q via envFrom; got %+v", conn, c.EnvFrom)
 	}
+	// MUST have a wait-for-addons init container that TCP-waits on the
+	// clone DB before running migrate — the clone StatefulSet's ClusterIP
+	// transiently refuses connections while it comes up / reconciles, and
+	// with backoffLimit=0 a connection-refused permanently fails the
+	// migrate (the live bug: "dial tcp ...:5432: connect: connection
+	// refused"). The init must inherit the same envFrom so $DATABASE_URL
+	// resolves.
+	if len(pod.InitContainers) == 0 {
+		t.Fatalf("migrate Job must have a wait-for-addons init container; got none")
+	}
+	wait := pod.InitContainers[0]
+	if wait.Name != "wait-for-addons" {
+		t.Errorf("first init container = %q, want wait-for-addons", wait.Name)
+	}
+	var initSawConn bool
+	for _, ef := range wait.EnvFrom {
+		if ef.SecretRef != nil && ef.SecretRef.Name == conn {
+			initSawConn = true
+		}
+	}
+	if !initSawConn {
+		t.Errorf("wait-for-addons init must inherit the clone conn envFrom so $DATABASE_URL resolves; got %+v", wait.EnvFrom)
+	}
 	// Owned by the clone addon CR (cascade on PR-close).
 	if len(job.OwnerReferences) != 1 || job.OwnerReferences[0].Name != "tickero-db-pr-36" {
 		t.Errorf("owner ref must be the clone addon, got %+v", job.OwnerReferences)

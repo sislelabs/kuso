@@ -116,6 +116,38 @@ fi
 exit $rc
 `
 
+// WaitForAddonsInitContainer returns the init container that TCP-waits on the
+// addon endpoints derived from the supplied env (DATABASE_URL / REDIS_URL /
+// NATS_URL) before the main container runs. Shared by the release Job (here)
+// and the preview post-seed migrate Job (previewdb) so both ride out the
+// window where a freshly-provisioned or reconciling addon's ClusterIP
+// transiently refuses connections — without it a one-shot migrate Job
+// (backoffLimit 0) permanently fails on a transient `connection refused`.
+// envVars + envFrom must match the main container's so $DATABASE_URL resolves.
+func WaitForAddonsInitContainer(envVars []corev1.EnvVar, envFrom []corev1.EnvFromSource) corev1.Container {
+	return corev1.Container{
+		Name:    "wait-for-addons",
+		Image:   "busybox:1.36",
+		Env:     envVars,
+		EnvFrom: envFrom,
+		Command: []string{"sh", "-c", waitForAddonsScript},
+		SecurityContext: &corev1.SecurityContext{
+			AllowPrivilegeEscalation: ptrBool(false),
+			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+		},
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("10m"),
+				corev1.ResourceMemory: resource.MustParse("16Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("64Mi"),
+			},
+		},
+	}
+}
+
 // Runner runs release Jobs. Created once per server boot; reused
 // across calls. The Kube client + project namespace resolver are
 // shared with the rest of the server.
@@ -230,13 +262,13 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 			Name:      name,
 			Namespace: env.Namespace,
 			Labels: map[string]string{
-				"app.kubernetes.io/name":          "release-job",
-				"app.kubernetes.io/managed-by":    "kuso-server",
-				"kuso.sislelabs.com/project":      env.Spec.Project,
-				"kuso.sislelabs.com/service":      env.Spec.Service,
-				"kuso.sislelabs.com/env":          env.Name,
-				"kuso.sislelabs.com/release-tag":  image.Tag,
-				"kuso.sislelabs.com/role":         "release",
+				"app.kubernetes.io/name":         "release-job",
+				"app.kubernetes.io/managed-by":   "kuso-server",
+				"kuso.sislelabs.com/project":     env.Spec.Project,
+				"kuso.sislelabs.com/service":     env.Spec.Service,
+				"kuso.sislelabs.com/env":         env.Name,
+				"kuso.sislelabs.com/release-tag": image.Tag,
+				"kuso.sislelabs.com/role":        "release",
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				{
@@ -250,10 +282,10 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 			},
 		},
 		Spec: batchv1.JobSpec{
-			ActiveDeadlineSeconds: ptrInt64(int64(timeoutSec)),
-			BackoffLimit:          &backoff,
-			Parallelism:           &parallelism,
-			Completions:           &completions,
+			ActiveDeadlineSeconds:   ptrInt64(int64(timeoutSec)),
+			BackoffLimit:            &backoff,
+			Parallelism:             &parallelism,
+			Completions:             &completions,
 			TTLSecondsAfterFinished: ptrInt32(86400), // Keep Job + pod 24h for log access.
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
@@ -284,29 +316,7 @@ func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name
 					// stores actually accept connections. Bounded by the
 					// Job's activeDeadlineSeconds, so it can't hang forever.
 					InitContainers: []corev1.Container{
-						{
-							Name:    "wait-for-addons",
-							Image:   "busybox:1.36",
-							Env:     envVars,
-							EnvFrom: envFrom,
-							Command: []string{"sh", "-c", waitForAddonsScript},
-							SecurityContext: &corev1.SecurityContext{
-								AllowPrivilegeEscalation: ptrBool(false),
-								Capabilities: &corev1.Capabilities{
-									Drop: []corev1.Capability{"ALL"},
-								},
-							},
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("10m"),
-									corev1.ResourceMemory: resource.MustParse("16Mi"),
-								},
-								Limits: corev1.ResourceList{
-									corev1.ResourceCPU:    resource.MustParse("100m"),
-									corev1.ResourceMemory: resource.MustParse("64Mi"),
-								},
-							},
-						},
+						WaitForAddonsInitContainer(envVars, envFrom),
 					},
 					Containers: []corev1.Container{
 						{
@@ -444,6 +454,6 @@ func (r *Runner) Logs(ctx context.Context, ns, envName, imageTag string) (string
 // created (or has been TTL-garbage-collected).
 var ErrNoJob = errors.New("releaserun: no job for env+tag")
 
-func ptrBool(b bool) *bool       { return &b }
-func ptrInt32(i int32) *int32    { return &i }
-func ptrInt64(i int64) *int64    { return &i }
+func ptrBool(b bool) *bool    { return &b }
+func ptrInt32(i int32) *int32 { return &i }
+func ptrInt64(i int64) *int64 { return &i }
