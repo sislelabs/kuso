@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.16.13] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(ui): chip toggle silently no-op'd — api() double-stringified the body ([5107577](https://github.com/sislelabs/kuso/commit/5107577e8431904a741682a0ce5ae5c20819c15f))
+
 ## [0.16.12] — 2026-05-28
 
 ### 🐛 Bug Fixes
