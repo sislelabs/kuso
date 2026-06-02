@@ -203,6 +203,11 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				auto := autoscalingFromScale(svc.Spec.Scale)
 				env.Spec.SetReplicaCount(effectiveScaleMin(svc))
 				env.Spec.Autoscaling = auto
+				// Re-evaluate node-spread on every scale change: a
+				// service scaled 1→2 must pick up hard spread on the
+				// same write that adds the replica, and the live node
+				// count may have changed since the env was created.
+				env.Spec.SpreadPolicy = s.resolveSpreadPolicy(ctx)
 			}
 			if changed.Domains {
 				// Custom domains are now per-env (env.Spec.AdditionalHosts).

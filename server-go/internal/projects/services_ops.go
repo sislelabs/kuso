@@ -499,6 +499,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Port:             port,
 			ReplicaCount:     intPtr(scale.MinValue()),
 			Autoscaling:      autoscalingFromScale(scale),
+			SpreadPolicy:     s.resolveSpreadPolicy(ctx),
 			Host:             envHost,
 			AdditionalHosts:  envAdditionalHosts,
 			TLSHosts:         envTLSHosts,
@@ -795,6 +796,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			Port:         port,
 			ReplicaCount: intPtr(scaleMin),
 			Autoscaling:  autoscalingFromScale(svc.Spec.Scale),
+			SpreadPolicy: s.resolveSpreadPolicy(ctx),
 			Host:         host,
 			// Custom envs (staging, qa, client-demo) get ONLY their
 			// own host — never the service-level custom domains.

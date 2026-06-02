@@ -433,7 +433,7 @@ type KusoEnvironmentSpec struct {
 	// schedulable-node count by resolveSpreadPolicy at env-write time.
 	SpreadPolicy string        `json:"spreadPolicy,omitempty"`
 	Sleep        *KusoEnvSleep `json:"sleep,omitempty"`
-	Host         string           `json:"host,omitempty"`
+	Host         string        `json:"host,omitempty"`
 	// AdditionalHosts mirrors KusoService.spec.domains[].host onto the
 	// env CR so the kusoenvironment chart's Ingress template can emit
 	// one rule per host (the chart reads ONLY the env CR — there's no
