@@ -328,7 +328,11 @@ func buildSeedJob(ns, project, sourceFQN, cloneFQN string, ownerUID types.UID, n
 		jobName = jobName[:63]
 	}
 	one := int32(1)
-	zero := int32(0)
+	// A couple of retries: the script now waits (pg_isready) for both
+	// DBs before dumping, so it shouldn't fail transiently — but if it
+	// somehow does, retry rather than leaving an empty preview DB on a
+	// one-off blip. The TTL below still reaps the Job either way.
+	backoff := int32(2)
 	// TTL-reap the Job (and its pod) 1h after it finishes — success or
 	// failure. Without this a Failed seed Job sits forever; we saw 27
 	// orphaned Failed Jobs accumulate across a PR's resyncs because
@@ -369,7 +373,7 @@ func buildSeedJob(ns, project, sourceFQN, cloneFQN string, ownerUID types.UID, n
 			},
 		},
 		Spec: batchv1.JobSpec{
-			BackoffLimit:            &zero,
+			BackoffLimit:            &backoff,
 			Completions:             &one,
 			Parallelism:             &one,
 			TTLSecondsAfterFinished: &ttl,
@@ -389,10 +393,28 @@ func buildSeedJob(ns, project, sourceFQN, cloneFQN string, ownerUID types.UID, n
 						// tables.
 						Args: []string{`
 set -e
+# Wait for BOTH the source and the freshly-created clone Postgres to
+# actually accept connections before dumping. A per-PR clone is a brand-
+# new StatefulSet — its pod can be "ready" (the SS reports a ready
+# replica) a beat before Postgres is listening on TCP, and the source
+# can blip too. Without this wait the dump raced startup and died with
+# "Connection refused"; with BackoffLimit=0 that was a permanent
+# failure → an EMPTY preview DB. Poll pg_isready up to ~3 min each.
+wait_pg() { # host port user
+  i=0
+  until pg_isready -h "$1" -p "$2" -U "$3" -q; do
+    i=$((i+1))
+    if [ "$i" -ge 90 ]; then echo "==> $1:$2 never became ready" >&2; exit 1; fi
+    echo "==> waiting for $1:$2 ($i)…"; sleep 2
+  done
+}
+echo "==> waiting for source ${SRC_HOST}:${SRC_PORT:-5432} and clone ${DST_HOST}:${DST_PORT:-5432}"
+PGPASSWORD="${SRC_PASSWORD}" wait_pg "${SRC_HOST}" "${SRC_PORT:-5432}" "${SRC_USER}"
+PGPASSWORD="${DST_PASSWORD}" wait_pg "${DST_HOST}" "${DST_PORT:-5432}" "${DST_USER}"
 echo "==> dumping ${SRC_HOST}/${SRC_DB} → ${DST_HOST}/${DST_DB}"
 PGPASSWORD="${SRC_PASSWORD}" pg_dump --no-owner --no-acl --clean --if-exists \
   -h "${SRC_HOST}" -U "${SRC_USER}" "${SRC_DB}" \
-  | PGPASSWORD="${DST_PASSWORD}" psql \
+  | PGPASSWORD="${DST_PASSWORD}" psql -v ON_ERROR_STOP=1 \
   -h "${DST_HOST}" -U "${DST_USER}" "${DST_DB}"
 echo "==> done"
 `},
@@ -408,10 +430,12 @@ echo "==> done"
 						// name ... Name does not resolve".
 						Env: []corev1.EnvVar{
 							envFromSecret("SRC_HOST", addons.ConnSecretName(sourceFQN), "POSTGRES_HOST"),
+							envFromSecretOptional("SRC_PORT", addons.ConnSecretName(sourceFQN), "POSTGRES_PORT"),
 							envFromSecret("SRC_USER", addons.ConnSecretName(sourceFQN), "POSTGRES_USER"),
 							envFromSecret("SRC_DB", addons.ConnSecretName(sourceFQN), "POSTGRES_DB"),
 							envFromSecret("SRC_PASSWORD", addons.ConnSecretName(sourceFQN), "POSTGRES_PASSWORD"),
 							envFromSecret("DST_HOST", addons.ConnSecretName(cloneFQN), "POSTGRES_HOST"),
+							envFromSecretOptional("DST_PORT", addons.ConnSecretName(cloneFQN), "POSTGRES_PORT"),
 							envFromSecret("DST_USER", addons.ConnSecretName(cloneFQN), "POSTGRES_USER"),
 							envFromSecret("DST_DB", addons.ConnSecretName(cloneFQN), "POSTGRES_DB"),
 							envFromSecret("DST_PASSWORD", addons.ConnSecretName(cloneFQN), "POSTGRES_PASSWORD"),
@@ -441,4 +465,15 @@ func envFromSecret(name, secretName, key string) corev1.EnvVar {
 			},
 		},
 	}
+}
+
+// envFromSecretOptional is envFromSecret with Optional=true — a missing
+// key leaves the env var unset (the script supplies a default) instead
+// of wedging the pod in CreateContainerConfigError. Used for POSTGRES_
+// PORT, which not every addon's conn secret carries.
+func envFromSecretOptional(name, secretName, key string) corev1.EnvVar {
+	opt := true
+	e := envFromSecret(name, secretName, key)
+	e.ValueFrom.SecretKeyRef.Optional = &opt
+	return e
 }
