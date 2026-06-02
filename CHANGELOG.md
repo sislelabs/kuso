@@ -5,6 +5,17 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.9] — 2026-06-02
+
+### ✨ Features
+- Feat(previews): run service release hook against preview DB ([c539c1e](https://github.com/sislelabs/kuso/commit/c539c1ee81560942fb1f10e6ca173f59637dddd7))
+
+### 🐛 Bug Fixes
+- Fix(canvas): show only the env's DB, not both shared + per-PR clone ([5bf93e3](https://github.com/sislelabs/kuso/commit/5bf93e36695e7b4846a161abbb7719c2a49522c2))
+
+### 📝 Docs
+- Docs(spec): preview release hook — run service release Job against preview DB ([6af8e83](https://github.com/sislelabs/kuso/commit/6af8e8308eaac00f39d0d80e74d5045b468995cb))
+
 ## [0.18.8] — 2026-06-02
 
 ### ✨ Features
@@ -353,12 +364,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(propagate/canvas): preserve shadow overrides; canvas prefers production env ([19eba22](https://github.com/sislelabs/kuso/commit/19eba225a509a0c7fa12b7f05681a8aac6c9305e))
-
-## [0.16.16] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(propagate): preserve per-env envVar overrides; fix overlay URL ([3a041ae](https://github.com/sislelabs/kuso/commit/3a041ae4250ebd000798e5a016135d6171da575d))
-- Fix(crd): allow project-shared/instance-shared secrets in valueFrom.secretKeyRef ([fae6355](https://github.com/sislelabs/kuso/commit/fae635578bc6983b188c8317c8272493f6cede3e))
 
 
 ---
