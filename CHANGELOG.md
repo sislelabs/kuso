@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.11] — 2026-06-02
+
+### 🐛 Bug Fixes
+- Fix(previews): migrate Job must wait for the clone DB to accept connections ([749ae53](https://github.com/sislelabs/kuso/commit/749ae534c74bdac210961a914ae58f02fac61df2))
+
 ## [0.18.10] — 2026-06-02
 
 ### 🐛 Bug Fixes
@@ -362,11 +367,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(ui): NetworkingSection binds to env-scoped custom domains ([a7da957](https://github.com/sislelabs/kuso/commit/a7da957ea83f4739ce4119fa6506c140e2d55a33))
-
-## [0.16.18] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix: always-visible canvas footer, per-env auto-domain, drift superset, eye-toggle dirty ([f0b5e91](https://github.com/sislelabs/kuso/commit/f0b5e917b9e32d9b4c34123b8f0222123e85983c))
 
 
 ---
