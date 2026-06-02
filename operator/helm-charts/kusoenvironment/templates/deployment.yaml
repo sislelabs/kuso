@@ -113,19 +113,30 @@ spec:
       {{- end }}
       {{- end }}
       {{- /*
-        Even spread: when replicaCount > 1, prefer to land each replica
-        on a different node so a single host outage doesn't take the
-        service down. ScheduleAnyway (not DoNotSchedule) so a single-
-        node cluster still schedules everything — the constraint
-        becomes a soft preference there. When the user pins via
-        placement.nodes (specific hostnames), spread is meaningless,
-        so we skip it.
+        Even spread: when replicaCount > 1, land each replica on a
+        different node so a single host reboot/outage can't take all
+        replicas down.
+
+        whenUnsatisfiable is driven by spec.spreadPolicy, which the
+        server sets from the live schedulable-node count:
+          - "hard"  → DoNotSchedule: a HARD guarantee — two replicas
+            cannot both sit on one node while another node is free.
+            Set only when there's >1 schedulable node, so nothing hangs
+            Pending.
+          - "soft"/unset → ScheduleAnyway: best-effort. The default, and
+            what a single-node cluster gets (so the 2nd replica still
+            schedules on the only node).
+        Default "soft" keeps existing env CRs (no spreadPolicy yet)
+        rendering exactly as before until the server re-stamps them.
+
+        When the user pins via placement.nodes (specific hostnames),
+        spread is meaningless, so we skip the block entirely.
       */}}
       {{- if and (gt (int .Values.replicaCount) 1) (not (and .Values.placement .Values.placement.nodes)) }}
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
-          whenUnsatisfiable: ScheduleAnyway
+          whenUnsatisfiable: {{ if eq (.Values.spreadPolicy | default "soft") "hard" }}DoNotSchedule{{ else }}ScheduleAnyway{{ end }}
           labelSelector:
             matchLabels:
               {{- include "kusoenvironment.selectorLabels" . | nindent 14 }}

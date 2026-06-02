@@ -424,7 +424,15 @@ type KusoEnvironmentSpec struct {
 	// Use Spec.ReplicaCountValue() to read with the nil→1 fallback.
 	ReplicaCount *int             `json:"replicaCount,omitempty"`
 	Autoscaling  *KusoAutoscaling `json:"autoscaling,omitempty"`
-	Sleep        *KusoEnvSleep    `json:"sleep,omitempty"`
+	// SpreadPolicy controls how multi-replica pods are placed across
+	// nodes: "hard" → topologySpreadConstraints whenUnsatisfiable=
+	// DoNotSchedule (replicas guaranteed on distinct nodes, so a node
+	// reboot can't take all replicas down); "soft"/"" → ScheduleAnyway
+	// (best-effort spread, needed on single-node clusters so the 2nd
+	// replica still schedules). Server-managed: set from the live
+	// schedulable-node count by resolveSpreadPolicy at env-write time.
+	SpreadPolicy string        `json:"spreadPolicy,omitempty"`
+	Sleep        *KusoEnvSleep `json:"sleep,omitempty"`
 	Host         string           `json:"host,omitempty"`
 	// AdditionalHosts mirrors KusoService.spec.domains[].host onto the
 	// env CR so the kusoenvironment chart's Ingress template can emit
