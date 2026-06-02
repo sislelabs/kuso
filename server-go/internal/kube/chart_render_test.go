@@ -101,3 +101,57 @@ func TestKusoEnvironmentChart_EgressLabel(t *testing.T) {
 		})
 	}
 }
+
+// TestKusoEnvironmentChart_SpreadPolicy verifies the topology-spread
+// constraint's whenUnsatisfiable is driven by spec.spreadPolicy:
+// "hard" → DoNotSchedule (replicas forced onto distinct nodes), unset/
+// "soft" → ScheduleAnyway, and the block is absent for a single replica.
+func TestKusoEnvironmentChart_SpreadPolicy(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name       string
+		sets       []string
+		wantSubstr string // "" means: expect NO topologySpreadConstraints block
+	}{
+		{
+			name:       "replicas2_hard_DoNotSchedule",
+			sets:       []string{"replicaCount=2", "spreadPolicy=hard"},
+			wantSubstr: "whenUnsatisfiable: DoNotSchedule",
+		},
+		{
+			name:       "replicas2_unset_ScheduleAnyway",
+			sets:       []string{"replicaCount=2"},
+			wantSubstr: "whenUnsatisfiable: ScheduleAnyway",
+		},
+		{
+			name:       "replicas2_soft_ScheduleAnyway",
+			sets:       []string{"replicaCount=2", "spreadPolicy=soft"},
+			wantSubstr: "whenUnsatisfiable: ScheduleAnyway",
+		},
+		{
+			name:       "replicas1_no_spread_block",
+			sets:       []string{"replicaCount=1", "spreadPolicy=hard"},
+			wantSubstr: "", // single replica → no constraint at all
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			out := helmTemplate(t, "test-env", tc.sets...)
+			hasBlock := strings.Contains(out, "topologySpreadConstraints:")
+			if tc.wantSubstr == "" {
+				if hasBlock {
+					t.Errorf("expected NO topologySpreadConstraints for single replica, got:\n%s", out)
+				}
+				return
+			}
+			if !hasBlock {
+				t.Fatalf("expected a topologySpreadConstraints block, none rendered:\n%s", out)
+			}
+			if !strings.Contains(out, tc.wantSubstr) {
+				t.Errorf("expected render to contain %q, got:\n%s", tc.wantSubstr, out)
+			}
+		})
+	}
+}
