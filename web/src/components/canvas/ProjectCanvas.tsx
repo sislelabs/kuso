@@ -140,6 +140,33 @@ export function ProjectCanvas({
     staleTime: 10_000,
   });
 
+  // Env-scoped addon visibility. Per-PR preview clones are named
+  // "<base>-pr-<N>". The canvas should show the DB the SELECTED env
+  // actually uses, not both the shared base AND its per-PR clone:
+  //   - preview-pr-N view → show this PR's clones (…-pr-N), hide the
+  //     shared base each clone replaces. Shared addons with no clone
+  //     (cache/storage/queue) still show.
+  //   - production/other  → hide ALL per-PR clones (preview-only).
+  // Computed once and used for BOTH node rendering and edge wiring so a
+  // hidden addon never leaves a dangling edge.
+  const visibleAddons: KusoAddon[] = useMemo(() => {
+    const prMatch = selectedEnv.match(/^preview-pr-(\d+)$/);
+    const prSuffix = prMatch ? `-pr-${prMatch[1]}` : "";
+    const isPRClone = (name: string) => /-pr-\d+$/.test(name);
+    const replacedBases = new Set(
+      prSuffix
+        ? addons
+            .filter((a) => a.metadata.name.endsWith(prSuffix))
+            .map((a) => a.metadata.name.slice(0, -prSuffix.length))
+        : [],
+    );
+    return addons.filter((a) => {
+      const name = a.metadata.name;
+      if (isPRClone(name)) return !!prSuffix && name.endsWith(prSuffix);
+      return !replacedBases.has(name);
+    });
+  }, [addons, selectedEnv]);
+
   const initialNodes: Node[] = useMemo(() => {
     const out: Node[] = [];
     services.forEach((s) => {
@@ -171,7 +198,7 @@ export function ProjectCanvas({
         data: { project, service: s, env, latestBuild } satisfies ServiceNodeData,
       });
     });
-    addons.forEach((a) => {
+    visibleAddons.forEach((a) => {
       out.push({
         id: `addon:${a.metadata.name}`,
         type: "addon",
@@ -188,7 +215,7 @@ export function ProjectCanvas({
       });
     });
     return out;
-  }, [project, services, addons, envs, latestBuilds.data, allCrons.data]);
+  }, [project, services, visibleAddons, envs, latestBuilds.data, allCrons.data]);
 
   const initialEdges: Edge[] = useMemo(() => {
     const out: Edge[] = [];
@@ -223,7 +250,7 @@ export function ProjectCanvas({
           // Conn-secret naming is "<addon-cr-name>-conn" — strip the
           // suffix and match against known addons.
           const addonFQN = skr.name.slice(0, -"-conn".length);
-          if (addons.some((a) => a.metadata.name === addonFQN)) {
+          if (visibleAddons.some((a) => a.metadata.name === addonFQN)) {
             explicitUsedAddons.add(`${s.metadata.name}|${addonFQN}`);
           }
         }
@@ -238,7 +265,7 @@ export function ProjectCanvas({
             const refName = m[1];
             const candidates = [refName, `${project}-${refName}`];
             for (const c of candidates) {
-              if (addons.some((a) => a.metadata.name === c)) {
+              if (visibleAddons.some((a) => a.metadata.name === c)) {
                 explicitUsedAddons.add(`${s.metadata.name}|${c}`);
                 break;
               }
@@ -268,7 +295,7 @@ export function ProjectCanvas({
       for (const secretName of secrets) {
         if (!secretName.endsWith("-conn")) continue;
         const addonFQN = secretName.slice(0, -"-conn".length);
-        if (!addons.some((a) => a.metadata.name === addonFQN)) continue;
+        if (!visibleAddons.some((a) => a.metadata.name === addonFQN)) continue;
         const dedupeKey = `${svcFQN}|${addonFQN}`;
         if (seenSvcAddon.has(dedupeKey)) continue;
         seenSvcAddon.add(dedupeKey);
@@ -482,7 +509,7 @@ export function ProjectCanvas({
       }
     });
     return out;
-  }, [project, services, addons, envs]);
+  }, [project, services, visibleAddons, envs]);
 
   const [nodes, setNodes] = useState<Node[]>([]);
   const [edges, setEdges] = useState<Edge[]>(initialEdges);
