@@ -183,7 +183,7 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 		seedCtx, cancel := context.WithTimeout(c.BaseCtx, 30*time.Minute)
 		go func(src, clone string, isInstancePG bool) {
 			defer cancel()
-			c.seedAsync(seedCtx, ns, project, src, clone, isInstancePG)
+			c.seedAsync(seedCtx, ns, project, src, clone, isInstancePG, prNumber)
 		}(addons.CRName(project, s.Name), cloneFQN, instancePG)
 	}
 	return connSecrets, nil
@@ -223,7 +223,7 @@ func (c *Cloner) DeletePRAddons(ctx context.Context, project string, prNumber in
 // spawns a Job that pg_dumps from the source into the clone. Best-
 // effort: failures are logged; the preview env still boots, just
 // with an empty DB.
-func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN string, instancePG bool) {
+func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN string, instancePG bool, prNumber int) {
 	deadline := time.Now().Add(5 * time.Minute)
 	for time.Now().Before(deadline) {
 		if c.cloneReady(ctx, ns, cloneFQN, instancePG) {
@@ -241,7 +241,7 @@ func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN
 	// with a local trust socket to RepairPassword against. Skip the
 	// repair step (which targets native-addon pods) for them.
 	if instancePG {
-		if err := c.runSeedJob(ctx, ns, project, sourceFQN, cloneFQN); err != nil {
+		if err := c.seedAndMigrate(ctx, ns, project, sourceFQN, cloneFQN, prNumber); err != nil {
 			c.Logger.Warn("preview db seed job (instance-pg)", "clone", cloneFQN, "err", err)
 			return
 		}
@@ -263,7 +263,7 @@ func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN
 	if err := c.Addons.RepairPassword(ctx, project, cloneShort); err != nil {
 		c.Logger.Warn("preview db clone repair-password", "clone", cloneFQN, "err", err)
 	}
-	if err := c.runSeedJob(ctx, ns, project, sourceFQN, cloneFQN); err != nil {
+	if err := c.seedAndMigrate(ctx, ns, project, sourceFQN, cloneFQN, prNumber); err != nil {
 		c.Logger.Warn("preview db seed job", "clone", cloneFQN, "err", err)
 		return
 	}
@@ -292,7 +292,10 @@ func (c *Cloner) cloneReady(ctx context.Context, ns, cloneFQN string, instancePG
 	return ss.Status.ReadyReplicas >= 1
 }
 
-func (c *Cloner) runSeedJob(ctx context.Context, ns, project, sourceFQN, cloneFQN string) error {
+// runSeedJob creates the seed Job and returns its name + the per-run nonce
+// (the same nonce keys the post-seed migrate Job, so a re-seed → re-migrate).
+// jobName is "" when the create was a no-op dedupe (Job already in flight).
+func (c *Cloner) runSeedJob(ctx context.Context, ns, project, sourceFQN, cloneFQN string) (jobName string, nonce int64, err error) {
 	// Own the Job by the clone addon CR so kube-GC cascades the delete
 	// when DeletePRAddons drops the clone on PR-close (mirrors how
 	// addons.Add owns each addon by its KusoProject). Best-effort: if the
@@ -303,15 +306,65 @@ func (c *Cloner) runSeedJob(ctx context.Context, ns, project, sourceFQN, cloneFQ
 		ownerUID = clone.UID
 	}
 
-	job := buildSeedJob(ns, project, sourceFQN, cloneFQN, ownerUID, time.Now().Unix())
+	nonce = time.Now().Unix()
+	job := buildSeedJob(ns, project, sourceFQN, cloneFQN, ownerUID, nonce)
 	if _, err := c.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {
-			return nil // re-running for the same PR; previous Job
+			return "", nonce, nil // re-running for the same PR; previous Job
 			// either succeeded or is still in flight.
 		}
-		return fmt.Errorf("create seed job: %w", err)
+		return "", nonce, fmt.Errorf("create seed job: %w", err)
 	}
+	return job.Name, nonce, nil
+}
+
+// seedAndMigrate runs the seed Job, waits for it to complete, then runs the
+// post-seed migration against the clone for every preview env that uses it.
+// The migrate is strictly ordered after the seed by construction — this is the
+// fix for the close→reopen bug where a re-seed dropped a migration that a
+// build-promote-time release had applied earlier. prNumber drives the env
+// lookup; project/clone identify the DB.
+func (c *Cloner) seedAndMigrate(ctx context.Context, ns, project, sourceFQN, cloneFQN string, prNumber int) error {
+	jobName, nonce, err := c.runSeedJob(ctx, ns, project, sourceFQN, cloneFQN)
+	if err != nil {
+		return err
+	}
+	// Wait for the seed to actually finish before migrating — the seed's
+	// `pg_dump --clean` drops+recreates tables, so a migration that ran
+	// before/during the seed would be wiped. When jobName is "" the create
+	// deduped (a seed for this PR is already in flight); wait on the latest
+	// seed Job for this clone instead.
+	waitName := jobName
+	if waitName == "" {
+		waitName = c.latestSeedJobName(ctx, ns, project, cloneFQN)
+	}
+	if waitName != "" {
+		if werr := c.waitForJobComplete(ctx, ns, waitName, 5*time.Minute); werr != nil {
+			c.Logger.Warn("preview seed job did not complete; skipping migrate", "clone", cloneFQN, "job", waitName, "err", werr)
+			return nil
+		}
+	}
+	c.migrateAfterSeed(ctx, ns, project, prNumber, cloneFQN, nonce)
 	return nil
+}
+
+// latestSeedJobName returns the most-recently-created preview-seed Job name for
+// this clone, or "" if none. Used when runSeedJob deduped against an in-flight
+// seed and we still need something to wait on.
+func (c *Cloner) latestSeedJobName(ctx context.Context, ns, project, cloneFQN string) string {
+	jobs, err := c.Kube.Clientset.BatchV1().Jobs(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("kuso.sislelabs.com/role=preview-seed,kuso.sislelabs.com/clone-addon=%s", addons.ShortName(project, cloneFQN)),
+	})
+	if err != nil || len(jobs.Items) == 0 {
+		return ""
+	}
+	latest := jobs.Items[0]
+	for i := range jobs.Items {
+		if jobs.Items[i].CreationTimestamp.After(latest.CreationTimestamp.Time) {
+			latest = jobs.Items[i]
+		}
+	}
+	return latest.Name
 }
 
 // buildSeedJob renders the pg_dump|psql seed Job that clones a source

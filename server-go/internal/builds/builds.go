@@ -2220,7 +2220,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		// Idempotency: the Job name is per-(env, image-tag), so a
 		// re-deploy of the same tag is a no-op (Job exists, already
 		// succeeded). See releaserun.JobName.
-		if e.Spec.Release != nil && len(e.Spec.Release.Command) > 0 && p.ReleaseRunner != nil {
+		if shouldRunRelease(&e) && p.ReleaseRunner != nil {
 			res, rerr := p.ReleaseRunner.Run(ctx, ns, &e, b.Spec.Image)
 			if rerr != nil {
 				// Infra error talking to kube — log + skip this env
@@ -2373,6 +2373,25 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 // way (main.go wires the concrete type in).
 type ReleaseRunner interface {
 	Run(ctx context.Context, ns string, env *kube.KusoEnvironment, image *kube.KusoImage) (releaserun.Result, error)
+}
+
+// shouldRunRelease reports whether the build poller should run the pre-deploy
+// release Job for this env. It runs for any env carrying a release command —
+// EXCEPT preview envs. Preview migrations are owned by the seed path
+// (previewdb runs the migration AFTER the per-PR clone is (re)seeded, on every
+// PR lifecycle event including close→reopen). If the poller also ran the
+// release Job for previews it would race the seed (which `pg_dump --clean`s the
+// DB after promote) and trip the per-(env,tag) idempotency on reopen, leaving
+// the preview un-migrated. Production and other long-lived envs have no seed,
+// so the poller stays their migration trigger.
+func shouldRunRelease(e *kube.KusoEnvironment) bool {
+	if e.Spec.Release == nil || len(e.Spec.Release.Command) == 0 {
+		return false
+	}
+	if e.Spec.Kind == "preview" {
+		return false
+	}
+	return true
 }
 
 // markReleaseFailed stamps the build CR with phase=release-failed and

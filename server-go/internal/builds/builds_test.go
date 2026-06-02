@@ -1090,3 +1090,34 @@ func TestPoller_ReleaseSucceededPromotesFromServiceConsumers(t *testing.T) {
 		t.Errorf("worker env should inherit the image on release success, got %+v", workerEnv.Spec.Image)
 	}
 }
+
+// TestShouldRunRelease_SkipsPreview is the regression test for the close→reopen
+// migration bug: preview migrations are owned by the seed path (previewdb runs
+// migrate AFTER the seed completes, on every PR event incl. reopen). The build
+// poller must NOT also run the release Job for preview envs — doing so races
+// the seed and trips the per-(env,tag) idempotency on reopen. Production and
+// other env kinds keep their poller-driven release.
+func TestShouldRunRelease_SkipsPreview(t *testing.T) {
+	t.Parallel()
+	withRelease := func(kind string) *kube.KusoEnvironment {
+		return &kube.KusoEnvironment{
+			Spec: kube.KusoEnvironmentSpec{
+				Kind:    kind,
+				Release: &kube.KusoReleaseSpec{Command: []string{"sh", "-c", "migrate up"}},
+			},
+		}
+	}
+	if shouldRunRelease(withRelease("preview")) {
+		t.Error("preview env must NOT run the poller-driven release (seed path owns it)")
+	}
+	if !shouldRunRelease(withRelease("production")) {
+		t.Error("production env with a release hook must run the poller-driven release")
+	}
+	if !shouldRunRelease(withRelease("custom")) {
+		t.Error("custom/long-lived env with a release hook must run the poller-driven release")
+	}
+	// No release command → nothing to run regardless of kind.
+	if shouldRunRelease(&kube.KusoEnvironment{Spec: kube.KusoEnvironmentSpec{Kind: "production"}}) {
+		t.Error("env without a release command must not run a release")
+	}
+}
