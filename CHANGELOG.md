@@ -5,6 +5,19 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.8] — 2026-06-02
+
+### ✨ Features
+- Feat(ha): add spreadPolicy to kusoenvironments CRD schema + golden ([2621944](https://github.com/sislelabs/kuso/commit/2621944bf31b2594f87bb1aefd45539f2a6a420e))
+
+### 🐛 Bug Fixes
+- Fix(preview): repoint DB secretKeyRef envVars (READ_URL) to clone DB ([9ee394c](https://github.com/sislelabs/kuso/commit/9ee394c6a847bb23313b593a875e048392cc0d39))
+- Fix(preview): seed job waits for Postgres readiness before dumping ([95d5beb](https://github.com/sislelabs/kuso/commit/95d5beb7746c70881d2939c09f1119ec0e1c279b))
+- Fix(autoscale): guarantee a CPU request so the HPA can actually scale ([a219895](https://github.com/sislelabs/kuso/commit/a219895c54cf7568a7461693067bb81171b65a99))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.8 ship) ([a120803](https://github.com/sislelabs/kuso/commit/a120803f4901e50445ca6c2dd0ae330dbcb7f5a0))
+
 ## [0.18.7] — 2026-06-02
 
 ### ✨ Features
@@ -346,11 +359,6 @@ messages on every release. The format is loosely based on
 ### 🐛 Bug Fixes
 - Fix(propagate): preserve per-env envVar overrides; fix overlay URL ([3a041ae](https://github.com/sislelabs/kuso/commit/3a041ae4250ebd000798e5a016135d6171da575d))
 - Fix(crd): allow project-shared/instance-shared secrets in valueFrom.secretKeyRef ([fae6355](https://github.com/sislelabs/kuso/commit/fae635578bc6983b188c8317c8272493f6cede3e))
-
-## [0.16.15] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(kube): bump default QPS/burst — propagation was rate-limited to 0 ([97ac356](https://github.com/sislelabs/kuso/commit/97ac3564a90ef9956ae1c8b1734500acecd11b16))
 
 
 ---
