@@ -968,3 +968,31 @@ func TestSwapPGCloneSecretRefsInEnvVars(t *testing.T) {
 		t.Error("nil map should return input")
 	}
 }
+
+// TestPreviewRewriteEntries_InClusterDNS is the regression test for the
+// SSR-reads-production bug: a preview frontend's API_URL points at the
+// in-cluster production API (http://tickero-api-production.kuso.svc.cluster.local),
+// and the per-PR rewrite must redirect that to the preview's OWN in-cluster
+// API service — otherwise the preview SSRs production data (e.g. null prices)
+// while only the browser-side NEXT_PUBLIC_API_URL is rewritten.
+func TestPreviewRewriteEntries_InClusterDNS(t *testing.T) {
+	t.Parallel()
+	got := previewRewriteEntries("tickero", "api", 36, "kuso", "tickero.bg", []string{"api.tickero.bg"})
+
+	// Public host (existing behaviour) preserved.
+	if got["api.tickero.bg"] != "api-pr-36.tickero.bg" {
+		t.Errorf("public host rewrite missing/wrong: %q", got["api.tickero.bg"])
+	}
+	// In-cluster production service DNS → preview service DNS (the fix).
+	wantInCluster := map[string]string{
+		"tickero-api-production.kuso.svc.cluster.local": "tickero-api-pr-36.kuso.svc.cluster.local",
+		"tickero-api-staging.kuso.svc.cluster.local":    "tickero-api-pr-36.kuso.svc.cluster.local",
+		"tickero-api-production.kuso.svc":               "tickero-api-pr-36.kuso.svc",
+		"tickero-api-production":                        "tickero-api-pr-36",
+	}
+	for from, want := range wantInCluster {
+		if got[from] != want {
+			t.Errorf("in-cluster rewrite %q = %q, want %q", from, got[from], want)
+		}
+	}
+}

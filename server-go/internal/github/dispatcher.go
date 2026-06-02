@@ -1313,21 +1313,65 @@ func (d *Dispatcher) buildPreviewHostRewrite(ctx context.Context, proj *kube.Kus
 		if short == "" {
 			short = fqn
 		}
-		previewHost := fmt.Sprintf("%s-pr-%d.%s", short, prNumber, baseDomain)
-		out[fmt.Sprintf("%s.%s", short, baseDomain)] = previewHost
-		// Custom domains (spec.domains[].host). All of them, not just
-		// the first — services with both an apex (tickero.bg) and a
-		// www subdomain (www.tickero.bg) need both rewritten.
-		// Unstructured walk so we don't need a typed decode here.
+		var customDomains []string
 		if domains, found, _ := unstructured.NestedSlice(u.Object, "spec", "domains"); found {
 			for _, dRaw := range domains {
 				if dm, ok := dRaw.(map[string]any); ok {
 					if host, _ := dm["host"].(string); host != "" {
-						out[host] = previewHost
+						customDomains = append(customDomains, host)
 					}
 				}
 			}
 		}
+		for from, to := range previewRewriteEntries(proj.Name, short, prNumber, ns, baseDomain, customDomains) {
+			out[from] = to
+		}
+	}
+	return out
+}
+
+// previewRewriteEntries builds the prod-host → preview-host rewrite map for one
+// service. Covers both the PUBLIC hosts (so the browser hits the preview) AND
+// the IN-CLUSTER service DNS (so a server-side fetch — e.g. a Next.js SSR
+// reading API_URL=http://<proj>-<svc>-production.<ns>.svc.cluster.local — hits
+// the preview's OWN API instead of production). Without the in-cluster
+// rewrite, a preview frontend SSRs production data while only its browser-side
+// NEXT_PUBLIC_* points at the PR; that was the "preview shows no prices" bug.
+//
+// The boundary-aware matcher (rewriteHostInValue) requires each key to be a
+// full host token, so we enumerate the concrete in-cluster DNS forms a
+// service-to-service URL can take rather than matching a bare prefix.
+func previewRewriteEntries(project, short string, prNumber int, ns, baseDomain string, customDomains []string) map[string]string {
+	out := map[string]string{}
+	previewHost := fmt.Sprintf("%s-pr-%d.%s", short, prNumber, baseDomain)
+	out[fmt.Sprintf("%s.%s", short, baseDomain)] = previewHost
+	for _, host := range customDomains {
+		out[host] = previewHost
+	}
+
+	// In-cluster service DNS. The env Service name == the env CR name,
+	// "<project>-<service>-<envname>" (e.g. tickero-api-production). A
+	// preview that references any sibling env's in-cluster API should be
+	// redirected to its own pr-N service. Enumerate the DNS suffixes kube
+	// resolves (FQDN, .svc, bare) for the common non-preview env names plus
+	// the bare service form, each mapped to this PR's service.
+	fqn := project + "-" + short
+	prevSvc := fmt.Sprintf("%s-pr-%d", fqn, prNumber)
+	dnsSuffixes := []string{
+		fmt.Sprintf(".%s.svc.cluster.local", ns),
+		fmt.Sprintf(".%s.svc", ns),
+		"", // bare in-namespace short name
+	}
+	// Sibling env names a service-to-service URL is likely to target.
+	for _, envName := range []string{"production", "staging"} {
+		src := fmt.Sprintf("%s-%s", fqn, envName)
+		for _, suf := range dnsSuffixes {
+			out[src+suf] = prevSvc + suf
+		}
+	}
+	// Bare "<project>-<service>" (no env suffix) → preview too.
+	for _, suf := range dnsSuffixes {
+		out[fqn+suf] = prevSvc + suf
 	}
 	return out
 }
