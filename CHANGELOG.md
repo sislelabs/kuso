@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.10] — 2026-06-02
+
+### 🐛 Bug Fixes
+- Fix(previews): run migrations after the seed, not at build-promote ([93f8f67](https://github.com/sislelabs/kuso/commit/93f8f67d18c95e1cee75952fc2fdb46b2d15148a))
+
+### 📝 Docs
+- Docs(spec): preview migrate-after-seed — couple migration to the seed, not the build ([cc616d2](https://github.com/sislelabs/kuso/commit/cc616d23416e7305accd86daa23531f6add58dd8))
+
 ## [0.18.9] — 2026-06-02
 
 ### ✨ Features
@@ -359,11 +367,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix: always-visible canvas footer, per-env auto-domain, drift superset, eye-toggle dirty ([f0b5e91](https://github.com/sislelabs/kuso/commit/f0b5e917b9e32d9b4c34123b8f0222123e85983c))
-
-## [0.16.17] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(propagate/canvas): preserve shadow overrides; canvas prefers production env ([19eba22](https://github.com/sislelabs/kuso/commit/19eba225a509a0c7fa12b7f05681a8aac6c9305e))
 
 
 ---
