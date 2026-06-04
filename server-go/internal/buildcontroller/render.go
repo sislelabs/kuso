@@ -468,6 +468,12 @@ fi
 SRC="/workspace/src/$REPO_PATH"
 cd "$SRC"
 
+# Runtime-only / kuso-managed keys that must never be injected into the
+# build (NODE_ENV=production makes pnpm/npm skip devDeps → install fails).
+# MUST mirror builds.reservedBuildEnvKeys (server) + the detect-script's
+# RESERVED. Used by the KUSO_BUILDENV_KEYS guards below as defense-in-depth.
+RESERVED="PORT HOSTNAME HOME PATH USER PWD SHELL TERM LANG LC_ALL LC_CTYPE NODE_ENV NODE_OPTIONS NODE_VERSION NPM_CONFIG_LOGLEVEL DEBIAN_FRONTEND DEBUG CI VERCEL_ENV NEXT_RUNTIME RAILS_ENV"
+
 EXTRA_ENVS=""
 add_env() {
   EXTRA_ENVS="${EXTRA_ENVS}${EXTRA_ENVS:+ }$1"
@@ -532,6 +538,13 @@ done
 #     its environment to pick the toolchain at plan time; a --env flag
 #     alone is not honored for toolchain selection in nixpacks v1.41.
 for k in $KUSO_BUILDENV_KEYS; do
+  # Defense-in-depth: never pass a runtime-only / kuso-managed key into the
+  # build, even if one somehow reached spec.buildEnv (the server already
+  # filters via builds.reservedBuildEnvKeys; keep the two in lockstep).
+  # NODE_ENV=production here makes pnpm/npm skip devDeps and breaks installs.
+  case " $RESERVED " in
+    *" $k "*) continue ;;
+  esac
   kv="$(printenv "KUSO_BE_${k}")"
   NIXPACKS_ENV_FLAGS="$NIXPACKS_ENV_FLAGS --env ${k}=${kv}"
   case "$k" in
@@ -553,6 +566,10 @@ for env_pair in $EXTRA_ENVS; do
   ENV_BLOCK="${ENV_BLOCK}ENV ${k} ${v}\n"
 done
 for k in $KUSO_BUILDENV_KEYS; do
+  # Same RESERVED guard as the --env loop above (defense-in-depth).
+  case " $RESERVED " in
+    *" $k "*) continue ;;
+  esac
   # value from KUSO_BE_<key>; printf the literal so no re-evaluation.
   v="$(printenv "KUSO_BE_${k}")"
   ENV_BLOCK="${ENV_BLOCK}ENV ${k} ${v}\n"

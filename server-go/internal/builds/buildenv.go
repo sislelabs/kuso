@@ -15,13 +15,39 @@ import (
 // vector. Only valid identifiers may be injected — anything else is dropped.
 var envKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
-// reservedBuildEnvKeys are kuso/kubelet-managed names that must never be
-// injected as build-time env — kuso owns them at runtime (PORT desyncs from
-// spec.port; the rest are container bookkeeping). Mirrors the build job's own
-// RESERVED list.
+// reservedBuildEnvKeys are names that must never be injected as build-time
+// env. Two classes:
+//
+//  1. kuso/kubelet-managed container bookkeeping (PORT desyncs from
+//     spec.port; HOME/PATH/etc. are shell/container internals).
+//
+//  2. RUNTIME-ONLY environment selectors — chiefly NODE_ENV. A user (often
+//     via a Coolify migration) sets NODE_ENV=production as a service env
+//     var; that's correct at RUNTIME, but injecting it into the BUILD makes
+//     npm/pnpm/yarn skip devDependencies, so any build needing a devDep (a
+//     husky prepare hook, typescript, the bundler itself) fails with
+//     "<tool>: not found". The build step's own tooling (next build / vite
+//     build) sets NODE_ENV=production itself when it needs a production
+//     bundle, so dropping it here is safe and matches how nixpacks/Heroku
+//     behave. RAILS_ENV is the Ruby analogue; CI/DEBUG/NEXT_RUNTIME/
+//     VERCEL_ENV similarly steer build behaviour in ways the user's runtime
+//     value should not dictate at build time.
+//
+// This list MUST mirror the build job's own RESERVED list in
+// buildcontroller/render.go (the script filters EXTRA_ENVS against it). The
+// two had diverged — render.go listed NODE_ENV but this map didn't — which
+// is exactly what let NODE_ENV=production reach the build and break installs.
+// Keep them in lockstep.
 var reservedBuildEnvKeys = map[string]bool{
+	// Container / shell bookkeeping (kubelet/kuso-managed).
 	"PORT": true, "HOSTNAME": true, "HOME": true, "PATH": true,
 	"PWD": true, "USER": true, "SHELL": true, "TERM": true,
+	"LANG": true, "LC_ALL": true, "LC_CTYPE": true,
+	"NODE_OPTIONS": true, "NODE_VERSION": true, "NPM_CONFIG_LOGLEVEL": true,
+	"DEBIAN_FRONTEND": true,
+	// Runtime-only environment selectors — must not steer the build.
+	"NODE_ENV": true, "DEBUG": true, "CI": true,
+	"VERCEL_ENV": true, "NEXT_RUNTIME": true, "RAILS_ENV": true,
 }
 
 // secretLookup returns the literal value of a secret key, or false if absent.

@@ -1162,6 +1162,38 @@ func TestBuildEnvFromVars(t *testing.T) {
 	}
 }
 
+// TestBuildEnvFromVars_DropsRuntimeOnlyKeys is the regression test for the
+// "NODE_ENV=production poisons the build" bug. A user (often via a Coolify
+// migration) sets NODE_ENV=production as a service env var — correct for
+// RUNTIME, but if it's injected into the BUILD it makes npm/pnpm/yarn skip
+// devDependencies, so any build that needs a devDep (husky prepare hook,
+// typescript, the bundler itself) fails. These runtime-only / kuso-managed
+// keys must be dropped from build env. The list must mirror the build job's
+// own RESERVED list in buildcontroller/render.go — they had diverged
+// (render.go listed NODE_ENV, this map didn't), which is what let the bug
+// through. The build step's own tooling (next build / vite build) sets
+// NODE_ENV=production itself when it needs to.
+func TestBuildEnvFromVars_DropsRuntimeOnlyKeys(t *testing.T) {
+	t.Parallel()
+	vars := []kube.KusoEnvVar{
+		{Name: "NODE_ENV", Value: "production"},
+		{Name: "NODE_OPTIONS", Value: "--max-old-space-size=512"},
+		{Name: "CI", Value: "true"},
+		{Name: "NEXT_RUNTIME", Value: "nodejs"},
+		{Name: "RAILS_ENV", Value: "production"},
+		{Name: "KEEP_ME", Value: "yes"}, // a real build var must survive
+	}
+	got := buildEnvFromVars(vars, func(string, string) (string, bool) { return "", false })
+	for _, k := range []string{"NODE_ENV", "NODE_OPTIONS", "CI", "NEXT_RUNTIME", "RAILS_ENV"} {
+		if _, ok := got[k]; ok {
+			t.Errorf("runtime-only key %q must be dropped from build env, got %q", k, got[k])
+		}
+	}
+	if got["KEEP_ME"] != "yes" {
+		t.Errorf("non-reserved build var must survive: %v", got)
+	}
+}
+
 // TestBuildEnvFromVars_RejectsMaliciousKeys guards against shell/command
 // injection: build env keys are rendered into an `ENV <key> <value>` line in
 // the build job's shell, so a key with shell metacharacters could execute.
