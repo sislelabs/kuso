@@ -807,8 +807,28 @@ IMAGE=$IMAGE_REF
 CACHE=$CACHE_REF
 BUILDKIT_HOST=$BUILDKIT_ADDR
 
+# Runtime-only / kuso-managed keys never passed to the build (NODE_ENV=
+# production makes the install skip devDeps). Mirrors builds.reservedBuildEnvKeys.
+RESERVED="PORT HOSTNAME HOME PATH USER PWD SHELL TERM LANG LC_ALL LC_CTYPE NODE_ENV NODE_OPTIONS NODE_VERSION NPM_CONFIG_LOGLEVEL DEBIAN_FRONTEND DEBUG CI VERCEL_ENV NEXT_RUNTIME RAILS_ENV"
+
+# Build-args from the service's build-time env (KUSO_BE_<KEY> container vars).
+# Each becomes --opt build-arg:KEY=VALUE; the Dockerfile consumes the ones it
+# declares ARG for, the rest are ignored by buildkit. Accumulate into the
+# positional params via set -- so a VALUE containing spaces survives as one
+# argument (a plain string + word-splitting would break it). Values come from
+# the environment (printenv), never interpolated into the script, so no
+# shell-injection regardless of value contents.
+set --
+for k in $KUSO_BUILDENV_KEYS; do
+  case " $RESERVED " in
+    *" $k "*) continue ;;
+  esac
+  set -- "$@" --opt "build-arg:${k}=$(printenv "KUSO_BE_${k}")"
+done
+
 echo "==> buildkit: daemon=$BUILDKIT_HOST"
 echo "==> buildkit: image=$IMAGE cache=$CACHE df=$DF ctx=$CTX dryRun=${DRY_RUN:-0}"
+echo "==> buildkit: build-arg keys=${KUSO_BUILDENV_KEYS:-<none>}"
 
 for i in $(seq 1 30); do
   if buildctl --addr "$BUILDKIT_HOST" debug workers >/dev/null 2>&1; then
@@ -828,6 +848,7 @@ if [ "${DRY_RUN:-0}" = "1" ]; then
     --local context="$CTX" \
     --local dockerfile="$CTX" \
     --opt filename="$DF" \
+    "$@" \
     --output type=image,name="$IMAGE",push=false,registry.insecure=true \
     --import-cache type=registry,ref="$CACHE",registry.insecure=true \
     --progress plain
@@ -840,6 +861,7 @@ exec buildctl \
   --local context="$CTX" \
   --local dockerfile="$CTX" \
   --opt filename="$DF" \
+  "$@" \
   --output type=image,name="$IMAGE",push=true,registry.insecure=true \
   --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=true \
   --import-cache type=registry,ref="$CACHE",registry.insecure=true \
@@ -862,6 +884,16 @@ exec buildctl \
 	if hasAuthSecret(b) {
 		envs = append(envs, corev1.EnvVar{Name: "DOCKER_CONFIG", Value: "/tmp/.docker"})
 	}
+	// Build-time env for RAW Dockerfile builds. nixpacks/static generate a
+	// Dockerfile kuso edits to inject ENV lines; a raw Dockerfile we don't
+	// own, so we pass each buildEnv key as a `--opt build-arg` instead. The
+	// Dockerfile opts in by declaring `ARG <KEY>` (kutiq does:
+	// `ARG DATABASE_URL` → `ENV DATABASE_URL=${DATABASE_URL}`). A build-arg
+	// the Dockerfile doesn't declare is a harmless no-op in buildkit, so
+	// passing all keys is safe. Values arrive as KUSO_BE_<KEY> container
+	// env (kubelet-escaped; never shell-parsed) with the key list in
+	// KUSO_BUILDENV_KEYS — same mechanism as the nixpacks-plan container.
+	envs = append(envs, buildEnvContainerVars(b)...)
 
 	mounts := []corev1.VolumeMount{
 		{Name: "workspace", MountPath: "/workspace"},

@@ -413,6 +413,44 @@ func TestBuildEnvContainerVars(t *testing.T) {
 
 // TestNixpacksContainerInjectsBuildEnv: the rendered nixpacks-plan container
 // carries the buildEnv vars + the script reads KUSO_BUILDENV_KEYS.
+// TestBuildkitContainerInjectsBuildArgs is the regression test for the
+// dockerfile build-env gap: build-time env injection used to work only for
+// nixpacks/static (which generate a Dockerfile kuso can edit), NOT for raw
+// Dockerfile builds — the buildkit invocation passed zero build env. So a
+// dockerfile app whose Dockerfile declares `ARG DATABASE_URL` (and a build
+// step that reads it, e.g. `RUN npm run build` validating env) got an empty
+// value and failed. The buildkit container must now carry the KUSO_BE_*
+// vars AND the script must pass each buildEnv key as `--opt build-arg`.
+// Passing a build-arg the Dockerfile doesn't declare is a harmless no-op in
+// buildkit, so passing all keys is safe.
+func TestBuildkitContainerInjectsBuildArgs(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		Strategy: "dockerfile",
+		BuildEnv: map[string]string{"DATABASE_URL": "postgres://x", "STRIPE_SECRET_KEY": "sk_test_x"},
+		Image:    &kube.KusoImage{Repository: "registry.local/alpha/api", Tag: "sha"},
+	}}
+	c := renderBuildkitContainer(b, "dockerfile", corev1.ResourceRequirements{})
+
+	// The KUSO_BE_* values must be present as container env (kubelet
+	// escapes them; the script reads them via printenv).
+	var sawKey bool
+	for _, e := range c.Env {
+		if e.Name == "KUSO_BE_DATABASE_URL" && e.Value == "postgres://x" {
+			sawKey = true
+		}
+	}
+	if !sawKey {
+		t.Error("buildkit container missing KUSO_BE_DATABASE_URL")
+	}
+	// The script must consume the keys and pass them as build-args.
+	if !strings.Contains(c.Args[0], "KUSO_BUILDENV_KEYS") {
+		t.Error("buildkit script does not consume KUSO_BUILDENV_KEYS")
+	}
+	if !strings.Contains(c.Args[0], "build-arg") {
+		t.Error("buildkit script does not pass --opt build-arg for build env")
+	}
+}
+
 func TestNixpacksContainerInjectsBuildEnv(t *testing.T) {
 	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
 		Strategy: "nixpacks",
