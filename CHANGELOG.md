@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.30] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): don't inject NODE_ENV (and runtime-only keys) into the build ([a4eb0ff](https://github.com/sislelabs/kuso/commit/a4eb0ff730d2c8a2714b5fa5fdd685f73ef8f2b1))
+
+### 📝 Docs
+- Docs(migration): log env-propagation fix + projects-grid feature ([f4a0342](https://github.com/sislelabs/kuso/commit/f4a0342136c9eb4fa2913f84cba05d1e09c2992a))
+
 ## [0.18.29] — 2026-06-04
 
 ### ✨ Features
@@ -372,11 +380,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(api): worker service creation drops FromService field ([ee53d4a](https://github.com/sislelabs/kuso/commit/ee53d4a9e49f622abeae13f7ef3dcbf6394d85ff))
-
-## [0.17.8] — 2026-05-29
-
-### 🐛 Bug Fixes
-- Fix(previews): scope addons via canonical env label, not bespoke marker ([d651fec](https://github.com/sislelabs/kuso/commit/d651fecbce6a7c7bd2c059f260863870cc9461ca))
 
 
 ---
