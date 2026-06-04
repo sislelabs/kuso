@@ -207,3 +207,19 @@ service's secretKeyRef propagates cleanly.
   consumers and the button says "delete"), OR re-provision should RepairPassword
   on PVC reuse. Does NOT affect the migration (which never disables the cluster
   DB). Tracked for a follow-up TDD+ship.
+
+
+## UPDATE: runtime blocker chain FULLY RESOLVED (v0.18.25 + v0.18.26)
+
+Two more root causes found + fixed after the env-ref work:
+1. v0.18.25 — extractEnvOnlyOverrides treated a stale unresolved ${{ }} literal
+   as a per-env override, re-stamping it over the service's resolved
+   secretKeyRef. Fixed: unresolved-ref literals are not overrides.
+2. v0.18.26 — NetworkPolicy: per-project default-deny + intra-project-only
+   egress BLOCKED app→cluster-DB-pooler (pooler is in the kuso-instance
+   project, a different project). Added allow-instance-db-egress (5432+6432
+   to kuso-instance pods). THIS was the P1001 "can't reach pooler" crash.
+
+RESULT: all 13 migrated app pods Running 1/1. db-masterclass verified end to
+end: `prisma migrate deploy` → "No pending migrations" → "Ready" — it reaches
+its per-project DB through the pooler. The DB-connectivity chain works.
