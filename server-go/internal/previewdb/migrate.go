@@ -169,6 +169,32 @@ func buildMigrateJob(ns, project, cloneFQN string, env *kube.KusoEnvironment, ow
 
 func ptrBool(b bool) *bool { return &b }
 
+// tryAcquireSeed returns true if no seed+migrate is already in flight for this
+// clone, marking it in-flight. ensurePreviewEnv calls EnsurePRAddons once per
+// service, so without this guard every service that shares a DB addon would
+// spawn its own seed+migrate goroutine for the SAME clone — producing
+// redundant seed Jobs and migrate Jobs per reopen (observed: 3). The first
+// caller wins; the rest skip. releaseSeed clears the flag when the
+// seed+migrate finishes, so a later genuine resync can run again.
+func (c *Cloner) tryAcquireSeed(cloneFQN string) bool {
+	c.seedMu.Lock()
+	defer c.seedMu.Unlock()
+	if c.seedInFlight[cloneFQN] {
+		return false
+	}
+	if c.seedInFlight == nil {
+		c.seedInFlight = map[string]bool{}
+	}
+	c.seedInFlight[cloneFQN] = true
+	return true
+}
+
+func (c *Cloner) releaseSeed(cloneFQN string) {
+	c.seedMu.Lock()
+	defer c.seedMu.Unlock()
+	delete(c.seedInFlight, cloneFQN)
+}
+
 // migrateAfterSeed runs the release-hook migration against a freshly-(re)seeded
 // clone, for every preview env in this PR that uses the clone. It is called
 // from seedAsync AFTER the seed Job completes, so the migration always lands on

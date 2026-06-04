@@ -25,6 +25,7 @@ import (
 	"log/slog"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -61,6 +62,13 @@ type Cloner struct {
 	// detached goroutines and zombie psql processes against a
 	// half-torn-down kube client.
 	BaseCtx context.Context
+
+	// seedInFlight dedupes concurrent seed+migrate spawns per clone.
+	// EnsurePRAddons runs once per service; several services sharing a
+	// DB addon would otherwise each spawn a seed+migrate for the same
+	// clone. Guarded by seedMu. See tryAcquireSeed/releaseSeed.
+	seedMu       sync.Mutex
+	seedInFlight map[string]bool
 }
 
 func New(ctx context.Context, k *kube.Client, addonSvc *addons.Service, namespace string, logger *slog.Logger) *Cloner {
@@ -180,9 +188,18 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 		// inside seedAsync.
 		// 30-min cap is plenty for any production-sized DB clone;
 		// past that the operator probably wants to know.
+		// Dedupe: EnsurePRAddons runs once per service, so several
+		// services sharing this DB addon would each spawn a seed+migrate
+		// for the same clone. Only the first in-flight spawn proceeds;
+		// the rest skip (the conn secret is still returned above, so the
+		// preview env mounts the clone regardless).
+		if !c.tryAcquireSeed(cloneFQN) {
+			continue
+		}
 		seedCtx, cancel := context.WithTimeout(c.BaseCtx, 30*time.Minute)
 		go func(src, clone string, isInstancePG bool) {
 			defer cancel()
+			defer c.releaseSeed(clone)
 			c.seedAsync(seedCtx, ns, project, src, clone, isInstancePG, prNumber)
 		}(addons.CRName(project, s.Name), cloneFQN, instancePG)
 	}

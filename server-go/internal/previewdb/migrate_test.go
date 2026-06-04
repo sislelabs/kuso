@@ -149,3 +149,30 @@ func TestBuildMigrateJob_SeedNonceMakesReopenReMigrate(t *testing.T) {
 		t.Errorf("re-seed must yield a distinct migrate Job name (same image tag must NOT dedupe); both were %q", first.Name)
 	}
 }
+
+// TestSeedInFlightGuard dedupes concurrent seed+migrate spawns for the SAME
+// clone: ensurePreviewEnv calls EnsurePRAddons once per service, so multiple
+// services sharing one DB addon would each spawn a seed+migrate goroutine for
+// the same clone (observed: 3 redundant migrate Jobs per reopen). The guard
+// lets only the first caller proceed until it releases.
+func TestSeedInFlightGuard(t *testing.T) {
+	t.Parallel()
+	c := &Cloner{}
+	clone := "tickero-db-pr-36"
+
+	if !c.tryAcquireSeed(clone) {
+		t.Fatal("first acquire should succeed")
+	}
+	if c.tryAcquireSeed(clone) {
+		t.Error("second acquire for the same clone (in flight) must be refused")
+	}
+	// A different clone is independent.
+	if !c.tryAcquireSeed("tickero-db-pr-99") {
+		t.Error("a different clone must acquire independently")
+	}
+	// After release, the clone can be acquired again (a later genuine resync).
+	c.releaseSeed(clone)
+	if !c.tryAcquireSeed(clone) {
+		t.Error("after release, the clone must be re-acquirable")
+	}
+}
