@@ -68,6 +68,7 @@ func TestEnvVarCascade(t *testing.T) {
 		sharedKeys     []string
 		svcExplicit    []kube.KusoEnvVar
 		envExplicit    []kube.KusoEnvVar
+		envOverrides   []string       // names deliberately pinned per-env
 		envFromSecrets []string
 		extraSecret    *corev1.Secret // optional per-env Secret to seed
 		// expectations
@@ -101,6 +102,10 @@ func TestEnvVarCascade(t *testing.T) {
 			envExplicit: []kube.KusoEnvVar{
 				{Name: "API_URL", Value: "https://api.env-staging"},
 			},
+			// API_URL is on the service too, so it only survives as an
+			// override when deliberately pinned. (A drifted seed with the
+			// same name but no marker would correctly re-stamp from svc.)
+			envOverrides: []string{"API_URL"},
 			wantValueForName: map[string]string{
 				"API_URL": "https://api.env-staging",
 			},
@@ -157,6 +162,7 @@ func TestEnvVarCascade(t *testing.T) {
 				tc.svcExplicit,
 				append(tc.envExplicit, []kube.KusoEnvVar{}...), // copy guard
 				tc.envFromSecrets,
+				tc.envOverrides,
 			)
 			if err != nil {
 				t.Fatalf("resolve: %v", err)

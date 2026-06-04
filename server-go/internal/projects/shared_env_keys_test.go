@@ -7,39 +7,51 @@ import (
 )
 
 // TestExtractEnvOnlyOverrides locks in the rule for distinguishing
-// per-env overrides (names not on the service) from env entries that
-// merely mirror the service. Only the env-only entries survive
-// propagation; service-mirrored entries get re-stamped from the
-// service spec anyway.
+// per-env overrides from env entries that merely mirror (or have
+// drifted from) the service.
+//
+// The classification is driven by an EXPLICIT marker set
+// (env.Spec.EnvOverrides — the names the user deliberately pinned via
+// the per-env scoped editor), NOT by value-comparison against the
+// service. Value-comparison is unsound: a stale inherited seed whose
+// value has drifted from the service looks identical to a deliberate
+// override, so a service-level edit could never reach the env (the
+// jira-mudira "redirects to ticketmaster" bug). The marker removes the
+// guessing: only names in the set (or net-new names absent from the
+// service entirely) survive; everything else drops and gets re-stamped
+// from the (newer) service value.
 func TestExtractEnvOnlyOverrides(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
-		name        string
-		svc         []kube.KusoEnvVar
-		env         []kube.KusoEnvVar
-		wantNames   []string
-		wantValues  map[string]string
+		name       string
+		svc        []kube.KusoEnvVar
+		env        []kube.KusoEnvVar
+		overrides  map[string]bool // env.Spec.EnvOverrides as a set
+		wantNames  []string
+		wantValues map[string]string
 	}{
 		{
-			name: "env has shadow overrides + per-env-only entries + mirrors",
+			name: "marked shadow overrides + net-new survive; mirrors + drifted-but-unmarked drop",
 			svc: []kube.KusoEnvVar{
 				{Name: "NEXT_PUBLIC_API_URL", Value: "https://api.tickero.bg"},
 				{Name: "NEXT_PUBLIC_ENVIRONMENT", Value: "production"},
 				{Name: "MIRROR_ME", Value: "same-everywhere"},
 			},
 			env: []kube.KusoEnvVar{
-				// SHADOW OVERRIDE: same name as svc, different value.
-				// Must survive (user staged this for staging).
+				// MARKED shadow override: user staged this for staging.
 				{Name: "NEXT_PUBLIC_API_URL", Value: "https://api-staging.tickero.bg"},
-				// SHADOW OVERRIDE.
+				// MARKED shadow override.
 				{Name: "NEXT_PUBLIC_ENVIRONMENT", Value: "staging"},
-				// MIRROR: identical to svc value — drop, propagation
-				// will re-stamp from svc anyway.
+				// MIRROR: identical to svc — drop, re-stamped from svc.
 				{Name: "MIRROR_ME", Value: "same-everywhere"},
-				// PER-ENV-ONLY: net-new on this env.
+				// PER-ENV-ONLY: net-new on this env, not on svc.
 				{Name: "NEXT_PUBLIC_SITE_URL", Value: "https://staging.tickero.bg"},
 				{Name: "API_URL", Value: "http://tickero-api-staging.kuso.svc.cluster.local"},
+			},
+			overrides: map[string]bool{
+				"NEXT_PUBLIC_API_URL":     true,
+				"NEXT_PUBLIC_ENVIRONMENT": true,
 			},
 			wantNames: []string{
 				"NEXT_PUBLIC_API_URL", "NEXT_PUBLIC_ENVIRONMENT",
@@ -53,18 +65,37 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 			},
 		},
 		{
-			name: "no env entries",
-			svc:  []kube.KusoEnvVar{{Name: "FOO", Value: "bar"}},
-			env:  nil,
+			// THE jira-mudira REGRESSION. The env carries a stale
+			// inherited seed (AUTH_URL=ticketmaster.sisle.org) that has
+			// drifted from the service value (web.jira-mudira...). It is
+			// NOT in the override set — it's a leftover from AddService
+			// seeding, never a deliberate per-env edit. It MUST drop so
+			// the service's current value propagates. The old
+			// value-comparison rule wrongly kept it (differs from svc =>
+			// "override"), permanently shadowing the service and sending
+			// users to the wrong host.
+			name: "drifted seed not in override set — must drop (jira-mudira)",
+			svc: []kube.KusoEnvVar{
+				{Name: "AUTH_URL", Value: "https://web.jira-mudira.kuso.sislelabs.com"},
+			},
+			env: []kube.KusoEnvVar{
+				{Name: "AUTH_URL", Value: "https://ticketmaster.sisle.org"},
+			},
+			overrides: nil, // no deliberate override recorded
+			wantNames: nil,  // drops; service value wins
 		},
 		{
-			// REGRESSION (Coolify migration): an env entry that is an
-			// unresolved ${{ ref }} literal is a STALE SEED, never a
-			// deliberate per-env override. It must NOT shadow the
-			// service's resolved value (a secretKeyRef or concrete
-			// string) — otherwise the pod gets the literal "${{...}}"
-			// and crashes (Prisma "scheme not recognized"). Drop it so
-			// the service's resolved value propagates.
+			name:      "no env entries",
+			svc:       []kube.KusoEnvVar{{Name: "FOO", Value: "bar"}},
+			env:       nil,
+			overrides: nil,
+		},
+		{
+			// An env entry holding an unresolved ${{ ref }} literal is a
+			// stale seed (written before the ref could resolve), never a
+			// deliberate override — drop it even if somehow marked, so the
+			// service's resolved value (secretKeyRef / concrete) wins and
+			// the pod never sees the literal "${{...}}".
 			name: "env has stale unresolved ${{ }} literal — not an override",
 			svc: []kube.KusoEnvVar{
 				{Name: "DATABASE_URL", ValueFrom: map[string]any{
@@ -74,7 +105,8 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 			env: []kube.KusoEnvVar{
 				{Name: "DATABASE_URL", Value: "${{ db.DATABASE_URL }}"},
 			},
-			wantNames: nil, // no override — service's secretKeyRef wins
+			overrides: map[string]bool{"DATABASE_URL": true}, // even if marked, refs drop
+			wantNames: nil,
 		},
 		{
 			name: "env mirrors service exactly — all entries drop",
@@ -86,10 +118,11 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 				{Name: "FOO", Value: "shared-value"},
 				{Name: "BAR", Value: "shared-value"},
 			},
+			overrides: nil,
 			wantNames: nil,
 		},
 		{
-			name: "all env entries shadow service with different values — all survive",
+			name: "marked overrides survive even when same name as service",
 			svc: []kube.KusoEnvVar{
 				{Name: "FOO", Value: "svc"},
 				{Name: "BAR", Value: "svc"},
@@ -98,34 +131,28 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 				{Name: "FOO", Value: "env-staged"},
 				{Name: "BAR", Value: "env-staged"},
 			},
+			overrides:  map[string]bool{"FOO": true, "BAR": true},
 			wantNames:  []string{"FOO", "BAR"},
 			wantValues: map[string]string{"FOO": "env-staged", "BAR": "env-staged"},
 		},
 		{
-			// B2.5 regression: a literal-value env override for a key
-			// that's subscribed via sharedEnvKeys (not present on the
-			// svc.spec.envVars list) is the canonical "I want to
-			// override the shared default per-env without creating a
-			// per-env Secret" case. extractEnvOnlyOverrides MUST treat
-			// it as a net-new override so mergeExplicitOverrides can
-			// later strip the subscribed valueFrom in favour of this
-			// literal — otherwise the pod sees the shared default and
-			// the user's edit silently disappears.
-			name: "literal env override for subscribed-only key",
-			svc:  nil, // svc.spec.envVars empty; key lives in sharedEnvKeys
-			env: []kube.KusoEnvVar{
-				{Name: "API_URL", Value: "https://api-staging.tickero.bg"},
+			// A literal-value env override for a key that's subscribed via
+			// sharedEnvKeys (not on svc.spec.envVars) — the canonical
+			// "override the shared default per-env" case. It's net-new
+			// relative to the service envVars list, so it survives without
+			// needing to be in the marker set (net-new is always kept).
+			name:      "literal env override for subscribed-only key (net-new)",
+			svc:       nil,
+			env:       []kube.KusoEnvVar{{Name: "API_URL", Value: "https://api-staging.tickero.bg"}},
+			overrides: nil,
+			wantNames: []string{"API_URL"},
+			wantValues: map[string]string{
+				"API_URL": "https://api-staging.tickero.bg",
 			},
-			wantNames:  []string{"API_URL"},
-			wantValues: map[string]string{"API_URL": "https://api-staging.tickero.bg"},
 		},
 		{
-			// B2.5 regression (mirror case): an env-level entry that
-			// re-stamps the subscribed valueFrom (legacy state from
-			// propagation when valueFrom was written to env.spec.envVars
-			// directly) must also survive as "net-new" — the dedupe in
-			// mergeSubscribedEnvVars/mergeExplicitOverrides handles the
-			// duplicate downstream.
+			// valueFrom env override for a subscribed-only key (legacy
+			// stamp) — net-new relative to svc.envVars, survives.
 			name: "valueFrom env override for subscribed-only key (legacy stamp)",
 			svc:  nil,
 			env: []kube.KusoEnvVar{
@@ -139,6 +166,7 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 					},
 				},
 			},
+			overrides: nil,
 			wantNames: []string{"API_URL"},
 		},
 	}
@@ -146,7 +174,7 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := extractEnvOnlyOverrides(tc.svc, tc.env)
+			got := extractEnvOnlyOverrides(tc.svc, tc.env, tc.overrides)
 			if len(got) != len(tc.wantNames) {
 				t.Fatalf("got %d overrides, want %d (%v)", len(got), len(tc.wantNames), got)
 			}
@@ -171,13 +199,13 @@ func TestMergeExplicitOverrides(t *testing.T) {
 	t.Parallel()
 
 	base := []kube.KusoEnvVar{
-		{Name: "NEXT_PUBLIC_API_URL", Value: "https://api.tickero.bg"},   // svc-level default
-		{Name: "NEXT_PUBLIC_ENVIRONMENT", Value: "production"},           // svc-level default
-		{Name: "DATABASE_URL", Value: "subscribed"},                       // subscribed
+		{Name: "NEXT_PUBLIC_API_URL", Value: "https://api.tickero.bg"}, // svc-level default
+		{Name: "NEXT_PUBLIC_ENVIRONMENT", Value: "production"},         // svc-level default
+		{Name: "DATABASE_URL", Value: "subscribed"},                    // subscribed
 	}
 	overrides := []kube.KusoEnvVar{
 		{Name: "NEXT_PUBLIC_API_URL", Value: "https://api-staging.tickero.bg"}, // per-env override
-		{Name: "NEXT_PUBLIC_SITE_URL", Value: "https://staging.tickero.bg"},     // per-env-only
+		{Name: "NEXT_PUBLIC_SITE_URL", Value: "https://staging.tickero.bg"},    // per-env-only
 	}
 	got := mergeExplicitOverrides(base, overrides)
 

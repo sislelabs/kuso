@@ -171,6 +171,7 @@ func (s *Service) resolveSharedEnvKeysForEnv(
 	svcExplicitEnvVars []kube.KusoEnvVar,
 	envExplicitEnvVars []kube.KusoEnvVar,
 	envFromSecrets []string,
+	envOverrideNames []string,
 ) (mergedEnvVars []kube.KusoEnvVar, prunedEnvFromSecrets []string, err error) {
 	subscribed, missing, err := s.expandSharedEnvKeysToEnvVars(ctx, ns, project, sharedEnvKeys)
 	if err != nil {
@@ -247,7 +248,11 @@ func (s *Service) resolveSharedEnvKeysForEnv(
 		}
 		filteredEnvExplicit = append(filteredEnvExplicit, e)
 	}
-	envOverrides := extractEnvOnlyOverrides(svcExplicitEnvVars, filteredEnvExplicit)
+	overrideSet := make(map[string]bool, len(envOverrideNames))
+	for _, n := range envOverrideNames {
+		overrideSet[n] = true
+	}
+	envOverrides := extractEnvOnlyOverrides(svcExplicitEnvVars, filteredEnvExplicit, overrideSet)
 	// Build merged envVars: subscribed (base) ← svc-explicit ← env-overrides.
 	merged := mergeSubscribedEnvVars(svcExplicitEnvVars, subscribed)
 	merged = mergeExplicitOverrides(merged, envOverrides)
@@ -350,20 +355,34 @@ func isUnsubscribedSharedSecretRef(e kube.KusoEnvVar, sharedSet, sharedSecretNam
 // survive propagation as per-env overrides. Two flavours qualify:
 //
 //  1. **Net-new on this env** — name doesn't exist on the service at
-//     all. These are obviously per-env (e.g. NEXT_PUBLIC_SITE_URL
-//     defined only on the staging env).
+//     all. These are unambiguously per-env (e.g. NEXT_PUBLIC_SITE_URL
+//     defined only on the staging env, or a subscribed-key override
+//     that lives in sharedEnvKeys rather than svc.spec.envVars).
 //
-//  2. **Shadow overrides** — name exists on the service but with a
-//     DIFFERENT value/valueFrom shape. The user set this env's value
-//     deliberately (staging overrides production's
-//     NEXT_PUBLIC_API_URL); it must NOT get re-stamped to the
-//     service default.
+//  2. **Marked shadow overrides** — name exists on the service AND the
+//     name is in overrideNames, the EXPLICIT set of vars the user
+//     deliberately pinned to this env via the per-env scoped editor
+//     (env.Spec.EnvOverrides). The user set this env's value on purpose
+//     (staging overrides production's NEXT_PUBLIC_API_URL); it must NOT
+//     get re-stamped to the service default.
 //
-// Service-mirrored entries (same name AND identical value) drop out
-// — propagation will re-stamp them from the (possibly newer) service
-// value anyway. That keeps the env CR from accumulating stale copies
-// of every service var.
-func extractEnvOnlyOverrides(svcExplicit, envExplicit []kube.KusoEnvVar) []kube.KusoEnvVar {
+// Everything else — a same-name entry NOT in overrideNames — drops,
+// regardless of whether its value matches the service. This is the
+// crux of the fix: we no longer GUESS "override" from value-difference.
+// A drifted inherited seed (e.g. the production env seeded with
+// AUTH_URL=ticketmaster at AddService, then the service value changed
+// to web.jira-mudira) differs from the service but is NOT a deliberate
+// override — value-comparison wrongly kept it and permanently shadowed
+// the service, so a service-level edit could never reach the env. With
+// the explicit marker, only genuinely-pinned vars survive; drifted
+// seeds drop and get re-stamped from the (newer) service value.
+//
+// overrideNames may be nil (no deliberate overrides recorded — the
+// common case for auto-seeded production envs and for every env
+// migrated before this field existed). A nil set means "trust the
+// service": all same-name entries drop and re-stamp. Net-new entries
+// still survive because they have no service value to fall back to.
+func extractEnvOnlyOverrides(svcExplicit, envExplicit []kube.KusoEnvVar, overrideNames map[string]bool) []kube.KusoEnvVar {
 	if len(envExplicit) == 0 {
 		return nil
 	}
@@ -380,20 +399,22 @@ func extractEnvOnlyOverrides(svcExplicit, envExplicit []kube.KusoEnvVar) []kube.
 		// per-env override. Treating it as an override re-stamps the raw
 		// literal over the service's RESOLVED value (secretKeyRef /
 		// concrete string), and the pod gets "${{...}}" verbatim and
-		// crashes. Skip it so the service's resolved value propagates.
-		// A genuine override is always a concrete value or a resolved
-		// ref, never an unresolved `${{ }}` token.
+		// crashes. Skip it (even if somehow marked) so the service's
+		// resolved value propagates. A genuine override is always a
+		// concrete value or a resolved ref, never an unresolved `${{ }}`.
 		if _, isRef, _ := ParseVarRef(e.Value); isRef {
 			continue
 		}
-		svcEntry, exists := svcByName[e.Name]
-		if !exists {
-			// Net-new.
+		if _, exists := svcByName[e.Name]; !exists {
+			// Net-new: no service value to fall back to, so it can only
+			// live on the env. Always survives.
 			out = append(out, e)
 			continue
 		}
-		if !envVarsEqual(svcEntry, e) {
-			// Shadow override — env value differs from service.
+		// Same name as the service: survives ONLY if the user explicitly
+		// pinned it on this env. Unmarked same-name entries are inherited
+		// seeds (possibly drifted) — drop them so the service value wins.
+		if overrideNames[e.Name] {
 			out = append(out, e)
 		}
 	}

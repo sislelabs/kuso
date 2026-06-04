@@ -17,6 +17,7 @@ package projects
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 
 	"kuso/server/internal/kube"
@@ -220,6 +221,14 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 	}
 
 	return s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envCRName, func(env *kube.KusoEnvironment) error {
+		// Record this name as a DELIBERATE per-env override so later
+		// service-level propagation preserves it instead of re-stamping
+		// the service value over it. This explicit marker is what lets
+		// extractEnvOnlyOverrides tell a genuine override from a stale
+		// inherited seed (see KusoEnvironmentSpec.EnvOverrides).
+		if !slices.Contains(env.Spec.EnvOverrides, name) {
+			env.Spec.EnvOverrides = append(env.Spec.EnvOverrides, name)
+		}
 		for i := range env.Spec.EnvVars {
 			if env.Spec.EnvVars[i].Name == name {
 				env.Spec.EnvVars[i] = next
@@ -263,6 +272,11 @@ func (s *Service) UnsetEnvScopedVar(ctx context.Context, project, service, envNa
 			return kube.ErrAbortRetry
 		}
 		env.Spec.EnvVars = out
+		// Drop the override marker too — once the user unsets their
+		// per-env value, the var should fall back to inheriting from
+		// the service on the next propagation, not stay pinned to a
+		// now-absent override.
+		env.Spec.EnvOverrides = slices.DeleteFunc(env.Spec.EnvOverrides, func(s string) bool { return s == name })
 		return nil
 	})
 	if notFound {

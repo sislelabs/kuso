@@ -460,7 +460,28 @@ type KusoEnvironmentSpec struct {
 	ClusterIssuer    string       `json:"clusterIssuer,omitempty"`
 	IngressClassName string       `json:"ingressClassName,omitempty"`
 	EnvVars          []KusoEnvVar `json:"envVars,omitempty"`
-	EnvFromSecrets   []string     `json:"envFromSecrets,omitempty"`
+	// EnvOverrides is the set of env-var NAMES the user deliberately
+	// pinned to THIS env via the per-env scoped editor (SetEnvScopedVar).
+	// It is the explicit marker that distinguishes a deliberate per-env
+	// override from an inherited seed: propagation re-stamps every
+	// service-owned var from the service spec EXCEPT the names listed
+	// here, which keep their env-local value.
+	//
+	// Why a marker instead of value-comparison: AddService seeds the
+	// production env's EnvVars with a full copy of the service's vars.
+	// Once the service value later changes, the seeded copy "differs"
+	// from the service — indistinguishable from a deliberate override by
+	// value alone. The old value-diff heuristic therefore treated every
+	// drifted seed as an override and permanently shadowed the service
+	// (the jira-mudira "redirects to the wrong host" bug). The marker
+	// removes the guessing: only names the user actually pinned survive.
+	//
+	// nil/empty = no deliberate overrides on this env (the common case
+	// for auto-seeded production envs and every env created before this
+	// field existed). omitempty is fine: nil and [] are semantically the
+	// same here ("nothing pinned"), unlike SharedEnvKeys.
+	EnvOverrides   []string `json:"envOverrides,omitempty"`
+	EnvFromSecrets []string `json:"envFromSecrets,omitempty"`
 	// SharedEnvKeys mirrors KusoService.spec.sharedEnvKeys so the
 	// kusoenvironment chart can render per-key env entries (one
 	// secretKeyRef per subscribed key) instead of the legacy blanket

@@ -461,6 +461,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			created.Spec.EnvVars,
 			nil,
 			envFromSecrets,
+			nil, // brand-new env: no deliberate per-env overrides yet
 		)
 		if err == nil {
 			prodEnvVars = merged
@@ -763,6 +764,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			scopedSvcEnvVars,
 			nil, // no existing env entries to preserve — this is create
 			envFromSecrets,
+			nil, // brand-new env: no deliberate per-env overrides yet
 		)
 		if err == nil {
 			mergedEnvVars = merged

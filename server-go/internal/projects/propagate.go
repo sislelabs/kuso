@@ -162,6 +162,11 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 					rescopedSvcEnvVars,
 					env.Spec.EnvVars, // preserve per-env overrides (R-bug)
 					env.Spec.EnvFromSecrets,
+					// Only the names the user explicitly pinned on this
+					// env survive as overrides. Drifted inherited seeds
+					// (not in this set) drop and re-stamp from the service
+					// — the fix for the jira-mudira shadowing bug.
+					env.Spec.EnvOverrides,
 				)
 				if err != nil {
 					return fmt.Errorf("resolve sharedEnvKeys for env %s: %w", envName, err)

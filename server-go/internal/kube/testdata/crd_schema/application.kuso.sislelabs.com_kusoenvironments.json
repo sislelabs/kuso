@@ -62,6 +62,13 @@
             },
             "type": "array"
           },
+          "envOverrides": {
+            "description": "Env-var NAMES the user deliberately pinned to this env via the per-env scoped editor. The kuso server's propagation step preserves these env-local values and re-stamps every other service-owned var from the parent KusoService — the explicit marker that tells a deliberate override from a stale inherited seed. Server-managed; the chart does not render it.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "envVars": {
             "items": {
               "properties": {

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -675,10 +676,14 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 	// on top so "DEMO_MODE=true" survives every resync.
 	var baseEnvVars []kube.KusoEnvVar
 	var baseEnvFromSecrets []string
+	var baseEnvOverrides []string
 	if baseEnvName != "" {
 		baseEnvCRName := fmt.Sprintf("%s-%s", serviceFQN, baseEnvName)
 		if baseEnv, err := d.Kube.GetKusoEnvironment(ctx, ns, baseEnvCRName); err == nil && baseEnv != nil {
 			baseEnvVars = append(baseEnvVars, baseEnv.Spec.EnvVars...)
+			// Carry the base env's deliberate per-env overrides forward
+			// so the preview inherits the same pinned set.
+			baseEnvOverrides = append([]string(nil), baseEnv.Spec.EnvOverrides...)
 			// Also clone EnvFromSecrets so per-env secret mounts come
 			// across. The per-env Secret names get swapped to per-PR
 			// names by clonePerEnvSecretsForPreview below; shared
@@ -757,6 +762,28 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		}
 	}
 
+	// Mark every literal envVar on the preview as a deliberate per-env
+	// override. A preview env's literals are per-PR snapshot values:
+	// host-rewritten URLs (rewriteEnvVarValues above), PG-clone secret
+	// swaps, and per-service previewEnvVars. They differ from the parent
+	// service on purpose and MUST survive a later service-level
+	// propagation — extractEnvOnlyOverrides only preserves names listed
+	// in spec.EnvOverrides. Without this, the next `kuso env set` on the
+	// service would re-stamp production values onto the preview (Bug 5:
+	// preview page would call the production API). secretKeyRef entries
+	// are skipped — those resolve via envFromSecrets, not the literal
+	// override path. Union with the base env's overrides so an inherited
+	// pin isn't lost.
+	previewOverrides := append([]string(nil), baseEnvOverrides...)
+	for _, e := range mergedEnvVars {
+		if e.Value == "" || e.ValueFrom != nil { // secretKeyRef — not a literal override
+			continue
+		}
+		if !slices.Contains(previewOverrides, e.Name) {
+			previewOverrides = append(previewOverrides, e.Name)
+		}
+	}
+
 	objMeta := metav1.ObjectMeta{
 		Name: envName,
 		Labels: map[string]string{
@@ -799,6 +826,9 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 			// vars behavior for projects that haven't opted into the
 			// new model.
 			EnvVars: mergedEnvVars,
+			// Per-PR literals are deliberate overrides — see the
+			// previewOverrides computation above (Bug 5 fix).
+			EnvOverrides: previewOverrides,
 			// Inherit subscription state so the preview pod sees the
 			// same shared-secret keys + addon-conn secrets the base
 			// pod does. nil means legacy mount-all (pre-v0.16.10).

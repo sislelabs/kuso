@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -317,6 +318,84 @@ func TestDispatch_PROpened_PreviewsBaseDomain(t *testing.T) {
 	}
 	if envCR.Spec.Host != "web-pr-42.tickero.bg" {
 		t.Errorf("preview host should use previews.baseDomain, got %q (want web-pr-42.tickero.bg)", envCR.Spec.Host)
+	}
+}
+
+// TestDispatch_PROpened_MarksRewrittenLiteralsAsOverrides is the
+// regression test for Bug 5 from the EnvOverrides review: a preview env
+// clones the production env's literal envVars and rewrites their hosts
+// to the per-PR host (NEXT_PUBLIC_API_URL: api.alpha.example.com →
+// api-pr-42.alpha.example.com). Those rewritten literals are deliberate
+// per-preview values — they MUST be marked in spec.EnvOverrides so a
+// later service-level propagation (extractEnvOnlyOverrides) preserves
+// them instead of re-stamping the production value. Without the marker
+// the preview pod's browser would call the PRODUCTION API from a preview
+// page (CSP blocks it / wrong cookies) the moment any service env edit
+// fires propagation.
+func TestDispatch_PROpened_MarksRewrittenLiteralsAsOverrides(t *testing.T) {
+	t.Parallel()
+
+	prodEnvWeb := &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alpha-web-production",
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": "alpha",
+				"kuso.sislelabs.com/service": "web",
+				"kuso.sislelabs.com/env":     "production",
+			},
+		},
+		Spec: kube.KusoEnvironmentSpec{
+			Project: "alpha",
+			Service: "alpha-web",
+			Kind:    "production",
+			// A plain LITERAL envVar (not a secretKeyRef) — this is the
+			// path rewriteEnvVarValues touches and the one Bug 5 hits.
+			EnvVars: []kube.KusoEnvVar{
+				{Name: "NEXT_PUBLIC_API_URL", Value: "https://api.alpha.example.com"},
+			},
+		},
+	}
+
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		// "api" service so the hostRewrite map carries an
+		// api.alpha.example.com → api-pr-42 entry.
+		seedSvc("alpha", "web"),
+		seedSvc("alpha", "api"),
+		typedSeed(kube.GVREnvironments, "KusoEnvironment", prodEnvWeb),
+	)
+
+	body := []byte(`{
+		"action": "opened",
+		"number": 42,
+		"pull_request": {"head": {"ref": "feat/x", "sha": "abcdef0123456789abcdef0123456789abcdef01"}, "state": "open"},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch pr: %v", err)
+	}
+
+	envCR, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-42")
+	if err != nil {
+		t.Fatalf("preview env not created: %v", err)
+	}
+
+	// The literal must have been rewritten to the preview host...
+	var gotVal string
+	for _, e := range envCR.Spec.EnvVars {
+		if e.Name == "NEXT_PUBLIC_API_URL" {
+			gotVal = e.Value
+		}
+	}
+	if gotVal != "https://api-pr-42.alpha.example.com" {
+		t.Fatalf("NEXT_PUBLIC_API_URL not rewritten: got %q", gotVal)
+	}
+
+	// ...AND the name must be marked as a per-env override so service
+	// propagation can't wipe it back to the production value.
+	if !slices.Contains(envCR.Spec.EnvOverrides, "NEXT_PUBLIC_API_URL") {
+		t.Errorf("NEXT_PUBLIC_API_URL not in EnvOverrides %v — service propagation will re-stamp the production URL onto this preview (Bug 5)", envCR.Spec.EnvOverrides)
 	}
 }
 
