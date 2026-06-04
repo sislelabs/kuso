@@ -5,6 +5,15 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.27] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(ui): project card domain falls back to detected frontend's default host ([dc7ec8d](https://github.com/sislelabs/kuso/commit/dc7ec8db8aacfefccb17a8fb6aafad6cb06c8668))
+
+### 📝 Docs
+- Docs(migration): full e2e results — 11/14 apps verified (DB parity + pooler query + HTTP) ([8cefc78](https://github.com/sislelabs/kuso/commit/8cefc7894f9ce1f69c97067107757c0c2489b81b))
+- Docs(migration): runtime blocker chain resolved (v0.18.25 env-ref, v0.18.26 netpolicy); all 13 apps Running ([cf53ac1](https://github.com/sislelabs/kuso/commit/cf53ac119631d6a59ad0d7297042487f3fa4bdf5))
+
 ## [0.18.26] — 2026-06-04
 
 ### 🐛 Bug Fixes
@@ -368,11 +377,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(previews): break addon-clone idempotency loop ([d070e4c](https://github.com/sislelabs/kuso/commit/d070e4caf75c6b9c88888fa72579407b94c89654))
-
-## [0.17.5] — 2026-05-29
-
-### 🐛 Bug Fixes
-- Fix(previews): default per-PR Postgres clones to ON ([42dcc33](https://github.com/sislelabs/kuso/commit/42dcc333733296cec1ed2c42803d17604c873d0a))
 
 
 ---
