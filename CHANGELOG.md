@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.20] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): validate build-env keys (command-injection hardening) ([c567636](https://github.com/sislelabs/kuso/commit/c567636efd7a8cc073d29c0034529b4624c8ba7f))
+
 ## [0.18.19] — 2026-06-04
 
 ### ✨ Features
@@ -368,11 +373,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(propagate): drop env's shared-secret refs when a per-env override exists ([1d75716](https://github.com/sislelabs/kuso/commit/1d757164fd80ae9937c38e99b799746469f7e9ce))
-
-## [0.16.26] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(propagate): per-env Secret overrides win over subscribed shared keys ([0243cd9](https://github.com/sislelabs/kuso/commit/0243cd99ba42f9c8f7397043a4d4e2de11c2f39a))
 
 
 ---
