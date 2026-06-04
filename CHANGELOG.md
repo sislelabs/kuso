@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.16] — 2026-06-04
+
+### ✨ Features
+- Feat(settings): unify cluster database + instance-addons into one page ([bbcdca2](https://github.com/sislelabs/kuso/commit/bbcdca2db828d8d8854ab4bb0f532fe45642717a))
+
 ## [0.18.15] — 2026-06-04
 
 ### 🐛 Bug Fixes
@@ -359,11 +364,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(subscribed-addons): respect project prefix on conn-secret allow-list ([3f628e7](https://github.com/sislelabs/kuso/commit/3f628e73a1ace7c47fed83eb2438dc4813152089))
-
-## [0.16.23] — 2026-05-28
-
-### ✨ Features
-- Feat: per-service addon-mount subscription (auto-migrate from legacy) ([89525af](https://github.com/sislelabs/kuso/commit/89525af747589259692fb8e48485db48b16199a8))
 
 
 ---
