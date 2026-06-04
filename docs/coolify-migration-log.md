@@ -107,12 +107,31 @@ DATA loaded + ownership-fixed, env set) — ONLY the build step fails.
       passes NO env to builds today, so even a literal doesn't reach the build).
   (c) Defer the build-time-env apps; finish the build-clean apps now.
 
-Migrated + build-OK (2): jira-mudira, boiler-code-landing.
-Migrated, data+config done, build BLOCKED (3): db-masterclass, produktche,
-ilikata. (bukvite30 build was 'running' at pause — likely same failure, it's a
-Next.js app.) Remaining not yet started: berivangold(×2), kutiq, newsletterite,
-vibe-detector, junior-accelerator-web, junior-accelerator-ship, s3-web; Phase 3
-compose: s3, analiz.
+### BLOCKER RESOLVED — build-time env injection shipped (v0.18.20→v0.18.23)
+
+Built the feature (TDD+ship): builds.Create resolves the service's env to
+literals (secretKeyRefs read server-side) → KusoBuild.spec.buildEnv → the REAL
+renderer internal/buildcontroller/render.go (NOT the dead kusobuild helm chart!)
+injects them as KUSO_BE_<KEY> container env → ENV-after-FROM in the nixpacks
+Dockerfile + nixpacks --env + EXPORT of NIXPACKS_* for toolchain selection.
+Security: key identifier-regex validated at 3 layers (server, CRD propertyNames,
+render); values base64/kubelet-escaped; build logs print keys only. Found the
+red herring that the kusobuild chart is dead (server renders in Go); the
+NIXPACKS_NODE_VERSION export was the final piece (nixpacks reads it from its
+process env, not --env).
+
+**All 4 previously-blocked apps now BUILD SUCCESSFULLY:** db-masterclass,
+produktche, ilikata, bukvite30 (verified nodejs_22 + Prisma generate OK).
+
+### Phase 2 status: 6 apps fully migrated (data+config+build)
+
+DONE (build succeeded): jira-mudira, boiler-code-landing, db-masterclass,
+ilikata, bukvite30, produktche. (jira-mudira also redirect-fixed + verified
+live earlier.)
+
+REMAINING to migrate: berivangold (main+develop), kutiq (has Redis),
+newsletterite, vibe-detector, junior-accelerator-web, junior-accelerator-ship,
+s3-web. Phase 3 compose: s3, analiz.
 
 ## Event log
 
