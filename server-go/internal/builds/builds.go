@@ -791,6 +791,15 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		Static:     svcCR.Spec.Static,
 		Buildpacks: svcCR.Spec.Buildpacks,
 	}
+	// Build-time env: resolve the service's env vars to literals (reading
+	// referenced secrets) and stamp them onto the CR so the build job can
+	// bake them into the image. Apps that read env at build (Prisma
+	// generate needs DATABASE_URL, Next.js compiles NEXT_PUBLIC_* and
+	// validates env) require this. Unresolvable refs are omitted, not fatal.
+	// NOTE: these values bake into image layers in the in-cluster registry.
+	if be := s.resolveBuildEnv(ctx, ns, svcCR.Spec.EnvVars); len(be) > 0 {
+		spec.BuildEnv = be
+	}
 	if !queued {
 		spec.Image = &kube.KusoImage{Repository: imageRepo, Tag: ImageTag(sha)}
 	}

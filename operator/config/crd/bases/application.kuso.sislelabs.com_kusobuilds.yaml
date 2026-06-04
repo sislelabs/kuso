@@ -84,6 +84,17 @@ spec:
                   type: string
                   enum: [dockerfile, nixpacks, buildpacks, static]
                   default: dockerfile
+                buildEnv:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: >-
+                    Service env vars resolved to literals, baked into the
+                    image at build time (ENV-after-FROM). Set by the server
+                    from the service's envVars (secretKeyRefs resolved
+                    server-side). For apps that read env during build
+                    (Prisma, Next.js NEXT_PUBLIC_*). Values bake into image
+                    layers.
                 # done=true means the build reached a terminal state
                 # (succeeded / failed / cancelled). The kusobuild chart
                 # treats this as a hard no-op gate: when true, the

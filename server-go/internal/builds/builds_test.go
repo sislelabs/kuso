@@ -1121,3 +1121,43 @@ func TestShouldRunRelease_SkipsPreview(t *testing.T) {
 		t.Error("env without a release command must not run a release")
 	}
 }
+
+// TestBuildEnvFromVars resolves a service's env vars to build-time KEY=VALUE
+// literals: literal Values pass through; secretKeyRef vars are resolved via the
+// injected secret lookup; unresolvable refs and reserved/kuso-managed keys are
+// omitted. This is what populates KusoBuild.spec.buildEnv so the build job can
+// bake build-time env (Prisma DATABASE_URL, Next NEXT_PUBLIC_*) into the image.
+func TestBuildEnvFromVars(t *testing.T) {
+	t.Parallel()
+	vars := []kube.KusoEnvVar{
+		{Name: "NEXT_PUBLIC_APP_URL", Value: "https://web.foo.example.com"},
+		{Name: "DATABASE_URL", ValueFrom: map[string]any{
+			"secretKeyRef": map[string]any{"name": "foo-db-conn", "key": "DATABASE_URL"},
+		}},
+		{Name: "MISSING_REF", ValueFrom: map[string]any{
+			"secretKeyRef": map[string]any{"name": "nonexistent", "key": "X"},
+		}},
+		{Name: "PORT", Value: "9999"}, // reserved (kuso-managed) → omitted
+	}
+	// secret lookup: only foo-db-conn/DATABASE_URL resolves.
+	lookup := func(secret, key string) (string, bool) {
+		if secret == "foo-db-conn" && key == "DATABASE_URL" {
+			return "postgres://u:p@foo-db-pooler:6432/foo_db?sslmode=disable", true
+		}
+		return "", false
+	}
+	got := buildEnvFromVars(vars, lookup)
+
+	if got["NEXT_PUBLIC_APP_URL"] != "https://web.foo.example.com" {
+		t.Errorf("literal not passed through: %q", got["NEXT_PUBLIC_APP_URL"])
+	}
+	if got["DATABASE_URL"] != "postgres://u:p@foo-db-pooler:6432/foo_db?sslmode=disable" {
+		t.Errorf("secretKeyRef not resolved: %q", got["DATABASE_URL"])
+	}
+	if _, ok := got["MISSING_REF"]; ok {
+		t.Errorf("unresolvable ref should be omitted, got %q", got["MISSING_REF"])
+	}
+	if _, ok := got["PORT"]; ok {
+		t.Errorf("reserved key PORT must be omitted from build env")
+	}
+}

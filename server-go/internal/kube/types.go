@@ -698,6 +698,12 @@ type KusoBuildSpec struct {
 	Branch               string              `json:"branch,omitempty"`
 	GithubInstallationID int64               `json:"githubInstallationId,omitempty"`
 	Strategy             string              `json:"strategy,omitempty"`
+	// BuildEnv carries the service's env vars resolved to literals, baked
+	// into the image at build time (ENV-after-FROM). Set by builds.Create
+	// from the service's EnvVars (secretKeyRefs resolved server-side). Apps
+	// that read env during `npm run build` (Prisma, Next.js NEXT_PUBLIC_*)
+	// need this. Values are baked into image layers (in-cluster registry).
+	BuildEnv             map[string]string   `json:"buildEnv,omitempty"`
 	Image                *KusoImage          `json:"image,omitempty"`
 	Static               *KusoStaticSpec     `json:"static,omitempty"`
 	Buildpacks           *KusoBuildpacksSpec `json:"buildpacks,omitempty"`

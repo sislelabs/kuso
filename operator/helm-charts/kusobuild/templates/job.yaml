@@ -404,10 +404,25 @@ spec:
               # --build-arg at runtime. Kaniko doesn't auto-forward
               # our detected values, so we prepend literal ENV
               # statements right after the FROM line.
+              #
+              # We build a list of `ENV KEY VALUE` lines (Dockerfile's
+              # space-form, so values may contain '=' / ':' / '/' freely
+              # without quoting headaches). Toolchain hints (EXTRA_ENVS,
+              # KEY=VALUE form) first, then the user's build-time env from
+              # buildEnv (rendered below as base64 to survive ANY value —
+              # URLs, JSON, special chars — through helm + shell intact).
               ENV_BLOCK=""
               for env_pair in $EXTRA_ENVS; do
-                ENV_BLOCK="${ENV_BLOCK}ENV ${env_pair}\n"
+                k="${env_pair%%=*}"; v="${env_pair#*=}"
+                ENV_BLOCK="${ENV_BLOCK}ENV ${k} ${v}\n"
               done
+              {{- /* buildEnv: service env baked at build time. base64 the
+                     value so arbitrary content (incl. newlines, quotes,
+                     '=') round-trips through helm rendering + the shell. */}}
+              {{- range $k, $v := .Values.buildEnv }}
+              be_v="$(printf '%s' {{ $v | b64enc | quote }} | base64 -d)"
+              ENV_BLOCK="${ENV_BLOCK}ENV {{ $k }} ${be_v}\n"
+              {{- end }}
               if [ -n "$ENV_BLOCK" ]; then
                 awk -v block="$ENV_BLOCK" '
                   BEGIN { inserted = 0 }
@@ -417,8 +432,11 @@ spec:
                 mv .nixpacks/Dockerfile.patched .nixpacks/Dockerfile
               fi
 
-              echo "--- generated Dockerfile ---"
-              cat .nixpacks/Dockerfile
+              # Print FROM + ENV KEYS only (never values — buildEnv may
+              # carry secrets, and build logs are user-visible).
+              echo "--- Dockerfile FROM + injected ENV keys ---"
+              grep -E '^FROM ' .nixpacks/Dockerfile | head -3
+              grep -E '^ENV ' .nixpacks/Dockerfile | awk '{print "ENV " $2}' | head -60
           volumeMounts:
             - name: workspace
               mountPath: /workspace
