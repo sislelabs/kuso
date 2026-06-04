@@ -373,6 +373,19 @@ func extractEnvOnlyOverrides(svcExplicit, envExplicit []kube.KusoEnvVar) []kube.
 	}
 	out := make([]kube.KusoEnvVar, 0, len(envExplicit))
 	for _, e := range envExplicit {
+		// An env entry holding an UNRESOLVED `${{ ref }}` literal is a
+		// stale seed (written before the ref could resolve — e.g. the
+		// auto-created production env seeded with `${{ db.DATABASE_URL }}`
+		// before the addon's conn Secret existed), NOT a deliberate
+		// per-env override. Treating it as an override re-stamps the raw
+		// literal over the service's RESOLVED value (secretKeyRef /
+		// concrete string), and the pod gets "${{...}}" verbatim and
+		// crashes. Skip it so the service's resolved value propagates.
+		// A genuine override is always a concrete value or a resolved
+		// ref, never an unresolved `${{ }}` token.
+		if _, isRef, _ := ParseVarRef(e.Value); isRef {
+			continue
+		}
 		svcEntry, exists := svcByName[e.Name]
 		if !exists {
 			// Net-new.

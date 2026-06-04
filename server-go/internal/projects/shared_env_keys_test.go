@@ -58,6 +58,25 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 			env:  nil,
 		},
 		{
+			// REGRESSION (Coolify migration): an env entry that is an
+			// unresolved ${{ ref }} literal is a STALE SEED, never a
+			// deliberate per-env override. It must NOT shadow the
+			// service's resolved value (a secretKeyRef or concrete
+			// string) — otherwise the pod gets the literal "${{...}}"
+			// and crashes (Prisma "scheme not recognized"). Drop it so
+			// the service's resolved value propagates.
+			name: "env has stale unresolved ${{ }} literal — not an override",
+			svc: []kube.KusoEnvVar{
+				{Name: "DATABASE_URL", ValueFrom: map[string]any{
+					"secretKeyRef": map[string]any{"name": "app-db-conn", "key": "DATABASE_URL"},
+				}},
+			},
+			env: []kube.KusoEnvVar{
+				{Name: "DATABASE_URL", Value: "${{ db.DATABASE_URL }}"},
+			},
+			wantNames: nil, // no override — service's secretKeyRef wins
+		},
+		{
 			name: "env mirrors service exactly — all entries drop",
 			svc: []kube.KusoEnvVar{
 				{Name: "FOO", Value: "shared-value"},
