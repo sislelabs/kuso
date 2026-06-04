@@ -251,6 +251,50 @@ function distinctServiceDomain(services: ReadonlyArray<KusoService>): string | u
   return hosts.size === 1 ? [...hosts][0] : undefined;
 }
 
+// isFrontendService: a web-facing service worth surfacing as the project's
+// public face. Heuristic from the fields the client models: a declared HTTP
+// port means it serves traffic (workers have no port). Used to pick which
+// service's default host represents the project on the card.
+function isFrontendService(s: KusoService): boolean {
+  return (s.spec.port ?? 0) > 0;
+}
+
+// defaultProjectHost is the card's display-domain fallback when the project
+// has no baseDomain AND no custom service domain: use the kuso-default host
+// (e.g. web.<project>.kuso.sislelabs.com) of the DETECTED FRONTEND service's
+// production environment — or, if no frontend is detected, the FIRST service.
+// The host lives on the production KusoEnvironment (.spec.host), not the
+// service. Returns undefined when there are no services / no env host yet.
+function defaultProjectHost(
+  services: ReadonlyArray<KusoService>,
+  environments: ReadonlyArray<KusoEnvironment>,
+): string | undefined {
+  if (services.length === 0) return undefined;
+  // Match a service to its production env via the kuso.sislelabs.com/service
+  // label on both — robust to hyphenated project/service names (no CR-name
+  // parsing). Falls back to a single-service project's lone production host.
+  const svcLabel = (s: KusoService) => s.metadata?.labels?.["kuso.sislelabs.com/service"];
+  const prodHostForService = (s: KusoService): string | undefined => {
+    const want = svcLabel(s);
+    let lone: string | undefined;
+    let count = 0;
+    for (const e of environments) {
+      if (e.spec?.kind !== "production" || !e.spec?.host) continue;
+      count++;
+      lone = e.spec.host;
+      if (want && e.metadata?.labels?.["kuso.sislelabs.com/service"] === want) {
+        return e.spec.host;
+      }
+    }
+    // No label match but exactly one production env → it's this service's.
+    return count === 1 ? lone : undefined;
+  };
+  // Detected frontend first (in service order = creation order from the API),
+  // then fall back to the first service of any kind.
+  const pick = services.find(isFrontendService) ?? services[0];
+  return prodHostForService(pick);
+}
+
 function repoWebURL(raw?: string): string | null {
   if (!raw) return null;
   let s = raw.trim();
@@ -325,15 +369,19 @@ function ProjectsGrid({
           : null;
         const summary = queries[i]?.data;
         const services = summary?.services ?? [];
-        // Display domain. Prefer the project baseDomain; when a project
-        // has none (service-first projects like nev-abrom), fall back to
-        // a service's own primary custom domain so the card still shows
-        // where the app lives. distinctServiceDomain returns the single
-        // host shared across services (or the lone service's host), or
-        // undefined for a multi-domain project (we don't guess). We no
-        // longer infer from window.location.host (that printed the kuso
-        // server's own hostname on every baseless card — confusing).
-        const domain = p.spec.baseDomain ?? distinctServiceDomain(services);
+        const environments = summary?.environments ?? [];
+        // Display domain, in priority order:
+        //   1. project baseDomain (explicit),
+        //   2. a single custom domain shared across services,
+        //   3. the kuso-default host of the detected frontend service's
+        //      production env (or the first service's) — so service-first
+        //      projects with no custom domain still show where the app
+        //      lives (e.g. web.<project>.kuso.sislelabs.com) instead of a
+        //      blank domain row.
+        const domain =
+          p.spec.baseDomain ??
+          distinctServiceDomain(services) ??
+          defaultProjectHost(services, environments);
         // Effective repo for the card. Prefer the project's defaultRepo;
         // when it has none (single-service / service-first projects where
         // the repo lives on the service), fall back to the services' own
