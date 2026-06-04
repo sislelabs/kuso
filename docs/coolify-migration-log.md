@@ -277,10 +277,40 @@ cards equal-height in a row. Server-side prefs (UserProjectPref, migration
 0003) so the layout follows the user across devices. Not migration work —
 shipped alongside.
 
+## FULL E2E RE-VERIFICATION + 2 MORE KUSO BUILD BUGS FIXED (v0.18.30, v0.18.31)
+
+Re-swept all 18 projects (grew from 14): DB schema present in all 14 project
+DBs (8-39 tables), 0 DB connection errors, direct pooler queries as the
+per-project role succeed, all public URLs serve. 17/18 active 1/1.
+
+Two more kuso build bugs found + fixed (the "can't happen again" work):
+
+1. **NODE_ENV poisoned the build (v0.18.30).** Every Coolify-migrated app
+   carries NODE_ENV=production; kuso injected it into the BUILD, so
+   npm/pnpm skipped devDeps and any build needing a devDep (husky, tsc,
+   bundler) failed ("husky: not found"). Broke berivangold + berivangold-dev.
+   Fix: builds.reservedBuildEnvKeys now mirrors render.go's RESERVED
+   (NODE_ENV + runtime-only keys filtered from build env; render.go
+   KUSO_BUILDENV_KEYS loops also skip RESERVED, defense-in-depth). Verified
+   live: both apps build WITH NODE_ENV set (filtered from build CR, kept at
+   runtime) and run active 1/1.
+
+2. **Raw-Dockerfile builds got zero build env (v0.18.31).** Build-env
+   injection (#48) only worked for nixpacks/static. renderBuildkitContainer
+   now carries KUSO_BE_* and passes each buildEnv key as --opt build-arg
+   (set--/$@, RESERVED-filtered). Verified: DATABASE_URL now resolves for
+   kutiq; papelito (working dockerfile app) rebuilds clean, no regression.
+
 ## REMAINING WORK
-- 3 build-failing apps need repo-side fixes (lockfile / stripe route) — app
-  owner's call, not kuso.
-- Phase 3 compose apps (s3, analiz) — not started (#45).
-- Domains/DNS cutover — out of scope per instruction.
-- Follow-ups #46 (PVC drift), #47 (role ownership grant), #51 (kusoenvironment
-  CRD volumes schema field-name mismatch — latent, 0 live volumes) — non-blocking.
+- **kutiq** — only red app. NOW PURELY REPO-SIDE: kuso passes all 19
+  build-args, but kutiq's Dockerfile only declares `ARG DATABASE_URL` (which
+  now resolves); the other 17 vars its env.ts validates at build are not
+  ARG-declared. Repo fix: `export const dynamic = 'force-dynamic'` on the
+  env-importing routes (cleanest), or declare the remaining ARGs.
+- Phase 3 compose apps (analiz) — not started (#45). (s3 → s3-web is live.)
+- Domains/DNS cutover — out of scope. nev-abrom's app is healthy but
+  nevabrom.com still points at the old Apache host (185.80.2.210), not kuso.
+- Follow-ups #47 (role ownership grant), #51 (kusoenvironment CRD volumes
+  schema field-name mismatch — latent, 0 live volumes) — non-blocking.
+- Live Stripe/secret keys still copied as-is in gitignored migration/ files
+  — flagged for rotation (your side).
