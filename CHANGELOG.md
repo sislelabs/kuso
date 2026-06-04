@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.26] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(netpolicy): allow project egress to the cluster-DB pooler/PG ([3eab6ba](https://github.com/sislelabs/kuso/commit/3eab6ba3f2480d71364d92553e89434987f6989b))
+
 ## [0.18.25] — 2026-06-04
 
 ### 🐛 Bug Fixes
@@ -368,11 +373,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(previews): default per-PR Postgres clones to ON ([42dcc33](https://github.com/sislelabs/kuso/commit/42dcc333733296cec1ed2c42803d17604c873d0a))
-
-## [0.17.4] — 2026-05-29
-
-### 🐛 Bug Fixes
-- Fix(previews): clone per-env secrets w/ URL rewrite + enable per-PR DB ([793c8da](https://github.com/sislelabs/kuso/commit/793c8da624a6c85f5f93ed0fca5ab81bf0dc942b))
 
 
 ---
