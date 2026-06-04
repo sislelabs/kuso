@@ -155,6 +155,24 @@ func TestCreate_RejectsMissingFields(t *testing.T) {
 	}
 }
 
+// The "kuso-" prefix is reserved for kuso-internal resources (e.g. the
+// cluster-PG addon's synthetic project "kuso-instance"). A user project named
+// "kuso-instance" would otherwise produce an addon CR colliding with the
+// cluster PG. Create must reject "kuso-" prefixed names with ErrInvalid.
+func TestCreate_RejectsReservedKusoPrefix(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t)
+	for _, name := range []string{"kuso-instance", "kuso-foo", "kuso-"} {
+		if _, err := s.Create(context.Background(), CreateProjectRequest{Name: name}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("name %q should be rejected as reserved (ErrInvalid), got %v", name, err)
+		}
+	}
+	// A name that merely CONTAINS "kuso" but isn't prefixed is fine.
+	if _, err := s.Create(context.Background(), CreateProjectRequest{Name: "mykuso"}); err != nil {
+		t.Errorf("name %q (not kuso- prefixed) should be allowed, got %v", "mykuso", err)
+	}
+}
+
 // As of v0.3.5, defaultRepo is optional — a project is just a
 // container, services bring their own repos. Verify a bare-name
 // create succeeds and produces a CR with no DefaultRepo.

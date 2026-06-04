@@ -85,6 +85,14 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 	if req.Name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalid)
 	}
+	// The "kuso-" prefix is reserved for kuso-internal resources (the
+	// cluster-PG addon uses the synthetic project "kuso-instance"). Reject
+	// it so a user project can never produce an addon CR ("<project>-<addon>")
+	// that collides with an internal one, and so the prefix stays available
+	// for future internal use.
+	if strings.HasPrefix(req.Name, "kuso-") {
+		return nil, fmt.Errorf("%w: project names starting with \"kuso-\" are reserved for kuso-internal resources", ErrInvalid)
+	}
 	req.BaseDomain = strings.TrimSpace(req.BaseDomain)
 	if req.BaseDomain != "" && !isPublicFQDN(req.BaseDomain) {
 		return nil, fmt.Errorf("%w: baseDomain %q is not a public FQDN — needs at least one dot and a real TLD (e.g. example.com), Let's Encrypt can't issue certs for it otherwise", ErrInvalid, req.BaseDomain)

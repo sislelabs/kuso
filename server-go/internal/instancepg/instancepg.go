@@ -18,10 +18,11 @@
 //     instance-shared). That orchestration belongs somewhere that
 //     can own state without bloating the other two.
 //
-// Naming: the addon CR is created with project="__instance__" and
+// Naming: the addon CR is created with project="kuso-instance" and
 // the special label kuso.sislelabs.com/instance-pg=true so it never
 // appears in any user-facing project addon list, and the per-project
-// addons.List filter can skip it.
+// addons.List filter can skip it. The label (not the name) is what
+// discriminates the cluster PG from real project addons.
 package instancepg
 
 import (
@@ -52,10 +53,13 @@ var (
 )
 
 // instanceProject is the synthetic "project" name used on the cluster
-// PG addon CR. The double-underscore prefix won't clash with any
-// real project (kuso enforces a-z0-9-) and the addons.List path can
-// filter on it cheaply.
-const instanceProject = "__instance__"
+// PG addon CR. It MUST be a valid RFC-1123 name because it becomes part
+// of the addon CR's metadata.name ("<project>-pg") and a label value —
+// the apiserver rejects underscores (the old "__instance__" 500'd before
+// any CR was created). The "kuso-" prefix is reserved: projects.Create
+// rejects user project names starting with "kuso-", so a real project can
+// never produce an addon CR that collides with "kuso-instance-pg".
+const instanceProject = "kuso-instance"
 
 // instancePGAddonName is the short name of the cluster PG addon. We
 // keep this fixed: there's one cluster PG, not N. The user picks
@@ -494,7 +498,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 	// conn Secret → DSN → instance-secrets handoff.
 	//
 	// Conn Secret name follows the chart's convention:
-	// "<project>-<addon>-conn". For us that's "__instance__-pg-conn".
+	// "<project>-<addon>-conn". For us that's "kuso-instance-pg-conn".
 	sec, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Get(ctx, connSecretName(), metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {

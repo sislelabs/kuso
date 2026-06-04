@@ -2,6 +2,7 @@ package instancepg
 
 import (
 	"log/slog"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -127,12 +128,27 @@ func TestParseDSNDisplay(t *testing.T) {
 
 // TestAddonAndConnNames pins the deterministic naming so any future
 // refactor that touches one site has to touch the other.
+// rfc1123 matches a lowercase RFC-1123 subdomain — the constraint kube's
+// apiserver enforces on metadata.name. The old "__instance__-pg" name failed
+// this (underscores), so "Run on this cluster" 500'd before any CR was created.
+var rfc1123 = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`)
+
 func TestAddonAndConnNames(t *testing.T) {
-	if got := addonCRName(); got != "__instance__-pg" {
-		t.Errorf("addonCRName() = %q", got)
+	if got := addonCRName(); got != "kuso-instance-pg" {
+		t.Errorf("addonCRName() = %q, want kuso-instance-pg", got)
 	}
-	if got := connSecretName(); got != "__instance__-pg-conn" {
-		t.Errorf("connSecretName() = %q", got)
+	if got := connSecretName(); got != "kuso-instance-pg-conn" {
+		t.Errorf("connSecretName() = %q, want kuso-instance-pg-conn", got)
+	}
+	// Both must be valid RFC-1123 names or the apiserver rejects the CR /
+	// Secret. This is the actual bug guard.
+	for _, name := range []string{addonCRName(), connSecretName(), instanceProject} {
+		if !rfc1123.MatchString(name) {
+			t.Errorf("%q is not a valid RFC-1123 name (kube apiserver will reject it)", name)
+		}
+		if strings.Contains(name, "_") {
+			t.Errorf("%q contains an underscore — invalid in a kube resource name", name)
+		}
 	}
 }
 
