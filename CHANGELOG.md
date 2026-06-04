@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.25] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(env): stale unresolved ${{ }} literal is not a per-env override ([0aa8936](https://github.com/sislelabs/kuso/commit/0aa89361d1024899aabf6b58b571fcd50f34fa9f))
+
+### 📝 Docs
+- Docs(migration): final session status — 14 apps migrated, env-ref propagation bug root-caused ([94512ce](https://github.com/sislelabs/kuso/commit/94512ce68d834d50ef70bdfadbb81333f18f262f))
+
 ## [0.18.24] — 2026-06-04
 
 ### 🐛 Bug Fixes
@@ -365,11 +373,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(previews): clone per-env secrets w/ URL rewrite + enable per-PR DB ([793c8da](https://github.com/sislelabs/kuso/commit/793c8da624a6c85f5f93ed0fca5ab81bf0dc942b))
-
-## [0.17.3] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(canvas+redeploy): env-aware build labels and branch-correct redeploy ([76d518b](https://github.com/sislelabs/kuso/commit/76d518b2c848ffb021d0ab63d677671f9b1e7053))
 
 
 ---
