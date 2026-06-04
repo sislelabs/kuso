@@ -525,6 +525,14 @@ NIXPACKS_ENV_FLAGS=""
 for env_pair in $EXTRA_ENVS; do
   NIXPACKS_ENV_FLAGS="$NIXPACKS_ENV_FLAGS --env $env_pair"
 done
+# Pass the service's build-time env to nixpacks too — some keys
+# (NIXPACKS_NODE_VERSION/PYTHON_VERSION/etc.) are read by nixpacks at
+# plan time to pick the toolchain, so a post-FROM ENV would be too late.
+# nixpacks --env takes KEY=VALUE; the value comes from the kubelet-set
+# KUSO_BE_<KEY> var (no shell re-eval). Harmless for non-NIXPACKS keys.
+for k in $KUSO_BUILDENV_KEYS; do
+  NIXPACKS_ENV_FLAGS="$NIXPACKS_ENV_FLAGS --env ${k}=$(printenv "KUSO_BE_${k}")"
+done
 # shellcheck disable=SC2086
 nixpacks build . --out . $NIXPACKS_ENV_FLAGS
 
