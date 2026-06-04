@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useCan, Perms } from "@/features/auth";
 import { api } from "@/lib/api-client";
-import { Database, Cloud, Server, Trash2, RotateCw, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
+import { Database, Cloud, Server, Trash2, RotateCw, CheckCircle2, AlertCircle, Loader2, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 
@@ -133,6 +133,12 @@ export default function DatabasePage() {
           onDisable={() => setShowDisableConfirm(true)}
         />
       )}
+
+      {/* Additional shared servers — the named registry. The primary
+          slot above is the default cluster DB; these are extra servers
+          (a second on-cluster PG, or external Neon/RDS/Supabase) that
+          projects can also opt into by name. */}
+      <AdditionalServers />
 
       <ProvisionDialog
         open={showProvisionDialog}
@@ -455,6 +461,244 @@ function Picker({
         ))}
       </div>
     </div>
+  );
+}
+
+interface InstanceAddon {
+  name: string;
+  host: string;
+  port?: string;
+  user?: string;
+  kind: string;
+}
+
+// AdditionalServers surfaces the named instance-addon registry: extra
+// shared database servers (a second on-cluster PG, or an external
+// Neon/RDS/Supabase) registered by superuser DSN. Projects opt into one
+// by name via the canvas Add Addon dialog → Instance. The primary
+// managed/external slot above auto-registers as "pg", so we filter it
+// out here to avoid showing it twice — it's the card at the top.
+function AdditionalServers() {
+  const qc = useQueryClient();
+  const list = useQuery<{ addons: InstanceAddon[] }>({
+    queryKey: ["instance-addons"],
+    queryFn: () => api("/api/instance-addons"),
+  });
+  const register = useMutation({
+    mutationFn: ({ name, dsn }: { name: string; dsn: string }) =>
+      api("/api/instance-addons", { method: "PUT", body: { name, dsn } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["instance-addons"] }),
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Register failed"),
+  });
+  const unregister = useMutation({
+    mutationFn: (name: string) =>
+      api(`/api/instance-addons/${encodeURIComponent(name)}`, { method: "DELETE" }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["instance-addons"] }),
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Unregister failed"),
+  });
+
+  const [showAdd, setShowAdd] = useState(false);
+  const [newName, setNewName] = useState("");
+  const [newDSN, setNewDSN] = useState("");
+  const [pendingUnregister, setPendingUnregister] = useState<string | null>(null);
+
+  const onSubmit = () => {
+    const name = newName.trim().toLowerCase();
+    const dsn = newDSN.trim();
+    if (!name || !dsn) return;
+    if (!/^[a-z][a-z0-9-]{0,30}[a-z0-9]?$/.test(name)) {
+      toast.error("Name: lowercase, dashes, ≤32 chars, must start with a letter");
+      return;
+    }
+    if (!/^postgres(ql)?:\/\//.test(dsn)) {
+      toast.error("DSN must start with postgres:// or postgresql://");
+      return;
+    }
+    if (name === "pg") {
+      toast.error('"pg" is reserved for the primary cluster database above');
+      return;
+    }
+    register.mutate(
+      { name, dsn },
+      {
+        onSuccess: () => {
+          toast.success(`${name} registered — projects can now connect to it`);
+          setNewName("");
+          setNewDSN("");
+          setShowAdd(false);
+        },
+      }
+    );
+  };
+
+  // The primary slot registers itself as "pg"; it's the card above, so
+  // drop it from this list.
+  const addons = (list.data?.addons ?? [])
+    .filter((a) => a.name !== "pg")
+    .slice()
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  return (
+    <section className="mt-8 space-y-3">
+      <header className="flex items-baseline justify-between">
+        <div>
+          <h2 className="text-sm font-semibold tracking-tight">Additional shared servers</h2>
+          <p className="mt-1 text-[12px] leading-relaxed text-[var(--text-secondary)]">
+            Register extra Postgres servers — a second on-cluster instance, or an external
+            Neon / RDS / Supabase — by superuser DSN. Projects opt into one by name via{" "}
+            <code className="rounded bg-[var(--bg-secondary)] px-1 font-mono text-[11px]">
+              + addon → Instance
+            </code>{" "}
+            on the canvas; kuso carves an isolated database + role per project.
+          </p>
+        </div>
+        {!showAdd && (
+          <Button size="sm" variant="ghost" onClick={() => setShowAdd(true)} className="shrink-0">
+            <Plus className="h-3.5 w-3.5" />
+            Register
+          </Button>
+        )}
+      </header>
+
+      {list.isPending ? (
+        <Skeleton className="h-16 w-full" />
+      ) : addons.length === 0 ? (
+        <p className="rounded-md border border-dashed border-[var(--border-subtle)] px-3 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
+          No additional servers. The primary cluster database above covers most setups; register
+          more only if you need separate instances or an external provider.
+        </p>
+      ) : (
+        <ul className="space-y-2">
+          {addons.map((a) => (
+            <li
+              key={a.name}
+              className="flex items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 px-3 py-2"
+            >
+              <Database className="h-4 w-4 shrink-0 text-[var(--text-tertiary)]" />
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-2">
+                  <span className="font-mono text-[13px] font-medium text-[var(--text-primary)]">{a.name}</span>
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                    {a.kind}
+                  </span>
+                </div>
+                <p className="mt-0.5 truncate font-mono text-[10px] text-[var(--text-tertiary)]">
+                  {a.user ? `${a.user}@` : ""}
+                  {a.host || "<unparseable host>"}
+                  {a.port ? `:${a.port}` : ""}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPendingUnregister(a.name)}
+                disabled={unregister.isPending}
+                className="rounded p-1 text-[var(--text-tertiary)] hover:bg-red-500/10 hover:text-red-400 disabled:opacity-40"
+                aria-label={`Unregister ${a.name}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {showAdd && (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            onSubmit();
+          }}
+          className="flex flex-col gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-3"
+        >
+          <div>
+            <label
+              htmlFor="add-server-name"
+              className="mb-1 block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+            >
+              name
+            </label>
+            <Input
+              id="add-server-name"
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              placeholder="analytics-pg"
+              className="h-8 font-mono text-[12px]"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+              Lowercase, dashes, ≤32 chars. Projects reference this name when opting in.
+            </p>
+          </div>
+          <div>
+            <label
+              htmlFor="add-server-dsn"
+              className="mb-1 block font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+            >
+              superuser dsn
+            </label>
+            <Input
+              id="add-server-dsn"
+              value={newDSN}
+              onChange={(e) => setNewDSN(e.target.value)}
+              type="password"
+              placeholder="postgres://admin:pw@db.example.com:5432/postgres?sslmode=require"
+              className="h-8 font-mono text-[12px]"
+              spellCheck={false}
+              autoComplete="off"
+            />
+            <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+              Needs CREATE DATABASE + CREATE ROLE. The password never round-trips back to the browser.
+            </p>
+          </div>
+          <div className="flex items-center justify-end gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              type="button"
+              onClick={() => {
+                setShowAdd(false);
+                setNewName("");
+                setNewDSN("");
+              }}
+              disabled={register.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              type="submit"
+              disabled={!newName.trim() || !newDSN.trim() || register.isPending}
+            >
+              <Plus className="h-3.5 w-3.5" />
+              {register.isPending ? "Registering…" : "Register"}
+            </Button>
+          </div>
+        </form>
+      )}
+
+      <ConfirmDialog
+        open={pendingUnregister !== null}
+        title="Unregister shared server?"
+        body={
+          <p>
+            Projects that already opted in to{" "}
+            <span className="font-mono text-[var(--text-primary)]">{pendingUnregister}</span> keep
+            their per-project databases and connection secrets, but no new projects can opt in until
+            you re-register. The DSN is removed from the kuso-instance-shared Secret.
+          </p>
+        }
+        typeToConfirm={pendingUnregister ?? undefined}
+        confirmLabel="Unregister"
+        destructive
+        pending={unregister.isPending}
+        onConfirm={() => {
+          if (pendingUnregister) unregister.mutate(pendingUnregister);
+          setPendingUnregister(null);
+        }}
+        onCancel={() => setPendingUnregister(null)}
+      />
+    </section>
   );
 }
 

@@ -20,9 +20,10 @@ import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 // One canonical place to rotate them.
 //
 // We hide keys that look like INSTANCE_ADDON_<UPPER>_DSN_ADMIN —
-// those are managed by the dedicated /settings/instance-addons UI
-// and surface as a connection record there, not as a raw env var
-// here. Keeping them out of this page avoids a footgun where an
+// those are managed by the Cluster database UI (/settings/database,
+// "Additional shared servers") and surface as a connection record
+// there, not as a raw env var here. Keeping them out of this page
+// avoids a footgun where an
 // admin deletes the addon admin DSN by mistake.
 function isInstanceAddonAdminKey(k: string): boolean {
   return /^INSTANCE_ADDON_[A-Z0-9_]+_DSN_ADMIN$/.test(k);
