@@ -378,3 +378,57 @@ func containsEnv(env []corev1.EnvVar, name, value string) bool {
 	}
 	return false
 }
+
+// TestBuildEnvContainerVars verifies the service's build-time env is passed to
+// the nixpacks-plan container as KUSO_BE_<KEY> vars + a KUSO_BUILDENV_KEYS
+// list (kubelet-escaped values, no shell injection), and that non-identifier
+// keys are dropped at the render boundary.
+func TestBuildEnvContainerVars(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		BuildEnv: map[string]string{
+			"DATABASE_URL":        "postgres://u:p@h:6432/d?sslmode=disable",
+			"NEXT_PUBLIC_APP_URL": "https://x.example.com",
+			"BAD$(x)":             "evil", // dropped
+		},
+	}}
+	vars := buildEnvContainerVars(b)
+	got := map[string]string{}
+	for _, e := range vars {
+		got[e.Name] = e.Value
+	}
+	if got["KUSO_BE_DATABASE_URL"] != "postgres://u:p@h:6432/d?sslmode=disable" {
+		t.Errorf("DATABASE_URL not passed: %q", got["KUSO_BE_DATABASE_URL"])
+	}
+	if got["KUSO_BE_NEXT_PUBLIC_APP_URL"] != "https://x.example.com" {
+		t.Errorf("NEXT_PUBLIC_APP_URL not passed: %q", got["KUSO_BE_NEXT_PUBLIC_APP_URL"])
+	}
+	if _, bad := got["KUSO_BE_BAD$(x)"]; bad {
+		t.Error("malicious key must be dropped")
+	}
+	keys := got["KUSO_BUILDENV_KEYS"]
+	if keys != "DATABASE_URL NEXT_PUBLIC_APP_URL" {
+		t.Errorf("KUSO_BUILDENV_KEYS = %q, want sorted valid keys", keys)
+	}
+}
+
+// TestNixpacksContainerInjectsBuildEnv: the rendered nixpacks-plan container
+// carries the buildEnv vars + the script reads KUSO_BUILDENV_KEYS.
+func TestNixpacksContainerInjectsBuildEnv(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		Strategy: "nixpacks",
+		BuildEnv: map[string]string{"DATABASE_URL": "postgres://x"},
+	}}
+	c := renderNixpacksPlanContainer(b)
+	var sawKey bool
+	for _, e := range c.Env {
+		if e.Name == "KUSO_BE_DATABASE_URL" && e.Value == "postgres://x" {
+			sawKey = true
+		}
+	}
+	if !sawKey {
+		t.Error("nixpacks container missing KUSO_BE_DATABASE_URL")
+	}
+	if !strings.Contains(c.Args[0], "KUSO_BUILDENV_KEYS") {
+		t.Error("nixpacks script does not consume KUSO_BUILDENV_KEYS")
+	}
+}

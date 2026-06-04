@@ -2,6 +2,8 @@ package buildcontroller
 
 import (
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -526,9 +528,21 @@ done
 # shellcheck disable=SC2086
 nixpacks build . --out . $NIXPACKS_ENV_FLAGS
 
+# ENV lines to inject after the FROM line. Toolchain hints (EXTRA_ENVS,
+# KEY=VALUE form) first; then the service's build-time env. The latter
+# arrives as container env vars KUSO_BE_<KEY> (kubelet handles all value
+# escaping — values never pass through shell parsing, so no injection
+# risk) with the key list in KUSO_BUILDENV_KEYS. We use Dockerfile's
+# space-form (ENV KEY VALUE) so values with '='/':'/'/'/spaces are fine.
 ENV_BLOCK=""
 for env_pair in $EXTRA_ENVS; do
-  ENV_BLOCK="${ENV_BLOCK}ENV ${env_pair}\n"
+  k="${env_pair%%=*}"; v="${env_pair#*=}"
+  ENV_BLOCK="${ENV_BLOCK}ENV ${k} ${v}\n"
+done
+for k in $KUSO_BUILDENV_KEYS; do
+  # value from KUSO_BE_<key>; printf the literal so no re-evaluation.
+  v="$(printenv "KUSO_BE_${k}")"
+  ENV_BLOCK="${ENV_BLOCK}ENV ${k} ${v}\n"
 done
 if [ -n "$ENV_BLOCK" ]; then
   awk -v block="$ENV_BLOCK" '
@@ -539,22 +553,64 @@ if [ -n "$ENV_BLOCK" ]; then
   mv .nixpacks/Dockerfile.patched .nixpacks/Dockerfile
 fi
 
-echo "--- generated Dockerfile ---"
-cat .nixpacks/Dockerfile
+# Print FROM + injected ENV KEYS only — never values (build-time env may
+# carry secrets, and build logs are user-visible).
+echo "--- Dockerfile FROM + injected ENV keys ---"
+grep -E '^FROM ' .nixpacks/Dockerfile | head -3
+grep -E '^ENV ' .nixpacks/Dockerfile | awk '{print "ENV " $2}' | head -80
 `
 
+	env := []corev1.EnvVar{
+		{Name: "REPO_PATH", Value: path},
+		{Name: "USE_CACHE", Value: useCache},
+	}
+	env = append(env, buildEnvContainerVars(b)...)
 	return corev1.Container{
 		Name:            "nixpacks-plan",
 		Image:           image,
 		SecurityContext: dropAllCapsRootAllowed(),
 		Command:         []string{"/bin/bash", "-c"},
 		Args:            []string{script},
-		Env: []corev1.EnvVar{
-			{Name: "REPO_PATH", Value: path},
-			{Name: "USE_CACHE", Value: useCache},
-		},
-		VolumeMounts: mounts,
+		Env:             env,
+		VolumeMounts:    mounts,
 	}
+}
+
+// envKeyRE is the POSIX env-var identifier. buildEnv keys are interpolated
+// into both a shell var name (KUSO_BE_<key>) and an `ENV <key>` Dockerfile
+// line, so a non-identifier key would be a shell-injection / malformed-ENV
+// vector. The server already validates keys (builds.buildEnvFromVars), but we
+// re-validate here as defense-in-depth at the render boundary.
+var envKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// buildEnvContainerVars turns b.Spec.BuildEnv into container env vars:
+// KUSO_BUILDENV_KEYS (space-separated key list) + one KUSO_BE_<KEY> per
+// entry. Values flow as kubelet-managed env (no shell escaping needed). Keys
+// failing the identifier check are dropped.
+func buildEnvContainerVars(b *kube.KusoBuild) []corev1.EnvVar {
+	if b == nil || len(b.Spec.BuildEnv) == 0 {
+		return nil
+	}
+	var out []corev1.EnvVar
+	var keys []string
+	// stable order for deterministic rendering (tests).
+	names := make([]string, 0, len(b.Spec.BuildEnv))
+	for k := range b.Spec.BuildEnv {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	for _, k := range names {
+		if !envKeyRE.MatchString(k) {
+			continue
+		}
+		keys = append(keys, k)
+		out = append(out, corev1.EnvVar{Name: "KUSO_BE_" + k, Value: b.Spec.BuildEnv[k]})
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	out = append(out, corev1.EnvVar{Name: "KUSO_BUILDENV_KEYS", Value: strings.Join(keys, " ")})
+	return out
 }
 
 // renderStaticPlanContainer runs the optional buildCmd in a builder
