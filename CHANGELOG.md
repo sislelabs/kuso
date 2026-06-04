@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.17] — 2026-06-04
+
+### ✨ Features
+- Feat(cluster-db): shared auth_query PgBouncer in front of the cluster Postgres ([6658273](https://github.com/sislelabs/kuso/commit/66582733cfee861c71579ab09a752f35387e0e53))
+
 ## [0.18.16] — 2026-06-04
 
 ### ✨ Features
@@ -359,11 +364,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(canvas): infer service→service edges from URL-named env keys ([f9ef9b1](https://github.com/sislelabs/kuso/commit/f9ef9b153396b19b84a92a0bc1bf31b9691f75e3))
-
-## [0.16.24] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(subscribed-addons): respect project prefix on conn-secret allow-list ([3f628e7](https://github.com/sislelabs/kuso/commit/3f628e73a1ace7c47fed83eb2438dc4813152089))
 
 
 ---
