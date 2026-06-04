@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.24] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(apply): resolve ${{ addon.KEY }} refs in pending mode (kuso apply) ([3f0a3ff](https://github.com/sislelabs/kuso/commit/3f0a3ff6fc52dc6e463ee061c8a68b762bd77fd9))
+
+### 📝 Docs
+- Docs(migration): build-env feature shipped (v0.18.23); 6 apps fully migrated ([36325f7](https://github.com/sislelabs/kuso/commit/36325f73c30e0ffaa37603655ef05e1c6a729c5a))
+
 ## [0.18.23] — 2026-06-04
 
 ### 🐛 Bug Fixes
@@ -362,11 +370,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(canvas+redeploy): env-aware build labels and branch-correct redeploy ([76d518b](https://github.com/sislelabs/kuso/commit/76d518b2c848ffb021d0ab63d677671f9b1e7053))
-
-## [0.17.2] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(previews): default baseEnv to production in legacy mode (B1 audit) ([fac5253](https://github.com/sislelabs/kuso/commit/fac5253407d7b516b92a20cbfe14914460aaad0a))
 
 
 ---
