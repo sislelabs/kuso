@@ -242,11 +242,15 @@ spec:
                     properties:
                       name: { type: string }
                       mountPath: { type: string }
-                      size: { type: string }
+                      # MUST match kube.KusoVolume json tags: sizeGi (int) +
+                      # accessMode (string). The schema previously declared
+                      # size (string) + accessModes (array), which the apiserver
+                      # PRUNED on write (structural schema, no preserve-unknown)
+                      # — so every PVC silently fell back to the chart default
+                      # (1Gi / ReadWriteOnce) regardless of what the user set.
+                      sizeGi: { type: integer }
                       storageClass: { type: string }
-                      accessModes:
-                        type: array
-                        items: { type: string }
+                      accessMode: { type: string }
                 displayName:
                   type: string
                   description: |

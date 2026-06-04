@@ -69,8 +69,11 @@ func (i *Issuer) Middleware(skip ...string) func(http.Handler) http.Handler {
 			// Revocation check after signature/expiry. Two probes
 			// (per-jti RevokedToken + per-user invalidation
 			// watermark) folded into one hook so the middleware
-			// doesn't grow a DB pool reference. Fail-open on checker
-			// error so a transient DB outage doesn't 401 every user.
+			// doesn't grow a DB pool reference. The checker fails
+			// CLOSED on error / cache miss (returns "revoked" → 401)
+			// — a transient DB outage must NOT silently un-revoke a
+			// previously revoked token. See the RevocationChecker type
+			// doc above and cmd/kuso-server/revocation.go.
 			if i.revoked != nil {
 				var iat time.Time
 				if claims.IssuedAt != nil {

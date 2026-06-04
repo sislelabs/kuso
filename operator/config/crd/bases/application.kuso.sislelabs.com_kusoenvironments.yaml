@@ -257,11 +257,14 @@ spec:
                     properties:
                       name: { type: string }
                       mountPath: { type: string }
-                      size: { type: string }
+                      # MUST match kube.KusoVolume json tags: sizeGi (int) +
+                      # accessMode (string). Previously size (string) +
+                      # accessModes (array) — pruned by the apiserver on write,
+                      # so PVCs silently rendered 1Gi / ReadWriteOnce. See the
+                      # KusoService CRD for the full explanation.
+                      sizeGi: { type: integer }
                       storageClass: { type: string }
-                      accessModes:
-                        type: array
-                        items: { type: string }
+                      accessMode: { type: string }
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

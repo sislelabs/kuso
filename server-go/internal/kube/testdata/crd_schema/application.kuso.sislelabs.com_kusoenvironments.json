@@ -269,11 +269,8 @@
             "description": "Persistent volumes to mount into the env's pod. Same shape as KusoService.spec.volumes; declared explicitly so the apiserver doesn't prune them.",
             "items": {
               "properties": {
-                "accessModes": {
-                  "items": {
-                    "type": "string"
-                  },
-                  "type": "array"
+                "accessMode": {
+                  "type": "string"
                 },
                 "mountPath": {
                   "type": "string"
@@ -281,8 +278,8 @@
                 "name": {
                   "type": "string"
                 },
-                "size": {
-                  "type": "string"
+                "sizeGi": {
+                  "type": "integer"
                 },
                 "storageClass": {
                   "type": "string"
