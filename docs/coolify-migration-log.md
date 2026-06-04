@@ -223,3 +223,34 @@ Two more root causes found + fixed after the env-ref work:
 RESULT: all 13 migrated app pods Running 1/1. db-masterclass verified end to
 end: `prisma migrate deploy` → "No pending migrations" → "Ready" — it reaches
 its per-project DB through the pooler. The DB-connectivity chain works.
+
+
+## END-TO-END TEST RESULTS (full verification)
+
+11 of 14 apps fully working end-to-end. The 3 not-running are app-specific
+BUILD failures (not migration/kuso): berivangold + berivangold-dev (pnpm
+--frozen-lockfile mismatch in the repo), kutiq (Next.js evaluates the Stripe
+webhook route at build — needs force-dynamic in the repo).
+
+Per working app, verified:
+- DB DATA: table-count parity vs the Coolify source DB (jira_mudira 39,
+  db_masterclass 10, produktche 14, ilikata 8, bukvite30 25, + row-count parity
+  confirmed at migrate time, e.g. jira-mudira Issue=666 Activity=2648).
+- API↔DB: a client using the app's exact conn secret connects through
+  kuso-instance-pg-pooler:6432 as the per-project role and queries real data
+  (jira-mudira Issue=666). All 10 DB-backed apps: ✓ DB reachable via pooler.
+- App pods: all 11 Running 1/1, ready, 0 runtime DB errors (after netpolicy +
+  fresh restart).
+- FRONTEND/HTTP: all 11 serve on their kuso host (web.<project>.kuso.sislelabs.com)
+  — HTTP 200 / 307 (auth redirect), no 5xx.
+
+Domain-display bug FIXED (web): project card now falls back to the detected
+frontend service's default host when there's no baseDomain/custom domain
+(was showing a blank domain row for every migrated app).
+
+## REMAINING WORK
+- 3 build-failing apps need repo-side fixes (lockfile / stripe route) — app
+  owner's call, not kuso.
+- Phase 3 compose apps (s3, analiz) — not started.
+- Domains/DNS cutover — out of scope per instruction.
+- Follow-ups #46 (PVC drift), #47 (role ownership grant) — non-blocking.
