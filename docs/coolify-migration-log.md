@@ -81,6 +81,39 @@ object ownership, or offer a managed dump-load path. (tracked)
 jira-mudira app VERIFIED end-to-end: build succeeded → production pod Running
 1/1 → Next.js "Ready" → queries its DB through the pooler. Full pipeline works.
 
+### BLOCKER (needs a decision): kuso has no build-time env injection
+
+3 of 6 builds FAILED (db-masterclass, produktche, ilikata) — all with the same
+cause: `npm run build` runs Prisma/Next config that needs DATABASE_URL (and
+other vars) **at build time**. In Coolify every env var was `is_buildtime:true`
+(baked into the build). In kuso, env vars are RUNTIME-only (envFrom secretKeyRef
++ literal env on the deployment); the build job does NOT receive the service's
+env vars as build args at all. So any app that touches env during `build`
+(Prisma generate, Next.js env validation, etc.) fails to build.
+
+- Unaffected: apps whose build doesn't read env — jira-mudira ✓, boiler-code ✓.
+- Affected so far: db-masterclass, produktche, ilikata (and likely more of the
+  remaining nixpacks apps: berivangold, kutiq, newsletterite, etc.).
+
+These apps are otherwise fully migrated (project, service, cluster-DB addon,
+DATA loaded + ownership-fixed, env set) — ONLY the build step fails.
+
+**Decision needed (paused here):** how to give builds their env.
+  (a) Build a kuso feature: inject service env vars as build args / a build-time
+      env file into the build job (resolve `${{ refs }}` at build too). The
+      correct, general fix — but a real feature (security note: build-time
+      secrets get baked into image layers) needing its own design+TDD+ship.
+  (b) Per-app: set a dummy/literal build-time DATABASE_URL (won't work — kuso
+      passes NO env to builds today, so even a literal doesn't reach the build).
+  (c) Defer the build-time-env apps; finish the build-clean apps now.
+
+Migrated + build-OK (2): jira-mudira, boiler-code-landing.
+Migrated, data+config done, build BLOCKED (3): db-masterclass, produktche,
+ilikata. (bukvite30 build was 'running' at pause — likely same failure, it's a
+Next.js app.) Remaining not yet started: berivangold(×2), kutiq, newsletterite,
+vibe-detector, junior-accelerator-web, junior-accelerator-ship, s3-web; Phase 3
+compose: s3, analiz.
+
 ## Event log
 
 - 2026-06-04: research complete; pooler design approved; Coolify host access
