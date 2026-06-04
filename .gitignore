@@ -72,3 +72,4 @@ server-go/internal/web/dist/*
 
 # Local development worktrees (superpowers)
 .worktrees/
+migration/
