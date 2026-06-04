@@ -133,6 +133,55 @@ REMAINING to migrate: berivangold (main+develop), kutiq (has Redis),
 newsletterite, vibe-detector, junior-accelerator-web, junior-accelerator-ship,
 s3-web. Phase 3 compose: s3, analiz.
 
+### FINAL STATE (end of autonomous session)
+
+ALL 14 non-compose apps migrated: project + service + cluster-DB addon (pooler)
++ DATA loaded with verified row-count parity + env kusified. Build outcomes:
+11/14 build+deploy OK; 3 fail on APP-SPECIFIC build issues (NOT kuso/migration):
+  - berivangold (×2): `pnpm install --frozen-lockfile` lockfile mismatch (repo).
+  - kutiq: Next.js "Failed to collect page data for /api/webhooks/stripe"
+    (Stripe route evaluated at build — needs force-dynamic in the repo).
+
+Shipped 5 kuso features/fixes this session (v0.18.18→v0.18.24): cluster-DB
+pooler (auth_query); build-time env injection; nixpacks toolchain env;
+build-env key injection-hardening; apply pending-ref resolution.
+
+### OPEN BUG (blocks DB apps at runtime) — needs investigation
+
+Production env CRs keep DATABASE_URL as the LITERAL `${{ db.DATABASE_URL }}`
+instead of a secretKeyRef, so DB-backed apps crash at boot
+(Prisma "scheme not recognized" / P1012). Root-caused the apply path
+(SetEnv used AllowPending=false → fixed in v0.18.24 with SetEnvPending), and
+the SERVICE spec now resolves to a secretKeyRef after re-apply — BUT the
+production ENV CR still shows the literal. So service→env propagation
+(propagateChangedToEnvs) is NOT carrying the resolved secretKeyRef to the
+production env (which is what the pod uses).
+Apps Running with this bug haven't hit a DB query yet; they'll fail on first
+query. Conn secrets + data are correct; only the env-ref wiring on the env CR
+is wrong.
+
+ROOT CAUSE PINPOINTED: propagate.go:159-169 `resolveSharedEnvKeysForEnv`
+merges the service envVars (now a resolved secretKeyRef after the v0.18.24 fix)
+with `env.Spec.EnvVars` "preserving per-env overrides" (line 163). The
+production env's pre-existing LITERAL `${{ db.DATABASE_URL }}` — seeded at
+AddService time BEFORE the conn secret existed — is treated as a per-env
+override and KEPT, shadowing the service's resolved secretKeyRef. So the env
+never picks up the fix even though the SERVICE spec is now correct.
+Verified: service spec = secretKeyRef; production env = literal.
+
+FIX (small, targeted, needs choosing — not rushed at session end):
+  (a) In the env merge, treat an unresolved `${{ }}` literal env value as NOT a
+      real override — re-resolve/replace it from the service's resolved value; OR
+  (b) AddService resolves refs with AllowPending so the production env is never
+      seeded with a raw literal to begin with.
+Option (b) is cleaner (fixes the seed, not the symptom).
+
+QUICK MANUAL UNBLOCK before the code fix: clear the stale literal on each
+production env (env-scoped editor) or delete+recreate the production env so the
+service's secretKeyRef propagates cleanly.
+
+### NOT STARTED: Phase 3 compose apps (s3, analiz).
+
 ## Event log
 
 - 2026-06-04: research complete; pooler design approved; Coolify host access
