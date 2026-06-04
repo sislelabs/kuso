@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.32] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): nixpacks build-env values with spaces no longer break the build ([a287a4e](https://github.com/sislelabs/kuso/commit/a287a4e9281b2dd7457e4fe49bb2ee7d67a4c697))
+
+### 📝 Docs
+- Docs(migration): log NODE_ENV + dockerfile build-env fixes, full re-verify ([4bc6fb3](https://github.com/sislelabs/kuso/commit/4bc6fb3f1c295c9ff8d20d8059c724817574b352))
+
 ## [0.18.31] — 2026-06-04
 
 ### 🐛 Bug Fixes
@@ -375,11 +383,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(projects): kuso project delete --purge-data ([3da1299](https://github.com/sislelabs/kuso/commit/3da1299768ba29bd7f742c2593c6bb4f69706967))
-
-## [0.17.10] — 2026-05-29
-
-### ✨ Features
-- Feat(cli): kuso service set --path / --branch ([4e2de50](https://github.com/sislelabs/kuso/commit/4e2de504cc06db5052b8049343b1236a467c3d04))
 
 
 ---
