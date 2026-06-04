@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.21] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): inject build-time env in the REAL renderer (buildcontroller, not the dead chart) ([62bc4fb](https://github.com/sislelabs/kuso/commit/62bc4fb47c2faadc23289bc1946d2c1e4852e76a))
+
 ## [0.18.20] — 2026-06-04
 
 ### 🐛 Bug Fixes
@@ -368,11 +373,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(previews/web): hash-route reviewer page so kuso/web static-export builds ([8d4b146](https://github.com/sislelabs/kuso/commit/8d4b1465a10c4c207bd174e04e1f2ccb44a36527))
-
-## [0.16.27] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(propagate): drop env's shared-secret refs when a per-env override exists ([1d75716](https://github.com/sislelabs/kuso/commit/1d757164fd80ae9937c38e99b799746469f7e9ce))
 
 
 ---
