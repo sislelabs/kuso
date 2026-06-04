@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.28] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(env): explicit per-env override marker stops stale seeds shadowing service ([c98c47e](https://github.com/sislelabs/kuso/commit/c98c47e3306ca63346e9b9b601c8fd9aab65edf0))
+
 ## [0.18.27] — 2026-06-04
 
 ### 🐛 Bug Fixes
@@ -372,11 +377,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(cli): kuso run --follow; fix(previews): drop service-name guessing ([633ade5](https://github.com/sislelabs/kuso/commit/633ade51ab34879a9330721c358d3387801efb7a))
-
-## [0.17.6] — 2026-05-29
-
-### 🐛 Bug Fixes
-- Fix(previews): break addon-clone idempotency loop ([d070e4c](https://github.com/sislelabs/kuso/commit/d070e4caf75c6b9c88888fa72579407b94c89654))
 
 
 ---
