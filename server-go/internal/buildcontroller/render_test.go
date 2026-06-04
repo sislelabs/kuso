@@ -470,3 +470,28 @@ func TestNixpacksContainerInjectsBuildEnv(t *testing.T) {
 		t.Error("nixpacks script does not consume KUSO_BUILDENV_KEYS")
 	}
 }
+
+// TestNixpacksBuildEnvFlagsAreWordSplitSafe is the regression test for the
+// "RESEND_FROM=Name <email>" build failure. A build-env VALUE containing a
+// space was concatenated into a NIXPACKS_ENV_FLAGS string and passed
+// UNQUOTED to `nixpacks build . --out . $NIXPACKS_ENV_FLAGS`, so the value
+// word-split and `<email>` was parsed as a stray nixpacks argument
+// (exit 2). The fix builds the --env flags as positional params (set --)
+// and passes "$@", so each --env KEY=VALUE stays one argv pair regardless
+// of spaces in VALUE. Assert the unsafe unquoted-expansion pattern is gone.
+func TestNixpacksBuildEnvFlagsAreWordSplitSafe(t *testing.T) {
+	b := &kube.KusoBuild{Spec: kube.KusoBuildSpec{
+		Strategy: "nixpacks",
+		BuildEnv: map[string]string{"RESEND_FROM": "Bozhidar <bozhidar@launchpaid.app>"},
+	}}
+	c := renderNixpacksPlanContainer(b)
+	script := c.Args[0]
+	// The unquoted word-splitting form must NOT be present.
+	if strings.Contains(script, "--out . $NIXPACKS_ENV_FLAGS") {
+		t.Error("nixpacks build still uses unquoted $NIXPACKS_ENV_FLAGS — a value with spaces will word-split")
+	}
+	// The safe positional-param form must be present.
+	if !strings.Contains(script, `nixpacks build . --out . "$@"`) {
+		t.Error("nixpacks build does not pass env flags via quoted \"$@\"")
+	}
+}

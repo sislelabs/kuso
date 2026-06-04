@@ -527,9 +527,17 @@ if [ -f .sdkmanrc ]; then
 fi
 
 echo "running nixpacks build --out ."
-NIXPACKS_ENV_FLAGS=""
+# Accumulate the --env flags as POSITIONAL PARAMS (set --) rather than a
+# space-joined string. A build-env VALUE containing spaces (e.g.
+# RESEND_FROM="Name <addr>") would word-split out of an unquoted string and
+# nixpacks would parse the trailing token as a stray argument (exit 2). With
+# set -- / "$@", each --env KEY=VALUE stays exactly two argv tokens and the
+# VALUE survives intact regardless of spaces/metachars.
+set --
+# Toolchain hints (EXTRA_ENVS) are kuso-generated KEY=VALUE pairs with no
+# spaces, but route them through the same safe path for uniformity.
 for env_pair in $EXTRA_ENVS; do
-  NIXPACKS_ENV_FLAGS="$NIXPACKS_ENV_FLAGS --env $env_pair"
+  set -- "$@" --env "$env_pair"
 done
 # Pass the service's build-time env to nixpacks two ways:
 #  1. --env KEY=VALUE so the value is available to build commands, AND
@@ -546,13 +554,12 @@ for k in $KUSO_BUILDENV_KEYS; do
     *" $k "*) continue ;;
   esac
   kv="$(printenv "KUSO_BE_${k}")"
-  NIXPACKS_ENV_FLAGS="$NIXPACKS_ENV_FLAGS --env ${k}=${kv}"
+  set -- "$@" --env "${k}=${kv}"
   case "$k" in
     NIXPACKS_*) export "${k}=${kv}"; echo "  export ${k}" ;;
   esac
 done
-# shellcheck disable=SC2086
-nixpacks build . --out . $NIXPACKS_ENV_FLAGS
+nixpacks build . --out . "$@"
 
 # ENV lines to inject after the FROM line. Toolchain hints (EXTRA_ENVS,
 # KEY=VALUE form) first; then the service's build-time env. The latter
