@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.29] — 2026-06-04
+
+### ✨ Features
+- Feat(projects): per-user starring + folders + equal-height cards ([afd3002](https://github.com/sislelabs/kuso/commit/afd300225d8417fec930c48c2c3e29cd9fd6b05b))
+
 ## [0.18.28] — 2026-06-04
 
 ### 🐛 Bug Fixes
@@ -372,11 +377,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(previews): scope addons via canonical env label, not bespoke marker ([d651fec](https://github.com/sislelabs/kuso/commit/d651fecbce6a7c7bd2c059f260863870cc9461ca))
-
-## [0.17.7] — 2026-05-29
-
-### ✨ Features
-- Feat(cli): kuso run --follow; fix(previews): drop service-name guessing ([633ade5](https://github.com/sislelabs/kuso/commit/633ade51ab34879a9330721c358d3387801efb7a))
 
 
 ---
