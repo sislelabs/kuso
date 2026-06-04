@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.33] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(crd): align volume schema field names with KusoVolume (sizeGi/accessMode) ([33a81d3](https://github.com/sislelabs/kuso/commit/33a81d3c15c8fc66a65a1fd0ad3d784f20b16a7b))
+
 ## [0.18.32] — 2026-06-04
 
 ### 🐛 Bug Fixes
@@ -378,11 +383,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(projects): purge-data must also sweep StatefulSet-generated PVCs ([e3239ba](https://github.com/sislelabs/kuso/commit/e3239bad89132470ed0cd8142327c356c3192c06))
-
-## [0.17.11] — 2026-05-29
-
-### ✨ Features
-- Feat(projects): kuso project delete --purge-data ([3da1299](https://github.com/sislelabs/kuso/commit/3da1299768ba29bd7f742c2593c6bb4f69706967))
 
 
 ---
