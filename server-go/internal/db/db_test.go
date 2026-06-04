@@ -31,7 +31,7 @@ func openTestDB(t *testing.T) *DB {
 		TRUNCATE TABLE
 			"_PermissionToToken", "_PermissionToRole", "_UserToUserGroup",
 			"InviteRedemption", "Invite",
-			"NotificationOutbox", "NotificationEvent", "BuildLog", "BuildRecord", "AlertRule",
+			"NotificationOutbox", "NotificationEvent", "BuildLog", "BuildRecord", "AlertRule", "UserProjectPref",
 			"NodeMetric", "LogLine", "SSHKey",
 			"OAuthState", "ErrorEvent", "ErrorScannerState",
 			"Audit", "Token", "Permission",

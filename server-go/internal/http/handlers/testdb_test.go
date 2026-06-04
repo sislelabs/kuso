@@ -36,7 +36,7 @@ func openHandlerTestDB(t *testing.T) *db.DB {
 		TRUNCATE TABLE
 			"_PermissionToToken", "_PermissionToRole", "_UserToUserGroup",
 			"InviteRedemption", "Invite",
-			"NotificationEvent", "BuildLog", "BuildRecord", "AlertRule",
+			"NotificationEvent", "BuildLog", "BuildRecord", "AlertRule", "UserProjectPref",
 			"NodeMetric", "LogLine", "SSHKey",
 			"NodeBootstrapToken",
 			"OAuthState", "ErrorEvent", "ErrorScannerState",

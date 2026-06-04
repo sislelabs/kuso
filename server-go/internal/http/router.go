@@ -398,6 +398,12 @@ func mountAuthenticatedRoutes(
 			}
 			projH.Mount(r)
 		}
+		// Per-user project preferences (starring + folders for the
+		// projects grid). DB-backed; scoped to the JWT user.
+		if d.DB != nil {
+			prefsH := &httphandlers.UserPrefsHandler{DB: d.DB, Logger: d.Logger}
+			prefsH.Mount(r)
+		}
 		if d.Secrets != nil {
 			secH := &httphandlers.SecretsHandler{Svc: d.Secrets, DB: d.DB, Audit: d.Audit, Logger: d.Logger}
 			secH.Mount(r)

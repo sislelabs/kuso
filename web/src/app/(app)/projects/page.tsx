@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useProjects } from "@/features/projects";
 import { useInstallations } from "@/features/github";
 import { useCan, Perms } from "@/features/auth";
+import { useProjectPrefs, useSetProjectPref } from "@/features/userprefs";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
-import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, MemoryStick, Settings } from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, MemoryStick, Settings, Star, FolderPlus, Folder, ChevronDown } from "lucide-react";
 import { relativeTime } from "@/lib/format";
 import { useQueries } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
@@ -339,6 +341,19 @@ function ProjectsGrid({
   // Gates the per-card settings shortcut — only instance admins manage
   // project settings.
   const canManage = useCan(Perms.SettingsAdmin);
+  // Per-user grid prefs: starred projects pin to the top, folders group
+  // the rest. byProject is a Map for O(1) per-card lookup.
+  const { byProject: prefs } = useProjectPrefs();
+  const setPref = useSetProjectPref();
+  // Known folder labels across the user's prefs — offered in each card's
+  // "move to folder" menu so filing into an existing folder is one click.
+  const knownFolders = Array.from(
+    new Set(
+      Array.from(prefs.values())
+        .map((p) => p.folder)
+        .filter((f): f is string => !!f)
+    )
+  ).sort((a, b) => a.localeCompare(b));
   const queries = useQueries({
     queries: projects.map((p) => ({
       queryKey: ["projects", p.metadata.name, "describe-summary"],
@@ -360,10 +375,15 @@ function ProjectsGrid({
       staleTime: 25_000,
     })),
   });
-  return (
-    <ul className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-      {projects.map((p, i) => {
+  // Build one rendered <li> per project, tagged with its star/folder
+  // state so we can group them into sections below without recomputing
+  // the per-card data (which is indexed off the queries arrays by
+  // position).
+  const cards = projects.map((p, i) => {
         const name = p.metadata.name;
+        const pref = prefs.get(name);
+        const starred = pref?.starred ?? false;
+        const folder = pref?.folder ?? "";
         const created = p.metadata.creationTimestamp
           ? relativeTime(p.metadata.creationTimestamp)
           : null;
@@ -461,8 +481,8 @@ function ProjectsGrid({
           return pick(anyWithDomain);
         })();
         const metrics = metricQueries[i]?.data;
-        return (
-          <li key={p.metadata.uid ?? name}>
+        const node = (
+          <li key={p.metadata.uid ?? name} className="h-full">
             {/* Card layout: the whole card is one big <Link> into
                 kuso, with nested clickable bits (the external domain
                 row) escaped via pointer-events. We previously used an
@@ -473,8 +493,12 @@ function ProjectsGrid({
                 pointer-events-none on the link overlay's content, and
                 pointer-events-auto on the one nested <a> that needs
                 its own click. The overlay <Link> stays at z-10
-                covering the whole card. */}
-            <div className="group relative cursor-pointer rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40">
+                covering the whole card.
+
+                h-full + flex-col makes every card fill its grid row so
+                cards in the same row are equal height regardless of how
+                many body rows (description, addons, metrics) they have. */}
+            <div className="group relative flex h-full cursor-pointer flex-col rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-4 transition-colors hover:border-[var(--border-strong)] hover:bg-[var(--bg-tertiary)]/40">
               <Link
                 href={`/projects/${name}`}
                 aria-label={`Open project ${name}`}
@@ -499,6 +523,41 @@ function ProjectsGrid({
                     )}
                   </div>
                   <div className="flex shrink-0 items-center gap-1.5">
+                    {/* Star toggle — pins this project to the top
+                        "Starred" section of the grid. pointer-events-auto
+                        + z-30 so it acts on itself, not the card link.
+                        Starred state shows a filled amber star. */}
+                    <button
+                      type="button"
+                      aria-label={starred ? `Unstar ${name}` : `Star ${name}`}
+                      aria-pressed={starred}
+                      title={starred ? "Unstar" : "Star"}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setPref.mutate({ project: name, starred: !starred, folder });
+                      }}
+                      className="pointer-events-auto relative z-30 inline-flex h-6 w-6 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                    >
+                      <Star
+                        className={
+                          "h-3.5 w-3.5 " +
+                          (starred ? "fill-amber-400 text-amber-400" : "")
+                        }
+                      />
+                    </button>
+                    {/* Move-to-folder menu (Popover, NOT dropdown-menu —
+                        base-ui Menu has a hydration edge case in our
+                        static export; see CLAUDE.md). Lists existing
+                        folders + "New folder…" + "Remove from folder". */}
+                    <FolderMenu
+                      project={name}
+                      currentFolder={folder}
+                      knownFolders={knownFolders}
+                      onPick={(nextFolder) =>
+                        setPref.mutate({ project: name, starred, folder: nextFolder })
+                      }
+                    />
                     {/* Settings shortcut. Sits above the overlay <Link>
                         (pointer-events-auto + higher z) so it navigates
                         to the project's settings instead of the card's
@@ -619,7 +678,190 @@ function ProjectsGrid({
             </div>
           </li>
         );
-      })}
+        return { name, starred, folder, node };
+      });
+
+  // Group the cards into sections: Starred (pinned to top), then each
+  // folder alphabetically, then Unfiled. Within a section cards keep the
+  // incoming alphabetical order. A starred project shows ONLY in Starred
+  // (its folder is still recorded, just not double-listed) so the top
+  // section is the user's true shortlist.
+  const starredCards = cards.filter((c) => c.starred);
+  const unstarred = cards.filter((c) => !c.starred);
+  const folderNames = Array.from(
+    new Set(unstarred.map((c) => c.folder).filter((f) => f !== ""))
+  ).sort((a, b) => a.localeCompare(b));
+  const unfiledCards = unstarred.filter((c) => c.folder === "");
+
+  const grid = (items: typeof cards) => (
+    <ul className="grid items-stretch gap-3 sm:grid-cols-2 lg:grid-cols-3">
+      {items.map((c) => c.node)}
     </ul>
+  );
+
+  // No prefs at all → the original flat grid, no section chrome.
+  const hasSections = starredCards.length > 0 || folderNames.length > 0;
+  if (!hasSections) return grid(cards);
+
+  return (
+    <div className="space-y-6">
+      {starredCards.length > 0 && (
+        <Section
+          icon={<Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />}
+          label="Starred"
+          count={starredCards.length}
+        >
+          {grid(starredCards)}
+        </Section>
+      )}
+      {folderNames.map((fname) => {
+        const items = unstarred.filter((c) => c.folder === fname);
+        return (
+          <Section
+            key={fname}
+            icon={<Folder className="h-3.5 w-3.5" />}
+            label={fname}
+            count={items.length}
+          >
+            {grid(items)}
+          </Section>
+        );
+      })}
+      {unfiledCards.length > 0 && (
+        <Section label="Unfiled" count={unfiledCards.length} muted>
+          {grid(unfiledCards)}
+        </Section>
+      )}
+    </div>
+  );
+}
+
+// Section is a collapsible group header + its card grid. Used to render
+// the Starred / per-folder / Unfiled groupings on the projects page.
+// Collapse state is local (per-session) — folder identity already
+// persists server-side; whether a section is open is ephemeral UI.
+function Section({
+  icon,
+  label,
+  count,
+  muted,
+  children,
+}: {
+  icon?: React.ReactNode;
+  label: string;
+  count: number;
+  muted?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <section>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={
+          "mb-2 flex w-full items-center gap-1.5 text-[11px] font-medium uppercase tracking-widest " +
+          (muted ? "text-[var(--text-tertiary)]" : "text-[var(--text-secondary)]")
+        }
+      >
+        <ChevronDown
+          className={"h-3 w-3 transition-transform " + (open ? "" : "-rotate-90")}
+          aria-hidden
+        />
+        {icon}
+        <span>{label}</span>
+        <span className="text-[var(--text-tertiary)]">{count}</span>
+      </button>
+      {open && children}
+    </section>
+  );
+}
+
+// FolderMenu is the per-card "move to folder" Popover. Lists existing
+// folders for one-click filing, plus inline "new folder" entry and a
+// "remove from folder" affordance when the card is already filed.
+function FolderMenu({
+  project,
+  currentFolder,
+  knownFolders,
+  onPick,
+}: {
+  project: string;
+  currentFolder: string;
+  knownFolders: string[];
+  onPick: (folder: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [newName, setNewName] = useState("");
+  const pick = (folder: string) => {
+    onPick(folder);
+    setOpen(false);
+    setNewName("");
+  };
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        aria-label={`Organize ${project}`}
+        title="Move to folder"
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+        }}
+        className={
+          "pointer-events-auto relative z-30 inline-flex h-6 w-6 items-center justify-center rounded-md hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] " +
+          (currentFolder ? "text-[var(--text-secondary)]" : "text-[var(--text-tertiary)]")
+        }
+      >
+        {currentFolder ? <Folder className="h-3.5 w-3.5" /> : <FolderPlus className="h-3.5 w-3.5" />}
+      </PopoverTrigger>
+      <PopoverContent
+        align="end"
+        className="w-52 p-1"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <p className="px-2 py-1.5 text-[10px] font-medium uppercase tracking-widest text-[var(--text-tertiary)]">
+          Move to folder
+        </p>
+        {knownFolders.map((f) => (
+          <button
+            key={f}
+            type="button"
+            onClick={() => pick(f)}
+            className={
+              "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] hover:bg-[var(--bg-tertiary)] " +
+              (f === currentFolder ? "text-[var(--accent)]" : "text-[var(--text-primary)]")
+            }
+          >
+            <Folder className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">{f}</span>
+            {f === currentFolder && <span className="ml-auto text-[10px]">✓</span>}
+          </button>
+        ))}
+        {currentFolder && (
+          <button
+            type="button"
+            onClick={() => pick("")}
+            className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-[13px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)]"
+          >
+            Remove from folder
+          </button>
+        )}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            const v = newName.trim();
+            if (v) pick(v);
+          }}
+          className="mt-1 border-t border-[var(--border-subtle)] p-1.5"
+        >
+          <input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            placeholder="New folder…"
+            className="w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1 text-[13px] text-[var(--text-primary)] outline-none focus:border-[var(--accent)]"
+          />
+        </form>
+      </PopoverContent>
+    </Popover>
   );
 }
