@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.23] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): export NIXPACKS_* build-env into nixpacks process env (toolchain selection) ([e1af453](https://github.com/sislelabs/kuso/commit/e1af45347cf149e6f67e2fe3721642733e612033))
+
 ## [0.18.22] — 2026-06-04
 
 ### 🐛 Bug Fixes
@@ -362,13 +367,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(previews): default baseEnv to production in legacy mode (B1 audit) ([fac5253](https://github.com/sislelabs/kuso/commit/fac5253407d7b516b92a20cbfe14914460aaad0a))
-
-## [0.17.1] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(v0.17.1): secrets locking, missing-key warnings, env-var cascade tests ([81a0693](https://github.com/sislelabs/kuso/commit/81a069355a3971ddd3db3775ad2039694add538e))
-- Fix(v0.17.0 audit): subscription wiring, env-scoped refs, canvas accuracy ([97d3d82](https://github.com/sislelabs/kuso/commit/97d3d82de24916130a0aea0074a30d3d1106da07))
-- Fix(rollback): env-scoped rollback (B1.1) ([d7272dc](https://github.com/sislelabs/kuso/commit/d7272dc3ab4cb3ae6a7a51fbe0ae87fe1a664bbc))
 
 
 ---
