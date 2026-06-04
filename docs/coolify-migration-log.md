@@ -248,9 +248,39 @@ Domain-display bug FIXED (web): project card now falls back to the detected
 frontend service's default host when there's no baseDomain/custom domain
 (was showing a blank domain row for every migrated app).
 
+## ENV-PROPAGATION BUG FIXED (v0.18.28) — "jira-mudira redirected to ticketmaster"
+
+Root cause: AddService seeds the production KusoEnvironment's spec.envVars with
+a full copy of the service's envVars. extractEnvOnlyOverrides then guessed
+"deliberate per-env override" vs "inherited seed" purely by value-difference —
+so once a service value changed, the stale seed differed and was re-applied
+forever, and the service edit could never reach the env. jira-mudira kept the
+old AUTH_URL/NEXT_PUBLIC_APP_URL (ticketmaster.sisle.org) on the env while the
+service had the correct kuso host.
+
+Fix: explicit marker KusoEnvironment.spec.envOverrides — the var NAMES the user
+deliberately pinned via the per-env scoped editor. Propagation re-stamps every
+service-owned var EXCEPT the marked ones. Drifted seeds (unmarked) drop and
+re-stamp from the service; genuine overrides (marked) survive. Verified live:
+(1) service edit now reaches the env (URLs re-stamped to web.jira-mudira),
+(2) a scoped-editor override survives a conflicting service edit. CRD field
+added + applied to the cluster. Preview-env path also fixed (Bug 5, found in
+review): preview rewrote literal URLs to per-PR hosts but didn't mark them, so
+a service propagation would have wiped them back to prod URLs — now marked.
+
+Cluster audit at fix time: 0 drifted seeds (jira-mudira was the only one,
+already corrected), 304 benign matching seeds that re-stamp identically.
+
+## PROJECTS GRID: starring + folders + equal-height cards (v0.18.29)
+Per-user: star to pin to top, file into folders (collapsible sections),
+cards equal-height in a row. Server-side prefs (UserProjectPref, migration
+0003) so the layout follows the user across devices. Not migration work —
+shipped alongside.
+
 ## REMAINING WORK
 - 3 build-failing apps need repo-side fixes (lockfile / stripe route) — app
   owner's call, not kuso.
-- Phase 3 compose apps (s3, analiz) — not started.
+- Phase 3 compose apps (s3, analiz) — not started (#45).
 - Domains/DNS cutover — out of scope per instruction.
-- Follow-ups #46 (PVC drift), #47 (role ownership grant) — non-blocking.
+- Follow-ups #46 (PVC drift), #47 (role ownership grant), #51 (kusoenvironment
+  CRD volumes schema field-name mismatch — latent, 0 live volumes) — non-blocking.
