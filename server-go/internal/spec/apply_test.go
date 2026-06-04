@@ -239,7 +239,7 @@ func (f *fakeProjects) DeleteService(_ context.Context, _, service string) error
 	return nil
 }
 
-func (f *fakeProjects) SetEnv(_ context.Context, project, service string, envVars []projects.EnvVar) error {
+func (f *fakeProjects) SetEnvPending(_ context.Context, project, service string, envVars []projects.EnvVar) error {
 	f.envSet = append(f.envSet, projectsEnvCall{project: project, service: service, envVars: envVars})
 	return nil
 }

@@ -1112,6 +1112,16 @@ func (s *Service) SetEnv(ctx context.Context, project, service string, envVars [
 	return s.SetEnvWithOpts(ctx, project, service, envVars, SetEnvOpts{})
 }
 
+// SetEnvPending is SetEnv with AllowPending — for declarative `kuso apply`,
+// where an env can reference an addon being provisioned in the SAME apply
+// (its conn Secret doesn't exist yet). A strict SetEnv would keep the
+// `${{ addon.KEY }}` ref as a broken literal (the pod then gets the literal
+// string as its value and crashes); pending mode emits a speculative
+// secretKeyRef that resolves once the conn Secret lands.
+func (s *Service) SetEnvPending(ctx context.Context, project, service string, envVars []EnvVar) error {
+	return s.SetEnvWithOpts(ctx, project, service, envVars, SetEnvOpts{AllowPending: true})
+}
+
 // SetEnvWithOpts is the variant that threads strictness through to
 // the var-ref rewriter.
 //

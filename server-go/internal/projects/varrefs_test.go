@@ -232,3 +232,41 @@ func TestFormatVarRef(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// TestRewriteEnvVar_AllowPendingSpeculativeSecretRef is the regression test
+// for the kuso-apply migration bug: a `${{ db.DATABASE_URL }}` ref to an addon
+// whose conn Secret doesn't exist yet (provisioned async in the same apply)
+// must become a speculative secretKeyRef in pending mode — NOT be left as a
+// literal string (which the pod would receive verbatim, crashing Prisma with
+// "scheme not recognized"). This is what SetEnvPending (used by apply) relies
+// on.
+func TestRewriteEnvVar_AllowPendingSpeculativeSecretRef(t *testing.T) {
+	// No addon resolver match (conn secret not created yet) + AllowPending.
+	noAddon := func(string) (string, bool) { return "", false }
+	out, err := RewriteEnvVarWithOpts(
+		EnvVar{Name: "DATABASE_URL", Value: "${{ db.DATABASE_URL }}"},
+		nil, noAddon, RewriteOpts{AllowPending: true},
+	)
+	if err != nil {
+		t.Fatalf("AllowPending should not error on a pending addon ref: %v", err)
+	}
+	if out.Value != "" {
+		t.Errorf("pending ref must NOT stay a literal value, got %q", out.Value)
+	}
+	if out.ValueFrom == nil {
+		t.Fatalf("pending ref must emit a speculative secretKeyRef, got nil valueFrom")
+	}
+	ref, _ := out.ValueFrom["secretKeyRef"].(map[string]any)
+	if ref == nil || ref["key"] != "DATABASE_URL" {
+		t.Errorf("speculative secretKeyRef wrong: %+v", out.ValueFrom)
+	}
+
+	// Strict mode (apply's OLD behaviour) errors instead — proving the
+	// distinction the fix turns on.
+	if _, err := RewriteEnvVarWithOpts(
+		EnvVar{Name: "DATABASE_URL", Value: "${{ db.DATABASE_URL }}"},
+		nil, noAddon, RewriteOpts{AllowPending: false},
+	); err == nil {
+		t.Error("strict mode should error on an unresolvable ref (the old apply bug kept it literal via a different path)")
+	}
+}

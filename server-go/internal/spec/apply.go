@@ -17,7 +17,7 @@ type projectsReconciler interface {
 	AddService(ctx context.Context, project string, req projects.CreateServiceRequest) (*kube.KusoService, error)
 	PatchService(ctx context.Context, project, service string, req projects.PatchServiceRequest) (*kube.KusoService, error)
 	DeleteService(ctx context.Context, project, service string) error
-	SetEnv(ctx context.Context, project, service string, envVars []projects.EnvVar) error
+	SetEnvPending(ctx context.Context, project, service string, envVars []projects.EnvVar) error
 }
 
 // addonsReconciler is the slice of addons.Service that Apply uses.
@@ -127,7 +127,7 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File) (*ApplyResu
 		// mapToEnvVars(nil) returns an empty slice and SetEnv applies
 		// that as a full replace (svc.Spec.EnvVars = []), so omitting
 		// env: clears existing vars rather than leaving them stale.
-		if err := r.Projects.SetEnv(ctx, f.Project, name, mapToEnvVars(desiredSvcs[name].Env)); err != nil {
+		if err := r.Projects.SetEnvPending(ctx, f.Project, name, mapToEnvVars(desiredSvcs[name].Env)); err != nil {
 			out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "env", Message: err.Error()})
 		}
 	}
@@ -141,7 +141,7 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File) (*ApplyResu
 		if len(desiredSvcs[name].Env) == 0 {
 			continue
 		}
-		if err := r.Projects.SetEnv(ctx, f.Project, name, mapToEnvVars(desiredSvcs[name].Env)); err != nil {
+		if err := r.Projects.SetEnvPending(ctx, f.Project, name, mapToEnvVars(desiredSvcs[name].Env)); err != nil {
 			out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "env", Message: err.Error()})
 		}
 	}
