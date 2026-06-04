@@ -1161,3 +1161,26 @@ func TestBuildEnvFromVars(t *testing.T) {
 		t.Errorf("reserved key PORT must be omitted from build env")
 	}
 }
+
+// TestBuildEnvFromVars_RejectsMaliciousKeys guards against shell/command
+// injection: build env keys are rendered into an `ENV <key> <value>` line in
+// the build job's shell, so a key with shell metacharacters could execute.
+// Only valid env-var identifiers ([A-Za-z_][A-Za-z0-9_]*) may pass.
+func TestBuildEnvFromVars_RejectsMaliciousKeys(t *testing.T) {
+	t.Parallel()
+	vars := []kube.KusoEnvVar{
+		{Name: "GOOD_KEY", Value: "ok"},
+		{Name: "BAD$(touch /pwned)", Value: "x"},
+		{Name: "BAD KEY", Value: "x"},
+		{Name: "BAD-KEY", Value: "x"},
+		{Name: "1STARTS_DIGIT", Value: "x"},
+		{Name: "BAD;rm", Value: "x"},
+	}
+	got := buildEnvFromVars(vars, func(string, string) (string, bool) { return "", false })
+	if got["GOOD_KEY"] != "ok" {
+		t.Errorf("valid key dropped: %v", got)
+	}
+	if len(got) != 1 {
+		t.Errorf("only GOOD_KEY should survive; got %v", got)
+	}
+}

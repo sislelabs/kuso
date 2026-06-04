@@ -2,11 +2,18 @@ package builds
 
 import (
 	"context"
+	"regexp"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/kube"
 )
+
+// envKeyRE is the standard POSIX env-var identifier. Build env keys are
+// rendered into an `ENV <key> <value>` line in the build job's shell, so a key
+// with shell metacharacters ($(...), ;, spaces) would be a command-injection
+// vector. Only valid identifiers may be injected — anything else is dropped.
+var envKeyRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // reservedBuildEnvKeys are kuso/kubelet-managed names that must never be
 // injected as build-time env — kuso owns them at runtime (PORT desyncs from
@@ -27,7 +34,7 @@ type secretLookup func(secret, key string) (string, bool)
 func buildEnvFromVars(vars []kube.KusoEnvVar, lookup secretLookup) map[string]string {
 	out := map[string]string{}
 	for _, v := range vars {
-		if v.Name == "" || reservedBuildEnvKeys[v.Name] {
+		if v.Name == "" || reservedBuildEnvKeys[v.Name] || !envKeyRE.MatchString(v.Name) {
 			continue
 		}
 		if v.Value != "" {

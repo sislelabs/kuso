@@ -32,6 +32,9 @@
               "type": "string"
             },
             "description": "Service env vars resolved to literals, baked into the image at build time (ENV-after-FROM). Set by the server from the service's envVars (secretKeyRefs resolved server-side). For apps that read env during build (Prisma, Next.js NEXT_PUBLIC_*). Values bake into image layers.",
+            "propertyNames": {
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
             "type": "object"
           },
           "buildpacks": {

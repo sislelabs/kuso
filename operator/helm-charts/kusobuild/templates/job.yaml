@@ -419,9 +419,14 @@ spec:
               {{- /* buildEnv: service env baked at build time. base64 the
                      value so arbitrary content (incl. newlines, quotes,
                      '=') round-trips through helm rendering + the shell. */}}
+              {{- /* Keys are validated server-side (env-identifier regex) and
+                     again here: skip any key with shell-unsafe chars as
+                     defense-in-depth, since this renders into a shell line. */}}
               {{- range $k, $v := .Values.buildEnv }}
+              {{- if regexMatch "^[A-Za-z_][A-Za-z0-9_]*$" $k }}
               be_v="$(printf '%s' {{ $v | b64enc | quote }} | base64 -d)"
               ENV_BLOCK="${ENV_BLOCK}ENV {{ $k }} ${be_v}\n"
+              {{- end }}
               {{- end }}
               if [ -n "$ENV_BLOCK" ]; then
                 awk -v block="$ENV_BLOCK" '
