@@ -240,6 +240,34 @@ func TestCoerceSSLMode(t *testing.T) {
 // Without this, a fresh boot would briefly flag the cluster PG as
 // down before the first Reconcile tick — the zero-snapshot guard
 // in GetStatus prevents that, and this test pins it.
+// TestInstanceAddonSpec_EnablesAuthQueryPooler pins the cluster-DB pooler
+// wiring: the instance PG addon CR must enable a pooler in auth_query mode so
+// projects can route their DATABASE_URL through PgBouncer (:6432) instead of
+// connecting direct. auth_query (not a static userlist) is required because the
+// cluster PG serves many per-project users that rotate as projects opt in.
+func TestInstanceAddonSpec_EnablesAuthQueryPooler(t *testing.T) {
+	spec := instanceAddonSpec(ProvisionManagedRequest{
+		Size: "small", Version: "16", StorageSize: "20Gi", HA: false,
+	})
+	pooler, ok := spec["pooler"].(map[string]any)
+	if !ok {
+		t.Fatalf("spec.pooler missing or wrong type: %#v", spec["pooler"])
+	}
+	if pooler["enabled"] != true {
+		t.Errorf("pooler.enabled = %v, want true", pooler["enabled"])
+	}
+	if pooler["authMode"] != "query" {
+		t.Errorf("pooler.authMode = %v, want \"query\"", pooler["authMode"])
+	}
+	if pooler["instancePooler"] != true {
+		t.Errorf("pooler.instancePooler = %v, want true (lets the chart render the pooler for the cluster PG despite no useInstanceAddon on this CR)", pooler["instancePooler"])
+	}
+	// Existing fields preserved.
+	if spec["kind"] != "postgres" || spec["version"] != "16" {
+		t.Errorf("base spec fields changed: %#v", spec)
+	}
+}
+
 func TestHealthSnapshotSurface(t *testing.T) {
 	t.Run("zero snapshot stays at ready", func(t *testing.T) {
 		s := &Service{Logger: slog.Default()}

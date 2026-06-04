@@ -90,6 +90,23 @@ spec:
                     enabled:
                       type: boolean
                       default: false
+                    authMode:
+                      type: string
+                      enum: ["", userlist, query]
+                      description: >-
+                        How PgBouncer authenticates clients. "" / "userlist"
+                        (default) = static userlist from the addon's single
+                        conn-secret role (dedicated single-addon pooler).
+                        "query" = auth_query against the backend's pg_shadow
+                        via a privileged auth user — for the shared cluster-DB
+                        pooler fronting many per-project roles.
+                    instancePooler:
+                      type: boolean
+                      default: false
+                      description: >-
+                        Marks this as the shared pooler for the cluster
+                        (instance) Postgres, so the chart renders it even
+                        though the CR sets no useInstanceAddon.
                 publicTCP:
                   type: object
                   description: >-

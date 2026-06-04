@@ -319,14 +319,7 @@ func (s *Service) ProvisionManaged(ctx context.Context, req ProvisionManagedRequ
 				"kuso.sislelabs.com/addon-kind": "postgres",
 			},
 		},
-		"spec": map[string]any{
-			"project":     instanceProject,
-			"kind":        "postgres",
-			"version":     req.Version,
-			"size":        req.Size,
-			"ha":          req.HA,
-			"storageSize": req.StorageSize,
-		},
+		"spec": instanceAddonSpec(req),
 	}
 	if _, err := s.Kube.Dynamic.Resource(gvr).Namespace(s.Namespace).Create(ctx, toUnstructured(cr), metav1.CreateOptions{}); err != nil {
 		if apierrors.IsAlreadyExists(err) {
@@ -646,6 +639,29 @@ func (s *Service) countConsumers(ctx context.Context) (int, error) {
 
 // addonCRName is the deterministic name of the cluster PG addon CR.
 // Mirrors addons.CRName(project, name) for the synthetic project.
+// instanceAddonSpec builds the KusoAddon spec for the managed cluster PG.
+// Pure (no I/O) so the pooler wiring stays unit-testable. Enables an
+// auth_query PgBouncer in front of the instance PG: projects that opt into the
+// cluster DB route their DATABASE_URL through the pooler (:6432). authMode
+// "query" + instancePooler let the kusoaddon chart render the pooler for the
+// cluster PG (which serves many rotating per-project users) instead of the
+// dedicated single-user static-userlist pooler.
+func instanceAddonSpec(req ProvisionManagedRequest) map[string]any {
+	return map[string]any{
+		"project":     instanceProject,
+		"kind":        "postgres",
+		"version":     req.Version,
+		"size":        req.Size,
+		"ha":          req.HA,
+		"storageSize": req.StorageSize,
+		"pooler": map[string]any{
+			"enabled":        true,
+			"authMode":       "query",
+			"instancePooler": true,
+		},
+	}
+}
+
 func addonCRName() string { return instanceProject + "-" + instancePGAddonName }
 
 // connSecretName is the deterministic name of the conn Secret the

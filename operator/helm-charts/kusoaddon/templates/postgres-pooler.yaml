@@ -21,7 +21,16 @@ md5 userlist format is "user" "md5<hash>", hash = md5(password+user)).
 Password rotation (kuso project addon repair-password) needs a pooler
 pod restart to re-render — rare, operator-driven, acceptable.
 */}}
-{{- if and (eq .Values.kind "postgres") .Values.pooler .Values.pooler.enabled (not .Values.ha) (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- /*
+   Render gate. Normally we skip useInstanceAddon (consumers bypass
+   provisioning), but the shared cluster-PG pooler IS rendered for the
+   instance PG addon — it sets pooler.instancePooler=true and never sets
+   useInstanceAddon (it's the server, not a consumer). So allow render
+   when either: a dedicated postgres addon opts in, OR this is the
+   instance pooler. external + ha still bypass (ha uses a CNPG Pooler).
+*/ -}}
+{{- if and (eq .Values.kind "postgres") .Values.pooler .Values.pooler.enabled (not .Values.ha) (not .Values.external) (or (not .Values.useInstanceAddon) (and .Values.pooler.instancePooler)) -}}
+{{- $authQuery := eq (default "" .Values.pooler.authMode) "query" -}}
 {{- $name := include "kusoaddon.fullname" . -}}
 {{- $poolerName := printf "%s-pooler" $name -}}
 {{- $connSecret := include "kusoaddon.connSecretName" . -}}
@@ -51,6 +60,19 @@ data:
     ; runs SCRAM both to the client and to the backend.
     auth_type = scram-sha-256
     auth_file = /etc/pgbouncer/userlist.txt
+    {{- if $authQuery }}
+    ; auth_query mode (shared cluster-DB pooler): the backend serves many
+    ; per-project roles created/rotated dynamically as projects opt in, so a
+    ; static userlist can't keep up. PgBouncer logs in as auth_user (the
+    ; instance superuser, the only entry in userlist.txt) and looks up each
+    ; client's SCRAM verifier from pg_shadow via auth_query — no pooler
+    ; restart when a new per-project role appears.
+    ; auth_user is the postgres chart's fixed superuser "kuso" (same
+    ; literal the chart stamps into the conn secret + pg_isready probe);
+    ; it's the sole entry rendered into userlist.txt below.
+    auth_user = kuso
+    auth_query = SELECT usename, passwd FROM pg_shadow WHERE usename=$1
+    {{- end }}
     pool_mode = transaction
     max_client_conn = 200
     default_pool_size = 25

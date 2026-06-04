@@ -274,7 +274,7 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 		if err != nil {
 			return nil, fmt.Errorf("%w: provision instance addon db: %w", ErrInvalid, err)
 		}
-		if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw); err != nil {
+		if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, ns, dsn)); err != nil {
 			return nil, fmt.Errorf("%w: write conn secret: %w", ErrInvalid, err)
 		}
 	}

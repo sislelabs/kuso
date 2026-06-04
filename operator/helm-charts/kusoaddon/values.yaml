@@ -96,6 +96,14 @@ useInstanceAddon: ""
 # DATABASE_URL stays direct. Ignored for non-postgres kinds.
 pooler:
   enabled: false
+  # authMode: "" / "userlist" = static userlist from the single
+  # conn-secret role (dedicated addon). "query" = auth_query against the
+  # backend's pg_shadow via a privileged auth user — for the shared
+  # cluster-DB pooler that fronts many per-project roles.
+  authMode: ""
+  # instancePooler: marks the shared cluster-PG pooler so it renders even
+  # though the cluster-PG CR sets no useInstanceAddon.
+  instancePooler: false
 
 # publicTCP: opt-in public TCP endpoint for the addon. enabled is the
 # user toggle; port is server-allocated from the cluster's configured

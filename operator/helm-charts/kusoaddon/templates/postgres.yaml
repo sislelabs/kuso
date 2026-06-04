@@ -304,7 +304,14 @@ data:
   {{- if and .Values.pooler .Values.pooler.enabled }}
   POOLER_HOST: {{ printf "%s-pooler" $name | b64enc | quote }}
   POOLER_PORT: {{ "6432" | b64enc | quote }}
-  POOLER_URL: {{ printf "postgres://kuso:%s@%s-pooler:6432/%s?sslmode=require" ($password | urlquery) $name $database | b64enc | quote }}
+  {{- /* sslmode=disable: PgBouncer serves PLAINTEXT on :6432 (no
+         client_tls in postgres-pooler.yaml), so a require/verify DSN
+         fails the TLS negotiation against the pooler. Matches the HA
+         pooler URL (postgres-ha.yaml) and the control-plane pgbouncer
+         DSN (deploy/postgres.yaml). In-cluster pooler traffic is
+         already authenticated by the CNI. The direct DATABASE_URL above
+         keeps sslmode=require (the StatefulSet DOES serve TLS). */}}
+  POOLER_URL: {{ printf "postgres://kuso:%s@%s-pooler:6432/%s?sslmode=disable" ($password | urlquery) $name $database | b64enc | quote }}
   {{- else }}
   POOLER_HOST: {{ "" | b64enc | quote }}
   POOLER_PORT: {{ "" | b64enc | quote }}

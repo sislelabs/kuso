@@ -621,6 +621,19 @@ type KusoAddonSpec struct {
 // KusoAddonSpec. Only meaningful for kind=postgres.
 type KusoAddonPooler struct {
 	Enabled bool `json:"enabled,omitempty"`
+	// AuthMode selects how PgBouncer authenticates clients. "" / "userlist"
+	// (default) renders a static userlist from the addon's single conn-secret
+	// role — the dedicated single-addon pooler. "query" uses auth_query
+	// against the backend's pg_shadow via a privileged auth user — required
+	// for the shared cluster-DB pooler, which fronts many per-project roles
+	// that are created/rotated dynamically (no pooler restart on opt-in).
+	AuthMode string `json:"authMode,omitempty"`
+	// InstancePooler marks this as the shared pooler for the cluster
+	// (instance) Postgres. The cluster PG addon CR doesn't set
+	// useInstanceAddon (it IS the server, not a consumer), so this flag lets
+	// the chart render the pooler for it without tripping the
+	// useInstanceAddon bypass that dedicated consumers rely on.
+	InstancePooler bool `json:"instancePooler,omitempty"`
 }
 
 // KusoAddonPublicTCP is the opt-in public-TCP block on KusoAddonSpec.

@@ -101,8 +101,22 @@
           "pooler": {
             "description": "Opt-in PgBouncer connection pooler in front of a kind=postgres addon. Reach it via the POOLER_HOST/POOLER_PORT/POOLER_URL keys in the addon's \u003cname\u003e-conn Secret; DATABASE_URL stays direct. Ignored for non-postgres kinds.",
             "properties": {
+              "authMode": {
+                "description": "How PgBouncer authenticates clients. \"\" / \"userlist\" (default) = static userlist from the addon's single conn-secret role (dedicated single-addon pooler). \"query\" = auth_query against the backend's pg_shadow via a privileged auth user — for the shared cluster-DB pooler fronting many per-project roles.",
+                "enum": [
+                  "",
+                  "userlist",
+                  "query"
+                ],
+                "type": "string"
+              },
               "enabled": {
                 "default": false,
+                "type": "boolean"
+              },
+              "instancePooler": {
+                "default": false,
+                "description": "Marks this as the shared pooler for the cluster (instance) Postgres, so the chart renders it even though the CR sets no useInstanceAddon.",
                 "type": "boolean"
               }
             },

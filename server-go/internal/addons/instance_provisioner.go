@@ -55,6 +55,23 @@ func (s *Service) instanceAdminDSN(ctx context.Context, instanceAddonName string
 	return string(v), nil
 }
 
+// instanceHasPooler reports whether the instance Postgres at the given
+// per-project DSN's host runs a kuso-managed PgBouncer — true iff the
+// instance addon's "<host>-conn" Secret carries a non-empty POOLER_HOST
+// (the managed cluster PG with pooler.enabled populates it; external
+// instance addons have no such Secret, so we route direct for them).
+func (s *Service) instanceHasPooler(ctx context.Context, ns, perProjectDSN string) bool {
+	u, err := url.Parse(perProjectDSN)
+	if err != nil || u.Hostname() == "" {
+		return false
+	}
+	sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, u.Hostname()+"-conn", metav1.GetOptions{})
+	if err != nil {
+		return false
+	}
+	return len(sec.Data["POOLER_HOST"]) > 0
+}
+
 // provisionInstanceAddonDB creates the per-project database + user
 // on the shared server pointed to by adminDSN, then returns the
 // per-project DSN that should be stored in <addon>-conn. dbName /
@@ -125,11 +142,40 @@ func (s *Service) provisionInstanceAddonDB(adminDSN, project, addonShort string)
 	return u.String(), pw, nil
 }
 
+// poolerDSN rewrites a direct per-project DSN to route through the cluster-DB
+// PgBouncer: host gets the "-pooler" suffix (matching the chart's pooler
+// Service name), port → 6432, sslmode → disable (the pooler serves plaintext
+// on :6432; in-cluster traffic is CNI-authenticated). User / password / dbname
+// are preserved verbatim. This is what a cluster-DB project's DATABASE_URL
+// points at by default so app connections are pooled.
+func poolerDSN(directDSN string) (string, error) {
+	u, err := url.Parse(directDSN)
+	if err != nil {
+		return "", fmt.Errorf("parse direct DSN: %w", err)
+	}
+	host := u.Hostname()
+	if host == "" {
+		return "", fmt.Errorf("direct DSN has no host")
+	}
+	u.Host = fmt.Sprintf("%s-pooler:6432", host)
+	q := u.Query()
+	q.Set("sslmode", "disable")
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
 // writeInstanceAddonConnSecret writes (or updates) the addon's
 // <name>-conn secret with DATABASE_URL + the broken-out fields.
 // Same shape as the kusoaddon postgres chart's conn secret so
 // services envFrom: it transparently.
-func (s *Service) writeInstanceAddonConnSecret(ctx context.Context, ns, addonFQN, dsn, password string) error {
+//
+// poolerExists: true when the backing instance addon runs a kuso-managed
+// PgBouncer (the managed cluster PG with pooler.enabled). When true,
+// DATABASE_URL is routed through the pooler (<host>-pooler:6432, sslmode=
+// disable) and POOLER_* keys are populated; POSTGRES_HOST stays direct as a
+// fallback. When false (e.g. an external instance addon with no kuso pooler),
+// DATABASE_URL stays direct and POOLER_* are empty.
+func (s *Service) writeInstanceAddonConnSecret(ctx context.Context, ns, addonFQN, dsn, password string, poolerExists bool) error {
 	u, err := url.Parse(dsn)
 	if err != nil {
 		return fmt.Errorf("parse per-project DSN: %w", err)
@@ -141,13 +187,30 @@ func (s *Service) writeInstanceAddonConnSecret(ctx context.Context, ns, addonFQN
 	}
 	user := u.User.Username()
 	dbName := strings.TrimPrefix(u.Path, "/")
+
+	// Route DATABASE_URL through the pooler by default when one exists.
+	databaseURL := dsn
+	poolerHost, poolerPort, poolerURL := "", "", ""
+	if poolerExists {
+		pURL, perr := poolerDSN(dsn)
+		if perr != nil {
+			return fmt.Errorf("derive pooler DSN: %w", perr)
+		}
+		databaseURL = pURL
+		poolerHost = host + "-pooler"
+		poolerPort = "6432"
+		poolerURL = pURL
+	}
 	data := map[string][]byte{
-		"DATABASE_URL":      []byte(dsn),
+		"DATABASE_URL":      []byte(databaseURL),
 		"POSTGRES_HOST":     []byte(host),
 		"POSTGRES_PORT":     []byte(port),
 		"POSTGRES_USER":     []byte(user),
 		"POSTGRES_PASSWORD": []byte(password),
 		"POSTGRES_DB":       []byte(dbName),
+		"POOLER_HOST":       []byte(poolerHost),
+		"POOLER_PORT":       []byte(poolerPort),
+		"POOLER_URL":        []byte(poolerURL),
 	}
 	connName := connSecretName(addonFQN)
 	dst := &corev1.Secret{
@@ -281,5 +344,5 @@ func (s *Service) ResyncInstanceAddon(ctx context.Context, project, name string)
 	if err != nil {
 		return fmt.Errorf("provision: %w", err)
 	}
-	return s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw)
+	return s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, ns, dsn))
 }
