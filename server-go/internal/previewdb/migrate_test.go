@@ -1,10 +1,18 @@
 package previewdb
 
 import (
+	"context"
+	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/kube"
@@ -174,5 +182,101 @@ func TestSeedInFlightGuard(t *testing.T) {
 	c.releaseSeed(clone)
 	if !c.tryAcquireSeed(clone) {
 		t.Error("after release, the clone must be re-acquirable")
+	}
+}
+
+// TestEnvNeedsMigrate separates "this env should migrate against the clone (it
+// mounts the clone + has a release hook)" from "has an image yet". The image
+// is promoted by the build poller asynchronously and may land AFTER the seed
+// completes — so migrateAfterSeed must WAIT for the image rather than skip the
+// env outright (the bug the job-dedupe exposed: migrate ran pre-image and did
+// nothing, and no redundant goroutine re-ran it).
+func TestEnvNeedsMigrate(t *testing.T) {
+	t.Parallel()
+	conn := "tickero-db-pr-36-conn"
+	cmd := []string{"sh", "-c", "migrate up"}
+
+	// mounts clone + has release, image not yet stamped → STILL needs migrate
+	noImage := previewEnvCR("tickero-api-pr-36", []string{conn}, cmd, "")
+	if !envNeedsMigrate(&noImage, conn) {
+		t.Error("env that mounts the clone + has a release must need migrate even before its image lands")
+	}
+	// with image → needs migrate
+	withImage := previewEnvCR("tickero-api-pr-36", []string{conn}, cmd, "abc")
+	if !envNeedsMigrate(&withImage, conn) {
+		t.Error("env with clone+release+image must need migrate")
+	}
+	// no release → never migrates
+	noRelease := previewEnvCR("tickero-frontend-pr-36", []string{conn}, nil, "abc")
+	if envNeedsMigrate(&noRelease, conn) {
+		t.Error("env without a release hook must NOT need migrate")
+	}
+	// different clone → not this clone's concern
+	otherClone := previewEnvCR("tickero-x-pr-36", []string{"other-conn"}, cmd, "abc")
+	if envNeedsMigrate(&otherClone, conn) {
+		t.Error("env that does not mount this clone must NOT need migrate")
+	}
+}
+
+func newFakeCloner(t *testing.T, envObjs ...*kube.KusoEnvironment) *Cloner {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, map[schema.GroupVersionResource]string{
+		kube.GVREnvironments: "KusoEnvironmentList",
+	})
+	for _, e := range envObjs {
+		m, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(e)
+		u := &unstructured.Unstructured{Object: m}
+		u.SetGroupVersionKind(kube.GVREnvironments.GroupVersion().WithKind("KusoEnvironment"))
+		if u.GetNamespace() == "" {
+			u.SetNamespace("kuso")
+		}
+		if err := dyn.Tracker().Create(kube.GVREnvironments, u, "kuso"); err != nil {
+			t.Fatalf("seed env: %v", err)
+		}
+	}
+	return &Cloner{
+		Kube:      &kube.Client{Clientset: fake.NewSimpleClientset(), Dynamic: dyn},
+		Namespace: "kuso",
+		Logger:    slog.Default(),
+		BaseCtx:   context.Background(),
+	}
+}
+
+// TestWaitForEnvImage_ReturnsOnceImageLands is the regression test for the
+// image-after-seed race that the job-dedupe exposed: the build poller stamps
+// spec.image asynchronously, possibly AFTER the seed completes, so the migrate
+// path must wait for the image rather than skip the env.
+func TestWaitForEnvImage_ReturnsOnceImageLands(t *testing.T) {
+	t.Parallel()
+	noImage := &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{Name: "tickero-api-pr-36", Namespace: "kuso"},
+		Spec:       kube.KusoEnvironmentSpec{Kind: "preview"},
+	}
+	c := newFakeCloner(t, noImage)
+
+	// No image yet → times out fast, returns nil.
+	if env := c.waitForEnvImage(context.Background(), "kuso", "tickero-api-pr-36", 80*time.Millisecond); env != nil {
+		t.Fatalf("should time out to nil while no image is stamped, got %+v", env.Spec.Image)
+	}
+
+	// Stamp the image, then the wait should return it.
+	stamped := &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{Name: "tickero-api-pr-36", Namespace: "kuso"},
+		Spec: kube.KusoEnvironmentSpec{
+			Kind:  "preview",
+			Image: &kube.KusoImage{Repository: "registry/app", Tag: "e41610fef3bb"},
+		},
+	}
+	m, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(stamped)
+	u := &unstructured.Unstructured{Object: m}
+	u.SetGroupVersionKind(kube.GVREnvironments.GroupVersion().WithKind("KusoEnvironment"))
+	if _, err := c.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace("kuso").
+		Update(context.Background(), u, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("stamp image: %v", err)
+	}
+	env := c.waitForEnvImage(context.Background(), "kuso", "tickero-api-pr-36", 2*time.Second)
+	if env == nil || env.Spec.Image == nil || env.Spec.Image.Tag != "e41610fef3bb" {
+		t.Fatalf("should return the env once image is stamped, got %+v", env)
 	}
 }

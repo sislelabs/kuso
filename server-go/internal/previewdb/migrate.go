@@ -26,18 +26,29 @@ func selectMigratableEnvs(envs []kube.KusoEnvironment, cloneConn string) []kube.
 	var out []kube.KusoEnvironment
 	for i := range envs {
 		e := envs[i]
-		if e.Spec.Release == nil || len(e.Spec.Release.Command) == 0 {
+		if !envNeedsMigrate(&e, cloneConn) {
 			continue
 		}
 		if e.Spec.Image == nil || e.Spec.Image.Tag == "" {
 			continue
 		}
-		if !containsString(e.Spec.EnvFromSecrets, cloneConn) {
-			continue
-		}
 		out = append(out, e)
 	}
 	return out
+}
+
+// envNeedsMigrate reports whether this env should run a migration against the
+// clone once everything is ready: it mounts the clone's conn secret AND has a
+// release hook. It does NOT require an image — the image is promoted by the
+// build poller asynchronously and can land after the seed completes, so the
+// migrate path waits for it rather than skipping. Used to decide whether to
+// wait for an image at all (vs. an env that never migrates: no release, or a
+// different clone).
+func envNeedsMigrate(e *kube.KusoEnvironment, cloneConn string) bool {
+	if e.Spec.Release == nil || len(e.Spec.Release.Command) == 0 {
+		return false
+	}
+	return containsString(e.Spec.EnvFromSecrets, cloneConn)
 }
 
 func containsString(ss []string, want string) bool {
@@ -214,9 +225,19 @@ func (c *Cloner) migrateAfterSeed(ctx context.Context, ns, project string, prNum
 		c.Logger.Warn("preview migrate: list envs", "clone", cloneFQN, "pr", prNumber, "err", err)
 		return
 	}
-	targets := selectMigratableEnvs(envs, addons.ConnSecretName(cloneFQN))
+	// Envs that SHOULD migrate against this clone (mount it + have a release
+	// hook) — regardless of whether the image has landed yet. The build
+	// poller promotes the image asynchronously and it can land AFTER the seed
+	// completes, so we wait for it below rather than skipping the env.
+	conn := addons.ConnSecretName(cloneFQN)
+	var targets []kube.KusoEnvironment
+	for i := range envs {
+		if envNeedsMigrate(&envs[i], conn) {
+			targets = append(targets, envs[i])
+		}
+	}
 	if len(targets) == 0 {
-		return // no service uses this clone with a release hook + image yet
+		return // no service uses this clone with a release hook
 	}
 
 	var ownerUID types.UID
@@ -225,7 +246,16 @@ func (c *Cloner) migrateAfterSeed(ctx context.Context, ns, project string, prNum
 	}
 
 	for i := range targets {
-		env := &targets[i]
+		// Wait for the env's image to be promoted before migrating — the
+		// build poller stamps spec.image asynchronously and it may not be
+		// present yet when the seed finishes. Re-fetch the env CR until the
+		// image lands (bounded); skip if it never does.
+		env := c.waitForEnvImage(ctx, ns, targets[i].Name, 10*time.Minute)
+		if env == nil {
+			c.Logger.Warn("preview migrate: env image never promoted; skipping",
+				"env", targets[i].Name, "clone", cloneFQN)
+			continue
+		}
 		job := buildMigrateJob(ns, project, cloneFQN, env, ownerUID, nonce)
 		if _, err := c.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{}); err != nil {
 			if apierrors.IsAlreadyExists(err) {
@@ -240,6 +270,27 @@ func (c *Cloner) migrateAfterSeed(ctx context.Context, ns, project string, prNum
 			continue
 		}
 		c.Logger.Info("preview migrate applied", "env", env.Name, "clone", cloneFQN, "job", job.Name)
+	}
+}
+
+// waitForEnvImage re-fetches the env CR until spec.image.tag is set (the build
+// poller promoted it), or returns nil on timeout. Returns the env with the
+// image so the caller can build the migrate Job against the PR image.
+func (c *Cloner) waitForEnvImage(ctx context.Context, ns, envName string, timeout time.Duration) *kube.KusoEnvironment {
+	deadline := time.Now().Add(timeout)
+	for {
+		env, err := c.Kube.GetKusoEnvironment(ctx, ns, envName)
+		if err == nil && env != nil && env.Spec.Image != nil && env.Spec.Image.Tag != "" {
+			return env
+		}
+		if time.Now().After(deadline) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(3 * time.Second):
+		}
 	}
 }
 
