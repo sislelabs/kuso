@@ -50,10 +50,36 @@ Coolify→kuso env rewrite rules:
 
 ## Phase status
 
-- [ ] Phase 0 — cluster-DB pooler (auth_query)  ← IN PROGRESS
-- [ ] Phase 1 — prereqs / matrix
-- [ ] Phase 2 — 14 nixpacks/dockerfile apps
+- [x] Phase 0 — cluster-DB pooler (auth_query) — SHIPPED v0.18.18, verified
+- [x] Phase 1 — prereqs / matrix
+- [ ] Phase 2 — 14 nixpacks/dockerfile apps  ← IN PROGRESS
 - [ ] Phase 3 — compose apps (s3, analiz)
+
+## Phase 2 per-app progress
+
+CLI auth: wrote the provided ivo9999 admin token into ~/.kuso/credentials.yaml
+(backup at credentials.yaml.premigration). migration/ is gitignored (kuso.yml
+files hold plaintext secrets). DB migrations use migration/migrate-db.sh.
+
+| App | project created | applied (svc+addon) | data loaded | build | notes |
+|---|---|---|---|---|---|
+| jira-mudira | ✓ | ✓ | ✓ ticketeer→jira_mudira_db (39 tbl, Activity 2648 parity) | running | DB pooler-routed; secrets copied (AUTH_SECRET is a placeholder — rotate) |
+| boiler-code-landing | ✓ | ✓ | ✓ boiler-code→boiler_code_landing_db (Session 36 parity) | queued | **LIVE Stripe keys** copied as-is; Better-Auth, Resend, GitHub PAT |
+| db-masterclass | ✓ | ✓ | ✓ dbmaster→db_masterclass_db (audit_logs 378 parity) | queued | NEXTAUTH_SECRET reused as ENCRYPTION_KEY |
+
+### Data-migration ownership fix (applies to ALL DB-backed apps)
+
+The dump loads as the kuso superuser → restored objects owned by `kuso` → the
+per-project role gets "permission denied for table X" through the pooler.
+**Fix folded into migrate-db.sh**: after load, ALTER OWNER of every public
+table/sequence/view to the per-project role + GRANT schema. Verified
+jira-mudira: `issues=666 activity=2648` via pooler as the per-project role.
+Retro-applied to jira_mudira_db, boiler_code_landing_db, db_masterclass_db.
+**Product follow-up:** kuso's instance-addon provisioning could grant the role
+object ownership, or offer a managed dump-load path. (tracked)
+
+jira-mudira app VERIFIED end-to-end: build succeeded → production pod Running
+1/1 → Next.js "Ready" → queries its DB through the pooler. Full pipeline works.
 
 ## Event log
 
