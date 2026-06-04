@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.14] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(previews): wait for the env image before migrating (image-after-seed race) ([d3d37c9](https://github.com/sislelabs/kuso/commit/d3d37c90dfaa70f0a979ced1268850c1002759d3))
+
 ## [0.18.13] — 2026-06-04
 
 ### 🐛 Bug Fixes
@@ -359,11 +364,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(propagate): drop leftover shared-secret refs when unsubscribing ([9feb0d3](https://github.com/sislelabs/kuso/commit/9feb0d3ef52a7c8952a1c40a0d92ce29ab6e6556))
-
-## [0.16.21] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(ui): projects list sorted alphabetically by name ([6429c95](https://github.com/sislelabs/kuso/commit/6429c9556bd88ccd2080c924d641cc5ff27528ed))
 
 
 ---
