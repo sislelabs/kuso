@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.31] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): pass build-time env to raw-Dockerfile builds as build-args ([c275215](https://github.com/sislelabs/kuso/commit/c2752157e741d21dce4c0924eadc2083c9e94d66))
+
 ## [0.18.30] — 2026-06-04
 
 ### 🐛 Bug Fixes
@@ -375,11 +380,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(cli): kuso service set --path / --branch ([4e2de50](https://github.com/sislelabs/kuso/commit/4e2de504cc06db5052b8049343b1236a467c3d04))
-
-## [0.17.9] — 2026-05-29
-
-### 🐛 Bug Fixes
-- Fix(api): worker service creation drops FromService field ([ee53d4a](https://github.com/sislelabs/kuso/commit/ee53d4a9e49f622abeae13f7ef3dcbf6394d85ff))
 
 
 ---
