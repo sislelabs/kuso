@@ -226,4 +226,45 @@ spec:
               {{- range .Values.networkPolicy.extraBlockCIDRs }}
               - {{ . | quote }}
               {{- end }}
+---
+# Egress to the cluster-shared (instance) Postgres + its PgBouncer.
+# Projects that opt into the cluster DB (KusoAddon spec.useInstanceAddon)
+# get a per-project database on the instance PG, reached via the
+# instance pooler — but those Services live in the synthetic
+# "kuso-instance" project, NOT this one, so the default-deny + the
+# intra-project allow (same-project siblings only) would block the
+# connection. A dedicated app would have its addon as a same-project
+# sibling (covered by allow-intra-project); the cluster DB does not.
+# Allow egress to the kuso-instance project's pods on the PG (5432) +
+# pooler (6432) ports. Narrow: only those two ports, only to the
+# instance-DB pods. Always rendered — harmless for projects that don't
+# use the cluster DB (nothing to connect to), and avoids a chicken-egg
+# where the policy is missing until the project opts in.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-instance-db-egress
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    {{- toYaml $projectSelector | nindent 4 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
+          podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: kuso-instance
+        # Same-ns fallback for single-namespace installs.
+        - podSelector:
+            matchLabels:
+              kuso.sislelabs.com/project: kuso-instance
+      ports:
+        - port: 5432
+          protocol: TCP
+        - port: 6432
+          protocol: TCP
 {{- end }}
