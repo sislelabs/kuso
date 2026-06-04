@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.13] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(previews): dedupe redundant seed+migrate jobs per reopen ([3af1ff3](https://github.com/sislelabs/kuso/commit/3af1ff36ffc583a30c71dc8a791413a9562fdf1d))
+
 ## [0.18.12] — 2026-06-02
 
 ### 🐛 Bug Fixes
@@ -359,11 +364,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(ui): projects list sorted alphabetically by name ([6429c95](https://github.com/sislelabs/kuso/commit/6429c9556bd88ccd2080c924d641cc5ff27528ed))
-
-## [0.16.20] — 2026-05-28
-
-### 🐛 Bug Fixes
-- Fix(overlay): use env label to match env CR — staging tab no longer shows production URL ([497dcd9](https://github.com/sislelabs/kuso/commit/497dcd92edc3a9078480b8424086c52bc45123dd))
 
 
 ---
