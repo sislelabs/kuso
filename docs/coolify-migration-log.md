@@ -30,3 +30,24 @@ phases without check-ins. Domains excluded. Coolify untouched (read-only + dumps
 
 - 2026-06-04: research complete; pooler design approved; Coolify host access
   confirmed; GitHub App confirmed on org. Starting Phase 0.
+- 2026-06-04: **Phase 0 SHIPPED + VERIFIED (v0.18.18).** Shared auth_query
+  PgBouncer in front of the cluster PG. E2E proven: throwaway project →
+  cluster-DB addon → DATABASE_URL routes through `kuso-instance-pg-pooler:6432`
+  → a client authenticated as the per-project user `pooltest_db` through the
+  pooler (auth_query, no restart) and ran SELECT 1. Two bugs found+fixed during
+  rollout: (a) operator image didn't auto-rebuild on chart change — forced with
+  KUSO_RELEASE_OPERATOR=1; (b) non-HA POOLER_URL used sslmode=require against a
+  plaintext pgbouncer → fixed to disable. Throwaway project cleaned up.
+
+## Known follow-ups (non-blocking)
+
+- **PVC-drift on cluster-DB disable→re-provision:** the postgres chart's PVC is
+  `resource-policy=keep`, so `instancepg.Disable` (UI "Disable + delete") leaves
+  `data-kuso-instance-pg-0` behind. Re-provision reuses the old data dir (old
+  `kuso` role password) but writes a NEW password to the conn secret + admin
+  DSN → admin DSN auth fails over the Service (loopback is trust, so it masks
+  locally). Repaired live this session via `ALTER ROLE kuso WITH PASSWORD`.
+  **Fix later:** `Disable` should delete the retained PVC(s) (it's gated on 0
+  consumers and the button says "delete"), OR re-provision should RepairPassword
+  on PVC reuse. Does NOT affect the migration (which never disables the cluster
+  DB). Tracked for a follow-up TDD+ship.
