@@ -1,7 +1,23 @@
 # Docker Compose → kuso import
 
 **Date:** 2026-06-06
-**Status:** Approved (brainstorm) → implementing
+**Status:** Implemented
+
+## Implementation notes (delta from design)
+
+- **`runtime: image` in kuso.yaml** turned out to require less than feared: the
+  `projects` domain already had `ServiceImageSpec` on the create path, so wiring
+  was (1) add `image` to `spec.ServiceSpec` + the patch path, (2) widen
+  `validRuntime` to accept `image`/`worker`. No CRD change. `PullPolicy` was
+  dropped from the kuso.yaml `ImageSpec` — the domain layer doesn't expose it.
+- **Project auto-create:** `spec.Apply` creates services/addons/crons but NOT
+  the project. Both `--apply` (CLI) and the web Apply now create the project
+  first (ignoring 409) before applying the generated kuso.yaml.
+- **env_file tolerance (bug found in testing):** compose-go stats referenced
+  `env_file` paths and hard-fails if absent. Set `SkipResolveEnvironment` so a
+  missing `.env` flags rather than aborts; inline `environment:` still parses.
+- **Implicit `default` network** is suppressed from the report (compose adds it
+  to every service; flagging it would be noise).
 
 ## Goal
 

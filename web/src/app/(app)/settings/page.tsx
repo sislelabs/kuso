@@ -21,6 +21,7 @@ import {
   Activity,
   ArrowDown,
   DollarSign,
+  FileUp,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -76,6 +77,7 @@ const CARDS: Card[] = [
   { href: "/settings/github",        title: "GitHub App",   description: "Connect a GitHub App so kuso can monitor repos and trigger builds.", icon: Github,    perm: Perms.SettingsAdmin, group: "integrations", keywords: "github app webhook repo build push pr" },
   { href: "/settings/notifications", title: "Notifications", description: "Discord webhooks, generic webhook fan-out, alerts.",                  icon: Bell,      group: "integrations", keywords: "webhook slack discord email alert" },
   { href: "/settings/import",        title: "Import from Coolify", description: "Migrate Coolify apps + dbs + services into kuso.",             icon: ArrowDown, perm: Perms.SettingsAdmin, group: "integrations", keywords: "coolify import migrate migration" },
+  { href: "/settings/import-compose", title: "Import docker-compose", description: "Convert a docker-compose.yml into kuso projects, services + addons.", icon: FileUp, perm: Perms.SettingsAdmin, group: "integrations", keywords: "docker compose import convert yaml migrate" },
 ];
 
 const GROUPS: { id: Card["group"]; label: string; hint: string }[] = [

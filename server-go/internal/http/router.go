@@ -508,6 +508,10 @@ func mountAuthenticatedRoutes(
 			Logger:    d.Logger,
 			Migration: &migration.Service{Projects: d.Projects, Addons: d.Addons, Logger: d.Logger},
 		}).Mount(r)
+		// Docker Compose import — convert-only preview. Writes nothing;
+		// the UI feeds the generated kuso.yaml back through
+		// POST /api/projects/{p}/apply to create resources.
+		(&httphandlers.ImportComposeHandler{Logger: d.Logger}).Mount(r)
 		if bootstrapH != nil {
 			bootstrapH.MountAdmin(r)
 		}

@@ -126,6 +126,9 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 	if cr.Spec.Buildpacks != nil {
 		s.Buildpacks = &BuildpacksSpec{Builder: cr.Spec.Buildpacks.BuilderImage}
 	}
+	if cr.Spec.Image != nil {
+		s.Image = &ImageSpec{Repository: cr.Spec.Image.Repository, Tag: cr.Spec.Image.Tag}
+	}
 	s.Env = exportEnv(project, cr.Spec.EnvVars)
 	return s
 }
