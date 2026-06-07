@@ -60,17 +60,19 @@ func TestClassifyDatastore(t *testing.T) {
 	}{
 		{"postgres:16-alpine", "postgres", "16"},
 		{"docker.io/library/postgres:15", "postgres", "15"},
-		{"mysql:8.0.36", "mysql", "8"},
-		{"mariadb:11", "mariadb", "11"},
 		{"redis:7", "redis", "7"},
-		{"valkey/valkey:8", "valkey", "8"},
-		{"mongo:7", "mongodb", "7"},
 		{"clickhouse/clickhouse-server:24", "clickhouse", "24"},
-		{"rabbitmq:3-management", "rabbitmq", "3"},
-		{"bitnami/kafka:3.7", "kafka", "3"},
 		{"redis:latest", "redis", ""},
 		{"nginx:1.27", "", ""},
 		{"myorg/api:1.0", "", ""},
+		// Reserved-but-unimplemented datastores must NOT classify as
+		// addons — kuso has no managed addon for them yet.
+		{"mysql:8.0.36", "", ""},
+		{"mariadb:11", "", ""},
+		{"mongo:7", "", ""},
+		{"valkey/valkey:8", "", ""},
+		{"rabbitmq:3-management", "", ""},
+		{"bitnami/kafka:3.7", "", ""},
 	}
 	for _, c := range cases {
 		kind, version := classifyDatastore(c.image)
@@ -151,6 +153,32 @@ volumes:
 	}
 }
 
+func TestConvert_ReservedDatastoreStaysFlaggedService(t *testing.T) {
+	// mysql has no managed kuso addon yet — it must become a plain
+	// image service AND be flagged, never a broken addon.
+	doc, rep := convertString(t, `
+services:
+  db:
+    image: mysql:8.0
+`)
+	if findAddon(doc, "db") != nil {
+		t.Error("mysql must NOT become an addon (no managed addon kind)")
+	}
+	svc := findService(doc, "db")
+	if svc == nil || svc.Runtime != "image" {
+		t.Fatalf("mysql should be a runtime=image service, got %+v", svc)
+	}
+	flagged := false
+	for _, n := range rep.Notes {
+		if n.Action == ActionFlag && strings.Contains(n.Detail, "mysql") {
+			flagged = true
+		}
+	}
+	if !flagged {
+		t.Error("unsupported datastore should be flagged")
+	}
+}
+
 func TestConvert_DependsOnEnvRewrite(t *testing.T) {
 	doc, _ := convertString(t, `
 services:
@@ -168,8 +196,8 @@ services:
 		t.Fatal("api service not found")
 	}
 	got := svc.Env["DATABASE_URL"]
-	if !strings.Contains(got, "${{ db.URL }}") {
-		t.Errorf("DATABASE_URL = %q, want it rewritten to ${{ db.URL }} form", got)
+	if !strings.Contains(got, "${{ db.DATABASE_URL }}") {
+		t.Errorf("DATABASE_URL = %q, want it rewritten to ${{ db.DATABASE_URL }} form", got)
 	}
 }
 

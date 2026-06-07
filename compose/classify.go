@@ -6,33 +6,69 @@ import (
 
 // datastoreImages maps a normalized image base name (the repository
 // without registry host or tag) to the kuso addon kind it should
-// become. kuso supports these kinds via the kusoaddon helm chart:
-// postgres, mysql, mariadb, redis, valkey, mongodb, clickhouse,
-// kafka, rabbitmq. We map the common official-image names (and a few
-// vendor-prefixed variants like bitnami/*) onto them.
+// become. Only kinds the kusoaddon helm chart ACTUALLY implements are
+// listed — postgres, redis, clickhouse. Other datastores (mysql,
+// mariadb, mongodb, valkey, kafka, rabbitmq) are reserved-but-not-
+// implemented in the chart (they'd render a "pending" ConfigMap, not a
+// working addon), so we deliberately DON'T classify them as addons —
+// they fall through to a flagged service instead (see maybeDatastore).
 var datastoreImages = map[string]string{
-	"postgres":            "postgres",
-	"postgresql":          "postgres",
-	"postgis/postgis":     "postgres",
-	"bitnami/postgresql":  "postgres",
-	"mysql":               "mysql",
-	"bitnami/mysql":       "mysql",
-	"mariadb":             "mariadb",
-	"bitnami/mariadb":     "mariadb",
-	"redis":               "redis",
-	"bitnami/redis":       "redis",
-	"valkey/valkey":       "valkey",
-	"bitnami/valkey":      "valkey",
-	"mongo":               "mongodb",
-	"mongodb":             "mongodb",
-	"bitnami/mongodb":     "mongodb",
+	"postgres":                     "postgres",
+	"postgresql":                   "postgres",
+	"postgis/postgis":              "postgres",
+	"bitnami/postgresql":           "postgres",
+	"redis":                        "redis",
+	"bitnami/redis":                "redis",
 	"clickhouse/clickhouse-server": "clickhouse",
-	"clickhouse":          "clickhouse",
-	"rabbitmq":            "rabbitmq",
-	"bitnami/rabbitmq":    "rabbitmq",
-	"confluentinc/cp-kafka": "kafka",
-	"bitnami/kafka":       "kafka",
-	"apache/kafka":        "kafka",
+	"clickhouse":                   "clickhouse",
+}
+
+// addonURLKey returns the conn-secret key that holds the canonical
+// connection URL for an addon kind — what a ${{ addon.KEY }} reference
+// must point at. Each kind's helm chart names this differently
+// (postgres→DATABASE_URL, redis→REDIS_URL, clickhouse→CLICKHOUSE_URL).
+func addonURLKey(kind string) string {
+	switch kind {
+	case "postgres":
+		return "DATABASE_URL"
+	case "redis":
+		return "REDIS_URL"
+	case "clickhouse":
+		return "CLICKHOUSE_URL"
+	default:
+		return ""
+	}
+}
+
+// reservedDatastores are kinds that look like datastores but the kuso
+// addon chart doesn't implement yet. We detect them only to flag
+// them, never to create a (broken) addon.
+var reservedDatastores = map[string]bool{
+	"mysql": true, "mariadb": true, "mongodb": true,
+	"valkey": true, "kafka": true, "rabbitmq": true, "memcached": true,
+}
+
+// maybeReservedDatastore returns the reserved kind name when an image
+// is a recognizable-but-unimplemented datastore, else "".
+func maybeReservedDatastore(image string) string {
+	repo, _ := imageParts(image)
+	switch baseImageName(repo) {
+	case "mysql", "bitnami/mysql":
+		return "mysql"
+	case "mariadb", "bitnami/mariadb":
+		return "mariadb"
+	case "mongo", "mongodb", "bitnami/mongodb":
+		return "mongodb"
+	case "valkey/valkey", "bitnami/valkey":
+		return "valkey"
+	case "rabbitmq", "bitnami/rabbitmq":
+		return "rabbitmq"
+	case "confluentinc/cp-kafka", "bitnami/kafka", "apache/kafka":
+		return "kafka"
+	case "memcached":
+		return "memcached"
+	}
+	return ""
 }
 
 // imageParts splits a compose image reference into its repository

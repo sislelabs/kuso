@@ -49,7 +49,7 @@ services:
 	if resp.Project != "shop" {
 		t.Errorf("project = %q, want shop", resp.Project)
 	}
-	for _, want := range []string{"runtime: image", "kind: postgres", "${{ db.URL }}"} {
+	for _, want := range []string{"runtime: image", "kind: postgres", "${{ db.DATABASE_URL }}"} {
 		if !strings.Contains(resp.YAML, want) {
 			t.Errorf("yaml missing %q:\n%s", want, resp.YAML)
 		}
