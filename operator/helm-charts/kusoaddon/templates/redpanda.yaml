@@ -66,7 +66,7 @@ spec:
             - "--pandaproxy-addr internal://0.0.0.0:8082"
             - "--advertise-pandaproxy-addr internal://{{ $name }}:8082"
             - "--schema-registry-addr internal://0.0.0.0:8081"
-            - "--rpc-addr {{ $name }}:33145"
+            - "--rpc-addr 0.0.0.0:33145"
             - "--advertise-rpc-addr {{ $name }}:33145"
             - "--mode dev-container"
             - "--smp 1"
