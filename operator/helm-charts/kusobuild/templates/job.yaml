@@ -620,7 +620,11 @@ spec:
               DF=".kuso-static.Dockerfile"
               {{- else }}
               CTX="/workspace/src/{{ .Values.repo.path | default "." }}"
-              DF="{{ .Values.dockerfile | default "Dockerfile" }}"
+              # squote single-quotes the value (escaping embedded quotes)
+              # as defense-in-depth; the server already validates
+              # spec.dockerfile against the repo.path allow-list (no shell
+              # metacharacters) before it reaches the build CR.
+              DF={{ .Values.dockerfile | default "Dockerfile" | squote }}
               {{- end }}
 
               IMAGE="{{ .Values.image.repository }}:{{ .Values.image.tag }}"

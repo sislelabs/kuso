@@ -97,6 +97,27 @@ func validateRepoPath(p string) error {
 	return nil
 }
 
+// validateDockerfile guards spec.dockerfile, which is interpolated into
+// a shell string in the build chart (DF="..."). Same shell-injection
+// risk + same allow-list as repo.path: reject `..`, absolute paths, and
+// any character outside [A-Za-z0-9._/-]. Empty is allowed (chart
+// defaults to "Dockerfile").
+func validateDockerfile(p string) error {
+	if p == "" {
+		return nil
+	}
+	if strings.Contains(p, "..") {
+		return fmt.Errorf("%w: dockerfile must not contain .. (traversal)", ErrInvalid)
+	}
+	if strings.HasPrefix(p, "/") {
+		return fmt.Errorf("%w: dockerfile must be a relative path", ErrInvalid)
+	}
+	if !repoPathRE.MatchString(p) {
+		return fmt.Errorf("%w: dockerfile may only contain letters, digits, dot, slash, underscore, dash", ErrInvalid)
+	}
+	return nil
+}
+
 // ociImageRE is the allow-list for an OCI image reference. Used to
 // validate every user-supplied image string (static.runtimeImage,
 // static.builderImage, buildpacks.builderImage,
@@ -249,6 +270,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	// rather than threading slug everywhere.
 	req.Name = slug
 	if err := validateRuntime(req.Runtime); err != nil {
+		return nil, err
+	}
+	if err := validateDockerfile(req.Dockerfile); err != nil {
 		return nil, err
 	}
 	// Static / Buildpacks / Image specs all carry user-supplied
@@ -1870,6 +1894,9 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		}
 	}
 	if req.Dockerfile != nil {
+		if err := validateDockerfile(*req.Dockerfile); err != nil {
+			return nil, err
+		}
 		svc.Spec.Dockerfile = *req.Dockerfile
 	}
 	commandChanged := false

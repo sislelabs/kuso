@@ -85,6 +85,32 @@ func TestValidateStaticSpec(t *testing.T) {
 	}
 }
 
+func TestValidateDockerfile(t *testing.T) {
+	cases := []struct {
+		in     string
+		wantOK bool
+	}{
+		{"", true},                       // empty → chart default
+		{"Dockerfile", true},
+		{"apps/web/Dockerfile.dev", true},
+		{"sub_dir/Docker-file", true},
+		{"/etc/passwd", false},           // absolute
+		{"../escape/Dockerfile", false},  // traversal
+		{`Dockerfile";rm -rf /;"`, false}, // shell injection
+		{"Docker file", false},           // space
+		{"$(touch x)", false},            // command substitution
+	}
+	for _, c := range cases {
+		err := validateDockerfile(c.in)
+		if c.wantOK && err != nil {
+			t.Errorf("validateDockerfile(%q) want ok, got %v", c.in, err)
+		}
+		if !c.wantOK && err == nil {
+			t.Errorf("validateDockerfile(%q) want error, got nil", c.in)
+		}
+	}
+}
+
 func TestValidateRuntime(t *testing.T) {
 	cases := []struct {
 		in         string
