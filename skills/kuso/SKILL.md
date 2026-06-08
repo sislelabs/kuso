@@ -1,6 +1,6 @@
 ---
 name: kuso
-description: Use when working in a project deployed to kuso (a self-hosted Kubernetes PaaS). Explains the kuso CLI, how deployments work, how to handle env vars & secrets (always `env set`/`shared-secret`, never `secret set`; per-env overrides, `${{ }}` addon aliases, least-privilege subscriptions), preview/PR environments, base + custom domains, release hooks, debugging builds/sleeping pods, and the v0.16+/v0.17+ features. Invoke whenever the user mentions deploys, builds, logs, env vars, secrets, addons (postgres/redis/etc.), subscriptions, preview/PR envs, domains, release hooks, migrations, sleeping pods, callback webhooks, or anything related to their kuso instance.
+description: Use when working in a project deployed to kuso (a self-hosted Kubernetes PaaS). Explains the kuso CLI, how deployments work, how to handle env vars & secrets (always `env set`/`shared-secret`, never `secret set`; per-env overrides, `${{ }}` addon aliases with per-kind URL keys, least-privilege subscriptions), preview/PR environments, base + custom domains, release hooks, custom Dockerfile paths, container command overrides, importing docker-compose projects, addon kinds (incl. redpanda/Kafka + clickhouse), debugging builds/sleeping pods, and the v0.16+ through v0.18+ features. Invoke whenever the user mentions deploys, builds, logs, env vars, secrets, addons (postgres/redis/clickhouse/redpanda/etc.), subscriptions, preview/PR envs, domains, release hooks, migrations, docker-compose import, sleeping pods, callback webhooks, or anything related to their kuso instance.
 allowed-tools: Bash(kuso:*), Bash(curl:*), Bash(awk:*), Bash(ssh:*), Read, Edit, Write, Grep, Glob
 ---
 
@@ -8,7 +8,7 @@ allowed-tools: Bash(kuso:*), Bash(curl:*), Bash(awk:*), Bash(ssh:*), Read, Edit,
 
 This project is deployed via [kuso](https://github.com/sislelabs/kuso), a self-hosted Kubernetes PaaS. The user has a `kuso` CLI on their PATH and a logged-in session against their instance. **Always drive operations through `kuso`, not raw `kubectl`** — the CLI exercises the same auth/tenancy/perm layers users hit, so what you see is what they see.
 
-This skill is current to **v0.17.26**. Run `kuso version` to confirm what's on the user's machine.
+This skill is current to **v0.18.47**. Run `kuso version` to confirm what's on the user's machine.
 
 > **Env vars & secrets — the one rule that overrides everything:** set EVERY
 > variable (sensitive or not) through `kuso env set` (service-level) or
@@ -71,14 +71,20 @@ kuso project create papelito \
 kuso project addon add papelito db --kind postgres --version 16 --size small
 kuso project addon add papelito storage --kind s3
 kuso project addon add papelito cache --kind redis
-# Other supported kinds: mailpit, nats, meilisearch, clickhouse,
-# mongodb, mysql, rabbitmq, memcached, elasticsearch, kafka,
-# cockroachdb, couchdb. Check what your CLI build supports with:
-#   kuso project addon add --help
+# Other IMPLEMENTED kinds (chart renders a real workload + conn secret):
+#   mailpit, nats, meilisearch, clickhouse, redpanda (Kafka API, v0.18+).
+# RESERVED-but-not-implemented (creating one renders only a "pending"
+# marker — DON'T use as if it works): mongodb, mysql, rabbitmq,
+# memcached, elasticsearch, kafka, cockroachdb, couchdb. Check your
+# CLI build with:  kuso project addon add --help
 
 # 3. Service from a repo (default: build via dockerfile)
 kuso project service add papelito web \
   --runtime dockerfile --port 3000
+# 3a. Monorepo with a non-standard Dockerfile name/path (v0.18+):
+#     --dockerfile is RELATIVE to --path; default is "Dockerfile".
+kuso project service add papelito web \
+  --runtime dockerfile --path . --dockerfile apps/web/Dockerfile.dev --port 3000
 
 # 3b. OR: service from a pre-built registry image (no kaniko build)
 #     --image-repo + --image-tag are SEPARATE; don't put X:Y in --image-repo
@@ -234,6 +240,34 @@ kuso apply --dry-run        # always first
 kuso apply                  # only after the dry-run is clean
 ```
 
+## Importing a docker-compose project (v0.18+)
+
+`kuso import compose <docker-compose.yml>` converts a local compose file
+into kuso resources. Datastore services (postgres/redis/clickhouse images)
+become managed **addons**; app services become build (`runtime=dockerfile`)
+or image (`runtime=image`) services; `depends_on` env refs are rewritten to
+`${{ addon.KEY }}`. Anything kuso has no equivalent for (healthcheck,
+restart, networks, bind mounts, Kafka without a redpanda addon) is
+**reported, never silently dropped**.
+
+```bash
+kuso import compose docker-compose.yml                  # dry-run: prints the report + generated kuso.yaml
+kuso import compose docker-compose.yml -o kuso.yaml      # write the kuso.yaml for review
+kuso import compose docker-compose.yml --apply           # create resources (auto-creates the project first)
+kuso import compose docker-compose.yml --project shop --apply
+```
+
+Caveats:
+- Only **implemented** addon kinds map (postgres/redis/clickhouse +
+  redpanda for kafka images); mysql/mongo/etc. images stay as flagged
+  image services (kuso has no managed addon for them).
+- `build:` services land with a blank `repo:` — you must set the git repo
+  before they'll build (the report flags this).
+- A monorepo service with a non-standard Dockerfile path is handled via
+  the new `dockerfile` field (the converter sets it from `build.dockerfile`).
+- It does NOT migrate data — move addon data separately (`kuso addon-backup`,
+  or pg_dump/restore for shared PG).
+
 ## Env vars & secrets — the complete model
 
 There are FOUR places a variable can live. Pick by scope; the write command is always `env set` / `shared-secret set` (never `secret set`).
@@ -257,7 +291,16 @@ Add a postgres addon `db` → kuso writes `<project>-db-conn` and mounts it. Key
 | `redis`    | `REDIS_URL`, `REDIS_HOST/PORT/PASSWORD` |
 | `s3`       | `S3_ENDPOINT`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_BUCKET`, `S3_REGION`, `AWS_*` |
 | `nats`     | `NATS_URL`, `NATS_HOST/PORT/TOKEN`, `NATS_MONITOR_URL` |
+| `clickhouse` | `CLICKHOUSE_URL`, `CLICKHOUSE_HOST/HTTP_PORT/NATIVE_PORT/USER/PASSWORD/DATABASE`, `CLICKHOUSE_NATIVE_URL` |
+| `redpanda` | `KAFKA_BROKERS` (bootstrap host:port), `KAFKA_HOST/PORT`, `REDPANDA_URL`, `REDPANDA_ADMIN/SCHEMA_REGISTRY/PROXY_URL` |
 | `mailpit`  | `SMTP_HOST/PORT`, `MAIL_*` |
+
+> The canonical "connection URL" key is **per kind** — `postgres`→`DATABASE_URL`,
+> `redis`→`REDIS_URL`, `clickhouse`→`CLICKHOUSE_URL`, `redpanda`→`REDPANDA_URL`/`KAFKA_BROKERS`.
+> There is **no generic `.URL` key on an addon** (that's only the
+> service-to-service form, `${{ api.URL }}`). Writing `${{ db.URL }}` for a
+> postgres addon resolves to a non-existent secret key and the pod fails with
+> `couldn't find key URL in Secret`. Always use the kind's real key name.
 
 **Key-name mismatch is the #1 footgun.** kuso injects `S3_ACCESS_KEY_ID` but your app may read `S3_ACCESS_KEY`; kuso injects `DATABASE_URL` but you also want a read-replica `DATABASE_READ_URL`. Alias with `${{ <addon>.<KEY> }}`:
 
@@ -505,6 +548,18 @@ kuso redeploy <project> <service>
 | `release` block change         | Takes effect at NEXT deploy. Existing pods unaffected. |
 | `wakeOn.excludePaths` change   | Re-propagates to env's replicaCount on next save.  |
 | Addon password rotation        | Existing pods keep old creds until they restart. |
+| `command` override (v0.18+)    | Rolls a new pod with the container CMD replaced.  |
+
+**Container command override (v0.18+):** any runtime (not just `worker`)
+can override the image's default CMD via `spec.command`. Use it when an
+image bundles several processes that contend for the same `PORT` — e.g. a
+container running both a Go sidecar and `node server.js`, where kuso's
+injected `PORT` makes both bind the same port and one crash-loops. Point
+the command at the single process kuso should serve. `worker` runtime has
+a `--command` CLI flag; for other runtimes it's API-only today:
+`PATCH /api/projects/<p>/services/<s>` with `{"command":["node","server.js"]}`.
+(Reminder: `PORT` is reserved — kuso injects it = the service port; you
+cannot override it via `env set`.)
 
 Only edit production env-vars when you mean to. The web UI shows a **Diff Confirm** modal before applying; the CLI applies immediately — use `kuso apply --dry-run` shapes when in doubt.
 

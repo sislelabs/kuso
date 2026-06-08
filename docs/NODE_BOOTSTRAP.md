@@ -37,13 +37,66 @@ The script fetched by `GET /bootstrap?token=<jti>` runs in this order:
    up to 4 times with capped backoff (5s → 15s → 20s) for transient
    network blips. Hard-fails with a friendly message on 410 (token
    gone) or 404 (token unknown).
-4. Receives `{ k3sUrl, k3sToken, installCommand, … }` from kuso.
-5. Runs `curl -sfL https://get.k3s.io | K3S_URL=… K3S_TOKEN=… INSTALL_K3S_EXEC="agent --node-label …" sh -`.
-6. Logs `done.` — the new node should appear in `kuso get nodes`
+4. Receives `{ installCommand, registryHost, registryIP, nodeName, labels }`
+   from kuso. (The k3s URL + token are embedded, already shell-escaped,
+   inside `installCommand` — they are never returned as separate fields,
+   so a script error path can't echo the cluster secret.)
+5. Tunes `fs.inotify` sysctls (persisted to `/etc/sysctl.d`).
+6. **Wires the in-cluster registry** (when the control plane advertised
+   one): appends `<registryIP> <registryHost-without-port>` to
+   `/etc/hosts` and writes `/etc/rancher/k3s/registries.yaml` pointing
+   the registry at plain `http://` with `insecure_skip_verify`. This is
+   required — the k3s agent install does NOT set it up, and without it
+   the node can't pull build images (see Troubleshooting). Both files
+   are idempotent and survive reboot.
+7. Runs `curl -sfL https://get.k3s.io | K3S_URL=… K3S_TOKEN=… INSTALL_K3S_EXEC="agent --node-label …" sh -`.
+8. Logs `done.` — the new node should appear in `kuso get nodes`
    within ~30 seconds as kubelet registers.
 
 The k3s shared secret is never logged in plain text. Operator-visible
 output redacts `K3S_TOKEN=***`.
+
+## Prerequisite: KUSO_K3S_URL
+
+The control plane must advertise an address the **new node can route
+to** as the k3s join URL. By default the server falls back to
+`KUBERNETES_SERVICE_HOST` — which inside the pod is the in-cluster
+ClusterIP (`10.43.0.1`), **unreachable from an external VM**. A join
+against that fails with `Failed to validate connection to cluster …
+context deadline exceeded`.
+
+Set `KUSO_K3S_URL` on the kuso-server deployment to the control plane's
+publicly-reachable API endpoint:
+
+```bash
+kubectl set env -n kuso deploy/kuso-server KUSO_K3S_URL=https://<control-plane-public-ip>:6443
+```
+
+`/bootstrap/register-node` returns `503 control-plane URL not configured`
+only when neither `KUSO_K3S_URL` nor `KUBERNETES_SERVICE_HOST` is set;
+when the fallback is used you get a *working-looking* command that
+silently can't reach the API — so set `KUSO_K3S_URL` explicitly for any
+node that isn't on the control plane's own private network.
+
+## Firewall: ports a joining node needs
+
+k3s is peer-to-peer for networking. The control plane's firewall must
+allow **inbound from the new node's IP** on:
+
+| Port      | Proto | Purpose                          |
+| --------- | ----- | -------------------------------- |
+| 6443      | TCP   | k3s API (the join itself)        |
+| 10250     | TCP   | kubelet (logs / exec / metrics)  |
+| 8472      | UDP   | flannel VXLAN (pod networking)   |
+
+**6443 alone is not enough.** A node will *join* with only 6443 open
+but its pods get zero overlay connectivity (no ClusterIP, no DNS, no
+registry) because flannel VXLAN rides UDP 8472. The symptom is
+`ImagePullBackOff` (can't reach the registry) on every pod scheduled
+to the new node, while plain `curl` to the control plane works. If the
+allowlist is per-source-IP, add the new node's IP to **all three**
+rules — it's easy to update 6443/10250 (TCP) and forget the 8472 (UDP)
+rule, which leaves exactly this half-broken state.
 
 ## Security model
 
@@ -121,13 +174,19 @@ POST /bootstrap/register-node
 }
 → 200
 {
-  "k3sUrl":         "https://10.0.0.1:6443",
-  "k3sToken":       "K…::server:…",
   "nodeName":       "worker-2",
   "labels":         {"region": "eu", "tier": "premium", "arch": "amd64", …},
-  "installCommand": "curl -sfL https://get.k3s.io | K3S_URL=… sh -"
+  "installCommand": "unset HISTFILE; curl -sfL https://get.k3s.io | K3S_URL=… K3S_TOKEN=… INSTALL_K3S_EXEC=… sh -",
+  "registryHost":   "kuso-registry.kuso.svc.cluster.local:5000",
+  "registryIP":     "10.43.206.191"
 }
 ```
+
+The k3s URL + token are embedded (shell-escaped) inside `installCommand`,
+never returned as separate fields. `registryHost`/`registryIP` are
+best-effort: omitted when the server has no kube client or the
+`kuso-registry` Service is missing, in which case the bootstrap skips
+registry wiring (an older join that worked before this was added).
 
 Replays / revoked / expired tokens return `410 Gone`. Unknown tokens
 return `404`.
@@ -185,9 +244,42 @@ applied at boot via `--node-label`. If `kubectl get node <name>
 operator's pending-tokens row is the source of truth — confirm it
 carried the labels you expected.
 
-**k3s install fails with "Failed to connect to https://...:6443"**:
-Open port 6443 outbound on the new VM (egress firewall) or the
-control plane (ingress firewall, if applicable). The control-plane
-reachability probe in the SSH path catches this earlier; in the
-bootstrap path the failure surfaces in the install output on the
-VM's terminal.
+**k3s install fails with "Failed to connect to https://...:6443"** or
+the agent log loops on `Failed to validate connection to cluster …
+context deadline exceeded`: the new VM can't reach the k3s API.
+Two distinct causes:
+
+- **Wrong URL advertised.** If the agent is trying `https://10.43.0.1:6443`
+  (a ClusterIP), `KUSO_K3S_URL` isn't set — the server fell back to the
+  in-cluster address. Set it (see *Prerequisite: KUSO_K3S_URL*) and
+  re-run the join.
+- **6443 firewalled.** Open inbound 6443/TCP from the new node on the
+  control plane (see *Firewall*). From the VM, `curl -k
+  https://<control-plane>:6443/` should not time out.
+
+**Every pod on the new node is `ImagePullBackOff` / `ErrImagePull`**:
+the node can't pull from the in-cluster registry. Diagnose in order:
+
+1. **Overlay broken (most common).** Run a pod pinned to the node and
+   `curl http://<registry-ClusterIP>:5000/v2/` from inside it. Timeout
+   ⇒ flannel VXLAN isn't flowing — open **UDP 8472** from the node on
+   the control plane (and any other node). Confirm with `tcpdump -ni any
+   'udp port 8472 and host <node-ip>'` on the control plane while the
+   node sends pod traffic; zero packets ⇒ firewall is dropping VXLAN.
+2. **Registry not wired.** `dial tcp: lookup kuso-registry… : Try again`
+   in the pull error ⇒ the node has no `/etc/hosts` entry for the
+   registry (its containerd resolves from the host netns, not cluster
+   DNS). A `https://` in the error ⇒ no `registries.yaml`. Both are
+   written automatically by current bootstraps; on a node that joined
+   before this fix, add them by hand (copy from a working node) or
+   re-run the bootstrap one-liner.
+
+**Stop the crash-looping immediately:** `kubectl cordon <node>` then
+delete the stuck pods so they reschedule onto healthy nodes. Uncordon
+once the node's networking/registry is fixed.
+
+**Script aborts with `set: Illegal option -o history`**: an old kuso
+build. The bootstrap install command used `set +o history`, which dash
+(`/bin/sh` on Debian/Ubuntu) rejects as a special-builtin error that
+exits before `curl` runs. Fixed in current builds (the line was
+removed; `unset HISTFILE` covers the token-in-history concern).
