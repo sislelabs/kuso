@@ -84,6 +84,11 @@ spec:
                   type: string
                   enum: [dockerfile, nixpacks, buildpacks, static]
                   default: dockerfile
+                dockerfile:
+                  type: string
+                  description: >-
+                    Dockerfile filename (relative to repo.path) for
+                    strategy=dockerfile. Empty defaults to "Dockerfile".
                 buildEnv:
                   type: object
                   propertyNames:

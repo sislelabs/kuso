@@ -61,6 +61,13 @@ spec:
                     a sibling web service, but no ingress and a custom
                     command. Pair it with spec.command and spec.fromService
                     pointing at the web sibling whose image to reuse.
+                dockerfile:
+                  type: string
+                  description: |
+                    Dockerfile filename (relative to repo.path) for
+                    runtime=dockerfile. Empty defaults to "Dockerfile".
+                    Lets a monorepo service build from a non-standard
+                    path, e.g. "apps/web/Dockerfile.dev".
                 command:
                   type: array
                   items: { type: string }

@@ -183,6 +183,11 @@ type KusoServiceSpec struct {
 	PrivateEgress bool         `json:"privateEgress,omitempty"`
 	Repo          *KusoRepoRef `json:"repo,omitempty"`
 	Runtime       string       `json:"runtime,omitempty"`
+	// Dockerfile overrides the Dockerfile filename for runtime=dockerfile
+	// builds, relative to repo.path. Empty = "Dockerfile". Lets a monorepo
+	// service build from e.g. "apps/web/Dockerfile.dev". Ignored for
+	// non-dockerfile runtimes.
+	Dockerfile    string       `json:"dockerfile,omitempty"`
 	Command       []string     `json:"command,omitempty"`
 	// FromService — for runtime=worker, the sibling service whose
 	// image to reuse. Empty = the worker has its own repo + builds.
@@ -719,6 +724,10 @@ type KusoBuildSpec struct {
 	Branch               string              `json:"branch,omitempty"`
 	GithubInstallationID int64               `json:"githubInstallationId,omitempty"`
 	Strategy             string              `json:"strategy,omitempty"`
+	// Dockerfile overrides the Dockerfile filename (relative to repo.path)
+	// for strategy=dockerfile builds. Empty = "Dockerfile". Mirrored from
+	// KusoServiceSpec.Dockerfile by builds.Create.
+	Dockerfile           string              `json:"dockerfile,omitempty"`
 	// BuildEnv carries the service's env vars resolved to literals, baked
 	// into the image at build time (ENV-after-FROM). Set by builds.Create
 	// from the service's EnvVars (secretKeyRefs resolved server-side). Apps

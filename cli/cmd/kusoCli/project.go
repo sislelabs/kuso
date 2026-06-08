@@ -263,6 +263,7 @@ var projectDescribeCmd = &cobra.Command{
 var (
 	serviceAddPath        string
 	serviceAddRuntime     string
+	serviceAddDockerfile  string
 	serviceAddPort        int
 	serviceAddImageRepo   string
 	serviceAddImageTag    string
@@ -297,10 +298,11 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("not logged in; run 'kuso login' first")
 	}
 	req := kusoApi.CreateServiceRequest{
-		Name:    args[1],
-		Runtime: serviceAddRuntime,
-		Port:    int32(serviceAddPort),
-		Repo:    &kusoApi.ServiceRepoSpec{Path: serviceAddPath},
+		Name:       args[1],
+		Runtime:    serviceAddRuntime,
+		Dockerfile: serviceAddDockerfile,
+		Port:       int32(serviceAddPort),
+		Repo:       &kusoApi.ServiceRepoSpec{Path: serviceAddPath},
 		Command: serviceAddCommand,
 	}
 	// Build a ServiceScale only when the user actually set a flag —
@@ -1005,6 +1007,7 @@ func init() {
 	projectServiceCmd.AddCommand(serviceAddCmd)
 	serviceAddCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
 	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static|image — nixpacks auto-detects most languages with zero config; image deploys an existing registry image without building")
+	serviceAddCmd.Flags().StringVar(&serviceAddDockerfile, "dockerfile", "", "Dockerfile filename relative to --path (runtime=dockerfile only; default \"Dockerfile\"), e.g. apps/web/Dockerfile.dev")
 	serviceAddCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	serviceAddCmd.Flags().StringVar(&serviceAddImageRepo, "image-repo", "", "(runtime=image) registry image, e.g. ghcr.io/owner/app")
 	serviceAddCmd.Flags().StringVar(&serviceAddImageTag, "image-tag", "", "(runtime=image) tag — defaults to 'latest' server-side")
@@ -1066,6 +1069,7 @@ func init() {
 	serviceCmd.AddCommand(serviceAddTopCmd)
 	serviceAddTopCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static|image — nixpacks auto-detects most languages with zero config; image deploys an existing registry image without building")
+	serviceAddTopCmd.Flags().StringVar(&serviceAddDockerfile, "dockerfile", "", "Dockerfile filename relative to --path (runtime=dockerfile only; default \"Dockerfile\"), e.g. apps/web/Dockerfile.dev")
 	serviceAddTopCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddImageRepo, "image-repo", "", "(runtime=image) registry image, e.g. ghcr.io/owner/app")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddImageTag, "image-tag", "", "(runtime=image) tag — defaults to 'latest' server-side")

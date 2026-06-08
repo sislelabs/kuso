@@ -393,6 +393,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			DisplayName: displayName,
 			Repo:        &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
 			Runtime:     req.Runtime,
+			Dockerfile:  req.Dockerfile,
 			Command:     req.Command,
 			// FromService: only meaningful for runtime=worker, where
 			// the worker reuses a sibling's built image. The build
@@ -1549,6 +1550,10 @@ type PatchServiceRequest struct {
 	// Used by the config-as-code apply to keep runtime=image services
 	// in lockstep with their kuso.yaml.
 	Image *ServiceImageSpec `json:"image,omitempty"`
+	// Dockerfile overrides the Dockerfile filename for runtime=dockerfile
+	// (relative to repo.path). Pointer so omitting leaves it; "" clears
+	// back to the default "Dockerfile".
+	Dockerfile *string `json:"dockerfile,omitempty"`
 	// Command replaces the run command. Pointer to a slice so "unset"
 	// (nil, leave alone) is distinguishable from "empty" (clear it).
 	Command *[]string `json:"command,omitempty"`
@@ -1863,6 +1868,9 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 				Tag:        tag,
 			}
 		}
+	}
+	if req.Dockerfile != nil {
+		svc.Spec.Dockerfile = *req.Dockerfile
 	}
 	commandChanged := false
 	if req.Command != nil {

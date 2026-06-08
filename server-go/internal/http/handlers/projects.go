@@ -66,6 +66,7 @@ func apiv1CreateServiceToDomain(in apiv1.CreateServiceRequest) projects.CreateSe
 		Name:        in.Name,
 		DisplayName: in.DisplayName,
 		Runtime:     in.Runtime,
+		Dockerfile:  in.Dockerfile,
 		Command:     in.Command,
 		Port:        in.Port,
 		// FromService is required for runtime=worker (sibling service

@@ -620,7 +620,7 @@ spec:
               DF=".kuso-static.Dockerfile"
               {{- else }}
               CTX="/workspace/src/{{ .Values.repo.path | default "." }}"
-              DF="Dockerfile"
+              DF="{{ .Values.dockerfile | default "Dockerfile" }}"
               {{- end }}
 
               IMAGE="{{ .Values.image.repository }}:{{ .Values.image.tag }}"

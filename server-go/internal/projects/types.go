@@ -70,6 +70,10 @@ type CreateServiceRequest struct {
 	DisplayName string                 `json:"displayName,omitempty"`
 	Repo       *CreateServiceRepo     `json:"repo,omitempty"`
 	Runtime    string                 `json:"runtime,omitempty"`
+	// Dockerfile overrides the Dockerfile filename (relative to repo.path)
+	// for runtime=dockerfile. Empty = "Dockerfile". For monorepos with a
+	// non-standard name, e.g. "apps/web/Dockerfile.dev".
+	Dockerfile string                 `json:"dockerfile,omitempty"`
 	// Command is the argv for runtime=worker. Ignored otherwise.
 	Command []string `json:"command,omitempty"`
 	// FromService is the sibling service whose built image this

@@ -783,6 +783,7 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		Repo:                 &kube.KusoRepoRef{URL: repoURL, Path: repoPath},
 		GithubInstallationID: installationID,
 		Strategy:             strategy,
+		Dockerfile:           svcCR.Spec.Dockerfile,
 		DryRun:               req.DryRun,
 		// Carry strategy-specific configuration from the service
 		// spec onto the build CR so the helm chart can render the
