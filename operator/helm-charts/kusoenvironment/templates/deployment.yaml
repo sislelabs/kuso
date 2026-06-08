@@ -149,10 +149,14 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
-          {{- /* Workers override the image's default CMD with the
-                 user-supplied command (e.g. `bundle exec sidekiq`).
-                 Web services keep the image's default. */}}
-          {{- if and (eq (default "" .Values.runtime) "worker") .Values.command }}
+          {{- /* Any service may override the image's default CMD with a
+                 user-supplied command. Workers use it for queue consumers
+                 (e.g. `bundle exec sidekiq`); web services use it to pick
+                 one of several processes baked into an image (e.g. run only
+                 the Next.js server in a container that bundles a sidecar
+                 that would otherwise contend for the same PORT). Empty =
+                 keep the image's default CMD. */}}
+          {{- if .Values.command }}
           command:
             {{- range .Values.command }}
             - {{ . | quote }}
