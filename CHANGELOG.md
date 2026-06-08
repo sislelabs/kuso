@@ -5,12 +5,23 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [0.18.35] — 2026-06-07
+## [0.18.45] — 2026-06-08
 
 ### ✨ Features
+- Feat(deploy): allow command override for any runtime, not just worker ([425a228](https://github.com/sislelabs/kuso/commit/425a2282182a02aa0c77e9032bb5172ca7b8e6fa))
+- Feat(builds): custom Dockerfile filename per service ([034ecc7](https://github.com/sislelabs/kuso/commit/034ecc77a1c9d1340502d6082a583e6cbb61c128))
+- Feat(addons): redpanda (Kafka) addon kind ([480fe97](https://github.com/sislelabs/kuso/commit/480fe970c1e787c49fdf2bd441734dbef88a77e7))
 - Feat(import): docker-compose → kuso import (CLI + web) ([74aa708](https://github.com/sislelabs/kuso/commit/74aa708ed1be64d9141aaaa00684011d25ad0f06))
 
 ### 🐛 Bug Fixes
+- Fix(security): validate spec.dockerfile against shell-injection ([053be32](https://github.com/sislelabs/kuso/commit/053be32799e783b0ddf2769aaac0e90d656a89d6))
+- Fix(addons): clickhouse writable users.d (non-root entrypoint rewrite) ([b6c3718](https://github.com/sislelabs/kuso/commit/b6c37188937fd5eefbd48e9452549efc19de23a1))
+- Fix(addons): redpanda rpc-addr binds 0.0.0.0, advertises service DNS ([4d05fa5](https://github.com/sislelabs/kuso/commit/4d05fa5f1af8ffdfdd245db59c50bbd7f80e5c67))
+- Fix(addons): redpanda writable /etc/redpanda + HOME (non-root) ([703a27f](https://github.com/sislelabs/kuso/commit/703a27f589192b92a63cca2ffef3ab66601d7bf3))
+- Fix(addons): run redpanda via image entrypoint (rpk), not raw binary ([fbb88e5](https://github.com/sislelabs/kuso/commit/fbb88e50876ebe88b4d965149c1df2bd12d85a7f))
+- Fix(addons): redpanda args as separate argv tokens ([c286aec](https://github.com/sislelabs/kuso/commit/c286aec11ff06bfbe530e9b8768e865e937e20fb))
+- Fix(addons): redpanda args must be one flag+value string each ([98cca3f](https://github.com/sislelabs/kuso/commit/98cca3f3e5876374ee9bff87f00f348c6713d78f))
+- Fix(crd): add redpanda to KusoAddon spec.kind enum ([70c4159](https://github.com/sislelabs/kuso/commit/70c4159783573e25d415ba004528b493427ef44f))
 - Fix(import): map only implemented addon kinds + correct conn URL key ([10ce96e](https://github.com/sislelabs/kuso/commit/10ce96edc4a0a29cc316e122e9c7bbc4c15b2f0e))
 
 ### 📝 Docs
