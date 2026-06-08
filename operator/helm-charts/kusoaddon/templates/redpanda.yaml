@@ -81,9 +81,22 @@ spec:
               containerPort: 8081
             - name: proxy
               containerPort: 8082
+          # rpk (via the image entrypoint) writes a generated config to
+          # /etc/redpanda and rpk state under $HOME/.config. kuso runs
+          # pods non-root with drop:ALL caps, so those default paths
+          # aren't writable — without writable mounts rpk fails with
+          # "permission denied" and dumps help. Give it writable
+          # emptyDirs + point HOME at one of them.
+          env:
+            - name: HOME
+              value: /home/redpanda
           volumeMounts:
             - name: data
               mountPath: /var/lib/redpanda/data
+            - name: etc
+              mountPath: /etc/redpanda
+            - name: home
+              mountPath: /home/redpanda
           readinessProbe:
             exec:
               command:
@@ -96,6 +109,11 @@ spec:
             failureThreshold: 12
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      volumes:
+        - name: etc
+          emptyDir: {}
+        - name: home
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: data
