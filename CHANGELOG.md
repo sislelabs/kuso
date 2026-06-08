@@ -14,6 +14,7 @@ messages on every release. The format is loosely based on
 - Feat(import): docker-compose → kuso import (CLI + web) ([74aa708](https://github.com/sislelabs/kuso/commit/74aa708ed1be64d9141aaaa00684011d25ad0f06))
 
 ### 🐛 Bug Fixes
+- Fix(rbac): grant kuso-server get/list services (node-bootstrap registry lookup) ([2bfd651](https://github.com/sislelabs/kuso/commit/2bfd651c006130eb71c3a7018bd35c29fbedb7fb))
 - Fix(nodejoin): auto-wire in-cluster registry on joining nodes ([a5284cf](https://github.com/sislelabs/kuso/commit/a5284cfd95e26b65b063a164d6008cf6e616e647))
 - Fix(nodejoin): drop 'set +o history' — dash aborts on it ([c1cdf3c](https://github.com/sislelabs/kuso/commit/c1cdf3c9b5aeeea028cd3717338f4f594c03a5e4))
 - Fix(addons): clickhouse pass CLICKHOUSE_PASSWORD to container env ([f980867](https://github.com/sislelabs/kuso/commit/f980867e96a250906873d87fa4cf9ccd47c45467))
