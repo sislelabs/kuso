@@ -112,6 +112,13 @@ func TestRenderScript_BakesParams(t *testing.T) {
 		"KUSO_TOKEN='abc123'",
 		"/bootstrap/register-node",
 		"INSTALL_K3S_EXEC=", // redacted log line still mentions the env var
+		// Registry wiring (so joined nodes can pull build images): the
+		// script must parse the registry fields and write both files.
+		"REGISTRY_HOST=$(extract registryHost)",
+		"REGISTRY_IP=$(extract registryIP)",
+		"/etc/rancher/k3s/registries.yaml",
+		"/etc/hosts",
+		"insecure_skip_verify: true",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("script missing %q", want)

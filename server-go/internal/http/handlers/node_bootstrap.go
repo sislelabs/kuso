@@ -18,6 +18,7 @@
 package handlers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -27,9 +28,13 @@ import (
 	"strings"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"kuso/server/internal/audit"
 	"kuso/server/internal/auth"
+	"kuso/server/internal/builds"
 	"kuso/server/internal/db"
+	"kuso/server/internal/kube"
 	"kuso/server/internal/nodejoin"
 )
 
@@ -42,9 +47,15 @@ var splitHostPort = net.SplitHostPort
 // the public /bootstrap routes can be mounted on the unauthenticated
 // router without dragging the kube client through the public side.
 type NodeBootstrapHandler struct {
-	DB     *db.DB
-	Audit  *audit.Service
-	Logger *slog.Logger
+	DB    *db.DB
+	Audit *audit.Service
+	// Kube is used (best-effort) to look up the in-cluster registry
+	// Service ClusterIP so the bootstrap can wire a joining node's
+	// /etc/hosts + containerd registries.yaml. Optional: when nil the
+	// register response omits registry info and the bootstrap skips it.
+	Kube      *kube.Client
+	Namespace string
+	Logger    *slog.Logger
 }
 
 // MountAdmin registers the admin-only token-management endpoints. Wire
@@ -397,11 +408,49 @@ func (h *NodeBootstrapHandler) RegisterNode(w http.ResponseWriter, r *http.Reque
 	// the operator's terminal. The install-command already has the
 	// token shell-escaped inside it, which is exactly what the
 	// script needs to run.
+	// Best-effort: advertise the in-cluster registry so the bootstrap
+	// can wire the joining node's /etc/hosts + registries.yaml. Without
+	// this the node can't pull build images (the k3s agent install sets
+	// up neither). Failures here don't block the join — older flows
+	// joined without it; the operator can fix a node by hand if needed.
+	registryHost, registryIP := h.registryEndpoint(r.Context())
+
 	writeJSON(w, http.StatusOK, nodejoin.RegisterResponse{
 		NodeName:       tok.NodeName,
 		Labels:         mergedLabels,
 		InstallCommand: installCmd,
+		RegistryHost:   registryHost,
+		RegistryIP:     registryIP,
 	})
+}
+
+// registryEndpoint returns the in-cluster registry host:port and its
+// Service ClusterIP. The host is the canonical build-registry address;
+// the IP is looked up live (it's stable but not hard-coded). Returns
+// empty strings when kube is unavailable or the Service is missing, in
+// which case the bootstrap skips registry wiring.
+func (h *NodeBootstrapHandler) registryEndpoint(ctx context.Context) (host, ip string) {
+	if h.Kube == nil {
+		return "", ""
+	}
+	host = builds.RegistryHost // kuso-registry.kuso.svc.cluster.local:5000
+	// Derive the Service name from the canonical host: first DNS label.
+	svcName := host
+	if i := strings.Index(svcName, "."); i >= 0 {
+		svcName = svcName[:i]
+	}
+	ns := h.Namespace
+	if ns == "" {
+		ns = "kuso"
+	}
+	svc, err := h.Kube.Clientset.CoreV1().Services(ns).Get(ctx, svcName, metav1.GetOptions{})
+	if err != nil || svc.Spec.ClusterIP == "" || svc.Spec.ClusterIP == "None" {
+		if err != nil {
+			h.Logger.Warn("nodejoin: registry Service lookup failed; skipping registry wiring", "svc", svcName, "ns", ns, "err", err)
+		}
+		return "", ""
+	}
+	return host, svc.Spec.ClusterIP
 }
 
 // publicBaseURL derives kuso's externally-reachable base URL.

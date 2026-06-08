@@ -177,6 +177,15 @@ type RegisterResponse struct {
 	NodeName       string            `json:"nodeName,omitempty"`
 	Labels         map[string]string `json:"labels"`
 	InstallCommand string            `json:"installCommand"`
+	// RegistryHost is the in-cluster image registry's host:port
+	// (e.g. "kuso-registry.kuso.svc.cluster.local:5000"). The bootstrap
+	// writes a containerd registries.yaml entry for it so the new node
+	// can pull build images over plain HTTP. Empty = skip registry setup.
+	RegistryHost string `json:"registryHost,omitempty"`
+	// RegistryIP is the registry Service's ClusterIP. The new node's
+	// containerd resolves RegistryHost from the host netns (NOT cluster
+	// DNS), so the bootstrap pins host→IP in /etc/hosts. Empty = skip.
+	RegistryIP string `json:"registryIP,omitempty"`
 }
 
 // MergeFactLabels takes the operator-supplied label set and the
@@ -375,6 +384,8 @@ extract() {
 }
 
 NODE_NAME_VAL=$(extract nodeName)
+REGISTRY_HOST=$(extract registryHost)
+REGISTRY_IP=$(extract registryIP)
 INSTALL_CMD=$(printf '%s' "$RESPONSE" | sed -n 's/.*"installCommand"[[:space:]]*:[[:space:]]*"\(.*\)"[[:space:]]*[},].*/\1/p' | head -n1)
 # JSON un-escape \" and \\ in the install command so it's a runnable shell line.
 INSTALL_CMD=$(printf '%s' "$INSTALL_CMD" | sed -e 's/\\"/"/g' -e 's/\\\\/\\/g')
@@ -383,6 +394,41 @@ if [ -z "$INSTALL_CMD" ]; then
   err "register response missing installCommand — server bug?"
   # No $RESPONSE in the error: it embeds the join token.
   exit 5
+fi
+
+# ---------- in-cluster registry wiring ----------
+# Build images live in an in-cluster registry served over plain HTTP at
+# a ClusterIP. A worker needs two things to pull from it, and the k3s
+# agent install does NOT set either up:
+#
+#   1. /etc/hosts: containerd resolves the registry host from the HOST
+#      netns, which has no cluster DNS — so without a hosts entry the
+#      pull dies with "lookup …: Try again". Pin host -> ClusterIP.
+#   2. registries.yaml: tell containerd to use http:// (not https) and
+#      skip TLS verify for that host, else the pull tries https and
+#      fails on the plain-HTTP registry.
+#
+# Both files are idempotent + persist across reboots. Skipped when the
+# server didn't advertise a registry (older control planes).
+if [ -n "$REGISTRY_HOST" ] && [ -n "$REGISTRY_IP" ]; then
+  REG_NAME="${REGISTRY_HOST%%:*}"   # strip :port for the /etc/hosts name
+  log "wiring in-cluster registry $REGISTRY_HOST ($REGISTRY_IP)"
+  if ! grep -q "[[:space:]]$REG_NAME\$" /etc/hosts 2>/dev/null; then
+    printf '%s %s\n' "$REGISTRY_IP" "$REG_NAME" >> /etc/hosts
+  fi
+  mkdir -p /etc/rancher/k3s
+  cat > /etc/rancher/k3s/registries.yaml <<REG_EOF
+mirrors:
+  "$REGISTRY_HOST":
+    endpoint:
+      - "http://$REGISTRY_HOST"
+configs:
+  "$REGISTRY_HOST":
+    tls:
+      insecure_skip_verify: true
+REG_EOF
+else
+  log "no registry advertised by control plane — skipping registry wiring"
 fi
 
 # ---------- kernel tuning ----------

@@ -267,7 +267,7 @@ func NewRouter(d Deps) http.Handler {
 	// live on the bearer-protected router.
 	var bootstrapH *httphandlers.NodeBootstrapHandler
 	if d.DB != nil {
-		bootstrapH = &httphandlers.NodeBootstrapHandler{DB: d.DB, Audit: d.Audit, Logger: d.Logger}
+		bootstrapH = &httphandlers.NodeBootstrapHandler{DB: d.DB, Audit: d.Audit, Kube: d.Kube, Namespace: d.Namespace, Logger: d.Logger}
 		bootstrapH.MountPublic(r)
 	}
 
