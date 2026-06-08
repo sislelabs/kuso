@@ -22,20 +22,20 @@ func BuildInstallCommand(k3sURL, k3sToken string, labels map[string]string, node
 	if flags != "" {
 		execArg = "agent " + flags
 	}
-	// `unset HISTFILE` + leading-space prefix on the actual command
-	// keeps the K3S_TOKEN out of bash/zsh history. Operators who paste
-	// this into a terminal won't leak the bootstrap token through
-	// their shell scrollback file. The `set +o history` covers shells
-	// that don't honour HISTCONTROL=ignorespace.
+	// `unset HISTFILE` keeps the K3S_TOKEN out of an interactive shell's
+	// history file when an operator pastes this manually.
 	//
-	// The `|| true` after `set +o history` is load-bearing: dash (the
-	// default /bin/sh on Debian/Ubuntu) rejects `set -o history` with
-	// a non-zero exit, and the bootstrap script runs the install command
-	// with `set -eu` so an unguarded `set` failure aborts the entire
-	// install before curl even runs. The redirect alone doesn't help —
-	// it suppresses stderr but the exit code still trips `-e`.
+	// We deliberately do NOT use `set +o history` here: dash (the default
+	// /bin/sh on Debian/Ubuntu) treats `set [+-]o history` as an *illegal
+	// option*, which is a POSIX "special builtin" error that exits the
+	// shell immediately — it bypasses `|| true` and even `2>/dev/null`
+	// can't save it (the redirect hides the message, not the exit). Since
+	// the bootstrap runs this via `sh -c "$INSTALL_CMD"`, an unguarded
+	// `set` failure aborted the whole install before curl ran. History is
+	// off in a non-interactive shell anyway, so `unset HISTFILE` alone is
+	// sufficient.
 	return fmt.Sprintf(
-		`unset HISTFILE; set +o history 2>/dev/null || true; curl -sfL https://get.k3s.io | K3S_URL=%s K3S_TOKEN=%s INSTALL_K3S_EXEC=%s sh -`,
+		`unset HISTFILE; curl -sfL https://get.k3s.io | K3S_URL=%s K3S_TOKEN=%s INSTALL_K3S_EXEC=%s sh -`,
 		shEscape(k3sURL), shEscape(k3sToken), shEscape(execArg),
 	)
 }
