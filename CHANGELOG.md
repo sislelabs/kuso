@@ -5,10 +5,13 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [0.18.34] — 2026-06-06
+## [0.18.35] — 2026-06-07
 
 ### ✨ Features
 - Feat(import): docker-compose → kuso import (CLI + web) ([74aa708](https://github.com/sislelabs/kuso/commit/74aa708ed1be64d9141aaaa00684011d25ad0f06))
+
+### 🐛 Bug Fixes
+- Fix(import): map only implemented addon kinds + correct conn URL key ([10ce96e](https://github.com/sislelabs/kuso/commit/10ce96edc4a0a29cc316e122e9c7bbc4c15b2f0e))
 
 ### 📝 Docs
 - Docs(import): docker-compose → kuso import design spec ([1847586](https://github.com/sislelabs/kuso/commit/1847586055fee3880379ce99b5dc031222165cd7))
