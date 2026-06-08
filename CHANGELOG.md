@@ -5,7 +5,7 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [0.18.46] — 2026-06-08
+## [0.18.47] — 2026-06-08
 
 ### ✨ Features
 - Feat(deploy): allow command override for any runtime, not just worker ([425a228](https://github.com/sislelabs/kuso/commit/425a2282182a02aa0c77e9032bb5172ca7b8e6fa))
@@ -14,6 +14,7 @@ messages on every release. The format is loosely based on
 - Feat(import): docker-compose → kuso import (CLI + web) ([74aa708](https://github.com/sislelabs/kuso/commit/74aa708ed1be64d9141aaaa00684011d25ad0f06))
 
 ### 🐛 Bug Fixes
+- Fix(nodejoin): drop 'set +o history' — dash aborts on it ([c1cdf3c](https://github.com/sislelabs/kuso/commit/c1cdf3c9b5aeeea028cd3717338f4f594c03a5e4))
 - Fix(addons): clickhouse pass CLICKHOUSE_PASSWORD to container env ([f980867](https://github.com/sislelabs/kuso/commit/f980867e96a250906873d87fa4cf9ccd47c45467))
 - Fix(migrate): normalize Coolify base_directory + dedupe/filter env vars ([ab5f766](https://github.com/sislelabs/kuso/commit/ab5f7667079a50ff4b0f2e1498e3454e9adc743d))
 - Fix(crd): drop propertyNames from kusobuilds.buildEnv (unbreaks apply) ([22800de](https://github.com/sislelabs/kuso/commit/22800de49209694074ab9de332ec0ac20ad9900c))
