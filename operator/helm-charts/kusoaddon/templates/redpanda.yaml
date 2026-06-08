@@ -50,38 +50,28 @@ spec:
           image: "docker.redpanda.com/redpandadata/redpanda:{{ $version }}"
           {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
           imagePullPolicy: IfNotPresent
-          command:
-            - redpanda
-            - start
-          # k8s args[] are literal argv tokens (no shell splitting), so
-          # each flag and its value must be SEPARATE array elements.
-          # "--flag value" as one element becomes a single argv with a
-          # space → "unrecognised option"; "--flag=value" as one token
-          # also errors. Two elements per flag is the form redpanda's
-          # parser accepts under exec (non-shell) invocation.
+          # IMPORTANT: do NOT set `command:`. The image ENTRYPOINT is
+          # /entrypoint.sh, which execs `rpk redpanda start <args>`. rpk
+          # accepts the combined "--flag value" string form (one arg per
+          # flag, space inside). Overriding command to [redpanda,start]
+          # bypasses entrypoint.sh + rpk and the raw binary rejects the
+          # flags with "unrecognised option". So we pass args through the
+          # default entrypoint: args = [redpanda, start, "--flag value", …]
+          # exactly as the upstream redpanda compose runs it.
           args:
-            - "--kafka-addr"
-            - "internal://0.0.0.0:9092"
-            - "--advertise-kafka-addr"
-            - "internal://{{ $name }}:9092"
-            - "--pandaproxy-addr"
-            - "internal://0.0.0.0:8082"
-            - "--advertise-pandaproxy-addr"
-            - "internal://{{ $name }}:8082"
-            - "--schema-registry-addr"
-            - "internal://0.0.0.0:8081"
-            - "--rpc-addr"
-            - "{{ $name }}:33145"
-            - "--advertise-rpc-addr"
-            - "{{ $name }}:33145"
-            - "--mode"
-            - "dev-container"
-            - "--smp"
-            - "1"
-            - "--default-log-level"
-            - "warn"
-            - "--set"
-            - "auto_create_topics_enabled=true"
+            - "redpanda"
+            - "start"
+            - "--kafka-addr internal://0.0.0.0:9092"
+            - "--advertise-kafka-addr internal://{{ $name }}:9092"
+            - "--pandaproxy-addr internal://0.0.0.0:8082"
+            - "--advertise-pandaproxy-addr internal://{{ $name }}:8082"
+            - "--schema-registry-addr internal://0.0.0.0:8081"
+            - "--rpc-addr {{ $name }}:33145"
+            - "--advertise-rpc-addr {{ $name }}:33145"
+            - "--mode dev-container"
+            - "--smp 1"
+            - "--default-log-level=warn"
+            - "--set auto_create_topics_enabled=true"
           ports:
             - name: kafka
               containerPort: 9092
