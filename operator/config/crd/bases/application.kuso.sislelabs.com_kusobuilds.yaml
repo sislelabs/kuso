@@ -91,8 +91,12 @@ spec:
                     strategy=dockerfile. Empty defaults to "Dockerfile".
                 buildEnv:
                   type: object
-                  propertyNames:
-                    pattern: "^[A-Za-z_][A-Za-z0-9_]*$"
+                  # NOTE: no `propertyNames` validator here. It is valid
+                  # OpenAPI v3 but the apiserver's structural-schema strict
+                  # decoder rejects it on `kubectl apply` (the live CRD was
+                  # installed without it), which broke every operator roll.
+                  # Env-var key validation already happens server-side
+                  # (builds.Create resolves keys from the service spec).
                   additionalProperties:
                     type: string
                   description: >-
