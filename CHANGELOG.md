@@ -5,7 +5,7 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
-## [0.18.47] — 2026-06-08
+## [0.18.48] — 2026-06-08
 
 ### ✨ Features
 - Feat(deploy): allow command override for any runtime, not just worker ([425a228](https://github.com/sislelabs/kuso/commit/425a2282182a02aa0c77e9032bb5172ca7b8e6fa))
@@ -14,6 +14,7 @@ messages on every release. The format is loosely based on
 - Feat(import): docker-compose → kuso import (CLI + web) ([74aa708](https://github.com/sislelabs/kuso/commit/74aa708ed1be64d9141aaaa00684011d25ad0f06))
 
 ### 🐛 Bug Fixes
+- Fix(nodejoin): auto-wire in-cluster registry on joining nodes ([a5284cf](https://github.com/sislelabs/kuso/commit/a5284cfd95e26b65b063a164d6008cf6e616e647))
 - Fix(nodejoin): drop 'set +o history' — dash aborts on it ([c1cdf3c](https://github.com/sislelabs/kuso/commit/c1cdf3c9b5aeeea028cd3717338f4f594c03a5e4))
 - Fix(addons): clickhouse pass CLICKHOUSE_PASSWORD to container env ([f980867](https://github.com/sislelabs/kuso/commit/f980867e96a250906873d87fa4cf9ccd47c45467))
 - Fix(migrate): normalize Coolify base_directory + dedupe/filter env vars ([ab5f766](https://github.com/sislelabs/kuso/commit/ab5f7667079a50ff4b0f2e1498e3454e9adc743d))
@@ -29,6 +30,7 @@ messages on every release. The format is loosely based on
 - Fix(import): map only implemented addon kinds + correct conn URL key ([10ce96e](https://github.com/sislelabs/kuso/commit/10ce96edc4a0a29cc316e122e9c7bbc4c15b2f0e))
 
 ### 📝 Docs
+- Docs(nodejoin,skill): registry wiring, KUSO_K3S_URL, firewall ports + v0.18 features ([c47510a](https://github.com/sislelabs/kuso/commit/c47510aa2c9c29b9daf41d3775a17991e616dec9))
 - Docs(import): docker-compose → kuso import design spec ([1847586](https://github.com/sislelabs/kuso/commit/1847586055fee3880379ce99b5dc031222165cd7))
 
 ## [0.18.33] — 2026-06-04
