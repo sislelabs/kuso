@@ -94,6 +94,16 @@ spec:
             # its entrypoint init scripts.
             - name: CLICKHOUSE_DB
               value: {{ $database | quote }}
+            # The image entrypoint regenerates default-user.xml at boot
+            # from CLICKHOUSE_USER/PASSWORD. Without PASSWORD here the
+            # default user gets an EMPTY password on the server while the
+            # conn-secret advertises the generated one → every client
+            # using the secret fails auth. Pass the same $password the
+            # conn-secret carries so server and secret agree.
+            - name: CLICKHOUSE_USER
+              value: "default"
+            - name: CLICKHOUSE_PASSWORD
+              value: {{ $password | quote }}
             - name: CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT
               value: "1"
           volumeMounts:
