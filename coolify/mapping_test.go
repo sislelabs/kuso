@@ -69,6 +69,58 @@ func TestNormalizeRepoURL(t *testing.T) {
 	}
 }
 
+func TestSelectEnvVars(t *testing.T) {
+	in := []EnvVar{
+		{Key: "NODE_VERSION", Value: "22", IsPreview: false},
+		{Key: "NODE_VERSION", Value: "22", IsPreview: true},  // preview dup → dropped
+		{Key: "PORT", Value: "3000", IsCoolify: true},        // coolify-managed → dropped
+		{Key: "API_URL", RealValue: "https://api", Value: "{{X}}"}, // real_value wins
+		{Key: "", Value: "x"},                                 // empty key → dropped
+		{Key: "DUP", Value: "first"},
+		{Key: "DUP", Value: "second"},                         // last-wins
+	}
+	out := SelectEnvVars(in)
+	got := map[string]string{}
+	for _, e := range out {
+		got[e.Key] = e.Value
+	}
+	if len(out) != 3 {
+		t.Fatalf("expected 3 vars (NODE_VERSION, API_URL, DUP), got %d: %+v", len(out), out)
+	}
+	if got["NODE_VERSION"] != "22" {
+		t.Errorf("NODE_VERSION = %q, want 22 (preview dup dropped)", got["NODE_VERSION"])
+	}
+	if got["API_URL"] != "https://api" {
+		t.Errorf("API_URL = %q, want real_value", got["API_URL"])
+	}
+	if got["DUP"] != "second" {
+		t.Errorf("DUP = %q, want last-wins 'second'", got["DUP"])
+	}
+	if _, ok := got["PORT"]; ok {
+		t.Error("PORT (is_coolify) must be dropped")
+	}
+}
+
+func TestNormalizeBaseDir(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"", ""},
+		{"  ", ""},
+		{"/", ""},        // Coolify repo-root → kuso empty path
+		{"/apps/web", "apps/web"},
+		{"apps/web", "apps/web"},
+		{"/apps/web/", "apps/web"},
+		{"/src", "src"},
+	}
+	for _, c := range cases {
+		got := NormalizeBaseDir(c.in)
+		if got != c.want {
+			t.Errorf("NormalizeBaseDir(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestRuntimeForBuildPack(t *testing.T) {
 	cases := []struct {
 		in, want string

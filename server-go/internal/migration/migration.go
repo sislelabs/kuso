@@ -240,7 +240,7 @@ func (s *Service) importApp(ctx context.Context, c CoolifyClient, projectSlug st
 		Port:    int32(coolify.ParseFirstPort(it.App.PortsExposes)),
 		Repo: &projects.CreateServiceRepo{
 			URL:  coolify.NormalizeRepoURL(it.App.GitRepository),
-			Path: it.App.BaseDirectory,
+			Path: coolify.NormalizeBaseDir(it.App.BaseDirectory),
 		},
 	}
 	if _, err := s.Projects.AddService(ctx, projectSlug, svcReq); err != nil {
@@ -259,16 +259,15 @@ func (s *Service) importApp(ctx context.Context, c CoolifyClient, projectSlug st
 		out.Errors = append(out.Errors, Detail{Kind: "env", Name: projectSlug + "/" + svcSlug, Reason: "list envs: " + err.Error()})
 		return
 	}
-	envVars := make([]projects.EnvVar, 0, len(envs))
-	for _, e := range envs {
-		if e.IsCoolify {
-			// Coolify-managed system vars (PORT etc.) live on the
-			// Coolify-side runtime, not the user-space config. kuso
-			// re-derives these from its own runtime; importing them
-			// verbatim would shadow the kuso-correct value.
-			continue
-		}
-		envVars = append(envVars, projects.EnvVar{Name: e.Key, Value: e.EffectiveValue()})
+	// SelectEnvVars drops Coolify-managed system vars (PORT etc. — kuso
+	// re-derives these and importing them verbatim would shadow the
+	// kuso-correct value) AND preview-scoped duplicates, then dedupes
+	// by key so kuso's "duplicate env var name" validation doesn't
+	// reject the whole batch.
+	selected := coolify.SelectEnvVars(envs)
+	envVars := make([]projects.EnvVar, 0, len(selected))
+	for _, e := range selected {
+		envVars = append(envVars, projects.EnvVar{Name: e.Key, Value: e.Value})
 	}
 	if len(envVars) == 0 {
 		return

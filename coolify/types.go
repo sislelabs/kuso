@@ -123,6 +123,32 @@ func (e EnvVar) EffectiveValue() string {
 	return e.Value
 }
 
+// SelectEnvVars normalizes a Coolify app's raw env list into the set
+// kuso should import: it drops Coolify-managed vars (is_coolify) and
+// preview-scoped duplicates (is_preview — Coolify stores the same key
+// once per environment, so a key set for both production and previews
+// arrives twice; kuso previews inherit from production, so the preview
+// copy is redundant), then dedupes by key (last non-preview wins).
+// Without this, importing an app whose key exists in two Coolify
+// environments fails kuso's "duplicate env var name" validation.
+// Returns ordered (Key, Value) pairs, preserving first-seen order.
+func SelectEnvVars(in []EnvVar) []struct{ Key, Value string } {
+	seen := map[string]int{} // key → index in out
+	var out []struct{ Key, Value string }
+	for _, e := range in {
+		if e.IsCoolify || e.IsPreview || e.Key == "" {
+			continue
+		}
+		if idx, ok := seen[e.Key]; ok {
+			out[idx].Value = e.EffectiveValue() // last-wins
+			continue
+		}
+		seen[e.Key] = len(out)
+		out = append(out, struct{ Key, Value string }{e.Key, e.EffectiveValue()})
+	}
+	return out
+}
+
 // ParsedAt parses the Coolify ISO-8601 timestamp. Returns zero on
 // parse failure — none of our migration paths actually need exact
 // times, just rough chronology in reports.

@@ -137,6 +137,19 @@ func NormalizeRepoURL(s string) string {
 	return "https://github.com/" + strings.TrimSuffix(s, ".git")
 }
 
+// NormalizeBaseDir turns a Coolify base_directory into a kuso
+// spec.repo.path. Coolify expresses the repo root as "/" (and often a
+// monorepo subdir as "/apps/web"); kuso's repo.path is a RELATIVE path
+// under the clone root and rejects a leading slash, so we strip it.
+// "/" → "" (root); "/apps/web" → "apps/web"; "" → "". Trailing slashes
+// are trimmed so "apps/web/" doesn't drift from "apps/web".
+func NormalizeBaseDir(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.TrimPrefix(s, "/")
+	s = strings.TrimSuffix(s, "/")
+	return s
+}
+
 // RuntimeForBuildPack maps a Coolify BuildPack to a kuso runtime
 // string. Unknown values default to "dockerfile" — the safest option
 // since the imported app needs *some* build path and a Dockerfile is

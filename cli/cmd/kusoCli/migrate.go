@@ -265,7 +265,7 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 				Port:    int32(coolify.ParseFirstPort(it.App.PortsExposes)),
 				Repo: &kusoApi.ServiceRepoSpec{
 					URL:  coolify.NormalizeRepoURL(it.App.GitRepository),
-					Path: it.App.BaseDirectory,
+					Path: coolify.NormalizeBaseDir(it.App.BaseDirectory),
 				},
 			}
 			sr, err := api.AddService(projectSlug, svcReq)
@@ -286,13 +286,10 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 				continue
 			}
 			body := kusoApi.SetEnvRequest{EnvVars: []map[string]any{}}
-			for _, e := range envs {
-				if e.IsCoolify {
-					continue
-				}
+			for _, e := range coolify.SelectEnvVars(envs) {
 				body.EnvVars = append(body.EnvVars, map[string]any{
 					"name":  e.Key,
-					"value": e.EffectiveValue(),
+					"value": e.Value,
 				})
 			}
 			if len(body.EnvVars) == 0 {
