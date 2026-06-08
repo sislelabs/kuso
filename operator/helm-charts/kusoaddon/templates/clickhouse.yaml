@@ -61,6 +61,23 @@ spec:
     spec:
       {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
       {{- include "kusoaddon.placement" . | nindent 6 }}
+      initContainers:
+        # The CH entrypoint (with access-management on) rewrites files
+        # under /etc/clickhouse-server/users.d at boot. A configmap/secret
+        # subPath mount is read-only, so the entrypoint dies with
+        # "Read-only file system". Stage our default-user.xml into a
+        # WRITABLE emptyDir the entrypoint can also write to.
+        - name: seed-userconf
+          image: "clickhouse/clickhouse-server:{{ $version }}"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
+          command: ["/bin/sh", "-c"]
+          args:
+            - "cp /seed/default-user.xml /etc/clickhouse-server/users.d/default-user.xml"
+          volumeMounts:
+            - name: seed-userconf
+              mountPath: /seed
+            - name: usersd
+              mountPath: /etc/clickhouse-server/users.d
       containers:
         - name: clickhouse
           image: "clickhouse/clickhouse-server:{{ $version }}"
@@ -84,10 +101,8 @@ spec:
               mountPath: /var/lib/clickhouse
             - name: logs
               mountPath: /var/log/clickhouse-server
-            - name: userconf
-              mountPath: /etc/clickhouse-server/users.d/default-user.xml
-              subPath: default-user.xml
-              readOnly: true
+            - name: usersd
+              mountPath: /etc/clickhouse-server/users.d
           readinessProbe:
             httpGet:
               path: /ping
@@ -108,9 +123,13 @@ spec:
       volumes:
         - name: logs
           emptyDir: {}
-        - name: userconf
+        # Read-only source for the seed initContainer.
+        - name: seed-userconf
           secret:
             secretName: {{ $name }}-userconf
+        # Writable users.d the entrypoint can rewrite at boot.
+        - name: usersd
+          emptyDir: {}
   volumeClaimTemplates:
     - metadata:
         name: data
