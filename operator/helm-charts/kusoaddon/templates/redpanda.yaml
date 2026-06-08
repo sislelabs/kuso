@@ -53,23 +53,35 @@ spec:
           command:
             - redpanda
             - start
+          # k8s args[] are literal argv tokens (no shell splitting), so
+          # each flag and its value must be SEPARATE array elements.
+          # "--flag value" as one element becomes a single argv with a
+          # space → "unrecognised option"; "--flag=value" as one token
+          # also errors. Two elements per flag is the form redpanda's
+          # parser accepts under exec (non-shell) invocation.
           args:
-            # Each arg is ONE string with flag + value together (space
-            # inside the string), matching redpanda's expected form. The
-            # standalone "--flag=value" token form errors with
-            # "unrecognised option". advertise the in-cluster Service DNS
-            # so clients reconnect to a routable address, not localhost.
-            - "--kafka-addr internal://0.0.0.0:9092"
-            - "--advertise-kafka-addr internal://{{ $name }}:9092"
-            - "--pandaproxy-addr internal://0.0.0.0:8082"
-            - "--advertise-pandaproxy-addr internal://{{ $name }}:8082"
-            - "--schema-registry-addr internal://0.0.0.0:8081"
-            - "--rpc-addr {{ $name }}:33145"
-            - "--advertise-rpc-addr {{ $name }}:33145"
-            - "--mode dev-container"
-            - "--smp 1"
-            - "--default-log-level=warn"
-            - "--set auto_create_topics_enabled=true"
+            - "--kafka-addr"
+            - "internal://0.0.0.0:9092"
+            - "--advertise-kafka-addr"
+            - "internal://{{ $name }}:9092"
+            - "--pandaproxy-addr"
+            - "internal://0.0.0.0:8082"
+            - "--advertise-pandaproxy-addr"
+            - "internal://{{ $name }}:8082"
+            - "--schema-registry-addr"
+            - "internal://0.0.0.0:8081"
+            - "--rpc-addr"
+            - "{{ $name }}:33145"
+            - "--advertise-rpc-addr"
+            - "{{ $name }}:33145"
+            - "--mode"
+            - "dev-container"
+            - "--smp"
+            - "1"
+            - "--default-log-level"
+            - "warn"
+            - "--set"
+            - "auto_create_topics_enabled=true"
           ports:
             - name: kafka
               containerPort: 9092
