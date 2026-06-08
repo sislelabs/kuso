@@ -190,6 +190,9 @@ func serviceCreateReq(s ServiceSpec) projects.CreateServiceRequest {
 	if s.Buildpacks != nil {
 		req.Buildpacks = &projects.ServiceBuildpacksSpec{BuilderImage: s.Buildpacks.Builder}
 	}
+	if s.Image != nil {
+		req.Image = &projects.ServiceImageSpec{Repository: s.Image.Repository, Tag: s.Image.Tag}
+	}
 	for _, d := range s.Domains {
 		req.Domains = append(req.Domains, projects.ServiceDomain{Host: d.Host, TLS: d.TLS})
 	}
@@ -262,6 +265,14 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 	if s.Buildpacks != nil {
 		buildpacks.BuilderImage = s.Buildpacks.Builder
 	}
+	// Image is set unconditionally (non-nil pointer always) so an
+	// omitted block resets a runtime=image service's registry pointer
+	// back to empty — declarative reset, same as Static/Buildpacks.
+	image := &projects.ServiceImageSpec{}
+	if s.Image != nil {
+		image.Repository = s.Image.Repository
+		image.Tag = s.Image.Tag
+	}
 	cmd := s.Command
 
 	return projects.PatchServiceRequest{
@@ -276,6 +287,7 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 		Volumes:       &volumes,
 		Static:        static,
 		Buildpacks:    buildpacks,
+		Image:         image,
 		Command:       &cmd,
 	}
 }

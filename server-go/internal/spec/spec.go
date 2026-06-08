@@ -91,6 +91,17 @@ type ServiceSpec struct {
 	Volumes       []VolumeSpec      `yaml:"volumes,omitempty"`
 	Static        *StaticSpec       `yaml:"static,omitempty"`
 	Buildpacks    *BuildpacksSpec   `yaml:"buildpacks,omitempty"`
+	Image         *ImageSpec        `yaml:"image,omitempty"`
+}
+
+// ImageSpec is the deploy-from-registry pointer for runtime=image
+// services — kuso pulls the tag directly instead of building from a
+// repo. Repository is the full reference up to (but not including)
+// the tag, e.g. "ghcr.io/foo/bar"; Tag defaults to "latest" when
+// empty. Mirrors projects.ServiceImageSpec.
+type ImageSpec struct {
+	Repository string `yaml:"repository,omitempty"`
+	Tag        string `yaml:"tag,omitempty"`
 }
 
 // DomainSpec is one custom domain on a service.
@@ -230,7 +241,7 @@ func Parse(raw []byte) (*File, error) {
 // validRuntime reports whether r is a known service runtime.
 func validRuntime(r string) bool {
 	switch r {
-	case "dockerfile", "nixpacks", "buildpacks", "static":
+	case "dockerfile", "nixpacks", "buildpacks", "static", "image", "worker":
 		return true
 	default:
 		return false

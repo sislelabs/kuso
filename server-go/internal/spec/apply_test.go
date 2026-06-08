@@ -110,6 +110,71 @@ func TestApply_PatchServiceCarriesStaticBuildConfig(t *testing.T) {
 	}
 }
 
+func TestApply_CreateServiceCarriesImagePointer(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	// A runtime=image service: the create request must carry the
+	// registry pointer so the env CR's image gets stamped (no build).
+	f := &File{
+		Project: "shop",
+		Services: []ServiceSpec{{
+			Name: "api", Runtime: "image",
+			Image: &ImageSpec{Repository: "ghcr.io/me/api", Tag: "1.4"},
+		}},
+	}
+	plan := &Plan{ServicesToCreate: []string{"api"}}
+	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	req := fp.created[0].req
+	if req.Image == nil || req.Image.Repository != "ghcr.io/me/api" || req.Image.Tag != "1.4" {
+		t.Fatalf("create must carry image pointer: %+v", req.Image)
+	}
+}
+
+func TestApply_PatchServiceCarriesImagePointer(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	f := &File{
+		Project: "shop",
+		Services: []ServiceSpec{{
+			Name: "api", Runtime: "image",
+			Image: &ImageSpec{Repository: "ghcr.io/me/api", Tag: "2.0"},
+		}},
+	}
+	plan := &Plan{ServicesToUpdate: []string{"api"}}
+	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	req := fp.patched[0].req
+	if req.Image == nil || req.Image.Repository != "ghcr.io/me/api" || req.Image.Tag != "2.0" {
+		t.Fatalf("patch must carry image pointer: %+v", req.Image)
+	}
+}
+
+func TestApply_PatchServiceResetsImageWhenOmitted(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	// A service update where the YAML OMITS the image block: the patch
+	// must still carry a non-nil (reset-to-empty) Image so a stale
+	// runtime=image pointer is cleared declaratively.
+	f := &File{
+		Project:  "shop",
+		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
+	}
+	plan := &Plan{ServicesToUpdate: []string{"api"}}
+	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	req := fp.patched[0].req
+	if req.Image == nil {
+		t.Fatalf("omitted image must still patch a non-nil reset: %+v", req)
+	}
+	if req.Image.Repository != "" || req.Image.Tag != "" {
+		t.Fatalf("reset Image must be zero-valued: %+v", req.Image)
+	}
+}
+
 func TestApply_PatchServiceResetsStaticWhenOmitted(t *testing.T) {
 	fp := &fakeProjects{}
 	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}

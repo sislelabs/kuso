@@ -7,6 +7,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/sislelabs/kuso/api/apiv1 v0.0.0
+	github.com/sislelabs/kuso/compose v0.0.0
 	github.com/sislelabs/kuso/coolify v0.0.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/viper v1.20.1
@@ -20,12 +21,26 @@ replace github.com/sislelabs/kuso/api/apiv1 => ../api/apiv1
 
 replace github.com/sislelabs/kuso/coolify => ../coolify
 
+replace github.com/sislelabs/kuso/compose => ../compose
+
 require (
+	github.com/compose-spec/compose-go/v2 v2.4.7 // indirect
+	github.com/distribution/reference v0.5.0 // indirect
+	github.com/docker/go-connections v0.4.0 // indirect
+	github.com/docker/go-units v0.5.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
+	github.com/mattn/go-shellwords v1.0.12 // indirect
+	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
+	github.com/sirupsen/logrus v1.9.0 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
+	github.com/xeipuuv/gojsonpointer v0.0.0-20180127040702-4e3ac2762d5f // indirect
+	github.com/xeipuuv/gojsonreference v0.0.0-20180127040603-bd5ef7bd5415 // indirect
+	github.com/xeipuuv/gojsonschema v1.2.0 // indirect
+	golang.org/x/exp v0.0.0-20240112132812-db7319d0e0e3 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c // indirect
 )
 

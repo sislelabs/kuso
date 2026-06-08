@@ -1544,6 +1544,11 @@ type PatchServiceRequest struct {
 	// Buildpacks replaces the buildpacks-runtime config wholesale. nil
 	// leaves it alone; a non-nil pointer resets it.
 	Buildpacks *ServiceBuildpacksSpec `json:"buildpacks,omitempty"`
+	// Image sets the registry pointer for runtime=image services. nil
+	// leaves it alone; a non-nil pointer (with a Repository) stamps it.
+	// Used by the config-as-code apply to keep runtime=image services
+	// in lockstep with their kuso.yaml.
+	Image *ServiceImageSpec `json:"image,omitempty"`
 	// Command replaces the run command. Pointer to a slice so "unset"
 	// (nil, leave alone) is distinguishable from "empty" (clear it).
 	Command *[]string `json:"command,omitempty"`
@@ -1841,6 +1846,23 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			return nil, err
 		}
 		svc.Spec.Buildpacks = toBuildpacksSpec(req.Buildpacks)
+	}
+	if req.Image != nil {
+		if err := validateServiceImageSpec(req.Image); err != nil {
+			return nil, err
+		}
+		if strings.TrimSpace(req.Image.Repository) == "" {
+			svc.Spec.Image = nil
+		} else {
+			tag := strings.TrimSpace(req.Image.Tag)
+			if tag == "" {
+				tag = "latest"
+			}
+			svc.Spec.Image = &kube.KusoImage{
+				Repository: strings.TrimSpace(req.Image.Repository),
+				Tag:        tag,
+			}
+		}
 	}
 	commandChanged := false
 	if req.Command != nil {

@@ -3,6 +3,7 @@ go 1.26.0
 use (
 	./api/apiv1
 	./cli
+	./compose
 	./coolify
 	./mcp
 	./server-go
