@@ -185,6 +185,12 @@ rules:
   - apiGroups: [""]
     resources: [pods/exec]
     verbs: [create]
+  # services (read): node-bootstrap looks up the in-cluster registry
+  # Service ClusterIP so a joining node can be wired to pull build
+  # images. Read-only, namespace-scoped.
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list]
 ---
 # Bootstrap binding for the home `kuso` namespace. New project
 # namespaces get their RoleBinding created by EnsureNamespace.
@@ -345,7 +351,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: server
-          image: ghcr.io/sislelabs/kuso-server-go:v0.18.47
+          image: ghcr.io/sislelabs/kuso-server-go:v0.18.48
           imagePullPolicy: IfNotPresent
           # Burstable QoS. Setting requests below limits puts us in
           # Burstable — survives host pressure without pre-allocating
