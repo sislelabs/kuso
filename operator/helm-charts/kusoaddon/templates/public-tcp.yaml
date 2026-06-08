@@ -22,6 +22,7 @@ port allocator ensures no two addons share an entrypoint.
 {{- if eq .Values.kind "mysql" -}}{{- $svcPort = 3306 -}}{{- end -}}
 {{- if eq .Values.kind "clickhouse" -}}{{- $svcPort = 9000 -}}{{- end -}}
 {{- if eq .Values.kind "nats" -}}{{- $svcPort = 4222 -}}{{- end -}}
+{{- if eq .Values.kind "redpanda" -}}{{- $svcPort = 9092 -}}{{- end -}}
 {{- if eq .Values.kind "meilisearch" -}}{{- $svcPort = 7700 -}}{{- end -}}
 {{- if eq .Values.kind "s3" -}}{{- $svcPort = 9000 -}}{{- end -}}
 {{- if eq $svcPort 0 -}}

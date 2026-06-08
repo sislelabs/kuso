@@ -62,6 +62,8 @@ func TestClassifyDatastore(t *testing.T) {
 		{"docker.io/library/postgres:15", "postgres", "15"},
 		{"redis:7", "redis", "7"},
 		{"clickhouse/clickhouse-server:24", "clickhouse", "24"},
+		// redpanda: registry host stripped, v-prefixed tag → no numeric major.
+		{"docker.redpanda.com/redpandadata/redpanda:v24.1.1", "redpanda", ""},
 		{"redis:latest", "redis", ""},
 		{"nginx:1.27", "", ""},
 		{"myorg/api:1.0", "", ""},

@@ -1,0 +1,150 @@
+{{- if and (eq .Values.kind "redpanda") (not .Values.ha) (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- $version := .Values.version | default "v24.1.1" -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{- $secretName := include "kusoaddon.connSecretName" . -}}
+{{/*
+  Redpanda — Kafka-API-compatible event streaming, single Go binary
+  (no JVM, no ZooKeeper). Picked over Apache Kafka for the same reason
+  NATS was picked over RabbitMQ: Kafka's JVM + ZooKeeper/KRaft quorum
+  cost hundreds of MB idle and a lot of operational surface that indie
+  single-node deployments don't need. Redpanda in `dev-container` mode
+  is a single ~1-replica pod that speaks the Kafka wire protocol, so
+  existing Kafka clients (kafkajs, franz-go, the ClickHouse Kafka
+  table engine) connect unchanged.
+
+  Scope: single pod, dev-container mode (--smp 1), auto-create-topics
+  on (apps that publish to a topic before creating it — like litetrack's
+  ingest pipeline — rely on this). No auth: the Kafka listener is
+  in-namespace ClusterIP only and kube pod-to-pod traffic is trusted,
+  same stance as the nats addon. Users needing SASL/mTLS or a real
+  multi-broker cluster should BYO via raw Helm (HA is out of scope).
+
+  Ports:
+    - 9092  Kafka API (the conn-secret KAFKA_BROKERS points here)
+    - 9644  Admin API (health, rpk)
+    - 8081  Schema Registry
+    - 8082  HTTP proxy (pandaproxy)
+*/}}
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+    spec:
+      {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
+      {{- include "kusoaddon.placement" . | nindent 6 }}
+      containers:
+        - name: redpanda
+          image: "docker.redpanda.com/redpandadata/redpanda:{{ $version }}"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
+          imagePullPolicy: IfNotPresent
+          command:
+            - redpanda
+            - start
+          args:
+            # advertise the in-cluster Service DNS so clients that get
+            # the broker list back from metadata reconnect to a routable
+            # address (not the pod's localhost).
+            - "--kafka-addr=internal://0.0.0.0:9092"
+            - "--advertise-kafka-addr=internal://{{ $name }}:9092"
+            - "--pandaproxy-addr=internal://0.0.0.0:8082"
+            - "--advertise-pandaproxy-addr=internal://{{ $name }}:8082"
+            - "--schema-registry-addr=internal://0.0.0.0:8081"
+            - "--rpc-addr={{ $name }}:33145"
+            - "--advertise-rpc-addr={{ $name }}:33145"
+            - "--mode=dev-container"
+            - "--smp=1"
+            - "--default-log-level=warn"
+            - "--set=auto_create_topics_enabled=true"
+          ports:
+            - name: kafka
+              containerPort: 9092
+            - name: admin
+              containerPort: 9644
+            - name: schema
+              containerPort: 8081
+            - name: proxy
+              containerPort: 8082
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/redpanda/data
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "rpk cluster health --api-urls http://localhost:9644 | grep -q 'Healthy:.*true'"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ include "kusoaddon.storageSize" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: kafka
+      port: 9092
+      targetPort: kafka
+    - name: admin
+      port: 9644
+      targetPort: admin
+    - name: schema
+      port: 8081
+      targetPort: schema
+    - name: proxy
+      port: 8082
+      targetPort: proxy
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kusoaddon.connSecretName" . }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: Opaque
+# base64 `data:` not `stringData:` — see postgres.yaml conn Secret comment
+# (stringData triggers perpetual helm-operator reconcile churn).
+data:
+  # KAFKA_BROKERS is the canonical client bootstrap (host:port). Most
+  # Kafka clients (kafkajs, franz-go) + the ClickHouse Kafka engine
+  # take a comma-separated broker list here.
+  KAFKA_BROKERS: {{ printf "%s:9092" $name | b64enc | quote }}
+  KAFKA_HOST: {{ $name | b64enc | quote }}
+  KAFKA_PORT: {{ "9092" | b64enc | quote }}
+  # REDPANDA_URL surfaces as the canonical dollar-brace addon
+  # reference; same value as KAFKA_BROKERS for the bootstrap server.
+  REDPANDA_URL: {{ printf "%s:9092" $name | b64enc | quote }}
+  REDPANDA_ADMIN_URL: {{ printf "http://%s:9644" $name | b64enc | quote }}
+  REDPANDA_SCHEMA_REGISTRY_URL: {{ printf "http://%s:8081" $name | b64enc | quote }}
+  REDPANDA_PROXY_URL: {{ printf "http://%s:8082" $name | b64enc | quote }}
+{{- end }}

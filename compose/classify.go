@@ -21,6 +21,8 @@ var datastoreImages = map[string]string{
 	"bitnami/redis":                "redis",
 	"clickhouse/clickhouse-server": "clickhouse",
 	"clickhouse":                   "clickhouse",
+	"redpandadata/redpanda":        "redpanda",
+	"vectorized/redpanda":          "redpanda",
 }
 
 // addonURLKey returns the conn-secret key that holds the canonical
@@ -35,6 +37,8 @@ func addonURLKey(kind string) string {
 		return "REDIS_URL"
 	case "clickhouse":
 		return "CLICKHOUSE_URL"
+	case "redpanda":
+		return "REDPANDA_URL"
 	default:
 		return ""
 	}

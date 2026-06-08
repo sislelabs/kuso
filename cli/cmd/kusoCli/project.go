@@ -632,7 +632,7 @@ var (
 var supportedAddonKinds = []string{
 	// Implemented kinds — chart renders real workloads + conn secret.
 	"postgres", "redis", "s3",
-	"mailpit", "nats", "meilisearch", "clickhouse",
+	"mailpit", "nats", "meilisearch", "clickhouse", "redpanda",
 	// Reserved (chart emits an "unsupported" marker); listed so the
 	// CLI accepts the kind for projects that pre-declare the field.
 	"mongodb", "mysql", "rabbitmq", "memcached",
