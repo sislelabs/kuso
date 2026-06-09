@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.49] — 2026-06-09
+
+### 🐛 Bug Fixes
+- Fix(addons): emit DIRECT_URL conn key so Prisma migrations skip the pooler ([94ddc12](https://github.com/sislelabs/kuso/commit/94ddc124651f073b182c829e949115c1b6c1d82f))
+
+### 🧹 Chores
+- Chore(changelog): archive older release entries (tooling churn) ([9fcc753](https://github.com/sislelabs/kuso/commit/9fcc753e3eb890a54a5b7bb5fe17fc8162c71a52))
+
 ## [0.18.48] — 2026-06-08
 
 ### ✨ Features
@@ -402,11 +410,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(web): per-env secrets are editable; subscribed keys count as set ([efd1730](https://github.com/sislelabs/kuso/commit/efd173030d119d8082732b87d05cc0182fb4a3c1))
-
-## [0.17.13] — 2026-05-29
-
-### ✨ Features
-- Feat(web/server): show per-env secrets in Variables tab + Command propagation ([434611f](https://github.com/sislelabs/kuso/commit/434611f590eda4bef4e5bafedf6def7fb633c63e))
 
 
 ---
