@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.50] — 2026-06-09
+
+### 🐛 Bug Fixes
+- Fix(cli): kuso upgrade falsely reported "timed out after 15m" on success ([c29fcb0](https://github.com/sislelabs/kuso/commit/c29fcb03be743c27269bab593c4ee202ac61ca1f))
+
 ## [0.18.49] — 2026-06-09
 
 ### 🐛 Bug Fixes
@@ -405,11 +410,6 @@ messages on every release. The format is loosely based on
 
 ### Other
 - Revert(web): drop per-env Secrets section from Variables editor ([cae09b9](https://github.com/sislelabs/kuso/commit/cae09b91da6819f417fc956d6bd5737f8602c3c6))
-
-## [0.17.14] — 2026-05-29
-
-### ✨ Features
-- Feat(web): per-env secrets are editable; subscribed keys count as set ([efd1730](https://github.com/sislelabs/kuso/commit/efd173030d119d8082732b87d05cc0182fb4a3c1))
 
 
 ---
