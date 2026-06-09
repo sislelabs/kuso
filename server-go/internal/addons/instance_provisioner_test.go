@@ -69,3 +69,54 @@ func TestPoolerDSN_PreservesCredsAndDB(t *testing.T) {
 		t.Errorf("creds/db not preserved: %s", got)
 	}
 }
+
+// TestInstanceAddonConnData_DirectURLNeverPooled is the regression guard for
+// the Prisma-on-PgBouncer CrashLoopBackOff: when the shared instance has a
+// pooler, DATABASE_URL gets rewritten to the -pooler:6432 transaction-pooling
+// endpoint, but DIRECT_URL MUST stay the un-pooled :5432 input DSN so Prisma's
+// `directUrl` runs migrations (session-scoped pg_advisory_lock 72707369) on a
+// sticky session instead of leaking the lock across the pooler txn boundary.
+func TestInstanceAddonConnData_DirectURLNeverPooled(t *testing.T) {
+	const dsn = "postgres://berivangold_db:secret@kuso-instance-pg:5432/berivangold_db?sslmode=disable"
+
+	data, err := instanceAddonConnData(dsn, "secret", true /* poolerExists */)
+	if err != nil {
+		t.Fatalf("instanceAddonConnData: %v", err)
+	}
+
+	if got := string(data["DIRECT_URL"]); got != dsn {
+		t.Errorf("DIRECT_URL = %q, want the un-pooled input DSN %q", got, dsn)
+	}
+	if got := string(data["DIRECT_URL"]); strings.Contains(got, "-pooler") || strings.Contains(got, ":6432") {
+		t.Errorf("DIRECT_URL is routed through the pooler (%q) — migrations would hit the advisory-lock leak", got)
+	}
+	if got := string(data["DATABASE_URL"]); !strings.Contains(got, "-pooler:6432") {
+		t.Errorf("DATABASE_URL = %q, want the pooler endpoint when poolerExists", got)
+	}
+	if string(data["DATABASE_URL"]) == string(data["DIRECT_URL"]) {
+		t.Error("DATABASE_URL and DIRECT_URL are identical with a pooler present; the split is the whole point")
+	}
+}
+
+// TestInstanceAddonConnData_NoPooler: with no pooler, DATABASE_URL and
+// DIRECT_URL collapse to the same direct DSN and POOLER_* keys stay empty
+// (emitted-but-blank, not absent — apps read "" as "pooler not enabled").
+func TestInstanceAddonConnData_NoPooler(t *testing.T) {
+	const dsn = "postgres://app:secret@some-external-pg:5432/app?sslmode=require"
+
+	data, err := instanceAddonConnData(dsn, "secret", false /* poolerExists */)
+	if err != nil {
+		t.Fatalf("instanceAddonConnData: %v", err)
+	}
+	if got := string(data["DIRECT_URL"]); got != dsn {
+		t.Errorf("DIRECT_URL = %q, want %q", got, dsn)
+	}
+	if got := string(data["DATABASE_URL"]); got != dsn {
+		t.Errorf("DATABASE_URL = %q, want the direct DSN %q when no pooler", got, dsn)
+	}
+	for _, k := range []string{"POOLER_HOST", "POOLER_PORT", "POOLER_URL"} {
+		if got := string(data[k]); got != "" {
+			t.Errorf("%s = %q, want empty when no pooler", k, got)
+		}
+	}
+}

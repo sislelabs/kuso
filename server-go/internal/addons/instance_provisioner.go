@@ -175,10 +175,15 @@ func poolerDSN(directDSN string) (string, error) {
 // disable) and POOLER_* keys are populated; POSTGRES_HOST stays direct as a
 // fallback. When false (e.g. an external instance addon with no kuso pooler),
 // DATABASE_URL stays direct and POOLER_* are empty.
-func (s *Service) writeInstanceAddonConnSecret(ctx context.Context, ns, addonFQN, dsn, password string, poolerExists bool) error {
+// instanceAddonConnData builds the byte map for the <name>-conn secret from a
+// direct per-project DSN. Pure (no kube I/O) so the key contract is unit
+// testable. When poolerExists, DATABASE_URL is rewritten through the PgBouncer
+// pooler (-pooler:6432) and the POOLER_* keys are populated; DIRECT_URL always
+// stays the un-pooled input DSN — see the DIRECT_URL note below.
+func instanceAddonConnData(dsn, password string, poolerExists bool) (map[string][]byte, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return fmt.Errorf("parse per-project DSN: %w", err)
+		return nil, fmt.Errorf("parse per-project DSN: %w", err)
 	}
 	host := u.Hostname()
 	port := u.Port()
@@ -194,15 +199,23 @@ func (s *Service) writeInstanceAddonConnSecret(ctx context.Context, ns, addonFQN
 	if poolerExists {
 		pURL, perr := poolerDSN(dsn)
 		if perr != nil {
-			return fmt.Errorf("derive pooler DSN: %w", perr)
+			return nil, fmt.Errorf("derive pooler DSN: %w", perr)
 		}
 		databaseURL = pURL
 		poolerHost = host + "-pooler"
 		poolerPort = "6432"
 		poolerURL = pURL
 	}
-	data := map[string][]byte{
+	// DIRECT_URL is always the un-pooled, session-safe DSN (the raw per-project
+	// `dsn` input — host:5432 direct, never the -pooler:6432 rewrite). Apps that
+	// run Prisma migrations MUST point Prisma's `directUrl` at this: PgBouncer
+	// runs in transaction-pooling mode, where session-scoped pg_advisory_lock
+	// (Prisma's migration lock 72707369) leaks onto a backend across the txn
+	// boundary, so `migrate deploy` over DATABASE_URL (the pooler) hangs 10s and
+	// CrashLoopBackOffs. DIRECT_URL keeps migrations on a sticky session.
+	return map[string][]byte{
 		"DATABASE_URL":      []byte(databaseURL),
+		"DIRECT_URL":        []byte(dsn),
 		"POSTGRES_HOST":     []byte(host),
 		"POSTGRES_PORT":     []byte(port),
 		"POSTGRES_USER":     []byte(user),
@@ -211,6 +224,13 @@ func (s *Service) writeInstanceAddonConnSecret(ctx context.Context, ns, addonFQN
 		"POOLER_HOST":       []byte(poolerHost),
 		"POOLER_PORT":       []byte(poolerPort),
 		"POOLER_URL":        []byte(poolerURL),
+	}, nil
+}
+
+func (s *Service) writeInstanceAddonConnSecret(ctx context.Context, ns, addonFQN, dsn, password string, poolerExists bool) error {
+	data, err := instanceAddonConnData(dsn, password, poolerExists)
+	if err != nil {
+		return err
 	}
 	connName := connSecretName(addonFQN)
 	dst := &corev1.Secret{

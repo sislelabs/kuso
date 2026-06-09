@@ -286,6 +286,16 @@ data:
   # The auto-generated password (randAlphaNum) is safe without it, but
   # passwordSecret-supplied values can be anything.
   DATABASE_URL: {{ printf "postgres://kuso:%s@%s:5432/%s?sslmode=require" ($password | urlquery) $name $database | b64enc | quote }}
+  {{- /* DIRECT_URL: always the un-pooled, session-safe DSN (== the direct
+         DATABASE_URL above for this StatefulSet path). Apps running Prisma
+         migrations point Prisma's `directUrl` here. It matters mainly when
+         the app routes runtime queries through POOLER_URL (transaction
+         pooling), where session-scoped pg_advisory_lock — Prisma's migration
+         lock 72707369 — leaks across the txn boundary and `migrate deploy`
+         hangs 10s then CrashLoopBackOffs. Emitted unconditionally so the key
+         set matches the instance-shared conn secret (instance_provisioner.go),
+         giving apps one stable ${{ <addon>.DIRECT_URL }} contract everywhere. */}}
+  DIRECT_URL: {{ printf "postgres://kuso:%s@%s:5432/%s?sslmode=require" ($password | urlquery) $name $database | b64enc | quote }}
   {{- /* Pooler keys. Additive — DATABASE_URL above stays direct at
          the StatefulSet so existing consumers are unaffected. Apps
          opt into pooling with ${{ <addon>.POOLER_URL }}.

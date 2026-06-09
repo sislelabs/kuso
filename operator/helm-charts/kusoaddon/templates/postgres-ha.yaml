@@ -147,6 +147,15 @@ data:
   # latency on every connect. Apps that want TLS-in-cluster override
   # DATABASE_URL with sslmode=require.
   DATABASE_URL: {{ printf "postgres://kuso:%s@%s-rw:5432/%s?sslmode=disable" ($password | urlquery) $name $database | b64enc | quote }}
+  {{- /* DIRECT_URL: un-pooled, session-safe DSN for Prisma `directUrl` and
+         any migration tool that needs a sticky session. Points at the CNPG
+         primary (-rw, direct :5432), never the -pooler:6432 endpoint, because
+         session-scoped pg_advisory_lock (Prisma's migration lock 72707369)
+         leaks across the transaction boundary under PgBouncer transaction
+         pooling and hangs `migrate deploy`. Emitted unconditionally so the
+         ${{ <addon>.DIRECT_URL }} contract is identical across the
+         single-node, HA, and instance-shared paths. */}}
+  DIRECT_URL: {{ printf "postgres://kuso:%s@%s-rw:5432/%s?sslmode=disable" ($password | urlquery) $name $database | b64enc | quote }}
   {{- /* Pooler keys are ALWAYS emitted (empty when disabled), not
          conditionally rendered: helm-operator's 3-way merge does not
          prune individual stringData keys that vanish between

@@ -55,11 +55,36 @@ project namespace (per addon):
     # no StatefulSet rendered
 
   Secret/<addon-name>-conn
-    DATABASE_URL    # per-project DSN, scoped to one DB + one role
-    PGUSER, PGPASSWORD, PGHOST, PGPORT, PGDATABASE
+    DATABASE_URL    # per-project DSN — pooler (:6432) when the instance has a PgBouncer, else direct
+    DIRECT_URL      # per-project DSN, ALWAYS un-pooled/direct (:5432) — use for Prisma migrations
+    POSTGRES_HOST, POSTGRES_PORT, POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB
+    POOLER_HOST, POOLER_PORT, POOLER_URL   # populated when the instance runs a pooler, else empty
 ```
 
 The per-project Secret is just like the native-addon conn-secret. Services that did `envFromSecrets: [myapp-db-conn]` continue working unchanged whether the addon is native or instance-shared.
+
+### Prisma migrations — use `DIRECT_URL`, not `DATABASE_URL`
+
+The shared cluster PG fronts every per-project database with **PgBouncer in `transaction` pooling mode**, and `DATABASE_URL` routes through it by default (`<host>-pooler:6432`). That's correct for app runtime traffic, but it **breaks schema migrations**: Prisma's migration engine takes a session-scoped advisory lock (`pg_advisory_lock(72707369)`). Under transaction pooling, PgBouncer hands each transaction a different backend, so the lock is acquired on one server connection and leaked when that connection returns to the pool — the next migration attempt blocks, times out after 10s (`Timed out trying to acquire a postgres advisory lock`), and the pod `CrashLoopBackOff`s until the leaked backend is recycled.
+
+Point Prisma's `directUrl` at the always-direct `DIRECT_URL` key so migrations run on a sticky, un-pooled session:
+
+```prisma
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")   // pooled — app runtime queries
+  directUrl = env("DIRECT_URL")     // direct :5432 — migrations only
+}
+```
+
+Wire it in the service's env vars (the `${{ <addon>.KEY }}` ref resolves to a `secretKeyRef` against `<addon>-conn`):
+
+```
+DATABASE_URL = ${{ <addon>.DATABASE_URL }}   # or just envFromSecrets the conn secret
+DIRECT_URL   = ${{ <addon>.DIRECT_URL }}
+```
+
+`DIRECT_URL` is emitted by the native StatefulSet chart, the HA chart, and the instance-shared provisioner alike, so the same wiring works on every postgres-addon backing path. Same applies to any migration tool that relies on a session-scoped lock (golang-migrate's `pg_advisory_lock`, Flyway, Liquibase) — run migrations against `DIRECT_URL`.
 
 ### Lifecycle
 
