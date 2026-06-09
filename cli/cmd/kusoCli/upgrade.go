@@ -170,16 +170,40 @@ that hasn't propagated to "latest" yet. Pinned upgrades skip the
 				}
 				lastPhase = s.Phase
 			}
-			switch s.Phase {
-			case "Succeeded", "Done":
+			if terminal, err := classifyUpgradePhase(s.Phase, s.Message); terminal {
+				if err != nil {
+					return err
+				}
 				fmt.Println("Upgrade finished.")
 				return nil
-			case "Failed", "Error":
-				return fmt.Errorf("upgrade failed: %s", s.Message)
 			}
 		}
 		return fmt.Errorf("upgrade timed out after 15m; check 'kuso status' or the Update page")
 	},
+}
+
+// classifyUpgradePhase decides whether an update-status phase is terminal.
+// It matches the phase vocabulary the in-cluster updater actually writes
+// (updater.go UpdateStatus.Phase): pending | applying-crds | rolling-server
+// | rolling-operator | done | failed, plus rolled-back / rollback-failed from
+// the auto-rollback path. The capitalized aliases ("Done", "Succeeded",
+// "Failed", "Error") are defensive only — the updater never emits them, and
+// matching ONLY those is what made a successful upgrade ("done") fall through
+// to a false "timed out after 15m". Returns terminal=false for non-terminal
+// (or empty/unknown) phases so the caller keeps polling.
+func classifyUpgradePhase(phase, message string) (terminal bool, err error) {
+	switch phase {
+	case "done", "Done", "Succeeded":
+		return true, nil
+	case "rolled-back":
+		// Upgrade failed but the updater auto-rolled back to the prior
+		// version — the instance is healthy on the OLD tag.
+		return true, fmt.Errorf("upgrade failed and was rolled back to the previous version: %s", message)
+	case "failed", "Failed", "Error", "rollback-failed":
+		return true, fmt.Errorf("upgrade failed: %s", message)
+	default:
+		return false, nil
+	}
 }
 
 func init() {

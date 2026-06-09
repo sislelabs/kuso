@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.13] — 2026-05-29
+
+### ✨ Features
+- Feat(web/server): show per-env secrets in Variables tab + Command propagation ([434611f](https://github.com/sislelabs/kuso/commit/434611f590eda4bef4e5bafedf6def7fb633c63e))
+
 ## [0.17.12] — 2026-05-29
 
 ### 🐛 Bug Fixes
