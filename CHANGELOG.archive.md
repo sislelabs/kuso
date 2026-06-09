@@ -2,6 +2,146 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.12] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(projects): purge-data must also sweep StatefulSet-generated PVCs ([e3239ba](https://github.com/sislelabs/kuso/commit/e3239bad89132470ed0cd8142327c356c3192c06))
+
+## [0.17.11] — 2026-05-29
+
+### ✨ Features
+- Feat(projects): kuso project delete --purge-data ([3da1299](https://github.com/sislelabs/kuso/commit/3da1299768ba29bd7f742c2593c6bb4f69706967))
+
+## [0.17.10] — 2026-05-29
+
+### ✨ Features
+- Feat(cli): kuso service set --path / --branch ([4e2de50](https://github.com/sislelabs/kuso/commit/4e2de504cc06db5052b8049343b1236a467c3d04))
+
+## [0.17.9] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(api): worker service creation drops FromService field ([ee53d4a](https://github.com/sislelabs/kuso/commit/ee53d4a9e49f622abeae13f7ef3dcbf6394d85ff))
+
+## [0.17.8] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(previews): scope addons via canonical env label, not bespoke marker ([d651fec](https://github.com/sislelabs/kuso/commit/d651fecbce6a7c7bd2c059f260863870cc9461ca))
+
+## [0.17.7] — 2026-05-29
+
+### ✨ Features
+- Feat(cli): kuso run --follow; fix(previews): drop service-name guessing ([633ade5](https://github.com/sislelabs/kuso/commit/633ade51ab34879a9330721c358d3387801efb7a))
+
+## [0.17.6] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(previews): break addon-clone idempotency loop ([d070e4c](https://github.com/sislelabs/kuso/commit/d070e4caf75c6b9c88888fa72579407b94c89654))
+
+## [0.17.5] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(previews): default per-PR Postgres clones to ON ([42dcc33](https://github.com/sislelabs/kuso/commit/42dcc333733296cec1ed2c42803d17604c873d0a))
+
+## [0.17.4] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(previews): clone per-env secrets w/ URL rewrite + enable per-PR DB ([793c8da](https://github.com/sislelabs/kuso/commit/793c8da624a6c85f5f93ed0fca5ab81bf0dc942b))
+
+## [0.17.3] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(canvas+redeploy): env-aware build labels and branch-correct redeploy ([76d518b](https://github.com/sislelabs/kuso/commit/76d518b2c848ffb021d0ab63d677671f9b1e7053))
+
+## [0.17.2] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(previews): default baseEnv to production in legacy mode (B1 audit) ([fac5253](https://github.com/sislelabs/kuso/commit/fac5253407d7b516b92a20cbfe14914460aaad0a))
+
+## [0.17.1] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(v0.17.1): secrets locking, missing-key warnings, env-var cascade tests ([81a0693](https://github.com/sislelabs/kuso/commit/81a069355a3971ddd3db3775ad2039694add538e))
+- Fix(v0.17.0 audit): subscription wiring, env-scoped refs, canvas accuracy ([97d3d82](https://github.com/sislelabs/kuso/commit/97d3d82de24916130a0aea0074a30d3d1106da07))
+- Fix(rollback): env-scoped rollback (B1.1) ([d7272dc](https://github.com/sislelabs/kuso/commit/d7272dc3ab4cb3ae6a7a51fbe0ae87fe1a664bbc))
+
+## [0.17.0] — 2026-05-28
+
+### ✨ Features
+- Feat(previews): reviewer page + seed Job + PR-comment integration ([7780126](https://github.com/sislelabs/kuso/commit/7780126d2c080be7b7e69a1bb78bc5b01efe9014))
+- Feat(previews): trigger gating + env-var inheritance from base env ([7f0c83b](https://github.com/sislelabs/kuso/commit/7f0c83ba63219d014b78155c35bfd4f005d4f478))
+
+### 🐛 Bug Fixes
+- Fix(previews/web): hash-route reviewer page so kuso/web static-export builds ([8d4b146](https://github.com/sislelabs/kuso/commit/8d4b1465a10c4c207bd174e04e1f2ccb44a36527))
+
+## [0.16.27] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(propagate): drop env's shared-secret refs when a per-env override exists ([1d75716](https://github.com/sislelabs/kuso/commit/1d757164fd80ae9937c38e99b799746469f7e9ce))
+
+## [0.16.26] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(propagate): per-env Secret overrides win over subscribed shared keys ([0243cd9](https://github.com/sislelabs/kuso/commit/0243cd99ba42f9c8f7397043a4d4e2de11c2f39a))
+
+## [0.16.25] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(canvas): infer service→service edges from URL-named env keys ([f9ef9b1](https://github.com/sislelabs/kuso/commit/f9ef9b153396b19b84a92a0bc1bf31b9691f75e3))
+
+## [0.16.24] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(subscribed-addons): respect project prefix on conn-secret allow-list ([3f628e7](https://github.com/sislelabs/kuso/commit/3f628e73a1ace7c47fed83eb2438dc4813152089))
+
+## [0.16.23] — 2026-05-28
+
+### ✨ Features
+- Feat: per-service addon-mount subscription (auto-migrate from legacy) ([89525af](https://github.com/sislelabs/kuso/commit/89525af747589259692fb8e48485db48b16199a8))
+
+## [0.16.22] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(propagate): drop leftover shared-secret refs when unsubscribing ([9feb0d3](https://github.com/sislelabs/kuso/commit/9feb0d3ef52a7c8952a1c40a0d92ce29ab6e6556))
+
+## [0.16.21] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(ui): projects list sorted alphabetically by name ([6429c95](https://github.com/sislelabs/kuso/commit/6429c9556bd88ccd2080c924d641cc5ff27528ed))
+
+## [0.16.20] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(overlay): use env label to match env CR — staging tab no longer shows production URL ([497dcd9](https://github.com/sislelabs/kuso/commit/497dcd92edc3a9078480b8424086c52bc45123dd))
+
+## [0.16.19] — 2026-05-28
+
+### ✨ Features
+- Feat: per-env custom domains (server-side) + fix auto-host for user baseDomain ([83af977](https://github.com/sislelabs/kuso/commit/83af977e63a611bb8482c9f6633663706adc2d0b))
+
+### 🐛 Bug Fixes
+- Fix(ui): NetworkingSection binds to env-scoped custom domains ([a7da957](https://github.com/sislelabs/kuso/commit/a7da957ea83f4739ce4119fa6506c140e2d55a33))
+
+## [0.16.18] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix: always-visible canvas footer, per-env auto-domain, drift superset, eye-toggle dirty ([f0b5e91](https://github.com/sislelabs/kuso/commit/f0b5e917b9e32d9b4c34123b8f0222123e85983c))
+
+## [0.16.17] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(propagate/canvas): preserve shadow overrides; canvas prefers production env ([19eba22](https://github.com/sislelabs/kuso/commit/19eba225a509a0c7fa12b7f05681a8aac6c9305e))
+
+## [0.16.16] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(propagate): preserve per-env envVar overrides; fix overlay URL ([3a041ae](https://github.com/sislelabs/kuso/commit/3a041ae4250ebd000798e5a016135d6171da575d))
+- Fix(crd): allow project-shared/instance-shared secrets in valueFrom.secretKeyRef ([fae6355](https://github.com/sislelabs/kuso/commit/fae635578bc6983b188c8317c8272493f6cede3e))
+
+## [0.16.15] — 2026-05-28
+
+### 🐛 Bug Fixes
+- Fix(kube): bump default QPS/burst — propagation was rate-limited to 0 ([97ac356](https://github.com/sislelabs/kuso/commit/97ac3564a90ef9956ae1c8b1734500acecd11b16))
+
 ## [0.16.14] — 2026-05-28
 
 ### Other
