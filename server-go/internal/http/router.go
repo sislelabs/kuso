@@ -81,6 +81,9 @@ type Deps struct {
 	// operator endpoints are admin-gated; the agent endpoints (findings/pr)
 	// auth via per-incident bearer token on the public router.
 	Incidents *incidents.Manager
+	// IncidentCfgInvalidate drops the incident Manager's config cache after a
+	// settings PUT so the toggle hot-reloads. Optional.
+	IncidentCfgInvalidate func()
 	// Spec drives POST /api/projects/{p}/apply (config-as-code).
 	// Optional: nil → endpoint returns 503.
 	Spec *spec.Reconciler
@@ -449,6 +452,18 @@ func mountAuthenticatedRoutes(
 				settingsH.OnBuildSettingsChange = d.Builds.InvalidateSettingsCache
 			}
 			settingsH.Mount(r)
+
+			// Incident-agent settings console: config knobs + secret upload.
+			if d.Kube != nil {
+				incSettingsH := &httphandlers.IncidentAgentSettingsHandler{
+					DB:             d.DB,
+					Kube:           d.Kube,
+					Namespace:      d.Namespace,
+					OnConfigChange: d.IncidentCfgInvalidate,
+					Logger:         d.Logger,
+				}
+				incSettingsH.Mount(r)
+			}
 			httphandlers.NewBackupHandler(d.DB, d.Kube, "", d.Logger).Mount(r)
 			usersH := &httphandlers.UsersHandler{DB: d.DB, Logger: d.Logger}
 			usersH.Mount(r)

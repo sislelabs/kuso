@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -178,36 +180,63 @@ var incidentAgentCmd = &cobra.Command{
 	Short: "Helpers for the incident-response agent",
 }
 
-var incidentAgentSetCredsNamespace string
+var (
+	incidentAgentSetCredsNamespace string
+	incidentAgentCredsFile         string
+	incidentAgentPrintKubectl      bool
+)
 
 var incidentAgentSetCredsCmd = &cobra.Command{
 	Use:   "set-credentials",
-	Short: "Print the kubectl that seeds the agent's Claude Code credentials secret",
-	Long: `Prints (does not run) the kubectl command that creates/updates the
-'kuso-incident-agent-cc' secret from your local Claude Code OAuth
-credentials. The credentials never traverse the kuso API — you pipe the
-printed command into your own kubectl with cluster access.
+	Short: "Upload your Claude Code credentials to the incident agent",
+	Long: `Reads your local Claude Code OAuth credentials and uploads the
+claudeAiOauth block to kuso, which stores it in the 'kuso-incident-agent-cc'
+secret so the agent runs as you. The agent uses YOUR Claude Code subscription.
 
-Credentials path resolution:
-  $CLAUDE_CONFIG_DIR/.credentials.json  (if CLAUDE_CONFIG_DIR is set)
-  ~/.claude/.credentials.json           (default)`,
-	Example: `  kuso incident-agent set-credentials | sh
-  kuso incident-agent set-credentials --namespace kuso`,
+Credential source (in order):
+  --file <path>                          explicit file
+  $CLAUDE_CONFIG_DIR/.credentials.json   if CLAUDE_CONFIG_DIR is set
+  ~/.claude/.credentials.json            default file
+  macOS Keychain ("Claude Code-credentials")  fallback on darwin
+
+This goes through the kuso admin API (settings:admin). To avoid the API and
+pipe straight to kubectl instead, use --print-kubectl.`,
+	Example: `  kuso incident-agent set-credentials
+  kuso incident-agent set-credentials --file ~/creds.json
+  kuso incident-agent set-credentials --print-kubectl | sh`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		path, err := claudeCredentialsPath()
+		raw, src, err := readClaudeCredentials(incidentAgentCredsFile)
 		if err != nil {
 			return err
 		}
-		if _, err := os.Stat(path); err != nil {
-			return fmt.Errorf("Claude Code credentials not found at %s: %w\n"+
-				"set CLAUDE_CONFIG_DIR or run `claude login` first", path, err)
+		// Keep only the claudeAiOauth block (strip MCP cruft) + validate.
+		clean, err := extractClaudeAiOauth(raw)
+		if err != nil {
+			return fmt.Errorf("%s: %w", src, err)
 		}
-		// Mirror the exact command documented in the design spec.
-		fmt.Printf(
-			"kubectl create secret generic kuso-incident-agent-cc -n %s "+
-				"--from-file=credentials.json=%s --dry-run=client -o yaml | kubectl apply -f -\n",
-			incidentAgentSetCredsNamespace, path,
-		)
+
+		if incidentAgentPrintKubectl {
+			// Write the clean blob to a temp file path the operator can apply.
+			fmt.Fprintf(os.Stderr, "# credentials read from %s\n", src)
+			fmt.Printf(
+				"printf '%%s' %s | kubectl create secret generic kuso-incident-agent-cc -n %s "+
+					"--from-file=credentials.json=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -\n",
+				shellQuote(string(clean)), incidentAgentSetCredsNamespace,
+			)
+			return nil
+		}
+
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.PutIncidentAgentCCCredentials(string(clean))
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("Claude Code credentials uploaded (from %s).\n", src)
 		return nil
 	},
 }
@@ -223,6 +252,59 @@ func claudeCredentialsPath() (string, error) {
 		return "", fmt.Errorf("resolve home dir: %w", err)
 	}
 	return filepath.Join(home, ".claude", ".credentials.json"), nil
+}
+
+// readClaudeCredentials returns the raw credentials JSON + a human source
+// label. Tries (in order): explicit --file, the resolved file path, then the
+// macOS Keychain. Returns an actionable error if none yield creds.
+func readClaudeCredentials(file string) (raw []byte, src string, err error) {
+	if file != "" {
+		b, e := os.ReadFile(file)
+		if e != nil {
+			return nil, "", fmt.Errorf("read %s: %w", file, e)
+		}
+		return b, file, nil
+	}
+	path, e := claudeCredentialsPath()
+	if e == nil {
+		if b, re := os.ReadFile(path); re == nil {
+			return b, path, nil
+		}
+	}
+	// macOS: creds live in the Keychain, not a file.
+	if runtime.GOOS == "darwin" {
+		out, ke := exec.Command("security", "find-generic-password", "-s", "Claude Code-credentials", "-w").Output()
+		if ke == nil && len(out) > 0 {
+			return out, "macOS Keychain", nil
+		}
+	}
+	return nil, "", fmt.Errorf("Claude Code credentials not found (tried %s%s).\n"+
+		"Run `claude login` first, or pass --file <path>.", path,
+		map[bool]string{true: " + macOS Keychain", false: ""}[runtime.GOOS == "darwin"])
+}
+
+// extractClaudeAiOauth validates the blob carries claudeAiOauth.accessToken
+// and returns a minimal {claudeAiOauth: ...} JSON (stripping MCP cruft).
+func extractClaudeAiOauth(raw []byte) ([]byte, error) {
+	var probe struct {
+		ClaudeAiOauth json.RawMessage `json:"claudeAiOauth"`
+	}
+	if err := json.Unmarshal(raw, &probe); err != nil {
+		return nil, fmt.Errorf("not valid JSON: %w", err)
+	}
+	var hasToken struct {
+		AccessToken string `json:"accessToken"`
+	}
+	if len(probe.ClaudeAiOauth) == 0 || json.Unmarshal(probe.ClaudeAiOauth, &hasToken) != nil || hasToken.AccessToken == "" {
+		return nil, fmt.Errorf("missing claudeAiOauth.accessToken (is this a Claude Code credentials file?)")
+	}
+	return json.Marshal(map[string]json.RawMessage{"claudeAiOauth": probe.ClaudeAiOauth})
+}
+
+// shellQuote single-quotes a string for safe embedding in a printed shell
+// command (the --print-kubectl path).
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 func incidentTarget(in kusoApi.Incident) string {
@@ -273,5 +355,7 @@ func init() {
 
 	rootCmd.AddCommand(incidentAgentCmd)
 	incidentAgentCmd.AddCommand(incidentAgentSetCredsCmd)
-	incidentAgentSetCredsCmd.Flags().StringVarP(&incidentAgentSetCredsNamespace, "namespace", "n", "kuso", "namespace for the credentials secret")
+	incidentAgentSetCredsCmd.Flags().StringVarP(&incidentAgentSetCredsNamespace, "namespace", "n", "kuso", "namespace for the credentials secret (--print-kubectl only)")
+	incidentAgentSetCredsCmd.Flags().StringVar(&incidentAgentCredsFile, "file", "", "explicit credentials file (default: ~/.claude/.credentials.json or macOS Keychain)")
+	incidentAgentSetCredsCmd.Flags().BoolVar(&incidentAgentPrintKubectl, "print-kubectl", false, "print a kubectl command instead of uploading via the kuso API")
 }

@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"kuso/server/internal/db"
 	"kuso/server/internal/notify"
 )
 
@@ -11,6 +12,7 @@ func TestDecide(t *testing.T) {
 	t.Parallel()
 	now := time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC)
 
+	const cooldown = time.Hour
 	cases := []struct {
 		name       string
 		openExists bool
@@ -18,24 +20,48 @@ func TestDecide(t *testing.T) {
 		lastOK     bool
 		openCount  int
 		maxConc    int
+		cooldown   time.Duration
 		want       spawnDecision
 	}{
-		{"no open, never closed, room → spawn", false, time.Time{}, false, 0, 3, decideSpawn},
-		{"open exists → attach", true, time.Time{}, false, 1, 3, decideAttach},
-		{"open exists wins over cap", true, time.Time{}, false, 9, 3, decideAttach},
-		{"closed recently → cooldown drop", false, now.Add(-30 * time.Minute), true, 0, 3, decideDrop},
-		{"closed long ago → spawn", false, now.Add(-2 * time.Hour), true, 0, 3, decideSpawn},
-		{"at cap → drop", false, time.Time{}, false, 3, 3, decideDrop},
-		{"over cap → drop", false, time.Time{}, false, 5, 3, decideDrop},
-		{"cooldown takes priority over cap room", false, now.Add(-1 * time.Minute), true, 0, 3, decideDrop},
+		{"no open, never closed, room → spawn", false, time.Time{}, false, 0, 3, cooldown, decideSpawn},
+		{"open exists → attach", true, time.Time{}, false, 1, 3, cooldown, decideAttach},
+		{"open exists wins over cap", true, time.Time{}, false, 9, 3, cooldown, decideAttach},
+		{"closed recently → cooldown drop", false, now.Add(-30 * time.Minute), true, 0, 3, cooldown, decideDrop},
+		{"closed long ago → spawn", false, now.Add(-2 * time.Hour), true, 0, 3, cooldown, decideSpawn},
+		{"at cap → drop", false, time.Time{}, false, 3, 3, cooldown, decideDrop},
+		{"over cap → drop", false, time.Time{}, false, 5, 3, cooldown, decideDrop},
+		{"cooldown takes priority over cap room", false, now.Add(-1 * time.Minute), true, 0, 3, cooldown, decideDrop},
+		// Cooldown of 0 disables the cooldown gate entirely.
+		{"zero cooldown → recently-closed still spawns", false, now.Add(-1 * time.Minute), true, 0, 3, 0, decideSpawn},
+		// MaxConcurrent of 0 disables the cap.
+		{"zero cap → never cap-drops", false, time.Time{}, false, 99, 0, cooldown, decideSpawn},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := decide(c.openExists, c.lastClosed, c.lastOK, c.openCount, c.maxConc, now)
+			got := decide(c.openExists, c.lastClosed, c.lastOK, c.openCount, c.maxConc, c.cooldown, now)
 			if got != c.want {
 				t.Errorf("decide = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// TestTriggerEnabled / Hook gating: a disabled config or a disabled trigger
+// type is a no-op.
+func TestTriggerEnabled(t *testing.T) {
+	t.Parallel()
+	cfg := db.IncidentAgentConfig{TriggerPod: true, TriggerAlert: false, TriggerNode: true}
+	if !triggerEnabled(cfg, notify.EventPodCrashed) {
+		t.Error("pod should be enabled")
+	}
+	if triggerEnabled(cfg, notify.EventAlertFired) {
+		t.Error("alert should be disabled")
+	}
+	if !triggerEnabled(cfg, notify.EventNodeUnreachable) {
+		t.Error("node should be enabled")
+	}
+	if triggerEnabled(cfg, notify.EventBuildFailed) {
+		t.Error("non-trigger event must be false")
 	}
 }
 

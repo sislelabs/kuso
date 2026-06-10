@@ -61,8 +61,9 @@ type KubeSpawner struct {
 	Namespace  string
 	APIBaseURL string // base URL the agent hits, e.g. http://kuso-server.kuso.svc:8080
 	AgentImage string
-	Repos      RepoResolver // optional; resolves repo + git token for implement
-	CloneOnly  bool         // test mode: implement Job clones + branches, skips the PR
+	Repos      RepoResolver   // optional; resolves repo + git token for implement
+	Config     ConfigProvider // optional; an AgentImage override here wins over the field
+	CloneOnly  bool           // test mode: implement Job clones + branches, skips the PR
 	Logger     *slog.Logger
 }
 
@@ -80,6 +81,12 @@ func (s *KubeSpawner) namespace() string {
 }
 
 func (s *KubeSpawner) image() string {
+	// Config override (settings UI) wins, so the image hot-reloads.
+	if s.Config != nil {
+		if img := s.Config.Get(context.Background()).AgentImage; img != "" {
+			return img
+		}
+	}
 	if s.AgentImage != "" {
 		return s.AgentImage
 	}

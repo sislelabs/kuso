@@ -831,20 +831,29 @@ func main() {
 		}
 	}
 
-	// Autonomous incident-response agent. Gated behind KUSO_INCIDENT_AGENT
-	// (off by default) — when on, the Manager subscribes to the dispatcher
-	// and spawns claude-p Jobs on pod.crashed / alert.fired / node.unreachable.
-	// nil Manager → the incident endpoints aren't mounted (router checks).
+	// Autonomous incident-response agent. The Manager is ALWAYS constructed
+	// now — enable/disable + the trigger/cap/cooldown knobs live in the DB
+	// (db.IncidentAgentConfig) and are read via a cached ConfigProvider, so
+	// the settings UI hot-reloads without a redeploy. The KUSO_INCIDENT_*
+	// env vars only SEED the DB config on first boot (back-compat for
+	// env-configured installs).
 	var incidentMgr *incidents.Manager
-	if os.Getenv("KUSO_INCIDENT_AGENT") == "true" {
-		agentImage := os.Getenv("KUSO_INCIDENT_AGENT_IMAGE")
-		if agentImage == "" {
-			agentImage = "ghcr.io/sislelabs/kuso-incident-agent:latest"
+	var incidentCfgProvider *incidents.DBConfigProvider
+	{
+		// Seed-once from env if no incident.* config exists yet.
+		seedCtx, seedCancel := context.WithTimeout(ctx, 5*time.Second)
+		if exists, err := database.IncidentAgentConfigExists(seedCtx); err == nil && !exists {
+			seed := db.DefaultIncidentAgentConfig()
+			seed.Enabled = os.Getenv("KUSO_INCIDENT_AGENT") == "true"
+			seed.AgentImage = os.Getenv("KUSO_INCIDENT_AGENT_IMAGE")
+			if err := database.SetIncidentAgentConfig(seedCtx, seed, "env-seed"); err != nil {
+				logger.Warn("incident: seed config from env", "err", err)
+			}
 		}
-		// Repo resolver for the implement phase — reads the project's
-		// KusoService CR for the repo + mints a GitHub App installation
-		// token to push the fix branch. Nil when GitHub isn't wired; the
-		// implement Job then runs with empty repo info (agent reports it).
+		seedCancel()
+
+		incidentCfgProvider = &incidents.DBConfigProvider{DB: database}
+
 		var repoResolver incidents.RepoResolver
 		if ghDeps != nil && ghDeps.Client != nil {
 			repoResolver = &incidents.GithubRepoResolver{
@@ -857,51 +866,54 @@ func main() {
 			DB:     database,
 			Kube:   kubeClient,
 			Notify: notifyDisp,
+			Config: incidentCfgProvider,
 			Spawner: &incidents.KubeSpawner{
-				Kube:       kubeClient,
-				Namespace:  *namespace,
+				Kube:      kubeClient,
+				Namespace: *namespace,
 				// The kuso-server Service listens on :80 (→ container :3000).
-				// Agent Jobs hit the Service, so :80 is correct; :3000 only
-				// works from inside the server pod, not via the Service DNS.
 				APIBaseURL: envOr("KUSO_INCIDENT_API_URL", "http://kuso-server.kuso:80"),
-				AgentImage: agentImage,
+				// Fallback default image; the config's AgentImage override wins.
+				AgentImage: envOr("KUSO_INCIDENT_AGENT_IMAGE", "ghcr.io/sislelabs/kuso-incident-agent:latest"),
 				Repos:      repoResolver,
+				Config:     incidentCfgProvider,
 				CloneOnly:  os.Getenv("KUSO_INCIDENT_CLONE_ONLY") == "true",
 				Logger:     logger.With("component", "incident-spawner"),
 			},
 			Logger: logger.With("component", "incidents"),
 		}
-		// Register the event hook (leader-gated inside the dispatcher).
+		// The Hook self-gates on the live config (disabled → no-op), so it's
+		// always registered.
 		notifyDisp.SetEventHook(incidentMgr.Hook)
-		logger.Info("incident-response agent enabled", "image", agentImage)
+		logger.Info("incident-response agent wired (enable/configure via /settings/incident-agent)")
 	}
 
 	r := httpsrv.NewRouter(httpsrv.Deps{
-		DB:              database,
-		Incidents:       incidentMgr,
-		LogDB:           logDB,
-		Issuer:          issuer,
-		Projects:        projSvc,
-		Secrets:         secSvc,
-		Builds:          buildSvc,
-		Logs:            logsSvc,
-		Config:          cfgSvc,
-		Status:          statSvc,
-		Addons:          addonSvc,
-		Crons:           cronSvc,
-		Runs:            runSvc,
-		ProjectSecrets:  projectSecretSvc,
-		InstanceSecrets: instanceSecretSvc,
-		InstancePG:      instancePGSvc,
-		Audit:           auditSvc,
-		Github:          ghDeps,
-		Notify:          notifyDisp,
-		Spec:            specRecon,
-		Kube:            kubeClient,
-		Namespace:       *namespace,
-		Updater:         updaterSvc,
-		Logger:          logger,
-		BaseCtx:         ctx,
+		DB:                    database,
+		Incidents:             incidentMgr,
+		IncidentCfgInvalidate: incidentCfgProvider.Invalidate,
+		LogDB:                 logDB,
+		Issuer:                issuer,
+		Projects:              projSvc,
+		Secrets:               secSvc,
+		Builds:                buildSvc,
+		Logs:                  logsSvc,
+		Config:                cfgSvc,
+		Status:                statSvc,
+		Addons:                addonSvc,
+		Crons:                 cronSvc,
+		Runs:                  runSvc,
+		ProjectSecrets:        projectSecretSvc,
+		InstanceSecrets:       instanceSecretSvc,
+		InstancePG:            instancePGSvc,
+		Audit:                 auditSvc,
+		Github:                ghDeps,
+		Notify:                notifyDisp,
+		Spec:                  specRecon,
+		Kube:                  kubeClient,
+		Namespace:             *namespace,
+		Updater:               updaterSvc,
+		Logger:                logger,
+		BaseCtx:               ctx,
 	})
 
 	srv := &http.Server{

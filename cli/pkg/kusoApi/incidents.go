@@ -50,3 +50,11 @@ func (k *KusoClient) GetIncident(id string) (*resty.Response, error) {
 func (k *KusoClient) ResolveIncident(id string) (*resty.Response, error) {
 	return k.client.Post("/api/incidents/" + esc(id) + "/resolve")
 }
+
+// PutIncidentAgentCCCredentials uploads the Claude Code credentials blob to
+// the incident-agent settings endpoint (settings:admin). The server validates
+// the claudeAiOauth shape + stores it in the kuso-incident-agent-cc secret.
+func (k *KusoClient) PutIncidentAgentCCCredentials(credentials string) (*resty.Response, error) {
+	k.client.SetBody(map[string]string{"credentials": credentials})
+	return k.client.Put("/api/admin/settings/incident-agent/cc-credentials")
+}

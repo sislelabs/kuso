@@ -22,21 +22,10 @@ import (
 	"kuso/server/internal/notify"
 )
 
-// Cooldown is how long after an incident for a target CLOSES before a new
-// event on that same target may auto-spawn another agent. Prevents a
-// resolve→immediately-reopen loop on a still-flapping service.
-const Cooldown = time.Hour
-
-// DefaultMaxConcurrent caps simultaneous open incidents (CC-sub usage
-// backstop). Beyond this, new events are dropped (logged), not queued.
-const DefaultMaxConcurrent = 3
-
-// triggerEventTypes are the only events that open an incident.
-var triggerEventTypes = map[notify.EventType]bool{
-	notify.EventPodCrashed:      true,
-	notify.EventAlertFired:      true,
-	notify.EventNodeUnreachable: true,
-}
+// Cooldown / max-concurrent / which event types trigger are now runtime
+// config (db.IncidentAgentConfig), read via the Manager's ConfigProvider so
+// the settings UI can tune them without a redeploy. The defaults live in
+// db.DefaultIncidentAgentConfig().
 
 // Spawner abstracts the in-cluster Job launch so the Manager's decision
 // logic is testable without kube. jobs.go provides the real impl.
@@ -45,15 +34,22 @@ type Spawner interface {
 	SpawnImplement(ctx context.Context, in db.Incident) (jobName string, err error)
 }
 
+// ConfigProvider supplies the runtime-tunable config (enabled, trigger
+// flags, caps). DB-backed + cached so a UI toggle hot-reloads. config.go
+// provides the real impl; tests pass a stub.
+type ConfigProvider interface {
+	Get(ctx context.Context) db.IncidentAgentConfig
+}
+
 // Manager reacts to events and drives incidents. Construct with the fields
 // set, call Run to start the reaper, and register Hook on the dispatcher.
 type Manager struct {
-	DB            *db.DB
-	Kube          *kube.Client
-	Notify        *notify.Dispatcher
-	Spawner       Spawner
-	Logger        *slog.Logger
-	MaxConcurrent int
+	DB      *db.DB
+	Kube    *kube.Client
+	Notify  *notify.Dispatcher
+	Spawner Spawner
+	Config  ConfigProvider // required for gating; nil → feature off
+	Logger  *slog.Logger
 	// now is injected in tests; defaults to time.Now.
 	now func() time.Time
 }
@@ -65,11 +61,13 @@ func (m *Manager) clock() time.Time {
 	return time.Now().UTC()
 }
 
-func (m *Manager) maxConcurrent() int {
-	if m.MaxConcurrent > 0 {
-		return m.MaxConcurrent
+// cfg returns the live config, or the defaults (disabled) when no provider
+// is wired.
+func (m *Manager) cfg(ctx context.Context) db.IncidentAgentConfig {
+	if m.Config == nil {
+		return db.DefaultIncidentAgentConfig() // Enabled:false
 	}
-	return DefaultMaxConcurrent
+	return m.Config.Get(ctx)
 }
 
 func (m *Manager) log() *slog.Logger {
@@ -79,11 +77,30 @@ func (m *Manager) log() *slog.Logger {
 	return slog.Default()
 }
 
+// triggerEnabled reports whether the config opts this event type in.
+func triggerEnabled(cfg db.IncidentAgentConfig, t notify.EventType) bool {
+	switch t {
+	case notify.EventPodCrashed:
+		return cfg.TriggerPod
+	case notify.EventAlertFired:
+		return cfg.TriggerAlert
+	case notify.EventNodeUnreachable:
+		return cfg.TriggerNode
+	default:
+		return false
+	}
+}
+
 // Hook is registered via dispatcher.SetEventHook. It runs leader-only on
 // the Emit path, so it must return fast: it does the cheap DB checks
-// inline but hands the (slower) Job spawn to a goroutine.
+// inline but hands the (slower) Job spawn to a goroutine. Gated on the live
+// config — disabled feature or a disabled trigger type is a no-op.
 func (m *Manager) Hook(e notify.Event) {
-	if m == nil || !triggerEventTypes[e.Type] {
+	if m == nil {
+		return
+	}
+	cfg := m.cfg(context.Background())
+	if !cfg.Enabled || !triggerEnabled(cfg, e.Type) {
 		return
 	}
 	// Copy what we need; the event is reused by the caller.
@@ -124,15 +141,15 @@ const (
 // decide implements the dedup/cooldown/cap rules. open is the current open
 // incident for the target (ok=false if none); lastClosed is the most-recent
 // close time for the target (ok=false if never closed); openCount is the
-// global open count.
-func decide(openExists bool, lastClosed time.Time, lastClosedOK bool, openCount, maxConcurrent int, now time.Time) spawnDecision {
+// global open count. cooldown + maxConcurrent come from the live config.
+func decide(openExists bool, lastClosed time.Time, lastClosedOK bool, openCount, maxConcurrent int, cooldown time.Duration, now time.Time) spawnDecision {
 	if openExists {
 		return decideAttach
 	}
-	if lastClosedOK && now.Sub(lastClosed) < Cooldown {
+	if lastClosedOK && cooldown > 0 && now.Sub(lastClosed) < cooldown {
 		return decideDrop
 	}
-	if openCount >= maxConcurrent {
+	if maxConcurrent > 0 && openCount >= maxConcurrent {
 		return decideDrop
 	}
 	return decideSpawn
@@ -144,13 +161,15 @@ func (m *Manager) handle(ctx context.Context, e notify.Event) {
 	defer cancel()
 	key := targetKeyFor(e)
 	log := m.log().With("event", string(e.Type), "target", key)
+	cfg := m.cfg(ctx)
 
 	open, openErr := m.DB.OpenIncidentForTarget(ctx, key)
 	openExists := openErr == nil
 	lastClosed, lastOK, _ := m.DB.LastClosedAtForTarget(ctx, key)
 	openCount, _ := m.DB.CountOpenIncidents(ctx)
 
-	switch decide(openExists, lastClosed, lastOK, openCount, m.maxConcurrent(), m.clock()) {
+	cooldown := time.Duration(cfg.CooldownHours) * time.Hour
+	switch decide(openExists, lastClosed, lastOK, openCount, cfg.MaxConcurrent, cooldown, m.clock()) {
 	case decideAttach:
 		// A matching event while an incident is open: log it as feedback so
 		// the agent/operator see the issue recurred. Don't spawn.
