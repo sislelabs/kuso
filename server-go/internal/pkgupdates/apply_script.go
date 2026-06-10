@@ -29,6 +29,10 @@ APISERVER="https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
 TOKEN=$(cat "$SA/token")
 
 command -v curl >/dev/null 2>&1 || apk add --no-cache curl >/dev/null 2>&1 || true
+# jq is used to parse the pod list for the drain (awk over flattened JSON
+# is too fragile — "name"/"kind" appear in many nested places). Installed
+# best-effort; if it's missing we skip the drain rather than mis-evict.
+command -v jq >/dev/null 2>&1 || apk add --no-cache jq >/dev/null 2>&1 || true
 
 # json_escape for embedding strings into JSON.
 json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g; s/	/ /g' | tr -d '\n' | tr -d '\r'; }
@@ -48,12 +52,17 @@ api_get() {
 
 # ready_node_count — number of nodes whose Ready condition is True.
 # Used to decide whether a drain is worthwhile: on a single Ready node
-# there's nowhere to evict to, so we skip the drain entirely.
+# there's nowhere to evict to, so we skip the drain entirely. Prefer jq
+# (exact: count nodes with a Ready=True condition); fall back to a grep
+# heuristic if jq somehow isn't present so the check still returns
+# something sane rather than 0 (which would wrongly skip the drain).
 ready_node_count() {
-  api_get "/api/v1/nodes" 2>/dev/null \
-    | tr '{' '\n' \
-    | grep -c '"type":"Ready","status":"True"' 2>/dev/null \
-    || echo 0
+  body=$(api_get "/api/v1/nodes" 2>/dev/null) || { echo 0; return; }
+  if command -v jq >/dev/null 2>&1; then
+    printf '%s' "$body" | jq '[.items[] | select(.status.conditions[]? | .type=="Ready" and .status=="True")] | length' 2>/dev/null || echo 0
+  else
+    printf '%s' "$body" | tr '{' '\n' | grep -c '"type":"Ready","status":"True"' 2>/dev/null || echo 0
+  fi
 }
 
 # drain_node — evict every non-DaemonSet, non-mirror pod scheduled on
@@ -64,27 +73,27 @@ ready_node_count() {
 # apply forever on a stubborn PDB). The node is already cordoned by the
 # caller, so nothing reschedules back onto it mid-drain.
 drain_node() {
+  # jq is required to parse the pod list safely. If it didn't install
+  # (offline node, apk mirror down), skip the drain rather than risk a
+  # bad parse evicting the wrong pods — the reboot still proceeds.
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "pkg-apply: drain: jq unavailable — skipping drain (reboot proceeds)"
+    return 0
+  fi
+
   # Pods on THIS node, all namespaces, via fieldSelector.
   pods_json=$(api_get "/api/v1/pods?fieldSelector=spec.nodeName=$NODE" 2>/dev/null) || {
     echo "pkg-apply: drain: could not list pods; skipping drain"; return 0; }
 
-  # Extract "namespace/name|ownerKind" tuples. We parse with a tiny awk
-  # state machine over the flattened JSON: each pod object carries its
-  # metadata.namespace, metadata.name, and ownerReferences[].kind. We
-  # skip DaemonSet-owned pods (they're tolerated/replaced per-node, not
-  # drainable) and mirror pods (static, kind=Node owner).
-  echo "$pods_json" \
-    | tr ',{}[]' '\n\n\n\n\n' \
-    | awk '
-        /"namespace":/ { gsub(/.*"namespace":"|".*/,""); ns=$0 }
-        /"name":/ && name=="" { v=$0; gsub(/.*"name":"|".*/,"",v); name=v }
-        /"kind":"DaemonSet"/ { daemon=1 }
-        /"kind":"Node"/      { mirror=1 }
-        /"phase":"/ { p=$0; gsub(/.*"phase":"|".*/,"",p); phase=p
-                      if (ns!="" && name!="" && daemon==0 && mirror==0 && phase!="Succeeded" && phase!="Failed")
-                        print ns"/"name
-                      ns=""; name=""; daemon=0; mirror=0; phase="" }
-      ' 2>/dev/null | sort -u > /tmp/drain_pods || true
+  # Select drainable pods with jq: skip DaemonSet-owned pods (tolerated/
+  # replaced per-node, not drainable) and mirror/static pods (owner
+  # kind=Node), and skip already-terminal pods. Emit "namespace/name".
+  printf '%s' "$pods_json" | jq -r '
+    .items[]
+    | select(([.metadata.ownerReferences[]?.kind] | (contains(["DaemonSet"]) or contains(["Node"]))) | not)
+    | select(.status.phase != "Succeeded" and .status.phase != "Failed")
+    | .metadata.namespace + "/" + .metadata.name
+  ' 2>/dev/null | sort -u > /tmp/drain_pods || true
 
   count=$(wc -l < /tmp/drain_pods 2>/dev/null | tr -d ' ')
   echo "pkg-apply: drain: $count pod(s) to evict from $NODE"
