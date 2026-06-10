@@ -57,7 +57,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: bot
-          image: ghcr.io/sislelabs/kuso-incident-bot:v0.18.54
+          image: ghcr.io/sislelabs/kuso-incident-bot:v0.18.55
           imagePullPolicy: IfNotPresent
           resources:
             requests:

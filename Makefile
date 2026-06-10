@@ -157,3 +157,27 @@ updater-image:
 		-t ghcr.io/sislelabs/kuso-updater:$(UPDATER_VERSION) \
 		-t ghcr.io/sislelabs/kuso-updater:latest \
 		-f build/updater/Dockerfile build/updater
+
+# Incident-agent image — node20 + Claude Code CLI + kuso CLI + kubectl +
+# git/gh. The investigate/implement Jobs run this. We cross-build the kuso
+# CLI into the build context and bake it (KUSO_CLI_LOCAL) so the image never
+# depends on a published CLI release existing yet.
+.PHONY: incident-agent-image
+INCIDENT_AGENT_VERSION ?= latest
+incident-agent-image:
+	@( cd cli && GOOS=linux GOARCH=amd64 go build -o ../build/incident-agent/kuso-linux-amd64 ./cmd )
+	@docker buildx build --platform linux/amd64 --push \
+		--build-arg KUSO_CLI_LOCAL=kuso-linux-amd64 \
+		-t ghcr.io/sislelabs/kuso-incident-agent:$(INCIDENT_AGENT_VERSION) \
+		-t ghcr.io/sislelabs/kuso-incident-agent:latest \
+		-f build/incident-agent/Dockerfile build/incident-agent
+	@rm -f build/incident-agent/kuso-linux-amd64
+
+# Incident-bot image — the Discord two-way bridge (discordgo).
+.PHONY: incident-bot-image
+INCIDENT_BOT_VERSION ?= latest
+incident-bot-image:
+	@docker buildx build --platform linux/amd64 --push \
+		-t ghcr.io/sislelabs/kuso-incident-bot:$(INCIDENT_BOT_VERSION) \
+		-t ghcr.io/sislelabs/kuso-incident-bot:latest \
+		-f build/incident-bot/Dockerfile build/incident-bot
