@@ -48,47 +48,61 @@ func TestHasUpdates(t *testing.T) {
 	}
 }
 
-// TestShouldNotify pins the restart-safe edge-dedup: notify only when
-// there are real updates AND the advisory is newer than what we last
-// announced. This is what stops re-paging on every server restart.
-func TestShouldNotify(t *testing.T) {
+// TestShouldNotifyAggregate pins the once-a-day throttle: fire at most
+// once per UTC day, and survive restarts (a stored date for today means
+// don't re-fire even if the process restarts). Empty stored date = never
+// notified → fire.
+func TestShouldNotifyAggregate(t *testing.T) {
 	t.Parallel()
-	fresh := Advisory{Present: true, Count: 7, PkgMgr: "apt", CheckedAt: "2026-06-01T18:00:00Z"}
-
-	// Never notified before → fire.
-	if !shouldNotify(fresh, "") {
-		t.Error("first advisory should notify")
+	// Never notified → fire.
+	if !shouldNotifyAggregate("2026-06-10", "") {
+		t.Error("first run of the day should notify")
 	}
-	// Same checkedAt already notified → don't re-fire (restart-safe).
-	if shouldNotify(fresh, "2026-06-01T18:00:00Z") {
-		t.Error("already-notified advisory must not re-fire")
+	// Already notified today → don't re-fire (restart-safe, per-tick-safe).
+	if shouldNotifyAggregate("2026-06-10", "2026-06-10") {
+		t.Error("already-notified-today must not re-fire")
 	}
-	// Older than what we notified (clock skew / stale read) → don't fire.
-	if shouldNotify(fresh, "2026-06-01T19:00:00Z") {
-		t.Error("stale advisory must not fire")
+	// A new day → fire again.
+	if !shouldNotifyAggregate("2026-06-11", "2026-06-10") {
+		t.Error("new day should notify")
 	}
-	// A newer probe run → fire again.
-	newer := fresh
-	newer.CheckedAt = "2026-06-02T00:00:00Z"
-	if !shouldNotify(newer, "2026-06-01T18:00:00Z") {
-		t.Error("newer advisory should re-notify")
-	}
-	// No actionable updates → never fire regardless of recency.
-	if shouldNotify(Advisory{Present: true, Count: 0, PkgMgr: "apt", CheckedAt: "2026-06-03T00:00:00Z"}, "") {
-		t.Error("zero-count advisory must not notify")
+	// Empty today (defensive) → never fire.
+	if shouldNotifyAggregate("", "2026-06-10") {
+		t.Error("empty date must not fire")
 	}
 }
 
-func TestNotifyTitleBody(t *testing.T) {
+// TestAggregateTitleBody pins the digest copy: one event listing every
+// node with pending updates, count-led, with a per-node line.
+func TestAggregateTitleBody(t *testing.T) {
 	t.Parallel()
-	_, body := notifyTitleBody(Advisory{Node: "server2", Count: 50, RebootRequired: true, Sample: []string{"base-files 1->2"}})
-	if want := "Node server2: 50 package updates available (reboot required)"; !contains(body, want) {
-		t.Errorf("body = %q, want to contain %q", body, want)
+	advs := []Advisory{
+		{Node: "server2", Count: 11, RebootRequired: true, Sample: []string{"base-files 1->2"}},
+		{Node: "tickero-node", Count: 4, RebootRequired: true},
 	}
-	// Singular + no reboot.
-	_, body2 := notifyTitleBody(Advisory{Node: "n", Count: 1})
-	if !contains(body2, "1 package update available") || contains(body2, "reboot required") {
-		t.Errorf("singular/no-reboot body wrong: %q", body2)
+	_, body := aggregateTitleBody(advs)
+	for _, want := range []string{
+		"2 nodes with pending host package updates",
+		"reboot required on some",
+		"server2: 11 updates (reboot required)",
+		"tickero-node: 4 updates (reboot required)",
+		"base-files 1->2",
+	} {
+		if !contains(body, want) {
+			t.Errorf("body = %q, want to contain %q", body, want)
+		}
+	}
+
+	// Single node, singular wording, no reboot.
+	_, body2 := aggregateTitleBody([]Advisory{{Node: "n", Count: 1}})
+	if !contains(body2, "1 node with pending host package updates") {
+		t.Errorf("single-node header wrong: %q", body2)
+	}
+	if contains(body2, "reboot required") {
+		t.Errorf("should not mention reboot when none required: %q", body2)
+	}
+	if !contains(body2, "n: 1 update") {
+		t.Errorf("singular per-node line wrong: %q", body2)
 	}
 }
 

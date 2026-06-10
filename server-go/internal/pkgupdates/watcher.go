@@ -74,32 +74,44 @@ func (w *Watcher) tick(ctx context.Context, logger *slog.Logger) {
 	if w.Notify == nil || w.DB == nil {
 		return // surfacing-only deployment (no notify/dedup store)
 	}
+
+	// Collect every node that currently has actionable updates. The
+	// notification is a single once-a-day digest across ALL of them, not
+	// one event per node — so we gather first, then emit at most once.
+	var pending []Advisory
 	for _, a := range advisories {
-		if !a.HasUpdates() {
-			continue
+		if a.HasUpdates() {
+			pending = append(pending, a)
 		}
-		key := settingKeyPrefix + a.Node
-		last, _ := w.DB.GetSetting(ctx, key) // "" if unset/err → treat as never-notified
-		if !shouldNotify(a, last) {
-			continue
-		}
-		title, body := notifyTitleBody(a)
-		w.Notify.Emit(notify.Event{
-			Type:      notify.EventNodeUpdatesAvailable,
-			Timestamp: time.Now().UTC(),
-			Title:     title,
-			Body:      body,
-			// warn, NOT error: an unpatched node is informational, not a
-			// page. notify.mentionFor only @here-pings error events.
-			Severity: "warn",
-		})
-		// Record the watermark so we don't re-notify this same advisory
-		// (including across a kuso-server restart).
-		if err := w.DB.SetSetting(ctx, key, a.CheckedAt, "pkgupdates"); err != nil {
-			logger.Warn("pkgupdates: record notify watermark", "node", a.Node, "err", err)
-		}
-		logger.Info("pkgupdates: advisory notified", "node", a.Node, "count", a.Count, "reboot", a.RebootRequired)
 	}
+	if len(pending) == 0 {
+		return // nothing to report today
+	}
+
+	// Daily throttle: emit at most once per UTC day. The watermark is a
+	// single cluster-wide date (not per-node), so a steady state of
+	// unpatched nodes produces one summary a day, not a page per node
+	// per probe cycle. Survives kuso-server restarts via the Setting kv.
+	today := time.Now().UTC().Format("2006-01-02")
+	last, _ := w.DB.GetSetting(ctx, aggregateNotifiedKey) // "" if unset/err → never notified
+	if !shouldNotifyAggregate(today, last) {
+		return
+	}
+
+	title, body := aggregateTitleBody(pending)
+	w.Notify.Emit(notify.Event{
+		Type:      notify.EventNodeUpdatesAvailable,
+		Timestamp: time.Now().UTC(),
+		Title:     title,
+		Body:      body,
+		// warn, NOT error: unpatched nodes are informational, not a page.
+		// notify.mentionFor only @here-pings error events.
+		Severity: "warn",
+	})
+	if err := w.DB.SetSetting(ctx, aggregateNotifiedKey, today, "pkgupdates"); err != nil {
+		logger.Warn("pkgupdates: record daily digest watermark", "err", err)
+	}
+	logger.Info("pkgupdates: daily digest notified", "nodes", len(pending), "date", today)
 }
 
 // List returns the current advisory for every node, parsed from the

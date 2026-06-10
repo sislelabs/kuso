@@ -27,9 +27,12 @@ import (
 // Annotation is the node annotation key the probe writes.
 const Annotation = "kuso.sislelabs.com/pkg-updates"
 
-// settingKeyPrefix namespaces the per-node last-notified watermark in
-// the Setting kv table.
-const settingKeyPrefix = "pkgupdates.notified."
+// aggregateNotifiedKey holds the last UTC date (YYYY-MM-DD) we emitted
+// the daily host-package-updates digest. One key for the whole cluster,
+// not one per node: the notification is a single once-a-day summary
+// across ALL nodes with pending updates, so the dedup watermark is a
+// single date watermark too.
+const aggregateNotifiedKey = "pkgupdates.aggregate.lastNotified"
 
 // Advisory is the parsed per-node package-update summary. Mirrors the
 // probe's JSON payload plus the node name.
@@ -86,39 +89,58 @@ func ParseAnnotation(node, raw string) Advisory {
 	return a
 }
 
-// shouldNotify decides whether a fresh advisory warrants a notification,
-// given the last checkedAt we already notified for this node. It fires
-// only when there are actionable updates AND the probe's checkedAt is
-// newer than what we last announced — so steady-state ticks and
-// kuso-server restarts don't re-page. checkedAt strings are RFC3339
-// (lexically sortable), so a string compare is a valid recency test.
-func shouldNotify(a Advisory, lastNotifiedCheckedAt string) bool {
-	if !a.HasUpdates() {
-		return false
-	}
-	return a.CheckedAt != "" && a.CheckedAt > lastNotifiedCheckedAt
+// shouldNotifyAggregate decides whether to emit the daily digest, given
+// today's UTC date and the date we last emitted. It fires at most once
+// per UTC day: an operator who hasn't patched yet gets ONE summary a day
+// across all nodes, not one page per node per probe cycle. todayDate and
+// lastNotifiedDate are YYYY-MM-DD strings; an empty last date means we've
+// never notified, so the first run of a day always fires.
+func shouldNotifyAggregate(todayDate, lastNotifiedDate string) bool {
+	return todayDate != "" && todayDate != lastNotifiedDate
 }
 
-// notifyTitleBody renders the notification copy for a fresh advisory.
-func notifyTitleBody(a Advisory) (title, body string) {
+// aggregateTitleBody renders the once-a-day digest copy for every node
+// that currently has actionable updates. advisories must be pre-filtered
+// to HasUpdates()==true and non-empty (the caller checks). The body
+// leads with the node count, then one line per node.
+func aggregateTitleBody(advisories []Advisory) (title, body string) {
 	title = "Host package updates available"
+
+	anyReboot := false
+	for _, a := range advisories {
+		if a.RebootRequired {
+			anyReboot = true
+			break
+		}
+	}
+
+	nodeWord := "node"
+	if len(advisories) != 1 {
+		nodeWord = "nodes"
+	}
 	reboot := ""
-	if a.RebootRequired {
-		reboot = " (reboot required)"
+	if anyReboot {
+		reboot = " (reboot required on some)"
 	}
-	body = "Node " + a.Node + ": " + itoa(a.Count) + " package update"
-	if a.Count != 1 {
-		body += "s"
-	}
-	body += " available" + reboot + ". Review + apply from the nodes page."
-	if len(a.Sample) > 0 {
-		body += " e.g. " + strings.Join(a.Sample, ", ")
+	body = itoa(len(advisories)) + " " + nodeWord + " with pending host package updates" + reboot + ". Review + apply from the nodes page.\n"
+	for _, a := range advisories {
+		line := "• " + a.Node + ": " + itoa(a.Count) + " update"
+		if a.Count != 1 {
+			line += "s"
+		}
+		if a.RebootRequired {
+			line += " (reboot required)"
+		}
+		if len(a.Sample) > 0 {
+			line += " — e.g. " + strings.Join(a.Sample, ", ")
+		}
+		body += "\n" + line
 	}
 	return title, body
 }
 
 // ApplyState is the parsed pkg-apply-state annotation: where a node is
-// in the patch/reboot lifecycle. Phase ∈ running|rebooting|done|failed.
+// in the patch/reboot lifecycle. Phase ∈ running|draining|rebooting|done|failed.
 type ApplyState struct {
 	Phase string `json:"phase"`
 	At    string `json:"at"`

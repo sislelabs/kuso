@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.14] — 2026-05-29
+
+### ✨ Features
+- Feat(web): per-env secrets are editable; subscribed keys count as set ([efd1730](https://github.com/sislelabs/kuso/commit/efd173030d119d8082732b87d05cc0182fb4a3c1))
+
 ## [0.17.13] — 2026-05-29
 
 ### ✨ Features

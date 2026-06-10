@@ -40,6 +40,78 @@ api_patch_node() {
     "$APISERVER/api/v1/nodes/$NODE" --data "$1" >/dev/null
 }
 
+# api_get <path> — GET against the apiserver, echo body on stdout.
+api_get() {
+  curl -sf --cacert "$SA/ca.crt" -H "Authorization: Bearer $TOKEN" \
+    "$APISERVER$1"
+}
+
+# ready_node_count — number of nodes whose Ready condition is True.
+# Used to decide whether a drain is worthwhile: on a single Ready node
+# there's nowhere to evict to, so we skip the drain entirely.
+ready_node_count() {
+  api_get "/api/v1/nodes" 2>/dev/null \
+    | tr '{' '\n' \
+    | grep -c '"type":"Ready","status":"True"' 2>/dev/null \
+    || echo 0
+}
+
+# drain_node — evict every non-DaemonSet, non-mirror pod scheduled on
+# this node via the Eviction API, so workloads reschedule onto other
+# Ready nodes BEFORE the host reboots. Best-effort + bounded: an eviction
+# blocked by a PodDisruptionBudget is retried for a while, then we proceed
+# to the reboot regardless (the reboot is the operation; we never wedge an
+# apply forever on a stubborn PDB). The node is already cordoned by the
+# caller, so nothing reschedules back onto it mid-drain.
+drain_node() {
+  # Pods on THIS node, all namespaces, via fieldSelector.
+  pods_json=$(api_get "/api/v1/pods?fieldSelector=spec.nodeName=$NODE" 2>/dev/null) || {
+    echo "pkg-apply: drain: could not list pods; skipping drain"; return 0; }
+
+  # Extract "namespace/name|ownerKind" tuples. We parse with a tiny awk
+  # state machine over the flattened JSON: each pod object carries its
+  # metadata.namespace, metadata.name, and ownerReferences[].kind. We
+  # skip DaemonSet-owned pods (they're tolerated/replaced per-node, not
+  # drainable) and mirror pods (static, kind=Node owner).
+  echo "$pods_json" \
+    | tr ',{}[]' '\n\n\n\n\n' \
+    | awk '
+        /"namespace":/ { gsub(/.*"namespace":"|".*/,""); ns=$0 }
+        /"name":/ && name=="" { v=$0; gsub(/.*"name":"|".*/,"",v); name=v }
+        /"kind":"DaemonSet"/ { daemon=1 }
+        /"kind":"Node"/      { mirror=1 }
+        /"phase":"/ { p=$0; gsub(/.*"phase":"|".*/,"",p); phase=p
+                      if (ns!="" && name!="" && daemon==0 && mirror==0 && phase!="Succeeded" && phase!="Failed")
+                        print ns"/"name
+                      ns=""; name=""; daemon=0; mirror=0; phase="" }
+      ' 2>/dev/null | sort -u > /tmp/drain_pods || true
+
+  count=$(wc -l < /tmp/drain_pods 2>/dev/null | tr -d ' ')
+  echo "pkg-apply: drain: $count pod(s) to evict from $NODE"
+  [ "${count:-0}" -eq 0 ] && return 0
+
+  # Evict each pod. The Eviction API respects PodDisruptionBudgets.
+  deadline=$(( $(date +%s) + 120 ))
+  while read -r nsname; do
+    [ -z "$nsname" ] && continue
+    ns=${nsname%%/*}; pod=${nsname#*/}
+    body="{\"apiVersion\":\"policy/v1\",\"kind\":\"Eviction\",\"metadata\":{\"name\":\"$pod\",\"namespace\":\"$ns\"},\"deleteOptions\":{\"gracePeriodSeconds\":30}}"
+    # Retry a blocked eviction (429 from a PDB) until the deadline.
+    while : ; do
+      if curl -sf --cacert "$SA/ca.crt" -H "Authorization: Bearer $TOKEN" \
+           -H "Content-Type: application/json" -X POST \
+           "$APISERVER/api/v1/namespaces/$ns/pods/$pod/eviction" --data "$body" >/dev/null 2>&1; then
+        echo "pkg-apply: drain: evicted $ns/$pod"; break
+      fi
+      if [ "$(date +%s)" -ge "$deadline" ]; then
+        echo "pkg-apply: drain: gave up on $ns/$pod (PDB/blocked); proceeding"; break
+      fi
+      sleep 5
+    done
+  done < /tmp/drain_pods
+  return 0
+}
+
 # set_state <phase> <logtail>
 set_state() {
   now=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -75,12 +147,19 @@ fi
 # belt-and-suspenders so the marker is set even if launched directly.)
 api_patch_node "{\"spec\":{\"unschedulable\":true},\"metadata\":{\"annotations\":{\"${CORDON_ANNOTATION}\":\"true\"}}}" || true
 
-# Drain best-effort: evict non-DaemonSet pods on this node. On a single
-# node there's nowhere to reschedule, so failures here are expected and
-# non-fatal — we proceed to the reboot regardless (documented behavior).
-# (kubectl isn't guaranteed in-container; we rely on the kubelet to
-# restart pods after reboot. A future enhancement can add eviction via
-# the API here. For now the reboot itself is the operation.)
+# Drain: on a MULTI-node cluster, evict this node's pods (via the
+# Eviction API) so they reschedule onto other Ready nodes before the
+# reboot — preserving availability. On a single Ready node there's
+# nowhere to go, so skip the drain and rely on the kubelet restarting
+# pods after the reboot (current single-node behavior, unchanged).
+READY=$(ready_node_count)
+echo "pkg-apply: ready node count = $READY"
+if [ "${READY:-0}" -gt 1 ]; then
+  set_state draining "draining $NODE before reboot ($READY ready nodes)"
+  drain_node
+else
+  echo "pkg-apply: single ready node — skipping drain (nowhere to reschedule)"
+fi
 
 set_state rebooting "patched; rebooting node to finish (reboot-required)"
 echo "pkg-apply: rebooting $NODE (detached)"

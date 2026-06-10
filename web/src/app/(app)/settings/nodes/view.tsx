@@ -396,7 +396,7 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
   const qc = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const phase = advisory?.apply?.phase ?? "";
-  const inFlight = phase === "running" || phase === "rebooting";
+  const inFlight = phase === "running" || phase === "draining" || phase === "rebooting";
 
   const apply = useMutation({
     mutationFn: (allowReboot: boolean) =>
@@ -413,7 +413,7 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
   });
 
   // While an apply is in flight, poll the advisory so phase transitions
-  // (running → rebooting → done) surface without a manual refresh.
+  // (running → draining → rebooting → done) surface without a manual refresh.
   useEffect(() => {
     if (!inFlight) return;
     const t = setInterval(
@@ -456,7 +456,9 @@ function PackageUpdates({ advisory }: { advisory?: NodeUpdateAdvisory }) {
         <RotateCcw className="h-3.5 w-3.5 shrink-0 animate-spin" />
         {phase === "rebooting"
           ? "Patched — rebooting node to finish…"
-          : "Applying host package updates…"}
+          : phase === "draining"
+            ? "Patched — draining node before reboot…"
+            : "Applying host package updates…"}
         <span className="ml-auto font-mono text-[9px] text-[var(--text-tertiary)]">
           {advisory.apply.at ? relativeTime(advisory.apply.at) : ""}
         </span>

@@ -60,6 +60,20 @@ func (w *Watcher) Apply(ctx context.Context, node string, allowReboot bool) erro
 			ErrNothingToDo, node, adv.PkgMgr, adv.Count)
 	}
 
+	// Serialize reboot-applies across nodes: never drain+reboot two nodes
+	// at once, or a multi-node cluster could lose a quorum/all replicas of
+	// a service simultaneously. If ANOTHER node is already mid patch+reboot
+	// (carrying our cordon marker, or apply-state draining/rebooting),
+	// refuse — the operator applies nodes one at a time. A non-reboot apply
+	// (allowReboot=false) doesn't evict or reboot, so it isn't gated.
+	if allowReboot {
+		if busy, err := w.anotherNodeRebooting(ctx, node); err != nil {
+			return fmt.Errorf("check other-node apply: %w", err)
+		} else if busy != "" {
+			return fmt.Errorf("%w: node %s is still applying host updates (drain+reboot in progress); apply nodes one at a time", ErrAlreadyRunning, busy)
+		}
+	}
+
 	// Concurrency lock: refuse if a prior apply Job is still around.
 	name := applyJobName(node)
 	if existing, gerr := w.Kube.Clientset.BatchV1().Jobs(w.namespace()).Get(ctx, name, metav1.GetOptions{}); gerr == nil {
@@ -104,6 +118,33 @@ func (w *Watcher) Apply(ctx context.Context, node string, allowReboot bool) erro
 // Watcher doesn't carry a namespace field today; the apply Job lives in
 // the control-plane namespace regardless of the target node.
 func (w *Watcher) namespace() string { return "kuso" }
+
+// anotherNodeRebooting reports the name of any node OTHER than `except`
+// that is currently mid patch+reboot: it carries our cordon marker, or
+// its apply-state phase is draining/rebooting. Returns "" when no other
+// node is busy. This is what enforces one-node-at-a-time draining: the
+// signal is durable on the Node object, so it holds even across a
+// kuso-server restart mid-operation.
+func (w *Watcher) anotherNodeRebooting(ctx context.Context, except string) (string, error) {
+	nodes, err := w.Kube.Clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return "", err
+	}
+	for i := range nodes.Items {
+		n := &nodes.Items[i]
+		if n.Name == except {
+			continue
+		}
+		if n.Annotations[CordonAnnotation] == "true" {
+			return n.Name, nil
+		}
+		switch parseApplyState(n.Annotations[ApplyStateAnnotation]).Phase {
+		case "draining", "rebooting", "running":
+			return n.Name, nil
+		}
+	}
+	return "", nil
+}
 
 // reconcileReboots finalizes nodes that finished a patch+reboot. A node
 // whose apply-state is "rebooting" and is now Ready again is uncordoned

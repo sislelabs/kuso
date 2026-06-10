@@ -39,6 +39,16 @@ rules:
   - apiGroups: [""]
     resources: [nodes]
     verbs: [get, patch]
+  # The apply Job drains the node before a reboot on multi-node clusters:
+  # list pods on the node, then evict each non-DaemonSet pod so workloads
+  # reschedule onto healthy nodes before the host reboots. list (cluster
+  # scope, filtered by spec.nodeName) + the eviction subresource.
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [get, list]
+  - apiGroups: [""]
+    resources: [pods/eviction]
+    verbs: [create]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
