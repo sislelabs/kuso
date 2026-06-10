@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.56] — 2026-06-10
+
+### 🐛 Bug Fixes
+- Fix(incidents): live-e2e fixes — KUSO_TOKEN optional, Service :80, CLI list envelope ([ee8dc4d](https://github.com/sislelabs/kuso/commit/ee8dc4d548aba33e0e65d8b58ab9ea9e33023b2c))
+
+### 🧹 Chores
+- Chore(changelog): archive churn ([ed68b0c](https://github.com/sislelabs/kuso/commit/ed68b0c6950e3af822bd8c215711405c705d7e37))
+
 ## [0.18.55] — 2026-06-10
 
 ### Other
@@ -420,11 +428,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(rbac): grant kuso-server delete on PVCs so `project delete --purge-data` works ([4b42e12](https://github.com/sislelabs/kuso/commit/4b42e12f57795146f48ed5b6decd5b357cde3ab6))
-
-## [0.17.21] — 2026-05-29
-
-### 🐛 Bug Fixes
-- Fix(projects): use list+delete for project-scoped secret cleanup (no deletecollection RBAC) ([cc0f1b5](https://github.com/sislelabs/kuso/commit/cc0f1b5af305984feae20c58e97881b6be835b29))
 
 
 ---
