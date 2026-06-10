@@ -160,6 +160,10 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
   const data = (addons.data ?? []).find((a) => a.metadata.name === addon);
   const kind = data?.spec.kind ?? "";
   const isPostgres = kind === "postgres";
+  // The SQL browser/data-editor works against any postgres-wire addon —
+  // both the single-node and HA charts. (Backups stays postgres-only for
+  // now; its restore path is chart-specific.)
+  const isSQLCapable = kind === "postgres" || kind === "postgres-ha";
   const canSQL = useCanOnProject(project, Perms.SQLRead);
   const canWriteAddon = useCanOnProject(project, Perms.AddonsWrite);
 
@@ -229,7 +233,8 @@ export function AddonOverlay({ project, addon, defaultTab, onClose }: Props) {
 
             <nav className="flex shrink-0 items-center gap-1 border-b border-[var(--border-subtle)] px-3">
               {TABS.map((t) => {
-                if (!isPostgres && (t.id === "backups" || t.id === "sql")) return null;
+                if (!isPostgres && t.id === "backups") return null;
+                if (!isSQLCapable && t.id === "sql") return null;
                 // SQL tab needs sql:read; Settings (delete) needs
                 // addons:write. Hide entirely for users without —
                 // less confusing than rendering then 403'ing on action.

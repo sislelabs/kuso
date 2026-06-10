@@ -312,6 +312,127 @@ export async function runSQL(
   );
 }
 
+// --- Structured data browser/editor ---------------------------------
+//
+// The grid reads paginated rows for one table and writes single rows by
+// primary key. A value crosses the wire as { value, isNull } so NULL is
+// distinct from "" / 0 / false; the server binds it as a parameter and
+// lets Postgres do the final type coercion.
+
+export interface SQLCellValue {
+  value: unknown;
+  isNull: boolean;
+}
+
+export interface SQLColumn {
+  name: string;
+  dataType: string;
+  udtName: string;
+  nullable: boolean;
+  default?: string;
+  ordinal: number;
+  isEnum: boolean;
+  enumValues?: string[];
+}
+
+export interface SQLColumnsResponse {
+  columns: SQLColumn[];
+  primaryKey: string[];
+  editable: boolean;
+}
+
+export async function getSQLColumns(
+  project: string,
+  addon: string,
+  schema: string,
+  table: string
+): Promise<SQLColumnsResponse> {
+  const qs = new URLSearchParams({ schema, table }).toString();
+  return api<SQLColumnsResponse>(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/columns?${qs}`
+  );
+}
+
+export interface SQLRowsResponse {
+  columns: string[];
+  rows: string[][];
+  nulls: boolean[][];
+  total: number;
+  truncated: boolean;
+  elapsed: string;
+}
+
+export async function getSQLRows(
+  project: string,
+  addon: string,
+  opts: {
+    schema: string;
+    table: string;
+    limit?: number;
+    offset?: number;
+    orderBy?: string;
+    dir?: "asc" | "desc";
+  }
+): Promise<SQLRowsResponse> {
+  const qs = new URLSearchParams({ schema: opts.schema, table: opts.table });
+  if (opts.limit != null) qs.set("limit", String(opts.limit));
+  if (opts.offset != null) qs.set("offset", String(opts.offset));
+  if (opts.orderBy) qs.set("orderBy", opts.orderBy);
+  if (opts.dir) qs.set("dir", opts.dir);
+  return api<SQLRowsResponse>(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/rows?${qs.toString()}`
+  );
+}
+
+function rowsURL(project: string, addon: string): string {
+  return `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/rows`;
+}
+
+export interface SQLWriteResult {
+  columns: string[];
+  row: string[];
+}
+
+export async function insertSQLRow(
+  project: string,
+  addon: string,
+  schema: string,
+  table: string,
+  values: Record<string, SQLCellValue>
+): Promise<SQLWriteResult> {
+  return api<SQLWriteResult>(rowsURL(project, addon), {
+    method: "POST",
+    body: { schema, table, values },
+  });
+}
+
+export async function updateSQLRow(
+  project: string,
+  addon: string,
+  schema: string,
+  table: string,
+  pk: Record<string, SQLCellValue>,
+  set: Record<string, SQLCellValue>
+): Promise<SQLWriteResult> {
+  return api<SQLWriteResult>(rowsURL(project, addon), {
+    method: "PATCH",
+    body: { schema, table, pk, set },
+  });
+}
+
+export async function deleteSQLRow(
+  project: string,
+  addon: string,
+  schema: string,
+  table: string,
+  pk: Record<string, SQLCellValue>
+): Promise<{ deleted: number }> {
+  return api<{ deleted: number }>(rowsURL(project, addon), {
+    method: "DELETE",
+    body: { schema, table, pk },
+  });
+}
+
 // --- Config-as-code -------------------------------------------------
 //
 // getProjectSpec / applyConfig don't go through the `api()` wrapper:

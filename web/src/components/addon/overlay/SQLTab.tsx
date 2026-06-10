@@ -11,8 +11,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { toast } from "sonner";
+import { TableGrid } from "./data/TableGrid";
 
 export function SQLTab({ project, addon }: { project: string; addon: string }) {
+  // Two sub-modes: "browse" (structured table grid, default) and "sql" (the
+  // raw read-only query runner). The table list on the left drives both —
+  // clicking a table selects it for the grid in browse mode, or seeds a
+  // SELECT in sql mode.
+  const [mode, setMode] = useState<"browse" | "sql">("browse");
+  const [selected, setSelected] = useState<{ schema: string; name: string } | null>(null);
   const tables = useQuery({
     queryKey: ["addons", project, addon, "sql", "tables"],
     queryFn: () => listSQLTables(project, addon),
@@ -59,8 +66,11 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
     looksLikePasswordDrift(tablesErrMsg) || looksLikePasswordDrift(queryErrMsg);
 
   const pickTable = (schema: string, name: string) => {
-    const safe = schema === "public" ? `"${name}"` : `"${schema}"."${name}"`;
-    setQuery(`SELECT * FROM ${safe} LIMIT 100`);
+    setSelected({ schema, name });
+    if (mode === "sql") {
+      const safe = schema === "public" ? `"${name}"` : `"${schema}"."${name}"`;
+      setQuery(`SELECT * FROM ${safe} LIMIT 100`);
+    }
   };
 
   return (
@@ -122,7 +132,11 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
                 <button
                   type="button"
                   onClick={() => pickTable(t.schema, t.name)}
-                  className="block w-full truncate rounded px-2 py-1 text-left font-mono text-[11px] text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+                  className={`block w-full truncate rounded px-2 py-1 text-left font-mono text-[11px] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] ${
+                    selected?.schema === t.schema && selected?.name === t.name
+                      ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                      : "text-[var(--text-secondary)]"
+                  }`}
                   title={`${t.schema}.${t.name}`}
                 >
                   {t.schema === "public" ? t.name : `${t.schema}.${t.name}`}
@@ -134,47 +148,84 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
       </aside>
 
       <section className="flex min-h-0 min-w-0 flex-col">
-        <div className="border-b border-[var(--border-subtle)] p-3">
-          <textarea
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            spellCheck={false}
-            rows={4}
-            placeholder="SELECT * FROM users LIMIT 100"
-            className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
-            onKeyDown={(e) => {
-              // ⌘/Ctrl+Enter runs the query — same shortcut every other
-              // SQL UI uses, so muscle memory carries over from psql,
-              // DBeaver, etc.
-              if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                e.preventDefault();
-                run.mutate(query);
-              }
-            }}
-          />
-          <div className="mt-2 flex items-center justify-between">
-            <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-              read-only · 5s timeout · max 100 rows · ⌘/Ctrl + ↵ to run
-            </span>
-            <Button size="sm" onClick={() => run.mutate(query)} disabled={run.isPending}>
-              <Play className="h-3 w-3" />
-              {run.isPending ? "Running…" : "Run"}
-            </Button>
-          </div>
+        {/* Browse / SQL mode toggle */}
+        <div className="flex items-center gap-1 border-b border-[var(--border-subtle)] px-3 py-1.5">
+          {(["browse", "sql"] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              className={`rounded px-2 py-1 font-mono text-[10px] uppercase tracking-wider ${
+                mode === m
+                  ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                  : "text-[var(--text-tertiary)] hover:text-[var(--text-secondary)]"
+              }`}
+            >
+              {m === "browse" ? "Browse" : "SQL"}
+            </button>
+          ))}
         </div>
-        <div className="min-h-0 flex-1 overflow-auto p-3">
-          {error ? (
-            <pre className="whitespace-pre-wrap rounded-md border border-red-500/30 bg-red-500/5 p-3 font-mono text-[11px] text-red-400">
-              {error}
-            </pre>
-          ) : resp ? (
-            <SQLResults resp={resp} />
+
+        {mode === "browse" ? (
+          selected ? (
+            <TableGrid
+              project={project}
+              addon={addon}
+              schema={selected.schema}
+              table={selected.name}
+            />
           ) : (
-            <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-              no results yet — write a query and hit Run.
-            </p>
-          )}
-        </div>
+            <div className="flex flex-1 items-center justify-center">
+              <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                pick a table to browse + edit its data.
+              </p>
+            </div>
+          )
+        ) : (
+          <>
+            <div className="border-b border-[var(--border-subtle)] p-3">
+              <textarea
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                spellCheck={false}
+                rows={4}
+                placeholder="SELECT * FROM users LIMIT 100"
+                className="w-full resize-y rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-2 font-mono text-[12px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+                onKeyDown={(e) => {
+                  // ⌘/Ctrl+Enter runs the query — same shortcut every other
+                  // SQL UI uses, so muscle memory carries over from psql,
+                  // DBeaver, etc.
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    run.mutate(query);
+                  }
+                }}
+              />
+              <div className="mt-2 flex items-center justify-between">
+                <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                  read-only · 5s timeout · max 100 rows · ⌘/Ctrl + ↵ to run
+                </span>
+                <Button size="sm" onClick={() => run.mutate(query)} disabled={run.isPending}>
+                  <Play className="h-3 w-3" />
+                  {run.isPending ? "Running…" : "Run"}
+                </Button>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-auto p-3">
+              {error ? (
+                <pre className="whitespace-pre-wrap rounded-md border border-red-500/30 bg-red-500/5 p-3 font-mono text-[11px] text-red-400">
+                  {error}
+                </pre>
+              ) : resp ? (
+                <SQLResults resp={resp} />
+              ) : (
+                <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                  no results yet — write a query and hit Run.
+                </p>
+              )}
+            </div>
+          </>
+        )}
       </section>
     </div>
   );

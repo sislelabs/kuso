@@ -55,6 +55,14 @@ func (h *BackupsHandler) Mount(r chi.Router) {
 	// a stray `; DROP TABLE` or a runaway scan.
 	r.Get("/api/projects/{project}/addons/{addon}/sql/tables", h.SQLTables)
 	r.Post("/api/projects/{project}/addons/{addon}/sql/query", h.SQLQuery)
+	// Structured data browser/editor (sql_data.go): per-table schema +
+	// paginated rows + PK-targeted insert/update/delete. The raw /sql/query
+	// runner above stays read-only; ALL writes flow through these.
+	r.Get("/api/projects/{project}/addons/{addon}/sql/columns", h.SQLColumns)
+	r.Get("/api/projects/{project}/addons/{addon}/sql/rows", h.SQLRows)
+	r.Post("/api/projects/{project}/addons/{addon}/sql/rows", h.SQLInsertRow)
+	r.Patch("/api/projects/{project}/addons/{addon}/sql/rows", h.SQLUpdateRow)
+	r.Delete("/api/projects/{project}/addons/{addon}/sql/rows", h.SQLDeleteRow)
 }
 
 // BackupSettings is the wire shape. We never echo the secret access
