@@ -152,12 +152,22 @@ WHERE "state" IN ('investigating','awaiting_feedback','implementing','pr_open')`
 	return n, err
 }
 
-// ListIncidents returns the newest `limit` incidents (UI feed).
-func (d *DB) ListIncidents(ctx context.Context, limit int) ([]Incident, error) {
+// ListIncidents returns the newest `limit` incidents (UI feed). When state
+// is non-empty, only incidents in that state are returned (the Discord bot
+// filters to "awaiting_feedback").
+func (d *DB) ListIncidents(ctx context.Context, limit int, state string) ([]Incident, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := d.QueryContext(ctx, `SELECT `+incidentCols+` FROM "Incident" ORDER BY "createdAt" DESC LIMIT $1`, limit)
+	q := `SELECT ` + incidentCols + ` FROM "Incident"`
+	args := []any{}
+	if state != "" {
+		args = append(args, state)
+		q += ` WHERE "state" = $1`
+	}
+	args = append(args, limit)
+	q += fmt.Sprintf(` ORDER BY "createdAt" DESC LIMIT $%d`, len(args))
+	rows, err := d.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

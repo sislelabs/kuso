@@ -81,7 +81,7 @@ func (h *IncidentsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := incidentCtx(r)
 	defer cancel()
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-	rows, err := h.DB.ListIncidents(ctx, limit)
+	rows, err := h.DB.ListIncidents(ctx, limit, r.URL.Query().Get("state"))
 	if err != nil {
 		h.log().Error("incidents: list", "err", err)
 		http.Error(w, "internal", http.StatusInternalServerError)

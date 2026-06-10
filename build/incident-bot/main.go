@@ -463,11 +463,15 @@ func (k *kusoClient) listIncidents(ctx context.Context, state string) ([]inciden
 	if resp.StatusCode != http.StatusOK {
 		return nil, statusErr("list incidents", resp)
 	}
-	var out []incident
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+	// Server wraps the list as {"incidents":[...]} (same envelope as the web
+	// client + the kuso CLI).
+	var env struct {
+		Incidents []incident `json:"incidents"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
 		return nil, fmt.Errorf("decode incidents: %w", err)
 	}
-	return out, nil
+	return env.Incidents, nil
 }
 
 // setThread POSTs /api/incidents/{id}/thread {thread:"..."}.

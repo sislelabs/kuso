@@ -57,7 +57,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: bot
-          image: ghcr.io/sislelabs/kuso-incident-bot:v0.18.55
+          image: ghcr.io/sislelabs/kuso-incident-bot:v0.18.56
           imagePullPolicy: IfNotPresent
           resources:
             requests:
@@ -72,7 +72,7 @@ spec:
             capabilities: { drop: ["ALL"] }
           env:
             # In-cluster kuso API. Pod-to-pod over the Service; no TLS needed.
-            - { name: KUSO_API_URL, value: "http://kuso-server.kuso:3000" }
+            - { name: KUSO_API_URL, value: "http://kuso-server.kuso:80" }
             # The Discord channel where incident threads are created.
             - name: DISCORD_CHANNEL_ID
               valueFrom:
@@ -90,22 +90,13 @@ spec:
                   name: kuso-incident-bot-secrets
                   key: kuso-bot-token
 ---
-# Non-secret config: the watched Discord channel id. Set this to the channel
-# the bot should open incident threads in.
+# Non-secret config: the watched Discord channel id, in the ConfigMap
+# `kuso-incident-bot-config` key `discord-channel-id`. Create it out-of-band
+# (NOT embedded here — an embedded stub would clobber the real value every
+# time this manifest is re-applied):
 #
 #   kubectl create configmap kuso-incident-bot-config -n kuso \
 #     --from-literal=discord-channel-id='<DISCORD_CHANNEL_ID>'
 #
-# Committed as a stub so `kubectl apply -f deploy/incident-bot.yaml` doesn't
-# fail on a missing ConfigMap; replace the value via the command above or edit
-# in place. A placeholder value just means the bot logs thread-create errors
-# until it's set — the rest of the kuso install is unaffected.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: kuso-incident-bot-config
-  namespace: kuso
-  labels:
-    app.kubernetes.io/name: kuso-incident-bot
-data:
-  discord-channel-id: "CHANGEME"
+# The bot pod stays in error (logs "open thread" failures) until the ConfigMap
+# exists with a real channel id — the rest of the kuso install is unaffected.
