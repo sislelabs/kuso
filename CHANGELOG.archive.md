@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.21] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(projects): use list+delete for project-scoped secret cleanup (no deletecollection RBAC) ([cc0f1b5](https://github.com/sislelabs/kuso/commit/cc0f1b5af305984feae20c58e97881b6be835b29))
+
 ## [0.17.20] — 2026-05-29
 
 ### 🐛 Bug Fixes
