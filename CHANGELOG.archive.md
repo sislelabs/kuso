@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.23] — 2026-05-29
+
+### ✨ Features
+- Feat(previews): custom preview base domain + fix preview-DB-clone password drift ([f85fc4c](https://github.com/sislelabs/kuso/commit/f85fc4c353ff00e0dcf4c0233df4cb59e4bb755c))
+
 ## [0.17.22] — 2026-05-29
 
 ### ✨ Features
