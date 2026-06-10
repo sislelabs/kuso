@@ -5,6 +5,17 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.59] — 2026-06-10
+
+### ✨ Features
+- Feat(incidents): settings page to enable + configure the incident agent ([6153444](https://github.com/sislelabs/kuso/commit/61534441b9895656366654fbd25f0cf2c17f3412))
+
+### 📝 Docs
+- Docs(spec): incident-agent settings page design ([f76893b](https://github.com/sislelabs/kuso/commit/f76893b15e78a43cf3868110cab445487760bb6f))
+
+### 🧹 Chores
+- Chore(changelog): archive churn ([91d64de](https://github.com/sislelabs/kuso/commit/91d64dea6221c230895b8596f8cedb8c7395b106))
+
 ## [0.18.58] — 2026-06-10
 
 ### ✨ Features
@@ -425,12 +436,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(previews): self-heal recreated preview env image + pin previews to 1 replica ([e260538](https://github.com/sislelabs/kuso/commit/e26053820c65a792402782ff7cf6780b0ca9b0bb))
-
-## [0.17.24] — 2026-05-29
-
-### 🐛 Bug Fixes
-- Fix(previews): stop addon over-mount into preview + production envs ([1085649](https://github.com/sislelabs/kuso/commit/1085649c68282cc0f9bcfc0f1c0ff97bf44d717a))
-- Fix(crd): add previews.baseDomain to KusoProject CRD schema ([2a6f03a](https://github.com/sislelabs/kuso/commit/2a6f03ab9b40cbb57d8011e8ea4ca6b4085fb4c3))
 
 
 ---
