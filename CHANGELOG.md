@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.51] — 2026-06-10
+
+### ✨ Features
+- Feat(pkgupdates): daily aggregated update notification + rolling node drain ([4fd3094](https://github.com/sislelabs/kuso/commit/4fd3094a89fe4908ed936efca77dc16034f076a1))
+
 ## [0.18.50] — 2026-06-09
 
 ### 🐛 Bug Fixes
@@ -405,11 +410,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addons): stop perpetual helm-operator reconcile churn + gate release-hook promotion ([f86205b](https://github.com/sislelabs/kuso/commit/f86205b745f7474844660e2f2b11d3fcd799ca4f))
-
-## [0.17.15] — 2026-05-29
-
-### Other
-- Revert(web): drop per-env Secrets section from Variables editor ([cae09b9](https://github.com/sislelabs/kuso/commit/cae09b91da6819f417fc956d6bd5737f8602c3c6))
 
 
 ---
