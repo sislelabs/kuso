@@ -46,6 +46,11 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list]
+  # The eviction subresource is authorized against the CORE ("") apiGroup
+  # on this cluster — the apiserver checks `create pods/eviction in API
+  # group ""` (verified live: a policy-group rule yields 403, a core-group
+  # rule yields 404-on-missing-pod = authorized). `kubectl auth can-i` is
+  # misleading here; the real eviction POST is the source of truth.
   - apiGroups: [""]
     resources: [pods/eviction]
     verbs: [create]
