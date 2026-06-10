@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.15] — 2026-05-29
+
+### Other
+- Revert(web): drop per-env Secrets section from Variables editor ([cae09b9](https://github.com/sislelabs/kuso/commit/cae09b91da6819f417fc956d6bd5737f8602c3c6))
+
 ## [0.17.14] — 2026-05-29
 
 ### ✨ Features
