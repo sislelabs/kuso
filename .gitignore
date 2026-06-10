@@ -28,6 +28,10 @@ dist/
 /build/*
 !/build/updater/
 !/build/backup/
+!/build/incident-agent/
+!/build/incident-bot/
+# but never the bot's compiled binary
+/build/incident-bot/incident-bot
 *.log
 npm-debug.log*
 yarn-debug.log*

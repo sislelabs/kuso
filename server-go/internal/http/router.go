@@ -29,6 +29,7 @@ import (
 	"kuso/server/internal/db"
 	"kuso/server/internal/github"
 	httphandlers "kuso/server/internal/http/handlers"
+	"kuso/server/internal/incidents"
 	"kuso/server/internal/installscripts"
 	"kuso/server/internal/instancepg"
 	"kuso/server/internal/instancesecrets"
@@ -75,6 +76,11 @@ type Deps struct {
 	Audit           *audit.Service
 	Github          *GithubDeps
 	Notify          *notify.Dispatcher
+	// Incidents drives the autonomous incident-response agent. Optional —
+	// nil → the incident endpoints aren't mounted (kill switch off). The
+	// operator endpoints are admin-gated; the agent endpoints (findings/pr)
+	// auth via per-incident bearer token on the public router.
+	Incidents *incidents.Manager
 	// Spec drives POST /api/projects/{p}/apply (config-as-code).
 	// Optional: nil → endpoint returns 503.
 	Spec *spec.Reconciler
@@ -277,6 +283,25 @@ func NewRouter(d Deps) http.Handler {
 	if d.DB != nil {
 		reviewH := &httphandlers.PreviewReviewHandler{DB: d.DB, Kube: d.Kube}
 		reviewH.Mount(r)
+	}
+
+	// Incident-agent endpoints the in-cluster agent Job calls back into:
+	// POST /api/incidents/{id}/findings and /pr. They authenticate with
+	// the per-incident bearer token (minted into the Job env), NOT a JWT,
+	// so they live on the public router — same rationale as the node-
+	// bootstrap callbacks above. The operator-facing endpoints are
+	// admin-gated on the authenticated router (mountAuthenticatedRoutes).
+	// Gated on d.Incidents (the feature kill switch) AND d.DB — when the
+	// incident agent is off, these agent-callback endpoints don't exist at
+	// all (no token-probe surface on a server that has no incidents).
+	if d.DB != nil && d.Incidents != nil {
+		incPub := &httphandlers.IncidentsHandler{
+			DB:      d.DB,
+			Manager: d.Incidents,
+			Audit:   d.Audit,
+			Logger:  d.Logger,
+		}
+		incPub.MountPublic(r)
 	}
 
 	// WebSocket log tail. Auth is handled inside the handler (the bearer
@@ -499,6 +524,19 @@ func mountAuthenticatedRoutes(
 		if d.Audit != nil {
 			auditH := &httphandlers.AuditHandler{Svc: d.Audit, DB: d.DB, Logger: d.Logger}
 			auditH.Mount(r)
+		}
+		// Incident-response agent — operator-facing endpoints (list,
+		// detail, feedback, resolve). Admin-gated at the handler. The
+		// agent-facing /findings + /pr endpoints are mounted on the
+		// PUBLIC router (incident-token auth, no JWT) in NewRouter.
+		if d.Incidents != nil {
+			incH := &httphandlers.IncidentsHandler{
+				DB:      d.DB,
+				Manager: d.Incidents,
+				Audit:   d.Audit,
+				Logger:  d.Logger,
+			}
+			incH.Mount(r)
 		}
 		// Coolify import — read-only preview now, commit endpoint
 		// follow-up. Admin-only at the handler level; mounted

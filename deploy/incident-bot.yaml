@@ -1,0 +1,111 @@
+---
+# Discord two-way bridge for the autonomous incident-response agent.
+#
+# A small standalone deployable (build/incident-bot, its own go.mod) that:
+#   - polls the kuso API for incidents in state awaiting_feedback and opens a
+#     Discord thread with the agent's findings, then records the thread id back
+#     into kuso via POST /api/incidents/{id}/thread,
+#   - relays operator replies/reactions in those threads to
+#     POST /api/incidents/{id}/feedback ({text} or {decision:go|reject}).
+#
+# It holds NO cluster RBAC — it only talks to Discord (outbound) and the kuso
+# HTTP API (with a bot bearer token). Single replica: one Discord gateway
+# connection is intentional; running two would double-post threads and
+# double-relay reactions. There is no leader election here, so keep replicas: 1.
+#
+# Secrets (create out-of-band, not committed):
+#   kubectl create secret generic kuso-incident-bot-secrets -n kuso \
+#     --from-literal=discord-bot-token='<DISCORD_BOT_TOKEN>' \
+#     --from-literal=kuso-bot-token='<KUSO_BOT_TOKEN>'
+#
+# The KUSO_BOT_TOKEN is a kuso API bearer scoped to the incidents endpoints
+# (list + per-incident thread/feedback). Mint it the same way other service
+# tokens are minted; it does NOT need settings:admin — the incidents bot
+# routes are bot-token-gated (see http-api integration note).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kuso-incident-bot
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-incident-bot
+    app.kubernetes.io/part-of: kuso
+spec:
+  # Exactly one Discord gateway connection. Do not scale past 1.
+  replicas: 1
+  # The bot is stateless (its thread<->incident map is rebuilt from the kuso
+  # API on boot), so a clean Recreate roll is fine and avoids two gateway
+  # connections briefly overlapping during a rollout.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels: { app.kubernetes.io/name: kuso-incident-bot }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: kuso-incident-bot }
+    spec:
+      # Schedulable anywhere, including the control-plane node on single-node
+      # installs (mirrors the kuso-server toleration).
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: bot
+          image: ghcr.io/sislelabs/kuso-incident-bot:v0.18.54
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            # In-cluster kuso API. Pod-to-pod over the Service; no TLS needed.
+            - { name: KUSO_API_URL, value: "http://kuso-server.kuso:3000" }
+            # The Discord channel where incident threads are created.
+            - name: DISCORD_CHANNEL_ID
+              valueFrom:
+                configMapKeyRef:
+                  name: kuso-incident-bot-config
+                  key: discord-channel-id
+            - name: DISCORD_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-incident-bot-secrets
+                  key: discord-bot-token
+            - name: KUSO_BOT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kuso-incident-bot-secrets
+                  key: kuso-bot-token
+---
+# Non-secret config: the watched Discord channel id. Set this to the channel
+# the bot should open incident threads in.
+#
+#   kubectl create configmap kuso-incident-bot-config -n kuso \
+#     --from-literal=discord-channel-id='<DISCORD_CHANNEL_ID>'
+#
+# Committed as a stub so `kubectl apply -f deploy/incident-bot.yaml` doesn't
+# fail on a missing ConfigMap; replace the value via the command above or edit
+# in place. A placeholder value just means the bot logs thread-create errors
+# until it's set — the rest of the kuso install is unaffected.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kuso-incident-bot-config
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-incident-bot
+data:
+  discord-channel-id: "CHANGEME"

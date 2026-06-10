@@ -181,6 +181,13 @@ type Dispatcher struct {
 	// always-on (single-replica installs and tests).
 	isLeader func() bool
 
+	// eventHook, when set, is called synchronously from Emit AFTER the
+	// event is persisted, on the leader only. The incidents.Manager
+	// registers one to react to pod.crashed / alert.fired /
+	// node.unreachable. It must be cheap + non-blocking (it spawns work
+	// async); a slow hook would stall the Emit caller. nil = no hook.
+	eventHook func(Event)
+
 	mu          sync.Mutex
 	closed      bool
 	dropOnFloor bool
@@ -221,6 +228,19 @@ func (d *Dispatcher) SetLeaderHook(fn func() bool) {
 	}
 	d.mu.Lock()
 	d.isLeader = fn
+	d.mu.Unlock()
+}
+
+// SetEventHook installs a callback invoked (leader-only, after persist)
+// for every emitted event. The incidents.Manager uses it to open/attach
+// incidents. The hook must return quickly — it runs on the Emit path.
+// Pass nil to clear.
+func (d *Dispatcher) SetEventHook(fn func(Event)) {
+	if d == nil {
+		return
+	}
+	d.mu.Lock()
+	d.eventHook = fn
 	d.mu.Unlock()
 }
 
@@ -329,6 +349,17 @@ func (d *Dispatcher) Emit(e Event) {
 				d.logger.Warn("notify: persist event", "err", err, "type", string(e.Type))
 			}
 		}()
+	}
+	// Event hook (incidents.Manager): leader-only, after persist. Snapshot
+	// the fn + leader predicate under the lock, then call outside it so a
+	// slow-but-cheap hook never holds d.mu. The hook itself spawns async
+	// work; it must not block.
+	d.mu.Lock()
+	hook := d.eventHook
+	leader := d.isLeader
+	d.mu.Unlock()
+	if hook != nil && (leader == nil || leader()) {
+		hook(e)
 	}
 	select {
 	case d.ch <- e:

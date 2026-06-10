@@ -36,6 +36,7 @@ import (
 	ghpkg "kuso/server/internal/github"
 	"kuso/server/internal/health"
 	httpsrv "kuso/server/internal/http"
+	"kuso/server/internal/incidents"
 	"kuso/server/internal/instancepg"
 	"kuso/server/internal/instancesecrets"
 	"kuso/server/internal/kube"
@@ -830,8 +831,50 @@ func main() {
 		}
 	}
 
+	// Autonomous incident-response agent. Gated behind KUSO_INCIDENT_AGENT
+	// (off by default) — when on, the Manager subscribes to the dispatcher
+	// and spawns claude-p Jobs on pod.crashed / alert.fired / node.unreachable.
+	// nil Manager → the incident endpoints aren't mounted (router checks).
+	var incidentMgr *incidents.Manager
+	if os.Getenv("KUSO_INCIDENT_AGENT") == "true" {
+		agentImage := os.Getenv("KUSO_INCIDENT_AGENT_IMAGE")
+		if agentImage == "" {
+			agentImage = "ghcr.io/sislelabs/kuso-incident-agent:latest"
+		}
+		// Repo resolver for the implement phase — reads the project's
+		// KusoService CR for the repo + mints a GitHub App installation
+		// token to push the fix branch. Nil when GitHub isn't wired; the
+		// implement Job then runs with empty repo info (agent reports it).
+		var repoResolver incidents.RepoResolver
+		if ghDeps != nil && ghDeps.Client != nil {
+			repoResolver = &incidents.GithubRepoResolver{
+				Kube:      kubeClient,
+				Tokens:    ghDeps.Client,
+				Namespace: *namespace,
+			}
+		}
+		incidentMgr = &incidents.Manager{
+			DB:     database,
+			Kube:   kubeClient,
+			Notify: notifyDisp,
+			Spawner: &incidents.KubeSpawner{
+				Kube:       kubeClient,
+				Namespace:  *namespace,
+				APIBaseURL: envOr("KUSO_INCIDENT_API_URL", "http://kuso-server.kuso:3000"),
+				AgentImage: agentImage,
+				Repos:      repoResolver,
+				Logger:     logger.With("component", "incident-spawner"),
+			},
+			Logger: logger.With("component", "incidents"),
+		}
+		// Register the event hook (leader-gated inside the dispatcher).
+		notifyDisp.SetEventHook(incidentMgr.Hook)
+		logger.Info("incident-response agent enabled", "image", agentImage)
+	}
+
 	r := httpsrv.NewRouter(httpsrv.Deps{
 		DB:              database,
+		Incidents:       incidentMgr,
 		LogDB:           logDB,
 		Issuer:          issuer,
 		Projects:        projSvc,

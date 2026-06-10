@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.19] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(domains): `kuso domains add` propagates to the production env (ingress + cert) ([4000a98](https://github.com/sislelabs/kuso/commit/4000a98fbd262a2282c82b207dfdafe132619e39))
+
 ## [0.17.17] — 2026-05-29
 
 ### 🐛 Bug Fixes

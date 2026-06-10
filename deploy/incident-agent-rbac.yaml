@@ -1,0 +1,77 @@
+---
+# RBAC for the autonomous incident-response agent (the investigate phase).
+#
+# An incident Job (image ghcr.io/sislelabs/kuso-incident-agent, built in
+# build/incident-agent/) runs as THIS ServiceAccount during the investigate
+# phase. The agent root-causes a live incident with the kuso CLI first, then
+# falls back to kubectl — but ONLY read-only. That read-only-ness is enforced
+# here, not in the prompt: the SA below has get/list/watch on the inspection
+# resources and NOTHING ELSE. No write verbs, no pods/exec, no secrets.
+#
+# This is the structural half of the design's "human gate before any write"
+# guardrail: the investigate phase physically cannot mutate the cluster. Any
+# fix is a code change shipped as a reviewable PR in a separate implement Job
+# (which clones a project repo with a short-lived git token — it does not use
+# this SA's kube access to change anything).
+#
+# Single-tenant scope: kuso is one team per cluster, so cluster-wide READ is
+# acceptable here (it mirrors what the operator sees debugging by hand). We
+# deliberately do NOT grant secrets read — the agent gets the data it needs
+# via the project-scoped kuso API token (viewer + sql), not by reading raw
+# k8s Secrets.
+#
+# Applied during install alongside the other deploy/*.yaml manifests. CRD/RBAC
+# changes are NOT picked up by the image auto-updater — re-apply this file on
+# the cluster when it changes (kubectl apply -f deploy/incident-agent-rbac.yaml).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuso-incident-agent
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-incident-agent
+    app.kubernetes.io/part-of: kuso
+---
+# Read-only cluster inspection. Scoped to exactly the resources the
+# investigate prompt drives kubectl against:
+#   - pods + pods/log : pod state, restart reasons, current + previous logs
+#   - nodes           : node conditions for node.unreachable incidents
+#   - events          : kube events (CrashLoopBackOff / OOMKilled / scheduling)
+# get/list/watch only — no create/update/patch/delete, no exec/attach.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: kuso-incident-agent
+  labels:
+    app.kubernetes.io/name: kuso-incident-agent
+    app.kubernetes.io/part-of: kuso
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - nodes
+      - events
+    verbs: [get, list, watch]
+  # Modern clusters surface events under events.k8s.io as well as core "".
+  # Read both so `kubectl get events` is complete regardless of apiserver
+  # version. Still read-only.
+  - apiGroups: ["events.k8s.io"]
+    resources: [events]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kuso-incident-agent
+  labels:
+    app.kubernetes.io/name: kuso-incident-agent
+    app.kubernetes.io/part-of: kuso
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kuso-incident-agent
+subjects:
+  - kind: ServiceAccount
+    name: kuso-incident-agent
+    namespace: kuso
