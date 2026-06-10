@@ -114,7 +114,7 @@ func (s *Service) Log(ctx context.Context, e Entry) {
 	// need quoting. Unquoted, the INSERT silently fails the FK.
 	if _, err := s.DB.ExecContext(ctx, `
 INSERT INTO "Audit" (timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user", "createdAt", "updatedAt")
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
 		now, e.Severity, e.Action, e.Namespace, e.Phase, e.App, e.Pipeline, e.Resource, e.Message, e.User, now, now,
 	); err != nil {
 		// Logging an audit row must never affect the call site — log the
@@ -135,7 +135,7 @@ func (s *Service) Get(ctx context.Context, limit int) ([]Entry, int, error) {
 	}
 	rows, err := s.DB.QueryContext(ctx, `
 SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
-FROM "Audit" ORDER BY id DESC LIMIT ?`, limit)
+FROM "Audit" ORDER BY id DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, 0, fmt.Errorf("audit: get: %w", err)
 	}
@@ -170,16 +170,19 @@ func (s *Service) GetForProject(ctx context.Context, project string, after int64
 	if limit <= 0 || limit > 1000 {
 		limit = 100
 	}
+	// Postgres positional params: number each placeholder by its arg
+	// position as the slice grows (the optional `after` clause shifts the
+	// LIMIT placeholder, so we can't hard-code the indices).
 	q := `
 SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
-FROM "Audit" WHERE pipeline = ?`
+FROM "Audit" WHERE pipeline = $1`
 	args := []any{project}
 	if after > 0 {
-		q += " AND id < ?"
 		args = append(args, after)
+		q += fmt.Sprintf(" AND id < $%d", len(args))
 	}
-	q += " ORDER BY id DESC LIMIT ?"
 	args = append(args, limit)
+	q += fmt.Sprintf(" ORDER BY id DESC LIMIT $%d", len(args))
 
 	rows, err := s.DB.QueryContext(ctx, q, args...)
 	if err != nil {
@@ -199,7 +202,7 @@ FROM "Audit" WHERE pipeline = ?`
 	}
 	var total int
 	_ = s.DB.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM "Audit" WHERE pipeline = ?`,
+		`SELECT COUNT(*) FROM "Audit" WHERE pipeline = $1`,
 		project).Scan(&total)
 	return out, total, nil
 }
@@ -214,8 +217,8 @@ func (s *Service) GetForApp(ctx context.Context, pipeline, phase, app string, li
 	}
 	rows, err := s.DB.QueryContext(ctx, `
 SELECT id, timestamp, severity, action, namespace, phase, app, pipeline, resource, message, "user"
-FROM "Audit" WHERE pipeline = ? AND phase = ? AND app = ?
-ORDER BY id DESC LIMIT ?`, pipeline, phase, app, limit)
+FROM "Audit" WHERE pipeline = $1 AND phase = $2 AND app = $3
+ORDER BY id DESC LIMIT $4`, pipeline, phase, app, limit)
 	if err != nil {
 		return nil, 0, fmt.Errorf("audit: get app: %w", err)
 	}
@@ -233,7 +236,7 @@ ORDER BY id DESC LIMIT ?`, pipeline, phase, app, limit)
 	}
 	var total int
 	_ = s.DB.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM "Audit" WHERE pipeline = ? AND phase = ? AND app = ?`,
+		`SELECT COUNT(*) FROM "Audit" WHERE pipeline = $1 AND phase = $2 AND app = $3`,
 		pipeline, phase, app).Scan(&total)
 	return out, total, nil
 }
@@ -257,7 +260,7 @@ DELETE FROM "Audit"
 WHERE id < (
   SELECT id FROM "Audit"
   ORDER BY id DESC
-  LIMIT 1 OFFSET ?
+  LIMIT 1 OFFSET $1
 )`, s.MaxBackups)
 	if err != nil {
 		return fmt.Errorf("audit: trim: %w", err)

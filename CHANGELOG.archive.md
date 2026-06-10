@@ -2,6 +2,16 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.17] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(projects): empty subscription persists + project delete cleans orphaned secrets ([0cbce7f](https://github.com/sislelabs/kuso/commit/0cbce7fbd49a42e69d629c1d66d370737c9cb515))
+
+## [0.17.16] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(addons): stop perpetual helm-operator reconcile churn + gate release-hook promotion ([f86205b](https://github.com/sislelabs/kuso/commit/f86205b745f7474844660e2f2b11d3fcd799ca4f))
+
 ## [0.17.15] — 2026-05-29
 
 ### Other
