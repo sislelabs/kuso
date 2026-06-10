@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.54] — 2026-06-10
+
+### 🐛 Bug Fixes
+- Fix(audit): use Postgres $N placeholders, not SQLite ? ([6658259](https://github.com/sislelabs/kuso/commit/6658259c3d44bd382083272ae3fc891d5d447b5d))
+
 ## [0.18.53] — 2026-06-10
 
 ### ✨ Features
@@ -414,11 +419,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix: env-unset data loss, ghcr tag pagination, updater image fallback, env-scoped domains CLI ([c255bdc](https://github.com/sislelabs/kuso/commit/c255bdcf430dedc1762a36a5cd1e117d457de6c8))
-
-## [0.17.19] — 2026-05-29
-
-### 🐛 Bug Fixes
-- Fix(domains): `kuso domains add` propagates to the production env (ingress + cert) ([4000a98](https://github.com/sislelabs/kuso/commit/4000a98fbd262a2282c82b207dfdafe132619e39))
 
 
 ---
