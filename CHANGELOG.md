@@ -5,6 +5,17 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.55] — 2026-06-10
+
+### Other
+- Build(incidents): make targets for agent + bot images; pin bot deploy to v0.18.55 ([5ae2200](https://github.com/sislelabs/kuso/commit/5ae2200d591eed9fd4f029d59974c0e75b976e53))
+
+### ✨ Features
+- Feat(incidents): autonomous incident-response agent ([e5e3dd6](https://github.com/sislelabs/kuso/commit/e5e3dd67aea10296b727f3b86b4891369e01ce8b))
+
+### 📝 Docs
+- Docs(spec): autonomous incident-response agent design ([2d68882](https://github.com/sislelabs/kuso/commit/2d6888278e518a44b027a8757c0b3df4545ee6a2))
+
 ## [0.18.54] — 2026-06-10
 
 ### 🐛 Bug Fixes
@@ -414,11 +425,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(projects): use list+delete for project-scoped secret cleanup (no deletecollection RBAC) ([cc0f1b5](https://github.com/sislelabs/kuso/commit/cc0f1b5af305984feae20c58e97881b6be835b29))
-
-## [0.17.20] — 2026-05-29
-
-### 🐛 Bug Fixes
-- Fix: env-unset data loss, ghcr tag pagination, updater image fallback, env-scoped domains CLI ([c255bdc](https://github.com/sislelabs/kuso/commit/c255bdcf430dedc1762a36a5cd1e117d457de6c8))
 
 
 ---
