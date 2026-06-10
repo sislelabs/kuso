@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.20] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix: env-unset data loss, ghcr tag pagination, updater image fallback, env-scoped domains CLI ([c255bdc](https://github.com/sislelabs/kuso/commit/c255bdcf430dedc1762a36a5cd1e117d457de6c8))
+
 ## [0.17.19] — 2026-05-29
 
 ### 🐛 Bug Fixes
