@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.57] — 2026-06-10
+
+### 🐛 Bug Fixes
+- Fix(incidents): server honors ?state= filter; bot list-envelope; manifest no longer clobbers channel id ([ba65b5c](https://github.com/sislelabs/kuso/commit/ba65b5c14776b0c06794ef8227ebd8123075c028))
+
+### 🧹 Chores
+- Chore(changelog): archive churn ([2e5a3de](https://github.com/sislelabs/kuso/commit/2e5a3deb3adde386277f27177b37e8bde0f138e6))
+
 ## [0.18.56] — 2026-06-10
 
 ### 🐛 Bug Fixes
@@ -420,14 +428,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(previews): custom preview base domain + fix preview-DB-clone password drift ([f85fc4c](https://github.com/sislelabs/kuso/commit/f85fc4c353ff00e0dcf4c0233df4cb59e4bb755c))
-
-## [0.17.22] — 2026-05-29
-
-### ✨ Features
-- Feat(env): per-env env-var overrides + fix AddEnvironment service-ref rescope ([148ae71](https://github.com/sislelabs/kuso/commit/148ae711ded25824e8ee6bbef1a5d0a31b58da79))
-
-### 🐛 Bug Fixes
-- Fix(rbac): grant kuso-server delete on PVCs so `project delete --purge-data` works ([4b42e12](https://github.com/sislelabs/kuso/commit/4b42e12f57795146f48ed5b6decd5b357cde3ab6))
 
 
 ---
