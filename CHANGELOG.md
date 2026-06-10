@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.53] — 2026-06-10
+
+### ✨ Features
+- Feat(addons): data browser/editor on the postgres SQL tab ([1464108](https://github.com/sislelabs/kuso/commit/1464108543c9a684c62c322b9865f931e5d09983))
+
+### 📝 Docs
+- Docs(spec): addon data browser/editor design ([9b8e80d](https://github.com/sislelabs/kuso/commit/9b8e80d1a113af7ecd5819ebd4e65fbaad75f900))
+
 ## [0.18.52] — 2026-06-10
 
 ### 🐛 Bug Fixes
@@ -411,11 +419,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(domains): `kuso domains add` propagates to the production env (ingress + cert) ([4000a98](https://github.com/sislelabs/kuso/commit/4000a98fbd262a2282c82b207dfdafe132619e39))
-
-## [0.17.17] — 2026-05-29
-
-### 🐛 Bug Fixes
-- Fix(projects): empty subscription persists + project delete cleans orphaned secrets ([0cbce7f](https://github.com/sislelabs/kuso/commit/0cbce7fbd49a42e69d629c1d66d370737c9cb515))
 
 
 ---
