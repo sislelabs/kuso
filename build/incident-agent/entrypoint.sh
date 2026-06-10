@@ -16,7 +16,8 @@
 #   KUSO_API_URL     base URL of the kuso server      (required)
 #                    e.g. http://kuso-server.kuso.svc.cluster.local
 #   INCIDENT_TOKEN   per-incident bearer (agent-facing endpoints)  (required)
-#   KUSO_TOKEN       project-scoped kuso CLI token (viewer + sql)  (required)
+#   KUSO_TOKEN       project-scoped kuso CLI token (viewer + sql)  (OPTIONAL;
+#                    empty in v1 → agent uses kubectl via its read-only SA)
 #   CONTEXT_PACK     incident context-pack JSON (the Incident.contextPack
 #                    blob). Provided inline OR via CONTEXT_PACK_FILE.    (required)
 #   CONTEXT_PACK_FILE  path to a mounted file holding the context pack
@@ -63,7 +64,10 @@ require PHASE
 require INCIDENT_ID
 require KUSO_API_URL
 require INCIDENT_TOKEN
-require KUSO_TOKEN
+# KUSO_TOKEN is OPTIONAL in v1. When empty, the agent investigates via kubectl
+# (its read-only ServiceAccount token) instead of the kuso CLI's /api surface.
+# It is deliberately NOT the incident bearer (least privilege). A future
+# release mints a project-scoped viewer+sql token and sets this.
 
 case "$PHASE" in
   investigate|implement) ;;

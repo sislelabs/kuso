@@ -860,7 +860,10 @@ func main() {
 			Spawner: &incidents.KubeSpawner{
 				Kube:       kubeClient,
 				Namespace:  *namespace,
-				APIBaseURL: envOr("KUSO_INCIDENT_API_URL", "http://kuso-server.kuso:3000"),
+				// The kuso-server Service listens on :80 (→ container :3000).
+				// Agent Jobs hit the Service, so :80 is correct; :3000 only
+				// works from inside the server pod, not via the Service DNS.
+				APIBaseURL: envOr("KUSO_INCIDENT_API_URL", "http://kuso-server.kuso:80"),
 				AgentImage: agentImage,
 				Repos:      repoResolver,
 				Logger:     logger.With("component", "incident-spawner"),

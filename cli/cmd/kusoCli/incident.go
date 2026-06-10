@@ -45,10 +45,15 @@ var incidentListCmd = &cobra.Command{
 		if resp.StatusCode() >= 300 {
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
-		var incidents []kusoApi.Incident
-		if err := json.Unmarshal(resp.Body(), &incidents); err != nil {
+		// Server wraps the list as {"incidents": [...]} (matches the web
+		// client + the other list endpoints' envelope shape).
+		var envelope struct {
+			Incidents []kusoApi.Incident `json:"incidents"`
+		}
+		if err := json.Unmarshal(resp.Body(), &envelope); err != nil {
 			return fmt.Errorf("decode: %w", err)
 		}
+		incidents := envelope.Incidents
 		switch outputFormat {
 		case "json":
 			return jsonOut(incidents)

@@ -23,28 +23,25 @@ often points straight at the cause):
 
 ## How to investigate (in this order)
 
-1. DRIVE THE `kuso` CLI FIRST. It is the same API surface the operator's UI
-   uses, so what you see is what they see. The binary is `kuso`, already
-   authenticated for this project via the KUSO_TOKEN in your environment.
-   Useful commands:
-     kuso status {{PROJECT}}
-     kuso get services {{PROJECT}} -o json
-     kuso logs {{PROJECT}} {{SERVICE}} --env production
-     kuso build list {{PROJECT}} {{SERVICE}}
-     kuso env list {{PROJECT}} {{SERVICE}}
-     kuso get addons {{PROJECT}} -o json
+1. kubectl, READ-ONLY — this is your PRIMARY tool and always works (your
+   ServiceAccount has read-only cluster RBAC: pods, nodes, events, pods/log —
+   get/list/watch ONLY; no write verbs, no exec). Workloads live in the `kuso`
+   namespace. Examples:
+     kubectl get pods -n kuso -o wide | grep {{SERVICE}}
+     kubectl describe pod <pod> -n kuso
+     kubectl logs <pod> -n kuso --previous            # the crash's own logs
+     kubectl get events -n kuso --sort-by=.lastTimestamp
    For a node.unreachable incident the "service" field is the NODE name;
-   inspect the node and the workloads that were on it.
+   inspect the node (kubectl describe node <name>) and its workloads.
+   Any kubectl WRITE is denied by RBAC — do not attempt mutations.
 
-2. THEN kubectl, READ-ONLY. Your ServiceAccount has read-only cluster RBAC
-   (pods, nodes, events, pods/log — get/list/watch ONLY; no write verbs, no
-   exec). Use it for what the kuso CLI doesn't expose: raw pod state, kube
-   events, node conditions. Examples:
-     kubectl get pods -A -o wide
-     kubectl describe pod <pod> -n <ns>
-     kubectl logs <pod> -n <ns> --previous
-     kubectl get events -A --sort-by=.lastTimestamp
-   Any kubectl WRITE will be denied by RBAC — do not attempt mutations.
+2. The `kuso` CLI — use it ONLY IF $KUSO_TOKEN is non-empty (run
+   `[ -n "$KUSO_TOKEN" ]` to check). When set, it's the same API the operator's
+   UI uses (richer than raw kubectl): `kuso status {{PROJECT}}`,
+   `kuso logs {{PROJECT}} {{SERVICE}}`, `kuso get addons {{PROJECT}} -o json`,
+   `kuso env list {{PROJECT}} {{SERVICE}}`. If $KUSO_TOKEN is empty (the v1
+   default), SKIP the kuso CLI entirely and rely on kubectl above — do not
+   waste turns on kuso commands that will fail auth.
 
 3. Form a root-cause hypothesis. Prefer the simplest explanation consistent
    with the evidence. Distinguish symptom (pod restarting) from cause (bad
