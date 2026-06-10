@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.58] — 2026-06-10
+
+### ✨ Features
+- Feat(incidents): implement-phase graceful no-repo + clone-only plumbing test ([f1ffe91](https://github.com/sislelabs/kuso/commit/f1ffe91f1557f4966f3ad922388332aec1189b42))
+
+### 🧹 Chores
+- Chore(changelog): archive churn ([4feae91](https://github.com/sislelabs/kuso/commit/4feae9153283573c5c6d0ba90a88707733fab207))
+
 ## [0.18.57] — 2026-06-10
 
 ### 🐛 Bug Fixes
@@ -423,11 +431,6 @@ messages on every release. The format is loosely based on
 ### 🐛 Bug Fixes
 - Fix(previews): stop addon over-mount into preview + production envs ([1085649](https://github.com/sislelabs/kuso/commit/1085649c68282cc0f9bcfc0f1c0ff97bf44d717a))
 - Fix(crd): add previews.baseDomain to KusoProject CRD schema ([2a6f03a](https://github.com/sislelabs/kuso/commit/2a6f03ab9b40cbb57d8011e8ea4ca6b4085fb4c3))
-
-## [0.17.23] — 2026-05-29
-
-### ✨ Features
-- Feat(previews): custom preview base domain + fix preview-DB-clone password drift ([f85fc4c](https://github.com/sislelabs/kuso/commit/f85fc4c353ff00e0dcf4c0233df4cb59e4bb755c))
 
 
 ---
