@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.22] — 2026-05-29
+
+### ✨ Features
+- Feat(env): per-env env-var overrides + fix AddEnvironment service-ref rescope ([148ae71](https://github.com/sislelabs/kuso/commit/148ae711ded25824e8ee6bbef1a5d0a31b58da79))
+
+### 🐛 Bug Fixes
+- Fix(rbac): grant kuso-server delete on PVCs so `project delete --purge-data` works ([4b42e12](https://github.com/sislelabs/kuso/commit/4b42e12f57795146f48ed5b6decd5b357cde3ab6))
+
 ## [0.17.21] — 2026-05-29
 
 ### 🐛 Bug Fixes
