@@ -368,6 +368,11 @@ type prRequest struct {
 	Branch string `json:"branch,omitempty"`
 	Title  string `json:"title,omitempty"`
 	Body   string `json:"body,omitempty"`
+
+	// note: when prUrl is empty, the agent reports WHY no PR was opened
+	// (no repo wired / clone-only plumbing test). The note is appended to
+	// the feedback log and the incident resolves, instead of erroring.
+	Note string `json:"note,omitempty"`
 }
 
 // PR records the PR the agent opened and moves the incident to pr_open.
@@ -398,8 +403,18 @@ func (h *IncidentsHandler) PR(w http.ResponseWriter, r *http.Request) {
 	// resolve the project repo, call github.Client.OpenPR(ctx, instID,
 	// owner, repo, body.Branch, base, body.Title, body.Body), and use the
 	// returned (url, number). That keeps the App as the only push identity.
+	// Empty prUrl + a note = the agent couldn't/didn't open a PR (no repo
+	// wired, or a clone-only plumbing run). Record the note and resolve the
+	// incident — don't error.
 	if strings.TrimSpace(body.PRUrl) == "" {
-		http.Error(w, "prUrl required", http.StatusBadRequest)
+		if note := strings.TrimSpace(body.Note); note != "" {
+			_ = h.DB.AppendIncidentFeedback(ctx, in.ID, db.IncidentFeedback{Text: note})
+			_ = h.DB.SetIncidentState(ctx, in.ID, db.IncidentResolved)
+			h.auditFor(ctx, in, "incident.pr_skipped", note)
+			writeJSON(w, http.StatusOK, map[string]any{"ok": true, "resolved": true})
+			return
+		}
+		http.Error(w, "prUrl or note required", http.StatusBadRequest)
 		return
 	}
 

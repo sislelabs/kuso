@@ -62,6 +62,7 @@ type KubeSpawner struct {
 	APIBaseURL string // base URL the agent hits, e.g. http://kuso-server.kuso.svc:8080
 	AgentImage string
 	Repos      RepoResolver // optional; resolves repo + git token for implement
+	CloneOnly  bool         // test mode: implement Job clones + branches, skips the PR
 	Logger     *slog.Logger
 }
 
@@ -195,6 +196,10 @@ func (s *KubeSpawner) buildJob(in db.Incident, phase string, repo RepoInfo) *bat
 			corev1.EnvVar{Name: "REPO_DEFAULT_BRANCH", Value: orDefault(repo.DefaultBranch, "main")},
 			corev1.EnvVar{Name: "GIT_TOKEN", Value: repo.GitToken},
 		)
+		if s.CloneOnly {
+			// Plumbing test: clone + branch, then stop before opening a PR.
+			env = append(env, corev1.EnvVar{Name: "KUSO_INCIDENT_CLONE_ONLY", Value: "true"})
+		}
 	}
 
 	labels := map[string]string{

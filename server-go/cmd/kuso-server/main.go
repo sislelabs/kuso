@@ -866,6 +866,7 @@ func main() {
 				APIBaseURL: envOr("KUSO_INCIDENT_API_URL", "http://kuso-server.kuso:80"),
 				AgentImage: agentImage,
 				Repos:      repoResolver,
+				CloneOnly:  os.Getenv("KUSO_INCIDENT_CLONE_ONLY") == "true",
 				Logger:     logger.With("component", "incident-spawner"),
 			},
 			Logger: logger.With("component", "incidents"),

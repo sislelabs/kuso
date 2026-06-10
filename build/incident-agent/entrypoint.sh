@@ -164,9 +164,20 @@ PROMPT="$(render \
 
 # --- 5. Implement phase: clone the repo on a fresh branch ----------------
 if [ "$PHASE" = "implement" ]; then
-  require REPO_OWNER
-  require REPO_NAME
-  require GIT_TOKEN
+  # Fail GRACEFULLY when the repo isn't wired (no KusoService repo / no GitHub
+  # App installation for this project): POST a note to the incident so the
+  # operator sees WHY no PR was opened, then exit 0 (a non-zero exit would just
+  # show as a Job crash with no explanation).
+  if [ -z "${REPO_OWNER:-}" ] || [ -z "${REPO_NAME:-}" ] || [ -z "${GIT_TOKEN:-}" ]; then
+    log "implement: no repo wired (owner='${REPO_OWNER:-}' name='${REPO_NAME:-}' token=$([ -n "${GIT_TOKEN:-}" ] && echo set || echo empty))"
+    note="⚠️ Cannot open a PR: this incident's project/service has no repo + GitHub App installation wired in kuso, so there's nothing to push to. Resolve the fix manually, or wire the repo (KusoService.spec.repo + project GitHub installation) and re-run."
+    curl -fsS -X POST \
+      -H "Authorization: Bearer ${INCIDENT_TOKEN}" -H "Content-Type: application/json" \
+      --data "$(jq -n --arg u "$note" '{prUrl:"", prNumber:0, note:$u}')" \
+      "${KUSO_API_URL}/api/incidents/${INCIDENT_ID}/pr" >/dev/null 2>&1 || true
+    log "implement: reported no-repo to incident; exiting 0"
+    exit 0
+  fi
   REPO_DEFAULT_BRANCH="${REPO_DEFAULT_BRANCH:-main}"
   FIX_BRANCH="${FIX_BRANCH:-kuso-incident-${INCIDENT_ID}}"
   export FIX_BRANCH
@@ -187,6 +198,19 @@ if [ "$PHASE" = "implement" ]; then
   cd repo
   git checkout -b "$FIX_BRANCH"
   log "on branch ${FIX_BRANCH}"
+
+  # KUSO_INCIDENT_CLONE_ONLY: plumbing test. Proves the repo-resolve → token-mint
+  # → clone → branch chain works WITHOUT opening a PR. Reports a note + exits 0.
+  if [ "${KUSO_INCIDENT_CLONE_ONLY:-}" = "true" ]; then
+    head_sha="$(git rev-parse --short HEAD)"
+    log "clone-only: cloned ${REPO_OWNER}/${REPO_NAME}@${head_sha}, branch ${FIX_BRANCH} ready — skipping PR"
+    note="✅ Plumbing test: successfully resolved repo ${REPO_OWNER}/${REPO_NAME}, minted a push token, cloned (${REPO_DEFAULT_BRANCH}@${head_sha}), and created branch ${FIX_BRANCH}. PR creation skipped (KUSO_INCIDENT_CLONE_ONLY)."
+    curl -fsS -X POST \
+      -H "Authorization: Bearer ${INCIDENT_TOKEN}" -H "Content-Type: application/json" \
+      --data "$(jq -n --arg u "$note" '{prUrl:"", prNumber:0, note:$u}')" \
+      "${KUSO_API_URL}/api/incidents/${INCIDENT_ID}/pr" >/dev/null 2>&1 || true
+    exit 0
+  fi
 fi
 
 # --- 6. Run the agent ----------------------------------------------------
