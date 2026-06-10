@@ -5,6 +5,17 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.52] — 2026-06-10
+
+### 🐛 Bug Fixes
+- Fix(pkgupdates): parse drain pod-list with jq, not fragile awk ([5c09f45](https://github.com/sislelabs/kuso/commit/5c09f4500cc104be82de487adfbccc420c93635d))
+
+### 📝 Docs
+- Docs(pkg-probe): note eviction RBAC is core-group, not policy (verified live) ([a3a497f](https://github.com/sislelabs/kuso/commit/a3a497f61b4c3731c900e8a1f242acb4ab01ffc3))
+
+### 🧹 Chores
+- Chore(changelog): archive older release entries (tooling churn) ([9e72bb5](https://github.com/sislelabs/kuso/commit/9e72bb574910ba68383eca588d0f72a17ee3e02b))
+
 ## [0.18.51] — 2026-06-10
 
 ### ✨ Features
@@ -405,11 +416,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(projects): empty subscription persists + project delete cleans orphaned secrets ([0cbce7f](https://github.com/sislelabs/kuso/commit/0cbce7fbd49a42e69d629c1d66d370737c9cb515))
-
-## [0.17.16] — 2026-05-29
-
-### 🐛 Bug Fixes
-- Fix(addons): stop perpetual helm-operator reconcile churn + gate release-hook promotion ([f86205b](https://github.com/sislelabs/kuso/commit/f86205b745f7474844660e2f2b11d3fcd799ca4f))
 
 
 ---
