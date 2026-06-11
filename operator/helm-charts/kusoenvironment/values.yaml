@@ -36,9 +36,12 @@ autoscaling:
   targetCPUUtilizationPercentage: 70
   # Scaling behavior windows (see hpa.yaml). Conservative defaults so a flaky
   # metrics-server or a rollout's metric-less new pods can't ratchet replicas to
-  # max and pin them there. Override per service via scale if a workload needs
-  # to scale up faster.
-  scaleUpStabilizationSeconds: 60
+  # max and pin them there. 120s scale-up rides out the window where a freshly
+  # rolled pod has no metrics yet (the HPA reports "no metrics returned /
+  # invalid metrics" for ~15-60s and would otherwise spuriously scale up during
+  # every deploy). Override per service via scale if a workload needs to scale
+  # up faster.
+  scaleUpStabilizationSeconds: 120
   scaleDownStabilizationSeconds: 300
 
 # sleep: copied from KusoService.spec.sleep.
