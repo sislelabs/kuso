@@ -254,8 +254,8 @@ func runConnect(project, addon string, doExec bool) error {
 	if resp.StatusCode() >= 300 {
 		return fmt.Errorf("addon secret: %d %s", resp.StatusCode(), string(resp.Body()))
 	}
-	var secret map[string]string
-	if err := json.Unmarshal(resp.Body(), &secret); err != nil {
+	secret, err := decodeAddonSecret(resp.Body())
+	if err != nil {
 		return fmt.Errorf("decode secret: %w", err)
 	}
 
@@ -302,6 +302,29 @@ func runConnect(project, addon string, doExec bool) error {
 		return runClientFor(kindHint, dsn)
 	}
 	return <-tunnelDone
+}
+
+// decodeAddonSecret parses the GET /addons/{addon}/secret response into a flat
+// map of connection values. The server wraps them under a "values" key
+// (handlers.AddonsHandler.Secret writes {"values": {...}}); we decode that
+// shape, falling back to a flat top-level map for older servers. The flat
+// fallback is what the original code assumed unconditionally — which broke once
+// the server adopted the wrapper, since {"values": {...}} fails to unmarshal
+// into map[string]string ("cannot unmarshal object into Go value of type
+// string").
+func decodeAddonSecret(body []byte) (map[string]string, error) {
+	var wrapped struct {
+		Values map[string]string `json:"values"`
+	}
+	if err := json.Unmarshal(body, &wrapped); err == nil && wrapped.Values != nil {
+		return wrapped.Values, nil
+	}
+	// Legacy flat shape: {"DATABASE_URL": "...", ...}.
+	var flat map[string]string
+	if err := json.Unmarshal(body, &flat); err != nil {
+		return nil, err
+	}
+	return flat, nil
 }
 
 // localDSNFromSecret returns (kindHint, dsn) — a rewritten connection
