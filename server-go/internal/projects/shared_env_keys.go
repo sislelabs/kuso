@@ -255,7 +255,7 @@ func (s *Service) resolveSharedEnvKeysForEnv(
 	for _, n := range envOverrideNames {
 		overrideSet[n] = true
 	}
-	envOverrides := extractEnvOnlyOverrides(svcExplicitEnvVars, filteredEnvExplicit, overrideSet)
+	envOverrides := extractEnvOnlyOverrides(svcExplicitEnvVars, filteredEnvExplicit, overrideSet, sharedSet)
 	// Build merged envVars: subscribed (base) ← svc-explicit ← env-overrides.
 	merged := mergeSubscribedEnvVars(svcExplicitEnvVars, subscribed)
 	merged = mergeExplicitOverrides(merged, envOverrides)
@@ -391,7 +391,7 @@ func isUnsubscribedSharedSecretRef(e kube.KusoEnvVar, sharedSet, sharedSecretNam
 // migrated before this field existed). A nil set means "trust the
 // service": all same-name entries drop and re-stamp. Net-new entries
 // still survive because they have no service value to fall back to.
-func extractEnvOnlyOverrides(svcExplicit, envExplicit []kube.KusoEnvVar, overrideNames map[string]bool) []kube.KusoEnvVar {
+func extractEnvOnlyOverrides(svcExplicit, envExplicit []kube.KusoEnvVar, overrideNames, sharedKeySet map[string]bool) []kube.KusoEnvVar {
 	if len(envExplicit) == 0 {
 		return nil
 	}
@@ -415,9 +415,22 @@ func extractEnvOnlyOverrides(svcExplicit, envExplicit []kube.KusoEnvVar, overrid
 			continue
 		}
 		if _, exists := svcByName[e.Name]; !exists {
-			// Net-new: no service value to fall back to, so it can only
-			// live on the env. Always survives.
-			out = append(out, e)
+			// On the env but NOT on the service. Keep it only if it's a
+			// deliberate per-env value, i.e. either:
+			//   - marked as a per-env override (SetEnvScopedVar records the
+			//     name in env.Spec.EnvOverrides), or
+			//   - an explicit env literal for a SUBSCRIBED shared key (the
+			//     user pinned a per-env value that overrides the shared one;
+			//     this never appears in svcExplicit, only in sharedKeys).
+			// Otherwise it's an inherited seed the service USED to have and
+			// then unset — `env unset` drops it from the service, but the
+			// propagation RMW re-reads the env CR which still carries the old
+			// copy. Before this fix every not-on-service env var "always
+			// survived", so an unset var lived on forever in the env
+			// (DATABASE_SSL_NO_VERIFY kept forcing SSL after unset → crash).
+			if overrideNames[e.Name] || sharedKeySet[e.Name] {
+				out = append(out, e)
+			}
 			continue
 		}
 		// Same name as the service: survives ONLY if the user explicitly

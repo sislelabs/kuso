@@ -28,6 +28,7 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 		svc        []kube.KusoEnvVar
 		env        []kube.KusoEnvVar
 		overrides  map[string]bool // env.Spec.EnvOverrides as a set
+		shared     map[string]bool // subscribed sharedEnvKeys as a set
 		wantNames  []string
 		wantValues map[string]string
 	}{
@@ -49,6 +50,9 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 				{Name: "NEXT_PUBLIC_SITE_URL", Value: "https://staging.tickero.bg"},
 				{Name: "API_URL", Value: "http://tickero-api-staging.kuso.svc.cluster.local"},
 			},
+			// NEXT_PUBLIC_SITE_URL + API_URL are subscribed shared keys with
+			// per-env literal overrides (net-new vs svc.envVars) — survive.
+			shared: map[string]bool{"NEXT_PUBLIC_SITE_URL": true, "API_URL": true},
 			overrides: map[string]bool{
 				"NEXT_PUBLIC_API_URL":     true,
 				"NEXT_PUBLIC_ENVIRONMENT": true,
@@ -145,6 +149,7 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 			svc:       nil,
 			env:       []kube.KusoEnvVar{{Name: "API_URL", Value: "https://api-staging.tickero.bg"}},
 			overrides: nil,
+			shared:    map[string]bool{"API_URL": true},
 			wantNames: []string{"API_URL"},
 			wantValues: map[string]string{
 				"API_URL": "https://api-staging.tickero.bg",
@@ -167,14 +172,30 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 				},
 			},
 			overrides: nil,
+			shared:    map[string]bool{"API_URL": true},
 			wantNames: []string{"API_URL"},
+		},
+		{
+			// Regression: a var the SERVICE used to have and then `env unset`
+			// removed. It's gone from svc.envVars but the env CR still carries
+			// the old copy (propagation re-reads the env). It is NOT a marked
+			// per-env override and NOT a subscribed shared key — so it must
+			// DROP, otherwise `env unset` never reaches the pod. This is the
+			// DATABASE_SSL_NO_VERIFY crash: unset on the service, but the env
+			// kept forcing SSL against a plaintext Postgres.
+			name:      "unset service var orphaned on env — must drop",
+			svc:       nil, // service no longer has it (unset)
+			env:       []kube.KusoEnvVar{{Name: "DATABASE_SSL_NO_VERIFY", Value: "true"}},
+			overrides: nil, // never a deliberate per-env override
+			shared:    nil, // not a subscribed shared key
+			wantNames: nil, // drops
 		},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := extractEnvOnlyOverrides(tc.svc, tc.env, tc.overrides)
+			got := extractEnvOnlyOverrides(tc.svc, tc.env, tc.overrides, tc.shared)
 			if len(got) != len(tc.wantNames) {
 				t.Fatalf("got %d overrides, want %d (%v)", len(got), len(tc.wantNames), got)
 			}
