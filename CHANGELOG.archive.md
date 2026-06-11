@@ -2,6 +2,39 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.3] — 2026-05-30
+
+### ✨ Features
+- Feat(groups): show + manage group members (roster, not blind add/remove) ([2694dc4](https://github.com/sislelabs/kuso/commit/2694dc4f04339b5fb3fb38a905ad309bb6a030f9))
+- Feat(users): admin can set a user's instance role from the Users page ([fedb1eb](https://github.com/sislelabs/kuso/commit/fedb1ebf2a935bc308e3e061026f4a4f2784e071))
+
+### 🐛 Bug Fixes
+- Fix(notifications): keep the Discord mention picker open on select ([ccc15f8](https://github.com/sislelabs/kuso/commit/ccc15f834ca907ecccba1bd0ad53065375399edf))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.3 ship) ([360e721](https://github.com/sislelabs/kuso/commit/360e7218e2ccd2c93ac74dac597f388f17be638e))
+
+## [0.18.2] — 2026-05-30
+
+### 🐛 Bug Fixes
+- Fix(notifications): persist per-event Discord mention rules server-side ([b0e72d0](https://github.com/sislelabs/kuso/commit/b0e72d03940ed98f141646e325d1709355eab658))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.2 ship) ([2d7f1a9](https://github.com/sislelabs/kuso/commit/2d7f1a911b91595327bf3744eeefb7b39c434761))
+
+## [0.18.1] — 2026-05-30
+
+### 🐛 Bug Fixes
+- Fix(db): drop carried-over indexes before recreating in LogLine partition migration ([146f16c](https://github.com/sislelabs/kuso/commit/146f16c1fc5a8030207fcaaab3753878bce98820))
+- Fix(notifications): persist explicit "none" Discord mention over @here default ([3208b14](https://github.com/sislelabs/kuso/commit/3208b14d916ebb071cb7091c0e3c8fd0b82ded61))
+
+### 🔨 Refactors
+- Refactor: decouple served-app domain from the kuso.sislelabs.com literal ([04c3609](https://github.com/sislelabs/kuso/commit/04c3609d382b4f02b62adf8c5077446c72884977))
+- Refactor(db): purge SQLite dialect — native Postgres $N + ON CONFLICT ([a9561c0](https://github.com/sislelabs/kuso/commit/a9561c00a4285c35d8e222755d8e0a454a9ea41b))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.1 ship) ([74c6ba9](https://github.com/sislelabs/kuso/commit/74c6ba9204e6d3b3677f950828a569f8460f43af))
+
 ## [0.18.0] — 2026-05-30
 
 ### Other
