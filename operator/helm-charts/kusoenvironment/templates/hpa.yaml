@@ -19,4 +19,26 @@ spec:
         target:
           type: Utilization
           averageUtilization: {{ .Values.autoscaling.targetCPUUtilizationPercentage }}
+  # Conservative scaling behavior. Without an explicit behavior block the HPA
+  # uses defaults that, combined with a flaky metrics-server (transient
+  # "no metrics returned" scrape blips, or rollouts where new pods have no
+  # metrics yet), let replicas ratchet toward maxReplicas and stay pinned there
+  # — a metric gap reads as "can't prove I should scale down". We:
+  #   - scale UP gently: at most +1 pod per 60s, so a brief CPU spike or a
+  #     single bad reading can't jump straight to max.
+  #   - scale DOWN after a 300s stabilization window so we don't flap, but still
+  #     return to baseline once load genuinely subsides.
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleUpStabilizationSeconds | default 60 }}
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: {{ .Values.autoscaling.scaleDownStabilizationSeconds | default 300 }}
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
 {{- end }}

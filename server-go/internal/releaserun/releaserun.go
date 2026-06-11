@@ -236,13 +236,12 @@ func JobName(envName, imageTag string) string {
 // resolved envVars + envFromSecrets so the release command sees the
 // same DATABASE_URL etc. that the running pods do.
 func (r *Runner) buildJob(env *kube.KusoEnvironment, image *kube.KusoImage, name string, timeoutSec int32) *batchv1.Job {
-	envVars := make([]corev1.EnvVar, 0, len(env.Spec.EnvVars))
-	for _, e := range env.Spec.EnvVars {
-		// Closed schema rejects valueFrom smuggling at the apiserver
-		// already; we trust what landed on the env CR.
-		ev := corev1.EnvVar{Name: e.Name, Value: e.Value}
-		envVars = append(envVars, ev)
-	}
+	// Carry valueFrom (e.g. a `${{ addon.KEY }}` alias resolves to a
+	// secretKeyRef). The deployment renders these via toYaml, so the running
+	// pods get them — the release Job MUST too, or a release command that reads,
+	// say, DATABASE_URI (aliased from the addon's DATABASE_URL) sees an empty
+	// value and connects to localhost.
+	envVars := kube.CoreEnvVars(env.Spec.EnvVars)
 	envFrom := make([]corev1.EnvFromSource, 0, len(env.Spec.EnvFromSecrets))
 	for _, secret := range env.Spec.EnvFromSecrets {
 		envFrom = append(envFrom, corev1.EnvFromSource{

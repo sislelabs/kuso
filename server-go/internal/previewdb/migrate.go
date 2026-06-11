@@ -104,10 +104,10 @@ func buildMigrateJob(ns, project, cloneFQN string, env *kube.KusoEnvironment, ow
 			},
 		})
 	}
-	envVars := make([]corev1.EnvVar, 0, len(env.Spec.EnvVars))
-	for _, e := range env.Spec.EnvVars {
-		envVars = append(envVars, corev1.EnvVar{Name: e.Name, Value: e.Value})
-	}
+	// Preserve valueFrom (addon-aliased secretKeyRefs) — see kube.CoreEnvVars.
+	// Without this the post-seed migrate against the preview-DB clone reads an
+	// empty DATABASE_URI and falls back to localhost.
+	envVars := kube.CoreEnvVars(env.Spec.EnvVars)
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
