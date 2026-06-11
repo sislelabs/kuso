@@ -5,6 +5,15 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.67] — 2026-06-11
+
+### ✨ Features
+- Feat(addons): per-addon postgres TLS opt-in (spec.tls) ([e467040](https://github.com/sislelabs/kuso/commit/e467040c54731850d887fd19db062b160170ecb7))
+- Feat(cli): kuso project addon list/subscribe/unsubscribe ([e676abf](https://github.com/sislelabs/kuso/commit/e676abfb865dbca796e647c4ec81e263d0bf85c0))
+
+### 🐛 Bug Fixes
+- Fix(addons): restore redpanda to the add-addon catalog + canvas icon ([15da68a](https://github.com/sislelabs/kuso/commit/15da68a0dabb4a3c7feb894cc5aac6af268b75e3))
+
 ## [0.18.66] — 2026-06-11
 
 ### 🐛 Bug Fixes
@@ -410,14 +419,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive promoted CHANGELOG entries (pre-v0.18.3 ship) ([360e721](https://github.com/sislelabs/kuso/commit/360e7218e2ccd2c93ac74dac597f388f17be638e))
-
-## [0.18.2] — 2026-05-30
-
-### 🐛 Bug Fixes
-- Fix(notifications): persist per-event Discord mention rules server-side ([b0e72d0](https://github.com/sislelabs/kuso/commit/b0e72d03940ed98f141646e325d1709355eab658))
-
-### 🧹 Chores
-- Chore: archive promoted CHANGELOG entries (pre-v0.18.2 ship) ([2d7f1a9](https://github.com/sislelabs/kuso/commit/2d7f1a911b91595327bf3744eeefb7b39c434761))
 
 
 ---
