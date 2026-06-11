@@ -57,6 +57,7 @@
               "nats",
               "meilisearch",
               "clickhouse",
+              "redpanda",
               "mongodb",
               "mysql",
               "rabbitmq",
@@ -153,6 +154,16 @@
             "type": "string"
           },
           "storageSize": {
+            "type": "string"
+          },
+          "tls": {
+            "default": "disable",
+            "description": "In-cluster wire TLS for a native kind=postgres addon. \"disable\" (default) = plaintext, conn advertises sslmode=disable — works with every driver, zero config. \"require\" = the StatefulSet serves TLS via a self-signed cert and the conn advertises sslmode=require, for apps that mandate encrypted DB connections in production (Go/pgx, Rails, strict prod-mode checks). Default node-postgres rejects a self-signed cert under require, so only opt in when your driver accepts an unverified chain or you pin the CA.",
+            "enum": [
+              "",
+              "disable",
+              "require"
+            ],
             "type": "string"
           },
           "useInstanceAddon": {

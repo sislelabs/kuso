@@ -34,6 +34,15 @@ size: small
 #   others   → ignored (single-node fallback)
 ha: false
 
+# tls: in-cluster wire TLS for a native kind=postgres addon.
+#   "disable" (default) → plaintext on :5432, conn advertises
+#                         sslmode=disable. Works with every driver.
+#   "require"           → StatefulSet serves TLS via a self-signed cert,
+#                         conn advertises sslmode=require. For apps that
+#                         mandate encrypted DB connections in production.
+# See templates/postgres.yaml for the cross-driver rationale.
+tls: "disable"
+
 # singleNode: only honoured when ha=true on a Postgres addon. Allows
 # the 3 CNPG replicas to colocate on one kube node — accepts the
 # SPOF in exchange for HA-shaped replication on a single-node

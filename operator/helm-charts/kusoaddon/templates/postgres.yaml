@@ -57,6 +57,12 @@
   {{- fail (printf "kusoaddon %s/%s: StatefulSet exists but conn Secret is missing — refusing to generate a fresh password. Run `kuso project addon repair-password` to recover." .Release.Namespace $name) -}}
 {{- end -}}
 {{- $password := $providedPw | default .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+{{- /* tlsOn: opt-in in-cluster TLS. Default "disable" → plaintext +
+       sslmode=disable (works with every driver). "require" → serve TLS
+       via a self-signed cert + advertise sslmode=require, for apps that
+       mandate encrypted DB connections. */ -}}
+{{- $tlsOn := eq (.Values.tls | default "disable") "require" -}}
+{{- $sslmode := ternary "require" "disable" $tlsOn -}}
 
 # StatefulSet running the upstream Postgres image. Plain non-HA single-node;
 # good enough for v0.2 and most indie-dev workloads. Switch to CloudNativePG
@@ -86,6 +92,33 @@ spec:
     spec:
       {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
       {{- include "kusoaddon.placement" . | nindent 6 }}
+      {{- if $tlsOn }}
+      # initContainer copies the TLS bundle into a writable dir with the
+      # restrictive perms postgres demands (key mode 0600, owner postgres).
+      # Mounted Secret keys land as root-owned 0444 symlinks, so postgres
+      # refuses to start ("private key file has group or world access").
+      # Only rendered when spec.tls=require.
+      initContainers:
+        - name: tls-prep
+          image: "postgres:{{ $version }}"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
+          command:
+            - sh
+            - -c
+            - |
+              set -e
+              cp /tls-src/tls.crt /tls-dst/server.crt
+              cp /tls-src/tls.key /tls-dst/server.key
+              chmod 0600 /tls-dst/server.key
+              chmod 0644 /tls-dst/server.crt
+              chown 999:999 /tls-dst/server.crt /tls-dst/server.key
+          volumeMounts:
+            - name: tls-src
+              mountPath: /tls-src
+              readOnly: true
+            - name: tls
+              mountPath: /tls-dst
+      {{- end }}
       containers:
         - name: postgres
           image: "postgres:{{ $version }}"
@@ -93,16 +126,24 @@ spec:
           ports:
             - name: postgres
               containerPort: 5432
-          # No in-cluster TLS. The conn string advertises sslmode=disable
-          # (see the conn-Secret DATABASE_URL below). We previously served a
-          # self-signed cert + a magic sslmode, but no single sslmode value
-          # is accepted by every driver family (Go/pgx rejects `no-verify`;
-          # default node-postgres rejects `prefer`/`require` against a self-
-          # signed cert), so the cert bought breakage, not security. Pod-to-
-          # pod isolation is the CNI + per-project NetworkPolicies' job; for
-          # genuinely verified in-cluster DB TLS, a future opt-in (spec.tls:
-          # verify, cert-manager-issued cert + CA in the app trust store) is
-          # the right tool — not a cert nobody verifies.
+          {{- if $tlsOn }}
+          # spec.tls=require: serve TLS via the self-signed cert in <name>-tls
+          # so the conn string can advertise sslmode=require. Accepted by
+          # Go/pgx + libpq (encrypt, don't verify the self-signed chain);
+          # default node-postgres rejects it, so this is opt-in per addon.
+          args:
+            - "-c"
+            - "ssl=on"
+            - "-c"
+            - "ssl_cert_file=/tls/server.crt"
+            - "-c"
+            - "ssl_key_file=/tls/server.key"
+          {{- else }}
+          # No in-cluster TLS (default). The conn string advertises
+          # sslmode=disable — the one mode every driver accepts with zero
+          # config. Pod-to-pod isolation is the CNI + NetworkPolicies' job.
+          # Apps that mandate encrypted DB connections set spec.tls=require.
+          {{- end }}
           env:
             - name: POSTGRES_DB
               value: {{ $database | quote }}
@@ -118,6 +159,11 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
+            {{- if $tlsOn }}
+            - name: tls
+              mountPath: /tls
+              readOnly: true
+            {{- end }}
           readinessProbe:
             exec:
               command: ["pg_isready", "-U", "kuso", "-d", {{ $database | quote }}]
@@ -125,6 +171,15 @@ spec:
             periodSeconds: 5
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
+      {{- if $tlsOn }}
+      volumes:
+        - name: tls-src
+          secret:
+            secretName: {{ printf "%s-tls" $name }}
+            defaultMode: 0444
+        - name: tls
+          emptyDir: {}
+      {{- end }}
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -162,6 +217,45 @@ spec:
     - name: postgres
       port: 5432
       targetPort: postgres
+{{- if $tlsOn }}
+---
+# TLS bundle (only when spec.tls=require). Self-signed cert+key the postgres
+# container loads to serve TLS on 5432. Reused across reconciles via lookup +
+# helm.sh/resource-policy so the cert doesn't rotate every pass (which would
+# drop live client connections). genSelfSignedCert keeps cert-manager off the
+# critical path for the basic addon; the SAN covers the service DNS names but
+# clients connect with sslmode=require (encrypt, don't verify) so SAN match
+# isn't enforced — the cert makes TLS the channel, not a tenant-identity proof.
+{{- $tlsSecretName := printf "%s-tls" $name -}}
+{{- $existingTLS := lookup "v1" "Secret" .Release.Namespace $tlsSecretName -}}
+{{- $tlsCert := "" -}}
+{{- $tlsKey := "" -}}
+{{- if and $existingTLS $existingTLS.data (index $existingTLS.data "tls.crt") (index $existingTLS.data "tls.key") -}}
+  {{- $tlsCert = (index $existingTLS.data "tls.crt" | b64dec) -}}
+  {{- $tlsKey = (index $existingTLS.data "tls.key" | b64dec) -}}
+{{- else -}}
+  {{- $cn := printf "%s.%s.svc" $name .Release.Namespace -}}
+  {{- $sans := list $name $cn (printf "%s.%s.svc.cluster.local" $name .Release.Namespace) -}}
+  {{- $gen := genSelfSignedCert $cn nil $sans 3650 -}}
+  {{- $tlsCert = $gen.Cert -}}
+  {{- $tlsKey = $gen.Key -}}
+{{- end }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $tlsSecretName }}
+  annotations:
+    # Don't let an accidental KusoAddon delete wipe the TLS material; a
+    # delete-and-recreate falls back to genSelfSignedCert but keeping it
+    # spares a pod restart.
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: kubernetes.io/tls
+data:
+  tls.crt: {{ $tlsCert | b64enc | quote }}
+  tls.key: {{ $tlsKey | b64enc | quote }}
+{{- end }}
 ---
 # Connection secret. Picked up by every KusoEnvironment in the project via
 # envFrom. Standard env names match Heroku/Railway conventions so apps that
@@ -187,29 +281,25 @@ data:
   POSTGRES_USER: {{ "kuso" | b64enc | quote }}
   POSTGRES_PASSWORD: {{ $password | b64enc | quote }}
   POSTGRES_DB: {{ $database | b64enc | quote }}
-  # sslmode=disable: the addon Postgres serves PLAINTEXT on 5432 (no TLS).
-  # This is the one mode every driver in every language accepts with zero
-  # per-app config — which is the only property that matters for a PaaS
-  # default. The history of trying to be clever here:
-  #   - sslmode=require → Go/pgx + libpq accept the self-signed cert, but
-  #     DEFAULT node-postgres still verifies the chain and crashes with
-  #     DEPTH_ZERO_SELF_SIGNED_CERT. Broke every Node deploy.
-  #   - sslmode=no-verify → node-postgres accepts it (rejectUnauthorized
-  #     false), but Go/pgx REJECTS it as an invalid sslmode and crashes on
-  #     parse ("sslmode is invalid"). Broke every Go deploy.
-  # There is no single sslmode string both families accept against a self-
-  # signed cert, so we stop serving one. In-cluster pod-to-pod isolation is
-  # the CNI + per-project NetworkPolicies' job; a cert nobody verifies adds
-  # breakage, not security. For genuinely encrypted+verified in-cluster DB
-  # TLS, a future opt-in (spec.tls: verify → cert-manager-issued cert + the
-  # CA in the app's trust store) is the right tool; override DATABASE_URL or
-  # connect through your own TLS proxy in the meantime.
+  # sslmode is driven by spec.tls (default "disable"):
+  #   disable → addon serves PLAINTEXT; conn says sslmode=disable. The one
+  #     mode every driver in every language accepts with zero config — the
+  #     right PaaS default. (history: `require` broke default node-postgres
+  #     on the self-signed cert; `no-verify` broke Go/pgx which rejects it
+  #     as an invalid sslmode. No single string works for both, so the
+  #     default serves no cert at all. CNI + NetworkPolicies are the
+  #     in-cluster isolation boundary, not a cert nobody verifies.)
+  #   require → addon serves TLS via the self-signed <name>-tls cert; conn
+  #     says sslmode=require. For apps that MANDATE encrypted DB connections
+  #     in production (Go/pgx, Rails, strict prod-mode checks). Accepted by
+  #     pgx + libpq; default node-postgres rejects the self-signed chain
+  #     under require, which is why this is opt-in per addon.
   #
   # urlquery the password so user-supplied creds with reserved chars
   # (`@`, `:`, `/`, `?`, `#`, `%`) don't corrupt the connection string.
   # The auto-generated password (randAlphaNum) is safe without it, but
   # passwordSecret-supplied values can be anything.
-  DATABASE_URL: {{ printf "postgres://kuso:%s@%s:5432/%s?sslmode=disable" ($password | urlquery) $name $database | b64enc | quote }}
+  DATABASE_URL: {{ printf "postgres://kuso:%s@%s:5432/%s?sslmode=%s" ($password | urlquery) $name $database $sslmode | b64enc | quote }}
   {{- /* DIRECT_URL: always the un-pooled, session-safe DSN (== the direct
          DATABASE_URL above for this StatefulSet path). Apps running Prisma
          migrations point Prisma's `directUrl` here. It matters mainly when
@@ -219,7 +309,7 @@ data:
          hangs 10s then CrashLoopBackOffs. Emitted unconditionally so the key
          set matches the instance-shared conn secret (instance_provisioner.go),
          giving apps one stable ${{ <addon>.DIRECT_URL }} contract everywhere. */}}
-  DIRECT_URL: {{ printf "postgres://kuso:%s@%s:5432/%s?sslmode=disable" ($password | urlquery) $name $database | b64enc | quote }}
+  DIRECT_URL: {{ printf "postgres://kuso:%s@%s:5432/%s?sslmode=%s" ($password | urlquery) $name $database $sslmode | b64enc | quote }}
   {{- /* Pooler keys. Additive — DATABASE_URL above stays direct at
          the StatefulSet so existing consumers are unaffected. Apps
          opt into pooling with ${{ <addon>.POOLER_URL }}.

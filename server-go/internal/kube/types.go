@@ -647,6 +647,17 @@ type KusoAddonSpec struct {
 	// — access is gated by the caller's kuso session. Kinds without
 	// a known UI port silently ignore the flag.
 	WebUI *KusoAddonWebUI `json:"webUI,omitempty"`
+	// TLS controls in-cluster wire TLS for a native kind=postgres
+	// addon. "" / "disable" (default) = plaintext, conn advertises
+	// sslmode=disable — works for every driver with zero config.
+	// "require" = the StatefulSet serves TLS via a self-signed cert
+	// and the conn advertises sslmode=require — for apps that mandate
+	// encrypted DB connections in production (Go/pgx, Rails, strict
+	// production-mode checks). Note: default node-postgres rejects a
+	// self-signed cert under sslmode=require, so only opt into this
+	// when your app's driver accepts an unverified chain or you pin
+	// the CA. See operator/helm-charts/kusoaddon/templates/postgres.yaml.
+	TLS string `json:"tls,omitempty"`
 }
 
 // KusoAddonPooler is the opt-in connection-pooler block on

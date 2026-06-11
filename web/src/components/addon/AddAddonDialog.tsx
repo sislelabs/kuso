@@ -32,6 +32,7 @@ const KINDS = [
   "nats",
   "meilisearch",
   "clickhouse",
+  "redpanda",
   // Reserved — chart renders the unsupported marker. Hidden behind a
   // flag once we have a Coming-Soon affordance; for now they're kept
   // out of the picker entirely so users can't add them by accident.
@@ -57,6 +58,10 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
   const [version, setVersion] = useState<string>("");
   const [ha, setHA] = useState(false);
   const [storageSize, setStorageSize] = useState<string>("");
+  // requireTLS opts a managed postgres addon into in-cluster wire TLS
+  // (spec.tls=require) so its conn string advertises sslmode=require —
+  // for apps that mandate encrypted DB connections in production.
+  const [requireTLS, setRequireTLS] = useState(false);
   const qc = useQueryClient();
 
   // Pull the list of admin-registered instance addons so the picker
@@ -88,6 +93,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
       setVersion("");
       setHA(false);
       setStorageSize("");
+      setRequireTLS(false);
     }
   }, [open]);
 
@@ -147,6 +153,7 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
         if (version.trim()) body.version = version.trim();
         if (ha) body.ha = true;
         if (storageSize.trim()) body.storageSize = storageSize.trim();
+        if (kind === "postgres" && requireTLS) body.tls = "require";
       }
       return addAddon(project, body);
     },
@@ -430,6 +437,25 @@ export function AddAddonDialog({ project, open, onClose }: Props) {
                         />
                         High availability (multi-replica + anti-affinity)
                       </label>
+                      {kind === "postgres" && (
+                        <div>
+                          <label className="flex items-center gap-2 font-mono text-[11px] text-[var(--text-secondary)]">
+                            <input
+                              type="checkbox"
+                              checked={requireTLS}
+                              onChange={(e) => setRequireTLS(e.target.checked)}
+                              className="h-3.5 w-3.5"
+                            />
+                            Require TLS on the wire (sslmode=require)
+                          </label>
+                          <p className="mt-1 pl-5 font-mono text-[10px] leading-relaxed text-[var(--text-tertiary)]">
+                            Default is plaintext in-cluster (sslmode=disable) — works with every
+                            driver. Enable only if your app mandates encrypted DB connections
+                            (Go/pgx, Rails); note default node-postgres rejects the self-signed
+                            cert under require.
+                          </p>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>

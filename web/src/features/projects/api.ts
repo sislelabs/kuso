@@ -111,6 +111,9 @@ export async function addAddon(
     version?: string;
     ha?: boolean;
     storageSize?: string;
+    // tls=require opts a managed postgres addon into in-cluster wire TLS
+    // (sslmode=require). Omit / "disable" = plaintext default.
+    tls?: "disable" | "require";
   }
 ): Promise<KusoAddon> {
   return api(

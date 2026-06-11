@@ -107,6 +107,11 @@ type CreateAddonRequest struct {
 	// Pooler enables the opt-in PgBouncer pooler at create time.
 	// Nil = no pooler.
 	Pooler *kube.KusoAddonPooler `json:"pooler,omitempty"`
+	// TLS opts a native kind=postgres addon into in-cluster wire TLS.
+	// "" / "disable" (default) = plaintext + sslmode=disable. "require"
+	// = serve TLS + sslmode=require, for apps that mandate encrypted
+	// DB connections. Ignored for non-postgres / external / instance.
+	TLS string `json:"tls,omitempty"`
 }
 
 // CRName builds the addon CR name from a project + a name that may
@@ -252,7 +257,14 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 			External:         req.External,
 			UseInstanceAddon: req.UseInstanceAddon,
 			Pooler:           req.Pooler,
+			TLS:              req.TLS,
 		},
+	}
+	if req.TLS != "" && req.TLS != "disable" && req.TLS != "require" {
+		return nil, fmt.Errorf("%w: tls must be \"disable\" or \"require\"", ErrInvalid)
+	}
+	if req.TLS == "require" && req.Kind != "postgres" {
+		return nil, fmt.Errorf("%w: tls=require only supports kind=postgres", ErrInvalid)
 	}
 	if req.External != nil && req.External.SecretName != "" && req.UseInstanceAddon != "" {
 		return nil, fmt.Errorf("%w: external and useInstanceAddon are mutually exclusive", ErrInvalid)
