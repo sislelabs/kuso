@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.25] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(previews): self-heal recreated preview env image + pin previews to 1 replica ([e260538](https://github.com/sislelabs/kuso/commit/e26053820c65a792402782ff7cf6780b0ca9b0bb))
+
 ## [0.17.24] — 2026-05-29
 
 ### 🐛 Bug Fixes
