@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.68] — 2026-06-11
+
+### ✨ Features
+- Feat(addons): add MongoDB, RabbitMQ, and Valkey addon kinds ([a87a76f](https://github.com/sislelabs/kuso/commit/a87a76f15585f0b767b19b386785e5258274ed0b))
+
+### 🐛 Bug Fixes
+- Fix(env): unset now propagates to envs (drop orphaned inherited vars) ([307d60f](https://github.com/sislelabs/kuso/commit/307d60fb5080bc2c1f8df00c7468a964f532f7b0))
+
 ## [0.18.67] — 2026-06-11
 
 ### ✨ Features
@@ -407,18 +415,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive promoted CHANGELOG entries (pre-v0.18.4 ship) ([e7e754b](https://github.com/sislelabs/kuso/commit/e7e754b642dce73e038036b66be15d6717265ded))
-
-## [0.18.3] — 2026-05-30
-
-### ✨ Features
-- Feat(groups): show + manage group members (roster, not blind add/remove) ([2694dc4](https://github.com/sislelabs/kuso/commit/2694dc4f04339b5fb3fb38a905ad309bb6a030f9))
-- Feat(users): admin can set a user's instance role from the Users page ([fedb1eb](https://github.com/sislelabs/kuso/commit/fedb1ebf2a935bc308e3e061026f4a4f2784e071))
-
-### 🐛 Bug Fixes
-- Fix(notifications): keep the Discord mention picker open on select ([ccc15f8](https://github.com/sislelabs/kuso/commit/ccc15f834ca907ecccba1bd0ad53065375399edf))
-
-### 🧹 Chores
-- Chore: archive promoted CHANGELOG entries (pre-v0.18.3 ship) ([360e721](https://github.com/sislelabs/kuso/commit/360e7218e2ccd2c93ac74dac597f388f17be638e))
 
 
 ---
