@@ -213,7 +213,26 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 
 	next := kube.KusoEnvVar{Name: name}
 	if hasValue {
-		next.Value = req.Value
+		// Resolve ${{ addon.KEY }} / ${{ svc.URL }} refs at set time,
+		// exactly like the service-level SetEnv path does. Without this
+		// the raw `${{ }}` literal was stored verbatim — so (a) the pod
+		// got the literal string instead of the resolved value, and
+		// (b) the next service-level propagation dropped it as an
+		// "unresolved ref" (extractEnvOnlyOverrides), silently destroying
+		// the user's per-env override. Rewriting here makes a genuine
+		// override always a concrete value or a resolved secretKeyRef —
+		// the invariant that drop logic relies on.
+		svcResolver, rerr := s.buildServiceResolver(ctx, project, ns)
+		if rerr != nil {
+			return nil, fmt.Errorf("resolve services: %w", rerr)
+		}
+		addonResolver := s.buildAddonResolver(ctx, project)
+		rewritten, rerr := RewriteEnvVar(EnvVar{Name: name, Value: req.Value}, svcResolver, addonResolver)
+		if rerr != nil {
+			return nil, rerr
+		}
+		next.Value = rewritten.Value
+		next.ValueFrom = rewritten.ValueFrom
 	} else {
 		next.ValueFrom = map[string]any{
 			"secretKeyRef": map[string]any{"name": req.SecretRef.Name, "key": req.SecretRef.Key},

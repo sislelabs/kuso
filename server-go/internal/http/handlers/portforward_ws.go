@@ -84,6 +84,13 @@ func (h *PortForwardWSHandler) PortForward(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// Revocation: Verify only checks signature + expiry. On the public
+	// router (no auth middleware) we must consult the revocation hook
+	// ourselves, else a revoked token still tunnels to a DB until expiry.
+	if h.Issuer.CheckRevoked(r.Context(), claims) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
 	// Admin-only: a port-forward to a database is a strictly
 	// elevated capability — not even the deployer role gets one.
 	if !auth.Has(claims.Permissions, auth.PermSettingsAdmin) {

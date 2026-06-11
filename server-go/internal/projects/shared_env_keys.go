@@ -201,7 +201,10 @@ func (s *Service) resolveSharedEnvKeysForEnv(
 	// any non-shared secret whose key set includes one of our
 	// subscribed names = "user has a per-env override; let envFrom
 	// deliver it, drop this entry from envVars".
-	overrideKeys := s.collectEnvFromOverrideKeys(ctx, ns, project, envFromSecrets)
+	overrideKeys, err := s.collectEnvFromOverrideKeys(ctx, ns, project, envFromSecrets)
+	if err != nil {
+		return nil, nil, fmt.Errorf("collect per-env override keys: %w", err)
+	}
 	if len(overrideKeys) > 0 {
 		filteredSubscribed := subscribed[:0]
 		for _, e := range subscribed {
@@ -268,13 +271,16 @@ func (s *Service) resolveSharedEnvKeysForEnv(
 // valueFrom (which would otherwise win because explicit env: beats
 // envFrom: in k8s).
 //
-// Errors are swallowed: missing secrets contribute zero keys, which
-// preserves the prior behavior. A real secret-read failure would
-// also fall through; in that case the worst case is the override
-// gets masked, which the user can recover from by re-saving.
-func (s *Service) collectEnvFromOverrideKeys(ctx context.Context, ns, project string, envFromSecrets []string) map[string]bool {
+// A NotFound secret contributes zero keys and is skipped (the Secret
+// may legitimately not exist yet). But any OTHER read error is returned
+// to the caller: silently treating it as "no override keys" lets the
+// subscribed shared-secret value survive the filter and MASK the user's
+// per-env override (staging pod gets the production value) with no
+// signal anywhere. Better to abort this propagation pass and let the
+// next save retry than to ship a wrong env invisibly.
+func (s *Service) collectEnvFromOverrideKeys(ctx context.Context, ns, project string, envFromSecrets []string) (map[string]bool, error) {
 	if len(envFromSecrets) == 0 {
-		return nil
+		return nil, nil
 	}
 	sharedNames := map[string]bool{}
 	for _, n := range kube.SharedSecretNames(project) {
@@ -292,14 +298,17 @@ func (s *Service) collectEnvFromOverrideKeys(ctx context.Context, ns, project st
 			continue
 		}
 		sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, name, metav1.GetOptions{})
-		if err != nil {
+		if apierrors.IsNotFound(err) {
 			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read per-env override secret %s/%s: %w", ns, name, err)
 		}
 		for k := range sec.Data {
 			out[k] = true
 		}
 	}
-	return out
+	return out, nil
 }
 
 // isSharedSecretRefWithOverride returns true when an env's envVar

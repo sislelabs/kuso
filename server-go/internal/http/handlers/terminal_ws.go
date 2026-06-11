@@ -74,6 +74,22 @@ func (h *TerminalWSHandler) Terminal(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
+	// Revocation: Verify only checks signature + expiry. This handler is
+	// on the public router (no auth middleware), so we must consult the
+	// revocation hook ourselves — otherwise a logged-out / deactivated
+	// admin's unexpired token still opens a shell. Fails closed.
+	if h.Issuer.CheckRevoked(r.Context(), claims) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	// The auth middleware (which we bypass) is the only production code
+	// that stuffs claims into the request context. callerHasProjectPerm
+	// reads them back via ClaimsFromContext, so inject them here — without
+	// this the perm check sees nil claims and 403s every caller, admins
+	// included (the browser terminal was wholly inoperative before this).
+	ctx := auth.ContextWithClaims(r.Context(), claims)
+	r = r.WithContext(ctx)
+
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
 

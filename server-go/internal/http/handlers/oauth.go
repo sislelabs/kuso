@@ -72,7 +72,7 @@ func (h *OAuthHandler) GithubStart(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	setStateCookie(w, state)
+	setStateCookie(w, r, state)
 	http.Redirect(w, r, h.Github.AuthCodeURL(state), http.StatusFound)
 }
 
@@ -160,7 +160,7 @@ func (h *OAuthHandler) OAuth2Start(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	setStateCookie(w, state)
+	setStateCookie(w, r, state)
 	http.Redirect(w, r, h.OAuth2.AuthCodeURL(state), http.StatusFound)
 }
 
@@ -385,12 +385,15 @@ func (h *OAuthHandler) fail(w http.ResponseWriter, op string, err error) {
 	http.Error(w, "internal", http.StatusInternalServerError)
 }
 
-func setStateCookie(w http.ResponseWriter, state string) {
+func setStateCookie(w http.ResponseWriter, r *http.Request, state string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: stateCookie, Value: state, Path: "/",
 		HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		MaxAge: 600,
-		Secure: true,
+		// Secure tracks the actual scheme so OAuth works on plain-HTTP
+		// dev hosts (LAN-IP, un-TLS'd) the same way password login does
+		// (auth.go uses isHTTPS); production stays TLS-terminated → Secure.
+		Secure: isHTTPS(r),
 	})
 }
 
@@ -420,14 +423,18 @@ func verifyStateCookie(r *http.Request) bool {
 // readable bearer for the WS handshake, where the browser can't
 // send Authorization headers.
 //
-// Secure: true means the browser only ships the cookie over TLS.
+// Secure tracks the request scheme (isHTTPS) so the browser ships the
+// cookie over TLS in production but the session also lands on plain-HTTP
+// dev hosts — matching the password-login path in auth.go. Without this
+// the OAuth session cookie was silently dropped on non-localhost HTTP,
+// so login appeared to succeed then bounced straight back to /login.
 // SameSite=Lax keeps the OAuth-callback redirect path working while
 // blocking cross-site CSRF.
-func setJWTCookie(w http.ResponseWriter, jwt string) {
+func setJWTCookie(w http.ResponseWriter, r *http.Request, jwt string) {
 	http.SetCookie(w, &http.Cookie{
 		Name: "kuso.JWT_TOKEN", Value: jwt, Path: "/",
 		HttpOnly: true, SameSite: http.SameSiteLaxMode,
-		Secure: true,
+		Secure: isHTTPS(r),
 		MaxAge: 36000,
 	})
 }
@@ -445,7 +452,7 @@ func setJWTCookie(w http.ResponseWriter, jwt string) {
 // in browser history / analytics referer / third-party scripts on
 // the landing page.
 func redirectWithJWT(w http.ResponseWriter, r *http.Request, jwt string) {
-	setJWTCookie(w, jwt)
+	setJWTCookie(w, r, jwt)
 	http.Redirect(w, r, "/?login=ok", http.StatusFound)
 }
 

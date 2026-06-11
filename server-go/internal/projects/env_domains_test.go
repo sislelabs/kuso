@@ -127,6 +127,54 @@ func TestSetEnvScopedVar_SurvivesServicePropagation(t *testing.T) {
 	}
 }
 
+// TestSetEnvScopedVar_ResolvesRefAtSetTime is the regression test for the
+// env-scoped-ref bug: `kuso env set --env staging 'X=${{ api.URL }}'` must
+// resolve the ref to a concrete in-cluster URL at set time (like the
+// service-level path), NOT store the raw `${{ }}` literal. Storing it raw
+// meant the pod got the literal string AND the next service-level
+// propagation silently dropped the override as an "unresolved ref".
+func TestSetEnvScopedVar_ResolvesRefAtSetTime(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "api", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+		seedEnv("alpha", "web", "staging", "stage", "alpha-web-staging"),
+	)
+
+	env, err := s.SetEnvScopedVar(context.Background(), "alpha", "web", "staging",
+		"API_URL", SetEnvVarRequest{Value: "${{ api.URL }}"})
+	if err != nil {
+		t.Fatalf("SetEnvScopedVar: %v", err)
+	}
+	got, _ := envVarValue(env, "API_URL")
+	if got == "${{ api.URL }}" || got == "" {
+		t.Fatalf("env-scoped ref should resolve at set time, got %q (raw literal = bug)", got)
+	}
+	// Resolved to a concrete in-cluster URL (same shape the service-level
+	// SetEnv path produces). The point of the fix is that it is RESOLVED,
+	// not raw — so it both works in the pod and survives propagation.
+	const want = "http://alpha-api-production.kuso.svc.cluster.local"
+	if got != want {
+		t.Errorf("resolved ref = %q, want %q", got, want)
+	}
+
+	// And it must survive a subsequent service-level write — the path that
+	// previously dropped it as an "unresolved ref" and re-stamped the
+	// service value.
+	if _, err := s.SetEnvVar(context.Background(), "alpha", "web", "SOMETHING_ELSE",
+		SetEnvVarRequest{Value: "x"}); err != nil {
+		t.Fatalf("service SetEnvVar: %v", err)
+	}
+	after, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-staging")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if v, _ := envVarValue(after, "API_URL"); v != want {
+		t.Errorf("resolved override must survive propagation, got %q", v)
+	}
+}
+
 func TestAddEnvDomain_AppendsAndComputesTLS(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,

@@ -74,20 +74,34 @@ func (i *Issuer) Middleware(skip ...string) func(http.Handler) http.Handler {
 			// — a transient DB outage must NOT silently un-revoke a
 			// previously revoked token. See the RevocationChecker type
 			// doc above and cmd/kuso-server/revocation.go.
-			if i.revoked != nil {
-				var iat time.Time
-				if claims.IssuedAt != nil {
-					iat = claims.IssuedAt.Time
-				}
-				if i.revoked(r.Context(), claims.ID, claims.UserID, iat) {
-					http.Error(w, "unauthorized", http.StatusUnauthorized)
-					return
-				}
+			if i.CheckRevoked(r.Context(), claims) {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
 			}
 			ctx := context.WithValue(r.Context(), claimsCtxKey, claims)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
+}
+
+// CheckRevoked reports whether the given verified claims have been
+// revoked, consulting the same per-jti + per-user hook the Middleware
+// uses. Returns false (not revoked) when no checker is installed.
+//
+// Handlers mounted on the PUBLIC router that verify tokens themselves
+// (the WebSocket upgraders) MUST call this after Verify — Verify only
+// checks signature + expiry, so without this a logged-out / deactivated
+// principal's still-unexpired token keeps working on those surfaces.
+// Fails CLOSED on DB error/cache miss, exactly like the middleware path.
+func (i *Issuer) CheckRevoked(ctx context.Context, c *Claims) bool {
+	if i.revoked == nil || c == nil {
+		return false
+	}
+	var iat time.Time
+	if c.IssuedAt != nil {
+		iat = c.IssuedAt.Time
+	}
+	return i.revoked(ctx, c.ID, c.UserID, iat)
 }
 
 // ClaimsFromContext returns the verified Claims previously stored by
@@ -97,12 +111,21 @@ func ClaimsFromContext(ctx context.Context) (*Claims, bool) {
 	return c, ok
 }
 
+// ContextWithClaims stores already-verified claims under the same key
+// Middleware uses, so downstream code reading ClaimsFromContext works.
+// For handlers on the PUBLIC router that verify the token themselves
+// (the WebSocket upgraders) — these MUST have called Verify and
+// CheckRevoked first; this helper does no validation of its own.
+func ContextWithClaims(ctx context.Context, c *Claims) context.Context {
+	return context.WithValue(ctx, claimsCtxKey, c)
+}
+
 // WithClaimsForTest stuffs claims into ctx using the same key the
 // Middleware would, so tests can short-circuit JWT verification when
 // they only want to exercise a handler. Production code MUST go
 // through Middleware.
 func WithClaimsForTest(ctx context.Context, c *Claims) context.Context {
-	return context.WithValue(ctx, claimsCtxKey, c)
+	return ContextWithClaims(ctx, c)
 }
 
 // bearerToken pulls a token out of "Authorization: Bearer <token>"

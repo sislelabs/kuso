@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 
 	"kuso/server/internal/kube"
 )
@@ -63,54 +64,75 @@ func (s *Service) SetKey(ctx context.Context, key, value string) error {
 	if key == "" {
 		return fmt.Errorf("%w: key required", ErrInvalid)
 	}
-	sec, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Get(ctx, SecretName, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		fresh := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      SecretName,
-				Namespace: s.Namespace,
-				Labels: map[string]string{
-					"kuso.sislelabs.com/role": "instance-shared-envs",
+	// Re-read + Update under RetryOnConflict so two concurrent SetKey /
+	// UnsetKey calls don't clobber each other: a stale resourceVersion
+	// would otherwise let the second write drop the first key.
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		sec, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Get(ctx, SecretName, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			fresh := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      SecretName,
+					Namespace: s.Namespace,
+					Labels: map[string]string{
+						"kuso.sislelabs.com/role": "instance-shared-envs",
+					},
 				},
-			},
-			Data: map[string][]byte{key: []byte(value)},
-			Type: corev1.SecretTypeOpaque,
+				Data: map[string][]byte{key: []byte(value)},
+				Type: corev1.SecretTypeOpaque,
+			}
+			if cerr := s.createSecret(ctx, fresh); cerr != nil {
+				// A racing create won the slot: fall through to the
+				// read+update path on the next retry instead of failing.
+				if apierrors.IsAlreadyExists(cerr) {
+					return apierrors.NewConflict(corev1.Resource("secrets"), SecretName, cerr)
+				}
+				return fmt.Errorf("create instance secret: %w", cerr)
+			}
+			return nil
 		}
-		if _, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Create(ctx, fresh, metav1.CreateOptions{}); err != nil {
-			return fmt.Errorf("create instance secret: %w", err)
+		if err != nil {
+			return fmt.Errorf("read instance secret: %w", err)
+		}
+		if sec.Data == nil {
+			sec.Data = map[string][]byte{}
+		}
+		sec.Data[key] = []byte(value)
+		if _, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update instance secret: %w", err)
 		}
 		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read instance secret: %w", err)
-	}
-	if sec.Data == nil {
-		sec.Data = map[string][]byte{}
-	}
-	sec.Data[key] = []byte(value)
-	if _, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("update instance secret: %w", err)
-	}
-	return nil
+	})
 }
 
 func (s *Service) UnsetKey(ctx context.Context, key string) error {
-	sec, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Get(ctx, SecretName, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
+	// RetryOnConflict so a concurrent SetKey/UnsetKey on the same Secret
+	// doesn't clobber the other's change via a stale resourceVersion.
+	return retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		sec, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Get(ctx, SecretName, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read instance secret: %w", err)
+		}
+		if sec.Data == nil {
+			return nil
+		}
+		if _, ok := sec.Data[key]; !ok {
+			return nil
+		}
+		delete(sec.Data, key)
+		if _, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
+			return fmt.Errorf("update instance secret: %w", err)
+		}
 		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("read instance secret: %w", err)
-	}
-	if sec.Data == nil {
-		return nil
-	}
-	if _, ok := sec.Data[key]; !ok {
-		return nil
-	}
-	delete(sec.Data, key)
-	if _, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Update(ctx, sec, metav1.UpdateOptions{}); err != nil {
-		return fmt.Errorf("update instance secret: %w", err)
-	}
-	return nil
+	})
+}
+
+// createSecret is a thin wrapper so SetKey's create path stays readable
+// inside the retry closure.
+func (s *Service) createSecret(ctx context.Context, sec *corev1.Secret) error {
+	_, err := s.Kube.Clientset.CoreV1().Secrets(s.Namespace).Create(ctx, sec, metav1.CreateOptions{})
+	return err
 }

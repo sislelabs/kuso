@@ -21,6 +21,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 
 	"kuso/server/internal/kube"
 	"kuso/server/internal/secrets"
@@ -109,37 +110,48 @@ func (s *Service) SetKey(ctx context.Context, project, key, value string, opts S
 		}
 	}
 	name := SecretName(project)
-	sec, err := s.read(ctx, ns, name)
-	if apierrors.IsNotFound(err) {
-		// Create fresh.
-		fresh := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      name,
-				Namespace: ns,
-				Labels: map[string]string{
-					"kuso.sislelabs.com/project": project,
-					"kuso.sislelabs.com/role":    "shared-project-envs",
+	// Re-read + write under RetryOnConflict so concurrent SetKey/UnsetKey
+	// on this project's shared Secret can't clobber each other through a
+	// stale resourceVersion. The dependent-env rollout runs once after,
+	// outside the loop, since it's idempotent and doesn't touch the Secret.
+	if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		sec, err := s.read(ctx, ns, name)
+		if apierrors.IsNotFound(err) {
+			// Create fresh.
+			fresh := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      name,
+					Namespace: ns,
+					Labels: map[string]string{
+						"kuso.sislelabs.com/project": project,
+						"kuso.sislelabs.com/role":    "shared-project-envs",
+					},
 				},
-			},
-			Data: map[string][]byte{key: []byte(value)},
-			Type: corev1.SecretTypeOpaque,
+				Data: map[string][]byte{key: []byte(value)},
+				Type: corev1.SecretTypeOpaque,
+			}
+			if _, cerr := s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, fresh, metav1.CreateOptions{}); cerr != nil {
+				// A racing create won: retry into the read+update path.
+				if apierrors.IsAlreadyExists(cerr) {
+					return apierrors.NewConflict(corev1.Resource("secrets"), name, cerr)
+				}
+				return fmt.Errorf("create shared secret: %w", cerr)
+			}
+			return nil
 		}
-		_, cerr := s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, fresh, metav1.CreateOptions{})
-		if cerr != nil {
-			return 0, fmt.Errorf("create shared secret: %w", cerr)
+		if err != nil {
+			return fmt.Errorf("read shared secret: %w", err)
 		}
-		return s.rollDependentEnvs(ctx, project, ns, name)
-	}
-	if err != nil {
-		return 0, fmt.Errorf("read shared secret: %w", err)
-	}
-	if sec.Data == nil {
-		sec.Data = map[string][]byte{}
-	}
-	sec.Data[key] = []byte(value)
-	_, uerr := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{})
-	if uerr != nil {
-		return 0, fmt.Errorf("update shared secret: %w", uerr)
+		if sec.Data == nil {
+			sec.Data = map[string][]byte{}
+		}
+		sec.Data[key] = []byte(value)
+		if _, uerr := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{}); uerr != nil {
+			return fmt.Errorf("update shared secret: %w", uerr)
+		}
+		return nil
+	}); err != nil {
+		return 0, err
 	}
 	return s.rollDependentEnvs(ctx, project, ns, name)
 }
@@ -152,23 +164,37 @@ func (s *Service) SetKey(ctx context.Context, project, key, value string, opts S
 func (s *Service) UnsetKey(ctx context.Context, project, key string) (rolled int, err error) {
 	ns := s.nsFor(ctx, project)
 	name := SecretName(project)
-	sec, err := s.read(ctx, ns, name)
-	if apierrors.IsNotFound(err) {
+	// missing tracks whether the key (or whole Secret) was absent, so we
+	// can skip the dependent-env rollout — there's nothing to propagate.
+	var missing bool
+	if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		sec, err := s.read(ctx, ns, name)
+		if apierrors.IsNotFound(err) {
+			missing = true
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("read shared secret: %w", err)
+		}
+		if sec.Data == nil {
+			missing = true
+			return nil
+		}
+		if _, ok := sec.Data[key]; !ok {
+			missing = true
+			return nil
+		}
+		missing = false
+		delete(sec.Data, key)
+		if _, uerr := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{}); uerr != nil {
+			return fmt.Errorf("update shared secret: %w", uerr)
+		}
+		return nil
+	}); err != nil {
+		return 0, err
+	}
+	if missing {
 		return 0, nil
-	}
-	if err != nil {
-		return 0, fmt.Errorf("read shared secret: %w", err)
-	}
-	if sec.Data == nil {
-		return 0, nil
-	}
-	if _, ok := sec.Data[key]; !ok {
-		return 0, nil
-	}
-	delete(sec.Data, key)
-	_, uerr := s.Kube.Clientset.CoreV1().Secrets(ns).Update(ctx, sec, metav1.UpdateOptions{})
-	if uerr != nil {
-		return 0, fmt.Errorf("update shared secret: %w", uerr)
 	}
 	return s.rollDependentEnvs(ctx, project, ns, name)
 }

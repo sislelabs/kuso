@@ -7,9 +7,10 @@
 //     labeled kuso.sislelabs.com/cron.
 //   - For Jobs in terminal Failed state we haven't seen before,
 //     resolve the parent KusoCron and dispatch.
-//   - Idempotency: in-memory map of dispatched Job UIDs. Failed
-//     Jobs prune via failedJobsHistoryLimit, so the map self-bounds
-//     even on a long-running server.
+//   - Idempotency: in-memory map of dispatched Job UIDs. Each tick
+//     prunes UIDs that no longer match a live Job, so the map stays
+//     bounded by the current cluster Job count even on a long-running
+//     server.
 //
 // Why a separate package: notify already routes events, but the
 // detection (watch Jobs → resolve KusoCron → render payload + HMAC) is
@@ -25,6 +26,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -80,7 +82,8 @@ type Watcher struct {
 	mu sync.Mutex
 	// dispatched records Job UIDs we've already fired for, so a
 	// failed Job that sticks around (failedJobsHistoryLimit > 0)
-	// doesn't re-fire on every tick.
+	// doesn't re-fire on every tick. Pruned each tick against the live
+	// Job set (see tick) so it doesn't grow unbounded.
 	dispatched map[types.UID]struct{}
 }
 
@@ -144,6 +147,22 @@ func (w *Watcher) tick(ctx context.Context) {
 		w.mu.Unlock()
 		w.handleFailure(ctx, job)
 	}
+	// Prune dispatched UIDs that no longer correspond to a live Job.
+	// failedJobsHistoryLimit bounds Jobs IN THE CLUSTER, not entries in
+	// this map — without an explicit prune the map grows for the life of
+	// the process as failed Jobs age out. We have the full current Job
+	// list in hand, so drop any UID that isn't in it.
+	live := make(map[types.UID]struct{}, len(jobs.Items))
+	for i := range jobs.Items {
+		live[jobs.Items[i].UID] = struct{}{}
+	}
+	w.mu.Lock()
+	for uid := range w.dispatched {
+		if _, ok := live[uid]; !ok {
+			delete(w.dispatched, uid)
+		}
+	}
+	w.mu.Unlock()
 }
 
 // isFailed checks Job.Status.Conditions for a terminal Failed=True.
@@ -239,21 +258,21 @@ func (w *Watcher) dispatchWebhook(ctx context.Context, cron *kube.KusoCron, job 
 	if err != nil {
 		return fmt.Errorf("marshal payload: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cron.Spec.OnFailure.WebhookURL, bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "kuso-cronwatch/1")
+	var sig string
 	if cron.Spec.OnFailure.SecretRef != nil {
-		sig, sigErr := w.signBody(ctx, job.Namespace, cron.Spec.OnFailure.SecretRef, body)
+		s, sigErr := w.signBody(ctx, job.Namespace, cron.Spec.OnFailure.SecretRef, body)
 		if sigErr != nil {
 			return fmt.Errorf("sign body: %w", sigErr)
 		}
-		req.Header.Set("X-Kuso-Signature", "sha256="+sig)
+		sig = s
 	}
 	// Retry: 1 attempt + 2 retries with linear backoff (1s, 4s).
 	// Webhooks are best-effort; a hard fail just logs.
+	//
+	// A FRESH request is built per attempt: the body is a bytes.Reader
+	// that is at EOF after the first Do, so reusing one *http.Request
+	// would make every retry fail client-side with "ContentLength=N with
+	// Body length 0" — i.e. the retry loop was previously dead code.
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
@@ -263,13 +282,26 @@ func (w *Watcher) dispatchWebhook(ctx context.Context, cron *kube.KusoCron, job 
 			case <-time.After(time.Duration(attempt*attempt) * time.Second):
 			}
 		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, cron.Spec.OnFailure.WebhookURL, bytes.NewReader(body))
+		if err != nil {
+			return fmt.Errorf("build request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", "kuso-cronwatch/1")
+		if sig != "" {
+			req.Header.Set("X-Kuso-Signature", "sha256="+sig)
+		}
 		resp, err := w.HTTP.Do(req)
 		if err != nil {
 			lastErr = err
 			continue
 		}
-		defer resp.Body.Close()
-		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		ok := resp.StatusCode >= 200 && resp.StatusCode < 300
+		// Drain + close before the next attempt so the connection can be
+		// reused and nothing leaks across loop iterations.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4<<10))
+		resp.Body.Close()
+		if ok {
 			return nil
 		}
 		lastErr = fmt.Errorf("webhook returned %d", resp.StatusCode)
