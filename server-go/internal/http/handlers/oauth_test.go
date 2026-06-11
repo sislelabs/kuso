@@ -291,6 +291,41 @@ func TestOAuth_RejectsStateMismatch(t *testing.T) {
 	}
 }
 
+// TestOAuth_ForwardsAppInstallRedirect covers the self-heal for a
+// GitHub App whose Setup URL is (mis)pointed at the OAuth callback:
+// GitHub sends the post-install hop here with setup_action/installation_id
+// and NO state. Instead of "state mismatch", we forward to the install
+// handler with the query intact.
+func TestOAuth_ForwardsAppInstallRedirect(t *testing.T) {
+	r, _, _, _ := newOAuthHarness(t)
+
+	cbReq := httptest.NewRequest(http.MethodGet,
+		"/api/auth/github/callback?code=dc7747c645e12450ffba&installation_id=139593223&setup_action=install",
+		nil)
+	cbRR := httptest.NewRecorder()
+	r.ServeHTTP(cbRR, cbReq)
+
+	if cbRR.Code != http.StatusFound {
+		t.Fatalf("expected 302 forward, got %d body=%q", cbRR.Code, cbRR.Body.String())
+	}
+	loc := cbRR.Header().Get("Location")
+	wantPath := "/api/github/setup-callback"
+	if !strings.HasPrefix(loc, wantPath+"?") {
+		t.Fatalf("expected forward to %s with query, got %q", wantPath, loc)
+	}
+	// Query must survive so the install handler still sees installation_id.
+	u, err := url.Parse(loc)
+	if err != nil {
+		t.Fatalf("parse location: %v", err)
+	}
+	if got := u.Query().Get("installation_id"); got != "139593223" {
+		t.Errorf("installation_id should be preserved, got %q", got)
+	}
+	if got := u.Query().Get("setup_action"); got != "install" {
+		t.Errorf("setup_action should be preserved, got %q", got)
+	}
+}
+
 func TestOAuth_RejectsMissingStateCookie(t *testing.T) {
 	r, _, gm, _ := newOAuthHarness(t)
 	cbReq := httptest.NewRequest(http.MethodGet,

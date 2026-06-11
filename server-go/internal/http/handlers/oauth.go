@@ -79,6 +79,24 @@ func (h *OAuthHandler) GithubStart(w http.ResponseWriter, r *http.Request) {
 // GithubCallback exchanges the code, upserts the local user, and
 // redirects to "/" with the JWT in kuso.JWT_TOKEN.
 func (h *OAuthHandler) GithubCallback(w http.ResponseWriter, r *http.Request) {
+	// Tolerate a GitHub APP-INSTALL redirect landing here by mistake.
+	// When an App is configured with its Setup URL pointed at this OAuth
+	// callback (instead of /api/github/setup-callback), GitHub sends the
+	// post-install hop here with setup_action/installation_id and NO
+	// state — which would fail the state check below with a bare
+	// "state mismatch". Those params never appear in a real OAuth
+	// sign-in (which carries code+state), so detect them and forward to
+	// the install handler, query intact. Self-heals a misconfigured
+	// Setup URL; the genuine sign-in path is untouched.
+	q := r.URL.Query()
+	if q.Get("setup_action") != "" || (q.Get("installation_id") != "" && q.Get("state") == "") {
+		target := "/api/github/setup-callback"
+		if raw := r.URL.RawQuery; raw != "" {
+			target += "?" + raw
+		}
+		http.Redirect(w, r, target, http.StatusFound)
+		return
+	}
 	if !verifyStateCookie(r) {
 		http.Error(w, "state mismatch", http.StatusBadRequest)
 		return
