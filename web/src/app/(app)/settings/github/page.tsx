@@ -24,6 +24,7 @@ import {
   Copy,
   Check,
   RefreshCw,
+  Plus,
   Lock,
   Globe,
   Building2,
@@ -295,10 +296,11 @@ function ConfiguredPanel({
                 href={installURL}
                 target="_blank"
                 rel="noreferrer"
+                title="Opens GitHub's account picker — install kuso on any org or user account you administer"
                 className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-3 text-xs font-medium hover:bg-[var(--accent-subtle)]"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
-                Install on a repo
+                Add org / repo
               </a>
             )}
             {adminURL && (
@@ -332,26 +334,40 @@ function ConfiguredPanel({
               {installs.isPending
                 ? "loading…"
                 : installations.length === 0
-                  ? "No installations yet — click Install on a repo above to add one."
+                  ? "No orgs connected yet — click Add org to connect one."
                   : `${installations.length} ${installations.length === 1 ? "installation" : "installations"} · ${totalRepos} ${totalRepos === 1 ? "repo" : "repos"} accessible (${totalPrivate} private)`}
             </p>
           </div>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => refresh.mutate()}
-            disabled={refresh.isPending}
-          >
-            <RefreshCw className={cn("h-3.5 w-3.5", refresh.isPending && "animate-spin")} />
-            Refresh
-          </Button>
+          <div className="flex items-center gap-2">
+            {installURL && (
+              <a
+                href={installURL}
+                target="_blank"
+                rel="noreferrer"
+                title="Install kuso on another org or user account, then Refresh"
+                className="inline-flex h-8 items-center gap-1.5 rounded-md border border-[var(--accent)]/40 bg-[var(--accent-subtle)] px-3 text-xs font-medium text-[var(--accent)] hover:bg-[var(--accent-subtle)]/70"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add org
+              </a>
+            )}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => refresh.mutate()}
+              disabled={refresh.isPending}
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", refresh.isPending && "animate-spin")} />
+              Refresh
+            </Button>
+          </div>
         </div>
         {installations.length === 0 && !installs.isPending ? (
           <div className="px-4 py-6 text-center text-[12px] text-[var(--text-tertiary)]">
             kuso can&apos;t see any repos yet. Click{" "}
-            <strong className="text-[var(--text-secondary)]">Install on a repo</strong> to grant
-            access to a user account or organization. Refresh after installing if the row
-            doesn&apos;t appear within ~10s.
+            <strong className="text-[var(--text-secondary)]">Add org</strong> to grant access to an
+            organization or user account. Refresh after installing if the row doesn&apos;t appear
+            within ~10s.
           </div>
         ) : (
           <ul className="divide-y divide-[var(--border-subtle)]">
