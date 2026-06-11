@@ -87,6 +87,22 @@ func (k *KusoClient) SetSharedEnvKeys(project, service string, keys []string) (*
 	return k.client.Put("/api/projects/" + esc(project) + "/services/" + esc(service) + "/shared-env-keys")
 }
 
+// GetSubscribedAddons returns { subscribed: [...], available: [...] } — which
+// project addons this service mounts vs. which it could.
+func (k *KusoClient) GetSubscribedAddons(project, service string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/services/" + esc(service) + "/subscribed-addons")
+}
+
+// SetSubscribedAddons replaces the addon subscription list outright. Empty
+// (non-nil) slice = subscribe to no addons.
+func (k *KusoClient) SetSubscribedAddons(project, service string, addons []string) (*resty.Response, error) {
+	if addons == nil {
+		addons = []string{}
+	}
+	k.client.SetBody(map[string]any{"addons": addons})
+	return k.client.Put("/api/projects/" + esc(project) + "/services/" + esc(service) + "/subscribed-addons")
+}
+
 // envQuery returns "?env=<name>" or "" — kept inline rather than using
 // resty's QueryParam to avoid leaking state into later requests on the
 // shared client.

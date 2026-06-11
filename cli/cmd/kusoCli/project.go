@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -699,6 +700,154 @@ var addonAddCmd = &cobra.Command{
 	},
 }
 
+// subscribableAddonsShape mirrors the GET
+// /services/{service}/subscribed-addons response.
+type subscribableAddonsShape struct {
+	Subscribed []string `json:"subscribed"`
+	Available  []string `json:"available"`
+}
+
+func readSubscribedAddons(project, service string) (*subscribableAddonsShape, error) {
+	resp, err := api.GetSubscribedAddons(project, service)
+	if err != nil {
+		return nil, fmt.Errorf("read subscribed addons: %w", err)
+	}
+	if resp.StatusCode() >= 300 {
+		return nil, fmt.Errorf("read subscribed addons: server returned %d: %s",
+			resp.StatusCode(), string(resp.Body()))
+	}
+	var out subscribableAddonsShape
+	if err := json.Unmarshal(resp.Body(), &out); err != nil {
+		return nil, fmt.Errorf("decode subscribed addons: %w", err)
+	}
+	return &out, nil
+}
+
+var addonListCmd = &cobra.Command{
+	Use:   "list <project> <service>",
+	Short: "List which addons a service is subscribed to (and which it could be)",
+	Long: `Show a service's addon subscriptions. Only subscribed addons have their
+connection secret (DATABASE_URL, REDIS_URL, …) injected into the service's pods.
+
+Examples:
+  kuso project addon list myproj web
+  kuso project addon subscribe myproj web cache      # mount the redis addon's conn
+  kuso project addon unsubscribe myproj web cache`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		sub, err := readSubscribedAddons(args[0], args[1])
+		if err != nil {
+			return err
+		}
+		subSet := map[string]bool{}
+		for _, a := range sub.Subscribed {
+			subSet[a] = true
+		}
+		all := append([]string{}, sub.Available...)
+		sort.Strings(all)
+		if len(all) == 0 {
+			fmt.Printf("%s/%s: no project addons available to subscribe to\n", args[0], args[1])
+			return nil
+		}
+		fmt.Printf("addons for %s/%s (✓ = subscribed, conn injected):\n", args[0], args[1])
+		for _, a := range all {
+			mark := " "
+			if subSet[a] {
+				mark = "✓"
+			}
+			fmt.Printf("  %s %s\n", mark, a)
+		}
+		return nil
+	},
+}
+
+var addonSubscribeCmd = &cobra.Command{
+	Use:   "subscribe <project> <service> <addon> [addon ...]",
+	Short: "Subscribe a service to project addons (inject their connection secrets)",
+	Args:  cobra.MinimumNArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		project, service, add := args[0], args[1], args[2:]
+		sub, err := readSubscribedAddons(project, service)
+		if err != nil {
+			return err
+		}
+		// Warn (don't fail) on an addon name that isn't in the project — the
+		// server is authoritative, but a typo is worth surfacing.
+		availSet := map[string]bool{}
+		for _, a := range sub.Available {
+			availSet[a] = true
+		}
+		next := append([]string{}, sub.Subscribed...)
+		seen := map[string]bool{}
+		for _, a := range next {
+			seen[a] = true
+		}
+		for _, a := range add {
+			if !availSet[a] {
+				fmt.Fprintf(os.Stderr, "warning: %q is not a known addon in project %q (available: %s)\n",
+					a, project, strings.Join(sub.Available, ", "))
+			}
+			if !seen[a] {
+				seen[a] = true
+				next = append(next, a)
+			}
+		}
+		resp, err := api.SetSubscribedAddons(project, service, next)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("subscribed %s/%s — now subscribed to: %s\n", project, service, strings.Join(next, ", "))
+		fmt.Fprintln(os.Stderr, "note: this rolls the service's pod(s) to mount the new connection secret(s).")
+		return nil
+	},
+}
+
+var addonUnsubscribeCmd = &cobra.Command{
+	Use:   "unsubscribe <project> <service> <addon> [addon ...]",
+	Short: "Unsubscribe a service from project addons (stop injecting their secrets)",
+	Args:  cobra.MinimumNArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		project, service, drop := args[0], args[1], args[2:]
+		sub, err := readSubscribedAddons(project, service)
+		if err != nil {
+			return err
+		}
+		dropSet := map[string]bool{}
+		for _, a := range drop {
+			dropSet[a] = true
+		}
+		next := make([]string, 0, len(sub.Subscribed))
+		for _, a := range sub.Subscribed {
+			if !dropSet[a] {
+				next = append(next, a)
+			}
+		}
+		resp, err := api.SetSubscribedAddons(project, service, next)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("unsubscribed %s/%s — now subscribed to: %s\n", project, service,
+			strings.Join(next, ", "))
+		fmt.Fprintln(os.Stderr, "note: this rolls the service's pod(s).")
+		return nil
+	},
+}
+
 var addonDeleteYes bool
 
 var addonDeleteCmd = &cobra.Command{
@@ -1033,6 +1182,9 @@ func init() {
 
 	projectCmd.AddCommand(projectAddonCmd)
 	projectAddonCmd.AddCommand(addonAddCmd)
+	projectAddonCmd.AddCommand(addonListCmd)
+	projectAddonCmd.AddCommand(addonSubscribeCmd)
+	projectAddonCmd.AddCommand(addonUnsubscribeCmd)
 	addonAddCmd.Flags().StringVar(&addonAddKind, "kind", "", "addon kind (required: "+strings.Join(supportedAddonKinds, ", ")+")")
 	addonAddCmd.Flags().StringVar(&addonAddVersion, "version", "", "engine version")
 	addonAddCmd.Flags().StringVar(&addonAddSize, "size", "small", "small|medium|large")
