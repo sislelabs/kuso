@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.26] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(projects): base-domain change now rewrites env hosts (FQN→short bug) ([f023dbf](https://github.com/sislelabs/kuso/commit/f023dbf42ccb081f2747dff10777779c5a1e285f))
+
 ## [0.17.25] — 2026-05-29
 
 ### 🐛 Bug Fixes
