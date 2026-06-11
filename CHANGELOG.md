@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.60] — 2026-06-11
+
+### 🐛 Bug Fixes
+- Fix(incidents): keep the Claude Code token fresh (it expires ~daily) ([4bc0619](https://github.com/sislelabs/kuso/commit/4bc0619f7548635ca1ee1425b0232546c0dc6127))
+
+### 🧹 Chores
+- Chore(changelog): archive churn ([3694f9c](https://github.com/sislelabs/kuso/commit/3694f9c7ed42f03790e75161ef1b279555c93103))
+
 ## [0.18.59] — 2026-06-10
 
 ### ✨ Features
@@ -431,11 +439,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(projects): base-domain change now rewrites env hosts (FQN→short bug) ([f023dbf](https://github.com/sislelabs/kuso/commit/f023dbf42ccb081f2747dff10777779c5a1e285f))
-
-## [0.17.25] — 2026-05-29
-
-### 🐛 Bug Fixes
-- Fix(previews): self-heal recreated preview env image + pin previews to 1 replica ([e260538](https://github.com/sislelabs/kuso/commit/e26053820c65a792402782ff7cf6780b0ca9b0bb))
 
 
 ---
