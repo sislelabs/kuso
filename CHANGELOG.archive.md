@@ -2,6 +2,12 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.24] — 2026-05-29
+
+### 🐛 Bug Fixes
+- Fix(previews): stop addon over-mount into preview + production envs ([1085649](https://github.com/sislelabs/kuso/commit/1085649c68282cc0f9bcfc0f1c0ff97bf44d717a))
+- Fix(crd): add previews.baseDomain to KusoProject CRD schema ([2a6f03a](https://github.com/sislelabs/kuso/commit/2a6f03ab9b40cbb57d8011e8ea4ca6b4085fb4c3))
+
 ## [0.17.23] — 2026-05-29
 
 ### ✨ Features
