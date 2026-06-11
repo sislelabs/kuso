@@ -120,6 +120,16 @@ const BRANDS: Record<
     path:
       "M11 3a8 8 0 1 0 5.293 14.293l3.207 3.207 1.5-1.5-3.207-3.207A8 8 0 0 0 11 3zm0 2a6 6 0 1 1 0 12 6 6 0 0 1 0-12zm-2 3v6h1.5v-2.25l1.25 2.25h.75l1.25-2.25V14H15V8h-1.5l-1.5 2.7L10.5 8H9z",
   },
+  redpanda: {
+    // Streaming-bars + panda-ear mark in Redpanda's signature red. The
+    // project's wordmark doesn't reduce well to a 16px monochrome glyph,
+    // so this is a "log/stream" motif (three rising bars) that reads as
+    // an event-streaming datastore alongside the other addon tiles.
+    label: "Redpanda",
+    color: "#E8385D",
+    path:
+      "M4 20V9h3v11H4zm6.5 0V4h3v16h-3zM17 20v-7h3v7h-3zM4 7a2 2 0 1 1 4 0 2 2 0 0 1-4 0zm13 4a2 2 0 1 1 4 0 2 2 0 0 1-4 0z",
+  },
 };
 
 // Aliases — incoming "kind" strings vary between callers (helm chart
