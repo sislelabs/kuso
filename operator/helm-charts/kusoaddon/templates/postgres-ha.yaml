@@ -142,10 +142,13 @@ data:
   POSTGRES_USER: {{ "kuso" | b64enc | quote }}
   POSTGRES_PASSWORD: {{ $password | b64enc | quote }}
   POSTGRES_DB: {{ $database | b64enc | quote }}
-  # CNPG serves TLS by default but we connect via the in-cluster
-  # Service ClusterIP, so plaintext is fine and avoids cert-handshake
-  # latency on every connect. Apps that want TLS-in-cluster override
-  # DATABASE_URL with sslmode=require.
+  # CNPG serves TLS by default but we connect via the in-cluster Service
+  # ClusterIP with sslmode=disable: plaintext avoids cert-handshake latency
+  # and, more importantly, sidesteps the cross-driver self-signed-cert
+  # incompatibility (Go/pgx vs node-postgres disagree on which sslmode
+  # accepts an unverified chain — see the single-node postgres.yaml note).
+  # In-cluster isolation is the CNI + NetworkPolicies' job. Apps needing
+  # verified in-cluster TLS should pin CNPG's CA in their driver config.
   DATABASE_URL: {{ printf "postgres://kuso:%s@%s-rw:5432/%s?sslmode=disable" ($password | urlquery) $name $database | b64enc | quote }}
   {{- /* DIRECT_URL: un-pooled, session-safe DSN for Prisma `directUrl` and
          any migration tool that needs a sticky session. Points at the CNPG
