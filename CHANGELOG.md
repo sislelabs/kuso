@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.69] — 2026-06-11
+
+### ✨ Features
+- Feat(services): expose custom Dockerfile-path field in the UI ([84ee10b](https://github.com/sislelabs/kuso/commit/84ee10b3c25a13fd7bfff1812e1855c39f396b84))
+
+### 🧹 Chores
+- Chore(changelog): archive churn ([ad0e3d1](https://github.com/sislelabs/kuso/commit/ad0e3d14a44aa64df47787f3a17dece2280c8825))
+
 ## [0.18.68] — 2026-06-11
 
 ### ✨ Features
@@ -407,14 +415,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive promoted CHANGELOG entries (pre-v0.18.5 ship) ([5e63f1d](https://github.com/sislelabs/kuso/commit/5e63f1df259f6bc3451e277ec92b6a7c5645816f))
-
-## [0.18.4] — 2026-05-30
-
-### 🐛 Bug Fixes
-- Fix(access): click-to-add multi-select popovers for members + grants ([2861c18](https://github.com/sislelabs/kuso/commit/2861c185d04c41e924bf61dee6546065b341a5c8))
-
-### 🧹 Chores
-- Chore: archive promoted CHANGELOG entries (pre-v0.18.4 ship) ([e7e754b](https://github.com/sislelabs/kuso/commit/e7e754b642dce73e038036b66be15d6717265ded))
 
 
 ---
