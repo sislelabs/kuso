@@ -130,6 +130,15 @@ const BRANDS: Record<
     path:
       "M4 20V9h3v11H4zm6.5 0V4h3v16h-3zM17 20v-7h3v7h-3zM4 7a2 2 0 1 1 4 0 2 2 0 0 1-4 0zm13 4a2 2 0 1 1 4 0 2 2 0 0 1-4 0z",
   },
+  valkey: {
+    // Valkey (BSD Redis fork). No clean 16px monochrome wordmark, so a
+    // stacked-cache motif (two cylinders) in Valkey's teal — reads as a
+    // key/value store next to redis.
+    label: "Valkey",
+    color: "#1B98E0",
+    path:
+      "M12 2c4.418 0 8 1.343 8 3s-3.582 3-8 3-8-1.343-8-3 3.582-3 8-3zm8 6.5C20 10.157 16.418 11.5 12 11.5S4 10.157 4 8.5V12c0 1.657 3.582 3 8 3s8-1.343 8-3V8.5zm0 5.5c0 1.657-3.582 3-8 3s-8-1.343-8-3v3.5C4 20.657 7.582 22 12 22s8-1.343 8-3V14z",
+  },
 };
 
 // Aliases — incoming "kind" strings vary between callers (helm chart

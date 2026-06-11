@@ -1,0 +1,108 @@
+{{- if and (eq .Values.kind "valkey") (not .Values.ha) (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- /* Valkey — the BSD-licensed Redis fork. Wire-compatible with Redis,
+       so the conn secret emits both REDIS_* and VALKEY_* keys; apps that
+       speak either protocol name work unchanged. Single-node StatefulSet,
+       mirrors redis.yaml. */ -}}
+{{- $version := .Values.version | default "8" -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{- $secretName := include "kusoaddon.connSecretName" . -}}
+{{/*
+  Reuse the password from the live Secret if it exists. Same reason as
+  redis/postgres: without this, every reconcile rotates the password and
+  the operator burns CPU + flips credentials forever.
+*/}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $existingPw := "" -}}
+{{- if and $existing $existing.data (index $existing.data "REDIS_PASSWORD") -}}
+  {{- $existingPw = (index $existing.data "REDIS_PASSWORD" | b64dec) -}}
+{{- end -}}
+{{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+    spec:
+      {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
+      {{- include "kusoaddon.placement" . | nindent 6 }}
+      containers:
+        - name: valkey
+          image: "valkey/valkey:{{ $version }}-alpine"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
+          command: ["valkey-server", "--requirepass", "$(REDIS_PASSWORD)", "--appendonly", "yes"]
+          ports:
+            - name: valkey
+              containerPort: 6379
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kusoaddon.connSecretName" . }}
+                  key: REDIS_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            exec:
+              command: ["sh", "-c", "valkey-cli -a \"$REDIS_PASSWORD\" ping | grep PONG"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ include "kusoaddon.storageSize" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: valkey
+      port: 6379
+      targetPort: valkey
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kusoaddon.connSecretName" . }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: Opaque
+# base64 `data:` not `stringData:` — see postgres.yaml conn Secret comment
+# (stringData triggers perpetual helm-operator reconcile churn).
+data:
+  # REDIS_* keys for drop-in compatibility (most clients/libraries key off
+  # these); VALKEY_* aliases for apps that prefer the new name.
+  REDIS_HOST: {{ $name | b64enc | quote }}
+  REDIS_PORT: {{ "6379" | b64enc | quote }}
+  REDIS_PASSWORD: {{ $password | b64enc | quote }}
+  REDIS_URL: {{ printf "redis://default:%s@%s:6379" $password $name | b64enc | quote }}
+  VALKEY_HOST: {{ $name | b64enc | quote }}
+  VALKEY_PORT: {{ "6379" | b64enc | quote }}
+  VALKEY_URL: {{ printf "redis://default:%s@%s:6379" $password $name | b64enc | quote }}
+{{- end }}

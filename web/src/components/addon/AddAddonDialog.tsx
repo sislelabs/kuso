@@ -26,7 +26,10 @@ interface Props {
 const KINDS = [
   // Implemented (real chart, real workload).
   "postgres",
+  "mongodb",
   "redis",
+  "valkey",
+  "rabbitmq",
   "s3",
   "mailpit",
   "nats",

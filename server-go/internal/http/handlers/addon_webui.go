@@ -52,6 +52,8 @@ func addonWebUIPort(kind string) int32 {
 		return 8025
 	case "nats":
 		return 8222
+	case "rabbitmq":
+		return 15672
 	}
 	return 0
 }

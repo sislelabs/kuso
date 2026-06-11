@@ -1,0 +1,108 @@
+{{- if and (eq .Values.kind "rabbitmq") (not .Values.ha) (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- /* Single-node RabbitMQ with the management plugin (the -management
+       image). AMQP on 5672, the management UI on 15672 (reachable through
+       kuso's authenticated WebUI proxy — see addonWebUIPort). The conn
+       Secret emits AMQP_URL / RABBITMQ_URL plus discrete host/port/creds. */ -}}
+{{- $version := .Values.version | default "3" -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{- $secretName := include "kusoaddon.connSecretName" . -}}
+{{/* Password reuse — same reconcile-stability reason as postgres/redis. */}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $existingPw := "" -}}
+{{- if and $existing $existing.data (index $existing.data "RABBITMQ_PASSWORD") -}}
+  {{- $existingPw = (index $existing.data "RABBITMQ_PASSWORD" | b64dec) -}}
+{{- end -}}
+{{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+    spec:
+      {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
+      {{- include "kusoaddon.placement" . | nindent 6 }}
+      containers:
+        - name: rabbitmq
+          image: "rabbitmq:{{ $version }}-management-alpine"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
+          ports:
+            - name: amqp
+              containerPort: 5672
+            - name: management
+              containerPort: 15672
+          env:
+            - name: RABBITMQ_DEFAULT_USER
+              value: kuso
+            - name: RABBITMQ_DEFAULT_PASS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kusoaddon.connSecretName" . }}
+                  key: RABBITMQ_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/rabbitmq
+          readinessProbe:
+            exec:
+              command: ["rabbitmq-diagnostics", "-q", "ping"]
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ include "kusoaddon.storageSize" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: amqp
+      port: 5672
+      targetPort: amqp
+    - name: management
+      port: 15672
+      targetPort: management
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kusoaddon.connSecretName" . }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: Opaque
+# base64 `data:` not `stringData:` — see postgres.yaml conn Secret comment.
+data:
+  RABBITMQ_HOST: {{ $name | b64enc | quote }}
+  RABBITMQ_PORT: {{ "5672" | b64enc | quote }}
+  RABBITMQ_USER: {{ "kuso" | b64enc | quote }}
+  RABBITMQ_PASSWORD: {{ $password | b64enc | quote }}
+  # urlquery the password so reserved chars don't corrupt the URL. The
+  # default vhost is "/" → encoded as %2F in the path.
+  AMQP_URL: {{ printf "amqp://kuso:%s@%s:5672/%%2F" ($password | urlquery) $name | b64enc | quote }}
+  RABBITMQ_URL: {{ printf "amqp://kuso:%s@%s:5672/%%2F" ($password | urlquery) $name | b64enc | quote }}
+{{- end }}

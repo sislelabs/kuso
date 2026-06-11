@@ -28,6 +28,9 @@ matching `nobody` user).
 {{- define "kusoaddon.uidForKind" -}}
 {{- if eq .Values.kind "postgres" -}}999
 {{- else if eq .Values.kind "redis" -}}999
+{{- else if eq .Values.kind "valkey" -}}999
+{{- else if eq .Values.kind "mongodb" -}}999
+{{- else if eq .Values.kind "rabbitmq" -}}999
 {{- else if eq .Values.kind "clickhouse" -}}101
 {{- else if eq .Values.kind "s3" -}}1001
 {{- else -}}1000

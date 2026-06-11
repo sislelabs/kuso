@@ -1,11 +1,12 @@
-{{- $supported := list "postgres" "redis" "s3" "mailpit" "nats" "meilisearch" "clickhouse" "redpanda" -}}
+{{- $supported := list "postgres" "redis" "valkey" "mongodb" "rabbitmq" "s3" "mailpit" "nats" "meilisearch" "clickhouse" "redpanda" -}}
 {{- if not (has .Values.kind $supported) }}
 
 # Skeleton for addon kinds reserved in v0.2.0 but not yet implemented:
-#   mongodb, mysql, rabbitmq, memcached, elasticsearch, kafka,
-#   cockroachdb, couchdb
+#   mysql, memcached, elasticsearch, kafka, cockroachdb, couchdb
 #
-# (redpanda — Kafka-API event streaming — implemented; see redpanda.yaml)
+# Implemented: redpanda (Kafka-API streaming), valkey (BSD redis fork),
+# mongodb (document DB), rabbitmq (AMQP broker + mgmt UI). See their
+# per-kind templates.
 #
 # Real implementations land across v0.2.x as users ask. v0.9.37
 # added: mailpit (dev SMTP), nats (MQ + JetStream), meilisearch

@@ -1,0 +1,122 @@
+{{- if and (eq .Values.kind "mongodb") (not .Values.ha) (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- /* Single-node MongoDB. Uses the official `mongo` image with a root
+       user seeded from the conn Secret. The conn Secret emits MONGO_URL /
+       MONGODB_URI / DATABASE_URL so apps keyed on any common name connect
+       unchanged. authSource=admin because the root user lives in the admin
+       DB. */ -}}
+{{- $version := .Values.version | default "7" -}}
+{{- $database := .Values.database | default .Values.project -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{- $secretName := include "kusoaddon.connSecretName" . -}}
+{{/* Password reuse — same reconcile-stability reason as postgres/redis. */}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $existingPw := "" -}}
+{{- if and $existing $existing.data (index $existing.data "MONGO_PASSWORD") -}}
+  {{- $existingPw = (index $existing.data "MONGO_PASSWORD" | b64dec) -}}
+{{- end -}}
+{{/* Drift guard: a StatefulSet whose data PVC already seeded a root user
+     must NOT get a fresh random password (it wouldn't match on-disk auth). */}}
+{{- $existingSts := lookup "apps/v1" "StatefulSet" .Release.Namespace $name -}}
+{{- if and $existingSts (not $existingPw) (not .Values.password) -}}
+  {{- fail (printf "kusoaddon %s/%s: StatefulSet exists but conn Secret is missing — refusing to generate a fresh password. Run `kuso project addon repair-password` to recover." .Release.Namespace $name) -}}
+{{- end -}}
+{{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+    spec:
+      {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
+      {{- include "kusoaddon.placement" . | nindent 6 }}
+      containers:
+        - name: mongodb
+          image: "mongo:{{ $version }}"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
+          ports:
+            - name: mongodb
+              containerPort: 27017
+          env:
+            - name: MONGO_INITDB_ROOT_USERNAME
+              value: kuso
+            - name: MONGO_INITDB_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "kusoaddon.connSecretName" . }}
+                  key: MONGO_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /data/db
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mongosh --quiet --eval "db.adminCommand('ping').ok" | grep -q 1
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        annotations:
+          # Don't let an accidental KusoAddon delete cascade the PVC + the
+          # customer's data. Same keep policy as postgres.yaml.
+          "helm.sh/resource-policy": keep
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ include "kusoaddon.storageSize" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: mongodb
+      port: 27017
+      targetPort: mongodb
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "kusoaddon.connSecretName" . }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: Opaque
+# base64 `data:` not `stringData:` — see postgres.yaml conn Secret comment.
+data:
+  MONGO_HOST: {{ $name | b64enc | quote }}
+  MONGO_PORT: {{ "27017" | b64enc | quote }}
+  MONGO_USER: {{ "kuso" | b64enc | quote }}
+  MONGO_PASSWORD: {{ $password | b64enc | quote }}
+  MONGO_DB: {{ $database | b64enc | quote }}
+  # urlquery the password so reserved chars don't corrupt the URI.
+  # authSource=admin: the root user is created in the admin DB.
+  MONGO_URL: {{ printf "mongodb://kuso:%s@%s:27017/%s?authSource=admin" ($password | urlquery) $name $database | b64enc | quote }}
+  # MONGODB_URI + DATABASE_URL aliases — different ecosystems expect
+  # different names (Mongoose: MONGODB_URI; generic: DATABASE_URL).
+  MONGODB_URI: {{ printf "mongodb://kuso:%s@%s:27017/%s?authSource=admin" ($password | urlquery) $name $database | b64enc | quote }}
+  DATABASE_URL: {{ printf "mongodb://kuso:%s@%s:27017/%s?authSource=admin" ($password | urlquery) $name $database | b64enc | quote }}
+{{- end }}
