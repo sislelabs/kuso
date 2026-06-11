@@ -1,0 +1,96 @@
+---
+# Keep-alive token refresher for the incident agent.
+#
+# The agent authenticates with the operator's Claude Code OAuth token, which
+# expires roughly daily. The operator's laptop auto-refreshes locally, but the
+# cluster's copy (Secret kuso-incident-agent-cc) is static — so without this it
+# goes stale within ~24h and every agent run 401s.
+#
+# This CronJob runs the agent image in PHASE=refresh every 6h: it mounts the
+# secret, makes a trivial `claude` call (which refreshes the access token using
+# the stored refresh token via Claude's own OAuth logic — no reverse-engineered
+# endpoint), and writes the rotated credentials back into the secret. So the
+# shared secret stays fresh and investigate/implement Jobs always mount valid
+# creds.
+#
+# The refresher SA can update ONLY the one CC secret (resourceNames-scoped) —
+# it is NOT the read-only agent SA (which can't write secrets at all).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: kuso-incident-agent-refresher
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-incident-agent-refresher
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kuso-incident-agent-refresher
+  namespace: kuso
+rules:
+  # get to read the current secret; update/patch to write the rotated token
+  # back. Scoped to the single CC secret by name — nothing else in the
+  # namespace is reachable.
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: [kuso-incident-agent-cc]
+    verbs: [get, update, patch]
+  # create is namespace-wide (resourceNames can't gate create), but the
+  # entrypoint only ever `kubectl apply`s the one named secret. The apply
+  # path needs create for the first-ever write; get/update cover the rest.
+  - apiGroups: [""]
+    resources: [secrets]
+    verbs: [create]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kuso-incident-agent-refresher
+  namespace: kuso
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kuso-incident-agent-refresher
+subjects:
+  - kind: ServiceAccount
+    name: kuso-incident-agent-refresher
+    namespace: kuso
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kuso-incident-agent-refresher
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-incident-agent-refresher
+spec:
+  schedule: "0 */6 * * *" # every 6h — wide margin under a ~24h token life
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 3600
+      template:
+        spec:
+          restartPolicy: Never
+          serviceAccountName: kuso-incident-agent-refresher
+          tolerations:
+            - key: node-role.kubernetes.io/control-plane
+              operator: Exists
+              effect: NoSchedule
+          volumes:
+            - name: cc-creds
+              secret:
+                secretName: kuso-incident-agent-cc
+          containers:
+            - name: refresh
+              image: ghcr.io/sislelabs/kuso-incident-agent:latest
+              env:
+                - { name: PHASE, value: "refresh" }
+                - { name: CC_SECRET_NAME, value: "kuso-incident-agent-cc" }
+                - { name: KUSO_NAMESPACE, value: "kuso" }
+              volumeMounts:
+                - { name: cc-creds, mountPath: /cc, readOnly: true }

@@ -59,6 +59,39 @@ require() {
 PROMPTS_DIR="${PROMPTS_DIR:-/opt/incident-agent/prompts}"
 CC_CREDS_SRC="${CC_CREDS_SRC:-/cc/credentials.json}"
 
+# --- PHASE=refresh: keep-alive token refresh (no incident) ---------------
+# Run by the kuso-incident-agent-refresher CronJob. Mounts the CC secret,
+# runs a trivial `claude` call (which refreshes the OAuth access token using
+# the refresh token), then writes the refreshed ~/.claude/.credentials.json
+# back into the secret via kubectl — so the shared secret stays fresh and
+# investigate/implement Jobs always mount valid creds. CC_SECRET_NAME +
+# KUSO_NAMESPACE are set by the CronJob; the refresher SA can update ONLY
+# that one secret.
+if [ "${PHASE:-}" = "refresh" ]; then
+  : "${CC_SECRET_NAME:=kuso-incident-agent-cc}"
+  : "${KUSO_NAMESPACE:=kuso}"
+  mkdir -p "${HOME}/.claude"
+  [ -f "$CC_CREDS_SRC" ] || die "refresh: creds not mounted at ${CC_CREDS_SRC}"
+  install -m 0600 "$CC_CREDS_SRC" "${HOME}/.claude/.credentials.json"
+  before="$(md5sum "${HOME}/.claude/.credentials.json" | cut -d' ' -f1)"
+  log "refresh: triggering token refresh via claude"
+  # A trivial prompt forces CC to validate + (if near expiry) refresh the token.
+  claude -p "reply with: ok" --dangerously-skip-permissions >/dev/null 2>&1 || true
+  after="$(md5sum "${HOME}/.claude/.credentials.json" | cut -d' ' -f1)"
+  if [ "$before" = "$after" ]; then
+    log "refresh: token unchanged (still valid) — nothing to write back"
+    exit 0
+  fi
+  log "refresh: token rotated — writing back to secret ${CC_SECRET_NAME}"
+  # Write ONLY the claudeAiOauth block back (strip any transient cruft CC added).
+  clean="$(jq -c '{claudeAiOauth: .claudeAiOauth}' "${HOME}/.claude/.credentials.json")"
+  kubectl create secret generic "$CC_SECRET_NAME" -n "$KUSO_NAMESPACE" \
+    --from-literal=credentials.json="$clean" \
+    --dry-run=client -o yaml | kubectl apply -f - >/dev/null \
+    && log "refresh: secret updated" || die "refresh: failed to write secret"
+  exit 0
+fi
+
 # --- 1. Validate the common env contract ---------------------------------
 require PHASE
 require INCIDENT_ID
