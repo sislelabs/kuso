@@ -351,7 +351,7 @@ spec:
       terminationGracePeriodSeconds: 60
       containers:
         - name: server
-          image: ghcr.io/sislelabs/kuso-server-go:v0.18.60
+          image: ghcr.io/sislelabs/kuso-server-go:v0.18.61
           imagePullPolicy: IfNotPresent
           # Burstable QoS. Setting requests below limits puts us in
           # Burstable — survives host pressure without pre-allocating

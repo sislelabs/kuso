@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.61] — 2026-06-11
+
+### 🐛 Bug Fixes
+- Fix(security): close auth/WS gaps, secret RMW races, and env-override loss ([f56d01b](https://github.com/sislelabs/kuso/commit/f56d01b4fb39c319559cb1bc7707d8f2299c0d66))
+
+### 🧹 Chores
+- Chore(changelog): archive churn ([7f72e3d](https://github.com/sislelabs/kuso/commit/7f72e3d7bd5312893819bd6237c6b52a258fd275))
+
 ## [0.18.60] — 2026-06-11
 
 ### 🐛 Bug Fixes
@@ -434,11 +442,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(skill): rewrite env/secrets handling + add domains/previews; full review ([403e184](https://github.com/sislelabs/kuso/commit/403e1849634e302620d2d0fef45678d6c46f9765))
-
-## [0.17.26] — 2026-05-29
-
-### 🐛 Bug Fixes
-- Fix(projects): base-domain change now rewrites env hosts (FQN→short bug) ([f023dbf](https://github.com/sislelabs/kuso/commit/f023dbf42ccb081f2747dff10777779c5a1e285f))
 
 
 ---
