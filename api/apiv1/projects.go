@@ -29,6 +29,9 @@ type UpdateProjectRequest struct {
 	// AlwaysOn=true overrides every per-service sleep config so all
 	// services in this project run with scale-to-zero disabled.
 	AlwaysOn *bool `json:"alwaysOn,omitempty"`
+	// IncidentMonitoring=true opts the project into the incident-
+	// response agent. Omitted = leave unchanged.
+	IncidentMonitoring *bool `json:"incidentMonitoring,omitempty"`
 }
 
 // RepoRef pairs a repo URL with optional branch + path. Used by

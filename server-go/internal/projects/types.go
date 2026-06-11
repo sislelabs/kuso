@@ -50,6 +50,9 @@ type UpdateProjectRequest struct {
 	// start cost is unacceptable. Pointer-typed so a request that
 	// omits the key leaves the value alone.
 	AlwaysOn *bool `json:"alwaysOn,omitempty"`
+	// IncidentMonitoring opts the project into the incident-response
+	// agent. Pointer-typed so an omitted key leaves the value alone.
+	IncidentMonitoring *bool `json:"incidentMonitoring,omitempty"`
 }
 
 type UpdateProjectPreviewsSpec struct {

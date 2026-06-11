@@ -2,7 +2,15 @@
 
 import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Bot, ShieldCheck, AlertTriangle, MessageSquare } from "lucide-react";
+import {
+  Bot,
+  ShieldCheck,
+  AlertTriangle,
+  MessageSquare,
+  KeyRound,
+  FolderGit2,
+  Search,
+} from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -15,8 +23,10 @@ import {
   putDiscordConfig,
   type IncidentAgentConfig,
 } from "@/features/incident-agent";
+import { useProjects, useSetIncidentMonitoring } from "@/features/projects";
 import { toast } from "sonner";
 import { relativeTime } from "@/lib/format";
+import { cn } from "@/lib/utils";
 
 export default function IncidentAgentPage() {
   const qc = useQueryClient();
@@ -50,9 +60,156 @@ export default function IncidentAgentPage() {
       </header>
 
       <ConfigSection config={config} status={status} readOnly={readOnly} onSaved={invalidate} />
+      <MonitoredProjectsSection agentEnabled={config.enabled} readOnly={readOnly} />
       <CredentialsSection status={status} readOnly={readOnly} onSaved={invalidate} />
       <DiscordSection status={status} readOnly={readOnly} onSaved={invalidate} />
     </div>
+  );
+}
+
+// --- per-project opt-in: which projects the agent is allowed to watch ---
+function MonitoredProjectsSection({
+  agentEnabled,
+  readOnly,
+}: {
+  agentEnabled: boolean;
+  readOnly: boolean;
+}) {
+  const projects = useProjects();
+  const setMonitoring = useSetIncidentMonitoring();
+  const [filter, setFilter] = useState("");
+  // Track the project currently being toggled so we can spin just that row.
+  const [pending, setPending] = useState<string | null>(null);
+
+  const rows = (projects.data ?? [])
+    .map((p) => ({ name: p.metadata.name, on: p.spec.incidentMonitoring === true }))
+    .filter((r) => r.name.toLowerCase().includes(filter.toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const monitoredCount = (projects.data ?? []).filter(
+    (p) => p.spec.incidentMonitoring === true,
+  ).length;
+
+  const toggle = (name: string, enabled: boolean) => {
+    setPending(name);
+    setMonitoring.mutate(
+      { name, enabled },
+      {
+        onSuccess: () =>
+          toast.success(`${name} ${enabled ? "now monitored" : "no longer monitored"}`),
+        onError: (e) => toast.error(e instanceof Error ? e.message : "update failed"),
+        onSettled: () => setPending(null),
+      },
+    );
+  };
+
+  return (
+    <Card>
+      <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <FolderGit2 className="h-4 w-4 text-[var(--accent)]" />
+          Monitored projects
+        </CardTitle>
+        <span className="rounded-full border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]">
+          {monitoredCount} of {projects.data?.length ?? 0} enrolled
+        </span>
+      </CardHeader>
+      <CardContent className="space-y-3 text-[13px]">
+        <p className="text-[11px] text-[var(--text-tertiary)]">
+          Opt-in, per project. The agent only investigates crashes and alerts for projects toggled
+          on here — so a noisy or low-priority project never burns an agent run.
+          {!agentEnabled && (
+            <>
+              {" "}
+              <span className="text-amber-400">
+                The agent is currently disabled above, so nothing fires regardless.
+              </span>
+            </>
+          )}
+        </p>
+
+        {(projects.data?.length ?? 0) > 8 && (
+          <div className="relative">
+            <Search className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-[var(--text-tertiary)]" />
+            <Input
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              placeholder="Filter projects…"
+              className="h-8 pl-7 text-xs"
+            />
+          </div>
+        )}
+
+        {projects.isPending ? (
+          <Skeleton className="h-24" />
+        ) : rows.length === 0 ? (
+          <p className="py-4 text-center text-[12px] text-[var(--text-tertiary)]">
+            {filter ? "No projects match." : "No projects yet."}
+          </p>
+        ) : (
+          <ul className="divide-y divide-[var(--border-subtle)] overflow-hidden rounded-md border border-[var(--border-subtle)]">
+            {rows.map((r) => (
+              <li
+                key={r.name}
+                className="flex items-center justify-between gap-3 bg-[var(--bg-primary)] px-3 py-2"
+              >
+                <div className="flex min-w-0 items-center gap-2">
+                  <span
+                    className={cn(
+                      "h-1.5 w-1.5 flex-shrink-0 rounded-full",
+                      r.on ? "bg-emerald-400" : "bg-[var(--text-tertiary)]/40",
+                    )}
+                  />
+                  <span className="truncate font-mono text-[12px] text-[var(--text-primary)]">
+                    {r.name}
+                  </span>
+                </div>
+                <ProjectMonitorToggle
+                  on={r.on}
+                  disabled={readOnly || pending === r.name}
+                  busy={pending === r.name}
+                  onChange={(v) => toggle(r.name, v)}
+                />
+              </li>
+            ))}
+          </ul>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// ProjectMonitorToggle is a compact on/off switch for one project row.
+function ProjectMonitorToggle({
+  on,
+  disabled,
+  busy,
+  onChange,
+}: {
+  on: boolean;
+  disabled: boolean;
+  busy: boolean;
+  onChange: (v: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      disabled={disabled}
+      onClick={() => onChange(!on)}
+      className={cn(
+        "relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors disabled:opacity-50",
+        on ? "bg-emerald-500/80" : "bg-[var(--bg-tertiary)] border border-[var(--border-subtle)]",
+        busy && "animate-pulse",
+      )}
+    >
+      <span
+        className={cn(
+          "inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform",
+          on ? "translate-x-[18px]" : "translate-x-[3px]",
+        )}
+      />
+    </button>
   );
 }
 
@@ -85,16 +242,25 @@ function ConfigSection({
 
   return (
     <Card>
-      <CardHeader className="flex-row items-center justify-between">
+      <CardHeader className="flex-row items-center justify-between gap-3 space-y-0">
         <CardTitle className="flex items-center gap-2 text-sm">
           {draft.enabled ? (
             <ShieldCheck className="h-4 w-4 text-emerald-400" />
           ) : (
             <AlertTriangle className="h-4 w-4 text-[var(--text-tertiary)]" />
           )}
-          {draft.enabled ? "Enabled" : "Disabled"}
+          <span
+            className={cn(
+              "rounded-full px-2 py-0.5 text-[11px] font-medium",
+              draft.enabled
+                ? "bg-emerald-500/10 text-emerald-400"
+                : "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)]",
+            )}
+          >
+            {draft.enabled ? "Agent enabled" : "Agent disabled"}
+          </span>
         </CardTitle>
-        <label className="flex cursor-pointer items-center gap-2 text-xs">
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--text-secondary)]">
           <input
             type="checkbox"
             checked={draft.enabled}
@@ -105,7 +271,13 @@ function ConfigSection({
         </label>
       </CardHeader>
       <CardContent className="space-y-4 text-[13px]">
-        <div className="text-[11px] text-[var(--text-tertiary)]">
+        <div className="flex items-center gap-1.5 text-[11px] text-[var(--text-tertiary)]">
+          <span
+            className={cn(
+              "h-1.5 w-1.5 rounded-full",
+              status.openIncidents > 0 ? "bg-amber-400" : "bg-emerald-400/60",
+            )}
+          />
           {status.openIncidents} open incident{status.openIncidents === 1 ? "" : "s"} right now.
         </div>
 
@@ -184,7 +356,9 @@ function CredentialsSection({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-sm">Claude Code credentials</CardTitle>
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <KeyRound className="h-4 w-4 text-[var(--accent)]" /> Claude Code credentials
+        </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-[13px]">
         <p className="text-[11px] text-[var(--text-tertiary)]">
@@ -260,7 +434,7 @@ function DiscordSection({
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-sm">
-          <MessageSquare className="h-4 w-4" /> Discord bridge
+          <MessageSquare className="h-4 w-4 text-[var(--accent)]" /> Discord bridge
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3 text-[13px]">
@@ -364,7 +538,14 @@ function Field({
 
 function StatusLine({ ok, okText, badText }: { ok: boolean; okText: string; badText: string }) {
   return (
-    <div className={`flex items-center gap-1.5 text-[11px] ${ok ? "text-emerald-400" : "text-amber-400"}`}>
+    <div
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px]",
+        ok
+          ? "border-emerald-500/20 bg-emerald-500/5 text-emerald-400"
+          : "border-amber-500/20 bg-amber-500/5 text-amber-400",
+      )}
+    >
       <span>{ok ? "✓" : "⚠"}</span>
       <span>{ok ? okText : badText}</span>
     </div>

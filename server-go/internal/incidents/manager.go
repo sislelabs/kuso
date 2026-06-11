@@ -50,6 +50,9 @@ type Manager struct {
 	Spawner Spawner
 	Config  ConfigProvider // required for gating; nil → feature off
 	Logger  *slog.Logger
+	// Namespace is the home namespace where KusoProject CRs live, used
+	// to read the per-project incident-monitoring opt-in. Empty → "kuso".
+	Namespace string
 	// now is injected in tests; defaults to time.Now.
 	now func() time.Time
 }
@@ -68,6 +71,29 @@ func (m *Manager) cfg(ctx context.Context) db.IncidentAgentConfig {
 		return db.DefaultIncidentAgentConfig() // Enabled:false
 	}
 	return m.Config.Get(ctx)
+}
+
+// projectMonitored reports whether the named project has opted into
+// incident monitoring (KusoProject.spec.incidentMonitoring). Fails
+// CLOSED — a read error or missing project means "not monitored" so a
+// transient apiserver blip can't suddenly enroll every project. The CR
+// read is cheap and this runs off the Emit hot path (in handle's
+// goroutine), so no caching is needed.
+func (m *Manager) projectMonitored(ctx context.Context, project string) bool {
+	if m.Kube == nil {
+		return false
+	}
+	ns := m.Namespace
+	if ns == "" {
+		ns = "kuso"
+	}
+	p, err := m.Kube.GetKusoProject(ctx, ns, project)
+	if err != nil {
+		m.log().Warn("incident: could not read project opt-in; treating as not monitored",
+			"project", project, "err", err)
+		return false
+	}
+	return p.Spec.IncidentMonitoring
 }
 
 func (m *Manager) log() *slog.Logger {
@@ -162,6 +188,17 @@ func (m *Manager) handle(ctx context.Context, e notify.Event) {
 	key := targetKeyFor(e)
 	log := m.log().With("event", string(e.Type), "target", key)
 	cfg := m.cfg(ctx)
+
+	// Per-project opt-in. The agent only investigates project-scoped
+	// events (pod crash, alert) for projects that have explicitly opted
+	// into incident monitoring (KusoProject.spec.incidentMonitoring).
+	// Node-level events are cluster-wide (no owning project) and stay
+	// gated only by the global TriggerNode flag — filtering them by a
+	// project opt-in would silently drop every node incident.
+	if e.Project != "" && !m.projectMonitored(ctx, e.Project) {
+		log.Info("incident: event skipped (project not opted into incident monitoring)", "project", e.Project)
+		return
+	}
 
 	open, openErr := m.DB.OpenIncidentForTarget(ctx, key)
 	openExists := openErr == nil

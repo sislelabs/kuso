@@ -56,6 +56,11 @@
             },
             "type": "object"
           },
+          "incidentMonitoring": {
+            "default": false,
+            "description": "Opt this project into the incident-response agent.\nThe agent only investigates crashes/alerts/node\nevents for projects with this set to true — opt-in,\nso a noisy or low-priority project doesn't burn agent\nruns. Gated additionally by the global incident-agent\nenable. Default false (not monitored).\n",
+            "type": "boolean"
+          },
           "namespace": {
             "description": "Optional execution namespace for this project's child\nresources (services, environments, addons, builds,\nplus their per-service Secrets). The KusoProject CR\nitself always lives in the server's home namespace;\nthis field controls only child routing. Empty = home.\n",
             "type": "string"

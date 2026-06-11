@@ -26,6 +26,9 @@ export interface KusoProjectSpec {
   // alwaysOn=true overrides every per-service sleep config so all
   // services in this project run with scale-to-zero disabled.
   alwaysOn?: boolean;
+  // incidentMonitoring=true opts the project into the incident-response
+  // agent (it only investigates opted-in projects).
+  incidentMonitoring?: boolean;
 }
 
 export interface KusoProject {

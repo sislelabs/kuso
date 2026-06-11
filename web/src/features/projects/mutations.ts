@@ -12,6 +12,9 @@ export interface UpdateProjectBody {
   // alwaysOn=true overrides every per-service sleep config so all
   // services in this project run with scale-to-zero disabled.
   alwaysOn?: boolean;
+  // incidentMonitoring=true opts the project into the incident-response
+  // agent (it only investigates opted-in projects).
+  incidentMonitoring?: boolean;
 }
 
 async function updateProject(name: string, body: UpdateProjectBody): Promise<unknown> {
@@ -43,6 +46,22 @@ export function useUpdateProject(name: string) {
   return useMutation({
     mutationFn: (body: UpdateProjectBody) => updateProject(name, body),
     onSuccess: () => {
+      qc.invalidateQueries({ queryKey: projectQueryKey(name) });
+      qc.invalidateQueries({ queryKey: projectsQueryKey });
+    },
+  });
+}
+
+// useSetIncidentMonitoring flips one project's incident-agent opt-in.
+// Standalone (not keyed to a single project) so the incident-agent
+// settings page can drive a whole list of toggles. Invalidates the
+// projects list so every row reflects the new state.
+export function useSetIncidentMonitoring() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ name, enabled }: { name: string; enabled: boolean }) =>
+      updateProject(name, { incidentMonitoring: enabled }),
+    onSuccess: (_data, { name }) => {
       qc.invalidateQueries({ queryKey: projectQueryKey(name) });
       qc.invalidateQueries({ queryKey: projectsQueryKey });
     },

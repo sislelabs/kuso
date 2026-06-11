@@ -220,6 +220,9 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 	if req.AlwaysOn != nil {
 		cur.Spec.AlwaysOn = *req.AlwaysOn
 	}
+	if req.IncidentMonitoring != nil {
+		cur.Spec.IncidentMonitoring = *req.IncidentMonitoring
+	}
 	out, err := s.Kube.UpdateKusoProject(ctx, s.Namespace, cur)
 	if err != nil {
 		return nil, err

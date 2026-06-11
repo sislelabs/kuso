@@ -132,6 +132,16 @@ spec:
                     APIs, background processors that must always be
                     listening).
                   default: false
+                incidentMonitoring:
+                  type: boolean
+                  description: |
+                    Opt this project into the incident-response agent.
+                    The agent only investigates crashes/alerts/node
+                    events for projects with this set to true — opt-in,
+                    so a noisy or low-priority project doesn't burn agent
+                    runs. Gated additionally by the global incident-agent
+                    enable. Default false (not monitored).
+                  default: false
                 placement:
                   type: object
                   description: |

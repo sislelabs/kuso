@@ -863,10 +863,11 @@ func main() {
 			}
 		}
 		incidentMgr = &incidents.Manager{
-			DB:     database,
-			Kube:   kubeClient,
-			Notify: notifyDisp,
-			Config: incidentCfgProvider,
+			DB:        database,
+			Kube:      kubeClient,
+			Notify:    notifyDisp,
+			Config:    incidentCfgProvider,
+			Namespace: *namespace,
 			Spawner: &incidents.KubeSpawner{
 				Kube:      kubeClient,
 				Namespace: *namespace,

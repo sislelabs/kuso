@@ -132,9 +132,10 @@ func apiv1EnvVarsToDomain(in []apiv1.EnvVar) []projects.EnvVar {
 // non-nil = apply (even when the dereferenced value is zero).
 func apiv1UpdateToDomain(in apiv1.UpdateProjectRequest) projects.UpdateProjectRequest {
 	out := projects.UpdateProjectRequest{
-		Description: in.Description,
-		BaseDomain:  in.BaseDomain,
-		AlwaysOn:    in.AlwaysOn,
+		Description:        in.Description,
+		BaseDomain:         in.BaseDomain,
+		AlwaysOn:           in.AlwaysOn,
+		IncidentMonitoring: in.IncidentMonitoring,
 	}
 	if in.DefaultRepo != nil {
 		out.DefaultRepo = &projects.CreateProjectRepoSpec{

@@ -65,6 +65,12 @@ type KusoProjectSpec struct {
 	// (enabled). When Enabled is false, a push never triggers a
 	// config apply.
 	ConfigAsCode *KusoConfigAsCode `json:"configAsCode,omitempty"`
+	// IncidentMonitoring opts this project into the incident-response
+	// agent. The agent only investigates crashes/alerts/node events for
+	// projects with this set to true — opt-in, so a noisy or low-priority
+	// project doesn't burn agent runs. Defaults to false (not monitored).
+	// Gated additionally by the global KUSO_INCIDENT_AGENT enable.
+	IncidentMonitoring bool `json:"incidentMonitoring,omitempty"`
 }
 
 // KusoConfigAsCode is the spec.configAsCode block on KusoProject.

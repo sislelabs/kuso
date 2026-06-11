@@ -63,6 +63,7 @@ export type {
 } from "./api";
 export {
   useUpdateProject,
+  useSetIncidentMonitoring,
   useDeleteProject,
   useCreateProject,
 } from "./mutations";
