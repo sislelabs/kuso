@@ -5,6 +5,18 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.63] — 2026-06-11
+
+### ✨ Features
+- Feat(incidents): per-project opt-in for the incident agent ([e550501](https://github.com/sislelabs/kuso/commit/e55050122d62d405ad172ca7400fe677701404f7))
+
+### 🐛 Bug Fixes
+- Fix(github): tolerate App-install redirect on the OAuth callback ([539c107](https://github.com/sislelabs/kuso/commit/539c1078d5c9b1c066b2f27fafd04ef2b0cabb72))
+- Fix(addons): postgres conn uses sslmode=no-verify so node apps connect ([e34a265](https://github.com/sislelabs/kuso/commit/e34a2658c096eba459f8f1451d3d47da5302f06e))
+
+### 🧹 Chores
+- Chore(changelog): archive churn ([f0436f9](https://github.com/sislelabs/kuso/commit/f0436f98dc0a68e055045d93f0942359e1c6bdef))
+
 ## [0.18.62] — 2026-06-11
 
 ### ✨ Features
@@ -421,24 +433,6 @@ messages on every release. The format is loosely based on
 - Feat(reliability): surface control-plane backup health + addon-PVC orphan trail (tier 1) ([91ff76e](https://github.com/sislelabs/kuso/commit/91ff76ea6c7b7cda9f60b9185c5935564d0c89f4))
 - Feat(github): per-service repo routing + editable default repo + card fallback ([7b5d82f](https://github.com/sislelabs/kuso/commit/7b5d82f3f1964e786056f48c76d9cac2a91e952a))
 - Feat(web): make the project card's GitHub repo row clickable ([ed97870](https://github.com/sislelabs/kuso/commit/ed97870309d2fad5494669a4b21a02a24833bd3d))
-
-## [0.17.28] — 2026-05-30
-
-### ✨ Features
-- Feat(builds): rollback window — keep last N images, prune older, records persist ([c3002ed](https://github.com/sislelabs/kuso/commit/c3002ed242fb46d5bdefd755060019c6be307bb6))
-- Feat(builds): archive build summaries so deployment history survives cleanup ([315535e](https://github.com/sislelabs/kuso/commit/315535ec49c8ead24f8caa849dfcb65a47a2e1f6))
-- Feat(web): role v2 UI — 3-role pickers, project access panel, env masking (phase 5) ([bc7f971](https://github.com/sislelabs/kuso/commit/bc7f9717107b943ec6294a2466df82a346047753))
-- Feat(authz): role v2 grant-management API (phase 4) ([1bcbbd0](https://github.com/sislelabs/kuso/commit/1bcbbd0ea87419b49a42c1d47cedbff5288b3e81))
-- Feat(authz): role v2 data model — ProjectGrant + user roles + migration (phase 2) ([09c5a55](https://github.com/sislelabs/kuso/commit/09c5a5577efe9bb4fa46c250a016a51588e210ee))
-- Feat(authz): role system v2 core — viewer/editor/admin (phase 1+3) ([eeb9f47](https://github.com/sislelabs/kuso/commit/eeb9f47ef49b34f2de7fb6c735bbcfc6be47a10f))
-
-### 🐛 Bug Fixes
-- Fix(authz): instance-addon picker gate — addons:write → authenticated ([8aa5d9b](https://github.com/sislelabs/kuso/commit/8aa5d9b216daab8bbe99456d3a9c99baec3787c0))
-- Fix(authz): close role-v2 client + stale-gate gaps from code review ([9e1fe6e](https://github.com/sislelabs/kuso/commit/9e1fe6e3d19463caba477065e827198318312e76))
-
-### 📝 Docs
-- Docs(spec): role v2 — sql console + null-inherit clarifications ([181cf7d](https://github.com/sislelabs/kuso/commit/181cf7d543b5784be592eb16dba5703e97f9ddee))
-- Docs(spec): role system v2 design (viewer/editor/admin, hybrid grants) ([74edc97](https://github.com/sislelabs/kuso/commit/74edc9712c9ac28bae9ac54ff1c172e9ca3ac8ae))
 
 
 ---
