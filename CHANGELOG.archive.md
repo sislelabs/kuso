@@ -2,6 +2,17 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.17.27] — 2026-05-30
+
+### ✨ Features
+- Feat(canvas): surface per-env custom domain on node + overlay URL ([9288cc8](https://github.com/sislelabs/kuso/commit/9288cc8a6c91201097cb0360b65cd730619951cb))
+
+### 🐛 Bug Fixes
+- Fix(previews): seed Job DNS/db-name + cascade-delete on PR close ([2f2f042](https://github.com/sislelabs/kuso/commit/2f2f042144c682c5fe75b5124228fdf2d5a2cadf))
+
+### 📝 Docs
+- Docs(skill): rewrite env/secrets handling + add domains/previews; full review ([403e184](https://github.com/sislelabs/kuso/commit/403e1849634e302620d2d0fef45678d6c46f9765))
+
 ## [0.17.26] — 2026-05-29
 
 ### 🐛 Bug Fixes
