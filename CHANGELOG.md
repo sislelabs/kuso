@@ -5,6 +5,12 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.65] — 2026-06-11
+
+### 🐛 Bug Fixes
+- Fix(jobs+hpa): carry valueFrom into release/preview Jobs; tame HPA scaling ([76855c6](https://github.com/sislelabs/kuso/commit/76855c6dbd5d3b32223e52fa16e433c43a7fa02b))
+- Fix(cli): decode the wrapped {values:{...}} addon secret in db connect ([b45732e](https://github.com/sislelabs/kuso/commit/b45732e137d1d5af96cea888245b8f114f3b2d0e))
+
 ## [0.18.64] — 2026-06-11
 
 ### 🐛 Bug Fixes
@@ -417,19 +423,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive promoted CHANGELOG entries (pre-v0.18.1 ship) ([74c6ba9](https://github.com/sislelabs/kuso/commit/74c6ba9204e6d3b3677f950828a569f8460f43af))
-
-## [0.18.0] — 2026-05-30
-
-### Other
-- M3: latency histograms + schema-migration gauges on /metrics ([2ef8384](https://github.com/sislelabs/kuso/commit/2ef8384b1a553e3c12a4d8bcf9c845857691cb25))
-- M2: reconciler tests for the load-bearing untested paths ([4967bed](https://github.com/sislelabs/kuso/commit/4967bed39c91e820ad583aa9744b042e8a1d653e))
-- M1: versioned DB migrations (runner + first migration + ops surfacing) ([afe5eb2](https://github.com/sislelabs/kuso/commit/afe5eb294b240bd69875f576a6a21f86bbe81a49))
-
-### 🐛 Bug Fixes
-- Fix(web): project card — stack repo/domain rows + service-domain fallback + correct link ([7d39973](https://github.com/sislelabs/kuso/commit/7d39973bda814ab358693470b033031d2b06cd39))
-
-### 🧹 Chores
-- Chore: archive promoted CHANGELOG entries (pre-v0.18.0 ship) ([ec9e3d9](https://github.com/sislelabs/kuso/commit/ec9e3d905a7b781167079def9be376d489ecf2fd))
 
 
 ---
