@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.66] — 2026-06-11
+
+### 🐛 Bug Fixes
+- Fix(addons): postgres addon serves plaintext, conn uses sslmode=disable ([1f21ba9](https://github.com/sislelabs/kuso/commit/1f21ba97ffcc482e7579d77a8a41641866b8b537))
+
+### 🧹 Chores
+- Chore(changelog): archive churn ([df3395a](https://github.com/sislelabs/kuso/commit/df3395a45c71ba9b813c4b95f1f3707336019670))
+
 ## [0.18.65] — 2026-06-11
 
 ### 🐛 Bug Fixes
@@ -410,19 +418,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive promoted CHANGELOG entries (pre-v0.18.2 ship) ([2d7f1a9](https://github.com/sislelabs/kuso/commit/2d7f1a911b91595327bf3744eeefb7b39c434761))
-
-## [0.18.1] — 2026-05-30
-
-### 🐛 Bug Fixes
-- Fix(db): drop carried-over indexes before recreating in LogLine partition migration ([146f16c](https://github.com/sislelabs/kuso/commit/146f16c1fc5a8030207fcaaab3753878bce98820))
-- Fix(notifications): persist explicit "none" Discord mention over @here default ([3208b14](https://github.com/sislelabs/kuso/commit/3208b14d916ebb071cb7091c0e3c8fd0b82ded61))
-
-### 🔨 Refactors
-- Refactor: decouple served-app domain from the kuso.sislelabs.com literal ([04c3609](https://github.com/sislelabs/kuso/commit/04c3609d382b4f02b62adf8c5077446c72884977))
-- Refactor(db): purge SQLite dialect — native Postgres $N + ON CONFLICT ([a9561c0](https://github.com/sislelabs/kuso/commit/a9561c00a4285c35d8e222755d8e0a454a9ea41b))
-
-### 🧹 Chores
-- Chore: archive promoted CHANGELOG entries (pre-v0.18.1 ship) ([74c6ba9](https://github.com/sislelabs/kuso/commit/74c6ba9204e6d3b3677f950828a569f8460f43af))
 
 
 ---
