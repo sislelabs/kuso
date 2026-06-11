@@ -2,6 +2,30 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.0] — 2026-05-30
+
+### Other
+- M3: latency histograms + schema-migration gauges on /metrics ([2ef8384](https://github.com/sislelabs/kuso/commit/2ef8384b1a553e3c12a4d8bcf9c845857691cb25))
+- M2: reconciler tests for the load-bearing untested paths ([4967bed](https://github.com/sislelabs/kuso/commit/4967bed39c91e820ad583aa9744b042e8a1d653e))
+- M1: versioned DB migrations (runner + first migration + ops surfacing) ([afe5eb2](https://github.com/sislelabs/kuso/commit/afe5eb294b240bd69875f576a6a21f86bbe81a49))
+
+### 🐛 Bug Fixes
+- Fix(web): project card — stack repo/domain rows + service-domain fallback + correct link ([7d39973](https://github.com/sislelabs/kuso/commit/7d39973bda814ab358693470b033031d2b06cd39))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.0 ship) ([ec9e3d9](https://github.com/sislelabs/kuso/commit/ec9e3d905a7b781167079def9be376d489ecf2fd))
+
+## [0.17.29] — 2026-05-30
+
+### ✨ Features
+- Feat(previews): clone instance-pg addons into isolated per-PR databases (tier 3) ([63a816c](https://github.com/sislelabs/kuso/commit/63a816ccdb571440d4df6e0281eb83ae1f15e069))
+- Feat(addons): record + revert addon config revisions (tier 3) ([0b9b83e](https://github.com/sislelabs/kuso/commit/0b9b83eca67b7fbd851cfaf8170b95d4f35d4d6f))
+- Feat(services): per-service CPU/memory requests+limits (tier 3) ([ba9f535](https://github.com/sislelabs/kuso/commit/ba9f5352c3bf40227bd9114882a2b7a06c782ed9))
+- Feat(reliability): operator blind-spot signals — poller liveness, registry GC, webhook health (tier 2) ([0c780a9](https://github.com/sislelabs/kuso/commit/0c780a98ef2666f56da122e358ba19638c22d6a0))
+- Feat(reliability): surface control-plane backup health + addon-PVC orphan trail (tier 1) ([91ff76e](https://github.com/sislelabs/kuso/commit/91ff76ea6c7b7cda9f60b9185c5935564d0c89f4))
+- Feat(github): per-service repo routing + editable default repo + card fallback ([7b5d82f](https://github.com/sislelabs/kuso/commit/7b5d82f3f1964e786056f48c76d9cac2a91e952a))
+- Feat(web): make the project card's GitHub repo row clickable ([ed97870](https://github.com/sislelabs/kuso/commit/ed97870309d2fad5494669a4b21a02a24833bd3d))
+
 ## [0.17.28] — 2026-05-30
 
 ### ✨ Features
