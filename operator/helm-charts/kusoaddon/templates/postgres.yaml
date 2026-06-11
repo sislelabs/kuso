@@ -123,9 +123,10 @@ spec:
           ports:
             - name: postgres
               containerPort: 5432
-          # Enable TLS on the wire. Required so the connection string
-          # can advertise sslmode=require, which Tickero-style strict
-          # production-mode checks demand.
+          # Enable TLS on the wire so the connection string can advertise
+          # sslmode=no-verify (encrypt, don't verify the self-signed chain) —
+          # the channel apps actually consume. See the conn-Secret DATABASE_URL
+          # below for the require-vs-no-verify cross-driver rationale.
           args:
             - "-c"
             - "ssl=on"
@@ -213,7 +214,7 @@ spec:
 # requiring cert-manager to be installed for the basic single-node
 # addon to work. The single SAN covers <name>.<namespace>.svc and
 # both shorter forms — apps connect via the service DNS name.
-# sslmode=require (not verify-full) is what we advertise, so SAN
+# sslmode=no-verify (not verify-full) is what we advertise, so SAN
 # match isn't enforced client-side; the cert is mostly there to
 # make TLS the default channel, not to defend against in-cluster
 # MITM (the kube network already authenticates pod-to-pod via CNI).
@@ -272,20 +273,29 @@ data:
   POSTGRES_USER: {{ "kuso" | b64enc | quote }}
   POSTGRES_PASSWORD: {{ $password | b64enc | quote }}
   POSTGRES_DB: {{ $database | b64enc | quote }}
-  # sslmode=require: the postgres container serves TLS via the
-  # self-signed cert in <name>-tls. Apps' production strictness checks
-  # (Tickero, Rails RAILS_ENV=production, etc.) accept this without
-  # verify-full because in-cluster Service traffic is already
-  # authenticated by the CNI — the cert proves "you're talking to
-  # postgres", not "you're talking to THIS specific tenant's postgres"
-  # (CNI does the latter). For verify-full, override DATABASE_URL with
-  # your own URL or pin a CA cert via your driver config.
+  # sslmode=no-verify: the postgres container serves TLS via the
+  # self-signed cert in <name>-tls. We want TLS as the default channel
+  # but NOT chain/host verification — the cert proves "you're talking to
+  # postgres", not "you're talking to THIS tenant's postgres" (the CNI
+  # authenticates pod-to-pod, so in-cluster MITM isn't the threat model).
+  #
+  # We advertise `no-verify` rather than `require` because of a real
+  # cross-driver split on what `require` MEANS:
+  #   - libpq (psql, Rails, Python psycopg, Go pgx): `require` = encrypt,
+  #     DON'T verify the chain → accepts the self-signed cert. Fine.
+  #   - node-postgres (Node/Next/Payload, Prisma w/o ?sslaccept): `require`
+  #     turns TLS ON but STILL verifies the chain by default → rejects the
+  #     self-signed cert with DEPTH_ZERO_SELF_SIGNED_CERT, crashing the app
+  #     on connect/migrate. This bit every Node deploy.
+  # `no-verify` means "encrypt, skip verification" to BOTH families, so the
+  # one URL works everywhere without per-app driver config. For verify-full,
+  # override DATABASE_URL with your own URL or pin a CA via your driver.
   #
   # urlquery the password so user-supplied creds with reserved chars
   # (`@`, `:`, `/`, `?`, `#`, `%`) don't corrupt the connection string.
   # The auto-generated password (randAlphaNum) is safe without it, but
   # passwordSecret-supplied values can be anything.
-  DATABASE_URL: {{ printf "postgres://kuso:%s@%s:5432/%s?sslmode=require" ($password | urlquery) $name $database | b64enc | quote }}
+  DATABASE_URL: {{ printf "postgres://kuso:%s@%s:5432/%s?sslmode=no-verify" ($password | urlquery) $name $database | b64enc | quote }}
   {{- /* DIRECT_URL: always the un-pooled, session-safe DSN (== the direct
          DATABASE_URL above for this StatefulSet path). Apps running Prisma
          migrations point Prisma's `directUrl` here. It matters mainly when
@@ -295,7 +305,7 @@ data:
          hangs 10s then CrashLoopBackOffs. Emitted unconditionally so the key
          set matches the instance-shared conn secret (instance_provisioner.go),
          giving apps one stable ${{ <addon>.DIRECT_URL }} contract everywhere. */}}
-  DIRECT_URL: {{ printf "postgres://kuso:%s@%s:5432/%s?sslmode=require" ($password | urlquery) $name $database | b64enc | quote }}
+  DIRECT_URL: {{ printf "postgres://kuso:%s@%s:5432/%s?sslmode=no-verify" ($password | urlquery) $name $database | b64enc | quote }}
   {{- /* Pooler keys. Additive — DATABASE_URL above stays direct at
          the StatefulSet so existing consumers are unaffected. Apps
          opt into pooling with ${{ <addon>.POOLER_URL }}.
