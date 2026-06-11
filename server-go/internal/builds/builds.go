@@ -1987,7 +1987,7 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 		// just omits the field.
 		var siteURL string
 		if p.Svc != nil {
-			siteURL = lookupSiteURL(ctx, p.Svc.Kube, ns, b.Spec.Service)
+			siteURL = lookupSiteURL(ctx, p.Svc.Kube, ns, b.Spec.Project, b.Spec.Service)
 		}
 		title, desc, fields := buildRichCard(b, short, "succeeded", "", siteURL)
 		p.Notifier.Emit(EventEnvelope{

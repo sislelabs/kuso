@@ -1,6 +1,7 @@
 package builds
 
 import (
+	"context"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -141,6 +142,95 @@ func TestBuildRichCard_SiteURL(t *testing.T) {
 	if siteField.Value != "[web.distill.sislelabs.com](https://web.distill.sislelabs.com)" {
 		t.Errorf("Site field value: %q", siteField.Value)
 	}
+}
+
+// TestLookupSiteURL covers the resolution order: explicit service domain
+// first, then the production env's auto-generated host, then "" for an
+// internal-only service or no env at all. The env fallback is the fix for
+// auto-host services (e.g. scaffold) whose Site link was silently dropped.
+func TestLookupSiteURL(t *testing.T) {
+	svcWithDomain := func(project, service, host string, tls bool) seed {
+		s := &kube.KusoService{
+			ObjectMeta: metav1.ObjectMeta{Name: project + "-" + service, Namespace: "kuso"},
+			Spec: kube.KusoServiceSpec{
+				Project: project,
+				Domains: []kube.KusoDomain{{Host: host, TLS: tls}},
+			},
+		}
+		return typedSeed(kube.GVRServices, "KusoService", s)
+	}
+	prodEnv := func(project, service, host string, tlsHosts []string, internal bool) seed {
+		e := &kube.KusoEnvironment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      project + "-" + service + "-production",
+				Namespace: "kuso",
+				Labels: map[string]string{
+					kube.LabelProject: project,
+					kube.LabelService: service,
+					kube.LabelEnv:     "production",
+				},
+			},
+			Spec: kube.KusoEnvironmentSpec{
+				Project: project, Service: project + "-" + service, Kind: "production",
+				Host: host, TLSHosts: tlsHosts, Internal: internal,
+			},
+		}
+		return typedSeed(kube.GVREnvironments, "KusoEnvironment", e)
+	}
+
+	t.Run("explicit service domain wins", func(t *testing.T) {
+		s := fakeService(t,
+			svcWithDomain("distill", "web", "custom.example.com", true),
+			prodEnv("distill", "web", "web.distill.sislelabs.com", []string{"web.distill.sislelabs.com"}, false),
+		)
+		got := lookupSiteURL(context.Background(), s.Kube, "kuso", "distill", "distill-web")
+		if got != "https://custom.example.com" {
+			t.Errorf("got %q, want the explicit service domain", got)
+		}
+	})
+
+	t.Run("falls back to production env auto-host (TLS)", func(t *testing.T) {
+		// Service has NO spec.domains — the scaffold case.
+		s := fakeService(t,
+			seedService("scaffold", "scaffold"),
+			prodEnv("scaffold", "scaffold", "scaffold.scaffold.sislelabs.com",
+				[]string{"scaffold.scaffold.sislelabs.com"}, false),
+		)
+		got := lookupSiteURL(context.Background(), s.Kube, "kuso", "scaffold", "scaffold-scaffold")
+		if got != "https://scaffold.scaffold.sislelabs.com" {
+			t.Errorf("got %q, want the production env https host", got)
+		}
+	})
+
+	t.Run("http when host not in TLSHosts", func(t *testing.T) {
+		s := fakeService(t,
+			seedService("p", "s"),
+			prodEnv("p", "s", "s.p.example.com", nil, false),
+		)
+		got := lookupSiteURL(context.Background(), s.Kube, "kuso", "p", "p-s")
+		if got != "http://s.p.example.com" {
+			t.Errorf("got %q, want http (host not TLS-eligible)", got)
+		}
+	})
+
+	t.Run("internal-only service has no public link", func(t *testing.T) {
+		s := fakeService(t,
+			seedService("p", "worker"),
+			prodEnv("p", "worker", "worker.p.example.com", []string{"worker.p.example.com"}, true),
+		)
+		got := lookupSiteURL(context.Background(), s.Kube, "kuso", "p", "p-worker")
+		if got != "" {
+			t.Errorf("got %q, want empty for internal-only service", got)
+		}
+	})
+
+	t.Run("no env, no domain -> empty", func(t *testing.T) {
+		s := fakeService(t, seedService("p", "s"))
+		got := lookupSiteURL(context.Background(), s.Kube, "kuso", "p", "p-s")
+		if got != "" {
+			t.Errorf("got %q, want empty when nothing resolves", got)
+		}
+	})
 }
 
 // TestBuildRichCard_NoSiteURLOnFailure verifies the Site field is NOT

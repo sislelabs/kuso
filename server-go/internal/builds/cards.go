@@ -239,31 +239,79 @@ func buildDurationMs(b *kube.KusoBuild) int64 {
 }
 
 // lookupSiteURL resolves the public URL of a service for inclusion in
-// notification cards. Returns "" when the service has no configured
-// domain, or on any kube lookup error (we don't fail the notification
-// over a missing site link).
+// notification cards. Returns "" when no public host can be resolved, or
+// on any kube lookup error (we don't fail the notification over a missing
+// site link).
 //
-// fqn is the service's KusoService CR name (e.g. "distill-web"), not
-// the short alias. Convention: https when TLS, http otherwise.
-func lookupSiteURL(ctx context.Context, kc *kube.Client, ns, fqn string) string {
+// fqn is the service's KusoService CR name (e.g. "distill-web"), not the
+// short alias. project is the owning project (for the env lookup).
+//
+// Resolution order:
+//  1. The service's first explicit spec.domains[] entry (a user-pinned
+//     custom domain), https/http per its TLS flag.
+//  2. The PRODUCTION KusoEnvironment's resolved host. This is the common
+//     case — most services have no explicit spec.domains and rely on the
+//     auto-generated <service>.<baseDomain> host, which the server writes
+//     onto the env CR's spec.host. Without this fallback the "Site" link
+//     was silently dropped for every auto-host service (e.g. scaffold).
+//
+// Internal-only services have no public URL, so they resolve to "".
+func lookupSiteURL(ctx context.Context, kc *kube.Client, ns, project, fqn string) string {
 	if kc == nil || ns == "" || fqn == "" {
 		return ""
 	}
 	lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	svc, err := kc.GetKusoService(lctx, ns, fqn)
-	if err != nil || svc == nil || len(svc.Spec.Domains) == 0 {
+
+	// 1) Explicit service-level custom domain wins.
+	if svc, err := kc.GetKusoService(lctx, ns, fqn); err == nil && svc != nil && len(svc.Spec.Domains) > 0 {
+		if host := strings.TrimSpace(svc.Spec.Domains[0].Host); host != "" {
+			scheme := "https"
+			if !svc.Spec.Domains[0].TLS {
+				scheme = "http"
+			}
+			return scheme + "://" + host
+		}
+	}
+
+	// 2) Fall back to the production env's resolved host (the auto-
+	//    generated <svc>.<baseDomain> lives here even when the service
+	//    has no explicit spec.domains).
+	short := strings.TrimPrefix(fqn, project+"-")
+	envs, err := kc.ListKusoEnvironmentsByLabels(lctx, ns, map[string]string{
+		kube.LabelProject: project,
+		kube.LabelService: short,
+	})
+	if err != nil {
 		return ""
 	}
-	host := strings.TrimSpace(svc.Spec.Domains[0].Host)
-	if host == "" {
-		return ""
+	for i := range envs {
+		e := &envs[i]
+		if e.Spec.Kind != "production" {
+			continue
+		}
+		// Internal-only services aren't reachable from outside the
+		// cluster — no public link to offer.
+		if e.Spec.Internal {
+			return ""
+		}
+		host := strings.TrimSpace(e.Spec.Host)
+		if host == "" && len(e.Spec.AdditionalHosts) > 0 {
+			host = strings.TrimSpace(e.Spec.AdditionalHosts[0])
+		}
+		if host == "" {
+			return ""
+		}
+		scheme := "http"
+		for _, th := range e.Spec.TLSHosts {
+			if th == host {
+				scheme = "https"
+				break
+			}
+		}
+		return scheme + "://" + host
 	}
-	scheme := "https"
-	if !svc.Spec.Domains[0].TLS {
-		scheme = "http"
-	}
-	return scheme + "://" + host
+	return ""
 }
 
 // isHexSHA returns true when s is a hex-only string of 7+ characters.
