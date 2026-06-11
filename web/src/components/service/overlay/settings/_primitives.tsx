@@ -42,6 +42,9 @@ export interface FormState {
   memLimit: string;
   // Build
   runtime: string;
+  // dockerfile overrides the Dockerfile filename for runtime=dockerfile
+  // (relative to repo path). Empty = "Dockerfile".
+  dockerfile: string;
   // Storage
   volumes: VolumeRow[];
   // Placement
@@ -98,6 +101,7 @@ export function fromSvc(svc?: KusoService): FormState {
     memRequest: svc?.spec.resources?.requests?.memory ?? "",
     memLimit: svc?.spec.resources?.limits?.memory ?? "",
     runtime: svc?.spec.runtime ?? "dockerfile",
+    dockerfile: svc?.spec.dockerfile ?? "",
     volumes: (svc?.spec.volumes ?? []).map((v: KusoVolume) => ({
       name: v.name,
       mountPath: v.mountPath,

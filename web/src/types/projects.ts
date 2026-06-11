@@ -46,6 +46,9 @@ export interface KusoServiceSpec {
   displayName?: string;
   repo?: KusoRepoRef;
   runtime?: "dockerfile" | "nixpacks" | "buildpacks" | "static";
+  // dockerfile overrides the Dockerfile filename for runtime=dockerfile
+  // (relative to repo.path). Empty = "Dockerfile".
+  dockerfile?: string;
   port?: number;
   domains?: { host?: string; tls?: boolean }[];
   envVars?: KusoEnvVar[];

@@ -212,6 +212,10 @@ export interface PatchServiceBody {
   // in-cluster Service so siblings can reach it via cluster DNS.
   internal?: boolean;
   runtime?: string;
+  // dockerfile overrides the Dockerfile filename for runtime=dockerfile
+  // (relative to repo path). "" clears back to the default "Dockerfile";
+  // absent leaves it unchanged.
+  dockerfile?: string;
   domains?: { host: string; tls?: boolean }[];
   scale?: { min?: number; max?: number; targetCPU?: number };
   // Pod CPU/memory requests+limits (k8s ResourceRequirements shape).

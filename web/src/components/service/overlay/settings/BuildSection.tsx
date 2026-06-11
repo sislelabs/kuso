@@ -2,9 +2,11 @@
 
 import { Hammer } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
 import { Section, Row, RUNTIMES, type SectionProps } from "./_primitives";
 
 export function BuildSection({ state, setState }: SectionProps) {
+  const isDockerfile = state.runtime === "dockerfile";
   return (
     <Section id="build" title="Build" icon={Hammer}>
       <Row
@@ -33,8 +35,24 @@ export function BuildSection({ state, setState }: SectionProps) {
             ))}
           </div>
         }
-        last
+        last={!isDockerfile}
       />
+      {isDockerfile && (
+        <Row
+          label="dockerfile"
+          hint="path to Dockerfile (relative to source path); blank = Dockerfile"
+          control={
+            <Input
+              value={state.dockerfile}
+              onChange={(e) => setState((s) => ({ ...s, dockerfile: e.target.value }))}
+              placeholder="Dockerfile"
+              className="h-7 w-48 font-mono text-[12px]"
+              spellCheck={false}
+            />
+          }
+          last
+        />
+      )}
     </Section>
   );
 }

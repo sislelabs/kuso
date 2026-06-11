@@ -261,6 +261,11 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     if (state.runtime !== baseline.runtime) {
       body.runtime = state.runtime;
     }
+    // dockerfile path: only meaningful for runtime=dockerfile. Send on
+    // change ("" clears back to the default "Dockerfile" server-side).
+    if (state.dockerfile !== baseline.dockerfile) {
+      body.dockerfile = state.dockerfile;
+    }
     if (
       state.repoURL !== baseline.repoURL ||
       state.repoBranch !== baseline.repoBranch ||

@@ -57,6 +57,9 @@ export function AddServiceView() {
   const slug = useMemo(() => slugifyServiceName(name), [name]);
   const [path, setPath] = useState("");
   const [runtime, setRuntime] = useState<string>("dockerfile");
+  // dockerfile overrides the Dockerfile filename for runtime=dockerfile
+  // (relative to the repo path). Empty = "Dockerfile".
+  const [dockerfile, setDockerfile] = useState<string>("");
   const [command, setCommand] = useState<string>("");
   const [port, setPort] = useState<string>("");
   const [reason, setReason] = useState<string | null>(null);
@@ -149,6 +152,9 @@ export function AddServiceView() {
             ...(path.trim() ? { path: path.trim() } : {}),
           },
           runtime,
+          ...(runtime === "dockerfile" && dockerfile.trim()
+            ? { dockerfile: dockerfile.trim() }
+            : {}),
           ...(runtime === "worker" && command.trim()
             ? { command: command.trim().split(/\s+/).filter(Boolean) }
             : {}),
@@ -457,6 +463,20 @@ export function AddServiceView() {
                 ))}
               </div>
             </Field>
+            {runtime === "dockerfile" && (
+              <Field label="dockerfile" hint="path to Dockerfile; default if empty">
+                <Input
+                  value={dockerfile}
+                  onChange={(e) => setDockerfile(e.target.value)}
+                  placeholder="Dockerfile"
+                  className="h-8 font-mono text-[12px]"
+                />
+                <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
+                  Relative to the path above. Override for a non-standard name or a monorepo
+                  build file, e.g. <span className="text-[var(--text-secondary)]">docker/Dockerfile.prod</span>.
+                </p>
+              </Field>
+            )}
             {runtime === "worker" && (
               <Field label="command">
                 <Input
