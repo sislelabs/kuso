@@ -28,7 +28,7 @@ func TestApply_AppliesFullServiceFieldSetAndCrons(t *testing.T) {
 	}
 	plan := &Plan{ServicesToCreate: []string{"api"}, CronsToCreate: []string{"nightly"}}
 
-	res, err := r.Apply(context.Background(), plan, f)
+	res, err := r.Apply(context.Background(), plan, f, ApplyOpts{})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestApply_SkipsDeletesWhenPlanHasNone(t *testing.T) {
 	// prune=false plans carry no *ToDelete (Task 2 moved them to
 	// WouldDelete) — apply must perform zero deletions.
 	plan := &Plan{WouldDelete: []string{"service:old"}}
-	_, err := r.Apply(context.Background(), plan, plan2file(plan))
+	_, err := r.Apply(context.Background(), plan, plan2file(plan), ApplyOpts{})
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestApply_PatchServiceIsDeclarativeReset(t *testing.T) {
 		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
 	}
 	plan := &Plan{ServicesToUpdate: []string{"api"}}
-	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(fp.patched) != 1 {
@@ -98,7 +98,7 @@ func TestApply_PatchServiceCarriesStaticBuildConfig(t *testing.T) {
 		}},
 	}
 	plan := &Plan{ServicesToUpdate: []string{"site"}}
-	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	req := fp.patched[0].req
@@ -123,7 +123,7 @@ func TestApply_CreateServiceCarriesImagePointer(t *testing.T) {
 		}},
 	}
 	plan := &Plan{ServicesToCreate: []string{"api"}}
-	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	req := fp.created[0].req
@@ -143,7 +143,7 @@ func TestApply_PatchServiceCarriesImagePointer(t *testing.T) {
 		}},
 	}
 	plan := &Plan{ServicesToUpdate: []string{"api"}}
-	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	req := fp.patched[0].req
@@ -163,7 +163,7 @@ func TestApply_PatchServiceResetsImageWhenOmitted(t *testing.T) {
 		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
 	}
 	plan := &Plan{ServicesToUpdate: []string{"api"}}
-	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	req := fp.patched[0].req
@@ -186,7 +186,7 @@ func TestApply_PatchServiceResetsStaticWhenOmitted(t *testing.T) {
 		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
 	}
 	plan := &Plan{ServicesToUpdate: []string{"api"}}
-	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	req := fp.patched[0].req
@@ -209,7 +209,7 @@ func TestApply_CreateServiceCarriesReleaseHook(t *testing.T) {
 		}},
 	}
 	plan := &Plan{ServicesToCreate: []string{"api"}}
-	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	req := fp.created[0].req
@@ -232,7 +232,7 @@ func TestApply_PatchServiceCarriesReleaseHook(t *testing.T) {
 		}},
 	}
 	plan := &Plan{ServicesToUpdate: []string{"api"}}
-	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	req := fp.patched[0].req
@@ -251,7 +251,7 @@ func TestApply_PatchServiceClearsReleaseWhenOmitted(t *testing.T) {
 		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
 	}
 	plan := &Plan{ServicesToUpdate: []string{"api"}}
-	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	req := fp.patched[0].req
@@ -271,7 +271,7 @@ func TestApply_SetEnvUnconditionalOnUpdate(t *testing.T) {
 		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
 	}
 	plan := &Plan{ServicesToUpdate: []string{"api"}}
-	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(fp.envSet) != 1 {
@@ -289,7 +289,7 @@ func TestApply_RefusesDeletionsWhenPruneFalse(t *testing.T) {
 	// caller bug — Apply must refuse before any kube write.
 	f := &File{Project: "shop", Prune: false}
 	plan := &Plan{ServicesToDelete: []string{"old"}}
-	_, err := r.Apply(context.Background(), plan, f)
+	_, err := r.Apply(context.Background(), plan, f, ApplyOpts{})
 	if err == nil {
 		t.Fatalf("Apply must refuse a prune:false plan with deletions")
 	}
@@ -309,7 +309,7 @@ func TestApply_AddonBackupAppliedAsPostCreateUpdate(t *testing.T) {
 		}},
 	}
 	plan := &Plan{AddonsToCreate: []string{"db"}}
-	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+	if _, err := r.Apply(context.Background(), plan, f, ApplyOpts{}); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
 	if len(fa.added) != 1 || fa.added[0] != "db" {
@@ -416,4 +416,102 @@ func (f *fakeCrons) UpdateProject(_ context.Context, _, name string, _ crons.Upd
 func (f *fakeCrons) DeleteProject(_ context.Context, _, name string) error {
 	f.deletedProject = append(f.deletedProject, name)
 	return nil
+}
+
+// fakeSecrets records SetKey calls and serves a seeded existing-key set
+// from ListKeys, so generate-once + rotate behavior can be asserted.
+type fakeSecrets struct {
+	existing map[string]bool   // keys ListKeys reports as already present
+	setCalls map[string]string // key → value, every SetKey
+}
+
+func newFakeSecrets(existing ...string) *fakeSecrets {
+	fs := &fakeSecrets{existing: map[string]bool{}, setCalls: map[string]string{}}
+	for _, k := range existing {
+		fs.existing[k] = true
+	}
+	return fs
+}
+
+func (f *fakeSecrets) ListKeys(_ context.Context, _, _, _ string) ([]string, error) {
+	out := make([]string, 0, len(f.existing))
+	for k := range f.existing {
+		out = append(out, k)
+	}
+	return out, nil
+}
+
+func (f *fakeSecrets) SetKey(_ context.Context, _, _, _, key, value string) error {
+	f.setCalls[key] = value
+	f.existing[key] = true
+	return nil
+}
+
+func genEnv() map[string]EnvValue {
+	return map[string]EnvValue{"PAYLOAD_SECRET": {Generate: "hex32"}}
+}
+
+func TestApply_GeneratesSecretOnFirstApply(t *testing.T) {
+	fp, fs := &fakeProjects{}, newFakeSecrets()
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs}
+	f := &File{Project: "shop", Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile", Env: genEnv()}}}
+	res, err := r.Apply(context.Background(), &Plan{ServicesToCreate: []string{"api"}}, f, ApplyOpts{})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(res.Errors) != 0 {
+		t.Fatalf("unexpected step errors: %+v", res.Errors)
+	}
+	v, ok := fs.setCalls["PAYLOAD_SECRET"]
+	if !ok {
+		t.Fatal("PAYLOAD_SECRET was not generated on first apply")
+	}
+	if len(v) != 64 { // hex32 = 32 bytes = 64 hex chars
+		t.Fatalf("hex32 must be 64 chars, got %d: %q", len(v), v)
+	}
+	// Generated value must NOT leak into the CR's plain env replace.
+	for _, c := range fp.envSet {
+		for _, e := range c.envVars {
+			if e.Name == "PAYLOAD_SECRET" {
+				t.Fatalf("generated secret leaked into cleartext env replace: %+v", e)
+			}
+		}
+	}
+}
+
+func TestApply_GenerateOnceDoesNotRotate(t *testing.T) {
+	fp, fs := &fakeProjects{}, newFakeSecrets("PAYLOAD_SECRET") // already exists
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs}
+	f := &File{Project: "shop", Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile", Env: genEnv()}}}
+	if _, err := r.Apply(context.Background(), &Plan{ServicesToUpdate: []string{"api"}}, f, ApplyOpts{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, set := fs.setCalls["PAYLOAD_SECRET"]; set {
+		t.Fatal("generate-once violated: existing secret was re-minted without --rotate-secrets")
+	}
+}
+
+func TestApply_RotateSecretsRemints(t *testing.T) {
+	fp, fs := &fakeProjects{}, newFakeSecrets("PAYLOAD_SECRET") // already exists
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs}
+	f := &File{Project: "shop", Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile", Env: genEnv()}}}
+	if _, err := r.Apply(context.Background(), &Plan{ServicesToUpdate: []string{"api"}}, f, ApplyOpts{RotateSecrets: true}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, set := fs.setCalls["PAYLOAD_SECRET"]; !set {
+		t.Fatal("--rotate-secrets must re-mint an existing generated secret")
+	}
+}
+
+func TestApply_GenerateWithoutSecretsConfiguredErrors(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}} // Secrets nil
+	f := &File{Project: "shop", Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile", Env: genEnv()}}}
+	res, err := r.Apply(context.Background(), &Plan{ServicesToCreate: []string{"api"}}, f, ApplyOpts{})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(res.Errors) == 0 {
+		t.Fatal("a generate directive with no secrets backend must surface a step error, not silently skip")
+	}
 }

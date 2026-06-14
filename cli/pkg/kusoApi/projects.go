@@ -8,6 +8,7 @@ package kusoApi
 
 import (
 	"net/url"
+	"strings"
 
 	"github.com/go-resty/resty/v2"
 
@@ -339,10 +340,19 @@ func (k *KusoClient) RepairAddonPassword(project, addon string) (*resty.Response
 
 // Apply posts a kuso.yml body to the server's config-as-code endpoint.
 // dryRun=true returns a Plan without writing; false applies it.
-func (k *KusoClient) Apply(project string, yamlBody []byte, dryRun bool) (*resty.Response, error) {
+// rotateSecrets=true forces generated secrets ({generate: …}) to be
+// re-minted even if they already exist (default is generate-once).
+func (k *KusoClient) Apply(project string, yamlBody []byte, dryRun, rotateSecrets bool) (*resty.Response, error) {
 	url := "/api/projects/" + esc(project) + "/apply"
+	q := []string{}
 	if dryRun {
-		url += "?dryRun=1"
+		q = append(q, "dryRun=1")
+	}
+	if rotateSecrets {
+		q = append(q, "rotateSecrets=1")
+	}
+	if len(q) > 0 {
+		url += "?" + strings.Join(q, "&")
 	}
 	k.client.SetBody(yamlBody)
 	k.client.SetHeader("Content-Type", "application/yaml")
@@ -351,10 +361,10 @@ func (k *KusoClient) Apply(project string, yamlBody []byte, dryRun bool) (*resty
 
 // ApplyConfig POSTs a kuso.yaml body to the config-as-code apply
 // endpoint. dryRun adds ?dryRun=1 so the server returns the plan only
-// and writes nothing. Body is sent as application/yaml. This is the
-// config-as-code name for the same call Apply makes.
-func (k *KusoClient) ApplyConfig(project string, body []byte, dryRun bool) (*resty.Response, error) {
-	return k.Apply(project, body, dryRun)
+// and writes nothing; rotateSecrets adds ?rotateSecrets=1. Body is sent
+// as application/yaml. This is the config-as-code name for Apply.
+func (k *KusoClient) ApplyConfig(project string, body []byte, dryRun, rotateSecrets bool) (*resty.Response, error) {
+	return k.Apply(project, body, dryRun, rotateSecrets)
 }
 
 // GetProjectSpec GETs the project's current live state reconstructed

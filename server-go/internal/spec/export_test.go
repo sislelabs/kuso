@@ -120,11 +120,11 @@ func TestExport_RoundTripsToNoOpPlan(t *testing.T) {
 	if len(s.Volumes) != 1 || s.Volumes[0].Name != "data" || s.Volumes[0].SizeGi != 5 {
 		t.Fatalf("service volumes not exported: %+v", s.Volumes)
 	}
-	if s.Env["LOG_LEVEL"] != "info" {
+	if s.Env["LOG_LEVEL"].Value != "info" {
 		t.Fatalf("plain env not exported: %+v", s.Env)
 	}
-	if s.Env["DATABASE_URL"] != "${{ db.DATABASE_URL }}" {
-		t.Fatalf("addon-conn valueFrom not reversed: %q", s.Env["DATABASE_URL"])
+	if s.Env["DATABASE_URL"].Value != "${{ db.DATABASE_URL }}" {
+		t.Fatalf("addon-conn valueFrom not reversed: %q", s.Env["DATABASE_URL"].Value)
 	}
 
 	if len(f.Addons) != 1 || f.Addons[0].Name != "db" {
@@ -193,7 +193,7 @@ func TestExport_OmitsNonAddonSecretRefs(t *testing.T) {
 	if _, ok := env["API_KEY"]; ok {
 		t.Fatalf("non-addon secret ref must be omitted, got %q", env["API_KEY"])
 	}
-	if env["PLAIN"] != "ok" {
+	if env["PLAIN"].Value != "ok" {
 		t.Fatalf("plain env dropped: %+v", env)
 	}
 }

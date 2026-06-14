@@ -75,6 +75,44 @@ func TestParse_RejectsUnknownField(t *testing.T) {
 	}
 }
 
+func TestParse_EnvValueUnion(t *testing.T) {
+	src := "project: x\nservices:\n  - name: a\n    env:\n" +
+		"      LOG_LEVEL: info\n" +
+		"      DB: ${{ db.URL }}\n" +
+		"      SECRET: { generate: hex32 }\n"
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	env := f.Services[0].Env
+	if env["LOG_LEVEL"].Value != "info" || env["LOG_LEVEL"].IsGenerated() {
+		t.Fatalf("scalar must be a literal value: %+v", env["LOG_LEVEL"])
+	}
+	if env["DB"].Value != "${{ db.URL }}" {
+		t.Fatalf("varref scalar must be a literal value: %+v", env["DB"])
+	}
+	if !env["SECRET"].IsGenerated() || env["SECRET"].Generate != "hex32" {
+		t.Fatalf("generate mapping must set Generate: %+v", env["SECRET"])
+	}
+	if env["SECRET"].Value != "" {
+		t.Fatalf("generated entry must not carry a value: %+v", env["SECRET"])
+	}
+}
+
+func TestParse_RejectsUnknownGenerateKind(t *testing.T) {
+	_, err := Parse([]byte("project: x\nservices:\n  - name: a\n    env:\n      S: { generate: md5 }\n"))
+	if err == nil {
+		t.Fatal("expected error for unknown generate kind md5")
+	}
+}
+
+func TestParse_RejectsUnknownEnvValueField(t *testing.T) {
+	_, err := Parse([]byte("project: x\nservices:\n  - name: a\n    env:\n      S: { bogus: 1 }\n"))
+	if err == nil {
+		t.Fatal("expected error for unknown env-value field bogus")
+	}
+}
+
 func TestParse_RejectsBadAPIVersion(t *testing.T) {
 	_, err := Parse([]byte("apiVersion: kuso/v2\nproject: x\n"))
 	if err == nil {

@@ -2,7 +2,10 @@ package spec
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"fmt"
+	"sort"
 	"strings"
 
 	"kuso/server/internal/addons"
@@ -34,6 +37,17 @@ type cronsReconciler interface {
 	DeleteProject(ctx context.Context, project, name string) error
 }
 
+// secretsReconciler is the slice of secrets.Service that Apply uses to
+// implement generate-once secrets. ListKeys reports which keys already
+// exist in the per-service Secret (so we don't re-mint); SetKey writes a
+// generated value into the shared (env="") Secret, which auto-attaches to
+// the service's envFromSecrets. Optional — nil disables generation
+// (generate directives then surface as a per-service error).
+type secretsReconciler interface {
+	ListKeys(ctx context.Context, project, service, env string) ([]string, error)
+	SetKey(ctx context.Context, project, service, env, key, value string) error
+}
+
 // Reconciler bundles the dependencies Apply needs. Callers construct
 // it once at boot and reuse — no per-request state. *projects.Service
 // / *addons.Service / *crons.Service all satisfy these interfaces.
@@ -41,6 +55,17 @@ type Reconciler struct {
 	Projects projectsReconciler
 	Addons   addonsReconciler
 	Crons    cronsReconciler
+	// Secrets implements generate-once secrets. Optional: when nil, a
+	// service that declares a `{generate: …}` env value gets a per-step
+	// error instead of a silently-skipped secret.
+	Secrets secretsReconciler
+}
+
+// ApplyOpts tunes a single Apply run. RotateSecrets forces generated
+// secrets to be re-minted even when they already exist (the deliberate
+// escape hatch — a normal apply is generate-once and never rotates).
+type ApplyOpts struct {
+	RotateSecrets bool
 }
 
 // ApplyResult is what the API returns: the plan we executed plus a
@@ -67,7 +92,7 @@ type StepError struct {
 // Returns the executed plan + any per-step failures. Top-level error
 // is reserved for things that prevent any progress (DB down, kube
 // auth gone).
-func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File) (*ApplyResult, error) {
+func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File, opts ApplyOpts) (*ApplyResult, error) {
 	// Defensive prune gate: PlanFor already strips *ToDelete sets when
 	// prune is false, but Apply must not trust the caller to have run
 	// PlanFor with the same File. A plan carrying deletions against a
@@ -144,6 +169,16 @@ func (r *Reconciler) Apply(ctx context.Context, plan *Plan, f *File) (*ApplyResu
 		if err := r.Projects.SetEnvPending(ctx, f.Project, name, mapToEnvVars(desiredSvcs[name].Env)); err != nil {
 			out.Errors = append(out.Errors, StepError{Resource: "service:" + name, Op: "env", Message: err.Error()})
 		}
+	}
+
+	// Generate-once secrets. Run for every created/updated service AFTER
+	// the service (and its env) exist, so the generated value's Secret
+	// can attach to envFromSecrets. Generate-once: skip a key that already
+	// exists in the per-service Secret unless opts.RotateSecrets forces it.
+	// Generated values live in the Secret, NOT the CR's cleartext env — so
+	// they survive the declarative env full-replace above untouched.
+	for _, name := range append(append([]string{}, plan.ServicesToCreate...), plan.ServicesToUpdate...) {
+		r.generateSecrets(ctx, f.Project, name, desiredSvcs[name], opts, out)
 	}
 
 	for _, name := range plan.CronsToCreate {
@@ -347,12 +382,86 @@ func addonBackupUpdateReq(a AddonSpec) addons.UpdateAddonRequest {
 	}
 }
 
-func mapToEnvVars(in map[string]string) []projects.EnvVar {
+// mapToEnvVars converts the desired env map into the projects wire
+// shape. GENERATED entries are skipped — their values live in the
+// per-service Secret (written by generateSecrets), not the CR's
+// cleartext env, and reach the pod via envFromSecrets.
+func mapToEnvVars(in map[string]EnvValue) []projects.EnvVar {
 	out := make([]projects.EnvVar, 0, len(in))
 	for k, v := range in {
-		out = append(out, projects.EnvVar{Name: k, Value: v})
+		if v.IsGenerated() {
+			continue
+		}
+		out = append(out, projects.EnvVar{Name: k, Value: v.Value})
 	}
 	return out
+}
+
+// generateSecrets mints any `{generate: …}` env entries for one service
+// into its shared Secret. Generate-once: an existing key is left alone
+// unless opts.RotateSecrets is set. Errors are recorded per-step, not
+// fatal, matching the rest of Apply.
+func (r *Reconciler) generateSecrets(ctx context.Context, project, service string, s ServiceSpec, opts ApplyOpts, out *ApplyResult) {
+	// Collect generate directives in deterministic order.
+	gen := make([]string, 0)
+	for k, v := range s.Env {
+		if v.IsGenerated() {
+			gen = append(gen, k)
+		}
+	}
+	if len(gen) == 0 {
+		return
+	}
+	sort.Strings(gen)
+
+	if r.Secrets == nil {
+		out.Errors = append(out.Errors, StepError{
+			Resource: "service:" + service, Op: "secret",
+			Message: "service declares generated secrets but secret generation is not configured on this server",
+		})
+		return
+	}
+
+	existing := map[string]bool{}
+	if keys, err := r.Secrets.ListKeys(ctx, project, service, ""); err == nil {
+		for _, k := range keys {
+			existing[k] = true
+		}
+	} else {
+		out.Errors = append(out.Errors, StepError{
+			Resource: "service:" + service, Op: "secret",
+			Message: "read existing secrets: " + err.Error(),
+		})
+		return
+	}
+
+	for _, key := range gen {
+		if existing[key] && !opts.RotateSecrets {
+			continue // generate-once: already present, don't rotate
+		}
+		val, err := mintSecret(s.Env[key].Generate)
+		if err != nil {
+			out.Errors = append(out.Errors, StepError{Resource: "service:" + service, Op: "secret", Message: key + ": " + err.Error()})
+			continue
+		}
+		if err := r.Secrets.SetKey(ctx, project, service, "", key, val); err != nil {
+			out.Errors = append(out.Errors, StepError{Resource: "service:" + service, Op: "secret", Message: "set " + key + ": " + err.Error()})
+		}
+	}
+}
+
+// mintSecret produces a fresh random value for a generate kind. hexN
+// emits N random bytes as lowercase hex (matching `openssl rand -hex N`).
+func mintSecret(kind string) (string, error) {
+	n, ok := generateKinds[kind]
+	if !ok {
+		return "", fmt.Errorf("unknown generate kind %q", kind)
+	}
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("read random: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 func splitRepo(repo, explicitPath string) (string, string) {

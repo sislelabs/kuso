@@ -9,13 +9,15 @@ import (
 )
 
 var (
-	applyFile   string
-	applyDryRun bool
+	applyFile          string
+	applyDryRun        bool
+	applyRotateSecrets bool
 )
 
 func init() {
 	applyCmd.Flags().StringVarP(&applyFile, "file", "f", "kuso.yaml", "path to the kuso.yaml file")
 	applyCmd.Flags().BoolVar(&applyDryRun, "dry-run", false, "show the plan without writing")
+	applyCmd.Flags().BoolVar(&applyRotateSecrets, "rotate-secrets", false, "re-mint generated ({generate: …}) secrets even if they already exist (default: generate-once)")
 	rootCmd.AddCommand(applyCmd)
 }
 
@@ -69,7 +71,7 @@ needed.`,
 			os.Exit(1)
 		}
 
-		resp, err := api.ApplyConfig(project, body, applyDryRun)
+		resp, err := api.ApplyConfig(project, body, applyDryRun, applyRotateSecrets)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "apply:", err)
 			os.Exit(1)

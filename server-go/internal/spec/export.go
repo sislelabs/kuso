@@ -146,20 +146,23 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 // addon-conn pattern (`<project>-<addon>-conn` or the pending-mode
 // `<addon>-conn`); any other secret ref (a hand-managed Secret) is
 // omitted because there is no faithful YAML form for it.
-func exportEnv(project string, envVars []kube.KusoEnvVar) map[string]string {
-	out := map[string]string{}
+func exportEnv(project string, envVars []kube.KusoEnvVar) map[string]EnvValue {
+	out := map[string]EnvValue{}
 	for _, e := range envVars {
 		if e.Name == "" {
 			continue
 		}
 		if e.ValueFrom != nil {
 			if ref, ok := reverseAddonConnRef(project, e.ValueFrom); ok {
-				out[e.Name] = ref
+				out[e.Name] = EnvValue{Value: ref}
 			}
 			// Non-addon secret ref → no faithful YAML form; omit.
+			// (Generated secrets live in the per-service Secret, not on
+			// the CR's EnvVars, so they don't appear here — exporting
+			// them as `{generate: …}` would need a marker we don't keep.)
 			continue
 		}
-		out[e.Name] = e.Value
+		out[e.Name] = EnvValue{Value: e.Value}
 	}
 	if len(out) == 0 {
 		return nil

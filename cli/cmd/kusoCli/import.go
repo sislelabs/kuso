@@ -118,7 +118,7 @@ resources on the connected kuso instance.`,
 				return fmt.Errorf("create project failed (%d): %s", pr.StatusCode(), pr.String())
 			}
 		}
-		resp, err := api.ApplyConfig(doc.Project, yamlOut, importDryRun)
+		resp, err := api.ApplyConfig(doc.Project, yamlOut, importDryRun, false)
 		if err != nil {
 			return fmt.Errorf("apply: %w", err)
 		}

@@ -543,7 +543,10 @@ func (h *ProjectsHandler) Apply(w http.ResponseWriter, r *http.Request) {
 	// mid-apply, the post-apply log line never runs and we'd lose all
 	// trace of what was attempted.
 	h.Logger.Info("apply: planned", "project", f.Project, "plan", plan.Summary())
-	res, err := h.Reconciler.Apply(ctx, plan, f)
+	// ?rotateSecrets=1 forces generated secrets to be re-minted (the
+	// deliberate escape hatch); the default is generate-once.
+	opts := spec.ApplyOpts{RotateSecrets: r.URL.Query().Get("rotateSecrets") == "1"}
+	res, err := h.Reconciler.Apply(ctx, plan, f, opts)
 	if err != nil {
 		h.Logger.Error("apply: execute", "err", err)
 		http.Error(w, "apply failed", http.StatusInternalServerError)

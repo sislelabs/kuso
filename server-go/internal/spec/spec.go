@@ -82,10 +82,10 @@ type ServiceSpec struct {
 	Port          int32             `yaml:"port,omitempty"`
 	Internal      bool              `yaml:"internal,omitempty"`
 	PrivateEgress bool              `yaml:"privateEgress,omitempty"`
-	Command       []string          `yaml:"command,omitempty"`
-	Domains       []DomainSpec      `yaml:"domains,omitempty"`
-	Env           map[string]string `yaml:"env,omitempty"`
-	Scale         *ScaleSpec        `yaml:"scale,omitempty"`
+	Command       []string            `yaml:"command,omitempty"`
+	Domains       []DomainSpec        `yaml:"domains,omitempty"`
+	Env           map[string]EnvValue `yaml:"env,omitempty"`
+	Scale         *ScaleSpec          `yaml:"scale,omitempty"`
 	Sleep         *SleepSpec        `yaml:"sleep,omitempty"`
 	Placement     *PlacementSpec    `yaml:"placement,omitempty"`
 	Volumes       []VolumeSpec      `yaml:"volumes,omitempty"`
@@ -106,6 +106,88 @@ type ReleaseSpec struct {
 	Command        []string `yaml:"command,omitempty"`
 	TimeoutSeconds int      `yaml:"timeoutSeconds,omitempty"`
 }
+
+// EnvValue is one entry in a service's env: map. It's a tagged union so
+// the YAML accepts BOTH a plain scalar and a structured generator:
+//
+//	env:
+//	  LOG_LEVEL: info                      # literal value
+//	  DATABASE_URI: ${{ db.DATABASE_URL }} # varref (still a literal string here)
+//	  PAYLOAD_SECRET: { generate: hex32 }  # generated once, stored in the Secret
+//
+// A scalar (or a `{value: ...}` mapping) sets Value. A `{generate: KIND}`
+// mapping sets Generate; the value is minted ONCE on first apply, written
+// to the per-service Secret (not the CR's cleartext env), and never
+// rotated on re-apply unless `kuso apply --rotate-secrets` is passed.
+type EnvValue struct {
+	Value    string // literal value or ${{ }} varref
+	Generate string // generator kind (e.g. "hex32"); empty for a literal
+}
+
+// IsGenerated reports whether this entry is a generate directive.
+func (e EnvValue) IsGenerated() bool { return e.Generate != "" }
+
+// UnmarshalYAML accepts a scalar (literal) or a mapping with either
+// `value:` or `generate:`. KnownFields strictness is preserved by
+// decoding the mapping into a closed struct.
+func (e *EnvValue) UnmarshalYAML(node *yaml.Node) error {
+	// Scalar → literal value (covers plain strings and ${{ }} varrefs).
+	if node.Kind == yaml.ScalarNode {
+		e.Value = node.Value
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("%w: env value must be a string or a {value|generate} mapping", ErrInvalid)
+	}
+	// Reject unknown keys in the mapping (yaml.Node has no KnownFields
+	// toggle, so check explicitly) to keep typos loud, matching the
+	// top-level decoder's strictness.
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		k := node.Content[i].Value
+		if k != "value" && k != "generate" {
+			return fmt.Errorf("%w: unknown env value field %q (want value or generate)", ErrInvalid, k)
+		}
+	}
+	var m struct {
+		Value    *string `yaml:"value"`
+		Generate string  `yaml:"generate"`
+	}
+	if err := node.Decode(&m); err != nil {
+		return fmt.Errorf("%w: %s", ErrInvalid, err.Error())
+	}
+	if m.Value != nil && m.Generate != "" {
+		return fmt.Errorf("%w: env value sets both value and generate", ErrInvalid)
+	}
+	if m.Generate != "" {
+		if !validGenerateKind(m.Generate) {
+			return fmt.Errorf("%w: unknown generate kind %q (want one of: %s)", ErrInvalid, m.Generate, generateKindList)
+		}
+		e.Generate = m.Generate
+		return nil
+	}
+	if m.Value != nil {
+		e.Value = *m.Value
+	}
+	return nil
+}
+
+// MarshalYAML emits a scalar for literals and `{generate: KIND}` for
+// generators, so Export round-trips the authored form.
+func (e EnvValue) MarshalYAML() (any, error) {
+	if e.Generate != "" {
+		return map[string]string{"generate": e.Generate}, nil
+	}
+	return e.Value, nil
+}
+
+// generateKinds is the allowlist of supported generators. hex32/hex16
+// emit that many BYTES as lowercase hex (64/32 chars) — matching the
+// scaffold's `openssl rand -hex 32` / `-hex 16`.
+var generateKinds = map[string]int{"hex32": 32, "hex16": 16}
+
+const generateKindList = "hex16, hex32"
+
+func validGenerateKind(k string) bool { _, ok := generateKinds[k]; return ok }
 
 // ImageSpec is the deploy-from-registry pointer for runtime=image
 // services — kuso pulls the tag directly instead of building from a

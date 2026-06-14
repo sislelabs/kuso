@@ -272,7 +272,10 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 					if err != nil {
 						return err
 					}
-					_, err = d.Reconciler.Apply(ctx, plan, parsed)
+					// GitHub-driven applies never rotate generated
+					// secrets (generate-once) — a push to main must not
+					// silently roll PAYLOAD_SECRET and log everyone out.
+					_, err = d.Reconciler.Apply(ctx, plan, parsed, spec.ApplyOpts{})
 					return err
 				}
 				if err := applyConfigFromRepo(ctx, fetch, apply, owner, repoName, headSHA, proj.Name); err != nil {
