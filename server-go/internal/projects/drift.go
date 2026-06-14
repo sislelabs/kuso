@@ -211,9 +211,17 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	if envVarsDrifting {
 		out.SpecPending = append(out.SpecPending, "envVars")
 	}
-	if !reflect.DeepEqual(domainHosts(svc.Spec.Domains), env.Spec.AdditionalHosts) {
-		out.SpecPending = append(out.SpecPending, "domains")
-	}
+	// NOTE: we intentionally do NOT compare svc.Spec.Domains against
+	// env.Spec.AdditionalHosts. Custom domains went per-env (see
+	// propagateChangedToEnvs / the Domains branch): the env CR's
+	// AdditionalHosts is the source of truth and the service-level
+	// spec.domains is now only a create-time SEED template, never
+	// propagated after AddEnvironment. Comparing them flagged a
+	// permanent "pending changes" on any service whose env host
+	// diverged from the seed (e.g. apex on the env, www on the
+	// service) — drift that can NEVER reconcile because nothing
+	// propagates it. To edit hosts, go through the env-scoped
+	// Networking PATCH, which updates AdditionalHosts directly.
 	if svc.Spec.Internal != env.Spec.Internal {
 		out.SpecPending = append(out.SpecPending, "internal")
 	}
