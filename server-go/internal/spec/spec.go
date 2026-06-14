@@ -92,6 +92,19 @@ type ServiceSpec struct {
 	Static        *StaticSpec       `yaml:"static,omitempty"`
 	Buildpacks    *BuildpacksSpec   `yaml:"buildpacks,omitempty"`
 	Image         *ImageSpec        `yaml:"image,omitempty"`
+	Release       *ReleaseSpec      `yaml:"release,omitempty"`
+}
+
+// ReleaseSpec is the pre-deploy release hook (migrations etc.), flattened
+// for human authoring. kuso runs Command once as a Job using the new
+// build's image + the service's effective env BEFORE promoting the
+// rollout; a non-zero exit fails the release and the old pods keep
+// serving. Empty Command means "no hook" (equivalent to omitting the
+// block). TimeoutSeconds caps the Job (server default 900s when ≤0).
+// Mirrors kube.KusoReleaseSpec / projects.PatchReleaseRequest.
+type ReleaseSpec struct {
+	Command        []string `yaml:"command,omitempty"`
+	TimeoutSeconds int      `yaml:"timeoutSeconds,omitempty"`
 }
 
 // ImageSpec is the deploy-from-registry pointer for runtime=image

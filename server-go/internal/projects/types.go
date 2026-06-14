@@ -101,6 +101,11 @@ type CreateServiceRequest struct {
 	// :latest is mutable so rollouts won't observe new versions until
 	// the user redeploys with a different tag or kubectl-rolls).
 	Image *ServiceImageSpec `json:"image,omitempty"`
+	// Release configures the pre-deploy release hook (migrations etc.) at
+	// create time. Reuses the patch wire shape; an empty/omitted Command
+	// means no hook. Mirrors PatchReleaseRequest minus Clear (a brand-new
+	// service has nothing to clear).
+	Release *PatchReleaseRequest `json:"release,omitempty"`
 }
 
 // ServiceImageSpec is the deploy-from-registry shape for runtime=image.
