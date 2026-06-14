@@ -5,6 +5,21 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.71] — 2026-06-14
+
+### ✨ Features
+- Feat(cli): kuso init --template payload ([9b4c249](https://github.com/sislelabs/kuso/commit/9b4c2492922479c4130cb9cc9d9fc739002f252b))
+- Feat(spec): build-time env as a CRD field (buildArgs + publicEnv) ([c3d915c](https://github.com/sislelabs/kuso/commit/c3d915ca2ed8277695beb8623367d6a5704b2a36))
+- Feat(spec): generated secrets in kuso.yml ({generate: hex32}, generate-once) ([8d851eb](https://github.com/sislelabs/kuso/commit/8d851ebe2c35857636b0e2b28aacf5df6718b77f))
+- Feat(mcp): deploy tools — apply, build, set_env, set_secret, logs, status ([3149a16](https://github.com/sislelabs/kuso/commit/3149a16544772172eda695959d6809175c26b733))
+- Feat(spec): expose release hook in kuso.yml (apply + create + export) ([a50e643](https://github.com/sislelabs/kuso/commit/a50e643fdae3ead90223d825a8a626298c2bb5eb))
+
+### 🐛 Bug Fixes
+- Fix(install): bump stale KUSO_SERVER_VERSION default + stop it drifting ([3a02f07](https://github.com/sislelabs/kuso/commit/3a02f074356f85afe60f0f4826226d07cb796430))
+
+### 🧪 Tests
+- Test(kube): regenerate CRD schema goldens for buildArgs/publicEnv/dockerfile ([0f37624](https://github.com/sislelabs/kuso/commit/0f3762422f699c32cc3db915bca08b916716554c))
+
 ## [0.18.70] — 2026-06-14
 
 ### 🐛 Bug Fixes
@@ -397,23 +412,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive promoted CHANGELOG entries (pre-v0.18.7 ship) ([2685176](https://github.com/sislelabs/kuso/commit/2685176bad6ca9d98068bf8dde47d9c6fa132370))
-
-## [0.18.6] — 2026-06-01
-
-### Other
-- Feat(pkg-updates) phase 3+4: apply patches + reboot orchestration ([a6430aa](https://github.com/sislelabs/kuso/commit/a6430aa0a97bbc98aa6c1a50435f466cec8a9fe5))
-- Feat(pkg-updates) phase 2: advisory surface + notify ([e4ea1fd](https://github.com/sislelabs/kuso/commit/e4ea1fdfe4842ce30cb26fc8c6a079d5c6b4ae4b))
-- Feat(pkg-updates) phase 1: host package-update probe DaemonSet ([47d2baf](https://github.com/sislelabs/kuso/commit/47d2baf9fa65d1f8fb8580d1d2f4ce14538a1fa3))
-
-### 🐛 Bug Fixes
-- Fix(backuphealth): don't @here-page when backups were never configured ([edd17c8](https://github.com/sislelabs/kuso/commit/edd17c8ba385fe2ca8211224ccc951b3057ada78))
-- Fix(cron): http crons crashloop with CreateContainerConfigError ([3cdb1ec](https://github.com/sislelabs/kuso/commit/3cdb1ec4f6e399c1b13821a45947881d1671883c))
-
-### 📝 Docs
-- Docs(spec): host package-update advisory + patch orchestration ([4d8ec48](https://github.com/sislelabs/kuso/commit/4d8ec489573bea460101f65d8da92866b5bd4a46))
-
-### 🧹 Chores
-- Chore: archive promoted CHANGELOG entries (pre-v0.18.6 ship) ([64c3815](https://github.com/sislelabs/kuso/commit/64c3815d8ce31bb1d0f9ef076cd993b983035755))
 
 
 ---
