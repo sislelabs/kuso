@@ -10,10 +10,11 @@ import (
 )
 
 var (
-	initProject string
-	initRuntime string
-	initPort    int
-	initForce   bool
+	initProject  string
+	initRuntime  string
+	initPort     int
+	initForce    bool
+	initTemplate string
 )
 
 func init() {
@@ -21,6 +22,7 @@ func init() {
 	initCmd.Flags().StringVar(&initRuntime, "runtime", "dockerfile", "runtime: dockerfile|nixpacks|static|buildpacks")
 	initCmd.Flags().IntVar(&initPort, "port", 8080, "container port")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite an existing kuso.yml")
+	initCmd.Flags().StringVar(&initTemplate, "template", "", "scaffold from a known-good template: payload")
 	rootCmd.AddCommand(initCmd)
 }
 
@@ -35,7 +37,8 @@ var initCmd = &cobra.Command{
 	Use:   "init",
 	Short: "Write a starter kuso.yml in the current directory.",
 	Example: `  kuso init
-  kuso init --runtime nixpacks --port 3000`,
+  kuso init --runtime nixpacks --port 3000
+  kuso init --template payload        # Payload CMS / Next.js, fully wired`,
 	Run: func(cmd *cobra.Command, args []string) {
 		path := "kuso.yml"
 		if _, err := os.Stat(path); err == nil && !initForce {
@@ -50,16 +53,82 @@ var initCmd = &cobra.Command{
 		}
 		repo := guessGitRemote()
 
-		body := renderInitYAML(project, project, repo, initRuntime, initPort)
+		var body string
+		switch initTemplate {
+		case "":
+			body = renderInitYAML(project, project, repo, initRuntime, initPort)
+		case "payload":
+			body = renderPayloadTemplate(project, repo)
+		default:
+			fmt.Fprintf(os.Stderr, "unknown template %q (known: payload)\n", initTemplate)
+			os.Exit(1)
+		}
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 			fmt.Fprintln(os.Stderr, "write:", err)
 			os.Exit(1)
 		}
-		fmt.Printf("wrote kuso.yml (project=%s, runtime=%s, port=%d)\n", project, initRuntime, initPort)
-		fmt.Println("next:")
-		fmt.Println("  edit kuso.yml to taste")
-		fmt.Println("  kuso apply           # plan + push")
+		if initTemplate == "payload" {
+			fmt.Printf("wrote kuso.yml (project=%s, template=payload)\n", project)
+			fmt.Println("next:")
+			fmt.Println("  set baseDomain to your real domain (and the NEXT_PUBLIC_* URLs)")
+			fmt.Println("  kuso apply           # plan + push (generates secrets, runs migrations)")
+		} else {
+			fmt.Printf("wrote kuso.yml (project=%s, runtime=%s, port=%d)\n", project, initRuntime, initPort)
+			fmt.Println("next:")
+			fmt.Println("  edit kuso.yml to taste")
+			fmt.Println("  kuso apply           # plan + push")
+		}
 	},
+}
+
+// renderPayloadTemplate emits a fully-wired kuso.yml for a Payload CMS /
+// Next.js app (the payload-scaffold shape): postgres + s3 addons, the
+// DATABASE_URI alias varref, generate-once secrets, the publicEnv
+// sentinel list, and the pre-deploy migration release hook. The only
+// thing the user must edit is the domain.
+func renderPayloadTemplate(project, repo string) string {
+	repoLine := "    # repo: https://github.com/owner/repo\n"
+	if repo != "" {
+		repoLine = "    repo: " + repo + "\n"
+	}
+	return fmt.Sprintf(`# kuso.yml — Payload CMS / Next.js, fully wired for kuso.
+# Source of truth on every push. The ONLY thing you must change is the
+# domain (baseDomain + the two NEXT_PUBLIC_* URLs).
+
+project: %s
+baseDomain: %s.example.com        # ← your real domain
+
+services:
+  - name: %s
+%s    branch: main
+    runtime: dockerfile
+    port: 3000
+    env:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: '1'
+      # The release hook runs migrations; don't also migrate on boot.
+      RUN_MIGRATIONS: 'false'
+      # Public URLs (inlined into the browser bundle; baked as sentinels
+      # at build, swapped to these values at pod start via publicEnv).
+      NEXT_PUBLIC_SERVER_URL: https://%s.example.com               # ← your domain
+      NEXT_PUBLIC_MEDIA_URL: https://%s.example.com/api/media/file # ← your domain
+      # Alias the postgres addon's DATABASE_URL → DATABASE_URI (Payload reads URI).
+      DATABASE_URI: ${{ db.DATABASE_URL }}
+      # Generated once, stored in the service Secret, never rotated on re-apply
+      # (use 'kuso apply --rotate-secrets' to force a fresh value).
+      PAYLOAD_SECRET: { generate: hex32 }
+      PREVIEW_SECRET: { generate: hex16 }
+    publicEnv:
+      - NEXT_PUBLIC_SERVER_URL
+      - NEXT_PUBLIC_MEDIA_URL
+    release:
+      command: ['node_modules/.bin/payload', 'migrate']
+    scale: { min: 1, max: 3, targetCPU: 70 }
+
+addons:
+  - { name: db,      kind: postgres, version: '16', size: small }
+  - { name: storage, kind: s3 }
+`, project, project, project, repoLine, project, project)
 }
 
 // renderInitYAML returns a small starter file. Pure string templating
