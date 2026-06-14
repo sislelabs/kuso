@@ -5,6 +5,12 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.72] — 2026-06-14
+
+### 🐛 Bug Fixes
+- Fix(install): pgbouncer pg_hba md5 + missing publicEnv on env CRD — two fresh-install blockers ([afd7cf4](https://github.com/sislelabs/kuso/commit/afd7cf46f0a974c7e7a4891240f50ba98706bf02))
+- Fix(postgres): store kuso role as md5 so pgbouncer auth works on fresh install ([158b73f](https://github.com/sislelabs/kuso/commit/158b73f6d80d5d035085350230ea3461adca0b63))
+
 ## [0.18.71] — 2026-06-14
 
 ### ✨ Features
@@ -394,24 +400,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive promoted CHANGELOG entries (pre-v0.18.8 ship) ([a120803](https://github.com/sislelabs/kuso/commit/a120803f4901e50445ca6c2dd0ae330dbcb7f5a0))
-
-## [0.18.7] — 2026-06-02
-
-### ✨ Features
-- Feat(ha): resolve + stamp spreadPolicy from live node count ([0af23eb](https://github.com/sislelabs/kuso/commit/0af23ebeba5f069532b313476c8551587fe4fac6))
-- Feat(ha): spreadPolicy field + chart hard/soft topology spread ([119e53c](https://github.com/sislelabs/kuso/commit/119e53c9e4ec1d839efa0195bf8ba74d10390a70))
-
-### 🐛 Bug Fixes
-- Fix(pkg-updates): reboot path left node cordoned (post-reboot Job re-run) ([d072e56](https://github.com/sislelabs/kuso/commit/d072e561c372491ebc9a09093d07ac6f33f21041))
-
-### 📝 Docs
-- Docs(spec): guaranteed replica spread across nodes (HA) ([e74ae4b](https://github.com/sislelabs/kuso/commit/e74ae4b526125e58505d8d5bdddc519b262f689a))
-
-### 🧪 Tests
-- Test(ha): chart-render assertions for spreadPolicy ([a2258de](https://github.com/sislelabs/kuso/commit/a2258deb4d294583a2baf116e040aabc846511d0))
-
-### 🧹 Chores
-- Chore: archive promoted CHANGELOG entries (pre-v0.18.7 ship) ([2685176](https://github.com/sislelabs/kuso/commit/2685176bad6ca9d98068bf8dde47d9c6fa132370))
 
 
 ---
