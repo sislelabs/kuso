@@ -403,6 +403,17 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Tag:        tag,
 		}
 	}
+	// Release hook (migrations etc.) at create time. Mirror the patch-path
+	// semantics: a non-empty Command sets the hook (default timeout 900s);
+	// an empty/omitted Command leaves it nil (no hook).
+	var releaseSpec *kube.KusoReleaseSpec
+	if req.Release != nil && !req.Release.Clear && len(req.Release.Command) > 0 {
+		timeout := req.Release.TimeoutSeconds
+		if timeout <= 0 {
+			timeout = 900
+		}
+		releaseSpec = &kube.KusoReleaseSpec{Command: req.Release.Command, TimeoutSeconds: timeout}
+	}
 	svc := &kube.KusoService{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: fqn,
@@ -435,6 +446,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Static:      toStaticSpec(req.Static),
 			Buildpacks:  toBuildpacksSpec(req.Buildpacks),
 			Image:       imgSpec,
+			Release:     releaseSpec,
 		},
 	}
 	created, err := s.Kube.CreateKusoService(ctx, ns, svc)

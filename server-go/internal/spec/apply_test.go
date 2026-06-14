@@ -198,6 +198,68 @@ func TestApply_PatchServiceResetsStaticWhenOmitted(t *testing.T) {
 	}
 }
 
+func TestApply_CreateServiceCarriesReleaseHook(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	f := &File{
+		Project: "shop",
+		Services: []ServiceSpec{{
+			Name: "api", Runtime: "dockerfile",
+			Release: &ReleaseSpec{Command: []string{"node", "migrate.js"}, TimeoutSeconds: 600},
+		}},
+	}
+	plan := &Plan{ServicesToCreate: []string{"api"}}
+	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	req := fp.created[0].req
+	if req.Release == nil || len(req.Release.Command) != 2 || req.Release.Command[0] != "node" {
+		t.Fatalf("create must carry release command: %+v", req.Release)
+	}
+	if req.Release.TimeoutSeconds != 600 {
+		t.Fatalf("create must carry release timeout: %+v", req.Release)
+	}
+}
+
+func TestApply_PatchServiceCarriesReleaseHook(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	f := &File{
+		Project: "shop",
+		Services: []ServiceSpec{{
+			Name: "api", Runtime: "dockerfile",
+			Release: &ReleaseSpec{Command: []string{"payload", "migrate"}},
+		}},
+	}
+	plan := &Plan{ServicesToUpdate: []string{"api"}}
+	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	req := fp.patched[0].req
+	if req.Release == nil || req.Release.Clear || len(req.Release.Command) != 2 {
+		t.Fatalf("patch must carry release command (not clear): %+v", req.Release)
+	}
+}
+
+func TestApply_PatchServiceClearsReleaseWhenOmitted(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	// A service update where the YAML OMITS the release block: the patch
+	// must carry Clear=true so a stale live hook is removed declaratively.
+	f := &File{
+		Project:  "shop",
+		Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}},
+	}
+	plan := &Plan{ServicesToUpdate: []string{"api"}}
+	if _, err := r.Apply(context.Background(), plan, f); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	req := fp.patched[0].req
+	if req.Release == nil || !req.Release.Clear {
+		t.Fatalf("omitted release must patch Clear=true: %+v", req.Release)
+	}
+}
+
 func TestApply_SetEnvUnconditionalOnUpdate(t *testing.T) {
 	fp := &fakeProjects{}
 	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}

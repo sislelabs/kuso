@@ -129,6 +129,12 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 	if cr.Spec.Image != nil {
 		s.Image = &ImageSpec{Repository: cr.Spec.Image.Repository, Tag: cr.Spec.Image.Tag}
 	}
+	if cr.Spec.Release != nil && len(cr.Spec.Release.Command) > 0 {
+		s.Release = &ReleaseSpec{
+			Command:        cr.Spec.Release.Command,
+			TimeoutSeconds: cr.Spec.Release.TimeoutSeconds,
+		}
+	}
 	s.Env = exportEnv(project, cr.Spec.EnvVars)
 	return s
 }

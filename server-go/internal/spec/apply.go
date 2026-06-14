@@ -199,6 +199,12 @@ func serviceCreateReq(s ServiceSpec) projects.CreateServiceRequest {
 	if len(s.Env) > 0 {
 		req.EnvVars = mapToEnvVars(s.Env)
 	}
+	if s.Release != nil {
+		req.Release = &projects.PatchReleaseRequest{
+			Command:        s.Release.Command,
+			TimeoutSeconds: s.Release.TimeoutSeconds,
+		}
+	}
 	return req
 }
 
@@ -275,6 +281,17 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 	}
 	cmd := s.Command
 
+	// Release is set unconditionally (declarative reset): an omitted
+	// release: block clears the live hook via Clear=true, the same way the
+	// other patch fields reset to defaults when omitted.
+	release := &projects.PatchReleaseRequest{}
+	if s.Release != nil && len(s.Release.Command) > 0 {
+		release.Command = s.Release.Command
+		release.TimeoutSeconds = s.Release.TimeoutSeconds
+	} else {
+		release.Clear = true
+	}
+
 	return projects.PatchServiceRequest{
 		Port:          &port,
 		Runtime:       &runtime,
@@ -289,6 +306,7 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 		Buildpacks:    buildpacks,
 		Image:         image,
 		Command:       &cmd,
+		Release:       release,
 	}
 }
 
