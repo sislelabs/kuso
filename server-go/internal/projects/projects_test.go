@@ -659,6 +659,65 @@ func TestPatchService_DomainsDoNotPropagateToEnvironments(t *testing.T) {
 	}
 }
 
+// TestGetDrift_DomainDivergenceIsNotPending is the regression test for
+// the sticky "pending changes" badge. Custom domains are per-env: the
+// env CR's AdditionalHosts is the source of truth and svc.Spec.Domains
+// is only a create-time seed (see
+// TestPatchService_DomainsDoNotPropagateToEnvironments). GetDrift used
+// to compare the two and report SpecPending=["domains"] whenever they
+// diverged — which is the *normal* steady state once the user edits a
+// host on the env or seeds an apex while the service template carries a
+// www host. Nothing propagates the field, so the badge could never
+// clear. The drift report must ignore the domain divergence entirely.
+func TestGetDrift_DomainDivergenceIsNotPending(t *testing.T) {
+	t.Parallel()
+	envSeed := typedSeed(kube.GVREnvironments, "KusoEnvironment", "alpha-web-production",
+		&kube.KusoEnvironment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "alpha-web-production",
+				Namespace: "kuso",
+				Labels: map[string]string{
+					labelProject: "alpha",
+					labelService: "web",
+					labelEnv:     "production",
+				},
+			},
+			Spec: kube.KusoEnvironmentSpec{
+				Project: "alpha",
+				Service: serviceCRName("alpha", "web"),
+				Kind:    "production",
+				Branch:  "main",
+				Port:    3000,
+				// Env host diverges from the service-level template
+				// below — the exact condition that pinned the badge.
+				AdditionalHosts: []string{"apex.example.com"},
+				SharedEnvKeys:   []string{},
+			},
+		})
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{
+			Project:       "alpha",
+			Port:          3000,
+			Domains:       []kube.KusoDomain{{Host: "www.example.com", TLS: true}},
+			SharedEnvKeys: []string{},
+		}),
+		envSeed,
+	)
+	d, err := s.GetDrift(context.Background(), "alpha", "web")
+	if err != nil {
+		t.Fatalf("GetDrift: %v", err)
+	}
+	for _, f := range d.SpecPending {
+		if f == "domains" {
+			t.Fatalf("SpecPending contains %q — domain divergence must not be reported as drift (got %+v)", f, d.SpecPending)
+		}
+	}
+	if len(d.SpecPending) != 0 {
+		t.Errorf("SpecPending = %+v, want empty (port/internal/envVars/sharedEnvKeys all match)", d.SpecPending)
+	}
+}
+
 // TestPatchService_PrivateEgressPropagatesToEnvironments verifies that
 // toggling PrivateEgress on a KusoService also writes the new value
 // onto every owned KusoEnvironment. The kusoenvironment chart stamps

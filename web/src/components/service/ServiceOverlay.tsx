@@ -473,10 +473,28 @@ export function ServiceOverlay({
                     const stale = d.podsStale && d.podsStale.length > 0;
                     const rolling = d.rolloutPending;
                     const specOff = d.specPending && d.specPending.length > 0;
-                    // Suppress diagnostic during an active rollout —
-                    // kube is already resolving it. StatusDot shows
-                    // "Rolling" to surface the same fact.
-                    if (rolling) return null;
+                    // During an active rollout, surface an explicit
+                    // "applying changes…" chip instead of hiding the
+                    // header entirely. After an env-var edit the pods
+                    // roll for a few seconds; a blank header made users
+                    // think nothing happened (or that the stale "pending
+                    // changes" badge was their save not taking). Naming
+                    // the in-flight field (envVars/image/…) makes it
+                    // obvious the edit was accepted and is propagating.
+                    if (rolling) {
+                      const fields = stale ? d.podsStale : [];
+                      const what =
+                        fields.length > 0 ? ` (${fields.join(", ")})` : "";
+                      return (
+                        <span
+                          className="inline-flex items-center gap-1.5 rounded-md border border-sky-500/40 bg-sky-500/10 px-2 py-0.5 font-mono text-[10px] text-sky-200"
+                          title={`Rolling out the latest spec${what}. Pods are restarting to pick up your change.`}
+                        >
+                          <span className="size-1.5 animate-pulse rounded-full bg-sky-400" />
+                          applying changes{what}…
+                        </span>
+                      );
+                    }
                     if (specOff) {
                       return (
                         <span
