@@ -328,8 +328,19 @@ DEFAULT_ISSUER="letsencrypt-${KUSO_LE_ENV}"
 # Fatal: every CRD must apply. If any fails (404, network glitch, malformed
 # yaml), the operator can't reconcile and the rest of the install builds a
 # broken cluster silently. Better to die here with a clear pointer.
+#
+# CRITICAL: this list MUST be a superset of every `kind` in
+# operator/watches.yaml. The helm-operator starts one informer per
+# watched kind at boot; if a watched kind's CRD isn't registered, the
+# manager's cache-sync times out and the whole process exits non-zero →
+# the operator Deployment CrashLoopBackOffs forever and `kubectl wait`
+# for it times out. This bit a user on v0.18.69: `kusoruns` was added to
+# watches.yaml but never added here, so fresh installs never created the
+# KusoRun CRD and the operator crashed on every boot. When you add a new
+# watched kind, add its CRD plural here too. (kusobuilds is no longer
+# watched as of v0.10 but the CRD is still applied for older clusters.)
 log "applying kuso CRDs (from ${KUSO_REF})"
-for crd in kusoprojects kusoservices kusoenvironments kusoaddons kusobuilds kusocrons; do
+for crd in kusoprojects kusoservices kusoenvironments kusoaddons kusobuilds kusocrons kusoruns; do
   url="${KUSO_RAW}/operator/config/crd/bases/application.kuso.sislelabs.com_${crd}.yaml"
   yaml="$(curl -sfL "$url" || true)"
   if [[ -z "$yaml" ]]; then

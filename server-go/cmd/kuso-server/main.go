@@ -1529,6 +1529,12 @@ func (a runsNotifyAdapter) Emit(e runs.RunEvent) {
 // "present" — we don't want a transient apiserver hiccup to spam
 // false alarms in the boot log.
 func preflightCRDs(ctx context.Context, kc *kube.Client) []string {
+	// Keep in sync with the CRD-apply loop in hack/install.sh and the
+	// watched kinds in operator/watches.yaml. A kind the operator
+	// watches but whose CRD isn't registered crashes the operator on
+	// boot (cache-sync failure) — kusoruns was missing from both this
+	// list and install.sh, so a fresh install crashlooped the operator
+	// with no boot-log warning here to point at the cause.
 	want := []string{
 		"kusoprojects.application.kuso.sislelabs.com",
 		"kusoservices.application.kuso.sislelabs.com",
@@ -1536,6 +1542,7 @@ func preflightCRDs(ctx context.Context, kc *kube.Client) []string {
 		"kusoaddons.application.kuso.sislelabs.com",
 		"kusobuilds.application.kuso.sislelabs.com",
 		"kusocrons.application.kuso.sislelabs.com",
+		"kusoruns.application.kuso.sislelabs.com",
 	}
 	missing := []string{}
 	gvr := schema.GroupVersionResource{
