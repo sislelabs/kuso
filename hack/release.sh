@@ -253,14 +253,22 @@ if [[ "$CURRENT" != "$VERSION" ]]; then
 
     # hack/install.sh: KUSO_SERVER_VERSION default + KUSO_VERSION
     # (operator pin) default + the sed line that rewrites the deploy
-    # yaml during fresh installs. The operator pin used to be left
-    # frozen across releases (was stuck at v0.2.6 through v0.7.x);
-    # the regex below catches whatever it currently is.
+    # yaml during fresh installs.
+    #
+    # CRITICAL: match whatever the file CURRENTLY holds, not ${CURRENT}.
+    # The version-default lines drift out of lockstep with
+    # server-go/internal/version/VERSION (the source of ${CURRENT}) —
+    # e.g. KUSO_SERVER_VERSION sat at v0.17.0 for many releases while
+    # CURRENT marched on, so an `…:-${CURRENT}` anchored sed never
+    # matched and the default went stale → fresh installs pulled an old
+    # server image and the install's `kubectl wait` timed out. The
+    # tolerant `v[0-9]…` regex (same as the KUSO_VERSION line) catches
+    # any prior value, so the default is always rewritten to ${VERSION}.
     sed -i.bak \
-      -e "s|KUSO_SERVER_VERSION:-${CURRENT}|KUSO_SERVER_VERSION:-${VERSION}|g" \
+      -e "s|KUSO_SERVER_VERSION=\"\${KUSO_SERVER_VERSION:-v[0-9][0-9.]*[a-zA-Z0-9.-]*}\"|KUSO_SERVER_VERSION=\"\${KUSO_SERVER_VERSION:-${VERSION}}\"|g" \
       -e "s|KUSO_VERSION=\"\${KUSO_VERSION:-v[0-9][0-9.]*[a-zA-Z0-9.-]*}\"|KUSO_VERSION=\"\${KUSO_VERSION:-${VERSION}}\"|g" \
-      -e "s|kuso-server-go:${CURRENT}|kuso-server-go:${VERSION}|g" \
-      -e "s|server image tag (default: ${CURRENT};|server image tag (default: ${VERSION};|g" \
+      -e "s|kuso-server-go:v[0-9][0-9.]*[a-zA-Z0-9.-]*|kuso-server-go:${VERSION}|g" \
+      -e "s|server image tag (default: v[0-9][0-9.]*[a-zA-Z0-9.-]*;|server image tag (default: ${VERSION};|g" \
       hack/install.sh
     rm hack/install.sh.bak
 
