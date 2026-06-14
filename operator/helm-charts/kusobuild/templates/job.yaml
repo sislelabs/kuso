@@ -657,6 +657,27 @@ spec:
                 sleep 1
               done
 
+              {{- /* buildArgs → --opt build-arg:KEY=VAL. base64 the value so
+                     arbitrary content round-trips helm + the shell. Keys are
+                     validated here (env-identifier) as defense-in-depth since
+                     they render into a shell line. publicEnv names are passed
+                     as build-args set to the __KUSO_RUNTIME_<KEY>__ sentinel so
+                     a Dockerfile's `ARG <KEY>` picks them up uniformly; the
+                     real per-deploy value is substituted at pod start by the
+                     env chart. */}}
+              BUILD_ARGS=""
+              {{- range $k, $v := .Values.buildArgs }}
+              {{- if regexMatch "^[A-Za-z_][A-Za-z0-9_]*$" $k }}
+              ba_v="$(printf '%s' {{ $v | b64enc | quote }} | base64 -d)"
+              BUILD_ARGS="$BUILD_ARGS --opt build-arg:{{ $k }}=${ba_v}"
+              {{- end }}
+              {{- end }}
+              {{- range $k := .Values.publicEnv }}
+              {{- if regexMatch "^[A-Za-z_][A-Za-z0-9_]*$" $k }}
+              BUILD_ARGS="$BUILD_ARGS --opt build-arg:{{ $k }}=__KUSO_RUNTIME_{{ $k }}__"
+              {{- end }}
+              {{- end }}
+
               exec buildctl \
                 --addr "$BUILDKIT_HOST" \
                 build \
@@ -664,6 +685,7 @@ spec:
                 --local context="$CTX" \
                 --local dockerfile="$CTX" \
                 --opt filename="$DF" \
+                $BUILD_ARGS \
                 --output type=image,name="$IMAGE",push=true,registry.insecure=true \
                 --export-cache type=registry,ref="$CACHE",mode=max,registry.insecure=true \
                 --import-cache type=registry,ref="$CACHE",registry.insecure=true \

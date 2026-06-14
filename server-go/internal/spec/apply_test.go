@@ -451,6 +451,42 @@ func genEnv() map[string]EnvValue {
 	return map[string]EnvValue{"PAYLOAD_SECRET": {Generate: "hex32"}}
 }
 
+func TestApply_CreateCarriesBuildArgsAndPublicEnv(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	f := &File{Project: "shop", Services: []ServiceSpec{{
+		Name: "api", Runtime: "dockerfile",
+		BuildArgs: map[string]string{"FEATURE_X": "on"},
+		PublicEnv: []string{"NEXT_PUBLIC_URL"},
+	}}}
+	if _, err := r.Apply(context.Background(), &Plan{ServicesToCreate: []string{"api"}}, f, ApplyOpts{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	req := fp.created[0].req
+	if req.BuildArgs["FEATURE_X"] != "on" {
+		t.Fatalf("create must carry buildArgs: %+v", req.BuildArgs)
+	}
+	if len(req.PublicEnv) != 1 || req.PublicEnv[0] != "NEXT_PUBLIC_URL" {
+		t.Fatalf("create must carry publicEnv: %+v", req.PublicEnv)
+	}
+}
+
+func TestApply_PatchResetsBuildArgsWhenOmitted(t *testing.T) {
+	fp := &fakeProjects{}
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}}
+	f := &File{Project: "shop", Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile"}}}
+	if _, err := r.Apply(context.Background(), &Plan{ServicesToUpdate: []string{"api"}}, f, ApplyOpts{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	req := fp.patched[0].req
+	if req.BuildArgs == nil || req.PublicEnv == nil {
+		t.Fatalf("omitted buildArgs/publicEnv must still patch a non-nil reset: %+v", req)
+	}
+	if len(*req.BuildArgs) != 0 || len(*req.PublicEnv) != 0 {
+		t.Fatalf("reset buildArgs/publicEnv must be empty: %+v %+v", *req.BuildArgs, *req.PublicEnv)
+	}
+}
+
 func TestApply_GeneratesSecretOnFirstApply(t *testing.T) {
 	fp, fs := &fakeProjects{}, newFakeSecrets()
 	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs}

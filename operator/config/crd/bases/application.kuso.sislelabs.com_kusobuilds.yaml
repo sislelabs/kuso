@@ -106,6 +106,20 @@ spec:
                     server-side). For apps that read env during build
                     (Prisma, Next.js NEXT_PUBLIC_*). Values bake into image
                     layers.
+                buildArgs:
+                  type: object
+                  additionalProperties:
+                    type: string
+                  description: >-
+                    Build args passed to the build as --build-arg KEY=VAL
+                    (dockerfile ARG inputs). Mirrored from the service spec.
+                publicEnv:
+                  type: array
+                  items:
+                    type: string
+                  description: >-
+                    Env var names baked as __KUSO_RUNTIME_<KEY>__ sentinels at
+                    build, substituted at pod start. Mirrored from the service.
                 # done=true means the build reached a terminal state
                 # (succeeded / failed / cancelled). The kusobuild chart
                 # treats this as a hard no-op gate: when true, the

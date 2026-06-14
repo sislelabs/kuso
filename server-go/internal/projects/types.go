@@ -106,6 +106,11 @@ type CreateServiceRequest struct {
 	// means no hook. Mirrors PatchReleaseRequest minus Clear (a brand-new
 	// service has nothing to clear).
 	Release *PatchReleaseRequest `json:"release,omitempty"`
+	// BuildArgs / PublicEnv configure build-time env at create time.
+	// BuildArgs become --build-arg inputs; PublicEnv names get sentinel-
+	// baked at build and substituted at pod start. Mirror KusoServiceSpec.
+	BuildArgs map[string]string `json:"buildArgs,omitempty"`
+	PublicEnv []string          `json:"publicEnv,omitempty"`
 }
 
 // ServiceImageSpec is the deploy-from-registry shape for runtime=image.

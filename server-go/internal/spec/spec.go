@@ -93,6 +93,17 @@ type ServiceSpec struct {
 	Buildpacks    *BuildpacksSpec   `yaml:"buildpacks,omitempty"`
 	Image         *ImageSpec        `yaml:"image,omitempty"`
 	Release       *ReleaseSpec      `yaml:"release,omitempty"`
+	// BuildArgs are passed to the image build as --build-arg KEY=VAL.
+	// True build-time constants — the SAME across every environment (the
+	// built artifact is identical), so use them for things compiled in,
+	// not per-env values. For per-env public values use PublicEnv.
+	BuildArgs map[string]string `yaml:"buildArgs,omitempty"`
+	// PublicEnv names env vars inlined into the build output (e.g. Next.js
+	// NEXT_PUBLIC_*) that must still vary per deploy. kuso bakes each as a
+	// sentinel at build and substitutes the real value at pod start —
+	// "build once, run anywhere": the image is identical across envs and
+	// the per-env value comes from the service/env env + secrets.
+	PublicEnv []string `yaml:"publicEnv,omitempty"`
 }
 
 // ReleaseSpec is the pre-deploy release hook (migrations etc.), flattened

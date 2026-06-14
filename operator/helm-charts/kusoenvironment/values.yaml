@@ -106,6 +106,12 @@ envFromSecrets: []
 # - my-project-pg-conn
 # - my-project-redis-conn
 
+# publicEnv: names of env vars baked as __KUSO_RUNTIME_<KEY>__ sentinels at
+# build. Rendered as the KUSO_PUBLIC_ENV env var (space-separated) so the
+# image's entrypoint can substitute each sentinel with its real runtime value
+# at pod start. Mirrored from the service's spec.publicEnv. Empty = no list.
+publicEnv: []
+
 # secretsRev: opaque revision string bumped by the server every time a
 # secret value referenced by envFromSecrets changes. The chart stamps
 # this into the pod template's annotations so the Deployment rolls a new

@@ -447,6 +447,8 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Buildpacks:  toBuildpacksSpec(req.Buildpacks),
 			Image:       imgSpec,
 			Release:     releaseSpec,
+			BuildArgs:   req.BuildArgs,
+			PublicEnv:   req.PublicEnv,
 		},
 	}
 	created, err := s.Kube.CreateKusoService(ctx, ns, svc)
@@ -1598,6 +1600,11 @@ type PatchServiceRequest struct {
 	// removes the hook entirely; otherwise the command + timeout replace
 	// whatever was there.
 	Release *PatchReleaseRequest `json:"release,omitempty"`
+	// BuildArgs / PublicEnv replace the build-time env config wholesale.
+	// Pointer so omitting leaves it alone; a non-nil pointer (even to an
+	// empty map/slice) resets it — declarative reset, matching Static.
+	BuildArgs *map[string]string `json:"buildArgs,omitempty"`
+	PublicEnv *[]string          `json:"publicEnv,omitempty"`
 }
 
 // PatchReleaseRequest is the wire shape for editing the release hook.
@@ -1935,6 +1942,16 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			}
 		}
 		releaseChanged = true
+	}
+	// Build-time env config. Wholesale replace on a non-nil pointer
+	// (declarative reset); leave alone when omitted. These are consumed
+	// when the next build CR is created (builds.Create reads the service
+	// spec), not propagated to env CRs — no changedFields entry needed.
+	if req.BuildArgs != nil {
+		svc.Spec.BuildArgs = *req.BuildArgs
+	}
+	if req.PublicEnv != nil {
+		svc.Spec.PublicEnv = *req.PublicEnv
 	}
 
 	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)

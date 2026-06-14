@@ -240,6 +240,8 @@ func serviceCreateReq(s ServiceSpec) projects.CreateServiceRequest {
 			TimeoutSeconds: s.Release.TimeoutSeconds,
 		}
 	}
+	req.BuildArgs = s.BuildArgs
+	req.PublicEnv = s.PublicEnv
 	return req
 }
 
@@ -327,6 +329,14 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 		release.Clear = true
 	}
 
+	// Build-time env, set unconditionally (declarative reset): an omitted
+	// buildArgs/publicEnv resets the live CR to empty, same as Static.
+	buildArgs := map[string]string{}
+	for k, v := range s.BuildArgs {
+		buildArgs[k] = v
+	}
+	publicEnv := append([]string{}, s.PublicEnv...)
+
 	return projects.PatchServiceRequest{
 		Port:          &port,
 		Runtime:       &runtime,
@@ -342,6 +352,8 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 		Image:         image,
 		Command:       &cmd,
 		Release:       release,
+		BuildArgs:     &buildArgs,
+		PublicEnv:     &publicEnv,
 	}
 }
 

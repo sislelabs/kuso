@@ -135,6 +135,12 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 			TimeoutSeconds: cr.Spec.Release.TimeoutSeconds,
 		}
 	}
+	if len(cr.Spec.BuildArgs) > 0 {
+		s.BuildArgs = cr.Spec.BuildArgs
+	}
+	if len(cr.Spec.PublicEnv) > 0 {
+		s.PublicEnv = cr.Spec.PublicEnv
+	}
 	s.Env = exportEnv(project, cr.Spec.EnvVars)
 	return s
 }

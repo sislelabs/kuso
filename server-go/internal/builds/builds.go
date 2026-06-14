@@ -791,6 +791,11 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		// its defaults.
 		Static:     svcCR.Spec.Static,
 		Buildpacks: svcCR.Spec.Buildpacks,
+		// Build-time env config (see KusoServiceSpec): --build-arg inputs
+		// and the sentinel-baked public-env names. Plain pass-through —
+		// the build Job + env chart consume these.
+		BuildArgs: svcCR.Spec.BuildArgs,
+		PublicEnv: svcCR.Spec.PublicEnv,
 	}
 	// Build-time env: resolve the service's env vars to literals (reading
 	// referenced secrets) and stamp them onto the CR so the build job can

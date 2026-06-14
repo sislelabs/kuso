@@ -251,6 +251,13 @@ type KusoServiceSpec struct {
 	Resources  map[string]any      `json:"resources,omitempty"`
 	Static     *KusoStaticSpec     `json:"static,omitempty"`
 	Buildpacks *KusoBuildpacksSpec `json:"buildpacks,omitempty"`
+	// BuildArgs are passed to the image build as --build-arg KEY=VAL —
+	// true build-time constants, identical across every environment.
+	BuildArgs map[string]string `json:"buildArgs,omitempty"`
+	// PublicEnv names env vars baked as sentinels at build and
+	// substituted at pod start (build-once-run-anywhere for inlined
+	// public values like Next.js NEXT_PUBLIC_*).
+	PublicEnv []string `json:"publicEnv,omitempty"`
 	// Image is set on runtime=image services to point at an existing
 	// registry image. The propagation step copies this onto every
 	// KusoEnvironment so the chart pulls the image directly without a
@@ -493,6 +500,11 @@ type KusoEnvironmentSpec struct {
 	// same here ("nothing pinned"), unlike SharedEnvKeys.
 	EnvOverrides   []string `json:"envOverrides,omitempty"`
 	EnvFromSecrets []string `json:"envFromSecrets,omitempty"`
+	// PublicEnv names env vars baked as __KUSO_RUNTIME_<KEY>__ sentinels
+	// at build; the env chart substitutes each with its real runtime value
+	// (from envVars/envFromSecrets) at pod start. Propagated from the
+	// service's spec.publicEnv. nil/empty = no substitution step.
+	PublicEnv []string `json:"publicEnv,omitempty"`
 	// SharedEnvKeys mirrors KusoService.spec.sharedEnvKeys so the
 	// kusoenvironment chart can render per-key env entries (one
 	// secretKeyRef per subscribed key) instead of the legacy blanket
@@ -751,6 +763,14 @@ type KusoBuildSpec struct {
 	// that read env during `npm run build` (Prisma, Next.js NEXT_PUBLIC_*)
 	// need this. Values are baked into image layers (in-cluster registry).
 	BuildEnv             map[string]string   `json:"buildEnv,omitempty"`
+	// BuildArgs are passed to the build as --build-arg KEY=VAL. Unlike
+	// BuildEnv (which bakes ENV lines), these are dockerfile ARG inputs —
+	// build-time constants identical across envs. Mirrored from the
+	// service's BuildArgs by builds.Create.
+	BuildArgs map[string]string `json:"buildArgs,omitempty"`
+	// PublicEnv names vars baked as __KUSO_RUNTIME_<KEY>__ sentinels at
+	// build and substituted at pod start. Mirrored from the service.
+	PublicEnv            []string            `json:"publicEnv,omitempty"`
 	Image                *KusoImage          `json:"image,omitempty"`
 	Static               *KusoStaticSpec     `json:"static,omitempty"`
 	Buildpacks           *KusoBuildpacksSpec `json:"buildpacks,omitempty"`

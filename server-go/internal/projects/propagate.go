@@ -133,6 +133,11 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 		// the propagation loop is the last surface in this package
 		// that needs RMW.
 		_, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envName, func(env *kube.KusoEnvironment) error {
+			// publicEnv is a build-time concern (sentinel names to
+			// substitute at pod start); mirror it onto the env CR on every
+			// propagation pass — cheap, idempotent, and decoupled from the
+			// changed-flags that gate the env-var merge below.
+			env.Spec.PublicEnv = svc.Spec.PublicEnv
 			if changed.EnvVars {
 				// Per-key shared-secret subscription: when the parent
 				// service has spec.sharedEnvKeys set (non-nil), expand

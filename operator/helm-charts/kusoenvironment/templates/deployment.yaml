@@ -185,11 +185,22 @@ spec:
             envVars (if any) still render below.
           */}}
           {{- $isWeb := not (eq (default "" .Values.runtime) "worker") }}
-          {{- if or $isWeb .Values.envVars }}
+          {{- if or $isWeb .Values.envVars .Values.publicEnv }}
           env:
             {{- if $isWeb }}
             - name: PORT
               value: {{ .Values.port | quote }}
+            {{- end }}
+            {{- /* publicEnv: the names of vars baked as __KUSO_RUNTIME_<KEY>__
+                   sentinels at build. The image's entrypoint reads
+                   KUSO_PUBLIC_ENV (a space-separated list) and substitutes each
+                   sentinel with the real runtime value (which arrives via the
+                   normal envVars/envFromSecrets below) — "build once, run
+                   anywhere" without a fragile, image-specific generic wrapper
+                   that kuso can't safely inject. */}}
+            {{- with .Values.publicEnv }}
+            - name: KUSO_PUBLIC_ENV
+              value: {{ join " " . | quote }}
             {{- end }}
             {{- with .Values.envVars }}
             {{- toYaml . | nindent 12 }}

@@ -230,6 +230,25 @@ spec:
                 buildpacks:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
+                buildArgs:
+                  type: object
+                  # Passed to the image build as --build-arg KEY=VAL.
+                  # Build-time constants, identical across environments.
+                  # (No propertyNames validator — see buildEnv in the
+                  # kusobuilds CRD for why the strict decoder rejects it.)
+                  additionalProperties:
+                    type: string
+                  description: >-
+                    Build args passed to the image build (--build-arg). True
+                    build-time constants, the same across every environment.
+                publicEnv:
+                  type: array
+                  items:
+                    type: string
+                  description: >-
+                    Env var names baked as __KUSO_RUNTIME_<KEY>__ sentinels at
+                    build and substituted with the real per-deploy value at pod
+                    start (build-once-run-anywhere for inlined public values).
                 placement:
                   type: object
                   description: AND-of-labels node selector + explicit node allowlist. Empty/missing means "schedule anywhere". The env helm chart fans this out to nodeSelector + topologySpreadConstraints.

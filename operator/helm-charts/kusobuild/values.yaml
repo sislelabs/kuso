@@ -33,6 +33,16 @@ strategy: dockerfile
 # Next.js NEXT_PUBLIC_*). Empty = nothing injected (default).
 buildEnv: {}
 
+# buildArgs: passed to the dockerfile.v0 build as --build-arg KEY=VAL.
+# Build-time constants, identical across environments. Mirrored from the
+# service's spec.buildArgs. Empty = no build args (default).
+buildArgs: {}
+
+# publicEnv: env var NAMES baked as --build-arg KEY=__KUSO_RUNTIME_KEY__
+# sentinels at build, then substituted with the real per-deploy value at
+# pod start (build-once-run-anywhere). Mirrored from spec.publicEnv.
+publicEnv: []
+
 nixpacks:
   # Pin the binary version so builds are reproducible. The image
   # tag (kuso-nixpacks:<version>) carries the binary pre-installed
