@@ -211,6 +211,18 @@ spec:
                     addons' conn-secrets in envFromSecrets.
                   items:
                     type: string
+                publicEnv:
+                  type: array
+                  items:
+                    type: string
+                  description: >-
+                    Env var names baked as __KUSO_RUNTIME_<KEY>__ sentinels at
+                    build and substituted with the real per-deploy value at pod
+                    start. Mirrored from the parent KusoService.spec.publicEnv.
+                    Must exist here because the kuso-server build/deploy path
+                    writes env.spec.publicEnv; a missing field makes the
+                    apiserver silently prune it and the server boots in
+                    degraded mode (readyz=503, writes refused).
                 secretsRev:
                   type: string
                 resources:
