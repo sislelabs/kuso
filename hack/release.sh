@@ -531,6 +531,36 @@ else
   fi
 fi
 
+# Correct the eager operator pin from step 2. The version-bump block
+# rewrote deploy/operator.yaml + install.sh's KUSO_VERSION default to
+# ${VERSION} unconditionally — BUT when operator/ is unchanged we do NOT
+# build+push an operator image at ${VERSION}, so that pin dangles. Fresh
+# installs (`kubectl apply -f deploy/operator.yaml`, or install.sh which
+# fetches the same file) then pull a 404 tag → ImagePullBackOff → the
+# install's `kubectl wait` times out. This bit v0.18.69: server shipped
+# at v0.18.69 but the operator image only existed up to v0.18.68, so the
+# deploy yaml pointed at a phantom kuso-operator:v0.18.69.
+#
+# release.json was always correct (it pins OPERATOR_VERSION via the
+# query above), so auto-updating clusters were fine — only the
+# kubectl-apply / fresh-install path broke. Re-stamp the two install
+# sources to the tag we actually pinned so all three paths agree.
+if [[ "$OPERATOR_VERSION" != "$VERSION" && "$CURRENT" != "$VERSION" ]]; then
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "re-stamp deploy/operator.yaml + install.sh KUSO_VERSION default: ${VERSION} → ${OPERATOR_VERSION} (operator not rebuilt this release)"
+  else
+    log "operator not rebuilt — re-stamping install sources to real operator tag ${OPERATOR_VERSION} (was ${VERSION})"
+    sed -i.bak \
+      -E "s|kuso-operator:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-operator:${OPERATOR_VERSION}|g" \
+      deploy/operator.yaml
+    rm deploy/operator.yaml.bak
+    sed -i.bak \
+      -e "s|KUSO_VERSION=\"\${KUSO_VERSION:-v[0-9][0-9.]*[a-zA-Z0-9.-]*}\"|KUSO_VERSION=\"\${KUSO_VERSION:-${OPERATOR_VERSION}}\"|g" \
+      hack/install.sh
+    rm hack/install.sh.bak
+  fi
+fi
+
 if operator_should_build && [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
   log "building operator image ${OPERATOR_IMAGE}:${OPERATOR_VERSION}"
   if [[ "$DRY_RUN" == "1" ]]; then
@@ -574,7 +604,26 @@ fi
 if [[ "${KUSO_RELEASE_SKIP_VISIBILITY_CHECK:-0}" != "1" && "$DRY_RUN" != "1" ]]; then
   log "checking ghcr image visibility (anonymous pull)"
   visibility_failures=()
-  for img in "${KUSO_RELEASE_IMAGE}:${VERSION}" "${OPERATOR_IMAGE}:${OPERATOR_VERSION}" "${UPDATER_IMAGE}:${VERSION}"; do
+  # Belt-and-suspenders: also check the operator tag actually baked into
+  # the INSTALL sources, not just OPERATOR_VERSION (release.json's pin).
+  # release.json was always correct in the v0.18.69 incident — what
+  # broke was deploy/operator.yaml pointing at a phantom tag the
+  # fresh-install path pulls directly. Reading the tag back out of the
+  # file (rather than trusting a variable) catches the whole class of
+  # "install source points at an unpushed image" bugs, however it got
+  # there. The set collapses to one entry when everything agrees.
+  declare -a OPERATOR_PIN_CHECKS=("${OPERATOR_IMAGE}:${OPERATOR_VERSION}")
+  deploy_op_tag="$(sed -nE 's|.*image:[[:space:]]*ghcr.io/sislelabs/kuso-operator:([A-Za-z0-9._-]+).*|\1|p' deploy/operator.yaml | head -1)"
+  if [[ -n "$deploy_op_tag" ]]; then
+    OPERATOR_PIN_CHECKS+=("${OPERATOR_IMAGE}:${deploy_op_tag}")
+  fi
+  install_op_tag="$(sed -nE 's|^KUSO_VERSION="\$\{KUSO_VERSION:-([^}]+)\}".*|\1|p' hack/install.sh | head -1)"
+  if [[ -n "$install_op_tag" ]]; then
+    OPERATOR_PIN_CHECKS+=("${OPERATOR_IMAGE}:${install_op_tag}")
+  fi
+  # Dedupe so we don't HEAD the same manifest three times.
+  mapfile -t OPERATOR_PIN_CHECKS < <(printf '%s\n' "${OPERATOR_PIN_CHECKS[@]}" | sort -u)
+  for img in "${KUSO_RELEASE_IMAGE}:${VERSION}" "${OPERATOR_PIN_CHECKS[@]}" "${UPDATER_IMAGE}:${VERSION}"; do
     repo_part="${img%:*}"     # strip :tag
     ref_part="${img##*:}"     # tag only
     path="${repo_part#ghcr.io/}"
