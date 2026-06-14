@@ -481,6 +481,18 @@ else
     --from-literal=database="kuso" \
     | kubectl apply -f - >/dev/null
 
+  # PgBouncer fronts Postgres with auth_type=md5, so the kuso role must
+  # be stored as an md5 verifier (see deploy/postgres.yaml's
+  # postgresql.parameters.password_encryption=md5). CNPG ≥1.29.2/1.30
+  # SCRAM-encodes role passwords operator-side BEFORE issuing CREATE/
+  # ALTER ROLE, which would override password_encryption and re-break
+  # the md5 pooler with `wrong password type (08P01)`. This annotation
+  # opts out of operator-side hashing so PostgreSQL honours
+  # password_encryption=md5. No-op on the CNPG 1.24 we pin today;
+  # present so a future CNPG bump doesn't silently reintroduce the bug.
+  kubectl annotate secret kuso-postgres-conn -n kuso \
+    cnpg.io/passwordPassthrough=enabled --overwrite >/dev/null 2>&1 || true
+
   # HA mode: the default manifest ships single-instance (1 primary,
   # no standby) because kuso is single-tenant and typically deployed
   # on one node, where HA-postgres buys nothing. Operators on ≥3-node

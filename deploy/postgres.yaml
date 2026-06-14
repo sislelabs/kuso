@@ -76,6 +76,22 @@ spec:
   # is the actual incident.
   primaryUpdateStrategy: unsupervised
 
+  # PgBouncer (deploy/postgres.yaml ConfigMap below) fronts this DB with
+  # `auth_type = md5` + a userlist.txt holding md5(password+user). For
+  # that handshake to succeed the Postgres-side `kuso` role MUST store
+  # its password as an md5 verifier. PostgreSQL 16 defaults
+  # password_encryption to scram-sha-256, so without this CNPG bootstraps
+  # the owner role with a SCRAM verifier and every pooled connection
+  # fails with `pq: server login failed: wrong password type (08P01)` →
+  # kuso-server crashloops on a *fresh* install (not just a stale one).
+  # Setting it here makes initdb store the owner password as md5 from the
+  # start, matching the pooler. (Switching pgbouncer to scram instead
+  # would be the modern alternative, but needs a SCRAM verifier in the
+  # shell-rendered userlist — md5 is the simpler self-consistent pair.)
+  postgresql:
+    parameters:
+      password_encryption: md5
+
   bootstrap:
     initdb:
       database: kuso
