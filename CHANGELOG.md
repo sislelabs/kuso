@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.70] — 2026-06-14
+
+### 🐛 Bug Fixes
+- Fix(install): apply kusoruns CRD so the operator doesn't crashloop ([3145c27](https://github.com/sislelabs/kuso/commit/3145c275e7cd63305ee7d65b98a7bd365ed0077f))
+- Fix(release): stop dangling-operator-pin when operator image isn't rebuilt ([a6b6d14](https://github.com/sislelabs/kuso/commit/a6b6d141468393d1158fe9293f27ffad92ab01b7))
+- Fix(drift): stop reporting per-env domain divergence as pending changes ([e506ed3](https://github.com/sislelabs/kuso/commit/e506ed37a6ee35e9b34c04fe7432d45958cbf7ea))
+- Fix(hpa): scaleUp stabilization 60s->120s to ride out rollout metric gaps ([3da1b8a](https://github.com/sislelabs/kuso/commit/3da1b8ac3d157146892ccc535db8e46079c50107))
+
 ## [0.18.69] — 2026-06-11
 
 ### ✨ Features
@@ -406,15 +414,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: archive promoted CHANGELOG entries (pre-v0.18.6 ship) ([64c3815](https://github.com/sislelabs/kuso/commit/64c3815d8ce31bb1d0f9ef076cd993b983035755))
-
-## [0.18.5] — 2026-05-30
-
-### 🐛 Bug Fixes
-- Fix(projects): card domain links to the base domain + add settings shortcut ([db84a2f](https://github.com/sislelabs/kuso/commit/db84a2f1aaa15318820ad6a8a8cb45fb3895ebef))
-- Fix(auth): don't log out the admin when they change a group they're in ([a982977](https://github.com/sislelabs/kuso/commit/a98297778d8f96afb5691e3bcea7f15e5a102331))
-
-### 🧹 Chores
-- Chore: archive promoted CHANGELOG entries (pre-v0.18.5 ship) ([5e63f1d](https://github.com/sislelabs/kuso/commit/5e63f1df259f6bc3451e277ec92b6a7c5645816f))
 
 
 ---
