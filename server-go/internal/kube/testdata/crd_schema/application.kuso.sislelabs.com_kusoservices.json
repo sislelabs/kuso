@@ -13,6 +13,13 @@
       },
       "spec": {
         "properties": {
+          "buildArgs": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Build args passed to the image build (--build-arg). True build-time constants, the same across every environment.",
+            "type": "object"
+          },
           "buildpacks": {
             "type": "object",
             "x-kubernetes-preserve-unknown-fields": true
@@ -26,6 +33,10 @@
           },
           "displayName": {
             "description": "Free-form label shown in the UI (canvas chip,\noverlay header). Decoupled from the CR name + URL\nslug so renaming the visual label is fast and\ndoesn't recreate kube resources. Validation:\nletters / digits / spaces / hyphens, max 60 chars.\nEmpty = UI falls back to the slug.\n",
+            "type": "string"
+          },
+          "dockerfile": {
+            "description": "Dockerfile filename (relative to repo.path) for\nruntime=dockerfile. Empty defaults to \"Dockerfile\".\nLets a monorepo service build from a non-standard\npath, e.g. \"apps/web/Dockerfile.dev\".\n",
             "type": "string"
           },
           "domains": {
@@ -199,6 +210,13 @@
           },
           "project": {
             "type": "string"
+          },
+          "publicEnv": {
+            "description": "Env var names baked as __KUSO_RUNTIME_\u003cKEY\u003e__ sentinels at build and substituted with the real per-deploy value at pod start (build-once-run-anywhere for inlined public values).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
           },
           "release": {
             "description": "Pre-deploy release hook. When set, the build poller\nruns `command` as a Job using the NEW build's image\n+ this env's effective envVars/envFromSecrets BEFORE\npromoting the image onto the deployment. Heroku-\nstyle — typical use is `./bin/migrate` or\n`npx prisma migrate deploy`.\n\nOn non-zero exit (or timeout) the build is marked\nrelease-failed and the image tag is NOT patched —\nexisting pods keep running on the previous image.\nA notify event fires so a failed migration doesn't\nsilently bury itself in the build history.\n\nThe Job is named `\u003cenv\u003e-release-\u003cshort-image-tag\u003e`,\nso re-deploying the same tag is a no-op (Job exists,\nalready succeeded). Mirrored onto every\nKusoEnvironment owned by this service.\n",
