@@ -173,6 +173,13 @@
           "project": {
             "type": "string"
           },
+          "publicEnv": {
+            "description": "Env var names baked as __KUSO_RUNTIME_\u003cKEY\u003e__ sentinels at build and substituted with the real per-deploy value at pod start. Mirrored from the parent KusoService.spec.publicEnv. Must exist here because the kuso-server build/deploy path writes env.spec.publicEnv; a missing field makes the apiserver silently prune it and the server boots in degraded mode (readyz=503, writes refused).",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "pullRequest": {
             "properties": {
               "headRef": {
