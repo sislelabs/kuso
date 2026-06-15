@@ -92,11 +92,17 @@ func renderPayloadTemplate(project, repo string) string {
 		repoLine = "    repo: " + repo + "\n"
 	}
 	return fmt.Sprintf(`# kuso.yml — Payload CMS / Next.js, fully wired for kuso.
-# Source of truth on every push. The ONLY thing you must change is the
-# domain (baseDomain + the two NEXT_PUBLIC_* URLs).
+# Self-sufficient source of truth on every push: 'kuso apply' is the whole
+# deploy. The ONLY thing you must change is the domain (set baseDomain + the
+# two NEXT_PUBLIC_* URLs to your real host).
+#
+# Keep values comment-free on their own line — the CLI's apply reads
+# 'project:' with a cheap line parser that does NOT strip trailing inline
+# comments, so 'project: foo  # note' would break 'kuso apply'.
 
 project: %s
-baseDomain: %s.example.com        # ← your real domain
+# ← set to your real domain
+baseDomain: %s.example.com
 
 services:
   - name: %s
@@ -108,16 +114,23 @@ services:
       NEXT_TELEMETRY_DISABLED: '1'
       # The release hook runs migrations; don't also migrate on boot.
       RUN_MIGRATIONS: 'false'
-      # Public URLs (inlined into the browser bundle; baked as sentinels
-      # at build, swapped to these values at pod start via publicEnv).
-      NEXT_PUBLIC_SERVER_URL: https://%s.example.com               # ← your domain
-      NEXT_PUBLIC_MEDIA_URL: https://%s.example.com/api/media/file # ← your domain
+      # Public URLs (inlined into the browser bundle; baked as sentinels at
+      # build, swapped to these values at pod start via publicEnv).
+      # ← set both to your real domain (keep /api/media/file on the media one).
+      NEXT_PUBLIC_SERVER_URL: https://%s.example.com
+      NEXT_PUBLIC_MEDIA_URL: https://%s.example.com/api/media/file
       # Alias the postgres addon's DATABASE_URL → DATABASE_URI (Payload reads URI).
       DATABASE_URI: ${{ db.DATABASE_URL }}
       # Generated once, stored in the service Secret, never rotated on re-apply
       # (use 'kuso apply --rotate-secrets' to force a fresh value).
       PAYLOAD_SECRET: { generate: hex32 }
       PREVIEW_SECRET: { generate: hex16 }
+      # EXTERNAL/PROVIDER SECRETS (OPENAI_API_KEY, STRIPE_SECRET_KEY,
+      # RESEND_API_KEY, …) do NOT go here — this file is committed to git.
+      # Set them as secret-typed env instead (value stays out of git):
+      #   kuso secret set %s %s OPENAI_API_KEY sk-...
+      # Only non-secret values, '{ generate }' recipes, and '${{ addon.KEY }}'
+      # references belong in this env block.
     publicEnv:
       - NEXT_PUBLIC_SERVER_URL
       - NEXT_PUBLIC_MEDIA_URL
@@ -128,7 +141,10 @@ services:
 addons:
   - { name: db,      kind: postgres, version: '16', size: small }
   - { name: storage, kind: s3 }
-`, project, project, project, repoLine, project, project)
+  # Redis — injects REDIS_URL for the shared ISR/data cache (cache-handler.mjs).
+  # Drop this if you run single-replica; keep it for multi-pod correctness.
+  - { name: cache,   kind: redis,    size: small }
+`, project, project, project, repoLine, project, project, project, project)
 }
 
 // renderInitYAML returns a small starter file. Pure string templating
