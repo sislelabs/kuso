@@ -207,6 +207,28 @@ func main() {
 		}
 	}
 
+	// Session lifetime is now a live, admin-editable Setting (session.*
+	// keys) instead of the boot-only JWT_EXPIRESIN env var. To preserve
+	// intent for installs that pinned JWT_EXPIRESIN, seed the DB setting
+	// from it ONCE — only when the operator set the env var AND no
+	// session setting exists yet. After that the UI is the source of
+	// truth; the env var is ignored. Fresh installs with no env var get
+	// the 30-day default (db.DefaultSessionSettings) with no row written.
+	if raw := strings.TrimSpace(os.Getenv("JWT_EXPIRESIN")); raw != "" {
+		if existing, gerr := database.GetSetting(ctx, "session.ttlSeconds"); gerr == nil && existing == "" {
+			if d := parseTTL(raw); d > 0 {
+				secs := int(d / time.Second)
+				if err := database.SetSessionSettings(ctx,
+					db.SessionSettings{TTLSeconds: secs, NeverExpire: false},
+					"migration:JWT_EXPIRESIN"); err != nil {
+					logger.Warn("session: seed from JWT_EXPIRESIN failed", "err", err)
+				} else {
+					logger.Info("session: seeded lifetime from JWT_EXPIRESIN", "seconds", secs)
+				}
+			}
+		}
+	}
+
 	// One-shot escape hatch: KUSO_PROMOTE_USER=<username> attaches
 	// the named user to the admin group on every boot until it's
 	// unset. Useful when an OAuth user got stuck in pending after

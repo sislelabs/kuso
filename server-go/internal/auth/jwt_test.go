@@ -45,6 +45,51 @@ func TestIssuer_RoundTrip(t *testing.T) {
 	}
 }
 
+// TestIssuer_NeverExpire covers the "never log out" session option:
+// SignWithExpiry with the zero time must omit the exp claim entirely,
+// and Verify must still accept the token. This is the path the session-
+// settings neverExpire toggle drives.
+func TestIssuer_NeverExpire(t *testing.T) {
+	t.Parallel()
+	iss, err := NewIssuer("super-secret", time.Hour)
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	tok, err := iss.SignWithExpiry(Claims{UserID: "u", Username: "u", Role: "admin"}, time.Time{})
+	if err != nil {
+		t.Fatalf("SignWithExpiry(zero): %v", err)
+	}
+	got, err := iss.Verify(tok)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if got.ExpiresAt != nil {
+		t.Errorf("never-expire token must have no exp claim, got %+v", got.ExpiresAt)
+	}
+}
+
+// TestIssuer_ConfiguredTTL covers the configurable-lifetime path: a
+// 30-day expiry should round-trip with the exp claim ~30 days out.
+func TestIssuer_ConfiguredTTL(t *testing.T) {
+	t.Parallel()
+	iss, _ := NewIssuer("super-secret", time.Hour)
+	want := time.Now().Add(30 * 24 * time.Hour)
+	tok, err := iss.SignWithExpiry(Claims{UserID: "u", Username: "u", Role: "admin"}, want)
+	if err != nil {
+		t.Fatalf("SignWithExpiry: %v", err)
+	}
+	got, err := iss.Verify(tok)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if got.ExpiresAt == nil {
+		t.Fatal("ExpiresAt must be set")
+	}
+	if delta := got.ExpiresAt.Time.Sub(want); delta > time.Minute || delta < -time.Minute {
+		t.Errorf("exp off by %v (got %v, want ~%v)", delta, got.ExpiresAt.Time, want)
+	}
+}
+
 func TestIssuer_RejectsWrongSecret(t *testing.T) {
 	t.Parallel()
 	a, _ := NewIssuer("secret-A", time.Hour)

@@ -5,12 +5,15 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"database/sql"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"kuso/server/internal/auth"
@@ -334,10 +337,15 @@ func (h *OAuthHandler) upsertAndIssue(ctx context.Context, prof *auth.OAuthProfi
 			}
 		}
 	}
-	return h.Issuer.Sign(auth.Claims{
+	// Honor the admin-configurable session lifetime (Setting table,
+	// session.* keys), same as the password-login path in auth.go, so
+	// OAuth sessions don't silently keep the old 10h expiry. Best-
+	// effort read; falls back to the 30-day default.
+	tok, _, err := signSessionToken(ctx, h.DB, h.Issuer, auth.Claims{
 		UserID: user.ID, Username: user.Username, Role: roleName,
 		UserGroups: groups, Permissions: perms, Strategy: strategy,
 	})
+	return tok, err
 }
 
 // bootstrapOrPending decides where a fresh OAuth user lands. We try
@@ -453,8 +461,43 @@ func setJWTCookie(w http.ResponseWriter, r *http.Request, jwt string) {
 		Name: "kuso.JWT_TOKEN", Value: jwt, Path: "/",
 		HttpOnly: true, SameSite: http.SameSiteLaxMode,
 		Secure: isHTTPS(r),
-		MaxAge: 36000,
+		// MaxAge tracks the token's own exp claim (driven by the
+		// admin-configurable session setting) instead of a hardcoded
+		// 10h, so a longer/never-expiring session isn't truncated by a
+		// short cookie. A token with no exp (never-expire) → 10y cookie.
+		MaxAge: cookieMaxAgeFromJWT(jwt),
 	})
+}
+
+// cookieMaxAgeFromJWT reads the unverified exp claim off a freshly-
+// minted token to size the session cookie. We just signed this token so
+// no signature check is needed here — we only want its expiry. Returns
+// a 10-year MaxAge when the token has no exp (never-expire sessions),
+// and the 30-day default if the claim can't be read.
+func cookieMaxAgeFromJWT(tok string) int {
+	const tenYears = 10 * 365 * 24 * 60 * 60
+	parts := strings.Split(tok, ".")
+	if len(parts) != 3 {
+		return db.DefaultSessionTTLSeconds
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return db.DefaultSessionTTLSeconds
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return db.DefaultSessionTTLSeconds
+	}
+	if claims.Exp == 0 {
+		return tenYears // never-expire token
+	}
+	secs := claims.Exp - time.Now().Unix()
+	if secs < 60 {
+		secs = 60
+	}
+	return int(secs)
 }
 
 // redirectWithJWT finalises an OAuth flow by setting the HttpOnly

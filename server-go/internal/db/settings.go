@@ -133,6 +133,92 @@ func (d *DB) SetBuildSettings(ctx context.Context, in BuildSettings, updatedBy s
 	return nil
 }
 
+// SessionSettings controls how long a dashboard login stays valid
+// before the user is bounced to /login. Persisted in the Setting table
+// (session.* keys) so an admin can change it live from the UI — it
+// takes effect on the next login (the natural granularity for a
+// session-lifetime knob; existing tokens keep their original expiry).
+type SessionSettings struct {
+	// TTLSeconds is the lifetime of a freshly-minted login token in
+	// seconds. Ignored when NeverExpire is true.
+	TTLSeconds int `json:"ttlSeconds"`
+	// NeverExpire, when true, mints login tokens with NO exp claim —
+	// the user stays logged in until they explicitly log out or the
+	// token is revoked (logout / role change). Convenience for single-
+	// user / homelab installs that find the periodic logout annoying.
+	// Security note: a leaked never-expiring cookie is valid forever
+	// unless revoked; the UI surfaces this tradeoff.
+	NeverExpire bool `json:"neverExpire"`
+}
+
+// DefaultSessionTTLSeconds is the baseline login lifetime: 30 days.
+// Chosen to stop the "logged out too often" complaints against the
+// historical 10h default while still expiring eventually by default.
+const DefaultSessionTTLSeconds = 30 * 24 * 60 * 60
+
+// DefaultSessionSettings returns the baseline (30-day expiry, not
+// never-expire).
+func DefaultSessionSettings() SessionSettings {
+	return SessionSettings{TTLSeconds: DefaultSessionTTLSeconds, NeverExpire: false}
+}
+
+// GetSessionSettings reads the session knobs out of the Setting table,
+// falling back to the 30-day default for unset keys.
+func (d *DB) GetSessionSettings(ctx context.Context) (SessionSettings, error) {
+	out := DefaultSessionSettings()
+	rows, err := d.QueryContext(ctx,
+		`SELECT key, value FROM "Setting" WHERE key LIKE 'session.%'`,
+	)
+	if err != nil {
+		return out, fmt.Errorf("GetSessionSettings: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return out, fmt.Errorf("scan setting: %w", err)
+		}
+		switch k {
+		case "session.ttlSeconds":
+			var n int
+			if err := json.Unmarshal([]byte(v), &n); err == nil && n > 0 {
+				out.TTLSeconds = n
+			}
+		case "session.neverExpire":
+			var b bool
+			if err := json.Unmarshal([]byte(v), &b); err == nil {
+				out.NeverExpire = b
+			}
+		}
+	}
+	return out, rows.Err()
+}
+
+// SetSessionSettings persists the session knobs. updatedBy is the
+// admin username who saved.
+func (d *DB) SetSessionSettings(ctx context.Context, in SessionSettings, updatedBy string) error {
+	pairs := []struct{ key, value string }{
+		{"session.ttlSeconds", strconv.Itoa(in.TTLSeconds)},
+		{"session.neverExpire", strconv.FormatBool(in.NeverExpire)},
+	}
+	now := time.Now().UTC()
+	for _, p := range pairs {
+		_, err := d.ExecContext(ctx, `
+			INSERT INTO "Setting" (key, value, "updatedAt", "updatedBy")
+			VALUES ($1, $2, $3, $4)
+			ON CONFLICT (key) DO UPDATE
+			   SET value = EXCLUDED.value,
+			       "updatedAt" = EXCLUDED."updatedAt",
+			       "updatedBy" = EXCLUDED."updatedBy"`,
+			p.key, p.value, now, updatedBy,
+		)
+		if err != nil {
+			return fmt.Errorf("SetSessionSettings %s: %w", p.key, err)
+		}
+	}
+	return nil
+}
+
 // quote / unquote shim — values are JSON-encoded TEXT so an int and
 // a string can share the same column. JSON-quote a string at write
 // time, strip the quotes at read time.

@@ -23,6 +23,7 @@ import {
   DollarSign,
   FileUp,
   Bot,
+  Clock,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -61,6 +62,7 @@ const CARDS: Card[] = [
   { href: "/settings/database",         title: "Cluster database", description: "First-class Postgres. Managed on-cluster or external, plus extra registered servers — per-project databases.", icon: Database, perm: Perms.SettingsAdmin, group: "cluster", keywords: "postgres pg database shared cluster instance addons redis mysql clickhouse external neon rds supabase dsn" },
   { href: "/settings/instance-secrets", title: "Instance secrets", description: "Env vars auto-mounted into every service in every project.",        icon: Globe,        perm: Perms.SettingsAdmin, group: "cluster", keywords: "env environment variable global secret" },
   { href: "/settings/builds",           title: "Build resources",  description: "Concurrency cap + per-build memory/CPU limits. Tune to your VM size.", icon: Cpu,         perm: Perms.SettingsAdmin, group: "cluster", keywords: "kaniko buildpacks memory cpu limit concurrent" },
+  { href: "/settings/sessions",         title: "Sessions",         description: "How long a login stays valid before re-auth. Extend it or turn expiry off.", icon: Clock, perm: Perms.SettingsAdmin, group: "cluster", keywords: "session login logout jwt token expiry timeout remember never sign-out auth" },
   { href: "/settings/backups",          title: "Backups",          description: "Server backup/restore + S3 credentials for scheduled addon dumps.", icon: HardDrive,    perm: Perms.SettingsAdmin, group: "cluster", keywords: "backup restore s3 dump pg_dump snapshot" },
   { href: "/settings/updates",          title: "Updates",          description: "Self-update the kuso server + operator + CRDs.",                    icon: Package,      perm: Perms.SettingsAdmin, group: "cluster", keywords: "version upgrade release self-update" },
   { href: "/settings/usage",            title: "Usage + cost",     description: "Per-node CPU + memory rollup with monthly cost projection.",        icon: DollarSign,   perm: Perms.SettingsRead,  group: "cluster", keywords: "cost spend billing dollars cpu memory rollup metrics estimate" },

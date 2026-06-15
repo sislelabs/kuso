@@ -20,6 +20,36 @@ import (
 	"kuso/server/internal/db"
 )
 
+// signSessionToken mints a login JWT honoring the admin-configurable
+// session lifetime (Setting table, session.* keys). It returns the
+// signed token and the cookie MaxAge (seconds) that should accompany
+// it, so the HttpOnly cookie expires in lockstep with the JWT instead
+// of a hardcoded constant. Shared by the password-login and OAuth-login
+// paths so both respect the same knob.
+//
+// Best-effort on the DB read: a transient settings-read error falls back
+// to the 30-day default rather than failing the login.
+func signSessionToken(ctx context.Context, database *db.DB, issuer *auth.Issuer, claims auth.Claims) (token string, cookieMaxAge int, err error) {
+	sess := db.DefaultSessionSettings()
+	if database != nil {
+		if s, serr := database.GetSessionSettings(ctx); serr == nil {
+			sess = s
+		}
+	}
+	if sess.NeverExpire {
+		// Zero time → exp claim omitted; token never expires server-side.
+		tok, e := issuer.SignWithExpiry(claims, time.Time{})
+		// 10y cookie so the browser keeps it across restarts.
+		return tok, 10 * 365 * 24 * 60 * 60, e
+	}
+	ttl := time.Duration(sess.TTLSeconds) * time.Second
+	if ttl <= 0 {
+		ttl = time.Duration(db.DefaultSessionTTLSeconds) * time.Second
+	}
+	tok, e := issuer.SignWithExpiry(claims, time.Now().Add(ttl))
+	return tok, int(ttl / time.Second), e
+}
+
 // AuthHandler implements POST /api/auth/login (and friends). It depends
 // on the DB for password verify + permissions lookup and on the Issuer
 // for JWT signing.
@@ -108,7 +138,12 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	tok, err := h.Issuer.Sign(auth.Claims{
+	// Session lifetime is admin-configurable (Setting table, session.*
+	// keys) so an install that finds the default 30-day expiry too
+	// short/long can change it live — or disable expiry entirely. The
+	// shared helper reads the setting (taking effect on next login, no
+	// restart) and returns the matching cookie MaxAge.
+	tok, cookieMaxAge, err := signSessionToken(ctx, h.DB, h.Issuer, auth.Claims{
 		UserID:      user.ID,
 		Username:    user.Username,
 		Role:        roleName,
@@ -145,8 +180,12 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		HttpOnly: true,
 		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
-		// 12h matches the JWT TTL.
-		MaxAge: 12 * 60 * 60,
+		// Cookie MaxAge tracks the JWT lifetime (admin-configurable
+		// session setting), not a hardcoded constant. The old fixed
+		// 12h MaxAge silently expired the cookie out from under a
+		// longer-lived JWT (and vice versa), forcing premature
+		// logouts — exactly the "logged out too often" symptom.
+		MaxAge: cookieMaxAge,
 	})
 	w.Header().Set("Content-Type", "application/json")
 	// Body still carries the access_token for the CLI / API token
