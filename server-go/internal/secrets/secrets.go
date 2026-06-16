@@ -134,6 +134,58 @@ func (s *Service) ListKeys(ctx context.Context, project, service, env string) ([
 	return out, nil
 }
 
+// generatedAnnoPrefix marks a shared-scope secret key as kuso-generated
+// (via a kuso.yaml `{ generate: KIND }` directive) so config-as-code
+// Export can re-emit the `{generate}` form instead of dropping the key
+// (the value lives only in the Secret, never on the service CR). The
+// annotation key is generatedAnnoPrefix+<KEY>; its value is the kind
+// (e.g. "hex32").
+const generatedAnnoPrefix = "secrets.kuso.sislelabs.com/generated-"
+
+// MarkGenerated records on the SHARED per-service Secret that `key` was
+// minted from a `{ generate: kind }` directive. Idempotent merge-patch
+// of a single annotation; safe to call right after SetKey. A no-op-safe
+// failure path: if the Secret doesn't exist yet the patch 404s and we
+// return the error so the caller can surface it (SetKey runs first, so
+// in practice the Secret always exists by now).
+func (s *Service) MarkGenerated(ctx context.Context, project, service, key, kind string) error {
+	ns := s.nsFor(ctx, project)
+	name := Name(project, service, "")
+	anno := generatedAnnoPrefix + key
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, anno, kind)
+	_, err := s.Kube.Clientset.CoreV1().Secrets(ns).
+		Patch(ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+	if err != nil {
+		return fmt.Errorf("mark generated %s on %s: %w", key, name, err)
+	}
+	return nil
+}
+
+// GeneratedKinds returns key→kind for every shared-scope secret key that
+// MarkGenerated tagged. Empty when the Secret or its annotations are
+// absent. Used by config-as-code Export to reconstruct `{generate}`.
+func (s *Service) GeneratedKinds(ctx context.Context, project, service string) (map[string]string, error) {
+	out := map[string]string{}
+	// No clientset (e.g. a kube.Client built without secret access) → no
+	// markers to recover; degrade gracefully rather than panic.
+	if s == nil || s.Kube == nil || s.Kube.Clientset == nil {
+		return out, nil
+	}
+	sec, err := s.read(ctx, s.nsFor(ctx, project), Name(project, service, ""))
+	if err != nil {
+		return nil, err
+	}
+	if sec == nil {
+		return out, nil
+	}
+	for a, kind := range sec.Annotations {
+		if strings.HasPrefix(a, generatedAnnoPrefix) {
+			out[strings.TrimPrefix(a, generatedAnnoPrefix)] = kind
+		}
+	}
+	return out, nil
+}
+
 // SetKey upserts a single (key, value) into the scoped Secret without
 // touching other keys. Concurrent SetKey calls for *different* keys MUST
 // NOT lose updates — this is verified by the resilience-sweep probes.

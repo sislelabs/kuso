@@ -373,3 +373,41 @@ func TestJSONPointerEscape(t *testing.T) {
 		}
 	}
 }
+
+func TestMarkGenerated_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	s := fakeService(t)
+	// The shared Secret must exist before we can annotate it.
+	if err := s.SetKey(ctx, "alpha", "web", "", "PAYLOAD_SECRET", "deadbeef"); err != nil {
+		t.Fatalf("SetKey: %v", err)
+	}
+	if err := s.MarkGenerated(ctx, "alpha", "web", "PAYLOAD_SECRET", "hex32"); err != nil {
+		t.Fatalf("MarkGenerated: %v", err)
+	}
+	// A non-generated hand-set key must NOT appear in GeneratedKinds.
+	if err := s.SetKey(ctx, "alpha", "web", "", "OPENAI_API_KEY", "sk-x"); err != nil {
+		t.Fatalf("SetKey 2: %v", err)
+	}
+	kinds, err := s.GeneratedKinds(ctx, "alpha", "web")
+	if err != nil {
+		t.Fatalf("GeneratedKinds: %v", err)
+	}
+	if kinds["PAYLOAD_SECRET"] != "hex32" {
+		t.Fatalf("want PAYLOAD_SECRET=hex32, got %v", kinds)
+	}
+	if _, ok := kinds["OPENAI_API_KEY"]; ok {
+		t.Fatal("hand-set secret must not be reported as generated")
+	}
+}
+
+func TestGeneratedKinds_NoClientsetIsGraceful(t *testing.T) {
+	// Export may run with a kube.Client lacking secret access — must not panic.
+	s := &Service{Kube: &kube.Client{}, Namespace: "kuso"}
+	kinds, err := s.GeneratedKinds(context.Background(), "alpha", "web")
+	if err != nil {
+		t.Fatalf("expected graceful nil, got err: %v", err)
+	}
+	if len(kinds) != 0 {
+		t.Fatalf("expected empty, got %v", kinds)
+	}
+}

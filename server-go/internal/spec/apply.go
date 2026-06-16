@@ -12,6 +12,7 @@ import (
 	"kuso/server/internal/crons"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/projects"
+	"kuso/server/internal/secrets"
 )
 
 // projectsReconciler is the slice of projects.Service that Apply
@@ -39,13 +40,17 @@ type cronsReconciler interface {
 
 // secretsReconciler is the slice of secrets.Service that Apply uses to
 // implement generate-once secrets. ListKeys reports which keys already
-// exist in the per-service Secret (so we don't re-mint); SetKey writes a
-// generated value into the shared (env="") Secret, which auto-attaches to
-// the service's envFromSecrets. Optional — nil disables generation
-// (generate directives then surface as a per-service error).
+// exist in the per-service Secret (so we don't re-mint); SetKeyOpts writes
+// a generated value into the shared (env="") Secret (which auto-attaches
+// to envFromSecrets) WITH the shadow guard — so a generated key that would
+// shadow a project-shared key of the same name surfaces as an error rather
+// than silently overriding it. MarkGenerated tags the key so config-as-code
+// Export can re-emit the `{generate}` form. Optional — nil disables
+// generation (generate directives then surface as a per-service error).
 type secretsReconciler interface {
 	ListKeys(ctx context.Context, project, service, env string) ([]string, error)
-	SetKey(ctx context.Context, project, service, env, key, value string) error
+	SetKeyOpts(ctx context.Context, project, service, env, key, value string, opts secrets.SetOptions) error
+	MarkGenerated(ctx context.Context, project, service, key, kind string) error
 }
 
 // Reconciler bundles the dependencies Apply needs. Callers construct
@@ -448,16 +453,35 @@ func (r *Reconciler) generateSecrets(ctx context.Context, project, service strin
 	}
 
 	for _, key := range gen {
+		kind := s.Env[key].Generate
 		if existing[key] && !opts.RotateSecrets {
-			continue // generate-once: already present, don't rotate
+			// Generate-once: already present, don't rotate. Still (re)mark
+			// it generated so Export can round-trip a key minted before
+			// the marker existed, or after the annotation was lost.
+			if err := r.Secrets.MarkGenerated(ctx, project, service, key, kind); err != nil {
+				out.Errors = append(out.Errors, StepError{Resource: "service:" + service, Op: "secret", Message: "mark " + key + ": " + err.Error()})
+			}
+			continue
 		}
-		val, err := mintSecret(s.Env[key].Generate)
+		val, err := mintSecret(kind)
 		if err != nil {
 			out.Errors = append(out.Errors, StepError{Resource: "service:" + service, Op: "secret", Message: key + ": " + err.Error()})
 			continue
 		}
-		if err := r.Secrets.SetKey(ctx, project, service, "", key, val); err != nil {
-			out.Errors = append(out.Errors, StepError{Resource: "service:" + service, Op: "secret", Message: "set " + key + ": " + err.Error()})
+		// SetKeyOpts WITH the shadow guard (Force only when the user
+		// explicitly asked to rotate): a generated key that would shadow a
+		// project-shared key of the same name surfaces as a step error
+		// instead of silently overriding it.
+		if err := r.Secrets.SetKeyOpts(ctx, project, service, "", key, val, secrets.SetOptions{Force: opts.RotateSecrets}); err != nil {
+			if secrets.IsShadowed(err) {
+				out.Errors = append(out.Errors, StepError{Resource: "service:" + service, Op: "secret", Message: "generated key " + key + " would shadow a project-shared secret; rename it or apply --rotate-secrets to override"})
+			} else {
+				out.Errors = append(out.Errors, StepError{Resource: "service:" + service, Op: "secret", Message: "set " + key + ": " + err.Error()})
+			}
+			continue
+		}
+		if err := r.Secrets.MarkGenerated(ctx, project, service, key, kind); err != nil {
+			out.Errors = append(out.Errors, StepError{Resource: "service:" + service, Op: "secret", Message: "mark " + key + ": " + err.Error()})
 		}
 	}
 }

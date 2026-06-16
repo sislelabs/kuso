@@ -8,6 +8,7 @@ import (
 	"kuso/server/internal/crons"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/projects"
+	"kuso/server/internal/secrets"
 )
 
 func TestApply_AppliesFullServiceFieldSetAndCrons(t *testing.T) {
@@ -418,15 +419,19 @@ func (f *fakeCrons) DeleteProject(_ context.Context, _, name string) error {
 	return nil
 }
 
-// fakeSecrets records SetKey calls and serves a seeded existing-key set
-// from ListKeys, so generate-once + rotate behavior can be asserted.
+// fakeSecrets records SetKeyOpts + MarkGenerated calls and serves a seeded
+// existing-key set from ListKeys, so generate-once / rotate / shadow / mark
+// behavior can be asserted. shadowKeys names keys that SetKeyOpts treats as
+// shadowed when Force is false.
 type fakeSecrets struct {
-	existing map[string]bool   // keys ListKeys reports as already present
-	setCalls map[string]string // key → value, every SetKey
+	existing   map[string]bool   // keys ListKeys reports as already present
+	setCalls   map[string]string // key → value, every successful SetKeyOpts
+	marked     map[string]string // key → kind, every MarkGenerated
+	shadowKeys map[string]bool   // keys that shadow a project-shared secret
 }
 
 func newFakeSecrets(existing ...string) *fakeSecrets {
-	fs := &fakeSecrets{existing: map[string]bool{}, setCalls: map[string]string{}}
+	fs := &fakeSecrets{existing: map[string]bool{}, setCalls: map[string]string{}, marked: map[string]string{}, shadowKeys: map[string]bool{}}
 	for _, k := range existing {
 		fs.existing[k] = true
 	}
@@ -441,9 +446,17 @@ func (f *fakeSecrets) ListKeys(_ context.Context, _, _, _ string) ([]string, err
 	return out, nil
 }
 
-func (f *fakeSecrets) SetKey(_ context.Context, _, _, _, key, value string) error {
+func (f *fakeSecrets) SetKeyOpts(_ context.Context, _, _, _, key, value string, opts secrets.SetOptions) error {
+	if f.shadowKeys[key] && !opts.Force {
+		return &secrets.ShadowedError{Key: key}
+	}
 	f.setCalls[key] = value
 	f.existing[key] = true
+	return nil
+}
+
+func (f *fakeSecrets) MarkGenerated(_ context.Context, _, _, key, kind string) error {
+	f.marked[key] = kind
 	return nil
 }
 
@@ -549,5 +562,61 @@ func TestApply_GenerateWithoutSecretsConfiguredErrors(t *testing.T) {
 	}
 	if len(res.Errors) == 0 {
 		t.Fatal("a generate directive with no secrets backend must surface a step error, not silently skip")
+	}
+}
+
+func TestApply_MarksGeneratedKeyForExportRoundTrip(t *testing.T) {
+	fp, fs := &fakeProjects{}, newFakeSecrets()
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs}
+	f := &File{Project: "shop", Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile", Env: genEnv()}}}
+	if _, err := r.Apply(context.Background(), &Plan{ServicesToCreate: []string{"api"}}, f, ApplyOpts{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if fs.marked["PAYLOAD_SECRET"] != "hex32" {
+		t.Fatalf("minted key must be marked generated (kind hex32) so export round-trips; got %q", fs.marked["PAYLOAD_SECRET"])
+	}
+}
+
+func TestApply_MarksGeneratedEvenWhenNotRotated(t *testing.T) {
+	// A pre-existing generated key (generate-once skips minting) must still
+	// be (re)marked, so a key minted before the marker existed round-trips.
+	fp, fs := &fakeProjects{}, newFakeSecrets("PAYLOAD_SECRET")
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs}
+	f := &File{Project: "shop", Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile", Env: genEnv()}}}
+	if _, err := r.Apply(context.Background(), &Plan{ServicesToUpdate: []string{"api"}}, f, ApplyOpts{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if _, set := fs.setCalls["PAYLOAD_SECRET"]; set {
+		t.Fatal("generate-once violated: re-minted an existing key")
+	}
+	if fs.marked["PAYLOAD_SECRET"] != "hex32" {
+		t.Fatalf("existing generated key must still be marked for export; got %q", fs.marked["PAYLOAD_SECRET"])
+	}
+}
+
+func TestApply_GeneratedKeyShadowingSurfacesError(t *testing.T) {
+	fp, fs := &fakeProjects{}, newFakeSecrets()
+	fs.shadowKeys["PAYLOAD_SECRET"] = true // collides with a project-shared key
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs}
+	f := &File{Project: "shop", Services: []ServiceSpec{{Name: "api", Runtime: "dockerfile", Env: genEnv()}}}
+	res, err := r.Apply(context.Background(), &Plan{ServicesToCreate: []string{"api"}}, f, ApplyOpts{})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if len(res.Errors) == 0 {
+		t.Fatal("a generated key shadowing a project-shared secret must surface a step error, not silently override")
+	}
+	if _, set := fs.setCalls["PAYLOAD_SECRET"]; set {
+		t.Fatal("shadowed key must NOT be written without --rotate-secrets")
+	}
+	// --rotate-secrets (Force) overrides the shadow guard deliberately.
+	fs2 := newFakeSecrets()
+	fs2.shadowKeys["PAYLOAD_SECRET"] = true
+	r2 := &Reconciler{Projects: &fakeProjects{}, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs2}
+	if _, err := r2.Apply(context.Background(), &Plan{ServicesToCreate: []string{"api"}}, f, ApplyOpts{RotateSecrets: true}); err != nil {
+		t.Fatalf("Apply(rotate): %v", err)
+	}
+	if _, set := fs2.setCalls["PAYLOAD_SECRET"]; !set {
+		t.Fatal("--rotate-secrets must force past the shadow guard")
 	}
 }

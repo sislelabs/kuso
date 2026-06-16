@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"kuso/server/internal/kube"
+	"kuso/server/internal/secrets"
 )
 
 // Export reconstructs a kuso.yaml File from the live CRs of a project.
@@ -39,11 +40,25 @@ func Export(ctx context.Context, k *kube.Client, namespace, project string) (*Fi
 	if err != nil {
 		return nil, fmt.Errorf("list services: %w", err)
 	}
+	// Secrets service to recover which env keys were kuso-generated, so
+	// Export re-emits `{generate: KIND}` rather than dropping them (their
+	// values live only in the per-service Secret, never on the CR).
+	secSvc := secrets.New(k, namespace)
 	for _, ls := range liveSvcs {
 		if ls.Spec.Project != project {
 			continue
 		}
-		f.Services = append(f.Services, exportService(project, ls))
+		svc := exportService(project, ls)
+		shortName := svc.Name
+		if gk, gerr := secSvc.GeneratedKinds(ctx, project, shortName); gerr == nil {
+			for key, kind := range gk {
+				if svc.Env == nil {
+					svc.Env = map[string]EnvValue{}
+				}
+				svc.Env[key] = EnvValue{Generate: kind}
+			}
+		}
+		f.Services = append(f.Services, svc)
 	}
 	sort.Slice(f.Services, func(i, j int) bool { return f.Services[i].Name < f.Services[j].Name })
 
