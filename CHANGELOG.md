@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.74] — 2026-06-17
+
+### 🐛 Bug Fixes
+- Fix(scale-to-zero): activator as direct backend; fix cold-start dial races ([a8d29cf](https://github.com/sislelabs/kuso/commit/a8d29cfe54e52c3ae66b89fcb00e18b3ae27917f))
+
 ## [0.18.73] — 2026-06-17
 
 ### ✨ Features
@@ -389,17 +394,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(spec): preview migrate-after-seed — couple migration to the seed, not the build ([cc616d2](https://github.com/sislelabs/kuso/commit/cc616d23416e7305accd86daa23531f6add58dd8))
-
-## [0.18.9] — 2026-06-02
-
-### ✨ Features
-- Feat(previews): run service release hook against preview DB ([c539c1e](https://github.com/sislelabs/kuso/commit/c539c1ee81560942fb1f10e6ca173f59637dddd7))
-
-### 🐛 Bug Fixes
-- Fix(canvas): show only the env's DB, not both shared + per-PR clone ([5bf93e3](https://github.com/sislelabs/kuso/commit/5bf93e36695e7b4846a161abbb7719c2a49522c2))
-
-### 📝 Docs
-- Docs(spec): preview release hook — run service release Job against preview DB ([6af8e83](https://github.com/sislelabs/kuso/commit/6af8e8308eaac00f39d0d80e74d5045b468995cb))
 
 
 ---
