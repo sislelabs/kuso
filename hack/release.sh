@@ -1078,6 +1078,12 @@ if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
     server-go/internal/version/VERSION
     deploy/server-go.yaml
     deploy/operator.yaml
+    # kuso-activator.yaml's image tag is rewritten in the version-bump
+    # step (it runs the kuso-server-go image); it MUST be committed too,
+    # else the released tag ships an activator pinned to the PREVIOUS
+    # version. v0.18.74 shipped that bug — the sed bumped it but it was
+    # never staged, so the tag's activator pointed at v0.18.73.
+    deploy/kuso-activator.yaml
     hack/install.sh
     server-go/internal/installscripts/scripts/install.sh
     cli/cmd/kusoCli/version/CLI_VERSION
