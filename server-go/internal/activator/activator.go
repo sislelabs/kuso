@@ -22,6 +22,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
@@ -29,7 +30,6 @@ import (
 	"sync"
 	"time"
 
-	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -65,6 +65,10 @@ type Activator struct {
 	hostMu    sync.RWMutex
 	hostCache map[string]hostEntry
 	hostTTL   time.Duration
+
+	// proxyTransport is the cold-start-tolerant transport used for the
+	// reverse proxy (short dial timeout + retry on dial races).
+	proxyTransport http.RoundTripper
 }
 
 type hostEntry struct {
@@ -87,9 +91,10 @@ func New(kc *kube.Client, logger *slog.Logger) *Activator {
 		logger:       logger,
 		holdTimeout:  30 * time.Second,
 		pollInterval: 250 * time.Millisecond,
-		waking:       map[string]*wakeState{},
-		hostCache:    map[string]hostEntry{},
-		hostTTL:      30 * time.Second,
+		waking:         map[string]*wakeState{},
+		hostCache:      map[string]hostEntry{},
+		hostTTL:        30 * time.Second,
+		proxyTransport: newProxyTransport(),
 	}
 }
 
@@ -144,6 +149,7 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 		Host:   fmt.Sprintf("%s.%s.svc.cluster.local:80", env, ns),
 	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = a.proxyTransport
 	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, perr error) {
 		a.logger.Warn("activator: proxy error", "ns", ns, "env", env, "err", perr)
 		rw.Header().Set("Retry-After", "2")
@@ -152,15 +158,87 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	proxy.ServeHTTP(w, r)
 }
 
+// newProxyTransport builds the transport the activator proxies through.
+// Two cold-start hazards motivate the design:
+//   - "connection refused": endpoint ready but the pod's listener hasn't
+//     called accept() yet.
+//   - "i/o timeout": the Endpoints object has an address but kube-proxy
+//     hasn't programmed the Service ClusterIP rule yet, so the dial to
+//     the ClusterIP black-holes.
+//
+// Each dial gets a SHORT timeout so a black-holed ClusterIP fails fast
+// instead of hanging the whole hold budget, and retryTransport retries
+// both error classes until the request context (the hold deadline)
+// expires.
+func newProxyTransport() http.RoundTripper {
+	dialer := &net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}
+	base := &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           dialer.DialContext,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   5 * time.Second,
+		ExpectContinueTimeout: time.Second,
+		// Don't reuse a connection for a service that may have just been
+		// scaled — fresh dial each time during the cold-start window.
+		DisableKeepAlives: false,
+	}
+	return &retryTransport{base: base, wait: 250 * time.Millisecond}
+}
+
+// retryTransport retries connection-establishment failures during the
+// cold-start window — "connection refused" (listener not up yet) and
+// dial "i/o timeout" (Service ClusterIP not yet programmed). Both mean
+// no bytes reached the app, so retrying is safe even for non-idempotent
+// methods. It retries until the request context (the activator's hold
+// deadline) expires.
+type retryTransport struct {
+	base http.RoundTripper
+	wait time.Duration
+}
+
+func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	for {
+		resp, err := t.base.RoundTrip(req)
+		if err == nil {
+			return resp, nil
+		}
+		if !retriableDialErr(err) {
+			return nil, err
+		}
+		select {
+		case <-req.Context().Done():
+			return nil, req.Context().Err()
+		case <-time.After(t.wait):
+		}
+	}
+}
+
+// retriableDialErr reports whether err is a cold-start dial failure we
+// should retry (connection refused, or a dial timeout / no route while
+// kube-proxy catches up).
+func retriableDialErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "no route to host") ||
+		strings.Contains(msg, "connection reset")
+}
+
 // wakeAndWait scales the target Deployment to at least 1 (coalescing
 // concurrent callers) and blocks until it reports a Ready replica or
 // ctx expires.
 func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
 	key := ns + "/" + name
 
-	// Fast path: already Ready? (e.g. the route flipped a beat late, or
-	// another request already woke it.)
-	if ready, _ := a.deploymentReady(ctx, ns, name); ready {
+	// Fast path: already serving? (e.g. another request already woke it,
+	// or the route reached us a beat late.) Endpoint-ready, not just
+	// deployment-ready, so we never hand back to the proxy before the
+	// Service can route.
+	if ready, _ := a.endpointReady(ctx, ns, name); ready {
 		return nil
 	}
 
@@ -229,12 +307,17 @@ func (a *Activator) doWake(ctx context.Context, ns, name string) error {
 	return nil
 }
 
-// waitReady polls until the Deployment reports ≥1 Ready replica.
+// waitReady polls until the target Service has at least one READY
+// endpoint address. We check Endpoints, NOT Deployment.ReadyReplicas:
+// a fresh scale-up can report a ready replica a beat before kube-proxy
+// programs the Service endpoint, and proxying in that window yields
+// "connection refused". The Service endpoint being ready is the true
+// "the proxied request will land on a live pod" signal.
 func (a *Activator) waitReady(ctx context.Context, ns, name string) error {
 	ticker := time.NewTicker(a.pollInterval)
 	defer ticker.Stop()
 	for {
-		if ready, _ := a.deploymentReady(ctx, ns, name); ready {
+		if ready, _ := a.endpointReady(ctx, ns, name); ready {
 			return nil
 		}
 		select {
@@ -245,19 +328,20 @@ func (a *Activator) waitReady(ctx context.Context, ns, name string) error {
 	}
 }
 
-func (a *Activator) deploymentReady(ctx context.Context, ns, name string) (bool, error) {
-	dep, err := a.kc.Clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+// endpointReady reports whether the env's Service (same name as the env)
+// has ≥1 ready endpoint address — i.e. kube-proxy will route to a live
+// pod. This is the gate the activator waits on before proxying.
+func (a *Activator) endpointReady(ctx context.Context, ns, name string) (bool, error) {
+	ep, err := a.kc.Clientset.CoreV1().Endpoints(ns).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		return false, err
 	}
-	return readyReplicas(dep) >= 1, nil
-}
-
-func readyReplicas(dep *appsv1.Deployment) int32 {
-	if dep == nil {
-		return 0
+	for _, ss := range ep.Subsets {
+		if len(ss.Addresses) > 0 {
+			return true, nil
+		}
 	}
-	return dep.Status.ReadyReplicas
+	return false, nil
 }
 
 // resolveByHost finds the env CR (and its namespace) whose Host or

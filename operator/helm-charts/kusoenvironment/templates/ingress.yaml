@@ -96,21 +96,9 @@ metadata:
   name: {{ include "kusoenvironment.fullname" . }}
   labels:
     {{- include "kusoenvironment.labels" . | nindent 4 }}
-  {{- $needsCert := and .Values.tlsEnabled $tlsHosts }}
-  {{- $sleeps := and .Values.sleep .Values.sleep.enabled }}
-  {{- if or $needsCert $sleeps }}
+  {{- if and .Values.tlsEnabled $tlsHosts }}
   annotations:
-    {{- if $needsCert }}
     cert-manager.io/cluster-issuer: {{ .Values.clusterIssuer | quote }}
-    {{- end }}
-    {{- if $sleeps }}
-    # Scale-to-zero: route 502-504 (no Ready backend = slept) to the
-    # shared kuso-activator, which wakes this service and replays the
-    # request. Only attached for sleep-enabled services so a normal
-    # 5xx from a non-sleeping app still surfaces. See
-    # docs/design/SCALE_TO_ZERO.md.
-    traefik.ingress.kubernetes.io/router.middlewares: kuso-kuso-activator@kubernetescrd
-    {{- end }}
   {{- end }}
 spec:
   ingressClassName: {{ .Values.ingressClassName | quote }}
@@ -151,6 +139,17 @@ spec:
     {{- end }}
   {{- end }}
   rules:
+    {{- /* Scale-to-zero: for sleep-enabled services route the Ingress
+           backend to the shared kuso-activator instead of the app's own
+           Service. The activator resolves the target by Host, wakes the
+           Deployment, and proxies the held request — so a request to a
+           0-replica (slept) app is served instead of 503-ing. When the
+           app is awake the activator transparently passes through with
+           ~15ms overhead. (The errors-middleware approach was tried
+           first but traefik didn't reliably forward/hold the request;
+           a direct backend is the validated mechanism — see
+           docs/design/SCALE_TO_ZERO.md.) */ -}}
+    {{- $sleeps := and .Values.sleep .Values.sleep.enabled -}}
     {{- range $hosts }}
     - host: {{ . | quote }}
       http:
@@ -159,9 +158,15 @@ spec:
             pathType: Prefix
             backend:
               service:
+                {{- if $sleeps }}
+                name: kuso-activator
+                port:
+                  number: 80
+                {{- else }}
                 name: {{ include "kusoenvironment.fullname" $ }}
                 port:
                   name: http
+                {{- end }}
     {{- end }}
 {{- end }}
 {{- end }}

@@ -1,17 +1,18 @@
 # kuso-activator — the scale-to-zero request-holding proxy.
 #
-# Runs the kuso-server image in `--activator` mode. traefik routes
-# traffic for scaled-to-zero services here (via the errors-middleware
-# below): the activator resolves the target env from the Host header,
-# scales its Deployment to 1, holds the request until a pod is Ready,
-# then reverse-proxies it. Once the app is awake, traffic flows directly
-# to the app again (the activator only ever sees first-hit-after-idle).
+# Runs the kuso-server image in `--activator` mode. For sleep-enabled
+# services the kusoenvironment Ingress routes its backend directly here
+# (not the app's own Service): the activator resolves the target env from
+# the Host header, scales its Deployment to 1, holds the request until
+# the Service has a ready endpoint, then reverse-proxies it. A request to
+# a slept (0-replica) app is served instead of 503-ing; when the app is
+# awake the activator passes through transparently (~15ms overhead).
 #
 # See docs/design/SCALE_TO_ZERO.md.
 #
 # Reuses the kuso-server ServiceAccount + ClusterRole — the activator's
-# kube needs (kusoenvironments get/list/patch, deployments get/patch) are
-# a subset of what kuso-server already holds, so no new RBAC.
+# kube needs (kusoenvironments + deployments get/patch, endpoints read)
+# are a subset of what kuso-server already holds, so no new RBAC.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -38,7 +39,7 @@ spec:
       priorityClassName: kuso-platform
       containers:
         - name: activator
-          image: ghcr.io/sislelabs/kuso-server-go:v0.18.72
+          image: ghcr.io/sislelabs/kuso-server-go:v0.18.73
           args: ["--activator"]
           env:
             - { name: KUSO_HTTP_ADDR, value: ":3000" }
@@ -69,26 +70,3 @@ spec:
   selector: { app.kubernetes.io/name: kuso-activator }
   ports:
     - { name: http, port: 80, targetPort: 3000, protocol: TCP }
----
-# traefik errors-middleware: when an app route returns 502/503/504 (the
-# signature of a scaled-to-zero service with no Ready backend), traefik
-# forwards the request to kuso-activator instead of surfacing the error.
-# The activator wakes the app and replays the request.
-#
-# Attached to a service's Ingress only when sleep is enabled (see the
-# kusoenvironment ingress template). Apps without sleep never get this
-# middleware, so a genuine 503 from a healthy-but-erroring app still
-# surfaces normally for them.
-apiVersion: traefik.io/v1alpha1
-kind: Middleware
-metadata:
-  name: kuso-activator
-  namespace: kuso
-spec:
-  errors:
-    status:
-      - "502-504"
-    service:
-      name: kuso-activator
-      port: 80
-    query: "/{path}"

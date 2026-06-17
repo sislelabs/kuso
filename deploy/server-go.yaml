@@ -74,6 +74,12 @@ rules:
   - apiGroups: [""]
     resources: [pods]
     verbs: [get, list, watch, delete]
+  # endpoints: the scale-to-zero activator (--activator mode, reusing
+  # this ServiceAccount) gates "safe to proxy" on the target Service
+  # having a ready endpoint, so it needs to read Endpoints cluster-wide.
+  - apiGroups: [""]
+    resources: [endpoints]
+    verbs: [get, list, watch]
   - apiGroups: [""]
     resources: [events]
     verbs: [get, list, watch]

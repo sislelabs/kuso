@@ -1,5 +1,20 @@
 # Design: Scale-to-Zero with a Request-Holding Activator
 
+> **IMPLEMENTED (v0.18.73+).** Live e2e validated. One design change vs the
+> original proposal: the traefik **errors-middleware (mechanism 3) did NOT
+> work** — traefik returned 503 to the client (~5s) instead of reliably
+> forwarding/holding the request at the activator. The validated mechanism
+> is **the activator as the direct Ingress backend** for sleep-enabled
+> services (a clean variant of mechanism 2, with no per-state route
+> flipping): the kusoenvironment Ingress points its backend at
+> `kuso-activator` whenever `sleep.enabled`. Hitting the activator
+> directly woke a 0-replica app and served 200 in ~3.3s; awake requests
+> pass through in ~15ms. Two activator code fixes were needed: gate
+> "safe to proxy" on the **Service Endpoints** being ready (not
+> Deployment.ReadyReplicas), and a retry transport with a short dial
+> timeout that retries the cold-start dial races ("connection refused"
+> AND "i/o timeout" while kube-proxy programs the ClusterIP).
+
 **Status:** Draft / proposal
 **Author:** (design doc)
 **Context:** Hosting many mostly-idle apps (e.g. an AI-app-builder backend) requires

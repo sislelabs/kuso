@@ -1,12 +1,19 @@
 package activator
 
 import (
+	"errors"
+	"net/http"
 	"testing"
-
-	appsv1 "k8s.io/api/apps/v1"
+	"time"
 
 	"kuso/server/internal/kube"
 )
+
+var errBoom = errors.New("boom")
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestHostOnly(t *testing.T) {
 	t.Parallel()
@@ -43,14 +50,62 @@ func TestHostMatches(t *testing.T) {
 	}
 }
 
-func TestReadyReplicas(t *testing.T) {
+func TestRetryTransport_NonRetriableErrorReturnsImmediately(t *testing.T) {
 	t.Parallel()
-	if got := readyReplicas(nil); got != 0 {
-		t.Errorf("nil deployment: got %d, want 0", got)
+	// A non-dial-race error must NOT be retried — return immediately so
+	// a genuine app 500/etc isn't masked by retries.
+	calls := 0
+	rt := &retryTransport{base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		return nil, errBoom
+	}), wait: time.Millisecond}
+	req, _ := http.NewRequest("GET", "http://x/", nil)
+	if _, err := rt.RoundTrip(req); err != errBoom {
+		t.Fatalf("want errBoom, got %v", err)
 	}
-	dep := &appsv1.Deployment{}
-	dep.Status.ReadyReplicas = 3
-	if got := readyReplicas(dep); got != 3 {
-		t.Errorf("got %d, want 3", got)
+	if calls != 1 {
+		t.Errorf("non-retriable error retried %d times, want 1", calls)
+	}
+}
+
+func TestRetryTransport_RetriesDialRaceUntilSuccess(t *testing.T) {
+	t.Parallel()
+	// "connection refused" then success on the 3rd try → one 200.
+	calls := 0
+	rt := &retryTransport{base: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		if calls < 3 {
+			return nil, errors.New("dial tcp 10.0.0.1:80: connect: connection refused")
+		}
+		return &http.Response{StatusCode: 200, Body: http.NoBody}, nil
+	}), wait: time.Millisecond}
+	req, _ := http.NewRequest("GET", "http://x/", nil)
+	resp, err := rt.RoundTrip(req)
+	if err != nil || resp.StatusCode != 200 {
+		t.Fatalf("want 200, got resp=%v err=%v", resp, err)
+	}
+	if calls != 3 {
+		t.Errorf("want 3 tries, got %d", calls)
+	}
+}
+
+func TestRetriableDialErr(t *testing.T) {
+	t.Parallel()
+	retri := []string{
+		"dial tcp 10.0.0.1:80: connect: connection refused",
+		"dial tcp 10.0.0.1:80: i/o timeout",
+		"dial tcp: no route to host",
+		"read: connection reset by peer",
+	}
+	for _, m := range retri {
+		if !retriableDialErr(errors.New(m)) {
+			t.Errorf("want retriable: %q", m)
+		}
+	}
+	if retriableDialErr(errors.New("500 internal server error")) {
+		t.Error("app error must not be retriable")
+	}
+	if retriableDialErr(nil) {
+		t.Error("nil must not be retriable")
 	}
 }
