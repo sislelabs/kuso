@@ -243,6 +243,15 @@ if [[ "$CURRENT" != "$VERSION" ]]; then
       deploy/server-go.yaml
     rm deploy/server-go.yaml.bak
 
+    # deploy/kuso-activator.yaml: runs the same kuso-server-go image in
+    # --activator mode, so its tag must move in lockstep. Tolerant regex
+    # (any prior version) so it can't go stale the way KUSO_SERVER_VERSION
+    # once did.
+    sed -i.bak \
+      -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${VERSION}|g" \
+      deploy/kuso-activator.yaml
+    rm deploy/kuso-activator.yaml.bak
+
     # deploy/operator.yaml: same shape — the image: line is the
     # source of truth for `kubectl apply -f deploy/` direct users.
     # Pre-v0.9.4 this was frozen at v0.1.0-dev for releases on end.

@@ -1,0 +1,94 @@
+# kuso-activator — the scale-to-zero request-holding proxy.
+#
+# Runs the kuso-server image in `--activator` mode. traefik routes
+# traffic for scaled-to-zero services here (via the errors-middleware
+# below): the activator resolves the target env from the Host header,
+# scales its Deployment to 1, holds the request until a pod is Ready,
+# then reverse-proxies it. Once the app is awake, traffic flows directly
+# to the app again (the activator only ever sees first-hit-after-idle).
+#
+# See docs/design/SCALE_TO_ZERO.md.
+#
+# Reuses the kuso-server ServiceAccount + ClusterRole — the activator's
+# kube needs (kusoenvironments get/list/patch, deployments get/patch) are
+# a subset of what kuso-server already holds, so no new RBAC.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kuso-activator
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-activator
+spec:
+  # Two replicas: the activator is in the request path for waking apps,
+  # so it must survive a node drain without dropping wakes. They don't
+  # coordinate — all shared state is on the Deployment objects they
+  # scale, so racing replicas converge.
+  replicas: 2
+  selector:
+    matchLabels: { app.kubernetes.io/name: kuso-activator }
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxSurge: 1, maxUnavailable: 0 }
+  template:
+    metadata:
+      labels: { app.kubernetes.io/name: kuso-activator }
+    spec:
+      serviceAccountName: kuso-server
+      priorityClassName: kuso-platform
+      containers:
+        - name: activator
+          image: ghcr.io/sislelabs/kuso-server-go:v0.18.72
+          args: ["--activator"]
+          env:
+            - { name: KUSO_HTTP_ADDR, value: ":3000" }
+            - { name: KUSO_NAMESPACE, value: kuso }
+          ports:
+            - { name: http, containerPort: 3000 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 5
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            # The activator is a thin proxy — small footprint. It's a
+            # fixed shared cost amortized across every scaled-to-zero app.
+            requests: { cpu: 25m, memory: 64Mi }
+            limits: { memory: 256Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kuso-activator
+  namespace: kuso
+  labels: { app.kubernetes.io/name: kuso-activator }
+spec:
+  selector: { app.kubernetes.io/name: kuso-activator }
+  ports:
+    - { name: http, port: 80, targetPort: 3000, protocol: TCP }
+---
+# traefik errors-middleware: when an app route returns 502/503/504 (the
+# signature of a scaled-to-zero service with no Ready backend), traefik
+# forwards the request to kuso-activator instead of surfacing the error.
+# The activator wakes the app and replays the request.
+#
+# Attached to a service's Ingress only when sleep is enabled (see the
+# kusoenvironment ingress template). Apps without sleep never get this
+# middleware, so a genuine 503 from a healthy-but-erroring app still
+# surfaces normally for them.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: kuso-activator
+  namespace: kuso
+spec:
+  errors:
+    status:
+      - "502-504"
+    service:
+      name: kuso-activator
+      port: 80
+    query: "/{path}"

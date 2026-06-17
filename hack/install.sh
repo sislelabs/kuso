@@ -908,6 +908,16 @@ curl -sfL "${KUSO_RAW}/deploy/server-go.yaml" \
   | sed -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
   | kubectl apply -f - >/dev/null
 
+# kuso-activator: the scale-to-zero request-holding proxy (runs the same
+# image in --activator mode). Reuses the kuso-server ServiceAccount, so
+# it must apply AFTER server-go.yaml (which declares the SA + RBAC). The
+# traefik errors-Middleware it defines is what wakes slept services.
+# Best-effort: a cluster without scale-to-zero users still works, the
+# activator just sits idle. Same image-tag rewrite as the server.
+curl -sfL "${KUSO_RAW}/deploy/kuso-activator.yaml" \
+  | sed -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
+  | kubectl apply -f - >/dev/null 2>&1 || warn "kuso-activator apply failed (scale-to-zero wake won't work until fixed)"
+
 kubectl apply -f - <<EOF >/dev/null
 # kuso-server's ServiceAccount + RBAC are owned by deploy/server-go.yaml
 # (the narrow ClusterRole + ClusterRoleBinding declared at the top of

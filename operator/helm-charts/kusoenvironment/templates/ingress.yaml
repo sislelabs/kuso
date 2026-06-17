@@ -96,9 +96,21 @@ metadata:
   name: {{ include "kusoenvironment.fullname" . }}
   labels:
     {{- include "kusoenvironment.labels" . | nindent 4 }}
-  {{- if and .Values.tlsEnabled $tlsHosts }}
+  {{- $needsCert := and .Values.tlsEnabled $tlsHosts }}
+  {{- $sleeps := and .Values.sleep .Values.sleep.enabled }}
+  {{- if or $needsCert $sleeps }}
   annotations:
+    {{- if $needsCert }}
     cert-manager.io/cluster-issuer: {{ .Values.clusterIssuer | quote }}
+    {{- end }}
+    {{- if $sleeps }}
+    # Scale-to-zero: route 502-504 (no Ready backend = slept) to the
+    # shared kuso-activator, which wakes this service and replays the
+    # request. Only attached for sleep-enabled services so a normal
+    # 5xx from a non-sleeping app still surfaces. See
+    # docs/design/SCALE_TO_ZERO.md.
+    traefik.ingress.kubernetes.io/router.middlewares: kuso-kuso-activator@kubernetescrd
+    {{- end }}
   {{- end }}
 spec:
   ingressClassName: {{ .Values.ingressClassName | quote }}

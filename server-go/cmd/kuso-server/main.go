@@ -45,7 +45,9 @@ import (
 	"kuso/server/internal/logship"
 	"kuso/server/internal/metrics"
 	"kuso/server/internal/nodemetrics"
+	"kuso/server/internal/activator"
 	"kuso/server/internal/nodewatch"
+	"kuso/server/internal/scaledown"
 	"kuso/server/internal/notify"
 	"kuso/server/internal/pkgupdates"
 	"kuso/server/internal/platformharden"
@@ -71,10 +73,21 @@ func main() {
 	// a Secret; the deploy yaml mounts it as KUSO_DB_DSN.
 	dbDSN := flag.String("db-dsn", envOr("KUSO_DB_DSN", "postgres://kuso:kuso@kuso-postgres:5432/kuso?sslmode=disable"), "Postgres DSN")
 	namespace := flag.String("namespace", envOr("KUSO_NAMESPACE", "kuso"), "Kubernetes namespace for Kuso CRs")
+	// --activator runs this same image as the scale-to-zero request-
+	// holding proxy instead of the full control plane. It needs only a
+	// kube client + an HTTP listener — no DB, no router. traefik routes
+	// scaled-to-zero traffic here; the activator wakes the target and
+	// proxies the held request (see docs/design/SCALE_TO_ZERO.md).
+	activatorMode := flag.Bool("activator", envOr("KUSO_ACTIVATOR", "") == "true", "run as the scale-to-zero activator proxy")
 	flag.Parse()
 
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	slog.SetDefault(logger)
+
+	if *activatorMode {
+		runActivator(*addr, logger)
+		return
+	}
 
 	jwtSecret := os.Getenv("JWT_SECRET")
 
@@ -990,6 +1003,16 @@ func main() {
 				Logger: logger.With("component", "nodewatch"),
 			}
 			go watcher.Run(workCtx)
+			// Scale-to-zero scale-down half: sleeps idle sleep-enabled
+			// services (Deployment → 0 replicas) after sleep.afterMinutes
+			// of no traffic; the activator (--activator mode) wakes them
+			// on the next request. Leader-gated so only one replica
+			// scales things. See docs/design/SCALE_TO_ZERO.md.
+			go (&scaledown.Watcher{
+				Kube:      kubeClient,
+				Namespace: *namespace,
+				Logger:    logger.With("component", "scaledown"),
+			}).Run(workCtx)
 			// Host package-update advisory — reads the pkg-probe
 			// DaemonSet's node annotations and notifies (warn, edge-
 			// triggered, restart-safe via the Setting kv) when a node
@@ -1613,4 +1636,36 @@ type ghInstallResolverFunc func(ctx context.Context, owner, repo string) (int64,
 
 func (f ghInstallResolverFunc) ResolveInstallationForRepo(ctx context.Context, owner, repo string) (int64, error) {
 	return f(ctx, owner, repo)
+}
+
+// runActivator runs the scale-to-zero activator proxy (the --activator
+// mode). It builds only a kube client + an HTTP server — no DB, no
+// router, no leader election. Several activator replicas can run; they
+// converge because all shared state (desired replicas) lives on the
+// Deployment object.
+func runActivator(addr string, logger *slog.Logger) {
+	kc, err := kube.NewClient()
+	if err != nil {
+		logger.Error("activator: kube client", "err", err)
+		os.Exit(2)
+	}
+	act := activator.New(kc, logger.With("component", "activator"))
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           act.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	go func() {
+		<-ctx.Done()
+		shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(shutCtx)
+	}()
+	logger.Info("kuso activator listening", "addr", addr)
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		logger.Error("activator: serve", "err", err)
+		os.Exit(1)
+	}
 }
