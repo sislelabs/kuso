@@ -5,6 +5,19 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.73] — 2026-06-17
+
+### ✨ Features
+- Feat(scale-to-zero): activator proxy + idle detector for sleep services ([f7c86d0](https://github.com/sislelabs/kuso/commit/f7c86d0d8cdd38450bd20b86b71e9beeed4301c3))
+- Feat(cli): payload template — external-secrets guidance + redis addon + apply-safe comments ([103586f](https://github.com/sislelabs/kuso/commit/103586fbeb1cd4832ea4bcba2b89e965e179fc09))
+- Feat(auth): configurable + disable-able session lifetime ([41c505a](https://github.com/sislelabs/kuso/commit/41c505ac44b40d148e28fab01d48aaf7064fa14f))
+
+### 🐛 Bug Fixes
+- Fix(spec): generated-secret export round-trip + shadow-guard on generate ([4993170](https://github.com/sislelabs/kuso/commit/4993170d1661413a7bdc72da83bf4fcbff402be3))
+
+### 🧪 Tests
+- Test(kube): regenerate kusoenvironments CRD golden for publicEnv ([421bdb9](https://github.com/sislelabs/kuso/commit/421bdb953629275f6bb34ea2295e52aa08a86669))
+
 ## [0.18.72] — 2026-06-14
 
 ### 🐛 Bug Fixes
@@ -387,19 +400,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(spec): preview release hook — run service release Job against preview DB ([6af8e83](https://github.com/sislelabs/kuso/commit/6af8e8308eaac00f39d0d80e74d5045b468995cb))
-
-## [0.18.8] — 2026-06-02
-
-### ✨ Features
-- Feat(ha): add spreadPolicy to kusoenvironments CRD schema + golden ([2621944](https://github.com/sislelabs/kuso/commit/2621944bf31b2594f87bb1aefd45539f2a6a420e))
-
-### 🐛 Bug Fixes
-- Fix(preview): repoint DB secretKeyRef envVars (READ_URL) to clone DB ([9ee394c](https://github.com/sislelabs/kuso/commit/9ee394c6a847bb23313b593a875e048392cc0d39))
-- Fix(preview): seed job waits for Postgres readiness before dumping ([95d5beb](https://github.com/sislelabs/kuso/commit/95d5beb7746c70881d2939c09f1119ec0e1c279b))
-- Fix(autoscale): guarantee a CPU request so the HPA can actually scale ([a219895](https://github.com/sislelabs/kuso/commit/a219895c54cf7568a7461693067bb81171b65a99))
-
-### 🧹 Chores
-- Chore: archive promoted CHANGELOG entries (pre-v0.18.8 ship) ([a120803](https://github.com/sislelabs/kuso/commit/a120803f4901e50445ca6c2dd0ae330dbcb7f5a0))
 
 
 ---
