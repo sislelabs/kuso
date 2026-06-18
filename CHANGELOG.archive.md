@@ -2,6 +2,90 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.10] — 2026-06-02
+
+### 🐛 Bug Fixes
+- Fix(previews): run migrations after the seed, not at build-promote ([93f8f67](https://github.com/sislelabs/kuso/commit/93f8f67d18c95e1cee75952fc2fdb46b2d15148a))
+
+### 📝 Docs
+- Docs(spec): preview migrate-after-seed — couple migration to the seed, not the build ([cc616d2](https://github.com/sislelabs/kuso/commit/cc616d23416e7305accd86daa23531f6add58dd8))
+
+## [0.18.9] — 2026-06-02
+
+### ✨ Features
+- Feat(previews): run service release hook against preview DB ([c539c1e](https://github.com/sislelabs/kuso/commit/c539c1ee81560942fb1f10e6ca173f59637dddd7))
+
+### 🐛 Bug Fixes
+- Fix(canvas): show only the env's DB, not both shared + per-PR clone ([5bf93e3](https://github.com/sislelabs/kuso/commit/5bf93e36695e7b4846a161abbb7719c2a49522c2))
+
+### 📝 Docs
+- Docs(spec): preview release hook — run service release Job against preview DB ([6af8e83](https://github.com/sislelabs/kuso/commit/6af8e8308eaac00f39d0d80e74d5045b468995cb))
+
+## [0.18.8] — 2026-06-02
+
+### ✨ Features
+- Feat(ha): add spreadPolicy to kusoenvironments CRD schema + golden ([2621944](https://github.com/sislelabs/kuso/commit/2621944bf31b2594f87bb1aefd45539f2a6a420e))
+
+### 🐛 Bug Fixes
+- Fix(preview): repoint DB secretKeyRef envVars (READ_URL) to clone DB ([9ee394c](https://github.com/sislelabs/kuso/commit/9ee394c6a847bb23313b593a875e048392cc0d39))
+- Fix(preview): seed job waits for Postgres readiness before dumping ([95d5beb](https://github.com/sislelabs/kuso/commit/95d5beb7746c70881d2939c09f1119ec0e1c279b))
+- Fix(autoscale): guarantee a CPU request so the HPA can actually scale ([a219895](https://github.com/sislelabs/kuso/commit/a219895c54cf7568a7461693067bb81171b65a99))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.8 ship) ([a120803](https://github.com/sislelabs/kuso/commit/a120803f4901e50445ca6c2dd0ae330dbcb7f5a0))
+
+## [0.18.7] — 2026-06-02
+
+### ✨ Features
+- Feat(ha): resolve + stamp spreadPolicy from live node count ([0af23eb](https://github.com/sislelabs/kuso/commit/0af23ebeba5f069532b313476c8551587fe4fac6))
+- Feat(ha): spreadPolicy field + chart hard/soft topology spread ([119e53c](https://github.com/sislelabs/kuso/commit/119e53c9e4ec1d839efa0195bf8ba74d10390a70))
+
+### 🐛 Bug Fixes
+- Fix(pkg-updates): reboot path left node cordoned (post-reboot Job re-run) ([d072e56](https://github.com/sislelabs/kuso/commit/d072e561c372491ebc9a09093d07ac6f33f21041))
+
+### 📝 Docs
+- Docs(spec): guaranteed replica spread across nodes (HA) ([e74ae4b](https://github.com/sislelabs/kuso/commit/e74ae4b526125e58505d8d5bdddc519b262f689a))
+
+### 🧪 Tests
+- Test(ha): chart-render assertions for spreadPolicy ([a2258de](https://github.com/sislelabs/kuso/commit/a2258deb4d294583a2baf116e040aabc846511d0))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.7 ship) ([2685176](https://github.com/sislelabs/kuso/commit/2685176bad6ca9d98068bf8dde47d9c6fa132370))
+
+## [0.18.6] — 2026-06-01
+
+### Other
+- Feat(pkg-updates) phase 3+4: apply patches + reboot orchestration ([a6430aa](https://github.com/sislelabs/kuso/commit/a6430aa0a97bbc98aa6c1a50435f466cec8a9fe5))
+- Feat(pkg-updates) phase 2: advisory surface + notify ([e4ea1fd](https://github.com/sislelabs/kuso/commit/e4ea1fdfe4842ce30cb26fc8c6a079d5c6b4ae4b))
+- Feat(pkg-updates) phase 1: host package-update probe DaemonSet ([47d2baf](https://github.com/sislelabs/kuso/commit/47d2baf9fa65d1f8fb8580d1d2f4ce14538a1fa3))
+
+### 🐛 Bug Fixes
+- Fix(backuphealth): don't @here-page when backups were never configured ([edd17c8](https://github.com/sislelabs/kuso/commit/edd17c8ba385fe2ca8211224ccc951b3057ada78))
+- Fix(cron): http crons crashloop with CreateContainerConfigError ([3cdb1ec](https://github.com/sislelabs/kuso/commit/3cdb1ec4f6e399c1b13821a45947881d1671883c))
+
+### 📝 Docs
+- Docs(spec): host package-update advisory + patch orchestration ([4d8ec48](https://github.com/sislelabs/kuso/commit/4d8ec489573bea460101f65d8da92866b5bd4a46))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.6 ship) ([64c3815](https://github.com/sislelabs/kuso/commit/64c3815d8ce31bb1d0f9ef076cd993b983035755))
+
+## [0.18.5] — 2026-05-30
+
+### 🐛 Bug Fixes
+- Fix(projects): card domain links to the base domain + add settings shortcut ([db84a2f](https://github.com/sislelabs/kuso/commit/db84a2f1aaa15318820ad6a8a8cb45fb3895ebef))
+- Fix(auth): don't log out the admin when they change a group they're in ([a982977](https://github.com/sislelabs/kuso/commit/a98297778d8f96afb5691e3bcea7f15e5a102331))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.5 ship) ([5e63f1d](https://github.com/sislelabs/kuso/commit/5e63f1df259f6bc3451e277ec92b6a7c5645816f))
+
+## [0.18.4] — 2026-05-30
+
+### 🐛 Bug Fixes
+- Fix(access): click-to-add multi-select popovers for members + grants ([2861c18](https://github.com/sislelabs/kuso/commit/2861c185d04c41e924bf61dee6546065b341a5c8))
+
+### 🧹 Chores
+- Chore: archive promoted CHANGELOG entries (pre-v0.18.4 ship) ([e7e754b](https://github.com/sislelabs/kuso/commit/e7e754b642dce73e038036b66be15d6717265ded))
+
 ## [0.18.3] — 2026-05-30
 
 ### ✨ Features
@@ -826,6 +910,7 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 - Fix(review): release signing, persistent rate limit, schema check + 5 more ([d15f720](https://github.com/sislelabs/kuso/commit/d15f720bdf4d45bef877b46460738ecb293ef794))
 - Fix(review): architecture extracts + 8 more P1/P2 findings ([f3e852b](https://github.com/sislelabs/kuso/commit/f3e852b5bc6aa64f13b377ba9c96ee6ee7487c0b))
 - Fix(review): land P0 review findings + 6 P1/P2 fixes ([6620e66](https://github.com/sislelabs/kuso/commit/6620e66451d85786f83ebceea69ff84ccb5be5ec))
+- Fix(addon-sql): stop wide tables from blowing out the overlay ([9dacc6f](https://github.com/sislelabs/kuso/commit/9dacc6f5c3c016e6d7fd5a7ba3de8f683ab4066c))
 
 ### 📝 Docs
 - Docs(auth): correct misleading fail-open comment on RevocationChecker (Sec P1-4) ([9f4fc8b](https://github.com/sislelabs/kuso/commit/9f4fc8b9994c87a9076ba3f064d8ab0f87be624d))
@@ -848,17 +933,12 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 - Refactor(http): extract mountAuthenticatedRoutes out of NewRouter (A-P1-2) ([d6b25cc](https://github.com/sislelabs/kuso/commit/d6b25cc79420a81ab53dbc09503d43b6f2212dba))
 - Refactor(web): move shared-secrets API calls into features/ (A-P1-8) ([05737ce](https://github.com/sislelabs/kuso/commit/05737ce7cb9cfbef74c32bea1ea579a2220c9e7a))
 
-## [0.9.79] — 2026-05-12
-
-### 🐛 Bug Fixes
-- Fix(addon-sql): stop wide tables from blowing out the overlay ([9dacc6f](https://github.com/sislelabs/kuso/commit/9dacc6f5c3c016e6d7fd5a7ba3de8f683ab4066c))
-
-## [0.9.78] — 2026-05-11
+## [0.9.79] — 2026-05-11
 
 ### Other
 - Ux(service-settings): drop "test access" button + style Internal-only as toggle ([20679e3](https://github.com/sislelabs/kuso/commit/20679e3ef2ab0a374bca3443e76d44cd108f1681))
 
-## [0.9.77] — 2026-05-11
+## [0.9.78] — 2026-05-11
 
 ### ✨ Features
 - Feat: security hardening + project export/import + CLI parity ([dd2bb08](https://github.com/sislelabs/kuso/commit/dd2bb0860a04774e009b92f323d4a1fc82896d1f))
@@ -866,28 +946,32 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 ### 🐛 Bug Fixes
 - Fix(updater): graceful default for unsigned-no-key state ([b5d54cc](https://github.com/sislelabs/kuso/commit/b5d54cc38bc58d5350e7bc1e2ae774eb615591b0))
 
-## [0.9.76] — 2026-05-11
+## [0.9.77] — 2026-05-11
 
 ### Other
 - Ux: trim user dropdown + alpha-sort env vars ([872c825](https://github.com/sislelabs/kuso/commit/872c8254f390c9c9fb0e253c7d7f58e5553acd3e))
 
-## [0.9.75] — 2026-05-11
+## [0.9.76] — 2026-05-11
 
 ### Other
 - Ux(settings): tighter Source + Build rows ([3301a20](https://github.com/sislelabs/kuso/commit/3301a2076b348f8244aedaf4d3a5c2e1446ae3cf))
 
+## [0.9.75] — 2026-05-11
+
 ### ✨ Features
 - Feat(github): one-click "Sign in with GitHub" provisioning for services ([d13cb5b](https://github.com/sislelabs/kuso/commit/d13cb5b8b7a75da3bf68991c1e81b2600c5f6812))
-
-## [0.9.74] — 2026-05-11
 
 ### 🐛 Bug Fixes
 - Fix(builds): poll every 5s, not 30s — BuildKit warm-cache builds completed in <30s so the poller's first tick saw 'succeeded' without ever observing 'running'. UI showed PENDING all the way through despite logs streaming. ([de32a74](https://github.com/sislelabs/kuso/commit/de32a74418ff29d5b91436f55ede8ff1b569dd83))
 
-## [0.9.73] — 2026-05-11
+## [0.9.74] — 2026-05-11
 
 ### Other
 - Ux(canvas): pulse on pending/queued builds too, not just running ([db5dc7a](https://github.com/sislelabs/kuso/commit/db5dc7a85b94fb0e64bbc076f121d8f9b458d03a))
+
+## [0.9.73] — 2026-05-11
+
+### Other
 - Build: long-lived shared BuildKit daemon — Coolify-style architecture ([a060ef7](https://github.com/sislelabs/kuso/commit/a060ef7f005a6dd002d1748d728f330dd5076e30))
 - Build: swap kaniko for moby/buildkit:rootless ([fdc8f70](https://github.com/sislelabs/kuso/commit/fdc8f70a13e09a21b257c9fd5a8e9ba76c6c0878))
 
@@ -910,11 +994,12 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 - Fix(postgres-dsn-stamp): read from kuso-postgres-conn, not -app ([857c167](https://github.com/sislelabs/kuso/commit/857c167eb7ff486e7273036a7b0a109f740961a9))
 - Fix(deploy): use alpine/k8s:1.30.4 not rancher/kubectl:v1.30.4 ([485c08b](https://github.com/sislelabs/kuso/commit/485c08b3508c63eb1b157623a1f44c6a35d6ff86))
 - Fix(deploy): replace bitnami/kubectl:1.30 (deprecated, pulled from ([5040a67](https://github.com/sislelabs/kuso/commit/5040a6758a6ee7efb44e2f4f10bd684b92ec0d0b))
+- Fix(logs): build pod logs work via REST tail + add --build CLI flag ([eaaaae8](https://github.com/sislelabs/kuso/commit/eaaaae8931395ec72885f9e138d9f26e5ea82847))
 
 ## [0.9.60] — 2026-05-10
 
 ### 🐛 Bug Fixes
-- Fix(logs): build pod logs work via REST tail + add --build CLI flag ([eaaaae8](https://github.com/sislelabs/kuso/commit/eaaaae8931395ec72885f9e138d9f26e5ea82847))
+- Fix: apply scoped to project + CLI image-runtime + skill accuracy ([8e7d418](https://github.com/sislelabs/kuso/commit/8e7d4185a820bca287ccf9e5d9b7cf2c720448a9))
 
 ## [0.9.59] — 2026-05-10
 
@@ -922,80 +1007,75 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 - Skill: drop-in kuso skill for Claude Code ([4735c52](https://github.com/sislelabs/kuso/commit/4735c52517b8137c7da4fe1332d7317183a243e1))
 - Hardening pass: pod-security, RBAC, CSRF, multi-ns logs, mobile incident ([bb1386f](https://github.com/sislelabs/kuso/commit/bb1386fe1a4354faa6ab2e52043fbe1a478b602b))
 
-### 🐛 Bug Fixes
-- Fix: apply scoped to project + CLI image-runtime + skill accuracy ([8e7d418](https://github.com/sislelabs/kuso/commit/8e7d4185a820bca287ccf9e5d9b7cf2c720448a9))
-
-## [0.9.58] — 2026-05-08
-
 ### 📝 Docs
 - Docs: surface "set your app's URL env var" hint on custom-domains ([90c6d5f](https://github.com/sislelabs/kuso/commit/90c6d5f1903c6ec94ecb91c70a844ad5245ce038))
 
-## [0.9.57] — 2026-05-08
+## [0.9.58] — 2026-05-08
 
 ### 🐛 Bug Fixes
 - Fix two regressions ([595caec](https://github.com/sislelabs/kuso/commit/595caecc71611a722c68453dcb165274fbed57fb))
 
-## [0.9.56] — 2026-05-08
+## [0.9.57] — 2026-05-08
 
 ### Other
 - Build: lighter kaniko + capture OOMKilled in failure reason ([fc6e587](https://github.com/sislelabs/kuso/commit/fc6e58729bb177a69607b86102d845c9dc0c42a0))
 
-## [0.9.55] — 2026-05-08
+## [0.9.56] — 2026-05-08
 
 ### Other
 - Ux: drop redeploy split-button + widen settings rows ([71559a8](https://github.com/sislelabs/kuso/commit/71559a881db905e1ab78430d301d21e48521df18))
 
-## [0.9.54] — 2026-05-08
+## [0.9.55] — 2026-05-08
 
 ### Other
 - Gh: smarter, more resilient build-trigger flow ([a366108](https://github.com/sislelabs/kuso/commit/a3661088d909cbc897035c7a4bd2add19ee4e2be))
 
-## [0.9.53] — 2026-05-08
+## [0.9.54] — 2026-05-08
 
 ### Other
 - Ux: deep review pass — 20 fixes across surface ([6ba8cbf](https://github.com/sislelabs/kuso/commit/6ba8cbf19094732e5bebf9de2eab2dd1d2dc0016))
 
-## [0.9.52] — 2026-05-08
+## [0.9.53] — 2026-05-08
 
 ### 👷 CI
 - Ci: register react-hooks plugin + fix 22 lint errors ([e403395](https://github.com/sislelabs/kuso/commit/e40339555eb80d6b8039ece743d4c44fa12f2352))
 
-## [0.9.51] — 2026-05-08
+## [0.9.52] — 2026-05-08
 
 ### 🐛 Bug Fixes
 - Fix(env-switcher): always set ?env=<name>, even for production ([b855bdd](https://github.com/sislelabs/kuso/commit/b855bdd34e8d19bc78ef982edf6f0574cfc33f65))
 
-## [0.9.50] — 2026-05-08
+## [0.9.51] — 2026-05-08
 
 ### 🐛 Bug Fixes
 - Fix(env-switcher): rows are real <a href> links ([4709b67](https://github.com/sislelabs/kuso/commit/4709b674578446891b986cf4f39705ebac673e8c))
 
-## [0.9.49] — 2026-05-08
+## [0.9.50] — 2026-05-08
 
 ### 🐛 Bug Fixes
 - Fix(env-switcher): roll-our-own dropdown, both directions work ([a0a8df3](https://github.com/sislelabs/kuso/commit/a0a8df35e52ac54e12a948a61c535814be5c742f))
 
-## [0.9.48] — 2026-05-08
+## [0.9.49] — 2026-05-08
 
 ### 🐛 Bug Fixes
 - Fix(ui): drop discard-changes prompt + plain-button env switcher ([c4246e9](https://github.com/sislelabs/kuso/commit/c4246e967ee783e3040aea2ae26be11b6eaea79f))
 
-## [0.9.47] — 2026-05-08
+## [0.9.48] — 2026-05-08
 
 ### 🐛 Bug Fixes
 - Fix(envs): clone service envVars too; switcher click; pulse on running build ([0701d84](https://github.com/sislelabs/kuso/commit/0701d84e45538a492d7662ee40a9c73d4b13160a))
 
-## [0.9.46] — 2026-05-08
+## [0.9.47] — 2026-05-08
 
 ### 🐛 Bug Fixes
 - Fix(envs): cloned env CR uses -production suffix, not bare service name ([410161e](https://github.com/sislelabs/kuso/commit/410161e32c5f4605f7fbc52363706982755e1f38))
 
-## [0.9.45] — 2026-05-07
+## [0.9.46] — 2026-05-07
 
 ### 🐛 Bug Fixes
 - Fix(envs): clone sibling URLs + image, dedupe env CR name + host ([7568864](https://github.com/sislelabs/kuso/commit/7568864ad6cfb976d312b95065c7d2d4d7e8363a))
 
-## [0.9.44] — 2026-05-07
+## [0.9.45] — 2026-05-07
 
 ### ✨ Features
 - Feat(envs): non-prod banner + per-env branch input + previews copy ([c0d9912](https://github.com/sislelabs/kuso/commit/c0d9912ab820f239322a583a9f3402e33bbce229))
@@ -1004,23 +1084,19 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 
 ### ✨ Features
 - Feat(envs): project-level environment groups with addon mirroring ([efafe68](https://github.com/sislelabs/kuso/commit/efafe6839ca8c40a21a2fe9b3ad1946dd579c4e5))
-
-## [0.9.42] — 2026-05-07
-
-### ✨ Features
 - Feat(settings/github): rich App status with installations + repo coverage ([7aaa5b3](https://github.com/sislelabs/kuso/commit/7aaa5b39c7b43822d16157600ebe3e55aa355bb9))
 
-## [0.9.41] — 2026-05-07
+## [0.9.42] — 2026-05-07
 
 ### 🐛 Bug Fixes
 - Fix(canvas): status border honors prod pod, not pending/queued builds ([3d4f34c](https://github.com/sislelabs/kuso/commit/3d4f34c372686bae84d582c4ed5d646a20b6be14))
 
-## [0.9.40] — 2026-05-07
+## [0.9.41] — 2026-05-07
 
 ### 🐛 Bug Fixes
 - Fix(deep-review-5): close 22 scalability + UX findings from second deep review ([ad7ffff](https://github.com/sislelabs/kuso/commit/ad7ffffe25c327d94f872ed0f7a01b7cd15b3d33))
 
-## [0.9.39] — 2026-05-07
+## [0.9.40] — 2026-05-07
 
 ### ✨ Features
 - Feat(notifications): clear-all button in the bell dropdown ([8208913](https://github.com/sislelabs/kuso/commit/820891342fdc92b595f015f6c31b34cbc83a7532))
@@ -1031,79 +1107,75 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 - Fix(deep-review-3): close audit findings from post-batch review ([ebb4b0d](https://github.com/sislelabs/kuso/commit/ebb4b0d920b79d21375e935357c84ed8878600fd))
 - Fix(deep-review-2): CNPG default, real backup/restore, token invalidation, settings UX ([4a6a5ef](https://github.com/sislelabs/kuso/commit/4a6a5efc2c97f785f0d0988a10c194bfeea6cf82))
 - Fix(deep-review): close ~30 audit findings across data, kube, security, UX ([b92cd20](https://github.com/sislelabs/kuso/commit/b92cd207fa81cd9402be554e50c3a16403b1df7f))
+- Fix(addons): unbreak helm parse — \${{ }} in comments tripped Go templates ([e45eb61](https://github.com/sislelabs/kuso/commit/e45eb61a48bf176d826a47f67595f5991c9e904f))
 
 ### 🧪 Tests
 - Test(kube): refresh CRD golden snapshots for v0.9.39 ([7098b46](https://github.com/sislelabs/kuso/commit/7098b467639a2356091f2e92dcc2289817fdb244))
 
-## [0.9.38] — 2026-05-07
+## [0.9.39] — 2026-05-07
 
-### 🐛 Bug Fixes
-- Fix(addons): unbreak helm parse — \${{ }} in comments tripped Go templates ([e45eb61](https://github.com/sislelabs/kuso/commit/e45eb61a48bf176d826a47f67595f5991c9e904f))
+### ✨ Features
+- Feat(addons): ship Mailpit + NATS + MeiliSearch + ClickHouse ([a040e58](https://github.com/sislelabs/kuso/commit/a040e584fefd452208e8a3018472200384d0542b))
 
 ## [0.9.37] — 2026-05-07
 
 ### ✨ Features
-- Feat(addons): ship Mailpit + NATS + MeiliSearch + ClickHouse ([a040e58](https://github.com/sislelabs/kuso/commit/a040e584fefd452208e8a3018472200384d0542b))
+- Feat(ha): kuso-server runs on worker nodes via kuso-k3s-token Secret ([2f793a6](https://github.com/sislelabs/kuso/commit/2f793a68e7262b98fa777002da59a04bc37fbec4))
 
 ### 📝 Docs
 - Docs: reposition kuso as multi-node, Postgres-backed, HA-capable ([6a8a44b](https://github.com/sislelabs/kuso/commit/6a8a44b4ad2a2e0205a34fb13e2470fa39f61de1))
 
 ## [0.9.36] — 2026-05-07
 
-### ✨ Features
-- Feat(ha): kuso-server runs on worker nodes via kuso-k3s-token Secret ([2f793a6](https://github.com/sislelabs/kuso/commit/2f793a68e7262b98fa777002da59a04bc37fbec4))
+### 🐛 Bug Fixes
+- Fix(builds): chart-level no-op gate stops resurrection of done builds ([255961a](https://github.com/sislelabs/kuso/commit/255961a5be6636058d3da56fdb0e9335386b5de2))
 
 ## [0.9.35] — 2026-05-07
 
 ### 🐛 Bug Fixes
-- Fix(builds): chart-level no-op gate stops resurrection of done builds ([255961a](https://github.com/sislelabs/kuso/commit/255961a5be6636058d3da56fdb0e9335386b5de2))
+- Fix(logs): copy-friendly build logs ([94534ed](https://github.com/sislelabs/kuso/commit/94534ed3372d0d62d6ac6d6f56981c33b5242caf))
 
 ## [0.9.34] — 2026-05-07
 
 ### 🐛 Bug Fixes
-- Fix(logs): copy-friendly build logs ([94534ed](https://github.com/sislelabs/kuso/commit/94534ed3372d0d62d6ac6d6f56981c33b5242caf))
+- Fix(builds): tighten pending→running chip latency ([6f6c4f8](https://github.com/sislelabs/kuso/commit/6f6c4f80f4d20969510d2af7af32e5e9c77e50f3))
 
 ## [0.9.33] — 2026-05-07
 
 ### 🐛 Bug Fixes
-- Fix(builds): tighten pending→running chip latency ([6f6c4f8](https://github.com/sislelabs/kuso/commit/6f6c4f80f4d20969510d2af7af32e5e9c77e50f3))
+- Fix(builds): GitHub installation falls back to service-level ([29f841b](https://github.com/sislelabs/kuso/commit/29f841bdf508ce5bfd8041c336c3ab713f4350ec))
 
 ## [0.9.32] — 2026-05-07
 
 ### 🐛 Bug Fixes
-- Fix(builds): GitHub installation falls back to service-level ([29f841b](https://github.com/sislelabs/kuso/commit/29f841bdf508ce5bfd8041c336c3ab713f4350ec))
+- Fix(env-dialog): branch field references the picked service's repo ([a3e8653](https://github.com/sislelabs/kuso/commit/a3e865335c9c8fec76671f4f993b18a0cf874e57))
 
 ## [0.9.31] — 2026-05-07
 
 ### 🐛 Bug Fixes
-- Fix(env-dialog): branch field references the picked service's repo ([a3e8653](https://github.com/sislelabs/kuso/commit/a3e865335c9c8fec76671f4f993b18a0cf874e57))
+- Fix(settings/builds): preset cards show real headroom math ([70581ac](https://github.com/sislelabs/kuso/commit/70581ac275066fb452c64b51724977deef496823))
 
 ## [0.9.30] — 2026-05-07
 
 ### 🐛 Bug Fixes
-- Fix(settings/builds): preset cards show real headroom math ([70581ac](https://github.com/sislelabs/kuso/commit/70581ac275066fb452c64b51724977deef496823))
+- Fix(builds): queue at cap-hit instead of returning 409 ([148c9f8](https://github.com/sislelabs/kuso/commit/148c9f8dc7cd36f4062b493de87edc978c39a3f3))
 
 ## [0.9.29] — 2026-05-07
 
 ### 🐛 Bug Fixes
-- Fix(builds): queue at cap-hit instead of returning 409 ([148c9f8](https://github.com/sislelabs/kuso/commit/148c9f8dc7cd36f4062b493de87edc978c39a3f3))
+- Fix(builds): orphaned cancelled-build pods don't block the cap ([c491067](https://github.com/sislelabs/kuso/commit/c49106721b9ee2a3f5dd2192ea26a7e82efb3e8e))
 
 ## [0.9.28] — 2026-05-07
 
 ### 🐛 Bug Fixes
-- Fix(builds): orphaned cancelled-build pods don't block the cap ([c491067](https://github.com/sislelabs/kuso/commit/c49106721b9ee2a3f5dd2192ea26a7e82efb3e8e))
+- Fix(logs): swallow transient "container is waiting" lines while build pod boots ([399cbab](https://github.com/sislelabs/kuso/commit/399cbab48ca089303ac8d508c98f3f06078df944))
 
 ## [0.9.27] — 2026-05-07
 
 ### 🐛 Bug Fixes
-- Fix(logs): swallow transient "container is waiting" lines while build pod boots ([399cbab](https://github.com/sislelabs/kuso/commit/399cbab48ca089303ac8d508c98f3f06078df944))
-
-## [0.9.26] — 2026-05-07
-
-### 🐛 Bug Fixes
 - Fix(drift): flag rolloutPending during helm-operator reconcile lag ([7502832](https://github.com/sislelabs/kuso/commit/750283243eed46414c6c971e10ff015af12ffdc9))
 
-## [0.9.25] — 2026-05-07
+## [0.9.26] — 2026-05-07
 
 ### ✨ Features
 - Feat(chart): zero-downtime env rollouts with readinessProbe + maxSurge=1 ([81f9b4b](https://github.com/sislelabs/kuso/commit/81f9b4b4b3c007a87c7eb533ae52231b8ed27cdc))
@@ -1111,52 +1183,52 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 ### 🐛 Bug Fixes
 - Fix(drift-banner): rolling-out beats out-of-date; honest copy ([b5a5f3d](https://github.com/sislelabs/kuso/commit/b5a5f3de5d164889f01012f1ccb49008b2d3e505))
 
-## [0.9.24] — 2026-05-07
+## [0.9.25] — 2026-05-07
 
 ### 🐛 Bug Fixes
 - Fix(env-editor): banner only fires from local save, never from server-side lastRolloutAt ([0133194](https://github.com/sislelabs/kuso/commit/01331940150b25bb054d8ff1edc1dc052427bae4))
 
-## [0.9.23] — 2026-05-07
+## [0.9.24] — 2026-05-07
 
 ### 🐛 Bug Fixes
 - Fix(drift): only emit lastRolloutAt when there's a recent actual edit ([550716e](https://github.com/sislelabs/kuso/commit/550716ee94579ad5ac8728ee0ee510883fbfda60))
 
-## [0.9.22] — 2026-05-07
+## [0.9.23] — 2026-05-07
 
 ### 🐛 Bug Fixes
 - Fix(drift): banner survives refresh + ACTIVE chip flips on build success ([2085aaf](https://github.com/sislelabs/kuso/commit/2085aaf0872d0ca0c49c4654f9826d3d5e3ae3aa))
 
-## [0.9.21] — 2026-05-07
+## [0.9.22] — 2026-05-07
 
 ### 🐛 Bug Fixes
 - Fix(drift): pod-creation-time vs last-spec-edit makes badge survive refresh ([c396670](https://github.com/sislelabs/kuso/commit/c396670fc28b70de77cf3926e69c62058e5ab8f5))
 
-## [0.9.20] — 2026-05-07
+## [0.9.21] — 2026-05-07
 
 ### 🐛 Bug Fixes
 - Fix(env-editor): sticky 60s banner after save so users see rollout signal ([fd4cee8](https://github.com/sislelabs/kuso/commit/fd4cee8ad2a3101482ca6952531f149e73e3729f))
 
-## [0.9.19] — 2026-05-07
+## [0.9.20] — 2026-05-07
 
 ### 🐛 Bug Fixes
 - Fix(drift): compare env CR spec against running pod, not deployment template ([6382433](https://github.com/sislelabs/kuso/commit/63824330a237909e93a715606a98cfae2f267c33))
 
-## [0.9.18] — 2026-05-07
+## [0.9.19] — 2026-05-07
 
 ### 🐛 Bug Fixes
 - Fix(drift): derive RolloutPending from Deployment, not env-CR observedGeneration ([185f1d1](https://github.com/sislelabs/kuso/commit/185f1d1f60c3bf724bc2b70ade1baaa86bdfcba4))
 
-## [0.9.17] — 2026-05-07
+## [0.9.18] — 2026-05-07
 
 ### 🐛 Bug Fixes
 - Fix(logs/builds): cancel survives operator restart, friendlier pod-not-found ([d5c741c](https://github.com/sislelabs/kuso/commit/d5c741c76fa412e221ba73f4c0d83e8dcf152896))
 
-## [0.9.16] — 2026-05-07
+## [0.9.17] — 2026-05-07
 
 ### 🐛 Bug Fixes
 - Fix(http): make statusRecorder a Hijacker so WS upgrades work ([d0cd35f](https://github.com/sislelabs/kuso/commit/d0cd35f2c039cd01409595651ed095bf5181ed47))
 
-## [0.9.15] — 2026-05-07
+## [0.9.16] — 2026-05-07
 
 ### 🐛 Bug Fixes
 - Fix(logs): clean WS close + suppress reconnect after end-of-stream ([398b44b](https://github.com/sislelabs/kuso/commit/398b44b87dd2090acfa8cddebd4859da6ededf51))
@@ -1202,33 +1274,29 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 - Fix(security): triage audit's P0 + P1 findings ([e41723b](https://github.com/sislelabs/kuso/commit/e41723bf2312c6ed6520d6b727d698b5778afb69))
 - Fix(env): per-var edits now propagate to env CR + drift indicator ([dbe23ff](https://github.com/sislelabs/kuso/commit/dbe23ffc902df023c3a46c5a9c439e10666a4610))
 - Fix(security): P0-1 BackupsHandler — gate all six methods ([bf0d72a](https://github.com/sislelabs/kuso/commit/bf0d72a5bf28b893d1e6d725d3a91b8c2bc20027))
-
-## [0.9.8] — 2026-05-06
-
-### 🐛 Bug Fixes
 - Fix(security): plug audit P0s — auth gates, redirect, signing, broken delete ([bc35380](https://github.com/sislelabs/kuso/commit/bc353808ff2f5f8a9247e40acc8bb860d2224af0))
 
-## [0.9.7] — 2026-05-06
+## [0.9.8] — 2026-05-06
 
 ### ✨ Features
 - Feat(env): auto-detect missing env vars at build + crash time ([169a845](https://github.com/sislelabs/kuso/commit/169a845b0a5b52a4e9fca27cc7645e364ef7910c))
 
-## [0.9.6] — 2026-05-06
+## [0.9.7] — 2026-05-06
 
 ### 🐛 Bug Fixes
 - Fix(domains): use Mozilla public-suffix list for FQDN check + skip stable nixpacks ship ([3655e78](https://github.com/sislelabs/kuso/commit/3655e780ffbaeddfee47286f67ffd8b5288f208c))
 
-## [0.9.5] — 2026-05-06
+## [0.9.6] — 2026-05-06
 
 ### 🐛 Bug Fixes
 - Fix(domains): reject non-public FQDNs at edit + filter from ingress TLS ([f6fbe68](https://github.com/sislelabs/kuso/commit/f6fbe6854d15d47f5af2714b1a33af5f8b92049b))
 
-## [0.9.4] — 2026-05-06
+## [0.9.5] — 2026-05-06
 
 ### 🐛 Bug Fixes
 - Fix(networking): auto-inject PORT, propagate baseDomain, audit cleanup ([552076b](https://github.com/sislelabs/kuso/commit/552076bb35e19089fb0d234b5f3617189619d33f))
 
-## [0.9.3] — 2026-05-06
+## [0.9.4] — 2026-05-06
 
 ### 🐛 Bug Fixes
 - Fix(projects): live-services count was inflated by desired>0 ([a901500](https://github.com/sislelabs/kuso/commit/a9015008be1c591d09ae94de1d5f4e241d2db682))
@@ -1238,10 +1306,12 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 ### ✨ Features
 - Feat(settings): admin-tunable build resources + concurrency cap ([39d1456](https://github.com/sislelabs/kuso/commit/39d14566387df43336d7b002fb9c99c45d1d9dbf))
 
-## [0.9.1] — 2026-05-06
-
 ### 🐛 Bug Fixes
 - Fix(builds): bump kaniko memory limit 1Gi → 2Gi for nixpacks snapshots ([0257cc1](https://github.com/sislelabs/kuso/commit/0257cc1b4983eab8f9a240cd2101cc5c3ab8f6df))
+
+## [0.9.1] — 2026-05-05
+
+### 🐛 Bug Fixes
 - Fix(install): kusocrons CRD + eager PriorityClass + pod-create race ([7f82f73](https://github.com/sislelabs/kuso/commit/7f82f7308fcaa9d226ac418563475fe21a61ab68))
 - Fix(install): drop Secret block from postgres.yaml ([6abc8ea](https://github.com/sislelabs/kuso/commit/6abc8eae60c3e2d06c9d4e55a2b010bd051223fc))
 
@@ -1279,51 +1349,50 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 
 ## [0.8.9] — 2026-05-05
 
+### Other
+- Hardening(builds): close TOCTOU, deflake retention, drop spoof surface ([b9df890](https://github.com/sislelabs/kuso/commit/b9df890f9e5982297cd5874bd0b2288d3cb732fb))
+
 ### ⚡ Performance
 - Perf(builds): persistent /nix store + lang dep cache + baked nixpacks image ([1197d84](https://github.com/sislelabs/kuso/commit/1197d8453d4e2f3e49a8e1ab468440839e64fb71))
 
 ## [0.8.8] — 2026-05-05
 
-### Other
-- Hardening(builds): close TOCTOU, deflake retention, drop spoof surface ([b9df890](https://github.com/sislelabs/kuso/commit/b9df890f9e5982297cd5874bd0b2288d3cb732fb))
-
-## [0.8.7] — 2026-05-05
-
 ### 🐛 Bug Fixes
 - Fix(builds): gate queued-build kaniko Job on spec.image, not operator ([ca898b7](https://github.com/sislelabs/kuso/commit/ca898b70c30c9c72b24e264bc8db3bdc27bfff93))
 
-## [0.8.6] — 2026-05-05
+## [0.8.7] — 2026-05-05
 
 ### ✨ Features
 - Feat(builds): real queue + trigger context + pod-phase log frames ([b045a73](https://github.com/sislelabs/kuso/commit/b045a737e0fbc1000da1d214eb06c8a65b3905ed))
 
-## [0.8.5] — 2026-05-05
+## [0.8.6] — 2026-05-05
 
 ### ✨ Features
 - Feat(builds): coolify-style deployment lifecycle (cancel, dur, log archive) ([7f7a07c](https://github.com/sislelabs/kuso/commit/7f7a07c7073875b1e604ea843b37a04dcde35cd2))
 
-## [0.8.4] — 2026-05-05
+## [0.8.5] — 2026-05-05
 
 ### 🐛 Bug Fixes
 - Fix(cleanup): skip pods+jobs owned by KusoBuild CRDs ([e05c772](https://github.com/sislelabs/kuso/commit/e05c772da114835242c237494cb3624cc7b6d664))
 
-## [0.8.3] — 2026-05-05
+## [0.8.4] — 2026-05-05
 
 ### ✨ Features
 - Feat: kuso-server resilience pack + cluster cleanup endpoint ([1a3333f](https://github.com/sislelabs/kuso/commit/1a3333f16b2a72724a8bdfdbfe6bfab638a0b18a))
 
-### 🧹 Chores
-- Chore: post-review batch 2 — backup default, golden tests, delta ops, shared-addons doc ([cc7111f](https://github.com/sislelabs/kuso/commit/cc7111f3ed180b0d94e9a99c94bf3919ed059393))
-
-## [0.8.2] — 2026-05-05
+## [0.8.3] — 2026-05-05
 
 ### 🐛 Bug Fixes
 - Fix(canvas+ui): cron side panel, neutral border, uptime fallback, ([6a9e912](https://github.com/sislelabs/kuso/commit/6a9e91226e8b78bfec5cf9871dd806f2f625b35a))
+
+### 🧹 Chores
+- Chore: post-review batch 2 — backup default, golden tests, delta ops, shared-addons doc ([cc7111f](https://github.com/sislelabs/kuso/commit/cc7111f3ed180b0d94e9a99c94bf3919ed059393))
 
 ## [0.8.1] — 2026-05-05
 
 ### ✨ Features
 - Feat: mobile UX + cron edit overlay + CLI parity for v0.8 ([d264704](https://github.com/sislelabs/kuso/commit/d264704baec7aceb8ffede29744fe4c3ae00e958))
+- Feat: cron canvas node + friendly schedule picker + MinIO addon ([b80665c](https://github.com/sislelabs/kuso/commit/b80665cd387f417846520f29db7ae6c5561e2df4))
 
 ### 🧹 Chores
 - Chore: import other-agent changes — informer cache + docs + LE-prod default ([738bd74](https://github.com/sislelabs/kuso/commit/738bd74781140c26e59bf7e598b782ea6351bf8d))
@@ -1331,102 +1400,91 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 ## [0.8.0] — 2026-05-05
 
 ### ✨ Features
-- Feat: cron canvas node + friendly schedule picker + MinIO addon ([b80665c](https://github.com/sislelabs/kuso/commit/b80665cd387f417846520f29db7ae6c5561e2df4))
+- Feat(services): internal-only toggle skips Ingress ([c2ec390](https://github.com/sislelabs/kuso/commit/c2ec3907816393031f238c78bd8b166675b6dc2a))
 
 ## [0.7.56] — 2026-05-05
 
 ### ✨ Features
-- Feat(services): internal-only toggle skips Ingress ([c2ec390](https://github.com/sislelabs/kuso/commit/c2ec3907816393031f238c78bd8b166675b6dc2a))
+- Feat: canvas custom-domain URL + project-level always-on toggle ([f226f6c](https://github.com/sislelabs/kuso/commit/f226f6c6e60daba9752366a93b813a108dc253c8))
 
 ## [0.7.55] — 2026-05-05
 
 ### ✨ Features
-- Feat: canvas custom-domain URL + project-level always-on toggle ([f226f6c](https://github.com/sislelabs/kuso/commit/f226f6c6e60daba9752366a93b813a108dc253c8))
+- Feat(addons): instance dropdown lists registered shared servers ([5274e10](https://github.com/sislelabs/kuso/commit/5274e10739beab5702faa7e838f1da888167aef6))
 
 ## [0.7.54] — 2026-05-05
 
 ### ✨ Features
-- Feat(addons): instance dropdown lists registered shared servers ([5274e10](https://github.com/sislelabs/kuso/commit/5274e10739beab5702faa7e838f1da888167aef6))
+- Feat(addons): backup schedule + retention via API + UI ([f054ee7](https://github.com/sislelabs/kuso/commit/f054ee7988e773fef4b7569afddcc4e291079be5))
 
 ## [0.7.53] — 2026-05-05
 
-### ✨ Features
-- Feat(addons): backup schedule + retention via API + UI ([f054ee7](https://github.com/sislelabs/kuso/commit/f054ee7988e773fef4b7569afddcc4e291079be5))
+### 🐛 Bug Fixes
+- Fix(s3-backup): restore reads conn from <release>-conn Secret ([d857ab3](https://github.com/sislelabs/kuso/commit/d857ab3b8f757f1fd17324e06770de488087752f))
+- Fix(s3-backup): three bugs found while testing against a self-hosted S3 ([15582b2](https://github.com/sislelabs/kuso/commit/15582b2384283fa8ec56813408fa6b29f78d2868))
 
 ## [0.7.52] — 2026-05-05
 
 ### 🐛 Bug Fixes
-- Fix(s3-backup): restore reads conn from <release>-conn Secret ([d857ab3](https://github.com/sislelabs/kuso/commit/d857ab3b8f757f1fd17324e06770de488087752f))
-
-## [0.7.51] — 2026-05-05
-
-### 🐛 Bug Fixes
-- Fix(s3-backup): three bugs found while testing against a self-hosted S3 ([15582b2](https://github.com/sislelabs/kuso/commit/15582b2384283fa8ec56813408fa6b29f78d2868))
+- Fix(envvars): reserve PORT / HOSTNAME / KUBERNETES_* ([61aed3e](https://github.com/sislelabs/kuso/commit/61aed3ede3fa13a48e3c1646f8d39296ecfd47e2))
 
 ## [0.7.50] — 2026-05-05
 
 ### ✨ Features
 - Feat(crd): allow KusoEnvironment.spec.additionalHosts ([49fa230](https://github.com/sislelabs/kuso/commit/49fa230bae94e13e77c4b845b258ad699b7eebe2))
-
-### 🐛 Bug Fixes
-- Fix(envvars): reserve PORT / HOSTNAME / KUBERNETES_* ([61aed3e](https://github.com/sislelabs/kuso/commit/61aed3ede3fa13a48e3c1646f8d39296ecfd47e2))
-
-## [0.7.49] — 2026-05-05
-
-### ✨ Features
 - Feat(domains): end-to-end custom domain support ([570037c](https://github.com/sislelabs/kuso/commit/570037ce3985f2c49dc9211984efe72204f3c06f))
 
-## [0.7.48] — 2026-05-05
+## [0.7.49] — 2026-05-05
 
 ### 🐛 Bug Fixes
 - Fix(settings): persistent save errors + add/remove domains list ([a720c35](https://github.com/sislelabs/kuso/commit/a720c350355db6f553b4a7e8131b8025cf7fd83b))
 
-## [0.7.47] — 2026-05-05
+## [0.7.48] — 2026-05-05
 
 ### Other
 - Ui(buttons): lighten primary CTA in light mode ([71efc44](https://github.com/sislelabs/kuso/commit/71efc44002ec50a27308b204a9304e8b50a11db2))
 
-## [0.7.46] — 2026-05-05
+## [0.7.47] — 2026-05-05
 
 ### 🐛 Bug Fixes
 - Fix(invite): generalize parsePathname so /invite/<token> resolves ([d646187](https://github.com/sislelabs/kuso/commit/d646187dec1c1849db265848f05179f94c044816))
 
-## [0.7.45] — 2026-05-05
+## [0.7.46] — 2026-05-05
 
 ### 🐛 Bug Fixes
 - Fix(invite): read token from URL pathname, not Next's build placeholder ([dbf716b](https://github.com/sislelabs/kuso/commit/dbf716b3ae284ea75c1ca8798269f6935b97bcb7))
 
-## [0.7.44] — 2026-05-04
+## [0.7.45] — 2026-05-04
 
 ### 🐛 Bug Fixes
 - Fix(envvars): keep PORT in the ref picker ([6234990](https://github.com/sislelabs/kuso/commit/6234990699c532b87780bd37cf970a79a4150181))
 
-## [0.7.43] — 2026-05-04
+## [0.7.44] — 2026-05-04
 
 ### ✨ Features
 - Feat: service display name + slim env-ref picker ([2cf631b](https://github.com/sislelabs/kuso/commit/2cf631b4fcce999309d2c5d93c758daab84f2bea))
 
-## [0.7.42] — 2026-05-04
+## [0.7.43] — 2026-05-04
 
 ### ✨ Features
 - Feat(canvas): drag-to-connect + PUBLIC_URL/PUBLIC_HOST refs ([25332ed](https://github.com/sislelabs/kuso/commit/25332ed1828735bdd9f4808e5ece9358353a5d8e))
 
-## [0.7.41] — 2026-05-04
+## [0.7.42] — 2026-05-04
 
 ### ✨ Features
 - Feat(updates): add manual "Check for updates" button ([4ee5653](https://github.com/sislelabs/kuso/commit/4ee56539098f5c34234d73f2c1cc7b2c5fec1107))
 
-## [0.7.40] — 2026-05-04
+## [0.7.41] — 2026-05-04
 
 ### 🐛 Bug Fixes
 - Fix(projects): propagate service-level port + envVars to environments ([cd594bb](https://github.com/sislelabs/kuso/commit/cd594bb1f48ffe7ef294f6fc9a897ea729796bd5))
 
-## [0.7.39] — 2026-05-04
+## [0.7.40] — 2026-05-04
 
 ### ✨ Features
 - Feat(builds): supersede in-flight builds when a new one starts ([7e03acf](https://github.com/sislelabs/kuso/commit/7e03acf442713328ddd49ae5d07354e5822c9339))
 
-## [0.7.38] — 2026-05-04
+## [0.7.39] — 2026-05-04
 
 ### 🔨 Refactors
 - Refactor: split monoliths + extract db helpers ([eed3d98](https://github.com/sislelabs/kuso/commit/eed3d981ffbe385637a050bcfa769f873a6195d2))
@@ -1554,51 +1612,43 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 - Fix(release): retry gh release create on transient 502s ([77db565](https://github.com/sislelabs/kuso/commit/77db565262e5aa5731407d39b1c489fe83fae9cc))
 - Fix(release): two-phase GH release upload with retries (resists transient 404/422) ([1d5f3e5](https://github.com/sislelabs/kuso/commit/1d5f3e533324d7a7ddc47c0c619873a4df54eefa))
 - Fix(auth,install): GitHub sign-in works without re-pasting creds, HTTP→HTTPS redirect ([aef449f](https://github.com/sislelabs/kuso/commit/aef449fcb35a2d31a7deaf3dd0cf46c878b7a436))
-
-## [0.7.16] — 2026-05-04
-
-### 🐛 Bug Fixes
 - Fix(release): resolve OPERATOR_VERSION before writing release.json ([2eabe1e](https://github.com/sislelabs/kuso/commit/2eabe1ecc13c1296f753155bdb8c5fc82f86630d))
 
-## [0.7.15] — 2026-05-04
+## [0.7.16] — 2026-05-04
 
 ### 🐛 Bug Fixes
 - Fix(release): query ghcr for latest existing operator tag (was guessing wrong) ([aff7f44](https://github.com/sislelabs/kuso/commit/aff7f44f98cb06c9a638e76686c415b9229c2fc3))
 - Fix(release): pin operator image to last actually-built tag ([569a11b](https://github.com/sislelabs/kuso/commit/569a11b2754d829f99ab9f8fb54c93acdfe5d0fc))
 
-## [0.7.14] — 2026-05-04
+## [0.7.15] — 2026-05-04
 
 ### ✨ Features
 - Feat(updater): bake updater image into release.json + handle nil RawPost body ([80d7838](https://github.com/sislelabs/kuso/commit/80d783824f762f6e6adf24309e39a2d4c92fec04))
 
-## [0.7.13] — 2026-05-04
+## [0.7.14] — 2026-05-04
 
 ### ✨ Features
 - Feat(updater): support pinned --version on kuso upgrade + add kuso github configure ([8c1fe3e](https://github.com/sislelabs/kuso/commit/8c1fe3ed6e4766d1959c3f5bd0c5372bd7e5e328))
 
+## [0.7.13] — 2026-05-04
+
+### Other
+- Release tooling — CI workflow, dry-run, CHANGELOG, cleaner Makefile ([a59bf1f](https://github.com/sislelabs/kuso/commit/a59bf1f12a25aa0fedb3070f732ce2b1811da247))
+
 ### 🐛 Bug Fixes
 - Fix(release): npm fallback in release.sh + npm cache in CI ([982f820](https://github.com/sislelabs/kuso/commit/982f820aca83cade170557db8f6ef9518bb206e2))
 - Fix(release): use --unreleased not --current for GH notes ([607bc15](https://github.com/sislelabs/kuso/commit/607bc159e7a84605b87aa379ae7a070aefe4ced1))
+- Fix(release): gate /healthz check behind dry-run too ([2e25a2c](https://github.com/sislelabs/kuso/commit/2e25a2c357ca4daaa02c3a1083b7dca9dcb7a8b4))
 
 ## [0.7.12] — 2026-05-04
 
 ### Other
-- Release tooling — CI workflow, dry-run, CHANGELOG, cleaner Makefile ([a59bf1f](https://github.com/sislelabs/kuso/commit/a59bf1f12a25aa0fedb3070f732ce2b1811da247))
 - Install.sh: point users to /settings/github for App setup ([a592663](https://github.com/sislelabs/kuso/commit/a5926636fc0e0ec623f1b98abac191998161e072))
-
-### 🐛 Bug Fixes
-- Fix(release): gate /healthz check behind dry-run too ([2e25a2c](https://github.com/sislelabs/kuso/commit/2e25a2c357ca4daaa02c3a1083b7dca9dcb7a8b4))
 
 ## [0.7.11] — 2026-05-04
 
 ### Other
 - Go.sum: add transitive deps for remotecommand exec (spdystream, flowrate) ([29a9ecb](https://github.com/sislelabs/kuso/commit/29a9ecb932d3cdd84e82de2c4eccf3109267690a))
-
-### 🐛 Bug Fixes
-- Fix(cli,install): honor KUSO_INSECURE for staging certs + surface reseeded GitHub App ([4f505a5](https://github.com/sislelabs/kuso/commit/4f505a55c70779dfe3d4d9edf1d0314404fd38aa))
-- Fix(install): default KUSO_REF=main and die on CRD failures ([581d2ca](https://github.com/sislelabs/kuso/commit/581d2ca848cf87342024be5dc609d2c86fc97d00))
-
-## [0.7.6] — 2026-05-04
 
 ### ✨ Features
 - Feat: v0.3.4 — fix builds, persist canvas, bulk env editor, editable settings ([05956ef](https://github.com/sislelabs/kuso/commit/05956efcde861b1f4ff1a474e75199c3d8eff1bb))
@@ -1609,6 +1659,8 @@ Older release entries split out of the main CHANGELOG.md once it grew past 50 re
 - Feat(web): service overlay panel — clicking a service opens an in-page sheet ([6a69830](https://github.com/sislelabs/kuso/commit/6a698302db8df962a735d1769779b936819d0a12))
 
 ### 🐛 Bug Fixes
+- Fix(cli,install): honor KUSO_INSECURE for staging certs + surface reseeded GitHub App ([4f505a5](https://github.com/sislelabs/kuso/commit/4f505a55c70779dfe3d4d9edf1d0314404fd38aa))
+- Fix(install): default KUSO_REF=main and die on CRD failures ([581d2ca](https://github.com/sislelabs/kuso/commit/581d2ca848cf87342024be5dc609d2c86fc97d00))
 - Fix(web): cookie wins over localStorage so post-OAuth handoff isn't blocked by stale token ([d797c2d](https://github.com/sislelabs/kuso/commit/d797c2d58f1d541955f5e1010785acd40ee50c30))
 - Fix(web): service URL uses short name, canvas zoom + scroll + minimap, sidebar params ([ed7ef7c](https://github.com/sislelabs/kuso/commit/ed7ef7cdee8f154cc1589bfc6a0315ff93a26556))
 - Fix(web): read dynamic route params from pathname, not the static-export placeholder ([5408dc8](https://github.com/sislelabs/kuso/commit/5408dc8a24ece58a4527b8a2aac2f1380948d4e7))
