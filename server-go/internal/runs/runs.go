@@ -153,10 +153,6 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		return nil, fmt.Errorf("internal: generated name %q does not satisfy CR naming", name)
 	}
 	ns := s.nsFor(ctx, project)
-	envOverlay := make([]kube.KusoRunEnv, 0, len(req.Env))
-	for _, e := range req.Env {
-		envOverlay = append(envOverlay, kube.KusoRunEnv{Name: e.Name, Value: e.Value})
-	}
 	// Resolve image + envFromSecrets + placement from the parent
 	// service's production env. Snapshotting at create time (not
 	// reconcile time) means a build that lands while the run is
@@ -168,6 +164,12 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		}
 		return nil, fmt.Errorf("lookup production env: %w", err)
 	}
+	// Seed the run's env with the service's own plain env vars, THEN apply the
+	// caller's --env overlay on top (overlay wins). This makes `kuso run` see the
+	// same configured env (DATABASE_URL aliases, app URLs, feature flags, …) the
+	// real pods do — its documented contract ("Env overlays on top of the
+	// service's resolved env") and what migration/seed/script tasks expect.
+	envOverlay := mergeRunEnv(envCR.Spec.EnvVars, req.Env)
 	if envCR.Spec.Image == nil || envCR.Spec.Image.Tag == "" {
 		return nil, fmt.Errorf("%w: production env has no image yet — wait for first deploy", ErrInvalid)
 	}
@@ -354,6 +356,36 @@ func (s *Service) nsFor(ctx context.Context, project string) string {
 func genRunName(project, service string) string {
 	suffix := strings.ToLower(base36(time.Now().UnixMilli()))
 	return fmt.Sprintf("%s-%s-run-%s", project, service, suffix)
+}
+
+// mergeRunEnv builds the run's plain env: the service's own plain env vars first,
+// then the caller's --env overlay on top (overlay wins on name collision, and
+// preserves declaration order). Service vars backed by valueFrom (addon
+// secretKeyRefs / ${{ }} refs) are skipped — addon connection vars reach the run
+// via envFromSecrets, and KusoRunEnv carries only name/value. This is what makes
+// `kuso run` see the same configured env the real pods do.
+func mergeRunEnv(serviceVars []kube.KusoEnvVar, overlay []EnvVar) []kube.KusoRunEnv {
+	out := make([]kube.KusoRunEnv, 0, len(serviceVars)+len(overlay))
+	idx := make(map[string]int, len(serviceVars)+len(overlay))
+	for _, e := range serviceVars {
+		if e.Name == "" || e.ValueFrom != nil {
+			continue
+		}
+		idx[e.Name] = len(out)
+		out = append(out, kube.KusoRunEnv{Name: e.Name, Value: e.Value})
+	}
+	for _, e := range overlay {
+		if e.Name == "" {
+			continue
+		}
+		if i, ok := idx[e.Name]; ok {
+			out[i].Value = e.Value
+			continue
+		}
+		idx[e.Name] = len(out)
+		out = append(out, kube.KusoRunEnv{Name: e.Name, Value: e.Value})
+	}
+	return out
 }
 
 // base36 is a tiny encoder so we don't pull in math/big for an
