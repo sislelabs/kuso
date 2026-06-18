@@ -5,6 +5,12 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.75] — 2026-06-18
+
+### 🐛 Bug Fixes
+- Fix(runs): kuso run inherits the service's configured env vars ([cc886b6](https://github.com/sislelabs/kuso/commit/cc886b63abc2d6263858461496c834c45e41c1f5))
+- Fix(release): commit deploy/kuso-activator.yaml on release; correct its tag ([fac0b8f](https://github.com/sislelabs/kuso/commit/fac0b8f455e1b9b8566589b0e6973ad341a88f1f))
+
 ## [0.18.74] — 2026-06-17
 
 ### 🐛 Bug Fixes
@@ -386,14 +392,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(previews): migrate Job must wait for the clone DB to accept connections ([749ae53](https://github.com/sislelabs/kuso/commit/749ae534c74bdac210961a914ae58f02fac61df2))
-
-## [0.18.10] — 2026-06-02
-
-### 🐛 Bug Fixes
-- Fix(previews): run migrations after the seed, not at build-promote ([93f8f67](https://github.com/sislelabs/kuso/commit/93f8f67d18c95e1cee75952fc2fdb46b2d15148a))
-
-### 📝 Docs
-- Docs(spec): preview migrate-after-seed — couple migration to the seed, not the build ([cc616d2](https://github.com/sislelabs/kuso/commit/cc616d23416e7305accd86daa23531f6add58dd8))
 
 
 ---
