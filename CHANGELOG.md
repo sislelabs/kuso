@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.76] — 2026-06-22
+
+### ✨ Features
+- Feat(service): inline rename in header + display name in build notifications ([4d1dbee](https://github.com/sislelabs/kuso/commit/4d1dbeebaaf2239fda8bc21a5b7999b69b1efa60))
+
+### 🧹 Chores
+- Chore(changelog): archive rollup after v0.18.75 release ([f030191](https://github.com/sislelabs/kuso/commit/f030191ba3abee839ec78da160abdd5a279f1fd2))
+
 ## [0.18.75] — 2026-06-18
 
 ### 🐛 Bug Fixes
@@ -387,11 +395,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(previews): rewrite in-cluster service DNS so preview frontend SSRs its OWN API ([37f3122](https://github.com/sislelabs/kuso/commit/37f312200e8a05a0e28f687f80d2550d19f278a0))
-
-## [0.18.11] — 2026-06-02
-
-### 🐛 Bug Fixes
-- Fix(previews): migrate Job must wait for the clone DB to accept connections ([749ae53](https://github.com/sislelabs/kuso/commit/749ae534c74bdac210961a914ae58f02fac61df2))
 
 
 ---
