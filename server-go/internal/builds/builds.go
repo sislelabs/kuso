@@ -1994,7 +1994,14 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 		if p.Svc != nil {
 			siteURL = lookupSiteURL(ctx, p.Svc.Kube, ns, b.Spec.Project, b.Spec.Service)
 		}
-		title, desc, fields := buildRichCard(b, short, "succeeded", "", siteURL)
+		// Title shows the cosmetic displayName when set (slug fallback);
+		// URLs + the Service field below stay the slug for deep-links.
+		var kc *kube.Client
+		if p.Svc != nil {
+			kc = p.Svc.Kube
+		}
+		label := serviceDisplayLabel(ctx, kc, ns, b.Spec.Service, short)
+		title, desc, fields := buildRichCard(b, label, "succeeded", "", siteURL)
 		p.Notifier.Emit(EventEnvelope{
 			Type:        eventBuildSucceeded,
 			Title:       title,
@@ -2057,7 +2064,12 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 		// deep-link with ?tab=<hint> instead so the click lands the
 		// user directly inside the service overlay.
 		deepLink := buildFailureURL(b.Spec.Project, short, classification)
-		title, desc, fields := buildRichCard(b, short, "failed", msg, "")
+		var kc *kube.Client
+		if p.Svc != nil {
+			kc = p.Svc.Kube
+		}
+		label := serviceDisplayLabel(ctx, kc, ns, b.Spec.Service, short)
+		title, desc, fields := buildRichCard(b, label, "failed", msg, "")
 		p.Notifier.Emit(EventEnvelope{
 			Type:           eventBuildFailed,
 			Title:          title,
@@ -2437,7 +2449,8 @@ func (p *Poller) markReleaseFailed(ctx context.Context, ns string, b *kube.KusoB
 	}
 	if p.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
-		title := fmt.Sprintf("Release hook failed for %s/%s", b.Spec.Project, short)
+		label := serviceDisplayLabel(ctx, p.Svc.Kube, ns, b.Spec.Service, short)
+		title := fmt.Sprintf("Release hook failed for %s/%s", b.Spec.Project, label)
 		desc := fmt.Sprintf("release command exited with %s — image was NOT promoted, existing pods unchanged. job=%s", res.Outcome, res.JobName)
 		fields := map[string]string{
 			"env":     e.Name,

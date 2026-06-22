@@ -102,7 +102,11 @@ func buildEventURL(project, service string) string {
 //
 // Returned fields are []EnvelopeField — the notify adapter forwards
 // them straight through to the Discord renderer's field block.
-func buildRichCard(b *kube.KusoBuild, short, phase, failureReason, siteURL string) (title, description string, fields []EnvelopeField) {
+// label is the service name shown in the card title — the service's
+// cosmetic displayName when set, else the URL slug (callers resolve it
+// via serviceDisplayLabel). It's display-only; deep-link URLs + the
+// envelope's Service field still use the slug.
+func buildRichCard(b *kube.KusoBuild, label, phase, failureReason, siteURL string) (title, description string, fields []EnvelopeField) {
 	var glyph, verb string
 	switch phase {
 	case "failed":
@@ -114,7 +118,7 @@ func buildRichCard(b *kube.KusoBuild, short, phase, failureReason, siteURL strin
 	default:
 		glyph, verb = "✓", "Build succeeded"
 	}
-	title = fmt.Sprintf("%s %s · %s / %s", glyph, verb, b.Spec.Project, short)
+	title = fmt.Sprintf("%s %s · %s / %s", glyph, verb, b.Spec.Project, label)
 
 	annos := b.Annotations
 	// Detect a synthetic ref ("<branch>-<base36-unix-ms>") produced
@@ -312,6 +316,26 @@ func lookupSiteURL(ctx context.Context, kc *kube.Client, ns, project, fqn string
 		return scheme + "://" + host
 	}
 	return ""
+}
+
+// serviceDisplayLabel returns the name to show for a service in
+// notification titles: the service's cosmetic spec.displayName when set,
+// otherwise the URL slug (short). Best-effort — any kube error falls
+// back to the slug so a notification never fails to send over a naming
+// lookup. fqn is the full CR name (<project>-<service>); short is the
+// already-computed slug.
+func serviceDisplayLabel(ctx context.Context, kc *kube.Client, ns, fqn, short string) string {
+	if kc == nil {
+		return short
+	}
+	lctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	if svc, err := kc.GetKusoService(lctx, ns, fqn); err == nil && svc != nil {
+		if dn := strings.TrimSpace(svc.Spec.DisplayName); dn != "" {
+			return dn
+		}
+	}
+	return short
 }
 
 // isHexSHA returns true when s is a hex-only string of 7+ characters.

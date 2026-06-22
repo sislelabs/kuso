@@ -352,3 +352,43 @@ func TestBuildDurationMs(t *testing.T) {
 		})
 	}
 }
+
+// seedServiceWithDisplay seeds a KusoService carrying a cosmetic
+// displayName, for the notification-label tests.
+func seedServiceWithDisplay(project, service, displayName string) seed {
+	s := &kube.KusoService{
+		ObjectMeta: metav1.ObjectMeta{Name: project + "-" + service, Namespace: "kuso"},
+		Spec:       kube.KusoServiceSpec{Project: project, DisplayName: displayName},
+	}
+	return typedSeed(kube.GVRServices, "KusoService", s)
+}
+
+// TestServiceDisplayLabel covers the notification title naming: use the
+// service's cosmetic displayName when set, fall back to the slug
+// otherwise (and on any kube/lookup miss).
+func TestServiceDisplayLabel(t *testing.T) {
+	t.Parallel()
+	svc := fakeService(t,
+		seedServiceWithDisplay("alpha", "web", "payload"),
+		seedService("beta", "api"), // no displayName
+	)
+	cases := []struct {
+		name       string
+		fqn, short string
+		want       string
+	}{
+		{"displayName set → used", "alpha-web", "web", "payload"},
+		{"no displayName → slug", "beta-api", "api", "api"},
+		{"unknown service → slug fallback", "ghost-x", "x", "x"},
+	}
+	for _, c := range cases {
+		got := serviceDisplayLabel(context.Background(), svc.Kube, "kuso", c.fqn, c.short)
+		if got != c.want {
+			t.Errorf("%s: serviceDisplayLabel(%q,%q) = %q, want %q", c.name, c.fqn, c.short, got, c.want)
+		}
+	}
+	// nil kube client → always the slug, never a panic.
+	if got := serviceDisplayLabel(context.Background(), nil, "kuso", "alpha-web", "web"); got != "web" {
+		t.Errorf("nil kube: got %q, want %q", got, "web")
+	}
+}

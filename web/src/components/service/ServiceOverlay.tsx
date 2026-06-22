@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { useService, useDrift, useBuilds, rollbackBuild, useServiceCrons, useRuns } from "@/features/services";
+import { useService, useDrift, useBuilds, rollbackBuild, useServiceCrons, useRuns, usePatchService } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Undo2 } from "lucide-react";
@@ -19,7 +19,7 @@ import { ServiceTerminalPanel } from "./overlay/ServiceTerminalPanel";
 import { ServiceSettingsPanel } from "./overlay/ServiceSettingsPanel";
 import { FailureBanner } from "./overlay/FailureBanner";
 import { FirstDeployCoachmark } from "./overlay/FirstDeployCoachmark";
-import { Check, Copy, ExternalLink, X } from "lucide-react";
+import { Check, Copy, ExternalLink, X, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 
@@ -94,6 +94,97 @@ const ALL_MAIN_TABS: { id: Tab; label: string; alwaysShow?: boolean }[] = [
   { id: "runs", label: "Runs" },
 ];
 const PINNED_TAB: { id: Tab; label: string } = { id: "settings", label: "Settings" };
+
+// EditableTitle renders the service's display name in the overlay header
+// with inline click-to-edit. Click the title (or the pencil that appears
+// on hover) → it becomes an input; Enter/blur saves, Escape cancels.
+// Saving PATCHes spec.displayName only (a cosmetic label — no rebuild,
+// no URL/CR-name change). Clearing the field falls the title back to the
+// URL slug. This is the rename affordance users reach for in the header.
+function EditableTitle({
+  project,
+  service,
+  displayName,
+}: {
+  project: string;
+  service: string;
+  displayName: string;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(displayName);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const patch = usePatchService(project, service);
+  // shown when not editing: displayName when set, else the slug.
+  const shown = displayName || service;
+
+  useEffect(() => {
+    if (editing) {
+      setValue(displayName);
+      // focus + select after the input mounts
+      requestAnimationFrame(() => inputRef.current?.select());
+    }
+  }, [editing, displayName]);
+
+  const commit = useCallback(async () => {
+    const trimmed = value.trim();
+    // No change → just close.
+    if (trimmed === displayName) {
+      setEditing(false);
+      return;
+    }
+    if (trimmed && !/^[A-Za-z0-9 -]{1,60}$/.test(trimmed)) {
+      toast.error("Display name: letters / digits / spaces / hyphens, ≤60 chars");
+      return;
+    }
+    try {
+      // Empty string clears the label back to the slug.
+      await patch.mutateAsync({ displayName: trimmed });
+      toast.success(trimmed ? `Renamed to "${trimmed}"` : "Display name cleared");
+      setEditing(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Rename failed");
+    }
+  }, [value, displayName, patch]);
+
+  if (editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={value}
+        onChange={(e) => setValue(e.target.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            void commit();
+          } else if (e.key === "Escape") {
+            e.preventDefault();
+            setEditing(false);
+          }
+        }}
+        maxLength={60}
+        spellCheck={false}
+        placeholder={service}
+        aria-label="Service display name"
+        className="font-heading text-lg font-semibold tracking-tight bg-transparent border-b border-[var(--accent)] outline-none min-w-0 w-[20ch] max-w-full"
+      />
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEditing(true)}
+      title="Rename (visual label only)"
+      className="group/title flex items-center gap-1.5 min-w-0 text-left"
+    >
+      <span className="font-heading text-lg font-semibold tracking-tight truncate">
+        {shown}
+      </span>
+      <Pencil className="h-3.5 w-3.5 shrink-0 text-[var(--text-tertiary)] opacity-0 transition-opacity group-hover/title:opacity-100" />
+    </button>
+  );
+}
 
 interface Props {
   project: string;
@@ -421,13 +512,22 @@ export function ServiceOverlay({
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <h2 className="font-heading text-lg font-semibold tracking-tight truncate">
-                    {/* Show the user's display name when set; fall back
-                        to the URL slug. The slug appears below in mono
-                        next to the project label so the actual CR name
-                        + URL are still discoverable. */}
-                    {svc.data?.spec.displayName?.trim() || service || ""}
-                  </h2>
+                  {/* Inline click-to-edit display name. Shows the
+                      cosmetic displayName when set, else the URL slug;
+                      the slug + project stay below in mono so the real
+                      CR name/URL are always discoverable. Editing PATCHes
+                      spec.displayName only — visual, no rebuild. */}
+                  {service ? (
+                    <EditableTitle
+                      project={project}
+                      service={service}
+                      displayName={svc.data?.spec.displayName?.trim() || ""}
+                    />
+                  ) : (
+                    <h2 className="font-heading text-lg font-semibold tracking-tight truncate">
+                      {service || ""}
+                    </h2>
+                  )}
                   <StatusDot status={status} />
                 </div>
                 <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px]">
