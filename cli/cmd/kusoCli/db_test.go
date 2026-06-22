@@ -28,8 +28,29 @@ func TestDecodeAddonSecret(t *testing.T) {
 			wantVal: "postgres://u:p@host:5432/db",
 		},
 		{
+			// Older servers (e.g. v0.17.x against a newer CLI) mirror the env-list
+			// shape: each value is an OBJECT {"value": "...", "type": "secret"}.
+			// The old decoder blew up here with "cannot unmarshal object into Go
+			// value of type string" — this is the live bug that motivated the fix.
+			name:    "wrapped object-valued (older server)",
+			body:    `{"values":{"DATABASE_URL":{"value":"postgres://u:p@host:5432/db","type":"secret"}}}`,
+			wantKey: "DATABASE_URL",
+			wantVal: "postgres://u:p@host:5432/db",
+		},
+		{
+			name:    "flat object-valued",
+			body:    `{"DATABASE_URL":{"value":"postgres://u:p@host:5432/db"}}`,
+			wantKey: "DATABASE_URL",
+			wantVal: "postgres://u:p@host:5432/db",
+		},
+		{
 			name:    "malformed json",
 			body:    `{"values":`,
+			wantErr: true,
+		},
+		{
+			name:    "no usable values",
+			body:    `{"values":{"DATABASE_URL":{"no_value_here":true}}}`,
 			wantErr: true,
 		},
 	}

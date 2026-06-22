@@ -305,26 +305,58 @@ func runConnect(project, addon string, doExec bool) error {
 }
 
 // decodeAddonSecret parses the GET /addons/{addon}/secret response into a flat
-// map of connection values. The server wraps them under a "values" key
-// (handlers.AddonsHandler.Secret writes {"values": {...}}); we decode that
-// shape, falling back to a flat top-level map for older servers. The flat
-// fallback is what the original code assumed unconditionally — which broke once
-// the server adopted the wrapper, since {"values": {...}} fails to unmarshal
-// into map[string]string ("cannot unmarshal object into Go value of type
-// string").
+// map of connection values. It tolerates every shape kuso servers have emitted
+// across versions, because a CLI routinely talks to an OLDER server than it was
+// built against:
+//
+//   - wrapped, string values:  {"values": {"DATABASE_URL": "postgres://…"}}
+//   - flat, string values:     {"DATABASE_URL": "postgres://…"}
+//   - wrapped/flat, OBJECT values (older servers that mirror the env-list shape):
+//                               {"values": {"DATABASE_URL": {"value": "…", "type": "secret"}}}
+//
+// The original code only handled the two string-valued shapes and decoded into
+// map[string]string, so an object-valued secret blew up with "cannot unmarshal
+// object into Go value of type string". We now decode into `any` and coerce,
+// pulling a nested `value`/`val`/`url` field out of object-shaped entries.
 func decodeAddonSecret(body []byte) (map[string]string, error) {
-	var wrapped struct {
-		Values map[string]string `json:"values"`
-	}
-	if err := json.Unmarshal(body, &wrapped); err == nil && wrapped.Values != nil {
-		return wrapped.Values, nil
-	}
-	// Legacy flat shape: {"DATABASE_URL": "...", ...}.
-	var flat map[string]string
-	if err := json.Unmarshal(body, &flat); err != nil {
+	var top map[string]any
+	if err := json.Unmarshal(body, &top); err != nil {
 		return nil, err
 	}
-	return flat, nil
+	// Unwrap a {"values": {...}} envelope if present and itself an object.
+	raw := top
+	if v, ok := top["values"]; ok {
+		if m, ok := v.(map[string]any); ok {
+			raw = m
+		}
+	}
+	out := make(map[string]string, len(raw))
+	for k, v := range raw {
+		if s, ok := coerceSecretValue(v); ok {
+			out[k] = s
+		}
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("no usable connection values in addon secret")
+	}
+	return out, nil
+}
+
+// coerceSecretValue turns a secret entry into a plain string. Strings pass
+// through; object-shaped entries ({"value": "…"} and common aliases) are
+// unwrapped. Returns ok=false for shapes that carry no usable scalar.
+func coerceSecretValue(v any) (string, bool) {
+	switch t := v.(type) {
+	case string:
+		return t, true
+	case map[string]any:
+		for _, key := range []string{"value", "val", "url", "dsn"} {
+			if s, ok := t[key].(string); ok {
+				return s, true
+			}
+		}
+	}
+	return "", false
 }
 
 // localDSNFromSecret returns (kindHint, dsn) — a rewritten connection
