@@ -40,6 +40,15 @@ var (
 var rootCmd = &cobra.Command{
 	Use:   "kuso",
 	Short: "kuso — a self-hosted Kubernetes-native PaaS",
+	// A failure inside a command's RunE is a RUNTIME error (the run failed, the
+	// server 500'd, the build errored) — not the user misusing the CLI. Cobra's
+	// default dumps the full usage/help block on any RunE error, which buries the
+	// real message under a wall of flags (e.g. `kuso run … -f` printing Usage
+	// after a seed's FK violation). Silence it: arg/flag PARSE errors still show
+	// usage (cobra handles those before RunE). SilenceErrors lets Execute() print
+	// the error exactly once instead of cobra + Execute() printing it twice.
+	SilenceUsage:  true,
+	SilenceErrors: true,
 	Long: `kuso ships your code from a git repo to a running URL on a
 Kubernetes cluster you control. Project graph, services, environments,
 addons, builds, secrets — all driven by a small set of CRDs reconciled
@@ -79,7 +88,8 @@ func Execute() {
 	}
 
 	if err := rootCmd.Execute(); err != nil {
-		// cobra prints its own error; we just need a non-zero exit.
+		// With SilenceErrors set on rootCmd, cobra no longer prints the error
+		// itself — so this is the single place the message is shown, then exit 1.
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
