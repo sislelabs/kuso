@@ -46,6 +46,12 @@ type Service struct {
 	// re-attach secrets manually after creating the addon.
 	AddonConnSecrets func(ctx context.Context, project string) ([]string, error)
 
+	// EnvAddons provisions per-env addon instances (own DB/redis/s3) for a new
+	// named environment and returns the clones' conn-secret names, scoped by the
+	// kuso.sislelabs.com/env label = envScope. nil = the env shares the project's
+	// addons (the legacy behavior). Backed by previewdb.Cloner.EnsureEnvAddons.
+	EnvAddons func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) ([]string, error)
+
 	// RecordRevision is called after every successful spec mutation
 	// (PatchService, SetEnv, …) with the patch payload that produced
 	// the new state. The history tab reads these; revert replays the

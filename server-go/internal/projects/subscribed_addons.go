@@ -94,6 +94,26 @@ func (s *Service) listProjectAddonConnSecrets(ctx context.Context, project strin
 	return out
 }
 
+// dropProjectAddonConns removes the project's own addon conn-secrets from a
+// list, leaving shared / instance / per-service / foo-conn secrets intact. Used
+// when a per-env env swaps the shared project addons for its own per-env clones.
+func dropProjectAddonConns(secrets, projectAddonConns []string) []string {
+	if len(projectAddonConns) == 0 {
+		return secrets
+	}
+	drop := make(map[string]bool, len(projectAddonConns))
+	for _, n := range projectAddonConns {
+		drop[n] = true
+	}
+	out := make([]string, 0, len(secrets))
+	for _, sec := range secrets {
+		if !drop[sec] {
+			out = append(out, sec)
+		}
+	}
+	return out
+}
+
 // SubscribableAddons is the response shape for the GET endpoint that
 // powers the dashboard's "addon mounts" chip toggle. Subscribed is
 // the service's current list; Available is the full project addon

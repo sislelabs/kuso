@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"kuso/server/internal/addons"
 	"kuso/server/internal/config"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/placement"
@@ -688,6 +689,16 @@ type CreateEnvRequest struct {
 	Name         string `json:"name"`
 	Branch       string `json:"branch"`
 	HostOverride string `json:"host,omitempty"`
+	// ShareAddons opts the env OUT of per-env addon provisioning: it shares the
+	// project's addons with production (the legacy behavior). Default false → the
+	// env gets its own DB/redis/s3.
+	ShareAddons bool `json:"shareAddons,omitempty"`
+	// SeedFrom, when set, seeds the env's new postgres DB from the named source
+	// env's database (pg_dump|psql). Empty = the env's DB starts empty.
+	SeedFrom string `json:"seedFrom,omitempty"`
+	// Addons overrides which stateful addon kinds get a per-env instance.
+	// Empty = every stateful kind the project has (postgres, redis, s3).
+	Addons []string `json:"addons,omitempty"`
 }
 
 // AddEnvironment creates a custom KusoEnvironment for a service.
@@ -782,6 +793,38 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		projectAddons := s.listProjectAddonConnSecrets(ctx, project)
 		envFromSecrets = filterEnvFromForSubscription(envFromSecrets, svc.Spec.SubscribedAddons, projectAddons, project)
 	}
+
+	// Per-env addons: by default a named env gets its OWN addons (own DB, redis,
+	// s3) so staging/qa never touch production data — the same isolation PR
+	// previews already get. --share-addons opts out (keeps the shared project
+	// addons assembled above).
+	if !req.ShareAddons && s.EnvAddons != nil {
+		// Resolve the seed source's postgres conn-secret if --seed-from was given.
+		var seedAll bool
+		if req.SeedFrom != "" {
+			if _, ok := s.postgresConnForEnv(ctx, project, req.SeedFrom); !ok {
+				return nil, fmt.Errorf("%w: --seed-from %q: no postgres database found for that env", ErrInvalid, req.SeedFrom)
+			}
+			seedAll = true
+		}
+		// Default kinds = every stateful kind the project has (postgres+redis+s3);
+		// an explicit --addons list overrides.
+		kinds := req.Addons
+		if len(kinds) == 0 {
+			kinds = s.statefulAddonKinds(ctx, project)
+		}
+		clones, err := s.EnvAddons(ctx, project, req.Name, kinds, seedAll)
+		if err != nil {
+			return nil, fmt.Errorf("provision env addons: %w", err)
+		}
+		// Drop the PROJECT addon conn-secrets from envFromSecrets (keep shared /
+		// instance / per-service / foo-conn secrets), then append the clones so the
+		// env's DATABASE_URL/REDIS_URL/etc. resolve to its OWN addons.
+		projectAddons := s.listProjectAddonConnSecrets(ctx, project)
+		envFromSecrets = dropProjectAddonConns(envFromSecrets, projectAddons)
+		envFromSecrets = append(envFromSecrets, clones...)
+	}
+
 	// Re-scope service-ref literals to THIS env before adopting them.
 	// svc.Spec.EnvVars carries production-scoped resolved values (e.g.
 	// API_URL=http://<svc>-production.<ns>.svc...), set at SetEnv time
@@ -900,6 +943,67 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 // new env (a few seconds in practice) — production traffic to the
 // old hostname returns 503 until the ingress for the new env comes
 // up. We accept this; it's the honest cost of "rename" in kube.
+// statefulAddonKinds returns the distinct stateful addon kinds (among
+// postgres/redis/s3) the project has, ignoring env-scoped addons (clones). Used
+// to default --addons to "every stateful kind the project has" when a per-env env
+// is created without an explicit kind list.
+func (s *Service) statefulAddonKinds(ctx context.Context, project string) []string {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return nil
+	}
+	list, err := s.Kube.ListKusoAddonsByLabels(ctx, ns, map[string]string{labelProject: project})
+	if err != nil {
+		return nil
+	}
+	stateful := map[string]bool{"postgres": true, "redis": true, "s3": true}
+	seen := map[string]bool{}
+	var out []string
+	for i := range list {
+		a := &list[i]
+		if a.Labels[labelEnv] != "" { // skip clones
+			continue
+		}
+		k := a.Spec.Kind
+		if stateful[k] && !seen[k] {
+			seen[k] = true
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// postgresConnForEnv resolves the postgres conn-secret to seed FROM for the named
+// source env. For "production" (or empty) that's the project's source postgres
+// addon; for a named env it's that env's own clone (<short>-<env>). Returns
+// (conn-secret-name, true) when found.
+func (s *Service) postgresConnForEnv(ctx context.Context, project, envName string) (string, bool) {
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return "", false
+	}
+	list, err := s.Kube.ListKusoAddonsByLabels(ctx, ns, map[string]string{labelProject: project})
+	if err != nil {
+		return "", false
+	}
+	wantClone := envName != "" && envName != "production"
+	for i := range list {
+		a := &list[i]
+		if a.Spec.Kind != "postgres" {
+			continue
+		}
+		scoped := a.Labels[labelEnv]
+		if wantClone {
+			if scoped == envName {
+				return addons.ConnSecretName(a.Name), true
+			}
+		} else if scoped == "" { // project source addon
+			return addons.ConnSecretName(a.Name), true
+		}
+	}
+	return "", false
+}
+
 func (s *Service) RenameService(ctx context.Context, project, oldName, newName string) (*kube.KusoService, error) {
 	if oldName == newName {
 		return nil, fmt.Errorf("%w: new name must differ from old", ErrInvalid)

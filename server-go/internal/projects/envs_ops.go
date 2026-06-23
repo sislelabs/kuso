@@ -176,6 +176,23 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 				}
 			}
 		}
+	} else if scope := envScopeForDelete(e, env, project, serviceFQN); scope != "" {
+		// Named env (staging/qa/...): delete every addon scoped to this env via the
+		// canonical env label, so the env's OWN DB/redis/s3 + their PVCs are removed.
+		selector := kube.LabelSelector(map[string]string{
+			kube.LabelProject: project,
+			kube.LabelEnv:     scope,
+		})
+		if addonList, lerr := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: selector,
+		}); lerr == nil {
+			for i := range addonList.Items {
+				name := addonList.Items[i].GetName()
+				if derr := s.Kube.DeleteKusoAddon(ctx, ns, name); derr != nil && !apierrors.IsNotFound(derr) {
+					_ = derr
+				}
+			}
+		}
 	}
 
 	// Phase 4: wipe per-env Secret. Tolerant of NotFound; the secrets
@@ -215,6 +232,26 @@ func inferServiceFQNFromEnv(env string) string {
 	}
 	if strings.HasSuffix(env, "-production") {
 		return strings.TrimSuffix(env, "-production")
+	}
+	return ""
+}
+
+// envScopeForDelete returns the env's kuso.sislelabs.com/env scope value (the env
+// short name, e.g. "staging") used to find its per-env addon clones on delete.
+// Prefers the CR's own env label when present; otherwise derives it from the env
+// CR name ("<service-fqn>-<scope>"). Returns "" when it can't be determined (the
+// addon sweep is then skipped — orphan-tolerant, like the rest of the cleanup).
+func envScopeForDelete(e *kube.KusoEnvironment, env, project, serviceFQN string) string {
+	if e != nil {
+		if scope := e.Labels[kube.LabelEnv]; scope != "" {
+			return scope
+		}
+	}
+	if serviceFQN != "" {
+		suffix := strings.TrimPrefix(env, serviceFQN+"-")
+		if suffix != env && suffix != "production" {
+			return suffix
+		}
 	}
 	return ""
 }
