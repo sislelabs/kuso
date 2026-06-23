@@ -5,6 +5,22 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.77] — 2026-06-23
+
+### Other
+- Merge: per-environment addon provisioning (kuso environment add gives new envs their own DB/redis/s3) ([baa4cc1](https://github.com/sislelabs/kuso/commit/baa4cc1e22aa1e1fdeb99476b423da29ab5416ca))
+
+### ✨ Features
+- Feat(env): kuso environment add provisions per-env addons by default ([e44d61e](https://github.com/sislelabs/kuso/commit/e44d61ebfa88d219fd72792f3e6a313a488d0bd2))
+- Feat(previewdb): generalize PR clone path into env-scope-keyed EnsureEnvAddons ([d97c230](https://github.com/sislelabs/kuso/commit/d97c230cb8a7be3225e107370e0cade4fb61af81))
+
+### 🐛 Bug Fixes
+- Fix(cli): don't dump usage (or double-print) on runtime errors (#6) ([62db75e](https://github.com/sislelabs/kuso/commit/62db75e0125013855daa4dbb04a67e39463e535a))
+
+### 📝 Docs
+- Docs(plan): per-environment addon provisioning implementation plan ([0bc2983](https://github.com/sislelabs/kuso/commit/0bc298375ed4c62bcf66bb1a01fc59f37f93db5e))
+- Docs(spec): per-environment addon provisioning design ([d003190](https://github.com/sislelabs/kuso/commit/d0031906b1a9553efd13bb1898715b5def7eee24))
+
 ## [0.18.76] — 2026-06-22
 
 ### ✨ Features
@@ -390,11 +406,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(previews): dedupe redundant seed+migrate jobs per reopen ([3af1ff3](https://github.com/sislelabs/kuso/commit/3af1ff36ffc583a30c71dc8a791413a9562fdf1d))
-
-## [0.18.12] — 2026-06-02
-
-### 🐛 Bug Fixes
-- Fix(previews): rewrite in-cluster service DNS so preview frontend SSRs its OWN API ([37f3122](https://github.com/sislelabs/kuso/commit/37f312200e8a05a0e28f687f80d2550d19f278a0))
 
 
 ---
