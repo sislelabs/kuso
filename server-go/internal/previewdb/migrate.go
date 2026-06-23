@@ -217,12 +217,12 @@ func (c *Cloner) releaseSeed(cloneFQN string) {
 // Best-effort per env: a failed migration is logged (the preview still boots,
 // just un-migrated, same contract as the seed). nonce is the seed's nowUnix so
 // each (re)seed produces a distinct, non-deduped migrate Job.
-func (c *Cloner) migrateAfterSeed(ctx context.Context, ns, project string, prNumber int, cloneFQN string, nonce int64) {
+func (c *Cloner) migrateAfterSeed(ctx context.Context, ns, project string, envScope string, cloneFQN string, nonce int64) {
 	envs, err := c.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
-		kube.LabelEnv: fmt.Sprintf("preview-pr-%d", prNumber),
+		kube.LabelEnv: envScope,
 	})
 	if err != nil {
-		c.Logger.Warn("preview migrate: list envs", "clone", cloneFQN, "pr", prNumber, "err", err)
+		c.Logger.Warn("preview migrate: list envs", "clone", cloneFQN, "scope", envScope, "err", err)
 		return
 	}
 	// Envs that SHOULD migrate against this clone (mount it + have a release

@@ -91,8 +91,51 @@ func New(ctx context.Context, k *kube.Client, addonSvc *addons.Service, namespac
 // Idempotent: re-running for the same PR finds the existing clones
 // and re-issues seed Jobs (so the reviewer can resync data).
 func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber int) ([]string, error) {
+	// Preview behavior, unchanged: postgres-only, seeded from the project's
+	// source postgres addon, with the preview-specific source-tracking labels.
+	// Everything below is the env-scope-keyed core (EnsureEnvAddons).
+	return c.EnsureEnvAddons(ctx, project, fmt.Sprintf("preview-pr-%d", prNumber), EnvAddonOpts{
+		Kinds:     []string{"postgres"},
+		SeedAll:   true,
+		PreviewPR: fmt.Sprintf("%d", prNumber),
+	})
+}
+
+// EnvAddonOpts controls how EnsureEnvAddons provisions a named env's addons.
+type EnvAddonOpts struct {
+	// Kinds limits which addon kinds get a per-env instance. Empty = postgres
+	// only (the historical preview default). Values: "postgres", "redis", "s3".
+	Kinds []string
+	// SeedAll, when true, seeds every postgres clone from its SOURCE addon via
+	// pg_dump|psql (the preview behavior). When false, postgres clones start
+	// EMPTY unless explicitly seeded by a caller-set source — named staging/qa
+	// envs default to empty. redis/s3 instances are never seeded.
+	SeedAll bool
+	// PreviewPR, when non-empty, stamps the preview-specific source-tracking
+	// labels (kuso.sislelabs.com/preview-pr + preview-source) so the existing
+	// preview-delete sweep keeps working. Empty for named envs.
+	PreviewPR string
+}
+
+// EnsureEnvAddons creates per-env instances of the project's stateful addons,
+// scoped by the kuso.sislelabs.com/env label = envScope, and returns the clones'
+// conn-secret names (callers swap these into the env's EnvFromSecrets). Idempotent:
+// an existing clone is reused (re-seeded only when SeedAll is set). Postgres clones
+// seed from their source when SeedAll is set; redis/s3 instances are always fresh.
+func (c *Cloner) EnsureEnvAddons(ctx context.Context, project, envScope string, opts EnvAddonOpts) ([]string, error) {
 	if c == nil || c.Addons == nil {
 		return nil, nil
+	}
+	wantKind := func(k string) bool {
+		if len(opts.Kinds) == 0 {
+			return k == "postgres"
+		}
+		for _, x := range opts.Kinds {
+			if x == k {
+				return true
+			}
+		}
+		return false
 	}
 	ns := c.namespaceFor(ctx, project)
 	sources, err := c.Addons.List(ctx, project)
@@ -102,97 +145,64 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 	var connSecrets []string
 	for i := range sources {
 		s := &sources[i]
-		// Only postgres for now — redis state is usually ephemeral
-		// (cache), and seeding it would mean RDB snapshot transfer.
-		// Out of scope.
-		if s.Spec.Kind != "postgres" {
+		if !wantKind(s.Spec.Kind) {
 			continue
 		}
-		// Skip env-scoped addons. The kuso.sislelabs.com/env label
-		// marks an addon as belonging to one specific env (preview,
-		// staging, etc.) rather than being part of the project's
-		// source addon set — we use the same label everywhere else
-		// in kuso for env scoping, so reading it here keeps the
-		// invariant single-source. Without this filter EnsurePRAddons
-		// would clone its own clones each sync, producing
-		// "tickero-pg-pr-35-pr-35-pr-35" growth per resync.
-		//
-		// The name-suffix fallback (isPreviewCloneName) catches
-		// pre-v0.17.7 clones that were stamped with the bespoke
-		// "preview-pr" label instead of the canonical env label;
-		// the env-label code-path takes precedence on new clones.
+		// Skip env-scoped addons (a clone) — never clone a clone. The
+		// kuso.sislelabs.com/env label marks an addon as belonging to one
+		// specific env; the name-suffix fallback catches pre-label clones.
 		if s.Labels[kube.LabelEnv] != "" {
 			continue
 		}
-		shortName := addons.ShortName(project, s.Name)
-		if isPreviewCloneName(shortName) {
+		shortSrc := addons.ShortName(project, s.Name)
+		if isPreviewCloneName(shortSrc) {
 			continue
 		}
-		// Instance-pg addons (project consumes the cluster-shared PG via
-		// spec.useInstanceAddon) clone differently from native ones:
-		// there's no StatefulSet to spin up. Instead addons.Add provisions
-		// a SEPARATE per-PR database on the shared server (CREATE DATABASE
-		// "<project>_<addon>_pr_N" + a role) and writes a <clone>-conn
-		// secret — so the preview gets an isolated DB a reviewer can't use
-		// to corrupt prod. The seed Job then pg_dump|psql's the source DB
-		// into it, same as native clones (it reads host/db/user from the
-		// conn secrets, which are reachable shared-server endpoints).
+		// Instance-pg addons clone differently (a per-env database on the
+		// shared server, not a StatefulSet); addons.Add handles that when
+		// UseInstanceAddon is carried through.
 		instancePG := s.Spec.UseInstanceAddon != ""
-		shortSrc := addons.ShortName(project, s.Name)
-		cloneShort := fmt.Sprintf("%s-pr-%d", shortSrc, prNumber)
+		cloneShort := fmt.Sprintf("%s-%s", shortSrc, envScope)
 		cloneFQN := addons.CRName(project, cloneShort)
 
-		// Create the clone if it doesn't exist. We don't update an
-		// existing clone — re-running just re-seeds it.
+		extraLabels := map[string]string{kube.LabelEnv: envScope}
+		if opts.PreviewPR != "" {
+			extraLabels["kuso.sislelabs.com/preview-pr"] = opts.PreviewPR
+			extraLabels["kuso.sislelabs.com/preview-source"] = shortSrc
+		}
+
+		// Create the clone if it doesn't exist. We don't update an existing
+		// clone — re-running just re-seeds it (when SeedAll).
 		if existing, _ := c.Kube.GetKusoAddon(ctx, ns, cloneFQN); existing == nil {
 			if _, err := c.Addons.Add(ctx, project, addons.CreateAddonRequest{
 				Name:    cloneShort,
 				Kind:    s.Spec.Kind,
 				Version: s.Spec.Version,
 				Size:    s.Spec.Size,
-				// Don't carry HA — preview clones stay single-replica
-				// regardless of the source's HA setting (cost +
-				// streaming-replica setup isn't worth it).
-				HA:          false,
-				StorageSize: s.Spec.StorageSize,
-				Database:    s.Spec.Database,
-				// Carry the instance-addon mode so the clone provisions a
-				// per-PR database on the shared server instead of a
-				// StatefulSet. Empty for native addons (unchanged path).
+				// Don't carry HA — per-env clones stay single-replica
+				// regardless of the source's HA setting.
+				HA:               false,
+				StorageSize:      s.Spec.StorageSize,
+				Database:         s.Spec.Database,
 				UseInstanceAddon: s.Spec.UseInstanceAddon,
-				ExtraLabels: map[string]string{
-					// Use the canonical env-scope label that the rest of
-					// kuso reads (envs, per-env Secrets, the addon-list
-					// filter above). Setting it here means EnsurePRAddons
-					// won't try to re-clone its own output on the next
-					// sync, AND the env-delete sweep can find every
-					// clone via a single label-selector List query.
-					kube.LabelEnv: fmt.Sprintf("preview-pr-%d", prNumber),
-					// Source-tracking label is preview-specific (the
-					// canonical env label can't carry both env + source
-					// in one field); keeps the preview-delete sweep
-					// independent of name parsing.
-					"kuso.sislelabs.com/preview-pr":     fmt.Sprintf("%d", prNumber),
-					"kuso.sislelabs.com/preview-source": shortSrc,
-				},
+				ExtraLabels:      extraLabels,
 			}); err != nil {
-				c.Logger.Warn("preview db clone create", "addon", cloneShort, "err", err)
-				continue
+				c.Logger.Warn("env addon clone create", "addon", cloneShort, "scope", envScope, "err", err)
+				return nil, fmt.Errorf("provision %s for env %s: %w", cloneShort, envScope, err)
 			}
-			c.Logger.Info("preview db clone created", "source", shortSrc, "clone", cloneShort)
+			c.Logger.Info("env addon provisioned", "source", shortSrc, "clone", cloneShort, "scope", envScope)
 		}
 		connSecrets = append(connSecrets, addons.ConnSecretName(cloneFQN))
-		// Kick off the seed Job in a goroutine — the create above
-		// returns when the CR lands, but the StatefulSet takes a
-		// few seconds to come up. We poll for the pod-ready state
-		// inside seedAsync.
-		// 30-min cap is plenty for any production-sized DB clone;
-		// past that the operator probably wants to know.
-		// Dedupe: EnsurePRAddons runs once per service, so several
-		// services sharing this DB addon would each spawn a seed+migrate
-		// for the same clone. Only the first in-flight spawn proceeds;
-		// the rest skip (the conn secret is still returned above, so the
-		// preview env mounts the clone regardless).
+
+		// Seed only postgres clones, and only when SeedAll is set (preview).
+		// Named envs default to an empty DB.
+		if s.Spec.Kind != "postgres" || !opts.SeedAll {
+			continue
+		}
+		// Dedupe: EnsureEnvAddons runs once per service, so several services
+		// sharing this DB addon would each spawn a seed+migrate for the same
+		// clone. Only the first in-flight spawn proceeds; the conn secret is
+		// still returned above, so the env mounts the clone regardless.
 		if !c.tryAcquireSeed(cloneFQN) {
 			continue
 		}
@@ -200,7 +210,7 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 		go func(src, clone string, isInstancePG bool) {
 			defer cancel()
 			defer c.releaseSeed(clone)
-			c.seedAsync(seedCtx, ns, project, src, clone, isInstancePG, prNumber)
+			c.seedAsync(seedCtx, ns, project, src, clone, isInstancePG, envScope)
 		}(addons.CRName(project, s.Name), cloneFQN, instancePG)
 	}
 	return connSecrets, nil
@@ -240,7 +250,7 @@ func (c *Cloner) DeletePRAddons(ctx context.Context, project string, prNumber in
 // spawns a Job that pg_dumps from the source into the clone. Best-
 // effort: failures are logged; the preview env still boots, just
 // with an empty DB.
-func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN string, instancePG bool, prNumber int) {
+func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN string, instancePG bool, envScope string) {
 	deadline := time.Now().Add(5 * time.Minute)
 	for time.Now().Before(deadline) {
 		if c.cloneReady(ctx, ns, cloneFQN, instancePG) {
@@ -258,7 +268,7 @@ func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN
 	// with a local trust socket to RepairPassword against. Skip the
 	// repair step (which targets native-addon pods) for them.
 	if instancePG {
-		if err := c.seedAndMigrate(ctx, ns, project, sourceFQN, cloneFQN, prNumber); err != nil {
+		if err := c.seedAndMigrate(ctx, ns, project, sourceFQN, cloneFQN, envScope); err != nil {
 			c.Logger.Warn("preview db seed job (instance-pg)", "clone", cloneFQN, "err", err)
 			return
 		}
@@ -280,7 +290,7 @@ func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN
 	if err := c.Addons.RepairPassword(ctx, project, cloneShort); err != nil {
 		c.Logger.Warn("preview db clone repair-password", "clone", cloneFQN, "err", err)
 	}
-	if err := c.seedAndMigrate(ctx, ns, project, sourceFQN, cloneFQN, prNumber); err != nil {
+	if err := c.seedAndMigrate(ctx, ns, project, sourceFQN, cloneFQN, envScope); err != nil {
 		c.Logger.Warn("preview db seed job", "clone", cloneFQN, "err", err)
 		return
 	}
@@ -341,7 +351,7 @@ func (c *Cloner) runSeedJob(ctx context.Context, ns, project, sourceFQN, cloneFQ
 // fix for the close→reopen bug where a re-seed dropped a migration that a
 // build-promote-time release had applied earlier. prNumber drives the env
 // lookup; project/clone identify the DB.
-func (c *Cloner) seedAndMigrate(ctx context.Context, ns, project, sourceFQN, cloneFQN string, prNumber int) error {
+func (c *Cloner) seedAndMigrate(ctx context.Context, ns, project, sourceFQN, cloneFQN string, envScope string) error {
 	jobName, nonce, err := c.runSeedJob(ctx, ns, project, sourceFQN, cloneFQN)
 	if err != nil {
 		return err
@@ -361,7 +371,7 @@ func (c *Cloner) seedAndMigrate(ctx context.Context, ns, project, sourceFQN, clo
 			return nil
 		}
 	}
-	c.migrateAfterSeed(ctx, ns, project, prNumber, cloneFQN, nonce)
+	c.migrateAfterSeed(ctx, ns, project, envScope, cloneFQN, nonce)
 	return nil
 }
 
