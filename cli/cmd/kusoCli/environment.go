@@ -25,8 +25,11 @@ import (
 )
 
 var (
-	environmentAddBranch string
-	environmentAddHost   string
+	environmentAddBranch      string
+	environmentAddHost        string
+	environmentAddShareAddons bool
+	environmentAddSeedFrom    string
+	environmentAddAddons      []string
 )
 
 // runEnvironmentAdd is shared by both the top-level `kuso environment
@@ -42,6 +45,9 @@ var runEnvironmentAdd = func(cmd *cobra.Command, args []string) error {
 		Name:         args[2],
 		Branch:       environmentAddBranch,
 		HostOverride: environmentAddHost,
+		ShareAddons:  environmentAddShareAddons,
+		SeedFrom:     environmentAddSeedFrom,
+		Addons:       environmentAddAddons,
 	}
 	resp, err := api.AddEnvironment(args[0], args[1], req)
 	if err != nil {
@@ -80,6 +86,11 @@ Each KusoService gets a "production" env created automatically. Use this
 command to add a "staging", "qa", or per-branch env that builds from a
 different git branch and (optionally) serves on a different host.
 
+By default a new env gets its OWN addons (its own postgres DB, redis, s3) so
+staging/qa never touch production data — the same isolation PR previews get.
+The postgres DB starts empty; pass --seed-from <env> to copy a snapshot, or
+--share-addons to fall back to sharing the project's production addons.
+
 This is distinct from "kuso env" which manages environment VARIABLES on
 a service.`,
 }
@@ -89,6 +100,8 @@ var environmentAddCmd = &cobra.Command{
 	Short: "Create a new environment for a service (e.g. staging)",
 	Args:  cobra.ExactArgs(3),
 	Example: `  kuso environment add tickero api staging --branch staging
+  kuso environment add tickero api staging --branch staging --seed-from production
+  kuso environment add tickero api staging --branch staging --share-addons
   kuso environment add tickero frontend qa --branch develop --host qa.tickero.bg`,
 	RunE: runEnvironmentAdd,
 }
@@ -108,6 +121,9 @@ func init() {
 	environmentCmd.AddCommand(environmentAddCmd)
 	environmentAddCmd.Flags().StringVar(&environmentAddBranch, "branch", "", "git branch this env builds from (required)")
 	environmentAddCmd.Flags().StringVar(&environmentAddHost, "host", "", "override the auto-generated host (default: <env>.<service>.<baseDomain>)")
+	environmentAddCmd.Flags().BoolVar(&environmentAddShareAddons, "share-addons", false, "share the project's addons with production instead of giving this env its own DB/redis/s3 (legacy behavior)")
+	environmentAddCmd.Flags().StringVar(&environmentAddSeedFrom, "seed-from", "", "seed this env's postgres DB from the named source env (default: empty DB)")
+	environmentAddCmd.Flags().StringSliceVar(&environmentAddAddons, "addons", nil, "stateful addon kinds to provision per-env (default: all the project has — postgres,redis,s3)")
 	_ = environmentAddCmd.MarkFlagRequired("branch")
 
 	// Project-scoped alias. projectEnvCmd is already registered in
@@ -116,5 +132,8 @@ func init() {
 	projectEnvCmd.AddCommand(projectEnvAddCmd)
 	projectEnvAddCmd.Flags().StringVar(&environmentAddBranch, "branch", "", "git branch this env builds from (required)")
 	projectEnvAddCmd.Flags().StringVar(&environmentAddHost, "host", "", "override the auto-generated host")
+	projectEnvAddCmd.Flags().BoolVar(&environmentAddShareAddons, "share-addons", false, "share the project's addons instead of giving this env its own DB/redis/s3")
+	projectEnvAddCmd.Flags().StringVar(&environmentAddSeedFrom, "seed-from", "", "seed this env's postgres DB from the named source env (default: empty DB)")
+	projectEnvAddCmd.Flags().StringSliceVar(&environmentAddAddons, "addons", nil, "stateful addon kinds to provision per-env (default: all the project has)")
 	_ = projectEnvAddCmd.MarkFlagRequired("branch")
 }

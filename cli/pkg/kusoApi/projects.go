@@ -264,9 +264,12 @@ func (k *KusoClient) UnsetEnvVar(project, service, name string) (*resty.Response
 // server type lives in an internal package; the JSON wire-shape is
 // the contract and matches field-for-field.
 type CreateEnvRequest struct {
-	Name         string `json:"name"`
-	Branch       string `json:"branch"`
-	HostOverride string `json:"host,omitempty"`
+	Name         string   `json:"name"`
+	Branch       string   `json:"branch"`
+	HostOverride string   `json:"host,omitempty"`
+	ShareAddons  bool     `json:"shareAddons,omitempty"`
+	SeedFrom     string   `json:"seedFrom,omitempty"`
+	Addons       []string `json:"addons,omitempty"`
 }
 
 func (k *KusoClient) GetEnvironments(project string) (*resty.Response, error) {

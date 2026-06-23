@@ -564,6 +564,14 @@ func main() {
 		// every existing project addon. Without this, services added
 		// AFTER an addon boot without DATABASE_URL etc. and crashloop.
 		projSvc.AddonConnSecrets = addonSvc.ConnSecretsForProject
+		// Per-env addon provisioning: a new named env (staging/qa) gets its OWN
+		// addons (own DB/redis/s3) by default — the same isolation PR previews
+		// get. Backed by a previewdb cloner (independent of the github/preview
+		// path so it's always available for `kuso environment add`).
+		envAddonCloner := previewdb.New(ctx, kc, addonSvc, *namespace, logger.With("component", "env-addons"))
+		projSvc.EnvAddons = func(ctx context.Context, project, envScope string, kinds []string, seedAll bool) ([]string, error) {
+			return envAddonCloner.EnsureEnvAddons(ctx, project, envScope, previewdb.EnvAddonOpts{Kinds: kinds, SeedAll: seedAll})
+		}
 		// Spec reconciler — the apply endpoint reuses the same
 		// project + addon services for create/update/delete so the
 		// validation rules stay in one place.
