@@ -215,11 +215,24 @@ func proxyOneConnection(ctx context.Context, local net.Conn, wsURL, tok string) 
 	}()
 
 	// ws → local
+	//
+	// Only BinaryMessage frames are tunnel payload. The server uses a
+	// TextMessage frame to report an out-of-band setup failure (e.g. the
+	// kube pods/portforward dial was rejected); writing that human string
+	// into the TCP socket corrupts the wrapped protocol — Postgres then
+	// reports a meaningless "connection terminated unexpectedly". Surface
+	// text frames to stderr and tear the bridge down instead.
 	go func() {
 		defer func() { done <- struct{}{} }()
 		for {
-			_, msg, err := ws.ReadMessage()
+			mt, msg, err := ws.ReadMessage()
 			if err != nil {
+				return
+			}
+			if mt != websocket.BinaryMessage {
+				if len(msg) > 0 {
+					fmt.Fprintf(os.Stderr, "[kuso] tunnel: %s\n", strings.TrimSpace(string(msg)))
+				}
 				return
 			}
 			if _, werr := local.Write(msg); werr != nil {

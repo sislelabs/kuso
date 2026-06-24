@@ -191,6 +191,15 @@ rules:
   - apiGroups: [""]
     resources: [pods/exec]
     verbs: [create]
+  # pods/portforward: `kuso db connect` / `db port-forward` front the
+  # kube pods/portforward subresource so an operator can reach an addon
+  # (postgres/redis/mongo) from their laptop without exposing it
+  # publicly. Same namespace scope and rationale as pods/exec above —
+  # without it the tunnel dial is rejected ("cannot create
+  # pods/portforward") and the data stream fails mid-handshake.
+  - apiGroups: [""]
+    resources: [pods/portforward]
+    verbs: [create]
   # services (read): node-bootstrap looks up the in-cluster registry
   # Service ClusterIP so a joining node can be wired to pull build
   # images. Read-only, namespace-scoped.
