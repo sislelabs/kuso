@@ -176,6 +176,20 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 				if err != nil {
 					return fmt.Errorf("resolve sharedEnvKeys for env %s: %w", envName, err)
 				}
+				// Re-scope explicit addon secretKeyRef env-vars (e.g.
+				// DATABASE_URL -> <project>-db-conn) onto THIS env's clone
+				// conns. svc.Spec.EnvVars carries the PRODUCTION-scoped
+				// secretKeyRef; without this, propagating any env-var change
+				// rewrites a staging env's DATABASE_URL back to the production
+				// conn (an explicit env entry wins over envFromSecrets on key
+				// collision), silently re-pointing staging at the production
+				// database. The env's own clone conns are already present in
+				// prunedFrom (carried from AddEnvironment); the dropped bases
+				// are the project's addon conns.
+				if envScope != "production" {
+					projectAddons := s.listProjectAddonConnSecrets(ctx, project)
+					merged = rescopeAddonConnRefs(merged, projectAddons, prunedFrom, envScope)
+				}
 				env.Spec.EnvVars = merged
 				// Filter the propagated envFromSecrets by the addon
 				// subscription. nil SubscribedAddons = legacy auto-

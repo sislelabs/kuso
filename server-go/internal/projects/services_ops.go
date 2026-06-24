@@ -798,6 +798,11 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	// s3) so staging/qa never touch production data — the same isolation PR
 	// previews already get. --share-addons opts out (keeps the shared project
 	// addons assembled above).
+	// droppedAddonConns + envCloneConns let the env-var rescope below
+	// rewrite explicit secretKeyRef entries (e.g. DATABASE_URL ->
+	// <project>-db-conn) onto this env's clone conns. Captured here so
+	// they're visible after the per-env-addon block.
+	var droppedAddonConns, envCloneConns []string
 	if !req.ShareAddons && s.EnvAddons != nil {
 		// Resolve the seed source's postgres conn-secret if --seed-from was given.
 		var seedAll bool
@@ -823,6 +828,8 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		projectAddons := s.listProjectAddonConnSecrets(ctx, project)
 		envFromSecrets = dropProjectAddonConns(envFromSecrets, projectAddons)
 		envFromSecrets = append(envFromSecrets, clones...)
+		droppedAddonConns = projectAddons
+		envCloneConns = clones
 	}
 
 	// Re-scope service-ref literals to THIS env before adopting them.
@@ -834,6 +841,12 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 	// staging env's API_URL targets <svc>-staging instead. (production
 	// is a no-op in rescopeServiceRefLiterals.)
 	scopedSvcEnvVars := rescopeServiceRefLiterals(svc.Spec.EnvVars, ns, req.Name)
+	// Re-scope explicit addon secretKeyRef env-vars (e.g. DATABASE_URL ->
+	// <project>-db-conn) onto this env's clone conns. An explicit env entry
+	// wins over envFromSecrets on key collision, so without this a staging
+	// env's DATABASE_URL would still resolve to the PRODUCTION database even
+	// though envFromSecrets was correctly swapped above.
+	scopedSvcEnvVars = rescopeAddonConnRefs(scopedSvcEnvVars, droppedAddonConns, envCloneConns, req.Name)
 	// Same treatment for inline envVars: expand the subscription into
 	// explicit valueFrom entries + drop shared-secret names from
 	// envFromSecrets so per-key gating actually works at create

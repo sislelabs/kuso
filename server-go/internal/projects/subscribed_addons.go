@@ -94,6 +94,77 @@ func (s *Service) listProjectAddonConnSecrets(ctx context.Context, project strin
 	return out
 }
 
+// rescopeAddonConnRefs rewrites explicit secretKeyRef env-vars that point at a
+// project base addon conn-secret so they instead point at the env's own clone
+// conn-secret. Used by AddEnvironment after the per-env addon clones are
+// provisioned and envFromSecrets has been swapped (dropProjectAddonConns +
+// append(clones)).
+//
+// Without this, a ${{ db.DATABASE_URL }} ref resolved against production lands
+// in the service spec as an explicit env[].valueFrom.secretKeyRef{name:
+// "<project>-db-conn"}. When that EnvVars list is adopted verbatim by a new
+// staging env, the explicit secretKeyRef is copied unchanged — and an explicit
+// env entry WINS over envFromSecrets on key collision in Kubernetes. So even
+// though envFromSecrets correctly carries "<project>-db-staging-conn", the
+// staging pod's DATABASE_URL still resolves to the PRODUCTION database. That
+// silently defeats per-env isolation (staging writes hit prod).
+//
+// The base->clone mapping mirrors EnsureEnvAddons: a base conn named
+// "<addon>-conn" maps to "<addon>-<envScope>-conn", and we only rewrite when
+// the matching clone conn is actually present in the env's secret list.
+func rescopeAddonConnRefs(in []kube.KusoEnvVar, droppedBaseConns, cloneConns []string, envScope string) []kube.KusoEnvVar {
+	if envScope == "" || envScope == "production" || len(in) == 0 || len(droppedBaseConns) == 0 {
+		return in
+	}
+	clonePresent := make(map[string]bool, len(cloneConns))
+	for _, c := range cloneConns {
+		clonePresent[c] = true
+	}
+	// Map each dropped base conn to its expected clone conn for this scope,
+	// but only if that clone was actually provisioned for the env.
+	baseToClone := make(map[string]string, len(droppedBaseConns))
+	for _, base := range droppedBaseConns {
+		short := strings.TrimSuffix(base, "-conn")
+		clone := short + "-" + envScope + "-conn"
+		if clonePresent[clone] {
+			baseToClone[base] = clone
+		}
+	}
+	if len(baseToClone) == 0 {
+		return in
+	}
+	out := make([]kube.KusoEnvVar, len(in))
+	for i, e := range in {
+		out[i] = e
+		if e.ValueFrom == nil {
+			continue
+		}
+		skr, ok := e.ValueFrom["secretKeyRef"].(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _ := skr["name"].(string)
+		clone, hit := baseToClone[name]
+		if !hit {
+			continue
+		}
+		// Deep-copy the ValueFrom map so we don't mutate the source service
+		// spec's slice (shared with the production env's EnvVars).
+		newVF := make(map[string]any, len(e.ValueFrom))
+		for k, v := range e.ValueFrom {
+			newVF[k] = v
+		}
+		newSKR := make(map[string]any, len(skr))
+		for k, v := range skr {
+			newSKR[k] = v
+		}
+		newSKR["name"] = clone
+		newVF["secretKeyRef"] = newSKR
+		out[i].ValueFrom = newVF
+	}
+	return out
+}
+
 // dropProjectAddonConns removes the project's own addon conn-secrets from a
 // list, leaving shared / instance / per-service / foo-conn secrets intact. Used
 // when a per-env env swaps the shared project addons for its own per-env clones.

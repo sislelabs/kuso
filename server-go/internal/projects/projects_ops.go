@@ -296,6 +296,23 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 		if err := s.Kube.DeleteKusoEnvironment(ctx, ns, e.Name); err != nil && !apierrors.IsNotFound(err) {
 			return fmt.Errorf("delete env %s: %w", e.Name, err)
 		}
+		// Reclaim the cert-manager TLS Secrets for this env. cert-manager
+		// (not helm) creates "<env>-tls" / "<env>-tls-extra-<host>"; they
+		// carry no ownerReference and aren't in the helm release, so neither
+		// the uninstall nor kube GC removes them. Project delete deletes the
+		// env CR directly (not via DeleteEnvironment), so mirror that path's
+		// Phase-5 TLS cleanup here to avoid leaking a Secret per env/preview.
+		if s.Kube.Clientset != nil {
+			_ = s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, e.Name+"-tls", metav1.DeleteOptions{})
+			prefix := e.Name + "-tls-extra-"
+			if secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{}); lerr == nil {
+				for i := range secs.Items {
+					if strings.HasPrefix(secs.Items[i].Name, prefix) {
+						_ = s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, secs.Items[i].Name, metav1.DeleteOptions{})
+					}
+				}
+			}
+		}
 	}
 	services, err := s.listServicesForProject(ctx, name)
 	if err != nil {

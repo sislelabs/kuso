@@ -183,6 +183,7 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 			kube.LabelProject: project,
 			kube.LabelEnv:     scope,
 		})
+		var deletedCloneAddons []string
 		if addonList, lerr := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).List(ctx, metav1.ListOptions{
 			LabelSelector: selector,
 		}); lerr == nil {
@@ -190,6 +191,31 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 				name := addonList.Items[i].GetName()
 				if derr := s.Kube.DeleteKusoAddon(ctx, ns, name); derr != nil && !apierrors.IsNotFound(derr) {
 					_ = derr
+				} else {
+					deletedCloneAddons = append(deletedCloneAddons, name)
+				}
+			}
+		}
+		// Purge the clone addons' retained data PVCs. The addon helm chart
+		// stamps `helm.sh/resource-policy: keep` on the data PVC to protect
+		// the PROJECT's production data on delete — but an env-scoped clone
+		// (staging/qa's own throwaway DB) is meant to be removed with the
+		// env. Worse, leaving the PVC behind while the conn Secret is NOT
+		// retained means a same-named env recreate reuses the old pgdata
+		// (old password baked into initdb) against a freshly-generated
+		// conn password → SASL auth crashloop. So we explicitly reclaim
+		// these PVCs here. Best-effort: a still-mounted PVC stamps a
+		// deletionTimestamp and GCs once the StatefulSet unmounts.
+		if s.Kube.Clientset != nil {
+			for _, addonFQN := range deletedCloneAddons {
+				pvcs, lerr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
+					LabelSelector: "app.kubernetes.io/instance=" + addonFQN,
+				})
+				if lerr != nil {
+					continue
+				}
+				for i := range pvcs.Items {
+					_ = s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcs.Items[i].Name, metav1.DeleteOptions{})
 				}
 			}
 		}
@@ -213,6 +239,30 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 			_ = cerr
 		}
 	}
+	// Phase 5: delete the cert-manager TLS Secrets for this env. The
+	// kusoenvironment Ingress only carries the cert-manager.io/cluster-issuer
+	// annotation — cert-manager (not helm) creates the backing Certificate
+	// CRs and the "<env>-tls" / "<env>-tls-extra-<host>" Secrets. They are
+	// NOT part of the helm release, so the uninstall does not remove them and
+	// (since the populated Secret has no ownerReference) nothing GCs them
+	// either. Left unchecked, every env — especially every PR preview — leaks
+	// a TLS Secret forever. cert-manager removes its Certificate CR on Ingress
+	// teardown but leaves the Secret behind; we reclaim it here.
+	if s.Kube.Clientset != nil {
+		// Primary host secret is the well-known "<env>-tls".
+		_ = s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, env+"-tls", metav1.DeleteOptions{})
+		// Additional-host secrets are "<env>-tls-extra-<host>"; the host
+		// suffix isn't known here without the env CR, so name-prefix match.
+		prefix := env + "-tls-extra-"
+		if secs, lerr := s.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{}); lerr == nil {
+			for i := range secs.Items {
+				if strings.HasPrefix(secs.Items[i].Name, prefix) {
+					_ = s.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, secs.Items[i].Name, metav1.DeleteOptions{})
+				}
+			}
+		}
+	}
+
 	// envKind is referenced for the production-env guard above; keep
 	// the variable live so future cleanup phases that need to vary by
 	// kind don't have to re-fetch.
