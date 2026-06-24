@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.79] — 2026-06-24
+
+### 🐛 Bug Fixes
+- Fix(public-tcp): grant operator traefik RBAC + declutter the public-URL UI ([18848ea](https://github.com/sislelabs/kuso/commit/18848eaebada96b89f534e7f8af765744e047cf8))
+
 ## [0.18.78] — 2026-06-24
 
 ### 🐛 Bug Fixes
@@ -401,11 +406,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(cluster-db): valid RFC-1123 name for the cluster PG addon + reserve kuso- prefix ([185bc66](https://github.com/sislelabs/kuso/commit/185bc66ec6b39a10877635c5fb53e1d605348368))
-
-## [0.18.14] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(previews): wait for the env image before migrating (image-after-seed race) ([d3d37c9](https://github.com/sislelabs/kuso/commit/d3d37c90dfaa70f0a979ced1268850c1002759d3))
 
 
 ---
