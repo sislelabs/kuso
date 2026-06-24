@@ -91,6 +91,13 @@ rules:
 - apiGroups: ["cert-manager.io"]
   resources: ["certificates", "issuers", "clusterissuers"]
   verbs: ["*"]
+# Traefik CRDs the kuso charts render. The kusoaddon chart's opt-in public TCP
+# endpoint (public-tcp.yaml) creates an IngressRouteTCP; without this grant the
+# helm release goes Irreconcilable ("ingressroutetcps.traefik.io ... is
+# forbidden") and the route is never created, so the public port never routes.
+- apiGroups: ["traefik.io"]
+  resources: ["ingressroutetcps", "ingressroutes", "middlewares", "middlewaretcps", "serverstransports", "serverstransporttcps", "tlsoptions", "traefikservices"]
+  verbs: ["*"]
 - apiGroups: ["policy"]
   resources: ["poddisruptionbudgets"]
   verbs: ["*"]

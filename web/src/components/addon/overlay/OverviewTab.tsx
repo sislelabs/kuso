@@ -125,10 +125,11 @@ export function OverviewTab({
 // rest alphabetical — matches what people scan for when they want to
 // connect.
 //
-// publicTCP, when set on the addon, also surfaces a per-row "also
-// reachable publicly at <host>:<port>" note under the HOST/PORT/URL
-// rows so users see, in-place, that this connection is exposed to
-// the public internet (not just internal).
+// When the addon's publicTCP is enabled, a SINGLE masked "public URL" row is
+// rendered at the top of the list (the credentialed DSN rewritten to
+// <cluster-host>:<public-port>). It's masked + copy-only like the password —
+// never shown in plaintext — instead of repeating a verbose "also reachable
+// publicly at postgres://user:password@…" note under every host/port/url row.
 function ConnectionRows({
   values,
   publicTCP,
@@ -147,33 +148,25 @@ function ConnectionRows({
   });
   const isSensitive = (k: string) => /url$|password|secret|token/i.test(k);
 
-  // Public-access annotation. When the addon's publicTCP is enabled
-  // with an allocated port, the HOST/PORT/URL rows ALSO describe a
-  // public endpoint at <cluster-host>:<port>. We surface that as a
-  // per-row hint so the user sees, in-place, "this connection is
-  // also reachable from the public internet."
+  // The single public DSN: rewrite the primary connection URL's host:port →
+  // <cluster-host>:<public-port>, keeping scheme / user:password / path / query.
   const publicEnabled =
     !!publicTCP?.enabled && typeof publicTCP?.port === "number" && publicTCP.port > 0;
   const publicHost =
     typeof window !== "undefined" ? window.location.hostname : "<your-cluster-host>";
-  const publicAliasFor = (k: string, v: string): string | null => {
+  const publicUrl = (() => {
     if (!publicEnabled) return null;
-    const port = publicTCP!.port!;
-    if (/_HOST$/i.test(k)) return `${publicHost} (public)`;
-    if (/_PORT$/i.test(k)) return `${port} (public)`;
-    if (/_URL$/i.test(k)) {
-      // Rewrite the URL host:port → cluster-host:public-port without
-      // touching scheme, user:password, path, or query string.
-      try {
-        const u = new URL(v);
-        u.host = `${publicHost}:${port}`;
-        return u.toString();
-      } catch {
-        return null;
-      }
+    const src =
+      values.DATABASE_URL || values.DIRECT_URL || values.POOLER_URL || values.REDIS_URL || "";
+    if (!src) return null;
+    try {
+      const u = new URL(src);
+      u.host = `${publicHost}:${publicTCP!.port}`;
+      return u.toString();
+    } catch {
+      return null;
     }
-    return null;
-  };
+  })();
 
   const onCopy = async (k: string, v: string) => {
     try {
@@ -184,79 +177,96 @@ function ConnectionRows({
       toast.error("clipboard unavailable");
     }
   };
-  return (
-    <ul>
-      {keys.map((k, i) => {
-        const v = values[k];
-        const sensitive = isSensitive(k);
-        const visible = !sensitive || !!shown[k];
-        const publicAlias = publicAliasFor(k, v);
-        return (
-          <li
-            key={k}
+
+  // A field row: monospace key, masked-or-revealed value, optional eye, copy.
+  const FieldRow = ({
+    k,
+    v,
+    sensitive,
+    last,
+    accent,
+  }: {
+    k: string;
+    v: string;
+    sensitive: boolean;
+    last?: boolean;
+    accent?: boolean;
+  }) => {
+    const visible = !sensitive || !!shown[k];
+    return (
+      <li
+        className={cn(
+          "px-3 py-2",
+          !last && "border-b border-[var(--border-subtle)]",
+          accent && "bg-amber-500/[0.04]",
+        )}
+      >
+        <div className="grid grid-cols-[180px_1fr_auto] items-center gap-2">
+          <span
             className={cn(
-              "px-3 py-2",
-              i < keys.length - 1 && "border-b border-[var(--border-subtle)]",
+              "truncate font-mono text-[10px] uppercase tracking-widest",
+              accent ? "text-amber-300/90" : "text-[var(--text-tertiary)]",
             )}
           >
-            <div className="grid grid-cols-[180px_1fr_auto] items-center gap-2">
-              <span className="truncate font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
-                {k}
-              </span>
-              <span
-                className={cn(
-                  "truncate rounded-md bg-[var(--bg-primary)] px-2 py-1 font-mono text-[11px]",
-                  visible
-                    ? "text-[var(--text-secondary)]"
-                    : "text-[var(--text-tertiary)] tracking-widest",
-                )}
-                title={visible ? v : "click eye to reveal"}
-              >
-                {visible ? v : "•".repeat(Math.min(v.length, 24))}
-              </span>
-              <div className="flex items-center gap-0.5">
-                {sensitive && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon-xs"
-                    aria-label={visible ? "Hide" : "Show"}
-                    onClick={() => setShown((s) => ({ ...s, [k]: !s[k] }))}
-                  >
-                    {visible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label="Copy"
-                  onClick={() => onCopy(k, v)}
-                >
-                  {copied === k ? (
-                    <Check className="h-3 w-3 text-emerald-500" />
-                  ) : (
-                    <Copy className="h-3 w-3" />
-                  )}
-                </Button>
-              </div>
-            </div>
-            {publicAlias && (
-              // Public-access annotation. The 180px left gutter aligns
-              // the note under the value column. Amber-on-muted matches
-              // the "live on :<port>" treatment in the Settings tab's
-              // PublicTCPSection so the two surfaces feel of-a-piece.
-              <div className="mt-1 grid grid-cols-[180px_1fr] items-center gap-2">
-                <span />
-                <span className="truncate font-mono text-[10px] text-amber-300/90">
-                  also reachable publicly at{" "}
-                  <span className="text-amber-300">{publicAlias}</span>
-                </span>
-              </div>
+            {k}
+          </span>
+          <span
+            className={cn(
+              "truncate rounded-md bg-[var(--bg-primary)] px-2 py-1 font-mono text-[11px]",
+              visible
+                ? "text-[var(--text-secondary)]"
+                : "text-[var(--text-tertiary)] tracking-widest",
             )}
-          </li>
-        );
-      })}
+            title={visible ? v : "click eye to reveal"}
+          >
+            {visible ? v : "•".repeat(Math.min(v.length, 24))}
+          </span>
+          <div className="flex items-center gap-0.5">
+            {sensitive && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon-xs"
+                aria-label={visible ? "Hide" : "Show"}
+                onClick={() => setShown((s) => ({ ...s, [k]: !s[k] }))}
+              >
+                {visible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+              </Button>
+            )}
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-xs"
+              aria-label="Copy"
+              onClick={() => onCopy(k, v)}
+            >
+              {copied === k ? (
+                <Check className="h-3 w-3 text-emerald-500" />
+              ) : (
+                <Copy className="h-3 w-3" />
+              )}
+            </Button>
+          </div>
+        </div>
+      </li>
+    );
+  };
+
+  return (
+    <ul>
+      {/* Single public-URL row, masked + copy-only, at the top when exposed. */}
+      {publicUrl && (
+        <FieldRow k="PUBLIC_URL" v={publicUrl} sensitive accent />
+      )}
+      {keys.map((k, i) => (
+        <FieldRow
+          key={k}
+          k={k}
+          v={values[k]}
+          sensitive={isSensitive(k)}
+          last={i === keys.length - 1}
+        />
+      ))}
     </ul>
   );
 }
