@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.80] — 2026-06-24
+
+### 🐛 Bug Fixes
+- Fix(envs): per-env DB isolation, TLS-secret + clone-PVC cleanup on delete ([ce3ccba](https://github.com/sislelabs/kuso/commit/ce3ccba437d86ee68dc032583cacb1bba5c51c88))
+
+### 🧹 Chores
+- Chore(changelog): promote 0.18.11–0.18.14 entries into the archive ([f3ec8c1](https://github.com/sislelabs/kuso/commit/f3ec8c15ada4d8c0f40b86a1096de837d0b54faa))
+
 ## [0.18.79] — 2026-06-24
 
 ### 🐛 Bug Fixes
@@ -401,11 +409,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(settings): unify cluster database + instance-addons into one page ([bbcdca2](https://github.com/sislelabs/kuso/commit/bbcdca2db828d8d8854ab4bb0f532fe45642717a))
-
-## [0.18.15] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(cluster-db): valid RFC-1123 name for the cluster PG addon + reserve kuso- prefix ([185bc66](https://github.com/sislelabs/kuso/commit/185bc66ec6b39a10877635c5fb53e1d605348368))
 
 
 ---
