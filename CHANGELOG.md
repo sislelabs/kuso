@@ -5,6 +5,11 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.78] — 2026-06-24
+
+### 🐛 Bug Fixes
+- Fix(env): per-env clone NAME suffix + canvas shows only the env's own addons ([e8bfda1](https://github.com/sislelabs/kuso/commit/e8bfda16b12a2d82cddcb370c5bc426bc2e0e8f0))
+
 ## [0.18.77] — 2026-06-23
 
 ### Other
@@ -401,11 +406,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(previews): wait for the env image before migrating (image-after-seed race) ([d3d37c9](https://github.com/sislelabs/kuso/commit/d3d37c90dfaa70f0a979ced1268850c1002759d3))
-
-## [0.18.13] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(previews): dedupe redundant seed+migrate jobs per reopen ([3af1ff3](https://github.com/sislelabs/kuso/commit/3af1ff36ffc583a30c71dc8a791413a9562fdf1d))
 
 
 ---
