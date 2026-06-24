@@ -2,6 +2,26 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.14] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(previews): wait for the env image before migrating (image-after-seed race) ([d3d37c9](https://github.com/sislelabs/kuso/commit/d3d37c90dfaa70f0a979ced1268850c1002759d3))
+
+## [0.18.13] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(previews): dedupe redundant seed+migrate jobs per reopen ([3af1ff3](https://github.com/sislelabs/kuso/commit/3af1ff36ffc583a30c71dc8a791413a9562fdf1d))
+
+## [0.18.12] — 2026-06-02
+
+### 🐛 Bug Fixes
+- Fix(previews): rewrite in-cluster service DNS so preview frontend SSRs its OWN API ([37f3122](https://github.com/sislelabs/kuso/commit/37f312200e8a05a0e28f687f80d2550d19f278a0))
+
+## [0.18.11] — 2026-06-02
+
+### 🐛 Bug Fixes
+- Fix(previews): migrate Job must wait for the clone DB to accept connections ([749ae53](https://github.com/sislelabs/kuso/commit/749ae534c74bdac210961a914ae58f02fac61df2))
+
 ## [0.18.10] — 2026-06-02
 
 ### 🐛 Bug Fixes
