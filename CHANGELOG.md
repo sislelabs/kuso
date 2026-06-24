@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.81] — 2026-06-24
+
+### 🐛 Bug Fixes
+- Fix(builds,envs,addons): stuck-build timeout, promote CAS, token+PVC leaks, env-editor round-trip ([2603f4c](https://github.com/sislelabs/kuso/commit/2603f4c321cdb03d861fae1e9d9a4d7c158f5eae))
+
+### 🧹 Chores
+- Chore(changelog): archive promotion from v0.18.80 ship ([4ca191c](https://github.com/sislelabs/kuso/commit/4ca191c5ed856f44a1ba04bd903e2b0c542630eb))
+
 ## [0.18.80] — 2026-06-24
 
 ### 🐛 Bug Fixes
@@ -404,11 +412,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(cluster-db): shared auth_query PgBouncer in front of the cluster Postgres ([6658273](https://github.com/sislelabs/kuso/commit/66582733cfee861c71579ab09a752f35387e0e53))
-
-## [0.18.16] — 2026-06-04
-
-### ✨ Features
-- Feat(settings): unify cluster database + instance-addons into one page ([bbcdca2](https://github.com/sislelabs/kuso/commit/bbcdca2db828d8d8854ab4bb0f532fe45642717a))
 
 
 ---
