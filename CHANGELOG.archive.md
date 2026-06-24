@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.15] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(cluster-db): valid RFC-1123 name for the cluster PG addon + reserve kuso- prefix ([185bc66](https://github.com/sislelabs/kuso/commit/185bc66ec6b39a10877635c5fb53e1d605348368))
+
 ## [0.18.14] — 2026-06-04
 
 ### 🐛 Bug Fixes
