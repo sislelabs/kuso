@@ -95,9 +95,13 @@ func (c *Cloner) EnsurePRAddons(ctx context.Context, project string, prNumber in
 	// source postgres addon, with the preview-specific source-tracking labels.
 	// Everything below is the env-scope-keyed core (EnsureEnvAddons).
 	return c.EnsureEnvAddons(ctx, project, fmt.Sprintf("preview-pr-%d", prNumber), EnvAddonOpts{
-		Kinds:     []string{"postgres"},
-		SeedAll:   true,
-		PreviewPR: fmt.Sprintf("%d", prNumber),
+		Kinds:   []string{"postgres"},
+		SeedAll: true,
+		// Keep the historical clone name "<base>-pr-N" (DeletePRAddons + the
+		// canvas's -pr-N regex depend on it), even though the env-label scope
+		// is "preview-pr-N".
+		NameSuffix: fmt.Sprintf("-pr-%d", prNumber),
+		PreviewPR:  fmt.Sprintf("%d", prNumber),
 	})
 }
 
@@ -115,6 +119,12 @@ type EnvAddonOpts struct {
 	// labels (kuso.sislelabs.com/preview-pr + preview-source) so the existing
 	// preview-delete sweep keeps working. Empty for named envs.
 	PreviewPR string
+	// NameSuffix overrides the clone NAME suffix ("<base><NameSuffix>"). It
+	// decouples the clone name from the env-label scope: PR previews keep their
+	// historical "<base>-pr-N" name while being labeled env=preview-pr-N (the
+	// -pr-N suffix is a contract for DeletePRAddons + the canvas regex). Empty
+	// = use "-<envScope>" (named envs: "<base>-staging").
+	NameSuffix string
 }
 
 // EnsureEnvAddons creates per-env instances of the project's stateful addons,
@@ -162,7 +172,11 @@ func (c *Cloner) EnsureEnvAddons(ctx context.Context, project, envScope string, 
 		// shared server, not a StatefulSet); addons.Add handles that when
 		// UseInstanceAddon is carried through.
 		instancePG := s.Spec.UseInstanceAddon != ""
-		cloneShort := fmt.Sprintf("%s-%s", shortSrc, envScope)
+		suffix := opts.NameSuffix
+		if suffix == "" {
+			suffix = "-" + envScope
+		}
+		cloneShort := shortSrc + suffix
 		cloneFQN := addons.CRName(project, cloneShort)
 
 		extraLabels := map[string]string{kube.LabelEnv: envScope}

@@ -157,21 +157,35 @@ export function ProjectDetailView() {
     return v === selectedEnv;
   };
   const envs = allEnvs.filter((e) => inGroup(e.metadata.labels));
-  // Addons are project-shared by default. An addon with no env label
-  // serves every env-group (its conn-secret is auto-injected into every
-  // KusoEnvironment in the project — staging apps already connect to
-  // the same Postgres as production). Show such addons under every env
-  // tab so the canvas matches the data plane.
+  // Addon visibility per env-group. Two cases:
   //
-  // An addon explicitly scoped to one env (label
-  // kuso.sislelabs.com/env=staging) is the "true isolation" case —
-  // those render ONLY under their tab and not under production. This
-  // matches kuso's `--env <name>` scoping pattern used elsewhere
-  // (secrets, env-group-specific addons created via the env-group API).
+  //  - An addon explicitly scoped to one env (label
+  //    kuso.sislelabs.com/env=staging) is the "true isolation" case — it
+  //    renders ONLY under its own tab.
+  //  - An unlabeled addon is project-shared: its conn-secret is injected into
+  //    every env, so it normally shows under every tab. BUT when the selected
+  //    env has its OWN clone of that base (e.g. staging mounts
+  //    scubatony-db-staging instead of the shared scubatony-db — per-env addon
+  //    provisioning), the shared base must be HIDDEN on that tab so the canvas
+  //    matches what the env's services actually mount. Production (and any env
+  //    without a clone of a given base) still shows the shared base.
+  //
+  // replacedBases = the short base names this env has an env-scoped clone for,
+  // derived as "<base>-<selectedEnv>" → "<base>".
+  const cloneSuffix = `-${selectedEnv}`;
+  const replacedBases = new Set(
+    selectedEnv !== "production"
+      ? allAddons
+          .filter((a) => a.metadata.labels?.[envLabel] === selectedEnv)
+          .map((a) => a.metadata.name)
+          .filter((n) => n.endsWith(cloneSuffix))
+          .map((n) => n.slice(0, -cloneSuffix.length))
+      : [],
+  );
   const addonsList = allAddons.filter((a) => {
     const v = a.metadata.labels?.[envLabel];
-    if (!v) return true; // project-shared: visible everywhere
-    return v === selectedEnv;
+    if (!v) return !replacedBases.has(a.metadata.name); // shared: hide if this env clones it
+    return v === selectedEnv; // env-scoped: only on its own tab
   });
   // When the selected env exists at all (i.e. has at least one env
   // CR or env-scoped addon), show every service so the canvas

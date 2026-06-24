@@ -140,6 +140,38 @@ func TestEnsureEnvAddons_SkipsEnvScopedSources(t *testing.T) {
 	}
 }
 
+// TestEnsureEnvAddons_NameSuffixPreservesPrNNaming pins the preview clone
+// contract: with NameSuffix the clone NAME stays "<base>-pr-N" (DeletePRAddons +
+// the canvas -pr-N regex depend on it) even though the env-label SCOPE is
+// "preview-pr-N". Regression guard for the EnsureEnvAddons generalization. Calls
+// EnsureEnvAddons directly with SeedAll=false so no seed goroutine is spawned (the
+// fake has no real cluster for a seed Job).
+func TestEnsureEnvAddons_NameSuffixPreservesPrNNaming(t *testing.T) {
+	c, dyn := newTestCloner(t, "alpha", addonCR("alpha", "pg", "postgres"))
+
+	conns, err := c.EnsureEnvAddons(context.Background(), "alpha", "preview-pr-36", EnvAddonOpts{
+		Kinds:      []string{"postgres"},
+		NameSuffix: "-pr-36",
+		PreviewPR:  "36",
+	})
+	if err != nil {
+		t.Fatalf("EnsureEnvAddons: %v", err)
+	}
+	if len(conns) != 1 || conns[0] != "alpha-pg-pr-36-conn" {
+		t.Fatalf("conns = %v, want [alpha-pg-pr-36-conn]", conns)
+	}
+	clone := getAddon(t, dyn, "alpha-pg-pr-36")
+	if clone == nil {
+		t.Fatalf("clone alpha-pg-pr-36 not created (naming regression — got -preview-pr-N?)")
+	}
+	if clone.Labels[kube.LabelEnv] != "preview-pr-36" {
+		t.Fatalf("clone env label = %q, want preview-pr-36", clone.Labels[kube.LabelEnv])
+	}
+	if clone.Labels["kuso.sislelabs.com/preview-pr"] != "36" {
+		t.Fatalf("clone missing preview-pr=36 source-tracking label: %v", clone.Labels)
+	}
+}
+
 func getAddon(t *testing.T, dyn *dynamicfake.FakeDynamicClient, name string) *kube.KusoAddon {
 	t.Helper()
 	u, err := dyn.Resource(kube.GVRAddons).Namespace("kuso").Get(context.Background(), name, metav1.GetOptions{})

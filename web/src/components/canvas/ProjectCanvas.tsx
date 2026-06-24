@@ -141,31 +141,13 @@ export function ProjectCanvas({
   });
 
   // Env-scoped addon visibility. Per-PR preview clones are named
-  // "<base>-pr-<N>". The canvas should show the DB the SELECTED env
-  // actually uses, not both the shared base AND its per-PR clone:
-  //   - preview-pr-N view → show this PR's clones (…-pr-N), hide the
-  //     shared base each clone replaces. Shared addons with no clone
-  //     (cache/storage/queue) still show.
-  //   - production/other  → hide ALL per-PR clones (preview-only).
-  // Computed once and used for BOTH node rendering and edge wiring so a
-  // hidden addon never leaves a dangling edge.
-  const visibleAddons: KusoAddon[] = useMemo(() => {
-    const prMatch = selectedEnv.match(/^preview-pr-(\d+)$/);
-    const prSuffix = prMatch ? `-pr-${prMatch[1]}` : "";
-    const isPRClone = (name: string) => /-pr-\d+$/.test(name);
-    const replacedBases = new Set(
-      prSuffix
-        ? addons
-            .filter((a) => a.metadata.name.endsWith(prSuffix))
-            .map((a) => a.metadata.name.slice(0, -prSuffix.length))
-        : [],
-    );
-    return addons.filter((a) => {
-      const name = a.metadata.name;
-      if (isPRClone(name)) return !!prSuffix && name.endsWith(prSuffix);
-      return !replacedBases.has(name);
-    });
-  }, [addons, selectedEnv]);
+  // Addon visibility per env is decided UPSTREAM in the project view
+  // (addonsForEnv): it hides the shared base addons that the selected env
+  // replaces with its own env-scoped clone (per-env addon provisioning), and
+  // scopes env-labeled clones to their own tab. The canvas trusts that filtered
+  // set so node rendering and edge wiring agree (a hidden addon never leaves a
+  // dangling edge) and there's a single source of truth.
+  const visibleAddons: KusoAddon[] = addons;
 
   const initialNodes: Node[] = useMemo(() => {
     const out: Node[] = [];
