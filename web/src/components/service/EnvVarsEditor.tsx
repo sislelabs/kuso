@@ -84,7 +84,8 @@ function addonShortByConnSecret(
 function toRow(
   v: KusoEnvVar,
   project: string,
-  addonByConn: Map<string, string>
+  addonByConn: Map<string, string>,
+  knownScopes: string[] = []
 ): Row {
   // Detect "secretKeyRef pointing at a known addon" and render it as a
   // ${{ <addon>.<KEY> }} ref instead of treating it as opaque. Anything
@@ -101,7 +102,7 @@ function toRow(
     name: v.name ?? "",
     // Reverse server-resolved literals back to ${{ x.KEY }} form so
     // the editor shows the original ref the user wrote.
-    value: fromSecret ? "" : literalToRef(raw, project),
+    value: fromSecret ? "" : literalToRef(raw, project, knownScopes),
     fromSecret,
     visible: false,
   };
@@ -159,28 +160,55 @@ const ENV_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
 //
 // Patterns we recognise (URL first to avoid mis-classifying
 // "http://host:port" as a HOST):
-//   http://<svc-fqn>.<ns>.svc.cluster.local:<port> → ${{ svc.URL }}
-//   <svc-fqn>.<ns>.svc.cluster.local              → ${{ svc.HOST }}
+//   http://<svc-fqn>-<scope>.<ns>.svc.cluster.local:<port> → ${{ svc.URL }}
+//   <svc-fqn>-<scope>.<ns>.svc.cluster.local               → ${{ svc.HOST }}
 //
-// project is needed to strip the "<project>-" prefix from the FQN
-// back to the short name the user typed. Without it we'd guess at
-// the dash position and break for projects with dashes (e.g.
-// "e2e-test").
-function literalToRef(value: string, project: string): string {
+// The first DNS label is "<project>-<svc>-<envScope>" (the server
+// resolves the ref against a concrete env, stamping its scope). We
+// strip BOTH the "<project>-" prefix AND the trailing "-<scope>"
+// segment to recover the short service name the user typed. Without
+// the scope strip, "http://proj-api-production.kuso.svc.cluster.local"
+// reverses to ${{ api-production.URL }} — corrupting the ref on a
+// no-op read→save round-trip (the saved value then points at a
+// non-existent service "api-production").
+//
+// knownScopes are the env scopes for this project (production, staging,
+// preview-pr-7, ...) so we strip a real scope and never mistake a dash
+// in the service name itself for a scope boundary.
+function literalToRef(value: string, project: string, knownScopes: string[] = []): string {
   if (!value) return value;
   const urlMatch = value.match(
     /^http:\/\/([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local(?::\d+)?$/
   );
   if (urlMatch) {
-    return `\${{ ${stripProjectPrefix(urlMatch[1], project)}.URL }}`;
+    return `\${{ ${shortServiceFromLabel(urlMatch[1], project, knownScopes)}.URL }}`;
   }
   const hostMatch = value.match(
     /^([a-z0-9-]+)\.[a-z0-9-]+\.svc\.cluster\.local$/
   );
   if (hostMatch) {
-    return `\${{ ${stripProjectPrefix(hostMatch[1], project)}.HOST }}`;
+    return `\${{ ${shortServiceFromLabel(hostMatch[1], project, knownScopes)}.HOST }}`;
   }
   return value;
+}
+
+// shortServiceFromLabel recovers the short service name from a resolved
+// DNS label "<project>-<svc>-<envScope>". Strips the project prefix, then
+// a recognised trailing env-scope segment. Falls back to stripping a
+// trailing "-production" when the scope list is unavailable (the dominant
+// case — service refs resolve against production at SetEnv time).
+function shortServiceFromLabel(label: string, project: string, knownScopes: string[]): string {
+  let name = stripProjectPrefix(label, project);
+  const scopes = knownScopes.length ? knownScopes : ["production"];
+  for (const scope of scopes) {
+    const suffix = "-" + scope;
+    // Only strip if there's a real service name left in front of it,
+    // so a service literally named after a scope isn't emptied out.
+    if (name.endsWith(suffix) && name.length > suffix.length) {
+      return name.slice(0, name.length - suffix.length);
+    }
+  }
+  return name;
 }
 
 // stripProjectPrefix returns the user-friendly short name from a
@@ -307,6 +335,24 @@ export function EnvVarsEditor({
     () => addonShortByConnSecret(addons.data ?? [], project),
     [addons.data, project]
   );
+  // Known env scopes for this project (production, staging, preview-pr-N,
+  // ...) so literalToRef can strip the env-scope segment a resolved
+  // service URL carries (`<project>-<svc>-<scope>...`) back to the short
+  // service name. Without this the read→save round-trip corrupts
+  // ${{ svc.URL }} into ${{ svc-production.URL }}.
+  const proj = useProject(project);
+  const knownScopes = useMemo(() => {
+    const envs =
+      (proj.data as { environments?: { metadata?: { labels?: Record<string, string> } }[] } | undefined)
+        ?.environments ?? [];
+    const scopes = new Set<string>(["production"]);
+    for (const e of envs) {
+      const scope = e.metadata?.labels?.["kuso.sislelabs.com/env"];
+      if (scope) scopes.add(scope);
+    }
+    // Longest-first so "preview-pr-7" is tried before "pr" etc.
+    return Array.from(scopes).sort((a, b) => b.length - a.length);
+  }, [proj.data]);
   // secrets:write gates the Save + the per-row destructive
   // affordances.
   //
@@ -397,7 +443,7 @@ export function EnvVarsEditor({
     // which IS sorted as a side effect, but that's fine; env-var
     // order has no semantic meaning).
     const incoming = (env.data.envVars ?? [])
-      .map((v) => toRow(v, project, addonByConn))
+      .map((v) => toRow(v, project, addonByConn, knownScopes))
       .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
     if (!dirty) {
       setRows(incoming);
@@ -416,7 +462,7 @@ export function EnvVarsEditor({
     // Always update the baseline ref so a refetch-then-discard maps
     // back to the latest server state.
     baselineFromRows.current = incoming;
-  }, [env.data, addonByConn, project, dirty, conflictNotified]);
+  }, [env.data, addonByConn, project, dirty, conflictNotified, knownScopes]);
 
   // Bulk text is derived from rows when entering bulk mode and
   // committed back to rows on every keystroke. We keep them in sync
@@ -506,7 +552,7 @@ export function EnvVarsEditor({
       // the raw resolved form (<secret> / in-cluster DNS) while the
       // "after" side shows the ${{ }} ref form — so every untouched
       // reference env var falsely appears as a change.
-      beforeMap.set(v.name, formatEnvForDiff(toEnvVar(toRow(v, project, addonByConn))));
+      beforeMap.set(v.name, formatEnvForDiff(toEnvVar(toRow(v, project, addonByConn, knownScopes))));
     }
     const afterMap = new Map<string, string>();
     for (const v of pendingPayload) {
@@ -528,7 +574,7 @@ export function EnvVarsEditor({
     }
     out.sort((x, y) => x.field.localeCompare(y.field));
     return out;
-  }, [pendingPayload, env.data, project, addonByConn]);
+  }, [pendingPayload, env.data, project, addonByConn, knownScopes]);
 
   const save = () => {
     const cleaned = cleanRows();

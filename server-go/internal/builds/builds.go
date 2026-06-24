@@ -880,7 +880,42 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		},
 		Spec: spec,
 	}
-	return s.Kube.CreateKusoBuild(ctx, ns, build)
+	created, cerr := s.Kube.CreateKusoBuild(ctx, ns, build)
+	if cerr != nil {
+		return created, cerr
+	}
+	// Adopt the clone-token Secret under the freshly-created KusoBuild CR
+	// so it cascade-deletes with the build (retention sweep, project
+	// delete, or manual CR delete). The Secret had to be created BEFORE
+	// the CR (the operator's helm render needs it the moment the Job
+	// pod schedules), so its ownerRef can only be stamped now that the
+	// CR's UID exists. Without this the Secret leaks whenever the
+	// terminal-transition delete is skipped (build stuck, poller missed
+	// the terminal edge) — the Job's TTL does NOT reap it (the Secret is
+	// not owned by the Job). Best-effort: a failure here just falls back
+	// to the explicit delete on terminal transition.
+	if created != nil && created.UID != "" {
+		s.adoptCloneTokenSecret(ctx, ns, buildName, string(created.UID))
+	}
+	return created, nil
+}
+
+// adoptCloneTokenSecret stamps an ownerReference to the KusoBuild CR onto
+// the <buildName>-token Secret so kube garbage-collects it when the build
+// CR is deleted. Best-effort; logged at warn on failure.
+func (s *Service) adoptCloneTokenSecret(ctx context.Context, ns, buildName, buildUID string) {
+	if s.Kube == nil || s.Kube.Clientset == nil {
+		return
+	}
+	patch := fmt.Sprintf(
+		`{"metadata":{"ownerReferences":[{"apiVersion":"application.kuso.sislelabs.com/v1alpha1","kind":"KusoBuild","name":%q,"uid":%q,"blockOwnerDeletion":false,"controller":false}]}}`,
+		buildName, buildUID,
+	)
+	if _, err := s.Kube.Clientset.CoreV1().Secrets(ns).Patch(
+		ctx, buildName+"-token", types.MergePatchType, []byte(patch), metav1.PatchOptions{},
+	); err != nil && !apierrors.IsNotFound(err) {
+		slog.Default().Warn("adopt clone-token secret", "build", buildName, "ns", ns, "err", err)
+	}
 }
 
 // ImageTag returns the canonical image tag for a ref: 12-char SHA prefix
@@ -1627,12 +1662,46 @@ func (p *Poller) promoteOne(ctx context.Context, ns, project, fqn string, next *
 	return true
 }
 
+// buildStuckTimeout bounds how long a non-terminal build may sit with no
+// observable Job before the poller force-fails it. A build whose Job never
+// rendered (operator down, chart-render reject) or was TTL-reaped before the
+// poller saw its terminal condition would otherwise stay pending/running
+// forever — and because findActiveForService treats it as active, it blocks
+// every subsequent build of the same service behind a zombie. Override via
+// KUSO_BUILD_STUCK_TIMEOUT (Go duration, e.g. "45m").
+func buildStuckTimeout() time.Duration {
+	if v := os.Getenv("KUSO_BUILD_STUCK_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			return d
+		}
+	}
+	return 30 * time.Minute
+}
+
 // checkBuild reads the kaniko Job for one build and reconciles status.
 // ns is the namespace the KusoBuild + Job live in (determined by the
 // project's spec.namespace, looked up by the caller).
 func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) error {
 	job, err := p.Svc.Kube.Clientset.BatchV1().Jobs(ns).Get(ctx, b.Name, metav1.GetOptions{})
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			// No Job for this build. Either it hasn't rendered yet (young
+			// CR — keep waiting for the operator) or it never will / was
+			// TTL-reaped after completing during a poller outage (old CR —
+			// force-fail so it stops blocking the per-service queue and
+			// becomes eligible for retention sweeps). Without this a build
+			// with no Job is polled forever and never reaches a terminal
+			// state. See findActiveForService — a non-terminal build counts
+			// as active and serializes the whole service's build queue.
+			if age := buildAge(b); age > buildStuckTimeout() {
+				p.logger().Warn("build force-failed: no Job and CR past stuck-timeout",
+					"build", b.Name, "ns", ns, "age", age.String())
+				return p.markFailed(ctx, ns, b,
+					"build job never appeared (operator unavailable or render rejected) and the build exceeded the stuck-timeout")
+			}
+			// Young CR, Job not yet rendered — not an error, just wait.
+			return nil
+		}
 		return err
 	}
 	if cond := completedCondition(job); cond != nil {
@@ -1641,10 +1710,28 @@ func (p *Poller) checkBuild(ctx context.Context, ns string, b *kube.KusoBuild) e
 		}
 		return p.markFailed(ctx, ns, b, cond.Message)
 	}
+	// A failed pod (backoffLimit reached) is terminal even in the brief
+	// window before the Job controller stamps the Failed condition. Catch
+	// it here so a Job that's TTL-reaped in that window doesn't lose the
+	// failure (it would otherwise fall through to the no-op return below
+	// and then hit the stuck-timeout path above on a later tick).
+	if job.Status.Failed > 0 && job.Status.Active == 0 {
+		return p.markFailed(ctx, ns, b, "build pod failed")
+	}
 	if job.Status.Active > 0 {
 		return p.markRunning(ctx, ns, b)
 	}
 	return nil
+}
+
+// buildAge returns how long ago the build CR was created. A zero
+// creationTimestamp (unusual — only in tests with hand-built objects)
+// yields 0 so the stuck-timeout never trips spuriously.
+func buildAge(b *kube.KusoBuild) time.Duration {
+	if b == nil || b.CreationTimestamp.IsZero() {
+		return 0
+	}
+	return time.Since(b.CreationTimestamp.Time)
 }
 
 // Build phase + timing live on annotations, not .status. helm-operator
@@ -2165,6 +2252,80 @@ func buildTriggerTimestamp(b *kube.KusoBuild) string {
 	return ""
 }
 
+// promoteEnvImageCAS patches the build's image onto one env with real
+// compare-and-set semantics on the promoted-at annotation. The naive
+// "read from a List snapshot, then unconditionally MergePatch" pattern
+// has a TOCTOU: two pollers (leader flip / brief double-leadership) or
+// two builds finishing on back-to-back ticks both read the stale
+// promoted-at, both pass the last-trigger-wins guard, then patch in
+// arbitrary order — last writer by wall-clock wins, which can pin prod
+// to the OLDER build's image. Here we re-Get the env, re-evaluate the
+// guard against the FRESH annotation, and patch with a resourceVersion
+// precondition so a concurrent write that moved promoted-at is rejected
+// with 409; we retry and re-evaluate. Returns (patched, err): patched is
+// false when the guard skipped the env (a newer trigger already won) or
+// the env vanished.
+func (p *Poller) promoteEnvImageCAS(ctx context.Context, ns, envName, bName, bTrigger string, img *kube.KusoImage) (bool, error) {
+	const maxAttempts = 4
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		raw, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+			Get(ctx, envName, metav1.GetOptions{})
+		if err != nil {
+			if apierrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, fmt.Errorf("get env %s: %w", envName, err)
+		}
+		var e kube.KusoEnvironment
+		if derr := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Object, &e); derr != nil {
+			return false, fmt.Errorf("decode env %s: %w", envName, derr)
+		}
+		// Re-evaluate the last-trigger-wins guard against the fresh
+		// annotation, not the stale List snapshot.
+		if prev := e.Annotations[annPromotedAt]; prev != "" && bTrigger != "" && prev > bTrigger {
+			p.logger().Info("build promote skipped (older trigger than current, CAS recheck)",
+				"env", envName, "build", bName, "buildTrigger", bTrigger, "envPromotedAt", prev)
+			return false, nil
+		}
+		// Mutate the freshly-read object in place and Update it. Update
+		// carries the object's resourceVersion as an optimistic-concurrency
+		// precondition: the apiserver returns 409 if the env changed since
+		// our Get, which closes the TOCTOU the old unconditional MergePatch
+		// had. On conflict we re-read and re-evaluate the guard.
+		spec, _ := raw.Object["spec"].(map[string]any)
+		if spec == nil {
+			spec = map[string]any{}
+			raw.Object["spec"] = spec
+		}
+		spec["image"] = map[string]any{
+			"repository": img.Repository,
+			"tag":        img.Tag,
+			"pullPolicy": "IfNotPresent",
+		}
+		meta, _ := raw.Object["metadata"].(map[string]any)
+		anns, _ := meta["annotations"].(map[string]any)
+		if anns == nil {
+			anns = map[string]any{}
+			meta["annotations"] = anns
+		}
+		anns[annPromotedBuild] = bName
+		anns[annPromotedAt] = bTrigger
+		if _, uerr := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+			Update(ctx, raw, metav1.UpdateOptions{}); uerr != nil {
+			if apierrors.IsConflict(uerr) {
+				// Someone moved the env under us — re-read and re-evaluate.
+				continue
+			}
+			if apierrors.IsNotFound(uerr) {
+				return false, nil
+			}
+			return false, fmt.Errorf("promote-update env %s: %w", envName, uerr)
+		}
+		return true, nil
+	}
+	return false, fmt.Errorf("promote env %s: exhausted CAS retries (persistent conflict)", envName)
+}
+
 // promoteImage patches the new image tag onto every KusoEnvironment
 // whose branch matches the build's branch. That's:
 //
@@ -2231,7 +2392,9 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		}
 		// Last-trigger-wins guard against back-to-back finishes.
 		// If a younger build already promoted, skip — this build
-		// would otherwise overwrite production with older code.
+		// would otherwise overwrite production with older code. This is
+		// an early-out on the stale List snapshot; the authoritative
+		// re-check happens under CAS in promoteEnvImageCAS below.
 		if prev := e.Annotations[annPromotedAt]; prev != "" && bTrigger != "" && prev > bTrigger {
 			p.logger().Info("build promote skipped (older trigger than current)",
 				"env", e.Name, "build", b.Name, "buildTrigger", bTrigger, "envPromotedAt", prev)
@@ -2269,18 +2432,12 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 			p.logger().Info("release hook succeeded",
 				"env", e.Name, "build", b.Name, "job", res.JobName)
 		}
-		patch := fmt.Sprintf(
-			`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}},"metadata":{"annotations":{%q:%q,%q:%q}}}`,
-			b.Spec.Image.Repository, b.Spec.Image.Tag,
-			annPromotedBuild, b.Name,
-			annPromotedAt, bTrigger,
-		)
-		if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
-			Patch(ctx, e.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
-			}
-			return fmt.Errorf("patch env %s: %w", e.Name, err)
+		promoted, err := p.promoteEnvImageCAS(ctx, ns, e.Name, b.Name, bTrigger, b.Spec.Image)
+		if err != nil {
+			return fmt.Errorf("promote env %s: %w", e.Name, err)
+		}
+		if !promoted {
+			continue
 		}
 		matched++
 		p.logger().Info("build promoted", "env", e.Name, "ns", ns, "tag", b.Spec.Image.Tag, "build", b.Name)
@@ -2372,19 +2529,12 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 			if prev := e.Annotations[annPromotedAt]; prev != "" && bTrigger != "" && prev > bTrigger {
 				continue
 			}
-			patch := fmt.Sprintf(
-				`{"spec":{"image":{"repository":%q,"tag":%q,"pullPolicy":"IfNotPresent"}},"metadata":{"annotations":{%q:%q,%q:%q}}}`,
-				b.Spec.Image.Repository, b.Spec.Image.Tag,
-				annPromotedBuild, b.Name,
-				annPromotedAt, bTrigger,
-			)
-			if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
-				Patch(ctx, e.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
-				if apierrors.IsNotFound(err) {
-					continue
-				}
-				p.logger().Warn("patch worker env failed",
-					"env", e.Name, "err", err)
+			promoted, err := p.promoteEnvImageCAS(ctx, ns, e.Name, b.Name, bTrigger, b.Spec.Image)
+			if err != nil {
+				p.logger().Warn("promote worker env failed", "env", e.Name, "err", err)
+				continue
+			}
+			if !promoted {
 				continue
 			}
 			p.logger().Info("worker env promoted via fromService",

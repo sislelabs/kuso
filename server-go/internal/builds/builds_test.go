@@ -1216,3 +1216,53 @@ func TestBuildEnvFromVars_RejectsMaliciousKeys(t *testing.T) {
 		t.Errorf("only GOOD_KEY should survive; got %v", got)
 	}
 }
+
+// TestCheckBuild_StuckNoJob: a non-terminal build whose Job never appeared
+// must force-fail once it's older than the stuck-timeout, so it stops
+// blocking the per-service queue. A young build with no Job must be left
+// alone (the operator hasn't rendered its Job yet).
+func TestCheckBuild_StuckNoJob(t *testing.T) {
+	mkBuild := func(name string, ageMin int, phase string) *kube.KusoBuild {
+		return &kube.KusoBuild{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              name,
+				Namespace:         "kuso",
+				CreationTimestamp: metav1.NewTime(time.Now().Add(-time.Duration(ageMin) * time.Minute)),
+				Annotations:       map[string]string{annPhase: phase},
+			},
+			Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-api", Branch: "main"},
+		}
+	}
+
+	t.Run("old build with no Job is force-failed", func(t *testing.T) {
+		b := mkBuild("alpha-api-old", 45, "running") // > 30m default stuck-timeout
+		s := fakeService(t, seedBuild(b))
+		p := &Poller{Svc: s, Logger: slog.Default()}
+		if err := p.checkBuild(context.Background(), "kuso", b); err != nil {
+			t.Fatalf("checkBuild: %v", err)
+		}
+		got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-api-old")
+		if err != nil {
+			t.Fatalf("get build: %v", err)
+		}
+		if ph := buildPhase(got); ph != "failed" {
+			t.Fatalf("stuck build phase = %q, want failed", ph)
+		}
+	})
+
+	t.Run("young build with no Job is left pending", func(t *testing.T) {
+		b := mkBuild("alpha-api-young", 1, "pending") // < stuck-timeout
+		s := fakeService(t, seedBuild(b))
+		p := &Poller{Svc: s, Logger: slog.Default()}
+		if err := p.checkBuild(context.Background(), "kuso", b); err != nil {
+			t.Fatalf("checkBuild: %v", err)
+		}
+		got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-api-young")
+		if err != nil {
+			t.Fatalf("get build: %v", err)
+		}
+		if ph := buildPhase(got); ph == "failed" {
+			t.Fatalf("young build should not be force-failed yet; phase=%q", ph)
+		}
+	})
+}

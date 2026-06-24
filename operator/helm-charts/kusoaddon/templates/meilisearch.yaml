@@ -82,6 +82,13 @@ spec:
   volumeClaimTemplates:
     - metadata:
         name: data
+        annotations:
+          # Retain the data PVC on uninstall (matches postgres). Deleting
+          # a KusoAddon CR cascades the StatefulSet; without this the PVC
+          # + PV go too (stock k3s reclaimPolicy=Delete) and the data is
+          # gone. Kept so an accidental addon delete isn't a data-loss
+          # event — reclaim space with an explicit `kubectl delete pvc`.
+          "helm.sh/resource-policy": keep
       spec:
         accessModes: [ReadWriteOnce]
         resources:
