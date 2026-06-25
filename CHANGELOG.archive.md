@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.16] — 2026-06-04
+
+### ✨ Features
+- Feat(settings): unify cluster database + instance-addons into one page ([bbcdca2](https://github.com/sislelabs/kuso/commit/bbcdca2db828d8d8854ab4bb0f532fe45642717a))
+
 ## [0.18.15] — 2026-06-04
 
 ### 🐛 Bug Fixes
