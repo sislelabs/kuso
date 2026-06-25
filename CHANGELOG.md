@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.84] — 2026-06-25
+
+### 🧪 Tests
+- Test(httpx,placement): pin SSRF guard + placement matcher contracts ([592e7a3](https://github.com/sislelabs/kuso/commit/592e7a3dc19981c6f585547eff56db648ffae0a8))
+
+### 🧹 Chores
+- Chore(changelog): archive promotion of 0.18.19 entries ([726bfef](https://github.com/sislelabs/kuso/commit/726bfefb5f0b5cf396005f1aed690d64a9907e54))
+
 ## [0.18.83] — 2026-06-25
 
 ### ✨ Features
@@ -407,11 +415,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(builds): inject build-time env in the REAL renderer (buildcontroller, not the dead chart) ([62bc4fb](https://github.com/sislelabs/kuso/commit/62bc4fb47c2faadc23289bc1946d2c1e4852e76a))
-
-## [0.18.20] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(builds): validate build-env keys (command-injection hardening) ([c567636](https://github.com/sislelabs/kuso/commit/c567636efd7a8cc073d29c0034529b4624c8ba7f))
 
 
 ---
