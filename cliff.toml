@@ -18,6 +18,20 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+> **Operator note (v0.18.85): addon helm upgrades were broken cluster-wide.**
+> A `helm.sh/resource-policy: keep` annotation on every addon StatefulSet's
+> `volumeClaimTemplates` (added in v0.18.84) is an immutable field — K8s
+> rejected the patch, so every pre-existing addon's helm upgrade failed and
+> rolled back, and no new templates applied. Most visibly, the addon "Public
+> TCP endpoint" toggle set `spec.publicTCP` but the Traefik `IngressRouteTCP`
+> never rendered, so `<host>:<port>` 301-redirected to the dashboard instead
+> of reaching the addon. **v0.18.85 removes the annotation** (PVC data is
+> retained regardless — a StatefulSet never GCs its VCT PVCs). Addons created
+> before the annotation self-heal on reconcile; addons created *with* it
+> (postgres `*-db`) need a one-time data-safe `kubectl delete sts <name>
+> --cascade=orphan` (pods + PVCs survive) before the operator recreates the
+> clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
+
 """
 body = """
 {% if version %}\
@@ -50,6 +64,10 @@ commit_parsers = [
   { message = "^v[0-9]+\\.[0-9]+\\.[0-9]+", skip = true },   # release commits
   { message = "^[Mm]erge ", skip = true },
   { message = "^[Bb]ump ", skip = true },
+  # Self-referential changelog bookkeeping — these commits ONLY regenerate
+  # the changelog/archive, so listing them in the changelog is pure noise
+  # (and a post-tag one spawns a duplicate version header). Skip them.
+  { message = "^[Cc]hore\\(changelog\\)", skip = true },
   { message = "^[Ff]eat(\\(.+\\))?[:!]", group = "✨ Features" },
   { message = "^[Aa]dd ",                  group = "✨ Features" },
   { message = "^[Ii]ntroduce ",            group = "✨ Features" },

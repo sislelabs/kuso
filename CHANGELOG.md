@@ -5,15 +5,26 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+> **Operator note (v0.18.85): addon helm upgrades were broken cluster-wide.**
+> A `helm.sh/resource-policy: keep` annotation on every addon StatefulSet's
+> `volumeClaimTemplates` (added in v0.18.84) is an immutable field — K8s
+> rejected the patch, so every pre-existing addon's helm upgrade failed and
+> rolled back, and no new templates applied. Most visibly, the addon "Public
+> TCP endpoint" toggle set `spec.publicTCP` but the Traefik `IngressRouteTCP`
+> never rendered, so `<host>:<port>` 301-redirected to the dashboard instead
+> of reaching the addon. **v0.18.85 removes the annotation** (PVC data is
+> retained regardless — a StatefulSet never GCs its VCT PVCs). Addons created
+> before the annotation self-heal on reconcile; addons created *with* it
+> (postgres `*-db`) need a one-time data-safe `kubectl delete sts <name>
+> --cascade=orphan` (pods + PVCs survive) before the operator recreates the
+> clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
+
 ## [0.18.86] — 2026-06-25
 
 ### ✨ Features
 - Feat(cli): usage, audit, ssh-keys, notification feed + users/groups/invites/config ([bb2ccb0](https://github.com/sislelabs/kuso/commit/bb2ccb0e342627b679d28973fc1495aa7f6fe240))
 - Feat(cli): node management + service wake/drift + env-scoped domains ([33d2da2](https://github.com/sislelabs/kuso/commit/33d2da2c62804465f30b7106003973f40c6b0b85))
 - Feat(cli): addon public-tcp, secret reveal, and update commands ([e0455d0](https://github.com/sislelabs/kuso/commit/e0455d07660411dd492442f3fdcfb5fddc9cb45d))
-
-### 🧹 Chores
-- Chore(changelog): archive promotion from v0.18.85 release ([82c4088](https://github.com/sislelabs/kuso/commit/82c4088e0a13cd4fe888da34600e745178cac678))
 
 ## [0.18.85] — 2026-06-25
 
@@ -25,16 +36,10 @@ messages on every release. The format is loosely based on
 ### 🧪 Tests
 - Test(httpx,placement): pin SSRF guard + placement matcher contracts ([592e7a3](https://github.com/sislelabs/kuso/commit/592e7a3dc19981c6f585547eff56db648ffae0a8))
 
-### 🧹 Chores
-- Chore(changelog): archive promotion of 0.18.19 entries ([726bfef](https://github.com/sislelabs/kuso/commit/726bfefb5f0b5cf396005f1aed690d64a9907e54))
-
 ## [0.18.83] — 2026-06-25
 
 ### ✨ Features
 - Feat(cli,obs,ux): env-group/grant CLI, run cancel/rm, build --follow, verb-aware parity, addon-crash + prev-logs, projects memo ([6603934](https://github.com/sislelabs/kuso/commit/6603934455f9eeaf27cd7d35d73886f07a6b4536))
-
-### 🧹 Chores
-- Chore(changelog): archive promotion from v0.18.82 ship ([b4b6872](https://github.com/sislelabs/kuso/commit/b4b687240f48f38bbef6297de1e9a3fd2423f46d))
 
 ## [0.18.82] — 2026-06-25
 
@@ -44,24 +49,15 @@ messages on every release. The format is loosely based on
 ### 🐛 Bug Fixes
 - Fix(db): grant pods/portforward RBAC + stop relaying WS error frames as TCP data ([229dac1](https://github.com/sislelabs/kuso/commit/229dac1eb4e435ae1ab561425bfcbecb48d76417))
 
-### 🧹 Chores
-- Chore(changelog): archive promotion from v0.18.81 ship ([a859ec8](https://github.com/sislelabs/kuso/commit/a859ec83f05d6b08f2dc1597039d6272e034de38))
-
 ## [0.18.81] — 2026-06-24
 
 ### 🐛 Bug Fixes
 - Fix(builds,envs,addons): stuck-build timeout, promote CAS, token+PVC leaks, env-editor round-trip ([2603f4c](https://github.com/sislelabs/kuso/commit/2603f4c321cdb03d861fae1e9d9a4d7c158f5eae))
 
-### 🧹 Chores
-- Chore(changelog): archive promotion from v0.18.80 ship ([4ca191c](https://github.com/sislelabs/kuso/commit/4ca191c5ed856f44a1ba04bd903e2b0c542630eb))
-
 ## [0.18.80] — 2026-06-24
 
 ### 🐛 Bug Fixes
 - Fix(envs): per-env DB isolation, TLS-secret + clone-PVC cleanup on delete ([ce3ccba](https://github.com/sislelabs/kuso/commit/ce3ccba437d86ee68dc032583cacb1bba5c51c88))
-
-### 🧹 Chores
-- Chore(changelog): promote 0.18.11–0.18.14 entries into the archive ([f3ec8c1](https://github.com/sislelabs/kuso/commit/f3ec8c15ada4d8c0f40b86a1096de837d0b54faa))
 
 ## [0.18.79] — 2026-06-24
 
@@ -93,9 +89,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(service): inline rename in header + display name in build notifications ([4d1dbee](https://github.com/sislelabs/kuso/commit/4d1dbeebaaf2239fda8bc21a5b7999b69b1efa60))
-
-### 🧹 Chores
-- Chore(changelog): archive rollup after v0.18.75 release ([f030191](https://github.com/sislelabs/kuso/commit/f030191ba3abee839ec78da160abdd5a279f1fd2))
 
 ## [0.18.75] — 2026-06-18
 
@@ -155,9 +148,6 @@ messages on every release. The format is loosely based on
 ### ✨ Features
 - Feat(services): expose custom Dockerfile-path field in the UI ([84ee10b](https://github.com/sislelabs/kuso/commit/84ee10b3c25a13fd7bfff1812e1855c39f396b84))
 
-### 🧹 Chores
-- Chore(changelog): archive churn ([ad0e3d1](https://github.com/sislelabs/kuso/commit/ad0e3d14a44aa64df47787f3a17dece2280c8825))
-
 ## [0.18.68] — 2026-06-11
 
 ### ✨ Features
@@ -180,9 +170,6 @@ messages on every release. The format is loosely based on
 ### 🐛 Bug Fixes
 - Fix(addons): postgres addon serves plaintext, conn uses sslmode=disable ([1f21ba9](https://github.com/sislelabs/kuso/commit/1f21ba97ffcc482e7579d77a8a41641866b8b537))
 
-### 🧹 Chores
-- Chore(changelog): archive churn ([df3395a](https://github.com/sislelabs/kuso/commit/df3395a45c71ba9b813c4b95f1f3707336019670))
-
 ## [0.18.65] — 2026-06-11
 
 ### 🐛 Bug Fixes
@@ -194,9 +181,6 @@ messages on every release. The format is loosely based on
 ### 🐛 Bug Fixes
 - Fix(notify): show the live-app link for auto-host services on build success ([71abefd](https://github.com/sislelabs/kuso/commit/71abefd28362f0ffc12379dc452d47b483300681))
 
-### 🧹 Chores
-- Chore(changelog): archive churn ([9063aea](https://github.com/sislelabs/kuso/commit/9063aea9f1f458f15bc94f01a386811121c2b21b))
-
 ## [0.18.63] — 2026-06-11
 
 ### ✨ Features
@@ -206,32 +190,20 @@ messages on every release. The format is loosely based on
 - Fix(github): tolerate App-install redirect on the OAuth callback ([539c107](https://github.com/sislelabs/kuso/commit/539c1078d5c9b1c066b2f27fafd04ef2b0cabb72))
 - Fix(addons): postgres conn uses sslmode=no-verify so node apps connect ([e34a265](https://github.com/sislelabs/kuso/commit/e34a2658c096eba459f8f1451d3d47da5302f06e))
 
-### 🧹 Chores
-- Chore(changelog): archive churn ([f0436f9](https://github.com/sislelabs/kuso/commit/f0436f98dc0a68e055045d93f0942359e1c6bdef))
-
 ## [0.18.62] — 2026-06-11
 
 ### ✨ Features
 - Feat(github): make adding another org a first-class action ([5cde943](https://github.com/sislelabs/kuso/commit/5cde94318b14314bdacd25a65b8a0a42a31fa465))
-
-### 🧹 Chores
-- Chore(changelog): archive churn ([2f2ffc1](https://github.com/sislelabs/kuso/commit/2f2ffc14fdeb846ac3999125118d3e1b0b41cc52))
 
 ## [0.18.61] — 2026-06-11
 
 ### 🐛 Bug Fixes
 - Fix(security): close auth/WS gaps, secret RMW races, and env-override loss ([f56d01b](https://github.com/sislelabs/kuso/commit/f56d01b4fb39c319559cb1bc7707d8f2299c0d66))
 
-### 🧹 Chores
-- Chore(changelog): archive churn ([7f72e3d](https://github.com/sislelabs/kuso/commit/7f72e3d7bd5312893819bd6237c6b52a258fd275))
-
 ## [0.18.60] — 2026-06-11
 
 ### 🐛 Bug Fixes
 - Fix(incidents): keep the Claude Code token fresh (it expires ~daily) ([4bc0619](https://github.com/sislelabs/kuso/commit/4bc0619f7548635ca1ee1425b0232546c0dc6127))
-
-### 🧹 Chores
-- Chore(changelog): archive churn ([3694f9c](https://github.com/sislelabs/kuso/commit/3694f9c7ed42f03790e75161ef1b279555c93103))
 
 ## [0.18.59] — 2026-06-10
 
@@ -241,32 +213,20 @@ messages on every release. The format is loosely based on
 ### 📝 Docs
 - Docs(spec): incident-agent settings page design ([f76893b](https://github.com/sislelabs/kuso/commit/f76893b15e78a43cf3868110cab445487760bb6f))
 
-### 🧹 Chores
-- Chore(changelog): archive churn ([91d64de](https://github.com/sislelabs/kuso/commit/91d64dea6221c230895b8596f8cedb8c7395b106))
-
 ## [0.18.58] — 2026-06-10
 
 ### ✨ Features
 - Feat(incidents): implement-phase graceful no-repo + clone-only plumbing test ([f1ffe91](https://github.com/sislelabs/kuso/commit/f1ffe91f1557f4966f3ad922388332aec1189b42))
-
-### 🧹 Chores
-- Chore(changelog): archive churn ([4feae91](https://github.com/sislelabs/kuso/commit/4feae9153283573c5c6d0ba90a88707733fab207))
 
 ## [0.18.57] — 2026-06-10
 
 ### 🐛 Bug Fixes
 - Fix(incidents): server honors ?state= filter; bot list-envelope; manifest no longer clobbers channel id ([ba65b5c](https://github.com/sislelabs/kuso/commit/ba65b5c14776b0c06794ef8227ebd8123075c028))
 
-### 🧹 Chores
-- Chore(changelog): archive churn ([2e5a3de](https://github.com/sislelabs/kuso/commit/2e5a3deb3adde386277f27177b37e8bde0f138e6))
-
 ## [0.18.56] — 2026-06-10
 
 ### 🐛 Bug Fixes
 - Fix(incidents): live-e2e fixes — KUSO_TOKEN optional, Service :80, CLI list envelope ([ee8dc4d](https://github.com/sislelabs/kuso/commit/ee8dc4d548aba33e0e65d8b58ab9ea9e33023b2c))
-
-### 🧹 Chores
-- Chore(changelog): archive churn ([ed68b0c](https://github.com/sislelabs/kuso/commit/ed68b0c6950e3af822bd8c215711405c705d7e37))
 
 ## [0.18.55] — 2026-06-10
 
@@ -300,9 +260,6 @@ messages on every release. The format is loosely based on
 ### 📝 Docs
 - Docs(pkg-probe): note eviction RBAC is core-group, not policy (verified live) ([a3a497f](https://github.com/sislelabs/kuso/commit/a3a497f61b4c3731c900e8a1f242acb4ab01ffc3))
 
-### 🧹 Chores
-- Chore(changelog): archive older release entries (tooling churn) ([9e72bb5](https://github.com/sislelabs/kuso/commit/9e72bb574910ba68383eca588d0f72a17ee3e02b))
-
 ## [0.18.51] — 2026-06-10
 
 ### ✨ Features
@@ -317,9 +274,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addons): emit DIRECT_URL conn key so Prisma migrations skip the pooler ([94ddc12](https://github.com/sislelabs/kuso/commit/94ddc124651f073b182c829e949115c1b6c1d82f))
-
-### 🧹 Chores
-- Chore(changelog): archive older release entries (tooling churn) ([9fcc753](https://github.com/sislelabs/kuso/commit/9fcc753e3eb890a54a5b7bb5fe17fc8162c71a52))
 
 ## [0.18.48] — 2026-06-08
 
