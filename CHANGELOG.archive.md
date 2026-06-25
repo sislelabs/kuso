@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.22] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): pass build-time env to nixpacks --env (toolchain keys read at plan time) ([2af5788](https://github.com/sislelabs/kuso/commit/2af57888e7ccbffc9d5c973acdd9228d28ecbda8))
+
 ## [0.18.21] — 2026-06-04
 
 ### 🐛 Bug Fixes
