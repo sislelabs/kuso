@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/go-resty/resty/v2"
 	"github.com/olekukonko/tablewriter"
@@ -298,6 +299,20 @@ func jsonOut(v any) error {
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// joinAny renders a JSON array value (as decoded into []any) as a
+// comma-joined string for table cells. "-" when empty/absent.
+func joinAny(v any) string {
+	arr, ok := v.([]any)
+	if !ok || len(arr) == 0 {
+		return "-"
+	}
+	parts := make([]string, 0, len(arr))
+	for _, e := range arr {
+		parts = append(parts, asString(e))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func init() {

@@ -219,11 +219,12 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     if (state.internal !== baseline.internal) {
       body.internal = state.internal;
     }
-    if (
+    const scaleChanged =
       state.scaleMin !== baseline.scaleMin ||
       state.scaleMax !== baseline.scaleMax ||
-      state.scaleCPU !== baseline.scaleCPU
-    ) {
+      state.scaleCPU !== baseline.scaleCPU;
+    const excludeChanged = state.sleepExcludePaths !== baseline.sleepExcludePaths;
+    if (scaleChanged || excludeChanged) {
       const min = Number(state.scaleMin);
       const max = Number(state.scaleMax);
       const cpu = Number(state.scaleCPU);
@@ -231,12 +232,22 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
         toast.error("max must be ≥ max(min, 1) and min ≥ 0");
         return;
       }
-      body.scale = { min, max, targetCPU: cpu };
+      if (scaleChanged) {
+        body.scale = { min, max, targetCPU: cpu };
+      }
       // Only flip the sleep enabled flag — keep the user's existing
       // afterMinutes value. Pre-v0.10 we hardcoded afterMinutes: 5
       // on every scale save, silently resetting any custom idle
       // timeout the user had configured elsewhere.
       body.sleep = { enabled: min === 0 };
+      // wakeOn.excludePaths: paths that must stay reachable even when the
+      // service sleeps (webhooks/callbacks). Empty list clears the
+      // override (wakeOn:null) so the deployment can scale to zero again.
+      const paths = state.sleepExcludePaths
+        .split("\n")
+        .map((p) => p.trim())
+        .filter(Boolean);
+      body.sleep.wakeOn = paths.length > 0 ? { excludePaths: paths } : null;
     }
     if (
       state.cpuRequest !== baseline.cpuRequest ||

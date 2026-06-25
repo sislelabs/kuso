@@ -221,7 +221,14 @@ export interface PatchServiceBody {
   // Pod CPU/memory requests+limits (k8s ResourceRequirements shape).
   // Empty object clears (chart default); absent leaves unchanged.
   resources?: Record<string, unknown>;
-  sleep?: { enabled?: boolean; afterMinutes?: number };
+  sleep?: {
+    enabled?: boolean;
+    afterMinutes?: number;
+    // wakeOn.excludePaths: any request to a listed path keeps the whole
+    // deployment warm even when scale.min=0 (webhooks/callbacks on a
+    // sleeping service). Send wakeOn:null to clear.
+    wakeOn?: { excludePaths?: string[] } | null;
+  };
   volumes?: VolumePatch[];
   placement?: PlacementPatch;
   repo?: PatchRepoBody;

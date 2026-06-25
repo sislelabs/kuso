@@ -559,6 +559,15 @@ func populateDerivedStatus(e *kube.KusoEnvironment) {
 	if e.Status == nil {
 		e.Status = map[string]any{}
 	}
+	// Workers have no public ingress (the env chart drops Service+Ingress
+	// for runtime=worker), and internal envs are cluster-only. Advertising
+	// a URL for them is a lie — `kuso status` printed an https:// link for
+	// worker services that 404s. Only derive a URL for envs that actually
+	// serve one. A status reconciler that genuinely knows a URL still wins
+	// (we only fill when absent).
+	if e.Spec.Runtime == "worker" || e.Spec.Internal {
+		return
+	}
 	if _, ok := e.Status["url"]; !ok && e.Spec.Host != "" {
 		scheme := "https"
 		if !e.Spec.TLSEnabled {

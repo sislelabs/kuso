@@ -112,6 +112,34 @@ func (w *Watcher) checkPods(ctx context.Context) {
 		service := p.Labels["app.kubernetes.io/instance"]
 		envKind := p.Labels["kuso.sislelabs.com/env-kind"]
 		restarts := containerRestartTotal(p)
+		// Addon pods (postgres/redis/s3/...) carry kuso.sislelabs.com/addon
+		// and app.kubernetes.io/name=kusoaddon. They were previously routed
+		// through the service crash path below, which read
+		// app.kubernetes.io/instance (the addon FQN) as a "service" and
+		// emitted a PodCrashed deep-linking to a service overlay that
+		// doesn't exist — a phantom service. Route addon crashes to their
+		// own higher-severity event (a crashed datastore takes down every
+		// service in the project that mounts its conn secret) and skip the
+		// service path.
+		if addon := p.Labels["kuso.sislelabs.com/addon"]; addon != "" ||
+			p.Labels["app.kubernetes.io/name"] == "kusoaddon" {
+			if addon == "" {
+				addon = p.Labels["app.kubernetes.io/instance"] // fallback to FQN
+			}
+			addonKind := p.Labels["kuso.sislelabs.com/addon-kind"]
+			logLines := w.previousLogLines(p, reason, 50)
+			logTail := ""
+			if n := len(logLines); n > 0 {
+				start := n - 5
+				if start < 0 {
+					start = 0
+				}
+				logTail = strings.Join(logLines[start:], "\n")
+			}
+			shortAddon := strings.TrimPrefix(addon, project+"-")
+			w.Notify.Emit(notify.AddonCrashed(project, shortAddon, addonKind, p.Name, reason, logTail, restarts))
+			continue
+		}
 		// Pull 50 lines for the classifier; the Discord card still only
 		// shows the last 5 (joined via previousLogTail). The classifier
 		// walks the larger window in reverse to find the regex that

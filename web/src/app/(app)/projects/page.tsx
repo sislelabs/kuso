@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useProjects } from "@/features/projects";
@@ -375,11 +375,24 @@ function ProjectsGrid({
       staleTime: 25_000,
     })),
   });
+  // Stable fingerprints of the two query arrays: change only when a query
+  // resolves new data (dataUpdatedAt advances), not on every render. Used
+  // as the cards-memo deps so a metrics poll that returns identical data
+  // doesn't rebuild all N cards.
+  const queriesFingerprint = queries.map((q) => q.dataUpdatedAt).join(",");
+  const metricsFingerprint = metricQueries.map((q) => q.dataUpdatedAt).join(",");
   // Build one rendered <li> per project, tagged with its star/folder
   // state so we can group them into sections below without recomputing
   // the per-card data (which is indexed off the queries arrays by
   // position).
-  const cards = projects.map((p, i) => {
+  //
+  // Memoised: this map builds ~300 lines of JSX per project and was
+  // re-running on EVERY render — including every 30s metrics-poll tick
+  // and every star/folder toggle — rebuilding all N cards even when only
+  // one project's data changed. At 50 projects that's a lot of wasted
+  // reconciliation. Keyed on the query/pref inputs so it only rebuilds
+  // when the underlying data actually moves.
+  const cards = useMemo(() => projects.map((p, i) => {
         const name = p.metadata.name;
         const pref = prefs.get(name);
         const starred = pref?.starred ?? false;
@@ -679,7 +692,14 @@ function ProjectsGrid({
           </li>
         );
         return { name, starred, folder, node };
-      });
+      }),
+    // useQueries returns a fresh array wrapper every render even when no
+    // data changed, so depending on `queries`/`metricQueries` directly
+    // would defeat the memo. Fingerprint on the per-query dataUpdatedAt
+    // (changes only when a query actually resolves new data) + prefs, so
+    // a 30s metrics tick that returns identical data is a no-op rebuild.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [projects, prefs, setPref, queriesFingerprint, metricsFingerprint]);
 
   // Group the cards into sections: Starred (pinned to top), then each
   // folder alphabetically, then Unfiled. Within a section cards keep the

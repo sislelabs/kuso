@@ -187,9 +187,64 @@ func parseRunEnvFlags(flags []string) ([]kusoApi.RunEnvVar, error) {
 	return out, nil
 }
 
+// runCancelCmd cancels an in-flight one-shot run. The CancelRun client
+// method existed but was never wired to a command — you could start a run
+// but not stop it from the CLI.
+var runCancelCmd = &cobra.Command{
+	Use:   "cancel <project> <run>",
+	Short: "Cancel an in-flight run",
+	Args:  cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.CancelRun(args[0], args[1])
+		if err != nil {
+			return fmt.Errorf("cancel run: %w", err)
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("run %s/%s cancelled\n", args[0], args[1])
+		return nil
+	},
+}
+
+var runDeleteYes bool
+
+// runDeleteCmd removes a finished run's record + pod. DeleteRun client
+// method existed but was unwired.
+var runDeleteCmd = &cobra.Command{
+	Use:     "delete <project> <run>",
+	Aliases: []string{"rm"},
+	Short:   "Delete a run (record + pod)",
+	Args:    cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(runDeleteYes,
+			fmt.Sprintf("Delete run %s/%s?", args[0], args[1])); err != nil {
+			return err
+		}
+		resp, err := api.DeleteRun(args[0], args[1])
+		if err != nil {
+			return fmt.Errorf("delete run: %w", err)
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("run %s/%s deleted\n", args[0], args[1])
+		return nil
+	},
+}
+
 func init() {
 	runCmd.Flags().IntVar(&runTimeoutSeconds, "timeout-seconds", 0, "max run duration in seconds (default 1800 / 30 min)")
 	runCmd.Flags().StringArrayVar(&runEnvFlags, "env", nil, "extra env var (KEY=VALUE), repeatable")
 	runCmd.Flags().BoolVarP(&runFollow, "follow", "f", false, "stream logs + block until the run completes; exit code matches the run's exit code")
+	runCmd.AddCommand(runCancelCmd)
+	runCmd.AddCommand(runDeleteCmd)
+	runDeleteCmd.Flags().BoolVarP(&runDeleteYes, "yes", "y", false, "skip the confirmation prompt")
 	rootCmd.AddCommand(runCmd)
 }

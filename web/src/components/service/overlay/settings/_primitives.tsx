@@ -34,6 +34,11 @@ export interface FormState {
   scaleMin: string;
   scaleMax: string;
   scaleCPU: string;
+  // Sleep wake-on exclude paths (newline-separated). When the service
+  // sleeps (min=0), any request to a listed path keeps the WHOLE
+  // deployment warm — so a Stripe/GitHub webhook on a sleeping service
+  // doesn't cold-start-503 the callback. Empty = no exclusions.
+  sleepExcludePaths: string;
   // Resources (pod CPU/memory requests+limits). Empty string = unset
   // (chart default). e.g. cpuRequest "100m", memRequest "128Mi".
   cpuRequest: string;
@@ -96,6 +101,10 @@ export function fromSvc(svc?: KusoService): FormState {
     scaleMin: String(svc?.spec.scale?.min ?? 1),
     scaleMax: String(svc?.spec.scale?.max ?? 5),
     scaleCPU: String(svc?.spec.scale?.targetCPU ?? 70),
+    sleepExcludePaths: (
+      (svc?.spec as { sleep?: { wakeOn?: { excludePaths?: string[] } } } | undefined)?.sleep
+        ?.wakeOn?.excludePaths ?? []
+    ).join("\n"),
     cpuRequest: svc?.spec.resources?.requests?.cpu ?? "",
     cpuLimit: svc?.spec.resources?.limits?.cpu ?? "",
     memRequest: svc?.spec.resources?.requests?.memory ?? "",

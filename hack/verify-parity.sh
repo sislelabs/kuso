@@ -109,3 +109,65 @@ if [[ ${#missing[@]} -gt 0 ]]; then
 else
   echo "verify-parity: every /api/<noun> has a plausible CLI command."
 fi
+
+# --- 5. VERB parity (the create-but-can't-delete class) -----------
+# The noun check above passes as long as SOME command exists under a
+# noun — it's blind to a resource you can create but not delete/list.
+# That's exactly how `environment` (add but no top-level delete/list),
+# `env-groups` and `grants` (full API, zero CLI) all slipped through.
+#
+# Here we curate the user-managed resources and the verbs that matter,
+# and check the CLI exposes each verb (as a cobra `Use:` word OR an
+# alias anywhere — delete is satisfied by delete OR rm). Curated rather
+# than auto-derived because "DELETE /api/.../grants/{id}" → which
+# command? needs a human noun→command mapping; this table is the
+# registry until a typed one exists. Add a row per user-managed resource.
+verb_specs=(
+  "environment|add delete list"
+  "env-group|create delete list"
+  "project grant|add list remove"
+  "run|cancel delete"
+  "addon|add"
+  "cron|add delete"
+  "domain|add remove"
+)
+
+cli_use_words="$(
+  grep -rh -E 'Use:\s*"' cli/cmd/kusoCli/ 2>/dev/null \
+    | sed -E 's|.*Use:[[:space:]]*"([a-zA-Z][a-zA-Z0-9_-]*).*|\1|'
+)"
+cli_alias_words="$(
+  grep -rhoE 'Aliases:[[:space:]]*\[\]string\{[^}]*\}' cli/cmd/kusoCli/ 2>/dev/null \
+    | grep -oE '"[a-zA-Z][a-zA-Z0-9_-]*"' | tr -d '"'
+)"
+all_cli_words="$(printf '%s\n%s\n' "$cli_use_words" "$cli_alias_words" | sort -u)"
+
+has_word() { echo "$all_cli_words" | grep -qx "$1"; }
+verb_satisfied() {
+  case "$1" in
+    delete) has_word delete || has_word rm ;;
+    remove) has_word remove || has_word rm ;;
+    *) has_word "$1" ;;
+  esac
+}
+
+verb_gaps=()
+for spec in "${verb_specs[@]}"; do
+  IFS='|' read -r label verbs <<<"$spec"
+  for v in $verbs; do
+    if ! verb_satisfied "$v"; then
+      verb_gaps+=("$label: missing '$v' verb")
+    fi
+  done
+done
+
+echo
+if [[ ${#verb_gaps[@]} -gt 0 ]]; then
+  echo "verify-parity: CLI verb gaps (create-but-can't-X class):"
+  printf '  - %s\n' "${verb_gaps[@]}"
+  echo
+  echo "A managed resource is missing a key verb. Wire it, or update the"
+  echo "verb_specs table in hack/verify-parity.sh if intentionally unsupported."
+else
+  echo "verify-parity: all curated resources expose their key verbs."
+fi

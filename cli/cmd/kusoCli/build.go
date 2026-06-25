@@ -41,7 +41,52 @@ var (
 	buildTriggerBranch string
 	buildTriggerRef    string
 	buildTriggerDryRun bool
+	buildTriggerFollow bool
 )
+
+// pollBuildToTerminal polls ListBuilds until the build with id buildID
+// reaches a terminal status (succeeded/failed/cancelled), printing a
+// status line on each change. Returns the terminal status. Mirrors the
+// restore/migrate streaming UX so `build trigger --follow` gives a real
+// "did it work" signal instead of fire-and-forget.
+func pollBuildToTerminal(project, service, buildID string) (string, error) {
+	last := ""
+	deadline := time.Now().Add(20 * time.Minute)
+	for time.Now().Before(deadline) {
+		resp, err := api.ListBuilds(project, service)
+		if err != nil {
+			return "", fmt.Errorf("poll builds: %w", err)
+		}
+		var items []struct {
+			ID           string `json:"id"`
+			Status       string `json:"status"`
+			ErrorMessage string `json:"errorMessage,omitempty"`
+		}
+		if err := json.Unmarshal(resp.Body(), &items); err != nil {
+			return "", fmt.Errorf("decode builds: %w", err)
+		}
+		for _, b := range items {
+			if b.ID != buildID {
+				continue
+			}
+			if b.Status != last {
+				fmt.Printf("  build %s: %s\n", buildID, b.Status)
+				last = b.Status
+			}
+			switch b.Status {
+			case "succeeded":
+				return b.Status, nil
+			case "failed", "error", "cancelled":
+				if b.ErrorMessage != "" {
+					return b.Status, fmt.Errorf("build %s: %s", b.Status, b.ErrorMessage)
+				}
+				return b.Status, fmt.Errorf("build %s", b.Status)
+			}
+		}
+		time.Sleep(5 * time.Second)
+	}
+	return "", fmt.Errorf("build %s did not finish within 20m — check `kuso build list %s %s`", buildID, project, service)
+}
 
 var buildTriggerCmd = &cobra.Command{
 	Use:     "trigger <project> <service>",
@@ -76,6 +121,13 @@ var buildTriggerCmd = &cobra.Command{
 		}
 		_ = json.Unmarshal(resp.Body(), &data)
 		fmt.Printf("build %s started (branch=%s, status=%s)\n", data.ID, data.Branch, data.Status)
+		if buildTriggerFollow && !buildTriggerDryRun && data.ID != "" {
+			status, ferr := pollBuildToTerminal(args[0], args[1], data.ID)
+			if ferr != nil {
+				return ferr // non-zero exit on failed/timeout so CI/scripts catch it
+			}
+			fmt.Printf("build %s %s\n", data.ID, status)
+		}
 		return nil
 	},
 }
@@ -209,6 +261,7 @@ func init() {
 	buildTriggerCmd.Flags().StringVar(&buildTriggerBranch, "branch", "", "branch to build (default: project default branch)")
 	buildTriggerCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "specific commit SHA to build")
 	buildTriggerCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "compile + assemble image but skip push and env promotion")
+	buildTriggerCmd.Flags().BoolVarP(&buildTriggerFollow, "follow", "f", false, "block until the build reaches a terminal state; non-zero exit on failure")
 
 	buildCmd.AddCommand(buildListCmd)
 	buildListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")

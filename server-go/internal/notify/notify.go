@@ -51,6 +51,7 @@ const (
 	EventBuildSuperseded EventType = "build.superseded"
 	EventDeployRolled    EventType = "deploy.rolled"
 	EventPodCrashed      EventType = "pod.crashed"
+	EventAddonCrashed    EventType = "addon.crashed"
 	EventAlertFired      EventType = "alert.fired"
 	EventBackupOK        EventType = "backup.succeeded"
 	EventBackupFailed    EventType = "backup.failed"
@@ -1042,6 +1043,45 @@ func PodCrashed(project, service, podName, reason, envKind, logTail string, rest
 		Extra:          map[string]string{"pod": podName},
 		Fields:         fields,
 		Classification: classification,
+	}
+}
+
+// AddonCrashed fires when a managed addon's pod (postgres/redis/etc.) is
+// crashlooping or image-pull-failing. Before this, addon pods fell into
+// the service crash path (PodCrashed) which mislabelled them as a
+// phantom service named after the addon FQN and deep-linked to a service
+// overlay that doesn't exist. An addon crash is higher-severity than a
+// single service pod: every service in the project that mounts the
+// addon's conn secret loses its datastore. addonKind is postgres/redis/
+// s3/... for the card; restarts/logTail mirror PodCrashed.
+func AddonCrashed(project, addon, addonKind, podName, reason, logTail string, restarts int) Event {
+	title := fmt.Sprintf("⚠ Addon crashed · %s / %s", project, addon)
+	desc := podName
+	if addonKind != "" {
+		desc = addonKind + " · " + podName
+	}
+	fields := []EventField{
+		{Name: "Reason", Value: reason, Inline: true},
+		{Name: "Addon", Value: addon, Inline: true},
+	}
+	if addonKind != "" {
+		fields = append(fields, EventField{Name: "Kind", Value: addonKind, Inline: true})
+	}
+	if restarts > 0 {
+		fields = append(fields, EventField{Name: "Restarts", Value: fmt.Sprintf("%d", restarts), Inline: true})
+	}
+	return Event{
+		Type:        EventAddonCrashed,
+		Title:       title,
+		Description: desc,
+		LogTail:     logTail,
+		Body:        reason,
+		Project:     project,
+		// Deep-link to the project canvas; the addon node lives there.
+		URL:      projectURL(project),
+		Severity: "error",
+		Extra:    map[string]string{"pod": podName, "addon": addon, "addonKind": addonKind},
+		Fields:   fields,
 	}
 }
 

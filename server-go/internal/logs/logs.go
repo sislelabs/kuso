@@ -181,13 +181,53 @@ func (s *Service) Tail(ctx context.Context, project, service, env string, lines 
 // container and returns the parsed lines. Container selection is left
 // implicit — the kuso operator only renders one container per pod, and
 // the kube API will pick the only one.
+//
+// When the container has restarted (it crashed and kube relaunched it),
+// kubelet only serves the CURRENT container's logs by default — the logs
+// from the run that actually crashed are gone. "What did it log right
+// before it OOM'd?" is then unanswerable. So if the pod shows restarts we
+// also pull the PREVIOUS container's tail (PodLogOptions{Previous:true})
+// and prepend it behind a separator line, best-effort.
 func (s *Service) tailOnePod(ctx context.Context, ns string, pod *corev1.Pod, tailLines int64) ([]Line, error) {
+	out := make([]Line, 0, tailLines)
+
+	// Previous-container logs first (chronologically older), only when the
+	// pod has restarted — skip the extra apiserver round-trip otherwise.
+	if podRestartTotal(pod) > 0 {
+		if prev := s.tailPodStream(ctx, ns, pod, tailLines, true); len(prev) > 0 {
+			out = append(out, prev...)
+			out = append(out, Line{Pod: pod.Name, Line: "── pod restarted; logs below are from the current container ──"})
+		}
+	}
+
+	out = append(out, s.tailPodStream(ctx, ns, pod, tailLines, false)...)
+	return out, nil
+}
+
+// podRestartTotal sums RestartCount across the pod's containers. >0 means
+// at least one container crashed and was relaunched, so the previous
+// container's logs are worth fetching.
+func podRestartTotal(p *corev1.Pod) int32 {
+	var total int32
+	for _, cs := range p.Status.ContainerStatuses {
+		total += cs.RestartCount
+	}
+	return total
+}
+
+// tailPodStream streams one GetLogs request (current or previous
+// container) and returns its lines. Errors are swallowed to nil so the
+// previous-container probe never fails the whole request (e.g. no prior
+// container exists yet) — the caller decides what to do with an empty
+// result.
+func (s *Service) tailPodStream(ctx context.Context, ns string, pod *corev1.Pod, tailLines int64, previous bool) []Line {
 	req := s.Kube.Clientset.CoreV1().Pods(ns).GetLogs(pod.Name, &corev1.PodLogOptions{
 		TailLines: &tailLines,
+		Previous:  previous,
 	})
 	stream, err := req.Stream(ctx)
 	if err != nil {
-		return nil, err
+		return nil
 	}
 	defer stream.Close()
 
@@ -201,10 +241,7 @@ func (s *Service) tailOnePod(ctx context.Context, ns string, pod *corev1.Pod, ta
 		}
 		out = append(out, Line{Pod: pod.Name, Line: line})
 	}
-	if err := scanner.Err(); err != nil {
-		return out, err
-	}
-	return out, nil
+	return out
 }
 
 // tailBuildPods returns lines from every pod owned by a KusoBuild,

@@ -59,6 +59,25 @@ export function ScaleSection({ state, setState }: SectionProps) {
           </div>
         }
       />
+      {/* Wake-on exclude paths — only relevant when the service sleeps.
+          Any request to a listed path keeps the WHOLE deployment warm, so
+          a webhook/callback on a sleeping service doesn't cold-start-503.
+          Hidden when min>0 (nothing to protect — it never sleeps). */}
+      {sleeps && (
+        <Row
+          label="keep-warm paths"
+          hint="requests to these paths block sleep (webhooks/callbacks) — one per line"
+          control={
+            <textarea
+              value={state.sleepExcludePaths}
+              onChange={(e) => setState((s) => ({ ...s, sleepExcludePaths: e.target.value }))}
+              placeholder={"/api/webhooks/stripe\n/api/callbacks/github"}
+              rows={2}
+              className="h-auto w-56 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-2 py-1 font-mono text-[11px]"
+            />
+          }
+        />
+      )}
       {/* Pod resources. Blank = chart default. Request = guaranteed
           floor (drives scheduling + HPA %); limit = hard ceiling
           (OOM-kill / CPU-throttle past it). k8s quantity syntax:
