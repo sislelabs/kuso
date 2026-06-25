@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.17] — 2026-06-04
+
+### ✨ Features
+- Feat(cluster-db): shared auth_query PgBouncer in front of the cluster Postgres ([6658273](https://github.com/sislelabs/kuso/commit/66582733cfee861c71579ab09a752f35387e0e53))
+
 ## [0.18.16] — 2026-06-04
 
 ### ✨ Features
