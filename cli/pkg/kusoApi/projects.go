@@ -341,6 +341,33 @@ func (k *KusoClient) RepairAddonPassword(project, addon string) (*resty.Response
 	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/repair-password")
 }
 
+// EnablePublicTCP opts the addon into a public TCP endpoint, allocating
+// a port from the cluster's configured pool. The server returns
+// {"port": <N>} on success. Admin-gated.
+func (k *KusoClient) EnablePublicTCP(project, addon string) (*resty.Response, error) {
+	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/public-tcp")
+}
+
+// DisablePublicTCP frees the addon's allocated public TCP port back to
+// the pool and removes the Traefik route on the next reconcile.
+// Admin-gated. Idempotent (204 even when already off).
+func (k *KusoClient) DisablePublicTCP(project, addon string) (*resty.Response, error) {
+	return k.client.Delete("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/public-tcp")
+}
+
+// AddonSecret returns the addon's plaintext connection values
+// (DATABASE_URL, passwords, …) as {"values": {KEY: VAL}}. Admin-gated
+// server-side — the same boundary as reading env values.
+func (k *KusoClient) AddonSecret(project, addon string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/secret")
+}
+
+// AddonSecretKeys lists the keys in the addon's connection secret
+// without exposing values ({"keys": [KEY, …]}). Viewer-gated.
+func (k *KusoClient) AddonSecretKeys(project, addon string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/secret-keys")
+}
+
 // Apply posts a kuso.yml body to the server's config-as-code endpoint.
 // dryRun=true returns a Plan without writing; false applies it.
 // rotateSecrets=true forces generated secrets ({generate: …}) to be
