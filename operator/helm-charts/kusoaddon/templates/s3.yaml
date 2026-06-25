@@ -89,13 +89,12 @@ spec:
   volumeClaimTemplates:
     - metadata:
         name: data
-        annotations:
-          # Retain the data PVC on uninstall (matches postgres). Deleting
-          # a KusoAddon CR cascades the StatefulSet; without this the PVC
-          # + PV go too (stock k3s reclaimPolicy=Delete) and the data is
-          # gone. Kept so an accidental addon delete isn't a data-loss
-          # event — reclaim space with an explicit `kubectl delete pvc`.
-          "helm.sh/resource-policy": keep
+        # NOTE: volumeClaimTemplates must stay annotation-free. K8s forbids
+        # any change to a StatefulSet's volumeClaimTemplates after creation,
+        # so adding a VCT annotation traps every pre-existing addon in a
+        # failed helm upgrade (see chart_render addon_vct_test). PVC data is
+        # retained regardless: a StatefulSet never garbage-collects its
+        # VCT-spawned PVCs, and helm uninstall doesn't own them either.
       spec:
         accessModes: [ReadWriteOnce]
         resources:

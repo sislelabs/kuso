@@ -215,6 +215,601 @@ var nodeRevokeCmd = &cobra.Command{
 	},
 }
 
+// --- node management parity with /settings/nodes -------------------
+//
+// Everything below rounds the `kuso node` subtree out to match the web
+// node-management view: list nodes, edit kuso labels, the SSH-driven
+// validate/join/remove lifecycle, host-package updates, per-node
+// history, and the cluster cleanup sweep. All are admin-gated server-
+// side; the CLI just surfaces the 403 cleanly.
+
+var nodeListCmd = &cobra.Command{
+	Use:     "list",
+	Aliases: []string{"ls"},
+	Short:   "List cluster nodes with status, roles, and live usage.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.ListNodes()
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		if outputFormat == "json" {
+			fmt.Println(string(resp.Body()))
+			return nil
+		}
+		var nodes []kusoApi.NodeSummary
+		if err := json.Unmarshal(resp.Body(), &nodes); err != nil {
+			return fmt.Errorf("decode: %w", err)
+		}
+		if len(nodes) == 0 {
+			fmt.Println("No nodes.")
+			return nil
+		}
+		tw := tablewriter.NewWriter(os.Stdout)
+		tw.SetHeader([]string{"Name", "Status", "Roles", "Region", "CPU", "Mem", "Pods", "Labels"})
+		for _, n := range nodes {
+			tw.Append([]string{
+				n.Name,
+				nodeStatus(n),
+				strings.Join(n.Roles, ","),
+				dashIfEmpty(n.Region),
+				fmt.Sprintf("%s / %s", formatMilliCPU(n.CPUUsageMilli), formatMilliCPU(n.CPUCapacityMilli)),
+				fmt.Sprintf("%s / %s", humanBytes(n.MemUsageBytes), humanBytes(n.MemCapacityBytes)),
+				fmt.Sprintf("%d/%d", n.Pods, n.PodsCapacity),
+				formatLabels(n.KusoLabels),
+			})
+		}
+		tw.Render()
+		return nil
+	},
+}
+
+// nodeLabelCmd groups the label set/rm subcommands.
+var nodeLabelCmd = &cobra.Command{
+	Use:   "label",
+	Short: "Set or remove kuso-managed labels on a node.",
+	Long: `Edit the kuso.sislelabs.com/-namespaced labels on a node. Bare keys
+only — the namespace prefix is applied server-side. Setting 'region'
+also drops a matching NoSchedule taint so untolerated workloads steer
+clear; removing it drops the taint.`,
+}
+
+var nodeLabelSetCmd = &cobra.Command{
+	Use:   "set <name> <key=value> [key=value...]",
+	Short: "Add or update kuso labels on a node (merges with existing).",
+	Example: `  kuso node label set worker-2 tier=premium gpu=true
+  kuso node label set worker-2 region=eu`,
+	Args: cobra.MinimumNArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		name := args[0]
+		// The label PUT is whole-set replacement: fetch the node's
+		// current kuso labels first and merge the new pairs in so a
+		// `set` of one key doesn't silently wipe the others.
+		current, err := currentNodeLabels(name)
+		if err != nil {
+			return err
+		}
+		for _, raw := range args[1:] {
+			k, v, ok := splitKV(raw)
+			if !ok {
+				return fmt.Errorf("%q must be key=value", raw)
+			}
+			current[k] = v
+		}
+		resp, err := api.SetNodeLabels(name, kusoApi.SetNodeLabelsRequest{Labels: current})
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("Labels updated on %s: %s\n", name, formatLabels(current))
+		return nil
+	},
+}
+
+var nodeLabelRmCmd = &cobra.Command{
+	Use:     "rm <name> <key> [key...]",
+	Aliases: []string{"remove", "unset"},
+	Short:   "Remove kuso labels from a node.",
+	Example: `  kuso node label rm worker-2 gpu
+  kuso node label rm worker-2 region`,
+	Args: cobra.MinimumNArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		name := args[0]
+		current, err := currentNodeLabels(name)
+		if err != nil {
+			return err
+		}
+		for _, k := range args[1:] {
+			if _, ok := current[k]; !ok {
+				return fmt.Errorf("node %s has no kuso label %q", name, k)
+			}
+			delete(current, k)
+		}
+		resp, err := api.SetNodeLabels(name, kusoApi.SetNodeLabelsRequest{Labels: current})
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("Labels updated on %s: %s\n", name, formatLabels(current))
+		return nil
+	},
+}
+
+var (
+	nodeSSHHost    string
+	nodeSSHPort    int
+	nodeSSHUser    string
+	nodeSSHPass    string
+	nodeSSHKeyFile string
+	nodeSSHKeyID   string
+	nodeJoinLabels []string
+	nodeJoinName   string
+	nodeRemoveForce bool
+	nodeApplyReboot bool
+)
+
+// nodeCredsFromFlags assembles the shared SSH credential block from the
+// connection flags. The private key is read from --ssh-key-file when
+// given; --ssh-key-id defers to the server's SSH key library instead.
+func nodeCredsFromFlags() (kusoApi.NodeCredentials, error) {
+	creds := kusoApi.NodeCredentials{
+		Host:     nodeSSHHost,
+		Port:     nodeSSHPort,
+		User:     nodeSSHUser,
+		Password: nodeSSHPass,
+	}
+	if nodeSSHKeyFile != "" {
+		b, err := os.ReadFile(nodeSSHKeyFile)
+		if err != nil {
+			return creds, fmt.Errorf("--ssh-key-file: %w", err)
+		}
+		creds.PrivateKey = string(b)
+	}
+	return creds, nil
+}
+
+var nodeValidateCmd = &cobra.Command{
+	Use:   "validate",
+	Short: "Pre-flight check a remote VM over SSH before joining (Coolify-style).",
+	Long: `Open an SSH session to a remote VM and run a series of probes — SSH
+handshake, root/sudo, control-plane reachability, curl, existing-k3s —
+WITHOUT installing anything. Fix any failing check, then run 'kuso node
+join' with the same flags.`,
+	Example: `  kuso node validate --host 10.0.0.5 --user root --ssh-key-file ~/.ssh/id_ed25519
+  kuso node validate --host 10.0.0.5 --user ubuntu --ssh-key-id <id>`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		creds, err := nodeCredsFromFlags()
+		if err != nil {
+			return err
+		}
+		resp, err := api.ValidateNode(kusoApi.ValidateNodeRequest{
+			NodeCredentials: creds,
+			SSHKeyID:        nodeSSHKeyID,
+		})
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		if outputFormat == "json" {
+			fmt.Println(string(resp.Body()))
+			return nil
+		}
+		var res kusoApi.ValidateNodeResult
+		if err := json.Unmarshal(resp.Body(), &res); err != nil {
+			return fmt.Errorf("decode: %w", err)
+		}
+		for _, c := range res.Checks {
+			mark := "FAIL"
+			if c.OK {
+				mark = "ok"
+			}
+			fmt.Printf("  [%-4s] %-14s %s\n", mark, c.Label, c.Detail)
+		}
+		fmt.Println()
+		if res.OK {
+			fmt.Println("All checks passed — safe to `kuso node join`.")
+			return nil
+		}
+		// Non-zero exit so scripts can gate the join on validate.
+		return fmt.Errorf("one or more pre-flight checks failed")
+	},
+}
+
+var nodeJoinCmd = &cobra.Command{
+	Use:   "join",
+	Short: "SSH into a remote VM and join it to the cluster as a k3s agent.",
+	Long: `Run the k3s agent install on a remote VM over SSH and join it to this
+cluster. Blocks for the duration of the install (typically 30-90s) and
+prints the install log. Run 'kuso node validate' with the same flags
+first to catch prereq problems early.`,
+	Example: `  kuso node join --host 10.0.0.5 --user root --ssh-key-file ~/.ssh/id_ed25519
+  kuso node join --host 10.0.0.5 --user root --ssh-key-file ~/.ssh/id_ed25519 \
+    --label region=eu --label tier=premium --name worker-2`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		creds, err := nodeCredsFromFlags()
+		if err != nil {
+			return err
+		}
+		labels := map[string]string{}
+		for _, raw := range nodeJoinLabels {
+			k, v, ok := splitKV(raw)
+			if !ok {
+				return fmt.Errorf("--label %q must be key=value", raw)
+			}
+			labels[k] = v
+		}
+		resp, err := api.JoinNode(kusoApi.JoinNodeRequest{
+			NodeCredentials: creds,
+			SSHKeyID:        nodeSSHKeyID,
+			Labels:          labels,
+			Name:            nodeJoinName,
+		})
+		if err != nil {
+			return err
+		}
+		// 502 carries {"error","output"} — surface the remote install
+		// log so the operator can debug a failed join.
+		if resp.StatusCode() >= 300 {
+			var fail struct {
+				Error  string `json:"error"`
+				Output string `json:"output"`
+			}
+			if json.Unmarshal(resp.Body(), &fail) == nil && fail.Error != "" {
+				if fail.Output != "" {
+					fmt.Fprintln(cmd.ErrOrStderr(), fail.Output)
+				}
+				return fmt.Errorf("join failed: %s", fail.Error)
+			}
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		var out struct {
+			Output   string `json:"output"`
+			NodeName string `json:"nodeName"`
+		}
+		if err := json.Unmarshal(resp.Body(), &out); err != nil {
+			return fmt.Errorf("decode: %w", err)
+		}
+		if out.Output != "" {
+			fmt.Println(out.Output)
+		}
+		fmt.Printf("\nNode %s joined. It should report Ready within ~30 seconds (`kuso node list`).\n", dashIfEmpty(out.NodeName))
+		return nil
+	},
+}
+
+var nodeRemoveCmd = &cobra.Command{
+	Use:   "remove <name>",
+	Short: "Cordon, drain, and remove a node from the cluster.",
+	Long: `Cordon → drain → delete the node from the control plane. When SSH
+connection flags are supplied, kuso also runs k3s-agent-uninstall on the
+host so the VM is left clean; without them the node is only untracked
+(use this when the VM is already gone). Refuses to remove the last
+control-plane node.`,
+	Example: `  kuso node remove worker-2
+  kuso node remove worker-2 --host 10.0.0.5 --user root --ssh-key-file ~/.ssh/id_ed25519
+  kuso node remove worker-2 --force`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		name := args[0]
+		req := kusoApi.RemoveNodeRequest{Force: nodeRemoveForce}
+		// Only attach credentials (triggering host uninstall) when a
+		// host was actually provided.
+		if nodeSSHHost != "" {
+			creds, err := nodeCredsFromFlags()
+			if err != nil {
+				return err
+			}
+			req.Credentials = &creds
+		}
+		resp, err := api.RemoveNode(name, req)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		var out struct {
+			Removed      string `json:"removed"`
+			UninstallOut string `json:"uninstallOut"`
+		}
+		if err := json.Unmarshal(resp.Body(), &out); err != nil {
+			return fmt.Errorf("decode: %w", err)
+		}
+		if out.UninstallOut != "" {
+			fmt.Fprintln(cmd.ErrOrStderr(), out.UninstallOut)
+		}
+		fmt.Printf("Node %s removed.\n", out.Removed)
+		return nil
+	},
+}
+
+var nodeUpdatesCmd = &cobra.Command{
+	Use:   "updates",
+	Short: "Show pending host package updates per node.",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.NodeUpdates()
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		if outputFormat == "json" {
+			fmt.Println(string(resp.Body()))
+			return nil
+		}
+		var body struct {
+			Data []struct {
+				Node           string `json:"node"`
+				Count          int    `json:"count"`
+				RebootRequired bool   `json:"rebootRequired"`
+				PkgMgr         string `json:"pkgMgr"`
+				CheckedAt      string `json:"checkedAt"`
+				Present        bool   `json:"present"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(resp.Body(), &body); err != nil {
+			return fmt.Errorf("decode: %w", err)
+		}
+		if len(body.Data) == 0 {
+			fmt.Println("No node update advisories.")
+			return nil
+		}
+		tw := tablewriter.NewWriter(os.Stdout)
+		tw.SetHeader([]string{"Node", "Updates", "Reboot", "PkgMgr", "Checked"})
+		for _, a := range body.Data {
+			count := fmt.Sprintf("%d", a.Count)
+			if !a.Present {
+				count = "checking…"
+			}
+			reboot := "no"
+			if a.RebootRequired {
+				reboot = "YES"
+			}
+			tw.Append([]string{a.Node, count, reboot, dashIfEmpty(a.PkgMgr), dashIfEmpty(a.CheckedAt)})
+		}
+		tw.Render()
+		return nil
+	},
+}
+
+var nodeApplyUpdatesCmd = &cobra.Command{
+	Use:   "apply-updates <name>",
+	Short: "Apply pending host package updates on a node (privileged Job).",
+	Long: `Launch a privileged Job that patches the node's host OS packages. By
+default it's patch-only; --allow-reboot lets kuso run the cordon/drain/
+reboot orchestration when a kernel or other update requires a restart.`,
+	Example: `  kuso node apply-updates worker-2
+  kuso node apply-updates worker-2 --allow-reboot`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		name := args[0]
+		resp, err := api.ApplyNodeUpdates(name, kusoApi.ApplyNodeUpdatesRequest{AllowReboot: nodeApplyReboot})
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() == 409 {
+			// Nothing-to-do or already-running both map to 409; pass the
+			// server's message through so the user sees which.
+			return fmt.Errorf("%s", strings.TrimSpace(string(resp.Body())))
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("Update Job started on %s", name)
+		if nodeApplyReboot {
+			fmt.Print(" (reboot allowed)")
+		}
+		fmt.Println(". Track progress with `kuso node updates`.")
+		return nil
+	},
+}
+
+var nodeHistoryCmd = &cobra.Command{
+	Use:   "history <name>",
+	Short: "Show up-to-7-days of CPU/RAM/disk samples for a node.",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.NodeHistory(args[0])
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		if outputFormat == "json" {
+			fmt.Println(string(resp.Body()))
+			return nil
+		}
+		var body struct {
+			Node    string `json:"node"`
+			Samples []struct {
+				Ts                time.Time `json:"ts"`
+				CPUUsedMilli      int64     `json:"cpuUsedMilli"`
+				CPUCapacityMilli  int64     `json:"cpuCapacityMilli"`
+				MemUsedBytes      int64     `json:"memUsedBytes"`
+				MemCapacityBytes  int64     `json:"memCapacityBytes"`
+				DiskAvailBytes    int64     `json:"diskAvailBytes"`
+				DiskCapacityBytes int64     `json:"diskCapacityBytes"`
+			} `json:"samples"`
+		}
+		if err := json.Unmarshal(resp.Body(), &body); err != nil {
+			return fmt.Errorf("decode: %w", err)
+		}
+		if len(body.Samples) == 0 {
+			fmt.Printf("No samples yet for %s (the sampler runs every ~30 min).\n", body.Node)
+			return nil
+		}
+		tw := tablewriter.NewWriter(os.Stdout)
+		tw.SetHeader([]string{"Time", "CPU", "Mem", "Disk used"})
+		for _, s := range body.Samples {
+			tw.Append([]string{
+				s.Ts.Local().Format(time.RFC3339),
+				fmt.Sprintf("%s / %s", formatMilliCPU(s.CPUUsedMilli), formatMilliCPU(s.CPUCapacityMilli)),
+				fmt.Sprintf("%s / %s", humanBytes(s.MemUsedBytes), humanBytes(s.MemCapacityBytes)),
+				fmt.Sprintf("%s / %s", humanBytes(s.DiskCapacityBytes-s.DiskAvailBytes), humanBytes(s.DiskCapacityBytes)),
+			})
+		}
+		tw.Render()
+		return nil
+	},
+}
+
+var nodeCleanupCmd = &cobra.Command{
+	Use:   "cleanup",
+	Short: "Delete completed pods + finished Jobs cluster-wide (admin only).",
+	Long: `Sweep Succeeded/Failed pods and finished Jobs across all namespaces.
+Running pods, active Jobs, KusoBuild-owned Jobs/pods, and the
+kube-system family are left untouched. Use this when the host is
+drowning in stale completion artifacts.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.CleanupCompleted()
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		if outputFormat == "json" {
+			fmt.Println(string(resp.Body()))
+			return nil
+		}
+		var out struct {
+			PodsDeleted int      `json:"podsDeleted"`
+			JobsDeleted int      `json:"jobsDeleted"`
+			Namespaces  []string `json:"namespaces"`
+			Errors      []string `json:"errors"`
+		}
+		if err := json.Unmarshal(resp.Body(), &out); err != nil {
+			return fmt.Errorf("decode: %w", err)
+		}
+		fmt.Printf("Deleted %d pod(s) and %d job(s)", out.PodsDeleted, out.JobsDeleted)
+		if len(out.Namespaces) > 0 {
+			fmt.Printf(" across: %s", strings.Join(out.Namespaces, ", "))
+		}
+		fmt.Println(".")
+		for _, e := range out.Errors {
+			fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", e)
+		}
+		return nil
+	},
+}
+
+// currentNodeLabels fetches a node's current kuso labels so the label
+// set/rm commands can merge rather than clobber (the PUT is a full
+// replace).
+func currentNodeLabels(name string) (map[string]string, error) {
+	resp, err := api.ListNodes()
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode() >= 300 {
+		return nil, fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+	}
+	var nodes []kusoApi.NodeSummary
+	if err := json.Unmarshal(resp.Body(), &nodes); err != nil {
+		return nil, fmt.Errorf("decode nodes: %w", err)
+	}
+	for _, n := range nodes {
+		if n.Name == name {
+			out := map[string]string{}
+			for k, v := range n.KusoLabels {
+				out[k] = v
+			}
+			return out, nil
+		}
+	}
+	return nil, fmt.Errorf("node %q not found", name)
+}
+
+// nodeStatus renders the human-facing status cell: Ready/NotReady plus
+// a cordoned/unreachable qualifier.
+func nodeStatus(n kusoApi.NodeSummary) string {
+	s := "NotReady"
+	if n.Ready {
+		s = "Ready"
+	}
+	switch {
+	case n.Unreachable:
+		s += ",Unreachable"
+	case !n.Schedulable:
+		s += ",Cordoned"
+	}
+	return s
+}
+
+func dashIfEmpty(s string) string {
+	if s == "" {
+		return "—"
+	}
+	return s
+}
+
+// formatMilliCPU renders milli-CPU as cores with one decimal (e.g.
+// 1500 → "1.5"). Keeps the nodes table compact vs. raw millicores.
+func formatMilliCPU(m int64) string {
+	if m == 0 {
+		return "0"
+	}
+	return fmt.Sprintf("%.1f", float64(m)/1000)
+}
+
+// humanBytes renders a byte count with a binary (Ki/Mi/Gi) suffix —
+// matches how kube quantities read and keeps the usage columns short.
+func humanBytes(b int64) string {
+	if b == 0 {
+		return "0"
+	}
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%dB", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%ci", float64(b)/float64(div), "KMGTPE"[exp])
+}
+
 func init() {
 	nodeAddTokenCmd.Flags().StringSliceVar(&nodeTokenLabels, "label", nil,
 		"Repeatable key=value label, baked onto the joined node (e.g. --label tier=premium)")
@@ -233,6 +828,47 @@ func init() {
 	nodeCmd.AddCommand(nodeAddTokenCmd)
 	nodeCmd.AddCommand(nodePendingCmd)
 	nodeCmd.AddCommand(nodeRevokeCmd)
+
+	// --- node management parity commands ---
+
+	nodeListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	nodeCmd.AddCommand(nodeListCmd)
+
+	nodeCmd.AddCommand(nodeLabelCmd)
+	nodeLabelCmd.AddCommand(nodeLabelSetCmd)
+	nodeLabelCmd.AddCommand(nodeLabelRmCmd)
+
+	// Shared SSH connection flags for validate/join/remove.
+	for _, c := range []*cobra.Command{nodeValidateCmd, nodeJoinCmd, nodeRemoveCmd} {
+		c.Flags().StringVar(&nodeSSHHost, "host", "", "SSH host (IP or hostname) of the target VM")
+		c.Flags().IntVar(&nodeSSHPort, "port", 0, "SSH port (default 22 server-side)")
+		c.Flags().StringVar(&nodeSSHUser, "user", "", "SSH user")
+		c.Flags().StringVar(&nodeSSHPass, "password", "", "SSH password (prefer --ssh-key-file / --ssh-key-id)")
+		c.Flags().StringVar(&nodeSSHKeyFile, "ssh-key-file", "", "path to a private key file for SSH auth")
+		c.Flags().StringVar(&nodeSSHKeyID, "ssh-key-id", "", "id of a key in kuso's SSH key library (server-side lookup)")
+	}
+	nodeValidateCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	nodeCmd.AddCommand(nodeValidateCmd)
+
+	nodeJoinCmd.Flags().StringSliceVar(&nodeJoinLabels, "label", nil, "repeatable key=value label baked onto the joined node")
+	nodeJoinCmd.Flags().StringVar(&nodeJoinName, "name", "", "override the joined node's name (default: VM hostname)")
+	nodeCmd.AddCommand(nodeJoinCmd)
+
+	nodeRemoveCmd.Flags().BoolVar(&nodeRemoveForce, "force", false, "skip graceful pod eviction during drain")
+	nodeCmd.AddCommand(nodeRemoveCmd)
+
+	nodeUpdatesCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	nodeCmd.AddCommand(nodeUpdatesCmd)
+
+	nodeApplyUpdatesCmd.Flags().BoolVar(&nodeApplyReboot, "allow-reboot", false, "permit cordon/drain/reboot when an update needs a restart")
+	nodeCmd.AddCommand(nodeApplyUpdatesCmd)
+
+	nodeHistoryCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	nodeCmd.AddCommand(nodeHistoryCmd)
+
+	nodeCleanupCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	nodeCmd.AddCommand(nodeCleanupCmd)
+
 	rootCmd.AddCommand(nodeCmd)
 }
 
