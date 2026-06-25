@@ -2,6 +2,20 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.19] — 2026-06-04
+
+### ✨ Features
+- Feat(builds): build-time env injection (resolve service env → bake into image) ([7b279a9](https://github.com/sislelabs/kuso/commit/7b279a9e095d5ae812c476925f3d69400ad83b92))
+
+### 📝 Docs
+- Docs(migration): BLOCKER — kuso has no build-time env injection (3 Prisma/Next builds fail) ([c25f64a](https://github.com/sislelabs/kuso/commit/c25f64a1459e7994a91b1f4ee006d57edb6dd829))
+- Docs(migration): 6 apps migrated (jira-mudira,boiler-code,db-masterclass,produktche,ilikata,bukvite30) + ownership fix ([41aafad](https://github.com/sislelabs/kuso/commit/41aafad5ad40691f5b578a4b265203f0583f1c86))
+- Docs(migration): Phase 1 matrix + kuso.yml apply flow ([d6b0344](https://github.com/sislelabs/kuso/commit/d6b0344d9f4fb7761339344dc1cb92ce373a4857))
+- Docs(migration): Phase 0 pooler shipped+verified; log PVC-drift follow-up ([7563b51](https://github.com/sislelabs/kuso/commit/7563b517bd5377daa28db9d3a59caf2e99c109a7))
+
+### 🧹 Chores
+- Chore: gitignore migration/ workdir (holds plaintext secrets) ([cf96bc4](https://github.com/sislelabs/kuso/commit/cf96bc4e3591fe92b8c67e620d01916be9ef449a))
+
 ## [0.18.17] — 2026-06-04
 
 ### ✨ Features
