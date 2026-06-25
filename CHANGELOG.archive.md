@@ -2,6 +2,16 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.21] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): inject build-time env in the REAL renderer (buildcontroller, not the dead chart) ([62bc4fb](https://github.com/sislelabs/kuso/commit/62bc4fb47c2faadc23289bc1946d2c1e4852e76a))
+
+## [0.18.20] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): validate build-env keys (command-injection hardening) ([c567636](https://github.com/sislelabs/kuso/commit/c567636efd7a8cc073d29c0034529b4624c8ba7f))
+
 ## [0.18.19] — 2026-06-04
 
 ### ✨ Features
