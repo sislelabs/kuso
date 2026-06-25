@@ -5,6 +5,14 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.83] — 2026-06-25
+
+### ✨ Features
+- Feat(cli,obs,ux): env-group/grant CLI, run cancel/rm, build --follow, verb-aware parity, addon-crash + prev-logs, projects memo ([6603934](https://github.com/sislelabs/kuso/commit/6603934455f9eeaf27cd7d35d73886f07a6b4536))
+
+### 🧹 Chores
+- Chore(changelog): archive promotion from v0.18.82 ship ([b4b6872](https://github.com/sislelabs/kuso/commit/b4b687240f48f38bbef6297de1e9a3fd2423f46d))
+
 ## [0.18.82] — 2026-06-25
 
 ### ✨ Features
@@ -404,20 +412,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(builds): validate build-env keys (command-injection hardening) ([c567636](https://github.com/sislelabs/kuso/commit/c567636efd7a8cc073d29c0034529b4624c8ba7f))
-
-## [0.18.19] — 2026-06-04
-
-### ✨ Features
-- Feat(builds): build-time env injection (resolve service env → bake into image) ([7b279a9](https://github.com/sislelabs/kuso/commit/7b279a9e095d5ae812c476925f3d69400ad83b92))
-
-### 📝 Docs
-- Docs(migration): BLOCKER — kuso has no build-time env injection (3 Prisma/Next builds fail) ([c25f64a](https://github.com/sislelabs/kuso/commit/c25f64a1459e7994a91b1f4ee006d57edb6dd829))
-- Docs(migration): 6 apps migrated (jira-mudira,boiler-code,db-masterclass,produktche,ilikata,bukvite30) + ownership fix ([41aafad](https://github.com/sislelabs/kuso/commit/41aafad5ad40691f5b578a4b265203f0583f1c86))
-- Docs(migration): Phase 1 matrix + kuso.yml apply flow ([d6b0344](https://github.com/sislelabs/kuso/commit/d6b0344d9f4fb7761339344dc1cb92ce373a4857))
-- Docs(migration): Phase 0 pooler shipped+verified; log PVC-drift follow-up ([7563b51](https://github.com/sislelabs/kuso/commit/7563b517bd5377daa28db9d3a59caf2e99c109a7))
-
-### 🧹 Chores
-- Chore: gitignore migration/ workdir (holds plaintext secrets) ([cf96bc4](https://github.com/sislelabs/kuso/commit/cf96bc4e3591fe92b8c67e620d01916be9ef449a))
 
 
 ---
