@@ -564,9 +564,11 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 		Delete(ctx, fqn, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete addon: %w", err)
 	}
-	// Data-safety trail: the addon's StatefulSet PVCs carry
-	// helm.sh/resource-policy=keep, so deleting the addon does NOT
-	// delete its data — the PVC is RETAINED. That's deliberate (an
+	// Data-safety trail: deleting the addon does NOT delete its data —
+	// the StatefulSet's volumeClaimTemplates PVCs are RETAINED. That's
+	// inherent to k8s (an STS never garbage-collects its VCT-spawned
+	// PVCs, and helm uninstall doesn't own them), not an annotation —
+	// the VCT carries none, or addon upgrades would immutable-trap. That's deliberate (an
 	// accidental delete shouldn't nuke a production DB), but it's a
 	// silent orphan: nothing else records which project owned it, and
 	// re-adding an addon with the same name will REUSE the old PVC's
