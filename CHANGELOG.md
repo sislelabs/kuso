@@ -5,6 +5,17 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.82] — 2026-06-25
+
+### ✨ Features
+- Feat(ux,perf): pre-build holding state, build deadline, HTTP liveness, OOM classify, drift cache, CLI+UI gaps ([e2cdf82](https://github.com/sislelabs/kuso/commit/e2cdf82b353eda2ee1f4e3cfa9f31b5b09894594))
+
+### 🐛 Bug Fixes
+- Fix(db): grant pods/portforward RBAC + stop relaying WS error frames as TCP data ([229dac1](https://github.com/sislelabs/kuso/commit/229dac1eb4e435ae1ab561425bfcbecb48d76417))
+
+### 🧹 Chores
+- Chore(changelog): archive promotion from v0.18.81 ship ([a859ec8](https://github.com/sislelabs/kuso/commit/a859ec83f05d6b08f2dc1597039d6272e034de38))
+
 ## [0.18.81] — 2026-06-24
 
 ### 🐛 Bug Fixes
@@ -407,11 +418,6 @@ messages on every release. The format is loosely based on
 
 ### 🧹 Chores
 - Chore: gitignore migration/ workdir (holds plaintext secrets) ([cf96bc4](https://github.com/sislelabs/kuso/commit/cf96bc4e3591fe92b8c67e620d01916be9ef449a))
-
-## [0.18.17] — 2026-06-04
-
-### ✨ Features
-- Feat(cluster-db): shared auth_query PgBouncer in front of the cluster Postgres ([6658273](https://github.com/sislelabs/kuso/commit/66582733cfee861c71579ab09a752f35387e0e53))
 
 
 ---
