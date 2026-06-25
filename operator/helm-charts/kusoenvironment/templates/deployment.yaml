@@ -5,15 +5,28 @@ metadata:
   labels:
     {{- include "kusoenvironment.labels" . | nindent 4 }}
 spec:
-  {{- /*
+  {{/*
+    Holding state before the first build: a service whose build pipeline
+    hasn't produced an image yet has image.repository="". Without a guard
+    the container image renders as ":latest", the kubelet rejects it with
+    InvalidImageName, and the Deployment crash-loops a placeholder pod
+    that confuses users ("why is my brand-new service failing?"). Pin
+    replicas to 0 until a real image lands so the service sits in a clean
+    "awaiting first build" state (0/0, no crash-loop) instead. The build
+    promote patches spec.image.repository, the operator reconciles, and
+    the Deployment scales up to replicaCount on its own. runtime=image
+    services set image.repository directly so they skip this hold.
+
     Replicas: only stamp spec.replicas when autoscaling is OFF. With an
     HPA wired up, helm-operator reconciles every 3m and would otherwise
     keep clobbering the autoscaler's chosen replica count back to
     replicaCount, producing periodic capacity dips and 503s during
     traffic spikes. Standard chart pattern: omit the field when the HPA
     owns it.
-  */ -}}
-  {{- if not (and .Values.autoscaling .Values.autoscaling.enabled) }}
+  */}}
+  {{- if not .Values.image.repository }}
+  replicas: 0
+  {{- else if not (and .Values.autoscaling .Values.autoscaling.enabled) }}
   replicas: {{ .Values.replicaCount }}
   {{- end }}
   {{/*
@@ -233,6 +246,42 @@ spec:
             the readinessProbe doesn't false-fail during cold starts.
           */}}
           {{- if not (eq (default "" .Values.runtime) "worker") }}
+          {{- if and .Values.healthcheck .Values.healthcheck.path }}
+          {{- /*
+            HTTP health check (user opted in via spec.healthcheck.path).
+            We render BOTH readiness (gate traffic) AND liveness (restart
+            a wedged process) against the path — the key win over the TCP
+            default is liveness: a process that accepts the socket but has
+            deadlocked/500s its handler is now detected and restarted
+            instead of reading healthy forever. Startup stays TCP so a
+            slow-booting app isn't liveness-killed before it's up (the
+            startupProbe gates liveness/readiness until it first passes).
+          */}}
+          {{- $hcPort := .Values.healthcheck.port | default .Values.port }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.healthcheck.path | quote }}
+              port: {{ $hcPort }}
+            initialDelaySeconds: {{ .Values.healthcheck.initialDelaySeconds | default 5 }}
+            periodSeconds: {{ .Values.healthcheck.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.healthcheck.timeoutSeconds | default 2 }}
+            failureThreshold: {{ .Values.healthcheck.failureThreshold | default 3 }}
+            successThreshold: 1
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.healthcheck.path | quote }}
+              port: {{ $hcPort }}
+            initialDelaySeconds: {{ .Values.healthcheck.initialDelaySeconds | default 5 }}
+            periodSeconds: {{ .Values.healthcheck.periodSeconds | default 10 }}
+            timeoutSeconds: {{ .Values.healthcheck.timeoutSeconds | default 2 }}
+            failureThreshold: {{ .Values.healthcheck.failureThreshold | default 3 }}
+          startupProbe:
+            tcpSocket:
+              port: {{ .Values.port }}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 60
+          {{- else }}
           readinessProbe:
             tcpSocket:
               port: {{ .Values.port }}
@@ -247,6 +296,7 @@ spec:
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 60
+          {{- end }}
           {{- end }}
           {{- /*
             A CPU-target HPA computes utilization as a percentage of the

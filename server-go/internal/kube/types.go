@@ -243,6 +243,11 @@ type KusoServiceSpec struct {
 	SubscribedAddons []string          `json:"subscribedAddons"`
 	Scale            *KusoScaleSpec    `json:"scale,omitempty"`
 	Sleep            *KusoServiceSleep `json:"sleep,omitempty"`
+	// Healthcheck, when its Path is set, makes the env render an HTTP
+	// readiness AND liveness probe against it. Propagated onto every
+	// owned KusoEnvironment. Nil/empty Path = default TCP probes, no
+	// liveness (the pre-v0.18.x behaviour).
+	Healthcheck *KusoHealthcheck `json:"healthcheck,omitempty"`
 	// Resources is the pod CPU/memory requests+limits, shaped exactly
 	// like a k8s ResourceRequirements ({"requests":{...},"limits":{...}}).
 	// Free-form map so the chart's `toYaml .Values.resources` renders it
@@ -382,6 +387,21 @@ type KusoScaleSpec struct {
 	TargetCPU int  `json:"targetCPU,omitempty"`
 }
 
+// KusoHealthcheck configures an optional HTTP health check. When Path is
+// set the env chart renders an HTTP readiness AND liveness probe against
+// it (so a hung-but-listening process is restarted instead of reading
+// healthy). Empty Path = default TCP readiness/startup probes, no liveness.
+// Port falls back to the service port; the timing fields fall back to the
+// CRD defaults (5/10/2/3) when zero.
+type KusoHealthcheck struct {
+	Path                string `json:"path,omitempty"`
+	Port                int32  `json:"port,omitempty"`
+	InitialDelaySeconds int32  `json:"initialDelaySeconds,omitempty"`
+	PeriodSeconds       int32  `json:"periodSeconds,omitempty"`
+	TimeoutSeconds      int32  `json:"timeoutSeconds,omitempty"`
+	FailureThreshold    int32  `json:"failureThreshold,omitempty"`
+}
+
 // MinValue returns scale.Min as an int, falling back to the CRD default
 // of 1 when the pointer is nil. All hot-path code reads through this
 // helper so a nil/0 ambiguity can never produce the wrong replicaCount.
@@ -436,6 +456,10 @@ type KusoEnvironmentSpec struct {
 	TTL         *KusoTTL         `json:"ttl,omitempty"`
 	Image       *KusoImage       `json:"image,omitempty"`
 	Port        int32            `json:"port,omitempty"`
+	// Healthcheck: resolved HTTP health check propagated from the
+	// service. When set, the chart renders HTTP readiness + liveness
+	// probes instead of the default TCP readiness/startup probes.
+	Healthcheck *KusoHealthcheck `json:"healthcheck,omitempty"`
 	// ReplicaCount: pointer so JSON marshal includes the field even at
 	// zero (omitempty would drop replicaCount=0, causing the CRD's
 	// `default: 1` to silently clobber scale-to-zero on env writes).

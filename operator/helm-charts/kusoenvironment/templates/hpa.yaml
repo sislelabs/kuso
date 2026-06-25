@@ -1,4 +1,10 @@
-{{- if .Values.autoscaling.enabled }}
+{{- /* Skip the HPA until the first build lands a real image. Pre-build
+       the Deployment is pinned to replicas: 0 (see deployment.yaml's
+       holding state); an HPA with minReplicas>=1 would fight that hold
+       and churn the apiserver trying to scale a target that has no
+       runnable image. The HPA reappears the moment image.repository is
+       set and the operator reconciles. */ -}}
+{{- if and .Values.autoscaling.enabled .Values.image.repository }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

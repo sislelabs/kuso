@@ -1900,6 +1900,39 @@ func extractTerminatedReason(pods []corev1.Pod) string {
 	return ""
 }
 
+// extractTerminatedSignal returns the structured (reason, exitCode) for
+// the build pod's failing container, for feeding failures.Classify. This
+// is the machine-readable sibling of extractTerminatedReason (which
+// produces the human message). Without it the build-failure classifier
+// runs on log lines ALONE — so an OOMKilled build (kernel kills the
+// process mid-step, often with no telltale log line) classifies as a
+// generic "see logs" instead of KindOOM with a "bump memory" CTA.
+// Returns ("", 0) when no container terminated abnormally.
+func extractTerminatedSignal(pods []corev1.Pod) (string, int32) {
+	for i := range pods {
+		pod := &pods[i]
+		for _, allStatuses := range [][]corev1.ContainerStatus{
+			pod.Status.ContainerStatuses,
+			pod.Status.InitContainerStatuses,
+		} {
+			for _, cs := range allStatuses {
+				t := cs.State.Terminated
+				if t == nil {
+					t = cs.LastTerminationState.Terminated
+				}
+				if t == nil || t.ExitCode == 0 {
+					continue
+				}
+				return t.Reason, t.ExitCode
+			}
+		}
+		if pod.Status.Reason != "" && pod.Status.Phase == corev1.PodFailed {
+			return pod.Status.Reason, 0
+		}
+	}
+	return "", 0
+}
+
 func terminatedFromState(cs corev1.ContainerStatus) string {
 	t := cs.State.Terminated
 	if t == nil {
@@ -2142,10 +2175,19 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 		logTail := joinLastN(classifyLines, 5)
 		// Classify the failure so the bell-popover row deep-links the
 		// user into the right overlay tab (Variables for missing-env,
-		// Logs for build_command_failed, etc.). Build pods don't have a
-		// kube pod-status reason like a runtime crash does — we only
-		// pass log lines, which is enough for build-specific patterns.
-		classification := failures.Classify(classifyLines, failures.Signal{})
+		// Logs for build_command_failed, etc.). Feed BOTH the log lines
+		// AND the build pod's terminated reason/exit code: an OOMKilled
+		// build leaves little in the logs (the kernel kills it mid-step),
+		// so reason="OOMKilled"/exit=137 is what makes it classify as
+		// KindOOM with a "bump build memory" CTA instead of generic.
+		var sig failures.Signal
+		if bp, perr := p.Svc.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+			LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": b.Name}),
+		}); perr == nil {
+			reason, exit := extractTerminatedSignal(bp.Items)
+			sig.Reason, sig.ExitCode = reason, exit
+		}
+		classification := failures.Classify(classifyLines, sig)
 		// Build-failed events never have a healthy site URL to link to
 		// (the prior image is still live but unrelated). Build the
 		// deep-link with ?tab=<hint> instead so the click lands the
@@ -2301,6 +2343,23 @@ func (p *Poller) promoteEnvImageCAS(ctx context.Context, ns, envName, bName, bTr
 			"repository": img.Repository,
 			"tag":        img.Tag,
 			"pullPolicy": "IfNotPresent",
+		}
+		// Release the pre-build holding state: a build-based env is created
+		// with replicaCount=0 (see projects.AddService) so it doesn't
+		// crash-loop a placeholder ":latest" pod before the first image
+		// exists. The first promote is the moment a real image lands, so
+		// bump replicas off 0 here. Restore to the autoscaling floor when an
+		// HPA owns scaling, else to 1; a user who explicitly scaled to 0
+		// later (sleep) isn't affected because that path edits the env after
+		// it already has an image (rc stays whatever they set on subsequent
+		// promotes — we only lift the initial hold, i.e. rc==0 with no prior
+		// promoted-build annotation).
+		if e.Spec.ReplicaCount != nil && *e.Spec.ReplicaCount == 0 && e.Annotations[annPromotedBuild] == "" {
+			restore := int64(1)
+			if e.Spec.Autoscaling != nil && e.Spec.Autoscaling.Enabled && e.Spec.Autoscaling.MinReplicas > 0 {
+				restore = int64(e.Spec.Autoscaling.MinReplicas)
+			}
+			spec["replicaCount"] = restore
 		}
 		meta, _ := raw.Object["metadata"].(map[string]any)
 		anns, _ := meta["annotations"].(map[string]any)

@@ -4,6 +4,7 @@ export type DeployStatus =
   | "building"
   | "deploying"
   | "active"
+  | "awaiting"
   | "sleeping"
   | "failed"
   | "crashed"
@@ -20,6 +21,11 @@ const styles: Record<DeployStatus, string> = {
     "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30 animate-pulse",
   active:
     "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/30",
+  // Awaiting the first build — neutral/informational, NOT red. A
+  // brand-new build-based service has no image yet (held at replicas=0),
+  // so it's intentionally not running rather than broken.
+  awaiting:
+    "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/30",
   sleeping:
     "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]",
   failed:

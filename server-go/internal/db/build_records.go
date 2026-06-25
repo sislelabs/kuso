@@ -73,17 +73,30 @@ func (d *DB) SaveBuildRecord(ctx context.Context, r BuildRecord) error {
 	return nil
 }
 
-// ListBuildRecords returns archived build summaries for a service,
-// newest-first by createdAt. Used by the Deployments list to backfill
-// builds whose live CR has been GC'd.
-func (d *DB) ListBuildRecords(ctx context.Context, project, service string) ([]BuildRecord, error) {
+// buildRecordCap bounds ListBuildRecords. BuildRecord is the permanent
+// post-GC archive; a service on continuous deploys accumulates thousands
+// of rows, and the Deployments tab fetched ALL of them on every open
+// (then dedup'd in Go against live CRs). The newest ~100 cover every
+// realistic "scroll back through recent deploys / roll back" need; the
+// archive isn't a forensic log.
+const buildRecordCap = 100
+
+// ListBuildRecords returns up to `limit` archived build summaries for a
+// service, newest-first by createdAt. limit<=0 (or >cap) clamps to
+// buildRecordCap. Used by the Deployments list to backfill builds whose
+// live CR has been GC'd.
+func (d *DB) ListBuildRecords(ctx context.Context, project, service string, limit int) ([]BuildRecord, error) {
+	if limit <= 0 || limit > buildRecordCap {
+		limit = buildRecordCap
+	}
 	rows, err := d.QueryContext(ctx, `
 		SELECT "buildName","project","service","branch","commitSha","commitMessage",
 		       "imageTag","status","startedAt","finishedAt","triggeredBy",
 		       "triggeredByUser","errorMessage","createdAt"
 		  FROM "BuildRecord"
 		 WHERE "project"=$1 AND "service"=$2
-		 ORDER BY "createdAt" DESC`, project, service)
+		 ORDER BY "createdAt" DESC
+		 LIMIT $3`, project, service, limit)
 	if err != nil {
 		return nil, fmt.Errorf("ListBuildRecords: %w", err)
 	}

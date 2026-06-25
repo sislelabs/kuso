@@ -347,6 +347,33 @@ func TestDelete_CleansProjectScopedSecrets(t *testing.T) {
 
 // ---- service ops --------------------------------------------------------
 
+// TestAddService_ImageRuntimeSkipsHold: a runtime=image service carries a
+// real image from the start, so it must NOT enter the pre-build holding
+// state — its env comes up at the service's min replicas immediately.
+func TestAddService_ImageRuntimeSkipsHold(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/x/y", DefaultBranch: "main"},
+		BaseDomain:  "alpha.example.com",
+	}))
+	_, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{
+		Name:    "web",
+		Runtime: "image",
+		Port:    3000,
+		Image:   &ServiceImageSpec{Repository: "ghcr.io/x/y", Tag: "v1"},
+	})
+	if err != nil {
+		t.Fatalf("AddService(image): %v", err)
+	}
+	env, err := s.GetEnvironment(context.Background(), "alpha", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("env: %v", err)
+	}
+	if env.Spec.ReplicaCountValue() != 1 {
+		t.Errorf("runtime=image must skip the pre-build hold: replicas=%d, want 1", env.Spec.ReplicaCountValue())
+	}
+}
+
 func TestAddService_AutoCreatesProductionEnv(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
@@ -376,8 +403,16 @@ func TestAddService_AutoCreatesProductionEnv(t *testing.T) {
 	if env.Spec.Host != "web.alpha.example.com" {
 		t.Errorf("host: got %q", env.Spec.Host)
 	}
-	if env.Spec.Port != 3000 || env.Spec.ReplicaCountValue() != 1 {
-		t.Errorf("port/replicas: %d/%d", env.Spec.Port, env.Spec.ReplicaCountValue())
+	// Pre-build holding state: a build-based service (dockerfile here) has
+	// no image at create time, so the env is held at replicaCount=0 to
+	// avoid crash-looping a ":latest" placeholder. The first successful
+	// build's promote bumps it back to the service min. (runtime=image
+	// services skip the hold — covered by TestAddService_ImageRuntime*.)
+	if env.Spec.Port != 3000 || env.Spec.ReplicaCountValue() != 0 {
+		t.Errorf("port/replicas: %d/%d (want 3000/0 pre-build hold)", env.Spec.Port, env.Spec.ReplicaCountValue())
+	}
+	if env.Spec.ReplicaCount == nil || *env.Spec.ReplicaCount != 0 {
+		t.Errorf("expected explicit replicaCount=0 holding state, got %v", env.Spec.ReplicaCount)
 	}
 }
 

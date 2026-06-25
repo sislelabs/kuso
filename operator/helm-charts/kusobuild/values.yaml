@@ -6,6 +6,12 @@ service: ""
 ref: ""        # commit SHA — used as image tag
 branch: main
 
+# Hard wall-clock cap (seconds) on the build Job. A hung build otherwise
+# holds the single build-concurrency slot until the server stuck-timeout.
+# 45m default — generous for cold cross-compiles; the server's own stuck
+# detector is the longer backstop.
+activeDeadlineSeconds: 2700
+
 # done=true short-circuits the chart to render zero objects. Server
 # stamps spec.done=true on succeeded / failed / cancelled transitions.
 # See top-level guard in templates/job.yaml for the full reason.

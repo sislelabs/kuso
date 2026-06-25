@@ -26,6 +26,13 @@ image:
 # port: container port to expose, copied from KusoService.spec.port.
 port: 8080
 
+# healthcheck: optional HTTP health check copied from
+# KusoService.spec.healthcheck. When .path is set the chart renders HTTP
+# readiness + liveness probes against it; otherwise the default TCP
+# readiness/startup probes apply (no liveness). Empty by default.
+healthcheck:
+  path: ""
+
 # replicaCount, autoscaling: copied from KusoService.spec.scale, optionally
 # overridden by KusoEnvironment.spec.overrides.scale.
 replicaCount: 1

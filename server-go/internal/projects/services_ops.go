@@ -522,6 +522,20 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		envAdditionalHosts = nil
 		envTLSHosts = nil
 	}
+	// Pre-build holding state: a build-based service is born with no image
+	// (the build pipeline patches spec.image on the first successful build).
+	// If we stamp replicaCount>=1 now, the chart renders image ":latest",
+	// the kubelet rejects it (InvalidImageName), and the Deployment
+	// crash-loops a placeholder pod that the dashboard paints red —
+	// indistinguishable from a real failure on every first deploy. Hold
+	// replicas at 0 until an image lands so the env sits in a clean
+	// "awaiting first build" state; promoteImage bumps it back to the
+	// service's min on the first promote. runtime=image services carry a
+	// real image from the start, so they skip the hold.
+	initialReplicas := scale.MinValue()
+	if created.Spec.Image == nil {
+		initialReplicas = 0
+	}
 	env := &kube.KusoEnvironment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: productionEnvName(project, req.Name),
@@ -538,7 +552,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Kind:             "production",
 			Branch:           defaultBranch,
 			Port:             port,
-			ReplicaCount:     intPtr(scale.MinValue()),
+			ReplicaCount:     intPtr(initialReplicas),
 			Autoscaling:      autoscalingFromScale(scale),
 			SpreadPolicy:     s.resolveSpreadPolicy(ctx),
 			Host:             envHost,
@@ -572,6 +586,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			// and pulls it directly. Build poller filters services by
 			// runtime and ignores "image".
 			Image: created.Spec.Image,
+			// Optional HTTP health check — propagated so the chart can
+			// render HTTP liveness+readiness instead of TCP.
+			Healthcheck: created.Spec.Healthcheck,
 		},
 	}
 	if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {

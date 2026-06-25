@@ -172,6 +172,35 @@ spec:
                     targetCPU:
                       type: integer
                       default: 70
+                healthcheck:
+                  type: object
+                  description: >-
+                    Optional HTTP health check. When `path` is set, the env
+                    renders an HTTP readiness AND liveness probe against it
+                    (GET path on `port` or the service port), so a hung-but-
+                    listening process (TCP accepts, HTTP wedged) gets
+                    restarted instead of reading healthy. When unset, the
+                    default TCP readiness/startup probes apply and there is
+                    no liveness probe (safe for apps with no health route).
+                  properties:
+                    path:
+                      type: string
+                      description: HTTP path, e.g. /healthz. Empty = TCP-only (default).
+                    port:
+                      type: integer
+                      description: Probe port. Defaults to the service port.
+                    initialDelaySeconds:
+                      type: integer
+                      default: 5
+                    periodSeconds:
+                      type: integer
+                      default: 10
+                    timeoutSeconds:
+                      type: integer
+                      default: 2
+                    failureThreshold:
+                      type: integer
+                      default: 3
                 resources:
                   type: object
                   description: >-

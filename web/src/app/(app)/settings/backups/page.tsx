@@ -53,7 +53,19 @@ function MaintenanceHealthBanners() {
     queryFn: () => api<BackupHealthResp>("/api/admin/backup-health"),
     refetchInterval: 60_000,
   });
-  if (health.isPending || !health.data) return null;
+  if (health.isPending) return null;
+  // An errored fetch must NOT silently render nothing — that reads as
+  // "backups are healthy" when we actually don't know. Surface the
+  // failure so an operator investigates instead of assuming green.
+  if (health.isError || !health.data) {
+    return (
+      <div className="mb-6 rounded-md border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[12px] text-amber-300">
+        Couldn&apos;t load backup / registry-GC health
+        {health.error instanceof Error ? `: ${health.error.message}` : ""}. Backup
+        status is unknown — check the control plane.
+      </div>
+    );
+  }
   const { backup, registryGC } = health.data;
   return (
     <div className="mb-6 space-y-2.5">

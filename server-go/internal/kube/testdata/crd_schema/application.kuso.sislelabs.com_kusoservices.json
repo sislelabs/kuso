@@ -106,6 +106,36 @@
             },
             "type": "object"
           },
+          "healthcheck": {
+            "description": "Optional HTTP health check. When `path` is set, the env renders an HTTP readiness AND liveness probe against it (GET path on `port` or the service port), so a hung-but- listening process (TCP accepts, HTTP wedged) gets restarted instead of reading healthy. When unset, the default TCP readiness/startup probes apply and there is no liveness probe (safe for apps with no health route).",
+            "properties": {
+              "failureThreshold": {
+                "default": 3,
+                "type": "integer"
+              },
+              "initialDelaySeconds": {
+                "default": 5,
+                "type": "integer"
+              },
+              "path": {
+                "description": "HTTP path, e.g. /healthz. Empty = TCP-only (default).",
+                "type": "string"
+              },
+              "periodSeconds": {
+                "default": 10,
+                "type": "integer"
+              },
+              "port": {
+                "description": "Probe port. Defaults to the service port.",
+                "type": "integer"
+              },
+              "timeoutSeconds": {
+                "default": 2,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
           "image": {
             "description": "Registry-image pointer for runtime=image services\n(no kaniko build). The propagation step copies\nthis onto every KusoEnvironment so the chart\npulls the tag directly. Other runtimes leave it\nnil; the build poller writes the env's Image\nafter a successful build.\n",
             "properties": {

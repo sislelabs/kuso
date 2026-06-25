@@ -138,6 +138,10 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			// propagation pass — cheap, idempotent, and decoupled from the
 			// changed-flags that gate the env-var merge below.
 			env.Spec.PublicEnv = svc.Spec.PublicEnv
+			// Healthcheck likewise mirrors unconditionally — a service-level
+			// edit (add/remove the HTTP probe) must reach every env so the
+			// chart re-renders the probe block. Idempotent when unchanged.
+			env.Spec.Healthcheck = svc.Spec.Healthcheck
 			if changed.EnvVars {
 				// Per-key shared-secret subscription: when the parent
 				// service has spec.sharedEnvKeys set (non-nil), expand

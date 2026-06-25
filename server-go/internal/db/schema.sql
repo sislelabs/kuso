@@ -332,6 +332,9 @@ CREATE TABLE IF NOT EXISTS "NotificationEvent" (
 );
 CREATE INDEX IF NOT EXISTS "NotificationEvent_createdAt_idx" ON "NotificationEvent"("createdAt" DESC);
 CREATE INDEX IF NOT EXISTS "NotificationEvent_readAt_idx" ON "NotificationEvent"("readAt");
+-- Per-project feed (non-admin bell): WHERE project IN (...) ORDER BY id DESC.
+-- See migrations/0005. Kept in the baseline so fresh installs get it too.
+CREATE INDEX IF NOT EXISTS "NotificationEvent_project_id_idx" ON "NotificationEvent"("project", "id" DESC);
 
 -- v0.12: notification outbox for durable webhook delivery.
 --
@@ -455,6 +458,9 @@ CREATE TABLE IF NOT EXISTS "BuildRecord" (
     "createdAt"       TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE INDEX IF NOT EXISTS "BuildRecord_project_service_idx" ON "BuildRecord"("project","service");
+-- Covers ListBuildRecords' WHERE project,service ORDER BY createdAt DESC LIMIT.
+-- See migrations/0006.
+CREATE INDEX IF NOT EXISTS "BuildRecord_project_service_createdAt_idx" ON "BuildRecord"("project","service","createdAt" DESC);
 
 -- v0.7: alert rules.
 CREATE TABLE IF NOT EXISTS "AlertRule" (

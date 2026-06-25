@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useBuilds, useTriggerBuild } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
 import type { BuildSummary } from "@/features/services/api";
@@ -91,6 +92,8 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
   );
   useNowTick(anyRunning);
 
+  const [confirmRedeploy, setConfirmRedeploy] = useState(false);
+
   const onRedeploy = async (body: { branch?: string; ref?: string } = {}) => {
     try {
       await trigger.mutateAsync(body);
@@ -98,6 +101,18 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to trigger build");
     }
+  };
+
+  const redeployBody = env?.spec?.branch ? { branch: env.spec.branch } : {};
+  // Redeploy is a real production build+rollout on one click. Confirm
+  // for the production env (a misclick rebuilds live); preview/staging
+  // redeploys fire straight through — they're cheap and expected.
+  const requestRedeploy = () => {
+    if (env?.spec?.kind === "production") {
+      setConfirmRedeploy(true);
+      return;
+    }
+    onRedeploy(redeployBody);
   };
 
   return (
@@ -124,7 +139,7 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
         {canDeploy ? (
           <Button
             size="sm"
-            onClick={() => onRedeploy(env?.spec?.branch ? { branch: env.spec.branch } : {})}
+            onClick={requestRedeploy}
             disabled={trigger.isPending}
           >
             <RotateCcw className="h-3.5 w-3.5" />
@@ -157,6 +172,30 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
           canDeploy={canDeploy}
         />
       )}
+
+      <ConfirmDialog
+        open={confirmRedeploy}
+        title="Redeploy production?"
+        destructive={false}
+        confirmLabel="Redeploy"
+        body={
+          <span>
+            This triggers a fresh build of{" "}
+            <span className="font-mono text-[var(--text-primary)]">{service}</span>{" "}
+            from{" "}
+            <span className="font-mono text-[var(--text-primary)]">
+              {env?.spec?.branch || "the default branch"}
+            </span>{" "}
+            and rolls it out to <strong>production</strong> when it succeeds.
+          </span>
+        }
+        pending={trigger.isPending}
+        onConfirm={() => {
+          setConfirmRedeploy(false);
+          onRedeploy(redeployBody);
+        }}
+        onCancel={() => setConfirmRedeploy(false)}
+      />
     </div>
   );
 }

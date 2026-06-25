@@ -67,6 +67,29 @@ export function ResourcesPanel({ project }: { project: string }) {
   if (loading) {
     return <LoadingState kind="list" />;
   }
+  // A failed fetch must not masquerade as "no resources yet" (which reads
+  // as an empty project). Surface the error with a retry instead.
+  const anyError = services.isError || envs.isError || addons.isError;
+  if (anyError) {
+    const e = services.error || envs.error || addons.error;
+    const err = e instanceof Error ? e.message : "request failed";
+    return (
+      <div className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-[12px]">
+        <p className="text-red-400">Couldn&apos;t load project resources: {err}</p>
+        <button
+          type="button"
+          onClick={() => {
+            services.refetch();
+            envs.refetch();
+            addons.refetch();
+          }}
+          className="mt-2 font-mono text-[11px] text-[var(--accent)] hover:underline"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
   return (
     <div className="space-y-1">
       <header className="mb-2 flex items-baseline justify-between">

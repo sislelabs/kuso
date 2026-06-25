@@ -313,7 +313,7 @@ func (h *BuildsHandler) List(w http.ResponseWriter, r *http.Request) {
 	// — if the DB read fails we still return the live builds rather than
 	// erroring the whole tab. h.DB may be nil in stripped test wiring.
 	if h.DB != nil {
-		records, rerr := h.DB.ListBuildRecords(ctx, project, service)
+		records, rerr := h.DB.ListBuildRecords(ctx, project, service, 0) // 0 → default cap
 		if rerr != nil {
 			h.Logger.Warn("list builds: archive read", "project", project, "service", service, "err", rerr)
 		} else {

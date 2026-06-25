@@ -59,6 +59,18 @@ function statusFor(env?: KusoEnvironment, latestBuild?: BuildSummary): DeploySta
 
   if (buildStatus === "failed" || buildStatus === "error") return "failed";
 
+  // Awaiting the first build: a brand-new build-based service has no
+  // image yet (server holds it at replicas=0 so it doesn't crash-loop a
+  // ":latest" placeholder). No imageTag in status AND no build has ever
+  // succeeded → it's intentionally not-yet-running, not broken. Without
+  // this branch the "desired>0 && ready===0 → failed" check below (or a
+  // stale phase) painted every first deploy red. Build-in-progress is
+  // already handled above, so reaching here with no image means we're
+  // genuinely waiting for the user's first push/trigger.
+  const hasImage = !!env.status?.imageTag;
+  const buildSucceeded = buildStatus === "succeeded";
+  if (!hasImage && !buildSucceeded) return "awaiting";
+
   const r = env.status?.replicas as { ready?: number; max?: number; desired?: number } | undefined;
   const desired = r?.max ?? r?.desired ?? 0;
   const ready = r?.ready ?? 0;
@@ -172,8 +184,11 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
           "border-[var(--building)]/70 animate-pulse",
         status === "active" && "border-emerald-500/60",
         status === "failed" && "border-red-500/60",
+        // Awaiting first build — sky/informational, distinct from both
+        // green (running) and red (broken).
+        status === "awaiting" && "border-sky-500/50",
         status === "sleeping" && "opacity-60 border-[var(--border-strong)]",
-        !["building", "deploying", "active", "failed", "sleeping"].includes(status) &&
+        !["building", "deploying", "active", "awaiting", "failed", "sleeping"].includes(status) &&
           "border-[var(--border-strong)]",
         // Keyboard focus ring — outline (not border) so it stacks on
         // top of the status colour without overriding it.

@@ -34,6 +34,23 @@ export function SharedSecretsCard({ project }: { project: string }) {
   const [editingKey, setEditingKey] = useState<string>("");
   const [editingValue, setEditingValue] = useState<string>("");
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
+  const [pendingOverwrite, setPendingOverwrite] = useState<string | null>(null);
+
+  const doSave = (k: string) => {
+    set.mutate(
+      { key: k, value: editingValue },
+      {
+        onSuccess: () => {
+          toast.success(`${k} saved to ${project}-shared`);
+          setEditingKey("");
+          setEditingValue("");
+          setPendingOverwrite(null);
+        },
+        onError: (e) =>
+          toast.error(e instanceof Error ? e.message : `Failed to save ${k}`),
+      }
+    );
+  };
 
   const onSave = () => {
     const k = editingKey.trim();
@@ -42,16 +59,15 @@ export function SharedSecretsCard({ project }: { project: string }) {
       toast.error("Use SCREAMING_SNAKE_CASE for env var names");
       return;
     }
-    set.mutate(
-      { key: k, value: editingValue },
-      {
-        onSuccess: () => {
-          toast.success(`${k} saved to ${project}-shared`);
-          setEditingKey("");
-          setEditingValue("");
-        },
-      }
-    );
+    // Overwriting an existing shared key changes a value mounted on
+    // EVERY service in the project — those pods pick up the new value on
+    // their next restart. Confirm before clobbering; adding a brand-new
+    // key is friction-free.
+    if (stored.includes(k)) {
+      setPendingOverwrite(k);
+      return;
+    }
+    doSave(k);
   };
 
   const onCancel = () => {
@@ -213,6 +229,28 @@ export function SharedSecretsCard({ project }: { project: string }) {
           setPendingDelete(null);
         }}
         onCancel={() => setPendingDelete(null)}
+      />
+
+      <ConfirmDialog
+        open={pendingOverwrite !== null}
+        title="Overwrite shared secret?"
+        body={
+          <p>
+            <span className="font-mono text-[var(--text-primary)]">
+              {pendingOverwrite}
+            </span>{" "}
+            is already mounted on every service in this project. Saving a new
+            value updates it everywhere — each service picks up the change on
+            its next restart.
+          </p>
+        }
+        confirmLabel="Overwrite"
+        destructive
+        pending={set.isPending}
+        onConfirm={() => {
+          if (pendingOverwrite) doSave(pendingOverwrite);
+        }}
+        onCancel={() => setPendingOverwrite(null)}
       />
     </section>
   );

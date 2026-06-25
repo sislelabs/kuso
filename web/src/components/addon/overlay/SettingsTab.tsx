@@ -12,6 +12,7 @@ import {
 } from "@/features/projects";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { api } from "@/lib/api-client";
 import {
   AlertTriangle,
@@ -704,12 +705,14 @@ function PublicTCPSection({
     typeof window !== "undefined" ? window.location.hostname : "<your-cluster-host>";
 
   const [confirming, setConfirming] = useState(false);
+  const [confirmingEnable, setConfirmingEnable] = useState(false);
 
   const enableM = useMutation({
     mutationFn: () => enableAddonPublicTCP(project, addon),
     onSuccess: (res) => {
       toast.success(`Public TCP port ${res.port} allocated`);
       qc.invalidateQueries({ queryKey: ["projects", project, "addons"] });
+      setConfirmingEnable(false);
     },
     onError: (e) =>
       toast.error(e instanceof Error ? e.message : "Failed to enable public TCP"),
@@ -807,7 +810,7 @@ function PublicTCPSection({
         ) : (
           <Button
             size="sm"
-            onClick={() => enableM.mutate()}
+            onClick={() => setConfirmingEnable(true)}
             disabled={enableM.isPending}
           >
             <Globe className="h-3.5 w-3.5" />
@@ -815,6 +818,30 @@ function PublicTCPSection({
           </Button>
         )}
       </div>
+      {/* Enabling exposes the datastore to the public internet — gate it
+          behind a typed-name confirm (the disable path was already
+          confirmed; enable was a silent one-click that contradicted the
+          asymmetry). */}
+      <ConfirmDialog
+        open={confirmingEnable}
+        title="Expose this addon to the public internet?"
+        destructive
+        confirmLabel="Expose publicly"
+        typeToConfirm={addon}
+        body={
+          <span>
+            This allocates a raw TCP port on{" "}
+            <span className="font-mono">{host}</span> reachable from anywhere.
+            kuso adds <strong>no</strong> network gate — the addon&apos;s own
+            protocol auth is the only thing standing between the internet and
+            your data. Type <span className="font-mono">{addon}</span> to
+            confirm.
+          </span>
+        }
+        pending={enableM.isPending}
+        onConfirm={() => enableM.mutate()}
+        onCancel={() => setConfirmingEnable(false)}
+      />
     </section>
   );
 }

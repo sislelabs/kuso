@@ -7,10 +7,48 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 
 	"kuso/server/internal/kube"
 )
+
+// driftGetDeployment reads a Deployment for the drift path, preferring the
+// warm Deployment informer cache and falling back to a live Get on miss.
+// GetDrift is polled ~10s per open service overlay; without the cache each
+// poll did 3 live Deployment Gets + 2 live Pod Lists straight to the
+// apiserver (the exact load the informer cache exists to kill — see cache.go).
+func (s *Service) driftGetDeployment(ctx context.Context, ns, name string) (*appsv1.Deployment, error) {
+	if dep, ok := s.Kube.Cache.GetDeployment(ns, name); ok {
+		return dep, nil
+	}
+	return s.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, name, metav1.GetOptions{})
+}
+
+// driftListPods lists the env's pods by the chart's instance label,
+// preferring the Pod informer cache (returns []*Pod) and falling back to a
+// live List. Normalises both to []corev1.Pod so callers are source-agnostic.
+func (s *Service) driftListPods(ctx context.Context, ns, instance string) ([]corev1.Pod, error) {
+	sel := labels.SelectorFromSet(labels.Set{"app.kubernetes.io/instance": instance})
+	if ptrs, ok := s.Kube.Cache.ListPodsByLabel(sel); ok {
+		out := make([]corev1.Pod, 0, len(ptrs))
+		for _, p := range ptrs {
+			if p != nil {
+				out = append(out, *p)
+			}
+		}
+		return out, nil
+	}
+	list, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": instance}),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return list.Items, nil
+}
 
 // DriftReport summarises whether a service's running production env
 // is in sync with the saved spec. Three layers:
@@ -302,10 +340,8 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 	// exactly what the badge is for. Missing pods (helm-operator
 	// hasn't rendered yet) → don't flag drift, RolloutPending covers
 	// that.
-	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": env.Name}),
-	})
-	if err != nil || len(pods.Items) == 0 {
+	podItems, err := s.driftListPods(ctx, ns, env.Name)
+	if err != nil || len(podItems) == 0 {
 		// Fall through to deployment-template compare so a freshly
 		// rendered env without pods yet doesn't false-negative. (Same
 		// semantics as before.)
@@ -332,8 +368,8 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 	// later spec edit would flag a brand-new running pod as stale
 	// even though kube hadn't decided to roll. Net effect was a
 	// sticky "pending restart" badge after a clean redeploy.
-	for i := range pods.Items {
-		p := &pods.Items[i]
+	for i := range podItems {
+		p := &podItems[i]
 		// Skip pods that are terminating — they're the OLD generation
 		// being killed, including them would make drift flap during
 		// rollouts. Phase==Running + DeletionTimestamp==nil = current.
@@ -388,7 +424,7 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 	}
 	// replicaCount drift comes off the Deployment, not pods (HPA can
 	// scale outside spec; we already exempt that case).
-	dep, derr := s.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, env.Name, metav1.GetOptions{})
+	dep, derr := s.driftGetDeployment(ctx, ns, env.Name)
 	if derr == nil && env.Spec.ReplicaCount != nil && dep.Spec.Replicas != nil &&
 		int32(env.Spec.ReplicaCountValue()) != *dep.Spec.Replicas {
 		if dep.Annotations["autoscaling.alpha.kubernetes.io/conditions"] == "" {
@@ -403,7 +439,7 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 // template — used only when no pods exist yet.
 func compareDeploymentTemplateToEnv(ctx context.Context, s *Service, ns string, env kube.KusoEnvironment) []string {
 	out := []string{}
-	dep, err := s.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, env.Name, metav1.GetOptions{})
+	dep, err := s.driftGetDeployment(ctx, ns, env.Name)
 	if err != nil {
 		return out
 	}
@@ -494,7 +530,7 @@ func deploymentRolling(ctx context.Context, s *Service, ns string, env kube.Kuso
 	if !lastEdit.IsZero() && lastEdit.After(lastReconcile) {
 		return true
 	}
-	dep, err := s.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, env.Name, metav1.GetOptions{})
+	dep, err := s.driftGetDeployment(ctx, ns, env.Name)
 	if err != nil {
 		return false
 	}
@@ -574,15 +610,13 @@ func newestPodCreatedAt(ctx context.Context, s *Service, ns, envName string) tim
 	if s.Kube == nil || s.Kube.Clientset == nil {
 		return time.Time{}
 	}
-	pods, err := s.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": envName}),
-	})
+	podItems, err := s.driftListPods(ctx, ns, envName)
 	if err != nil {
 		return time.Time{}
 	}
 	var newest time.Time
-	for i := range pods.Items {
-		p := &pods.Items[i]
+	for i := range podItems {
+		p := &podItems[i]
 		if p.DeletionTimestamp != nil {
 			continue
 		}

@@ -133,7 +133,18 @@ func (w *Watcher) checkPods(ctx context.Context) {
 		// (the user cares about "image-pull failed", not "image pull
 		// failed in init container").
 		sigReason := strings.TrimPrefix(reason, "init:")
-		classification := failures.Classify(logLines, failures.Signal{Reason: sigReason})
+		// Also surface the terminated reason + exit code: a pod that
+		// OOMs shows Waiting.Reason=CrashLoopBackOff on restart but
+		// Terminated.Reason=OOMKilled / exit=137 on the last run, so
+		// classifying on the Waiting reason alone mislabels every OOM
+		// as a crashloop. Prefer the terminated signal so Classify
+		// reaches KindOOM (and the exit-137 fallback).
+		termReason, exitCode := podTerminatedSignal(p)
+		sig := failures.Signal{Reason: sigReason, ExitCode: exitCode}
+		if termReason != "" {
+			sig.Reason = termReason
+		}
+		classification := failures.Classify(logLines, sig)
 		w.Notify.Emit(notify.PodCrashed(project, service, p.Name, reason, envKind, logTail, restarts, &classification))
 	}
 	// Garbage-collect stale alerts so a recovered pod can re-alert
@@ -145,6 +156,31 @@ func (w *Watcher) checkPods(ctx context.Context) {
 		}
 	}
 	w.mu.Unlock()
+}
+
+// podTerminatedSignal returns the (reason, exitCode) of the pod's most
+// recent abnormal container termination, for feeding failures.Classify.
+// OOMKilled lives in State/LastTerminationState.Terminated, NOT in the
+// Waiting reason podBadReason reads — so without this an OOM is only ever
+// seen as the CrashLoopBackOff it becomes on restart. Checks current then
+// last-termination state, main then init containers. ("", 0) when none.
+func podTerminatedSignal(p *corev1.Pod) (string, int32) {
+	for _, all := range [][]corev1.ContainerStatus{
+		p.Status.ContainerStatuses,
+		p.Status.InitContainerStatuses,
+	} {
+		for _, cs := range all {
+			t := cs.State.Terminated
+			if t == nil {
+				t = cs.LastTerminationState.Terminated
+			}
+			if t == nil || t.ExitCode == 0 {
+				continue
+			}
+			return t.Reason, t.ExitCode
+		}
+	}
+	return "", 0
 }
 
 func podBadReason(p *corev1.Pod) string {

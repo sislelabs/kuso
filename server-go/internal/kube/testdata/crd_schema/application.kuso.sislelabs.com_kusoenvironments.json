@@ -107,6 +107,30 @@
             },
             "type": "array"
           },
+          "healthcheck": {
+            "description": "Resolved HTTP health check (propagated from the service). When `path` is set the chart renders HTTP readiness + liveness probes against it instead of the default TCP readiness/startup probes.",
+            "properties": {
+              "failureThreshold": {
+                "type": "integer"
+              },
+              "initialDelaySeconds": {
+                "type": "integer"
+              },
+              "path": {
+                "type": "string"
+              },
+              "periodSeconds": {
+                "type": "integer"
+              },
+              "port": {
+                "type": "integer"
+              },
+              "timeoutSeconds": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
           "host": {
             "type": "string"
           },

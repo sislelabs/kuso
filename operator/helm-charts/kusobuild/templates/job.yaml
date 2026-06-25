@@ -35,6 +35,17 @@ metadata:
 spec:
   # Don't auto-retry; failed builds should surface as failed, not loop.
   backoffLimit: 0
+  # Hard wall-clock cap on a build. Without it a hung build (stuck git
+  # clone, a compile that never terminates, a wedged buildkit stream)
+  # holds the single cluster-wide build concurrency slot
+  # (KUSO_BUILD_MAX_CONCURRENT, default 1) until the server-side stuck
+  # timeout (~30m) force-fails the CR — blocking every other service's
+  # builds the whole time. kusorun/kusocron already cap their Jobs; the
+  # build Job was the one long-running Job without a deadline. On expiry
+  # the Job fails with reason=DeadlineExceeded, which the build poller
+  # surfaces as a failed build. Generous default (45m) so a legitimately
+  # slow cold cross-compile isn't killed; override via .Values.activeDeadlineSeconds.
+  activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds | default 2700 }}
   # Clean up the Job + Pod 1h after completion regardless of success.
   # Logs are streamed to the kuso server via the build status poller
   # before then; nothing in the Job needs to live longer.

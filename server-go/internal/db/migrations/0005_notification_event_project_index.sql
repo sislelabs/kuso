@@ -1,0 +1,13 @@
+-- 0005: index the per-project notification feed query.
+--
+-- NotificationEvent only had (createdAt DESC) and (readAt) indexes from
+-- the baseline. The non-admin bell feed (db.ListNotificationEventsForProjects,
+-- handlers/notifications.go MyFeed) filters by `project IN (...)` and orders
+-- by `id DESC` — with no `project` index the planner walks the id PK b-tree
+-- descending and filter-checks every row, scanning a large prefix exactly
+-- during build/incident storms (when the feed matters most) and on every
+-- non-admin feed poll.
+--
+-- Composite (project, id DESC) serves the WHERE project IN (...) ORDER BY id
+-- DESC access path directly. Mirrors the 0001 Audit_pipeline_id_idx fix.
+CREATE INDEX IF NOT EXISTS "NotificationEvent_project_id_idx" ON "NotificationEvent" ("project", "id" DESC);

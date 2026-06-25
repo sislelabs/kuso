@@ -109,6 +109,29 @@ export function ProjectAccessPanel({ project }: { project: string }) {
 
   if (grants.isPending) return <Skeleton className="h-32" />;
 
+  // Distinguish a failed fetch from a genuinely empty grant list. Without
+  // this an error falls through to "No grants" — which reads as "this
+  // project is admin-only", the OPPOSITE of "we couldn't load access
+  // control". An admin must not be told access is locked down when we
+  // simply failed to read it.
+  if (grants.isError) {
+    return (
+      <div className="rounded-md border border-red-500/30 bg-red-500/5 p-4 text-[12px]">
+        <p className="text-red-400">
+          Couldn&apos;t load project access:{" "}
+          {grants.error instanceof Error ? grants.error.message : "request failed"}
+        </p>
+        <button
+          type="button"
+          onClick={() => grants.refetch()}
+          className="mt-2 font-mono text-[11px] text-[var(--accent)] hover:underline"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
   const rows = grants.data ?? [];
 
   return (

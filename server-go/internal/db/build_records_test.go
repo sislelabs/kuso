@@ -25,7 +25,7 @@ func TestBuildRecord_SaveListUpsert(t *testing.T) {
 		t.Fatalf("save: %v", err)
 	}
 
-	got, err := d.ListBuildRecords(ctx, "distill", "web")
+	got, err := d.ListBuildRecords(ctx, "distill", "web", 0)
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestBuildRecord_SaveListUpsert(t *testing.T) {
 	if err := d.SaveBuildRecord(ctx, rec); err != nil {
 		t.Fatalf("re-save: %v", err)
 	}
-	got, _ = d.ListBuildRecords(ctx, "distill", "web")
+	got, _ = d.ListBuildRecords(ctx, "distill", "web", 0)
 	if len(got) != 1 {
 		t.Fatalf("after upsert got %d records, want 1", len(got))
 	}
@@ -67,11 +67,11 @@ func TestBuildRecord_ScopedAndDeleted(t *testing.T) {
 		}
 	}
 
-	web, _ := d.ListBuildRecords(ctx, "p", "web")
+	web, _ := d.ListBuildRecords(ctx, "p", "web", 0)
 	if len(web) != 2 {
 		t.Errorf("web records = %d, want 2", len(web))
 	}
-	api, _ := d.ListBuildRecords(ctx, "p", "api")
+	api, _ := d.ListBuildRecords(ctx, "p", "api", 0)
 	if len(api) != 1 {
 		t.Errorf("api records = %d, want 1", len(api))
 	}
@@ -79,11 +79,11 @@ func TestBuildRecord_ScopedAndDeleted(t *testing.T) {
 	if err := d.DeleteBuildRecordsForService(ctx, "p", "web"); err != nil {
 		t.Fatalf("delete: %v", err)
 	}
-	web, _ = d.ListBuildRecords(ctx, "p", "web")
+	web, _ = d.ListBuildRecords(ctx, "p", "web", 0)
 	if len(web) != 0 {
 		t.Errorf("after delete, web records = %d, want 0", len(web))
 	}
-	api, _ = d.ListBuildRecords(ctx, "p", "api")
+	api, _ = d.ListBuildRecords(ctx, "p", "api", 0)
 	if len(api) != 1 {
 		t.Errorf("delete leaked into api: %d records, want 1", len(api))
 	}
