@@ -5,6 +5,16 @@ messages on every release. The format is loosely based on
 [Keep a Changelog](https://keepachangelog.com/), versions follow
 [SemVer](https://semver.org/) (with a v0.x phase that takes liberties).
 
+## [0.18.86] — 2026-06-25
+
+### ✨ Features
+- Feat(cli): usage, audit, ssh-keys, notification feed + users/groups/invites/config ([bb2ccb0](https://github.com/sislelabs/kuso/commit/bb2ccb0e342627b679d28973fc1495aa7f6fe240))
+- Feat(cli): node management + service wake/drift + env-scoped domains ([33d2da2](https://github.com/sislelabs/kuso/commit/33d2da2c62804465f30b7106003973f40c6b0b85))
+- Feat(cli): addon public-tcp, secret reveal, and update commands ([e0455d0](https://github.com/sislelabs/kuso/commit/e0455d07660411dd492442f3fdcfb5fddc9cb45d))
+
+### 🧹 Chores
+- Chore(changelog): archive promotion from v0.18.85 release ([82c4088](https://github.com/sislelabs/kuso/commit/82c4088e0a13cd4fe888da34600e745178cac678))
+
 ## [0.18.85] — 2026-06-25
 
 ### 🐛 Bug Fixes
@@ -410,11 +420,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(builds): export NIXPACKS_* build-env into nixpacks process env (toolchain selection) ([e1af453](https://github.com/sislelabs/kuso/commit/e1af45347cf149e6f67e2fe3721642733e612033))
-
-## [0.18.22] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(builds): pass build-time env to nixpacks --env (toolchain keys read at plan time) ([2af5788](https://github.com/sislelabs/kuso/commit/2af57888e7ccbffc9d5c973acdd9228d28ecbda8))
 
 
 ---
