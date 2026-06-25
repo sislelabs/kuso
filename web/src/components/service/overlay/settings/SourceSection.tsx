@@ -104,7 +104,7 @@ export function SourceSection({
       />
       <Row
         label="branch"
-        hint="default deploy branch"
+        hint="default branch · production + any env without an override"
         control={
           <Input
             value={state.repoBranch}

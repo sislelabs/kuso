@@ -943,26 +943,28 @@ function HeaderRollbackChip({
     });
     return list;
   }, [builds.data]);
-  const mostRecent = sorted[0];
-  const recentFailed = mostRecent?.status === "failed";
-  const trigger = envFailed || recentFailed;
-  // Find the freshest succeeded build that ISN'T the one we're
-  // already on. We can't see "current active image" directly here,
-  // but rolling to the most-recent-succeeded that's NOT the most
-  // recent overall is a safe heuristic: when builds[0] is failed,
-  // we want the next green one down; when env is failed but builds[0]
-  // is succeeded, we still want to offer rollback (env failed after
-  // promote), and the user can re-roll-forward via Redeploy.
+  // A FAILED build never promotes its image — the env keeps the last
+  // good deployment running (see builds.go: promoteEnvImageCAS is only
+  // reached on the success path). So "the newest build failed" does NOT
+  // mean production is broken or rolled forward; the active deployment
+  // is already the last-good one and there is nothing to roll back to.
+  // Only surface the rollback CTA when the ENV ITSELF failed — i.e. a
+  // rollout that actually changed (and broke) what's serving. Offering
+  // "rollback to <active sha>" on a mere build failure is a confusing
+  // no-op (it targets the deployment that's already live).
+  const trigger = envFailed;
+  // Find the freshest succeeded build that ISN'T the one we're already
+  // on. We can't see "current active image" directly here, but when the
+  // env failed after a promote, the previous succeeded build is the safe
+  // rollback target; the user can re-roll-forward via Redeploy.
   const target = useMemo(() => {
     if (!trigger) return undefined;
-    if (recentFailed) {
-      return sorted.find((b) => b.status === "succeeded");
-    }
-    // env failed but builds[0] is succeeded — offer the previous
-    // succeeded build so the user can roll backwards.
+    // env failed — offer the previous succeeded build to roll backwards
+    // (succeeded[0] is whatever just promoted-then-failed; succeeded[1]
+    // is the prior good one). Fall back to [0] if there's only one.
     const succeeded = sorted.filter((b) => b.status === "succeeded");
     return succeeded[1] ?? succeeded[0];
-  }, [trigger, recentFailed, sorted]);
+  }, [trigger, sorted]);
   const m = useMutation({
     mutationFn: (buildId: string) => rollbackBuild(project, service, buildId, env),
     onSuccess: () => {

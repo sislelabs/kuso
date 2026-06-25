@@ -524,10 +524,19 @@ function EnvBranchSection({
       e.spec.service === fqn &&
       (e.metadata.labels?.["kuso.sislelabs.com/env"] ?? "") === env,
   );
-  const currentBranch =
-    envRow?.spec.branch ??
-    svc?.spec?.repo?.defaultBranch ??
-    "";
+  // The env CR's spec.branch is the OVERRIDE; empty means "no override,
+  // fall back to the service default branch". Keep these separate so we
+  // can (a) tell whether an override is actually set, and (b) prefill a
+  // sensible suggestion when it isn't.
+  const overrideBranch = envRow?.spec.branch ?? "";
+  const serviceDefaultBranch = svc?.spec?.repo?.defaultBranch ?? "main";
+  const hasOverride = overrideBranch.trim() !== "";
+  // Create-time convenience: when no override is set yet, prefill the
+  // input with the env's own name (the `staging`-env-tracks-`staging`-
+  // branch convention) as a SUGGESTION — still editable/clearable, and
+  // not persisted until the user hits Save.
+  const suggestedBranch = env;
+  const currentBranch = hasOverride ? overrideBranch : suggestedBranch;
   const repoLabel = (() => {
     const url = svc?.spec?.repo?.url ?? "";
     if (!url) return "";
@@ -538,7 +547,11 @@ function EnvBranchSection({
   useEffect(() => {
     setBranch(currentBranch);
   }, [currentBranch]);
-  const dirty = branch.trim() !== "" && branch !== currentBranch;
+  // "Dirty" = the input differs from what's actually persisted (the
+  // override, or empty when none). The suggestion prefill is NOT
+  // persisted, so a freshly-suggested value that equals the env name is
+  // still savable.
+  const dirty = branch.trim() !== "" && branch.trim() !== overrideBranch.trim();
   const [saving, setSaving] = useState(false);
   const qc = useQueryClient();
   const save = async () => {
@@ -577,12 +590,12 @@ function EnvBranchSection({
           )}
         </p>
       </header>
-      <div className="flex items-center gap-2 p-3">
+      <div className="flex items-center gap-2 px-3 pt-3">
         <input
           type="text"
           value={branch}
           onChange={(e) => setBranch(e.target.value)}
-          placeholder={svc?.spec?.repo?.defaultBranch || "main"}
+          placeholder={serviceDefaultBranch}
           spellCheck={false}
           className="h-8 flex-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[12px] outline-none focus:border-[var(--accent)]"
         />
@@ -590,6 +603,36 @@ function EnvBranchSection({
           {saving ? "Saving…" : "Save branch"}
         </Button>
       </div>
+      {/* Inline resolution so the default-vs-override relationship is
+          legible: spell out which branch this env effectively deploys
+          and what the service default is. */}
+      <p className="px-3 pb-3 pt-1.5 text-[11px] text-[var(--text-secondary)]">
+        {hasOverride ? (
+          <>
+            <span className="font-mono text-blue-200">{env}</span> deploys{" "}
+            <span className="font-mono">{overrideBranch}</span>{" "}
+            <span className="text-[var(--text-tertiary)]">(override)</span> · service default is{" "}
+            <span className="font-mono">{serviceDefaultBranch}</span>
+          </>
+        ) : (
+          <>
+            No override — <span className="font-mono text-blue-200">{env}</span> falls back to the
+            service default{" "}
+            <span className="font-mono">{serviceDefaultBranch}</span>.{" "}
+            {branch.trim() && branch.trim() !== serviceDefaultBranch ? (
+              <>
+                Save to track{" "}
+                <span className="font-mono">{branch.trim()}</span> here instead.
+              </>
+            ) : (
+              <>
+                Suggested:{" "}
+                <span className="font-mono">{suggestedBranch}</span>.
+              </>
+            )}
+          </>
+        )}
+      </p>
     </section>
   );
 }
