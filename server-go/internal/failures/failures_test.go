@@ -112,13 +112,13 @@ func TestClassify_LogRegexes(t *testing.T) {
 
 func TestClassify_BuildDetectors(t *testing.T) {
 	tests := []struct {
-		name        string
-		lines       []string
-		wantKind    Kind
-		wantTab     Tab
-		wantRemed   bool   // expect a non-nil Remediation
-		summarySub  string // optional substring the summary must contain
-		fixSub      string // optional substring the Remediation.Fix must contain
+		name       string
+		lines      []string
+		wantKind   Kind
+		wantTab    Tab
+		wantRemed  bool   // expect a non-nil Remediation
+		summarySub string // optional substring the summary must contain
+		fixSub     string // optional substring the Remediation.Fix must contain
 	}{
 		{
 			name: "pnpm patch file missing from build context",
@@ -133,12 +133,12 @@ func TestClassify_BuildDetectors(t *testing.T) {
 			fixSub:     "COPY patches/",
 		},
 		{
-			name:       "pnpm outdated lockfile",
-			lines:      []string{"using pnpm@9.15.0", "ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with \"frozen-lockfile\""},
-			wantKind:   KindLockfileDrift,
-			wantTab:    TabBuild,
-			wantRemed:  true,
-			fixSub:     "pnpm install",
+			name:      "pnpm outdated lockfile",
+			lines:     []string{"using pnpm@9.15.0", "ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with \"frozen-lockfile\""},
+			wantKind:  KindLockfileDrift,
+			wantTab:   TabBuild,
+			wantRemed: true,
+			fixSub:    "pnpm install",
 		},
 		{
 			name:      "npm ci lockfile out of sync",
@@ -156,12 +156,12 @@ func TestClassify_BuildDetectors(t *testing.T) {
 			wantRemed: true,
 		},
 		{
-			name:       "build OOM (node heap)",
-			lines:      []string{"<--- Last few GCs --->", "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory"},
-			wantKind:   KindBuildOOM,
-			wantTab:    TabBuild,
-			wantRemed:  true,
-			fixSub:     "max-old-space-size",
+			name:      "build OOM (node heap)",
+			lines:     []string{"<--- Last few GCs --->", "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory"},
+			wantKind:  KindBuildOOM,
+			wantTab:   TabBuild,
+			wantRemed: true,
+			fixSub:    "max-old-space-size",
 		},
 		{
 			name:      "registry pull access denied",
@@ -226,7 +226,7 @@ func TestClassify_RecentMostLineWins(t *testing.T) {
 	// the last thing that happened.
 	got := Classify(
 		[]string{
-			"Missing env var DATABASE_URL",         // older
+			"Missing env var DATABASE_URL",        // older
 			"panic: runtime error: nil ptr deref", // newer
 		},
 		Signal{},
