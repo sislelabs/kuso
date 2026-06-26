@@ -30,6 +30,31 @@ import { toast } from "sonner";
 import { useAddonOverlayDirty } from "@/components/addon/AddonOverlay";
 import { useCan, Perms } from "@/features/auth";
 
+// addonReconcileState reads the addon CR's real helm-reconcile condition
+// instead of inferring health from the form's dirty flag. "in sync" must
+// mean the deployed release actually matches the spec — NOT merely "the
+// form has no unsaved edits". An addon stuck in ReleaseFailed (the
+// cluster-wide-outage condition) has a clean form but is emphatically not
+// in sync; conflating the two is exactly the kind of status that lies.
+type ReconcileState = "failed" | "synced" | "unknown";
+function addonReconcileState(cr?: import("@/types/projects").KusoAddon): ReconcileState {
+  const conds = (cr?.status?.conditions as
+    | Array<{ type?: string; status?: string }>
+    | undefined) ?? undefined;
+  if (!conds) return "unknown";
+  const releaseFailed = conds.find((c) => c.type === "ReleaseFailed");
+  if (releaseFailed && String(releaseFailed.status).toLowerCase() === "true") {
+    return "failed";
+  }
+  const deployed = conds.find((c) => c.type === "Deployed");
+  if (deployed && String(deployed.status).toLowerCase() === "true") {
+    return "synced";
+  }
+  // Conditions present but neither failed nor deployed-true → can't claim
+  // "in sync"; say nothing rather than assert a false green.
+  return "unknown";
+}
+
 export function SettingsTab({
   project,
   addon,
@@ -217,9 +242,38 @@ function ConfigurationSection({
           <Settings className="h-3.5 w-3.5 text-[var(--text-tertiary)]" />
           <h4 className="text-sm font-semibold">Configuration</h4>
         </div>
-        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-          {dirty ? "unsaved" : "in sync"}
-        </span>
+        {(() => {
+          // Truthful status: dirty form → "unsaved"; otherwise reflect the
+          // ACTUAL reconcile state, not an assumed green. A failed helm
+          // upgrade shows "upgrade failed" (with the reason on hover), so
+          // the badge can't claim "in sync" while the release is broken.
+          if (dirty) {
+            return (
+              <span className="font-mono text-[10px] text-amber-300/80">unsaved</span>
+            );
+          }
+          const rs = addonReconcileState(cr);
+          if (rs === "failed") {
+            const msg =
+              ((cr?.status?.conditions as Array<{ type?: string; message?: string }> | undefined)
+                ?.find((c) => c.type === "ReleaseFailed")?.message) || "helm upgrade failed";
+            return (
+              <span
+                title={msg}
+                className="inline-flex items-center gap-1 font-mono text-[10px] text-red-300"
+              >
+                <AlertTriangle className="h-3 w-3" /> upgrade failed
+              </span>
+            );
+          }
+          if (rs === "synced") {
+            return (
+              <span className="font-mono text-[10px] text-emerald-300/80">in sync</span>
+            );
+          }
+          // Unknown reconcile state (no conditions yet) — don't assert green.
+          return <span className="font-mono text-[10px] text-[var(--text-tertiary)]">—</span>;
+        })()}
       </header>
       <div className="space-y-3 p-3">
         <div className="grid grid-cols-2 gap-3">

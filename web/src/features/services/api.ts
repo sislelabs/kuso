@@ -119,6 +119,36 @@ export interface BuildSummary {
   // the kubelet's terminated reason and stamps the hit. The UI
   // renders it as a sticky red banner above the log viewer.
   errorMessage?: string;
+  // failureClass is the structured classification of a failed build:
+  // which phase/tab it failed in, a one-line summary, an optional
+  // pointer to the offending log line, and (when known) a remediation
+  // with a copy-pasteable fix. Surfaces in the BuildErrorBanner above
+  // the log viewer. Absent on non-failed builds.
+  failureClass?: BuildFailureClass;
+}
+
+export interface BuildFailureRemediation {
+  title: string;
+  detail: string;
+  // fix is a copy-pasteable snippet (shell command, Dockerfile line,
+  // config patch). fixLang hints the syntax-highlight / label.
+  fix?: string;
+  fixLang?: string;
+  // docsAnchor links to the relevant docs section, when one exists.
+  docsAnchor?: string;
+}
+
+export interface BuildFailureClass {
+  // kind is the machine code for the failure class (e.g.
+  // "dockerfile-not-found", "npm-install-failed", "oom").
+  kind: string;
+  // tab is the UI surface the failure maps to (build / runtime / …).
+  tab: string;
+  summary: string;
+  // lineHint / lineNum point into the build log at the offending line.
+  lineHint?: string;
+  lineNum?: number;
+  remediation?: BuildFailureRemediation;
 }
 
 export async function listBuilds(project: string, service: string): Promise<BuildSummary[]> {
