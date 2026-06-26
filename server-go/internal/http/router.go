@@ -39,6 +39,8 @@ import (
 	"kuso/server/internal/notify"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/projectsecrets"
+	"kuso/server/internal/reconcilehealth"
+	"kuso/server/internal/remediate"
 	"kuso/server/internal/runs"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/serverstate"
@@ -488,6 +490,22 @@ func mountAuthenticatedRoutes(
 			// Read-only; defaults safely when rates are unset.
 			usageH := &httphandlers.UsageHandler{DB: d.DB, Cfg: d.Config, Logger: d.Logger}
 			usageH.Mount(r)
+		}
+		if d.Kube != nil {
+			// Control-plane reconcile-health report + one-click,
+			// data-safe remediation. Admin-gated inside the handler.
+			// The Scanner is read-only; the Remediator mutates live
+			// StatefulSets/CR annotations (audited via d.Audit).
+			rhScanner := &reconcilehealth.Scanner{Kube: d.Kube}
+			rhRemediator := &remediate.Remediator{Kube: d.Kube, Audit: d.Audit}
+			rhH := &httphandlers.ReconcileHealthHandler{
+				Scanner:    rhScanner,
+				Remediator: rhRemediator,
+				DB:         d.DB,
+				Namespace:  d.Namespace,
+				Logger:     d.Logger,
+			}
+			rhH.Mount(r)
 		}
 		if d.Addons != nil {
 			addonsH := &httphandlers.AddonsHandler{Svc: d.Addons, DB: d.DB, Audit: d.Audit, Logger: d.Logger}

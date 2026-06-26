@@ -96,6 +96,11 @@ const (
 	annStartedAt    = "kuso.sislelabs.com/build-started-at"
 	annMessage      = "kuso.sislelabs.com/build-message"
 	annSupersededBy = "kuso.sislelabs.com/superseded-by"
+	// annClassification carries the JSON-encoded failures.Classification
+	// (kind + tab + summary + actionable Remediation) for a failed build,
+	// so the Deployments tab can surface the fix when the user opens the
+	// build — not just in the bell-popover notification.
+	annClassification = "kuso.sislelabs.com/build-classification"
 	// detectedEnv carries a JSON-encoded []string of env-var names
 	// the build-time scanner surfaced from the source repo. UI uses
 	// this to flag "you reference X but it isn't set" at the
@@ -2163,31 +2168,43 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 	// Job TTL to harvest.
 	p.deleteCloneTokenSecret(ns, b.Name)
 	p.queueArchive(ctx, ns, b, "failed")
+
+	// Classify the failure ONCE, up front, so both the persisted build
+	// record (read by the Deployments tab to render the hint + the
+	// copy-pasteable remediation) and the notify card below share one
+	// classification. Pull the last 50 lines — the classifier walks the
+	// tail in reverse for a known failure regex; a 5-line window misses
+	// errors that print 10-30 lines before the end of buildkit/nixpacks
+	// output. Feed the pod's terminated reason/exit too: an OOMKilled
+	// build leaves little in the logs (kernel kills it mid-step), so
+	// reason="OOMKilled"/exit=137 is what reaches KindOOM/KindBuildOOM.
+	classifyLines := p.tailBuildLogLines(ctx, ns, b, 50)
+	var sig failures.Signal
+	if bp, perr := p.Svc.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": b.Name}),
+	}); perr == nil {
+		reason, exit := extractTerminatedSignal(bp.Items)
+		sig.Reason, sig.ExitCode = reason, exit
+	}
+	classification := failures.Classify(classifyLines, sig)
+	// Persist the classification (incl. any actionable Remediation) on
+	// the build CR so the Deployments tab can render the fix when the
+	// user opens the failed build — not just in the bell popover. JSON
+	// in an annotation keeps the wire shape intact across the build-
+	// summary API + the durable archive. Best-effort: a failed marshal/
+	// patch must not block the failure flow.
+	if cj, mErr := json.Marshal(classification); mErr == nil {
+		cPatch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, annClassification, string(cj))
+		if _, pErr := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+			Patch(ctx, b.Name, types.MergePatchType, []byte(cPatch), metav1.PatchOptions{}); pErr != nil {
+			p.logger().Warn("persist build classification", "build", b.Name, "err", pErr)
+		}
+	}
+
 	if p.Notifier != nil {
 		short := strings.TrimPrefix(b.Spec.Service, b.Spec.Project+"-")
-		// Pull the last 50 lines for classification — the Discord
-		// card only renders 5 (logTail), but the classifier walks the
-		// tail in reverse looking for a known failure regex and a
-		// 5-line window misses errors that print 10-30 lines before
-		// the end of buildpacks / nixpacks output.
-		classifyLines := p.tailBuildLogLines(ctx, ns, b, 50)
-		// Discord-card tail is still the last 5 — keep the card tight.
+		// Discord-card tail is the last 5 — keep the card tight.
 		logTail := joinLastN(classifyLines, 5)
-		// Classify the failure so the bell-popover row deep-links the
-		// user into the right overlay tab (Variables for missing-env,
-		// Logs for build_command_failed, etc.). Feed BOTH the log lines
-		// AND the build pod's terminated reason/exit code: an OOMKilled
-		// build leaves little in the logs (the kernel kills it mid-step),
-		// so reason="OOMKilled"/exit=137 is what makes it classify as
-		// KindOOM with a "bump build memory" CTA instead of generic.
-		var sig failures.Signal
-		if bp, perr := p.Svc.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-			LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": b.Name}),
-		}); perr == nil {
-			reason, exit := extractTerminatedSignal(bp.Items)
-			sig.Reason, sig.ExitCode = reason, exit
-		}
-		classification := failures.Classify(classifyLines, sig)
 		// Build-failed events never have a healthy site URL to link to
 		// (the prior image is still live but unrelated). Build the
 		// deep-link with ?tab=<hint> instead so the click lands the
