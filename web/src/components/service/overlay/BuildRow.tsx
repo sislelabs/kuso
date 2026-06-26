@@ -10,9 +10,9 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { LogStream } from "@/components/logs/LogStream";
 import { rollbackBuild, cancelBuild } from "@/features/services";
-import type { BuildSummary } from "@/features/services/api";
+import type { BuildSummary, BuildFailureClass } from "@/features/services/api";
 import { relativeTime } from "@/lib/format";
-import { ChevronDown, ChevronRight, Undo2, X } from "lucide-react";
+import { ChevronDown, ChevronRight, Undo2, X, Copy, Check } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { useState } from "react";
@@ -177,7 +177,10 @@ export function BuildRow({
       </div>
       {isOpen && (
         <div className="min-w-0 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]">
-          <BuildErrorBanner message={b.status === "failed" ? b.errorMessage : undefined} />
+          <BuildErrorBanner
+            message={b.status === "failed" ? b.errorMessage : undefined}
+            failureClass={b.status === "failed" ? b.failureClass : undefined}
+          />
           <BuildLogs project={project} service={service} buildId={b.id} />
         </div>
       )}
@@ -191,21 +194,109 @@ export function BuildRow({
 // the hit into kuso.sislelabs.com/build-message; the API surfaces it
 // on BuildSummary.errorMessage. Without this, users were hand-grepping
 // 200-600 lines of kaniko log noise to find the one-line cause.
-function BuildErrorBanner({ message }: { message?: string }) {
-  if (!message) return null;
+//
+// When the build also carries a structured failureClass with a
+// remediation, we render the richer card: the classifier's summary,
+// the remediation title + prose, and a copy-pasteable fix block. The
+// bare errorMessage path is the fallback for builds the classifier
+// couldn't (or hasn't yet) tagged.
+function BuildErrorBanner({
+  message,
+  failureClass,
+}: {
+  message?: string;
+  failureClass?: BuildFailureClass;
+}) {
+  const rem = failureClass?.remediation;
+  if (!message && !failureClass) return null;
   return (
     <div className="border-b border-red-500/40 bg-red-500/10 px-3 py-2 text-[12px] text-red-200">
       <div className="flex items-start gap-2">
         <span aria-hidden className="select-none">
           ✗
         </span>
-        <div className="min-w-0 flex-1">
-          <div className="font-mono text-[10px] uppercase tracking-widest text-red-300/80">
-            build failure cause
+        <div className="min-w-0 flex-1 space-y-2">
+          <div>
+            <div className="font-mono text-[10px] uppercase tracking-widest text-red-300/80">
+              build failure cause
+            </div>
+            <div className="mt-0.5 break-words font-mono text-[11px] leading-snug">
+              {failureClass?.summary || message}
+            </div>
+            {failureClass?.lineHint && (
+              <div className="mt-0.5 break-words font-mono text-[10px] text-red-300/70">
+                {failureClass.lineNum ? `line ${failureClass.lineNum}: ` : ""}
+                {failureClass.lineHint}
+              </div>
+            )}
           </div>
-          <div className="mt-0.5 break-words font-mono text-[11px] leading-snug">{message}</div>
+
+          {rem && (
+            <div className="rounded-md border border-red-500/30 bg-[var(--bg-primary)]/40 p-2">
+              <div className="text-[11px] font-semibold text-red-100">{rem.title}</div>
+              {rem.detail && (
+                <p className="mt-0.5 text-[11px] leading-snug text-red-200/90">{rem.detail}</p>
+              )}
+              {rem.fix && <FixBlock fix={rem.fix} lang={rem.fixLang} />}
+              {rem.docsAnchor && (
+                <a
+                  href={rem.docsAnchor}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1.5 inline-block font-mono text-[10px] text-red-200/80 underline underline-offset-2 hover:text-red-100"
+                >
+                  read the docs →
+                </a>
+              )}
+            </div>
+          )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// FixBlock is the copy-pasteable remediation snippet. lang labels the
+// block (shell / dockerfile / yaml …) and is purely cosmetic — we
+// don't ship a syntax highlighter, just a language tag + mono pre.
+function FixBlock({ fix, lang }: { fix: string; lang?: string }) {
+  const [copied, setCopied] = useState(false);
+  const onCopy = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await navigator.clipboard.writeText(fix);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error("clipboard unavailable");
+    }
+  };
+  return (
+    <div className="mt-1.5 overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+      <div className="flex items-center justify-between border-b border-[var(--border-subtle)] px-2 py-1">
+        <span className="font-mono text-[9px] uppercase tracking-widest text-[var(--text-tertiary)]">
+          {lang || "fix"}
+        </span>
+        <button
+          type="button"
+          onClick={onCopy}
+          aria-label="Copy fix"
+          className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+        >
+          {copied ? (
+            <>
+              <Check className="h-3 w-3 text-emerald-500" /> copied
+            </>
+          ) : (
+            <>
+              <Copy className="h-3 w-3" /> copy
+            </>
+          )}
+        </button>
+      </div>
+      <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words p-2 font-mono text-[11px] leading-snug text-[var(--text-secondary)]">
+        {fix}
+      </pre>
     </div>
   );
 }

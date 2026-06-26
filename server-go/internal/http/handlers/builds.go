@@ -13,6 +13,7 @@ import (
 	"kuso/server/internal/auth"
 	"kuso/server/internal/builds"
 	"kuso/server/internal/db"
+	"kuso/server/internal/failures"
 	"kuso/server/internal/kube"
 )
 
@@ -208,6 +209,12 @@ type buildSummary struct {
 	// above the log viewer so users don't have to hand-grep 200-600
 	// lines of kaniko noise to find "why".
 	ErrorMessage string `json:"errorMessage,omitempty"`
+	// FailureClass is the parsed failure classification for status=failed
+	// builds: the kind, the overlay tab to route to, a human summary, and
+	// — when kuso recognises the failure — an actionable Remediation with
+	// a copy-pasteable fix. Stamped on the CR as JSON by builds.markFailed;
+	// nil for non-failed builds or builds from before the field existed.
+	FailureClass *failures.Classification `json:"failureClass,omitempty"`
 }
 
 func toBuildSummary(b kube.KusoBuild) buildSummary {
@@ -249,6 +256,15 @@ func toBuildSummary(b kube.KusoBuild) buildSummary {
 		// on status=failed.
 		if v, ok := b.Annotations["kuso.sislelabs.com/build-message"]; ok {
 			out.ErrorMessage = v
+		}
+		// Parse the persisted failure classification (kind + remediation).
+		// Best-effort: a malformed/absent value just leaves FailureClass
+		// nil and the UI falls back to ErrorMessage + logs.
+		if v, ok := b.Annotations["kuso.sislelabs.com/build-classification"]; ok && v != "" {
+			var c failures.Classification
+			if err := json.Unmarshal([]byte(v), &c); err == nil && c.Kind != "" {
+				out.FailureClass = &c
+			}
 		}
 	}
 	if out.Status == "" && b.Status != nil {

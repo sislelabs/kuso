@@ -38,6 +38,18 @@ const (
 	KindPortConflict       Kind = "port_conflict"
 	KindHealthcheckFailed  Kind = "healthcheck_failed"
 	KindBuildCommandFailed Kind = "build_command_failed"
+	// Build-time (pre-image) failure kinds. These come from the Docker /
+	// buildkit / nixpacks / buildpacks build log, NOT the running pod.
+	// Most carry an actionable Remediation with a copy-pasteable fix
+	// because the fix lives in the user's repo (Dockerfile / lockfile),
+	// not in kuso settings.
+	KindDockerfileMissingCopy Kind = "dockerfile_missing_copy" // a COPY'd path / referenced file isn't in the build context
+	KindLockfileDrift         Kind = "lockfile_drift"          // --frozen-lockfile / npm ci out of sync with package.json
+	KindMissingBuildArg       Kind = "missing_build_arg"       // a build needs an ARG/env the build didn't pass
+	KindDependencyResolution  Kind = "dependency_resolution"   // npm/pnpm/yarn/pip/go could not resolve a dependency or version
+	KindDockerfileNotFound    Kind = "dockerfile_not_found"    // the configured Dockerfile path doesn't exist in the repo/subdir
+	KindBuildOOM              Kind = "build_oom"               // the build pod (not the app) ran out of memory
+	KindRegistryAuth          Kind = "registry_auth"           // pull/push to a registry denied (base image or cache)
 )
 
 // Tab is the overlay tab slug the UI should open on. Kept as a string
@@ -49,7 +61,33 @@ const (
 	TabLogs      Tab = "logs"
 	TabVariables Tab = "variables"
 	TabSettings  Tab = "settings"
+	// TabBuild opens the Build settings section — the right place for
+	// build-time failures whose fix is a build config (Dockerfile path,
+	// build args, build memory) rather than runtime env.
+	TabBuild Tab = "build"
 )
+
+// Remediation is the actionable "here's how to fix it" payload attached
+// to classifications where kuso can name a concrete fix. It's optional
+// (nil for kinds where we only know "something failed"). The UI renders
+// Title as a heading, Detail as prose, and — when Fix is set — a
+// copy-pasteable code block (a Dockerfile snippet, a CLI command, …).
+// DocsAnchor, when set, is a slug into the kuso docs the UI can deep-link.
+type Remediation struct {
+	// Title is a short imperative headline, e.g. "Copy the patches
+	// directory into the build context".
+	Title string `json:"title"`
+	// Detail is one or two sentences explaining the cause + fix.
+	Detail string `json:"detail"`
+	// Fix is an optional copy-pasteable snippet (Dockerfile lines, a
+	// shell command). Empty when the fix isn't a single paste.
+	Fix string `json:"fix,omitempty"`
+	// FixLang hints the UI's syntax highlighter ("dockerfile", "bash",
+	// "json"). Empty = plain.
+	FixLang string `json:"fixLang,omitempty"`
+	// DocsAnchor is an optional docs slug, e.g. "build/dockerfile".
+	DocsAnchor string `json:"docsAnchor,omitempty"`
+}
 
 // Classification is the wire shape that travels with a failure event.
 // All fields are populated by Classify; consumers can rely on Kind,
@@ -65,6 +103,10 @@ type Classification struct {
 	Summary  string `json:"summary"`
 	LineHint string `json:"lineHint,omitempty"`
 	LineNum  int    `json:"lineNum,omitempty"`
+	// Remediation is the actionable fix when kuso recognises one. Nil
+	// for generic / unrecognised failures (the UI then shows only the
+	// summary + logs). Populated mostly by the build-time detectors.
+	Remediation *Remediation `json:"remediation,omitempty"`
 }
 
 // Signal is the optional pod-status side-channel the caller can pass
@@ -107,13 +149,21 @@ func Classify(logLines []string, sig Signal) Classification {
 		line := logLines[i]
 		for _, d := range logDetectors {
 			if d.re.MatchString(line) {
-				return Classification{
+				c := Classification{
 					Kind:     d.kind,
 					Tab:      d.tab,
 					Summary:  d.summarize(line),
 					LineHint: truncateLine(line),
 					LineNum:  i + 1,
 				}
+				if d.remediate != nil {
+					// The remediation builder gets the whole tail (not just
+					// the matched line) so build-time fixes can cross-
+					// reference earlier context — e.g. which patch file the
+					// Dockerfile failed to find vs the package manager in use.
+					c.Remediation = d.remediate(line, logLines)
+				}
+				return c
 			}
 		}
 	}
@@ -178,6 +228,11 @@ type logDetector struct {
 	tab       Tab
 	re        *regexp.Regexp
 	summarize func(line string) string
+	// remediate is an optional builder for the actionable fix. It
+	// receives the matched line AND the full tail (for cross-line
+	// context). Returns nil when no concrete fix can be named for this
+	// particular match. Nil remediate = no remediation (runtime kinds).
+	remediate func(line string, tail []string) *Remediation
 }
 
 // logDetectors is the regex-driven detection list. Order is meaningful
@@ -185,6 +240,139 @@ type logDetector struct {
 // every failed pod gets walked over it, so adding a slow regex here
 // is a noticeable cost.
 var logDetectors = []logDetector{
+	// ── Build-time detectors (Docker / buildkit / package managers) ──
+	// These come FIRST: a build log can contain a generic "build failed"
+	// line as well as the specific root cause, and we want the specific,
+	// actionable one to win. Each carries a Remediation because the fix
+	// lives in the user's repo, not kuso settings.
+
+	// pnpm/npm patch file missing from the build context. The package
+	// manager reads `patchedDependencies` from package.json, tries to
+	// open the patch file, and ENOENTs because the Dockerfile copied
+	// package.json + lockfile but NOT the patches/ dir. Very common with
+	// Payload/pnpm setups. The fix is a one-line COPY before install.
+	{
+		kind: KindDockerfileMissingCopy,
+		tab:  TabBuild,
+		re:   regexp.MustCompile(`(?i)ENOENT.{0,80}\.patch|no such file or directory.{0,40}patches/|failed to (?:read|open).{0,40}\.patch`),
+		summarize: func(line string) string {
+			if f := extractPatchPath(line); f != "" {
+				return "Build can't find patch file " + f + " — it's declared in package.json but not COPYed into the image."
+			}
+			return "Build can't find a pnpm/npm patch file — the patches/ dir isn't COPYed into the build context."
+		},
+		remediate: func(line string, tail []string) *Remediation {
+			return &Remediation{
+				Title:      "Copy the patches directory into the build context",
+				Detail:     "Your package.json declares patchedDependencies, but the Dockerfile copies package.json and the lockfile without the patches/ directory — so the package manager can't find the patch at install time. Add a COPY for patches/ before the install step (in every stage that runs install).",
+				Fix:        "COPY package.json pnpm-lock.yaml* ./\nCOPY patches/ ./patches/\nRUN pnpm install --frozen-lockfile",
+				FixLang:    "dockerfile",
+				DocsAnchor: "build/dockerfile-context",
+			}
+		},
+	},
+	// Lockfile out of sync with package.json under a frozen/CI install.
+	// pnpm: "ERR_PNPM_OUTDATED_LOCKFILE"; npm ci: "can only install
+	// packages when your package.json and package-lock.json are in sync";
+	// yarn: "lockfile needs to be updated".
+	{
+		kind: KindLockfileDrift,
+		tab:  TabBuild,
+		re:   regexp.MustCompile(`(?i)ERR_PNPM_OUTDATED_LOCKFILE|lockfile.{0,40}(?:out of date|outdated|needs to be updated|not up to date)|npm ci.{0,80}out of sync|can only install packages when your package\.json and package-lock\.json.{0,20}in sync|frozen-lockfile`),
+		summarize: func(line string) string {
+			return "Lockfile is out of sync with package.json — a frozen/CI install can't reconcile it."
+		},
+		remediate: func(line string, tail []string) *Remediation {
+			pm := detectPackageManager(tail)
+			fix := "npm install   # regenerate package-lock.json, then commit it"
+			switch pm {
+			case "pnpm":
+				fix = "pnpm install   # regenerate pnpm-lock.yaml, then commit it"
+			case "yarn":
+				fix = "yarn install   # regenerate yarn.lock, then commit it"
+			}
+			return &Remediation{
+				Title:      "Update and commit your lockfile",
+				Detail:     "The build runs a frozen/CI install (no lockfile writes), but your lockfile doesn't match package.json. Run a normal install locally to regenerate the lockfile, commit it, and push.",
+				Fix:        fix,
+				FixLang:    "bash",
+				DocsAnchor: "build/lockfile",
+			}
+		},
+	},
+	// Configured Dockerfile path doesn't exist. buildkit: "failed to
+	// read dockerfile" / "Dockerfile: no such file". Usually a wrong
+	// build path / subdir in service settings.
+	{
+		kind: KindDockerfileNotFound,
+		tab:  TabBuild,
+		re:   regexp.MustCompile(`(?i)failed to read dockerfile|dockerfile.{0,20}no such file|cannot locate specified Dockerfile|unable to prepare context.{0,40}dockerfile`),
+		summarize: func(line string) string {
+			return "The configured Dockerfile wasn't found in the build path."
+		},
+		remediate: func(line string, tail []string) *Remediation {
+			return &Remediation{
+				Title:      "Fix the build path or Dockerfile location",
+				Detail:     "kuso looked for a Dockerfile in the configured build path and didn't find one. Check Settings → Build for the path (monorepo subdir) and the Dockerfile name, and confirm the file is committed at that location.",
+				DocsAnchor: "build/dockerfile",
+			}
+		},
+	},
+	// Build ran out of memory (the BUILD pod, not the app). buildkit /
+	// node often print "JavaScript heap out of memory" or the step is
+	// killed (exit 137) during a heavy `next build` / webpack.
+	{
+		kind: KindBuildOOM,
+		tab:  TabBuild,
+		re:   regexp.MustCompile(`(?i)JavaScript heap out of memory|FATAL ERROR:.{0,40}heap|Killed\s*$|signal: killed|out of memory.{0,20}(?:build|compil)`),
+		summarize: func(line string) string {
+			return "The build ran out of memory. Raise the build memory limit in Settings → Build."
+		},
+		remediate: func(line string, tail []string) *Remediation {
+			return &Remediation{
+				Title:      "Increase the build memory limit",
+				Detail:     "The build step was killed for exceeding its memory budget (common for large Next.js / webpack builds). Raise the build memory in Settings → Build. For Node builds you can also cap the heap with NODE_OPTIONS.",
+				Fix:        "ENV NODE_OPTIONS=--max-old-space-size=4096",
+				FixLang:    "dockerfile",
+				DocsAnchor: "build/resources",
+			}
+		},
+	},
+	// Registry auth / pull denied for the base image or build cache.
+	{
+		kind: KindRegistryAuth,
+		tab:  TabBuild,
+		re:   regexp.MustCompile(`(?i)(?:pull access denied|denied: requested access to the resource is denied|unauthorized: authentication required|error response from daemon.{0,40}unauthorized|failed to authorize)`),
+		summarize: func(line string) string {
+			return "A registry denied the build (base image or cache pull) — check the image name / credentials."
+		},
+		remediate: func(line string, tail []string) *Remediation {
+			return &Remediation{
+				Title:      "Check the base image and registry credentials",
+				Detail:     "The build couldn't pull from a registry — usually a typo'd base image, a private base image without credentials, or a rate-limited Docker Hub pull. Verify the FROM line and, for private bases, add registry credentials.",
+				DocsAnchor: "build/registry",
+			}
+		},
+	},
+	// Generic dependency resolution failures across ecosystems. Kept
+	// after the specific lockfile/patch detectors so those win.
+	{
+		kind: KindDependencyResolution,
+		tab:  TabBuild,
+		re:   regexp.MustCompile(`(?i)ERR_PNPM_NO_MATCHING_VERSION|npm ERR!.{0,40}(?:404|notarget|ETARGET)|Could not resolve dependency|No matching version found|Cannot find module|pip.{0,40}Could not find a version|go: .*: unknown revision|ERROR: No matching distribution found`),
+		summarize: func(line string) string {
+			return "A dependency couldn't be resolved. " + briefLine(line)
+		},
+		remediate: func(line string, tail []string) *Remediation {
+			return &Remediation{
+				Title:      "Fix the unresolved dependency",
+				Detail:     "The package manager couldn't resolve a dependency or version. Check for a typo'd package name, a version that doesn't exist, or a private package that needs registry auth, then update and commit your manifest + lockfile.",
+				DocsAnchor: "build/dependencies",
+			}
+		},
+	},
+
+	// ── Runtime detectors (existing) ─────────────────────────────────
 	// Missing env var — handled before the generic "Error:" catchers
 	// because a missing-env error usually says ERROR somewhere too.
 	{
@@ -260,6 +448,43 @@ var envNameRE = regexp.MustCompile(`[A-Z][A-Z0-9_]{1,63}`)
 
 func extractEnvName(line string) string {
 	return envNameRE.FindString(line)
+}
+
+// extractPatchPath pulls the offending patch-file path out of an ENOENT
+// line like:
+//
+//	ENOENT: no such file or directory, open '/app/patches/@payloadcms__ui@3.85.1.patch'
+//
+// Returns "" when no .patch path is present. We surface the basename
+// (patches/<file>.patch) since the absolute /app prefix is a build-stage
+// detail the user doesn't care about.
+var patchPathRE = regexp.MustCompile(`(patches/[^\s'"]+\.patch)`)
+
+func extractPatchPath(line string) string {
+	if m := patchPathRE.FindStringSubmatch(line); m != nil {
+		return m[1]
+	}
+	// Fall back to any *.patch token so we still name the file even when
+	// it isn't under a patches/ dir.
+	if m := regexp.MustCompile(`([^\s'"/]+\.patch)`).FindStringSubmatch(line); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
+// detectPackageManager sniffs the build tail for which JS package
+// manager is in play so lockfile-drift remediation names the right
+// command + lockfile. Returns "pnpm" | "yarn" | "npm" (default npm).
+func detectPackageManager(tail []string) string {
+	for _, l := range tail {
+		switch {
+		case strings.Contains(l, "pnpm") || strings.Contains(l, "pnpm-lock"):
+			return "pnpm"
+		case strings.Contains(l, "yarn") || strings.Contains(l, "yarn.lock"):
+			return "yarn"
+		}
+	}
+	return "npm"
 }
 
 // extractPort pulls a TCP port number out of a port-conflict log line.

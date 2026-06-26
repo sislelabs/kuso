@@ -110,6 +110,104 @@ func TestClassify_LogRegexes(t *testing.T) {
 	}
 }
 
+func TestClassify_BuildDetectors(t *testing.T) {
+	tests := []struct {
+		name       string
+		lines      []string
+		wantKind   Kind
+		wantTab    Tab
+		wantRemed  bool   // expect a non-nil Remediation
+		summarySub string // optional substring the summary must contain
+		fixSub     string // optional substring the Remediation.Fix must contain
+	}{
+		{
+			name: "pnpm patch file missing from build context",
+			lines: []string{
+				"#14 [prod-deps 3/3] RUN pnpm install --frozen-lockfile",
+				"#14 0.778  ENOENT  ENOENT: no such file or directory, open '/app/patches/@payloadcms__ui@3.85.1.patch'",
+			},
+			wantKind:   KindDockerfileMissingCopy,
+			wantTab:    TabBuild,
+			wantRemed:  true,
+			summarySub: "@payloadcms__ui@3.85.1.patch",
+			fixSub:     "COPY patches/",
+		},
+		{
+			name:      "pnpm outdated lockfile",
+			lines:     []string{"using pnpm@9.15.0", "ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with \"frozen-lockfile\""},
+			wantKind:  KindLockfileDrift,
+			wantTab:   TabBuild,
+			wantRemed: true,
+			fixSub:    "pnpm install",
+		},
+		{
+			name:      "npm ci lockfile out of sync",
+			lines:     []string{"npm ci", "npm ERR! can only install packages when your package.json and package-lock.json are in sync"},
+			wantKind:  KindLockfileDrift,
+			wantTab:   TabBuild,
+			wantRemed: true,
+			fixSub:    "npm install",
+		},
+		{
+			name:      "dockerfile not found",
+			lines:     []string{"failed to read dockerfile: open Dockerfile: no such file or directory"},
+			wantKind:  KindDockerfileNotFound,
+			wantTab:   TabBuild,
+			wantRemed: true,
+		},
+		{
+			name:      "build OOM (node heap)",
+			lines:     []string{"<--- Last few GCs --->", "FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory"},
+			wantKind:  KindBuildOOM,
+			wantTab:   TabBuild,
+			wantRemed: true,
+			fixSub:    "max-old-space-size",
+		},
+		{
+			name:      "registry pull access denied",
+			lines:     []string{"ERROR: failed to solve: pull access denied, repository does not exist or may require authorization"},
+			wantKind:  KindRegistryAuth,
+			wantTab:   TabBuild,
+			wantRemed: true,
+		},
+		{
+			name:      "dependency not resolvable",
+			lines:     []string{"npm ERR! code ETARGET", "npm ERR! notarget No matching version found for left-pad@99.0.0"},
+			wantKind:  KindDependencyResolution,
+			wantTab:   TabBuild,
+			wantRemed: true,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Classify(tc.lines, Signal{})
+			if got.Kind != tc.wantKind {
+				t.Errorf("Kind = %q, want %q", got.Kind, tc.wantKind)
+			}
+			if got.Tab != tc.wantTab {
+				t.Errorf("Tab = %q, want %q", got.Tab, tc.wantTab)
+			}
+			if tc.wantRemed && got.Remediation == nil {
+				t.Fatalf("expected a Remediation, got nil")
+			}
+			if !tc.wantRemed && got.Remediation != nil {
+				t.Errorf("expected no Remediation, got %+v", got.Remediation)
+			}
+			if tc.summarySub != "" && !containsAny(got.Summary, tc.summarySub) {
+				t.Errorf("Summary %q does not contain %q", got.Summary, tc.summarySub)
+			}
+			if tc.fixSub != "" {
+				if got.Remediation == nil || !containsAny(got.Remediation.Fix, tc.fixSub) {
+					t.Errorf("Remediation.Fix does not contain %q (remed=%+v)", tc.fixSub, got.Remediation)
+				}
+			}
+			if got.Remediation != nil && got.Remediation.Title == "" {
+				t.Error("Remediation.Title is empty")
+			}
+		})
+	}
+}
+
 func TestClassify_SignalBeatsLogs(t *testing.T) {
 	// An OOMKilled pod whose logs also mention "address already in use"
 	// from an earlier boot still classifies as OOM.
@@ -128,7 +226,7 @@ func TestClassify_RecentMostLineWins(t *testing.T) {
 	// the last thing that happened.
 	got := Classify(
 		[]string{
-			"Missing env var DATABASE_URL",         // older
+			"Missing env var DATABASE_URL",        // older
 			"panic: runtime error: nil ptr deref", // newer
 		},
 		Signal{},

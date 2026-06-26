@@ -21,6 +21,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"kuso/server/internal/activator"
 	"kuso/server/internal/addons"
 	"kuso/server/internal/alerts"
 	"kuso/server/internal/audit"
@@ -45,9 +46,7 @@ import (
 	"kuso/server/internal/logship"
 	"kuso/server/internal/metrics"
 	"kuso/server/internal/nodemetrics"
-	"kuso/server/internal/activator"
 	"kuso/server/internal/nodewatch"
-	"kuso/server/internal/scaledown"
 	"kuso/server/internal/notify"
 	"kuso/server/internal/pkgupdates"
 	"kuso/server/internal/platformharden"
@@ -55,8 +54,11 @@ import (
 	"kuso/server/internal/projectmetrics"
 	"kuso/server/internal/projects"
 	"kuso/server/internal/projectsecrets"
+	"kuso/server/internal/reconcilehealth"
 	"kuso/server/internal/releaserun"
+	"kuso/server/internal/remediate"
 	"kuso/server/internal/runs"
+	"kuso/server/internal/scaledown"
 	"kuso/server/internal/secrets"
 	"kuso/server/internal/serverstate"
 	"kuso/server/internal/spec"
@@ -1061,6 +1063,27 @@ func main() {
 				Namespace: *namespace,
 				Logger:    logger.With("component", "backupwatch"),
 			}).Run(workCtx)
+			// Unattended auto-remediation loop. OPT-IN and OFF by
+			// default — the Enabled closure reads the KUSO_AUTO_REMEDIATE
+			// env var (set to "1"/"true" to turn it on). When on, it
+			// scans control-plane reconcile health every interval and
+			// applies the data-safe fix for every Safe issue (auto=true,
+			// so the Remediator refuses anything not marked Safe).
+			// Leader-gated like the other singletons so only one replica
+			// acts. We always construct + start it; the flag is the gate,
+			// so flipping the env var (and restarting) is all it takes —
+			// no rewiring. Checked at construction AND per-tick so the
+			// no-op skip is cheap when disabled.
+			autoRemediateEnabled := func() bool {
+				v := os.Getenv("KUSO_AUTO_REMEDIATE")
+				return v == "1" || strings.EqualFold(v, "true")
+			}
+			rhScanner := &reconcilehealth.Scanner{Kube: kubeClient}
+			rhRemediator := &remediate.Remediator{Kube: kubeClient, Audit: auditSvc}
+			remediateLoop := remediate.NewScannerLoop(
+				rhScanner, rhRemediator, *namespace, 5*time.Minute,
+				autoRemediateEnabled, logger.With("component", "auto-remediate"))
+			go remediateLoop.Run(workCtx)
 		}
 		if os.Getenv("KUSO_DISABLE_LEADER_ELECTION") == "true" {
 			startKubeSingletons(ctx)
