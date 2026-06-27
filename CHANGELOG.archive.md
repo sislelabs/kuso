@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.24] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(apply): resolve ${{ addon.KEY }} refs in pending mode (kuso apply) ([3f0a3ff](https://github.com/sislelabs/kuso/commit/3f0a3ff6fc52dc6e463ee061c8a68b762bd77fd9))
+
+### 📝 Docs
+- Docs(migration): build-env feature shipped (v0.18.23); 6 apps fully migrated ([36325f7](https://github.com/sislelabs/kuso/commit/36325f73c30e0ffaa37603655ef05e1c6a729c5a))
+
 ## [0.18.23] — 2026-06-04
 
 ### 🐛 Bug Fixes
