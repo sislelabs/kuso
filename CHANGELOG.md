@@ -19,6 +19,16 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.87] — 2026-06-27
+
+### Other
+- Style(failures): gofmt build-detector test table ([4a1295e](https://github.com/sislelabs/kuso/commit/4a1295e12629c7afa754e3655bca1aed633f1a5e))
+
+### ✨ Features
+- Feat(platform): health dashboard, build-hint card, truthful addon status ([75576d2](https://github.com/sislelabs/kuso/commit/75576d2799bde2238e679b0388c4a273bd4e9357))
+- Feat(platform): reconcile-health API + remediation + build-hint surfacing + CLI ([f9da1a5](https://github.com/sislelabs/kuso/commit/f9da1a589dc0c7857558a4e442368ba2ba53b828))
+- Feat(platform): failure-remediation + reconcile-health + remediator foundations ([118a929](https://github.com/sislelabs/kuso/commit/118a929d94b59123e954a974a0eed144dd37f7ba))
+
 ## [0.18.86] — 2026-06-25
 
 ### ✨ Features
@@ -369,11 +379,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(migration): build-env feature shipped (v0.18.23); 6 apps fully migrated ([36325f7](https://github.com/sislelabs/kuso/commit/36325f73c30e0ffaa37603655ef05e1c6a729c5a))
-
-## [0.18.23] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(builds): export NIXPACKS_* build-env into nixpacks process env (toolchain selection) ([e1af453](https://github.com/sislelabs/kuso/commit/e1af45347cf149e6f67e2fe3721642733e612033))
 
 
 ---
