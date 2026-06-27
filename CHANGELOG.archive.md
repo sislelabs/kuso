@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.23] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): export NIXPACKS_* build-env into nixpacks process env (toolchain selection) ([e1af453](https://github.com/sislelabs/kuso/commit/e1af45347cf149e6f67e2fe3721642733e612033))
+
 ## [0.18.22] — 2026-06-04
 
 ### 🐛 Bug Fixes
