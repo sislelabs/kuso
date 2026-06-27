@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.88] — 2026-06-27
+
+### 🐛 Bug Fixes
+- Fix(web): clarify env-branch vs default-branch + drop no-op rollback chip ([0fbca7b](https://github.com/sislelabs/kuso/commit/0fbca7bfe0959aa73fdf9b9fa62db5f200defb03))
+
 ## [0.18.87] — 2026-06-27
 
 ### Other
@@ -371,14 +376,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(migration): final session status — 14 apps migrated, env-ref propagation bug root-caused ([94512ce](https://github.com/sislelabs/kuso/commit/94512ce68d834d50ef70bdfadbb81333f18f262f))
-
-## [0.18.24] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(apply): resolve ${{ addon.KEY }} refs in pending mode (kuso apply) ([3f0a3ff](https://github.com/sislelabs/kuso/commit/3f0a3ff6fc52dc6e463ee061c8a68b762bd77fd9))
-
-### 📝 Docs
-- Docs(migration): build-env feature shipped (v0.18.23); 6 apps fully migrated ([36325f7](https://github.com/sislelabs/kuso/commit/36325f73c30e0ffaa37603655ef05e1c6a729c5a))
 
 
 ---
