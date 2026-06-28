@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strconv"
@@ -255,7 +256,14 @@ func loadColumns(ctx context.Context, conn *sql.DB, schema, table string) (colum
 	if err != nil {
 		return out, err
 	}
-	defer colRows.Close()
+	// Drain the column rows into a slice and CLOSE the cursor BEFORE running
+	// any further query. pgConn caps the pool at MaxOpenConns(1), so a nested
+	// query issued while colRows is still open (the per-column enum lookup,
+	// or the PK query below) can't acquire a connection — it fails, the error
+	// gets swallowed, and the table comes back with no enum metadata AND no
+	// primary key (wrongly flagged "read-only / no primary key"). Any table
+	// with a USER-DEFINED enum column hit this. Reading into memory first
+	// frees the single connection for the enum + PK queries that follow.
 	for colRows.Next() {
 		var c columnInfo
 		var nullable string
@@ -263,15 +271,21 @@ func loadColumns(ctx context.Context, conn *sql.DB, schema, table string) (colum
 			continue
 		}
 		c.Nullable = nullable == "YES"
-		// USER-DEFINED data_type means the real type is udt_name — almost
-		// always an enum in app schemas. Load its labels for a dropdown.
-		if c.DataType == "USER-DEFINED" {
-			if vals, ok := loadEnumValues(ctx, conn, c.UDTName); ok {
-				c.IsEnum = true
-				c.EnumValues = vals
-			}
-		}
 		out.Columns = append(out.Columns, c)
+	}
+	colRows.Close()
+
+	// Now the connection is free: resolve enum labels for any USER-DEFINED
+	// columns (an enum dropdown in the editor). Each is a separate query on
+	// the now-idle single connection.
+	for i := range out.Columns {
+		if out.Columns[i].DataType != "USER-DEFINED" {
+			continue
+		}
+		if vals, ok := loadEnumValues(ctx, conn, out.Columns[i].UDTName); ok {
+			out.Columns[i].IsEnum = true
+			out.Columns[i].EnumValues = vals
+		}
 	}
 
 	// Resolve the PK columns via pg_catalog joins with parameterized
@@ -295,6 +309,13 @@ func loadColumns(ctx context.Context, conn *sql.DB, schema, table string) (colum
 				out.PrimaryKey = append(out.PrimaryKey, col)
 			}
 		}
+	} else {
+		// A failed PK query silently flips a table to read-only ("no primary
+		// key") even when it has one — exactly the bug that masked the
+		// MaxOpenConns(1) interleaving. Never swallow it silently again: log
+		// so the next regression is visible in server logs, not just the UI.
+		slog.Default().Warn("sql browser: primary-key lookup failed; table will show as read-only",
+			"schema", schema, "table", table, "err", err)
 	}
 	out.Editable = len(out.PrimaryKey) > 0
 	return out, nil
