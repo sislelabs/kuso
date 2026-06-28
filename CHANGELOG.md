@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.89] — 2026-06-28
+
+### 🐛 Bug Fixes
+- Fix(sql-browser): tables with enum columns wrongly shown read-only (no PK) ([6b0b006](https://github.com/sislelabs/kuso/commit/6b0b0069a662e5b7be2cf483215e82e3c63570f8))
+
 ## [0.18.88] — 2026-06-27
 
 ### 🐛 Bug Fixes
@@ -368,14 +373,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(netpolicy): allow project egress to the cluster-DB pooler/PG ([3eab6ba](https://github.com/sislelabs/kuso/commit/3eab6ba3f2480d71364d92553e89434987f6989b))
-
-## [0.18.25] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(env): stale unresolved ${{ }} literal is not a per-env override ([0aa8936](https://github.com/sislelabs/kuso/commit/0aa89361d1024899aabf6b58b571fcd50f34fa9f))
-
-### 📝 Docs
-- Docs(migration): final session status — 14 apps migrated, env-ref propagation bug root-caused ([94512ce](https://github.com/sislelabs/kuso/commit/94512ce68d834d50ef70bdfadbb81333f18f262f))
 
 
 ---
