@@ -6,6 +6,7 @@ import {
   useConfigureGithub,
   useSetupStatus,
   useInstallations,
+  getGithubManifest,
 } from "@/features/github";
 import type { ConfigureBody, GithubInstallation } from "@/features/github";
 import { api } from "@/lib/api-client";
@@ -29,7 +30,40 @@ import {
   Globe,
   Building2,
   User as UserIcon,
+  Sparkles,
+  Loader2,
 } from "lucide-react";
+
+// submitManifest builds a throwaway HTML form that POSTs the GitHub App
+// manifest to GitHub's app-creation endpoint (postURL) with the CSRF
+// state on the query string, then submits it — which navigates the
+// browser away to GitHub's "Create GitHub App" confirmation page. This
+// is the standard GitHub App Manifest flow: GitHub reads the manifest
+// field, shows a confirmation, then redirects to the redirect_url baked
+// into the manifest (our /api/github/manifest-callback).
+function submitManifest(postURL: string, state: string, manifest: unknown) {
+  const form = document.createElement("form");
+  form.method = "POST";
+  form.action = `${postURL}?state=${encodeURIComponent(state)}`;
+  const input = document.createElement("input");
+  input.type = "hidden";
+  input.name = "manifest";
+  input.value = JSON.stringify(manifest);
+  form.appendChild(input);
+  document.body.appendChild(form);
+  form.submit();
+}
+
+// Friendly copy for the ?error=<reason> values the manifest-callback
+// can bounce back with when the create/exchange/seed steps fail.
+const ERROR_MESSAGES: Record<string, string> = {
+  missing_code: "GitHub didn't return a setup code. Try creating the App again.",
+  bad_state: "The security token didn't match (possible stale tab). Start the flow again.",
+  exchange_failed:
+    "kuso couldn't exchange the code with GitHub for the App credentials. Try again.",
+  seed_failed:
+    "The App was created but kuso couldn't save its credentials. Check server logs and retry.",
+};
 
 // /settings/github — paste GitHub App credentials so kuso can monitor
 // repos and trigger builds. The wizard targets the case of an admin who
@@ -85,6 +119,9 @@ function GithubSettingsPage() {
   const [privateKey, setPrivateKey] = useState("");
   const [org, setOrg] = useState("");
   const [showReconfigure, setShowReconfigure] = useState(false);
+  // The manual paste path is demoted behind a toggle — the one-click
+  // manifest flow is the primary way to set up now.
+  const [showManual, setShowManual] = useState(false);
 
   const isConfigured = !!status.data?.configured && !showReconfigure;
 
@@ -121,6 +158,42 @@ function GithubSettingsPage() {
     }, 3_000);
     return () => clearInterval(id);
   }, [restartPolling, qc]);
+
+  // Handle the return trip from GitHub's manifest flow. The server's
+  // manifest-callback exchanges the code, seeds the secret, kicks off a
+  // restart, then redirects the browser here with ?created=<slug> (or
+  // ?error=<reason>). We show a toast, kick the same restart-poll the
+  // manual path uses so the page flips to the configured panel once the
+  // pod is back, then scrub the query string so a reload doesn't re-fire.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const created = params.get("created");
+    const error = params.get("error");
+    if (!created && !error) return;
+
+    if (created) {
+      toast.success(
+        `GitHub App '${created}' created — kuso is restarting to load it (~30s)`,
+      );
+      setRestartPolling(true);
+      setShowReconfigure(false);
+      setShowManual(false);
+    } else if (error) {
+      toast.error(ERROR_MESSAGES[error] ?? `GitHub App setup failed: ${error}`);
+    }
+
+    // Scrub the query params so a reload / back-nav doesn't replay the toast.
+    params.delete("created");
+    params.delete("error");
+    const qs = params.toString();
+    window.history.replaceState(
+      {},
+      "",
+      window.location.pathname + (qs ? `?${qs}` : ""),
+    );
+    // Run once on mount — reading window.location.search directly.
+  }, []);
 
   const onSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -180,27 +253,136 @@ function GithubSettingsPage() {
           onReconfigure={() => setShowReconfigure(true)}
         />
       ) : (
-        <WizardForm
-          appId={appId}
-          setAppId={setAppId}
-          appSlug={appSlug}
-          setAppSlug={setAppSlug}
-          clientId={clientId}
-          setClientId={setClientId}
-          clientSecret={clientSecret}
-          setClientSecret={setClientSecret}
-          webhookSecret={webhookSecret}
-          setWebhookSecret={setWebhookSecret}
-          privateKey={privateKey}
-          setPrivateKey={setPrivateKey}
-          org={org}
-          setOrg={setOrg}
-          submitting={configure.isPending}
-          onSubmit={onSubmit}
-          onCancel={status.data?.configured ? () => setShowReconfigure(false) : undefined}
-        />
+        <div className="space-y-4">
+          <CreateAppPanel />
+
+          {/* Manual paste path, demoted behind a toggle. Still the
+              escape hatch for air-gapped setups or when someone already
+              has an App and just wants to wire its existing credentials. */}
+          <section className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
+            <button
+              type="button"
+              onClick={() => setShowManual((v) => !v)}
+              className="flex w-full items-center justify-between px-4 py-2.5 text-left"
+            >
+              <span className="text-sm font-medium text-[var(--text-secondary)]">
+                or set up manually
+              </span>
+              {showManual ? (
+                <ChevronDown className="h-4 w-4 text-[var(--text-tertiary)]" />
+              ) : (
+                <ChevronRight className="h-4 w-4 text-[var(--text-tertiary)]" />
+              )}
+            </button>
+            {showManual && (
+              <div className="border-t border-[var(--border-subtle)] px-4 py-4">
+                <WizardForm
+                  appId={appId}
+                  setAppId={setAppId}
+                  appSlug={appSlug}
+                  setAppSlug={setAppSlug}
+                  clientId={clientId}
+                  setClientId={setClientId}
+                  clientSecret={clientSecret}
+                  setClientSecret={setClientSecret}
+                  webhookSecret={webhookSecret}
+                  setWebhookSecret={setWebhookSecret}
+                  privateKey={privateKey}
+                  setPrivateKey={setPrivateKey}
+                  org={org}
+                  setOrg={setOrg}
+                  submitting={configure.isPending}
+                  onSubmit={onSubmit}
+                  onCancel={
+                    status.data?.configured ? () => setShowReconfigure(false) : undefined
+                  }
+                />
+              </div>
+            )}
+          </section>
+        </div>
       )}
     </div>
+  );
+}
+
+// CreateAppPanel is the primary, one-click setup path. It fetches a
+// GitHub App manifest from the server (optionally scoped to an org),
+// then auto-submits an HTML form to GitHub which walks the user through
+// the standard "Create GitHub App" confirmation. GitHub redirects back
+// to the server's manifest-callback, which seeds the secret + restarts
+// kuso — the page's return-param handler picks that up.
+function CreateAppPanel() {
+  const [org, setOrg] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  const onCreate = async () => {
+    setLoading(true);
+    try {
+      const res = await getGithubManifest(org.trim() || undefined);
+      // Navigates the browser to GitHub — no further React state runs
+      // after this, so we intentionally leave `loading` true.
+      submitManifest(res.postURL, res.state, res.manifest);
+    } catch (err) {
+      setLoading(false);
+      toast.error(
+        err instanceof Error ? err.message : "Couldn't start the GitHub App setup",
+      );
+    }
+  };
+
+  return (
+    <section className="rounded-md border border-[var(--accent)]/30 bg-[var(--accent-subtle)]/40 p-5">
+      <div className="flex items-start gap-3">
+        <Sparkles className="mt-0.5 h-5 w-5 flex-shrink-0 text-[var(--accent)]" />
+        <div className="flex-1">
+          <h2 className="text-sm font-semibold tracking-tight text-[var(--text-primary)]">
+            Create a GitHub App in one click
+          </h2>
+          <p className="mt-1 text-[13px] text-[var(--text-secondary)]">
+            kuso pre-fills every permission, webhook, and redirect for you. You&apos;ll be sent
+            to GitHub to confirm and create the App, then bounced back here — kuso saves the
+            credentials and restarts automatically (~30s). No copy-pasting.
+          </p>
+
+          <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-end">
+            <div className="space-y-1">
+              <label
+                htmlFor="manifest-org"
+                className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]"
+              >
+                Org (leave blank for personal)
+              </label>
+              <Input
+                id="manifest-org"
+                value={org}
+                onChange={(e) => setOrg(e.target.value)}
+                placeholder="my-github-org"
+                disabled={loading}
+                className="h-9 w-full text-[13px] sm:w-64"
+              />
+            </div>
+            <Button type="button" onClick={onCreate} disabled={loading} className="h-9">
+              {loading ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Redirecting to GitHub…
+                </>
+              ) : (
+                <>
+                  <Github className="h-4 w-4" />
+                  Create GitHub App
+                </>
+              )}
+            </Button>
+          </div>
+          <p className="mt-3 text-[11px] text-[var(--text-tertiary)]">
+            An org value creates the App under that organization (you must be an org owner);
+            blank creates it under your personal account.
+          </p>
+        </div>
+      </div>
+    </section>
   );
 }
 

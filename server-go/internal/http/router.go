@@ -265,6 +265,21 @@ func NewRouter(d Deps) http.Handler {
 		ghHandler.RunInstallLimiterGC(d.BaseCtx)
 	}
 
+	// GithubConfigureHandler owns both a PUBLIC route (the App-Manifest
+	// callback GitHub redirects the browser to, no bearer) and AUTHED
+	// routes (setup-status, configure, manifest). The public + authed
+	// mounts happen in different router functions, so they're separate
+	// handler instances — but they share the manifest CSRF `state` via a
+	// package-level store inside the handler, so a state issued by the
+	// authed ManifestConfig is consumable by the public ManifestCallback.
+	if d.Logs != nil {
+		(&httphandlers.GithubConfigureHandler{
+			Kube:      d.Logs.Kube,
+			Namespace: d.Logs.Namespace,
+			Logger:    d.Logger,
+		}).MountPublic(r)
+	}
+
 	// Invite redemption is public — the invitee has no JWT yet.
 	// Token entropy (128 bits / base64url) is the security boundary.
 	if d.DB != nil && d.Issuer != nil {
@@ -603,12 +618,13 @@ func mountAuthenticatedRoutes(
 		// when the App isn't configured yet, this is the ONLY way a
 		// user can configure it from the UI without reinstalling.
 		if d.Logs != nil {
-			ghCfgH := &httphandlers.GithubConfigureHandler{
+			// Separate instance from the public manifest-callback mount, but
+			// the manifest CSRF state is shared via a package-level store.
+			(&httphandlers.GithubConfigureHandler{
 				Kube:      d.Logs.Kube,
 				Namespace: d.Logs.Namespace,
 				Logger:    d.Logger,
-			}
-			ghCfgH.Mount(r)
+			}).Mount(r)
 		}
 	})
 }
