@@ -993,13 +993,23 @@ if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]]; then
   # The known_hosts file still gets the entry — second run is fully
   # verified. Don't disable host key checking entirely; that opens us
   # up to MITM on every subsequent run.
+  # kuso-activator runs the SAME kuso-server-go image in --activator mode
+  # (see deploy/kuso-activator.yaml), so it must roll in lockstep. It's a
+  # separate Deployment the server-roll above doesn't touch — without this
+  # an activator-code change (e.g. the scale-to-zero / stopped-page path)
+  # silently never ships and the cluster keeps serving old behaviour.
+  # Tolerate its absence (older installs may predate the split) with
+  # `|| true` on the activator lines only.
   if [[ "$DRY_RUN" == "1" ]]; then
-    dry "ssh ${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST} 'kubectl set image -n ${KUSO_RELEASE_NS} deploy/${KUSO_RELEASE_DEPLOY} server=${KUSO_RELEASE_IMAGE}:${VERSION} && kubectl rollout status …'"
+    dry "ssh ${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST} 'kubectl set image -n ${KUSO_RELEASE_NS} deploy/${KUSO_RELEASE_DEPLOY} server=${KUSO_RELEASE_IMAGE}:${VERSION} && kubectl set image -n ${KUSO_RELEASE_NS} deploy/kuso-activator activator=${KUSO_RELEASE_IMAGE}:${VERSION} && kubectl rollout status …'"
   else
     ssh -i "$KUSO_RELEASE_KEY" \
       -o StrictHostKeyChecking=accept-new \
       "${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}" \
-      "kubectl set image -n ${KUSO_RELEASE_NS} deploy/${KUSO_RELEASE_DEPLOY} server=${KUSO_RELEASE_IMAGE}:${VERSION} && kubectl rollout status -n ${KUSO_RELEASE_NS} deploy/${KUSO_RELEASE_DEPLOY} --timeout=180s"
+      "kubectl set image -n ${KUSO_RELEASE_NS} deploy/${KUSO_RELEASE_DEPLOY} server=${KUSO_RELEASE_IMAGE}:${VERSION} && \
+       kubectl rollout status -n ${KUSO_RELEASE_NS} deploy/${KUSO_RELEASE_DEPLOY} --timeout=180s && \
+       (kubectl set image -n ${KUSO_RELEASE_NS} deploy/kuso-activator activator=${KUSO_RELEASE_IMAGE}:${VERSION} && \
+        kubectl rollout status -n ${KUSO_RELEASE_NS} deploy/kuso-activator --timeout=180s || echo 'kuso-activator not present — skipping (older install)')"
   fi
 
   # Verify /healthz reports the new version. Curl through the public
