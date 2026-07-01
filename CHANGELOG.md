@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.96] — 2026-07-01
+
+### ✨ Features
+- Feat(web): right-click context menu on project cards ([1a536b7](https://github.com/sislelabs/kuso/commit/1a536b746cf13e620c17aa8cfbf49f2946e7f17b))
+
 ## [0.18.95] — 2026-07-01
 
 ### Other
@@ -374,11 +379,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(migration): log NODE_ENV + dockerfile build-env fixes, full re-verify ([4bc6fb3](https://github.com/sislelabs/kuso/commit/4bc6fb3f1c295c9ff8d20d8059c724817574b352))
-
-## [0.18.31] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(builds): pass build-time env to raw-Dockerfile builds as build-args ([c275215](https://github.com/sislelabs/kuso/commit/c2752157e741d21dce4c0924eadc2083c9e94d66))
 
 
 ---
