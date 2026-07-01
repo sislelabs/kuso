@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.94] — 2026-07-01
+
+### 🔨 Refactors
+- Refactor(activator): restrained, editorial 404 (drop the maximalist version) ([b988f68](https://github.com/sislelabs/kuso/commit/b988f687cfa61b437503ce780cdbc82f9295406a))
+
 ## [0.18.93] — 2026-07-01
 
 ### ✨ Features
@@ -370,11 +375,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(migration): log env-propagation fix + projects-grid feature ([f4a0342](https://github.com/sislelabs/kuso/commit/f4a0342136c9eb4fa2913f84cba05d1e09c2992a))
-
-## [0.18.29] — 2026-06-04
-
-### ✨ Features
-- Feat(projects): per-user starring + folders + equal-height cards ([afd3002](https://github.com/sislelabs/kuso/commit/afd300225d8417fec930c48c2c3e29cd9fd6b05b))
 
 
 ---
