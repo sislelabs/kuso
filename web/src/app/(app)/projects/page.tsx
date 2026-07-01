@@ -12,7 +12,12 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, MemoryStick, Settings, Star, FolderPlus, Folder, ChevronDown, Power, Pause } from "lucide-react";
+import {
+  CanvasContextMenu,
+  type ContextMenuEntry,
+  type ContextMenuItem,
+} from "@/components/canvas/CanvasContextMenu";
+import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, MemoryStick, Settings, Star, FolderPlus, Folder, ChevronDown, Power, Pause, ExternalLink, FolderOpen } from "lucide-react";
 import { relativeTime } from "@/lib/format";
 import { useQueries } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
@@ -339,6 +344,7 @@ function ProjectsGrid({
 }: {
   projects: ReadonlyArray<{ metadata: { name: string; uid?: string; creationTimestamp?: string }; spec: { defaultRepo?: { url?: string }; baseDomain?: string; description?: string } }>;
 }) {
+  const router = useRouter();
   // Gates the per-card settings shortcut — only instance admins manage
   // project settings.
   const canManage = useCan(Perms.SettingsAdmin);
@@ -362,6 +368,14 @@ function ProjectsGrid({
   const [confirmStop, setConfirmStop] = useState<{
     name: string;
     count: number;
+  } | null>(null);
+  // Right-click context menu, rendered once at grid level (positioned at
+  // the click coordinate). null = closed. Reuses the canvas's menu so the
+  // card and the canvas node offer the same actions with one component.
+  const [cardMenu, setCardMenu] = useState<{
+    x: number;
+    y: number;
+    items: ContextMenuEntry[];
   } | null>(null);
   // Per-user grid prefs: starred projects pin to the top, folders group
   // the rest. byProject is a Map for O(1) per-card lookup.
@@ -528,7 +542,101 @@ function ProjectsGrid({
         })();
         const metrics = metricQueries[i]?.data;
         const node = (
-          <li key={p.metadata.uid ?? name} className="h-full">
+          <li
+            key={p.metadata.uid ?? name}
+            className="h-full"
+            onContextMenu={(e) => {
+              // Right-click → project action menu at the cursor. Build the
+              // items from this card's live state (stopped/running,
+              // starred, public URL) and open the shared menu.
+              e.preventDefault();
+              const items: ContextMenuEntry[] = [
+                {
+                  id: "header",
+                  kind: "header",
+                  label: name,
+                  subtitle: `project · ${services.length} service${
+                    services.length === 1 ? "" : "s"
+                  }`,
+                  icon: Box,
+                },
+                {
+                  id: "open",
+                  label: "Open project",
+                  icon: ArrowUpRight,
+                  onSelect: () => router.push(`/projects/${name}`),
+                },
+                ...(publicURL
+                  ? [
+                      {
+                        id: "open-url",
+                        label: "Open site ↗",
+                        icon: ExternalLink,
+                        onSelect: () =>
+                          window.open(publicURL, "_blank", "noopener"),
+                      } as ContextMenuItem,
+                    ]
+                  : []),
+                { id: "sep1", kind: "separator" },
+                ...(canStopProjects && services.length > 0
+                  ? allStopped
+                    ? [
+                        {
+                          id: "start",
+                          label: "Start project",
+                          icon: Power,
+                          onSelect: () => startProject.mutate(name),
+                        } as ContextMenuItem,
+                      ]
+                    : anyRunning
+                    ? [
+                        {
+                          id: "stop",
+                          label: "Stop project",
+                          icon: Pause,
+                          destructive: true,
+                          onSelect: () =>
+                            setConfirmStop({
+                              name,
+                              count: services.length,
+                            }),
+                        } as ContextMenuItem,
+                      ]
+                    : []
+                  : []),
+                {
+                  id: "star",
+                  label: starred ? "Unstar" : "Star",
+                  icon: Star,
+                  onSelect: () =>
+                    setPref.mutate({ project: name, starred: !starred, folder }),
+                },
+                ...(folder
+                  ? [
+                      {
+                        id: "unfile",
+                        label: "Remove from folder",
+                        icon: FolderOpen,
+                        onSelect: () =>
+                          setPref.mutate({ project: name, starred, folder: "" }),
+                      } as ContextMenuItem,
+                    ]
+                  : []),
+                ...(canManage
+                  ? [
+                      { id: "sep2", kind: "separator" } as ContextMenuEntry,
+                      {
+                        id: "settings",
+                        label: "Project settings",
+                        icon: Settings,
+                        onSelect: () => router.push(`/projects/${name}/settings`),
+                      } as ContextMenuItem,
+                    ]
+                  : []),
+              ];
+              setCardMenu({ x: e.clientX, y: e.clientY, items });
+            }}
+          >
             {/* Card layout: the whole card is one big <Link> into
                 kuso, with nested clickable bits (the external domain
                 row) escaped via pointer-events. We previously used an
@@ -879,6 +987,17 @@ function ProjectsGrid({
     />
   );
 
+  // Shared right-click menu (rendered once, in both return paths).
+  const contextMenu = (
+    <CanvasContextMenu
+      open={cardMenu !== null}
+      x={cardMenu?.x ?? 0}
+      y={cardMenu?.y ?? 0}
+      items={cardMenu?.items ?? []}
+      onClose={() => setCardMenu(null)}
+    />
+  );
+
   // No prefs at all → the original flat grid, no section chrome.
   const hasSections = starredCards.length > 0 || folderNames.length > 0;
   if (!hasSections)
@@ -886,12 +1005,14 @@ function ProjectsGrid({
       <>
         {grid(cards)}
         {stopDialog}
+        {contextMenu}
       </>
     );
 
   return (
     <div className="space-y-6">
       {stopDialog}
+      {contextMenu}
       {starredCards.length > 0 && (
         <Section
           icon={<Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />}
