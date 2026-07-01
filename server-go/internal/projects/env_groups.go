@@ -512,7 +512,8 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 			},
 			Spec: clonedSpec,
 		}
-		if _, err := s.Kube.CreateKusoService(ctx, ns, svcClone); err != nil {
+		createdClone, err := s.Kube.CreateKusoService(ctx, ns, svcClone)
+		if err != nil {
 			rollback()
 			return nil, fmt.Errorf("clone service %s: %w", item.short, err)
 		}
@@ -566,11 +567,20 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				Name: envCRName,
 				Labels: map[string]string{
 					labelProject: project,
-					labelService: newSvcCR,
+					// SHORT service name — matches the production-env
+					// convention (services_ops.go). propagateChangedToEnvs
+					// lists envs by labelService=<short>, so labeling this with
+					// the FQN (newSvcCR) silently hid the cloned env from every
+					// propagation, freezing its env-vars/scale/etc.
+					labelService: newSvcShort,
 					labelEnv:     req.Name,
 				},
-				Annotations:     annot,
-				OwnerReferences: []metav1.OwnerReference{kube.OwnerRefForService(item.svc)},
+				Annotations: annot,
+				// Own the env by the CLONE, not the source production service.
+				// Owning it by item.svc meant deleting production GC'd this
+				// clone's env (cross-env hazard) while deleting the clone did
+				// not (orphan). createdClone carries the UID from Create.
+				OwnerReferences: []metav1.OwnerReference{kube.OwnerRefForService(createdClone)},
 			},
 			Spec: kube.KusoEnvironmentSpec{
 				Project:          project,
@@ -585,6 +595,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				TLSHosts:         computeTLSHosts(host, domainHosts(item.svc.Spec.Domains)),
 				Internal:         item.svc.Spec.Internal,
 				Stopped:          item.svc.Spec.Stopped,
+				Sleep:            envSleepFrom(item.svc.Spec.Sleep),
 				TLSEnabled:       true,
 				ClusterIssuer:    "letsencrypt-prod",
 				IngressClassName: "traefik",

@@ -639,6 +639,25 @@ log "applying kuso-server-secrets"
 # Empty is fine for unsigned releases — the updater logs a warn but
 # proceeds. Set KUSO_REQUIRE_SIGNATURES=true to refuse unsigned.
 KUSO_RELEASE_PUBKEY="${KUSO_RELEASE_PUBLIC_KEY:-}"
+#
+# WHY THIS DEFAULTS TO false (and can't safely be flipped to true yet):
+# Releases ARE signed — release.sh publishes a release.json.sig asset and
+# the updater (server-go/internal/updater) verifies it Ed25519. BUT a
+# stock install ships NO public key: KUSO_RELEASE_PUBLIC_KEY above defaults
+# to empty AND the embedded server-go/internal/updater/releasekey.pub is a
+# 0-byte placeholder (hack/release-keygen.sh has never been run for this
+# repo). With a signature present but no key, verifyManifestSignature
+# returns "release is signed but no release public key configured", which
+# under KUSO_REQUIRE_SIGNATURES=true is a HARD FAIL on every update — it
+# would break self-update on all stock installs. So we default to false.
+#
+# TO SAFELY ENABLE (flip to true): distribute the release public key first.
+#   1. Run hack/release-keygen.sh (writes releasekey.pub + a private key),
+#      commit the non-empty releasekey.pub, and cut a release signed with
+#      the matching private key. Now the key is embedded in the binary, OR
+#   2. pass KUSO_RELEASE_PUBLIC_KEY=<base64 ed25519 pubkey> to this install.
+# Once a real key is present on the install, set KUSO_REQUIRE_SIGNATURES=true
+# to enforce supply-chain verification.
 KUSO_REQUIRE_SIGS="${KUSO_REQUIRE_SIGNATURES:-false}"
 kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o yaml \
   --from-literal=KUSO_SESSION_KEY="$SESSION_KEY" \

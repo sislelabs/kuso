@@ -934,6 +934,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			Internal:         svc.Spec.Internal,
 			PrivateEgress:    svc.Spec.PrivateEgress,
 			Stopped:          svc.Spec.Stopped,
+			Sleep:            envSleepFrom(svc.Spec.Sleep),
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
@@ -1909,7 +1910,9 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		}
 		scaleChanged = true
 	}
+	sleepChanged := false
 	if req.Sleep != nil {
+		sleepChanged = true
 		if svc.Spec.Sleep == nil {
 			svc.Spec.Sleep = &kube.KusoServiceSleep{}
 		}
@@ -2122,6 +2125,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		Runtime:       runtimeChanged,
 		PrivateEgress: privateEgressChanged,
 		Stopped:       stoppedChanged,
+		Sleep:         sleepChanged,
 		Release:       releaseChanged,
 		Command:       commandChanged,
 		Resources:     resourcesChanged,

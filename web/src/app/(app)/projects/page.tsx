@@ -342,14 +342,15 @@ function ProjectsGrid({
   // Gates the per-card settings shortcut — only instance admins manage
   // project settings.
   const canManage = useCan(Perms.SettingsAdmin);
-  // Stop/start is an EDITOR-level capability server-side (ProjectRoleEditor
-  // → services:write), matching the per-service stop action and the CLI.
-  // Gate the card's stop-project button on services:write, not the
-  // stricter settings:admin the settings gear uses — otherwise an editor
-  // the server authorizes can't see the button. (Single-tenant: instance
-  // services:write IS the editor grant; per-project role hooks can't be
-  // called inside the per-card map.)
-  const canStopProjects = useCan(Perms.ServicesWrite);
+  // Gate the card's stop-project button on settings:admin (same as the
+  // settings gear). NOTE: services:write is a PROJECT-scoped permission
+  // (PermsForProjectRole), never present in the session/instance perm set
+  // useCan checks — so useCan(ServicesWrite) is false for EVERYONE, admins
+  // included, which made this button dead. This list page renders N cards
+  // in a .map(), so per-project role hooks (useCanOnProject) can't be
+  // called here; settings:admin is the honest instance-level gate. The
+  // server still enforces ProjectRoleEditor on the endpoint regardless.
+  const canStopProjects = canManage;
   // Whole-project stop/start. The power button in each card's icon row
   // starts a project directly (one click, safe) but routes a stop
   // through a typed confirm — it 503s every visitor until start.

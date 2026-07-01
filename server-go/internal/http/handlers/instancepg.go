@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"kuso/server/internal/instancepg"
@@ -118,6 +119,7 @@ func (h *InstancePGHandler) fail(w http.ResponseWriter, op string, err error) {
 	case errors.Is(err, instancepg.ErrNotFound):
 		http.Error(w, err.Error(), http.StatusNotFound)
 	default:
-		http.Error(w, op+": "+err.Error(), http.StatusInternalServerError)
+		slog.Default().Error("instance-pg handler", "op", op, "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
 	}
 }

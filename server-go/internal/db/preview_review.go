@@ -17,6 +17,11 @@ import (
 	"time"
 )
 
+// ErrInvalidDecision is returned by SetPreviewReviewDecision when the
+// decision verb isn't one of the three accepted values. Handlers map
+// it to 400 so the raw error text never needs to reach the client.
+var ErrInvalidDecision = errors.New("invalid decision")
+
 type PreviewReview struct {
 	ID              string
 	Project         string
@@ -111,7 +116,7 @@ func (d *DB) SetPreviewReviewDecision(ctx context.Context, token, decision, comm
 	switch decision {
 	case "approved", "changes_requested", "denied":
 	default:
-		return fmt.Errorf("invalid decision %q", decision)
+		return fmt.Errorf("%w %q", ErrInvalidDecision, decision)
 	}
 	now := time.Now().UTC()
 	res, err := d.ExecContext(ctx, `

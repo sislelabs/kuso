@@ -73,9 +73,10 @@ func (d *Dispatcher) StartOutboxWorkers(ctx context.Context, workers int) {
 }
 
 // outboxWorker is the per-goroutine drain loop. Claims one row at a
-// time inside a transaction; on delivery success commits with
-// deliveredAt=now(), on failure commits with attempts++ +
-// nextAttemptAt advanced.
+// time (the claim commits immediately with a lease), delivers OUTSIDE
+// any transaction, then records the outcome: deliveredAt=now() on
+// success, attempts++ + nextAttemptAt advanced on failure. The DB
+// connection is never held across the HTTP/SMTP delivery.
 func (d *Dispatcher) outboxWorker(ctx context.Context, id int) {
 	for {
 		if ctx.Err() != nil {
@@ -113,20 +114,23 @@ func (d *Dispatcher) outboxWorker(ctx context.Context, id int) {
 // (false, nil) when the queue was empty; (false, err) on a real DB
 // or transaction error.
 func (d *Dispatcher) drainOne(ctx context.Context) (bool, error) {
-	tx, row, err := d.db.ClaimOutboxRow(ctx)
+	row, err := d.db.ClaimOutboxRow(ctx)
 	if err != nil {
 		if errors.Is(err, db.ErrNoOutboxRow) {
 			return false, nil
 		}
 		return false, err
 	}
-	// From here on the transaction MUST be committed (Mark*) or
-	// rolled back; never returned to the caller with the lock held.
-	// Unmarshal the event payload first so a corrupt row goes
-	// straight to dead-letter instead of being delivered as garbage.
+	// The claim already committed (with a lease pushing nextAttemptAt
+	// into the future), so NO DB connection is held past this point.
+	// Delivery happens outside any transaction; the outcome is recorded
+	// with a fresh short statement (Mark*), superseding the lease.
+	//
+	// Unmarshal the event payload first so a corrupt row goes straight
+	// to dead-letter instead of being delivered as garbage.
 	var ev Event
 	if uerr := json.Unmarshal(row.Payload, &ev); uerr != nil {
-		_ = d.db.MarkOutboxAttempt(ctx, tx, row.ID,
+		_ = d.db.MarkOutboxAttempt(ctx, row.ID,
 			"payload unmarshal: "+uerr.Error(),
 			time.Now().Add(outboxBackoffMax),
 		)
@@ -141,19 +145,19 @@ func (d *Dispatcher) drainOne(ctx context.Context) (bool, error) {
 		// terminal — the user removed the channel; we shouldn't keep
 		// retrying. Marking as delivered drops the row from the
 		// pending count without spamming dead-letter.
-		_ = d.db.MarkOutboxDelivered(ctx, tx, row.ID)
+		_ = d.db.MarkOutboxDelivered(ctx, row.ID)
 		d.logger.Info("notify: outbox row's channel no longer exists, skipping", "row", row.ID, "channelId", row.NotificationID)
 		return true, nil
 	}
 	if !notif.Enabled {
 		// Channel disabled — same treatment as deleted. User can re-
 		// enable later, but past-pending deliveries aren't replayed.
-		_ = d.db.MarkOutboxDelivered(ctx, tx, row.ID)
+		_ = d.db.MarkOutboxDelivered(ctx, row.ID)
 		return true, nil
 	}
 	derr := d.deliverViaChannel(ctx, notif, ev)
 	if derr == nil {
-		if merr := d.db.MarkOutboxDelivered(ctx, tx, row.ID); merr != nil {
+		if merr := d.db.MarkOutboxDelivered(ctx, row.ID); merr != nil {
 			return true, merr
 		}
 		metricsDispatched.WithLabelValues(string(ev.Type)).Inc()
@@ -165,7 +169,7 @@ func (d *Dispatcher) drainOne(ctx context.Context) (bool, error) {
 	nextAttempts := row.Attempts + 1
 	wait := outboxBackoff(nextAttempts)
 	nextAttemptAt := time.Now().Add(wait)
-	if merr := d.db.MarkOutboxAttempt(ctx, tx, row.ID, derr.Error(), nextAttemptAt); merr != nil {
+	if merr := d.db.MarkOutboxAttempt(ctx, row.ID, derr.Error(), nextAttemptAt); merr != nil {
 		return true, merr
 	}
 	if nextAttempts >= db.MaxOutboxAttempts {

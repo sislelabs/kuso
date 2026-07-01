@@ -19,8 +19,10 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -40,21 +42,21 @@ type PreviewReviewHandler struct {
 // every DB-internal field; only what the reviewer needs to make a
 // decision lands here.
 type PublicReviewerView struct {
-	Project          string                  `json:"project"`
-	PRNumber         int                     `json:"prNumber"`
-	PRTitle          string                  `json:"prTitle"`
-	PRBody           string                  `json:"prBody"`
-	PRAuthor         string                  `json:"prAuthor"`
-	BaseRef          string                  `json:"baseRef"`
-	HeadRef          string                  `json:"headRef"`
-	Services         []PublicReviewerService `json:"services"`
-	SeedPhase        string                  `json:"seedPhase"`
-	SeedError        string                  `json:"seedError,omitempty"`
-	Decision         string                  `json:"decision"`         // "" until reviewer picks
-	DecisionComment  string                  `json:"decisionComment,omitempty"`
-	DecidedAt        *time.Time              `json:"decidedAt,omitempty"`
-	DecidedBy        string                  `json:"decidedBy,omitempty"`
-	Closed           bool                    `json:"closed"`
+	Project         string                  `json:"project"`
+	PRNumber        int                     `json:"prNumber"`
+	PRTitle         string                  `json:"prTitle"`
+	PRBody          string                  `json:"prBody"`
+	PRAuthor        string                  `json:"prAuthor"`
+	BaseRef         string                  `json:"baseRef"`
+	HeadRef         string                  `json:"headRef"`
+	Services        []PublicReviewerService `json:"services"`
+	SeedPhase       string                  `json:"seedPhase"`
+	SeedError       string                  `json:"seedError,omitempty"`
+	Decision        string                  `json:"decision"` // "" until reviewer picks
+	DecisionComment string                  `json:"decisionComment,omitempty"`
+	DecidedAt       *time.Time              `json:"decidedAt,omitempty"`
+	DecidedBy       string                  `json:"decidedBy,omitempty"`
+	Closed          bool                    `json:"closed"`
 }
 
 type PublicReviewerService struct {
@@ -154,7 +156,9 @@ func (h *PreviewReviewHandler) GetByToken(w http.ResponseWriter, r *http.Request
 
 // PostDecision records the reviewer's verdict + optional comment.
 // Body: { "decision": "approved"|"changes_requested"|"denied",
-//         "comment": "...", "reviewer": "email@..." }
+//
+//	"comment": "...", "reviewer": "email@..." }
+//
 // 404 on token miss, 400 on bad decision verb, 200 + the updated view on success.
 func (h *PreviewReviewHandler) PostDecision(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -178,26 +182,23 @@ func (h *PreviewReviewHandler) PostDecision(w http.ResponseWriter, r *http.Reque
 		reviewer = "anonymous"
 	}
 	if err := h.DB.SetPreviewReviewDecision(ctx, token, body.Decision, body.Comment, reviewer); err != nil {
-		if errors.Is(err, errNotFoundSentinel()) {
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
 			http.Error(w, "not found", http.StatusNotFound)
-			return
+		case errors.Is(err, db.ErrInvalidDecision):
+			http.Error(w, "invalid decision", http.StatusBadRequest)
+		default:
+			// Unexpected DB error — log server-side, never leak the SQL
+			// text to this unauthenticated caller.
+			slog.Default().Error("preview review: set decision", "err", err)
+			http.Error(w, "internal error", http.StatusInternalServerError)
 		}
-		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	// Re-render the view so the reviewer page can re-baseline without
 	// a second fetch.
 	h.GetByToken(w, r)
 }
-
-// errNotFoundSentinel returns the sql.ErrNoRows-equivalent without
-// importing database/sql in this file. Implemented as a function so
-// the package init order works.
-func errNotFoundSentinel() error {
-	return errNoRowsForReview
-}
-
-var errNoRowsForReview = errors.New("sql: no rows in result set")
 
 // itoa is a tiny strconv shim so we don't pull strconv into the
 // reviewer-page handler when we only need int → string for one

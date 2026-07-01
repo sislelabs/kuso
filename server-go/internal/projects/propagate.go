@@ -72,10 +72,16 @@ type changedFields struct {
 	// replicas:0 off the env CR's value and the activator reads it to
 	// refuse waking, so a service-level toggle must reach the env CR.
 	Stopped bool
+	// Sleep carries spec.sleep (scale-to-zero) changes. The kusoenvironment
+	// ingress template routes to the activator off the ENV CR's
+	// sleep.enabled — so without propagation a sleep-enabled service's
+	// ingress never points at the activator, and when it idles to 0
+	// replicas the next request 503s instead of waking. Must reach the env.
+	Sleep bool
 }
 
 func (c changedFields) any() bool {
-	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.Release || c.Command || c.Resources || c.Stopped
+	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.Release || c.Command || c.Resources || c.Stopped || c.Sleep
 }
 
 // propagateChangedToEnvs is the single chokepoint that mirrors a
@@ -269,6 +275,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			}
 			if changed.Stopped {
 				env.Spec.Stopped = svc.Spec.Stopped
+			}
+			if changed.Sleep {
+				env.Spec.Sleep = envSleepFrom(svc.Spec.Sleep)
 			}
 			if changed.Release {
 				env.Spec.Release = svc.Spec.Release
