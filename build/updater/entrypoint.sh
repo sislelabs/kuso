@@ -41,6 +41,21 @@ write_status "rolling-server" "${KUSO_SERVER_IMAGE}"
 kubectl set image -n "$NS" deploy/kuso-server "server=${KUSO_SERVER_IMAGE}" >/dev/null
 kubectl rollout status -n "$NS" deploy/kuso-server --timeout=180s
 
+# The activator runs the SAME kuso-server-go image in `--activator` mode
+# (deploy/kuso-activator.yaml). Roll it in lockstep with the server so
+# activator-side changes (scale-to-zero / stopped-page / stopped-env
+# routing) actually reach self-updating clusters — otherwise it stays
+# pinned to the OLD image forever. Guard on presence: older installs
+# predate the activator, so a missing deployment must not fail the Job.
+if kubectl get -n "$NS" deploy/kuso-activator >/dev/null 2>&1; then
+  write_status "rolling-activator" "${KUSO_SERVER_IMAGE}"
+  kubectl set image -n "$NS" deploy/kuso-activator "activator=${KUSO_SERVER_IMAGE}" >/dev/null
+  kubectl rollout status -n "$NS" deploy/kuso-activator --timeout=180s
+else
+  write_status "rolling-activator" "no kuso-activator deployment — skipping (pre-activator install)"
+  echo "==> no kuso-activator deployment found; skipping activator roll"
+fi
+
 # Guard against a manifest with no operator image. Under `set -e` an empty
 # KUSO_OPERATOR_IMAGE would make `set image …manager=` fail and abort the
 # whole Job AFTER the server already rolled — leaving a half-applied upgrade.

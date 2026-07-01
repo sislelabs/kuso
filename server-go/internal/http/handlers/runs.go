@@ -188,6 +188,7 @@ func (h *RunsHandler) fail(w http.ResponseWriter, op string, err error) {
 	case errors.Is(err, runs.ErrConflict):
 		http.Error(w, err.Error(), http.StatusConflict)
 	default:
-		http.Error(w, op+": "+err.Error(), http.StatusInternalServerError)
+		h.Logger.Error("runs handler", "op", op, "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
 	}
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"kuso/server/internal/kube"
 )
 
 // StopService hard-stops a service: sets spec.stopped=true, which pins
@@ -76,4 +78,16 @@ func (s *Service) setProjectStopped(ctx context.Context, project string, stopped
 		return fmt.Errorf("%s failed for %d service(s): %s", verb, len(failed), strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// envSleepFrom maps a service's sleep spec to the env's slimmer sleep
+// spec (the kusoenvironment chart only reads sleep.enabled, to route the
+// ingress at the activator for scale-to-zero). Nil / disabled → nil, so
+// the env's ingress points at the app's own Service. Shared by the env-
+// creation sites and the propagation chokepoint so they can't diverge.
+func envSleepFrom(s *kube.KusoServiceSleep) *kube.KusoEnvSleep {
+	if s == nil || !s.Enabled {
+		return nil
+	}
+	return &kube.KusoEnvSleep{Enabled: true}
 }

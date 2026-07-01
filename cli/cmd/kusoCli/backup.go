@@ -25,6 +25,7 @@ var (
 	backupOutput  string
 	restoreNoWait bool
 	restoreWait   time.Duration
+	restoreYes    bool
 )
 
 var backupCmd = &cobra.Command{
@@ -78,6 +79,10 @@ you want to fire-and-forget and check status separately).`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		if err := confirmDestructive(restoreYes,
+			fmt.Sprintf("This OVERWRITES the current kuso control-plane database with %s and auto-rolls kuso-server. Continue?", args[0])); err != nil {
+			return err
 		}
 		f, err := os.Open(args[0])
 		if err != nil {
@@ -193,6 +198,7 @@ func init() {
 	rootCmd.AddCommand(backupCmd)
 	backupCmd.Flags().StringVarP(&backupOutput, "output", "o", "", "destination file (default: kuso-backup-<timestamp>.sql.gz)")
 	rootCmd.AddCommand(restoreCmd)
+	restoreCmd.Flags().BoolVarP(&restoreYes, "yes", "y", false, "skip the overwrite confirmation prompt")
 	restoreCmd.Flags().BoolVar(&restoreNoWait, "no-wait", false, "return immediately after submitting; don't poll the Job")
 	restoreCmd.Flags().DurationVar(&restoreWait, "wait", 10*time.Minute, "max time to wait for the Job (used with default polling)")
 	restoreCmd.AddCommand(restoreStatusCmd)

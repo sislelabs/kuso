@@ -45,6 +45,18 @@ type OutboxRow struct {
 // brief DNS hiccups) without permanently spinning on a wedged URL.
 const MaxOutboxAttempts = 10
 
+// OutboxClaimLease is how far into the future ClaimOutboxRow pushes a
+// claimed row's nextAttemptAt while delivery is in flight. This is the
+// lock that replaces holding the DB transaction open across the HTTP/
+// SMTP call: the claim commits immediately (releasing the connection),
+// but the pushed-out nextAttemptAt stops any other worker re-claiming
+// the row until the lease expires. It MUST exceed the worst-case
+// delivery timeout so a slow-but-succeeding delivery isn't double-sent.
+// If a worker crashes mid-delivery the lease expires and another worker
+// re-claims — that's the at-least-once guarantee. 2min comfortably
+// covers the per-channel HTTP/SMTP timeouts (seconds, not minutes).
+const OutboxClaimLease = 2 * time.Minute
+
 // ErrNoOutboxRow signals the worker that the table has no due rows
 // right now — sleep and try again, not an error to log.
 var ErrNoOutboxRow = errors.New("notification outbox: no due row")
@@ -68,21 +80,31 @@ func (d *DB) EnqueueOutbox(ctx context.Context, notificationID string, eventType
 	return id, nil
 }
 
-// ClaimOutboxRow grabs the next due row exclusively. Pattern:
-// SELECT ... FOR UPDATE SKIP LOCKED LIMIT 1 inside a transaction —
-// the row stays locked until the worker commits the result.
-// Workers process the row inside the same transaction so a crash
-// mid-delivery rolls back the claim and the next worker retries.
+// ClaimOutboxRow grabs the next due row exclusively and returns it
+// with NO transaction held. Pattern: SELECT … FOR UPDATE SKIP LOCKED
+// LIMIT 1 inside a SHORT transaction that immediately pushes the row's
+// nextAttemptAt OutboxClaimLease into the future, then COMMITS. The
+// committed lease — not a held row lock — is what stops other workers
+// re-claiming the row while its delivery is in flight.
+//
+// This is the fix for the connection-pool-exhaustion hazard: the DB
+// connection is released the instant the claim commits, so the caller
+// performs the (potentially slow / hung) HTTP/SMTP delivery OUTSIDE any
+// transaction, then records the outcome in a SECOND short transaction
+// via MarkOutboxDelivered / MarkOutboxAttempt. A slow webhook no longer
+// pins a DB connection + row lock for its whole timeout.
+//
+// At-least-once is preserved: if the worker crashes after claiming but
+// before marking, the lease expires (OutboxClaimLease later) and another
+// worker re-claims. On the success/normal-failure path the caller stamps
+// the real deliveredAt or backoff nextAttemptAt, superseding the lease.
 //
 // Returns ErrNoOutboxRow when the queue is empty / nothing due yet
 // (the worker should sleep instead of treating this as an error).
-//
-// The returned Tx MUST be committed (with MarkOutboxDelivered or
-// MarkOutboxAttempt) or rolled back by the caller.
-func (d *DB) ClaimOutboxRow(ctx context.Context) (*Tx, *OutboxRow, error) {
+func (d *DB) ClaimOutboxRow(ctx context.Context) (*OutboxRow, error) {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
-		return nil, nil, fmt.Errorf("claim outbox: begin: %w", err)
+		return nil, fmt.Errorf("claim outbox: begin: %w", err)
 	}
 	row := tx.QueryRowContext(ctx, `
 		SELECT "id", "notificationId", "eventType", "payload",
@@ -102,52 +124,64 @@ func (d *DB) ClaimOutboxRow(ctx context.Context) (*Tx, *OutboxRow, error) {
 		&r.Attempts, &r.LastError, &r.NextAttemptAt, &deliveredAt, &r.CreatedAt); err != nil {
 		_ = tx.Rollback()
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, nil, ErrNoOutboxRow
+			return nil, ErrNoOutboxRow
 		}
-		return nil, nil, fmt.Errorf("claim outbox: scan: %w", err)
+		return nil, fmt.Errorf("claim outbox: scan: %w", err)
 	}
 	if deliveredAt.Valid {
 		t := deliveredAt.Time
 		r.DeliveredAt = &t
 	}
-	return tx, &r, nil
+	// Lease the row: push nextAttemptAt out so no other worker re-claims
+	// it while we deliver. Committed immediately — the row lock (and the
+	// connection) is released here, not after delivery.
+	lease := time.Now().Add(OutboxClaimLease)
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE "NotificationOutbox"
+		SET "nextAttemptAt" = $1
+		WHERE "id" = $2
+	`, lease.UTC().Format("2006-01-02 15:04:05.999999"), r.ID); err != nil {
+		_ = tx.Rollback()
+		return nil, fmt.Errorf("claim outbox: lease: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("claim outbox: commit lease: %w", err)
+	}
+	return &r, nil
 }
 
-// MarkOutboxDelivered commits the claim with deliveredAt=now(). After
-// commit the row stays in the table (operators can audit successful
-// deliveries) until the daily cleanup goroutine prunes it.
-//
-// Receives the kuso wrapper *Tx (not *sql.Tx); either works now that
-// queries are native `$N`, but the wrapper keeps the write-error
-// counter consistent with the rest of the package.
-func (d *DB) MarkOutboxDelivered(ctx context.Context, tx *Tx, id int64) error {
-	if _, err := tx.ExecContext(ctx, `
+// MarkOutboxDelivered stamps deliveredAt=now() on a claimed+delivered
+// row in its own short statement — no caller-held transaction. Runs
+// AFTER the (out-of-band) delivery succeeded, superseding the claim
+// lease ClaimOutboxRow stamped. The row stays in the table (operators
+// can audit successful deliveries) until the daily cleanup prunes it.
+func (d *DB) MarkOutboxDelivered(ctx context.Context, id int64) error {
+	if _, err := d.ExecContext(ctx, `
 		UPDATE "NotificationOutbox"
 		SET "deliveredAt" = CURRENT_TIMESTAMP,
 		    "lastError" = NULL
 		WHERE "id" = $1
 	`, id); err != nil {
-		_ = tx.Rollback()
 		return fmt.Errorf("mark delivered: %w", err)
 	}
-	return tx.Commit()
+	return nil
 }
 
-// MarkOutboxAttempt commits the claim with attempts++ + lastError +
-// nextAttemptAt advanced by backoff. Same *Tx-not-*sql.Tx note as
-// MarkOutboxDelivered above.
-func (d *DB) MarkOutboxAttempt(ctx context.Context, tx *Tx, id int64, errMsg string, nextAttemptAt time.Time) error {
-	if _, err := tx.ExecContext(ctx, `
+// MarkOutboxAttempt records a failed delivery: attempts++ + lastError +
+// nextAttemptAt advanced by the caller's backoff. Runs in its own short
+// statement after the out-of-band delivery failed, overwriting the claim
+// lease with the real backoff schedule so the retry lands when intended.
+func (d *DB) MarkOutboxAttempt(ctx context.Context, id int64, errMsg string, nextAttemptAt time.Time) error {
+	if _, err := d.ExecContext(ctx, `
 		UPDATE "NotificationOutbox"
 		SET "attempts" = "attempts" + 1,
 		    "lastError" = $1,
 		    "nextAttemptAt" = $2
 		WHERE "id" = $3
 	`, errMsg, nextAttemptAt.UTC().Format("2006-01-02 15:04:05.999999"), id); err != nil {
-		_ = tx.Rollback()
 		return fmt.Errorf("mark attempt: %w", err)
 	}
-	return tx.Commit()
+	return nil
 }
 
 // PruneOutboxDelivered drops successfully-delivered rows older than

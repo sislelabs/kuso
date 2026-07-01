@@ -22,7 +22,7 @@ func TestOutboxEnqueueClaimDeliver(t *testing.T) {
 		t.Fatal("expected non-zero row id")
 	}
 
-	tx, row, err := d.ClaimOutboxRow(ctx)
+	row, err := d.ClaimOutboxRow(ctx)
 	if err != nil {
 		t.Fatalf("ClaimOutboxRow: %v", err)
 	}
@@ -35,12 +35,19 @@ func TestOutboxEnqueueClaimDeliver(t *testing.T) {
 	if row.Attempts != 0 {
 		t.Errorf("attempts = %d, want 0 (fresh row)", row.Attempts)
 	}
-	if err := d.MarkOutboxDelivered(ctx, tx, row.ID); err != nil {
+
+	// The claim committed with a lease pushing nextAttemptAt into the
+	// future, so a concurrent worker must not re-claim mid-delivery.
+	if _, err := d.ClaimOutboxRow(ctx); !errors.Is(err, ErrNoOutboxRow) {
+		t.Errorf("re-claim while leased should be ErrNoOutboxRow, got %v", err)
+	}
+
+	if err := d.MarkOutboxDelivered(ctx, row.ID); err != nil {
 		t.Fatalf("MarkOutboxDelivered: %v", err)
 	}
 
 	// Now the queue should be empty.
-	_, _, err = d.ClaimOutboxRow(ctx)
+	_, err = d.ClaimOutboxRow(ctx)
 	if !errors.Is(err, ErrNoOutboxRow) {
 		t.Errorf("re-claim after delivered should be ErrNoOutboxRow, got %v", err)
 	}
@@ -58,18 +65,18 @@ func TestOutboxAttemptBumpsScheduling(t *testing.T) {
 		t.Fatalf("EnqueueOutbox: %v", err)
 	}
 
-	tx, row, err := d.ClaimOutboxRow(ctx)
+	row, err := d.ClaimOutboxRow(ctx)
 	if err != nil {
 		t.Fatalf("ClaimOutboxRow: %v", err)
 	}
 	future := time.Now().Add(10 * time.Minute)
-	if err := d.MarkOutboxAttempt(ctx, tx, row.ID, "test failure", future); err != nil {
+	if err := d.MarkOutboxAttempt(ctx, row.ID, "test failure", future); err != nil {
 		t.Fatalf("MarkOutboxAttempt: %v", err)
 	}
 
 	// Row exists with attempts=1, nextAttemptAt in the future →
 	// re-claim should not pick it up.
-	_, _, err = d.ClaimOutboxRow(ctx)
+	_, err = d.ClaimOutboxRow(ctx)
 	if !errors.Is(err, ErrNoOutboxRow) {
 		t.Errorf("re-claim before nextAttemptAt should be ErrNoOutboxRow, got %v", err)
 	}
@@ -105,7 +112,7 @@ func TestOutboxCapStopsClaim(t *testing.T) {
 		t.Fatalf("force attempts: %v", err)
 	}
 	// Claim should refuse — row is dead-letter.
-	_, _, err = d.ClaimOutboxRow(ctx)
+	_, err = d.ClaimOutboxRow(ctx)
 	if !errors.Is(err, ErrNoOutboxRow) {
 		t.Errorf("claim of capped row should be ErrNoOutboxRow, got %v", err)
 	}
