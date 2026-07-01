@@ -584,6 +584,7 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				AdditionalHosts:  domainHosts(item.svc.Spec.Domains),
 				TLSHosts:         computeTLSHosts(host, domainHosts(item.svc.Spec.Domains)),
 				Internal:         item.svc.Spec.Internal,
+				Stopped:          item.svc.Spec.Stopped,
 				TLSEnabled:       true,
 				ClusterIssuer:    "letsencrypt-prod",
 				IngressClassName: "traefik",

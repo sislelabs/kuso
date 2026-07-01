@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { Handle, Position } from "@xyflow/react";
-import { Check, Copy, ExternalLink, MoreHorizontal } from "lucide-react";
+import { Check, Copy, ExternalLink, MoreHorizontal, Square } from "lucide-react";
 import type { KusoEnvironment, KusoService } from "@/types/projects";
 import type { BuildSummary } from "@/features/services/api";
 import { type DeployStatus } from "@/components/service/DeployStatusPill";
@@ -114,7 +114,13 @@ function replicasFor(env?: KusoEnvironment): Replicas | null {
 // N/M" at a glance.
 
 export function ServiceNode({ data }: { data: ServiceNodeData }) {
-  const status = statusFor(data.env, data.latestBuild);
+  // Hard stop (spec.stopped=true) overrides every other status — the
+  // service was explicitly taken offline, so we paint it as "stopped"
+  // regardless of what the env phase / build state say. Distinct from
+  // sleeping (which wakes on traffic): a stopped service stays down.
+  const stopped =
+    !!(data.service.spec as { stopped?: boolean } | undefined)?.stopped;
+  const status = stopped ? "stopped" : statusFor(data.env, data.latestBuild);
   const showFooter = true;
   // Visibility, in priority order:
   //   internal=true        → no Ingress; show "internal only" chip.
@@ -188,7 +194,10 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
         // green (running) and red (broken).
         status === "awaiting" && "border-sky-500/50",
         status === "sleeping" && "opacity-60 border-[var(--border-strong)]",
-        !["building", "deploying", "active", "awaiting", "failed", "sleeping"].includes(status) &&
+        // Stopped — dimmed like sleeping but with a slate border so it
+        // reads as an explicit "off", not a low-traffic doze.
+        status === "stopped" && "opacity-60 border-slate-500/50",
+        !["building", "deploying", "active", "awaiting", "failed", "sleeping", "stopped"].includes(status) &&
           "border-[var(--border-strong)]",
         // Keyboard focus ring — outline (not border) so it stacks on
         // top of the status colour without overriding it.
@@ -259,7 +268,13 @@ export function ServiceNode({ data }: { data: ServiceNodeData }) {
       {showFooter && (
         <div className="flex items-center justify-between gap-2 border-t border-[var(--border-subtle)] pt-2 font-mono text-[10px]">
           <ReplicasBadge replicas={replicas} status={status} />
-          {status === "sleeping" ? <SleepBadge /> : <BuildLine build={data.latestBuild} />}
+          {status === "stopped" ? (
+            <StoppedBadge />
+          ) : status === "sleeping" ? (
+            <SleepBadge />
+          ) : (
+            <BuildLine build={data.latestBuild} />
+          )}
         </div>
       )}
     </div>
@@ -307,6 +322,18 @@ function BuildLine({ build }: { build?: BuildSummary }) {
       )}
       {" "}
       <span className={cn("ml-0.5", cls)}>{glyph}</span>
+    </span>
+  );
+}
+
+// StoppedBadge is the footer chip for a hard-stopped service —
+// mirrors SleepBadge's shape but reads "stopped" with a slate hue so
+// it's clearly an explicit off-state, not a low-traffic doze.
+function StoppedBadge() {
+  return (
+    <span className="inline-flex items-center gap-1.5 rounded-md border border-slate-500/40 bg-slate-500/10 px-2 py-0.5 font-mono text-[10px] text-slate-300">
+      <Square className="h-3 w-3" />
+      <span>stopped</span>
     </span>
   );
 }

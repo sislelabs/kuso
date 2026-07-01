@@ -19,6 +19,8 @@ import {
   patchService,
   runPhase,
   setServiceEnv,
+  startService,
+  stopService,
   triggerBuild,
   wakeService,
   type CreateRunRequest,
@@ -180,6 +182,36 @@ export function useWakeService(project: string, service: string) {
     mutationFn: () => wakeService(project, service),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+    },
+  });
+}
+
+// useStopService / useStartService toggle the service's hard-stop
+// flag (spec.stopped). On success we invalidate the service query
+// (so the overlay header re-reads spec.stopped), the project envs
+// list (so the canvas node repaints its replica/stopped state), and
+// the project rollup (status counts). Mirrors useWakeService's
+// invalidation, widened to also refresh the service spec.
+export function useStopService(project: string, service: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => stopService(project, service),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: serviceQueryKey(project, service) });
+      qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+      qc.invalidateQueries({ queryKey: ["projects", project] });
+    },
+  });
+}
+
+export function useStartService(project: string, service: string) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => startService(project, service),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: serviceQueryKey(project, service) });
+      qc.invalidateQueries({ queryKey: ["projects", project, "envs"] });
+      qc.invalidateQueries({ queryKey: ["projects", project] });
     },
   });
 }

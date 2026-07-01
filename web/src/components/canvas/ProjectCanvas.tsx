@@ -58,6 +58,8 @@ import {
   Settings as SettingsIcon,
   Clock,
   Terminal,
+  Square,
+  Play,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -518,6 +520,14 @@ export function ProjectCanvas({
     nodeId: string;
   } | null>(null);
   const [deleting, setDeleting] = useState(false);
+  // Pending stop-confirm. Set when the user picks "Stop service" from
+  // the right-click menu; the ConfirmDialog below warns that stopping
+  // takes the service offline (503) before the API call fires.
+  const [confirmStop, setConfirmStop] = useState<{
+    short: string;
+    nodeId: string;
+  } | null>(null);
+  const [stopping, setStopping] = useState(false);
 
   // Edge category visibility. The two kinds today:
   //   - addon: the project's addon-conn Secret is mounted on every
@@ -821,6 +831,31 @@ export function ProjectCanvas({
         },
       },
       { id: "sep2", kind: "separator" },
+      // Hard-stop toggle. Reads spec.stopped off the node's service.
+      // Stopped → "Start service"; running → "Stop service" (confirmed
+      // via the shared ConfirmDialog since it takes the service offline).
+      (data.service.spec as { stopped?: boolean } | undefined)?.stopped
+        ? {
+            id: "start",
+            label: "Start service",
+            icon: Play,
+            onSelect: async () => {
+              try {
+                await callStopStart(data.project, short, "start", qc);
+                toast.success(`Starting ${short}`);
+              } catch (err) {
+                toast.error(err instanceof Error ? err.message : "Failed to start service");
+              }
+            },
+          }
+        : {
+            id: "stop",
+            label: "Stop service…",
+            icon: Square,
+            onSelect: () =>
+              setConfirmStop({ short, nodeId: `svc:${data.service.metadata.name}` }),
+          },
+      { id: "sep3", kind: "separator" },
       {
         id: "delete",
         label: "Delete service…",
@@ -1124,6 +1159,29 @@ export function ProjectCanvas({
           }
         }}
       />
+
+      <ConfirmDialog
+        open={!!confirmStop}
+        title={`Stop ${confirmStop?.short ?? ""}`}
+        body="This takes the service offline; visitors get a 503 until you start it."
+        confirmLabel="Stop service"
+        pending={stopping}
+        onCancel={() => setConfirmStop(null)}
+        onConfirm={async () => {
+          if (!confirmStop) return;
+          const { short } = confirmStop;
+          setStopping(true);
+          try {
+            await callStopStart(project, short, "stop", qc);
+            toast.success(`Stopped ${short}`);
+            setConfirmStop(null);
+          } catch (err) {
+            toast.error(err instanceof Error ? err.message : "Failed to stop service");
+          } finally {
+            setStopping(false);
+          }
+        }}
+      />
     </div>
   );
 }
@@ -1140,6 +1198,22 @@ async function callTrigger(
   void _hint;
   const { triggerBuild } = await import("@/features/services/api");
   await triggerBuild(project, service, {});
+}
+
+// callStopStart adapter: like callTrigger, the canvas hits the stop/
+// start API directly rather than spinning up a per-node mutation hook.
+// On success it invalidates the project subtree so the node repaints
+// its stopped/running state (spec.stopped + replicas both change).
+async function callStopStart(
+  project: string,
+  service: string,
+  action: "stop" | "start",
+  qc: ReturnType<typeof useQueryClient>
+) {
+  const { stopService, startService } = await import("@/features/services/api");
+  if (action === "stop") await stopService(project, service);
+  else await startService(project, service);
+  qc.invalidateQueries({ queryKey: ["projects", project] });
 }
 
 // EdgeControlsPanel — bottom-right cluster that combines a legend

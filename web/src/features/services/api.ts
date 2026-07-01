@@ -214,6 +214,25 @@ export async function wakeService(project: string, service: string): Promise<voi
   );
 }
 
+// stopService is a hard stop: scales the service to 0 replicas with
+// wake-on-traffic disabled (visitors get a 503 until start). Sets
+// spec.stopped=true server-side. 202 on accept.
+export async function stopService(project: string, service: string): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/stop`,
+    { method: "POST" }
+  );
+}
+
+// startService clears a prior hard stop (spec.stopped=false), letting
+// the service scale back up. 202 on accept.
+export async function startService(project: string, service: string): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/start`,
+    { method: "POST" }
+  );
+}
+
 export async function deleteService(project: string, service: string): Promise<void> {
   return api(
     `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}`,

@@ -2,10 +2,11 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { useService, useDrift, useBuilds, rollbackBuild, useServiceCrons, useRuns, usePatchService } from "@/features/services";
+import { useService, useDrift, useBuilds, rollbackBuild, useServiceCrons, useRuns, usePatchService, useStopService, useStartService } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Undo2 } from "lucide-react";
+import { Undo2, Square, Play } from "lucide-react";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { ServiceDeploymentsPanel } from "./overlay/ServiceDeploymentsPanel";
@@ -636,6 +637,18 @@ export function ServiceOverlay({
                       env={envParam}
                     />
                   ) : null}
+                  {/* Hard-stop toggle. When the service is stopped we
+                      show a "stopped" badge + a Start button; otherwise
+                      a Stop button. Stop confirms first (it takes the
+                      service offline — visitors get a 503). Reads
+                      spec.stopped off the loaded KusoService. */}
+                  {service ? (
+                    <StopStartControl
+                      project={project}
+                      service={service}
+                      stopped={!!(svc.data?.spec as { stopped?: boolean } | undefined)?.stopped}
+                    />
+                  ) : null}
                 </div>
               </div>
               <button
@@ -901,6 +914,95 @@ export function ServiceOverlay({
         </div>
       )}
     </AnimatePresence>
+  );
+}
+
+// StopStartControl is the hard-stop toggle in the overlay header.
+// stopped=false → a "Stop" button that confirms (taking the service
+// offline is destructive-adjacent: visitors get a 503 until start).
+// stopped=true → a "stopped" badge + a one-click "Start" button. Both
+// paths toast on success/failure. State comes from spec.stopped on the
+// loaded KusoService; the mutations invalidate the service query so the
+// badge flips once the server accepts.
+function StopStartControl({
+  project,
+  service,
+  stopped,
+}: {
+  project: string;
+  service: string;
+  stopped: boolean;
+}) {
+  const [confirming, setConfirming] = useState(false);
+  const stop = useStopService(project, service);
+  const start = useStartService(project, service);
+
+  const onStop = async () => {
+    try {
+      await stop.mutateAsync();
+      toast.success(`Stopped ${service}`);
+      setConfirming(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to stop service");
+    }
+  };
+
+  const onStart = async () => {
+    try {
+      await start.mutateAsync();
+      toast.success(`Starting ${service}`);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to start service");
+    }
+  };
+
+  if (stopped) {
+    return (
+      <>
+        <span
+          title="This service is stopped — 0 replicas, visitors get a 503."
+          className="inline-flex items-center gap-1 rounded-md border border-slate-500/40 bg-slate-500/10 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-slate-300"
+        >
+          <span className="size-1.5 rounded-full bg-slate-400" />
+          stopped
+        </span>
+        <button
+          type="button"
+          disabled={start.isPending}
+          onClick={onStart}
+          title="Start the service"
+          className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] text-emerald-300 hover:brightness-110 disabled:opacity-50"
+        >
+          <Play className="h-3 w-3" />
+          {start.isPending ? "starting…" : "Start"}
+        </button>
+      </>
+    );
+  }
+
+  return (
+    <>
+      <button
+        type="button"
+        disabled={stop.isPending}
+        onClick={() => setConfirming(true)}
+        title="Stop the service (takes it offline)"
+        className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:brightness-110 disabled:opacity-50"
+      >
+        <Square className="h-3 w-3" />
+        Stop
+      </button>
+      <ConfirmDialog
+        open={confirming}
+        title={`Stop ${service}`}
+        body="This takes the service offline; visitors get a 503 until you start it."
+        confirmLabel="Stop service"
+        destructive
+        pending={stop.isPending}
+        onConfirm={onStop}
+        onCancel={() => setConfirming(false)}
+      />
+    </>
   );
 }
 

@@ -91,6 +91,13 @@ internal: false
 # selects. Mirrors KusoService.spec.privateEgress.
 privateEgress: false
 
+# stopped: when true, HARD-STOP this env — pin the Deployment to 0
+# replicas and skip the HPA, so it stays down. Distinct from scale-to-
+# zero sleep: the activator refuses to wake a stopped env (it serves a
+# "service stopped" 503 instead of scaling up). Cleared by starting the
+# service. Mirrors KusoService.spec.stopped.
+stopped: false
+
 # tlsEnabled: when true, attach cert-manager.io/cluster-issuer annotation and
 # request a per-host cert via Ingress.spec.tls. Defaults to true; override to
 # false on bare-IP installs without cert-manager.

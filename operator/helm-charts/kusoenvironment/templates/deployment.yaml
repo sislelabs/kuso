@@ -24,7 +24,13 @@ spec:
     traffic spikes. Standard chart pattern: omit the field when the HPA
     owns it.
   */}}
-  {{- if not .Values.image.repository }}
+  {{- if .Values.stopped }}
+  {{/* Hard stop wins over everything: pin to 0 AND (via hpa.yaml gating
+       the HPA off when stopped) keep the autoscaler from scaling it back
+       up. Distinct from scale-to-zero sleep — the activator refuses to
+       wake a stopped env, so this stays at 0 until the user starts it. */}}
+  replicas: 0
+  {{- else if not .Values.image.repository }}
   replicas: 0
   {{- else if not (and .Values.autoscaling .Values.autoscaling.enabled) }}
   replicas: {{ .Values.replicaCount }}

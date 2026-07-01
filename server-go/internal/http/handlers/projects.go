@@ -258,6 +258,10 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	// service; preview envs come from the GH PR webhook.
 	r.Post("/api/projects/{project}/services/{service}/envs", h.AddEnvironment)
 	r.Post("/api/projects/{project}/services/{service}/wake", h.Wake)
+	// Hard stop / start: pin to 0 replicas with no wake-on-traffic
+	// (stop), then restore (start). Distinct from sleep + wake.
+	r.Post("/api/projects/{project}/services/{service}/stop", h.Stop)
+	r.Post("/api/projects/{project}/services/{service}/start", h.Start)
 	// Pods lookup for a service+env. Used by `kuso shell` to resolve
 	// a target pod for kubectl exec, and by future shell tab in the
 	// web UI. Slim summary — name, ready, container list.
@@ -949,6 +953,62 @@ func (h *ProjectsHandler) Wake(w http.ResponseWriter, r *http.Request) {
 	if err := h.Svc.WakeService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service")); err != nil {
 		h.fail(w, "wake service", err)
 		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// Stop hard-stops a service: pins every env to 0 replicas AND stops the
+// activator from waking it on traffic (unlike sleep). Editor-gated,
+// audited. Idempotent.
+func (h *ProjectsHandler) Stop(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project, service := chi.URLParam(r, "project"), chi.URLParam(r, "service")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+		return
+	}
+	if err := h.Svc.StopService(ctx, project, service); err != nil {
+		h.fail(w, "stop service", err)
+		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "service.stop",
+			Pipeline: project,
+			App:      service,
+			Resource: "kusoservice",
+			Message:  fmt.Sprintf("service %s/%s hard-stopped (0 replicas, no wake-on-traffic)", project, service),
+		})
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// Start clears a hard-stop: the operator scales the deployment back to
+// its configured replica count and normal wake-on-traffic resumes.
+// Editor-gated, audited. Idempotent.
+func (h *ProjectsHandler) Start(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project, service := chi.URLParam(r, "project"), chi.URLParam(r, "service")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+		return
+	}
+	if err := h.Svc.StartService(ctx, project, service); err != nil {
+		h.fail(w, "start service", err)
+		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "info",
+			Action:   "service.start",
+			Pipeline: project,
+			App:      service,
+			Resource: "kusoservice",
+			Message:  fmt.Sprintf("service %s/%s started (hard-stop cleared)", project, service),
+		})
 	}
 	w.WriteHeader(http.StatusAccepted)
 }

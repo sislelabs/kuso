@@ -43,6 +43,8 @@ type ProjectsAPI interface {
 	RenameService(ctx context.Context, project, oldName, newName string) (*kube.KusoService, error)
 	RevertService(ctx context.Context, project, service string, raw json.RawMessage) error
 	WakeService(ctx context.Context, project, service string) error
+	StopService(ctx context.Context, project, service string) error
+	StartService(ctx context.Context, project, service string) error
 
 	// Service deltas (domains, env vars)
 	AddDomain(ctx context.Context, project, service string, req projects.AddDomainRequest) (*kube.KusoService, error)

@@ -933,6 +933,7 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			TLSHosts:         computeTLSHosts(host, nil),
 			Internal:         svc.Spec.Internal,
 			PrivateEgress:    svc.Spec.PrivateEgress,
+			Stopped:          svc.Spec.Stopped,
 			TLSEnabled:       true,
 			ClusterIssuer:    "letsencrypt-prod",
 			IngressClassName: "traefik",
@@ -1685,10 +1686,14 @@ type PatchServiceRequest struct {
 	// PrivateEgress toggles public-internet egress. true = pods are
 	// namespace-internal only; false/unset = pods can reach the
 	// internet. Pointer so "unset" (leave alone) is distinguishable.
-	PrivateEgress *bool                  `json:"privateEgress,omitempty"`
-	Scale         *PatchScaleRequest     `json:"scale,omitempty"`
-	Sleep         *PatchSleepRequest     `json:"sleep,omitempty"`
-	Placement     *PatchPlacementRequest `json:"placement,omitempty"`
+	PrivateEgress *bool `json:"privateEgress,omitempty"`
+	// Stopped hard-stops (true) or starts (false) the service. Distinct
+	// from Sleep: a stopped service is pinned to 0 replicas and is NOT
+	// woken by traffic. Pointer so "unset" (leave alone) is distinct.
+	Stopped   *bool                  `json:"stopped,omitempty"`
+	Scale     *PatchScaleRequest     `json:"scale,omitempty"`
+	Sleep     *PatchSleepRequest     `json:"sleep,omitempty"`
+	Placement *PatchPlacementRequest `json:"placement,omitempty"`
 	// Volumes replaces the entire volume list. Pass empty slice to
 	// drop all volumes; nil to leave them as-is. We don't support
 	// per-volume add/remove patches because PVC names are stable —
@@ -1882,6 +1887,11 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	if req.PrivateEgress != nil {
 		svc.Spec.PrivateEgress = *req.PrivateEgress
 		privateEgressChanged = true
+	}
+	stoppedChanged := false
+	if req.Stopped != nil {
+		svc.Spec.Stopped = *req.Stopped
+		stoppedChanged = true
 	}
 	scaleChanged := false
 	if req.Scale != nil {
@@ -2111,6 +2121,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		Internal:      internalChanged,
 		Runtime:       runtimeChanged,
 		PrivateEgress: privateEgressChanged,
+		Stopped:       stoppedChanged,
 		Release:       releaseChanged,
 		Command:       commandChanged,
 		Resources:     resourcesChanged,
