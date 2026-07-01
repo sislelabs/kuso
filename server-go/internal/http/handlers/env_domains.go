@@ -130,10 +130,13 @@ func (h *ProjectsHandler) UnsetEnvScopedVar(w http.ResponseWriter, r *http.Reque
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
-	out, err := h.Svc.UnsetEnvScopedVar(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "env"), chi.URLParam(r, "name"))
-	if err != nil {
+	if _, err := h.Svc.UnsetEnvScopedVar(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "env"), chi.URLParam(r, "name")); err != nil {
 		h.fail(w, "unset env-scoped var", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	// Don't echo the full env CR back: it carries every env-var override
+	// VALUE in plaintext, and an editor who lacks secrets:read must not see
+	// values (the read-secret-values boundary is admin-only). Respond 204
+	// like the SetEnvScopedVar path — no body, no leaked values.
+	w.WriteHeader(http.StatusNoContent)
 }
