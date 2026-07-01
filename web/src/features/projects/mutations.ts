@@ -91,15 +91,25 @@ export function useDeleteProject() {
 // describe-summary the cards read from, and the services/envs the
 // canvas + overlay read from. Called by stop/start so the card badge
 // and canvas flip without a hard refresh.
+//
+// Scoped deliberately: react-query prefix-matches by default, so
+// invalidating the bare ["projects"] list key would ALSO invalidate
+// every ["projects", <other>, …] per-project detail query and trigger a
+// broad refetch across projects we didn't touch. We instead invalidate
+// the list key with { exact: true } (so only the list card badge, which
+// reads services off the describe-summary, refetches for the touched
+// project) plus this project's own detail keys.
 function invalidateProjectViews(
   qc: ReturnType<typeof useQueryClient>,
   name: string,
 ) {
-  qc.invalidateQueries({ queryKey: projectsQueryKey });
-  qc.invalidateQueries({ queryKey: projectQueryKey(name) });
-  // The projects grid cards read services + envs off this composite
-  // key, NOT the individual services/envs queries.
+  // Only the exact list query, not every descendant per-project key.
+  qc.invalidateQueries({ queryKey: projectsQueryKey, exact: true });
+  // This project's describe-summary — the projects grid cards read
+  // services + envs off this composite key, NOT the individual
+  // services/envs queries — plus the canvas/overlay's services + envs.
   qc.invalidateQueries({ queryKey: ["projects", name, "describe-summary"] });
+  qc.invalidateQueries({ queryKey: projectQueryKey(name), exact: true });
   qc.invalidateQueries({ queryKey: servicesQueryKey(name) });
   qc.invalidateQueries({ queryKey: envsQueryKey(name) });
 }

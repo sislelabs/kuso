@@ -120,13 +120,15 @@ type DriftReport struct {
 
 // extractHelmStatus walks the operator-sdk helm-operator status
 // shape and pulls out (phase, lastError). The shape is:
-//   status:
-//     conditions:
-//       - type: Initialized | Deployed | ReleaseFailed | Irreconcilable
-//         status: "True" | "False"
-//         reason: ...
-//         message: ...
-//     deployedRelease: { name, manifest }
+//
+//	status:
+//	  conditions:
+//	    - type: Initialized | Deployed | ReleaseFailed | Irreconcilable
+//	      status: "True" | "False"
+//	      reason: ...
+//	      message: ...
+//	  deployedRelease: { name, manifest }
+//
 // We pick the most-recent Failed/Irreconcilable condition's message
 // for HelmError; phase derives from whichever Deployed/ReleaseFailed
 // is True.
@@ -265,6 +267,62 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	}
 	if int(svc.Spec.Port) != int(env.Spec.Port) {
 		out.SpecPending = append(out.SpecPending, "port")
+	}
+	// The remaining fields are the rest of what propagateChangedToEnvs
+	// mirrors service→env. Comparing only envVars/internal/port left the
+	// other ~9 propagated fields invisible in drift — a propagation miss
+	// on scale/resources/sleep/… never surfaced. Each comparison below
+	// mirrors exactly what the propagate loop writes onto the env CR, so
+	// a fully-propagated env reports clean and a stale one shows the
+	// specific field. Domains stays intentionally excluded (per-env,
+	// see the note above).
+	if svc.Spec.Runtime != env.Spec.Runtime {
+		out.SpecPending = append(out.SpecPending, "runtime")
+	}
+	if svc.Spec.PrivateEgress != env.Spec.PrivateEgress {
+		out.SpecPending = append(out.SpecPending, "privateEgress")
+	}
+	if svc.Spec.Stopped != env.Spec.Stopped {
+		out.SpecPending = append(out.SpecPending, "stopped")
+	}
+	if !reflect.DeepEqual(svc.Spec.Command, env.Spec.Command) {
+		out.SpecPending = append(out.SpecPending, "command")
+	}
+	if !reflect.DeepEqual(svc.Spec.Volumes, env.Spec.Volumes) {
+		out.SpecPending = append(out.SpecPending, "volumes")
+	}
+	if !reflect.DeepEqual(svc.Spec.Resources, env.Spec.Resources) {
+		out.SpecPending = append(out.SpecPending, "resources")
+	}
+	if !reflect.DeepEqual(svc.Spec.Release, env.Spec.Release) {
+		out.SpecPending = append(out.SpecPending, "release")
+	}
+	// Sleep: env carries the reduced KusoEnvSleep (envSleepFrom collapses
+	// the service's sleep spec to {Enabled}). Compare against that same
+	// projection so an enabled/disabled mismatch shows without flagging
+	// the (deliberately dropped) schedule/wakeOn detail.
+	if !reflect.DeepEqual(envSleepFrom(svc.Spec.Sleep), env.Spec.Sleep) {
+		out.SpecPending = append(out.SpecPending, "sleep")
+	}
+	// Scale: the env CR carries the DERIVED replicaCount + autoscaling
+	// block (not the raw KusoScaleSpec), and preview envs are pinned to
+	// 1 replica with no HPA. Drift only inspects the production env, so
+	// the effective-min + autoscaling projection is the right comparison.
+	if env.Spec.Kind != "preview" {
+		if env.Spec.ReplicaCountValue() != effectiveScaleMin(svc) ||
+			!reflect.DeepEqual(env.Spec.Autoscaling, autoscalingFromScale(svc.Spec.Scale)) {
+			out.SpecPending = append(out.SpecPending, "scale")
+		}
+	}
+	// Placement: the env carries the RESOLVED placement (project default
+	// merged with the service override). Resolve the same way the
+	// propagate loop does so a project-default placement doesn't read as
+	// drift. Best-effort: a project-fetch error skips the check rather
+	// than emitting a false positive.
+	if proj, perr := s.Kube.GetKusoProject(ctx, s.Namespace, project); perr == nil {
+		if !reflect.DeepEqual(ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement), env.Spec.Placement) {
+			out.SpecPending = append(out.SpecPending, "placement")
+		}
 	}
 
 	// helm-operator quirk: it writes status.conditions[type=Deployed]

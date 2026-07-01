@@ -236,6 +236,30 @@ func TestClassify_RecentMostLineWins(t *testing.T) {
 	}
 }
 
+func TestClassify_SpecificBuildDetectorBeatsGenericLaterLine(t *testing.T) {
+	// A build log prints the SPECIFIC root cause (lockfile drift) early
+	// and a GENERIC "build failed" / "command failed with exit code"
+	// line at the very end. A naive reverse LINE walk would let the
+	// generic tail win because it's later in the buffer. The build-
+	// specific detector must win regardless of line position.
+	got := Classify(
+		[]string{
+			"using pnpm@9.15.0",
+			"ERR_PNPM_OUTDATED_LOCKFILE  Cannot install with \"frozen-lockfile\"", // specific, early
+			"#14 ERROR: process \"/bin/sh -c pnpm install\" did not complete",
+			"command failed with exit code 1", // generic, LATE
+		},
+		Signal{},
+	)
+	if got.Kind != KindLockfileDrift {
+		t.Errorf("Kind = %q, want %q (specific build detector must beat generic later line)",
+			got.Kind, KindLockfileDrift)
+	}
+	if got.Remediation == nil {
+		t.Error("expected the lockfile-drift Remediation, got nil")
+	}
+}
+
 func TestClassify_LineHintTruncated(t *testing.T) {
 	long := make([]byte, maxLineHint+200)
 	for i := range long {

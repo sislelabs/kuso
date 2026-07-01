@@ -95,12 +95,17 @@ func TestRetriableDialErr(t *testing.T) {
 		"dial tcp 10.0.0.1:80: connect: connection refused",
 		"dial tcp 10.0.0.1:80: i/o timeout",
 		"dial tcp: no route to host",
-		"read: connection reset by peer",
 	}
 	for _, m := range retri {
 		if !retriableDialErr(errors.New(m)) {
 			t.Errorf("want retriable: %q", m)
 		}
+	}
+	// "connection reset by peer" is deliberately NOT retriable: a reset
+	// can arrive after the app processed the request, so retrying would
+	// double-execute a non-idempotent request (a double POST).
+	if retriableDialErr(errors.New("read: connection reset by peer")) {
+		t.Error("connection reset must not be retriable (can double-execute non-idempotent requests)")
 	}
 	if retriableDialErr(errors.New("500 internal server error")) {
 		t.Error("app error must not be retriable")

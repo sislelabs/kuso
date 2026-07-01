@@ -18,9 +18,12 @@
 //     kuso-github-app Secret (reusing Configure's seedAndRestart) and
 //     bounce the user to the install step.
 //
-// Base URL: derived from the incoming request (the user is on
-// https://<domain>/settings/github, and GitHub calls back on the same
-// host), so this needs no KUSO_DOMAIN config.
+// Base URL: derived from a trusted source via publicBaseURL —
+// KUSO_PUBLIC_URL when set, else X-Forwarded-Host only from a peer in
+// KUSO_TRUSTED_PROXIES, else r.Host. We deliberately do NOT trust a raw
+// X-Forwarded-Host from an arbitrary peer: it would let an attacker spoof
+// the Host and point the created App's webhook/callback URLs at their own
+// domain.
 package handlers
 
 import (
@@ -85,24 +88,6 @@ func (m *manifestStore) consume(s string) bool {
 	return true
 }
 
-// baseURLFromRequest reconstructs the public origin (scheme://host) the
-// user reached kuso on, honoring the reverse proxy's forwarded headers
-// (traefik sets X-Forwarded-Proto). Used to author the manifest's URLs
-// so they always point back at THIS install.
-func baseURLFromRequest(r *http.Request) string {
-	scheme := "https"
-	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
-		scheme = p
-	} else if r.TLS == nil {
-		scheme = "http"
-	}
-	host := r.Host
-	if h := r.Header.Get("X-Forwarded-Host"); h != "" {
-		host = h
-	}
-	return scheme + "://" + host
-}
-
 // githubAppManifest is the manifest schema GitHub accepts at
 // /settings/apps/new. Only the fields kuso cares about are modeled.
 type githubAppManifest struct {
@@ -126,7 +111,14 @@ func (h *GithubConfigureHandler) ManifestConfig(w http.ResponseWriter, r *http.R
 	if !h.requireAdmin(w, r) {
 		return
 	}
-	base := baseURLFromRequest(r)
+	// Derive the manifest's URLs from a TRUSTED source, not raw request
+	// headers. publicBaseURL prefers KUSO_PUBLIC_URL (operator's source of
+	// truth) and only honors X-Forwarded-Host from peers in
+	// KUSO_TRUSTED_PROXIES — otherwise it falls back to r.Host. This
+	// closes the Host-spoofing vector: a spoofed X-Forwarded-Host from an
+	// untrusted peer can no longer point the created App's webhook /
+	// callback / redirect URLs at an attacker domain.
+	base := publicBaseURL(r)
 	// App name must be globally unique on GitHub; derive from the host's
 	// first label + a short suffix so retries after a name clash differ.
 	host := strings.TrimPrefix(base, "https://")

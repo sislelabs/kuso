@@ -671,6 +671,17 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	service := chi.URLParam(r, "service")
 	name := chi.URLParam(r, "name")
+	// Mask-sentinel guard (defense in depth) — same invariant the bulk
+	// SetEnv path enforces. GetEnv returns masked values ("••••••••") to
+	// non-admins; a read-modify-write client that didn't strip the mask
+	// would echo the sentinel back here and clobber the real value. Refuse
+	// the literal sentinel rather than persist it.
+	if wire.Value == envMaskSentinel {
+		http.Error(w,
+			fmt.Sprintf("refusing to write masked sentinel value for %q — env values are admin-only; supply a real value", name),
+			http.StatusBadRequest)
+		return
+	}
 	req := projects.SetEnvVarRequest{Value: wire.Value}
 	if wire.SecretRef != nil {
 		req.SecretRef = &projects.SetEnvVarSecretRefBody{Name: wire.SecretRef.Name, Key: wire.SecretRef.Key}
@@ -683,7 +694,9 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 	// Clear any pending crash hint for this var: the user just set
 	// it, so the "your last crash mentioned X" pip should disappear
 	// without waiting for the next crash to confirm. Best-effort.
-	_ = h.DB.DeleteEnvHint(ctx, project, service, name)
+	if h.DB != nil {
+		_ = h.DB.DeleteEnvHint(ctx, project, service, name)
+	}
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -833,7 +846,10 @@ func (h *ProjectsHandler) GetDetectedEnv(w http.ResponseWriter, r *http.Request)
 		h.fail(w, "get detected env", err)
 		return
 	}
-	hints, _ := h.DB.ListEnvHints(ctx, project, service)
+	var hints any
+	if h.DB != nil {
+		hints, _ = h.DB.ListEnvHints(ctx, project, service)
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"names":      names,
 		"detectedAt": ts,

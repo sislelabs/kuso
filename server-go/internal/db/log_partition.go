@@ -324,29 +324,61 @@ func (d *DB) MigrateLogLineToPartitioned(ctx context.Context, logger *slog.Logge
 	}
 	// 4. Copy data in batches. id is preserved so error-scan
 	// watermarks keep working across the cutover.
+	//
+	// Paginate by the actual last-id seen (WHERE id > lastID), NOT by a
+	// running row count. After time-based pruning the legacy table has
+	// id GAPS — using the copied-row count as the `id >` watermark would
+	// terminate the loop the moment the count fell short of the next id
+	// (e.g. 50 rows copied, next ids start at 1000: `id > 50` still
+	// matches, but `id > <count>` logic drifts and skips/duplicates rows
+	// as gaps accumulate). Tracking the max id actually copied is
+	// gap-safe: each batch strictly advances past the highest id written.
 	const batch = 100_000
-	var copiedTotal int64
+	var (
+		copiedTotal int64
+		lastID      int64
+	)
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		res, err := d.ExecContext(ctx, `
-			INSERT INTO "LogLine" ("id", "ts", "pod", "project", "service", "env", "line")
-			SELECT "id", "ts", "pod", "project", "service", "env", "line"
-			FROM "LogLine_legacy"
-			WHERE "id" > $1
-			ORDER BY "id" ASC
-			LIMIT $2
-		`, copiedTotal, batch)
+		// RETURNING the copied ids lets us both count the batch and pick
+		// up its max id as the next watermark in a single round-trip.
+		rows, err := d.QueryContext(ctx, `
+			WITH moved AS (
+				INSERT INTO "LogLine" ("id", "ts", "pod", "project", "service", "env", "line")
+				SELECT "id", "ts", "pod", "project", "service", "env", "line"
+				FROM "LogLine_legacy"
+				WHERE "id" > $1
+				ORDER BY "id" ASC
+				LIMIT $2
+				RETURNING "id"
+			)
+			SELECT COUNT(*), COALESCE(MAX("id"), 0) FROM moved
+		`, lastID, batch)
 		if err != nil {
 			return fmt.Errorf("copy batch: %w", err)
 		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
+		var (
+			n        int64
+			batchMax int64
+			scanErr  error
+			haveRow  bool
+		)
+		if rows.Next() {
+			haveRow = true
+			scanErr = rows.Scan(&n, &batchMax)
+		}
+		rows.Close()
+		if scanErr != nil {
+			return fmt.Errorf("scan copy batch: %w", scanErr)
+		}
+		if !haveRow || n == 0 {
 			break
 		}
 		copiedTotal += n
-		logger.Info("log-partition: copy progress", "rows", copiedTotal)
+		lastID = batchMax
+		logger.Info("log-partition: copy progress", "rows", copiedTotal, "lastId", lastID)
 	}
 	// 5. Drop the legacy table. The new partitioned table now carries
 	// every row that was in it, plus any new writes that landed

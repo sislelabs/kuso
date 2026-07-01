@@ -27,10 +27,15 @@ import (
 )
 
 // publicTCPMu serialises allocator runs so two concurrent EnablePublicTCP
-// calls can't both hand out the same port. Cluster-wide consistency
-// (multi-replica kuso-server) is provided by the spec read-allocate-
-// patch loop — a stale read produces a CR-validation conflict, not a
-// double-allocation, because the patch is keyed on the addon CR.
+// calls within ONE kuso-server replica can't both hand out the same port.
+// It is NOT a cluster-wide lock: two DIFFERENT replicas each allocating
+// for a different addon can both pass the initial scan and pick the same
+// free port, because the CR patch is keyed per-addon (the addon-CR patch
+// CAS detects concurrent writes to the SAME addon, not to the shared port
+// pool). Cross-replica double-allocation is closed by re-scanning the
+// in-use set inside the addon's UpdateKusoAddonWithRetry mutate closure
+// (see EnablePublicTCP): the loser of a race sees the winner's port
+// already taken and advances to the next free one instead of colliding.
 var publicTCPMu sync.Mutex
 
 // PublicTCPPool returns the inclusive [lo, hi] range configured for
@@ -108,10 +113,36 @@ func (s *Service) EnablePublicTCP(ctx context.Context, project, name string) (in
 		// Re-check inside the retry loop: a concurrent EnablePublicTCP
 		// for a DIFFERENT addon could have grabbed our port between
 		// the scan and the patch. The mutex covers single-replica
-		// kuso-server; multi-replica relies on this re-check.
+		// kuso-server; multi-replica relies on this re-scan.
 		if a.Spec.PublicTCP != nil && a.Spec.PublicTCP.Enabled && a.Spec.PublicTCP.Port > 0 {
 			picked = a.Spec.PublicTCP.Port
 			return nil
+		}
+		// Re-scan the cluster-wide in-use set from inside the mutate
+		// closure (which re-runs on every 409 retry). The per-process
+		// mutex only serialises allocator runs within ONE replica; two
+		// replicas each allocating for a DIFFERENT addon can both pass
+		// the outer scan and pick the same free port, because the CR
+		// patch is keyed per-addon — it is NOT a shared lock across the
+		// pool. Re-verifying here means a lost race sees the winner's
+		// port already taken and advances to the next free one, so we
+		// retry-and-advance instead of double-allocating.
+		fresh, scanErr := s.usedPublicTCPPorts(ctx)
+		if scanErr != nil {
+			return fmt.Errorf("re-scan in-use ports: %w", scanErr)
+		}
+		if fresh[picked] {
+			next := int32(0)
+			for p := lo; p <= hi; p++ {
+				if !fresh[p] {
+					next = p
+					break
+				}
+			}
+			if next == 0 {
+				return ErrPublicTCPPoolExhausted
+			}
+			picked = next
 		}
 		a.Spec.PublicTCP = &kube.KusoAddonPublicTCP{Enabled: true, Port: picked}
 		return nil

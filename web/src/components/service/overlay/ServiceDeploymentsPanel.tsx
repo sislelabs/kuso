@@ -66,11 +66,24 @@ function useNowTick(running: boolean) {
 // status. ACTIVE is reserved for the build whose imageTag matches the
 // env's current image — older successes become SUPERSEDED so the
 // "currently live" build is unambiguous.
-function classify(b: BuildSummary, activeImageTag?: string): BuildRowStatus {
+//
+// When the env has no resolvable image tag (activeImageTag absent), we
+// can't match on tag, so we fall back to marking exactly ONE succeeded
+// build active — the caller passes fallbackActiveId (the most-recent
+// succeeded build's id). Every other succeeded build is SUPERSEDED. This
+// avoids the old bug where a missing env tag marked EVERY succeeded build
+// active.
+function classify(
+  b: BuildSummary,
+  activeImageTag?: string,
+  fallbackActiveId?: string,
+): BuildRowStatus {
   const s = (b.status ?? "").toLowerCase();
   if (s === "succeeded") {
-    if (!activeImageTag) return "active";
-    return b.imageTag && b.imageTag === activeImageTag ? "active" : "superseded";
+    if (activeImageTag) {
+      return b.imageTag && b.imageTag === activeImageTag ? "active" : "superseded";
+    }
+    return b.id === fallbackActiveId ? "active" : "superseded";
   }
   if (s === "failed") return "failed";
   if (s === "running") return "running";
@@ -257,10 +270,18 @@ function BuildsList({
   }
   const envImage = (env?.spec as { image?: { tag?: string } } | undefined)?.image;
   const activeTag = envImage?.tag;
+  // Fallback "active" when the env has no resolvable image tag: builds
+  // arrive newest-first, so the first succeeded build in the (already
+  // branch-filtered) list is the most-recent success — the only one we
+  // mark active. Older successes become superseded rather than all
+  // showing active.
+  const fallbackActiveId = activeTag
+    ? undefined
+    : visible.find((b) => (b.status ?? "").toLowerCase() === "succeeded")?.id;
   return (
     <ul className="space-y-2">
       {visible.map((b) => {
-        const s = classify(b, activeTag);
+        const s = classify(b, activeTag, fallbackActiveId);
         return (
           <BuildRow
             key={b.id}

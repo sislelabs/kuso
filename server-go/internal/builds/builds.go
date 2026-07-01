@@ -1525,6 +1525,25 @@ func (p *Poller) dispatchQueued(ctx context.Context, ns string) {
 	promoted := 0
 	lastPromotedProject := ""
 
+	// Re-enforce the SAME concurrency caps admission enforces, here in
+	// the dispatch path. Admission only gates the interactive Create
+	// flow; a queued CR gets promoted to running by THIS dispatcher, so
+	// without re-checking, the queue could promote past the cluster-wide
+	// cap (across namespaces) and past a project's per-project cap —
+	// exactly the caps admitBuild refuses new builds on. maxPerTick
+	// alone doesn't cover this: it bounds promotions per tick but ignores
+	// builds already running from prior ticks / other namespaces.
+	//
+	// clusterCap is the cluster-wide concurrent-build cap (0 = uncapped).
+	// runningCluster is the current count of running/pending build pods
+	// across every namespace; each successful promote below increments
+	// it so a single tick can't blow past the cap.
+	clusterCap := cfg.MaxConcurrent
+	runningCluster := 0
+	if clusterCap > 0 {
+		runningCluster = p.Svc.countRunningBuildPodsCluster(ctx)
+	}
+
 	// One project per outer iteration; one (oldest queued, no active)
 	// build per service within. The two-level loop achieves "round-robin
 	// across projects, FIFO within a project" in a single pass.
@@ -1532,12 +1551,26 @@ func (p *Poller) dispatchQueued(ctx context.Context, ns string) {
 		if promoted >= maxPerTick {
 			break
 		}
+		if clusterCap > 0 && runningCluster >= clusterCap {
+			break // at the cluster cap — nothing else can promote this tick
+		}
 		queues := byProject[proj]
+		// Per-project cap check (0 = no override). Count active build
+		// pods for this project once per project pass; skip the whole
+		// project when it's already at its cap. A project gets at most
+		// one promote per pass, so a single count is sufficient here.
+		projCap := p.Svc.projectBuildCap(ctx, proj)
+		if projCap > 0 && p.Svc.countActiveBuildsForProject(ctx, proj) >= projCap {
+			continue
+		}
 		// Stable service order within a project too.
 		sort.SliceStable(queues, func(i, j int) bool { return queues[i].fqn < queues[j].fqn })
 	innerLoop:
 		for _, q := range queues {
 			if promoted >= maxPerTick {
+				break innerLoop
+			}
+			if clusterCap > 0 && runningCluster >= clusterCap {
 				break innerLoop
 			}
 			// Active check per service. If anything's running, skip
@@ -1565,6 +1598,7 @@ func (p *Poller) dispatchQueued(ctx context.Context, ns string) {
 			fqn := q.fqn
 			if p.promoteOne(ctx, ns, project, fqn, next) {
 				promoted++
+				runningCluster++ // count toward the cluster cap for the rest of this tick
 				lastPromotedProject = proj
 				// Move on to the NEXT project — fair round-robin
 				// means each project gets ONE promote slot per pass.
@@ -1861,6 +1895,21 @@ func (p *Poller) archiveLogs(ctx context.Context, ns string, b *kube.KusoBuild, 
 				Patch(lctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 				slog.Default().Warn("builds: patch failure reason", "err", err, "build", b.Name)
 			}
+			// Re-stamp the durable BuildRecord with the REFINED message.
+			// queueArchive already wrote a record synchronously (via
+			// archiveRecord) reading annMessage BEFORE this refinement
+			// existed — so it holds the generic "backoff limit" message.
+			// Without this re-save the Deployments-tab archived view would
+			// forever show the generic cause even though the live CR (just
+			// patched above) shows the good one. Update the local
+			// annotation so archiveRecord's upsert carries the refined
+			// message. Best-effort; a failure just leaves the generic
+			// message in the record.
+			if b.Annotations == nil {
+				b.Annotations = map[string]string{}
+			}
+			b.Annotations[annMessage] = reason
+			p.archiveRecord(lctx, b, phase)
 		}
 	}
 }

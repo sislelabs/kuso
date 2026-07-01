@@ -814,18 +814,20 @@ function ProjectsGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       projects,
+      // prefs is the byProject Map — now memoised in useProjectPrefs on the
+      // query's dataUpdatedAt, so its ref is stable across renders and only
+      // changes when the pref data actually moves. Listing it here is safe.
       prefs,
-      setPref,
       queriesFingerprint,
       metricsFingerprint,
       canManage,
       canStopProjects,
-      // NOTE: stopProject/startProject are intentionally NOT in the deps.
-      // They're useMutation() results — a fresh object reference every
-      // render — so listing them would invalidate this memo on every
-      // render and rebuild all N cards, defeating the whole point of the
-      // memo (see the comment above). Their `.mutate` fns are stable, so
-      // the closure captures a working reference regardless.
+      // NOTE: setPref/stopProject/startProject are intentionally NOT in the
+      // deps. They're useMutation() results — a fresh object reference every
+      // render — so listing them would invalidate this memo on every render
+      // and rebuild all N cards, defeating the whole point of the memo (see
+      // the comment above). Their `.mutate` fns are stable, so the closure
+      // captures a working reference regardless.
     ]);
 
   // Group the cards into sections: Starred (pinned to top), then each

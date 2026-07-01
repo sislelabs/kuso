@@ -229,21 +229,33 @@ func (h *AdminHandler) CreateMyToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	// expiresAt is optional now: empty / "never" / "null" mints an
-	// infinite token. The DB row stores a sentinel far-future time
-	// (we use 100y) so existing scans + indexes keep working without
-	// a NULL handling pass; the JWT itself omits the exp claim.
+	// SECURITY: a personal token bakes the user's CURRENT instance
+	// permissions into its JWT claims. Instance-level gates
+	// (requireAdmin / the admin bypass in requireProjectAccess) trust
+	// claims.Permissions verbatim, so a token minted today keeps its
+	// perms until it expires or is explicitly revoked — a later role
+	// demotion is NOT reflected in an already-issued token. We therefore
+	// cap the lifetime: no personal token may outlive maxTokenTTL. The
+	// "never expires" request is clamped to the cap rather than minting a
+	// truly infinite bearer, bounding the window a stale baked perm set
+	// can be replayed. (A full fix would re-resolve perms at verify time,
+	// which lives in the auth middleware; capping is the safe minimal
+	// improvement here.)
+	const maxTokenTTL = 365 * 24 * time.Hour
+	maxExpiry := time.Now().UTC().Add(maxTokenTTL)
 	var expiresAt time.Time
-	infinite := false
 	if req.ExpiresAt == "" || req.ExpiresAt == "never" || req.ExpiresAt == "null" {
-		infinite = true
-		expiresAt = time.Now().UTC().AddDate(100, 0, 0)
+		expiresAt = maxExpiry
 	} else {
 		var err error
 		expiresAt, err = time.Parse(time.RFC3339, req.ExpiresAt)
 		if err != nil {
 			http.Error(w, "expiresAt must be RFC3339 or empty for never-expires", http.StatusBadRequest)
 			return
+		}
+		// Clamp any requested expiry past the cap down to the cap.
+		if expiresAt.After(maxExpiry) {
+			expiresAt = maxExpiry
 		}
 	}
 
@@ -262,21 +274,14 @@ func (h *AdminHandler) CreateMyToken(w http.ResponseWriter, r *http.Request) {
 		Permissions: claims.Permissions,
 		Strategy:    "token",
 	}
-	var jwt string
-	{
-		// Pass time.Time{} (zero) to omit the exp claim entirely;
-		// any explicit time signs with that exp.
-		signExpiry := expiresAt
-		if infinite {
-			signExpiry = time.Time{}
-		}
-		var serr error
-		jwt, serr = h.Issuer.SignWithExpiry(tokenClaims, signExpiry)
-		if serr != nil {
-			h.Logger.Error("sign token", "err", serr)
-			http.Error(w, "internal", http.StatusInternalServerError)
-			return
-		}
+	// Every personal token now carries a real exp (capped at
+	// maxTokenTTL) — we no longer mint exp-less bearers, so a demoted
+	// user's stale token can't outlive the cap.
+	jwt, serr := h.Issuer.SignWithExpiry(tokenClaims, expiresAt)
+	if serr != nil {
+		h.Logger.Error("sign token", "err", serr)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
 	}
 
 	row := &db.Token{

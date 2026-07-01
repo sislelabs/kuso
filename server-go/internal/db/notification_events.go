@@ -74,22 +74,6 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 	if e.Severity == "" {
 		e.Severity = "info"
 	}
-	// INSERT + cap-prune in one transaction. Without the wrap, two
-	// concurrent Emits could interleave so that G2's prune subquery
-	// sees a state that hadn't observed G1's INSERT yet, and the
-	// resulting DELETE removed rows the user was supposed to see in
-	// their bell feed. Under build-storm load (50+ webhook deliveries
-	// per second during a deploy burst) the race was reproducible:
-	// notifications appeared and immediately disappeared from the UI.
-	//
-	// Both statements use the same transaction snapshot now, so the
-	// prune always sees the just-inserted row and the offset-from-
-	// top calculation is consistent.
-	tx, err := d.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin notification tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
 	// Classification rides through as a JSONB column when present.
 	// Stored as the typed wire shape (kind/tab/summary/lineHint/lineNum)
 	// so the browser handler doesn't need to re-derive it on every
@@ -98,39 +82,52 @@ func (d *DB) InsertNotificationEvent(ctx context.Context, e NotificationEvent) e
 	if len(e.Classification) > 0 {
 		classification = string(e.Classification)
 	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO "NotificationEvent" ("type","title","body","severity","project","service","url","extra","classification")
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-		e.Type, e.Title, e.Body, e.Severity, e.Project, e.Service, e.URL, extraJSON, classification,
-	); err != nil {
-		return fmt.Errorf("insert notification event: %w", err)
-	}
-	// Prune everything beyond the cap. The id is monotonically
-	// assigned so the "newest N" set is just the highest N ids; delete
-	// anything strictly below the cap-th id from the top.
+	// INSERT + cap-prune as ONE statement via a CTE. This replaces the
+	// former explicit 2-statement BEGIN/…/COMMIT transaction, which
+	// serialised every emitting goroutine on the DB (two round-trips +
+	// a held connection per event). Emit is called from build/health/
+	// node watchers, and under a build storm (50+ events/sec during a
+	// deploy burst) that per-event txn became the bottleneck.
 	//
-	// The earlier shape was `WHERE id NOT IN (SELECT ... LIMIT N)` —
-	// O(n log n), and Postgres can't push the LIMIT into the NOT IN
-	// (it has to materialise the inner set), so the table got locked
-	// during build storms. The OFFSET form lets the planner stop after
-	// scanning N rows of the descending PK b-tree.
-	if _, err := tx.ExecContext(ctx, `
+	// A single CTE is atomic on its own — no explicit transaction
+	// needed — and closes the interleave race the transaction guarded
+	// against: the INSERT and the prune's subquery run under one
+	// statement snapshot, so two concurrent Emits can no longer sequence
+	// as insert(G1) → prune(G2 over a snapshot missing G1's row) and
+	// delete a row the user was supposed to see. The data-modifying CTE
+	// snapshot means the prune's subquery does NOT observe this call's
+	// own just-inserted row, so steady-state the table sits at cap+1
+	// rather than exactly cap — within the documented "never exceeds the
+	// cap by more than the in-flight insert count" tolerance, and it
+	// never grows unbounded.
+	//
+	// The prune deletes everything below the cap-th id from the top.
+	// The id is monotonic so the "newest N" set is just the highest N
+	// ids; the OFFSET form lets the planner stop after scanning N rows
+	// of the descending PK b-tree (vs the old O(n log n) NOT IN, which
+	// Postgres had to materialise and which locked the table during
+	// build storms).
+	//
+	// A prune failure can't partially apply here (single statement), so
+	// there's no "commit the INSERT but skip the prune" fallback to make
+	// — either both land or neither does, and a hard failure surfaces as
+	// the error below (Emit logs + proceeds; the feed row is the load-
+	// bearing part and a retry lands it).
+	if _, err := d.ExecContext(ctx, `
+		WITH inserted AS (
+			INSERT INTO "NotificationEvent" ("type","title","body","severity","project","service","url","extra","classification")
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+		)
 		DELETE FROM "NotificationEvent"
 		WHERE "id" < (
 			SELECT "id" FROM "NotificationEvent"
 			ORDER BY "id" DESC
-			LIMIT 1 OFFSET $1
-		)`, notificationEventCap); err != nil {
-		// Don't roll back over a pruning failure — the INSERT is the
-		// load-bearing part. Commit what we have and accept the
-		// table may briefly exceed the cap.
-		if cerr := tx.Commit(); cerr != nil {
-			return fmt.Errorf("commit after prune failure: %w", cerr)
-		}
-		return nil
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit notification tx: %w", err)
+			LIMIT 1 OFFSET $10
+		)`,
+		e.Type, e.Title, e.Body, e.Severity, e.Project, e.Service, e.URL, extraJSON, classification,
+		notificationEventCap,
+	); err != nil {
+		return fmt.Errorf("insert notification event: %w", err)
 	}
 	return nil
 }

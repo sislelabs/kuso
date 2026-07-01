@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   clearProjectPref,
@@ -21,8 +22,16 @@ export function useProjectPrefs() {
     queryFn: listProjectPrefs,
     staleTime: 60_000,
   });
-  const byProject = new Map<string, ProjectPref>();
-  for (const p of query.data ?? []) byProject.set(p.project, p);
+  // Rebuild the lookup Map only when the underlying prefs data actually
+  // changes (dataUpdatedAt advances), not on every render — otherwise the
+  // fresh Map ref defeats downstream useMemo deps (e.g. the projects-grid
+  // cards memo) that depend on this Map.
+  const byProject = useMemo(() => {
+    const m = new Map<string, ProjectPref>();
+    for (const p of query.data ?? []) m.set(p.project, p);
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [query.dataUpdatedAt]);
   return { ...query, byProject };
 }
 

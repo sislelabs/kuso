@@ -2,10 +2,12 @@ package kusoCli
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -138,6 +140,71 @@ output names the next concrete step for every finding.`,
 			}
 		}
 
+		// TLS certificate — dial the API host and inspect the leaf
+		// cert's validity window + chain. Only meaningful for https;
+		// a plain-http server (localhost dev) has no cert to check, so
+		// we skip rather than FAIL. KUSO_INSECURE=1 mirrors the client
+		// setting and downgrades a verify failure to WARN (fresh boxes
+		// run LE *staging* certs the system roots reject).
+		if u, perr := url.Parse(serverURL); perr == nil && u.Scheme == "https" {
+			host := u.Hostname()
+			port := u.Port()
+			if port == "" {
+				port = "443"
+			}
+			insecure := func() bool {
+				v := strings.TrimSpace(os.Getenv("KUSO_INSECURE"))
+				return v == "1" || strings.EqualFold(v, "true")
+			}()
+			dialer := &net.Dialer{Timeout: 10 * time.Second}
+			// First dial WITH verification so we can distinguish a
+			// broken chain (untrusted root / hostname mismatch) from a
+			// merely-expiring-soon cert.
+			verifyErr := func() error {
+				conn, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(host, port), &tls.Config{ServerName: host})
+				if err != nil {
+					return err
+				}
+				conn.Close()
+				return nil
+			}()
+			// Re-dial skipping verification purely to READ the leaf's
+			// expiry — even when the chain is untrusted we still want to
+			// surface how long the presented cert is valid.
+			conn, err := tls.DialWithDialer(dialer, "tcp", net.JoinHostPort(host, port), &tls.Config{ServerName: host, InsecureSkipVerify: true})
+			switch {
+			case err != nil:
+				report("TLS", fmt.Sprintf("%s: could not read certificate: %v", host, err), "fail")
+			default:
+				chain := conn.ConnectionState().PeerCertificates
+				conn.Close()
+				if len(chain) == 0 {
+					report("TLS", fmt.Sprintf("%s presented no certificate", host), "fail")
+					break
+				}
+				leaf := chain[0]
+				now := time.Now()
+				switch {
+				case now.Before(leaf.NotBefore):
+					report("TLS", fmt.Sprintf("%s: certificate not valid until %s", host, leaf.NotBefore.Format(time.RFC3339)), "fail")
+				case now.After(leaf.NotAfter):
+					report("TLS", fmt.Sprintf("%s: certificate EXPIRED %s", host, leaf.NotAfter.Format(time.RFC3339)), "fail")
+				case verifyErr != nil && !insecure:
+					report("TLS", fmt.Sprintf("%s: chain invalid: %v — set KUSO_INSECURE=1 if this is a fresh LE-staging box", host, verifyErr), "fail")
+				case time.Until(leaf.NotAfter) < 14*24*time.Hour:
+					detail := fmt.Sprintf("%s: expires %s (in %d days) — renewal may be stuck", host, leaf.NotAfter.Format(time.RFC3339), int(time.Until(leaf.NotAfter).Hours()/24))
+					if verifyErr != nil {
+						detail += fmt.Sprintf("; chain not trusted (%v) — ignored via KUSO_INSECURE", verifyErr)
+					}
+					report("TLS", detail, "warn")
+				case verifyErr != nil:
+					report("TLS", fmt.Sprintf("%s: valid until %s but chain not trusted (%v) — ignored via KUSO_INSECURE", host, leaf.NotAfter.Format(time.RFC3339), verifyErr), "warn")
+				default:
+					report("TLS", fmt.Sprintf("%s: valid, expires %s", host, leaf.NotAfter.Format(time.RFC3339)), "pass")
+				}
+			}
+		}
+
 		// GitHub webhook round-trip — is the App configured, and are
 		// pushes actually landing? Admin-gated; needs the typed client
 		// (bearer + Host header) rather than a bare http request. We only
@@ -183,4 +250,3 @@ output names the next concrete step for every finding.`,
 		}
 	},
 }
-

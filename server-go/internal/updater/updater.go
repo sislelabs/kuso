@@ -47,12 +47,12 @@ import (
 // release manifest must still be able to parse the bits they care
 // about. New optional fields are fine; renaming or removing is not.
 type Manifest struct {
-	Version     string                `json:"version"`
-	PublishedAt time.Time             `json:"publishedAt"`
-	Components  ManifestComponents    `json:"components"`
-	CRDs        ManifestCRDs          `json:"crds"`
-	Notes       string                `json:"notes,omitempty"`
-	Breaking    bool                  `json:"breaking,omitempty"`
+	Version     string             `json:"version"`
+	PublishedAt time.Time          `json:"publishedAt"`
+	Components  ManifestComponents `json:"components"`
+	CRDs        ManifestCRDs       `json:"crds"`
+	Notes       string             `json:"notes,omitempty"`
+	Breaking    bool               `json:"breaking,omitempty"`
 }
 
 type ManifestComponents struct {
@@ -80,7 +80,7 @@ type ManifestCRDs struct {
 // new CRD lands so we can rename fields without losing data.
 type Migration struct {
 	ID         string `json:"id"`
-	Kind       string `json:"kind"`         // KusoService / KusoEnvironment / etc.
+	Kind       string `json:"kind"`           // KusoService / KusoEnvironment / etc.
 	Change     string `json:"kind_of_change"` // additive | defaulted | renamed | destructive
 	PreRewrite string `json:"preRewrite,omitempty"`
 }
@@ -88,31 +88,31 @@ type Migration struct {
 // State is what we cache in DB. Includes the raw manifest so the UI
 // can render notes without round-tripping to GitHub on every poll.
 type State struct {
-	Current    string    `json:"current"`
-	Latest     string    `json:"latest"`
-	Manifest   *Manifest `json:"manifest,omitempty"`
-	NeedsUpdate     bool      `json:"needsUpdate"`
-	CanAutoUpgrade  bool      `json:"canAutoUpgrade"`
-	BlockedReason   string    `json:"blockedReason,omitempty"`
-	LastChecked     time.Time `json:"lastChecked"`
-	LastCheckError  string    `json:"lastCheckError,omitempty"`
+	Current        string    `json:"current"`
+	Latest         string    `json:"latest"`
+	Manifest       *Manifest `json:"manifest,omitempty"`
+	NeedsUpdate    bool      `json:"needsUpdate"`
+	CanAutoUpgrade bool      `json:"canAutoUpgrade"`
+	BlockedReason  string    `json:"blockedReason,omitempty"`
+	LastChecked    time.Time `json:"lastChecked"`
+	LastCheckError string    `json:"lastCheckError,omitempty"`
 }
 
 // Service polls GH and serves State. Construct with New + start with
 // Run in a goroutine.
 type Service struct {
-	DB         *db.DB
-	Kube       *kube.Client
-	Namespace  string // server namespace (where deploy/kuso-server lives)
-	Repo       string // "sislelabs/kuso" — where releases are published
-	Current    string // server's running version, baked at build time
-	Logger     *slog.Logger
-	Interval   time.Duration
+	DB        *db.DB
+	Kube      *kube.Client
+	Namespace string // server namespace (where deploy/kuso-server lives)
+	Repo      string // "sislelabs/kuso" — where releases are published
+	Current   string // server's running version, baked at build time
+	Logger    *slog.Logger
+	Interval  time.Duration
 
-	mu      sync.RWMutex
-	state   State
-	etag    string // for If-None-Match on the GH releases endpoint
-	client  *http.Client
+	mu     sync.RWMutex
+	state  State
+	etag   string // for If-None-Match on the GH releases endpoint
+	client *http.Client
 
 	// runCtx is the lifecycle context set by Run. Background watchers
 	// (e.g. watchOperatorHealth) derive from this so a graceful
@@ -233,7 +233,18 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 	if resp.StatusCode != 200 {
 		return "", nil, fmt.Errorf("gh releases: status %d", resp.StatusCode)
 	}
-	if newETag := resp.Header.Get("ETag"); newETag != "" {
+	// Capture the ETag but DON'T cache it yet. Caching it here — before
+	// the manifest is decoded and its signature verified — means a
+	// malformed or unverifiable release would still poison the cache:
+	// the next poll sends If-None-Match, gets 304 Not Modified, and
+	// never re-attempts, silently wedging the updater on a bad release.
+	// We only commit the ETag on the success paths below (synthesized
+	// pre-manifest release, or a fully decoded + verified manifest).
+	newETag := resp.Header.Get("ETag")
+	saveETag := func() {
+		if newETag == "" {
+			return
+		}
 		s.mu.Lock()
 		s.etag = newETag
 		s.mu.Unlock()
@@ -263,6 +274,7 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 		// server still surfaces "latest=v0.4.2" even when there's no
 		// release.json, and `canAutoUpgrade=false` because we don't
 		// know what migrations might be needed.
+		saveETag()
 		return rel.TagName, &Manifest{
 			Version: rel.TagName,
 			Notes:   rel.Body,
@@ -322,6 +334,10 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 	if m.Notes == "" {
 		m.Notes = rel.Body
 	}
+	// Fully decoded + signature-checked (or explicitly accepted under
+	// require=false). Safe to cache the ETag now so the next poll can
+	// short-circuit on 304.
+	saveETag()
 	return m.Version, &m, nil
 }
 
@@ -593,8 +609,8 @@ const updateConfigMapName = "kuso-update-status"
 // keeps writing until it exits, so we always see the last reported
 // step.
 type UpdateStatus struct {
-	Phase   string `json:"phase"` // pending | applying-crds | rolling-server | rolling-operator | done | failed
-	Message string `json:"message,omitempty"`
+	Phase   string    `json:"phase"` // pending | applying-crds | rolling-server | rolling-operator | done | failed
+	Message string    `json:"message,omitempty"`
 	Started time.Time `json:"started"`
 	Updated time.Time `json:"updated"`
 }

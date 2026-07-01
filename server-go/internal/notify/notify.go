@@ -789,13 +789,13 @@ func SetVersion(v string) {
 // is set we sign the body and include the signature in three headers
 // receivers expect:
 //
-//   X-Hub-Signature-256: sha256=<hex>   — GitHub-shaped, the most
-//                                          widely-supported format.
-//   X-Kuso-Signature:    <hex>           — kuso-native, easier to
-//                                          parse for hand-rolled
-//                                          consumers.
-//   X-Kuso-Timestamp:    <unix-seconds>  — replay-window enforcement
-//                                          for receivers that care.
+//	X-Hub-Signature-256: sha256=<hex>   — GitHub-shaped, the most
+//	                                       widely-supported format.
+//	X-Kuso-Signature:    <hex>           — kuso-native, easier to
+//	                                       parse for hand-rolled
+//	                                       consumers.
+//	X-Kuso-Timestamp:    <unix-seconds>  — replay-window enforcement
+//	                                       for receivers that care.
 //
 // Pre-v0.9.4 the secret was read from the DB and immediately
 // `_ = secret`'d — receivers configured a secret expecting
@@ -883,16 +883,66 @@ func (d *Dispatcher) sendWebhookSync(ctx context.Context, url, secret string, e 
 	return d.postSync(ctx, url, e, signatureHeaders(secret, e))
 }
 
-// redact strips the secret token from a Discord webhook URL when
-// logging — Discord URLs end in `/.../<id>/<token>`. We keep the
-// id segment so different channels stay distinguishable in logs.
+// redact strips secret tokens from a webhook URL (or any string that
+// embeds one) before it's logged or stored. Two shapes are handled:
+//
+//   - Telegram: `https://api.telegram.org/bot<TOKEN>/sendMessage`. The
+//     token sits mid-URL between `/bot` and the next `/`, so the
+//     trailing-segment rule below wouldn't catch it. Replaced first,
+//     in place, so an error string like
+//     `Post "https://api.telegram.org/bot123:ABC/sendMessage": …` is
+//     scrubbed even when it embeds the URL rather than being one.
+//   - Discord et al.: the secret is the last `/`-segment
+//     (`/.../<id>/<token>`); drop it, keeping the id so different
+//     channels stay distinguishable in logs.
 func redact(url string) string {
+	if strings.Contains(url, "api.telegram.org") {
+		// Telegram token is mid-URL, not the trailing segment; redactTelegram
+		// handles it. Applying the trailing-segment rule below would then
+		// wrongly chop the /sendMessage method off the end.
+		return redactTelegram(url)
+	}
+	// Only apply the trailing-segment rule to a bare URL, not to a
+	// larger error string — otherwise we'd chop the tail of an arbitrary
+	// message. A bare URL has no spaces.
+	if strings.ContainsAny(url, " \t") {
+		return url
+	}
 	for i := len(url) - 1; i >= 0; i-- {
 		if url[i] == '/' {
 			return url[:i+1] + "..."
 		}
 	}
 	return url
+}
+
+// redactTelegram replaces the bot token in any Telegram Bot API URL
+// with a placeholder, wherever that URL appears in s (including inside
+// a wrapped HTTP-client error string like `Post "https://…/bot<tok>/…"`).
+// Matches `api.telegram.org/bot<token>` and rewrites the token to `...`.
+// Safe on strings with no Telegram URL.
+func redactTelegram(s string) string {
+	const marker = "api.telegram.org/bot"
+	var b strings.Builder
+	for {
+		i := strings.Index(s, marker)
+		if i < 0 {
+			b.WriteString(s)
+			return b.String()
+		}
+		tokStart := i + len(marker)
+		b.WriteString(s[:tokStart])
+		rest := s[tokStart:]
+		// Token runs until the next path separator or the end of the URL
+		// token (a quote/space in a wrapped error string). Everything up
+		// to that delimiter is the secret.
+		end := strings.IndexAny(rest, "/\" \t")
+		if end < 0 {
+			end = len(rest)
+		}
+		b.WriteString("...")
+		s = rest[end:]
+	}
 }
 
 // Format helpers used by callers to keep event creation tidy.

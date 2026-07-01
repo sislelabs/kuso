@@ -2130,10 +2130,14 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		Command:       commandChanged,
 		Resources:     resourcesChanged,
 	}); err != nil {
-		// Match the previous best-effort behaviour: log indirectly
-		// (returned nil; future cleanup adds a logger here) and let
-		// the caller see a successful service-spec save.
-		_ = err
+		// Best-effort: a propagation failure does NOT roll back the
+		// service spec (the service CR is the durable record and the
+		// next save retries propagation for every env). But we no longer
+		// swallow it silently — log loudly with the specific failing
+		// env(s) carried in the aggregated error so a stuck env is
+		// visible in the logs instead of surfacing only as later drift.
+		slog.ErrorContext(ctx, "propagate: service spec saved but env propagation incomplete",
+			"project", project, "service", service, "err", err)
 		return updated, nil
 	}
 	// Record a revision row so the History tab can render it. Best-

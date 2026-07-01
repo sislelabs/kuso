@@ -89,10 +89,12 @@ func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name stri
 				}
 				continue
 			}
-			// Drop the cache for the env's project so the next
-			// Describe doesn't return a freshly-deleted preview.
-			if proj := e.Labels[labelProject]; proj != "" {
-			}
+			// No describe cache to invalidate: Describe's list calls are
+			// informer-served (see the removed describeCache note on the
+			// Service struct), so the deleted env drops out of the next
+			// Describe as soon as the informer observes the delete on its
+			// watch stream. The previous empty if-block here was a dead
+			// no-op left from the cached-Describe era.
 			deleted++
 		}
 	}
@@ -163,8 +165,8 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 	// next sweep tick.
 	if pr := previewPRNumber(env, serviceFQN); pr != "" {
 		selector := kube.LabelSelector(map[string]string{
-			kube.LabelProject:                  project,
-			"kuso.sislelabs.com/preview-pr":    pr,
+			kube.LabelProject:               project,
+			"kuso.sislelabs.com/preview-pr": pr,
 		})
 		if addonList, lerr := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).List(ctx, metav1.ListOptions{
 			LabelSelector: selector,

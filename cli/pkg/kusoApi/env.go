@@ -42,8 +42,8 @@ func (k *KusoClient) SetEnv(project, service string, req SetEnvRequest) (*resty.
 // EnvVarRequest is the wire shape for a per-env override write:
 // {value} XOR {secretRef:{name,key}}.
 type EnvVarRequest struct {
-	Value     string            `json:"value,omitempty"`
-	SecretRef *EnvVarSecretRef  `json:"secretRef,omitempty"`
+	Value     string           `json:"value,omitempty"`
+	SecretRef *EnvVarSecretRef `json:"secretRef,omitempty"`
 }
 
 type EnvVarSecretRef struct {
@@ -110,7 +110,9 @@ func envQuery(env string) string {
 	if env == "" {
 		return ""
 	}
-	return "?env=" + env
+	// urlEscape (not esc/PathEscape) — this is a query-string value, so
+	// it must escape `&`/`=`, matching the log-search query path.
+	return "?env=" + urlEscape(env)
 }
 
 func (k *KusoClient) ListSecrets(project, service, env string) (*resty.Response, error) {

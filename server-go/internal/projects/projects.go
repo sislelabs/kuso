@@ -12,11 +12,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"golang.org/x/sync/singleflight"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
 	"kuso/server/internal/kube"
 )
@@ -243,7 +244,16 @@ const (
 // serviceCRName is the FQN convention "<project>-<service>" used by the
 // TS server. The CRD `metadata.name` must be RFC-1123, so callers should
 // pass already-validated project/service names.
+//
+// Guards an already-FQN input: callers sometimes hand us the short name
+// ("web") and sometimes the FQN ("kuso-demo-web"). Without this guard an
+// FQN would double-prefix to "kuso-demo-kuso-demo-web" and every lookup
+// would 404. Mirrors the HasPrefix guard used by the sibling delta
+// helpers (services_deltas.go, wake.go, pods_ops.go).
 func serviceCRName(project, service string) string {
+	if strings.HasPrefix(service, project+"-") {
+		return service
+	}
 	return fmt.Sprintf("%s-%s", project, service)
 }
 
@@ -270,4 +280,3 @@ var (
 	ErrConflict = errors.New("projects: conflict")
 	ErrInvalid  = errors.New("projects: invalid")
 )
-

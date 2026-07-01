@@ -30,7 +30,7 @@ import (
 	"net/url"
 	"strings"
 
-	_ "github.com/lib/pq"
+	"github.com/lib/pq"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -105,7 +105,7 @@ func (s *Service) provisionInstanceAddonDB(adminDSN, project, addonShort string)
 		return "", "", fmt.Errorf("check pg_database: %w", err)
 	}
 	if exists != 1 {
-		if _, err := db.Exec(fmt.Sprintf(`CREATE DATABASE %q`, dbName)); err != nil {
+		if _, err := db.Exec(fmt.Sprintf(`CREATE DATABASE %s`, pq.QuoteIdentifier(dbName))); err != nil {
 			return "", "", fmt.Errorf("create db %s: %w", dbName, err)
 		}
 	}
@@ -118,16 +118,29 @@ func (s *Service) provisionInstanceAddonDB(adminDSN, project, addonShort string)
 		return "", "", fmt.Errorf("check pg_roles: %w", err)
 	}
 	if userExists != 1 {
-		if _, err := db.Exec(fmt.Sprintf(`CREATE ROLE %q WITH LOGIN PASSWORD '%s'`, userName, escapeLiteral(pw))); err != nil {
+		if _, err := db.Exec(fmt.Sprintf(`CREATE ROLE %s WITH LOGIN PASSWORD %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(pw))); err != nil {
 			return "", "", fmt.Errorf("create role: %w", err)
 		}
 	} else {
-		if _, err := db.Exec(fmt.Sprintf(`ALTER ROLE %q WITH LOGIN PASSWORD '%s'`, userName, escapeLiteral(pw))); err != nil {
+		if _, err := db.Exec(fmt.Sprintf(`ALTER ROLE %s WITH LOGIN PASSWORD %s`, pq.QuoteIdentifier(userName), pq.QuoteLiteral(pw))); err != nil {
 			return "", "", fmt.Errorf("rotate role password: %w", err)
 		}
 	}
 
-	if _, err := db.Exec(fmt.Sprintf(`GRANT ALL PRIVILEGES ON DATABASE %q TO %q`, dbName, userName)); err != nil {
+	// Cross-project isolation on the SHARED instance-pg server (M8).
+	// Postgres grants CONNECT on every database to the built-in PUBLIC
+	// role by default, so without this REVOKE any per-project role could
+	// connect to (and, given a login, read) OTHER projects' databases on
+	// the same server. Lock the new DB down to its owning role: strip
+	// PUBLIC's CONNECT, then grant this project's role back in. GRANT ALL
+	// PRIVILEGES ON DATABASE only covers database-level privileges
+	// (CONNECT/CREATE/TEMP) — it does NOT confer access to other DBs, and
+	// the role is created without SUPERUSER/CREATEDB/CREATEROLE, so it
+	// cannot escalate across databases.
+	if _, err := db.Exec(fmt.Sprintf(`REVOKE CONNECT ON DATABASE %s FROM PUBLIC`, pq.QuoteIdentifier(dbName))); err != nil {
+		return "", "", fmt.Errorf("revoke public connect: %w", err)
+	}
+	if _, err := db.Exec(fmt.Sprintf(`GRANT ALL PRIVILEGES ON DATABASE %s TO %s`, pq.QuoteIdentifier(dbName), pq.QuoteIdentifier(userName))); err != nil {
 		return "", "", fmt.Errorf("grant: %w", err)
 	}
 
@@ -306,13 +319,13 @@ func (s *Service) dropInstanceAddonDB(adminDSN, project, addonShort string) erro
 	_, _ = db.Exec(
 		`SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`,
 		dbName)
-	if _, err := db.Exec(fmt.Sprintf(`DROP DATABASE IF EXISTS %q`, dbName)); err != nil {
+	if _, err := db.Exec(fmt.Sprintf(`DROP DATABASE IF EXISTS %s`, pq.QuoteIdentifier(dbName))); err != nil {
 		return fmt.Errorf("drop db %s: %w", dbName, err)
 	}
 	// Role drop is best-effort — it can fail if the role still owns
 	// objects in OTHER databases (shouldn't for a per-PR clone role, but
 	// don't let it block the DB drop's success).
-	if _, err := db.Exec(fmt.Sprintf(`DROP ROLE IF EXISTS %q`, userName)); err != nil {
+	if _, err := db.Exec(fmt.Sprintf(`DROP ROLE IF EXISTS %s`, pq.QuoteIdentifier(userName))); err != nil {
 		// Not fatal: the DB (the space-consuming part) is already gone.
 		return nil
 	}
@@ -326,17 +339,6 @@ func randPassword() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
-}
-
-// escapeLiteral does the minimal single-quote / backslash escaping
-// for embedding a string literal into a CREATE / ALTER ROLE
-// statement. We don't have a parameterized form for these because
-// PASSWORD '…' is a literal — not a parameter binding. The caller
-// owns name validation upstream.
-func escapeLiteral(s string) string {
-	s = strings.ReplaceAll(s, `\`, `\\`)
-	s = strings.ReplaceAll(s, `'`, `''`)
-	return s
 }
 
 // ResyncInstanceAddon re-runs the provisioner for an instance-shared

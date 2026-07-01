@@ -33,10 +33,10 @@ var nodeCmd = &cobra.Command{
 }
 
 var (
-	nodeTokenLabels   []string
-	nodeTokenRegion   string
-	nodeTokenName     string
-	nodeTokenTTL      string
+	nodeTokenLabels []string
+	nodeTokenRegion string
+	nodeTokenName   string
+	nodeTokenTTL    string
 )
 
 var nodeAddTokenCmd = &cobra.Command{
@@ -351,15 +351,16 @@ var nodeLabelRmCmd = &cobra.Command{
 }
 
 var (
-	nodeSSHHost    string
-	nodeSSHPort    int
-	nodeSSHUser    string
-	nodeSSHPass    string
-	nodeSSHKeyFile string
-	nodeSSHKeyID   string
-	nodeJoinLabels []string
-	nodeJoinName   string
+	nodeSSHHost     string
+	nodeSSHPort     int
+	nodeSSHUser     string
+	nodeSSHPass     string
+	nodeSSHKeyFile  string
+	nodeSSHKeyID    string
+	nodeJoinLabels  []string
+	nodeJoinName    string
 	nodeRemoveForce bool
+	nodeRemoveYes   bool
 	nodeApplyReboot bool
 )
 
@@ -510,13 +511,18 @@ host so the VM is left clean; without them the node is only untracked
 control-plane node.`,
 	Example: `  kuso node remove worker-2
   kuso node remove worker-2 --host 10.0.0.5 --user root --ssh-key-file ~/.ssh/id_ed25519
-  kuso node remove worker-2 --force`,
+  kuso node remove worker-2 --force
+  kuso node remove worker-2 --yes`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		name := args[0]
+		if err := confirmDestructive(nodeRemoveYes,
+			fmt.Sprintf("Cordon, drain, and remove node %q from the cluster? Its workloads reschedule elsewhere.", name)); err != nil {
+			return err
+		}
 		req := kusoApi.RemoveNodeRequest{Force: nodeRemoveForce}
 		// Only attach credentials (triggering host uninstall) when a
 		// host was actually provided.
@@ -855,6 +861,7 @@ func init() {
 	nodeCmd.AddCommand(nodeJoinCmd)
 
 	nodeRemoveCmd.Flags().BoolVar(&nodeRemoveForce, "force", false, "skip graceful pod eviction during drain")
+	nodeRemoveCmd.Flags().BoolVarP(&nodeRemoveYes, "yes", "y", false, "skip the confirmation prompt")
 	nodeCmd.AddCommand(nodeRemoveCmd)
 
 	nodeUpdatesCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")

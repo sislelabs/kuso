@@ -65,3 +65,84 @@ func TestNotification_MentionsRoundTrip(t *testing.T) {
 		t.Errorf("after update: build.failed should be gone (wholesale replace), got %v", m2["build.failed"])
 	}
 }
+
+// TestNotification_ChannelConfigRoundTrip is the regression guard for
+// M14: telegram / pushover / mattermost / email config (bot tokens,
+// chat ids, SMTP creds) had no persisted home — configCols only wrote
+// the typed webhook/slack/discord columns — so at delivery time
+// deliverViaChannel saw empty config and every send dead-lettered. The
+// generic "config" JSON column now carries the full map for all types.
+func TestNotification_ChannelConfigRoundTrip(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	cases := []struct {
+		id   string
+		typ  string
+		cfg  map[string]any
+		want map[string]string // key → expected string value after reload
+	}{
+		{
+			id:  "notif-telegram",
+			typ: "telegram",
+			cfg: map[string]any{"botToken": "123456:AAtoken", "chatId": "-1001234"},
+			want: map[string]string{
+				"botToken": "123456:AAtoken",
+				"chatId":   "-1001234",
+			},
+		},
+		{
+			id:  "notif-pushover",
+			typ: "pushover",
+			cfg: map[string]any{"token": "apptoken", "user": "userkey"},
+			want: map[string]string{
+				"token": "apptoken",
+				"user":  "userkey",
+			},
+		},
+		{
+			id:  "notif-email",
+			typ: "email",
+			cfg: map[string]any{
+				"host": "smtp.example.com", "port": "587",
+				"username": "u", "password": "p",
+				"from": "a@b.c", "to": "x@y.z",
+			},
+			want: map[string]string{
+				"host": "smtp.example.com", "port": "587",
+				"username": "u", "password": "p",
+				"from": "a@b.c", "to": "x@y.z",
+			},
+		},
+		{
+			id:  "notif-mattermost",
+			typ: "mattermost",
+			cfg: map[string]any{"url": "https://mm.example.com/hooks/abc"},
+			want: map[string]string{
+				"url": "https://mm.example.com/hooks/abc",
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.typ, func(t *testing.T) {
+			n := &Notification{
+				ID: c.id, Name: c.typ + "-test", Enabled: true,
+				Type: c.typ, Events: []string{"build.failed"}, Config: c.cfg,
+			}
+			t.Cleanup(func() { _ = d.DeleteNotification(ctx, n.ID) })
+			if err := d.CreateNotification(ctx, n); err != nil {
+				t.Fatalf("CreateNotification: %v", err)
+			}
+			got, err := d.FindNotification(ctx, n.ID)
+			if err != nil {
+				t.Fatalf("FindNotification: %v", err)
+			}
+			for k, want := range c.want {
+				if v, _ := got.Config[k].(string); v != want {
+					t.Errorf("%s: Config[%q] = %q, want %q (config not persisted → delivery dead-letters)", c.typ, k, v, want)
+				}
+			}
+		})
+	}
+}

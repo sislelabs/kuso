@@ -141,29 +141,31 @@ func Classify(logLines []string, sig Signal) Classification {
 	if c, ok := classifyFromSignal(sig); ok {
 		return c
 	}
-	// Log-line regex matches second. Walk the tail in reverse so a
-	// fresh failure outranks an older one repeated earlier in the
-	// buffer — the most-recent line is the one that took the pod
-	// down.
+	// Log-line regex matches second, in two phases.
+	//
+	// Phase 1 — build-specific detectors, PRIORITY-first and position-
+	// independent. A build log routinely contains a generic "build
+	// failed" / "command failed with exit code" line at the very END
+	// as well as the specific root cause (missing COPY, lockfile drift,
+	// …) printed EARLIER. A naive reverse LINE walk would let the
+	// generic tail line win because it's later in the buffer. So we try
+	// each build-specific detector across ALL lines first: the most
+	// actionable cause wins regardless of where it appears.
+	if c, ok := matchDetectors(logLines, true); ok {
+		return c
+	}
+	// Phase 2 — runtime detectors, reverse LINE walk (most-recent line
+	// wins). For the runtime kinds there's no "specific-vs-generic tail"
+	// problem; the freshest line is genuinely the one that took the pod
+	// down, so we preserve most-recent-wins here.
 	for i := len(logLines) - 1; i >= 0; i-- {
 		line := logLines[i]
 		for _, d := range logDetectors {
+			if d.buildTime {
+				continue // handled in phase 1
+			}
 			if d.re.MatchString(line) {
-				c := Classification{
-					Kind:     d.kind,
-					Tab:      d.tab,
-					Summary:  d.summarize(line),
-					LineHint: truncateLine(line),
-					LineNum:  i + 1,
-				}
-				if d.remediate != nil {
-					// The remediation builder gets the whole tail (not just
-					// the matched line) so build-time fixes can cross-
-					// reference earlier context — e.g. which patch file the
-					// Dockerfile failed to find vs the package manager in use.
-					c.Remediation = d.remediate(line, logLines)
-				}
-				return c
+				return buildClassification(d, line, i, logLines)
 			}
 		}
 	}
@@ -172,6 +174,43 @@ func Classify(logLines []string, sig Signal) Classification {
 		Tab:     TabLogs,
 		Summary: "Deploy failed. See logs for details.",
 	}
+}
+
+// matchDetectors tries every detector whose buildTime flag equals
+// `buildTime`, in their declared (specific-first) order, against ALL
+// log lines — so detector priority dominates line position. For the
+// winning detector it picks the MOST-RECENT matching line (reverse
+// scan) so a repeated failure surfaces its freshest occurrence.
+// Returns ok=false when no matching detector fired.
+func matchDetectors(logLines []string, buildTime bool) (Classification, bool) {
+	for _, d := range logDetectors {
+		if d.buildTime != buildTime {
+			continue
+		}
+		for i := len(logLines) - 1; i >= 0; i-- {
+			if d.re.MatchString(logLines[i]) {
+				return buildClassification(d, logLines[i], i, logLines), true
+			}
+		}
+	}
+	return Classification{}, false
+}
+
+// buildClassification assembles the Classification for a detector match
+// on `line` at 0-based index `i`, running the detector's remediation
+// builder (which gets the whole tail for cross-line context).
+func buildClassification(d logDetector, line string, i int, tail []string) Classification {
+	c := Classification{
+		Kind:     d.kind,
+		Tab:      d.tab,
+		Summary:  d.summarize(line),
+		LineHint: truncateLine(line),
+		LineNum:  i + 1,
+	}
+	if d.remediate != nil {
+		c.Remediation = d.remediate(line, tail)
+	}
+	return c
 }
 
 // classifyFromSignal maps kubelet container-state reasons to Kinds.
@@ -224,9 +263,16 @@ func classifyFromSignal(sig Signal) (Classification, bool) {
 // per-kind summarizer that pulls a human one-liner out of the matched
 // line. Detectors are tried in order; the first match wins.
 type logDetector struct {
-	kind      Kind
-	tab       Tab
-	re        *regexp.Regexp
+	kind Kind
+	tab  Tab
+	re   *regexp.Regexp
+	// buildTime marks the pre-image build-log detectors (missing COPY,
+	// lockfile drift, build OOM, …). Classify tries these PRIORITY-first
+	// and position-independent (across all lines) so a generic "build
+	// failed" tail line can't outrank the specific root cause printed
+	// earlier. Runtime detectors leave this false and use the
+	// most-recent-line reverse walk instead.
+	buildTime bool
 	summarize func(line string) string
 	// remediate is an optional builder for the actionable fix. It
 	// receives the matched line AND the full tail (for cross-line
@@ -252,9 +298,10 @@ var logDetectors = []logDetector{
 	// package.json + lockfile but NOT the patches/ dir. Very common with
 	// Payload/pnpm setups. The fix is a one-line COPY before install.
 	{
-		kind: KindDockerfileMissingCopy,
-		tab:  TabBuild,
-		re:   regexp.MustCompile(`(?i)ENOENT.{0,80}\.patch|no such file or directory.{0,40}patches/|failed to (?:read|open).{0,40}\.patch`),
+		kind:      KindDockerfileMissingCopy,
+		tab:       TabBuild,
+		buildTime: true,
+		re:        regexp.MustCompile(`(?i)ENOENT.{0,80}\.patch|no such file or directory.{0,40}patches/|failed to (?:read|open).{0,40}\.patch`),
 		summarize: func(line string) string {
 			if f := extractPatchPath(line); f != "" {
 				return "Build can't find patch file " + f + " — it's declared in package.json but not COPYed into the image."
@@ -276,9 +323,10 @@ var logDetectors = []logDetector{
 	// packages when your package.json and package-lock.json are in sync";
 	// yarn: "lockfile needs to be updated".
 	{
-		kind: KindLockfileDrift,
-		tab:  TabBuild,
-		re:   regexp.MustCompile(`(?i)ERR_PNPM_OUTDATED_LOCKFILE|lockfile.{0,40}(?:out of date|outdated|needs to be updated|not up to date)|npm ci.{0,80}out of sync|can only install packages when your package\.json and package-lock\.json.{0,20}in sync|frozen-lockfile`),
+		kind:      KindLockfileDrift,
+		tab:       TabBuild,
+		buildTime: true,
+		re:        regexp.MustCompile(`(?i)ERR_PNPM_OUTDATED_LOCKFILE|lockfile.{0,40}(?:out of date|outdated|needs to be updated|not up to date)|npm ci.{0,80}out of sync|can only install packages when your package\.json and package-lock\.json.{0,20}in sync|frozen-lockfile`),
 		summarize: func(line string) string {
 			return "Lockfile is out of sync with package.json — a frozen/CI install can't reconcile it."
 		},
@@ -304,9 +352,10 @@ var logDetectors = []logDetector{
 	// read dockerfile" / "Dockerfile: no such file". Usually a wrong
 	// build path / subdir in service settings.
 	{
-		kind: KindDockerfileNotFound,
-		tab:  TabBuild,
-		re:   regexp.MustCompile(`(?i)failed to read dockerfile|dockerfile.{0,20}no such file|cannot locate specified Dockerfile|unable to prepare context.{0,40}dockerfile`),
+		kind:      KindDockerfileNotFound,
+		tab:       TabBuild,
+		buildTime: true,
+		re:        regexp.MustCompile(`(?i)failed to read dockerfile|dockerfile.{0,20}no such file|cannot locate specified Dockerfile|unable to prepare context.{0,40}dockerfile`),
 		summarize: func(line string) string {
 			return "The configured Dockerfile wasn't found in the build path."
 		},
@@ -322,9 +371,10 @@ var logDetectors = []logDetector{
 	// node often print "JavaScript heap out of memory" or the step is
 	// killed (exit 137) during a heavy `next build` / webpack.
 	{
-		kind: KindBuildOOM,
-		tab:  TabBuild,
-		re:   regexp.MustCompile(`(?i)JavaScript heap out of memory|FATAL ERROR:.{0,40}heap|Killed\s*$|signal: killed|out of memory.{0,20}(?:build|compil)`),
+		kind:      KindBuildOOM,
+		tab:       TabBuild,
+		buildTime: true,
+		re:        regexp.MustCompile(`(?i)JavaScript heap out of memory|FATAL ERROR:.{0,40}heap|Killed\s*$|signal: killed|out of memory.{0,20}(?:build|compil)`),
 		summarize: func(line string) string {
 			return "The build ran out of memory. Raise the build memory limit in Settings → Build."
 		},
@@ -340,9 +390,10 @@ var logDetectors = []logDetector{
 	},
 	// Registry auth / pull denied for the base image or build cache.
 	{
-		kind: KindRegistryAuth,
-		tab:  TabBuild,
-		re:   regexp.MustCompile(`(?i)(?:pull access denied|denied: requested access to the resource is denied|unauthorized: authentication required|error response from daemon.{0,40}unauthorized|failed to authorize)`),
+		kind:      KindRegistryAuth,
+		tab:       TabBuild,
+		buildTime: true,
+		re:        regexp.MustCompile(`(?i)(?:pull access denied|denied: requested access to the resource is denied|unauthorized: authentication required|error response from daemon.{0,40}unauthorized|failed to authorize)`),
 		summarize: func(line string) string {
 			return "A registry denied the build (base image or cache pull) — check the image name / credentials."
 		},
@@ -357,9 +408,10 @@ var logDetectors = []logDetector{
 	// Generic dependency resolution failures across ecosystems. Kept
 	// after the specific lockfile/patch detectors so those win.
 	{
-		kind: KindDependencyResolution,
-		tab:  TabBuild,
-		re:   regexp.MustCompile(`(?i)ERR_PNPM_NO_MATCHING_VERSION|npm ERR!.{0,40}(?:404|notarget|ETARGET)|Could not resolve dependency|No matching version found|Cannot find module|pip.{0,40}Could not find a version|go: .*: unknown revision|ERROR: No matching distribution found`),
+		kind:      KindDependencyResolution,
+		tab:       TabBuild,
+		buildTime: true,
+		re:        regexp.MustCompile(`(?i)ERR_PNPM_NO_MATCHING_VERSION|npm ERR!.{0,40}(?:404|notarget|ETARGET)|Could not resolve dependency|No matching version found|Cannot find module|pip.{0,40}Could not find a version|go: .*: unknown revision|ERROR: No matching distribution found`),
 		summarize: func(line string) string {
 			return "A dependency couldn't be resolved. " + briefLine(line)
 		},

@@ -75,10 +75,10 @@ var (
 // anonymous struct were migrated to the apiv1.ServiceRepoSpec
 // pointer at the same time as this alias landed.
 type (
-	CreateServiceRequest  = apiv1.CreateServiceRequest
-	ServiceImageSpec      = apiv1.ServiceImage
-	CreateAddonRequest    = apiv1.CreateAddonRequest
-	AddonExternalRequest  = apiv1.AddonExternalSpec
+	CreateServiceRequest = apiv1.CreateServiceRequest
+	ServiceImageSpec     = apiv1.ServiceImage
+	CreateAddonRequest   = apiv1.CreateAddonRequest
+	AddonExternalRequest = apiv1.AddonExternalSpec
 )
 
 // Projects
@@ -131,6 +131,10 @@ func (k *KusoClient) UpdateProject(name string, req UpdateProjectRequest) (*rest
 // when the caller passes nil. Empty []byte{} would also work but nil
 // is what most callers reach for first.
 func (k *KusoClient) RawPost(path string, body []byte, contentType string) (*resty.Response, error) {
+	// Content-Type is set on the SHARED *resty.Request, so restore the
+	// JSON default afterwards — otherwise this call's content-type
+	// bleeds into unrelated later requests in the same process.
+	defer k.client.SetHeader("Content-Type", "application/json")
 	k.client.SetHeader("Content-Type", contentType)
 	if body == nil {
 		k.client.Body = nil
@@ -171,14 +175,14 @@ type PatchServiceDomain = apiv1.ServiceDomain
 // scale, sleep, repo, previews — the domain shape is broader than
 // the create path). The CLI only edits the small subset below.
 type PatchServiceRequest struct {
-	DisplayName *string              `json:"displayName,omitempty"`
-	Port        *int32               `json:"port,omitempty"`
-	Runtime     *string              `json:"runtime,omitempty"`
-	Domains     *[]PatchServiceDomain `json:"domains,omitempty"`
-	Internal      *bool                `json:"internal,omitempty"`
-	PrivateEgress *bool                `json:"privateEgress,omitempty"`
-	Scale         *PatchScaleRequest   `json:"scale,omitempty"`
-	Repo          *PatchRepoRequest    `json:"repo,omitempty"`
+	DisplayName   *string               `json:"displayName,omitempty"`
+	Port          *int32                `json:"port,omitempty"`
+	Runtime       *string               `json:"runtime,omitempty"`
+	Domains       *[]PatchServiceDomain `json:"domains,omitempty"`
+	Internal      *bool                 `json:"internal,omitempty"`
+	PrivateEgress *bool                 `json:"privateEgress,omitempty"`
+	Scale         *PatchScaleRequest    `json:"scale,omitempty"`
+	Repo          *PatchRepoRequest     `json:"repo,omitempty"`
 }
 
 // PatchRepoRequest mirrors the server's projects.PatchRepoRequest.
@@ -384,6 +388,10 @@ func (k *KusoClient) Apply(project string, yamlBody []byte, dryRun, rotateSecret
 	if len(q) > 0 {
 		url += "?" + strings.Join(q, "&")
 	}
+	// Restore the JSON default after this call — the Content-Type is
+	// set on the shared request and would otherwise leak into later
+	// unrelated calls.
+	defer k.client.SetHeader("Content-Type", "application/json")
 	k.client.SetBody(yamlBody)
 	k.client.SetHeader("Content-Type", "application/yaml")
 	return k.client.Post(url)
@@ -447,6 +455,10 @@ func (k *KusoClient) ExportProject(project string) (*resty.Response, error) {
 // is one of "error" (default), "rename", "overwrite" — see the
 // server's ExportHandler.Import for semantics.
 func (k *KusoClient) ImportProject(tarball []byte, policy string) (*resty.Response, error) {
+	// Restore the JSON default after this call — the Content-Type is
+	// set on the shared request and would otherwise leak into later
+	// unrelated calls.
+	defer k.client.SetHeader("Content-Type", "application/json")
 	k.client.SetBody(tarball)
 	k.client.SetHeader("Content-Type", "application/gzip")
 	path := "/api/projects/import"

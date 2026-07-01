@@ -986,6 +986,51 @@ fi
 
 # ---- 5. optional rollout -------------------------------------------
 
+# ---- 5-pre. CRDs FIRST (when operator/ changed) --------------------
+#
+# The new kuso-server refuses readiness until the CRD schemas it
+# expects are applied (the stale-CRD gate). If we rolled the server
+# first and applied CRDs afterwards, the server rollout would time out
+# and abort the script BEFORE the CRD-apply step ever ran — a
+# chicken-and-egg deadlock we actually hit in production. So scp +
+# apply the CRDs BEFORE the server roll below. CRD apply is idempotent
+# (`kubectl apply` of an unchanged CRD is a no-op), and only the CRD
+# schemas — not the operator image — gate server readiness, so the
+# operator IMAGE roll stays in section 5b where it belongs.
+#
+# Gated on operator_should_build: when nothing under operator/ changed,
+# the CRDs didn't change either, so the server's schema expectation is
+# already satisfied and there's nothing to apply.
+if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]] && operator_should_build; then
+  log "operator/ changed — applying CRDs BEFORE server roll on ${KUSO_RELEASE_HOST}"
+  log "scp + apply CRDs"
+  CRD_FILES=( operator/config/crd/bases/*.yaml )
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "scp ${CRD_FILES[*]} ${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}:/tmp/"
+  else
+    scp -i "$KUSO_RELEASE_KEY" \
+      -o StrictHostKeyChecking=accept-new \
+      "${CRD_FILES[@]}" \
+      "${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}:/tmp/" >/dev/null
+  fi
+
+  # Build the kubectl apply args list dynamically — one -f per CRD.
+  REMOTE_FLAGS=""
+  for f in "${CRD_FILES[@]}"; do
+    REMOTE_FLAGS="${REMOTE_FLAGS} -f /tmp/$(basename "$f")"
+  done
+
+  if [[ "$DRY_RUN" == "1" ]]; then
+    dry "ssh ${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST} 'kubectl apply${REMOTE_FLAGS}'"
+  else
+    ssh -i "$KUSO_RELEASE_KEY" \
+      -o StrictHostKeyChecking=accept-new \
+      "${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}" \
+      "kubectl apply ${REMOTE_FLAGS}"
+  fi
+  log "CRDs applied"
+fi
+
 if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]]; then
   log "rolling deploy/${KUSO_RELEASE_DEPLOY} on ${KUSO_RELEASE_HOST}"
   # accept-new auto-trusts a previously-unknown host on first contact
@@ -1025,12 +1070,17 @@ if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]]; then
   fi
 fi
 
-# ---- 5b. operator image + CRDs (auto when operator/ changed) -----
+# ---- 5b. operator image roll (auto when operator/ changed) -------
 #
 # Detects whether operator/ changed since the last git tag. When it
-# did, rebuilds the operator image, scps the CRDs, kubectl applies
-# them, and rolls the operator deployment. Skipped when nothing
-# under operator/ has changed.
+# did, rolls the operator deployment to the freshly-built image.
+# Skipped when nothing under operator/ has changed.
+#
+# NOTE: the CRDs are scp'd + applied in section 5-pre ABOVE (before the
+# server roll), NOT here — the new server's stale-CRD readiness gate
+# needs the schemas in place before its rollout, so applying them after
+# the server roll would deadlock. The operator IMAGE (which does NOT
+# gate server readiness) rolls here.
 #
 # Override: KUSO_RELEASE_OPERATOR=1 forces the operator step even
 # when git diff is empty (useful for explicit re-rolls, e.g. when
@@ -1038,38 +1088,15 @@ fi
 # skips it explicitly.
 
 if [[ "${KUSO_RELEASE_ROLL:-0}" == "1" ]] && operator_should_build; then
-  log "operator/ changed — rolling operator on ${KUSO_RELEASE_HOST} (image already built above)"
-
-  # Ship every CRD under operator/config/crd/bases/ to /tmp on the
-  # cluster, kubectl apply them, then roll the operator deployment.
-  # We don't filter to "only the changed CRD files" — applying an
-  # unchanged CRD is a no-op (`unchanged` in kubectl output), so the
-  # complexity isn't worth it.
-  log "scp + apply CRDs"
-  CRD_FILES=( operator/config/crd/bases/*.yaml )
-  if [[ "$DRY_RUN" == "1" ]]; then
-    dry "scp ${CRD_FILES[*]} ${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}:/tmp/"
-  else
-    scp -i "$KUSO_RELEASE_KEY" \
-      -o StrictHostKeyChecking=accept-new \
-      "${CRD_FILES[@]}" \
-      "${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}:/tmp/" >/dev/null
-  fi
-
-  # Build the kubectl apply args list dynamically — one -f per CRD.
-  REMOTE_FLAGS=""
-  for f in "${CRD_FILES[@]}"; do
-    REMOTE_FLAGS="${REMOTE_FLAGS} -f /tmp/$(basename "$f")"
-  done
+  log "operator/ changed — rolling operator on ${KUSO_RELEASE_HOST} (image already built above; CRDs already applied)"
 
   if [[ "$DRY_RUN" == "1" ]]; then
-    dry "ssh ${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST} 'kubectl apply${REMOTE_FLAGS} && kubectl set image -n ${KUSO_OPERATOR_NS} deploy/${KUSO_OPERATOR_DEPLOY} ${KUSO_OPERATOR_CONTAINER}=${OPERATOR_IMAGE}:${OPERATOR_VERSION} && kubectl rollout status …'"
+    dry "ssh ${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST} 'kubectl set image -n ${KUSO_OPERATOR_NS} deploy/${KUSO_OPERATOR_DEPLOY} ${KUSO_OPERATOR_CONTAINER}=${OPERATOR_IMAGE}:${OPERATOR_VERSION} && kubectl rollout status …'"
   else
     ssh -i "$KUSO_RELEASE_KEY" \
       -o StrictHostKeyChecking=accept-new \
       "${KUSO_RELEASE_USER}@${KUSO_RELEASE_HOST}" \
-      "kubectl apply ${REMOTE_FLAGS} && \
-       kubectl set image -n ${KUSO_OPERATOR_NS} deploy/${KUSO_OPERATOR_DEPLOY} ${KUSO_OPERATOR_CONTAINER}=${OPERATOR_IMAGE}:${OPERATOR_VERSION} && \
+      "kubectl set image -n ${KUSO_OPERATOR_NS} deploy/${KUSO_OPERATOR_DEPLOY} ${KUSO_OPERATOR_CONTAINER}=${OPERATOR_IMAGE}:${OPERATOR_VERSION} && \
        kubectl rollout status -n ${KUSO_OPERATOR_NS} deploy/${KUSO_OPERATOR_DEPLOY} --timeout=180s"
   fi
   log "operator rolled to ${OPERATOR_VERSION}"

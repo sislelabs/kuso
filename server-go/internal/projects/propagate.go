@@ -24,6 +24,7 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -131,6 +132,16 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			effectivePlacement = svc.Spec.Placement
 		}
 	}
+	// Collect per-env failures instead of returning on the first one.
+	// A single bad env (e.g. one stuck mid-reconcile) must not block the
+	// remaining envs from being updated — otherwise envs after the failed
+	// one stay stale until the next save happens to walk past them.
+	// Every env is attempted every pass; the aggregated error is returned
+	// so PatchService can log the specific envs loudly. Returning an error
+	// (rather than nil) keeps the "retry on next save" contract honest:
+	// the caller can see propagation was incomplete even though the
+	// service spec itself saved.
+	var propagateErrs []error
 	for i := range envs {
 		envName := envs[i].Name
 		// RMW with retry-on-409: re-fetch the env CR, apply the
@@ -290,9 +301,14 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 		if err != nil {
 			slog.WarnContext(ctx, "propagate: update env failed",
 				"env", envName, "err", err)
-			return fmt.Errorf("update env %s: %w", envName, err)
+			propagateErrs = append(propagateErrs, fmt.Errorf("update env %s: %w", envName, err))
+			continue
 		}
 		slog.InfoContext(ctx, "propagate: env updated", "env", envName)
+	}
+	if len(propagateErrs) > 0 {
+		return fmt.Errorf("propagate to %d/%d env(s) failed: %w",
+			len(propagateErrs), len(envs), errors.Join(propagateErrs...))
 	}
 	return nil
 }

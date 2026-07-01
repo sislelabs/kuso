@@ -1,6 +1,9 @@
 package notify
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 // TestAbsoluteURL pins the Discord/Slack URL upgrade rules.
 //
@@ -33,6 +36,52 @@ func TestAbsoluteURL(t *testing.T) {
 			t.Setenv("KUSO_DOMAIN", tc.domain)
 			if got := absoluteURL(tc.in); got != tc.want {
 				t.Fatalf("absoluteURL(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestRedact pins the token-scrubbing rules for both webhook shapes:
+//   - Telegram tokens live mid-URL (/bot<token>/sendMessage) and must
+//     be scrubbed even when the URL is embedded in a wrapped HTTP-client
+//     error string — otherwise the bot token leaks into logs AND the
+//     outbox lastError column (L18).
+//   - Discord/Slack tokens are the trailing /-segment.
+func TestRedact(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "telegram bare url",
+			in:   "https://api.telegram.org/bot123456:AAExampleToken/sendMessage",
+			want: "https://api.telegram.org/bot.../sendMessage",
+		},
+		{
+			name: "telegram wrapped in http error",
+			in:   `post: Post "https://api.telegram.org/bot123456:AAExampleToken/sendMessage": dial tcp: timeout`,
+			want: `post: Post "https://api.telegram.org/bot.../sendMessage": dial tcp: timeout`,
+		},
+		{
+			name: "discord trailing token",
+			in:   "https://discord.com/api/webhooks/123/SECRETTOKEN",
+			want: "https://discord.com/api/webhooks/123/...",
+		},
+		{
+			name: "plain error string untouched (no url)",
+			in:   "upstream 500: internal error",
+			want: "upstream 500: internal error",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := redact(tc.in)
+			if got != tc.want {
+				t.Fatalf("redact(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if strings.Contains(got, "AAExampleToken") || strings.Contains(got, "SECRETTOKEN") {
+				t.Fatalf("redact(%q) leaked token: %q", tc.in, got)
 			}
 		})
 	}

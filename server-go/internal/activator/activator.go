@@ -233,9 +233,17 @@ func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	}
 }
 
-// retriableDialErr reports whether err is a cold-start dial failure we
-// should retry (connection refused, or a dial timeout / no route while
-// kube-proxy catches up).
+// retriableDialErr reports whether err is a cold-start CONNECTION-
+// ESTABLISHMENT failure we should retry (connection refused, a dial
+// timeout, or no route while kube-proxy catches up). All three mean no
+// bytes reached the app, so retrying is safe even for non-idempotent
+// methods.
+//
+// We deliberately do NOT retry "connection reset by peer": a reset can
+// arrive AFTER the app has received and processed the request, so
+// retrying would re-execute a non-idempotent request (a double POST).
+// The cold-start races we care about are all pre-request dial failures,
+// which the conditions below already cover.
 func retriableDialErr(err error) bool {
 	if err == nil {
 		return false
@@ -243,8 +251,7 @@ func retriableDialErr(err error) bool {
 	msg := err.Error()
 	return strings.Contains(msg, "connection refused") ||
 		strings.Contains(msg, "i/o timeout") ||
-		strings.Contains(msg, "no route to host") ||
-		strings.Contains(msg, "connection reset")
+		strings.Contains(msg, "no route to host")
 }
 
 // wakeAndWait scales the target Deployment to at least 1 (coalescing

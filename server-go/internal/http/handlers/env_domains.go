@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -96,16 +97,29 @@ func (h *ProjectsHandler) SetEnvScopedVar(w http.ResponseWriter, r *http.Request
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
+	// Mask-sentinel guard (defense in depth) — same invariant the bulk
+	// SetEnv path enforces. A read-modify-write client that echoed the
+	// masked value ("••••••••") back would clobber the real value; refuse
+	// the sentinel rather than persist it.
+	if wire.Value == envMaskSentinel {
+		http.Error(w,
+			fmt.Sprintf("refusing to write masked sentinel value for %q — env values are admin-only; supply a real value", chi.URLParam(r, "name")),
+			http.StatusBadRequest)
+		return
+	}
 	req := projects.SetEnvVarRequest{Value: wire.Value}
 	if wire.SecretRef != nil {
 		req.SecretRef = &projects.SetEnvVarSecretRefBody{Name: wire.SecretRef.Name, Key: wire.SecretRef.Key}
 	}
-	out, err := h.Svc.SetEnvScopedVar(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "env"), chi.URLParam(r, "name"), req)
-	if err != nil {
+	if _, err := h.Svc.SetEnvScopedVar(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "env"), chi.URLParam(r, "name"), req); err != nil {
 		h.fail(w, "set env-scoped var", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, out)
+	// Don't echo the full env CR back: it carries every env-var override
+	// VALUE in plaintext, and an editor who lacks secrets:read must not
+	// see values (the read-secret-values boundary is admin-only). Respond
+	// 204 like the bulk SetEnv path — no body, no leaked values.
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // DELETE /api/projects/{project}/services/{service}/envs/{env}/env-vars/{name}

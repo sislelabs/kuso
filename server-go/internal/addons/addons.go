@@ -385,14 +385,28 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 		if req.Size != nil {
 			addon.Spec.Size = *req.Size
 		}
-		if req.HA != nil {
-			addon.Spec.HA = *req.HA
+		// HA is IMMUTABLE on a live addon (docs/EDIT_SAFETY.md: size/ha/
+		// storageSize/database are all "❌ No"). Flipping ha switches the
+		// chart between the single-pod StatefulSet and the CloudNativePG
+		// topology — DIFFERENT StatefulSets/PVCs. The old data PVC is
+		// abandoned and an empty DB bootstraps in its place: silent data
+		// loss. Refuse the toggle; a no-op patch (same value) is allowed
+		// so RevertAddon and idempotent re-saves still pass. To actually
+		// change HA: back up, delete, recreate at the new HA setting,
+		// restore.
+		if req.HA != nil && *req.HA != addon.Spec.HA {
+			return fmt.Errorf("%w: changing HA on a live addon is not supported — it abandons the existing data PVC and bootstraps an empty DB; back up, delete, recreate at the new HA setting, then restore", ErrConflict)
 		}
-		if req.StorageSize != nil {
-			addon.Spec.StorageSize = *req.StorageSize
+		// storageSize and database are likewise immutable post-creation
+		// (EDIT_SAFETY.md): the StatefulSet PVC template can't be resized
+		// in place, and changing the database name orphans the existing
+		// data. Refuse an actual change; allow a no-op so revert/re-save
+		// round-trips cleanly.
+		if req.StorageSize != nil && *req.StorageSize != addon.Spec.StorageSize {
+			return fmt.Errorf("%w: changing storageSize on a live addon is not supported — the StatefulSet PVC template is immutable; back up, delete, recreate at the new size, then restore", ErrConflict)
 		}
-		if req.Database != nil {
-			addon.Spec.Database = *req.Database
+		if req.Database != nil && *req.Database != addon.Spec.Database {
+			return fmt.Errorf("%w: changing the database name on a live addon is not supported — it orphans the existing data; back up, delete, recreate with the new database name, then restore", ErrConflict)
 		}
 		if req.Backup != nil {
 			// Lazy-init the spec.backup struct so we can patch a single

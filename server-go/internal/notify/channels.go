@@ -171,7 +171,14 @@ func (d *Dispatcher) sendTelegramSync(ctx context.Context, botToken, chatID stri
 		"text":                     truncateRunes(plainSummary(e), 4096),
 		"disable_web_page_preview": true,
 	}
-	return d.postSync(ctx, api, body, nil)
+	// The bot token is embedded in `api`, and Go's http client formats
+	// failed requests as `Post "<url>": …` — so an unredacted error would
+	// leak the token into logs AND the outbox lastError column. Scrub the
+	// token from any error before it escapes this function.
+	if err := d.postSync(ctx, api, body, nil); err != nil {
+		return fmt.Errorf("%s", redact(err.Error()))
+	}
+	return nil
 }
 
 // --- Pushover -------------------------------------------------------

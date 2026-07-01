@@ -644,11 +644,19 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 
 	selector := fmt.Sprintf("%s=%s,%s=%s", labelProject, project, labelEnv, name)
 
-	// Envs first.
-	envList, _ := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+	// Envs first. A LIST failure here means we can't even enumerate what
+	// to tear down — returning success would silently orphan the group's
+	// envs/services/addons. Surface it so the caller reports failure
+	// (individual per-resource deletes below stay fatal-on-error, matching
+	// the pre-existing cascade contract; only the previously-swallowed
+	// LIST errors are being fixed).
+	envList, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
 		labelProject: project,
 		labelEnv:     name,
 	})
+	if err != nil {
+		return fmt.Errorf("list envs for group %s: %w", name, err)
+	}
 	for i := range envList {
 		n := envList[i].Name
 		if err := s.Kube.DeleteKusoEnvironment(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
@@ -657,8 +665,11 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 	}
 
 	// Services next.
-	svcList, _ := s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).
+	svcList, err := s.Kube.Dynamic.Resource(kube.GVRServices).Namespace(ns).
 		List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return fmt.Errorf("list services for group %s: %w", name, err)
+	}
 	if svcList != nil {
 		for i := range svcList.Items {
 			n := svcList.Items[i].GetName()
@@ -669,8 +680,11 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 	}
 
 	// Addons last (services depend on them via envFromSecrets).
-	addonList, _ := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).
+	addonList, err := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).
 		List(ctx, metav1.ListOptions{LabelSelector: selector})
+	if err != nil {
+		return fmt.Errorf("list addons for group %s: %w", name, err)
+	}
 	if addonList != nil {
 		for i := range addonList.Items {
 			n := addonList.Items[i].GetName()
