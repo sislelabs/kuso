@@ -19,9 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
-## [0.18.90] — 2026-07-01
+## [0.18.91] — 2026-07-01
 
 ### ✨ Features
+- Feat(stop): branded stopped page, project card stopped state, stop-whole-project ([ff69409](https://github.com/sislelabs/kuso/commit/ff6940998255edb8c554873d91d2842f355293fb))
+- Feat(onboarding): one-click GitHub App creation + install summary + doctor webhook check ([b21cfb7](https://github.com/sislelabs/kuso/commit/b21cfb7ffe5381c7060f17e8d7534dee6a28543c))
 - Feat(cli,web): service stop/start surfaces ([de81e7c](https://github.com/sislelabs/kuso/commit/de81e7c8b47a5cbfa035525d0217ab890de4299c))
 - Feat(service): hard stop/start — pin to 0 replicas, no wake-on-traffic ([42c5153](https://github.com/sislelabs/kuso/commit/42c51533274731a9d4c089f6e255fe2753a97540))
 
