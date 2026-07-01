@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.98] — 2026-07-01
+
+### ✨ Features
+- Feat(web): best-in-class mobile incident experience ([28d061b](https://github.com/sislelabs/kuso/commit/28d061b172440b0c69baad0d70675cfba72eadd6))
+
 ## [0.18.97] — 2026-07-01
 
 ### 🐛 Bug Fixes
@@ -371,11 +376,6 @@ messages on every release. The format is loosely based on
 ### 📝 Docs
 - Docs(nodejoin,skill): registry wiring, KUSO_K3S_URL, firewall ports + v0.18 features ([c47510a](https://github.com/sislelabs/kuso/commit/c47510aa2c9c29b9daf41d3775a17991e616dec9))
 - Docs(import): docker-compose → kuso import design spec ([1847586](https://github.com/sislelabs/kuso/commit/1847586055fee3880379ce99b5dc031222165cd7))
-
-## [0.18.33] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(crd): align volume schema field names with KusoVolume (sizeGi/accessMode) ([33a81d3](https://github.com/sislelabs/kuso/commit/33a81d3c15c8fc66a65a1fd0ad3d784f20b16a7b))
 
 
 ---
