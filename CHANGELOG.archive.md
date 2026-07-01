@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.26] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(netpolicy): allow project egress to the cluster-DB pooler/PG ([3eab6ba](https://github.com/sislelabs/kuso/commit/3eab6ba3f2480d71364d92553e89434987f6989b))
+
 ## [0.18.25] — 2026-06-04
 
 ### 🐛 Bug Fixes

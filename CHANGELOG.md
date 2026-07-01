@@ -19,6 +19,12 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.90] — 2026-07-01
+
+### ✨ Features
+- Feat(cli,web): service stop/start surfaces ([de81e7c](https://github.com/sislelabs/kuso/commit/de81e7c8b47a5cbfa035525d0217ab890de4299c))
+- Feat(service): hard stop/start — pin to 0 replicas, no wake-on-traffic ([42c5153](https://github.com/sislelabs/kuso/commit/42c51533274731a9d4c089f6e255fe2753a97540))
+
 ## [0.18.89] — 2026-06-28
 
 ### 🐛 Bug Fixes
@@ -368,11 +374,6 @@ messages on every release. The format is loosely based on
 ### 📝 Docs
 - Docs(migration): full e2e results — 11/14 apps verified (DB parity + pooler query + HTTP) ([8cefc78](https://github.com/sislelabs/kuso/commit/8cefc7894f9ce1f69c97067107757c0c2489b81b))
 - Docs(migration): runtime blocker chain resolved (v0.18.25 env-ref, v0.18.26 netpolicy); all 13 apps Running ([cf53ac1](https://github.com/sislelabs/kuso/commit/cf53ac119631d6a59ad0d7297042487f3fa4bdf5))
-
-## [0.18.26] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(netpolicy): allow project egress to the cluster-DB pooler/PG ([3eab6ba](https://github.com/sislelabs/kuso/commit/3eab6ba3f2480d71364d92553e89434987f6989b))
 
 
 ---
