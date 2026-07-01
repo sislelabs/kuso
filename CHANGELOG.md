@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.93] — 2026-07-01
+
+### ✨ Features
+- Feat(activator): creative "4∅4" not-found page ([050d66d](https://github.com/sislelabs/kuso/commit/050d66d7339ef6b1ad40ff4bfa31cd7c7bee3dd1))
+
 ## [0.18.92] — 2026-07-01
 
 ### ✨ Features
@@ -370,11 +375,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(projects): per-user starring + folders + equal-height cards ([afd3002](https://github.com/sislelabs/kuso/commit/afd300225d8417fec930c48c2c3e29cd9fd6b05b))
-
-## [0.18.28] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(env): explicit per-env override marker stops stale seeds shadowing service ([c98c47e](https://github.com/sislelabs/kuso/commit/c98c47e3306ca63346e9b9b601c8fd9aab65edf0))
 
 
 ---
