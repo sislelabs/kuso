@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.92] — 2026-07-01
+
+### ✨ Features
+- Feat(activator): branded "no service here" 404 for unmatched domains ([66ebd5e](https://github.com/sislelabs/kuso/commit/66ebd5e814e3eccb1764d0cb2a6730a58695fa8f))
+
+### 🐛 Bug Fixes
+- Fix(release): roll kuso-activator in lockstep with kuso-server ([d52157a](https://github.com/sislelabs/kuso/commit/d52157a28bc92518f1aeee1b58a77f5ed5a0b8ed))
+
 ## [0.18.91] — 2026-07-01
 
 ### ✨ Features
@@ -367,15 +375,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env): explicit per-env override marker stops stale seeds shadowing service ([c98c47e](https://github.com/sislelabs/kuso/commit/c98c47e3306ca63346e9b9b601c8fd9aab65edf0))
-
-## [0.18.27] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(ui): project card domain falls back to detected frontend's default host ([dc7ec8d](https://github.com/sislelabs/kuso/commit/dc7ec8db8aacfefccb17a8fb6aafad6cb06c8668))
-
-### 📝 Docs
-- Docs(migration): full e2e results — 11/14 apps verified (DB parity + pooler query + HTTP) ([8cefc78](https://github.com/sislelabs/kuso/commit/8cefc7894f9ce1f69c97067107757c0c2489b81b))
-- Docs(migration): runtime blocker chain resolved (v0.18.25 env-ref, v0.18.26 netpolicy); all 13 apps Running ([cf53ac1](https://github.com/sislelabs/kuso/commit/cf53ac119631d6a59ad0d7297042487f3fa4bdf5))
 
 
 ---
