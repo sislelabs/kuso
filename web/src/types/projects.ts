@@ -59,6 +59,11 @@ export interface KusoServiceSpec {
     limits?: { cpu?: string; memory?: string };
   };
   sleep?: { enabled?: boolean; afterMinutes?: number };
+  // stopped=true is a hard stop: the service is scaled to 0 replicas
+  // with wake-on-traffic disabled (distinct from sleep, which wakes
+  // on the next request). Visitors get a 503 until it's started again.
+  // Toggled via POST .../stop and .../start.
+  stopped?: boolean;
   static?: {
     builderImage?: string;
     runtimeImage?: string;

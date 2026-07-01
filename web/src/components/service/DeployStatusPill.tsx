@@ -6,6 +6,7 @@ export type DeployStatus =
   | "active"
   | "awaiting"
   | "sleeping"
+  | "stopped"
   | "failed"
   | "crashed"
   | "unknown";
@@ -28,6 +29,10 @@ const styles: Record<DeployStatus, string> = {
     "bg-sky-500/10 text-sky-600 dark:text-sky-400 border-sky-500/30",
   sleeping:
     "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]",
+  // Stopped — explicit hard stop. Slate/grey so it reads as "off" and
+  // is visually distinct from sleeping (muted tertiary) and failed (red).
+  stopped:
+    "bg-slate-500/10 text-slate-500 dark:text-slate-300 border-slate-500/30",
   failed:
     "bg-red-500/10 text-red-600 dark:text-red-400 border-red-500/30",
   crashed:

@@ -8,6 +8,8 @@ export {
   useTriggerBuild,
   useLogsTail,
   useWakeService,
+  useStopService,
+  useStartService,
   useDeleteService,
   usePatchService,
   useAddonSecretKeys,
