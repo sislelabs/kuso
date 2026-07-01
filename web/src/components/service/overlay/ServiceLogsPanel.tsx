@@ -221,19 +221,23 @@ function LogList({ lines, highlight }: { lines: LogLine[]; highlight: string }) 
         const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
         setStickToBottom(nearBottom);
       }}
-      className="h-[28rem] overflow-y-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] font-mono text-[11px] leading-snug"
+      className="h-[28rem] overflow-x-hidden overflow-y-auto rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] font-mono text-[11px] leading-snug"
     >
-      <table className="w-full">
+      <table className="w-full table-fixed">
         <tbody>
           {grouped.map(({ line: l, isContinuation }) => (
             <tr key={l.id} className="border-b border-[var(--border-subtle)]/40 last:border-b-0 hover:bg-[var(--bg-tertiary)]/30">
-              <td className="w-44 align-top px-2 py-1 text-[10px] text-[var(--text-tertiary)] whitespace-nowrap">
+              {/* Timestamp narrower on phones; pod column hidden entirely
+                  (176px+128px of fixed cols left the log line ~70px at
+                  375px and forced horizontal scroll). table-fixed +
+                  break-all lets the message wrap instead of overflowing. */}
+              <td className="w-20 align-top px-2 py-1 text-[10px] text-[var(--text-tertiary)] whitespace-nowrap sm:w-44">
                 {isContinuation ? "" : fmtTs(l.ts)}
               </td>
-              <td className="w-32 align-top px-1 py-1 text-[10px] text-[var(--text-tertiary)] truncate" title={l.pod}>
+              <td className="hidden w-32 align-top px-1 py-1 text-[10px] text-[var(--text-tertiary)] truncate sm:table-cell" title={l.pod}>
                 {isContinuation ? "" : shortPod(l.pod)}
               </td>
-              <td className="px-2 py-1 text-[var(--text-secondary)]">
+              <td className="px-2 py-1 break-all text-[var(--text-secondary)]">
                 <Highlight text={l.line} query={highlight} />
               </td>
             </tr>

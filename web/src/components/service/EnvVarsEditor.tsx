@@ -198,7 +198,7 @@ function literalToRef(value: string, project: string, knownScopes: string[] = []
 // trailing "-production" when the scope list is unavailable (the dominant
 // case — service refs resolve against production at SetEnv time).
 function shortServiceFromLabel(label: string, project: string, knownScopes: string[]): string {
-  let name = stripProjectPrefix(label, project);
+  const name = stripProjectPrefix(label, project);
   const scopes = knownScopes.length ? knownScopes : ["production"];
   for (const scope of scopes) {
     const suffix = "-" + scope;
@@ -758,9 +758,14 @@ export function EnvVarsEditor({
             // focus from the input — every keystroke blurred). Also
             // keeps deletes from the middle correct since the survivor
             // keeps its id.
+            // Mobile (<sm): name + value stack full-width, the three
+            // actions sit on their own row — a 180px name column plus
+            // three buttons crushes the value field to ~100px at 375px.
+            // At sm+ this collapses back to the exact desktop single-row
+            // grid so nothing changes on a laptop.
             <div
               key={r.id}
-              className="grid grid-cols-[180px_1fr_auto_auto_auto] items-center gap-1.5"
+              className="flex flex-col gap-1.5 rounded-md border border-[var(--border-subtle)] p-1.5 sm:grid sm:grid-cols-[180px_1fr_auto_auto_auto] sm:items-center sm:rounded-none sm:border-0 sm:p-0"
             >
               <div className="flex flex-col gap-0.5">
                 <Input
@@ -785,36 +790,41 @@ export function EnvVarsEditor({
                 type={r.visible || r.fromSecret ? "text" : "password"}
                 value={r.value}
                 onChange={(e) => update(i, { value: e.target.value })}
-                className="h-8 font-mono text-[12px]"
+                className="h-8 min-w-0 font-mono text-[12px]"
                 disabled={r.fromSecret}
                 spellCheck={false}
               />
-              <ReferencePicker
-                project={project}
-                excludeService={service}
-                onPick={(ref) => update(i, { value: ref, visible: true })}
-                disabled={r.fromSecret}
-                forceOpen={pickerOpenForIndex === i}
-                onForceCloseConsumed={() => setPickerOpenForIndex(null)}
-              />
-              <button
-                type="button"
-                aria-label={r.visible ? "Hide" : "Show"}
-                onClick={() => update(i, { visible: !r.visible })}
-                disabled={r.fromSecret}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-30"
-              >
-                {r.visible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-              </button>
-              <button
-                type="button"
-                aria-label="Remove"
-                onClick={() => remove(i)}
-                disabled={r.fromSecret}
-                className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400 disabled:opacity-30"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-              </button>
+              {/* On mobile the three actions share one row (justify-end);
+                  on desktop they are three grid cells (contents unwraps
+                  this flex so each button lands in its own column). */}
+              <div className="flex items-center justify-end gap-1 sm:contents">
+                <ReferencePicker
+                  project={project}
+                  excludeService={service}
+                  onPick={(ref) => update(i, { value: ref, visible: true })}
+                  disabled={r.fromSecret}
+                  forceOpen={pickerOpenForIndex === i}
+                  onForceCloseConsumed={() => setPickerOpenForIndex(null)}
+                />
+                <button
+                  type="button"
+                  aria-label={r.visible ? "Hide" : "Show"}
+                  onClick={() => update(i, { visible: !r.visible })}
+                  disabled={r.fromSecret}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-30"
+                >
+                  {r.visible ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Remove"
+                  onClick={() => remove(i)}
+                  disabled={r.fromSecret}
+                  className="inline-flex h-8 w-8 items-center justify-center rounded-md text-[var(--text-tertiary)] hover:bg-[var(--bg-tertiary)] hover:text-red-400 disabled:opacity-30"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
             </div>
           ))}
         </div>

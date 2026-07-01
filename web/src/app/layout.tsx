@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Roboto, DM_Sans, Geist_Mono } from "next/font/google";
 import { ThemeProvider } from "next-themes";
 import { QueryProvider } from "@/lib/query-client";
@@ -34,6 +34,20 @@ export const metadata: Metadata = {
       { url: "/favicon.ico?v=4", sizes: "any" },
     ],
   },
+};
+
+// Declared explicitly rather than relying on Next's injected default.
+// viewportFit=cover lets full-screen overlays + the log panel reach
+// under notches; maximumScale is intentionally left unset so users can
+// still pinch-zoom (an accessibility floor we don't want to break).
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
+    { media: "(prefers-color-scheme: dark)", color: "#0a0a0a" },
+  ],
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
