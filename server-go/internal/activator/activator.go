@@ -513,169 +513,69 @@ var stoppedPageHTML = activatorPage(
 
 // notFoundPageHTML: an unmatched domain — no kuso service claims this host
 // (the catch-all for a domain pointed at kuso with no service, or a base
-// domain when only www.<domain> is configured). Bespoke "lost signal /
-// empty coordinate in the void" page: a drifting starfield, a big glitchy
-// ∅ glyph, a CRT scanline sweep, and a blinking terminal prompt — all
-// self-contained (inline CSS + a tiny inline JS starfield), no external
-// assets, so it renders even when the app + DNS are shaky.
+// domain when only www.<domain> is configured). Restrained, editorial
+// design: a near-black page, a large low-contrast "404", a thin rule, and
+// a short factual status block. No effects. Self-contained (inline CSS,
+// no assets, no JS) so it renders even when the app + DNS are shaky, and
+// content-negotiated so curl/health-checks get terse text.
 var notFoundPageHTML = []byte(`<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>404 · signal lost — kuso</title>
+<title>404 — no service</title>
 <style>
   :root{
     color-scheme: dark;
-    --ink:#d7deee; --dim:#69748c; --faint:#242b3a;
-    --cyan:#67e8f9; --violet:#c4b5fd; --rose:#fb7185; --lime:#86efac;
-    --mono: ui-monospace, "SF Mono", SFMono-Regular, "Cascadia Code", "JetBrains Mono", Menlo, Consolas, monospace;
+    --bg:#0b0c0e; --line:#22242a;
+    --ink:#e8e9ec; --sub:#9b9ea6; --mute:#616570;
+    --sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
   }
   *{box-sizing:border-box;}
   html,body{height:100%;margin:0;}
   body{
-    font-family:var(--mono); color:var(--ink);
-    background:#04050a;
-    overflow:hidden; display:grid; place-items:center; min-height:100%;
+    font-family:var(--sans); color:var(--ink); background:var(--bg);
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+    display:grid; place-items:center; min-height:100%; padding:32px;
   }
-  /* layered atmosphere: a soft aurora glow behind the void */
-  .aura{position:fixed; inset:-20%; z-index:0; pointer-events:none;
-    background:
-      radial-gradient(38% 46% at 50% 34%, rgba(103,232,249,.10), transparent 70%),
-      radial-gradient(30% 40% at 62% 60%, rgba(196,181,253,.09), transparent 72%),
-      radial-gradient(60% 60% at 50% 40%, rgba(9,12,22,0), #04050a 78%);
-    animation:drift 14s ease-in-out infinite alternate;}
-  @keyframes drift{from{transform:translate3d(-1.5%,-1%,0) scale(1)}to{transform:translate3d(1.5%,1.5%,0) scale(1.06)}}
-  #stars{position:fixed; inset:0; z-index:1;}
-  .grid{position:fixed; inset:0; z-index:2; pointer-events:none;
-    background-image:radial-gradient(rgba(120,180,230,.05) 1px, transparent 1px);
-    background-size:28px 28px;
-    -webkit-mask-image:radial-gradient(circle at 50% 44%, #000 0%, transparent 70%);
-            mask-image:radial-gradient(circle at 50% 44%, #000 0%, transparent 70%);}
-  /* CRT scanlines + a slow bright sweep */
-  .crt{position:fixed; inset:0; z-index:8; pointer-events:none; opacity:.5;
-    background:repeating-linear-gradient(0deg, rgba(255,255,255,.03) 0 1px, transparent 1px 3px);}
-  .crt::after{content:""; position:absolute; left:0; right:0; height:24%; top:-30%;
-    background:linear-gradient(180deg, transparent, rgba(103,232,249,.05), transparent);
-    animation:sweep 7s linear infinite;}
-  @keyframes sweep{to{top:110%}}
-
-  .stage{position:relative; z-index:10; width:min(90vw,560px); text-align:center; padding:24px;}
-
-  /* the void: a big 4 0 4 where the 0 is a glowing ∅ orbit */
-  .void{display:flex; align-items:center; justify-content:center; gap:.06em;
-    font-size:clamp(96px,22vw,176px); line-height:1; font-weight:800; letter-spacing:-.02em;
-    color:transparent; -webkit-background-clip:text; background-clip:text;
-    background-image:linear-gradient(180deg,#eef3ff, #9fb0d6 58%, #46536f);
-    filter:drop-shadow(0 6px 30px rgba(103,232,249,.14));}
-  .void .o{position:relative; width:.86em; height:.86em; margin:0 .02em; display:inline-grid; place-items:center;}
-  .void .o::before{content:""; position:absolute; inset:8%; border-radius:50%;
-    border:.09em solid rgba(190,205,235,.85);
-    box-shadow:0 0 34px rgba(103,232,249,.28), inset 0 0 22px rgba(196,181,253,.18);
-    animation:spin 9s linear infinite;}
-  /* the slash through the O (the "empty set" cue) */
-  .void .o::after{content:""; position:absolute; width:.12em; height:1.02em;
-    background:linear-gradient(180deg,#bfe9ff,#c4b5fd); border-radius:2px; transform:rotate(38deg);
-    box-shadow:0 0 16px rgba(103,232,249,.5);}
-  @keyframes spin{to{transform:rotate(360deg)}}
-  /* chromatic glitch ghosting on the whole numeral, rare + quick */
-  .void.glitch{animation:glitch 6s infinite;}
-  @keyframes glitch{0%,94%,100%{transform:translate(0);text-shadow:none}
-    95%{transform:translate(-2px,1px);text-shadow:2px 0 var(--rose),-2px 0 var(--cyan)}
-    97%{transform:translate(2px,-1px);text-shadow:-2px 0 var(--rose),2px 0 var(--cyan)}}
-
-  .badge{display:inline-flex; align-items:center; gap:9px; margin-bottom:20px;
-    padding:6px 14px; border-radius:999px;
-    border:1px solid rgba(251,113,133,.38); background:rgba(251,113,133,.07);
-    color:#fecdd3; font-size:11px; letter-spacing:.24em; text-transform:uppercase;}
-  .badge .dot{width:7px;height:7px;border-radius:50%;background:var(--rose);
-    box-shadow:0 0 12px var(--rose);animation:pulse 1.5s ease-in-out infinite;}
-  @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.3;transform:scale(.65)}}
-
-  h1{font-size:clamp(18px,4.2vw,26px); font-weight:700; margin:26px 0 12px;
-     letter-spacing:-.01em; color:#f2f6ff;}
-  .msg{font-size:13px; line-height:1.75; color:var(--dim); max-width:46ch; margin:0 auto;}
-  .msg b{color:#c4cee2; font-weight:600;}
-
-  .term{margin:26px auto 0; max-width:400px; text-align:left;
-    border:1px solid var(--faint); border-radius:11px; overflow:hidden;
-    background:rgba(8,11,19,.66);}
-  .term .bar{display:flex; align-items:center; gap:7px; padding:9px 13px;
-    border-bottom:1px solid var(--faint);}
-  .term .bar i{width:9px;height:9px;border-radius:50%;opacity:.5;}
-  .term .bar i:nth-child(1){background:#fb7185}.term .bar i:nth-child(2){background:#fbbf24}.term .bar i:nth-child(3){background:#34d399}
-  .term .bar span{margin-left:6px;font-size:10px;letter-spacing:.16em;color:#4a5468;text-transform:uppercase;}
-  .term pre{margin:0; padding:13px 15px 15px; font-size:12px; line-height:1.85; color:#93a2c2; white-space:pre-wrap;}
-  .term .p{color:var(--violet);} .term .ok{color:var(--lime);} .term .no{color:var(--rose);} .term .c{color:#525c72;}
-  .cursor{display:inline-block; width:7px; height:14px; background:var(--cyan);
-    vertical-align:-2px; animation:blink 1.05s steps(1) infinite;}
-  @keyframes blink{50%{opacity:0}}
-
-  .foot{margin-top:24px; font-size:10.5px; letter-spacing:.16em; color:#3a4356;}
-  .foot a{color:#5b6680; text-decoration:none; border-bottom:1px dotted #2e3648;}
-  .foot a:hover{color:var(--cyan);}
-
-  /* entrance is ADDITIVE: content is visible by default; the class just
-     adds a gentle rise. If the animation never runs, nothing is hidden. */
-  .rise{animation:rise .7s both cubic-bezier(.2,.7,.2,1);}
-  .d1{animation-delay:.04s}.d2{animation-delay:.12s}.d3{animation-delay:.22s}.d4{animation-delay:.34s}.d5{animation-delay:.48s}
-  @keyframes rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
-
-  @media (prefers-reduced-motion: reduce){ *{animation:none !important} }
+  .wrap{width:100%; max-width:400px;}
+  /* oversized, quiet numeral — a background note, not a spectacle */
+  .code{
+    font-family:var(--mono); font-weight:500;
+    font-size:clamp(76px,17vw,132px); line-height:.92; letter-spacing:-.04em;
+    color:#2c2f36; margin:0 0 26px; user-select:none;
+  }
+  h1{font-size:17px; font-weight:600; letter-spacing:-.01em; margin:0 0 8px; color:var(--ink);}
+  p{font-size:14px; line-height:1.6; color:var(--sub); margin:0;}
+  .rule{height:1px; background:var(--line); margin:26px 0 18px; border:0;}
+  /* factual status list — label / value pairs, no chrome */
+  dl{margin:0; display:grid; grid-template-columns:auto 1fr; gap:9px 20px;
+     font-family:var(--mono); font-size:12.5px;}
+  dt{color:var(--mute); white-space:nowrap;}
+  dd{margin:0; color:var(--sub);}
+  .next{margin-top:22px; font-size:13px; line-height:1.6; color:var(--sub);}
+  .next a{color:var(--ink); text-decoration:none; border-bottom:1px solid var(--line);}
+  .next a:hover{border-color:var(--sub);}
+  .foot{margin-top:34px; font-family:var(--mono); font-size:11px; letter-spacing:.04em; color:#4a4e57;}
+  .foot a{color:#6b6f79; text-decoration:none;}
+  .foot a:hover{color:var(--sub);}
 </style></head>
 <body>
-  <div class="aura"></div>
-  <canvas id="stars"></canvas>
-  <div class="grid"></div>
-  <div class="crt"></div>
+  <main class="wrap">
+    <div class="code">404</div>
+    <h1>No service here.</h1>
+    <p>This domain reaches kuso, but nothing is configured to answer it.</p>
 
-  <main class="stage">
-    <span class="badge rise d1"><span class="dot"></span> signal lost</span>
-    <div class="void glitch rise d2" aria-label="404">4<span class="o"></span>4</div>
-    <h1 class="rise d3">You've drifted off the map</h1>
-    <p class="msg rise d4">This domain reached <b>kuso</b>, but no service claims it.
-       If it's yours, add a service and point this hostname at it. Otherwise —
-       there's simply nothing out here.</p>
+    <hr class="rule">
+    <dl>
+      <dt>status</dt><dd>no route matched</dd>
+      <dt>served by</dt><dd>kuso</dd>
+    </dl>
 
-    <div class="term rise d5">
-      <div class="bar"><i></i><i></i><i></i><span>router</span></div>
-<pre><span class="p">kuso&#8239;&gt;</span> resolve $HOST
-<span class="c"># searching the routing table…</span>
-<span class="no">&#10007;</span> no service is bound to this hostname
-<span class="p">kuso&#8239;&gt;</span> what now?
-<span class="ok">&#10003;</span> map this domain to a service in the dashboard
-<span class="ok">&#10003;</span> or double-check the address for a typo
-<span class="p">kuso&#8239;&gt;</span> <span class="cursor"></span></pre>
-    </div>
+    <p class="next">If this domain is yours, <a href="https://github.com/sislelabs/kuso" rel="noreferrer">add a service in kuso</a> and point the hostname at it — otherwise, check the address for a typo.</p>
 
-    <div class="foot rise d5">lost in the void &#183; <a href="https://github.com/sislelabs/kuso" rel="noreferrer">powered by kuso</a></div>
+    <div class="foot"><a href="https://github.com/sislelabs/kuso" rel="noreferrer">kuso</a></div>
   </main>
-
-<script>
-(function(){
-  var c=document.getElementById('stars'); if(!c||!c.getContext) return;
-  if(matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-  var x=c.getContext('2d'), w,h,stars,DPR=Math.min(window.devicePixelRatio||1,2);
-  function rnd(a,b){return a+Math.random()*(b-a);}
-  function init(){
-    w=c.width=innerWidth*DPR; h=c.height=innerHeight*DPR;
-    c.style.width=innerWidth+'px'; c.style.height=innerHeight+'px';
-    var n=Math.min(190, Math.floor(innerWidth*innerHeight/8500));
-    stars=[]; for(var i=0;i<n;i++){stars.push({x:rnd(0,w),y:rnd(0,h),z:rnd(.15,1),s:rnd(.4,1.7)*DPR,tw:rnd(0,6.28)});}
-  }
-  var t=0;
-  function frame(){
-    t+=.016; x.clearRect(0,0,w,h);
-    for(var i=0;i<stars.length;i++){var st=stars[i];
-      st.x-=st.z*.20*DPR; if(st.x<0){st.x=w; st.y=rnd(0,h);}
-      var a=(.3+.5*Math.sin(t*1.4+st.tw))*st.z; if(a<0)a=0;
-      x.fillStyle='rgba('+(170+(st.z*50|0))+','+(200+(st.z*35|0))+',255,'+a.toFixed(3)+')';
-      x.beginPath(); x.arc(st.x,st.y,st.s*st.z,0,6.283); x.fill();
-    }
-    requestAnimationFrame(frame);
-  }
-  init(); frame(); addEventListener('resize', init);
-})();
-</script>
 </body></html>
 `)
