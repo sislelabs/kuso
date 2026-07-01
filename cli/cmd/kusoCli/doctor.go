@@ -2,6 +2,7 @@ package kusoCli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -38,7 +39,8 @@ var doctorCmd = &cobra.Command{
 - server URL DNS resolution,
 - server reachability (/healthz),
 - API auth (/api/projects),
-- TLS certificate validity (chain + expiry).
+- TLS certificate validity (chain + expiry),
+- GitHub webhook health (App configured + recent delivery).
 
 Use it after a fresh install or when something feels off — the
 output names the next concrete step for every finding.`,
@@ -132,6 +134,43 @@ output names the next concrete step for every finding.`,
 					report("auth", fmt.Sprintf("status=%d — token invalid or expired; run kuso login again", resp.StatusCode), "fail")
 				default:
 					report("auth", fmt.Sprintf("status=%d", resp.StatusCode), "warn")
+				}
+			}
+		}
+
+		// GitHub webhook round-trip — is the App configured, and are
+		// pushes actually landing? Admin-gated; needs the typed client
+		// (bearer + Host header) rather than a bare http request. We only
+		// probe when we have a token, since it 401s otherwise.
+		if token != "" && api != nil {
+			resp, err := api.WebhookHealth()
+			switch {
+			case err != nil:
+				report("github", "webhook-health probe failed: "+err.Error(), "warn")
+			case resp.StatusCode() == 401 || resp.StatusCode() == 403:
+				report("github", fmt.Sprintf("webhook-health returned %d — admin token required for this check", resp.StatusCode()), "warn")
+			case resp.StatusCode() >= 300:
+				report("github", fmt.Sprintf("webhook-health returned %d: %s", resp.StatusCode(), strings.TrimSpace(string(resp.Body()))), "warn")
+			default:
+				var wh struct {
+					Configured        bool   `json:"configured"`
+					LastDeliveryAt    string `json:"lastDeliveryAt"`
+					LastDeliveryEvent string `json:"lastDeliveryEvent"`
+				}
+				if jerr := json.Unmarshal(resp.Body(), &wh); jerr != nil {
+					report("github", "decode webhook-health: "+jerr.Error(), "warn")
+				} else if !wh.Configured {
+					report("github", "GitHub App not configured — connect it in the dashboard (Settings → GitHub, click 'Create GitHub App') or via the install wizard", "fail")
+				} else if wh.LastDeliveryAt == "" {
+					report("github", "App configured but no webhook delivery ever received — pushes may not be reaching kuso; check the App's Advanced → Recent Deliveries on GitHub", "warn")
+				} else if at, perr := time.Parse(time.RFC3339, wh.LastDeliveryAt); perr == nil && time.Since(at) > 7*24*time.Hour {
+					report("github", fmt.Sprintf("last webhook delivery was %s (%s) — no recent delivery; check the App's Recent Deliveries on GitHub", wh.LastDeliveryAt, dashIfEmpty(wh.LastDeliveryEvent)), "warn")
+				} else {
+					detail := "App configured; last delivery " + wh.LastDeliveryAt
+					if wh.LastDeliveryEvent != "" {
+						detail += " (" + wh.LastDeliveryEvent + ")"
+					}
+					report("github", detail, "pass")
 				}
 			}
 		}

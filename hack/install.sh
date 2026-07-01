@@ -64,8 +64,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.18.85}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.18.89}"
+KUSO_VERSION="${KUSO_VERSION:-v0.18.90}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.18.90}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 
@@ -281,8 +281,17 @@ fi
 if ! kubectl get ns cert-manager >/dev/null 2>&1; then
   log "installing cert-manager"
   kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.19.0/cert-manager.yaml >/dev/null
-  log "waiting for cert-manager-webhook..."
+  log "waiting for cert-manager-webhook (up to 3 min)..."
+  cm_deadline=$((SECONDS + 180))
   until kubectl wait --for=condition=Available --timeout=5s deployment/cert-manager-webhook -n cert-manager >/dev/null 2>&1; do
+    if (( SECONDS >= cm_deadline )); then
+      die "cert-manager-webhook never became Available (waited 3 min).
+Check what's wrong, then re-run this installer (it's idempotent):
+    kubectl get pods -n cert-manager
+    kubectl describe deploy/cert-manager-webhook -n cert-manager
+Most often this is a node with no outbound network (image pull stuck) or
+insufficient memory on a tiny box."
+    fi
     sleep 3
   done
 else
@@ -434,18 +443,23 @@ else
   if ! kubectl apply --server-side -f \
     "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/${CNPG_RELEASE_BRANCH}/releases/cnpg-${CNPG_VERSION}.yaml" \
     >/dev/null; then
-    err "CNPG install failed — check network access to raw.githubusercontent.com"
-    exit 1
+    die "CloudNativePG operator manifest failed to apply.
+This box likely can't reach raw.githubusercontent.com. Check:
+    curl -fsSL https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/${CNPG_RELEASE_BRANCH}/releases/cnpg-${CNPG_VERSION}.yaml | head
+Fix outbound network (or a proxy), then re-run this installer."
   fi
   log "waiting for CNPG operator to become ready (up to 5 min)"
   kubectl -n cnpg-system wait --for=condition=Available deploy/cnpg-controller-manager --timeout=300s \
-    || warn "CNPG operator not yet Available — proceeding (Cluster create may retry)"
+    || warn "CNPG operator not yet Available after 5 min — proceeding anyway (the Postgres Cluster create will retry). If the kuso-server pod later stalls on 'waiting for database', check: kubectl get pods -n cnpg-system && kubectl get cluster -n kuso"
 fi
 
 if [[ "${KUSO_USE_EXTERNAL_POSTGRES:-0}" == "1" ]]; then
   if ! kubectl get secret -n kuso kuso-postgres-conn >/dev/null 2>&1; then
-    err "KUSO_USE_EXTERNAL_POSTGRES=1 set but Secret kuso-postgres-conn missing — create it before re-running install"
-    exit 1
+    die "KUSO_USE_EXTERNAL_POSTGRES=1 is set but the Secret kuso-postgres-conn is missing.
+Create it first with your external DB's connection details, then re-run:
+    kubectl create secret generic kuso-postgres-conn -n kuso \\
+      --from-literal=username=<user> --from-literal=password=<pass> \\
+      --from-literal=host=<host> --from-literal=port=5432 --from-literal=dbname=kuso"
   fi
   log "external Postgres mode — using existing kuso-postgres-conn Secret"
 else
@@ -785,10 +799,25 @@ run_github_wizard() {
     1. listing/picking repos when you create a service
     2. receiving push + PR webhooks for automatic deploys + previews
 
-  Without it you can still create services, but you'll have to set the
-  repo URL manually and trigger builds with 'kuso build trigger'.
+  ────────────────────────────────────────────────────────────────
+  The easiest way: skip all of this and finish setup in the dashboard
+  once the install completes:
 
-  Setup steps (do this in another tab):
+      https://${KUSO_DOMAIN}/settings/github
+
+  Click 'Create GitHub App' — the App Manifest flow creates the App,
+  keys, and webhook secret for you in one click and wires them back to
+  kuso automatically. No manual field-copying, no .pem juggling.
+
+  The manual steps below are only if you'd rather do it now, from the
+  terminal, instead of in the browser after install.
+  ────────────────────────────────────────────────────────────────
+
+  Without a GitHub App you can still create services, but you'll have
+  to set the repo URL manually and trigger builds with
+  'kuso build trigger'.
+
+  Manual setup steps (do this in another tab):
 
     1. Go to:  https://github.com/settings/apps/new
        (or for an org: https://github.com/organizations/<org>/settings/apps/new)
@@ -856,8 +885,14 @@ EOF
   log "GitHub App credentials saved to /etc/kuso/github-app.{env,pem}"
 }
 
+# GITHUB_CONFIGURED tracks whether any of the seeding paths ran, so the
+# end-of-run summary can show a ✓ vs ⚠ without re-deriving it. The
+# kubectl secret check below is the authoritative fallback (covers the
+# case where a path failed mid-seed).
+GITHUB_CONFIGURED=0
 if [[ "${KUSO_GITHUB_WIZARD:-0}" == "1" ]]; then
   run_github_wizard
+  GITHUB_CONFIGURED=1
 elif [[ -n "${KUSO_GITHUB_APP_ENV:-}" ]]; then
   if [[ ! -r "$KUSO_GITHUB_APP_ENV" ]]; then
     die "KUSO_GITHUB_APP_ENV=$KUSO_GITHUB_APP_ENV not readable"
@@ -866,6 +901,7 @@ elif [[ -n "${KUSO_GITHUB_APP_ENV:-}" ]]; then
     die "KUSO_GITHUB_APP_PEM must point at a readable .pem file"
   fi
   gh_seed_from_env_file "$KUSO_GITHUB_APP_ENV" "$KUSO_GITHUB_APP_PEM"
+  GITHUB_CONFIGURED=1
 elif [[ -r /etc/kuso/github-app.env && -r /etc/kuso/github-app.pem ]]; then
   # Re-install: pick up existing credentials saved by an earlier wizard run.
   # We surface the App slug + ID so it's obvious *which* App is being used —
@@ -878,6 +914,7 @@ elif [[ -r /etc/kuso/github-app.env && -r /etc/kuso/github-app.pem ]]; then
   warn "  slug=${EXISTING_SLUG:-?}  id=${EXISTING_ID:-?}"
   warn "  to start fresh: rm /etc/kuso/github-app.{env,pem} and rerun with --github-wizard"
   gh_seed_from_env_file /etc/kuso/github-app.env /etc/kuso/github-app.pem
+  GITHUB_CONFIGURED=1
 fi
 
 # -------- 10. operator --------
@@ -1090,4 +1127,42 @@ EOF
 EOF
   fi
 fi
+
+# --- final at-a-glance summary of what got provisioned + how to verify ---
+# Prefer the tracked flag, but fall back to the authoritative secret
+# check so a mid-seed failure doesn't claim a ✓ it can't back up.
+if [[ "${GITHUB_CONFIGURED:-0}" == "1" ]] || kubectl get secret -n kuso kuso-github-app >/dev/null 2>&1; then
+  GH_LINE="    ✓ GitHub App — configured"
+else
+  GH_LINE="    ⚠ GitHub App — not yet (finish in dashboard → Settings → GitHub)"
+fi
+if [[ -n "$EXISTING_ADMIN" && "$ADMIN_PASSWORD" == "$EXISTING_ADMIN" ]]; then
+  PW_DISPLAY="<unchanged — see existing install>"
+else
+  PW_DISPLAY="$ADMIN_PASSWORD"
+fi
+cat <<EOF
+
+────────────────────────────────────────────────────────────────────
+  kuso is installed
+────────────────────────────────────────────────────────────────────
+  Dashboard:   https://${KUSO_DOMAIN}/        (admin / ${PW_DISPLAY})
+  CLI login:   kuso login --api https://${KUSO_DOMAIN} -u admin -p ${PW_DISPLAY}
+
+  Provisioned:
+    ✓ k3s + traefik + cert-manager
+    ✓ kuso server + operator + CRDs
+    ✓ in-cluster registry
+${GH_LINE}
+
+  Verify:
+    kuso doctor                        # pre-flight checks from your workstation
+    kubectl get pods -n kuso           # everything Running?
+    https://${KUSO_DOMAIN}/settings/github   # connect GitHub for repo deploys
+
+  If the dashboard 502s for a minute, cert issuance is still in flight —
+  check:  kubectl get certificate -n kuso
+────────────────────────────────────────────────────────────────────
+
+EOF
 echo

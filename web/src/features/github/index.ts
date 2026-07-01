@@ -7,6 +7,7 @@ export {
   useSetupStatus,
   useConfigureGithub,
 } from "./hooks";
+export { getGithubManifest } from "./api";
 export type {
   GithubInstallation,
   GithubRepo,
@@ -15,4 +16,5 @@ export type {
   SetupStatusResponse,
   ConfigureBody,
   ConfigureResponse,
+  ManifestResponse,
 } from "./api";

@@ -104,3 +104,23 @@ export interface ConfigureResponse {
 export async function configureGithub(body: ConfigureBody): Promise<ConfigureResponse> {
   return api("/api/github/configure", { method: "POST", body });
 }
+
+// ManifestResponse is the payload for the one-click "Create GitHub App"
+// flow. The server builds a GitHub App manifest (the app spec: name,
+// permissions, webhook URL, redirect_url, etc.) plus the postURL to
+// POST it to (github.com/settings/apps/new or the org variant) and a
+// CSRF state nonce. The web builds + auto-submits an HTML form to
+// postURL with the manifest JSON — GitHub shows a confirmation, then
+// redirects to our manifest-callback which exchanges the code, seeds
+// the secret, and restarts kuso-server.
+export interface ManifestResponse {
+  manifest: unknown;
+  postURL: string;
+  state: string;
+}
+
+export async function getGithubManifest(org?: string): Promise<ManifestResponse> {
+  return api<ManifestResponse>(
+    "/api/github/manifest" + (org ? `?org=${encodeURIComponent(org)}` : ""),
+  );
+}

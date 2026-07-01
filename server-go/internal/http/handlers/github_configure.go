@@ -52,10 +52,29 @@ type GithubConfigureHandler struct {
 	Logger    *slog.Logger
 }
 
-// Mount wires the routes onto the authed router.
+// manifests returns the shared package-level manifest CSRF store. It's a
+// singleton (not per-handler) so the state issued by the authed
+// ManifestConfig is consumable by the public ManifestCallback, which
+// runs on a different handler instance.
+func (h *GithubConfigureHandler) manifests() *manifestStore {
+	return globalManifestStore
+}
+
+// Mount wires the AUTHED routes onto the authed router.
 func (h *GithubConfigureHandler) Mount(r chi.Router) {
 	r.Get("/api/github/setup-status", h.SetupStatus)
 	r.Post("/api/github/configure", h.Configure)
+	// One-click App creation: config is admin-gated; the callback is
+	// mounted on the PUBLIC router (MountPublic) because GitHub redirects
+	// the browser to it without kuso's bearer.
+	r.Get("/api/github/manifest", h.ManifestConfig)
+}
+
+// MountPublic wires routes that GitHub itself calls (browser redirects
+// with no kuso bearer). The manifest callback is CSRF-gated by the
+// single-use `state` issued from the admin-only ManifestConfig.
+func (h *GithubConfigureHandler) MountPublic(r chi.Router) {
+	r.Get("/api/github/manifest-callback", h.ManifestCallback)
 }
 
 // SetupStatus reports whether the App is configured and (if so) which
@@ -142,25 +161,8 @@ func (h *GithubConfigureHandler) Configure(w http.ResponseWriter, r *http.Reques
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	if err := h.upsertSecret(ctx, "kuso-github-app", data); err != nil {
-		h.fail(w, "upsert secret", err)
-		return
-	}
-
-	// Restart the kuso-server deployment so the new env loads. We do
-	// this by patching a kuso.sislelabs.com/restartedAt annotation —
-	// same shape as `kubectl rollout restart` (kubectl uses
-	// kubectl.kubernetes.io/restartedAt). Using our own key keeps
-	// kubectl history clean.
-	patch := fmt.Appendf(nil, `{"spec":{"template":{"metadata":{"annotations":{"kuso.sislelabs.com/restartedAt":%q}}}}}`,
-		time.Now().UTC().Format(time.RFC3339))
-	if _, err := h.Kube.Clientset.AppsV1().
-		Deployments(h.namespace()).
-		Patch(ctx, "kuso-server", types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
-		// Secret is written but pod won't pick up new env until it
-		// happens to restart for another reason. Surface the failure
-		// loudly so the user knows to `kubectl rollout restart` manually.
-		h.fail(w, "rollout restart", err)
+	if err := h.seedAndRestart(ctx, data); err != nil {
+		h.fail(w, "configure github app", err)
 		return
 	}
 
@@ -174,6 +176,29 @@ func (h *GithubConfigureHandler) Configure(w http.ResponseWriter, r *http.Reques
 		"restarted": true,
 		"message":   "kuso-server is restarting; poll /healthz until version comes back online (~30s)",
 	})
+}
+
+// seedAndRestart writes the kuso-github-app Secret and rolls the
+// kuso-server deployment so the new env loads. Shared by the manual
+// Configure path and the GitHub App Manifest callback (both end up with
+// the same secret keys — the manifest flow just derives them from
+// GitHub's conversion response instead of a hand-typed form).
+func (h *GithubConfigureHandler) seedAndRestart(ctx context.Context, data map[string][]byte) error {
+	if err := h.upsertSecret(ctx, "kuso-github-app", data); err != nil {
+		return fmt.Errorf("upsert secret: %w", err)
+	}
+	// Restart the kuso-server deployment so the new env loads. We patch a
+	// kuso.sislelabs.com/restartedAt annotation — same shape as
+	// `kubectl rollout restart` (which uses kubectl.kubernetes.io/
+	// restartedAt); our own key keeps kubectl history clean.
+	patch := fmt.Appendf(nil, `{"spec":{"template":{"metadata":{"annotations":{"kuso.sislelabs.com/restartedAt":%q}}}}}`,
+		time.Now().UTC().Format(time.RFC3339))
+	if _, err := h.Kube.Clientset.AppsV1().
+		Deployments(h.namespace()).
+		Patch(ctx, "kuso-server", types.StrategicMergePatchType, patch, metav1.PatchOptions{}); err != nil {
+		return fmt.Errorf("rollout restart: %w", err)
+	}
+	return nil
 }
 
 // upsertSecret either creates kuso-github-app or merges the new keys
