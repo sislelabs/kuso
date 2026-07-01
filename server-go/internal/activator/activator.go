@@ -4,14 +4,14 @@
 //
 // Flow (see docs/design/SCALE_TO_ZERO.md):
 //
-//	1. A sleep-enabled service idles → its Deployment is scaled to 0.
-//	2. traefik routes requests for a 0-replica service to this activator
-//	   (via an errors-middleware fallback or an operator route flip).
-//	3. The activator resolves the target env from the Host header,
-//	   scales its Deployment to 1 (coalescing concurrent first-hits into
-//	   one scale-up), waits — bounded — until the Deployment reports a
-//	   Ready replica, then reverse-proxies the held request to the app's
-//	   in-cluster Service.
+//  1. A sleep-enabled service idles → its Deployment is scaled to 0.
+//  2. traefik routes requests for a 0-replica service to this activator
+//     (via an errors-middleware fallback or an operator route flip).
+//  3. The activator resolves the target env from the Host header,
+//     scales its Deployment to 1 (coalescing concurrent first-hits into
+//     one scale-up), waits — bounded — until the Deployment reports a
+//     Ready replica, then reverse-proxies the held request to the app's
+//     in-cluster Service.
 //
 // The activator is stateless and horizontally scalable; all shared
 // state (desired replicas) lives on the Deployment object, so two
@@ -73,6 +73,12 @@ type Activator struct {
 
 type hostEntry struct {
 	env, ns string
+	// stopped mirrors the env's spec.stopped. A stopped env must NOT be
+	// woken by traffic (that's the whole point of a hard stop vs sleep),
+	// so the handler serves a "service stopped" 503 instead of waking.
+	// Cached alongside env/ns; the short hostTTL bounds staleness after
+	// a start/stop toggle.
+	stopped bool
 	at      time.Time
 }
 
@@ -87,10 +93,10 @@ func New(kc *kube.Client, logger *slog.Logger) *Activator {
 		logger = slog.Default()
 	}
 	return &Activator{
-		kc:           kc,
-		logger:       logger,
-		holdTimeout:  30 * time.Second,
-		pollInterval: 250 * time.Millisecond,
+		kc:             kc,
+		logger:         logger,
+		holdTimeout:    30 * time.Second,
+		pollInterval:   250 * time.Millisecond,
 		waking:         map[string]*wakeState{},
 		hostCache:      map[string]hostEntry{},
 		hostTTL:        30 * time.Second,
@@ -119,13 +125,24 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 
-	env, ns, err := a.resolveByHost(ctx, host)
+	env, ns, stopped, err := a.resolveByHost(ctx, host)
 	if err != nil {
 		a.logger.Warn("activator: resolve host", "host", host, "err", err)
 		// Unknown host — nothing we can wake. 404 rather than a confusing
 		// 502, so a stray request to the activator's IP doesn't look like
 		// an app error.
 		http.Error(w, "activator: no service for host", http.StatusNotFound)
+		return
+	}
+
+	// Hard stop: the env is deliberately down and must NOT be woken by
+	// traffic (unlike sleep). Serve a clear 503 instead of scaling it up.
+	// No Retry-After — the caller shouldn't poll a stopped service into
+	// waking; it stays down until an operator starts it.
+	if stopped {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("This service is stopped.\n"))
 		return
 	}
 
@@ -349,11 +366,11 @@ func (a *Activator) endpointReady(ctx context.Context, ns, name string) (bool, e
 // Memoized with a short TTL — resolution only runs on the first hit
 // after idle, but a hot CDN can send a burst, so we avoid re-filtering
 // the full env list per request.
-func (a *Activator) resolveByHost(ctx context.Context, host string) (string, string, error) {
+func (a *Activator) resolveByHost(ctx context.Context, host string) (env, ns string, stopped bool, err error) {
 	a.hostMu.RLock()
 	if e, ok := a.hostCache[host]; ok && time.Since(e.at) < a.hostTTL {
 		a.hostMu.RUnlock()
-		return e.env, e.ns, nil
+		return e.env, e.ns, e.stopped, nil
 	}
 	a.hostMu.RUnlock()
 
@@ -362,9 +379,9 @@ func (a *Activator) resolveByHost(ctx context.Context, host string) (string, str
 	// lists cluster-wide; the env CR carries its own namespace. Routes
 	// through the cached typed-list (informer-backed when warm → a slice
 	// filter, not a network round-trip).
-	envs, err := a.kc.ListKusoEnvironments(ctx, "")
-	if err != nil {
-		return "", "", err
+	envs, lerr := a.kc.ListKusoEnvironments(ctx, "")
+	if lerr != nil {
+		return "", "", false, lerr
 	}
 	for i := range envs {
 		e := &envs[i]
@@ -373,12 +390,12 @@ func (a *Activator) resolveByHost(ctx context.Context, host string) (string, str
 		}
 		if hostMatches(host, e) {
 			a.hostMu.Lock()
-			a.hostCache[host] = hostEntry{env: e.Name, ns: e.Namespace, at: time.Now()}
+			a.hostCache[host] = hostEntry{env: e.Name, ns: e.Namespace, stopped: e.Spec.Stopped, at: time.Now()}
 			a.hostMu.Unlock()
-			return e.Name, e.Namespace, nil
+			return e.Name, e.Namespace, e.Spec.Stopped, nil
 		}
 	}
-	return "", "", fmt.Errorf("no env matches host %q", host)
+	return "", "", false, fmt.Errorf("no env matches host %q", host)
 }
 
 func hostMatches(host string, e *kube.KusoEnvironment) bool {

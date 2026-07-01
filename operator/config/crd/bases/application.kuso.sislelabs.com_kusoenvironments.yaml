@@ -146,6 +146,10 @@ spec:
                   type: boolean
                   description: When true, deny public internet egress for this env's pods. Mirrors KusoService.spec.privateEgress.
                   default: false
+                stopped:
+                  type: boolean
+                  description: When true, hard-stop this env — pin to 0 replicas and do NOT wake on traffic. Mirrors KusoService.spec.stopped. The activator serves a "service stopped" 503 for a stopped env instead of scaling it up.
+                  default: false
                 tlsEnabled:
                   type: boolean
                   default: true

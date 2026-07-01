@@ -350,6 +350,11 @@
             "type": "object",
             "x-kubernetes-preserve-unknown-fields": true
           },
+          "stopped": {
+            "default": false,
+            "description": "When true, the service is HARD-STOPPED — pinned to 0 replicas and NOT woken by traffic (unlike sleep, which the activator wakes on the next request). Visitors get a \"service stopped\" 503 until it is explicitly started. Mirrored onto every KusoEnvironment owned by this service.",
+            "type": "boolean"
+          },
           "subscribedAddons": {
             "description": "Per-service opt-in list of project addon short names whose \u003caddon\u003e-conn secret gets mounted on this service's pods. nil = legacy auto-mount-all (pre-v0.16.23); non-nil = explicit subscription. Same opt-in model as sharedEnvKeys, but for addon conn-secrets (DATABASE_URL, REDIS_URL, NATS_URL etc).",
             "items": {

@@ -269,6 +269,11 @@
             "description": "How multi-replica pods spread across nodes. \"hard\" = topologySpreadConstraints DoNotSchedule (replicas forced onto distinct nodes); \"soft\"/\"\" = ScheduleAnyway (single-node safe). Server-managed from the live schedulable-node count.",
             "type": "string"
           },
+          "stopped": {
+            "default": false,
+            "description": "When true, hard-stop this env — pin to 0 replicas and do NOT wake on traffic. Mirrors KusoService.spec.stopped. The activator serves a \"service stopped\" 503 for a stopped env instead of scaling it up.",
+            "type": "boolean"
+          },
           "subscribedAddons": {
             "description": "Mirrored from the parent KusoService.spec.subscribedAddons. nil = legacy auto-mount-all addon-conn secrets; non-nil = operator only includes the listed addons' conn-secrets in envFromSecrets.",
             "items": {

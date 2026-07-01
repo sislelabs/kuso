@@ -68,10 +68,14 @@ type changedFields struct {
 	// changes. The env chart renders `toYaml .Values.resources`, so a
 	// service-level resource change must reach the env CR to take effect.
 	Resources bool
+	// Stopped carries spec.stopped (hard-stop) changes. The chart pins
+	// replicas:0 off the env CR's value and the activator reads it to
+	// refuse waking, so a service-level toggle must reach the env CR.
+	Stopped bool
 }
 
 func (c changedFields) any() bool {
-	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.Release || c.Command || c.Resources
+	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.Release || c.Command || c.Resources || c.Stopped
 }
 
 // propagateChangedToEnvs is the single chokepoint that mirrors a
@@ -262,6 +266,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			}
 			if changed.PrivateEgress {
 				env.Spec.PrivateEgress = svc.Spec.PrivateEgress
+			}
+			if changed.Stopped {
+				env.Spec.Stopped = svc.Spec.Stopped
 			}
 			if changed.Release {
 				env.Spec.Release = svc.Spec.Release

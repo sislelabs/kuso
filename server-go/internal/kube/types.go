@@ -186,15 +186,22 @@ type KusoServiceSpec struct {
 	// on the pod template unless this is true; the kusoproject
 	// NetworkPolicy's allow-public-egress rule keys on that label.
 	// Mirrored onto every KusoEnvironment owned by this service.
-	PrivateEgress bool         `json:"privateEgress,omitempty"`
-	Repo          *KusoRepoRef `json:"repo,omitempty"`
-	Runtime       string       `json:"runtime,omitempty"`
+	PrivateEgress bool `json:"privateEgress,omitempty"`
+	// Stopped hard-stops the service: pinned to 0 replicas and NOT woken
+	// by traffic (unlike sleep, which the activator wakes on the next
+	// request). A stopped service's visitors get a "service stopped" 503
+	// until it's explicitly started. Mirrored onto every KusoEnvironment
+	// owned by this service so the operator (pin replicas 0) and the
+	// activator (don't wake) both see it.
+	Stopped bool         `json:"stopped,omitempty"`
+	Repo    *KusoRepoRef `json:"repo,omitempty"`
+	Runtime string       `json:"runtime,omitempty"`
 	// Dockerfile overrides the Dockerfile filename for runtime=dockerfile
 	// builds, relative to repo.path. Empty = "Dockerfile". Lets a monorepo
 	// service build from e.g. "apps/web/Dockerfile.dev". Ignored for
 	// non-dockerfile runtimes.
-	Dockerfile    string       `json:"dockerfile,omitempty"`
-	Command       []string     `json:"command,omitempty"`
+	Dockerfile string   `json:"dockerfile,omitempty"`
+	Command    []string `json:"command,omitempty"`
 	// FromService — for runtime=worker, the sibling service whose
 	// image to reuse. Empty = the worker has its own repo + builds.
 	FromService string       `json:"fromService,omitempty"`
@@ -497,7 +504,12 @@ type KusoEnvironmentSpec struct {
 	// kusoenvironment chart (which reads only the env CR) can gate the
 	// public-egress pod label. Server-managed: propagated from the
 	// service spec by propagateChangedToEnvs.
-	PrivateEgress    bool         `json:"privateEgress,omitempty"`
+	PrivateEgress bool `json:"privateEgress,omitempty"`
+	// Stopped mirrors KusoService.spec.stopped. The kusoenvironment chart
+	// pins replicas:0 when set, and the activator refuses to wake a stopped
+	// env (serving a "service stopped" 503 instead). Server-managed:
+	// propagated from the service spec by propagateChangedToEnvs.
+	Stopped          bool         `json:"stopped,omitempty"`
 	TLSEnabled       bool         `json:"tlsEnabled,omitempty"`
 	ClusterIssuer    string       `json:"clusterIssuer,omitempty"`
 	IngressClassName string       `json:"ingressClassName,omitempty"`
@@ -770,23 +782,23 @@ type KusoBuild struct {
 }
 
 type KusoBuildSpec struct {
-	Project              string              `json:"project"`
-	Service              string              `json:"service"`
-	Repo                 *KusoRepoRef        `json:"repo,omitempty"`
-	Ref                  string              `json:"ref"`
-	Branch               string              `json:"branch,omitempty"`
-	GithubInstallationID int64               `json:"githubInstallationId,omitempty"`
-	Strategy             string              `json:"strategy,omitempty"`
+	Project              string       `json:"project"`
+	Service              string       `json:"service"`
+	Repo                 *KusoRepoRef `json:"repo,omitempty"`
+	Ref                  string       `json:"ref"`
+	Branch               string       `json:"branch,omitempty"`
+	GithubInstallationID int64        `json:"githubInstallationId,omitempty"`
+	Strategy             string       `json:"strategy,omitempty"`
 	// Dockerfile overrides the Dockerfile filename (relative to repo.path)
 	// for strategy=dockerfile builds. Empty = "Dockerfile". Mirrored from
 	// KusoServiceSpec.Dockerfile by builds.Create.
-	Dockerfile           string              `json:"dockerfile,omitempty"`
+	Dockerfile string `json:"dockerfile,omitempty"`
 	// BuildEnv carries the service's env vars resolved to literals, baked
 	// into the image at build time (ENV-after-FROM). Set by builds.Create
 	// from the service's EnvVars (secretKeyRefs resolved server-side). Apps
 	// that read env during `npm run build` (Prisma, Next.js NEXT_PUBLIC_*)
 	// need this. Values are baked into image layers (in-cluster registry).
-	BuildEnv             map[string]string   `json:"buildEnv,omitempty"`
+	BuildEnv map[string]string `json:"buildEnv,omitempty"`
 	// BuildArgs are passed to the build as --build-arg KEY=VAL. Unlike
 	// BuildEnv (which bakes ENV lines), these are dockerfile ARG inputs —
 	// build-time constants identical across envs. Mirrored from the
@@ -794,14 +806,14 @@ type KusoBuildSpec struct {
 	BuildArgs map[string]string `json:"buildArgs,omitempty"`
 	// PublicEnv names vars baked as __KUSO_RUNTIME_<KEY>__ sentinels at
 	// build and substituted at pod start. Mirrored from the service.
-	PublicEnv            []string            `json:"publicEnv,omitempty"`
-	Image                *KusoImage          `json:"image,omitempty"`
-	Static               *KusoStaticSpec     `json:"static,omitempty"`
-	Buildpacks           *KusoBuildpacksSpec `json:"buildpacks,omitempty"`
-	Cache                *KusoBuildCache     `json:"cache,omitempty"`
-	Resources            *KusoBuildResources `json:"resources,omitempty"`
-	Auth                 *KusoBuildAuth      `json:"auth,omitempty"`
-	Registry             *KusoBuildRegistry  `json:"registry,omitempty"`
+	PublicEnv  []string            `json:"publicEnv,omitempty"`
+	Image      *KusoImage          `json:"image,omitempty"`
+	Static     *KusoStaticSpec     `json:"static,omitempty"`
+	Buildpacks *KusoBuildpacksSpec `json:"buildpacks,omitempty"`
+	Cache      *KusoBuildCache     `json:"cache,omitempty"`
+	Resources  *KusoBuildResources `json:"resources,omitempty"`
+	Auth       *KusoBuildAuth      `json:"auth,omitempty"`
+	Registry   *KusoBuildRegistry  `json:"registry,omitempty"`
 	// Done is the chart's no-op gate. When true, the kusobuild chart
 	// renders zero objects — even if helm-operator's initial cache
 	// sync (which ignores the build-state=done watch selector) tries

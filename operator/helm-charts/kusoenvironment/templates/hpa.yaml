@@ -4,7 +4,11 @@
        and churn the apiserver trying to scale a target that has no
        runnable image. The HPA reappears the moment image.repository is
        set and the operator reconciles. */ -}}
-{{- if and .Values.autoscaling.enabled .Values.image.repository }}
+{{- /* A hard-stopped env has no HPA: the deployment is pinned to 0 and
+       an autoscaler with minReplicas>=1 would immediately fight that pin
+       and scale it back up, defeating the stop. Drop the HPA while
+       stopped; it reappears on start. */ -}}
+{{- if and .Values.autoscaling.enabled .Values.image.repository (not .Values.stopped) }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
