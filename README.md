@@ -13,8 +13,16 @@ The platform is built for teams running serious workloads: real CRDs you can `ku
 - **Real Kubernetes underneath.** `KusoProject`, `KusoService`, `KusoEnvironment`, `KusoAddon`, `KusoBuild`, `KusoCron` are real CRDs. GitOps works. `kubectl edit` works. When the abstraction leaks, you're on familiar ground.
 - **Agent-native, not bolted on.** Every UI action has a typed CLI command and a first-party MCP tool. Claude Code and other agents drive the platform end-to-end — provision a project, add a service, attach an addon, tail logs, troubleshoot.
 - **Built to scale up.** Postgres-backed control plane with `RollingUpdate` and multi-replica `kuso-server`. CloudNativePG-backed HA Postgres addons (3 replicas, ~30s automatic failover). Sentinel-backed HA Redis. Multi-node clusters with token-based bootstrap, label-driven placement, and auto-cordon on node failure.
+- **Self-healing, not just self-hosting.** kuso surfaces control-plane health instead of failing silently: a reconcile-health dashboard flags stuck helm releases and drift cluster-wide (`kuso health`), one-click remediation applies the data-safe fix, and `kuso doctor` diagnoses first-run setup (DNS, TLS, GitHub webhook delivery). Build failures come with an actionable hint, not a raw log dump.
 - **Zero-downtime self-update.** `make ship` cuts a GitHub release; every running instance pulls itself forward on the next updater tick. No ssh-from-laptop. CRD changes apply automatically.
 - **Honest about what's missing.** Multi-region active/active and edge runtimes aren't on the roadmap — you have Cloudflare and managed Postgres for that. We do the control plane and the cluster well; we don't pretend to be Vercel + AWS in a box.
+
+## Lifecycle at a glance
+
+- **Deploy:** connect a GitHub repo (or any public URL) → kuso detects the runtime, builds it, and gives it a live URL with a real cert.
+- **Sleep:** idle services scale to zero and wake on the next request via the activator — no cold-start cost when nobody's looking.
+- **Stop:** hard-stop a service (or a whole project) when you want it deliberately off — pinned to zero replicas, *not* woken by traffic. Visitors get a clean "service stopped" page until you start it again. `kuso project service stop <project> <service>` or the dashboard.
+- **Scale:** per-service HPA (min/max replicas), multi-node placement, HA addons.
 
 ## Install
 
@@ -40,12 +48,11 @@ The install uses Let's Encrypt **prod** by default — your browser sees a real 
 
 The installer is **idempotent**: re-running it on the same box (e.g. with a newer `--server-version`) preserves the admin password, JWT secret, Postgres credentials, and GitHub App configuration, and skips any provisioning step that's already done. To roll the platform to a new tag, the supported path is `kuso upgrade` (see [Self-update](#self-update)) — re-running install is a fallback for when self-update is broken.
 
-GitHub-driven deploys can be set up two ways:
+GitHub-driven deploys (repo picker + push/PR webhooks) are one click:
 
-- (a) **Post-install** at `https://kuso.example.com/settings/github` — paste your GitHub App ID, slug, client secret, webhook secret, and private key. No reinstall needed.
-- (b) **At install time** with `--github-wizard`, which prompts on stdin for the same values.
+- Open **`https://kuso.example.com/settings/github`** → **Create GitHub App**. kuso authors the whole app manifest (name, URLs, permissions, webhook events), GitHub creates the app, and the credentials — including the private key — flow back automatically. No forms to fill, nothing to copy-paste, no `.pem` to download.
 
-Without either, services still build via `kuso build trigger` against any public repo URL — the repo picker just stays empty.
+The manual path (paste App ID / secrets / private key, or `--github-wizard` at install time) is still there behind "set up manually" if you'd rather. Without GitHub connected at all, services still build via `kuso build trigger` against any public repo URL — the repo picker just stays empty.
 
 ## Install the CLI
 
@@ -84,6 +91,26 @@ There's no rollout-from-laptop step in the release flow — releasing
 publishes a GH release, and every kuso install pulls itself forward
 on its own schedule.
 
+## Health & troubleshooting
+
+kuso tries to tell you what's wrong before you have to go digging:
+
+```bash
+kuso doctor          # workstation-side pre-flight: reachability, TLS,
+                     #   DNS, and the GitHub webhook round-trip
+kuso health          # cluster-wide reconcile health — flags stuck helm
+                     #   releases + drift across every addon/environment
+kuso health fix <r>  # apply the recommended data-safe remediation
+kuso build why <p> <s>   # explain a failed build with an actionable fix
+```
+
+The dashboard mirrors this: **Settings → Health** shows the same
+reconcile report with one-click remediation, failed builds surface a
+classified cause + suggested fix (not a raw log dump), and the addon
+status badge reflects the *real* helm-release state rather than assuming
+it's fine. Opt-in unattended auto-remediation (`KUSO_AUTO_REMEDIATE=1`
+on the server, off by default) applies the proven-safe fixes on a timer.
+
 ## Scaling
 
 kuso is built to grow with you:
@@ -116,7 +143,7 @@ That writes `.claude/skills/kuso/SKILL.md`; restart Claude Code and `/skills` wi
 
 | Path         | What it is                                                                |
 | ------------ | ------------------------------------------------------------------------- |
-| `server-go/` | Go backend + REST API. Postgres-backed. Serves the embedded SPA from `internal/web`. |
+| `server-go/` | Go backend + REST API. Postgres-backed. Serves the embedded SPA from `internal/web`. Also runs the **activator** (scale-to-zero / stopped-service proxy) in `--activator` mode. |
 | `web/`       | Next.js 16 frontend. Built into `server-go/internal/web/dist`.            |
 | `operator/`  | Kubernetes operator that reconciles `Kuso{Project,Service,...}` CRs.     |
 | `cli/`       | `kuso` command-line tool (Go, Cobra).                                     |
