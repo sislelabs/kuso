@@ -29,6 +29,21 @@ export async function listEnvironments(
   return api<KusoEnvironment[]>(`/api/projects/${encodeURIComponent(project)}/envs`);
 }
 
+// stopProject hard-stops every service in the project (scale to 0).
+// Server returns 202 Accepted; visitors get a 503 until start.
+export async function stopProject(project: string): Promise<void> {
+  return api(`/api/projects/${encodeURIComponent(project)}/stop`, {
+    method: "POST",
+  });
+}
+
+// startProject clears the hard-stop on every service in the project.
+export async function startProject(project: string): Promise<void> {
+  return api(`/api/projects/${encodeURIComponent(project)}/start`, {
+    method: "POST",
+  });
+}
+
 export async function createEnvironment(
   project: string,
   service: string,

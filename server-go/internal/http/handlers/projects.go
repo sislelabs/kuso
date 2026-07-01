@@ -197,6 +197,9 @@ func (h *ProjectsHandler) Mount(r chi.Router) {
 	r.Get("/api/projects/{project}", h.Describe)
 	r.Patch("/api/projects/{project}", h.Update)
 	r.Delete("/api/projects/{project}", h.Delete)
+	// Project-wide hard stop / start (all services at once).
+	r.Post("/api/projects/{project}/stop", h.StopProject)
+	r.Post("/api/projects/{project}/start", h.StartProject)
 
 	r.Get("/api/projects/{project}/services", h.ListServices)
 	r.Post("/api/projects/{project}/services", h.AddService)
@@ -1008,6 +1011,59 @@ func (h *ProjectsHandler) Start(w http.ResponseWriter, r *http.Request) {
 			App:      service,
 			Resource: "kusoservice",
 			Message:  fmt.Sprintf("service %s/%s started (hard-stop cleared)", project, service),
+		})
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// StopProject hard-stops every service in a project. Editor-gated,
+// audited. Best-effort — a per-service failure surfaces as a 5xx naming
+// the stragglers; already-applied stops stick.
+func (h *ProjectsHandler) StopProject(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+		return
+	}
+	if err := h.Svc.StopProject(ctx, project); err != nil {
+		h.fail(w, "stop project", err)
+		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "project.stop",
+			Pipeline: project,
+			Resource: "kusoproject",
+			Message:  fmt.Sprintf("project %s hard-stopped (all services → 0 replicas)", project),
+		})
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// StartProject clears the hard-stop on every service in a project.
+// Editor-gated, audited.
+func (h *ProjectsHandler) StartProject(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := projectCtx(r)
+	defer cancel()
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+		return
+	}
+	if err := h.Svc.StartProject(ctx, project); err != nil {
+		h.fail(w, "start project", err)
+		return
+	}
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "info",
+			Action:   "project.start",
+			Pipeline: project,
+			Resource: "kusoproject",
+			Message:  fmt.Sprintf("project %s started (all services)", project),
 		})
 	}
 	w.WriteHeader(http.StatusAccepted)

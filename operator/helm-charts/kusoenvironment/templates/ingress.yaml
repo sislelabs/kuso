@@ -149,7 +149,13 @@ spec:
            first but traefik didn't reliably forward/hold the request;
            a direct backend is the validated mechanism — see
            docs/design/SCALE_TO_ZERO.md.) */ -}}
-    {{- $sleeps := and .Values.sleep .Values.sleep.enabled -}}
+    {{- /* Route to the activator when the env is sleep-enabled OR
+           hard-stopped. Sleeping: activator wakes it on the request.
+           Stopped: activator refuses to wake and serves a branded
+           "service stopped" page — WITHOUT this, a stopped (non-sleeping)
+           env routes to its own 0-endpoint Service and traefik returns a
+           bare "no available server" instead. */ -}}
+    {{- $useActivator := or (and .Values.sleep .Values.sleep.enabled) .Values.stopped -}}
     {{- range $hosts }}
     - host: {{ . | quote }}
       http:
@@ -158,7 +164,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                {{- if $sleeps }}
+                {{- if $useActivator }}
                 name: kuso-activator
                 port:
                   number: 80

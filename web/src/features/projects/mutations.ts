@@ -1,8 +1,15 @@
 "use client";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
 import { api } from "@/lib/api-client";
-import { projectQueryKey, projectsQueryKey } from "./hooks";
+import { stopProject, startProject } from "./api";
+import {
+  envsQueryKey,
+  projectQueryKey,
+  projectsQueryKey,
+  servicesQueryKey,
+} from "./hooks";
 
 export interface UpdateProjectBody {
   description?: string | null;
@@ -75,6 +82,60 @@ export function useDeleteProject() {
     onSuccess: (_data, name) => {
       qc.invalidateQueries({ queryKey: projectsQueryKey });
       qc.removeQueries({ queryKey: projectQueryKey(name) });
+    },
+  });
+}
+
+// invalidateProjectViews refreshes every surface that renders a
+// project's live/stopped state: the projects list, the per-project
+// describe-summary the cards read from, and the services/envs the
+// canvas + overlay read from. Called by stop/start so the card badge
+// and canvas flip without a hard refresh.
+function invalidateProjectViews(
+  qc: ReturnType<typeof useQueryClient>,
+  name: string,
+) {
+  qc.invalidateQueries({ queryKey: projectsQueryKey });
+  qc.invalidateQueries({ queryKey: projectQueryKey(name) });
+  // The projects grid cards read services + envs off this composite
+  // key, NOT the individual services/envs queries.
+  qc.invalidateQueries({ queryKey: ["projects", name, "describe-summary"] });
+  qc.invalidateQueries({ queryKey: servicesQueryKey(name) });
+  qc.invalidateQueries({ queryKey: envsQueryKey(name) });
+}
+
+// useStopProject hard-stops every service in the project. The 202 is
+// only an ack — the operator scales pods to 0 asynchronously — so we
+// invalidate broadly and let the pollers pick up the final state.
+export function useStopProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => stopProject(name),
+    onSuccess: (_data, name) => {
+      invalidateProjectViews(qc, name);
+      toast.success(`Stopping ${name}`);
+    },
+    onError: (err, name) => {
+      toast.error(
+        `Failed to stop ${name}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    },
+  });
+}
+
+// useStartProject clears the hard-stop on every service in the project.
+export function useStartProject() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (name: string) => startProject(name),
+    onSuccess: (_data, name) => {
+      invalidateProjectViews(qc, name);
+      toast.success(`Starting ${name}`);
+    },
+    onError: (err, name) => {
+      toast.error(
+        `Failed to start ${name}: ${err instanceof Error ? err.message : String(err)}`,
+      );
     },
   });
 }

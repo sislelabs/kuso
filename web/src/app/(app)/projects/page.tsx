@@ -3,7 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useProjects } from "@/features/projects";
+import { useProjects, useStopProject, useStartProject } from "@/features/projects";
+import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { useInstallations } from "@/features/github";
 import { useCan, Perms } from "@/features/auth";
 import { useProjectPrefs, useSetProjectPref } from "@/features/userprefs";
@@ -11,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { EmptyState } from "@/components/shared/EmptyState";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, MemoryStick, Settings, Star, FolderPlus, Folder, ChevronDown } from "lucide-react";
+import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, MemoryStick, Settings, Star, FolderPlus, Folder, ChevronDown, Power, Pause } from "lucide-react";
 import { relativeTime } from "@/lib/format";
 import { useQueries } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
@@ -341,6 +342,26 @@ function ProjectsGrid({
   // Gates the per-card settings shortcut — only instance admins manage
   // project settings.
   const canManage = useCan(Perms.SettingsAdmin);
+  // Stop/start is an EDITOR-level capability server-side (ProjectRoleEditor
+  // → services:write), matching the per-service stop action and the CLI.
+  // Gate the card's stop-project button on services:write, not the
+  // stricter settings:admin the settings gear uses — otherwise an editor
+  // the server authorizes can't see the button. (Single-tenant: instance
+  // services:write IS the editor grant; per-project role hooks can't be
+  // called inside the per-card map.)
+  const canStopProjects = useCan(Perms.ServicesWrite);
+  // Whole-project stop/start. The power button in each card's icon row
+  // starts a project directly (one click, safe) but routes a stop
+  // through a typed confirm — it 503s every visitor until start.
+  const stopProject = useStopProject();
+  const startProject = useStartProject();
+  // Which project (if any) is awaiting stop confirmation, and how many
+  // services that stop would hit (for the dialog copy). Lives at the
+  // grid level so the single ConfirmDialog renders once, not per card.
+  const [confirmStop, setConfirmStop] = useState<{
+    name: string;
+    count: number;
+  } | null>(null);
   // Per-user grid prefs: starred projects pin to the top, folders group
   // the rest. byProject is a Map for O(1) per-card lookup.
   const { byProject: prefs } = useProjectPrefs();
@@ -461,6 +482,17 @@ function ProjectsGrid({
           if (st?.ready === true) return true;
           return false;
         }).length;
+        // Count services the user has hard-stopped (spec.stopped=true).
+        // A stopped service reports 0 ready pods, so without this the
+        // health line would render it as "down/degraded" (red/amber)
+        // when it's actually an intentional stop — shown slate instead.
+        const stoppedServices = services.filter(
+          (s) => s.spec.stopped === true
+        ).length;
+        // Whole-project state: every service stopped, or a mix.
+        const allStopped =
+          services.length > 0 && stoppedServices === services.length;
+        const anyRunning = services.length > 0 && stoppedServices < services.length;
         // Public URL of the live deployment, surfaced TWICE on the card:
         //   1. The domain `Row` becomes an <a> opening it in a new tab.
         //   2. Used by the body of the card if we ever want a "visit
@@ -586,6 +618,51 @@ function ProjectsGrid({
                         <Settings className="h-3.5 w-3.5" />
                       </Link>
                     )}
+                    {/* Whole-project power toggle. Only rendered once the
+                        project has at least one service. anyRunning →
+                        "Stop project" (routes through a typed confirm,
+                        since it 503s visitors); allStopped → "Start
+                        project" (one click). pointer-events-auto + z-30
+                        so it acts on itself, not the card's overlay Link
+                        — same escape pattern as the Star button. */}
+                    {canStopProjects && services.length > 0 && (
+                      <button
+                        type="button"
+                        aria-label={
+                          allStopped
+                            ? `Start project ${name}`
+                            : `Stop project ${name}`
+                        }
+                        title={allStopped ? "Start project" : "Stop project"}
+                        disabled={
+                          stopProject.isPending || startProject.isPending
+                        }
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (allStopped) {
+                            startProject.mutate(name);
+                          } else if (anyRunning) {
+                            setConfirmStop({
+                              name,
+                              count: services.length,
+                            });
+                          }
+                        }}
+                        className={
+                          "pointer-events-auto relative z-30 inline-flex h-6 w-6 items-center justify-center rounded-md hover:bg-[var(--bg-tertiary)] disabled:opacity-40 " +
+                          (allStopped
+                            ? "text-slate-400 hover:text-emerald-400"
+                            : "text-[var(--text-tertiary)] hover:text-red-400")
+                        }
+                      >
+                        {allStopped ? (
+                          <Power className="h-3.5 w-3.5" />
+                        ) : (
+                          <Pause className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                    )}
                     {/* The arrow signals the whole card is a link into
                         kuso. The overlay <Link> handles the actual
                         nav; this is purely affordance. */}
@@ -640,13 +717,48 @@ function ProjectsGrid({
                       cls = "text-emerald-400";
                       healthLabel = `healthy — all ${services.length} services live`;
                     }
+                    // Stopped services report 0 ready pods, so the
+                    // live/down logic above would mislabel an
+                    // intentional stop as an outage. When ALL services
+                    // are stopped, show a muted "stopped" pill (slate,
+                    // matching the canvas node's stopped styling); when
+                    // SOME are stopped, append "· K stopped" so a
+                    // partial stop reads distinct from a real degrade.
+                    if (allStopped) {
+                      return (
+                        <span
+                          className="inline-flex items-center gap-1"
+                          aria-label={`stopped — all ${services.length} services stopped`}
+                        >
+                          <Pause className="h-3 w-3" aria-hidden />
+                          <span className="text-slate-400">
+                            0/{services.length}
+                          </span>
+                          <span aria-hidden className="text-slate-400">
+                            stopped
+                          </span>
+                        </span>
+                      );
+                    }
                     return (
-                      <span className="inline-flex items-center gap-1" aria-label={healthLabel}>
+                      <span
+                        className="inline-flex items-center gap-1"
+                        aria-label={
+                          stoppedServices > 0
+                            ? `${healthLabel}, ${stoppedServices} stopped`
+                            : healthLabel
+                        }
+                      >
                         <Box className="h-3 w-3" aria-hidden />
                         <span className={cls}>
                           {liveServices}/{services.length}
                         </span>
                         <span aria-hidden>live</span>
+                        {stoppedServices > 0 && (
+                          <span aria-hidden className="text-slate-400">
+                            · {stoppedServices} stopped
+                          </span>
+                        )}
                       </span>
                     );
                   })()}
@@ -699,7 +811,21 @@ function ProjectsGrid({
     // (changes only when a query actually resolves new data) + prefs, so
     // a 30s metrics tick that returns identical data is a no-op rebuild.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [projects, prefs, setPref, queriesFingerprint, metricsFingerprint]);
+    [
+      projects,
+      prefs,
+      setPref,
+      queriesFingerprint,
+      metricsFingerprint,
+      canManage,
+      canStopProjects,
+      // NOTE: stopProject/startProject are intentionally NOT in the deps.
+      // They're useMutation() results — a fresh object reference every
+      // render — so listing them would invalidate this memo on every
+      // render and rebuild all N cards, defeating the whole point of the
+      // memo (see the comment above). Their `.mutate` fns are stable, so
+      // the closure captures a working reference regardless.
+    ]);
 
   // Group the cards into sections: Starred (pinned to top), then each
   // folder alphabetically, then Unfiled. Within a section cards keep the
@@ -719,12 +845,50 @@ function ProjectsGrid({
     </ul>
   );
 
+  // One shared stop-confirm modal for the whole grid — the per-card
+  // power buttons set `confirmStop`; this renders it. typeToConfirm =
+  // the project name because a project-wide stop 503s every visitor.
+  const stopDialog = (
+    <ConfirmDialog
+      open={confirmStop !== null}
+      title="Stop project"
+      destructive
+      confirmLabel="Stop project"
+      typeToConfirm={confirmStop?.name}
+      pending={stopProject.isPending}
+      body={
+        confirmStop ? (
+          <p>
+            This stops ALL {confirmStop.count} service
+            {confirmStop.count === 1 ? "" : "s"} in{" "}
+            <span className="font-mono text-[var(--text-primary)]">
+              {confirmStop.name}
+            </span>
+            . Visitors get a 503 until you start it again.
+          </p>
+        ) : null
+      }
+      onConfirm={() => {
+        if (confirmStop) stopProject.mutate(confirmStop.name);
+        setConfirmStop(null);
+      }}
+      onCancel={() => setConfirmStop(null)}
+    />
+  );
+
   // No prefs at all → the original flat grid, no section chrome.
   const hasSections = starredCards.length > 0 || folderNames.length > 0;
-  if (!hasSections) return grid(cards);
+  if (!hasSections)
+    return (
+      <>
+        {grid(cards)}
+        {stopDialog}
+      </>
+    );
 
   return (
     <div className="space-y-6">
+      {stopDialog}
       {starredCards.length > 0 && (
         <Section
           icon={<Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400" />}

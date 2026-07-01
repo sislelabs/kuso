@@ -136,13 +136,22 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Hard stop: the env is deliberately down and must NOT be woken by
-	// traffic (unlike sleep). Serve a clear 503 instead of scaling it up.
-	// No Retry-After — the caller shouldn't poll a stopped service into
-	// waking; it stays down until an operator starts it.
+	// traffic (unlike sleep). Serve a clear, branded 503 instead of
+	// scaling it up. No Retry-After — the caller shouldn't poll a stopped
+	// service into waking; it stays down until an operator starts it.
+	// Content-negotiate: browsers get the styled page, everything else
+	// (curl, health checks, APIs) gets terse text.
 	if stopped {
-		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = w.Write([]byte("This service is stopped.\n"))
+		w.Header().Set("Cache-Control", "no-store")
+		if strings.Contains(r.Header.Get("Accept"), "text/html") {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write(stoppedPageHTML)
+		} else {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte("This service is stopped.\n"))
+		}
 		return
 	}
 
@@ -385,7 +394,14 @@ func (a *Activator) resolveByHost(ctx context.Context, host string) (env, ns str
 	}
 	for i := range envs {
 		e := &envs[i]
-		if e.Spec.Kind != "" && e.Spec.Kind != "production" {
+		// Production envs are the ones that scale-to-zero (previews get
+		// GC'd on TTL instead, so they don't route here for WAKE). But a
+		// STOPPED preview DOES route to the activator via the ingress
+		// (spec.stopped propagates to every env, incl. previews), so we
+		// must still match it here — otherwise a stopped preview host
+		// 404s instead of serving the branded stopped page. Match a
+		// non-production env only when it's stopped.
+		if e.Spec.Kind != "" && e.Spec.Kind != "production" && !e.Spec.Stopped {
 			continue
 		}
 		if hostMatches(host, e) {
@@ -417,3 +433,65 @@ func hostOnly(h string) string {
 	}
 	return h
 }
+
+// stoppedPageHTML is the branded page a browser sees when it hits a
+// hard-stopped service. Self-contained (no external assets) so it renders
+// even though the app itself is down: inline CSS, a dark kuso-styled
+// dotted-grid backdrop, and the ‖ "stopped" motif from the dashboard
+// canvas. Kept as a package-level []byte so we don't rebuild it per hit.
+var stoppedPageHTML = []byte(`<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Service stopped</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html,body { height:100%; margin:0; }
+  body {
+    display:flex; align-items:center; justify-content:center;
+    min-height:100%;
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    color:#e4e4e7;
+    background-color:#0a0a0f;
+    background-image: radial-gradient(rgba(255,255,255,0.06) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  .card {
+    width: min(92vw, 460px);
+    padding: 34px 32px;
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    background: rgba(20,20,28,0.72);
+    box-shadow: 0 24px 60px -20px rgba(0,0,0,0.7);
+    backdrop-filter: blur(6px);
+  }
+  .badge {
+    display:inline-flex; align-items:center; gap:8px;
+    padding:5px 11px; border-radius:8px;
+    border:1px solid rgba(148,163,184,0.35);
+    background: rgba(100,116,139,0.14);
+    color:#cbd5e1; font-size:12px; letter-spacing:0.14em; text-transform:uppercase;
+  }
+  .badge .bars { display:inline-block; width:11px; height:12px; position:relative; }
+  .badge .bars::before, .badge .bars::after {
+    content:""; position:absolute; top:0; width:3px; height:12px; border-radius:1px; background:#94a3b8;
+  }
+  .badge .bars::before { left:1px; } .badge .bars::after { right:1px; }
+  h1 { font-size:19px; font-weight:600; margin:20px 0 8px; letter-spacing:-0.01em; color:#f4f4f5; }
+  p  { font-size:13px; line-height:1.6; color:#a1a1aa; margin:0; }
+  .host { margin-top:18px; font-size:12px; color:#71717a; word-break:break-all; }
+  .foot { margin-top:22px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);
+          font-size:11px; color:#52525b; letter-spacing:0.04em; }
+</style></head>
+<body>
+  <div class="card">
+    <span class="badge"><span class="bars"></span> stopped</span>
+    <h1>This service is stopped</h1>
+    <p>It has been intentionally taken offline and won't start on its own.
+       Traffic isn't waking it — it stays down until an operator starts it again.</p>
+    <div class="foot">powered by kuso</div>
+  </div>
+</body></html>
+`)

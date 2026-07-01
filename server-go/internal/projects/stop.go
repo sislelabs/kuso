@@ -1,6 +1,10 @@
 package projects
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"strings"
+)
 
 // StopService hard-stops a service: sets spec.stopped=true, which pins
 // every owned environment to 0 replicas AND tells the activator NOT to
@@ -26,4 +30,50 @@ func (s *Service) StartService(ctx context.Context, project, service string) err
 	stopped := false
 	_, err := s.PatchService(ctx, project, service, PatchServiceRequest{Stopped: &stopped})
 	return err
+}
+
+// StopProject hard-stops EVERY service in a project. Best-effort: it
+// tries all services and returns a combined error naming any that
+// failed, rather than aborting on the first — a partial stop is still
+// better than none, and the caller (UI) can re-run to retry stragglers.
+// Idempotent per service.
+func (s *Service) StopProject(ctx context.Context, project string) error {
+	return s.setProjectStopped(ctx, project, true)
+}
+
+// StartProject clears the hard-stop on every service in a project.
+// Best-effort with the same combined-error semantics as StopProject.
+func (s *Service) StartProject(ctx context.Context, project string) error {
+	return s.setProjectStopped(ctx, project, false)
+}
+
+func (s *Service) setProjectStopped(ctx context.Context, project string, stopped bool) error {
+	svcs, err := s.ListServices(ctx, project)
+	if err != nil {
+		return fmt.Errorf("list services: %w", err)
+	}
+	verb := "start"
+	if stopped {
+		verb = "stop"
+	}
+	var failed []string
+	for i := range svcs {
+		// ListServices returns FQN names (<project>-<service>); the
+		// per-service methods take the short name and re-prefix, so strip
+		// the project prefix here to avoid double-prefixing.
+		short := strings.TrimPrefix(svcs[i].Name, project+"-")
+		var perr error
+		if stopped {
+			perr = s.StopService(ctx, project, short)
+		} else {
+			perr = s.StartService(ctx, project, short)
+		}
+		if perr != nil {
+			failed = append(failed, short)
+		}
+	}
+	if len(failed) > 0 {
+		return fmt.Errorf("%s failed for %d service(s): %s", verb, len(failed), strings.Join(failed, ", "))
+	}
+	return nil
 }

@@ -18,6 +18,8 @@ export {
   listServices,
   listEnvironments,
   createEnvironment,
+  stopProject,
+  startProject,
   listAddons,
   addAddon,
   resyncExternalAddon,
@@ -66,5 +68,7 @@ export {
   useSetIncidentMonitoring,
   useDeleteProject,
   useCreateProject,
+  useStopProject,
+  useStartProject,
 } from "./mutations";
 export type { UpdateProjectBody, CreateProjectBody } from "./mutations";
