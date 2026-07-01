@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.97] — 2026-07-01
+
+### 🐛 Bug Fixes
+- Fix(env): don't leak plaintext env values from UnsetEnvScopedVar ([971a229](https://github.com/sislelabs/kuso/commit/971a229c1ae5285dc905b6ede341e78255594611))
+
 ## [0.18.96] — 2026-07-01
 
 ### ✨ Features
@@ -371,14 +376,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(crd): align volume schema field names with KusoVolume (sizeGi/accessMode) ([33a81d3](https://github.com/sislelabs/kuso/commit/33a81d3c15c8fc66a65a1fd0ad3d784f20b16a7b))
-
-## [0.18.32] — 2026-06-04
-
-### 🐛 Bug Fixes
-- Fix(builds): nixpacks build-env values with spaces no longer break the build ([a287a4e](https://github.com/sislelabs/kuso/commit/a287a4e9281b2dd7457e4fe49bb2ee7d67a4c697))
-
-### 📝 Docs
-- Docs(migration): log NODE_ENV + dockerfile build-env fixes, full re-verify ([4bc6fb3](https://github.com/sislelabs/kuso/commit/4bc6fb3f1c295c9ff8d20d8059c724817574b352))
 
 
 ---
