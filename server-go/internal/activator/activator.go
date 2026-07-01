@@ -128,10 +128,12 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	env, ns, stopped, err := a.resolveByHost(ctx, host)
 	if err != nil {
 		a.logger.Warn("activator: resolve host", "host", host, "err", err)
-		// Unknown host — nothing we can wake. 404 rather than a confusing
-		// 502, so a stray request to the activator's IP doesn't look like
-		// an app error.
-		http.Error(w, "activator: no service for host", http.StatusNotFound)
+		// Unknown host — no kuso service claims it. This is what an
+		// unmatched domain lands on when traefik's catch-all routes it
+		// here (or a stray request to the activator IP). Serve a branded
+		// 404 for browsers (content-negotiated) instead of a bare
+		// "404 page not found" — nothing we can wake.
+		writeActivatorPage(w, r, http.StatusNotFound, notFoundPageHTML, "No kuso service is configured for this domain.\n")
 		return
 	}
 
@@ -142,16 +144,7 @@ func (a *Activator) serve(w http.ResponseWriter, r *http.Request) {
 	// Content-negotiate: browsers get the styled page, everything else
 	// (curl, health checks, APIs) gets terse text.
 	if stopped {
-		w.Header().Set("Cache-Control", "no-store")
-		if strings.Contains(r.Header.Get("Accept"), "text/html") {
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write(stoppedPageHTML)
-		} else {
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte("This service is stopped.\n"))
-		}
+		writeActivatorPage(w, r, http.StatusServiceUnavailable, stoppedPageHTML, "This service is stopped.\n")
 		return
 	}
 
@@ -434,17 +427,35 @@ func hostOnly(h string) string {
 	return h
 }
 
-// stoppedPageHTML is the branded page a browser sees when it hits a
-// hard-stopped service. Self-contained (no external assets) so it renders
-// even though the app itself is down: inline CSS, a dark kuso-styled
-// dotted-grid backdrop, and the ‖ "stopped" motif from the dashboard
-// canvas. Kept as a package-level []byte so we don't rebuild it per hit.
-var stoppedPageHTML = []byte(`<!doctype html>
+// writeActivatorPage serves a branded status page for browsers and terse
+// text for everything else (curl, health checks, CDNs, APIs). Content-
+// negotiated on Accept; missing/odd Accept → text. Cache-Control no-store
+// so a start/route change isn't served from a cached error page.
+func writeActivatorPage(w http.ResponseWriter, r *http.Request, status int, html []byte, plain string) {
+	w.Header().Set("Cache-Control", "no-store")
+	if strings.Contains(r.Header.Get("Accept"), "text/html") {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(status)
+		_, _ = w.Write(html)
+	} else {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(plain))
+	}
+}
+
+// activatorPage renders one of the branded pages. Self-contained (inline
+// CSS, no external assets) so it renders even though the app itself is
+// down: a dark kuso-styled dotted-grid backdrop + a glass card. `badge`,
+// `badgeGlyph`, `title`, and `body` are the only per-page differences.
+// Built at init (package-level vars below) so we don't rebuild per hit.
+func activatorPage(pageTitle, badge, badgeGlyph, heading, body string) []byte {
+	return []byte(`<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>Service stopped</title>
+<title>` + pageTitle + `</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -474,24 +485,38 @@ var stoppedPageHTML = []byte(`<!doctype html>
     background: rgba(100,116,139,0.14);
     color:#cbd5e1; font-size:12px; letter-spacing:0.14em; text-transform:uppercase;
   }
-  .badge .bars { display:inline-block; width:11px; height:12px; position:relative; }
-  .badge .bars::before, .badge .bars::after {
-    content:""; position:absolute; top:0; width:3px; height:12px; border-radius:1px; background:#94a3b8;
-  }
-  .badge .bars::before { left:1px; } .badge .bars::after { right:1px; }
+  .badge .glyph { font-size:13px; line-height:1; opacity:0.9; }
   h1 { font-size:19px; font-weight:600; margin:20px 0 8px; letter-spacing:-0.01em; color:#f4f4f5; }
   p  { font-size:13px; line-height:1.6; color:#a1a1aa; margin:0; }
-  .host { margin-top:18px; font-size:12px; color:#71717a; word-break:break-all; }
   .foot { margin-top:22px; padding-top:16px; border-top:1px solid rgba(255,255,255,0.06);
           font-size:11px; color:#52525b; letter-spacing:0.04em; }
 </style></head>
 <body>
   <div class="card">
-    <span class="badge"><span class="bars"></span> stopped</span>
-    <h1>This service is stopped</h1>
-    <p>It has been intentionally taken offline and won't start on its own.
-       Traffic isn't waking it — it stays down until an operator starts it again.</p>
+    <span class="badge"><span class="glyph">` + badgeGlyph + `</span> ` + badge + `</span>
+    <h1>` + heading + `</h1>
+    <p>` + body + `</p>
     <div class="foot">powered by kuso</div>
   </div>
 </body></html>
 `)
+}
+
+// stoppedPageHTML: a hard-stopped service (deliberately offline, not woken
+// by traffic).
+var stoppedPageHTML = activatorPage(
+	"Service stopped",
+	"stopped", "‖",
+	"This service is stopped",
+	"It has been intentionally taken offline and won't start on its own. Traffic isn't waking it — it stays down until an operator starts it again.",
+)
+
+// notFoundPageHTML: an unmatched domain — no kuso service claims this host
+// (typically the catch-all for a domain pointed at kuso with no service, or
+// a base domain like example.com when only www.example.com is configured).
+var notFoundPageHTML = activatorPage(
+	"Not found",
+	"not found", "∅",
+	"No service here",
+	"No kuso service is configured for this domain. If you own it, add a service in kuso and point this hostname at it — or check for a typo in the address.",
+)

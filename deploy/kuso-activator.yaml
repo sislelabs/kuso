@@ -70,3 +70,29 @@ spec:
   selector: { app.kubernetes.io/name: kuso-activator }
   ports:
     - { name: http, port: 80, targetPort: 3000, protocol: TCP }
+---
+# Catch-all fallback route. A domain pointed at kuso with NO matching
+# service (e.g. a base domain when only www.<domain> is configured, or a
+# typo'd host) otherwise lands on traefik's bare "404 page not found".
+# This lowest-priority PathPrefix(`/`) route claims every host no specific
+# Ingress matches and sends it to the activator, which serves a branded
+# "no service here" page. `priority: 1` guarantees any real per-service
+# route (they don't set priority → default higher) wins, so this only ever
+# catches genuinely-unclaimed hosts. Rendered on plain HTTP; the websecure
+# variant relies on traefik's default cert (an unclaimed host has no kuso
+# cert, so the browser shows "Not secure" — the branded page still renders).
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: kuso-activator-catchall
+  namespace: kuso
+  labels: { app.kubernetes.io/name: kuso-activator }
+spec:
+  entryPoints: [web, websecure]
+  routes:
+    - match: PathPrefix(`/`)
+      kind: Rule
+      priority: 1
+      services:
+        - name: kuso-activator
+          port: 80
