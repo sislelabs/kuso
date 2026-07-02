@@ -23,24 +23,24 @@ var ErrInvalidManifest = errors.New("marketplace: invalid manifest")
 // pre-fills <app>.<baseDomain>). Substituted where ${{ prompt.<Key> }}
 // appears in the template.
 type Prompt struct {
-	Key         string `yaml:"key"`
-	Title       string `yaml:"title"`
-	Kind        string `yaml:"kind"`
-	Help        string `yaml:"help,omitempty"`
-	Default     string `yaml:"default,omitempty"`
-	Placeholder string `yaml:"placeholder,omitempty"`
-	Required    bool   `yaml:"required,omitempty"`
+	Key         string `yaml:"key" json:"key"`
+	Title       string `yaml:"title" json:"title"`
+	Kind        string `yaml:"kind" json:"kind"`
+	Help        string `yaml:"help,omitempty" json:"help,omitempty"`
+	Default     string `yaml:"default,omitempty" json:"default,omitempty"`
+	Placeholder string `yaml:"placeholder,omitempty" json:"placeholder,omitempty"`
+	Required    bool   `yaml:"required,omitempty" json:"required,omitempty"`
 }
 
 // Manifest is the metadata + prompt schema for one catalog app.
 type Manifest struct {
-	Name        string   `yaml:"name"`
-	Title       string   `yaml:"title"`
-	Description string   `yaml:"description"`
-	Category    string   `yaml:"category"`
-	Website     string   `yaml:"website,omitempty"`
-	AppVersion  string   `yaml:"appVersion,omitempty"`
-	Prompts     []Prompt `yaml:"prompts,omitempty"`
+	Name        string   `yaml:"name" json:"name"`
+	Title       string   `yaml:"title" json:"title"`
+	Description string   `yaml:"description" json:"description"`
+	Category    string   `yaml:"category" json:"category"`
+	Website     string   `yaml:"website,omitempty" json:"website,omitempty"`
+	AppVersion  string   `yaml:"appVersion,omitempty" json:"appVersion,omitempty"`
+	Prompts     []Prompt `yaml:"prompts,omitempty" json:"prompts,omitempty"`
 }
 
 var (

@@ -35,6 +35,13 @@ func TestMarketplace_List(t *testing.T) {
 	if len(body.Apps) == 0 {
 		t.Fatal("empty apps")
 	}
+	raw := w.Body.String()
+	if !strings.Contains(raw, `"name"`) {
+		t.Errorf("list response missing lowercase \"name\" key; got: %s", raw)
+	}
+	if strings.Contains(raw, `"Name":`) {
+		t.Errorf("list response has capitalized \"Name\" key (missing json tags): %s", raw)
+	}
 }
 
 func TestMarketplace_Get_OK(t *testing.T) {
@@ -52,6 +59,13 @@ func TestMarketplace_Get_OK(t *testing.T) {
 	}
 	if body.Name != "uptime-kuma" {
 		t.Fatalf("want name uptime-kuma, got %q", body.Name)
+	}
+	raw := w.Body.String()
+	if !strings.Contains(raw, `"name"`) || !strings.Contains(raw, `"title"`) {
+		t.Errorf("get response missing lowercase \"name\"/\"title\" key; got: %s", raw)
+	}
+	if strings.Contains(raw, `"Name":`) || strings.Contains(raw, `"Title":`) {
+		t.Errorf("get response has capitalized \"Name\"/\"Title\" key (missing json tags): %s", raw)
 	}
 }
 
