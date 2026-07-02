@@ -2,6 +2,7 @@ package projects
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -89,6 +90,46 @@ func TestPatchService_PropagatesScalarFieldsToAllEnvs(t *testing.T) {
 		}
 		if env.Spec.Resources == nil {
 			t.Errorf("%s: resources not propagated", name)
+		}
+	}
+}
+
+// TestPropagate_SecurityContext pins service->env propagation of the
+// per-service securityContext (Task 1's KusoSecurityContext): a
+// service-level caps/escalation edit must reach every owned env CR so
+// the chart re-renders the container securityContext. SecurityContext
+// isn't (yet) exposed on PatchServiceRequest, so we seed it directly on
+// the service spec — like Healthcheck/PublicEnv, propagation mirrors it
+// unconditionally on every pass, so any patch (here: Resources) that
+// walks the propagation loop is enough to observe it land on the envs.
+func TestPropagate_SecurityContext(t *testing.T) {
+	t.Parallel()
+	esc := true
+	sc := &kube.KusoSecurityContext{
+		Capabilities:             &kube.KusoCapabilities{Add: []string{"SETUID", "SETGID"}},
+		AllowPrivilegeEscalation: &esc,
+	}
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Port: 8080, Runtime: "dockerfile", SecurityContext: sc}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedEnv("alpha", "web", "staging", "stage", "alpha-web-staging"),
+	)
+
+	resources := map[string]any{"requests": map[string]any{"cpu": "250m"}}
+	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{
+		Resources: &resources,
+	}); err != nil {
+		t.Fatalf("PatchService: %v", err)
+	}
+
+	envs := envByName(t, s, "alpha", "web")
+	if len(envs) != 2 {
+		t.Fatalf("expected 2 envs, got %d", len(envs))
+	}
+	for name, gotEnv := range envs {
+		if !reflect.DeepEqual(gotEnv.Spec.SecurityContext, sc) {
+			t.Errorf("%s: securityContext not propagated: got %+v want %+v", name, gotEnv.Spec.SecurityContext, sc)
 		}
 	}
 }

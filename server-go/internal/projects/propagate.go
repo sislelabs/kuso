@@ -163,6 +163,10 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			// edit (add/remove the HTTP probe) must reach every env so the
 			// chart re-renders the probe block. Idempotent when unchanged.
 			env.Spec.Healthcheck = svc.Spec.Healthcheck
+			// SecurityContext mirrors unconditionally like Healthcheck —
+			// a service-level caps/escalation edit must reach every env
+			// so the chart re-renders the container securityContext.
+			env.Spec.SecurityContext = svc.Spec.SecurityContext
 			if changed.EnvVars {
 				// Per-key shared-secret subscription: when the parent
 				// service has spec.sharedEnvKeys set (non-nil), expand
