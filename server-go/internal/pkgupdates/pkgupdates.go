@@ -140,7 +140,10 @@ func aggregateTitleBody(advisories []Advisory) (title, body string) {
 }
 
 // ApplyState is the parsed pkg-apply-state annotation: where a node is
-// in the patch/reboot lifecycle. Phase ∈ running|draining|rebooting|done|failed.
+// in the patch/reboot lifecycle. Phase ∈
+// running|draining|rebooting|settling|done|failed. `settling` is the
+// post-reboot window where the node is back + uncordoned but we keep
+// sweeping pods the reboot stranded in Unknown before declaring done.
 type ApplyState struct {
 	Phase string `json:"phase"`
 	At    string `json:"at"`

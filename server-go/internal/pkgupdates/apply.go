@@ -162,13 +162,14 @@ func (w *Watcher) reconcileReboots(ctx context.Context, logger *slog.Logger) {
 	for i := range nodes.Items {
 		n := &nodes.Items[i]
 		st := parseApplyState(n.Annotations[ApplyStateAnnotation])
-		// Act on a node mid-reboot (phase=rebooting) OR any node still
+		// Act on a node mid-reboot (phase=rebooting), still settling after
+		// the reboot (phase=settling — see below), OR any node still
 		// carrying OUR cordon marker (defense in depth: if a post-reboot
-		// race overwrote the apply-state, the marker is the durable
-		// signal that we cordoned this node for a patch and owe it an
-		// uncordon). Skip nodes we don't own.
+		// race overwrote the apply-state, the marker is the durable signal
+		// that we cordoned this node for a patch and owe it an uncordon).
+		// Skip nodes we don't own.
 		ours := n.Annotations[CordonAnnotation] == "true"
-		if st.Phase != "rebooting" && !ours {
+		if st.Phase != "rebooting" && st.Phase != "settling" && !ours {
 			continue
 		}
 		if !nodeReady(n) {
@@ -191,9 +192,39 @@ func (w *Watcher) reconcileReboots(ctx context.Context, logger *slog.Logger) {
 		// the control plane can't confirm the old one is gone. Left alone,
 		// a singleton like the instance pg-pooler stays down until manual
 		// intervention (observed: cluster-wide DB outage on a worker
-		// reboot). Force-delete them so their controllers reschedule onto a
-		// healthy node.
-		w.rescheduleStrandedPods(ctx, n.Name, logger)
+		// reboot). Force-delete them so their controllers reschedule.
+		//
+		// A pod can flip to Unknown a little AFTER the node returns Ready
+		// (the kubelet re-registers, then the control plane times out the
+		// stale pod). So a single sweep at finalize can miss it — we keep
+		// the node in a `settling` phase and sweep every tick until either
+		// no Unknown pods remain (→ done) or a bounded window elapses. This
+		// keeps the node in the reconcile set instead of dropping straight
+		// to `done`, which was the gap that stranded distill-db-pooler.
+		swept := w.rescheduleStrandedPods(ctx, n.Name, logger)
+
+		// Settle window: how long after the node returns we keep watching
+		// for late-appearing Unknown pods before declaring done. Measured
+		// from the current apply-state timestamp (the reboot stamp on the
+		// first pass, then the settling stamp). A malformed/absent stamp
+		// parses to zero time → treated as "window elapsed" so we never
+		// wedge in settling forever on a parse error.
+		const settleWindow = 3 * time.Minute
+		at, perr := time.Parse(time.RFC3339, st.At)
+		settledOut := perr != nil || time.Since(at) > settleWindow
+
+		if swept > 0 || !settledOut {
+			// Still cleaning up or inside the settle window — hold in
+			// `settling` so the next tick re-sweeps. Only stamp the
+			// transition once (when we first arrive here from rebooting)
+			// so we don't churn the annotation every 15s.
+			if st.Phase != "settling" {
+				_ = w.setApplyState(ctx, n.Name, "settling", "node back + uncordoned; watching for stranded pods")
+				logger.Info("pkgupdates: node back, settling", "node", n.Name)
+			}
+			continue
+		}
+
 		_ = w.setApplyState(ctx, n.Name, "done", "patched + rebooted; node back and uncordoned")
 		if w.Notify != nil {
 			w.Notify.Emit(notifyApplyDone(n.Name))
@@ -213,15 +244,18 @@ func (w *Watcher) reconcileReboots(ctx context.Context, logger *slog.Logger) {
 // Scope is deliberately narrow — only pods on THIS node in Unknown phase.
 // We do not touch Running/Pending pods (the kubelet re-adopts those after
 // reboot) or pods on other nodes.
-func (w *Watcher) rescheduleStrandedPods(ctx context.Context, node string, logger *slog.Logger) {
+// Returns the number of stranded pods it force-deleted this pass (0 when
+// the node is clean), so the caller can decide whether to keep settling.
+func (w *Watcher) rescheduleStrandedPods(ctx context.Context, node string, logger *slog.Logger) int {
 	pods, err := w.Kube.Clientset.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
 		FieldSelector: "spec.nodeName=" + node,
 	})
 	if err != nil {
 		logger.Warn("pkgupdates: list pods for stranded-pod sweep", "node", node, "err", err)
-		return
+		return 0
 	}
 	zero := int64(0)
+	swept := 0
 	for i := range pods.Items {
 		p := &pods.Items[i]
 		// PodPhase Unknown = kubelet cannot report the pod's state
@@ -236,9 +270,11 @@ func (w *Watcher) rescheduleStrandedPods(ctx context.Context, node string, logge
 				"node", node, "pod", p.Namespace+"/"+p.Name, "err", err)
 			continue
 		}
+		swept++
 		logger.Info("pkgupdates: rescheduled stranded pod after reboot",
 			"node", node, "pod", p.Namespace+"/"+p.Name)
 	}
+	return swept
 }
 
 // nodeReady reports whether the node's Ready condition is True.

@@ -5,6 +5,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -221,5 +222,55 @@ func TestReconcileRebootsUncordonsAndSweeps(t *testing.T) {
 	}
 	if _, err := cs.CoreV1().Pods("kuso").Get(context.Background(), "pooler", metav1.GetOptions{}); err == nil {
 		t.Error("stranded pooler pod should have been force-deleted")
+	}
+}
+
+// TestReconcileRebootsSweepsLateStrandedPod covers the gap that stranded
+// distill-db-pooler on server2: a pod can flip to Unknown AFTER the node
+// returns Ready, so the finalize must keep sweeping (via the `settling`
+// phase) rather than declaring done on the first pass.
+func TestReconcileRebootsSweepsLateStrandedPod(t *testing.T) {
+	t.Parallel()
+	nowRFC := func() string { return time.Now().UTC().Format(time.RFC3339) }
+	readyNode := func() *corev1.Node {
+		return &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "server2",
+				Annotations: map[string]string{
+					CordonAnnotation:     "true",
+					ApplyStateAnnotation: `{"phase":"rebooting","at":"` + nowRFC() + `","log":""}`,
+				},
+			},
+			Spec: corev1.NodeSpec{Unschedulable: true},
+			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+				{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+			}},
+		}
+	}
+	cs := kubefake.NewSimpleClientset(readyNode())
+	w := &Watcher{Kube: &kube.Client{Clientset: cs}}
+
+	// Pass 1: node just back, no Unknown pods yet. Must uncordon and enter
+	// `settling` (NOT done) so it keeps watching.
+	w.reconcileReboots(context.Background(), slogDiscard())
+	n, _ := cs.CoreV1().Nodes().Get(context.Background(), "server2", metav1.GetOptions{})
+	if n.Spec.Unschedulable {
+		t.Fatal("pass 1: node should be uncordoned")
+	}
+	if got := parseApplyState(n.Annotations[ApplyStateAnnotation]).Phase; got != "settling" {
+		t.Fatalf("pass 1: phase = %q, want settling (must not go straight to done)", got)
+	}
+
+	// A pod NOW strands in Unknown (late), the way distill-db-pooler did.
+	_, _ = cs.CoreV1().Pods("kuso").Create(context.Background(), &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pooler", Namespace: "kuso"},
+		Spec:       corev1.PodSpec{NodeName: "server2"},
+		Status:     corev1.PodStatus{Phase: corev1.PodUnknown},
+	}, metav1.CreateOptions{})
+
+	// Pass 2: still in `settling`, so the sweep must run and delete it.
+	w.reconcileReboots(context.Background(), slogDiscard())
+	if _, err := cs.CoreV1().Pods("kuso").Get(context.Background(), "pooler", metav1.GetOptions{}); err == nil {
+		t.Error("pass 2: late-stranded pod should have been swept during settling")
 	}
 }
