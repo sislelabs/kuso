@@ -137,6 +137,14 @@ secretsRev: ""
 # resources: per-env CPU/mem limits and requests.
 resources: {}
 
+# securityContext: opt-in extra Linux capabilities / privilege escalation
+# for images that self-drop root at runtime (setpriv/gosu/su-exec).
+# Default (empty) = drop ALL caps, allowPrivilegeEscalation false.
+#   securityContext:
+#     capabilities: { add: ["SETUID", "SETGID"] }
+#     allowPrivilegeEscalation: true
+securityContext: {}
+
 # volumes: persistent disks mounted into every pod. The chart renders
 # one PVC per entry plus the matching volumeMount on the app
 # container. ReadWriteOnce + cluster-default StorageClass means it

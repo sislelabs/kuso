@@ -184,9 +184,19 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default "latest" }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
-            allowPrivilegeEscalation: false
+            allowPrivilegeEscalation: {{ if and .Values.securityContext .Values.securityContext.allowPrivilegeEscalation }}true{{ else }}false{{ end }}
             capabilities:
               drop: ["ALL"]
+              {{- with .Values.securityContext }}
+              {{- with .capabilities }}
+              {{- with .add }}
+              add:
+                {{- range . }}
+                - {{ . | quote }}
+                {{- end }}
+              {{- end }}
+              {{- end }}
+              {{- end }}
           {{- /* Any service may override the image's default CMD with a
                  user-supplied command. Workers use it for queue consumers
                  (e.g. `bundle exec sidekiq`); web services use it to pick
