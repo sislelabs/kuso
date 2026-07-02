@@ -1,0 +1,16 @@
+apiVersion: kuso/v1
+project: uptime-kuma
+services:
+  - name: uptime-kuma
+    runtime: image
+    port: 3001
+    image:
+      repository: louislam/uptime-kuma
+      tag: "1.23.16"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /app/data
+        sizeGi: 2

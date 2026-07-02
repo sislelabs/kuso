@@ -1,0 +1,12 @@
+name: uptime-kuma
+title: Uptime Kuma
+description: Self-hosted uptime monitoring with a beautiful dashboard.
+category: monitoring
+website: https://uptime.kuma.pet
+appVersion: "1.23.16"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Uptime Kuma will be served on.
