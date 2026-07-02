@@ -361,8 +361,23 @@ func (c *Client) CreateKusoProject(ctx context.Context, namespace string, p *Kus
 }
 
 // UpdateKusoProject replaces an existing KusoProject's spec.
+//
+// Prefer UpdateKusoProjectWithRetry for user-editable spec writes: the
+// plain path re-PUTs a stale object on conflict and silently drops a
+// concurrent writer's change (a lost update once the server runs 2+
+// replicas). This variant is fine for callers that already hold the
+// only writer (single-shot migrations, create-time seeds).
 func (c *Client) UpdateKusoProject(ctx context.Context, namespace string, p *KusoProject) (*KusoProject, error) {
 	return update[KusoProject](ctx, c, GVRProjects, "KusoProject", namespace, p)
+}
+
+// UpdateKusoProjectWithRetry — RMW variant for project CRs. Project
+// settings edits (baseDomain, previews, github) race against the
+// operator's status patches and, on a multi-replica control plane,
+// against a concurrent edit on another pod. The mutate callback re-runs
+// against the freshly-fetched CR on every 409 so no write is lost.
+func (c *Client) UpdateKusoProjectWithRetry(ctx context.Context, namespace, name string, mutate func(*KusoProject) error) (*KusoProject, error) {
+	return updateWithRetry[KusoProject](ctx, c, GVRProjects, "KusoProject", namespace, name, mutate)
 }
 
 // DeleteKusoProject deletes a KusoProject by name.

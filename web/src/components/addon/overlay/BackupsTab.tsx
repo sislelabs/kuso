@@ -64,7 +64,17 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
   });
   const restore = useMutation({
     mutationFn: ({ key, into }: { key: string; into?: string }) =>
-      restoreBackup(project, addon, key, into),
+      // In-place restore (no `into`, or into === source) is destructive;
+      // the server requires `confirm` to echo the addon name. The user
+      // has already opted into the destructive path via this dialog, so
+      // supply it here rather than adding a second type-the-name step.
+      restoreBackup(
+        project,
+        addon,
+        key,
+        into,
+        !into || into === addon ? addon : undefined
+      ),
     onSuccess: (res) => {
       toast.success(`Restore job started: ${res.job}`);
       qc.invalidateQueries({ queryKey: ["addons", project, addon, "backups"] });

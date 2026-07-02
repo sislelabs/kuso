@@ -142,6 +142,15 @@ type KusoPreviewsSpec struct {
 	// Empty = no email sent (operator gets the URL only via dashboard
 	// + GitHub PR comment).
 	DefaultReviewerEmail string `json:"defaultReviewerEmail,omitempty"`
+	// AllowForkPreviews opts the project INTO building preview envs for
+	// pull requests opened from a fork (head.repo != base.repo) by an
+	// untrusted author. This is dangerous: a fork PR runs attacker-
+	// supplied build/seed code inside the cluster with the project's
+	// production addon + shared secrets mounted (see ensurePreviewEnv).
+	// Default false — fork PRs are skipped unless the author is a repo
+	// OWNER/MEMBER/COLLABORATOR. Only enable for private/trusted repos
+	// where every PR author is already trusted with production creds.
+	AllowForkPreviews bool `json:"allowForkPreviews,omitempty"`
 }
 
 // KusoPreviewTrigger pairs a PR target branch with the env whose

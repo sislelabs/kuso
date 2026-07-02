@@ -34,7 +34,7 @@ func openTestDB(t *testing.T) *DB {
 			"NotificationOutbox", "NotificationEvent", "BuildLog", "BuildRecord", "AlertRule", "UserProjectPref", "Incident",
 			"NodeMetric", "LogLine", "SSHKey",
 			"OAuthState", "ErrorEvent", "ErrorScannerState",
-			"Audit", "Token", "Permission",
+			"Audit", "RevokedToken", "UserTokenInvalidation", "Token", "Permission",
 			"Notification", "GithubInstallation", "GithubUserLink",
 			"User", "UserGroup", "Role"
 		RESTART IDENTITY CASCADE

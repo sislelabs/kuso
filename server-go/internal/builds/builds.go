@@ -1421,7 +1421,7 @@ func (p *Poller) observeNamespace(ctx context.Context, ns string) {
 			continue
 		}
 		if err := p.checkBuild(ctx, ns, b); err != nil && !apierrors.IsNotFound(err) {
-			p.Logger.Warn("build poller checkBuild", "build", b.Name, "ns", ns, "err", err)
+			p.logger().Warn("build poller checkBuild", "build", b.Name, "ns", ns, "err", err)
 		}
 	}
 	// Queue dispatcher: promote the oldest queued build per service
@@ -2132,6 +2132,45 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 			return nil
 		}
 	}
+	// SEC-6: promote the image to the target env(s) BEFORE marking the
+	// build terminal. Previously this order was inverted — we stamped
+	// spec.done=true + build-state=done first and promoted last, so a
+	// promotion failure (CAS exhausted, apiserver blip on the env
+	// Update) left the build looking green in the UI while production
+	// kept running the old image forever: observeNamespace skips
+	// build-state=done builds, so checkBuild → markSucceeded →
+	// promoteImage never re-ran. Now promotion runs first; only on
+	// success do we stamp the terminal markers below. On failure we
+	// return the error WITHOUT stamping done, so the build stays active
+	// and the next poller tick retries the promotion (idempotent via
+	// the last-trigger-wins guard). The narrow operator-resurrection
+	// window that spec.done=true guards against is recoverable; a
+	// silently-stranded production is not — so retriability wins.
+	//
+	// DryRun builds never push an image, so there's nothing to promote
+	// and they're terminal immediately (handled after the stamp).
+	if !b.Spec.DryRun {
+		if err := p.promoteImage(ctx, ns, b); err != nil {
+			p.logger().Error("build promote failed; leaving build non-terminal for retry",
+				"build", b.Name, "ns", ns, "err", err)
+			return fmt.Errorf("promote image (build stays retriable): %w", err)
+		}
+		// promoteImage may have set its own terminal phase — a failed
+		// release hook stamps phase=release-failed + done=true via
+		// markReleaseFailed and the image is deliberately NOT promoted.
+		// In that case this build is already terminal; stamping
+		// "succeeded" over it would both lie about the outcome and
+		// resurrect the build for the operator. Re-read and bail if a
+		// terminal non-succeeded phase was written.
+		if cur, gerr := p.Svc.Kube.GetKusoBuild(ctx, ns, b.Name); gerr == nil {
+			switch buildPhase(cur) {
+			case "release-failed", "failed", "cancelled":
+				p.logger().Info("build reached terminal non-succeeded phase during promote; not stamping succeeded",
+					"build", b.Name, "phase", buildPhase(cur))
+				return nil
+			}
+		}
+	}
 	// spec.done=true gates the kusobuild chart to render zero objects
 	// from this point forward. Without it, an operator restart's
 	// initial cache sync would helm-install a fresh release for this
@@ -2188,15 +2227,15 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 			Fields:      fields,
 		})
 	}
-	// DryRun builds skip env promotion — the image was never pushed,
-	// so pointing the env's image tag at it would just crashloop. The
-	// success notification + log archive above still fire so the
-	// caller can confirm the dry-run completed cleanly.
+	// Promotion already ran (and succeeded) above, before the terminal
+	// stamp — see the SEC-6 block near the top of markSucceeded. DryRun
+	// builds skipped it entirely (no image was pushed) but still emit
+	// the success notification + log archive so the caller can confirm
+	// the dry-run completed cleanly.
 	if b.Spec.DryRun {
-		p.logger().Info("dry-run build succeeded; skipping promote", "build", b.Name)
-		return nil
+		p.logger().Info("dry-run build succeeded (no promote)", "build", b.Name)
 	}
-	return p.promoteImage(ctx, ns, b)
+	return nil
 }
 
 func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, msg string) error {
@@ -2496,6 +2535,16 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	}
 	bTrigger := buildTriggerTimestamp(b)
 	matched := 0
+	// promoteFailed records whether promoting to ANY matched env hit a
+	// hard error (CAS exhausted, apiserver blip on the env Update). We
+	// do NOT abort the loop on the first such error — abandoning the
+	// remaining envs would leave e.g. production promoted but staging
+	// stranded on the old image with no retry. Instead we log, keep
+	// going, and surface a non-nil error at the end so markSucceeded
+	// declines to mark the build terminal and the next poller tick
+	// retries the whole promotion (promoteEnvImageCAS is idempotent —
+	// already-promoted envs skip via the last-trigger-wins guard).
+	promoteFailed := false
 	// releaseBlocked records whether a release hook (migration) failed or
 	// errored for ANY of this build's source envs. When it did, the build's
 	// image is unverified (migrations didn't apply), so we must NOT promote
@@ -2559,7 +2608,13 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		}
 		promoted, err := p.promoteEnvImageCAS(ctx, ns, e.Name, b.Name, bTrigger, b.Spec.Image)
 		if err != nil {
-			return fmt.Errorf("promote env %s: %w", e.Name, err)
+			// Don't abort — log and keep promoting the other envs so a
+			// transient error on one doesn't strand the rest on the old
+			// image. The end-of-func error keeps the build retriable.
+			promoteFailed = true
+			p.logger().Error("promote env failed; continuing with remaining envs",
+				"env", e.Name, "build", b.Name, "err", err)
+			continue
 		}
 		if !promoted {
 			continue
@@ -2589,6 +2644,10 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 	if releaseBlocked {
 		p.logger().Warn("release hook blocked promotion — not propagating image to fromService consumers",
 			"service", b.Spec.Service, "build", b.Name)
+		// A blocked release means the image is intentionally NOT promoted
+		// yet; that's not a promotion failure to retry here (markReleaseFailed
+		// already handled the source env). Report success so the build is
+		// marked terminal — the release-failed annotation is the record.
 		return nil
 	}
 	if err := p.promoteToFromServiceConsumers(ctx, ns, b, shortService, bTrigger); err != nil {
@@ -2598,6 +2657,14 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		// up the worker.
 		p.logger().Warn("promote to fromService consumers failed",
 			"service", b.Spec.Service, "err", err)
+	}
+	if promoteFailed {
+		// At least one matched env failed to promote. Return an error so
+		// markSucceeded does NOT stamp the build terminal — the next
+		// poller tick re-enters checkBuild → markSucceeded → promoteImage
+		// and retries the failed env(s). Idempotent for the ones that
+		// already landed.
+		return fmt.Errorf("one or more envs failed to promote for build %s", b.Name)
 	}
 	return nil
 }

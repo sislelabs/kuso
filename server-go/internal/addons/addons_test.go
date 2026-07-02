@@ -202,6 +202,38 @@ func TestRefreshEnvSecrets_ExtraNotDuplicated(t *testing.T) {
 	}
 }
 
+// TestRefreshEnvSecrets_ExcludeDropsStaleConn is the DATA-1 regression:
+// when the addon label-list is stale and still returns an addon we just
+// deleted, the exclude set must keep its conn secret OUT of every env's
+// envFromSecrets (otherwise pods keep a dangling ref that fails
+// CreateContainerConfigError once the conn secret is GC'd).
+func TestRefreshEnvSecrets_ExcludeDropsStaleConn(t *testing.T) {
+	t.Parallel()
+	// Seed the addon (simulating the stale cache still listing it) and an
+	// env. A plain refresh would mount alpha-pg-conn; the exclude must
+	// drop it.
+	s := fakeService(t,
+		seedProj("alpha"),
+		seedEnv("alpha", "web", "production", "alpha-web-production"),
+		typedSeed(kube.GVRAddons, "KusoAddon", &kube.KusoAddon{
+			ObjectMeta: metav1.ObjectMeta{Name: "alpha-pg", Namespace: "kuso", Labels: map[string]string{"kuso.sislelabs.com/project": "alpha"}},
+			Spec:       kube.KusoAddonSpec{Project: "alpha", Kind: "postgres"},
+		}),
+	)
+	if err := s.refreshEnvSecretsFiltered(context.Background(), "alpha", nil, map[string]bool{"alpha-pg-conn": true}); err != nil {
+		t.Fatalf("refreshEnvSecretsFiltered: %v", err)
+	}
+	envCR, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	for _, g := range envCR.Spec.EnvFromSecrets {
+		if g == "alpha-pg-conn" {
+			t.Fatalf("excluded alpha-pg-conn still present in %+v", envCR.Spec.EnvFromSecrets)
+		}
+	}
+}
+
 func TestDelete_RefreshesEnvSecrets(t *testing.T) {
 	t.Parallel()
 	// Two addons; delete one and confirm env secret list shrinks to the

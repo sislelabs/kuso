@@ -2,6 +2,7 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -91,9 +92,19 @@ func (s *Service) migrateOneServiceAddons(ctx context.Context, ns, project, shor
 	if fresh.Spec.SubscribedAddons != nil {
 		return fresh, nil
 	}
-	fresh.Spec.SubscribedAddons = append([]string{}, addons...)
-	updated, err := s.Kube.UpdateKusoService(ctx, ns, fresh)
+	// RMW under optimistic concurrency; re-check the already-migrated
+	// guard against the fresh object so a racing migrator can't double-set.
+	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, serviceCRName(project, shortService), func(svc *kube.KusoService) error {
+		if svc.Spec.SubscribedAddons != nil {
+			return kube.ErrAbortRetry
+		}
+		svc.Spec.SubscribedAddons = append([]string{}, addons...)
+		return nil
+	})
 	if err != nil {
+		if errors.Is(err, kube.ErrAbortRetry) {
+			return fresh, nil
+		}
 		return nil, fmt.Errorf("update service: %w", err)
 	}
 	if err := s.propagateChangedToEnvs(ctx, ns, project, shortService, updated, changedFields{EnvVars: true}); err != nil {

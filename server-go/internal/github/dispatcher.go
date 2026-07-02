@@ -173,19 +173,70 @@ type prEvent struct {
 			Login string `json:"login"`
 		} `json:"user"`
 		Head struct {
-			Ref string `json:"ref"`
-			SHA string `json:"sha"`
+			Ref  string `json:"ref"`
+			SHA  string `json:"sha"`
+			Repo struct {
+				FullName string `json:"full_name"`
+			} `json:"repo"`
 		} `json:"head"`
 		Base struct {
-			Ref string `json:"ref"`
+			Ref  string `json:"ref"`
+			Repo struct {
+				FullName string `json:"full_name"`
+			} `json:"repo"`
 		} `json:"base"`
 		Labels []struct {
 			Name string `json:"name"`
 		} `json:"labels"`
+		// AuthorAssociation is GitHub's relationship of the PR author to
+		// the base repo: OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE, …
+		// Only the first three imply write-level trust; the rest are
+		// untrusted outsiders for the purpose of running code with prod
+		// secrets. See isForkPR / authorIsTrusted.
+		AuthorAssociation string `json:"author_association"`
 	} `json:"pull_request"`
 	Repository struct {
 		FullName string `json:"full_name"`
 	} `json:"repository"`
+}
+
+// isForkPR reports whether the PR's head branch lives in a different
+// repo than the base — i.e. it comes from a fork. GitHub always
+// populates head.repo.full_name for same-repo AND fork PRs on the
+// opened/reopened/synchronize events this gate runs on (it only nulls
+// head.repo for the rare deleted-fork case, which cannot occur on those
+// deploy actions). So a present head.repo that differs from the base is
+// the positive signal for a fork; an absent head.repo means the payload
+// carries no fork provenance and is treated as same-repo (not a fork)
+// rather than blocking a legitimate same-repo PR on a under-specified
+// event. A same-repo PR has head.repo.full_name == base.repo.full_name
+// == the webhook's repository.full_name.
+func isForkPR(pr *prEvent) bool {
+	head := pr.PullRequest.Head.Repo.FullName
+	if head == "" {
+		// No head-repo provenance in the payload → not a positive fork
+		// signal. Real same-repo PRs on deploy events always carry it.
+		return false
+	}
+	base := pr.PullRequest.Base.Repo.FullName
+	if base == "" {
+		base = pr.Repository.FullName
+	}
+	return !strings.EqualFold(head, base)
+}
+
+// authorIsTrusted reports whether the PR author has write-level
+// association with the base repo. Only OWNER/MEMBER/COLLABORATOR are
+// trusted to run build + seed code against production secrets; every
+// other association (CONTRIBUTOR, FIRST_TIME_CONTRIBUTOR, NONE, "") is
+// an untrusted outsider.
+func authorIsTrusted(pr *prEvent) bool {
+	switch strings.ToUpper(pr.PullRequest.AuthorAssociation) {
+	case "OWNER", "MEMBER", "COLLABORATOR":
+		return true
+	default:
+		return false
+	}
 }
 
 type installationEvent struct {
@@ -418,6 +469,25 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 		}
 		switch pr.Action {
 		case "opened", "reopened", "synchronize":
+			// SECURITY GATE (fork-PR RCE): a preview env builds the PR's
+			// head SHA and mounts the project's production addon + shared
+			// secrets into the pod (see ensurePreviewEnv), then runs a
+			// user-defined seed Job against them. For a PR from a fork
+			// opened by an untrusted author that is arbitrary code
+			// execution in-cluster with production credentials. Only
+			// auto-deploy when the PR is same-repo OR the author has
+			// write-level association, unless the project has explicitly
+			// opted into fork previews. Skipping is per-project so a
+			// multi-repo project's trusted PRs are unaffected.
+			if isForkPR(&pr) && !authorIsTrusted(&pr) &&
+				!(proj.Spec.Previews != nil && proj.Spec.Previews.AllowForkPreviews) {
+				d.Logger.Warn("preview skipped: untrusted fork PR (set previews.allowForkPreviews to override)",
+					"project", proj.Name, "pr", pr.Number,
+					"headRepo", pr.PullRequest.Head.Repo.FullName,
+					"author", pr.PullRequest.User.Login,
+					"association", pr.PullRequest.AuthorAssociation)
+				continue
+			}
 			for i := range services.Items {
 				// Per-service repo gate: only preview services that track
 				// the PR's repo. A multi-repo project's PR on repo X
@@ -865,8 +935,19 @@ func (d *Dispatcher) ensurePreviewEnv(ctx context.Context, proj *kube.KusoProjec
 		// auto-attached to previews; see attachToAllEnvs).
 		envFromSecrets = append([]string(nil), existing.Spec.EnvFromSecrets...)
 		env.Spec.EnvFromSecrets = envFromSecrets
-		env.ObjectMeta.ResourceVersion = existing.ResourceVersion
-		if _, err := d.Kube.UpdateKusoEnvironment(ctx, ns, env); err != nil {
+		// RMW under optimistic concurrency: replace the spec wholesale on
+		// the freshly-fetched CR so a concurrent write (operator status
+		// patch, or a second replica handling a rapid re-sync of the same
+		// PR) can't be lost. We carry EnvFromSecrets from the object we
+		// read at the top; re-read it inside the closure so a change that
+		// landed in between survives.
+		desiredSpec := env.Spec
+		if _, err := d.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(cur *kube.KusoEnvironment) error {
+			spec := desiredSpec
+			spec.EnvFromSecrets = append([]string(nil), cur.Spec.EnvFromSecrets...)
+			cur.Spec = spec
+			return nil
+		}); err != nil {
 			return fmt.Errorf("update preview env: %w", err)
 		}
 	} else {

@@ -1377,12 +1377,13 @@ func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, e
 	if err != nil {
 		return err
 	}
-	svc, err := s.GetService(ctx, project, service)
-	if err != nil {
-		return err
-	}
-	svc.Spec.EnvVars = convertEnvVars(rewritten)
-	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)
+	// RMW under optimistic concurrency (WithRetry) — the in-process
+	// service lock doesn't span replicas, so fetch-mutate-update so a
+	// concurrent spec edit on another pod isn't clobbered.
+	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, serviceCRName(project, service), func(svc *kube.KusoService) error {
+		svc.Spec.EnvVars = convertEnvVars(rewritten)
+		return nil
+	})
 	if err != nil {
 		return fmt.Errorf("update service env: %w", err)
 	}
@@ -1848,8 +1849,10 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
-	svc, err := s.GetService(ctx, project, service)
-	if err != nil {
+	// Ensure the service exists up front so a missing CR returns the
+	// same not-found error as before (the WithRetry closure below would
+	// otherwise surface it as a wrapped get error).
+	if _, err := s.GetService(ctx, project, service); err != nil {
 		return nil, err
 	}
 	ns, err := s.namespaceFor(ctx, project)
@@ -1857,13 +1860,22 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		return nil, err
 	}
 
-	if req.DisplayName != nil {
-		dn := strings.TrimSpace(*req.DisplayName)
-		if dn != "" && !displayNameRE.MatchString(dn) {
-			return nil, fmt.Errorf("%w: display name must be 1-60 letters/digits/spaces/hyphens", ErrInvalid)
+	// RMW under optimistic concurrency: the in-process lockService above
+	// serializes writers within ONE replica but not across pods. Running
+	// the whole mutation inside UpdateKusoServiceWithRetry means every
+	// field edit re-applies against the freshly-fetched CR on a 409, so a
+	// concurrent spec edit on another replica (or a mid-flight operator
+	// status patch) can't silently clobber this save. The changed-field
+	// flags are captured into `changed` for the post-update propagation.
+	var changed changedFields
+	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, serviceCRName(project, service), func(svc *kube.KusoService) error {
+		if req.DisplayName != nil {
+			dn := strings.TrimSpace(*req.DisplayName)
+			if dn != "" && !displayNameRE.MatchString(dn) {
+				return fmt.Errorf("%w: display name must be 1-60 letters/digits/spaces/hyphens", ErrInvalid)
+			}
+			svc.Spec.DisplayName = dn
 		}
-		svc.Spec.DisplayName = dn
-	}
 	portChanged := false
 	if req.Port != nil {
 		svc.Spec.Port = *req.Port
@@ -1954,7 +1966,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			svc.Spec.Repo = nil
 		} else {
 			if err := validateRepoPath(req.Repo.Path); err != nil {
-				return nil, err
+				return err
 			}
 			svc.Spec.Repo = &kube.KusoRepoRef{
 				URL:           req.Repo.URL,
@@ -1973,7 +1985,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		next := make([]kube.KusoVolume, 0, len(*req.Volumes))
 		for _, v := range *req.Volumes {
 			if v.Name == "" || v.MountPath == "" {
-				return nil, fmt.Errorf("%w: volume name + mountPath required", ErrInvalid)
+				return fmt.Errorf("%w: volume name + mountPath required", ErrInvalid)
 			}
 			next = append(next, kube.KusoVolume{
 				Name:         v.Name,
@@ -2015,7 +2027,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			// requirement was the explicit ask: better to refuse than
 			// silently misbehave.
 			if err := s.validatePlacement(ctx, svc.Spec.Placement); err != nil {
-				return nil, err
+				return err
 			}
 		}
 		placementChanged = true
@@ -2032,19 +2044,19 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		// these fields into shell contexts (the static heredoc). Mirror
 		// the AddService create path.
 		if err := validateStaticSpec(req.Static); err != nil {
-			return nil, err
+			return err
 		}
 		svc.Spec.Static = toStaticSpec(req.Static)
 	}
 	if req.Buildpacks != nil {
 		if err := validateBuildpacksSpec(req.Buildpacks); err != nil {
-			return nil, err
+			return err
 		}
 		svc.Spec.Buildpacks = toBuildpacksSpec(req.Buildpacks)
 	}
 	if req.Image != nil {
 		if err := validateServiceImageSpec(req.Image); err != nil {
-			return nil, err
+			return err
 		}
 		if strings.TrimSpace(req.Image.Repository) == "" {
 			svc.Spec.Image = nil
@@ -2061,7 +2073,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	}
 	if req.Dockerfile != nil {
 		if err := validateDockerfile(*req.Dockerfile); err != nil {
-			return nil, err
+			return err
 		}
 		svc.Spec.Dockerfile = *req.Dockerfile
 	}
@@ -2090,18 +2102,35 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		}
 		releaseChanged = true
 	}
-	// Build-time env config. Wholesale replace on a non-nil pointer
-	// (declarative reset); leave alone when omitted. These are consumed
-	// when the next build CR is created (builds.Create reads the service
-	// spec), not propagated to env CRs — no changedFields entry needed.
-	if req.BuildArgs != nil {
-		svc.Spec.BuildArgs = *req.BuildArgs
-	}
-	if req.PublicEnv != nil {
-		svc.Spec.PublicEnv = *req.PublicEnv
-	}
-
-	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)
+		// Build-time env config. Wholesale replace on a non-nil pointer
+		// (declarative reset); leave alone when omitted. These are consumed
+		// when the next build CR is created (builds.Create reads the service
+		// spec), not propagated to env CRs — no changedFields entry needed.
+		if req.BuildArgs != nil {
+			svc.Spec.BuildArgs = *req.BuildArgs
+		}
+		if req.PublicEnv != nil {
+			svc.Spec.PublicEnv = *req.PublicEnv
+		}
+		// Capture which fields changed for the post-update propagation.
+		// Recomputed on every retry attempt — deterministic from req.
+		changed = changedFields{
+			Placement:     placementChanged,
+			Volumes:       volumesChanged,
+			Port:          portChanged,
+			Scale:         scaleChanged,
+			Domains:       domainsChanged,
+			Internal:      internalChanged,
+			Runtime:       runtimeChanged,
+			PrivateEgress: privateEgressChanged,
+			Stopped:       stoppedChanged,
+			Sleep:         sleepChanged,
+			Release:       releaseChanged,
+			Command:       commandChanged,
+			Resources:     resourcesChanged,
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
 	}
@@ -2115,21 +2144,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	// Best-effort: a propagation failure does NOT roll back the
 	// service spec — the service is the durable record, and the next
 	// save will retry the propagation.
-	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{
-		Placement:     placementChanged,
-		Volumes:       volumesChanged,
-		Port:          portChanged,
-		Scale:         scaleChanged,
-		Domains:       domainsChanged,
-		Internal:      internalChanged,
-		Runtime:       runtimeChanged,
-		PrivateEgress: privateEgressChanged,
-		Stopped:       stoppedChanged,
-		Sleep:         sleepChanged,
-		Release:       releaseChanged,
-		Command:       commandChanged,
-		Resources:     resourcesChanged,
-	}); err != nil {
+	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changed); err != nil {
 		// Best-effort: a propagation failure does NOT roll back the
 		// service spec (the service CR is the durable record and the
 		// next save retries propagation for every env). But we no longer

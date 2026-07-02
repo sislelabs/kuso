@@ -79,19 +79,27 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 		http.Error(w, "name required", http.StatusBadRequest)
 		return
 	}
-	// Empty / "never" / "null" → infinite token. DB row carries a
-	// 100y sentinel; the JWT itself omits the exp claim.
+	// SECURITY (SEC-3): admin-issued tokens bake the target user's
+	// CURRENT permissions into the JWT exactly like the self-service
+	// path, so they carry the same demotion-replay risk and must be
+	// bounded the same way. Cap the lifetime at maxTokenTTL; "never" is
+	// clamped to the cap rather than minting a truly exp-less bearer
+	// that a later demotion/offboard can never invalidate short of an
+	// explicit revoke. Matches CreateMyToken's maxTokenTTL.
+	const maxTokenTTL = 365 * 24 * time.Hour
+	maxExpiry := time.Now().UTC().Add(maxTokenTTL)
 	var expiresAt time.Time
-	infinite := false
 	if req.ExpiresAt == "" || req.ExpiresAt == "never" || req.ExpiresAt == "null" {
-		infinite = true
-		expiresAt = time.Now().UTC().AddDate(100, 0, 0)
+		expiresAt = maxExpiry
 	} else {
 		var err error
 		expiresAt, err = time.Parse(time.RFC3339, req.ExpiresAt)
 		if err != nil {
 			http.Error(w, "expiresAt must be RFC3339 or empty for never-expires", http.StatusBadRequest)
 			return
+		}
+		if expiresAt.After(maxExpiry) {
+			expiresAt = maxExpiry
 		}
 	}
 	ctx, cancel := tokAdminCtx(r)
@@ -119,22 +127,22 @@ func (h *TokensAdminHandler) IssueForUser(w http.ResponseWriter, r *http.Request
 	if perms == nil {
 		perms = []string{}
 	}
-	signExpiry := expiresAt
-	if infinite {
-		signExpiry = time.Time{}
-	}
-	jwt, err := h.Issuer.SignWithExpiry(auth.Claims{
-		UserID: user.ID, Username: user.Username, Role: roleName,
-		UserGroups: groups, Permissions: perms, Strategy: "token",
-	}, signExpiry)
-	if err != nil {
-		h.Logger.Error("sign token", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
-		return
-	}
 	id, err := randomID()
 	if err != nil {
 		h.Logger.Error("token id", "err", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
+		return
+	}
+	// Pin the JWT jti to the Token row id so Delete can revoke the exact
+	// bearer (see TokensAdminHandler.Delete → RevokeToken).
+	tokenClaims := auth.Claims{
+		UserID: user.ID, Username: user.Username, Role: roleName,
+		UserGroups: groups, Permissions: perms, Strategy: "token",
+	}
+	tokenClaims.ID = id
+	jwt, err := h.Issuer.SignWithExpiry(tokenClaims, expiresAt)
+	if err != nil {
+		h.Logger.Error("sign token", "err", err)
 		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}

@@ -71,16 +71,16 @@ FROM "Token" WHERE "userId" = $1 ORDER BY "createdAt" DESC`, userID)
 // DeleteUserToken removes a single token belonging to userID. Refusing
 // to delete cross-user tokens is the call site's job — for the /my/:id
 // route it's enforced by the WHERE clause itself.
+//
+// SECURITY: deleting the Token row alone does NOT stop the bearer JWT —
+// the auth middleware validates signature+expiry+revocation, never the
+// row's existence. So we also write a RevokedToken row keyed on the
+// token's jti (which equals the Token row id; see CreateMyToken /
+// IssueForUser) in the SAME transaction, so a "revoked" token stops
+// authenticating immediately instead of surviving until natural expiry.
 func (d *DB) DeleteUserToken(ctx context.Context, userID, tokenID string) error {
-	res, err := d.ExecContext(ctx, `DELETE FROM "Token" WHERE id = $1 AND "userId" = $2`, tokenID, userID)
-	if err != nil {
-		return fmt.Errorf("db: delete token: %w", err)
-	}
-	n, _ := res.RowsAffected()
-	if n == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return d.deleteAndRevokeToken(ctx, `DELETE FROM "Token" WHERE id = $1 AND "userId" = $2 RETURNING "expiresAt"`,
+		tokenID, tokenID, userID)
 }
 
 // AdminToken includes the username for the admin all-users list view.
@@ -125,14 +125,63 @@ ORDER BY t."createdAt" DESC`)
 }
 
 // DeleteToken removes a token by id (admin-only). Cross-user safe via
-// being a primary-key delete.
+// being a primary-key delete. Also writes a RevokedToken row so the
+// bearer JWT stops authenticating immediately — see DeleteUserToken.
 func (d *DB) DeleteToken(ctx context.Context, id string) error {
-	res, err := d.ExecContext(ctx, `DELETE FROM "Token" WHERE id = $1`, id)
+	return d.deleteAndRevokeToken(ctx, `DELETE FROM "Token" WHERE id = $1 RETURNING "expiresAt"`,
+		id, id)
+}
+
+// deleteAndRevokeToken runs a DELETE ... RETURNING "expiresAt" that
+// removes exactly one Token row, then — in the same transaction —
+// inserts a RevokedToken row keyed on jti so the deleted token's bearer
+// JWT is rejected by the auth middleware from that point on. The jti is
+// the Token row id (bound at issue time). Returns ErrNotFound when the
+// DELETE matched no row. deleteArgs are the params for the DELETE query;
+// jti + the row's userId key the revocation.
+//
+// userID may be "" for the admin delete-by-id path (RevokedToken.userId
+// is informational; the middleware probes by jti). We fetch the row's
+// real userId from the delete when the query returns it; callers that
+// don't select it pass "" and we fall back to a lookup-free revoke.
+func (d *DB) deleteAndRevokeToken(ctx context.Context, deleteQuery, jti string, deleteArgs ...any) error {
+	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
+		return fmt.Errorf("db: delete token begin: %w", err)
+	}
+	rollback := true
+	defer func() {
+		if rollback {
+			_ = tx.Rollback()
+		}
+	}()
+
+	var expiresAt prismaTime
+	if err := tx.QueryRowContext(ctx, deleteQuery, deleteArgs...).Scan(&expiresAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrNotFound
+		}
 		return fmt.Errorf("db: delete token: %w", err)
 	}
-	if n, _ := res.RowsAffected(); n == 0 {
-		return ErrNotFound
+
+	exp := expiresAt.Time
+	if exp.IsZero() {
+		exp = time.Now().Add(100 * 365 * 24 * time.Hour)
 	}
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO "RevokedToken" ("jti", "userId", "reason", "expiresAt")
+VALUES ($1, '', 'token-deleted', $2)
+ON CONFLICT ("jti") DO UPDATE SET
+  "reason" = excluded."reason",
+  "expiresAt" = excluded."expiresAt"`,
+		jti, exp.UTC(),
+	); err != nil {
+		return fmt.Errorf("db: revoke deleted token: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("db: delete token commit: %w", err)
+	}
+	rollback = false
 	return nil
 }

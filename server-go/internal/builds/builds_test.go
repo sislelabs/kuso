@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 
 	"kuso/server/internal/kube"
 	"kuso/server/internal/releaserun"
@@ -799,6 +800,69 @@ func TestPoller_PromotesImageOnSuccess(t *testing.T) {
 	}
 	if envCR.Spec.Image == nil || envCR.Spec.Image.Tag != "abc" {
 		t.Errorf("env image not promoted: %+v", envCR.Spec.Image)
+	}
+}
+
+// TestPoller_PromoteFailureLeavesBuildRetriable is the SEC-6 regression:
+// when image promotion fails (env Update erroring), the build must NOT
+// be stamped terminal (build-state=done / spec.done / phase=succeeded).
+// Otherwise observeNamespace skips it forever and production is stranded
+// on the old image with the build showing green.
+func TestPoller_PromoteFailureLeavesBuildRetriable(t *testing.T) {
+	t.Parallel()
+	build := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-zzz", Namespace: "kuso"},
+		Spec: kube.KusoBuildSpec{
+			Project: "alpha",
+			Service: "alpha-web",
+			Ref:     "zzz",
+			Image:   &kube.KusoImage{Repository: "registry/alpha/web", Tag: "zzz"},
+		},
+	}
+	s := fakeService(t, seedBuild(build), seedProductionEnv("alpha", "web"))
+	if _, err := s.Kube.Clientset.BatchV1().Jobs("kuso").Create(context.Background(), &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-zzz", Namespace: "kuso"},
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{{Type: batchv1.JobComplete, Status: "True"}},
+		},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("seed job: %v", err)
+	}
+
+	// Force every env Update (the CAS promote write) to fail, simulating
+	// an apiserver blip / CAS exhaustion.
+	fakeDyn := s.Kube.Dynamic.(*dynamicfake.FakeDynamicClient)
+	fakeDyn.PrependReactor("update", "kusoenvironments",
+		func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, errors.New("simulated apiserver blip on env update")
+		})
+
+	p := &Poller{Svc: s, Interval: time.Hour}
+	// tick surfaces the promote error (checkBuild returns it); that's the
+	// signal that keeps the build eligible for the next tick.
+	_ = p.tick(context.Background())
+
+	got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-zzz")
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	if ph := buildPhase(got); ph == "succeeded" {
+		t.Errorf("build stamped succeeded despite promote failure — SEC-6 regression")
+	}
+	if got.Labels["kuso.sislelabs.com/build-state"] == "done" {
+		t.Errorf("build marked build-state=done despite promote failure — would never be retried")
+	}
+	if got.Spec.Done {
+		t.Errorf("build spec.done=true despite promote failure — would never be retried")
+	}
+
+	// Env must NOT have been promoted to the new tag.
+	envCR, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if envCR.Spec.Image != nil && envCR.Spec.Image.Tag == "zzz" {
+		t.Errorf("env promoted despite update failure: %+v", envCR.Spec.Image)
 	}
 }
 

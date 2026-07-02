@@ -274,6 +274,11 @@ func (h *AdminHandler) CreateMyToken(w http.ResponseWriter, r *http.Request) {
 		Permissions: claims.Permissions,
 		Strategy:    "token",
 	}
+	// Pin the JWT jti to the Token row id so deleting the row can revoke
+	// the exact bearer (see DeleteMyToken → RevokeToken). Without this
+	// the jti is a fresh random value unrelated to the row and a
+	// "deleted" token keeps authenticating until natural expiry.
+	tokenClaims.ID = id
 	// Every personal token now carries a real exp (capped at
 	// maxTokenTTL) — we no longer mint exp-less bearers, so a demoted
 	// user's stale token can't outlive the cap.

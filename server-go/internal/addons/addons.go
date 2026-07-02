@@ -598,7 +598,13 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 	// is re-added later. Best-effort: a partial failure here doesn't
 	// roll back the delete.
 	s.unsubscribeFromAddon(ctx, ns, project, name)
-	return s.RefreshEnvSecrets(ctx, project)
+	// Exclude the just-deleted addon's conn secret: the addon List() in
+	// refreshEnvSecrets is served from the eventually-consistent watch
+	// cache, which frequently still returns the addon we just deleted.
+	// Without this exclude its conn would be re-injected into every env
+	// and, once the chart's conn secret is GC'd, the next pod restart
+	// fails CreateContainerConfigError on the dangling secret ref.
+	return s.refreshEnvSecretsFiltered(ctx, project, nil, map[string]bool{connSecretName(name): true})
 }
 
 // retainedPVCsForAddon returns the names of PVCs that will survive the
@@ -710,6 +716,19 @@ func (s *Service) RefreshEnvSecrets(ctx context.Context, project string) error {
 // new addon's conn-secret name here to close that read-after-write
 // race deterministically.
 func (s *Service) refreshEnvSecrets(ctx context.Context, project string, extraConnSecrets ...string) error {
+	return s.refreshEnvSecretsFiltered(ctx, project, extraConnSecrets, nil)
+}
+
+// refreshEnvSecretsFiltered is the core rebuild. extraConnSecrets names
+// conn secrets to force-include even if the addon label-list hasn't
+// caught up yet (the Add read-after-write hand-off). excludeConnSecrets
+// names conn secrets to force-OMIT even if the stale label-list still
+// returns them — the symmetric hand-off for the Delete path: the addon
+// List() below is served from the eventually-consistent watch cache, so
+// a just-deleted addon frequently still appears and its conn would be
+// re-injected into every env, leaving pods with an env-var ref to a
+// soon-to-vanish secret (CreateContainerConfigError on the next restart).
+func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string, extraConnSecrets []string, excludeConnSecrets map[string]bool) error {
 	addons, err := s.List(ctx, project)
 	if err != nil {
 		return err
@@ -721,7 +740,7 @@ func (s *Service) refreshEnvSecrets(ctx context.Context, project string, extraCo
 	seen := make(map[string]bool)
 	baseSecrets := make([]string, 0, len(addons)+len(extraConnSecrets)+2)
 	addSecret := func(name string) {
-		if name == "" || seen[name] {
+		if name == "" || seen[name] || excludeConnSecrets[name] {
 			return
 		}
 		seen[name] = true
@@ -759,7 +778,12 @@ func (s *Service) refreshEnvSecrets(ctx context.Context, project string, extraCo
 	// next user save).
 	projectAddonConns := make([]string, 0, len(addons))
 	for _, a := range addons {
-		projectAddonConns = append(projectAddonConns, connSecretName(a.Name))
+		conn := connSecretName(a.Name)
+		if excludeConnSecrets[conn] {
+			// Skip a just-deleted addon that the stale cache still lists.
+			continue
+		}
+		projectAddonConns = append(projectAddonConns, conn)
 	}
 	for i := range envs {
 		env := &envs[i]

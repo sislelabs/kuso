@@ -61,6 +61,24 @@ var addonBackupListCmd = &cobra.Command{
 }
 
 var addonBackupRestoreInto string
+var addonBackupRestoreConfirm string
+
+// resolveRestoreConfirm computes the `confirm` value to send and
+// rejects an unconfirmed in-place (destructive) restore. In-place means
+// no --into, or --into naming the source addon itself; that path
+// overwrites live data, so the caller must have passed --confirm
+// <addon>. Restoring into a distinct sibling is non-destructive and
+// needs no confirmation.
+func resolveRestoreConfirm(addon, into, confirmFlag string) (string, error) {
+	inPlace := into == "" || into == addon
+	if !inPlace {
+		return confirmFlag, nil
+	}
+	if confirmFlag != addon {
+		return "", fmt.Errorf("in-place restore overwrites %q's live data — re-run with --confirm %s (or --into <other-addon>)", addon, addon)
+	}
+	return addon, nil
+}
 
 var addonBackupRestoreCmd = &cobra.Command{
 	Use:   "restore <project> <addon> <key>",
@@ -77,7 +95,14 @@ The target addon must already exist + be the same engine as the source.`,
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		req := kusoApi.RestoreBackupRequest{Key: args[2], Into: addonBackupRestoreInto}
+		// In-place restore is destructive; the server demands the
+		// destination addon name echoed in `confirm`. Fail early with a
+		// clear message rather than letting the server 400.
+		confirm, err := resolveRestoreConfirm(args[1], addonBackupRestoreInto, addonBackupRestoreConfirm)
+		if err != nil {
+			return err
+		}
+		req := kusoApi.RestoreBackupRequest{Key: args[2], Into: addonBackupRestoreInto, Confirm: confirm}
 		resp, err := api.RestoreAddonBackup(args[0], args[1], req)
 		if err != nil {
 			return err
@@ -183,6 +208,7 @@ func init() {
 	addonBackupListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	addonBackupCmd.AddCommand(addonBackupRestoreCmd)
 	addonBackupRestoreCmd.Flags().StringVar(&addonBackupRestoreInto, "into", "", "destination addon (empty = restore in-place, DESTRUCTIVE)")
+	addonBackupRestoreCmd.Flags().StringVar(&addonBackupRestoreConfirm, "confirm", "", "echo the addon name to acknowledge a DESTRUCTIVE in-place restore")
 	addonBackupCmd.AddCommand(addonBackupScheduleCmd)
 	addonBackupScheduleCmd.Flags().StringVar(&addonBackupSchedule, "schedule", "", "5-field cron expression (UTC); empty disables")
 	addonBackupScheduleCmd.Flags().IntVar(&addonBackupRetentionDays, "retention", 14, "delete S3 objects older than N days; 0 = keep forever")

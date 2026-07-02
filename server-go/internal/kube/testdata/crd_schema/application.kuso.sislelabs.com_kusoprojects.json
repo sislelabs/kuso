@@ -87,6 +87,11 @@
           },
           "previews": {
             "properties": {
+              "allowForkPreviews": {
+                "default": false,
+                "description": "Opt INTO building preview envs for PRs from a fork opened by an untrusted author. Dangerous: a fork PR runs attacker-supplied build/seed code in-cluster with the project's production addon + shared secrets mounted. Default false — fork PRs are skipped unless the author is a repo OWNER/MEMBER/COLLABORATOR. Only enable for private/trusted repos.",
+                "type": "boolean"
+              },
               "baseDomain": {
                 "description": "Base domain for preview hosts. When set, previews are \u003cshort\u003e-pr-\u003cN\u003e.\u003cbaseDomain\u003e (e.g. frontend-pr-35.tickero.bg) instead of the project's spec.baseDomain. Requires wildcard DNS for *.\u003cbaseDomain\u003e + a cert-manager HTTP-01 issuer.",
                 "type": "string"

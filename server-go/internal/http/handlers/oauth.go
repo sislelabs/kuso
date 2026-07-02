@@ -64,16 +64,17 @@ type mountable interface {
 // GithubStart writes a state cookie + persists the state in the
 // OAuthState DB table for single-use enforcement. Redirects to GH.
 func (h *OAuthHandler) GithubStart(w http.ResponseWriter, r *http.Request) {
+	if !h.requireOAuthDB(w) {
+		return
+	}
 	state, err := auth.NewState()
 	if err != nil {
 		h.fail(w, "state", err)
 		return
 	}
-	if h.DB != nil {
-		if err := h.DB.MintOAuthState(r.Context(), state, ""); err != nil {
-			h.fail(w, "mint state", err)
-			return
-		}
+	if err := h.DB.MintOAuthState(r.Context(), state, ""); err != nil {
+		h.fail(w, "mint state", err)
+		return
 	}
 	setStateCookie(w, r, state)
 	http.Redirect(w, r, h.Github.AuthCodeURL(state), http.StatusFound)
@@ -100,6 +101,9 @@ func (h *OAuthHandler) GithubCallback(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, target, http.StatusFound)
 		return
 	}
+	if !h.requireOAuthDB(w) {
+		return
+	}
 	if !verifyStateCookie(r) {
 		http.Error(w, "state mismatch", http.StatusBadRequest)
 		return
@@ -108,7 +112,7 @@ func (h *OAuthHandler) GithubCallback(w http.ResponseWriter, r *http.Request) {
 	// is atomic in Postgres (UPDATE … WHERE consumed=false); the
 	// second callback for the same state lands here with 0 rows
 	// affected and we bail.
-	if h.DB != nil {
+	{
 		state := r.URL.Query().Get("state")
 		if err := h.DB.ConsumeOAuthState(r.Context(), state, 10*time.Minute); err != nil {
 			http.Error(w, "state already used or expired", http.StatusBadRequest)
@@ -170,16 +174,17 @@ func (h *OAuthHandler) GithubCallback(w http.ResponseWriter, r *http.Request) {
 
 // OAuth2Start kicks off the generic OAuth2 flow.
 func (h *OAuthHandler) OAuth2Start(w http.ResponseWriter, r *http.Request) {
+	if !h.requireOAuthDB(w) {
+		return
+	}
 	state, err := auth.NewState()
 	if err != nil {
 		h.fail(w, "state", err)
 		return
 	}
-	if h.DB != nil {
-		if err := h.DB.MintOAuthState(r.Context(), state, ""); err != nil {
-			h.fail(w, "mint state", err)
-			return
-		}
+	if err := h.DB.MintOAuthState(r.Context(), state, ""); err != nil {
+		h.fail(w, "mint state", err)
+		return
 	}
 	setStateCookie(w, r, state)
 	http.Redirect(w, r, h.OAuth2.AuthCodeURL(state), http.StatusFound)
@@ -187,11 +192,14 @@ func (h *OAuthHandler) OAuth2Start(w http.ResponseWriter, r *http.Request) {
 
 // OAuth2Callback handles the generic OAuth2 callback.
 func (h *OAuthHandler) OAuth2Callback(w http.ResponseWriter, r *http.Request) {
+	if !h.requireOAuthDB(w) {
+		return
+	}
 	if !verifyStateCookie(r) {
 		http.Error(w, "state mismatch", http.StatusBadRequest)
 		return
 	}
-	if h.DB != nil {
+	{
 		state := r.URL.Query().Get("state")
 		if err := h.DB.ConsumeOAuthState(r.Context(), state, 10*time.Minute); err != nil {
 			http.Error(w, "state already used or expired", http.StatusBadRequest)
@@ -409,6 +417,24 @@ func (h *OAuthHandler) userIDForProvider(ctx context.Context, prof *auth.OAuthPr
 func (h *OAuthHandler) fail(w http.ResponseWriter, op string, err error) {
 	h.Logger.Error("oauth handler", "op", op, "err", err)
 	http.Error(w, "internal", http.StatusInternalServerError)
+}
+
+// requireOAuthDB HARD-FAILS the OAuth flow when no DB is wired. The
+// OAuthState table is what makes the `state` parameter single-use and
+// time-bounded — the real replay / login-CSRF defense. Without a DB the
+// only remaining check is the self-referential state cookie (query ==
+// cookie), which an attacker who can fix the victim's cookie satisfies.
+// So rather than silently DEGRADE to cookie-only (the old `if h.DB !=
+// nil` skip), we refuse to start/complete the flow. In production the
+// router always wires DB (router.go), so this only trips on a genuine
+// misconfiguration — exactly when failing closed is correct.
+func (h *OAuthHandler) requireOAuthDB(w http.ResponseWriter) bool {
+	if h.DB == nil {
+		h.Logger.Error("oauth refused: no DB wired — OAuthState single-use enforcement unavailable")
+		http.Error(w, "oauth unavailable", http.StatusServiceUnavailable)
+		return false
+	}
+	return true
 }
 
 func setStateCookie(w http.ResponseWriter, r *http.Request, state string) {

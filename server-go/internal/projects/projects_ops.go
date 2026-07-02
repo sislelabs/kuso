@@ -169,61 +169,70 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 // drives, and it's how callers flip previews.enabled, change the
 // default branch, or rotate the bound GitHub App installation.
 func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequest) (*kube.KusoProject, error) {
-	cur, err := s.Get(ctx, name)
-	if err != nil {
+	// Ensure the project exists up front so a missing CR returns the
+	// same not-found error as before the WithRetry migration.
+	if _, err := s.Get(ctx, name); err != nil {
 		return nil, err
 	}
-	if req.Description != nil {
-		cur.Spec.Description = *req.Description
-	}
-	prevBaseDomain := cur.Spec.BaseDomain
-	if req.BaseDomain != nil {
-		v := strings.TrimSpace(*req.BaseDomain)
-		if v != "" && !isPublicFQDN(v) {
-			return nil, fmt.Errorf("%w: baseDomain %q is not a public FQDN — needs at least one dot and a real TLD (e.g. example.com), Let's Encrypt can't issue certs for it otherwise", ErrInvalid, v)
+	// RMW under optimistic concurrency: mutate the freshly-fetched CR so
+	// a concurrent settings edit on another replica (or a mid-flight
+	// operator status patch) can't clobber this write. prevBaseDomain is
+	// captured from the object as it was just before this write so the
+	// post-update baseDomain-change propagation below is accurate.
+	var prevBaseDomain string
+	out, err := s.Kube.UpdateKusoProjectWithRetry(ctx, s.Namespace, name, func(cur *kube.KusoProject) error {
+		if req.Description != nil {
+			cur.Spec.Description = *req.Description
 		}
-		cur.Spec.BaseDomain = v
-	}
-	if req.DefaultRepo != nil {
-		if cur.Spec.DefaultRepo == nil {
-			cur.Spec.DefaultRepo = &kube.KusoRepoRef{}
+		prevBaseDomain = cur.Spec.BaseDomain
+		if req.BaseDomain != nil {
+			v := strings.TrimSpace(*req.BaseDomain)
+			if v != "" && !isPublicFQDN(v) {
+				return fmt.Errorf("%w: baseDomain %q is not a public FQDN — needs at least one dot and a real TLD (e.g. example.com), Let's Encrypt can't issue certs for it otherwise", ErrInvalid, v)
+			}
+			cur.Spec.BaseDomain = v
 		}
-		if req.DefaultRepo.URL != "" {
-			cur.Spec.DefaultRepo.URL = req.DefaultRepo.URL
+		if req.DefaultRepo != nil {
+			if cur.Spec.DefaultRepo == nil {
+				cur.Spec.DefaultRepo = &kube.KusoRepoRef{}
+			}
+			if req.DefaultRepo.URL != "" {
+				cur.Spec.DefaultRepo.URL = req.DefaultRepo.URL
+			}
+			if req.DefaultRepo.DefaultBranch != "" {
+				cur.Spec.DefaultRepo.DefaultBranch = req.DefaultRepo.DefaultBranch
+			}
 		}
-		if req.DefaultRepo.DefaultBranch != "" {
-			cur.Spec.DefaultRepo.DefaultBranch = req.DefaultRepo.DefaultBranch
+		if req.GitHub != nil {
+			// installationId=0 explicitly clears the binding; non-zero sets it.
+			if req.GitHub.InstallationID == 0 {
+				cur.Spec.GitHub = nil
+			} else {
+				cur.Spec.GitHub = &kube.KusoProjectGithubSpec{InstallationID: req.GitHub.InstallationID}
+			}
 		}
-	}
-	if req.GitHub != nil {
-		// installationId=0 explicitly clears the binding; non-zero sets it.
-		if req.GitHub.InstallationID == 0 {
-			cur.Spec.GitHub = nil
-		} else {
-			cur.Spec.GitHub = &kube.KusoProjectGithubSpec{InstallationID: req.GitHub.InstallationID}
+		if req.Previews != nil {
+			if cur.Spec.Previews == nil {
+				cur.Spec.Previews = &kube.KusoPreviewsSpec{TTLDays: 7}
+			}
+			if req.Previews.Enabled != nil {
+				cur.Spec.Previews.Enabled = *req.Previews.Enabled
+			}
+			if req.Previews.TTLDays != nil && *req.Previews.TTLDays > 0 {
+				cur.Spec.Previews.TTLDays = *req.Previews.TTLDays
+			}
+			if req.Previews.BaseDomain != nil {
+				cur.Spec.Previews.BaseDomain = strings.TrimSpace(*req.Previews.BaseDomain)
+			}
 		}
-	}
-	if req.Previews != nil {
-		if cur.Spec.Previews == nil {
-			cur.Spec.Previews = &kube.KusoPreviewsSpec{TTLDays: 7}
+		if req.AlwaysOn != nil {
+			cur.Spec.AlwaysOn = *req.AlwaysOn
 		}
-		if req.Previews.Enabled != nil {
-			cur.Spec.Previews.Enabled = *req.Previews.Enabled
+		if req.IncidentMonitoring != nil {
+			cur.Spec.IncidentMonitoring = *req.IncidentMonitoring
 		}
-		if req.Previews.TTLDays != nil && *req.Previews.TTLDays > 0 {
-			cur.Spec.Previews.TTLDays = *req.Previews.TTLDays
-		}
-		if req.Previews.BaseDomain != nil {
-			cur.Spec.Previews.BaseDomain = strings.TrimSpace(*req.Previews.BaseDomain)
-		}
-	}
-	if req.AlwaysOn != nil {
-		cur.Spec.AlwaysOn = *req.AlwaysOn
-	}
-	if req.IncidentMonitoring != nil {
-		cur.Spec.IncidentMonitoring = *req.IncidentMonitoring
-	}
-	out, err := s.Kube.UpdateKusoProject(ctx, s.Namespace, cur)
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -236,8 +245,8 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 	// pattern; user-customised hosts (added via the Networking tab
 	// or via `kuso domains add`) stay put. Best-effort: a partial
 	// failure logs but doesn't fail the project update.
-	if req.BaseDomain != nil && prevBaseDomain != cur.Spec.BaseDomain {
-		if perr := s.propagateBaseDomain(ctx, name, prevBaseDomain, cur.Spec.BaseDomain); perr != nil {
+	if req.BaseDomain != nil && prevBaseDomain != out.Spec.BaseDomain {
+		if perr := s.propagateBaseDomain(ctx, name, prevBaseDomain, out.Spec.BaseDomain); perr != nil {
 			fmt.Printf("warn: propagate baseDomain project=%s: %v\n", name, perr)
 		}
 	}

@@ -12,8 +12,10 @@
 //   - decision endpoint accepts only the three valid verbs +
 //     enforces a one-write rule (re-submitting flips the decision
 //     but only updates one column-set, no history table)
-//   - rate limit: 10 req/min/token via the same middleware that
-//     gates webhook POSTs
+//   - rate limit: both routes ride the shared per-IP limiter
+//     (RateLimitedReview in ratelimit.go), the same bucket that gates
+//     login / invite / OAuth-start, so the opaque token can't be
+//     brute-forced at full request rate
 
 package handlers
 
@@ -68,8 +70,13 @@ func (h *PreviewReviewHandler) Mount(r chi.Router) {
 	// Public — no auth middleware in front. The router setup needs to
 	// register this path BEFORE the auth-gate so reviewers can hit it
 	// without a kuso login. See router.go for the mount order.
-	r.Get("/api/reviews/{token}", h.GetByToken)
-	r.Post("/api/reviews/{token}/decision", h.PostDecision)
+	//
+	// Both routes ride the shared per-IP limiter (RateLimitedReview):
+	// the 32-char token is the only credential, so without a cap an
+	// attacker could brute-force the token space at full request rate
+	// (the package comment claimed this limit existed before it did).
+	r.Get("/api/reviews/{token}", RateLimitedReview(h.GetByToken))
+	r.Post("/api/reviews/{token}/decision", RateLimitedReview(h.PostDecision))
 }
 
 // GetByToken returns the reviewer view for the given token. 404 on

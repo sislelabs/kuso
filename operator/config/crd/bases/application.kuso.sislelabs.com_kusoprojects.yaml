@@ -110,6 +110,18 @@ spec:
                         to when the PR has no `reviewer:<email>` label.
                         Empty = no email; operator gets the URL only
                         from the dashboard + GitHub PR comment.
+                    allowForkPreviews:
+                      type: boolean
+                      default: false
+                      description: >-
+                        Opt INTO building preview envs for PRs from a
+                        fork opened by an untrusted author. Dangerous: a
+                        fork PR runs attacker-supplied build/seed code
+                        in-cluster with the project's production addon +
+                        shared secrets mounted. Default false — fork PRs
+                        are skipped unless the author is a repo
+                        OWNER/MEMBER/COLLABORATOR. Only enable for
+                        private/trusted repos.
                 configAsCode:
                   type: object
                   description: >-

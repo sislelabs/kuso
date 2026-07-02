@@ -115,6 +115,14 @@ func RateLimitedInvite(next http.HandlerFunc) http.HandlerFunc {
 	return withRateLimit(next)
 }
 
+// RateLimitedReview gates the public, unauthenticated reviewer-page
+// endpoints. The 32-char token is the only credential; without a limit
+// an attacker could brute-force the token space at full request rate.
+// Same per-IP bucket as the other public surfaces.
+func RateLimitedReview(next http.HandlerFunc) http.HandlerFunc {
+	return withRateLimit(next)
+}
+
 // RateLimitedOAuthStart caps OAuth-init requests at the same rate as
 // login. Without this, an attacker can abuse the start endpoint to
 // burn through OAuthState rows / spam the Postgres write path / hit

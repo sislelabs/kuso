@@ -2,6 +2,7 @@ package projects
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -140,9 +141,19 @@ func (s *Service) migrateOneService(ctx context.Context, ns, project, shortServi
 		// Won the race against another writer — nothing to do.
 		return fresh, nil
 	}
-	fresh.Spec.SharedEnvKeys = append([]string{}, keys...)
-	updated, err := s.Kube.UpdateKusoService(ctx, ns, fresh)
+	// RMW under optimistic concurrency; also re-checks the already-migrated
+	// guard against the fresh object so a concurrent migrator can't double-set.
+	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, serviceCRName(project, shortService), func(svc *kube.KusoService) error {
+		if svc.Spec.SharedEnvKeys != nil {
+			return kube.ErrAbortRetry
+		}
+		svc.Spec.SharedEnvKeys = append([]string{}, keys...)
+		return nil
+	})
 	if err != nil {
+		if errors.Is(err, kube.ErrAbortRetry) {
+			return fresh, nil
+		}
 		return nil, fmt.Errorf("update service: %w", err)
 	}
 	if err := s.propagateChangedToEnvs(ctx, ns, project, shortService, updated, changedFields{EnvVars: true}); err != nil {

@@ -113,7 +113,12 @@ func (s *Service) RegisterInstanceAddon(ctx context.Context, name, dsn string) e
 		return fmt.Errorf("%w: dsn required", ErrInvalid)
 	}
 	if _, err := url.Parse(dsn); err != nil {
-		return fmt.Errorf("%w: dsn parse: %w", ErrInvalid, err)
+		// Do NOT wrap the url.Parse error — Go includes the full raw URL
+		// (password and all) in its message, and this error is returned
+		// verbatim to the caller (instance_secrets fail() passes ErrInvalid
+		// strings through), which would leak the plaintext password into
+		// the response body / proxy logs / browser history. Static message.
+		return fmt.Errorf("%w: dsn is not a valid URL", ErrInvalid)
 	}
 	return s.SetKey(ctx, AddonKeyForName(name), dsn)
 }

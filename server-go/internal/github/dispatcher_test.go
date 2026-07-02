@@ -1075,3 +1075,146 @@ func TestPreviewRewriteEntries_InClusterDNS(t *testing.T) {
 		}
 	}
 }
+
+// --- SEC-1: fork-PR preview gate ---------------------------------------
+
+func TestIsForkPR(t *testing.T) {
+	t.Parallel()
+	mk := func(head, base, repo string) *prEvent {
+		p := &prEvent{}
+		p.PullRequest.Head.Repo.FullName = head
+		p.PullRequest.Base.Repo.FullName = base
+		p.Repository.FullName = repo
+		return p
+	}
+	cases := []struct {
+		name             string
+		head, base, repo string
+		wantFork         bool
+	}{
+		{"same repo", "example/alpha", "example/alpha", "example/alpha", false},
+		{"same repo case-insensitive", "Example/Alpha", "example/alpha", "example/alpha", false},
+		{"fork", "attacker/alpha", "example/alpha", "example/alpha", true},
+		{"head absent → no fork signal", "", "example/alpha", "example/alpha", false},
+		{"base absent falls back to repo", "example/alpha", "", "example/alpha", false},
+		{"base absent fork", "attacker/alpha", "", "example/alpha", true},
+	}
+	for _, c := range cases {
+		if got := isForkPR(mk(c.head, c.base, c.repo)); got != c.wantFork {
+			t.Errorf("%s: isForkPR=%v want %v", c.name, got, c.wantFork)
+		}
+	}
+}
+
+func TestAuthorIsTrusted(t *testing.T) {
+	t.Parallel()
+	trusted := []string{"OWNER", "MEMBER", "COLLABORATOR", "member"}
+	untrusted := []string{"CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "NONE", ""}
+	for _, a := range trusted {
+		p := &prEvent{}
+		p.PullRequest.AuthorAssociation = a
+		if !authorIsTrusted(p) {
+			t.Errorf("association %q should be trusted", a)
+		}
+	}
+	for _, a := range untrusted {
+		p := &prEvent{}
+		p.PullRequest.AuthorAssociation = a
+		if authorIsTrusted(p) {
+			t.Errorf("association %q should NOT be trusted", a)
+		}
+	}
+}
+
+// TestDispatch_PRFork_UntrustedAuthorSkipped is the SEC-1 regression:
+// a PR opened from a fork by an outsider must NOT spin up a preview env
+// (which would run their code with production secrets mounted).
+func TestDispatch_PRFork_UntrustedAuthorSkipped(t *testing.T) {
+	t.Parallel()
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		seedSvc("alpha", "web"),
+	)
+	body := []byte(`{
+		"action": "opened",
+		"number": 66,
+		"pull_request": {
+			"head": {"ref": "evil", "sha": "abcdef0123456789abcdef0123456789abcdef01", "repo": {"full_name": "attacker/alpha"}},
+			"base": {"ref": "main", "repo": {"full_name": "example/alpha"}},
+			"author_association": "NONE",
+			"state": "open"
+		},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if _, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-66"); err == nil {
+		t.Error("preview env created for untrusted fork PR — fork-PR RCE gate failed")
+	}
+	if bs, _ := d.Builds.List(context.Background(), "alpha", "web"); len(bs) != 0 {
+		t.Errorf("build triggered for untrusted fork PR: %d builds", len(bs))
+	}
+}
+
+// TestDispatch_PRFork_TrustedAuthorAllowed: a fork PR by a COLLABORATOR
+// (write-level trust) still previews.
+func TestDispatch_PRFork_TrustedAuthorAllowed(t *testing.T) {
+	t.Parallel()
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		seedSvc("alpha", "web"),
+	)
+	body := []byte(`{
+		"action": "opened",
+		"number": 67,
+		"pull_request": {
+			"head": {"ref": "feat", "sha": "abcdef0123456789abcdef0123456789abcdef01", "repo": {"full_name": "collab/alpha"}},
+			"base": {"ref": "main", "repo": {"full_name": "example/alpha"}},
+			"author_association": "COLLABORATOR",
+			"state": "open"
+		},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if _, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-67"); err != nil {
+		t.Errorf("preview env should exist for trusted-author fork PR: %v", err)
+	}
+}
+
+// TestDispatch_PRFork_OptInAllowsUntrusted: with previews.allowForkPreviews
+// the project accepts untrusted fork PRs (private/trusted-repo opt-in).
+func TestDispatch_PRFork_OptInAllowsUntrusted(t *testing.T) {
+	t.Parallel()
+	proj := &kube.KusoProject{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha", Namespace: "kuso"},
+		Spec: kube.KusoProjectSpec{
+			DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/example/alpha", DefaultBranch: "main"},
+			BaseDomain:  "alpha.example.com",
+			Previews:    &kube.KusoPreviewsSpec{Enabled: true, TTLDays: 5, AllowForkPreviews: true},
+		},
+	}
+	d := newDispatcher(t,
+		typedSeed(kube.GVRProjects, "KusoProject", proj),
+		seedSvc("alpha", "web"),
+	)
+	body := []byte(`{
+		"action": "opened",
+		"number": 68,
+		"pull_request": {
+			"head": {"ref": "x", "sha": "abcdef0123456789abcdef0123456789abcdef01", "repo": {"full_name": "attacker/alpha"}},
+			"base": {"ref": "main", "repo": {"full_name": "example/alpha"}},
+			"author_association": "NONE",
+			"state": "open"
+		},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(context.Background(), "pull_request", body); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if _, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-68"); err != nil {
+		t.Errorf("preview env should exist when allowForkPreviews=true: %v", err)
+	}
+}

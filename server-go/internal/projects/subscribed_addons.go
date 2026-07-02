@@ -252,12 +252,15 @@ func (s *Service) SetSubscribedAddons(ctx context.Context, project, service stri
 	if err != nil {
 		return nil, err
 	}
-	svc, err := s.GetService(ctx, project, service)
-	if err != nil {
-		return nil, err
-	}
-	svc.Spec.SubscribedAddons = clean
-	updated, err := s.Kube.UpdateKusoService(ctx, ns, svc)
+	// RMW via WithRetry: the in-process lockService above serializes
+	// writers within one replica, but NOT across replicas. Fetch-mutate-
+	// update under optimistic concurrency so a concurrent spec edit on
+	// another pod (or a mid-flight operator status patch) can't be
+	// clobbered — the mutation re-runs against the fresh object on 409.
+	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, serviceCRName(project, service), func(svc *kube.KusoService) error {
+		svc.Spec.SubscribedAddons = clean
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}

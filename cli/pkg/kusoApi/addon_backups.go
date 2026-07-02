@@ -11,6 +11,9 @@ type RestoreBackupRequest struct {
 	Key string `json:"key"`
 	// Into = sibling addon name. Empty = in-place (destructive).
 	Into string `json:"into,omitempty"`
+	// Confirm must echo the destination addon name for an in-place
+	// restore (server rejects otherwise). Ignored for --into siblings.
+	Confirm string `json:"confirm,omitempty"`
 }
 
 func (k *KusoClient) ListAddonBackups(project, addon string) (*resty.Response, error) {

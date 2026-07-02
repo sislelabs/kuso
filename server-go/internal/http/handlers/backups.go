@@ -244,6 +244,14 @@ type RestoreRequest struct {
 	// already exist (create it via the normal addon flow first
 	// with the same kind).
 	Into string `json:"into,omitempty"`
+	// Confirm must echo the destination addon name for an IN-PLACE
+	// restore (Into == "" or Into == source). The restore streams a
+	// `psql`-applied `--clean --if-exists` dump that DROPs and recreates
+	// the target's tables, overwriting live data — the same blast radius
+	// as an addon Delete, which is why it demands the same typed
+	// acknowledgement. Ignored when restoring into a distinct sibling
+	// addon (non-destructive to the source).
+	Confirm string `json:"confirm,omitempty"`
 }
 
 // Restore creates a one-shot Job that downloads the backup and pipes
@@ -295,6 +303,20 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	destAddon := addon
 	if req.Into != "" {
 		destAddon = req.Into
+	}
+	// Typed-confirmation guard for the DESTRUCTIVE in-place restore.
+	// When the destination is the source addon, the restore Job applies
+	// a `--clean --if-exists` dump that DROPs and recreates the target's
+	// tables — it overwrites live data with no undo, the same blast
+	// radius as an addon Delete. Demand the caller echo the destination
+	// addon name in `confirm`, mirroring AddonsHandler.Delete's
+	// ?confirm=<addon> gate. Restoring into a DISTINCT sibling addon
+	// leaves the source untouched, so it's exempt.
+	if destAddon == addon && req.Confirm != destAddon {
+		http.Error(w,
+			"in-place restore overwrites live data — set \"confirm\":\"<addon-name>\" to acknowledge (or restore into a different addon via \"into\")",
+			http.StatusBadRequest)
+		return
 	}
 	// Kind compatibility — refuse to point a postgres dump at a
 	// redis addon (the seed Job would only fail mid-restore with

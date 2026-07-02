@@ -12,6 +12,9 @@ Thumbs.db
 # agent-target.example.json for the committed template.
 agent-target.local.json
 
+# Local-only working docs (review notes, scratch findings) — never committed.
+*.local.md
+
 # Editor
 .vscode/
 .idea/

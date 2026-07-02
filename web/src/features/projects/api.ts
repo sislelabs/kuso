@@ -294,11 +294,15 @@ export async function restoreBackup(
   // Optional destination addon. Empty/undefined = restore in-place
   // (overwrites the source — destructive). Set to a sibling addon's
   // short name to restore non-destructively into that addon.
-  into?: string
+  into?: string,
+  // For an in-place restore the server requires `confirm` to equal the
+  // destination addon name (acknowledging data loss, mirroring delete).
+  // Ignored when restoring into a distinct sibling addon.
+  confirm?: string
 ): Promise<{ job: string }> {
   return api(
     `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/backups/restore`,
-    { method: "POST", body: { key, into } }
+    { method: "POST", body: { key, into, confirm } }
   );
 }
 

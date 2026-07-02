@@ -64,6 +64,15 @@ func (c Config) httpTimeout() time.Duration {
 	return c.HTTPTimeout
 }
 
+// KubeTimeout caps each apiserver call the watcher makes (Job list,
+// GetKusoCron, signing-secret read). The kube REST client sets no
+// global timeout, so without this a hung apiserver would block the
+// tick goroutine indefinitely and silently stall cron-failure alerting.
+// Defaults to 15s, matching nodewatch.
+func (c Config) kubeTimeout() time.Duration {
+	return 15 * time.Second
+}
+
 // Watcher polls Jobs labeled kuso.sislelabs.com/cron and fires
 // notify events + webhook calls when one terminates in Failed state.
 type Watcher struct {
@@ -126,13 +135,28 @@ func (w *Watcher) tick(ctx context.Context) {
 	// List Jobs cluster-wide with the kuso.sislelabs.com/cron label.
 	// CronJob-spawned Jobs inherit labels from the jobTemplate +
 	// the kusocron chart's _helpers.tpl emits this on every Job.
-	jobs, err := w.Kube.Clientset.BatchV1().Jobs("").List(ctx, metav1.ListOptions{
+	//
+	// Bound the LIST with a per-call timeout — the kube REST client has
+	// no global deadline, so a hung apiserver would otherwise block this
+	// tick forever and silently stop all cron-failure alerting. nodewatch
+	// and nodemetrics guard their LISTs the same way.
+	listCtx, cancel := context.WithTimeout(ctx, w.Config.kubeTimeout())
+	jobs, err := w.Kube.Clientset.BatchV1().Jobs("").List(listCtx, metav1.ListOptions{
 		LabelSelector: "kuso.sislelabs.com/cron",
 	})
+	cancel()
 	if err != nil {
 		w.Logger.Warn("cronwatch list jobs", "err", err)
 		return
 	}
+	// Fire each newly-failed Job's handler in its own goroutine so a
+	// single slow/unreachable webhook (up to ~15s of retry backoff)
+	// can't serialize detection of every other failed cron in this
+	// tick. The UID is marked dispatched BEFORE the goroutine starts,
+	// so a concurrent tick won't double-fire. We wait for all handlers
+	// before returning so the prune below sees a stable state and the
+	// goroutines stay bounded (never more than one tick's worth live).
+	var wg sync.WaitGroup
 	for i := range jobs.Items {
 		job := &jobs.Items[i]
 		if !isFailed(job) {
@@ -145,8 +169,13 @@ func (w *Watcher) tick(ctx context.Context) {
 		}
 		w.dispatched[job.UID] = struct{}{}
 		w.mu.Unlock()
-		w.handleFailure(ctx, job)
+		wg.Add(1)
+		go func(j *batchv1.Job) {
+			defer wg.Done()
+			w.handleFailure(ctx, j)
+		}(job)
 	}
+	wg.Wait()
 	// Prune dispatched UIDs that no longer correspond to a live Job.
 	// failedJobsHistoryLimit bounds Jobs IN THE CLUSTER, not entries in
 	// this map — without an explicit prune the map grows for the life of
@@ -182,7 +211,11 @@ func (w *Watcher) handleFailure(ctx context.Context, job *batchv1.Job) {
 	if cronName == "" {
 		return
 	}
-	cron, err := w.Kube.GetKusoCron(ctx, job.Namespace, cronName)
+	// Bound the CR read — same reasoning as the tick LIST: a hung
+	// apiserver must not wedge the handler goroutine.
+	getCtx, cancel := context.WithTimeout(ctx, w.Config.kubeTimeout())
+	cron, err := w.Kube.GetKusoCron(getCtx, job.Namespace, cronName)
+	cancel()
 	if err != nil {
 		w.Logger.Warn("cronwatch resolve cron", "err", err, "cron", cronName, "ns", job.Namespace)
 		return
@@ -227,6 +260,17 @@ func (w *Watcher) emitNotify(cron *kube.KusoCron, job *batchv1.Job) {
 			{Name: "job", Value: job.Name, Inline: true},
 		},
 	})
+}
+
+// httpClient returns the configured webhook client, lazily defaulting
+// one bounded by httpTimeout. Run() sets w.HTTP up front; this keeps a
+// Watcher usable when tick/handleFailure are driven directly (tests, or
+// any caller that skips Run).
+func (w *Watcher) httpClient() *http.Client {
+	if w.HTTP != nil {
+		return w.HTTP
+	}
+	return &http.Client{Timeout: w.Config.httpTimeout()}
 }
 
 // Payload is the JSON body POSTed to the per-cron onFailure webhook.
@@ -291,7 +335,7 @@ func (w *Watcher) dispatchWebhook(ctx context.Context, cron *kube.KusoCron, job 
 		if sig != "" {
 			req.Header.Set("X-Kuso-Signature", "sha256="+sig)
 		}
-		resp, err := w.HTTP.Do(req)
+		resp, err := w.httpClient().Do(req)
 		if err != nil {
 			lastErr = err
 			continue
@@ -310,7 +354,9 @@ func (w *Watcher) dispatchWebhook(ctx context.Context, cron *kube.KusoCron, job 
 }
 
 func (w *Watcher) signBody(ctx context.Context, ns string, ref *kube.KusoSecretKeyRef, body []byte) (string, error) {
-	sec, err := w.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, ref.Name, metav1.GetOptions{})
+	getCtx, cancel := context.WithTimeout(ctx, w.Config.kubeTimeout())
+	defer cancel()
+	sec, err := w.Kube.Clientset.CoreV1().Secrets(ns).Get(getCtx, ref.Name, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("get signing secret %s/%s: %w", ns, ref.Name, err)
 	}
