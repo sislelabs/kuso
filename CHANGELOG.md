@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.101] — 2026-07-02
+
+### ✨ Features
+- Feat(placement): support valueless node labels as capability flags ([7797da6](https://github.com/sislelabs/kuso/commit/7797da615142c1550b5b3c403a0a68e8b88436d2))
+
 ## [0.18.100] — 2026-07-02
 
 ### 🐛 Bug Fixes
@@ -347,11 +352,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(pkgupdates): daily aggregated update notification + rolling node drain ([4fd3094](https://github.com/sislelabs/kuso/commit/4fd3094a89fe4908ed936efca77dc16034f076a1))
-
-## [0.18.50] — 2026-06-09
-
-### 🐛 Bug Fixes
-- Fix(cli): kuso upgrade falsely reported "timed out after 15m" on success ([c29fcb0](https://github.com/sislelabs/kuso/commit/c29fcb03be743c27269bab593c4ee202ac61ca1f))
 
 
 ---
