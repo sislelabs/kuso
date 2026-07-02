@@ -12,11 +12,21 @@ import (
 	"kuso/server/internal/notify"
 )
 
-// DefaultInterval is the read cadence. Package lists don't move minute
-// to minute, and the probe itself only re-checks every ~6h, so a 1h
-// server-side read is plenty to surface a fresh advisory promptly
-// without hammering the apiserver.
+// DefaultInterval is the read cadence for the advisory digest. Package
+// lists don't move minute to minute, and the probe itself only re-checks
+// every ~6h, so a 1h server-side read is plenty to surface a fresh
+// advisory promptly without hammering the apiserver.
 const DefaultInterval = time.Hour
+
+// finalizeInterval is how often we run reconcileReboots — the finalize
+// path that uncordons a node once it's back Ready after a patch+reboot
+// and reschedules any pods stranded Unknown by the reboot. This MUST be
+// tight (not the 1h advisory cadence): between "node back" and "finalize"
+// the node stays cordoned with its workloads displaced, which for a node
+// hosting a singleton like the instance pg-pooler is a live outage. The
+// check is cheap (one node list + a pod list only when a reboot is in
+// flight), so 15s is safe on the apiserver.
+const finalizeInterval = 15 * time.Second
 
 // Watcher reads node pkg-updates annotations on a timer, and notifies
 // (once, edge-triggered, restart-safe) when a node gains a fresh
@@ -48,10 +58,18 @@ func (w *Watcher) Run(ctx context.Context) {
 	// one annotation before we read.
 	t := time.NewTimer(30 * time.Second)
 	defer t.Stop()
+	// Fast finalize ticker, independent of the advisory-read cadence.
+	// reconcileReboots is cheap and latency-critical (a rebooted node
+	// stays cordoned until it runs), so it gets its own tight loop.
+	ft := time.NewTicker(finalizeInterval)
+	defer ft.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-ft.C:
+			w.reconcileReboots(ctx, logger)
+			continue
 		case <-t.C:
 		}
 		w.tick(ctx, logger)

@@ -185,11 +185,59 @@ func (w *Watcher) reconcileReboots(ctx context.Context, logger *slog.Logger) {
 				continue
 			}
 		}
+		// Reschedule pods the reboot stranded. When a node reboots, kubelet
+		// stops reporting and its pods go into an Unknown phase; a
+		// StatefulSet/Deployment will NOT recreate an Unknown pod because
+		// the control plane can't confirm the old one is gone. Left alone,
+		// a singleton like the instance pg-pooler stays down until manual
+		// intervention (observed: cluster-wide DB outage on a worker
+		// reboot). Force-delete them so their controllers reschedule onto a
+		// healthy node.
+		w.rescheduleStrandedPods(ctx, n.Name, logger)
 		_ = w.setApplyState(ctx, n.Name, "done", "patched + rebooted; node back and uncordoned")
 		if w.Notify != nil {
 			w.Notify.Emit(notifyApplyDone(n.Name))
 		}
 		logger.Info("pkgupdates: node finished patch+reboot", "node", n.Name)
+	}
+}
+
+// rescheduleStrandedPods force-deletes pods on `node` that the reboot
+// left in an Unknown phase (kubelet lost then regained contact). A
+// controller won't recreate an Unknown pod on its own — the API server
+// can't confirm the container is actually gone — so we delete with
+// grace-period 0 to let the ReplicaSet/StatefulSet spawn a replacement
+// on a healthy node. Best-effort: a failure here is logged, not fatal,
+// and the next finalize tick retries because the pod is still Unknown.
+//
+// Scope is deliberately narrow — only pods on THIS node in Unknown phase.
+// We do not touch Running/Pending pods (the kubelet re-adopts those after
+// reboot) or pods on other nodes.
+func (w *Watcher) rescheduleStrandedPods(ctx context.Context, node string, logger *slog.Logger) {
+	pods, err := w.Kube.Clientset.CoreV1().Pods(metav1.NamespaceAll).List(ctx, metav1.ListOptions{
+		FieldSelector: "spec.nodeName=" + node,
+	})
+	if err != nil {
+		logger.Warn("pkgupdates: list pods for stranded-pod sweep", "node", node, "err", err)
+		return
+	}
+	zero := int64(0)
+	for i := range pods.Items {
+		p := &pods.Items[i]
+		// PodPhase Unknown = kubelet cannot report the pod's state
+		// (node was unreachable). This is the reboot-stranded signature.
+		if p.Status.Phase != corev1.PodUnknown {
+			continue
+		}
+		if err := w.Kube.Clientset.CoreV1().Pods(p.Namespace).Delete(ctx, p.Name, metav1.DeleteOptions{
+			GracePeriodSeconds: &zero,
+		}); err != nil && !apierrors.IsNotFound(err) {
+			logger.Warn("pkgupdates: force-delete stranded pod",
+				"node", node, "pod", p.Namespace+"/"+p.Name, "err", err)
+			continue
+		}
+		logger.Info("pkgupdates: rescheduled stranded pod after reboot",
+			"node", node, "pod", p.Namespace+"/"+p.Name)
 	}
 }
 

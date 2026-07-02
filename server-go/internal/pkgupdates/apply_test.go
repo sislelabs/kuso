@@ -2,6 +2,8 @@ package pkgupdates
 
 import (
 	"context"
+	"io"
+	"log/slog"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -11,6 +13,12 @@ import (
 
 	"kuso/server/internal/kube"
 )
+
+// slogDiscard returns a logger that drops output, for tests that only
+// assert on cluster state.
+func slogDiscard() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
 
 func TestBuildApplyJob(t *testing.T) {
 	t.Parallel()
@@ -140,5 +148,78 @@ func TestAnotherNodeRebooting(t *testing.T) {
 				t.Errorf("busy node = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+func TestRescheduleStrandedPods(t *testing.T) {
+	t.Parallel()
+	mkPod := func(name string, phase corev1.PodPhase, node string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso"},
+			Spec:       corev1.PodSpec{NodeName: node},
+			Status:     corev1.PodStatus{Phase: phase},
+		}
+	}
+	objs := []runtime.Object{
+		mkPod("stranded", corev1.PodUnknown, "worker"), // should be deleted
+		mkPod("healthy", corev1.PodRunning, "worker"),  // should survive
+		mkPod("pending", corev1.PodPending, "worker"),  // should survive
+	}
+	cs := kubefake.NewSimpleClientset(objs...)
+	w := &Watcher{Kube: &kube.Client{Clientset: cs}}
+	w.rescheduleStrandedPods(context.Background(), "worker", slogDiscard())
+
+	remaining, err := cs.CoreV1().Pods("kuso").List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("list pods: %v", err)
+	}
+	got := map[string]bool{}
+	for _, p := range remaining.Items {
+		got[p.Name] = true
+	}
+	if got["stranded"] {
+		t.Error("Unknown-phase pod should have been force-deleted")
+	}
+	if !got["healthy"] || !got["pending"] {
+		t.Error("Running/Pending pods must not be touched")
+	}
+}
+
+func TestReconcileRebootsUncordonsAndSweeps(t *testing.T) {
+	t.Parallel()
+	readyNode := &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "worker",
+			Annotations: map[string]string{
+				CordonAnnotation:     "true",
+				ApplyStateAnnotation: `{"phase":"rebooting","at":"","log":""}`,
+			},
+		},
+		Spec: corev1.NodeSpec{Unschedulable: true},
+		Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+			{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+		}},
+	}
+	strandedPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "pooler", Namespace: "kuso"},
+		Spec:       corev1.PodSpec{NodeName: "worker"},
+		Status:     corev1.PodStatus{Phase: corev1.PodUnknown},
+	}
+	cs := kubefake.NewSimpleClientset(readyNode, strandedPod)
+	w := &Watcher{Kube: &kube.Client{Clientset: cs}}
+	w.reconcileReboots(context.Background(), slogDiscard())
+
+	n, err := cs.CoreV1().Nodes().Get(context.Background(), "worker", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	if n.Spec.Unschedulable {
+		t.Error("node should have been uncordoned after reboot")
+	}
+	if n.Annotations[CordonAnnotation] != "" {
+		t.Errorf("cordon marker should be cleared, got %q", n.Annotations[CordonAnnotation])
+	}
+	if _, err := cs.CoreV1().Pods("kuso").Get(context.Background(), "pooler", metav1.GetOptions{}); err == nil {
+		t.Error("stranded pooler pod should have been force-deleted")
 	}
 }
