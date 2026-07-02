@@ -1,0 +1,28 @@
+apiVersion: kuso/v1
+project: gitea
+services:
+  - name: gitea
+    runtime: image
+    port: 3000
+    image:
+      repository: gitea/gitea
+      tag: "1.22.3"
+    env:
+      GITEA__database__DB_TYPE: postgres
+      GITEA__database__HOST: "${{ gitea-db.POSTGRES_HOST }}:${{ gitea-db.POSTGRES_PORT }}"
+      GITEA__database__NAME: "${{ gitea-db.POSTGRES_DB }}"
+      GITEA__database__USER: "${{ gitea-db.POSTGRES_USER }}"
+      GITEA__database__PASSWD: "${{ gitea-db.POSTGRES_PASSWORD }}"
+      GITEA__server__ROOT_URL: "https://${{ prompt.host }}/"
+      GITEA__server__DOMAIN: "${{ prompt.host }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /data
+        sizeGi: 5
+addons:
+  - name: gitea-db
+    kind: postgres
+    version: "16"

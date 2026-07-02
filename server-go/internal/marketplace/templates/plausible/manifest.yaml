@@ -1,0 +1,12 @@
+name: plausible
+title: Plausible Analytics
+description: Simple, open-source, lightweight and privacy-friendly web analytics.
+category: analytics
+website: https://plausible.io
+appVersion: "2.1.4"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Plausible will be served on.

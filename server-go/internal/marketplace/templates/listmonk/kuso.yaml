@@ -1,0 +1,23 @@
+apiVersion: kuso/v1
+project: listmonk
+services:
+  - name: listmonk
+    runtime: image
+    port: 9000
+    image:
+      repository: listmonk/listmonk
+      tag: "v3.0.0"
+    env:
+      LISTMONK_app__address: "0.0.0.0:9000"
+      LISTMONK_db__host: "${{ listmonk-db.POSTGRES_HOST }}"
+      LISTMONK_db__port: "${{ listmonk-db.POSTGRES_PORT }}"
+      LISTMONK_db__user: "${{ listmonk-db.POSTGRES_USER }}"
+      LISTMONK_db__password: "${{ listmonk-db.POSTGRES_PASSWORD }}"
+      LISTMONK_db__database: "${{ listmonk-db.POSTGRES_DB }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+addons:
+  - name: listmonk-db
+    kind: postgres
+    version: "16"

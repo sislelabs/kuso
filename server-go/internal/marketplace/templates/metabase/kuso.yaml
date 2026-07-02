@@ -1,0 +1,19 @@
+apiVersion: kuso/v1
+project: metabase
+services:
+  - name: metabase
+    runtime: image
+    port: 3000
+    image:
+      repository: metabase/metabase
+      tag: "v0.51.1.4"
+    env:
+      MB_DB_TYPE: postgres
+      MB_DB_CONNECTION_URI: "${{ metabase-db.DATABASE_URL }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+addons:
+  - name: metabase-db
+    kind: postgres
+    version: "16"

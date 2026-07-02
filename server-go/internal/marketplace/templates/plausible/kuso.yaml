@@ -1,0 +1,23 @@
+apiVersion: kuso/v1
+project: plausible
+services:
+  - name: plausible
+    runtime: image
+    port: 8000
+    image:
+      repository: ghcr.io/plausible/community-edition
+      tag: "v2.1.4"
+    env:
+      BASE_URL: "https://${{ prompt.host }}"
+      SECRET_KEY_BASE: { generate: hex32 }
+      DATABASE_URL: "${{ plausible-db.DATABASE_URL }}"
+      CLICKHOUSE_DATABASE_URL: "${{ plausible-ch.CLICKHOUSE_URL }}"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+addons:
+  - name: plausible-db
+    kind: postgres
+    version: "16"
+  - name: plausible-ch
+    kind: clickhouse

@@ -1,0 +1,12 @@
+name: listmonk
+title: listmonk
+description: High-performance, self-hosted newsletter and mailing list manager.
+category: comms
+website: https://listmonk.app
+appVersion: "3.0.0"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname listmonk will be served on.

@@ -1,0 +1,19 @@
+apiVersion: kuso/v1
+project: vaultwarden
+services:
+  - name: vaultwarden
+    runtime: image
+    port: 80
+    image:
+      repository: vaultwarden/server
+      tag: "1.32.1"
+    env:
+      DOMAIN: "https://${{ prompt.host }}"
+      ADMIN_TOKEN: { generate: hex32 }
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /data
+        sizeGi: 2

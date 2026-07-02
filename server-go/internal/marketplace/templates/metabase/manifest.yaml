@@ -1,0 +1,12 @@
+name: metabase
+title: Metabase
+description: Open-source business intelligence and dashboards.
+category: data
+website: https://www.metabase.com
+appVersion: "0.51.1.4"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Metabase will be served on.

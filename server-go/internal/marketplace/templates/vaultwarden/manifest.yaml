@@ -1,0 +1,12 @@
+name: vaultwarden
+title: Vaultwarden
+description: Unofficial Bitwarden-compatible password manager server.
+category: dev-tools
+website: https://github.com/dani-garcia/vaultwarden
+appVersion: "1.32.1"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Vaultwarden will be served on.

@@ -1,0 +1,12 @@
+name: n8n
+title: n8n
+description: Extendable workflow automation with a fair-code license.
+category: automation
+website: https://n8n.io
+appVersion: "1.62.1"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname n8n will be served on.

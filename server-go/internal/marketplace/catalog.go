@@ -76,7 +76,12 @@ func Catalog() ([]*Manifest, error) {
 	for _, e := range loaded {
 		out = append(out, e.Manifest)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Title < out[j].Title })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Title != out[j].Title {
+			return out[i].Title < out[j].Title
+		}
+		return out[i].Name < out[j].Name
+	})
 	return out, nil
 }
 

@@ -1,0 +1,20 @@
+apiVersion: kuso/v1
+project: umami
+services:
+  - name: umami
+    runtime: image
+    port: 3000
+    image:
+      repository: ghcr.io/umami-software/umami
+      tag: "postgresql-v2.13.3"
+    env:
+      DATABASE_URL: "${{ umami-db.DATABASE_URL }}"
+      DATABASE_TYPE: postgresql
+      APP_SECRET: { generate: hex32 }
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+addons:
+  - name: umami-db
+    kind: postgres
+    version: "16"

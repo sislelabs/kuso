@@ -1,0 +1,31 @@
+apiVersion: kuso/v1
+project: n8n
+services:
+  - name: n8n
+    runtime: image
+    port: 5678
+    image:
+      repository: docker.n8n.io/n8nio/n8n
+      tag: "1.62.1"
+    env:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: "${{ n8n-db.POSTGRES_HOST }}"
+      DB_POSTGRESDB_PORT: "${{ n8n-db.POSTGRES_PORT }}"
+      DB_POSTGRESDB_DATABASE: "${{ n8n-db.POSTGRES_DB }}"
+      DB_POSTGRESDB_USER: "${{ n8n-db.POSTGRES_USER }}"
+      DB_POSTGRESDB_PASSWORD: "${{ n8n-db.POSTGRES_PASSWORD }}"
+      N8N_ENCRYPTION_KEY: { generate: hex32 }
+      N8N_HOST: "${{ prompt.host }}"
+      N8N_PROTOCOL: https
+      WEBHOOK_URL: "https://${{ prompt.host }}/"
+    domains:
+      - host: "${{ prompt.host }}"
+        tls: true
+    volumes:
+      - name: data
+        mountPath: /home/node/.n8n
+        sizeGi: 1
+addons:
+  - name: n8n-db
+    kind: postgres
+    version: "16"

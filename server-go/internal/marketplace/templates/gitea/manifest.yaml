@@ -1,0 +1,12 @@
+name: gitea
+title: Gitea
+description: Self-hosted, lightweight Git service.
+category: dev-tools
+website: https://gitea.io
+appVersion: "1.22.3"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Gitea will be served on.

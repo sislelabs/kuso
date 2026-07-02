@@ -1,0 +1,12 @@
+name: umami
+title: Umami
+description: Privacy-focused, open-source website analytics.
+category: analytics
+website: https://umami.is
+appVersion: "2.13.3"
+prompts:
+  - key: host
+    title: Domain
+    kind: domain
+    required: true
+    help: The hostname Umami will be served on.
