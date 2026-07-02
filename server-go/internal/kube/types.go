@@ -270,6 +270,10 @@ type KusoServiceSpec struct {
 	// verbatim. Propagated onto every owned KusoEnvironment (the env
 	// chart already consumes .Values.resources). Nil = chart default.
 	Resources  map[string]any      `json:"resources,omitempty"`
+	// SecurityContext opts a service into extra Linux capabilities and/or
+	// privilege escalation. Nil keeps kuso's default (drop ALL, no
+	// escalation). Propagated onto every owned KusoEnvironment.
+	SecurityContext *KusoSecurityContext `json:"securityContext,omitempty"`
 	Static     *KusoStaticSpec     `json:"static,omitempty"`
 	Buildpacks *KusoBuildpacksSpec `json:"buildpacks,omitempty"`
 	// BuildArgs are passed to the image build as --build-arg KEY=VAL —
@@ -416,6 +420,22 @@ type KusoHealthcheck struct {
 	PeriodSeconds       int32  `json:"periodSeconds,omitempty"`
 	TimeoutSeconds      int32  `json:"timeoutSeconds,omitempty"`
 	FailureThreshold    int32  `json:"failureThreshold,omitempty"`
+}
+
+// KusoCapabilities lists Linux capabilities to ADD to the container.
+// kuso always drops ALL by default; entries here are added back on top.
+// Names are the k8s short form without CAP_ (e.g. "SETUID", "SETGID").
+type KusoCapabilities struct {
+	Add []string `json:"add,omitempty"`
+}
+
+// KusoSecurityContext is the narrow, opt-in escape hatch for images that
+// self-drop root at runtime (setpriv/gosu/su-exec). Nil = kuso's default
+// hardened context (drop ALL, allowPrivilegeEscalation false). Only the
+// fields set here relax that default.
+type KusoSecurityContext struct {
+	Capabilities             *KusoCapabilities `json:"capabilities,omitempty"`
+	AllowPrivilegeEscalation *bool             `json:"allowPrivilegeEscalation,omitempty"`
 }
 
 // MinValue returns scale.Min as an int, falling back to the CRD default
@@ -570,6 +590,7 @@ type KusoEnvironmentSpec struct {
 	SubscribedAddons []string       `json:"subscribedAddons"`
 	SecretsRev       string         `json:"secretsRev,omitempty"`
 	Resources        map[string]any `json:"resources,omitempty"`
+	SecurityContext *KusoSecurityContext `json:"securityContext,omitempty"`
 	// Placement is the resolved (effective) placement for this env,
 	// computed as: env > service > project. The operator's helm chart
 	// reads it directly to render nodeSelector/affinity/tolerations.
