@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.102] — 2026-07-02
+
+### ✨ Features
+- Feat(cli): accept bare node-label keys (valueless capability flags) ([2784da8](https://github.com/sislelabs/kuso/commit/2784da882114a57377d27afc2545697dbcabe1e5))
+
 ## [0.18.101] — 2026-07-02
 
 ### ✨ Features
@@ -347,11 +352,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(pkg-probe): note eviction RBAC is core-group, not policy (verified live) ([a3a497f](https://github.com/sislelabs/kuso/commit/a3a497f61b4c3731c900e8a1f242acb4ab01ffc3))
-
-## [0.18.51] — 2026-06-10
-
-### ✨ Features
-- Feat(pkgupdates): daily aggregated update notification + rolling node drain ([4fd3094](https://github.com/sislelabs/kuso/commit/4fd3094a89fe4908ed936efca77dc16034f076a1))
 
 
 ---
