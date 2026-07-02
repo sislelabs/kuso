@@ -280,10 +280,11 @@ clear; removing it drops the taint.`,
 }
 
 var nodeLabelSetCmd = &cobra.Command{
-	Use:   "set <name> <key=value> [key=value...]",
+	Use:   "set <name> <key[=value]> [key[=value]...]",
 	Short: "Add or update kuso labels on a node (merges with existing).",
 	Example: `  kuso node label set worker-2 tier=premium gpu=true
-  kuso node label set worker-2 region=eu`,
+  kuso node label set worker-2 region=eu
+  kuso node label set worker-2 gpu          # valueless capability flag`,
 	Args: cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -300,7 +301,7 @@ var nodeLabelSetCmd = &cobra.Command{
 		for _, raw := range args[1:] {
 			k, v, ok := splitKV(raw)
 			if !ok {
-				return fmt.Errorf("%q must be key=value", raw)
+				return fmt.Errorf("%q must be key or key=value (a leading = is not allowed)", raw)
 			}
 			current[k] = v
 		}
@@ -882,9 +883,20 @@ func init() {
 // splitKV parses k=v. Returns (k, v, true) on success; (_, _, false)
 // on a malformed input. Whitespace around the boundary is trimmed so
 // `--label "foo = bar"` works.
+//
+// A bare key with no `=` (e.g. `gpu`) is valid: it's a valueless
+// capability flag, returned as (k, "", true). Both `gpu` and `gpu=`
+// therefore work. A leading `=` (empty key) is still rejected.
 func splitKV(s string) (string, string, bool) {
 	i := strings.Index(s, "=")
-	if i <= 0 {
+	if i < 0 {
+		k := strings.TrimSpace(s)
+		if k == "" {
+			return "", "", false
+		}
+		return k, "", true
+	}
+	if i == 0 {
 		return "", "", false
 	}
 	return strings.TrimSpace(s[:i]), strings.TrimSpace(s[i+1:]), true
