@@ -598,6 +598,9 @@ func mountAuthenticatedRoutes(
 		// the UI feeds the generated kuso.yaml back through
 		// POST /api/projects/{p}/apply to create resources.
 		(&httphandlers.ImportComposeHandler{Logger: d.Logger}).Mount(r)
+		// App marketplace — read-only catalog + render. The UI/CLI feed
+		// the rendered kuso.yaml back through POST /api/projects/{p}/apply.
+		(&httphandlers.MarketplaceHandler{Logger: d.Logger}).Mount(r)
 		if bootstrapH != nil {
 			bootstrapH.MountAdmin(r)
 		}
