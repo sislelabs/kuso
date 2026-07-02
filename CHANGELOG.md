@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.104] — 2026-07-02
+
+### 🐛 Bug Fixes
+- Fix(pkgupdates): keep sweeping stranded pods through a settle window ([b9168f3](https://github.com/sislelabs/kuso/commit/b9168f3e2efa9c659db960738223110b4bde6c50))
+
 ## [0.18.103] — 2026-07-02
 
 ### 🐛 Bug Fixes
@@ -341,14 +346,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(audit): use Postgres $N placeholders, not SQLite ? ([6658259](https://github.com/sislelabs/kuso/commit/6658259c3d44bd382083272ae3fc891d5d447b5d))
-
-## [0.18.53] — 2026-06-10
-
-### ✨ Features
-- Feat(addons): data browser/editor on the postgres SQL tab ([1464108](https://github.com/sislelabs/kuso/commit/1464108543c9a684c62c322b9865f931e5d09983))
-
-### 📝 Docs
-- Docs(spec): addon data browser/editor design ([9b8e80d](https://github.com/sislelabs/kuso/commit/9b8e80d1a113af7ecd5819ebd4e65fbaad75f900))
 
 
 ---
