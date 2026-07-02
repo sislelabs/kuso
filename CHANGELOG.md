@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.103] — 2026-07-02
+
+### 🐛 Bug Fixes
+- Fix(pkgupdates): finalize reboots promptly + reschedule stranded pods ([843b42c](https://github.com/sislelabs/kuso/commit/843b42c29379b3ba567185831f50e64cb66d24c4))
+
 ## [0.18.102] — 2026-07-02
 
 ### ✨ Features
@@ -344,14 +349,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(spec): addon data browser/editor design ([9b8e80d](https://github.com/sislelabs/kuso/commit/9b8e80d1a113af7ecd5819ebd4e65fbaad75f900))
-
-## [0.18.52] — 2026-06-10
-
-### 🐛 Bug Fixes
-- Fix(pkgupdates): parse drain pod-list with jq, not fragile awk ([5c09f45](https://github.com/sislelabs/kuso/commit/5c09f4500cc104be82de487adfbccc420c93635d))
-
-### 📝 Docs
-- Docs(pkg-probe): note eviction RBAC is core-group, not policy (verified live) ([a3a497f](https://github.com/sislelabs/kuso/commit/a3a497f61b4c3731c900e8a1f242acb4ab01ffc3))
 
 
 ---
