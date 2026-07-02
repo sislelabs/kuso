@@ -243,7 +243,7 @@ git commit -m "feat(marketplace): manifest types + strict validation"
 - Test: `server-go/internal/marketplace/render_test.go`
 
 **Interfaces:**
-- Consumes: `Manifest`, `Prompt` (Task 1); `spec.File`, `spec.Parse` from `github.com/sislelabs/kuso/server-go/internal/spec`.
+- Consumes: `Manifest`, `Prompt` (Task 1); `spec.File`, `spec.Parse` from `kuso/server/internal/spec`.
 - Produces:
   - `type Note struct { Kind, Detail string }` (`Kind` ∈ `"service"`, `"addon"`, `"secret"`, `"domain"`, `"info"`)
   - `func RenderTemplate(m *Manifest, templateYAML []byte, project string, answers map[string]string) (*spec.File, []Note, error)`
@@ -367,7 +367,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/sislelabs/kuso/server-go/internal/spec"
+	"kuso/server/internal/spec"
 )
 
 // ErrRender is returned when a template can't be rendered (bad answers,
@@ -571,7 +571,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/sislelabs/kuso/server-go/internal/spec"
+	"kuso/server/internal/spec"
 )
 
 // TestCatalog_AllTemplatesValid is the guardrail: every embedded
@@ -926,7 +926,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/sislelabs/kuso/server-go/internal/marketplace"
+	"kuso/server/internal/marketplace"
 )
 
 // MarketplaceHandler serves the embedded app catalog and a read-only
