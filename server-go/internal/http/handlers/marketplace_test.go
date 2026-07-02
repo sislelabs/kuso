@@ -37,6 +37,57 @@ func TestMarketplace_List(t *testing.T) {
 	}
 }
 
+func TestMarketplace_Get_OK(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/marketplace/uptime-kuma", nil)
+	w := httptest.NewRecorder()
+	mktRouter().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	var body struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if body.Name != "uptime-kuma" {
+		t.Fatalf("want name uptime-kuma, got %q", body.Name)
+	}
+}
+
+func TestMarketplace_Get_NotFound(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/marketplace/nope", nil)
+	w := httptest.NewRecorder()
+	mktRouter().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
+func TestMarketplace_Icon_OK(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/marketplace/uptime-kuma/icon", nil)
+	w := httptest.NewRecorder()
+	mktRouter().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %s", w.Code, w.Body.String())
+	}
+	if ct := w.Header().Get("Content-Type"); !strings.Contains(ct, "image/svg+xml") {
+		t.Fatalf("want Content-Type image/svg+xml, got %q", ct)
+	}
+	if w.Body.Len() == 0 {
+		t.Fatal("empty icon body")
+	}
+}
+
+func TestMarketplace_Icon_NotFound(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/marketplace/nope/icon", nil)
+	w := httptest.NewRecorder()
+	mktRouter().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("want 404, got %d", w.Code)
+	}
+}
+
 func TestMarketplace_Render_OK(t *testing.T) {
 	payload := `{"project":"mysite","answers":{"host":"mysite.example.com"}}`
 	req := httptest.NewRequest(http.MethodPost, "/api/marketplace/uptime-kuma/render", strings.NewReader(payload))

@@ -52,12 +52,16 @@ func (h *MarketplaceHandler) Get(w http.ResponseWriter, r *http.Request) {
 
 func (h *MarketplaceHandler) Icon(w http.ResponseWriter, r *http.Request) {
 	e, err := marketplace.GetEntry(chi.URLParam(r, "app"))
-	if errors.Is(err, marketplace.ErrNotFound) || len(e.Icon) == 0 {
+	if errors.Is(err, marketplace.ErrNotFound) {
 		http.Error(w, "no icon", http.StatusNotFound)
 		return
 	}
 	if err != nil {
 		http.Error(w, "catalog unavailable", http.StatusInternalServerError)
+		return
+	}
+	if len(e.Icon) == 0 {
+		http.Error(w, "no icon", http.StatusNotFound)
 		return
 	}
 	w.Header().Set("Content-Type", "image/svg+xml")
