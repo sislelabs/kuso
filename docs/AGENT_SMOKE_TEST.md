@@ -288,6 +288,53 @@ show why.
 
 ---
 
+## Marketplace one-click deploy
+
+The marketplace ships curated app templates (embedded kuso.yaml + a
+prompt manifest). A template renders to kuso.yaml server-side and is
+created through the same `POST /api/projects/{p}/apply` config-as-code
+path as `kuso import compose`, so this smoke exercises render →
+project-create → apply → cert → rollout end to end. Uptime Kuma is the
+zero-addon showcase (single `runtime: image` service + a volume), so it
+reaches Ready without waiting on a datastore.
+
+1. **Catalog lists.** `kuso marketplace list` → prints ≥8 apps
+   (uptime-kuma, umami, n8n, vaultwarden, gitea, metabase, plausible,
+   listmonk). `kuso marketplace info uptime-kuma` → shows its one
+   required `host` (domain) prompt.
+
+2. **Dry-run render writes nothing.**
+   `kuso marketplace deploy uptime-kuma --project mkt-smoke --set host=mkt-smoke.<baseDomain> --dry-run`
+   → prints a kuso.yaml with `project: mkt-smoke` and the `host`
+   substituted into the service domain, plus a plan (`[service] …`,
+   `[domain] …`). `kuso get projects -o json` still shows no `mkt-smoke`.
+
+3. **Real deploy.** Drop `--dry-run`. The command creates project
+   `mkt-smoke` (409-tolerant), applies, and reports success. Watch the
+   rollout: `kuso status mkt-smoke` then `kuso get services mkt-smoke -o json`
+   → the service reaches Ready. (A partial apply returns per-step
+   errors, not a hard failure — the CLI prints them; the web dialog
+   surfaces `result.errors` instead of a false success.)
+
+4. **Live URL + cert.** `curl -I https://mkt-smoke.<baseDomain>` → 200
+   (allow ~1 min for the ACME cert + first rollout). Browser shows a
+   real Let's Encrypt cert.
+
+5. **Web parity (optional).** `/marketplace` in the dashboard shows the
+   card grid; deploying Uptime Kuma via the dialog lands on the project
+   canvas.
+
+6. **Cleanup.** Delete the `mkt-smoke` project (dashboard or CLI); confirm
+   it drains as in the teardown step above.
+
+Multi-addon path (deeper check, optional): `plausible` provisions a
+postgres **and** a clickhouse addon and wires both via
+`${{ plausible-db.DATABASE_URL }}` / `${{ plausible-ch.CLICKHOUSE_URL }}`.
+Use it to confirm addon conn-secret keys resolve; it takes longer to
+reach Ready than uptime-kuma.
+
+---
+
 ## Failure modes seen in past runs
 
 These are real bugs the smoke test caught against `kuso.sislelabs.com`.
