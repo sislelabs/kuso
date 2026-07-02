@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"kuso/server/internal/projects"
 	"kuso/server/internal/spec"
 )
 
@@ -58,8 +59,25 @@ func TestCatalog_AllTemplatesValid(t *testing.T) {
 				answers[p.Key] = "stub.example.com"
 			}
 		}
-		if _, _, err := RenderTemplate(m, e.TemplateYAML, "smoke", answers); err != nil {
+		rendered, _, err := RenderTemplate(m, e.TemplateYAML, "smoke", answers)
+		if err != nil {
 			t.Errorf("%s: render with stub answers failed: %v", m.Name, err)
+			continue
+		}
+		// Every addon/service env-var reference must be a whole-string
+		// ref: ParseVarRef rejects composites like "${{ a.HOST }}:${{ a.PORT }}"
+		// at apply time (ErrCompositeVarRef), silently dropping the env
+		// var. Prompt refs are substituted before this point into plain
+		// strings, so they're exempt (and correctly not rejected here).
+		for _, s := range rendered.Services {
+			for k, ev := range s.Env {
+				if ev.Generate != "" {
+					continue // generated secrets are literals, never refs
+				}
+				if _, _, perr := projects.ParseVarRef(ev.Value); perr != nil {
+					t.Errorf("%s: env %s=%q is not a valid whole-string ref: %v", m.Name, k, ev.Value, perr)
+				}
+			}
 		}
 	}
 }

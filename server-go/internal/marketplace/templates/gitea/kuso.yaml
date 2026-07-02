@@ -9,7 +9,7 @@ services:
       tag: "1.22.3"
     env:
       GITEA__database__DB_TYPE: postgres
-      GITEA__database__HOST: "${{ gitea-db.POSTGRES_HOST }}:${{ gitea-db.POSTGRES_PORT }}"
+      GITEA__database__HOST: "${{ gitea-db.POSTGRES_HOST }}"
       GITEA__database__NAME: "${{ gitea-db.POSTGRES_DB }}"
       GITEA__database__USER: "${{ gitea-db.POSTGRES_USER }}"
       GITEA__database__PASSWD: "${{ gitea-db.POSTGRES_PASSWORD }}"
