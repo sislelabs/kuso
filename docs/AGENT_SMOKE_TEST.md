@@ -340,6 +340,16 @@ reach Ready than uptime-kuma.
 These are real bugs the smoke test caught against `kuso.sislelabs.com`.
 Recording them here so future agents recognise the shape:
 
+- **Marketplace `uptime-kuma` crash-loops `setpriv: setgroups failed:
+  Operation not permitted` (exit 127)** — the image starts as root and
+  self-drops to its app user at runtime, which needs SETUID/SETGID caps.
+  kuso drops ALL container capabilities + `allowPrivilegeEscalation:
+  false` unconditionally, and there is no per-service securityContext
+  knob in the KusoService CRD. Caught on the first live marketplace
+  smoke (v0.18.105, 2026-07-02). Same class as the named-user runAsNonRoot
+  fix (v0.13.1). Marketplace templates must use fixed non-root images or
+  rootless variants; a real fix is an opt-in caps/securityContext field.
+
 - **Build pod 503s waiting for buildkitd** → default-deny NetworkPolicy
   doesn't allow build-pod egress to `kuso-buildkitd:1234`. Fixed in
   v0.13.4.
