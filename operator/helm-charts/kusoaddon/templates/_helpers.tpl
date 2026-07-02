@@ -89,24 +89,42 @@ doesn't block scheduling.
 */}}
 {{- define "kusoaddon.placement" -}}
 {{- with .Values.placement }}
-{{- if .labels }}
+{{- /*
+  Value labels → nodeSelector (exact match). Empty-value labels are
+  capability flags (e.g. `gpu`) → nodeAffinity Exists (a nodeSelector
+  value "" would exact-match the empty string, not check presence).
+  Mirrors kusoenvironment/templates/deployment.yaml. Empty-label Exists
+  terms + the hostname pin (.nodes) share one matchExpressions list.
+*/}}
+{{- $valueLabels := dict }}
+{{- $flagLabels := list }}
+{{- range $k, $v := .labels }}
+{{- if $v }}{{ $_ := set $valueLabels $k $v }}{{ else }}{{ $flagLabels = append $flagLabels $k }}{{ end }}
+{{- end }}
+{{- if $valueLabels }}
 nodeSelector:
-  {{- range $k, $v := .labels }}
+  {{- range $k, $v := $valueLabels }}
   {{ printf "kuso.sislelabs.com/%s" $k }}: {{ $v | quote }}
   {{- end }}
 {{- end }}
-{{- if .nodes }}
+{{- if or .nodes $flagLabels }}
 affinity:
   nodeAffinity:
     requiredDuringSchedulingIgnoredDuringExecution:
       nodeSelectorTerms:
         - matchExpressions:
+            {{- range $flagLabels }}
+            - key: {{ printf "kuso.sislelabs.com/%s" . | quote }}
+              operator: Exists
+            {{- end }}
+            {{- if .nodes }}
             - key: kubernetes.io/hostname
               operator: In
               values:
                 {{- range .nodes }}
                 - {{ . | quote }}
                 {{- end }}
+            {{- end }}
 {{- end }}
 {{- if .labels.region }}
 tolerations:

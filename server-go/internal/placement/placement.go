@@ -26,10 +26,14 @@ type NodeIdentity struct {
 //
 //   - nil placement: matches every node (the "schedule anywhere"
 //     default).
-//   - Labels: every requested label key must be present on the node
-//     AND match the requested value, after the kuso.sislelabs.com/
-//     prefix is applied (the user types `role: web`, the node label
-//     is `kuso.sislelabs.com/role=web`).
+//   - Labels: every requested label key must be present on the node,
+//     after the kuso.sislelabs.com/ prefix is applied (the user types
+//     `role: web`, the node label is `kuso.sislelabs.com/role=web`).
+//     A non-empty requested value must match the node's value exactly.
+//     An EMPTY requested value is a presence-only check (a capability
+//     flag like `gpu`): the key must exist on the node but its value
+//     is irrelevant — this pairs with the nodeAffinity Exists operator
+//     the helm charts render for empty-value labels.
 //   - Nodes: if non-empty, the node's hostname must appear in the
 //     list. Labels and Nodes AND together — a node must satisfy
 //     both to match.
@@ -39,7 +43,12 @@ func Matches(p *kube.KusoPlacement, nodeName string, nodeLabels map[string]strin
 	}
 	for k, v := range p.Labels {
 		got, ok := nodeLabels["kuso.sislelabs.com/"+k]
-		if !ok || got != v {
+		if !ok {
+			return false
+		}
+		// Empty requested value = presence-only (capability flag): key
+		// must exist, value is irrelevant. Non-empty = exact match.
+		if v != "" && got != v {
 			return false
 		}
 	}

@@ -31,10 +31,19 @@ export function PlacementSection({ state, setState }: SectionProps) {
   const allHostnames = (nodes.data ?? []).map((n) => n.name);
 
   // Live preview: which nodes match the current label+nodes selection?
+  // A row with a value is exact-match; a row with a key but no value is a
+  // presence-only capability flag (e.g. `gpu`) — the node just has to
+  // carry the key, any value. Mirrors placement.Matches on the server.
   const matching = (nodes.data ?? []).filter((n) => {
     for (const r of state.placement) {
-      if (!r.key.trim()) continue;
-      if ((n.kusoLabels ?? {})[r.key.trim()] !== r.value) return false;
+      const key = r.key.trim();
+      if (!key) continue;
+      const labels = n.kusoLabels ?? {};
+      if (r.value.trim() === "") {
+        if (!(key in labels)) return false;
+      } else if (labels[key] !== r.value) {
+        return false;
+      }
     }
     if (state.placementNodes.length > 0 && !state.placementNodes.includes(n.name))
       return false;
@@ -61,16 +70,14 @@ export function PlacementSection({ state, setState }: SectionProps) {
 
   const totalNodes = (nodes.data ?? []).length;
 
-  // Treat unfilled rule rows as "no rule yet" rather than letting them
-  // skew the live match count. Without this, opening "+ add label rule"
-  // and leaving the row blank reads "1/1 match" because the empty key
-  // was being skipped — so the user couldn't tell if the rule had taken
-  // effect or not. Trivially-true rows now show as "incomplete".
-  const incompleteRules = state.placement.filter(
-    (r) => !r.key.trim() || !r.value.trim(),
-  ).length;
+  // Treat rows with no KEY as "no rule yet" rather than letting them skew
+  // the live match count. A blank value is NOT incomplete — a key-only row
+  // is a valid presence-only capability flag (e.g. `gpu`); it matches any
+  // node carrying that key. Only a missing key means the row hasn't taken
+  // effect yet.
+  const incompleteRules = state.placement.filter((r) => !r.key.trim()).length;
   const hasEffectiveRules =
-    state.placement.some((r) => r.key.trim() && r.value.trim()) ||
+    state.placement.some((r) => r.key.trim()) ||
     state.placementNodes.length > 0;
 
   return (
@@ -152,7 +159,7 @@ export function PlacementSection({ state, setState }: SectionProps) {
                 <Input
                   value={r.value}
                   onChange={(e) => updLabel(i, { value: e.target.value })}
-                  placeholder={r.key.trim() ? "value" : "eu"}
+                  placeholder={r.key.trim() ? "value (blank = any)" : "eu"}
                   className="h-7 font-mono text-[11px]"
                   disabled={haveAnyLabels && !r.key.trim()}
                 />

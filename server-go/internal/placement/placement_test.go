@@ -80,6 +80,51 @@ func TestMatches(t *testing.T) {
 			want:      false,
 		},
 		{
+			name:      "presence flag: empty value matches key present with any value",
+			placement: &kube.KusoPlacement{Labels: map[string]string{"gpu": ""}},
+			nodeName:  "node-a",
+			labels:    map[string]string{"kuso.sislelabs.com/gpu": "true"},
+			want:      true,
+		},
+		{
+			name:      "presence flag: empty value matches key present with empty value",
+			placement: &kube.KusoPlacement{Labels: map[string]string{"gpu": ""}},
+			nodeName:  "node-a",
+			labels:    map[string]string{"kuso.sislelabs.com/gpu": ""},
+			want:      true,
+		},
+		{
+			name:      "presence flag: absent key still fails",
+			placement: &kube.KusoPlacement{Labels: map[string]string{"gpu": ""}},
+			nodeName:  "node-a",
+			labels:    map[string]string{"kuso.sislelabs.com/role": "web"},
+			want:      false,
+		},
+		{
+			name: "presence flag AND value label: both must hold",
+			placement: &kube.KusoPlacement{Labels: map[string]string{
+				"gpu": "", "role": "web",
+			}},
+			nodeName: "node-a",
+			labels: map[string]string{
+				"kuso.sislelabs.com/gpu":  "a100",
+				"kuso.sislelabs.com/role": "web",
+			},
+			want: true,
+		},
+		{
+			name: "presence flag AND value label: value mismatch fails",
+			placement: &kube.KusoPlacement{Labels: map[string]string{
+				"gpu": "", "role": "web",
+			}},
+			nodeName: "node-a",
+			labels: map[string]string{
+				"kuso.sislelabs.com/gpu":  "a100",
+				"kuso.sislelabs.com/role": "db",
+			},
+			want: false,
+		},
+		{
 			name:      "node whitelist hit",
 			placement: &kube.KusoPlacement{Nodes: []string{"node-a", "node-b"}},
 			nodeName:  "node-b",

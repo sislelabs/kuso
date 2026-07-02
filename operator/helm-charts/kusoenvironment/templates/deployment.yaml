@@ -104,24 +104,43 @@ spec:
         block scheduling.
       */}}
       {{- with .Values.placement }}
-      {{- if .labels }}
+      {{- /*
+        Value labels → nodeSelector (exact match). Empty-value labels are
+        capability flags (e.g. `gpu`): a nodeSelector with value "" would
+        exact-match the empty string, NOT check presence, so those render
+        as a nodeAffinity Exists matchExpression instead. Both empty-label
+        Exists terms and the hostname pin (.nodes) share one nodeAffinity
+        matchExpressions list so they AND together.
+      */}}
+      {{- $valueLabels := dict }}
+      {{- $flagLabels := list }}
+      {{- range $k, $v := .labels }}
+      {{- if $v }}{{ $_ := set $valueLabels $k $v }}{{ else }}{{ $flagLabels = append $flagLabels $k }}{{ end }}
+      {{- end }}
+      {{- if $valueLabels }}
       nodeSelector:
-        {{- range $k, $v := .labels }}
+        {{- range $k, $v := $valueLabels }}
         {{ printf "kuso.sislelabs.com/%s" $k }}: {{ $v | quote }}
         {{- end }}
       {{- end }}
-      {{- if .nodes }}
+      {{- if or .nodes $flagLabels }}
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
             nodeSelectorTerms:
               - matchExpressions:
+                  {{- range $flagLabels }}
+                  - key: {{ printf "kuso.sislelabs.com/%s" . | quote }}
+                    operator: Exists
+                  {{- end }}
+                  {{- if .nodes }}
                   - key: kubernetes.io/hostname
                     operator: In
                     values:
                       {{- range .nodes }}
                       - {{ . | quote }}
                       {{- end }}
+                  {{- end }}
       {{- end }}
       {{- if .labels.region }}
       tolerations:
