@@ -39,6 +39,7 @@ import {
   KeyRound,
   Bell,
   Settings,
+  Store,
   Users,
   Trash2,
 } from "lucide-react";
@@ -127,9 +128,17 @@ export function TopNav() {
 
       <div className="flex-1" />
 
-      {/* Mobile: icon-only Settings to save horizontal pixels. The
-          full-text version returns at sm. ServersPopover renders an
-          icon either way; ThemeToggle is icon-only. */}
+      {/* Mobile: icon-only Marketplace/Settings to save horizontal
+          pixels. The full-text version returns at sm. ServersPopover
+          renders an icon either way; ThemeToggle is icon-only. */}
+      <Link
+        href="/marketplace"
+        aria-label="Marketplace"
+        className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)]"
+      >
+        <Store className="h-3.5 w-3.5" />
+        <span className="hidden sm:inline">Marketplace</span>
+      </Link>
       <Link
         href="/settings"
         aria-label="Settings"
