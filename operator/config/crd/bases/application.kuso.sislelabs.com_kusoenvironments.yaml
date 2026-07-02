@@ -246,6 +246,22 @@ spec:
                 resources:
                   type: object
                   x-kubernetes-preserve-unknown-fields: true
+                securityContext:
+                  type: object
+                  description: >-
+                    Opt-in extra Linux capabilities and privilege escalation
+                    for images that self-drop root at runtime. Default drops
+                    ALL caps with no escalation.
+                  properties:
+                    capabilities:
+                      type: object
+                      properties:
+                        add:
+                          type: array
+                          items:
+                            type: string
+                    allowPrivilegeEscalation:
+                      type: boolean
                 runtime:
                   type: string
                   description: Mirrors KusoService.spec.runtime so the env helm chart can specialise (e.g. workers skip Service/Ingress/probes).
