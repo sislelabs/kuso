@@ -19,6 +19,32 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.105] — 2026-07-02
+
+### ✨ Features
+- Feat(web): marketplace catalog page + deploy dialog + nav link ([e371095](https://github.com/sislelabs/kuso/commit/e37109555d6a6f7c47426520291f921c87325c19))
+- Feat(web): marketplace feature client + hooks ([881a630](https://github.com/sislelabs/kuso/commit/881a63065d8e57178414843df6d8cc79653f13ca))
+- Feat(cli): kuso marketplace list/info/deploy ([a0f9c3f](https://github.com/sislelabs/kuso/commit/a0f9c3f0811e642e3679da72ec480b4bb1b91aa3))
+- Feat(marketplace): v1 catalog — umami, n8n, vaultwarden, gitea, metabase, plausible, listmonk ([663d121](https://github.com/sislelabs/kuso/commit/663d1218ba44e2f3eab6b8a8d8094529951608a0))
+- Feat(marketplace): HTTP handler (list/get/icon/render) + mount ([ceed620](https://github.com/sislelabs/kuso/commit/ceed6202c6f0a0523693a79f8d2072ac0368b67a))
+- Feat(marketplace): embedded catalog + first template (uptime-kuma) ([dab6bb5](https://github.com/sislelabs/kuso/commit/dab6bb552b8bee07456d8c2aeb0d6a3508a44cb2))
+- Feat(marketplace): render engine — post-parse prompt substitution ([8671778](https://github.com/sislelabs/kuso/commit/8671778e1b0411b968bb6426d3b56e39f3a1a2fd))
+- Feat(marketplace): manifest types + strict validation ([60a51ae](https://github.com/sislelabs/kuso/commit/60a51ae15857fa4526ad28f065a1b6393673e46c))
+
+### 🐛 Bug Fixes
+- Fix(marketplace): gitea whole-string DB host ref + guardrail rejects composite refs ([587835a](https://github.com/sislelabs/kuso/commit/587835afd41074aff819f429d8d26d3fa1d5c63e))
+- Fix(web): surface apply errors + invalidate stale preview in deploy dialog ([073c831](https://github.com/sislelabs/kuso/commit/073c8314ce657d666ffa42ae31f10c6acdf655fa))
+- Fix(marketplace): add json tags to Manifest/Prompt so wire keys are lowercase ([ff52c4a](https://github.com/sislelabs/kuso/commit/ff52c4a6bcc8546cb66b8be56e863b5498e1bb3b))
+- Fix(marketplace): guard nil Entry in icon handler + cover Get/Icon ([0c60965](https://github.com/sislelabs/kuso/commit/0c609657a5336330a31c6a2e49df05461c1f51d1))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([50b7cd3](https://github.com/sislelabs/kuso/commit/50b7cd35519e7484c4d6c8f16a20afed4922a6c4))
+- Docs(plans): correct import paths in marketplace plan (kuso/server, not github.com) ([70788f8](https://github.com/sislelabs/kuso/commit/70788f8afe5e1a5ab1c337ca162753de98f6d59a))
+- Docs(smoke): marketplace one-click deploy smoke steps ([35da144](https://github.com/sislelabs/kuso/commit/35da14453112332f925fd2e50da6bedfc006158d))
+- Docs(plans): one-click app marketplace implementation plan ([642aec9](https://github.com/sislelabs/kuso/commit/642aec91e024036de6ca92e9fa837fb70080893e))
+- Docs(specs): marketplace — why not addon kinds; unified catalog surface ([3222f5b](https://github.com/sislelabs/kuso/commit/3222f5bb278081d8812830855f95ee7dc621b6ef))
+- Docs(specs): one-click app marketplace design ([3c063e0](https://github.com/sislelabs/kuso/commit/3c063e0558eb8c5b37d0d13a8707fc07d1ccc9d8))
+
 ## [0.18.104] — 2026-07-02
 
 ### 🐛 Bug Fixes
@@ -341,11 +367,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(spec): autonomous incident-response agent design ([2d68882](https://github.com/sislelabs/kuso/commit/2d6888278e518a44b027a8757c0b3df4545ee6a2))
-
-## [0.18.54] — 2026-06-10
-
-### 🐛 Bug Fixes
-- Fix(audit): use Postgres $N placeholders, not SQLite ? ([6658259](https://github.com/sislelabs/kuso/commit/6658259c3d44bd382083272ae3fc891d5d447b5d))
 
 
 ---
