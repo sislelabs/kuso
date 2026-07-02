@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.99] — 2026-07-02
+
+### 🐛 Bug Fixes
+- Fix(security): harden fork previews, token revocation, build promotion, and RMW writes ([7643d36](https://github.com/sislelabs/kuso/commit/7643d36c3dc8544666ae509e58ff20e925156bc3))
+
 ## [0.18.98] — 2026-07-01
 
 ### ✨ Features
@@ -347,35 +352,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addons): emit DIRECT_URL conn key so Prisma migrations skip the pooler ([94ddc12](https://github.com/sislelabs/kuso/commit/94ddc124651f073b182c829e949115c1b6c1d82f))
-
-## [0.18.48] — 2026-06-08
-
-### ✨ Features
-- Feat(deploy): allow command override for any runtime, not just worker ([425a228](https://github.com/sislelabs/kuso/commit/425a2282182a02aa0c77e9032bb5172ca7b8e6fa))
-- Feat(builds): custom Dockerfile filename per service ([034ecc7](https://github.com/sislelabs/kuso/commit/034ecc77a1c9d1340502d6082a583e6cbb61c128))
-- Feat(addons): redpanda (Kafka) addon kind ([480fe97](https://github.com/sislelabs/kuso/commit/480fe970c1e787c49fdf2bd441734dbef88a77e7))
-- Feat(import): docker-compose → kuso import (CLI + web) ([74aa708](https://github.com/sislelabs/kuso/commit/74aa708ed1be64d9141aaaa00684011d25ad0f06))
-
-### 🐛 Bug Fixes
-- Fix(rbac): grant kuso-server get/list services (node-bootstrap registry lookup) ([2bfd651](https://github.com/sislelabs/kuso/commit/2bfd651c006130eb71c3a7018bd35c29fbedb7fb))
-- Fix(nodejoin): auto-wire in-cluster registry on joining nodes ([a5284cf](https://github.com/sislelabs/kuso/commit/a5284cfd95e26b65b063a164d6008cf6e616e647))
-- Fix(nodejoin): drop 'set +o history' — dash aborts on it ([c1cdf3c](https://github.com/sislelabs/kuso/commit/c1cdf3c9b5aeeea028cd3717338f4f594c03a5e4))
-- Fix(addons): clickhouse pass CLICKHOUSE_PASSWORD to container env ([f980867](https://github.com/sislelabs/kuso/commit/f980867e96a250906873d87fa4cf9ccd47c45467))
-- Fix(migrate): normalize Coolify base_directory + dedupe/filter env vars ([ab5f766](https://github.com/sislelabs/kuso/commit/ab5f7667079a50ff4b0f2e1498e3454e9adc743d))
-- Fix(crd): drop propertyNames from kusobuilds.buildEnv (unbreaks apply) ([22800de](https://github.com/sislelabs/kuso/commit/22800de49209694074ab9de332ec0ac20ad9900c))
-- Fix(security): validate spec.dockerfile against shell-injection ([053be32](https://github.com/sislelabs/kuso/commit/053be32799e783b0ddf2769aaac0e90d656a89d6))
-- Fix(addons): clickhouse writable users.d (non-root entrypoint rewrite) ([b6c3718](https://github.com/sislelabs/kuso/commit/b6c37188937fd5eefbd48e9452549efc19de23a1))
-- Fix(addons): redpanda rpc-addr binds 0.0.0.0, advertises service DNS ([4d05fa5](https://github.com/sislelabs/kuso/commit/4d05fa5f1af8ffdfdd245db59c50bbd7f80e5c67))
-- Fix(addons): redpanda writable /etc/redpanda + HOME (non-root) ([703a27f](https://github.com/sislelabs/kuso/commit/703a27f589192b92a63cca2ffef3ab66601d7bf3))
-- Fix(addons): run redpanda via image entrypoint (rpk), not raw binary ([fbb88e5](https://github.com/sislelabs/kuso/commit/fbb88e50876ebe88b4d965149c1df2bd12d85a7f))
-- Fix(addons): redpanda args as separate argv tokens ([c286aec](https://github.com/sislelabs/kuso/commit/c286aec11ff06bfbe530e9b8768e865e937e20fb))
-- Fix(addons): redpanda args must be one flag+value string each ([98cca3f](https://github.com/sislelabs/kuso/commit/98cca3f3e5876374ee9bff87f00f348c6713d78f))
-- Fix(crd): add redpanda to KusoAddon spec.kind enum ([70c4159](https://github.com/sislelabs/kuso/commit/70c4159783573e25d415ba004528b493427ef44f))
-- Fix(import): map only implemented addon kinds + correct conn URL key ([10ce96e](https://github.com/sislelabs/kuso/commit/10ce96edc4a0a29cc316e122e9c7bbc4c15b2f0e))
-
-### 📝 Docs
-- Docs(nodejoin,skill): registry wiring, KUSO_K3S_URL, firewall ports + v0.18 features ([c47510a](https://github.com/sislelabs/kuso/commit/c47510aa2c9c29b9daf41d3775a17991e616dec9))
-- Docs(import): docker-compose → kuso import design spec ([1847586](https://github.com/sislelabs/kuso/commit/1847586055fee3880379ce99b5dc031222165cd7))
 
 
 ---
