@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api-client";
 import { useRenderApp, type MarketplaceApp, type RenderResult } from "@/features/marketplace";
-import { applyConfig } from "@/features/projects";
+import { applyConfig, type ConfigStepError } from "@/features/projects";
 
 export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: () => void }) {
   const router = useRouter();
@@ -15,13 +15,20 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [preview, setPreview] = useState<RenderResult | null>(null);
   const [deploying, setDeploying] = useState(false);
+  const [applyErrors, setApplyErrors] = useState<ConfigStepError[] | null>(null);
   const render = useRenderApp(app.name);
 
   const missing = app.prompts.some((p) => p.required && !answers[p.key]);
 
+  function invalidatePreview() {
+    setPreview(null);
+    setApplyErrors(null);
+  }
+
   async function onPreview() {
     try {
       setPreview(await render.mutateAsync({ project, answers }));
+      setApplyErrors(null);
     } catch (e) {
       toast.error((e as Error).message);
     }
@@ -38,7 +45,17 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
       } catch (e) {
         if (!/409|exists/i.test((e as Error).message)) throw e;
       }
-      await applyConfig(project, preview.yaml, false);
+      const result = await applyConfig(project, preview.yaml, false);
+      if (result.errors && result.errors.length > 0) {
+        setApplyErrors(result.errors);
+        toast.error(
+          `${result.errors.length} step(s) failed: ${result.errors
+            .map((e) => `${e.resource} ${e.op}: ${e.message}`)
+            .join("; ")}`,
+        );
+        setDeploying(false);
+        return;
+      }
       toast.success(`Deployed ${app.title}`);
       router.push(`/projects/${encodeURIComponent(project)}`);
     } catch (e) {
@@ -54,7 +71,13 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
         <p className="mt-1 text-sm text-[var(--text-secondary)]">{app.description}</p>
 
         <label className="mt-4 block text-sm">Project</label>
-        <Input value={project} onChange={(e) => setProject(e.target.value)} />
+        <Input
+          value={project}
+          onChange={(e) => {
+            setProject(e.target.value);
+            invalidatePreview();
+          }}
+        />
 
         {app.prompts.map((p) => (
           <div key={p.key} className="mt-3">
@@ -66,7 +89,10 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
               type={p.kind === "password" ? "password" : "text"}
               placeholder={p.placeholder}
               value={answers[p.key] ?? p.default ?? ""}
-              onChange={(e) => setAnswers({ ...answers, [p.key]: e.target.value })}
+              onChange={(e) => {
+                setAnswers({ ...answers, [p.key]: e.target.value });
+                invalidatePreview();
+              }}
             />
             {p.help && <p className="mt-0.5 text-xs text-[var(--text-tertiary)]">{p.help}</p>}
           </div>
@@ -79,6 +105,24 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
               {preview.notes.map((n, i) => (
                 <li key={i} className="text-[var(--text-secondary)]">
                   <span className="text-[var(--text-tertiary)]">[{n.kind}]</span> {n.detail}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
+        {applyErrors && applyErrors.length > 0 && (
+          <div className="mt-4 rounded border border-red-500/40 bg-red-500/10 p-3 text-sm">
+            <p className="mb-1 font-medium text-amber-400">
+              {applyErrors.length} step(s) failed:
+            </p>
+            <ul className="space-y-0.5">
+              {applyErrors.map((e, i) => (
+                <li key={i} className="text-red-400">
+                  <span className="text-[var(--text-tertiary)]">
+                    [{e.resource} {e.op}]
+                  </span>{" "}
+                  {e.message}
                 </li>
               ))}
             </ul>
