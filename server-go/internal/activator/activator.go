@@ -26,6 +26,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -46,7 +48,12 @@ type Activator struct {
 	// holdTimeout bounds how long a single request waits for the target
 	// to become Ready before we give up and serve a "still starting"
 	// page. Container cold start (image already on the node) is usually
-	// 1-5s; 30s covers a slow start without wedging the client forever.
+	// 1-5s. The default is 60s, not 30s: the dominant cause of a dropped
+	// request (and therefore a dropped webhook — see docs/EDIT_SAFETY.md
+	// sleep caveat) is a cold image pull on a node that doesn't yet have
+	// the image, which can exceed 30s. Holding longer converts those into
+	// slow-but-delivered requests instead of 503s. Override with
+	// KUSO_ACTIVATOR_HOLD_SECONDS for clusters with unusually slow pulls.
 	holdTimeout time.Duration
 	// pollInterval is how often we re-check the Deployment's readiness
 	// while holding a request.
@@ -95,13 +102,33 @@ func New(kc *kube.Client, logger *slog.Logger) *Activator {
 	return &Activator{
 		kc:             kc,
 		logger:         logger,
-		holdTimeout:    30 * time.Second,
+		holdTimeout:    resolveHoldTimeout(),
 		pollInterval:   250 * time.Millisecond,
 		waking:         map[string]*wakeState{},
 		hostCache:      map[string]hostEntry{},
 		hostTTL:        30 * time.Second,
 		proxyTransport: newProxyTransport(),
 	}
+}
+
+// resolveHoldTimeout returns the per-request wake hold budget:
+// KUSO_ACTIVATOR_HOLD_SECONDS (clamped to 5..300) if set and parseable,
+// else 60s. Kept generous so a cold image pull becomes a slow request
+// rather than a 503 that a webhook sender may never retry.
+func resolveHoldTimeout() time.Duration {
+	const def = 60 * time.Second
+	v := strings.TrimSpace(os.Getenv("KUSO_ACTIVATOR_HOLD_SECONDS"))
+	if v == "" {
+		return def
+	}
+	secs, err := strconv.Atoi(v)
+	if err != nil || secs < 5 {
+		return def
+	}
+	if secs > 300 {
+		secs = 300
+	}
+	return time.Duration(secs) * time.Second
 }
 
 // Handler returns the http.Handler that fronts scaled-to-zero traffic.

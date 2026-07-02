@@ -170,7 +170,7 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- include "kusoaddon.resources" . | nindent 12 }}
       {{- if $tlsOn }}
       volumes:
         - name: tls-src

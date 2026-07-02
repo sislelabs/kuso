@@ -70,6 +70,11 @@ spec:
             - "--advertise-rpc-addr {{ $name }}:33145"
             - "--mode dev-container"
             - "--smp 1"
+            # Cap Seastar's memory reservation. Without this, dev-container
+            # mode sizes itself off total node memory (observed reserving
+            # ~14GB idle on a 15GB node), ignoring the cgroup limit below.
+            # Kept under the container memory limit — see kusoaddon.resources.
+            - "--memory {{ include "kusoaddon.redpandaMemMB" . }}M"
             - "--default-log-level=warn"
             - "--set auto_create_topics_enabled=true"
           ports:
@@ -108,7 +113,7 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 12
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- include "kusoaddon.resources" . | nindent 12 }}
       volumes:
         - name: etc
           emptyDir: {}

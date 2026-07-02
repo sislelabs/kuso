@@ -134,3 +134,68 @@ storage size by t-shirt size. Override via .Values.storageSize.
 5Gi
 {{- end -}}
 {{- end -}}
+
+{{/*
+Container resources by t-shirt size. Every engine template renders this
+via `include "kusoaddon.resources"` instead of `toYaml .Values.resources`
+so an addon always lands with requests+limits — without them a datastore
+sizes itself off the whole node (Redpanda/Seastar was observed reserving
+14GB idle on a 15GB node because nothing capped it).
+
+An explicit .Values.resources wins verbatim (BYO escape hatch). Otherwise
+we derive from .Values.size. Requests are deliberately modest (schedulable
+on a small node); limits are the real memory ceiling the engine must
+respect. memRequestMB / memLimitMB below MUST stay in step with these so
+Redpanda's --memory flag matches its cgroup limit.
+*/}}
+{{- define "kusoaddon.resources" -}}
+{{- if .Values.resources -}}
+{{- toYaml .Values.resources -}}
+{{- else if eq .Values.size "medium" -}}
+requests:
+  cpu: 250m
+  memory: 512Mi
+limits:
+  cpu: "2"
+  memory: 2Gi
+{{- else if eq .Values.size "large" -}}
+requests:
+  cpu: 500m
+  memory: 1Gi
+limits:
+  cpu: "4"
+  memory: 4Gi
+{{- else -}}
+requests:
+  cpu: 100m
+  memory: 256Mi
+limits:
+  cpu: "1"
+  memory: 1Gi
+{{- end -}}
+{{- end -}}
+
+{{/*
+Redpanda --memory value in whole MB. Seastar pre-reserves this at startup
+regardless of load, so it must sit UNDER the container memory limit from
+kusoaddon.resources (leave headroom for the entrypoint/rpk sidecar work
+and page cache). We target ~75% of the size's memory limit:
+  small  → 1Gi limit  → 768M
+  medium → 2Gi limit  → 1536M
+  large  → 4Gi limit  → 3072M
+When a user overrides .Values.resources we can't reliably parse their
+limit string in templating, so fall back to the small default; a user
+sophisticated enough to override resources can also override version/args
+via raw helm if they need a bigger broker.
+*/}}
+{{- define "kusoaddon.redpandaMemMB" -}}
+{{- if .Values.resources -}}
+768
+{{- else if eq .Values.size "medium" -}}
+1536
+{{- else if eq .Values.size "large" -}}
+3072
+{{- else -}}
+768
+{{- end -}}
+{{- end -}}

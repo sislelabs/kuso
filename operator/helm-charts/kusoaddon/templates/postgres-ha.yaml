@@ -99,7 +99,7 @@ spec:
   {{- /* Resource shape mirrors the single-node chart so the user's
          spec.size selection is honoured for both modes. */}}
   resources:
-    {{- toYaml (default dict .Values.resources) | nindent 4 }}
+    {{- include "kusoaddon.resources" . | nindent 4 }}
   affinity:
     {{- /* Pod anti-affinity by default so the 3 replicas land on
            different nodes. Override with .Values.singleNode=true

@@ -85,7 +85,7 @@ spec:
             initialDelaySeconds: 10
             periodSeconds: 30
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- include "kusoaddon.resources" . | nindent 12 }}
   volumeClaimTemplates:
     - metadata:
         name: data

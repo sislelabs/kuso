@@ -219,7 +219,7 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- include "kusoaddon.resources" . | nindent 12 }}
       volumes:
         - name: raw-conf
           configMap:
@@ -317,7 +317,7 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- include "kusoaddon.resources" . | nindent 12 }}
       volumes:
         - name: raw-conf
           configMap:

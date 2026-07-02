@@ -129,7 +129,7 @@ spec:
             periodSeconds: 5
             failureThreshold: 30
           resources:
-            {{- toYaml .Values.resources | nindent 12 }}
+            {{- include "kusoaddon.resources" . | nindent 12 }}
       volumes:
         - name: logs
           emptyDir: {}

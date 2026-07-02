@@ -114,3 +114,29 @@ func TestRetriableDialErr(t *testing.T) {
 		t.Error("nil must not be retriable")
 	}
 }
+
+func TestResolveHoldTimeout(t *testing.T) {
+	const def = 60 * time.Second
+	cases := []struct {
+		name string
+		env  string
+		want time.Duration
+	}{
+		{"unset uses default", "", def},
+		{"valid value", "45", 45 * time.Second},
+		{"min boundary", "5", 5 * time.Second},
+		{"clamped to 300", "600", 300 * time.Second},
+		{"below min falls back", "4", def},
+		{"zero falls back", "0", def},
+		{"negative falls back", "-10", def},
+		{"garbage falls back", "abc", def},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			t.Setenv("KUSO_ACTIVATOR_HOLD_SECONDS", c.env)
+			if got := resolveHoldTimeout(); got != c.want {
+				t.Fatalf("resolveHoldTimeout()=%v want %v", got, c.want)
+			}
+		})
+	}
+}

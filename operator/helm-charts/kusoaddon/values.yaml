@@ -53,7 +53,11 @@ singleNode: false
 # storageSize: PVC size override; defaults derived from size.
 storageSize: ""
 
-# resources: per-engine cpu/mem overrides; defaults derived from size.
+# resources: per-engine cpu/mem overrides. When empty, the chart derives
+# requests+limits from `size` (see kusoaddon.resources in _helpers.tpl):
+# small→256Mi/1Gi, medium→512Mi/2Gi, large→1Gi/4Gi (request/limit). Set
+# this to pin explicit requests/limits; the map is used verbatim and wins
+# over the size-derived default.
 resources: {}
 
 # password: optional explicit password. When empty, the server (or a hook)

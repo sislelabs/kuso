@@ -2,7 +2,8 @@
 // search + alerting. Watches every pod in the kuso namespace; opens
 // a follow stream per pod; batches inserts every 1s or 500 lines.
 //
-// Retention: 14 days, pruned on a slow ticker (every 30 min).
+// Retention: 7 days by default (KUSO_LOG_RETENTION_DAYS overrides),
+// pruned on a slow ticker (every 30 min).
 //
 // Why not Loki / Vector / ClickHouse: kuso's deployment shape is one
 // SQLite file on the control plane. Adding a stateful third party
@@ -16,7 +17,9 @@ import (
 	"bufio"
 	"context"
 	"log/slog"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,8 +33,13 @@ import (
 )
 
 const (
-	// Retention window. Older lines get pruned.
-	Retention = 14 * 24 * time.Hour
+	// Retention is the default log-line retention window. Lowered from
+	// 14d to 7d in v0.18.x: on a live cluster the LogLine table + its
+	// pg_trgm GIN index reached ~2.7GB (index > data), and observed data
+	// only ever spanned 7 days of active use. Halving the window halves
+	// the table AND every index on it. Operators who need a longer
+	// window override with KUSO_LOG_RETENTION_DAYS (see resolveRetention).
+	Retention = 7 * 24 * time.Hour
 	// How often we list pods to reconcile follow streams.
 	pollInterval = 30 * time.Second
 	// Flush batch buffer this often or when len ≥ flushBatchSize.
@@ -40,7 +48,52 @@ const (
 	// Max line length we store. Past this we truncate. App logs that
 	// dump a 5MB JSON in one line shouldn't blow up FTS5.
 	maxLineLen = 16 * 1024
+
+	// rateWindow / rateMaxLinesPerService bound how many lines a single
+	// (project, service) can write to LogLine per window. A service that
+	// exceeds the cap has its excess lines dropped for the rest of the
+	// window with a single warn log — one runaway app can't crowd out
+	// everyone else's logs or bloat the control-plane DB. 6000 lines/min
+	// (~100/s sustained) is generous for any real service; genuine
+	// high-volume needs a real log backend, which is the documented
+	// escape hatch. Override the cap with KUSO_LOG_MAX_LINES_PER_MIN.
+	rateWindow             = 1 * time.Minute
+	rateMaxLinesPerService = 6000
 )
+
+// resolveRateCap returns the per-service per-window line cap:
+// KUSO_LOG_MAX_LINES_PER_MIN (must be > 0) if set, else the default.
+// A value of 0 or negative, or an unparseable value, falls back to the
+// default rather than disabling the cap (fail safe, not open).
+func resolveRateCap() int {
+	v := strings.TrimSpace(os.Getenv("KUSO_LOG_MAX_LINES_PER_MIN"))
+	if v == "" {
+		return rateMaxLinesPerService
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n <= 0 {
+		return rateMaxLinesPerService
+	}
+	return n
+}
+
+// resolveRetention returns the active retention window: KUSO_LOG_RETENTION_DAYS
+// (clamped to 1..90) if set and parseable, else the Retention default.
+// Kept out of a package var so tests and boot logging see the same value.
+func resolveRetention() time.Duration {
+	v := strings.TrimSpace(os.Getenv("KUSO_LOG_RETENTION_DAYS"))
+	if v == "" {
+		return Retention
+	}
+	days, err := strconv.Atoi(v)
+	if err != nil || days < 1 {
+		return Retention
+	}
+	if days > 90 {
+		days = 90
+	}
+	return time.Duration(days) * 24 * time.Hour
+}
 
 // Shipper is the goroutine. Construct via New, call Run with a
 // cancellable context.
@@ -61,6 +114,15 @@ type Shipper struct {
 	streams map[string]context.CancelFunc // podUID → cancel
 	buf     []db.LogLine
 	bufMu   sync.Mutex
+
+	// rate caps per-service log ingestion so one chatty service can't
+	// dominate the shared LogLine table (observed: a single worker
+	// produced 42% of all lines cluster-wide). Keyed by "project/service",
+	// counts lines accepted in the current window; reset every
+	// rateWindow by resetRateCounters. Guarded by rateMu.
+	rateMu      sync.Mutex
+	rateCounts  map[string]int
+	rateDropped map[string]int // lines dropped this window (for the warn log)
 
 	// envHints accumulates "missing env var" hits parsed out of pod
 	// stdout. Keyed by "project/service/name" for natural dedupe
@@ -110,7 +172,7 @@ func (s *Shipper) Run(ctx context.Context) {
 		return
 	}
 	s.runCtx = ctx
-	s.Logger.Info("logship starting", "namespace", s.Namespace, "retention", Retention)
+	s.Logger.Info("logship starting", "namespace", s.Namespace, "retention", resolveRetention())
 
 	// Periodic flusher — drain the buffer every flushInterval so
 	// lines hit SQLite without us waiting for a 500-line batch from
@@ -119,6 +181,9 @@ func (s *Shipper) Run(ctx context.Context) {
 	// Periodic pruner — drop rows past retention. 30 min ticker
 	// keeps the table bounded without hammering DELETE.
 	go s.runPruner(ctx)
+	// Per-service rate-cap counter reset — every rateWindow, zero the
+	// counters and warn about any service that got throttled.
+	go s.resetRateCounters(ctx)
 
 	// Pod watcher — list pods on a slow ticker, start follow
 	// streams for new ones, drop streams for vanished pods.
@@ -370,7 +435,62 @@ func (s *Shipper) flushEnvHints(ctx context.Context) {
 	}
 }
 
+// allowLine enforces the per-service rate cap. Returns false when the
+// (project, service) has already hit the cap this window, in which case
+// the caller drops the line. Lines with no service label are never
+// capped (system/unlabelled pods are low-volume and we don't want to
+// silently lose their crash output).
+func (s *Shipper) allowLine(project, service string) bool {
+	if service == "" {
+		return true
+	}
+	key := project + "/" + service
+	cap := resolveRateCap()
+	s.rateMu.Lock()
+	defer s.rateMu.Unlock()
+	if s.rateCounts == nil {
+		s.rateCounts = map[string]int{}
+	}
+	if s.rateCounts[key] >= cap {
+		if s.rateDropped == nil {
+			s.rateDropped = map[string]int{}
+		}
+		s.rateDropped[key]++
+		return false
+	}
+	s.rateCounts[key]++
+	return true
+}
+
+// resetRateCounters zeroes the per-service counters every rateWindow and
+// emits one warn per service that hit the cap, so operators can see which
+// app is being throttled without per-line spam.
+func (s *Shipper) resetRateCounters(ctx context.Context) {
+	t := time.NewTicker(rateWindow)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.rateMu.Lock()
+			for key, n := range s.rateDropped {
+				if n > 0 {
+					s.Logger.Warn("logship: per-service log rate cap hit, dropping excess",
+						"service", key, "dropped", n, "cap", resolveRateCap(), "window", rateWindow)
+				}
+			}
+			s.rateCounts = map[string]int{}
+			s.rateDropped = map[string]int{}
+			s.rateMu.Unlock()
+		}
+	}
+}
+
 func (s *Shipper) append(l db.LogLine) {
+	if !s.allowLine(l.Project, l.Service) {
+		return
+	}
 	s.bufMu.Lock()
 	s.buf = append(s.buf, l)
 	shouldFlush := len(s.buf) >= flushBatchSize
@@ -445,7 +565,7 @@ func (s *Shipper) runPruner(ctx context.Context) {
 func (s *Shipper) prune(ctx context.Context) {
 	pctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	n, err := s.DB.PruneLogsOlderThan(pctx, time.Now().Add(-Retention))
+	n, err := s.DB.PruneLogsOlderThan(pctx, time.Now().Add(-resolveRetention()))
 	if err != nil {
 		s.Logger.Warn("logship prune", "err", err)
 		return
