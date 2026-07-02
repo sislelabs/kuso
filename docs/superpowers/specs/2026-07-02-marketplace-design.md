@@ -62,6 +62,31 @@ Decisions taken without live input (user AFK); each is revisitable:
    named after the app", but deploying into an existing project is allowed
    (apply is additive when `prune` is false, so it composes).
 
+## Considered alternative: marketplace apps as addon kinds
+
+Marketplace apps and addons rhyme ("pick from a catalog, get a running thing"
+— mailpit already blurs the line), but the substrate is deliberately
+different:
+
+- **Contract.** An addon is "StatefulSet + `<name>-conn` Secret", built to be
+  consumed by services; backups/HA/pooler/public-TCP all hang off that.
+  A marketplace app is a *service* — it needs domains, TLS, sleep, env
+  editing, and usually consumes addons itself (Umami → postgres). Addons
+  can't depend on addons, so app-as-addon-kind would embed its datastore in
+  the helm template and lose backups, HA, pooler, and the data editor for it.
+- **Closed vs open set.** An addon kind is code (helm template + conn wiring
+  + backup integration + operator release) — the right cost for
+  infrastructure. A marketplace app is data (a kuso.yaml through the normal
+  apply path) — adding the 9th app must stay cheap.
+- **Post-deploy UX.** As a service, the app gets the whole service overlay
+  (logs, env, domains, stop/sleep) for free; as an addon it would need all
+  of that re-grown in the addon UI.
+
+Convergence point kept from this idea: the marketplace page presents **one
+unified catalog** — app templates alongside the existing addon kinds, where
+addon cards simply deep-link into the existing Add Addon flow. One browsing
+surface, two existing backends.
+
 ## Architecture
 
 ```
@@ -151,7 +176,9 @@ The UI then feeds the YAML through the existing dry-run plan
 
 1. **`/marketplace`** top-level page (nav next to Settings): card grid with
    icon, title, one-liner, category filter + search. Static data from
-   `GET /api/marketplace`.
+   `GET /api/marketplace`. The grid also lists the addon kinds as a
+   "Datastores" category; those cards deep-link into the existing Add Addon
+   dialog rather than the template deploy path.
 2. **Deploy dialog** on card click: project picker ("new project «umami»" |
    existing), prompt form (only this app's prompts), Deploy button.
 3. **Preview:** render → dry-run plan → `DiffConfirmDialog` (exists) shows
