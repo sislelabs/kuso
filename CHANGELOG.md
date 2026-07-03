@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.110] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(marketplace): plausible needs a DB migration release hook ([5a822d3](https://github.com/sislelabs/kuso/commit/5a822d36389c50738b75ca66eaeb0a5aa5c4a5b5))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([82beec5](https://github.com/sislelabs/kuso/commit/82beec5be7928895b26d40609c66c83eb721f733))
+
 ## [0.18.109] — 2026-07-03
 
 ### 🐛 Bug Fixes
@@ -380,14 +388,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(incidents): keep the Claude Code token fresh (it expires ~daily) ([4bc0619](https://github.com/sislelabs/kuso/commit/4bc0619f7548635ca1ee1425b0232546c0dc6127))
-
-## [0.18.59] — 2026-06-10
-
-### ✨ Features
-- Feat(incidents): settings page to enable + configure the incident agent ([6153444](https://github.com/sislelabs/kuso/commit/61534441b9895656366654fbd25f0cf2c17f3412))
-
-### 📝 Docs
-- Docs(spec): incident-agent settings page design ([f76893b](https://github.com/sislelabs/kuso/commit/f76893b15e78a43cf3868110cab445487760bb6f))
 
 
 ---
