@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.114] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(marketplace): stop caching stale icons (no-cache + cache-bust query) ([f7c5e78](https://github.com/sislelabs/kuso/commit/f7c5e782618df62de2d384d414e6dc76f793b5ad))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([bb04cec](https://github.com/sislelabs/kuso/commit/bb04cecb61efdac1bd6af91217c97a4b6f6354cb))
+
 ## [0.18.113] — 2026-07-03
 
 ### 🐛 Bug Fixes
@@ -397,15 +405,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(notify): show the live-app link for auto-host services on build success ([71abefd](https://github.com/sislelabs/kuso/commit/71abefd28362f0ffc12379dc452d47b483300681))
-
-## [0.18.63] — 2026-06-11
-
-### ✨ Features
-- Feat(incidents): per-project opt-in for the incident agent ([e550501](https://github.com/sislelabs/kuso/commit/e55050122d62d405ad172ca7400fe677701404f7))
-
-### 🐛 Bug Fixes
-- Fix(github): tolerate App-install redirect on the OAuth callback ([539c107](https://github.com/sislelabs/kuso/commit/539c1078d5c9b1c066b2f27fafd04ef2b0cabb72))
-- Fix(addons): postgres conn uses sslmode=no-verify so node apps connect ([e34a265](https://github.com/sislelabs/kuso/commit/e34a2658c096eba459f8f1451d3d47da5302f06e))
 
 
 ---
