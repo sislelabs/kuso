@@ -703,14 +703,12 @@ mkdir -p "$DIST_DIR"
 
 log "writing dist/release.json + dist/crds.yaml for GitHub release"
 
-# Bundle every CRD (plus the kuso-server-managed-ns ClusterRole) into a single
-# applyable file. The updater Job's entrypoint runs `kubectl apply -f
-# /tmp/crds.yaml` with cluster-admin and trusts that all of these are safe to
-# re-apply (additive + idempotent, today). The ClusterRole rides here so its
-# namespace-scoped verb set self-heals on upgrade — the server can't reconcile
-# its own RBAC (escalation prevention). If you ship a destructive schema change
-# (rename, removal, type narrow), this is the wrong tool — apply the manual
-# migration over ssh before cutting the release.
+# Bundle every CRD into a single applyable file. The updater Job's
+# entrypoint runs `kubectl apply -f /tmp/crds.yaml` and trusts that
+# all of these are safe to re-apply (additive only, today). If you
+# ship a destructive schema change (rename, removal, type narrow),
+# this is the wrong tool — apply the manual migration over ssh
+# before cutting the release.
 {
   for f in operator/config/crd/bases/*.yaml; do
     if [[ -f "$f" ]]; then
@@ -718,17 +716,6 @@ log "writing dist/release.json + dist/crds.yaml for GitHub release"
       cat "$f"
     fi
   done
-  # Also bundle the kuso-server-managed-ns ClusterRole. The updater Job applies
-  # crds.yaml with cluster-admin, so this is the ONE place its namespace-scoped
-  # verb set (secrets / pods-exec / pods-portforward / services) self-heals on
-  # upgrade. The server can't do it — its own RBAC can't write ClusterRoles, and
-  # kube escalation-prevention forbids granting a verb it doesn't hold. Extracted
-  # from deploy/server-go.yaml (single source of truth) so a new verb added there
-  # reaches every cluster on the next `kuso upgrade`. It's additive + idempotent,
-  # safe to re-apply. Split on `---` and pick the ClusterRole doc by name.
-  printf -- '---\n'
-  awk 'BEGIN{RS="\n---\n"} /kind: ClusterRole/ && /name: kuso-server-managed-ns/ {print; exit}' \
-    deploy/server-go.yaml
 } > "$DIST_DIR/crds.yaml"
 
 # release.json: stable wire shape consumed by internal/updater.Manifest.
