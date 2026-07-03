@@ -24,25 +24,25 @@
 //
 // File shape:
 //
-//   apiVersion: kuso/v1
-//   project: my-product
-//   baseDomain: my-product.example.com
-//   prune: false
-//   services:
-//     - name: api
-//       repo: https://github.com/me/api
-//       runtime: dockerfile
-//       port: 8080
-//       scale: { min: 1, max: 5, targetCPU: 70 }
-//       domains: [{ host: api.my-product.example.com, tls: true }]
-//       env:
-//         LOG_LEVEL: info
-//       volumes:
-//         - { name: data, mountPath: /var/lib/api, sizeGi: 5 }
-//   addons:
-//     - { name: db, kind: postgres }
-//   crons:
-//     - { name: nightly, kind: service, schedule: "0 3 * * *", service: api }
+//	apiVersion: kuso/v1
+//	project: my-product
+//	baseDomain: my-product.example.com
+//	prune: false
+//	services:
+//	  - name: api
+//	    repo: https://github.com/me/api
+//	    runtime: dockerfile
+//	    port: 8080
+//	    scale: { min: 1, max: 5, targetCPU: 70 }
+//	    domains: [{ host: api.my-product.example.com, tls: true }]
+//	    env:
+//	      LOG_LEVEL: info
+//	    volumes:
+//	      - { name: data, mountPath: /var/lib/api, sizeGi: 5 }
+//	addons:
+//	  - { name: db, kind: postgres }
+//	crons:
+//	  - { name: nightly, kind: service, schedule: "0 3 * * *", service: api }
 package spec
 
 import (
@@ -74,25 +74,25 @@ type File struct {
 
 // ServiceSpec mirrors KusoServiceSpec, flattened for human authoring.
 type ServiceSpec struct {
-	Name          string            `yaml:"name"`
-	Repo          string            `yaml:"repo,omitempty"`
-	Branch        string            `yaml:"branch,omitempty"`
-	Path          string            `yaml:"path,omitempty"`
-	Runtime       string            `yaml:"runtime,omitempty"`
-	Port          int32             `yaml:"port,omitempty"`
-	Internal      bool              `yaml:"internal,omitempty"`
-	PrivateEgress bool              `yaml:"privateEgress,omitempty"`
+	Name          string              `yaml:"name"`
+	Repo          string              `yaml:"repo,omitempty"`
+	Branch        string              `yaml:"branch,omitempty"`
+	Path          string              `yaml:"path,omitempty"`
+	Runtime       string              `yaml:"runtime,omitempty"`
+	Port          int32               `yaml:"port,omitempty"`
+	Internal      bool                `yaml:"internal,omitempty"`
+	PrivateEgress bool                `yaml:"privateEgress,omitempty"`
 	Command       []string            `yaml:"command,omitempty"`
 	Domains       []DomainSpec        `yaml:"domains,omitempty"`
 	Env           map[string]EnvValue `yaml:"env,omitempty"`
 	Scale         *ScaleSpec          `yaml:"scale,omitempty"`
-	Sleep         *SleepSpec        `yaml:"sleep,omitempty"`
-	Placement     *PlacementSpec    `yaml:"placement,omitempty"`
-	Volumes       []VolumeSpec      `yaml:"volumes,omitempty"`
-	Static        *StaticSpec       `yaml:"static,omitempty"`
-	Buildpacks    *BuildpacksSpec   `yaml:"buildpacks,omitempty"`
-	Image         *ImageSpec        `yaml:"image,omitempty"`
-	Release       *ReleaseSpec      `yaml:"release,omitempty"`
+	Sleep         *SleepSpec          `yaml:"sleep,omitempty"`
+	Placement     *PlacementSpec      `yaml:"placement,omitempty"`
+	Volumes       []VolumeSpec        `yaml:"volumes,omitempty"`
+	Static        *StaticSpec         `yaml:"static,omitempty"`
+	Buildpacks    *BuildpacksSpec     `yaml:"buildpacks,omitempty"`
+	Image         *ImageSpec          `yaml:"image,omitempty"`
+	Release       *ReleaseSpec        `yaml:"release,omitempty"`
 	// BuildArgs are passed to the image build as --build-arg KEY=VAL.
 	// True build-time constants — the SAME across every environment (the
 	// built artifact is identical), so use them for things compiled in,
@@ -104,6 +104,11 @@ type ServiceSpec struct {
 	// "build once, run anywhere": the image is identical across envs and
 	// the per-env value comes from the service/env env + secrets.
 	PublicEnv []string `yaml:"publicEnv,omitempty"`
+	// SecurityContext is the opt-in escape hatch for images that need
+	// specific Linux capabilities or privilege escalation (e.g.
+	// setpriv-based entrypoints). Omitted = chart default (drop-ALL,
+	// no escalation). Mirrors kube.KusoSecurityContext.
+	SecurityContext *SecuritySpec `yaml:"securityContext,omitempty"`
 }
 
 // ReleaseSpec is the pre-deploy release hook (migrations etc.), flattened
@@ -225,6 +230,17 @@ type ScaleSpec struct {
 type SleepSpec struct {
 	Enabled      bool `yaml:"enabled,omitempty"`
 	AfterMinutes int  `yaml:"afterMinutes,omitempty"`
+}
+
+// SecuritySpec is the kuso.yaml form of an opt-in container security
+// context. Mirrors kube.KusoSecurityContext.
+type SecuritySpec struct {
+	Capabilities             *CapabilitiesSpec `yaml:"capabilities,omitempty"`
+	AllowPrivilegeEscalation *bool             `yaml:"allowPrivilegeEscalation,omitempty"`
+}
+
+type CapabilitiesSpec struct {
+	Add []string `yaml:"add,omitempty"`
 }
 
 type PlacementSpec struct {

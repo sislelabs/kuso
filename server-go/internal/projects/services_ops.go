@@ -438,18 +438,19 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			// tag. Set blindly here; the create validator above is
 			// responsible for catching combinations that don't make
 			// sense (e.g. fromService set with runtime=dockerfile).
-			FromService: req.FromService,
-			Port:        req.Port,
-			Domains:     convertDomains(req.Domains),
-			EnvVars:     convertEnvVars(req.EnvVars),
-			Scale:       scale,
-			Sleep:       sleep,
-			Static:      toStaticSpec(req.Static),
-			Buildpacks:  toBuildpacksSpec(req.Buildpacks),
-			Image:       imgSpec,
-			Release:     releaseSpec,
-			BuildArgs:   req.BuildArgs,
-			PublicEnv:   req.PublicEnv,
+			FromService:     req.FromService,
+			Port:            req.Port,
+			Domains:         convertDomains(req.Domains),
+			EnvVars:         convertEnvVars(req.EnvVars),
+			Scale:           scale,
+			Sleep:           sleep,
+			Static:          toStaticSpec(req.Static),
+			Buildpacks:      toBuildpacksSpec(req.Buildpacks),
+			Image:           imgSpec,
+			Release:         releaseSpec,
+			BuildArgs:       req.BuildArgs,
+			PublicEnv:       req.PublicEnv,
+			SecurityContext: req.SecurityContext,
 		},
 	}
 	created, err := s.Kube.CreateKusoService(ctx, ns, svc)
@@ -1746,6 +1747,13 @@ type PatchServiceRequest struct {
 	// empty map/slice) resets it — declarative reset, matching Static.
 	BuildArgs *map[string]string `json:"buildArgs,omitempty"`
 	PublicEnv *[]string          `json:"publicEnv,omitempty"`
+	// SecurityContext is the opt-in escape hatch for images that need
+	// specific Linux capabilities or privilege escalation. Simpler
+	// semantics than Resources: nil = leave alone; non-nil = set it
+	// verbatim. No "empty clears" case — to clear, a future caller
+	// would need an explicit sentinel; config-as-code re-apply sets it
+	// from the template every time, which covers the common case.
+	SecurityContext *kube.KusoSecurityContext `json:"securityContext,omitempty"`
 }
 
 // PatchReleaseRequest is the wire shape for editing the release hook.
@@ -1876,232 +1884,235 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			}
 			svc.Spec.DisplayName = dn
 		}
-	portChanged := false
-	if req.Port != nil {
-		svc.Spec.Port = *req.Port
-		portChanged = true
-	}
-	runtimeChanged := false
-	if req.Runtime != nil {
-		svc.Spec.Runtime = *req.Runtime
-		runtimeChanged = true
-	}
-	domainsChanged := false
-	if req.Domains != nil {
-		svc.Spec.Domains = convertDomains(*req.Domains)
-		domainsChanged = true
-	}
-	internalChanged := false
-	if req.Internal != nil {
-		svc.Spec.Internal = *req.Internal
-		internalChanged = true
-	}
-	privateEgressChanged := false
-	if req.PrivateEgress != nil {
-		svc.Spec.PrivateEgress = *req.PrivateEgress
-		privateEgressChanged = true
-	}
-	stoppedChanged := false
-	if req.Stopped != nil {
-		svc.Spec.Stopped = *req.Stopped
-		stoppedChanged = true
-	}
-	scaleChanged := false
-	if req.Scale != nil {
-		if svc.Spec.Scale == nil {
-			svc.Spec.Scale = &kube.KusoScaleSpec{}
+		portChanged := false
+		if req.Port != nil {
+			svc.Spec.Port = *req.Port
+			portChanged = true
 		}
-		if req.Scale.Min != nil {
-			svc.Spec.Scale.SetMin(*req.Scale.Min)
+		runtimeChanged := false
+		if req.Runtime != nil {
+			svc.Spec.Runtime = *req.Runtime
+			runtimeChanged = true
 		}
-		if req.Scale.Max != nil {
-			svc.Spec.Scale.Max = *req.Scale.Max
+		domainsChanged := false
+		if req.Domains != nil {
+			svc.Spec.Domains = convertDomains(*req.Domains)
+			domainsChanged = true
 		}
-		if req.Scale.TargetCPU != nil {
-			svc.Spec.Scale.TargetCPU = *req.Scale.TargetCPU
+		internalChanged := false
+		if req.Internal != nil {
+			svc.Spec.Internal = *req.Internal
+			internalChanged = true
 		}
-		scaleChanged = true
-	}
-	sleepChanged := false
-	if req.Sleep != nil {
-		sleepChanged = true
-		if svc.Spec.Sleep == nil {
-			svc.Spec.Sleep = &kube.KusoServiceSleep{}
+		privateEgressChanged := false
+		if req.PrivateEgress != nil {
+			svc.Spec.PrivateEgress = *req.PrivateEgress
+			privateEgressChanged = true
 		}
-		if req.Sleep.Enabled != nil {
-			svc.Spec.Sleep.Enabled = *req.Sleep.Enabled
+		stoppedChanged := false
+		if req.Stopped != nil {
+			svc.Spec.Stopped = *req.Stopped
+			stoppedChanged = true
 		}
-		if req.Sleep.AfterMinutes != nil {
-			svc.Spec.Sleep.AfterMinutes = *req.Sleep.AfterMinutes
+		scaleChanged := false
+		if req.Scale != nil {
+			if svc.Spec.Scale == nil {
+				svc.Spec.Scale = &kube.KusoScaleSpec{}
+			}
+			if req.Scale.Min != nil {
+				svc.Spec.Scale.SetMin(*req.Scale.Min)
+			}
+			if req.Scale.Max != nil {
+				svc.Spec.Scale.Max = *req.Scale.Max
+			}
+			if req.Scale.TargetCPU != nil {
+				svc.Spec.Scale.TargetCPU = *req.Scale.TargetCPU
+			}
+			scaleChanged = true
 		}
-		if req.Sleep.WakeOn != nil {
-			if req.Sleep.WakeOn.Clear {
-				svc.Spec.Sleep.WakeOn = nil
-				scaleChanged = true
-			} else if len(req.Sleep.WakeOn.ExcludePaths) > 0 {
-				cleaned := make([]string, 0, len(req.Sleep.WakeOn.ExcludePaths))
-				for _, p := range req.Sleep.WakeOn.ExcludePaths {
-					if p = strings.TrimSpace(p); p != "" {
-						cleaned = append(cleaned, p)
-					}
-				}
-				if len(cleaned) == 0 {
+		sleepChanged := false
+		if req.Sleep != nil {
+			sleepChanged = true
+			if svc.Spec.Sleep == nil {
+				svc.Spec.Sleep = &kube.KusoServiceSleep{}
+			}
+			if req.Sleep.Enabled != nil {
+				svc.Spec.Sleep.Enabled = *req.Sleep.Enabled
+			}
+			if req.Sleep.AfterMinutes != nil {
+				svc.Spec.Sleep.AfterMinutes = *req.Sleep.AfterMinutes
+			}
+			if req.Sleep.WakeOn != nil {
+				if req.Sleep.WakeOn.Clear {
 					svc.Spec.Sleep.WakeOn = nil
-				} else {
-					svc.Spec.Sleep.WakeOn = &kube.KusoServiceWake{ExcludePaths: cleaned}
+					scaleChanged = true
+				} else if len(req.Sleep.WakeOn.ExcludePaths) > 0 {
+					cleaned := make([]string, 0, len(req.Sleep.WakeOn.ExcludePaths))
+					for _, p := range req.Sleep.WakeOn.ExcludePaths {
+						if p = strings.TrimSpace(p); p != "" {
+							cleaned = append(cleaned, p)
+						}
+					}
+					if len(cleaned) == 0 {
+						svc.Spec.Sleep.WakeOn = nil
+					} else {
+						svc.Spec.Sleep.WakeOn = &kube.KusoServiceWake{ExcludePaths: cleaned}
+					}
+					// Changing wakeOn affects effective replicaCount —
+					// treat as a scale change so propagation re-stamps
+					// env.spec.replicaCount.
+					scaleChanged = true
 				}
-				// Changing wakeOn affects effective replicaCount —
-				// treat as a scale change so propagation re-stamps
-				// env.spec.replicaCount.
-				scaleChanged = true
 			}
 		}
-	}
-	volumesChanged := false
-	if req.Repo != nil {
-		// Replace (not merge) — the user's intent when editing the
-		// repo URL is "this is the new source," not "merge with the
-		// old path." Empty URL clears the repo.
-		if req.Repo.URL == "" {
-			svc.Spec.Repo = nil
-		} else {
-			if err := validateRepoPath(req.Repo.Path); err != nil {
+		volumesChanged := false
+		if req.Repo != nil {
+			// Replace (not merge) — the user's intent when editing the
+			// repo URL is "this is the new source," not "merge with the
+			// old path." Empty URL clears the repo.
+			if req.Repo.URL == "" {
+				svc.Spec.Repo = nil
+			} else {
+				if err := validateRepoPath(req.Repo.Path); err != nil {
+					return err
+				}
+				svc.Spec.Repo = &kube.KusoRepoRef{
+					URL:           req.Repo.URL,
+					DefaultBranch: req.Repo.Branch,
+					Path:          req.Repo.Path,
+				}
+			}
+			// installationId is recorded so the build path can mint a
+			// fresh installation token without re-asking the user. Per-
+			// service installation, separate from the project's default.
+			if req.Repo.InstallationID > 0 {
+				svc.Spec.Github = &kube.KusoServiceGithubSpec{InstallationID: req.Repo.InstallationID}
+			}
+		}
+		if req.Volumes != nil {
+			next := make([]kube.KusoVolume, 0, len(*req.Volumes))
+			for _, v := range *req.Volumes {
+				if v.Name == "" || v.MountPath == "" {
+					return fmt.Errorf("%w: volume name + mountPath required", ErrInvalid)
+				}
+				next = append(next, kube.KusoVolume{
+					Name:         v.Name,
+					MountPath:    v.MountPath,
+					SizeGi:       v.SizeGi,
+					StorageClass: v.StorageClass,
+					AccessMode:   v.AccessMode,
+				})
+			}
+			svc.Spec.Volumes = next
+			volumesChanged = true
+		}
+		resourcesChanged := false
+		if req.Resources != nil {
+			// Replace verbatim. An empty/nil map clears resources (chart
+			// falls back to its default). The map is the k8s
+			// ResourceRequirements shape; we don't validate the inner
+			// quantities here — kube rejects a malformed quantity at apply
+			// time with a clear error, and the UI sends well-formed values.
+			if len(*req.Resources) == 0 {
+				svc.Spec.Resources = nil
+			} else {
+				svc.Spec.Resources = *req.Resources
+			}
+			resourcesChanged = true
+		}
+		if req.SecurityContext != nil {
+			svc.Spec.SecurityContext = req.SecurityContext
+		}
+		placementChanged := false
+		if req.Placement != nil {
+			if req.Placement.Clear {
+				svc.Spec.Placement = nil
+			} else {
+				svc.Spec.Placement = &kube.KusoPlacement{
+					Labels: req.Placement.Labels,
+					Nodes:  req.Placement.Nodes,
+				}
+				// Block the save when the requested placement matches no
+				// nodes — otherwise pods would land in Pending forever and
+				// the user would have to debug it through events. The hard
+				// requirement was the explicit ask: better to refuse than
+				// silently misbehave.
+				if err := s.validatePlacement(ctx, svc.Spec.Placement); err != nil {
+					return err
+				}
+			}
+			placementChanged = true
+		}
+		if req.Previews != nil {
+			if req.Previews.Clear {
+				svc.Spec.Previews = nil
+			} else {
+				svc.Spec.Previews = &kube.KusoServicePreviews{Disabled: req.Previews.Disabled}
+			}
+		}
+		if req.Static != nil {
+			// Validate before stamping — the build controller interpolates
+			// these fields into shell contexts (the static heredoc). Mirror
+			// the AddService create path.
+			if err := validateStaticSpec(req.Static); err != nil {
 				return err
 			}
-			svc.Spec.Repo = &kube.KusoRepoRef{
-				URL:           req.Repo.URL,
-				DefaultBranch: req.Repo.Branch,
-				Path:          req.Repo.Path,
-			}
+			svc.Spec.Static = toStaticSpec(req.Static)
 		}
-		// installationId is recorded so the build path can mint a
-		// fresh installation token without re-asking the user. Per-
-		// service installation, separate from the project's default.
-		if req.Repo.InstallationID > 0 {
-			svc.Spec.Github = &kube.KusoServiceGithubSpec{InstallationID: req.Repo.InstallationID}
-		}
-	}
-	if req.Volumes != nil {
-		next := make([]kube.KusoVolume, 0, len(*req.Volumes))
-		for _, v := range *req.Volumes {
-			if v.Name == "" || v.MountPath == "" {
-				return fmt.Errorf("%w: volume name + mountPath required", ErrInvalid)
-			}
-			next = append(next, kube.KusoVolume{
-				Name:         v.Name,
-				MountPath:    v.MountPath,
-				SizeGi:       v.SizeGi,
-				StorageClass: v.StorageClass,
-				AccessMode:   v.AccessMode,
-			})
-		}
-		svc.Spec.Volumes = next
-		volumesChanged = true
-	}
-	resourcesChanged := false
-	if req.Resources != nil {
-		// Replace verbatim. An empty/nil map clears resources (chart
-		// falls back to its default). The map is the k8s
-		// ResourceRequirements shape; we don't validate the inner
-		// quantities here — kube rejects a malformed quantity at apply
-		// time with a clear error, and the UI sends well-formed values.
-		if len(*req.Resources) == 0 {
-			svc.Spec.Resources = nil
-		} else {
-			svc.Spec.Resources = *req.Resources
-		}
-		resourcesChanged = true
-	}
-	placementChanged := false
-	if req.Placement != nil {
-		if req.Placement.Clear {
-			svc.Spec.Placement = nil
-		} else {
-			svc.Spec.Placement = &kube.KusoPlacement{
-				Labels: req.Placement.Labels,
-				Nodes:  req.Placement.Nodes,
-			}
-			// Block the save when the requested placement matches no
-			// nodes — otherwise pods would land in Pending forever and
-			// the user would have to debug it through events. The hard
-			// requirement was the explicit ask: better to refuse than
-			// silently misbehave.
-			if err := s.validatePlacement(ctx, svc.Spec.Placement); err != nil {
+		if req.Buildpacks != nil {
+			if err := validateBuildpacksSpec(req.Buildpacks); err != nil {
 				return err
 			}
+			svc.Spec.Buildpacks = toBuildpacksSpec(req.Buildpacks)
 		}
-		placementChanged = true
-	}
-	if req.Previews != nil {
-		if req.Previews.Clear {
-			svc.Spec.Previews = nil
-		} else {
-			svc.Spec.Previews = &kube.KusoServicePreviews{Disabled: req.Previews.Disabled}
-		}
-	}
-	if req.Static != nil {
-		// Validate before stamping — the build controller interpolates
-		// these fields into shell contexts (the static heredoc). Mirror
-		// the AddService create path.
-		if err := validateStaticSpec(req.Static); err != nil {
-			return err
-		}
-		svc.Spec.Static = toStaticSpec(req.Static)
-	}
-	if req.Buildpacks != nil {
-		if err := validateBuildpacksSpec(req.Buildpacks); err != nil {
-			return err
-		}
-		svc.Spec.Buildpacks = toBuildpacksSpec(req.Buildpacks)
-	}
-	if req.Image != nil {
-		if err := validateServiceImageSpec(req.Image); err != nil {
-			return err
-		}
-		if strings.TrimSpace(req.Image.Repository) == "" {
-			svc.Spec.Image = nil
-		} else {
-			tag := strings.TrimSpace(req.Image.Tag)
-			if tag == "" {
-				tag = "latest"
+		if req.Image != nil {
+			if err := validateServiceImageSpec(req.Image); err != nil {
+				return err
 			}
-			svc.Spec.Image = &kube.KusoImage{
-				Repository: strings.TrimSpace(req.Image.Repository),
-				Tag:        tag,
+			if strings.TrimSpace(req.Image.Repository) == "" {
+				svc.Spec.Image = nil
+			} else {
+				tag := strings.TrimSpace(req.Image.Tag)
+				if tag == "" {
+					tag = "latest"
+				}
+				svc.Spec.Image = &kube.KusoImage{
+					Repository: strings.TrimSpace(req.Image.Repository),
+					Tag:        tag,
+				}
 			}
 		}
-	}
-	if req.Dockerfile != nil {
-		if err := validateDockerfile(*req.Dockerfile); err != nil {
-			return err
-		}
-		svc.Spec.Dockerfile = *req.Dockerfile
-	}
-	commandChanged := false
-	if req.Command != nil {
-		svc.Spec.Command = *req.Command
-		commandChanged = true
-	}
-	releaseChanged := false
-	if req.Release != nil {
-		if req.Release.Clear {
-			svc.Spec.Release = nil
-		} else if len(req.Release.Command) == 0 {
-			// Empty command treated as "clear" — there's no
-			// such thing as a release hook with no argv.
-			svc.Spec.Release = nil
-		} else {
-			timeout := req.Release.TimeoutSeconds
-			if timeout <= 0 {
-				timeout = 900
+		if req.Dockerfile != nil {
+			if err := validateDockerfile(*req.Dockerfile); err != nil {
+				return err
 			}
-			svc.Spec.Release = &kube.KusoReleaseSpec{
-				Command:        req.Release.Command,
-				TimeoutSeconds: timeout,
-			}
+			svc.Spec.Dockerfile = *req.Dockerfile
 		}
-		releaseChanged = true
-	}
+		commandChanged := false
+		if req.Command != nil {
+			svc.Spec.Command = *req.Command
+			commandChanged = true
+		}
+		releaseChanged := false
+		if req.Release != nil {
+			if req.Release.Clear {
+				svc.Spec.Release = nil
+			} else if len(req.Release.Command) == 0 {
+				// Empty command treated as "clear" — there's no
+				// such thing as a release hook with no argv.
+				svc.Spec.Release = nil
+			} else {
+				timeout := req.Release.TimeoutSeconds
+				if timeout <= 0 {
+					timeout = 900
+				}
+				svc.Spec.Release = &kube.KusoReleaseSpec{
+					Command:        req.Release.Command,
+					TimeoutSeconds: timeout,
+				}
+			}
+			releaseChanged = true
+		}
 		// Build-time env config. Wholesale replace on a non-nil pointer
 		// (declarative reset); leave alone when omitted. These are consumed
 		// when the next build CR is created (builds.Create reads the service

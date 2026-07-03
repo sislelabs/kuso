@@ -68,6 +68,26 @@ crons:
 	}
 }
 
+func TestParse_SecurityContext(t *testing.T) {
+	src := "project: x\nservices:\n  - name: a\n    securityContext:\n" +
+		"      capabilities:\n        add: [SETUID, SETGID]\n" +
+		"      allowPrivilegeEscalation: true\n"
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	sc := f.Services[0].SecurityContext
+	if sc == nil {
+		t.Fatalf("securityContext not parsed: %+v", f.Services[0])
+	}
+	if sc.AllowPrivilegeEscalation == nil || !*sc.AllowPrivilegeEscalation {
+		t.Fatalf("allowPrivilegeEscalation not parsed: %+v", sc)
+	}
+	if sc.Capabilities == nil || len(sc.Capabilities.Add) != 2 || sc.Capabilities.Add[0] != "SETUID" || sc.Capabilities.Add[1] != "SETGID" {
+		t.Fatalf("capabilities.add not parsed: %+v", sc.Capabilities)
+	}
+}
+
 func TestParse_RejectsUnknownField(t *testing.T) {
 	_, err := Parse([]byte("project: x\nservices:\n  - name: a\n    bogusField: 1\n"))
 	if err == nil {

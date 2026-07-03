@@ -1,11 +1,13 @@
 package projects
 
+import "kuso/server/internal/kube"
+
 // CreateProjectRequest is the body of POST /api/projects, matching the
 // TS CreateProjectDTO shape.
 type CreateProjectRequest struct {
-	Name        string                     `json:"name"`
-	Description string                     `json:"description,omitempty"`
-	BaseDomain  string                     `json:"baseDomain,omitempty"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	BaseDomain  string `json:"baseDomain,omitempty"`
 	// Namespace is the optional execution namespace for this project's
 	// child resources. The KusoProject CR itself always lives in the
 	// server's home namespace; this field controls only the routing of
@@ -69,14 +71,14 @@ type CreateServiceRequest struct {
 	// pre-slugify value is preserved as the display name; when both
 	// are set, DisplayName wins. This lets the AddService dialog send
 	// just one string ("Todo API") and have both fields populated.
-	Name        string                 `json:"name"`
-	DisplayName string                 `json:"displayName,omitempty"`
-	Repo       *CreateServiceRepo     `json:"repo,omitempty"`
-	Runtime    string                 `json:"runtime,omitempty"`
+	Name        string             `json:"name"`
+	DisplayName string             `json:"displayName,omitempty"`
+	Repo        *CreateServiceRepo `json:"repo,omitempty"`
+	Runtime     string             `json:"runtime,omitempty"`
 	// Dockerfile overrides the Dockerfile filename (relative to repo.path)
 	// for runtime=dockerfile. Empty = "Dockerfile". For monorepos with a
 	// non-standard name, e.g. "apps/web/Dockerfile.dev".
-	Dockerfile string                 `json:"dockerfile,omitempty"`
+	Dockerfile string `json:"dockerfile,omitempty"`
 	// Command is the argv for runtime=worker. Ignored otherwise.
 	Command []string `json:"command,omitempty"`
 	// FromService is the sibling service whose built image this
@@ -87,12 +89,12 @@ type CreateServiceRequest struct {
 	// Pair with Command to set the worker's argv.
 	FromService string                 `json:"fromService,omitempty"`
 	Port        int32                  `json:"port,omitempty"`
-	Domains    []ServiceDomain        `json:"domains,omitempty"`
-	EnvVars    []EnvVar               `json:"envVars,omitempty"`
-	Scale      *ServiceScale          `json:"scale,omitempty"`
-	Sleep      *ServiceSleep          `json:"sleep,omitempty"`
-	Static     *ServiceStaticSpec     `json:"static,omitempty"`
-	Buildpacks *ServiceBuildpacksSpec `json:"buildpacks,omitempty"`
+	Domains     []ServiceDomain        `json:"domains,omitempty"`
+	EnvVars     []EnvVar               `json:"envVars,omitempty"`
+	Scale       *ServiceScale          `json:"scale,omitempty"`
+	Sleep       *ServiceSleep          `json:"sleep,omitempty"`
+	Static      *ServiceStaticSpec     `json:"static,omitempty"`
+	Buildpacks  *ServiceBuildpacksSpec `json:"buildpacks,omitempty"`
 	// Image, when runtime=image, points kuso at an existing registry
 	// image instead of building from a repo. Bypasses kaniko/build
 	// entirely — the env CR's image gets stamped at create time and
@@ -111,6 +113,11 @@ type CreateServiceRequest struct {
 	// baked at build and substituted at pod start. Mirror KusoServiceSpec.
 	BuildArgs map[string]string `json:"buildArgs,omitempty"`
 	PublicEnv []string          `json:"publicEnv,omitempty"`
+	// SecurityContext is the opt-in escape hatch for images that need
+	// specific Linux capabilities or privilege escalation at create
+	// time (e.g. setpriv-based entrypoints). nil = chart default
+	// (drop-ALL, no escalation).
+	SecurityContext *kube.KusoSecurityContext `json:"securityContext,omitempty"`
 }
 
 // ServiceImageSpec is the deploy-from-registry shape for runtime=image.

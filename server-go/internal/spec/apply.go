@@ -89,10 +89,10 @@ type StepError struct {
 }
 
 // Apply turns the plan into kube writes. Order:
-//   1. addons first (services depend on their secrets via env-from)
-//   2. services next (created → updated → deleted, in that order so
-//      a rename pattern doesn't leave us briefly serviceless)
-//   3. crons last (kind=service crons reference a built service)
+//  1. addons first (services depend on their secrets via env-from)
+//  2. services next (created → updated → deleted, in that order so
+//     a rename pattern doesn't leave us briefly serviceless)
+//  3. crons last (kind=service crons reference a built service)
 //
 // Returns the executed plan + any per-step failures. Top-level error
 // is reserved for things that prevent any progress (DB down, kube
@@ -247,7 +247,22 @@ func serviceCreateReq(s ServiceSpec) projects.CreateServiceRequest {
 	}
 	req.BuildArgs = s.BuildArgs
 	req.PublicEnv = s.PublicEnv
+	req.SecurityContext = toKubeSecurityContext(s.SecurityContext)
 	return req
+}
+
+// toKubeSecurityContext maps a kuso.yaml SecuritySpec to the kube CR
+// shape. nil in, nil out — an omitted securityContext block leaves the
+// chart default (drop-ALL, no escalation) in place.
+func toKubeSecurityContext(s *SecuritySpec) *kube.KusoSecurityContext {
+	if s == nil {
+		return nil
+	}
+	out := &kube.KusoSecurityContext{AllowPrivilegeEscalation: s.AllowPrivilegeEscalation}
+	if s.Capabilities != nil {
+		out.Capabilities = &kube.KusoCapabilities{Add: s.Capabilities.Add}
+	}
+	return out
 }
 
 // servicePatchReq maps a ServiceSpec to the partial update request.
@@ -343,22 +358,23 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 	publicEnv := append([]string{}, s.PublicEnv...)
 
 	return projects.PatchServiceRequest{
-		Port:          &port,
-		Runtime:       &runtime,
-		Internal:      &internal,
-		PrivateEgress: &privateEgress,
-		Domains:       &domains,
-		Scale:         scale,
-		Sleep:         sleep,
-		Placement:     placement,
-		Volumes:       &volumes,
-		Static:        static,
-		Buildpacks:    buildpacks,
-		Image:         image,
-		Command:       &cmd,
-		Release:       release,
-		BuildArgs:     &buildArgs,
-		PublicEnv:     &publicEnv,
+		Port:            &port,
+		Runtime:         &runtime,
+		Internal:        &internal,
+		PrivateEgress:   &privateEgress,
+		Domains:         &domains,
+		Scale:           scale,
+		Sleep:           sleep,
+		Placement:       placement,
+		Volumes:         &volumes,
+		Static:          static,
+		Buildpacks:      buildpacks,
+		Image:           image,
+		Command:         &cmd,
+		Release:         release,
+		BuildArgs:       &buildArgs,
+		PublicEnv:       &publicEnv,
+		SecurityContext: toKubeSecurityContext(s.SecurityContext),
 	}
 }
 

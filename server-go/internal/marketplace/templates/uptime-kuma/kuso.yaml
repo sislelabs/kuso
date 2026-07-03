@@ -14,3 +14,7 @@ services:
       - name: data
         mountPath: /app/data
         sizeGi: 2
+    securityContext:
+      capabilities:
+        add: ["SETUID", "SETGID"]
+      allowPrivilegeEscalation: true
