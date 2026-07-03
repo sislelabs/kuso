@@ -64,6 +64,12 @@ export interface FormState {
   // default (drop ALL, no escalation).
   capAdd: string;
   allowPrivilegeEscalation: boolean;
+  // Release hook — a one-off Job that runs before each deploy is
+  // promoted (migrations etc). releaseCommand is the argv joined by
+  // spaces for editing as plain text; empty = no hook. releaseTimeout
+  // is the cap in seconds as a string; "" = server default (900).
+  releaseCommand: string;
+  releaseTimeout: string;
 }
 
 export interface SectionProps {
@@ -134,6 +140,8 @@ export function fromSvc(svc?: KusoService): FormState {
       !!(svc?.spec as { previews?: { disabled?: boolean } } | undefined)?.previews?.disabled,
     capAdd: (svc?.spec.securityContext?.capabilities?.add ?? []).join(", "),
     allowPrivilegeEscalation: !!svc?.spec.securityContext?.allowPrivilegeEscalation,
+    releaseCommand: (svc?.spec.release?.command ?? []).join(" "),
+    releaseTimeout: svc?.spec.release?.timeoutSeconds ? String(svc.spec.release.timeoutSeconds) : "",
   };
 }
 

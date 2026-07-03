@@ -34,21 +34,21 @@ export function VolumesSection({ state, setState }: SectionProps) {
         state.volumes.map((v, i) => (
           <div
             key={i}
-            className="grid grid-cols-[120px_1fr_72px_28px] items-center gap-1.5 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-b-0"
+            className="grid grid-cols-[120px_minmax(0,1fr)_72px_28px] items-center gap-1.5 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-b-0"
           >
             <Input
               value={v.name}
               onChange={(e) => update(i, { name: e.target.value })}
               placeholder="data"
-              className="h-7 font-mono text-[11px]"
+              className="h-7 min-w-0 font-mono text-[11px]"
             />
             <Input
               value={v.mountPath}
               onChange={(e) => update(i, { mountPath: e.target.value })}
               placeholder="/var/lib/app"
-              className="h-7 font-mono text-[11px]"
+              className="h-7 min-w-0 font-mono text-[11px]"
             />
-            <div className="relative">
+            <div className="relative min-w-0">
               <Input
                 type="number"
                 value={v.sizeGi}
@@ -56,7 +56,7 @@ export function VolumesSection({ state, setState }: SectionProps) {
                   update(i, { sizeGi: Math.max(1, Number(e.target.value) || 1) })
                 }
                 min={1}
-                className="h-7 pr-6 font-mono text-[11px]"
+                className="h-7 min-w-0 pr-6 font-mono text-[11px]"
               />
               <span className="pointer-events-none absolute right-1.5 top-1/2 -translate-y-1/2 font-mono text-[10px] text-[var(--text-tertiary)]">
                 Gi

@@ -293,6 +293,13 @@ export interface PatchServiceBody {
     capabilities?: { add?: string[] };
     allowPrivilegeEscalation?: boolean;
   };
+  // release is a pre-deploy hook: a one-off Job that runs `command`
+  // (with the new image + service env) BEFORE the rollout is
+  // promoted; a non-zero exit fails the deploy and keeps the old
+  // version serving. clear:true drops the hook; otherwise `command`
+  // replaces the argv and `timeoutSeconds` the cap (server default
+  // 900 when <= 0).
+  release?: { command?: string[]; timeoutSeconds?: number; clear?: boolean };
 }
 
 export interface PatchRepoBody {

@@ -81,6 +81,11 @@ export interface KusoServiceSpec {
     capabilities?: { add?: string[] };
     allowPrivilegeEscalation?: boolean;
   };
+  // release is a pre-deploy hook: a one-off Job that runs the given
+  // command (with the new image + service env) BEFORE a rollout is
+  // promoted. Non-zero exit fails the deploy and keeps the old
+  // version serving. Undefined/absent = no hook.
+  release?: { command?: string[]; timeoutSeconds?: number };
 }
 
 export interface KusoVolume {

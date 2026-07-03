@@ -9,7 +9,7 @@ import { useEnvironments, setEnvGroupServiceBranch, envsQueryKey } from "@/featu
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import type { KusoService } from "@/types/projects";
-import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin, ShieldAlert } from "lucide-react";
+import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin, ShieldAlert, Rocket } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
@@ -23,6 +23,7 @@ import { PlacementSection } from "./settings/PlacementSection";
 import { VolumesSection } from "./settings/VolumesSection";
 import { BuildSection } from "./settings/BuildSection";
 import { DeploySection } from "./settings/DeploySection";
+import { ReleaseSection } from "./settings/ReleaseSection";
 import { SecuritySection } from "./settings/SecuritySection";
 import { DangerSection } from "./settings/DangerSection";
 
@@ -46,6 +47,7 @@ const SECTIONS = [
   { id: "volumes",    label: "Volumes",    icon: HardDrive },
   { id: "build",      label: "Build",      icon: Hammer },
   { id: "deploy",     label: "Deploy",     icon: Cloud },
+  { id: "release",    label: "Release",    icon: Rocket },
   { id: "security",   label: "Security",   icon: ShieldAlert },
   { id: "danger",     label: "Danger",     icon: Trash2 },
 ] as const;
@@ -336,6 +338,19 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       body.previews = state.previewsDisabled ? { disabled: true } : { clear: true };
     }
     if (
+      state.releaseCommand !== baseline.releaseCommand ||
+      state.releaseTimeout !== baseline.releaseTimeout
+    ) {
+      const argv = state.releaseCommand.trim().split(/\s+/).filter(Boolean);
+      const hadHookBefore = baseline.releaseCommand.trim().length > 0;
+      if (argv.length > 0) {
+        body.release = { command: argv, timeoutSeconds: Number(state.releaseTimeout) || 0 };
+      } else if (hadHookBefore) {
+        body.release = { clear: true };
+      }
+      // else: no hook before, none now — nothing to send.
+    }
+    if (
       state.capAdd !== baseline.capAdd ||
       state.allowPrivilegeEscalation !== baseline.allowPrivilegeEscalation
     ) {
@@ -444,8 +459,8 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
           </a>
         ))}
       </nav>
-      <div className="grid grid-cols-1 gap-0 pb-24 md:grid-cols-[1fr_180px]">
-        <div className="space-y-8 px-4 py-4 md:px-6 md:py-6">
+      <div className="grid grid-cols-1 gap-0 pb-24 md:grid-cols-[minmax(0,1fr)_180px]">
+        <div className="min-w-0 space-y-8 px-4 py-4 md:px-6 md:py-6">
           {!onProduction && env && (
             <EnvBranchSection project={project} env={env} service={service} svc={svc} />
           )}
@@ -456,6 +471,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
           <VolumesSection state={state} setState={setState} />
           <BuildSection state={state} setState={setState} />
           <DeploySection project={project} state={state} setState={setState} />
+          <ReleaseSection state={state} setState={setState} />
           <SecuritySection state={state} setState={setState} />
           <DangerSection project={project} service={service} />
         </div>

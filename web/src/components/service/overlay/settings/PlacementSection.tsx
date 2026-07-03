@@ -119,13 +119,13 @@ export function PlacementSection({ state, setState }: SectionProps) {
             // this — same class as the F-2 audit finding.
             <div
               key={r.key ? `k:${r.key}=${r.value}` : `empty:${i}`}
-              className="grid grid-cols-[140px_1fr_28px] items-center gap-1.5 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-b-0"
+              className="grid grid-cols-[140px_minmax(0,1fr)_28px] items-center gap-1.5 border-b border-[var(--border-subtle)] px-3 py-1.5 last:border-b-0"
             >
               {haveAnyLabels ? (
                 <select
                   value={r.key}
                   onChange={(e) => updLabel(i, { key: e.target.value, value: "" })}
-                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+                  className="h-7 min-w-0 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
                 >
                   <option value="">pick label key</option>
                   {[...allLabels.keys()].sort().map((k) => (
@@ -139,14 +139,14 @@ export function PlacementSection({ state, setState }: SectionProps) {
                   value={r.key}
                   onChange={(e) => updLabel(i, { key: e.target.value })}
                   placeholder="region"
-                  className="h-7 font-mono text-[11px]"
+                  className="h-7 min-w-0 font-mono text-[11px]"
                 />
               )}
               {valuesForKey && valuesForKey.size > 0 ? (
                 <select
                   value={r.value}
                   onChange={(e) => updLabel(i, { value: e.target.value })}
-                  className="h-7 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+                  className="h-7 min-w-0 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
                 >
                   <option value="">pick value</option>
                   {[...valuesForKey].sort().map((v) => (
@@ -160,7 +160,7 @@ export function PlacementSection({ state, setState }: SectionProps) {
                   value={r.value}
                   onChange={(e) => updLabel(i, { value: e.target.value })}
                   placeholder={r.key.trim() ? "value (blank = any)" : "eu"}
-                  className="h-7 font-mono text-[11px]"
+                  className="h-7 min-w-0 font-mono text-[11px]"
                   disabled={haveAnyLabels && !r.key.trim()}
                 />
               )}
@@ -241,7 +241,7 @@ export function PlacementSection({ state, setState }: SectionProps) {
               ⚠ No nodes match. Pods would stay Pending.
             </span>
           ) : (
-            <span>
+            <span className="break-words">
               would schedule on:{" "}
               <span className="font-mono text-[var(--text-secondary)]">
                 {matching.map((m) => m.name).join(", ")}
