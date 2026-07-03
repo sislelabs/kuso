@@ -19,6 +19,26 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.106] — 2026-07-03
+
+### ✨ Features
+- Feat(web): surface per-service securityContext in settings ([08c0d37](https://github.com/sislelabs/kuso/commit/08c0d37521504d89e19fa61b3a9b30bab86885e4))
+- Feat(spec): securityContext in kuso.yaml + apply wiring + uptime-kuma caps ([4662c9a](https://github.com/sislelabs/kuso/commit/4662c9a86f1bc8fabcb6e8cbe1d2198db4caa114))
+- Feat(crd): securityContext schema on kusoservice + kusoenvironment ([487bbba](https://github.com/sislelabs/kuso/commit/487bbba2c727833983676d32a7a1bb3c0faedf09))
+- Feat(chart): render opt-in container securityContext (caps.add + allowPrivilegeEscalation) ([4bb3482](https://github.com/sislelabs/kuso/commit/4bb3482ed9a553da2e18fd12021031a27d728d82))
+- Feat(service): propagate SecurityContext service→env ([c734974](https://github.com/sislelabs/kuso/commit/c7349746b04e591110f472bf862f38befa598824))
+- Feat(service): KusoSecurityContext type on service + env spec ([096ab42](https://github.com/sislelabs/kuso/commit/096ab42ecdfc5a0c405c0de03004fcb24dde227a))
+
+### 🐛 Bug Fixes
+- Fix(service): fire propagation on securityContext-only patch + drift indicator ([aec4edc](https://github.com/sislelabs/kuso/commit/aec4edc899c1de4a46d1bacf3ec34aeb04909383))
+- Fix(cli): fetch-then-merge securityContext so a partial edit doesn't clobber the other field ([12d6252](https://github.com/sislelabs/kuso/commit/12d6252f73226ae3eea80fe490527175b75d024e))
+- Fix(service): copy SecurityContext (and Resources) onto first production env in AddService ([53e4879](https://github.com/sislelabs/kuso/commit/53e48794d360fff36d1e5d2287429aa43d770fba))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([ad86f76](https://github.com/sislelabs/kuso/commit/ad86f7680f661ebed717d86dca84cda4047949ff))
+- Docs(plans): per-service securityContext implementation plan ([ee0982c](https://github.com/sislelabs/kuso/commit/ee0982ce93f1291415ee26208673702abaab153e))
+- Docs(smoke): record marketplace setpriv/caps crash found on first live smoke ([d2a1088](https://github.com/sislelabs/kuso/commit/d2a1088123afc5c8b4fb834294da5a43c6d4e086))
+
 ## [0.18.105] — 2026-07-02
 
 ### ✨ Features
@@ -356,17 +376,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(incidents): live-e2e fixes — KUSO_TOKEN optional, Service :80, CLI list envelope ([ee8dc4d](https://github.com/sislelabs/kuso/commit/ee8dc4d548aba33e0e65d8b58ab9ea9e33023b2c))
-
-## [0.18.55] — 2026-06-10
-
-### Other
-- Build(incidents): make targets for agent + bot images; pin bot deploy to v0.18.55 ([5ae2200](https://github.com/sislelabs/kuso/commit/5ae2200d591eed9fd4f029d59974c0e75b976e53))
-
-### ✨ Features
-- Feat(incidents): autonomous incident-response agent ([e5e3dd6](https://github.com/sislelabs/kuso/commit/e5e3dd67aea10296b727f3b86b4891369e01ce8b))
-
-### 📝 Docs
-- Docs(spec): autonomous incident-response agent design ([2d68882](https://github.com/sislelabs/kuso/commit/2d6888278e518a44b027a8757c0b3df4545ee6a2))
 
 
 ---
