@@ -19,6 +19,17 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.109] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(addons): keep conn Secret on delete so re-add over a surviving PVC keeps the matching password ([974fca3](https://github.com/sislelabs/kuso/commit/974fca30ca2c4ba148eeb72a72357b972113fc05))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([357cfaa](https://github.com/sislelabs/kuso/commit/357cfaaea41c340b440d7cf9d32bcdea44a53438))
+
+### 🧪 Tests
+- Test(addons): assert conn Secret carries resource-policy=keep ([dd398e6](https://github.com/sislelabs/kuso/commit/dd398e6bc779065aebddf05d8425091ea7876319))
+
 ## [0.18.108] — 2026-07-03
 
 ### ✨ Features
@@ -377,11 +388,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(spec): incident-agent settings page design ([f76893b](https://github.com/sislelabs/kuso/commit/f76893b15e78a43cf3868110cab445487760bb6f))
-
-## [0.18.58] — 2026-06-10
-
-### ✨ Features
-- Feat(incidents): implement-phase graceful no-repo + clone-only plumbing test ([f1ffe91](https://github.com/sislelabs/kuso/commit/f1ffe91f1557f4966f3ad922388332aec1189b42))
 
 
 ---
