@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.111] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(service): copy Release hook onto first production env in AddService ([6c46e62](https://github.com/sislelabs/kuso/commit/6c46e627a123ba7927e07c2f9ddae3c3a8ed40d3))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([4e9e482](https://github.com/sislelabs/kuso/commit/4e9e482b2c9f7007177199493fb860ab4f0294f8))
+
 ## [0.18.110] — 2026-07-03
 
 ### 🐛 Bug Fixes
@@ -383,11 +391,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(security): close auth/WS gaps, secret RMW races, and env-override loss ([f56d01b](https://github.com/sislelabs/kuso/commit/f56d01b4fb39c319559cb1bc7707d8f2299c0d66))
-
-## [0.18.60] — 2026-06-11
-
-### 🐛 Bug Fixes
-- Fix(incidents): keep the Claude Code token fresh (it expires ~daily) ([4bc0619](https://github.com/sislelabs/kuso/commit/4bc0619f7548635ca1ee1425b0232546c0dc6127))
 
 
 ---
