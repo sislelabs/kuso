@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.61] — 2026-06-11
+
+### 🐛 Bug Fixes
+- Fix(security): close auth/WS gaps, secret RMW races, and env-override loss ([f56d01b](https://github.com/sislelabs/kuso/commit/f56d01b4fb39c319559cb1bc7707d8f2299c0d66))
+
 ## [0.18.60] — 2026-06-11
 
 ### 🐛 Bug Fixes
