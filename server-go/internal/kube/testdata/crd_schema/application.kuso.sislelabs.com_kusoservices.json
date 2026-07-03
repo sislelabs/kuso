@@ -313,6 +313,26 @@
             },
             "type": "object"
           },
+          "securityContext": {
+            "description": "Opt-in extra Linux capabilities and privilege escalation for images that self-drop root at runtime. Default drops ALL caps with no escalation.",
+            "properties": {
+              "allowPrivilegeEscalation": {
+                "type": "boolean"
+              },
+              "capabilities": {
+                "properties": {
+                  "add": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
           "sharedEnvKeys": {
             "description": "Per-service opt-in list of keys to inherit from project-shared (\u003cproject\u003e-shared) and instance- shared (kuso-instance-shared) Secrets. Operator chart mounts only these keys via individual env entries (no blanket envFrom), so adding a new key to a shared secret does not silently leak into services that did not subscribe. nil (omitted) = legacy behavior: mount all keys (preserved for pre-v0.16.10 services on upgrade). Empty list = inherit nothing. Use `kuso env share/unshare` or the dashboard chip toggle to edit.",
             "items": {

@@ -167,6 +167,21 @@
             ],
             "type": "string"
           },
+          "pendingImage": {
+            "description": "A runtime=image target withheld until the service's release hook (migration) succeeds. Promoted to image by the imagerelease watcher.",
+            "properties": {
+              "pullPolicy": {
+                "type": "string"
+              },
+              "repository": {
+                "type": "string"
+              },
+              "tag": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
           "placement": {
             "description": "Inherits the parent service placement so the env-helm chart can render nodeSelector + topologySpread. Pruning was the v0.7.x silent-data-loss bug — schema now covers what server-go writes.",
             "properties": {
@@ -245,6 +260,26 @@
           },
           "secretsRev": {
             "type": "string"
+          },
+          "securityContext": {
+            "description": "Opt-in extra Linux capabilities and privilege escalation for images that self-drop root at runtime. Default drops ALL caps with no escalation.",
+            "properties": {
+              "allowPrivilegeEscalation": {
+                "type": "boolean"
+              },
+              "capabilities": {
+                "properties": {
+                  "add": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
           },
           "service": {
             "type": "string"
