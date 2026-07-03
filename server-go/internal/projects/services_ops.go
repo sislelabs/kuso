@@ -537,6 +537,19 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	if created.Spec.Image == nil {
 		initialReplicas = 0
 	}
+	// Withhold the image when a release hook must run first (runtime=image
+	// only — built runtimes start imageless and the build poller promotes
+	// after release). The imagerelease watcher runs the migration Job and
+	// promotes pendingImage→image on success. Preview envs are excluded
+	// (their migrations are owned by the seed path).
+	var envImage, envPendingImage *kube.KusoImage
+	if created.Spec.Image != nil &&
+		created.Spec.Release != nil && len(created.Spec.Release.Command) > 0 &&
+		created.Spec.Runtime == "image" {
+		envPendingImage = created.Spec.Image
+	} else {
+		envImage = created.Spec.Image
+	}
 	env := &kube.KusoEnvironment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: productionEnvName(project, req.Name),
@@ -586,7 +599,8 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			// chart sees a populated env.spec.image at first reconcile
 			// and pulls it directly. Build poller filters services by
 			// runtime and ignores "image".
-			Image: created.Spec.Image,
+			Image:        envImage,
+			PendingImage: envPendingImage,
 			// Optional HTTP health check — propagated so the chart can
 			// render HTTP liveness+readiness instead of TCP.
 			Healthcheck:     created.Spec.Healthcheck,
