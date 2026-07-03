@@ -2,6 +2,17 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.55] — 2026-06-10
+
+### Other
+- Build(incidents): make targets for agent + bot images; pin bot deploy to v0.18.55 ([5ae2200](https://github.com/sislelabs/kuso/commit/5ae2200d591eed9fd4f029d59974c0e75b976e53))
+
+### ✨ Features
+- Feat(incidents): autonomous incident-response agent ([e5e3dd6](https://github.com/sislelabs/kuso/commit/e5e3dd67aea10296b727f3b86b4891369e01ce8b))
+
+### 📝 Docs
+- Docs(spec): autonomous incident-response agent design ([2d68882](https://github.com/sislelabs/kuso/commit/2d6888278e518a44b027a8757c0b3df4545ee6a2))
+
 ## [0.18.54] — 2026-06-10
 
 ### 🐛 Bug Fixes
