@@ -15,6 +15,15 @@ services:
     domains:
       - host: "${{ prompt.host }}"
         tls: true
+    # Plausible ships an empty database — it must be created + migrated
+    # before the app boots, or the first pod crashes on "relation ...
+    # does not exist". kuso runs this as a pre-deploy Job (with the same
+    # image + env, and after the addons are reachable) and only promotes
+    # the rollout once it exits 0. Mirrors Plausible CE's official
+    # compose (`db createdb && db migrate` before `run`).
+    release:
+      command: ["sh", "-c", "/entrypoint.sh db createdb; /entrypoint.sh db migrate"]
+      timeoutSeconds: 300
 addons:
   - name: plausible-db
     kind: postgres
