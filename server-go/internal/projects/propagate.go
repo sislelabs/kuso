@@ -79,10 +79,16 @@ type changedFields struct {
 	// ingress never points at the activator, and when it idles to 0
 	// replicas the next request 503s instead of waking. Must reach the env.
 	Sleep bool
+	// SecurityContext carries spec.securityContext (opt-in caps +
+	// allowPrivilegeEscalation) changes. The env chart renders the
+	// container securityContext off the ENV CR, so a service-level
+	// securityContext change must reach the env or the pod keeps the
+	// hardened default (drop ALL) and never gets the requested caps.
+	SecurityContext bool
 }
 
 func (c changedFields) any() bool {
-	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.Release || c.Command || c.Resources || c.Stopped || c.Sleep
+	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.Release || c.Command || c.Resources || c.Stopped || c.Sleep || c.SecurityContext
 }
 
 // propagateChangedToEnvs is the single chokepoint that mirrors a

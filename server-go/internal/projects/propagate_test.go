@@ -97,11 +97,11 @@ func TestPatchService_PropagatesScalarFieldsToAllEnvs(t *testing.T) {
 // TestPropagate_SecurityContext pins service->env propagation of the
 // per-service securityContext (Task 1's KusoSecurityContext): a
 // service-level caps/escalation edit must reach every owned env CR so
-// the chart re-renders the container securityContext. SecurityContext
-// isn't (yet) exposed on PatchServiceRequest, so we seed it directly on
-// the service spec — like Healthcheck/PublicEnv, propagation mirrors it
-// unconditionally on every pass, so any patch (here: Resources) that
-// walks the propagation loop is enough to observe it land on the envs.
+// the chart re-renders the container securityContext. This patch also
+// touches Resources so it walks the propagation loop regardless of
+// whether SecurityContext alone flips a changed flag — see
+// TestPropagate_SecurityContextOnly below for the isolated case, which
+// is what actually exercises changedFields.SecurityContext.
 func TestPropagate_SecurityContext(t *testing.T) {
 	t.Parallel()
 	esc := true
@@ -111,14 +111,15 @@ func TestPropagate_SecurityContext(t *testing.T) {
 	}
 	s := fakeService(t,
 		seedProject("alpha", kube.KusoProjectSpec{}),
-		seedService("alpha", "web", kube.KusoServiceSpec{Port: 8080, Runtime: "dockerfile", SecurityContext: sc}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Port: 8080, Runtime: "dockerfile"}),
 		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
 		seedEnv("alpha", "web", "staging", "stage", "alpha-web-staging"),
 	)
 
 	resources := map[string]any{"requests": map[string]any{"cpu": "250m"}}
 	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{
-		Resources: &resources,
+		Resources:       &resources,
+		SecurityContext: sc,
 	}); err != nil {
 		t.Fatalf("PatchService: %v", err)
 	}
@@ -130,6 +131,48 @@ func TestPropagate_SecurityContext(t *testing.T) {
 	for name, gotEnv := range envs {
 		if !reflect.DeepEqual(gotEnv.Spec.SecurityContext, sc) {
 			t.Errorf("%s: securityContext not propagated: got %+v want %+v", name, gotEnv.Spec.SecurityContext, sc)
+		}
+	}
+}
+
+// TestPropagate_SecurityContextOnly pins the actual bug found by the
+// final review: a PatchService call whose ONLY change is
+// securityContext must still walk propagateChangedToEnvs. Before the
+// fix, setting req.SecurityContext alone did not flip any changedFields
+// flag, so changed.any() was false, propagateChangedToEnvs
+// early-returned, and the env CR (and thus the running pod) never saw
+// the new securityContext — the primary UI surfaces for this feature
+// (web Security section, `kuso project service set --cap-add`) were
+// silently broken on an already-deployed service. This test sends a
+// patch with ONLY SecurityContext set (no Resources, no other changed
+// field) and asserts every owned env CR receives it.
+func TestPropagate_SecurityContextOnly(t *testing.T) {
+	t.Parallel()
+	esc := true
+	sc := &kube.KusoSecurityContext{
+		Capabilities:             &kube.KusoCapabilities{Add: []string{"SETUID", "SETGID"}},
+		AllowPrivilegeEscalation: &esc,
+	}
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Port: 8080, Runtime: "dockerfile"}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedEnv("alpha", "web", "staging", "stage", "alpha-web-staging"),
+	)
+
+	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{
+		SecurityContext: sc,
+	}); err != nil {
+		t.Fatalf("PatchService: %v", err)
+	}
+
+	envs := envByName(t, s, "alpha", "web")
+	if len(envs) != 2 {
+		t.Fatalf("expected 2 envs, got %d", len(envs))
+	}
+	for name, gotEnv := range envs {
+		if !reflect.DeepEqual(gotEnv.Spec.SecurityContext, sc) {
+			t.Errorf("%s: securityContext not propagated on securityContext-only patch: got %+v want %+v", name, gotEnv.Spec.SecurityContext, sc)
 		}
 	}
 }

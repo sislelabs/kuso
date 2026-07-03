@@ -2022,8 +2022,10 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			}
 			resourcesChanged = true
 		}
+		securityContextChanged := false
 		if req.SecurityContext != nil {
 			svc.Spec.SecurityContext = req.SecurityContext
+			securityContextChanged = true
 		}
 		placementChanged := false
 		if req.Placement != nil {
@@ -2128,19 +2130,20 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		// Capture which fields changed for the post-update propagation.
 		// Recomputed on every retry attempt — deterministic from req.
 		changed = changedFields{
-			Placement:     placementChanged,
-			Volumes:       volumesChanged,
-			Port:          portChanged,
-			Scale:         scaleChanged,
-			Domains:       domainsChanged,
-			Internal:      internalChanged,
-			Runtime:       runtimeChanged,
-			PrivateEgress: privateEgressChanged,
-			Stopped:       stoppedChanged,
-			Sleep:         sleepChanged,
-			Release:       releaseChanged,
-			Command:       commandChanged,
-			Resources:     resourcesChanged,
+			Placement:       placementChanged,
+			Volumes:         volumesChanged,
+			Port:            portChanged,
+			Scale:           scaleChanged,
+			Domains:         domainsChanged,
+			Internal:        internalChanged,
+			Runtime:         runtimeChanged,
+			PrivateEgress:   privateEgressChanged,
+			Stopped:         stoppedChanged,
+			Sleep:           sleepChanged,
+			Release:         releaseChanged,
+			Command:         commandChanged,
+			Resources:       resourcesChanged,
+			SecurityContext: securityContextChanged,
 		}
 		return nil
 	})

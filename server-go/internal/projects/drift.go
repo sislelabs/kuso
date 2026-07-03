@@ -297,6 +297,9 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	if !reflect.DeepEqual(svc.Spec.Release, env.Spec.Release) {
 		out.SpecPending = append(out.SpecPending, "release")
 	}
+	if !reflect.DeepEqual(svc.Spec.SecurityContext, env.Spec.SecurityContext) {
+		out.SpecPending = append(out.SpecPending, "securityContext")
+	}
 	// Sleep: env carries the reduced KusoEnvSleep (envSleepFrom collapses
 	// the service's sleep spec to {Enabled}). Compare against that same
 	// projection so an enabled/disabled mismatch shows without flagging
