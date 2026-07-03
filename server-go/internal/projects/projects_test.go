@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -413,6 +414,45 @@ func TestAddService_AutoCreatesProductionEnv(t *testing.T) {
 	}
 	if env.Spec.ReplicaCount == nil || *env.Spec.ReplicaCount != 0 {
 		t.Errorf("expected explicit replicaCount=0 holding state, got %v", env.Spec.ReplicaCount)
+	}
+}
+
+// TestAddService_CopiesSecurityContextToProductionEnv guards against the
+// gap where a brand-new service's securityContext (and resources) were
+// dropped from the auto-created production env: the propagation loop only
+// synced them on a LATER PatchService, so a service needing extra Linux
+// capabilities on its very first deploy (e.g. uptime-kuma from the
+// marketplace) would crash-loop until the user touched the service again.
+func TestAddService_CopiesSecurityContextToProductionEnv(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/x/y", DefaultBranch: "main"},
+		BaseDomain:  "alpha.example.com",
+	}))
+
+	wantSC := &kube.KusoSecurityContext{
+		Capabilities: &kube.KusoCapabilities{Add: []string{"SETUID"}},
+	}
+	created, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{
+		Name:            "web",
+		Runtime:         "image",
+		Port:            3000,
+		Image:           &ServiceImageSpec{Repository: "ghcr.io/x/y", Tag: "v1"},
+		SecurityContext: wantSC,
+	})
+	if err != nil {
+		t.Fatalf("AddService: %v", err)
+	}
+	if !reflect.DeepEqual(created.Spec.SecurityContext, wantSC) {
+		t.Fatalf("service securityContext: got %+v, want %+v", created.Spec.SecurityContext, wantSC)
+	}
+
+	env, err := s.GetEnvironment(context.Background(), "alpha", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("env not auto-created: %v", err)
+	}
+	if !reflect.DeepEqual(env.Spec.SecurityContext, wantSC) {
+		t.Errorf("production env securityContext: got %+v, want %+v", env.Spec.SecurityContext, wantSC)
 	}
 }
 

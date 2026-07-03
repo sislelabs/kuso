@@ -589,7 +589,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Image: created.Spec.Image,
 			// Optional HTTP health check — propagated so the chart can
 			// render HTTP liveness+readiness instead of TCP.
-			Healthcheck: created.Spec.Healthcheck,
+			Healthcheck:     created.Spec.Healthcheck,
+			SecurityContext: created.Spec.SecurityContext,
+			Resources:       created.Spec.Resources,
 		},
 	}
 	if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {
