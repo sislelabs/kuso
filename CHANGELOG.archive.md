@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.62] — 2026-06-11
+
+### ✨ Features
+- Feat(github): make adding another org a first-class action ([5cde943](https://github.com/sislelabs/kuso/commit/5cde94318b14314bdacd25a65b8a0a42a31fa465))
+
 ## [0.18.61] — 2026-06-11
 
 ### 🐛 Bug Fixes
