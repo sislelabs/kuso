@@ -13,6 +13,12 @@ services:
     domains:
       - host: "${{ prompt.host }}"
         tls: true
+    # Metabase's entrypoint runs adduser + su to drop from root to the
+    # metabase user — needs the privilege syscalls kuso drops by default.
+    securityContext:
+      capabilities:
+        add: ["SETUID", "SETGID", "CHOWN", "DAC_OVERRIDE", "FOWNER"]
+      allowPrivilegeEscalation: true
 addons:
   - name: metabase-db
     kind: postgres

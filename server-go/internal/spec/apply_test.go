@@ -528,6 +528,25 @@ func TestApply_GeneratesSecretOnFirstApply(t *testing.T) {
 	}
 }
 
+func TestApply_GeneratesHex64(t *testing.T) {
+	fp, fs := &fakeProjects{}, newFakeSecrets()
+	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs}
+	f := &File{Project: "shop", Services: []ServiceSpec{{
+		Name: "api", Runtime: "dockerfile",
+		Env: map[string]EnvValue{"SECRET_KEY_BASE": {Generate: "hex64"}},
+	}}}
+	if _, err := r.Apply(context.Background(), &Plan{ServicesToCreate: []string{"api"}}, f, ApplyOpts{}); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	v, ok := fs.setCalls["SECRET_KEY_BASE"]
+	if !ok {
+		t.Fatal("SECRET_KEY_BASE was not generated")
+	}
+	if len(v) != 128 { // hex64 = 64 bytes = 128 hex chars (Plausible needs a long key)
+		t.Fatalf("hex64 must be 128 chars, got %d: %q", len(v), v)
+	}
+}
+
 func TestApply_GenerateOnceDoesNotRotate(t *testing.T) {
 	fp, fs := &fakeProjects{}, newFakeSecrets("PAYLOAD_SECRET") // already exists
 	r := &Reconciler{Projects: fp, Addons: &fakeAddons{}, Crons: &fakeCrons{}, Secrets: fs}

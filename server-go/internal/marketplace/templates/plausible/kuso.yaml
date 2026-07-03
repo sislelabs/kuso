@@ -9,7 +9,7 @@ services:
       tag: "v2.1.4"
     env:
       BASE_URL: "https://${{ prompt.host }}"
-      SECRET_KEY_BASE: { generate: hex32 }
+      SECRET_KEY_BASE: { generate: hex64 }
       DATABASE_URL: "${{ plausible-db.DATABASE_URL }}"
       CLICKHOUSE_DATABASE_URL: "${{ plausible-ch.CLICKHOUSE_URL }}"
     domains:

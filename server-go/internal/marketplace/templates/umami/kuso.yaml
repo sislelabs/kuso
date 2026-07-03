@@ -5,8 +5,8 @@ services:
     runtime: image
     port: 3000
     image:
-      repository: ghcr.io/umami-software/umami
-      tag: "postgresql-v2.13.3"
+      repository: docker.io/umamisoftware/umami
+      tag: "postgresql-v2.20.2"
     env:
       DATABASE_URL: "${{ umami-db.DATABASE_URL }}"
       DATABASE_TYPE: postgresql

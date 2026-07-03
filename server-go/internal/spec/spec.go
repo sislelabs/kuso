@@ -196,12 +196,13 @@ func (e EnvValue) MarshalYAML() (any, error) {
 	return e.Value, nil
 }
 
-// generateKinds is the allowlist of supported generators. hex32/hex16
-// emit that many BYTES as lowercase hex (64/32 chars) — matching the
-// scaffold's `openssl rand -hex 32` / `-hex 16`.
-var generateKinds = map[string]int{"hex32": 32, "hex16": 16}
+// generateKinds is the allowlist of supported generators. hexN emits N
+// BYTES as lowercase hex (2N chars) — matching the scaffold's
+// `openssl rand -hex N`. hex64 (128 chars) is for apps that demand a
+// long secret, e.g. Plausible's Phoenix SECRET_KEY_BASE.
+var generateKinds = map[string]int{"hex64": 64, "hex32": 32, "hex16": 16}
 
-const generateKindList = "hex16, hex32"
+const generateKindList = "hex16, hex32, hex64"
 
 func validGenerateKind(k string) bool { _, ok := generateKinds[k]; return ok }
 
