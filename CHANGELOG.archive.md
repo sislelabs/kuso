@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.58] — 2026-06-10
+
+### ✨ Features
+- Feat(incidents): implement-phase graceful no-repo + clone-only plumbing test ([f1ffe91](https://github.com/sislelabs/kuso/commit/f1ffe91f1557f4966f3ad922388332aec1189b42))
+
 ## [0.18.57] — 2026-06-10
 
 ### 🐛 Bug Fixes
