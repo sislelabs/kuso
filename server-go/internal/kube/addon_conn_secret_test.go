@@ -103,6 +103,56 @@ func TestAddonConnSecret_UsesBase64Data(t *testing.T) {
 	}
 }
 
+// connSecretDoc pulls the "<name>-conn" Secret YAML doc out of a multi-doc
+// helm render. Returns "" if not present.
+func connSecretDoc(rendered string) string {
+	for _, doc := range strings.Split(rendered, "\n---") {
+		if strings.Contains(doc, "kind: Secret") && strings.Contains(doc, "-conn") {
+			return doc
+		}
+	}
+	return ""
+}
+
+// TestAddonConnSecret_HasKeepPolicy asserts every stateful addon kind whose
+// password is baked into a persistent data dir on first init carries
+// helm.sh/resource-policy: keep on its conn Secret.
+//
+// Why this matters: a KusoAddon delete removes helm-managed objects, but the
+// StatefulSet's data PVC is NEVER garbage-collected (a StatefulSet doesn't
+// own its VCT-spawned PVCs, and helm uninstall doesn't either). So without
+// keep on the conn Secret, delete removes the Secret while the PVC survives.
+// Re-adding the addon under the SAME name then mints a FRESH random password
+// into a new conn Secret, but the database boots on the surviving PVC and
+// keeps its ORIGINAL password (postgres/mongo/etc. only set the password on
+// an EMPTY data dir). Every app then fails with "password authentication
+// failed". Keeping the conn Secret aligns its lifecycle with the PVC's so
+// the password survives and matches on re-add. postgres-ha and the TLS
+// Secret already do this; the single-node kinds were missing it.
+func TestAddonConnSecret_HasKeepPolicy(t *testing.T) {
+	t.Parallel()
+
+	// Kinds whose conn password is persisted in the data store (a stale
+	// password → auth failure on re-add). clickhouse/s3/mailpit/nats are
+	// excluded: their password is not read from the conn Secret into a
+	// data-dir-initialised auth (verified: no secretKeyRef→data-dir path).
+	kinds := []string{"postgres", "redis", "valkey", "mongodb", "rabbitmq", "meilisearch"}
+	for _, kind := range kinds {
+		kind := kind
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+			out := helmTemplateAddon(t, kind)
+			doc := connSecretDoc(out)
+			if doc == "" {
+				t.Fatalf("kind=%s: no -conn Secret rendered", kind)
+			}
+			if !strings.Contains(doc, "helm.sh/resource-policy: keep") {
+				t.Errorf("kind=%s: conn Secret missing helm.sh/resource-policy: keep — a delete+re-add over the surviving PVC mismatches the password.\n%s", kind, doc)
+			}
+		})
+	}
+}
+
 // TestAddonConnSecret_HAVariants covers the clustered chart variants, which
 // share the same stringData bug.
 func TestAddonConnSecret_HAVariants(t *testing.T) {
