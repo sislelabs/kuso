@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.113] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(marketplace): public icon route, real theme tokens, move entry to create-project flow ([fac3a42](https://github.com/sislelabs/kuso/commit/fac3a422a72b3555a8d790b5b7d8faa46e8095af))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([add9e1d](https://github.com/sislelabs/kuso/commit/add9e1dbfc54aabc07780e53c2e1ecf2656d1003))
+
 ## [0.18.112] — 2026-07-03
 
 ### ✨ Features
@@ -398,11 +406,6 @@ messages on every release. The format is loosely based on
 ### 🐛 Bug Fixes
 - Fix(github): tolerate App-install redirect on the OAuth callback ([539c107](https://github.com/sislelabs/kuso/commit/539c1078d5c9b1c066b2f27fafd04ef2b0cabb72))
 - Fix(addons): postgres conn uses sslmode=no-verify so node apps connect ([e34a265](https://github.com/sislelabs/kuso/commit/e34a2658c096eba459f8f1451d3d47da5302f06e))
-
-## [0.18.62] — 2026-06-11
-
-### ✨ Features
-- Feat(github): make adding another org a first-class action ([5cde943](https://github.com/sislelabs/kuso/commit/5cde94318b14314bdacd25a65b8a0a42a31fa465))
 
 
 ---
