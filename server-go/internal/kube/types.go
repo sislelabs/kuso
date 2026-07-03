@@ -269,13 +269,13 @@ type KusoServiceSpec struct {
 	// Free-form map so the chart's `toYaml .Values.resources` renders it
 	// verbatim. Propagated onto every owned KusoEnvironment (the env
 	// chart already consumes .Values.resources). Nil = chart default.
-	Resources  map[string]any      `json:"resources,omitempty"`
+	Resources map[string]any `json:"resources,omitempty"`
 	// SecurityContext opts a service into extra Linux capabilities and/or
 	// privilege escalation. Nil keeps kuso's default (drop ALL, no
 	// escalation). Propagated onto every owned KusoEnvironment.
 	SecurityContext *KusoSecurityContext `json:"securityContext,omitempty"`
-	Static     *KusoStaticSpec     `json:"static,omitempty"`
-	Buildpacks *KusoBuildpacksSpec `json:"buildpacks,omitempty"`
+	Static          *KusoStaticSpec      `json:"static,omitempty"`
+	Buildpacks      *KusoBuildpacksSpec  `json:"buildpacks,omitempty"`
 	// BuildArgs are passed to the image build as --build-arg KEY=VAL —
 	// true build-time constants, identical across every environment.
 	BuildArgs map[string]string `json:"buildArgs,omitempty"`
@@ -491,7 +491,15 @@ type KusoEnvironmentSpec struct {
 	PullRequest *KusoPullRequest `json:"pullRequest,omitempty"`
 	TTL         *KusoTTL         `json:"ttl,omitempty"`
 	Image       *KusoImage       `json:"image,omitempty"`
-	Port        int32            `json:"port,omitempty"`
+	// PendingImage holds a runtime=image target that is NOT YET LIVE
+	// because the service has a release hook that must run first. The
+	// imagerelease watcher runs the release Job against this image and,
+	// on success, moves it to Image (promote) + clears PendingImage. The
+	// chart renders no pod while Image is empty (0 replicas hold), so the
+	// un-migrated image never serves. Nil for services with no release
+	// hook (Image is set directly) and for built runtimes.
+	PendingImage *KusoImage `json:"pendingImage,omitempty"`
+	Port         int32      `json:"port,omitempty"`
 	// Healthcheck: resolved HTTP health check propagated from the
 	// service. When set, the chart renders HTTP readiness + liveness
 	// probes instead of the default TCP readiness/startup probes.
@@ -587,10 +595,10 @@ type KusoEnvironmentSpec struct {
 	// auto-mount-all; non-nil = explicit subscription.
 	//
 	// NO omitempty, same empty≠nil reason as above.
-	SubscribedAddons []string       `json:"subscribedAddons"`
-	SecretsRev       string         `json:"secretsRev,omitempty"`
-	Resources        map[string]any `json:"resources,omitempty"`
-	SecurityContext *KusoSecurityContext `json:"securityContext,omitempty"`
+	SubscribedAddons []string             `json:"subscribedAddons"`
+	SecretsRev       string               `json:"secretsRev,omitempty"`
+	Resources        map[string]any       `json:"resources,omitempty"`
+	SecurityContext  *KusoSecurityContext `json:"securityContext,omitempty"`
 	// Placement is the resolved (effective) placement for this env,
 	// computed as: env > service > project. The operator's helm chart
 	// reads it directly to render nodeSelector/affinity/tolerations.

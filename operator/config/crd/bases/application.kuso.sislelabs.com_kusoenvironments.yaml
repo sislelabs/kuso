@@ -90,6 +90,17 @@ spec:
                     pullPolicy:
                       type: string
                       default: IfNotPresent
+                pendingImage:
+                  type: object
+                  description: >-
+                    A runtime=image target withheld until the service's
+                    release hook (migration) succeeds. Promoted to image by
+                    the imagerelease watcher.
+                  properties:
+                    repository: { type: string }
+                    tag: { type: string }
+                    pullPolicy:
+                      type: string
                 port:
                   type: integer
                   format: int32
