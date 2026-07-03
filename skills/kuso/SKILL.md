@@ -1,6 +1,6 @@
 ---
 name: kuso
-description: Use when working in a project deployed to kuso (a self-hosted Kubernetes PaaS). Explains the kuso CLI, how deployments work, how to handle env vars & secrets (always `env set`/`shared-secret`, never `secret set`; per-env overrides, `${{ }}` addon aliases with per-kind URL keys, least-privilege subscriptions), preview/PR environments, base + custom domains, release hooks, custom Dockerfile paths, container command overrides, importing docker-compose projects, addon kinds (incl. redpanda/Kafka + clickhouse), debugging builds/sleeping pods, and the v0.16+ through v0.18+ features. Invoke whenever the user mentions deploys, builds, logs, env vars, secrets, addons (postgres/redis/clickhouse/redpanda/etc.), subscriptions, preview/PR envs, domains, release hooks, migrations, docker-compose import, sleeping pods, callback webhooks, or anything related to their kuso instance.
+description: Use when working in a project deployed to kuso (a self-hosted Kubernetes PaaS). Explains the kuso CLI, how deployments work, how to handle env vars & secrets (default to `env set`/`shared-secret`, use `secret set` for provider secrets that must stay out of the rendered spec; per-env overrides, `${{ }}` addon aliases with per-kind URL keys, least-privilege subscriptions), preview/PR environments, base + custom domains, release hooks, custom Dockerfile paths, container command overrides, importing docker-compose projects, addon kinds (incl. redpanda/Kafka + clickhouse), debugging builds/sleeping pods, and the v0.16+ through v0.18+ features. Invoke whenever the user mentions deploys, builds, logs, env vars, secrets, addons (postgres/redis/clickhouse/redpanda/etc.), subscriptions, preview/PR envs, domains, release hooks, migrations, docker-compose import, sleeping pods, callback webhooks, or anything related to their kuso instance.
 allowed-tools: Bash(kuso:*), Bash(curl:*), Bash(awk:*), Bash(ssh:*), Read, Edit, Write, Grep, Glob
 ---
 
@@ -8,14 +8,19 @@ allowed-tools: Bash(kuso:*), Bash(curl:*), Bash(awk:*), Bash(ssh:*), Read, Edit,
 
 This project is deployed via [kuso](https://github.com/sislelabs/kuso), a self-hosted Kubernetes PaaS. The user has a `kuso` CLI on their PATH and a logged-in session against their instance. **Always drive operations through `kuso`, not raw `kubectl`** — the CLI exercises the same auth/tenancy/perm layers users hit, so what you see is what they see.
 
-This skill is current to **v0.18.47**. Run `kuso version` to confirm what's on the user's machine.
+This skill is current to **v0.18.115**. Run `kuso version` to confirm what's on the user's machine.
 
-> **Env vars & secrets — the one rule that overrides everything:** set EVERY
-> variable (sensitive or not) through `kuso env set` (service-level) or
-> `kuso shared-secret set` (project-level). **Do NOT use `kuso secret set`** —
-> it's a legacy per-env Secret escape hatch that's invisible in the Variables
-> tab, the rendered spec, and the audit trail. Full rules in the
-> "Env vars & secrets" section below — read it before touching any variable.
+> **Env vars & secrets — the default rule:** set most variables (sensitive or
+> not) through `kuso env set` (service-level) or `kuso shared-secret set`
+> (project-level) so they show in the Variables tab, the rendered spec, and the
+> audit trail. `kuso secret set` writes a Kubernetes-Secret-backed value that
+> does NOT appear in `kuso env list` — but it IS listed (keys only) by
+> `kuso secret list`, and it is the RIGHT home for external/provider secrets a
+> project's own docs mandate keep out of the rendered spec (e.g. `STRIPE_SECRET_KEY`,
+> `RESEND_API_KEY`, webhook signing secrets). Prefer `env set`; reach for
+> `secret set` when a value must not surface in the spec/UI or a project's
+> CLAUDE.md explicitly requires it. Full rules in the "Env vars & secrets"
+> section below — read it before touching any variable.
 
 ## Mental model — read this first
 
@@ -39,7 +44,7 @@ The CLI is rooted at `kuso <command>`. Run `kuso <command> --help` whenever shap
 | `env unset` | `KEY [KEY ...]`; `--env <name>` for a per-env override |
 | `env share` / `env unshare` | `<p> <s> KEY [KEY ...]` — subscribe/unsubscribe a service to project/instance shared-secret keys |
 | `shared-secret set` | `KEY=value` (ONE pair per call — `accepts 2 arg(s)` if you pass more) |
-| `secret set` | **legacy — don't use.** 4 positional args `<p> <s> KEY VALUE`; use `env set` instead |
+| `secret set` | 4 positional args `<p> <s> KEY VALUE`; Kubernetes-Secret-backed, NOT in `env list` (but keys show in `secret list`). Use for provider secrets kept out of the spec; else prefer `env set` |
 
 This inconsistency is real. When you get `Error: accepts N arg(s), received M`, you've hit the wrong convention.
 
@@ -97,7 +102,8 @@ kuso project service add papelito web \
 # 4. Domains
 kuso domains add papelito web papelito.example.com
 
-# 5. Env vars — ALWAYS `kuso env set` (sensitive or not). NEVER `secret set`.
+# 5. Env vars — default `kuso env set` (visible in spec/audit). Provider secrets
+#    that must stay out of the spec (STRIPE_SECRET_KEY, …) → `kuso secret set`.
 kuso env set papelito web NODE_ENV=production NEXT_TELEMETRY_DISABLED=1
 kuso env set papelito web RESEND_API_KEY=re_xxx STRIPE_SECRET_KEY=sk_live_xxx
 # Values shared across services → project-level shared secret (one K=V/call):
@@ -270,7 +276,9 @@ Caveats:
 
 ## Env vars & secrets — the complete model
 
-There are FOUR places a variable can live. Pick by scope; the write command is always `env set` / `shared-secret set` (never `secret set`).
+There are places a variable can live. Pick by scope. Default to `env set` /
+`shared-secret set` (visible in the spec + audit trail); use `secret set` only
+for values that must stay OUT of the rendered spec — see the note under the table.
 
 | Where | Set with | Scope |
 |---|---|---|
@@ -279,7 +287,21 @@ There are FOUR places a variable can live. Pick by scope; the write command is a
 | Project shared | `kuso shared-secret set <p> KEY=value` | every service that subscribes (see subscriptions) |
 | Addon-injected | (automatic) | the `<project>-<addon>-conn` Secret, mounted per subscription |
 
-**The hard rule: NEVER `kuso secret set`.** It writes a per-env kube Secret via `envFromSecrets` that's invisible in the Variables tab, the rendered service spec, `kuso env list`, and the audit/revision history. Even highly-sensitive values (JWT secret, payment keys, API tokens) go through `kuso env set` / `kuso shared-secret set` so the user sees them in the UI and the audit trail captures them. The ONLY time you touch `secret set` is migrating OFF legacy per-env Secrets — and the target is `env set`.
+**The default: `kuso env set` / `kuso shared-secret set`, not `secret set`.**
+`secret set` writes a Kubernetes-Secret-backed value that does NOT appear in the
+Variables tab, the rendered service spec, or `kuso env list` — so most values
+(including JWT secrets, most API tokens) belong in `env set` where the user sees
+them in the UI and the audit trail captures them.
+
+**But `secret set` is first-class, not forbidden.** Its keys ARE discoverable via
+`kuso secret list <p> <svc>` (values never returned), it supports `--env` scoping
+and a shadow-check against project-shared keys, and it is the correct home for
+**external/provider secrets that must not surface in the committed spec** —
+`STRIPE_SECRET_KEY`, `RESEND_API_KEY`, `OPENAI_API_KEY`, webhook signing secrets.
+Several project scaffolds' CLAUDE.md hard-rules mandate exactly this (keep provider
+secrets out of `kuso.yml`/`env set`, set them via `kuso secret set`). Follow the
+project's rule. Decision: value must stay out of the rendered spec, or a project
+CLAUDE.md says so → `secret set`; everything else → `env set`.
 
 ### Addon connection secrets — auto-injected, but mind the key NAMES
 
@@ -432,6 +454,12 @@ kuso cron delete <project> <service> <name>               # for kind=service
 
 # One-shot runs (migrations, seeds, console)
 kuso run <project> <service> -- sh -c 'rake db:seed'      # NOTE: -- separator, not --cmd
+kuso run <project> <service> --follow -- <cmd>            # -f streams logs + blocks until exit (exit code = the run's)
+# GOTCHA — run jobs get addon Secrets (envFromSecrets: DATABASE_URL, REDIS_URL, …)
+# but NOT service env backed by valueFrom / ${{ }} varrefs. So a `DATABASE_URI:
+# ${{ db.DATABASE_URL }}` ALIAS is dropped in the run — the app has it, the run
+# doesn't. Map it inside the job from the raw addon key:
+kuso run <project> <service> -- sh -c 'export DATABASE_URI="${DATABASE_URI:-$DATABASE_URL}"; <cmd>'
 
 # Shells + addons + domains
 kuso shell <project> <service>                  # exec into a pod (uses local kubectl context)
@@ -467,6 +495,13 @@ kuso token list                                 # API tokens
 # Admin-only (settings:admin role)
 kuso db connect <project> <addon>               # tunnel to addon DB from laptop
 kuso db port-forward <project> <addon>          # open local TCP port
+# GOTCHA — both `db` tunnels front the kube pods/portforward subresource. If the
+# tunnel LISTENS locally but every connection dies with "connection terminated
+# unexpectedly" / "Connection terminated", check the connect log for
+# "cannot create resource pods/portforward": the kuso-server SA is missing the
+# pods/portforward RBAC in the addon's namespace (fixed in-repo by
+# fix(db) 229dac1e — grant it alongside pods/exec in the managed-ns Role). When
+# the tunnel is unavailable, run DB work IN-CLUSTER via `kuso run` instead.
 kuso addon-backup list <project> <addon>        # list S3-stored addon dumps
 kuso instance-secret list                       # instance-wide shared secrets
 kuso node add-token / pending / revoke          # cluster node bootstrap tokens
