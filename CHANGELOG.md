@@ -19,6 +19,17 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.117] — 2026-07-03
+
+### Other
+- Revert "fix(rbac): self-heal managed-ns ClusterRole on boot (pods/portforward drift)" ([da0e999](https://github.com/sislelabs/kuso/commit/da0e999757757f0e579ccbb55664a7349b55bb4e))
+
+### 🐛 Bug Fixes
+- Fix(rbac): bundle managed-ns ClusterRole into crds.yaml so upgrades self-heal it ([6d85611](https://github.com/sislelabs/kuso/commit/6d85611202f8b7f19b51e32253d4d63b9a1fd806))
+
+### 🧪 Tests
+- Test(crd): refresh kusoruns golden for valueFrom (revert collateral) ([ea8d066](https://github.com/sislelabs/kuso/commit/ea8d0669fa35389761fa5401cea6564377c7fdc1))
+
 ## [0.18.116] — 2026-07-03
 
 ### 🐛 Bug Fixes
@@ -401,15 +412,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env): unset now propagates to envs (drop orphaned inherited vars) ([307d60f](https://github.com/sislelabs/kuso/commit/307d60fb5080bc2c1f8df00c7468a964f532f7b0))
-
-## [0.18.67] — 2026-06-11
-
-### ✨ Features
-- Feat(addons): per-addon postgres TLS opt-in (spec.tls) ([e467040](https://github.com/sislelabs/kuso/commit/e467040c54731850d887fd19db062b160170ecb7))
-- Feat(cli): kuso project addon list/subscribe/unsubscribe ([e676abf](https://github.com/sislelabs/kuso/commit/e676abfb865dbca796e647c4ec81e263d0bf85c0))
-
-### 🐛 Bug Fixes
-- Fix(addons): restore redpanda to the add-addon catalog + canvas icon ([15da68a](https://github.com/sislelabs/kuso/commit/15da68a0dabb4a3c7feb894cc5aac6af268b75e3))
 
 
 ---
