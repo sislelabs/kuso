@@ -2,6 +2,15 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.63] — 2026-06-11
+
+### ✨ Features
+- Feat(incidents): per-project opt-in for the incident agent ([e550501](https://github.com/sislelabs/kuso/commit/e55050122d62d405ad172ca7400fe677701404f7))
+
+### 🐛 Bug Fixes
+- Fix(github): tolerate App-install redirect on the OAuth callback ([539c107](https://github.com/sislelabs/kuso/commit/539c1078d5c9b1c066b2f27fafd04ef2b0cabb72))
+- Fix(addons): postgres conn uses sslmode=no-verify so node apps connect ([e34a265](https://github.com/sislelabs/kuso/commit/e34a2658c096eba459f8f1451d3d47da5302f06e))
+
 ## [0.18.62] — 2026-06-11
 
 ### ✨ Features
