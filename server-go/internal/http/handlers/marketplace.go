@@ -73,7 +73,12 @@ func (h *MarketplaceHandler) Icon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "image/svg+xml")
-	w.Header().Set("Cache-Control", "public, max-age=86400")
+	// Revalidate on every load rather than a long max-age: icons ship
+	// embedded in the server binary, so a redesign that lands in a new
+	// release must not be masked by a stale 24h-cached copy in the
+	// browser (which is exactly what a `max-age=86400` did — users saw
+	// the old placeholder squares after the real glyphs shipped).
+	w.Header().Set("Cache-Control", "no-cache")
 	_, _ = w.Write(e.Icon)
 }
 
