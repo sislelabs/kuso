@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -151,7 +152,18 @@ func (h *PortForwardWSHandler) PortForward(w http.ResponseWriter, r *http.Reques
 	// TCP connection. The kuso WS carries that data stream end-to-end.
 	dataStream, errorStream, closeStreams, err := h.openPortForwardStreams(ctx, ns, podName, port)
 	if err != nil {
-		_ = conn.WriteMessage(websocket.TextMessage, []byte("[kuso] portforward setup failed: "+err.Error()))
+		msg := "[kuso] portforward setup failed: " + err.Error()
+		// A cluster installed before pods/portforward was added to the
+		// kuso-server-managed-ns ClusterRole 403s here. It can't self-heal (the
+		// server can't escalate its own RBAC), so point the operator at the
+		// one-time cluster-admin fix instead of leaving a cryptic kube error.
+		if strings.Contains(err.Error(), "pods/portforward") && strings.Contains(err.Error(), "forbidden") {
+			msg += "\n[kuso] this cluster's RBAC predates pods/portforward. A cluster-admin must re-apply the manifest once:\n" +
+				"[kuso]   kubectl apply -f https://github.com/sislelabs/kuso/releases/latest/download/... (deploy/server-go.yaml)\n" +
+				"[kuso] or: kubectl -n kuso patch clusterrole kuso-server-managed-ns --type=json \\\n" +
+				"[kuso]      -p='[{\"op\":\"add\",\"path\":\"/rules/-\",\"value\":{\"apiGroups\":[\"\"],\"resources\":[\"pods/portforward\"],\"verbs\":[\"create\"]}}]'"
+		}
+		_ = conn.WriteMessage(websocket.TextMessage, []byte(msg))
 		return
 	}
 	defer closeStreams()
@@ -405,4 +417,3 @@ func (h *PortForwardWSHandler) releaseSlot(userID string) {
 		h.active[userID]--
 	}
 }
-
