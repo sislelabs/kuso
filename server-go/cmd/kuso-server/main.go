@@ -37,6 +37,7 @@ import (
 	ghpkg "kuso/server/internal/github"
 	"kuso/server/internal/health"
 	httpsrv "kuso/server/internal/http"
+	"kuso/server/internal/imagerelease"
 	"kuso/server/internal/incidents"
 	"kuso/server/internal/instancepg"
 	"kuso/server/internal/instancesecrets"
@@ -1022,6 +1023,24 @@ func main() {
 				Kube:      kubeClient,
 				Namespace: *namespace,
 				Logger:    logger.With("component", "scaledown"),
+			}).Run(workCtx)
+			// Image-path release trigger: runtime=image services skip the build
+			// pipeline, so the build poller never runs their release hook. This
+			// watcher reconciles envs with a withheld spec.pendingImage — runs the
+			// migration Job and promotes pendingImage→image on success. Leader-gated
+			// so only one replica drives it.
+			//
+			// Notify is left nil: markReleaseFailed's event shape (builds.EventEnvelope
+			// + the unexported eventBuildFailed type) isn't reusable from here without
+			// exporting build-package internals, and the brief calls for nil-and-log
+			// over a fragile hand-rolled event. The withheld image + logger.Warn below
+			// are the load-bearing failure signal; wire Notify once a shared event
+			// helper exists.
+			go (&imagerelease.Watcher{
+				Kube:      kubeClient,
+				Namespace: *namespace,
+				Logger:    logger.With("component", "imagerelease"),
+				Release:   releaserun.New(kubeClient),
 			}).Run(workCtx)
 			// Host package-update advisory — reads the pkg-probe
 			// DaemonSet's node annotations and notifies (warn, edge-
