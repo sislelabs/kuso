@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.115] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(marketplace): unify icon glyphs — consistent stroke weight, centering, rounded joins ([2cd676a](https://github.com/sislelabs/kuso/commit/2cd676a559991405152b62a54bbf6e4c518901c0))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([6262481](https://github.com/sislelabs/kuso/commit/6262481d65c52d970125ea24bd4382c37c23bd63))
+
 ## [0.18.114] — 2026-07-03
 
 ### 🐛 Bug Fixes
@@ -400,11 +408,6 @@ messages on every release. The format is loosely based on
 ### 🐛 Bug Fixes
 - Fix(jobs+hpa): carry valueFrom into release/preview Jobs; tame HPA scaling ([76855c6](https://github.com/sislelabs/kuso/commit/76855c6dbd5d3b32223e52fa16e433c43a7fa02b))
 - Fix(cli): decode the wrapped {values:{...}} addon secret in db connect ([b45732e](https://github.com/sislelabs/kuso/commit/b45732e137d1d5af96cea888245b8f114f3b2d0e))
-
-## [0.18.64] — 2026-06-11
-
-### 🐛 Bug Fixes
-- Fix(notify): show the live-app link for auto-host services on build success ([71abefd](https://github.com/sislelabs/kuso/commit/71abefd28362f0ffc12379dc452d47b483300681))
 
 
 ---
