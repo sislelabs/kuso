@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.56] — 2026-06-10
+
+### 🐛 Bug Fixes
+- Fix(incidents): live-e2e fixes — KUSO_TOKEN optional, Service :80, CLI list envelope ([ee8dc4d](https://github.com/sislelabs/kuso/commit/ee8dc4d548aba33e0e65d8b58ab9ea9e33023b2c))
+
 ## [0.18.55] — 2026-06-10
 
 ### Other
