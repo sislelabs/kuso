@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.60] — 2026-06-11
+
+### 🐛 Bug Fixes
+- Fix(incidents): keep the Claude Code token fresh (it expires ~daily) ([4bc0619](https://github.com/sislelabs/kuso/commit/4bc0619f7548635ca1ee1425b0232546c0dc6127))
+
 ## [0.18.59] — 2026-06-10
 
 ### ✨ Features
