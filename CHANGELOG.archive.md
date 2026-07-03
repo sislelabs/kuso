@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.59] — 2026-06-10
+
+### ✨ Features
+- Feat(incidents): settings page to enable + configure the incident agent ([6153444](https://github.com/sislelabs/kuso/commit/61534441b9895656366654fbd25f0cf2c17f3412))
+
+### 📝 Docs
+- Docs(spec): incident-agent settings page design ([f76893b](https://github.com/sislelabs/kuso/commit/f76893b15e78a43cf3868110cab445487760bb6f))
+
 ## [0.18.58] — 2026-06-10
 
 ### ✨ Features
