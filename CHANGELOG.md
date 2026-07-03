@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.107] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(marketplace): live-smoke template fixes + hex64 generator ([985f6a4](https://github.com/sislelabs/kuso/commit/985f6a46518b79cbe8ef9fd6678fcfc5b23aac8c))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([0ce819b](https://github.com/sislelabs/kuso/commit/0ce819b81b768b6fea387398f70d0e4b6355de8f))
+
 ## [0.18.106] — 2026-07-03
 
 ### ✨ Features
@@ -371,11 +379,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(incidents): server honors ?state= filter; bot list-envelope; manifest no longer clobbers channel id ([ba65b5c](https://github.com/sislelabs/kuso/commit/ba65b5c14776b0c06794ef8227ebd8123075c028))
-
-## [0.18.56] — 2026-06-10
-
-### 🐛 Bug Fixes
-- Fix(incidents): live-e2e fixes — KUSO_TOKEN optional, Service :80, CLI list envelope ([ee8dc4d](https://github.com/sislelabs/kuso/commit/ee8dc4d548aba33e0e65d8b58ab9ea9e33023b2c))
 
 
 ---
