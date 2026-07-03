@@ -617,7 +617,39 @@ Settings → Source / Networking flow.
 			req.Repo = rp
 		}
 		if cmd.Flags().Changed("cap-add") || cmd.Flags().Changed("allow-privilege-escalation") {
+			// Server-side semantic: a non-nil securityContext REPLACES the
+			// whole block verbatim (no per-field merge server-side). So
+			// changing just one of cap-add/allow-privilege-escalation has
+			// to round-trip the other's current value through a
+			// fetch-then-patch sequence — otherwise we'd silently reset
+			// the untouched sub-field to its zero value.
+			cur, err := api.GetService(args[0], args[1])
+			if err != nil {
+				return fmt.Errorf("fetch current service spec: %w", err)
+			}
+			if cur.StatusCode() >= 300 {
+				return fmt.Errorf("fetch current service spec: server %d", cur.StatusCode())
+			}
+			var curWire struct {
+				Spec struct {
+					SecurityContext *struct {
+						Capabilities *struct {
+							Add []string `json:"add"`
+						} `json:"capabilities"`
+						AllowPrivilegeEscalation *bool `json:"allowPrivilegeEscalation"`
+					} `json:"securityContext"`
+				} `json:"spec"`
+			}
+			if err := json.Unmarshal(cur.Body(), &curWire); err != nil {
+				return fmt.Errorf("decode current service: %w", err)
+			}
 			sc := &kusoApi.PatchSecurityContextRequest{}
+			if curWire.Spec.SecurityContext != nil {
+				if curWire.Spec.SecurityContext.Capabilities != nil {
+					sc.Capabilities = &kusoApi.PatchCapabilitiesRequest{Add: curWire.Spec.SecurityContext.Capabilities.Add}
+				}
+				sc.AllowPrivilegeEscalation = curWire.Spec.SecurityContext.AllowPrivilegeEscalation
+			}
 			if cmd.Flags().Changed("cap-add") {
 				caps := make([]string, 0, len(serviceSetCapAdd))
 				for _, c := range serviceSetCapAdd {
