@@ -592,6 +592,12 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Healthcheck:     created.Spec.Healthcheck,
 			SecurityContext: created.Spec.SecurityContext,
 			Resources:       created.Spec.Resources,
+			// Release hook (pre-deploy migration Job). Must be on the env
+			// at create time — the release Job runs off env.Spec.Release,
+			// so a first deploy of a service with a release hook (e.g. a
+			// marketplace app that ships an empty DB) would otherwise skip
+			// the migration and crash on missing tables until a later patch.
+			Release: created.Spec.Release,
 		},
 	}
 	if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {

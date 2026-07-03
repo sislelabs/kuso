@@ -456,6 +456,46 @@ func TestAddService_CopiesSecurityContextToProductionEnv(t *testing.T) {
 	}
 }
 
+// TestAddService_CopiesReleaseHookToProductionEnv guards the same
+// create-path gap for the release hook: the pre-deploy migration Job runs
+// off env.Spec.Release, so a first deploy of a service that ships an empty
+// DB (e.g. Plausible from the marketplace) must have the hook on its env at
+// create time — otherwise the app boots before migrations run and crashes
+// on missing tables until a later PatchService re-propagates it.
+func TestAddService_CopiesReleaseHookToProductionEnv(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/x/y", DefaultBranch: "main"},
+		BaseDomain:  "alpha.example.com",
+	}))
+
+	wantCmd := []string{"sh", "-c", "bin/migrate"}
+	created, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{
+		Name:    "web",
+		Runtime: "image",
+		Port:    3000,
+		Image:   &ServiceImageSpec{Repository: "ghcr.io/x/y", Tag: "v1"},
+		Release: &PatchReleaseRequest{Command: wantCmd, TimeoutSeconds: 300},
+	})
+	if err != nil {
+		t.Fatalf("AddService: %v", err)
+	}
+	if created.Spec.Release == nil || !reflect.DeepEqual(created.Spec.Release.Command, wantCmd) {
+		t.Fatalf("service release: got %+v, want cmd %+v", created.Spec.Release, wantCmd)
+	}
+
+	env, err := s.GetEnvironment(context.Background(), "alpha", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("env not auto-created: %v", err)
+	}
+	if env.Spec.Release == nil {
+		t.Fatal("production env has no release hook — first deploy would skip migrations")
+	}
+	if !reflect.DeepEqual(env.Spec.Release.Command, wantCmd) {
+		t.Errorf("production env release command: got %+v, want %+v", env.Spec.Release.Command, wantCmd)
+	}
+}
+
 // TestSlugifyServiceName covers the display-name → slug path used by
 // AddService when the user types "Todo API" in the dialog. Edge cases:
 // leading/trailing whitespace, runs of separators, diacritics dropped,
