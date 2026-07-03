@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.54] — 2026-06-10
+
+### 🐛 Bug Fixes
+- Fix(audit): use Postgres $N placeholders, not SQLite ? ([6658259](https://github.com/sislelabs/kuso/commit/6658259c3d44bd382083272ae3fc891d5d447b5d))
+
 ## [0.18.53] — 2026-06-10
 
 ### ✨ Features
