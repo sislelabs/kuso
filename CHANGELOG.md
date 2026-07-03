@@ -19,6 +19,15 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.116] — 2026-07-03
+
+### 🐛 Bug Fixes
+- Fix(rbac): self-heal managed-ns ClusterRole on boot (pods/portforward drift) ([f024f58](https://github.com/sislelabs/kuso/commit/f024f58a037dfb70774d31a8f5a255a53bd74f01))
+- Fix(run): carry ${{ }} env aliases into run pods (DATABASE_URI drop) ([3aea00b](https://github.com/sislelabs/kuso/commit/3aea00baa32d3850edf6fd47a6a01a751532a3ea))
+
+### 📝 Docs
+- Docs(skill): update kuso skill to v0.18.115 + correct secret-set guidance ([82fb981](https://github.com/sislelabs/kuso/commit/82fb98150f69f10e5783906fad21a7422f51f69c))
+
 ## [0.18.115] — 2026-07-03
 
 ### 🐛 Bug Fixes
@@ -229,6 +238,10 @@ messages on every release. The format is loosely based on
 ### ✨ Features
 - Feat(stop): branded stopped page, project card stopped state, stop-whole-project ([ff69409](https://github.com/sislelabs/kuso/commit/ff6940998255edb8c554873d91d2842f355293fb))
 - Feat(onboarding): one-click GitHub App creation + install summary + doctor webhook check ([b21cfb7](https://github.com/sislelabs/kuso/commit/b21cfb7ffe5381c7060f17e8d7534dee6a28543c))
+
+## [0.18.90] — 2026-07-01
+
+### ✨ Features
 - Feat(cli,web): service stop/start surfaces ([de81e7c](https://github.com/sislelabs/kuso/commit/de81e7c8b47a5cbfa035525d0217ab890de4299c))
 - Feat(service): hard stop/start — pin to 0 replicas, no wake-on-traffic ([42c5153](https://github.com/sislelabs/kuso/commit/42c51533274731a9d4c089f6e255fe2753a97540))
 
@@ -397,17 +410,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addons): restore redpanda to the add-addon catalog + canvas icon ([15da68a](https://github.com/sislelabs/kuso/commit/15da68a0dabb4a3c7feb894cc5aac6af268b75e3))
-
-## [0.18.66] — 2026-06-11
-
-### 🐛 Bug Fixes
-- Fix(addons): postgres addon serves plaintext, conn uses sslmode=disable ([1f21ba9](https://github.com/sislelabs/kuso/commit/1f21ba97ffcc482e7579d77a8a41641866b8b537))
-
-## [0.18.65] — 2026-06-11
-
-### 🐛 Bug Fixes
-- Fix(jobs+hpa): carry valueFrom into release/preview Jobs; tame HPA scaling ([76855c6](https://github.com/sislelabs/kuso/commit/76855c6dbd5d3b32223e52fa16e433c43a7fa02b))
-- Fix(cli): decode the wrapped {values:{...}} addon secret in db connect ([b45732e](https://github.com/sislelabs/kuso/commit/b45732e137d1d5af96cea888245b8f114f3b2d0e))
 
 
 ---
