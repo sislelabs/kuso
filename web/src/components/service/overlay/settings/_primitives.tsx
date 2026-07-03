@@ -57,6 +57,13 @@ export interface FormState {
   placementNodes: string[];
   // Deploy
   previewsDisabled: boolean;
+  // Security (advanced) — opt-in escape hatch for images that self-drop
+  // root at runtime (setpriv/gosu/su-exec). capAdd is comma-separated
+  // capability names without the CAP_ prefix, e.g. "SETUID, SETGID".
+  // Empty capAdd + allowPrivilegeEscalation=false = kuso's hardened
+  // default (drop ALL, no escalation).
+  capAdd: string;
+  allowPrivilegeEscalation: boolean;
 }
 
 export interface SectionProps {
@@ -125,6 +132,8 @@ export function fromSvc(svc?: KusoService): FormState {
     // KusoService type may not declare it (newer field), so cast.
     previewsDisabled:
       !!(svc?.spec as { previews?: { disabled?: boolean } } | undefined)?.previews?.disabled,
+    capAdd: (svc?.spec.securityContext?.capabilities?.add ?? []).join(", "),
+    allowPrivilegeEscalation: !!svc?.spec.securityContext?.allowPrivilegeEscalation,
   };
 }
 

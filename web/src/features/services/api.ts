@@ -285,6 +285,14 @@ export interface PatchServiceBody {
   // for this service even when the project toggle is on.
   // {clear:true} drops the override, falling back to project default.
   previews?: { disabled?: boolean; clear?: boolean };
+  // SecurityContext is the opt-in escape hatch for images that self-drop
+  // root at runtime (setpriv/gosu/su-exec). No "empty clears" semantics
+  // server-side — nil means leave-alone, non-nil sets it verbatim — so
+  // callers only send this when there's actually something to set.
+  securityContext?: {
+    capabilities?: { add?: string[] };
+    allowPrivilegeEscalation?: boolean;
+  };
 }
 
 export interface PatchRepoBody {

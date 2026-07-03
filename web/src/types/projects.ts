@@ -73,6 +73,14 @@ export interface KusoServiceSpec {
   buildpacks?: { builderImage?: string; lifecycleImage?: string };
   volumes?: KusoVolume[];
   placement?: { labels?: Record<string, string>; nodes?: string[] };
+  // SecurityContext is the opt-in escape hatch for images that self-drop
+  // root at runtime (setpriv/gosu/su-exec). Undefined = kuso's default
+  // hardened context (drop ALL capabilities, allowPrivilegeEscalation
+  // false). Mirrors kube.KusoSecurityContext.
+  securityContext?: {
+    capabilities?: { add?: string[] };
+    allowPrivilegeEscalation?: boolean;
+  };
 }
 
 export interface KusoVolume {

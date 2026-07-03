@@ -9,7 +9,7 @@ import { useEnvironments, setEnvGroupServiceBranch, envsQueryKey } from "@/featu
 import { useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import type { KusoService } from "@/types/projects";
-import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin } from "lucide-react";
+import { Github, Trash2, Network, Layers3, Hammer, Cloud, HardDrive, MapPin, ShieldAlert } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 import { useOverlayDirty } from "@/components/service/ServiceOverlay";
@@ -23,6 +23,7 @@ import { PlacementSection } from "./settings/PlacementSection";
 import { VolumesSection } from "./settings/VolumesSection";
 import { BuildSection } from "./settings/BuildSection";
 import { DeploySection } from "./settings/DeploySection";
+import { SecuritySection } from "./settings/SecuritySection";
 import { DangerSection } from "./settings/DangerSection";
 
 interface Props {
@@ -45,6 +46,7 @@ const SECTIONS = [
   { id: "volumes",    label: "Volumes",    icon: HardDrive },
   { id: "build",      label: "Build",      icon: Hammer },
   { id: "deploy",     label: "Deploy",     icon: Cloud },
+  { id: "security",   label: "Security",   icon: ShieldAlert },
   { id: "danger",     label: "Danger",     icon: Trash2 },
 ] as const;
 
@@ -333,6 +335,25 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
       // to the project toggle's setting).
       body.previews = state.previewsDisabled ? { disabled: true } : { clear: true };
     }
+    if (
+      state.capAdd !== baseline.capAdd ||
+      state.allowPrivilegeEscalation !== baseline.allowPrivilegeEscalation
+    ) {
+      const caps = state.capAdd
+        .split(",")
+        .map((c) => c.trim())
+        .filter(Boolean);
+      // Server semantics: nil = leave alone, non-nil = set verbatim (no
+      // "empty clears" sentinel yet). Only send when there's actually
+      // something to set, so an untouched service that never had
+      // securityContext isn't force-set to an all-empty block.
+      if (caps.length > 0 || state.allowPrivilegeEscalation) {
+        body.securityContext = {
+          ...(caps.length > 0 ? { capabilities: { add: caps } } : {}),
+          allowPrivilegeEscalation: state.allowPrivilegeEscalation,
+        };
+      }
+    }
 
     if (Object.keys(body).length === 0) {
       // Nothing actually changed (user shuffled empty rows around or
@@ -435,6 +456,7 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
           <VolumesSection state={state} setState={setState} />
           <BuildSection state={state} setState={setState} />
           <DeploySection project={project} state={state} setState={setState} />
+          <SecuritySection state={state} setState={setState} />
           <DangerSection project={project} service={service} />
         </div>
 

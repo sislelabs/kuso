@@ -477,8 +477,10 @@ var (
 	serviceSetPrivateEgress string // "on" | "off" | "" (leave alone)
 	serviceSetMinReplicas   int
 	serviceSetMaxReplicas   int
-	serviceSetPath          string // monorepo subpath (relative to repo root)
-	serviceSetBranch        string // git branch override
+	serviceSetPath          string   // monorepo subpath (relative to repo root)
+	serviceSetBranch        string   // git branch override
+	serviceSetCapAdd        []string // Linux capabilities to add back (e.g. SETUID,SETGID)
+	serviceSetAllowPrivEsc  string   // "on" | "off" | "" (leave alone)
 )
 
 var serviceSetCmd = &cobra.Command{
@@ -495,7 +497,10 @@ Settings → Source / Networking flow.
   --internal=on                 # skip public Ingress (in-cluster only)
   --internal=off                # re-expose publicly
   --private-egress=on           # deny public internet egress
-  --private-egress=off          # allow public internet egress`,
+  --private-egress=off          # allow public internet egress
+  --cap-add SETUID --cap-add SETGID   # add back Linux capabilities (repeatable)
+  --allow-privilege-escalation=on     # allow a process to gain more privs than its parent
+  --allow-privilege-escalation=off    # disallow (kuso's hardened default)`,
 	Example: `  kuso project service set hui kuso-demo-todo-web --display-name "Todo Web"
   kuso project service set hui kuso-demo-todo-api --port 8080
   kuso project service set hui worker --internal=on
@@ -610,6 +615,30 @@ Settings → Source / Networking flow.
 				rp.Branch = serviceSetBranch
 			}
 			req.Repo = rp
+		}
+		if cmd.Flags().Changed("cap-add") || cmd.Flags().Changed("allow-privilege-escalation") {
+			sc := &kusoApi.PatchSecurityContextRequest{}
+			if cmd.Flags().Changed("cap-add") {
+				caps := make([]string, 0, len(serviceSetCapAdd))
+				for _, c := range serviceSetCapAdd {
+					c = strings.TrimSpace(c)
+					if c != "" {
+						caps = append(caps, c)
+					}
+				}
+				sc.Capabilities = &kusoApi.PatchCapabilitiesRequest{Add: caps}
+			}
+			if cmd.Flags().Changed("allow-privilege-escalation") {
+				switch serviceSetAllowPrivEsc {
+				case "on", "true", "yes":
+					sc.AllowPrivilegeEscalation = kusoApi.BoolPtr(true)
+				case "off", "false", "no":
+					sc.AllowPrivilegeEscalation = kusoApi.BoolPtr(false)
+				default:
+					return fmt.Errorf("--allow-privilege-escalation must be on|off (got %q)", serviceSetAllowPrivEsc)
+				}
+			}
+			req.SecurityContext = sc
 		}
 		resp, err := api.PatchService(args[0], args[1], req)
 		if err != nil {
@@ -1179,6 +1208,8 @@ func init() {
 	serviceSetCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
 	serviceSetCmd.Flags().StringVar(&serviceSetPath, "path", "", "monorepo subpath relative to repo root (e.g. apps/api)")
 	serviceSetCmd.Flags().StringVar(&serviceSetBranch, "branch", "", "git branch override (empty = follow project default)")
+	serviceSetCmd.Flags().StringSliceVar(&serviceSetCapAdd, "cap-add", nil, "Linux capability to add back, without CAP_ (repeatable, e.g. --cap-add SETUID --cap-add SETGID)")
+	serviceSetCmd.Flags().StringVar(&serviceSetAllowPrivEsc, "allow-privilege-escalation", "", "allow a process to gain more privileges than its parent (on|off)")
 
 	projectCmd.AddCommand(projectAddonCmd)
 	projectAddonCmd.AddCommand(addonAddCmd)
