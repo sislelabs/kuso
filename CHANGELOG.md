@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.118] — 2026-07-03
+
+### Other
+- Revert "fix(rbac): bundle managed-ns ClusterRole into crds.yaml so upgrades self-heal it" ([7578cdf](https://github.com/sislelabs/kuso/commit/7578cdfda11165fadf4aaddae47f87d11e1a5a4e))
+
+### 🐛 Bug Fixes
+- Fix(db): actionable error when pods/portforward RBAC is stale ([ed20945](https://github.com/sislelabs/kuso/commit/ed20945d9a89b42ea2d19272564ec84f430e9a9d))
+
 ## [0.18.117] — 2026-07-03
 
 ### Other
@@ -404,14 +412,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(services): expose custom Dockerfile-path field in the UI ([84ee10b](https://github.com/sislelabs/kuso/commit/84ee10b3c25a13fd7bfff1812e1855c39f396b84))
-
-## [0.18.68] — 2026-06-11
-
-### ✨ Features
-- Feat(addons): add MongoDB, RabbitMQ, and Valkey addon kinds ([a87a76f](https://github.com/sislelabs/kuso/commit/a87a76f15585f0b767b19b386785e5258274ed0b))
-
-### 🐛 Bug Fixes
-- Fix(env): unset now propagates to envs (drop orphaned inherited vars) ([307d60f](https://github.com/sislelabs/kuso/commit/307d60fb5080bc2c1f8df00c7468a964f532f7b0))
 
 
 ---
