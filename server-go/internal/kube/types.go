@@ -1086,12 +1086,19 @@ type KusoRunSpec struct {
 	Done bool `json:"done,omitempty"`
 }
 
-// KusoRunEnv is a single env var overlay. Plain key/value only —
-// SecretKeyRef and ConfigMapRef expressions belong on the service
-// spec, which this run inherits.
+// KusoRunEnv is a single env var for the run. Usually a plain key/value
+// overlay, but it also carries ValueFrom so a service's ${{ }} aliases
+// (secretKeyRef/configMapKeyRef — e.g. DATABASE_URI: ${{ db.DATABASE_URL }})
+// reach the run pod. Those refs resolve against the same Secrets the run
+// mounts via EnvFromSecrets, so a run sees the SAME resolved env the real
+// pods do. Value and ValueFrom are mutually exclusive per var (kube rule).
 type KusoRunEnv struct {
 	Name  string `json:"name"`
-	Value string `json:"value"`
+	Value string `json:"value,omitempty"`
+	// ValueFrom mirrors KusoEnvVar.ValueFrom — a free-form map so
+	// secretKeyRef/configMapKeyRef survive the CR round-trip into the
+	// job helm chart, which renders it verbatim.
+	ValueFrom map[string]any `json:"valueFrom,omitempty"`
 }
 
 // ---- Kuso (config CRD) ---------------------------------------------------

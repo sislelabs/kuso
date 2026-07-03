@@ -358,28 +358,38 @@ func genRunName(project, service string) string {
 	return fmt.Sprintf("%s-%s-run-%s", project, service, suffix)
 }
 
-// mergeRunEnv builds the run's plain env: the service's own plain env vars first,
-// then the caller's --env overlay on top (overlay wins on name collision, and
-// preserves declaration order). Service vars backed by valueFrom (addon
-// secretKeyRefs / ${{ }} refs) are skipped — addon connection vars reach the run
-// via envFromSecrets, and KusoRunEnv carries only name/value. This is what makes
-// `kuso run` see the same configured env the real pods do.
+// mergeRunEnv builds the run's env: the service's own env vars first (both plain
+// key/value AND valueFrom aliases), then the caller's --env overlay on top
+// (overlay wins on name collision, and preserves declaration order).
+//
+// valueFrom vars (a service's ${{ }} secretKeyRef/configMapKeyRef aliases, e.g.
+// `DATABASE_URI: ${{ db.DATABASE_URL }}`) are CARRIED, not skipped: they resolve
+// against the same Secrets the run mounts via EnvFromSecrets, so the run sees the
+// SAME resolved env the real pods do. Previously they were dropped on the theory
+// that "addon vars arrive via envFromSecrets" — true for the RAW key (DATABASE_URL)
+// but NOT for a differently-named alias (DATABASE_URI), which then vanished from
+// the run and broke seeds/migrations that read the aliased name. An --env overlay
+// (plain value) always wins over a service var of the same name, clearing its
+// ValueFrom (kube forbids value + valueFrom on one var).
 func mergeRunEnv(serviceVars []kube.KusoEnvVar, overlay []EnvVar) []kube.KusoRunEnv {
 	out := make([]kube.KusoRunEnv, 0, len(serviceVars)+len(overlay))
 	idx := make(map[string]int, len(serviceVars)+len(overlay))
 	for _, e := range serviceVars {
-		if e.Name == "" || e.ValueFrom != nil {
+		if e.Name == "" {
 			continue
 		}
 		idx[e.Name] = len(out)
-		out = append(out, kube.KusoRunEnv{Name: e.Name, Value: e.Value})
+		out = append(out, kube.KusoRunEnv{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom})
 	}
 	for _, e := range overlay {
 		if e.Name == "" {
 			continue
 		}
 		if i, ok := idx[e.Name]; ok {
+			// Overlay is a plain value — it replaces the service var entirely,
+			// including any ValueFrom (value + valueFrom can't coexist).
 			out[i].Value = e.Value
+			out[i].ValueFrom = nil
 			continue
 		}
 		idx[e.Name] = len(out)

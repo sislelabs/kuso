@@ -67,7 +67,15 @@ spec:
           env:
             {{- range . }}
             - name: {{ .name | quote }}
+              {{- if .valueFrom }}
+              {{- /* A ${{ }} alias (secretKeyRef/configMapKeyRef). Resolves
+                     against the same Secrets mounted via envFromSecrets, so a
+                     run sees the service's aliased env (e.g. DATABASE_URI). */}}
+              valueFrom:
+                {{- toYaml .valueFrom | nindent 16 }}
+              {{- else }}
               value: {{ .value | quote }}
+              {{- end }}
             {{- end }}
           {{- end }}
           {{- with .Values.envFromSecrets }}

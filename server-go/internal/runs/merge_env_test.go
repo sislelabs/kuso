@@ -29,18 +29,53 @@ func TestMergeRunEnv_IncludesServicePlainVars(t *testing.T) {
 	}
 }
 
-func TestMergeRunEnv_SkipsValueFromVars(t *testing.T) {
+func TestMergeRunEnv_CarriesValueFromVars(t *testing.T) {
+	// A ${{ }} alias (secretKeyRef) must be CARRIED into the run so the run sees
+	// the service's aliased env (e.g. DATABASE_URI) — it resolves against the
+	// same Secrets the run mounts via envFromSecrets. Previously dropped, which
+	// silently broke seeds/migrations reading the aliased name.
+	ref := map[string]any{"secretKeyRef": map[string]any{"name": "db-conn", "key": "DATABASE_URL"}}
 	svc := []kube.KusoEnvVar{
-		{Name: "DATABASE_URL", ValueFrom: map[string]any{"secretKeyRef": map[string]any{"name": "db-conn", "key": "DATABASE_URL"}}},
+		{Name: "DATABASE_URI", ValueFrom: ref},
 		{Name: "PLAIN", Value: "ok"},
 	}
 	got := mergeRunEnv(svc, nil)
-	m := names(got)
-	if _, ok := m["DATABASE_URL"]; ok {
-		t.Fatalf("valueFrom var must be skipped (it arrives via envFromSecrets): %#v", m)
+
+	var alias *kube.KusoRunEnv
+	for i := range got {
+		if got[i].Name == "DATABASE_URI" {
+			alias = &got[i]
+		}
 	}
-	if m["PLAIN"] != "ok" {
-		t.Fatalf("plain var should remain: %#v", m)
+	if alias == nil {
+		t.Fatalf("valueFrom alias DATABASE_URI must be carried: %#v", got)
+	}
+	if alias.ValueFrom == nil {
+		t.Fatalf("DATABASE_URI must keep its ValueFrom ref: %#v", *alias)
+	}
+	if alias.Value != "" {
+		t.Fatalf("a valueFrom var must not also have a Value: %#v", *alias)
+	}
+	if names(got)["PLAIN"] != "ok" {
+		t.Fatalf("plain var should remain: %#v", got)
+	}
+}
+
+func TestMergeRunEnv_OverlayClearsValueFrom(t *testing.T) {
+	// A plain --env overlay of the same name replaces a service valueFrom var
+	// entirely (value + valueFrom can't coexist on one kube env var).
+	ref := map[string]any{"secretKeyRef": map[string]any{"name": "db-conn", "key": "DATABASE_URL"}}
+	svc := []kube.KusoEnvVar{{Name: "DATABASE_URI", ValueFrom: ref}}
+	overlay := []EnvVar{{Name: "DATABASE_URI", Value: "postgres://override"}}
+	got := mergeRunEnv(svc, overlay)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 var, got %#v", got)
+	}
+	if got[0].Value != "postgres://override" {
+		t.Fatalf("overlay value should win: %#v", got[0])
+	}
+	if got[0].ValueFrom != nil {
+		t.Fatalf("overlay must clear ValueFrom (value+valueFrom can't coexist): %#v", got[0])
 	}
 }
 
