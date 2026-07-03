@@ -233,6 +233,12 @@ func NewRouter(d Deps) http.Handler {
 	r.Post("/api/auth/logout", authH.Logout)
 	r.Get("/api/auth/methods", authH.Methods)
 
+	// Marketplace app icons are static SVG brand marks with no secrets,
+	// served publicly so the catalog grid's <img src> tags load without a
+	// bearer token (an image tag can't send one). List/get/render stay
+	// bearer-protected inside mountAuthenticatedRoutes.
+	(&httphandlers.MarketplaceHandler{Logger: d.Logger}).MountPublic(r)
+
 	// OAuth flows are public (no JWT yet) and end with a redirect
 	// carrying the JWT in a cookie. Only mounted when the corresponding
 	// env vars are configured.

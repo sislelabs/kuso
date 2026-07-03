@@ -65,12 +65,18 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
-      <div className="w-full max-w-lg rounded-lg bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-lg font-semibold">Deploy {app.title}</h2>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-lg rounded-xl border border-[var(--border-subtle)] bg-[var(--bg-elevated)] p-5 shadow-[var(--shadow-lg,0_20px_60px_rgba(0,0,0,0.5))]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 className="text-lg font-semibold text-[var(--text-primary)]">Deploy {app.title}</h2>
         <p className="mt-1 text-sm text-[var(--text-secondary)]">{app.description}</p>
 
-        <label className="mt-4 block text-sm">Project</label>
+        <label className="mt-4 block text-sm text-[var(--text-secondary)]">Project</label>
         <Input
           value={project}
           onChange={(e) => {
@@ -81,7 +87,7 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
 
         {app.prompts.map((p) => (
           <div key={p.key} className="mt-3">
-            <label className="block text-sm">
+            <label className="block text-sm text-[var(--text-secondary)]">
               {p.title}
               {p.required && <span className="text-amber-400"> *</span>}
             </label>
@@ -99,7 +105,7 @@ export function DeployDialog({ app, onClose }: { app: MarketplaceApp; onClose: (
         ))}
 
         {preview && (
-          <div className="mt-4 rounded border border-[var(--border)] p-3 text-sm">
+          <div className="mt-4 rounded-lg border border-[var(--border-subtle)] bg-[var(--bg-secondary)] p-3 text-sm">
             <p className="mb-1 font-medium">This will create:</p>
             <ul className="space-y-0.5">
               {preview.notes.map((n, i) => (

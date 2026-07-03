@@ -23,8 +23,16 @@ type MarketplaceHandler struct {
 func (h *MarketplaceHandler) Mount(r chi.Router) {
 	r.Get("/api/marketplace", h.List)
 	r.Get("/api/marketplace/{app}", h.Get)
-	r.Get("/api/marketplace/{app}/icon", h.Icon)
 	r.Post("/api/marketplace/{app}/render", h.Render)
+}
+
+// MountPublic registers routes that must be reachable WITHOUT a bearer
+// token. The icon is an <img src> in the catalog grid — a plain image tag
+// can't attach an Authorization header, so it 401s behind the auth gate.
+// The icon is a static SVG brand mark with no secrets, so serving it
+// publicly is safe.
+func (h *MarketplaceHandler) MountPublic(r chi.Router) {
+	r.Get("/api/marketplace/{app}/icon", h.Icon)
 }
 
 func (h *MarketplaceHandler) List(w http.ResponseWriter, r *http.Request) {

@@ -10,7 +10,7 @@ import { useCreateProject } from "@/features/projects";
 import { api } from "@/lib/api-client";
 import { restoreFormDraft } from "@/lib/query-client";
 import { toast } from "sonner";
-import { Plus, ArrowRight, Globe } from "lucide-react";
+import { Plus, ArrowRight, Globe, Store } from "lucide-react";
 
 // NewProjectPage creates an empty project — just a name and optional
 // base domain. Repos attach later as services (each service owns its
@@ -93,6 +93,35 @@ export default function NewProjectPage() {
           from its own GitHub repo.
         </p>
       </header>
+
+      {/* Two ways to start: a curated one-click app, or an empty project
+          you fill with your own services. The marketplace lives here (in
+          the create flow) rather than the global nav. */}
+      <Link
+        href="/marketplace"
+        className="group mb-4 flex items-center gap-3 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-4 py-3 transition hover:border-[var(--accent)] hover:bg-[var(--bg-elevated)]"
+      >
+        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-[var(--bg-tertiary)] text-[var(--accent)]">
+          <Store className="h-4 w-4" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-[13px] font-medium text-[var(--text-primary)]">
+            Start from a template
+          </span>
+          <span className="block text-[12px] text-[var(--text-secondary)]">
+            Deploy a curated app (Gitea, Metabase, Plausible…) in one click.
+          </span>
+        </span>
+        <ArrowRight className="h-4 w-4 shrink-0 text-[var(--text-tertiary)] transition group-hover:translate-x-0.5 group-hover:text-[var(--text-secondary)]" />
+      </Link>
+
+      <div className="mb-4 flex items-center gap-3">
+        <div className="h-px flex-1 bg-[var(--border-subtle)]" />
+        <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+          or start empty
+        </span>
+        <div className="h-px flex-1 bg-[var(--border-subtle)]" />
+      </div>
 
       <form
         onSubmit={onCreate}

@@ -12,7 +12,9 @@ import (
 
 func mktRouter() *chi.Mux {
 	r := chi.NewRouter()
-	(&MarketplaceHandler{}).Mount(r)
+	h := &MarketplaceHandler{}
+	h.Mount(r)
+	h.MountPublic(r) // icon lives on the public router in production
 	return r
 }
 
