@@ -19,6 +19,23 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.112] — 2026-07-03
+
+### ✨ Features
+- Feat(server): run the imagerelease watcher under the singleton leader gate ([02ea475](https://github.com/sislelabs/kuso/commit/02ea4759dd6b686319502c3a2bfa9cc3424014ae))
+- Feat(marketplace): real brand-colored app icons instead of placeholder squares ([b666c98](https://github.com/sislelabs/kuso/commit/b666c988a4a409e287535a3181f3e891941e10ed))
+- Feat(imagerelease): watcher runs release hook + promotes image for runtime=image ([115990f](https://github.com/sislelabs/kuso/commit/115990fa64148449844fb414a1f0f989f32a5059))
+- Feat(service): withhold runtime=image image into pendingImage when a release hook exists ([38a53a0](https://github.com/sislelabs/kuso/commit/38a53a0e1dd9d93365b30dd0516f4e2f36577224))
+- Feat(env): pendingImage field for withheld runtime=image release gating ([8bf626b](https://github.com/sislelabs/kuso/commit/8bf626b4e65343d58eecabf2df5853ea952d847b))
+
+### 📝 Docs
+- Docs(changelog): promote older entries into the archive ([138fd71](https://github.com/sislelabs/kuso/commit/138fd7130b93a9bce677ead256bc2c3214d995e0))
+- Docs(plans): image-path release trigger implementation plan ([c4c3191](https://github.com/sislelabs/kuso/commit/c4c31916436a90f9c6ad0228bbb3511c12664282))
+- Docs(specs): image-path release trigger design ([f27fd81](https://github.com/sislelabs/kuso/commit/f27fd813acef9181945bb6163a81dde4c4c8056f))
+
+### 🧪 Tests
+- Test(kube): refresh CRD golden for pendingImage (+ pre-existing env-spec drift) ([c9011d0](https://github.com/sislelabs/kuso/commit/c9011d0651f3ba9d0822e25f8e073901187fd23a))
+
 ## [0.18.111] — 2026-07-03
 
 ### 🐛 Bug Fixes
@@ -386,11 +403,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(github): make adding another org a first-class action ([5cde943](https://github.com/sislelabs/kuso/commit/5cde94318b14314bdacd25a65b8a0a42a31fa465))
-
-## [0.18.61] — 2026-06-11
-
-### 🐛 Bug Fixes
-- Fix(security): close auth/WS gaps, secret RMW races, and env-override loss ([f56d01b](https://github.com/sislelabs/kuso/commit/f56d01b4fb39c319559cb1bc7707d8f2299c0d66))
 
 
 ---
