@@ -423,16 +423,6 @@ func main() {
 			logger.Warn("home namespace: label managed-by failed (builds may be blocked by BuildKit NetworkPolicy)",
 				"ns", *namespace, "err", err)
 		}
-		// Self-heal the managed-ns ClusterRole verb set on every boot. The
-		// role ships in deploy/server-go.yaml but only refreshes on a manifest
-		// re-apply — a plain binary upgrade leaves a stale role, so a cluster
-		// that predates a newly-added verb (e.g. pods/portforward) keeps 403ing
-		// `kuso db connect`/`port-forward` forever. Best-effort; a failure here
-		// must not wedge boot (the manifest path still works).
-		if err := kc.EnsureManagedNSClusterRole(ctx); err != nil {
-			logger.Warn("managed-ns ClusterRole self-heal failed (db connect/port-forward may 403 until the manifest is re-applied)",
-				"err", err)
-		}
 		// Backfill the managed-ns RoleBinding for every project
 		// namespace from pre-RBAC-split installs. EnsureNamespace
 		// stamps the binding on Project.Create, but existing project

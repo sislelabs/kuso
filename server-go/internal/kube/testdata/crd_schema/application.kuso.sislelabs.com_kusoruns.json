@@ -23,14 +23,11 @@
                 },
                 "value": {
                   "type": "string"
-                },
-                "valueFrom": {
-                  "type": "object",
-                  "x-kubernetes-preserve-unknown-fields": true
                 }
               },
               "required": [
-                "name"
+                "name",
+                "value"
               ],
               "type": "object"
             },

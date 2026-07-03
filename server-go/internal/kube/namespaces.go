@@ -133,67 +133,6 @@ func (c *Client) ensureManagedNSBinding(ctx context.Context, ns string) error {
 	return fmt.Errorf("kube: ensure managed-ns binding in %q: %w", ns, err)
 }
 
-// managedNSClusterRoleRules is the canonical rule set for the
-// kuso-server-managed-ns ClusterRole, kept in lockstep with
-// deploy/server-go.yaml. Namespace-scoped verbs granted to kuso-server
-// inside every managed namespace via the RoleBinding above.
-func managedNSClusterRoleRules() []rbacv1.PolicyRule {
-	return []rbacv1.PolicyRule{
-		// Secret writes — addon conn Secrets, per-service Secrets, clone-token
-		// Secrets. Scoped to the managed namespace this role is bound into.
-		{APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"create", "update", "patch", "delete"}},
-		// pods/exec — addons.repair execs into addon pods for password resyncs.
-		{APIGroups: []string{""}, Resources: []string{"pods/exec"}, Verbs: []string{"create"}},
-		// pods/portforward — `kuso db connect` / `db port-forward` front the kube
-		// pods/portforward subresource so an operator reaches an addon from their
-		// laptop. Without it the tunnel dial is rejected ("cannot create
-		// pods/portforward") and the stream dies mid-handshake.
-		{APIGroups: []string{""}, Resources: []string{"pods/portforward"}, Verbs: []string{"create"}},
-		// services (read) — node-bootstrap looks up the in-cluster registry SVC.
-		{APIGroups: []string{""}, Resources: []string{"services"}, Verbs: []string{"get", "list"}},
-	}
-}
-
-// EnsureManagedNSClusterRole reconciles the kuso-server-managed-ns ClusterRole
-// to the current rule set (create if missing, update its rules if they drifted).
-// The ClusterRole ships in deploy/server-go.yaml, but that only applies on a
-// manifest re-apply — a plain binary upgrade never refreshes it, so a cluster
-// that predates a new verb (e.g. pods/portforward, added in the v0.18 line)
-// keeps the stale role and the feature 403s forever. Calling this at startup
-// makes RBAC verbs self-heal on every upgrade, the same way the managed-ns
-// RoleBinding backfill does for bindings. Idempotent; best-effort at the call
-// site (a transient failure shouldn't wedge boot).
-func (c *Client) EnsureManagedNSClusterRole(ctx context.Context) error {
-	rules := managedNSClusterRoleRules()
-	cr := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   ManagedNSRoleName,
-			Labels: map[string]string{ManagedByLabel: ManagedByValue},
-		},
-		Rules: rules,
-	}
-	_, err := c.Clientset.RbacV1().ClusterRoles().Create(ctx, cr, metav1.CreateOptions{})
-	if err == nil {
-		return nil
-	}
-	if !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("kube: ensure managed-ns clusterrole: %w", err)
-	}
-	// Exists — patch its rules to the canonical set so a stale role (missing a
-	// newly-added verb) self-heals. A JSON merge patch of `rules` replaces the
-	// whole array, which is what we want.
-	patch, mErr := json.Marshal(map[string]any{"rules": rules})
-	if mErr != nil {
-		return fmt.Errorf("kube: marshal managed-ns clusterrole patch: %w", mErr)
-	}
-	if _, err := c.Clientset.RbacV1().ClusterRoles().Patch(
-		ctx, ManagedNSRoleName, types.MergePatchType, patch, metav1.PatchOptions{},
-	); err != nil {
-		return fmt.Errorf("kube: patch managed-ns clusterrole rules: %w", err)
-	}
-	return nil
-}
-
 // IsManagedNamespace reports whether the named namespace carries
 // app.kubernetes.io/managed-by=kuso. The build controller calls
 // this before reconciling any KusoBuild CR — a malicious or
