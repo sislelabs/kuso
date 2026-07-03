@@ -98,6 +98,13 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: {{ include "kusoaddon.connSecretName" . }}
+  annotations:
+    # Align the conn Secret's lifecycle with the data PVC's (which
+    # survives addon deletion). Without keep, a delete+re-add over the
+    # surviving PVC mints a fresh password that won't match the DB that
+    # was initialised with the original — every app fails auth. Mirrors
+    # postgres-ha's conn Secret and the TLS secret.
+    helm.sh/resource-policy: keep
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 type: Opaque
