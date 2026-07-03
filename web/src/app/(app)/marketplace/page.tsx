@@ -54,7 +54,7 @@ export default function MarketplacePage() {
               className="flex flex-col items-start rounded-lg border border-[var(--border-subtle)] bg-[var(--card)] p-4 text-left transition hover:border-[var(--accent)] hover:bg-[var(--bg-elevated)]"
             >
               <img
-                src={`${env.apiBase}/api/marketplace/${encodeURIComponent(a.name)}/icon?v=2`}
+                src={`${env.apiBase}/api/marketplace/${encodeURIComponent(a.name)}/icon?v=3`}
                 alt=""
                 className="h-9 w-9 rounded-md"
                 onError={(e) => ((e.target as HTMLImageElement).style.visibility = "hidden")}
