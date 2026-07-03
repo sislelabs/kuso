@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.57] — 2026-06-10
+
+### 🐛 Bug Fixes
+- Fix(incidents): server honors ?state= filter; bot list-envelope; manifest no longer clobbers channel id ([ba65b5c](https://github.com/sislelabs/kuso/commit/ba65b5c14776b0c06794ef8227ebd8123075c028))
+
 ## [0.18.56] — 2026-06-10
 
 ### 🐛 Bug Fixes
