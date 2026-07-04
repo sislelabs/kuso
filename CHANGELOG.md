@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.120] — 2026-07-04
+
+### ✨ Features
+- Feat(github): build persistent envs on push to their tracked branch ([417ff69](https://github.com/sislelabs/kuso/commit/417ff69b1cb67d52fa46fb0650d777a73c2253f0))
+
+### 🧹 Chores
+- Chore: archive changelog for v0.18.119 ([8a65aa2](https://github.com/sislelabs/kuso/commit/8a65aa27fd4067d33e3a970c1cc4892912cd787a))
+
 ## [0.18.119] — 2026-07-04
 
 ### ✨ Features
@@ -404,14 +412,6 @@ messages on every release. The format is loosely based on
 
 ### 🧪 Tests
 - Test(kube): regenerate CRD schema goldens for buildArgs/publicEnv/dockerfile ([0f37624](https://github.com/sislelabs/kuso/commit/0f3762422f699c32cc3db915bca08b916716554c))
-
-## [0.18.70] — 2026-06-14
-
-### 🐛 Bug Fixes
-- Fix(install): apply kusoruns CRD so the operator doesn't crashloop ([3145c27](https://github.com/sislelabs/kuso/commit/3145c275e7cd63305ee7d65b98a7bd365ed0077f))
-- Fix(release): stop dangling-operator-pin when operator image isn't rebuilt ([a6b6d14](https://github.com/sislelabs/kuso/commit/a6b6d141468393d1158fe9293f27ffad92ab01b7))
-- Fix(drift): stop reporting per-env domain divergence as pending changes ([e506ed3](https://github.com/sislelabs/kuso/commit/e506ed37a6ee35e9b34c04fe7432d45958cbf7ea))
-- Fix(hpa): scaleUp stabilization 60s->120s to ride out rollout metric gaps ([3da1b8a](https://github.com/sislelabs/kuso/commit/3da1b8ac3d157146892ccc535db8e46079c50107))
 
 
 ---
