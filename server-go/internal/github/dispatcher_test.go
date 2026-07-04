@@ -93,10 +93,95 @@ func seedSvcWithRepo(project, service, repoURL string, domains []kube.KusoDomain
 func seedPreviewEnv(project, service string, prNumber int, branch string) seed {
 	envName := project + "-" + service + "-pr-" + strconv.Itoa(prNumber)
 	e := &kube.KusoEnvironment{
-		ObjectMeta: metav1.ObjectMeta{Name: envName, Namespace: "kuso"},
-		Spec:       kube.KusoEnvironmentSpec{Project: project, Service: project + "-" + service, Kind: "preview", Branch: branch},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      envName,
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": project,
+				"kuso.sislelabs.com/service": service,
+				"kuso.sislelabs.com/env":     "pr-" + strconv.Itoa(prNumber),
+			},
+		},
+		Spec: kube.KusoEnvironmentSpec{
+			Project: project, Service: project + "-" + service, Kind: "preview", Branch: branch,
+			// A preview env carries a pullRequest ref — this is what
+			// envBranchesByService keys on to EXCLUDE it from branch tracking.
+			PullRequest: &kube.KusoPullRequest{Number: prNumber},
+		},
 	}
 	return typedSeed(kube.GVREnvironments, "KusoEnvironment", e)
+}
+
+// seedPersistentEnv seeds a long-lived (non-preview) env that tracks a
+// branch — e.g. a `staging` env with spec.branch=staging. No pullRequest,
+// so envBranchesByService includes it in the branch-tracking set. Carries
+// the project/service labels real envs get (envBranchesByService selects on
+// LabelProject).
+func seedPersistentEnv(project, service, envName, branch string) seed {
+	e := &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      project + "-" + service + "-" + envName,
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": project,
+				"kuso.sislelabs.com/service": service,
+				"kuso.sislelabs.com/env":     envName,
+			},
+		},
+		Spec: kube.KusoEnvironmentSpec{Project: project, Service: project + "-" + service, Branch: branch},
+	}
+	return typedSeed(kube.GVREnvironments, "KusoEnvironment", e)
+}
+
+func TestDispatch_PushOnBranchTrackedByEnv_TriggersBuild(t *testing.T) {
+	t.Parallel()
+	// A staging env tracks the `staging` branch; a push to staging must
+	// build the service (so promoteImage can route the image onto that env).
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", false, 0),
+		seedSvc("alpha", "web"),
+		seedPersistentEnv("alpha", "web", "staging", "staging"),
+	)
+	body := []byte(`{
+		"ref": "refs/heads/staging",
+		"repository": {"full_name": "example/alpha", "default_branch": "main"}
+	}`)
+	if err := d.Dispatch(context.Background(), "push", body); err != nil {
+		t.Fatalf("Dispatch push: %v", err)
+	}
+	bs, err := d.Builds.List(context.Background(), "alpha", "web")
+	if err != nil {
+		t.Fatalf("List builds: %v", err)
+	}
+	if len(bs) != 1 {
+		t.Fatalf("expected 1 build for staging-tracked branch, got %d", len(bs))
+	}
+	if bs[0].Spec.Branch != "staging" {
+		t.Errorf("build branch = %q, want %q (drives per-env promotion)", bs[0].Spec.Branch, "staging")
+	}
+}
+
+func TestDispatch_PushOnBranchOnlyTrackedByPreviewEnv_Skips(t *testing.T) {
+	t.Parallel()
+	// A PREVIEW env's branch must NOT widen the push gate: its branch is a
+	// PR head ref driven by onPullRequest, not a plain branch to build on
+	// push. Only persistent envs count.
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", false, 0),
+		seedSvc("alpha", "web"),
+		seedPreviewEnv("alpha", "web", 7, "feature-x"),
+	)
+	body := []byte(`{
+		"ref": "refs/heads/feature-x",
+		"repository": {"full_name": "example/alpha", "default_branch": "main"}
+	}`)
+	if err := d.Dispatch(context.Background(), "push", body); err != nil {
+		t.Fatalf("Dispatch push: %v", err)
+	}
+	bs, _ := d.Builds.List(context.Background(), "alpha", "web")
+	if len(bs) != 0 {
+		t.Errorf("expected no build (branch only tracked by a preview env), got %d", len(bs))
+	}
 }
 
 func typedSeed(gvr schema.GroupVersionResource, kind string, obj any) seed {

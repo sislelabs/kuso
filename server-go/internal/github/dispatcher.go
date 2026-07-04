@@ -286,6 +286,18 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 		if !anyMatch {
 			continue
 		}
+		// Persistent-env branch tracking: an env may declare a non-default
+		// spec.branch (e.g. a "staging" env tracking the `staging` branch).
+		// A push to that branch must build the service so promoteImage can
+		// route the image onto the matching env — but the default-branch
+		// gate below drops it. Collect, per service, the set of non-empty
+		// branches its persistent envs track, so we can widen the gate.
+		// One env List per project (reused across the service loop), keyed
+		// by SHORT service name to match the env labels. Preview envs are
+		// excluded — they're driven by the separate onPullRequest path, and
+		// their synthetic pr-N refs must not be matched against real
+		// branch pushes.
+		envBranches := d.envBranchesByService(ctx, proj.Name)
 		// Detect PR-merge pushes so the build name reads as
 		// "pr-42-<sha>" instead of the opaque "main-<unix-ms>". GH
 		// puts either "Merge pull request #N" (merge commit) or
@@ -305,7 +317,14 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 		// warning and is otherwise ignored; builds still run. Guarded
 		// by d.Reconciler != nil (nil on kube-less installs) and the
 		// per-project configAsCode toggle.
-		if d.Reconciler != nil && d.Client != nil && configAsCodeEnabled(&proj) && headSHA != "" {
+		//
+		// DEFAULT BRANCH ONLY: a non-default branch (e.g. `staging`) that a
+		// persistent env tracks builds + promotes its IMAGE, but must not
+		// apply that branch's kuso.yaml — doing so would let the staging
+		// branch rewrite production-shared project/service settings. Config
+		// stays sourced from the project's default branch.
+		if branch == projectDefaultBranch(&proj) &&
+			d.Reconciler != nil && d.Client != nil && configAsCodeEnabled(&proj) && headSHA != "" {
 			owner, repoName := splitFullName(repoFullName)
 			installationID := int64(0)
 			if proj.Spec.GitHub != nil {
@@ -355,7 +374,17 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 			// repo X builds only X's services (and skips services on
 			// other repos or other branches).
 			svcRepo, svcBranch := serviceEffectiveRepo(&raw.Items[i], &proj)
-			if !repoMatches(svcRepo, repoFullName) || branch != svcBranch {
+			if !repoMatches(svcRepo, repoFullName) {
+				continue
+			}
+			// Build if the pushed branch is the service default OR a branch
+			// one of the service's persistent envs tracks. The latter is
+			// what lets a `staging` env (spec.branch=staging) auto-deploy on
+			// a push to `staging`; promoteImage then routes the image to
+			// that env by branch. A push to a branch no env tracks (and
+			// that isn't the default) is dropped — we don't build every
+			// random branch push.
+			if branch != svcBranch && !envBranches[short][branch] {
 				continue
 			}
 			// For a PR-merge push, prefer the head SHA (so the build
@@ -629,6 +658,64 @@ func serviceEffectiveRepo(u *unstructured.Unstructured, proj *kube.KusoProject) 
 func serviceRepoMatches(u *unstructured.Unstructured, proj *kube.KusoProject, repoFullName string) bool {
 	repoURL, _ := serviceEffectiveRepo(u, proj)
 	return repoMatches(repoURL, repoFullName)
+}
+
+// projectDefaultBranch returns the branch config-as-code is sourced from —
+// the project's defaultRepo.defaultBranch, defaulting to "main". Mirrors
+// the fallback in serviceEffectiveRepo.
+func projectDefaultBranch(proj *kube.KusoProject) string {
+	if proj.Spec.DefaultRepo != nil && proj.Spec.DefaultRepo.DefaultBranch != "" {
+		return proj.Spec.DefaultRepo.DefaultBranch
+	}
+	return "main"
+}
+
+// envBranchesByService maps a project's SHORT service name → the set of
+// non-empty branches its PERSISTENT (non-preview) environments track. Used
+// to widen the push-build gate so a push to a branch a persistent env
+// declares (e.g. a `staging` env's spec.branch=staging) triggers a build,
+// which promoteImage then routes onto that env by branch.
+//
+// Preview envs (spec.pullRequest set) are excluded: their branch is a PR
+// head ref, driven by onPullRequest, and must never be matched against a
+// plain branch push here. Envs with an empty spec.branch are excluded too
+// (they'd otherwise widen the gate to every push). Best-effort: a list
+// error returns an empty map, so the gate falls back to default-branch-only
+// (the prior behavior) rather than dropping builds.
+//
+// Reads fields off the unstructured env directly (like serviceEffectiveRepo
+// / svcPreviewsDisabled) to avoid a full typed conversion. env.spec.service
+// is the FQN ("<project>-<service>"); the gate keys on the SHORT name, so we
+// strip the project prefix to match.
+func (d *Dispatcher) envBranchesByService(ctx context.Context, project string) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	raw, err := d.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(d.nsFor(ctx, project)).
+		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: project})})
+	if err != nil {
+		d.Logger.Error("list envs for branch tracking", "project", project, "err", err)
+		return out
+	}
+	for i := range raw.Items {
+		obj := raw.Items[i].Object
+		// Preview env (spec.pullRequest set) — skip.
+		if _, found, _ := unstructured.NestedMap(obj, "spec", "pullRequest"); found {
+			continue
+		}
+		envBranch, _, _ := unstructured.NestedString(obj, "spec", "branch")
+		svcFQN, _, _ := unstructured.NestedString(obj, "spec", "service")
+		if envBranch == "" || svcFQN == "" {
+			continue
+		}
+		short := strings.TrimPrefix(svcFQN, project+"-")
+		if short == "" {
+			short = svcFQN
+		}
+		if out[short] == nil {
+			out[short] = map[string]bool{}
+		}
+		out[short][envBranch] = true
+	}
+	return out
 }
 
 // ensurePreviewEnv creates (or recreates) the preview KusoEnvironment
