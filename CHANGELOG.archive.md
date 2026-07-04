@@ -2,6 +2,21 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.71] — 2026-06-14
+
+### ✨ Features
+- Feat(cli): kuso init --template payload ([9b4c249](https://github.com/sislelabs/kuso/commit/9b4c2492922479c4130cb9cc9d9fc739002f252b))
+- Feat(spec): build-time env as a CRD field (buildArgs + publicEnv) ([c3d915c](https://github.com/sislelabs/kuso/commit/c3d915ca2ed8277695beb8623367d6a5704b2a36))
+- Feat(spec): generated secrets in kuso.yml ({generate: hex32}, generate-once) ([8d851eb](https://github.com/sislelabs/kuso/commit/8d851ebe2c35857636b0e2b28aacf5df6718b77f))
+- Feat(mcp): deploy tools — apply, build, set_env, set_secret, logs, status ([3149a16](https://github.com/sislelabs/kuso/commit/3149a16544772172eda695959d6809175c26b733))
+- Feat(spec): expose release hook in kuso.yml (apply + create + export) ([a50e643](https://github.com/sislelabs/kuso/commit/a50e643fdae3ead90223d825a8a626298c2bb5eb))
+
+### 🐛 Bug Fixes
+- Fix(install): bump stale KUSO_SERVER_VERSION default + stop it drifting ([3a02f07](https://github.com/sislelabs/kuso/commit/3a02f074356f85afe60f0f4826226d07cb796430))
+
+### 🧪 Tests
+- Test(kube): regenerate CRD schema goldens for buildArgs/publicEnv/dockerfile ([0f37624](https://github.com/sislelabs/kuso/commit/0f3762422f699c32cc3db915bca08b916716554c))
+
 ## [0.18.70] — 2026-06-14
 
 ### 🐛 Bug Fixes
