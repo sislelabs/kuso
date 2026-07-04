@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.119] — 2026-07-04
+
+### ✨ Features
+- Feat(addons): direct on-demand backup download ([9c48d7d](https://github.com/sislelabs/kuso/commit/9c48d7d491a8aa886a9de9da44a30bbab02483d7))
+
 ## [0.18.118] — 2026-07-03
 
 ### Other
@@ -407,11 +412,6 @@ messages on every release. The format is loosely based on
 - Fix(release): stop dangling-operator-pin when operator image isn't rebuilt ([a6b6d14](https://github.com/sislelabs/kuso/commit/a6b6d141468393d1158fe9293f27ffad92ab01b7))
 - Fix(drift): stop reporting per-env domain divergence as pending changes ([e506ed3](https://github.com/sislelabs/kuso/commit/e506ed37a6ee35e9b34c04fe7432d45958cbf7ea))
 - Fix(hpa): scaleUp stabilization 60s->120s to ride out rollout metric gaps ([3da1b8a](https://github.com/sislelabs/kuso/commit/3da1b8ac3d157146892ccc535db8e46079c50107))
-
-## [0.18.69] — 2026-06-11
-
-### ✨ Features
-- Feat(services): expose custom Dockerfile-path field in the UI ([84ee10b](https://github.com/sislelabs/kuso/commit/84ee10b3c25a13fd7bfff1812e1855c39f396b84))
 
 
 ---
