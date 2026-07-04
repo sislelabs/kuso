@@ -2,6 +2,248 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.69] — 2026-06-11
+
+### ✨ Features
+- Feat(services): expose custom Dockerfile-path field in the UI ([84ee10b](https://github.com/sislelabs/kuso/commit/84ee10b3c25a13fd7bfff1812e1855c39f396b84))
+
+## [0.18.68] — 2026-06-11
+
+### ✨ Features
+- Feat(addons): add MongoDB, RabbitMQ, and Valkey addon kinds ([a87a76f](https://github.com/sislelabs/kuso/commit/a87a76f15585f0b767b19b386785e5258274ed0b))
+
+### 🐛 Bug Fixes
+- Fix(env): unset now propagates to envs (drop orphaned inherited vars) ([307d60f](https://github.com/sislelabs/kuso/commit/307d60fb5080bc2c1f8df00c7468a964f532f7b0))
+
+## [0.18.67] — 2026-06-11
+
+### ✨ Features
+- Feat(addons): per-addon postgres TLS opt-in (spec.tls) ([e467040](https://github.com/sislelabs/kuso/commit/e467040c54731850d887fd19db062b160170ecb7))
+- Feat(cli): kuso project addon list/subscribe/unsubscribe ([e676abf](https://github.com/sislelabs/kuso/commit/e676abfb865dbca796e647c4ec81e263d0bf85c0))
+
+### 🐛 Bug Fixes
+- Fix(addons): restore redpanda to the add-addon catalog + canvas icon ([15da68a](https://github.com/sislelabs/kuso/commit/15da68a0dabb4a3c7feb894cc5aac6af268b75e3))
+
+## [0.18.66] — 2026-06-11
+
+### 🐛 Bug Fixes
+- Fix(addons): postgres addon serves plaintext, conn uses sslmode=disable ([1f21ba9](https://github.com/sislelabs/kuso/commit/1f21ba97ffcc482e7579d77a8a41641866b8b537))
+
+## [0.18.65] — 2026-06-11
+
+### 🐛 Bug Fixes
+- Fix(jobs+hpa): carry valueFrom into release/preview Jobs; tame HPA scaling ([76855c6](https://github.com/sislelabs/kuso/commit/76855c6dbd5d3b32223e52fa16e433c43a7fa02b))
+- Fix(cli): decode the wrapped {values:{...}} addon secret in db connect ([b45732e](https://github.com/sislelabs/kuso/commit/b45732e137d1d5af96cea888245b8f114f3b2d0e))
+
+## [0.18.64] — 2026-06-11
+
+### 🐛 Bug Fixes
+- Fix(notify): show the live-app link for auto-host services on build success ([71abefd](https://github.com/sislelabs/kuso/commit/71abefd28362f0ffc12379dc452d47b483300681))
+
+## [0.18.63] — 2026-06-11
+
+### ✨ Features
+- Feat(incidents): per-project opt-in for the incident agent ([e550501](https://github.com/sislelabs/kuso/commit/e55050122d62d405ad172ca7400fe677701404f7))
+
+### 🐛 Bug Fixes
+- Fix(github): tolerate App-install redirect on the OAuth callback ([539c107](https://github.com/sislelabs/kuso/commit/539c1078d5c9b1c066b2f27fafd04ef2b0cabb72))
+- Fix(addons): postgres conn uses sslmode=no-verify so node apps connect ([e34a265](https://github.com/sislelabs/kuso/commit/e34a2658c096eba459f8f1451d3d47da5302f06e))
+
+## [0.18.62] — 2026-06-11
+
+### ✨ Features
+- Feat(github): make adding another org a first-class action ([5cde943](https://github.com/sislelabs/kuso/commit/5cde94318b14314bdacd25a65b8a0a42a31fa465))
+
+## [0.18.61] — 2026-06-11
+
+### 🐛 Bug Fixes
+- Fix(security): close auth/WS gaps, secret RMW races, and env-override loss ([f56d01b](https://github.com/sislelabs/kuso/commit/f56d01b4fb39c319559cb1bc7707d8f2299c0d66))
+
+## [0.18.60] — 2026-06-11
+
+### 🐛 Bug Fixes
+- Fix(incidents): keep the Claude Code token fresh (it expires ~daily) ([4bc0619](https://github.com/sislelabs/kuso/commit/4bc0619f7548635ca1ee1425b0232546c0dc6127))
+
+## [0.18.59] — 2026-06-10
+
+### ✨ Features
+- Feat(incidents): settings page to enable + configure the incident agent ([6153444](https://github.com/sislelabs/kuso/commit/61534441b9895656366654fbd25f0cf2c17f3412))
+
+### 📝 Docs
+- Docs(spec): incident-agent settings page design ([f76893b](https://github.com/sislelabs/kuso/commit/f76893b15e78a43cf3868110cab445487760bb6f))
+
+## [0.18.58] — 2026-06-10
+
+### ✨ Features
+- Feat(incidents): implement-phase graceful no-repo + clone-only plumbing test ([f1ffe91](https://github.com/sislelabs/kuso/commit/f1ffe91f1557f4966f3ad922388332aec1189b42))
+
+## [0.18.57] — 2026-06-10
+
+### 🐛 Bug Fixes
+- Fix(incidents): server honors ?state= filter; bot list-envelope; manifest no longer clobbers channel id ([ba65b5c](https://github.com/sislelabs/kuso/commit/ba65b5c14776b0c06794ef8227ebd8123075c028))
+
+## [0.18.56] — 2026-06-10
+
+### 🐛 Bug Fixes
+- Fix(incidents): live-e2e fixes — KUSO_TOKEN optional, Service :80, CLI list envelope ([ee8dc4d](https://github.com/sislelabs/kuso/commit/ee8dc4d548aba33e0e65d8b58ab9ea9e33023b2c))
+
+## [0.18.55] — 2026-06-10
+
+### Other
+- Build(incidents): make targets for agent + bot images; pin bot deploy to v0.18.55 ([5ae2200](https://github.com/sislelabs/kuso/commit/5ae2200d591eed9fd4f029d59974c0e75b976e53))
+
+### ✨ Features
+- Feat(incidents): autonomous incident-response agent ([e5e3dd6](https://github.com/sislelabs/kuso/commit/e5e3dd67aea10296b727f3b86b4891369e01ce8b))
+
+### 📝 Docs
+- Docs(spec): autonomous incident-response agent design ([2d68882](https://github.com/sislelabs/kuso/commit/2d6888278e518a44b027a8757c0b3df4545ee6a2))
+
+## [0.18.54] — 2026-06-10
+
+### 🐛 Bug Fixes
+- Fix(audit): use Postgres $N placeholders, not SQLite ? ([6658259](https://github.com/sislelabs/kuso/commit/6658259c3d44bd382083272ae3fc891d5d447b5d))
+
+## [0.18.53] — 2026-06-10
+
+### ✨ Features
+- Feat(addons): data browser/editor on the postgres SQL tab ([1464108](https://github.com/sislelabs/kuso/commit/1464108543c9a684c62c322b9865f931e5d09983))
+
+### 📝 Docs
+- Docs(spec): addon data browser/editor design ([9b8e80d](https://github.com/sislelabs/kuso/commit/9b8e80d1a113af7ecd5819ebd4e65fbaad75f900))
+
+## [0.18.52] — 2026-06-10
+
+### 🐛 Bug Fixes
+- Fix(pkgupdates): parse drain pod-list with jq, not fragile awk ([5c09f45](https://github.com/sislelabs/kuso/commit/5c09f4500cc104be82de487adfbccc420c93635d))
+
+### 📝 Docs
+- Docs(pkg-probe): note eviction RBAC is core-group, not policy (verified live) ([a3a497f](https://github.com/sislelabs/kuso/commit/a3a497f61b4c3731c900e8a1f242acb4ab01ffc3))
+
+## [0.18.51] — 2026-06-10
+
+### ✨ Features
+- Feat(pkgupdates): daily aggregated update notification + rolling node drain ([4fd3094](https://github.com/sislelabs/kuso/commit/4fd3094a89fe4908ed936efca77dc16034f076a1))
+
+## [0.18.50] — 2026-06-09
+
+### 🐛 Bug Fixes
+- Fix(cli): kuso upgrade falsely reported "timed out after 15m" on success ([c29fcb0](https://github.com/sislelabs/kuso/commit/c29fcb03be743c27269bab593c4ee202ac61ca1f))
+
+## [0.18.49] — 2026-06-09
+
+### 🐛 Bug Fixes
+- Fix(addons): emit DIRECT_URL conn key so Prisma migrations skip the pooler ([94ddc12](https://github.com/sislelabs/kuso/commit/94ddc124651f073b182c829e949115c1b6c1d82f))
+
+## [0.18.48] — 2026-06-08
+
+### ✨ Features
+- Feat(deploy): allow command override for any runtime, not just worker ([425a228](https://github.com/sislelabs/kuso/commit/425a2282182a02aa0c77e9032bb5172ca7b8e6fa))
+- Feat(builds): custom Dockerfile filename per service ([034ecc7](https://github.com/sislelabs/kuso/commit/034ecc77a1c9d1340502d6082a583e6cbb61c128))
+- Feat(addons): redpanda (Kafka) addon kind ([480fe97](https://github.com/sislelabs/kuso/commit/480fe970c1e787c49fdf2bd441734dbef88a77e7))
+- Feat(import): docker-compose → kuso import (CLI + web) ([74aa708](https://github.com/sislelabs/kuso/commit/74aa708ed1be64d9141aaaa00684011d25ad0f06))
+
+### 🐛 Bug Fixes
+- Fix(rbac): grant kuso-server get/list services (node-bootstrap registry lookup) ([2bfd651](https://github.com/sislelabs/kuso/commit/2bfd651c006130eb71c3a7018bd35c29fbedb7fb))
+- Fix(nodejoin): auto-wire in-cluster registry on joining nodes ([a5284cf](https://github.com/sislelabs/kuso/commit/a5284cfd95e26b65b063a164d6008cf6e616e647))
+- Fix(nodejoin): drop 'set +o history' — dash aborts on it ([c1cdf3c](https://github.com/sislelabs/kuso/commit/c1cdf3c9b5aeeea028cd3717338f4f594c03a5e4))
+- Fix(addons): clickhouse pass CLICKHOUSE_PASSWORD to container env ([f980867](https://github.com/sislelabs/kuso/commit/f980867e96a250906873d87fa4cf9ccd47c45467))
+- Fix(migrate): normalize Coolify base_directory + dedupe/filter env vars ([ab5f766](https://github.com/sislelabs/kuso/commit/ab5f7667079a50ff4b0f2e1498e3454e9adc743d))
+- Fix(crd): drop propertyNames from kusobuilds.buildEnv (unbreaks apply) ([22800de](https://github.com/sislelabs/kuso/commit/22800de49209694074ab9de332ec0ac20ad9900c))
+- Fix(security): validate spec.dockerfile against shell-injection ([053be32](https://github.com/sislelabs/kuso/commit/053be32799e783b0ddf2769aaac0e90d656a89d6))
+- Fix(addons): clickhouse writable users.d (non-root entrypoint rewrite) ([b6c3718](https://github.com/sislelabs/kuso/commit/b6c37188937fd5eefbd48e9452549efc19de23a1))
+- Fix(addons): redpanda rpc-addr binds 0.0.0.0, advertises service DNS ([4d05fa5](https://github.com/sislelabs/kuso/commit/4d05fa5f1af8ffdfdd245db59c50bbd7f80e5c67))
+- Fix(addons): redpanda writable /etc/redpanda + HOME (non-root) ([703a27f](https://github.com/sislelabs/kuso/commit/703a27f589192b92a63cca2ffef3ab66601d7bf3))
+- Fix(addons): run redpanda via image entrypoint (rpk), not raw binary ([fbb88e5](https://github.com/sislelabs/kuso/commit/fbb88e50876ebe88b4d965149c1df2bd12d85a7f))
+- Fix(addons): redpanda args as separate argv tokens ([c286aec](https://github.com/sislelabs/kuso/commit/c286aec11ff06bfbe530e9b8768e865e937e20fb))
+- Fix(addons): redpanda args must be one flag+value string each ([98cca3f](https://github.com/sislelabs/kuso/commit/98cca3f3e5876374ee9bff87f00f348c6713d78f))
+- Fix(crd): add redpanda to KusoAddon spec.kind enum ([70c4159](https://github.com/sislelabs/kuso/commit/70c4159783573e25d415ba004528b493427ef44f))
+- Fix(import): map only implemented addon kinds + correct conn URL key ([10ce96e](https://github.com/sislelabs/kuso/commit/10ce96edc4a0a29cc316e122e9c7bbc4c15b2f0e))
+
+### 📝 Docs
+- Docs(nodejoin,skill): registry wiring, KUSO_K3S_URL, firewall ports + v0.18 features ([c47510a](https://github.com/sislelabs/kuso/commit/c47510aa2c9c29b9daf41d3775a17991e616dec9))
+- Docs(import): docker-compose → kuso import design spec ([1847586](https://github.com/sislelabs/kuso/commit/1847586055fee3880379ce99b5dc031222165cd7))
+
+## [0.18.33] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(crd): align volume schema field names with KusoVolume (sizeGi/accessMode) ([33a81d3](https://github.com/sislelabs/kuso/commit/33a81d3c15c8fc66a65a1fd0ad3d784f20b16a7b))
+
+## [0.18.32] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): nixpacks build-env values with spaces no longer break the build ([a287a4e](https://github.com/sislelabs/kuso/commit/a287a4e9281b2dd7457e4fe49bb2ee7d67a4c697))
+
+### 📝 Docs
+- Docs(migration): log NODE_ENV + dockerfile build-env fixes, full re-verify ([4bc6fb3](https://github.com/sislelabs/kuso/commit/4bc6fb3f1c295c9ff8d20d8059c724817574b352))
+
+## [0.18.31] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): pass build-time env to raw-Dockerfile builds as build-args ([c275215](https://github.com/sislelabs/kuso/commit/c2752157e741d21dce4c0924eadc2083c9e94d66))
+
+## [0.18.30] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): don't inject NODE_ENV (and runtime-only keys) into the build ([a4eb0ff](https://github.com/sislelabs/kuso/commit/a4eb0ff730d2c8a2714b5fa5fdd685f73ef8f2b1))
+
+### 📝 Docs
+- Docs(migration): log env-propagation fix + projects-grid feature ([f4a0342](https://github.com/sislelabs/kuso/commit/f4a0342136c9eb4fa2913f84cba05d1e09c2992a))
+
+## [0.18.29] — 2026-06-04
+
+### ✨ Features
+- Feat(projects): per-user starring + folders + equal-height cards ([afd3002](https://github.com/sislelabs/kuso/commit/afd300225d8417fec930c48c2c3e29cd9fd6b05b))
+
+## [0.18.28] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(env): explicit per-env override marker stops stale seeds shadowing service ([c98c47e](https://github.com/sislelabs/kuso/commit/c98c47e3306ca63346e9b9b601c8fd9aab65edf0))
+
+## [0.18.27] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(ui): project card domain falls back to detected frontend's default host ([dc7ec8d](https://github.com/sislelabs/kuso/commit/dc7ec8db8aacfefccb17a8fb6aafad6cb06c8668))
+
+### 📝 Docs
+- Docs(migration): full e2e results — 11/14 apps verified (DB parity + pooler query + HTTP) ([8cefc78](https://github.com/sislelabs/kuso/commit/8cefc7894f9ce1f69c97067107757c0c2489b81b))
+- Docs(migration): runtime blocker chain resolved (v0.18.25 env-ref, v0.18.26 netpolicy); all 13 apps Running ([cf53ac1](https://github.com/sislelabs/kuso/commit/cf53ac119631d6a59ad0d7297042487f3fa4bdf5))
+
+## [0.18.26] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(netpolicy): allow project egress to the cluster-DB pooler/PG ([3eab6ba](https://github.com/sislelabs/kuso/commit/3eab6ba3f2480d71364d92553e89434987f6989b))
+
+## [0.18.25] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(env): stale unresolved ${{ }} literal is not a per-env override ([0aa8936](https://github.com/sislelabs/kuso/commit/0aa89361d1024899aabf6b58b571fcd50f34fa9f))
+
+### 📝 Docs
+- Docs(migration): final session status — 14 apps migrated, env-ref propagation bug root-caused ([94512ce](https://github.com/sislelabs/kuso/commit/94512ce68d834d50ef70bdfadbb81333f18f262f))
+
+## [0.18.24] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(apply): resolve ${{ addon.KEY }} refs in pending mode (kuso apply) ([3f0a3ff](https://github.com/sislelabs/kuso/commit/3f0a3ff6fc52dc6e463ee061c8a68b762bd77fd9))
+
+### 📝 Docs
+- Docs(migration): build-env feature shipped (v0.18.23); 6 apps fully migrated ([36325f7](https://github.com/sislelabs/kuso/commit/36325f73c30e0ffaa37603655ef05e1c6a729c5a))
+
+## [0.18.23] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): export NIXPACKS_* build-env into nixpacks process env (toolchain selection) ([e1af453](https://github.com/sislelabs/kuso/commit/e1af45347cf149e6f67e2fe3721642733e612033))
+
+## [0.18.22] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): pass build-time env to nixpacks --env (toolchain keys read at plan time) ([2af5788](https://github.com/sislelabs/kuso/commit/2af57888e7ccbffc9d5c973acdd9228d28ecbda8))
+
+## [0.18.21] — 2026-06-04
+
+### 🐛 Bug Fixes
+- Fix(builds): inject build-time env in the REAL renderer (buildcontroller, not the dead chart) ([62bc4fb](https://github.com/sislelabs/kuso/commit/62bc4fb47c2faadc23289bc1946d2c1e4852e76a))
+
 ## [0.18.20] — 2026-06-04
 
 ### 🐛 Bug Fixes
