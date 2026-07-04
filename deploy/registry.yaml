@@ -114,6 +114,13 @@ spec:
   jobTemplate:
     spec:
       backoffLimit: 1
+      # Reap the finished Job (+ its pods) 24h after completion so a failed
+      # GC run doesn't linger as an Error pod until the CronJob history
+      # limit rotates it out. Matches the TTL convention on kuso's other
+      # Jobs (release, previewdb, pkgupdates). successfulJobsHistoryLimit/
+      # failedJobsHistoryLimit above still bound how many run records are
+      # kept; this ensures timely pod cleanup on top of that.
+      ttlSecondsAfterFinished: 86400
       template:
         spec:
           restartPolicy: OnFailure
