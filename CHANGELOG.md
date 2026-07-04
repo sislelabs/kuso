@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.121] — 2026-07-04
+
+### 🐛 Bug Fixes
+- Fix(web): render release-failed builds as RELEASE FAILED, not UNKNOWN ([8131804](https://github.com/sislelabs/kuso/commit/813180452776609292789cb14ac5c218af6008d8))
+
+### 🧹 Chores
+- Chore: archive changelog for v0.18.120 ([079b34c](https://github.com/sislelabs/kuso/commit/079b34c20613950ee0f9990f47a0c8b776e2c456))
+
 ## [0.18.120] — 2026-07-04
 
 ### ✨ Features
@@ -397,21 +405,6 @@ messages on every release. The format is loosely based on
 ### 🐛 Bug Fixes
 - Fix(install): pgbouncer pg_hba md5 + missing publicEnv on env CRD — two fresh-install blockers ([afd7cf4](https://github.com/sislelabs/kuso/commit/afd7cf46f0a974c7e7a4891240f50ba98706bf02))
 - Fix(postgres): store kuso role as md5 so pgbouncer auth works on fresh install ([158b73f](https://github.com/sislelabs/kuso/commit/158b73f6d80d5d035085350230ea3461adca0b63))
-
-## [0.18.71] — 2026-06-14
-
-### ✨ Features
-- Feat(cli): kuso init --template payload ([9b4c249](https://github.com/sislelabs/kuso/commit/9b4c2492922479c4130cb9cc9d9fc739002f252b))
-- Feat(spec): build-time env as a CRD field (buildArgs + publicEnv) ([c3d915c](https://github.com/sislelabs/kuso/commit/c3d915ca2ed8277695beb8623367d6a5704b2a36))
-- Feat(spec): generated secrets in kuso.yml ({generate: hex32}, generate-once) ([8d851eb](https://github.com/sislelabs/kuso/commit/8d851ebe2c35857636b0e2b28aacf5df6718b77f))
-- Feat(mcp): deploy tools — apply, build, set_env, set_secret, logs, status ([3149a16](https://github.com/sislelabs/kuso/commit/3149a16544772172eda695959d6809175c26b733))
-- Feat(spec): expose release hook in kuso.yml (apply + create + export) ([a50e643](https://github.com/sislelabs/kuso/commit/a50e643fdae3ead90223d825a8a626298c2bb5eb))
-
-### 🐛 Bug Fixes
-- Fix(install): bump stale KUSO_SERVER_VERSION default + stop it drifting ([3a02f07](https://github.com/sislelabs/kuso/commit/3a02f074356f85afe60f0f4826226d07cb796430))
-
-### 🧪 Tests
-- Test(kube): regenerate CRD schema goldens for buildArgs/publicEnv/dockerfile ([0f37624](https://github.com/sislelabs/kuso/commit/0f3762422f699c32cc3db915bca08b916716554c))
 
 
 ---
