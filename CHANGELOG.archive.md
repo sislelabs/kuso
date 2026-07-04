@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.70] — 2026-06-14
+
+### 🐛 Bug Fixes
+- Fix(install): apply kusoruns CRD so the operator doesn't crashloop ([3145c27](https://github.com/sislelabs/kuso/commit/3145c275e7cd63305ee7d65b98a7bd365ed0077f))
+- Fix(release): stop dangling-operator-pin when operator image isn't rebuilt ([a6b6d14](https://github.com/sislelabs/kuso/commit/a6b6d141468393d1158fe9293f27ffad92ab01b7))
+- Fix(drift): stop reporting per-env domain divergence as pending changes ([e506ed3](https://github.com/sislelabs/kuso/commit/e506ed37a6ee35e9b34c04fe7432d45958cbf7ea))
+- Fix(hpa): scaleUp stabilization 60s->120s to ride out rollout metric gaps ([3da1b8a](https://github.com/sislelabs/kuso/commit/3da1b8ac3d157146892ccc535db8e46079c50107))
+
 ## [0.18.69] — 2026-06-11
 
 ### ✨ Features
