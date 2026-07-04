@@ -24,3 +24,11 @@ func (k *KusoClient) RestoreAddonBackup(project, addon string, req RestoreBackup
 	k.client.SetBody(req)
 	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/backups/restore")
 }
+
+// DownloadAddonBackup streams an on-demand dump of the addon (postgres →
+// gzipped SQL, s3 → gzipped tar). Works even when scheduled S3 backups
+// aren't configured. Response body carries the bytes; the caller reads
+// the Content-Disposition filename off the response header.
+func (k *KusoClient) DownloadAddonBackup(project, addon string) (*resty.Response, error) {
+	return k.RawGet("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/backups/download")
+}

@@ -33,6 +33,7 @@ export {
   addonSecret,
   listBackups,
   restoreBackup,
+  downloadAddonBackup,
   listSQLTables,
   runSQL,
   getSQLColumns,

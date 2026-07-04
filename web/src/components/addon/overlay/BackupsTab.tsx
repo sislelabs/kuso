@@ -3,11 +3,12 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
-import { RotateCcw } from "lucide-react";
+import { RotateCcw, Download } from "lucide-react";
 import {
   useAddons,
   listBackups,
   restoreBackup,
+  downloadAddonBackup,
   updateAddon,
   type BackupObject,
 } from "@/features/projects";
@@ -46,6 +47,44 @@ function formatBytes(n: number): string {
     i++;
   }
   return v.toFixed(v >= 100 ? 0 : 1) + " " + units[i];
+}
+
+// DownloadBackupButton triggers an on-demand dump of the addon straight
+// to the browser — no S3 config required. Rendered in every branch of the
+// tab (including the "backups not set up" error state), since its whole
+// point is to work when scheduled backups aren't configured. Only shown
+// for kinds the server can dump: postgres + s3.
+function DownloadBackupButton({
+  project,
+  addon,
+  kind,
+}: {
+  project: string;
+  addon: string;
+  kind?: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  if (kind !== "postgres" && kind !== "s3" && kind !== "minio") return null;
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      disabled={busy}
+      onClick={async () => {
+        setBusy(true);
+        try {
+          await downloadAddonBackup(project, addon);
+        } catch (e) {
+          toast.error(e instanceof Error ? e.message : "Download failed");
+        } finally {
+          setBusy(false);
+        }
+      }}
+    >
+      <Download className="h-3 w-3" />
+      {busy ? "Preparing…" : "Download backup now"}
+    </Button>
+  );
 }
 
 export function BackupsTab({ project, addon }: { project: string; addon: string }) {
@@ -101,6 +140,10 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
     return (
       <div className="space-y-4 p-5">
         <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} />
+        <div className="flex items-center justify-between">
+          <h3 className="font-heading text-sm font-semibold tracking-tight">Backups</h3>
+          <DownloadBackupButton project={project} addon={addon} kind={thisAddon?.spec.kind} />
+        </div>
         <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4 text-sm text-amber-400">
           {noS3 ? "Backups not set up yet" : `Backups unavailable: ${msg}`}
           <p className="mt-2 font-mono text-[10px] text-[var(--text-tertiary)]">
@@ -129,6 +172,10 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
     return (
       <div className="space-y-4 p-5">
         <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} />
+        <div className="flex items-center justify-between">
+          <h3 className="font-heading text-sm font-semibold tracking-tight">Backups</h3>
+          <DownloadBackupButton project={project} addon={addon} kind={thisAddon?.spec.kind} />
+        </div>
         <p className="rounded-md border border-dashed border-[var(--border-subtle)] p-6 text-center text-sm text-[var(--text-tertiary)]">
           No backups yet. The CronJob will drop one once its schedule fires.
         </p>
@@ -141,11 +188,14 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
   return (
     <div className="space-y-4 p-5">
       <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} />
-      <header className="mb-3 flex items-center justify-between">
+      <header className="mb-3 flex items-center justify-between gap-3">
         <h3 className="font-heading text-sm font-semibold tracking-tight">Backups</h3>
-        <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
-          {items.length} {items.length === 1 ? "object" : "objects"} · auto-refresh 30s
-        </span>
+        <div className="flex items-center gap-3">
+          <span className="font-mono text-[10px] text-[var(--text-tertiary)]">
+            {items.length} {items.length === 1 ? "object" : "objects"} · auto-refresh 30s
+          </span>
+          <DownloadBackupButton project={project} addon={addon} kind={thisAddon?.spec.kind} />
+        </div>
       </header>
       <ul className="overflow-hidden rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)]">
         {sorted.map((b) => (

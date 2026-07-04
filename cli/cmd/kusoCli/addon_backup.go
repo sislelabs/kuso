@@ -3,7 +3,9 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"mime"
 	"os"
+	"path/filepath"
 
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
@@ -123,6 +125,93 @@ The target addon must already exist + be the same engine as the source.`,
 	},
 }
 
+var (
+	addonBackupDownloadOutput string
+	addonBackupDownloadForce  bool
+)
+
+var addonBackupDownloadCmd = &cobra.Command{
+	Use:   "download <project> <addon>",
+	Short: "Download an on-demand dump of the addon to a local file",
+	Long: `Streams a fresh dump of the addon straight to disk — no S3 config
+required. Works even when scheduled backups aren't set up.
+
+  postgres → gzipped pg_dump SQL (.sql.gz)
+  s3       → gzipped tar of every object in the bucket (.tar.gz)
+
+Other addon kinds (redis, clickhouse, redpanda) aren't supported.
+
+The dump is the addon's entire dataset — treat the output like a
+credential. Editor role required.`,
+	Example: `  kuso addon-backup download myproj myproj-db
+  kuso addon-backup download myproj myproj-db -o /tmp/db.sql.gz`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.DownloadAddonBackup(args[0], args[1])
+		if err != nil {
+			return fmt.Errorf("download: %w", err)
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		// --output is user-chosen and used verbatim (incl. any path they
+		// typed). The server-derived Content-Disposition name is NOT
+		// trusted: a hostile/spoofing server could send
+		// filename="../../.ssh/authorized_keys". Constrain it to a bare
+		// basename in the cwd so it can never escape the working dir.
+		out := addonBackupDownloadOutput
+		if out == "" {
+			name := filepath.Base(filenameFromResp(resp.Header().Get("Content-Disposition")))
+			if name == "" || name == "." || name == string(filepath.Separator) {
+				// Fall back to a sensible default; the server always
+				// sends Content-Disposition, so this only trips on an
+				// odd proxy or a hostile filename we just rejected.
+				name = fmt.Sprintf("%s-%s.gz", args[0], args[1])
+			}
+			out = name
+		}
+		// Don't silently clobber an existing file — a backup dump is
+		// exactly the kind of thing you don't want to overwrite by
+		// accident. O_EXCL fails if it exists; --force opts out.
+		flags := os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+		if !addonBackupDownloadForce {
+			flags = os.O_WRONLY | os.O_CREATE | os.O_EXCL
+		}
+		f, err := os.OpenFile(out, flags, 0o600)
+		if err != nil {
+			if os.IsExist(err) {
+				return fmt.Errorf("%s already exists; re-run with --force to overwrite", out)
+			}
+			return fmt.Errorf("open %s: %w", out, err)
+		}
+		n, err := f.Write(resp.Body())
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			return fmt.Errorf("write %s: %w", out, err)
+		}
+		fmt.Printf("wrote %d bytes to %s\n", n, out)
+		return nil
+	},
+}
+
+// filenameFromResp pulls the attachment filename out of a
+// Content-Disposition header, returning "" if absent/unparseable.
+func filenameFromResp(cd string) string {
+	if cd == "" {
+		return ""
+	}
+	_, params, err := mime.ParseMediaType(cd)
+	if err != nil {
+		return ""
+	}
+	return params["filename"]
+}
+
 // Schedule flags shared between `addon-backup schedule` and the
 // no-arg `addon-backup unschedule` (which is just `schedule
 // --schedule=""`).
@@ -209,6 +298,9 @@ func init() {
 	addonBackupCmd.AddCommand(addonBackupRestoreCmd)
 	addonBackupRestoreCmd.Flags().StringVar(&addonBackupRestoreInto, "into", "", "destination addon (empty = restore in-place, DESTRUCTIVE)")
 	addonBackupRestoreCmd.Flags().StringVar(&addonBackupRestoreConfirm, "confirm", "", "echo the addon name to acknowledge a DESTRUCTIVE in-place restore")
+	addonBackupCmd.AddCommand(addonBackupDownloadCmd)
+	addonBackupDownloadCmd.Flags().StringVarP(&addonBackupDownloadOutput, "output", "o", "", "output file (default: name from server, e.g. <project>-<addon>-<ts>.sql.gz)")
+	addonBackupDownloadCmd.Flags().BoolVar(&addonBackupDownloadForce, "force", false, "overwrite the output file if it already exists")
 	addonBackupCmd.AddCommand(addonBackupScheduleCmd)
 	addonBackupScheduleCmd.Flags().StringVar(&addonBackupSchedule, "schedule", "", "5-field cron expression (UTC); empty disables")
 	addonBackupScheduleCmd.Flags().IntVar(&addonBackupRetentionDays, "retention", 14, "delete S3 objects older than N days; 0 = keep forever")

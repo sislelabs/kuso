@@ -306,6 +306,43 @@ export async function restoreBackup(
   );
 }
 
+// downloadAddonBackup streams an on-demand dump of the addon (postgres →
+// gzipped SQL, s3 → gzipped tar) and triggers a browser save. Independent
+// of the S3-scheduled-backup config, so it works even when listBackups
+// returns 503 "backup not configured". We fetch the raw body rather than
+// go through api() (which parses JSON) because the response is binary.
+export async function downloadAddonBackup(project: string, addon: string): Promise<void> {
+  const res = await fetch(
+    `${env.apiBase}/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/backups/download`,
+    { credentials: "include" }
+  );
+  if (!res.ok) {
+    // Error bodies are short text (the handler's http.Error); surface it.
+    const detail = await res.text().catch(() => "");
+    throw new Error(detail.trim() || `${res.status} ${res.statusText}`);
+  }
+  const blob = await res.blob();
+  const filename =
+    filenameFromDisposition(res.headers.get("Content-Disposition")) ??
+    `${project}-${addon}.gz`;
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
+
+// filenameFromDisposition extracts the attachment filename the server set
+// (e.g. `attachment; filename="proj-addon-20260704T....sql.gz"`).
+function filenameFromDisposition(cd: string | null): string | null {
+  if (!cd) return null;
+  const m = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(cd);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
 export interface SQLTable {
   schema: string;
   name: string;

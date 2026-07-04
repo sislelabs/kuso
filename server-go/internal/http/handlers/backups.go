@@ -49,6 +49,9 @@ func (h *BackupsHandler) Mount(r chi.Router) {
 	r.Put("/api/admin/backup-settings", h.PutSettings)
 	r.Get("/api/projects/{project}/addons/{addon}/backups", h.List)
 	r.Post("/api/projects/{project}/addons/{addon}/backups/restore", h.Restore)
+	// Direct on-demand dump, streamed to the caller. Independent of the
+	// kuso-backup-s3 config, so it works when List/Restore return 503.
+	r.Get("/api/projects/{project}/addons/{addon}/backups/download", h.Download)
 	// SQL browser: list tables + run a read-only SELECT against the
 	// addon's postgres. The query is wrapped in a read-only
 	// transaction with a statement_timeout — defence in depth against
