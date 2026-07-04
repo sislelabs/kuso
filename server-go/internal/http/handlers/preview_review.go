@@ -188,10 +188,27 @@ func (h *PreviewReviewHandler) PostDecision(w http.ResponseWriter, r *http.Reque
 	if reviewer == "" {
 		reviewer = "anonymous"
 	}
-	if err := h.DB.SetPreviewReviewDecision(ctx, token, body.Decision, body.Comment, reviewer); err != nil {
+	// Cap the unauthenticated free-text fields so a token holder can't
+	// write megabytes per row (the global 1 MiB body limit is far too
+	// loose for two short strings). Truncate rather than reject — the
+	// reviewer's intent survives, storage abuse doesn't.
+	const (
+		maxComment  = 4096
+		maxReviewer = 254 // RFC 5321 max email length
+	)
+	comment := body.Comment
+	if len(comment) > maxComment {
+		comment = comment[:maxComment]
+	}
+	if len(reviewer) > maxReviewer {
+		reviewer = reviewer[:maxReviewer]
+	}
+	if err := h.DB.SetPreviewReviewDecision(ctx, token, body.Decision, comment, reviewer); err != nil {
 		switch {
 		case errors.Is(err, sql.ErrNoRows):
 			http.Error(w, "not found", http.StatusNotFound)
+		case errors.Is(err, db.ErrReviewClosed):
+			http.Error(w, "review is closed", http.StatusConflict)
 		case errors.Is(err, db.ErrInvalidDecision):
 			http.Error(w, "invalid decision", http.StatusBadRequest)
 		default:

@@ -22,6 +22,12 @@ import (
 // it to 400 so the raw error text never needs to reach the client.
 var ErrInvalidDecision = errors.New("invalid decision")
 
+// ErrReviewClosed is returned by SetPreviewReviewDecision when the row
+// has already been closed (PR merged/closed). It enforces the one-write
+// rule the package documents: once closed, a token holder can't flip
+// the recorded decision. Handlers map it to 409.
+var ErrReviewClosed = errors.New("review is closed")
+
 type PreviewReview struct {
 	ID              string
 	Project         string
@@ -119,20 +125,32 @@ func (d *DB) SetPreviewReviewDecision(ctx context.Context, token, decision, comm
 		return fmt.Errorf("%w %q", ErrInvalidDecision, decision)
 	}
 	now := time.Now().UTC()
+	// Guard on closedAt IS NULL so a closed review can't have its
+	// decision flipped — the one-write rule the package doc promises.
 	res, err := d.ExecContext(ctx, `
 		UPDATE "PreviewReview"
 		   SET decision = $2,
 		       "decisionComment" = $3,
 		       "decidedAt" = $4,
 		       "decidedBy" = $5
-		 WHERE token = $1
+		 WHERE token = $1 AND "closedAt" IS NULL
 	`, token, decision, comment, now, decidedBy)
 	if err != nil {
 		return fmt.Errorf("update review: %w", err)
 	}
 	n, _ := res.RowsAffected()
 	if n == 0 {
-		return sql.ErrNoRows
+		// Zero rows means either the token doesn't exist (→ 404) or the
+		// review is closed (→ 409). Disambiguate so the caller reports
+		// the right status; a bare ErrNoRows would mislabel a closed
+		// review as missing.
+		if _, gerr := d.GetPreviewReviewByToken(ctx, token); gerr != nil {
+			if errors.Is(gerr, sql.ErrNoRows) {
+				return sql.ErrNoRows
+			}
+			return fmt.Errorf("resolve review after no-op update: %w", gerr)
+		}
+		return ErrReviewClosed
 	}
 	return nil
 }

@@ -96,6 +96,23 @@ verify: typecheck test verify-parity
 verify-parity:
 	@bash hack/verify-parity.sh
 
+# hooks-install points git at hack/hooks/ for its hooks (currently just
+# pre-push). CI was removed from GitHub Actions — validation now runs
+# locally on push via hack/hooks/pre-push. Run this once per clone.
+.PHONY: hooks-install verify-ci
+hooks-install:
+	@git config core.hooksPath hack/hooks
+	@echo "==> git core.hooksPath set to hack/hooks (pre-push validation active)."
+	@echo "    Bypass a single push with 'git push --no-verify'."
+
+# verify-ci runs the full pre-push validation across the whole tree in
+# FULL mode (includes 'next build' + the kind CRD dry-run), regardless
+# of which paths changed — the local equivalent of the old CI matrix.
+# The hook itself only validates touched modules and skips the heavy
+# steps unless KUSO_HOOK_FULL=1.
+verify-ci:
+	@KUSO_HOOK_FULL=1 bash hack/hooks/pre-push origin < /dev/null
+
 update-goldens:
 	@cd server-go && KUSO_UPDATE_GOLDENS=1 go test ./internal/kube/ -run TestCRDSchema_GoldenStable
 

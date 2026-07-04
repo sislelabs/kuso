@@ -20,7 +20,11 @@ export function SourceSection({
 }: SectionProps & { project: string; service: string }) {
   // Pull installations so the user can re-point to a repo behind a
   // different GH App install. Best-effort: we don't gate the rest of
-  // the section on this query landing.
+  // the section on this query landing. /api/github/installations is
+  // admin-only (it enumerates every connected repo), so a non-admin
+  // editor gets a 403 here — the auto-resolution below already falls
+  // back to null, and the user can still type the repo URL by hand.
+  // retry:false so react-query doesn't hammer the 403.
   const installs = useQuery({
     queryKey: ["github", "installations"],
     queryFn: () =>
@@ -28,6 +32,7 @@ export function SourceSection({
         "/api/github/installations",
       ),
     staleTime: 60_000,
+    retry: false,
   });
   const repoDisplay = state.repoURL.replace(/^https?:\/\/(www\.)?/, "");
   // Parse owner/repo so we can preview the auto-resolution + run a

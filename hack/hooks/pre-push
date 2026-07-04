@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# kuso pre-push validation — runs the same checks that used to live in
+# .github/workflows/ci.yml, locally, before a push leaves your machine.
+# CI was removed from GitHub (no push/PR runners); this hook is now the
+# gate. Install it with `make hooks-install` (sets core.hooksPath to
+# hack/hooks so this file is the repo's pre-push hook).
+#
+# Path-aware, exactly like the old CI `changes` job: it only validates a
+# module when files under it are part of what you're pushing, so a
+# web-only change doesn't pay for the Go test suite and vice versa.
+#
+# Heavyweight steps (the kind-based CRD dry-run, the full `next build`)
+# are gated behind KUSO_HOOK_FULL=1 so a routine push stays fast. They
+# still run in `make verify-ci` / when you opt in. Skip the whole hook
+# for one push with `git push --no-verify` or KUSO_SKIP_HOOKS=1.
+set -uo pipefail
+
+if [[ "${KUSO_SKIP_HOOKS:-}" == "1" ]]; then
+  echo "pre-push: KUSO_SKIP_HOOKS=1 — skipping validation" >&2
+  exit 0
+fi
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$repo_root" || exit 1
+
+# ---- figure out the range being pushed -------------------------------
+# git feeds pushed refs on stdin: "<local ref> <local sha> <remote ref>
+# <remote sha>". We diff each local sha against its remote counterpart
+# (or against the merge-base with origin/main for a brand-new branch) to
+# get the set of changed files. Fall back to "changed vs origin/main" if
+# stdin is empty (e.g. invoked manually).
+remote="${1:-origin}"
+z40=0000000000000000000000000000000000000000
+changed=""
+while read -r _local_ref local_sha _remote_ref remote_sha; do
+  [[ -z "${local_sha:-}" ]] && continue
+  if [[ "$local_sha" == "$z40" ]]; then
+    continue # branch deletion — nothing to validate
+  fi
+  if [[ "$remote_sha" == "$z40" || -z "$remote_sha" ]]; then
+    base="$(git merge-base "$local_sha" origin/main 2>/dev/null || true)"
+    [[ -z "$base" ]] && base="$(git rev-parse "$local_sha^" 2>/dev/null || echo "$local_sha")"
+  else
+    base="$remote_sha"
+  fi
+  changed+=$'\n'"$(git diff --name-only "$base" "$local_sha" 2>/dev/null)"
+done
+
+if [[ -z "${changed// /}" ]]; then
+  # Manual invocation / nothing on stdin: diff the working tree state
+  # against origin/main so `bash hack/hooks/pre-push` still does something.
+  changed="$(git diff --name-only origin/main 2>/dev/null || true)"
+fi
+
+touched() { grep -qE "^$1" <<<"$changed"; }
+
+fail=0
+step() { # step <name> <cmd...>
+  local name="$1"; shift
+  echo "==> $name"
+  if ! "$@"; then
+    echo "FAIL  $name" >&2
+    fail=1
+  fi
+}
+
+# A module's CI also re-ran when ci.yml itself changed; there's no ci.yml
+# anymore, so path membership is the sole trigger.
+
+# ---- Go modules: vet + build + test ----------------------------------
+go_module() { # go_module <dir>
+  ( cd "$1" && go vet ./... && go build ./... && go test ./... -count=1 )
+}
+
+if touched 'server-go/'; then
+  step "server-go (go vet/build/test)" go_module server-go
+fi
+if touched 'cli/'; then
+  step "cli (go vet/build/test)" go_module cli
+fi
+if touched 'mcp/'; then
+  step "mcp (go vet/build/test)" go_module mcp
+fi
+
+# ---- web: typecheck + lint (+ build only in FULL mode) ---------------
+if touched 'web/' || touched 'scripts/build-frontend.sh'; then
+  step "web (tsc --noEmit)" bash -c 'cd web && npx tsc --noEmit'
+  step "web (eslint)"       bash -c 'cd web && npm run lint'
+  if [[ "${KUSO_HOOK_FULL:-}" == "1" ]]; then
+    step "web (next build)" bash -c 'cd web && npm run build'
+  else
+    echo "    (skipping 'next build' — set KUSO_HOOK_FULL=1 to include it)"
+  fi
+fi
+
+# ---- operator: helm lint (+ kind CRD dry-run only in FULL mode) ------
+if touched 'operator/'; then
+  if command -v helm >/dev/null 2>&1; then
+    step "operator (helm lint)" bash -c '
+      set -e
+      for chart in operator/helm-charts/*/; do
+        echo "  linting $chart"
+        helm lint "$chart"
+      done'
+  else
+    echo "==> operator: helm not installed — skipping chart lint" >&2
+  fi
+  if [[ "${KUSO_HOOK_FULL:-}" == "1" ]] && command -v kind >/dev/null 2>&1 && command -v kubectl >/dev/null 2>&1; then
+    step "operator (CRD dry-run on kind)" bash hack/hooks/crd-smoke.sh
+  else
+    echo "    (skipping kind CRD dry-run — needs KUSO_HOOK_FULL=1 + kind + kubectl)"
+  fi
+fi
+
+if [[ "$fail" -ne 0 ]]; then
+  echo "" >&2
+  echo "pre-push validation FAILED. Fix the above, or bypass with:" >&2
+  echo "  git push --no-verify        (skip once)" >&2
+  echo "  KUSO_SKIP_HOOKS=1 git push  (same, via env)" >&2
+  exit 1
+fi
+
+echo "pre-push validation passed."
+exit 0

@@ -152,12 +152,20 @@ func (h *GithubHandler) MountPublic(r chi.Router) {
 	r.Get("/api/github/setup-callback", h.SetupCallback)
 }
 
-// MountAuthed registers the bearer-protected admin routes:
+// MountAuthed registers the bearer-protected routes. All require
+// authentication (the authed group's Issuer.Middleware). The three
+// enumeration/disclosure endpoints additionally require settings:admin
+// in-handler (see requireAdmin calls below), because they return the
+// GitHub App's ENTIRE connected footprint — every installation and every
+// repo file tree — which any authenticated viewer must not be able to
+// walk. The repo-specific probes (check-repo, detect-runtime,
+// scan-addons) stay non-admin: they act on a single repo the caller
+// already names while editing a service, so an editor keeps that flow.
 //   - /api/github/install-url
-//   - /api/github/installations
-//   - /api/github/installations/{id}/repos
+//   - /api/github/installations              (admin — enumeration)
+//   - /api/github/installations/{id}/repos   (admin — enumeration)
 //   - /api/github/installations/refresh (POST)
-//   - /api/github/installations/{id}/repos/{owner}/{repo}/tree
+//   - /api/github/installations/{id}/repos/{owner}/{repo}/tree  (admin — disclosure)
 //   - /api/github/detect-runtime (POST)
 func (h *GithubHandler) MountAuthed(r chi.Router) {
 	r.Get("/api/github/install-url", h.InstallURL)
@@ -456,6 +464,12 @@ func (h *GithubHandler) InstallURL(w http.ResponseWriter, _ *http.Request) {
 // per-user installation filter via the GitHub user-to-installations
 // API. Out of scope for v1; multi-tenant is a different product.
 func (h *GithubHandler) ListInstallations(w http.ResponseWriter, r *http.Request) {
+	// Admin-only: this enumerates every installation and repo the App can
+	// see, which a non-admin viewer must not be able to walk. Consistent
+	// with WebhookHealth and the whole GithubConfigureHandler.
+	if !requireAdmin(w, r) {
+		return
+	}
 	if h.Cache == nil {
 		writeJSON(w, http.StatusOK, []any{})
 		return
@@ -489,6 +503,11 @@ func (h *GithubHandler) ListInstallations(w http.ResponseWriter, r *http.Request
 
 // InstallationRepos returns the cached repo list for one installation.
 func (h *GithubHandler) InstallationRepos(w http.ResponseWriter, r *http.Request) {
+	// Admin-only: lists every repo an installation can see — a disclosure
+	// surface, same bar as ListInstallations.
+	if !requireAdmin(w, r) {
+		return
+	}
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil {
 		http.Error(w, "bad id", http.StatusBadRequest)
@@ -532,6 +551,12 @@ func (h *GithubHandler) RefreshInstallations(w http.ResponseWriter, r *http.Requ
 
 // RepoTree walks a repo's git tree at HEAD of branch.
 func (h *GithubHandler) RepoTree(w http.ResponseWriter, r *http.Request) {
+	// Admin-only: walks any connected repo's file tree — a disclosure
+	// surface for source that the caller may have no project relationship
+	// to. Same bar as ListInstallations / InstallationRepos.
+	if !requireAdmin(w, r) {
+		return
+	}
 	if h.Client == nil {
 		http.Error(w, "github not configured", http.StatusServiceUnavailable)
 		return

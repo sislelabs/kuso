@@ -46,8 +46,13 @@ import (
 // truncated and the client errors on decompress — preferable to silently
 // shipping a half-dump (same tradeoff the control-plane handler documents).
 //
-// Editor-gated: it exfiltrates the entire dataset, so it's a data-read
-// action at the same bar as Restore's destructive write.
+// Admin-gated (secrets:read): it exfiltrates the ENTIRE dataset — every
+// row of every table, including secret-bearing app tables (password
+// hashes, session tokens, API keys). That's a strict superset of the
+// SQL browser (callerCanRunSQL) and project Export (callerCanReadSecrets),
+// both admin-only, so it takes the same admin secret-read bar. Restore's
+// editor bar is the wrong analogy: Restore *writes* and returns no data;
+// Download reads the whole dataset out to the caller.
 func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	addon := chi.URLParam(r, "addon")
@@ -65,10 +70,15 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
-	// Editor — Download returns the entire dataset to the caller. That's a
-	// data-read at the same blast radius as Restore's destructive write, so
-	// it takes the same write-grade role bar.
-	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
+	// Admin secret-read — Download returns the entire dataset (including
+	// secret-bearing app tables) to the caller, the same blast radius as
+	// the SQL browser and project Export, both admin-only. requireProjectAccess
+	// first so a non-member gets a plain 403 before we resolve the addon.
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
+		return
+	}
+	if !callerCanReadSecrets(ctx, h.DB, project) {
+		http.Error(w, "forbidden: downloading a database dump (which contains secret-bearing rows) requires the admin role", http.StatusForbidden)
 		return
 	}
 
