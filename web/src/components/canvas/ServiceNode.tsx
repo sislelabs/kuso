@@ -57,7 +57,13 @@ function statusFor(env?: KusoEnvironment, latestBuild?: BuildSummary): DeploySta
 
   if (!env) return "unknown";
 
-  if (buildStatus === "failed" || buildStatus === "error") return "failed";
+  // release-failed = build OK but release hook (migration) failed, image
+  // not promoted. If the env isn't already serving a prior-good image
+  // (handled by the env.status.ready check above), surface it as failed
+  // rather than falling through to awaiting/unknown.
+  if (buildStatus === "failed" || buildStatus === "error" || buildStatus === "release-failed") {
+    return "failed";
+  }
 
   // Awaiting the first build: a brand-new build-based service has no
   // image yet (server holds it at replicas=0 so it doesn't crash-loop a

@@ -21,6 +21,7 @@ export type BuildRowStatus =
   | "active"
   | "superseded"
   | "failed"
+  | "release-failed"
   | "running"
   | "pending"
   | "queued"
@@ -35,6 +36,11 @@ export function StatusBadge({ s }: { s: BuildRowStatus }) {
     active:     { label: "ACTIVE",     cls: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" },
     superseded: { label: "SUPERSEDED", cls: "bg-[var(--bg-tertiary)] text-[var(--text-tertiary)] border-[var(--border-subtle)]" },
     failed:     { label: "FAILED",     cls: "bg-red-500/10 text-red-400 border-red-500/30" },
+    // release-failed: the image BUILT fine but its release hook (e.g. a
+    // DB migration) failed, so kuso refused to promote it. Distinct label
+    // from FAILED so the operator knows the build is good and the fix is
+    // in the release step, not the build.
+    "release-failed": { label: "RELEASE FAILED", cls: "bg-orange-500/10 text-orange-400 border-orange-500/30" },
     running:    { label: "BUILDING",   cls: "bg-[var(--building-subtle)] text-[var(--building)] border-[var(--building)]/30" },
     pending:    { label: "PENDING",    cls: "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-subtle)]" },
     queued:     { label: "QUEUED",     cls: "bg-[var(--bg-tertiary)] text-[var(--text-secondary)] border-[var(--border-subtle)] border-dashed" },
@@ -128,7 +134,7 @@ export function BuildRow({
             {b.commitMessage && (
               <div className="truncate text-xs text-[var(--text-secondary)]">{b.commitMessage}</div>
             )}
-            {b.status === "failed" && b.errorMessage && (
+            {(b.status === "failed" || b.status === "release-failed") && b.errorMessage && (
               <div
                 className="truncate font-mono text-[11px] text-red-300/90"
                 title={b.errorMessage}
@@ -178,8 +184,12 @@ export function BuildRow({
       {isOpen && (
         <div className="min-w-0 border-t border-[var(--border-subtle)] bg-[var(--bg-primary)]">
           <BuildErrorBanner
-            message={b.status === "failed" ? b.errorMessage : undefined}
-            failureClass={b.status === "failed" ? b.failureClass : undefined}
+            message={
+              b.status === "failed" || b.status === "release-failed" ? b.errorMessage : undefined
+            }
+            failureClass={
+              b.status === "failed" || b.status === "release-failed" ? b.failureClass : undefined
+            }
           />
           <BuildLogs project={project} service={service} buildId={b.id} />
         </div>

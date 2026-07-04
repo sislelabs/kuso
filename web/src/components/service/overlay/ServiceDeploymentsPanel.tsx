@@ -86,6 +86,10 @@ function classify(
     return b.id === fallbackActiveId ? "active" : "superseded";
   }
   if (s === "failed") return "failed";
+  // release-failed: build succeeded but the release hook (migration) failed,
+  // so the image was NOT promoted. Without this case it fell through to
+  // "unknown" and rendered as a bare UNKNOWN badge.
+  if (s === "release-failed") return "release-failed";
   if (s === "running") return "running";
   if (s === "pending") return "pending";
   if (s === "queued") return "queued";
