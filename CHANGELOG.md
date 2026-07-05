@@ -19,6 +19,27 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.122] — 2026-07-05
+
+### Other
+- Merge: CLI web-UI feature parity ([970fe39](https://github.com/sislelabs/kuso/commit/970fe3966431bffc94dd87b94e6e83bc637461bc))
+
+### ✨ Features
+- Feat(cli): add addon placement, sql browser, diagnostics, backup settings, github/user/invite/notif commands ([6b35aee](https://github.com/sislelabs/kuso/commit/6b35aee26fc4fbbe2dce26d1ad3bd1795f92950a))
+- Feat(cli): instance-config pod-size CRUD, runpack list/delete, config reads ([ed0f395](https://github.com/sislelabs/kuso/commit/ed0f39589ddd9c9929ba7cb536beb67a8322cb1a))
+- Feat(cli): kuso role CRUD + wire 'kuso get roles' ([15d7019](https://github.com/sislelabs/kuso/commit/15d70190192326f7a8d95aba7d11a05a3d29705a))
+
+### 🐛 Bug Fixes
+- Fix(security): close three access-control gaps + move CI to pre-push ([023aff5](https://github.com/sislelabs/kuso/commit/023aff5427ff59ca43d924bb94c11ba6cd88986f))
+- Fix(registry-gc): set ttlSecondsAfterFinished so finished GC jobs self-reap ([464a5eb](https://github.com/sislelabs/kuso/commit/464a5eb42e6bb08cda69c107f556ace32fd85d03))
+
+### 📝 Docs
+- Docs: reflect CLI web-UI parity in CLAUDE.md + SKILL.md ([a0169f9](https://github.com/sislelabs/kuso/commit/a0169f916455bccb035ea8b22562f40d073cacef))
+- Docs: spec for CLI web-UI parity ([b35fc60](https://github.com/sislelabs/kuso/commit/b35fc604df26bbe22232ed2a7422f916ed32b5bb))
+
+### 🧹 Chores
+- Chore: archive changelog for v0.18.121 ([5fde907](https://github.com/sislelabs/kuso/commit/5fde9075e3860dd31f493a29a993d33334a6f7f5))
+
 ## [0.18.121] — 2026-07-04
 
 ### 🐛 Bug Fixes
@@ -399,12 +420,6 @@ messages on every release. The format is loosely based on
 
 ### 🧪 Tests
 - Test(kube): regenerate kusoenvironments CRD golden for publicEnv ([421bdb9](https://github.com/sislelabs/kuso/commit/421bdb953629275f6bb34ea2295e52aa08a86669))
-
-## [0.18.72] — 2026-06-14
-
-### 🐛 Bug Fixes
-- Fix(install): pgbouncer pg_hba md5 + missing publicEnv on env CRD — two fresh-install blockers ([afd7cf4](https://github.com/sislelabs/kuso/commit/afd7cf46f0a974c7e7a4891240f50ba98706bf02))
-- Fix(postgres): store kuso role as md5 so pgbouncer auth works on fresh install ([158b73f](https://github.com/sislelabs/kuso/commit/158b73f6d80d5d035085350230ea3461adca0b63))
 
 
 ---
