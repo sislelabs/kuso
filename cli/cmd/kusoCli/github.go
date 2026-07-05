@@ -368,6 +368,189 @@ func readEnvFile(path string) (map[string]string, error) {
 	return out, scn.Err()
 }
 
+// ---- Repo probes: check-repo / detect-runtime / scan-addons ----
+//
+// These POST a {installationId, owner, repo, [branch], [path]} body to
+// the matching /api/github/* endpoint. They act on a single repo the
+// caller names via --repo owner/name (non-admin server-side).
+//
+//   kuso github check-repo     --repo owner/name [--installation-id N]
+//   kuso github detect-runtime --repo owner/name [--ref branch] [--path sub/dir] [--installation-id N]
+//   kuso github scan-addons    --repo owner/name [--ref branch] [--path sub/dir] [--installation-id N]
+//
+// Server body shapes (verified against server-go handlers):
+//   check-repo:     {installationId, owner, repo}   — installationId 0
+//                   is auto-resolved server-side; always returns 200
+//                   with {ok, ...} (even on access failure).
+//   detect-runtime: {installationId, owner, repo, branch, path} — server
+//                   REQUIRES installationId!=0 AND branch!="" (400 else).
+//   scan-addons:    same required fields as detect-runtime.
+//
+// Because detect-runtime/scan-addons need a non-zero installationId and
+// a branch, this CLI resolves both client-side when the user omits them:
+// installationId by matching --repo's owner against the cached
+// installation list, branch by that installation's repo default branch.
+
+var (
+	ghRepoFlag      string
+	ghRefFlag       string
+	ghPathFlag      string
+	ghInstallIDFlag int64
+)
+
+// splitRepo turns "owner/name" into (owner, name). Rejects anything
+// that isn't exactly two non-empty slash-separated parts.
+func splitRepo(s string) (owner, repo string, err error) {
+	owner, repo, ok := strings.Cut(s, "/")
+	if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
+		return "", "", fmt.Errorf("--repo must be owner/name, got %q", s)
+	}
+	return owner, repo, nil
+}
+
+// resolveInstallation returns the installation id whose account matches
+// owner. Used when the caller didn't pass --installation-id. Returns 0
+// (no error) if nothing matches — the caller decides whether that's fatal.
+func resolveInstallation(owner string) (int64, error) {
+	resp, err := api.ListInstallations()
+	if err := checkRespErr(resp, err); err != nil {
+		return 0, err
+	}
+	var items []map[string]any
+	if err := json.Unmarshal(resp.Body(), &items); err != nil {
+		return 0, err
+	}
+	for _, it := range items {
+		if strings.EqualFold(asString(it["accountLogin"]), owner) {
+			if f, ok := it["id"].(float64); ok {
+				return int64(f), nil
+			}
+		}
+	}
+	return 0, nil
+}
+
+// resolveDefaultBranch returns the default branch of owner/repo as seen
+// through the given installation. Best-effort — "" if not found.
+func resolveDefaultBranch(installID int64, owner, repo string) string {
+	resp, err := api.ListInstallationRepos(installID)
+	if err := checkRespErr(resp, err); err != nil {
+		return ""
+	}
+	var items []map[string]any
+	if err := json.Unmarshal(resp.Body(), &items); err != nil {
+		return ""
+	}
+	want := owner + "/" + repo
+	for _, it := range items {
+		if strings.EqualFold(asString(it["fullName"]), want) {
+			return asString(it["defaultBranch"])
+		}
+	}
+	return ""
+}
+
+var githubCheckRepoCmd = &cobra.Command{
+	Use:   "check-repo",
+	Short: "Check whether the GitHub App can access a repo",
+	Args:  cobra.NoArgs,
+	Example: `  kuso github check-repo --repo sislelabs/kuso
+  kuso github check-repo --repo owner/name --installation-id 12345678`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		owner, repo, err := splitRepo(ghRepoFlag)
+		if err != nil {
+			return err
+		}
+		// installationId 0 is fine here — the server auto-resolves it.
+		body, _ := json.Marshal(map[string]any{
+			"installationId": ghInstallIDFlag,
+			"owner":          owner,
+			"repo":           repo,
+		})
+		resp, err := api.RawPost("/api/github/check-repo", body, "application/json")
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("check repo: %w", err)
+		}
+		var data map[string]any
+		if err := json.Unmarshal(resp.Body(), &data); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		return jsonOut(data)
+	},
+}
+
+var githubDetectRuntimeCmd = &cobra.Command{
+	Use:   "detect-runtime",
+	Short: "Auto-detect runtime + port from a repo",
+	Args:  cobra.NoArgs,
+	Example: `  kuso github detect-runtime --repo sislelabs/kuso
+  kuso github detect-runtime --repo owner/name --ref main --path services/api`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runGithubRepoProbe("/api/github/detect-runtime", "detect runtime")
+	},
+}
+
+var githubScanAddonsCmd = &cobra.Command{
+	Use:   "scan-addons",
+	Short: "Suggest addon kinds from a repo's env/compose hints",
+	Args:  cobra.NoArgs,
+	Example: `  kuso github scan-addons --repo sislelabs/kuso
+  kuso github scan-addons --repo owner/name --ref main`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runGithubRepoProbe("/api/github/scan-addons", "scan addons")
+	},
+}
+
+// runGithubRepoProbe is shared by detect-runtime + scan-addons: both
+// take the same {installationId, owner, repo, branch, path} body and the
+// server requires a non-zero installationId + a non-empty branch. We
+// resolve both client-side when the caller omits them.
+func runGithubRepoProbe(path, label string) error {
+	if api == nil {
+		return fmt.Errorf("not logged in; run 'kuso login' first")
+	}
+	owner, repo, err := splitRepo(ghRepoFlag)
+	if err != nil {
+		return err
+	}
+	installID := ghInstallIDFlag
+	if installID == 0 {
+		installID, err = resolveInstallation(owner)
+		if err != nil {
+			return fmt.Errorf("resolve installation: %w", err)
+		}
+		if installID == 0 {
+			return fmt.Errorf("no GitHub App installation found for owner %q — pass --installation-id or install the kuso App on that account", owner)
+		}
+	}
+	branch := ghRefFlag
+	if branch == "" {
+		branch = resolveDefaultBranch(installID, owner, repo)
+		if branch == "" {
+			return fmt.Errorf("could not resolve default branch for %s/%s — pass --ref", owner, repo)
+		}
+	}
+	body, _ := json.Marshal(map[string]any{
+		"installationId": installID,
+		"owner":          owner,
+		"repo":           repo,
+		"branch":         branch,
+		"path":           ghPathFlag,
+	})
+	resp, err := api.RawPost(path, body, "application/json")
+	if err := checkRespErr(resp, err); err != nil {
+		return fmt.Errorf("%s: %w", label, err)
+	}
+	var data any
+	if err := json.Unmarshal(resp.Body(), &data); err != nil {
+		return fmt.Errorf("decode response: %w", err)
+	}
+	return jsonOut(data)
+}
+
 func init() {
 	rootCmd.AddCommand(githubCmd)
 	githubCmd.AddCommand(githubStatusCmd)
@@ -375,6 +558,18 @@ func init() {
 	githubCmd.AddCommand(githubReposCmd)
 	githubCmd.AddCommand(githubRefreshCmd)
 	githubCmd.AddCommand(githubConfigureCmd)
+	githubCmd.AddCommand(githubCheckRepoCmd)
+	githubCmd.AddCommand(githubDetectRuntimeCmd)
+	githubCmd.AddCommand(githubScanAddonsCmd)
+
+	for _, c := range []*cobra.Command{githubCheckRepoCmd, githubDetectRuntimeCmd, githubScanAddonsCmd} {
+		c.Flags().StringVar(&ghRepoFlag, "repo", "", "target repo as owner/name (required)")
+		c.Flags().Int64Var(&ghInstallIDFlag, "installation-id", 0, "installation id (0 = auto-resolve from owner)")
+	}
+	for _, c := range []*cobra.Command{githubDetectRuntimeCmd, githubScanAddonsCmd} {
+		c.Flags().StringVar(&ghRefFlag, "ref", "", "git branch (default: repo's default branch)")
+		c.Flags().StringVar(&ghPathFlag, "path", "", "subdirectory within the repo")
+	}
 	githubCmd.PersistentFlags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 
 	githubConfigureCmd.Flags().StringVar(&gcEnvFile, "env-file", "", "KEY=VALUE file with APP_ID/APP_SLUG/CLIENT_ID/CLIENT_SECRET/WEBHOOK_SECRET/ORG")

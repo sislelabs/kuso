@@ -3,6 +3,7 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -265,6 +266,45 @@ func init() {
 
 	buildCmd.AddCommand(buildListCmd)
 	buildListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+
+	// `kuso build latest <project>` — the newest build per service in a
+	// project. Server returns a map keyed by service short-name →
+	// build summary; `--env` filters to an env-group's branch.
+	var buildLatestEnv string
+	buildLatestCmd := &cobra.Command{
+		Use:   "latest <project>",
+		Short: "Show the latest build per service in a project",
+		Long: `Return the newest build for each service in a project (map keyed by
+service short-name). Pass --env to filter to an env-group's branch
+(e.g. production, staging, preview-pr-7); omit it for the newest build
+per service regardless of branch.`,
+		Args:    cobra.ExactArgs(1),
+		Example: `  kuso build latest scubatony -o json
+  kuso build latest scubatony --env production`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if api == nil {
+				return fmt.Errorf("not logged in; run 'kuso login' first")
+			}
+			path := "/api/projects/" + url.PathEscape(args[0]) + "/builds/latest"
+			if buildLatestEnv != "" {
+				path += "?env=" + url.PathEscape(buildLatestEnv)
+			}
+			resp, err := api.RawGet(path)
+			if err := checkRespErr(resp, err); err != nil {
+				return fmt.Errorf("build latest: %w", err)
+			}
+			// Server returns map[service]buildSummary. Decode generically
+			// and pretty-print (JSON out); a table would drop the service
+			// key that makes the map useful.
+			var out map[string]any
+			if err := json.Unmarshal(resp.Body(), &out); err != nil {
+				return fmt.Errorf("decode response: %w", err)
+			}
+			return jsonOut(out)
+		},
+	}
+	buildLatestCmd.Flags().StringVar(&buildLatestEnv, "env", "", "env-group filter (production, staging, preview-pr-N)")
+	buildCmd.AddCommand(buildLatestCmd)
 
 	rollbackCmd := &cobra.Command{
 		Use:   "rollback <project> <service> <build>",
