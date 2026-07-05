@@ -17,6 +17,14 @@ When you need to check the state of the live cluster (services, addons, builds, 
 | Connect to addon DB              | `kuso get addons <project> -o json` then read DATABASE_URL               |
 | Trigger a build                  | `kuso build trigger <project> <service>`                                 |
 | Open a shell in a pod            | `kuso shell <project> <service>`                                         |
+| Pods for a service               | `kuso service pods <project> <service>` (or `kuso get pods …`)           |
+| Recent service errors            | `kuso service errors <project> <service>`                                |
+| Query an addon DB                | `kuso db sql <project> <addon> "SELECT …"` · `kuso db tables …`          |
+| Expose addon on a public port    | `kuso project addon public-tcp enable <project> <addon>`                 |
+| Pin an addon to nodes            | `kuso project addon placement set <project> <addon> --label k=v`         |
+| RBAC roles                       | `kuso get roles` · `kuso role create/edit/delete`                        |
+| Backup policy / health           | `kuso backup settings get` · `kuso backup health`                        |
+| Pod-size presets                 | `kuso instance-config podsize list`                                      |
 
 **Why this matters:**
 - The CLI hits the same `/api/...` surface the UI uses, so what you see is what users see — no "but on my machine" mismatches.
@@ -24,10 +32,17 @@ When you need to check the state of the live cluster (services, addons, builds, 
 - Bugs in the CLI become visible (we found four during the last e2e pass that way).
 - The output format is stable and scriptable; raw kubectl JSON is verbose and re-shapes between server versions.
 
+The CLI now has web-UI parity for operator tasks: roles (`kuso role`/`get roles`),
+pod-size & runpack config, backup settings/health, addon placement, the DB
+browser (`kuso db sql/tables/columns/rows`), service pods/errors, and the
+github/user/invite/notification helpers all have commands. `kuso <group> --help`
+lists them. If you reach for the web UI or kubectl for a kuso-managed resource,
+that's now a gap worth reporting, not a fallback.
+
 **Fall back to `kubectl` only when**:
-- The CLI doesn't expose what you need (e.g. `kubectl logs` of a non-kuso pod, helm-operator state, raw CRD yaml for debugging operator reconcile bugs, kube events).
+- The CLI genuinely has no equivalent: `kubectl logs` of a non-kuso pod, helm-operator state, raw CRD yaml for operator reconcile debugging, or **kube events** (no kuso endpoint exists — verified).
 - You're debugging the CLI itself.
-- You're inspecting cluster-level state (nodes, ClusterRoles, namespaces) that has no kuso-CLI equivalent.
+- You're inspecting cluster-level state (nodes beyond `kuso node list`, ClusterRoles, namespaces, storageclasses) that has no kuso-CLI equivalent.
 
 When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@kuso.sislelabs.com "kubectl ..."` — the test cluster's kubeconfig isn't on the dev machine.
 

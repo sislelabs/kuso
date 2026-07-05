@@ -373,6 +373,24 @@ kuso project addon public-tcp disable <project> <addon>
   clients reject that (and the public path is plaintext TCP, not TLS-terminated
   https) — treat it as a dev/ops convenience, not a way to wire a prod app.
 
+### Querying an addon DB without exposing it
+
+You don't need public-TCP (or a port-forward) just to run a query — the CLI
+proxies read queries through the kuso API:
+
+```bash
+kuso db tables <project> <addon>                       # list tables
+kuso db columns <project> <addon> --table users        # schema of one table
+kuso db sql <project> <addon> "SELECT count(*) FROM users"   # ad-hoc query
+kuso db rows <project> <addon> --table users --limit 20      # browse rows
+```
+
+`kuso db sql` is read-oriented (results stream back as columns+rows). For an
+interactive psql session use `kuso db connect <project> <addon>`; for a raw
+socket a local tool can dial, use `kuso db port-forward`. Row inserts/updates/
+deletes are intentionally NOT in the CLI — do those from a migration or the
+web data-grid.
+
 ### `${{ ... }}` reference syntax
 
 The `${{ ... }}` must be the ENTIRE value (no `prefix-${{ ... }}-suffix`).
