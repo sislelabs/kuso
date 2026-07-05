@@ -42,11 +42,12 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 ## Architecture cheatsheet (read this before reasoning about the codebase)
 
 **Repo layout:**
-- `server-go/` — Go HTTP API (`internal/http/handlers/*`), kube client (`internal/kube/`), domain services (`internal/projects`, `internal/addons`, `internal/builds`, `internal/secrets`, `internal/notify`, `internal/nodewatch`, `internal/nodemetrics`, `internal/nodejoin`, `internal/spec`, `internal/status`).
+- `server-go/` — Go HTTP API (`internal/http/handlers/*`), kube client (`internal/kube/`), 50+ domain packages under `internal/` (`projects`, `addons`, `builds`+`buildcontroller`, `secrets`, `notify`, `nodewatch`, `nodemetrics`, `nodejoin`, `spec`, `status`, `marketplace`, `crons`+`runs`, `previewdb`, `pkgupdates`, `scaledown`, `alerts`, `incidents`, `remediate`, `audit`, `updater`, `imagerelease`, `leader`, …). `ls server-go/internal` for the full set — don't assume this list is exhaustive.
 - `web/` — Next.js 16 App Router with `output: "export"`. Static bundle gets embedded into the server-go binary (`server-go/internal/web/dist/`).
-- `operator/` — operator-sdk helm-operator. CRDs in `operator/config/crd/bases/`, helm charts in `operator/helm-charts/{kuso,kusoproject,kusoservice,kusoenvironment,kusoaddon,kusobuild}/`.
+- `operator/` — operator-sdk helm-operator. CRDs in `operator/config/crd/bases/`, helm charts in `operator/helm-charts/{kuso,kusoproject,kusoservice,kusoenvironment,kusoaddon,kusobuild,kusocron,kusorun}/`.
 - `cli/` — single binary (`./cmd`) entry point + `cmd/kusoCli/` cobra commands + `pkg/kusoApi/` resty client + `pkg/coolify/` migration importer.
 - `deploy/` — kube manifests applied during install (`server-go.yaml`, `prometheus.yaml`, `cluster-issuer.yaml`).
+- `api/` typed API surface · `mcp/` MCP server · `compose/` docker-compose importer · `scripts/` dev-ops helpers · `skills/` the published Claude Code skill (`skills/kuso/SKILL.md`, installed into consumer repos via `install.sh`).
 - `hack/release.sh` — `make ship VERSION=vX.Y.Z` does version bump + web build + cross-platform docker push to ghcr + cuts a GH release + writes `release.json`. Live instances poll the GH releases endpoint and self-update via the in-built updater (no ssh from the laptop). `make local-roll VERSION=vX.Y.Z` is the dev-only escape hatch that ssh-rolls a single test cluster — almost no one should use it. The `make release-roll` target is deprecated and exits non-zero with a helpful message; replace any reference to it with `make ship`.
 
 **CRD model:**
@@ -54,7 +55,8 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 - `KusoService` — one application within a project. `spec.{repo, runtime, port, domains, envVars, scale, sleep, placement, volumes, previews, runtime-specific blocks (static/buildpacks)}`. `runtime ∈ {dockerfile, nixpacks, buildpacks, static}`.
 - `KusoEnvironment` — one deployed instance of a service (production / preview-pr-N). Carries the resolved placement + envFromSecrets + image tag.
 - `KusoAddon` — managed datastore. `spec.{kind, version, size, ha, storageSize, password, database, backup, placement}`. Helm chart renders to a StatefulSet + a `<name>-conn` Secret consumed by every env in the project via `envFromSecrets`.
-- `KusoBuild` — kaniko/buildpacks build pod that produces an image and patches the matching env CR.
+- `KusoBuild` — kaniko/buildpacks build pod that produces an image and patches the matching env CR. Reconciled by the server-go `buildcontroller`, NOT the helm-operator.
+- `KusoCron` — scheduled job in a project (cron expr + container spec) → renders a k8s CronJob. `KusoRun` — a one-off/triggered job execution (imperative counterpart to KusoCron).
 
 **Patterns to keep:**
 - API endpoints under `/api/...`. The web client uses `lib/api-client.ts`'s `api()` wrapper which auto-injects the JWT bearer + handles 401 (clears jwt + bounces to `/login` via the global QueryClient onError).
@@ -71,7 +73,7 @@ When you do shell out to `kubectl`, run it via `ssh -i ~/.ssh/keys/hetzner root@
 
 **Release flow:**
 - Bump `server-go/internal/version/VERSION`, `deploy/server-go.yaml` image tag, `hack/install.sh` `KUSO_SERVER_VERSION` AND `KUSO_VERSION` defaults. Then `make ship VERSION=vX.Y.Z` (release.sh handles all four version-string rewrites + the web bundle build + docker push + GH release). Live instances pick up the new release.json on the next updater tick and roll themselves; you do NOT ssh from the laptop. CRD changes still need an explicit `kubectl apply -f operator/config/crd/bases/...yaml` via ssh — the auto-updater only flips image tags, not schemas.
-- Operator helm-operator picks up CR spec changes via watch + 3m reconcile. Schema changes to a CRD require both the YAML apply AND the operator pod to restart-or-reconnect to refresh its informer.
+- Operator helm-operator picks up CR spec changes via watch + 3m reconcile (watches Project/Service/Environment/Addon/Cron/Run — NOT Build). Schema changes to a CRD require both the YAML apply AND the operator pod to restart-or-reconnect to refresh its informer.
 
 ## Scope guardrails (resist scope creep)
 
