@@ -10,6 +10,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// backupSettingsFlags holds the settable fields of the S3 backup
+// config. Each is applied only when the corresponding flag was
+// explicitly changed (cmd.Flags().Changed), so `set` is a
+// read-modify-write that leaves untouched fields alone — the server
+// wipes any field it receives, so we must resend the current values.
+var (
+	backupSetBucket    string
+	backupSetEndpoint  string
+	backupSetRegion    string
+	backupSetAccessKey string
+	backupSetSecretKey string
+)
+
 // `kuso backup` — pull a gzipped pg_dump of the live kuso server's
 // metadata DB to a local file. Server runs pg_dump in-process,
 // streams gzip down. Admin-only.
@@ -194,9 +207,154 @@ func waitForRestore(statusURL, jobName string, deadline time.Duration) error {
 	return fmt.Errorf("timed out waiting for Job %s; poll with `kuso restore status %s`", jobName, jobName)
 }
 
+// ---------- backup settings / health / db-stats (admin) ----------
+
+// backupSettingsCmd groups the S3 off-cluster backup config.
+var backupSettingsCmd = &cobra.Command{
+	Use:   "settings",
+	Short: "Read/write the off-cluster S3 backup settings (admin)",
+}
+
+var backupSettingsGetCmd = &cobra.Command{
+	Use:   "get",
+	Short: "Show the S3 backup settings (secret access key is never returned)",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.RawGet("/api/admin/backup-settings")
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("get backup settings: %w", err)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(resp.Body(), &out); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		return jsonOut(out)
+	},
+}
+
+var backupSettingsSetCmd = &cobra.Command{
+	Use:   "set",
+	Short: "Update S3 backup settings (read-modify-write; only changed flags are overwritten)",
+	Long: `Update the off-cluster S3 backup config. Reads the current settings,
+overlays only the flags you pass, and PUTs the merged object back — so
+unset flags keep their existing values instead of being wiped.
+
+bucket, endpoint and access-key-id are required by the server on first
+save; secret-access-key is required the first time and preserved
+server-side on subsequent saves if omitted.`,
+	Args: cobra.NoArgs,
+	Example: `  kuso backup settings set --bucket my-backups --endpoint https://s3.example.com --region auto --access-key-id AKIA... --secret-access-key ...
+  kuso backup settings set --region us-east-1`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		// Read current settings so PUT (which replaces the whole object)
+		// doesn't wipe fields the user didn't touch.
+		resp, err := api.RawGet("/api/admin/backup-settings")
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("read current settings: %w", err)
+		}
+		// Decode into a plain map so we round-trip whatever the server
+		// sends (drops the read-only hasSecret field on write, which the
+		// server ignores anyway). The server never returns
+		// secretAccessKey, so it stays absent unless --secret-access-key
+		// is passed.
+		body := map[string]any{}
+		if err := json.Unmarshal(resp.Body(), &body); err != nil {
+			return fmt.Errorf("decode current settings: %w", err)
+		}
+		// hasSecret is a read-only view field; don't send it back.
+		delete(body, "hasSecret")
+		if cmd.Flags().Changed("bucket") {
+			body["bucket"] = backupSetBucket
+		}
+		if cmd.Flags().Changed("endpoint") {
+			body["endpoint"] = backupSetEndpoint
+		}
+		if cmd.Flags().Changed("region") {
+			body["region"] = backupSetRegion
+		}
+		if cmd.Flags().Changed("access-key-id") {
+			body["accessKeyId"] = backupSetAccessKey
+		}
+		if cmd.Flags().Changed("secret-access-key") {
+			body["secretAccessKey"] = backupSetSecretKey
+		}
+		raw, err := json.Marshal(body)
+		if err != nil {
+			return fmt.Errorf("encode settings: %w", err)
+		}
+		putResp, err := api.RawPut("/api/admin/backup-settings", raw, "application/json")
+		if err != nil {
+			return fmt.Errorf("put backup settings: %w", err)
+		}
+		if putResp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", putResp.StatusCode(), string(putResp.Body()))
+		}
+		fmt.Println("backup settings updated")
+		return nil
+	},
+}
+
+var backupHealthCmd = &cobra.Command{
+	Use:   "health",
+	Short: "Show whether the control-plane DB is actually being backed up off-cluster (admin)",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.RawGet("/api/admin/backup-health")
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("backup health: %w", err)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(resp.Body(), &out); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		return jsonOut(out)
+	},
+}
+
+var backupDBStatsCmd = &cobra.Command{
+	Use:   "db-stats",
+	Short: "Show control-plane Postgres pool + migration stats (admin)",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.RawGet("/api/admin/db/stats")
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("db stats: %w", err)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(resp.Body(), &out); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		return jsonOut(out)
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(backupCmd)
 	backupCmd.Flags().StringVarP(&backupOutput, "output", "o", "", "destination file (default: kuso-backup-<timestamp>.sql.gz)")
+
+	// backup settings / health / db-stats
+	backupCmd.AddCommand(backupSettingsCmd)
+	backupSettingsCmd.AddCommand(backupSettingsGetCmd)
+	backupSettingsCmd.AddCommand(backupSettingsSetCmd)
+	backupSettingsSetCmd.Flags().StringVar(&backupSetBucket, "bucket", "", "S3 bucket name")
+	backupSettingsSetCmd.Flags().StringVar(&backupSetEndpoint, "endpoint", "", "S3 endpoint URL")
+	backupSettingsSetCmd.Flags().StringVar(&backupSetRegion, "region", "", "S3 region (default: auto)")
+	backupSettingsSetCmd.Flags().StringVar(&backupSetAccessKey, "access-key-id", "", "S3 access key ID")
+	backupSettingsSetCmd.Flags().StringVar(&backupSetSecretKey, "secret-access-key", "", "S3 secret access key (preserved server-side if omitted after first save)")
+	backupCmd.AddCommand(backupHealthCmd)
+	backupCmd.AddCommand(backupDBStatsCmd)
 	rootCmd.AddCommand(restoreCmd)
 	restoreCmd.Flags().BoolVarP(&restoreYes, "yes", "y", false, "skip the overwrite confirmation prompt")
 	restoreCmd.Flags().BoolVar(&restoreNoWait, "no-wait", false, "return immediately after submitting; don't poll the Job")

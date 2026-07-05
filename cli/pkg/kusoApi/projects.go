@@ -144,6 +144,20 @@ func (k *KusoClient) RawPost(path string, body []byte, contentType string) (*res
 	return k.client.Post(path)
 }
 
+// RawPut mirrors RawPost for the handful of admin settings endpoints
+// that take a JSON body on PUT (backup-settings, settings/build,
+// settings/session). Same shared-request content-type discipline.
+func (k *KusoClient) RawPut(path string, body []byte, contentType string) (*resty.Response, error) {
+	defer k.client.SetHeader("Content-Type", "application/json")
+	k.client.SetHeader("Content-Type", contentType)
+	if body == nil {
+		k.client.Body = nil
+	} else {
+		k.client.SetBody(body)
+	}
+	return k.client.Put(path)
+}
+
 // Services
 
 func (k *KusoClient) GetServices(project string) (*resty.Response, error) {
@@ -374,6 +388,21 @@ func (k *KusoClient) EnablePublicTCP(project, addon string) (*resty.Response, er
 // Admin-gated. Idempotent (204 even when already off).
 func (k *KusoClient) DisablePublicTCP(project, addon string) (*resty.Response, error) {
 	return k.client.Delete("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/public-tcp")
+}
+
+// AddonPlacement is the node-placement wire type for an addon
+// (mirrors kube.KusoPlacement). An empty struct clears placement.
+type AddonPlacement struct {
+	Labels map[string]string `json:"labels,omitempty"`
+	Nodes  []string          `json:"nodes,omitempty"`
+}
+
+// SetAddonPlacement pins (or, with an empty body, unpins) an addon to
+// nodes matching the given labels / explicit node names. Editor-gated.
+// PUT /api/projects/{project}/addons/{addon}/placement; returns 204.
+func (k *KusoClient) SetAddonPlacement(project, addon string, p AddonPlacement) (*resty.Response, error) {
+	k.client.SetBody(p)
+	return k.client.Put("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/placement")
 }
 
 // AddonSecret returns the addon's plaintext connection values

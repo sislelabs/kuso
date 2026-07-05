@@ -332,6 +332,65 @@ kuso env set <p> api 'S3_SECRET_KEY=${{ storage.S3_SECRET_ACCESS_KEY }}'
 kuso env set <p> api 'DATABASE_READ_URL=${{ db.DATABASE_URL }}'
 ```
 
+### Public (external) addon access — the `:PORT` NodePort + `PUBLIC_URL`
+
+The keys above (`DATABASE_URL`, `POSTGRES_HOST/PORT`, …) are all **in-cluster** —
+`POSTGRES_HOST` is an in-cluster DNS name (`<addon>`, resolves on port 5432)
+that only a pod running *inside* kuso can reach. To connect from **outside**
+the cluster (your laptop, CI, a migration tool, `psql`), the addon must be
+explicitly exposed on a public TCP port. It is **off by default**.
+
+```bash
+# Expose the addon on a public TCP port (admin-only).
+kuso project addon public-tcp enable <project> <addon>
+#   → "addon <project>/<addon> exposed on public TCP port <PORT>"
+# Hide it again (frees the port back to the pool):
+kuso project addon public-tcp disable <project> <addon>
+```
+
+- **The port is server-allocated from a fixed pool** (`KUSO_TCP_PROXY_PORTS`),
+  not chosen by you. Reading it back: the UI addon overlay shows a
+  `public · :<PORT>` badge, or `kuso get addons <project> -o json` →
+  `spec.publicTCP.{enabled,port}`. If the cluster has no pool configured the
+  enable call fails with "public TCP proxy is not configured".
+- **Connect at `<cluster-host>:<PORT>`** (e.g. `kuso.sislelabs.com:30001`), NOT
+  at `POSTGRES_HOST:5432`. kuso binds a Traefik `IngressRouteTCP` from that pool
+  port straight to the addon's Service.
+- **`PUBLIC_URL` is a convenience DSN shown in the UI overview only** — it is the
+  primary connection URL (`DATABASE_URL` / `DIRECT_URL` / `POOLER_URL` /
+  `REDIS_URL`) with its host rewritten to `<cluster-host>:<PORT>`, same
+  scheme / user:password / db / query. It is **NOT injected into pods** — there
+  is no `${{ db.PUBLIC_URL }}` addon key and no `PUBLIC_URL` in `process.env`.
+  In-cluster services keep using `DATABASE_URL`; `PUBLIC_URL` is for you,
+  copied from the UI, to point external clients at the DB.
+- **Auth is the addon's own protocol auth ONLY** — Postgres SCRAM, Redis ACL,
+  MinIO keys, etc. kuso adds no extra gate, so the endpoint is reachable by
+  anyone on the internet who has the creds. Treat it as a real exposure: prefer
+  a firewall/allowlist in front, and disable it when you're done. Not every
+  addon kind supports it (enable fails with a "not yet supported for kind=…"
+  message if so).
+- The `PUBLIC_URL` copied from the UI carries `?sslmode=disable`; many prod
+  clients reject that (and the public path is plaintext TCP, not TLS-terminated
+  https) — treat it as a dev/ops convenience, not a way to wire a prod app.
+
+### Querying an addon DB without exposing it
+
+You don't need public-TCP (or a port-forward) just to run a query — the CLI
+proxies read queries through the kuso API:
+
+```bash
+kuso db tables <project> <addon>                       # list tables
+kuso db columns <project> <addon> --table users        # schema of one table
+kuso db sql <project> <addon> "SELECT count(*) FROM users"   # ad-hoc query
+kuso db rows <project> <addon> --table users --limit 20      # browse rows
+```
+
+`kuso db sql` is read-oriented (results stream back as columns+rows). For an
+interactive psql session use `kuso db connect <project> <addon>`; for a raw
+socket a local tool can dial, use `kuso db port-forward`. Row inserts/updates/
+deletes are intentionally NOT in the CLI — do those from a migration or the
+web data-grid.
+
 ### `${{ ... }}` reference syntax
 
 The `${{ ... }}` must be the ENTIRE value (no `prefix-${{ ... }}-suffix`).

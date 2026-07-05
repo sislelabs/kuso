@@ -32,6 +32,11 @@ var (
 	userSetPassword     string
 	userRoleValue       string
 	userYes             bool
+
+	profileSetEmail     string
+	profileSetFirstName string
+	profileSetLastName  string
+	profileSetUsername  string
 )
 
 var userCmd = &cobra.Command{
@@ -192,6 +197,104 @@ var userRoleCmd = &cobra.Command{
 	},
 }
 
+// `kuso user profile` — read the current (authenticated) user's own
+// profile via GET /api/users/profile. Available to any logged-in user
+// (not admin-gated, unlike the rest of the `user` group). JSON out.
+var userProfileCmd = &cobra.Command{
+	Use:   "profile",
+	Short: "Show your own profile (the authenticated user)",
+	Args:  cobra.NoArgs,
+	Example: `  kuso user profile
+  kuso user profile -o json | jq '.email'`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.RawGet("/api/users/profile")
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("get profile: %w", err)
+		}
+		var data map[string]any
+		if err := json.Unmarshal(resp.Body(), &data); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		return jsonOut(data)
+	},
+}
+
+// `kuso user profile set` — edit your own first/last name + email via
+// PUT /api/users/profile. Read-modify-write: fetch the current profile,
+// overlay only the flags you pass, PUT it back. The server endpoint
+// only accepts firstName/lastName/email; username is admin-managed and
+// NOT editable here (passing --username errors).
+var userProfileSetCmd = &cobra.Command{
+	Use:   "set",
+	Short: "Update your own first name, last name, and/or email",
+	Args:  cobra.NoArgs,
+	Example: `  kuso user profile set --first-name Ada --last-name Lovelace
+  kuso user profile set --email ada@example.com`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		// The PUT /api/users/profile endpoint only edits firstName /
+		// lastName / email — username is not in its request shape and is
+		// admin-managed. Fail loudly rather than silently dropping it.
+		if cmd.Flags().Changed("username") {
+			return fmt.Errorf("--username is not editable via profile (server endpoint ignores it); ask an admin")
+		}
+		if !cmd.Flags().Changed("email") &&
+			!cmd.Flags().Changed("first-name") &&
+			!cmd.Flags().Changed("last-name") {
+			return fmt.Errorf("pass at least one of --email, --first-name, --last-name")
+		}
+
+		// Read current profile so we only overlay the passed flags.
+		resp, err := api.RawGet("/api/users/profile")
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("read current profile: %w", err)
+		}
+		var cur struct {
+			FirstName string `json:"firstName"`
+			LastName  string `json:"lastName"`
+			Email     string `json:"email"`
+		}
+		if err := json.Unmarshal(resp.Body(), &cur); err != nil {
+			return fmt.Errorf("decode current profile: %w", err)
+		}
+
+		firstName := cur.FirstName
+		lastName := cur.LastName
+		email := cur.Email
+		if cmd.Flags().Changed("first-name") {
+			firstName = profileSetFirstName
+		}
+		if cmd.Flags().Changed("last-name") {
+			lastName = profileSetLastName
+		}
+		if cmd.Flags().Changed("email") {
+			email = profileSetEmail
+		}
+
+		// Body matches server-go's updateUserRequest (firstName /
+		// lastName / email; roleId + isActive are stripped server-side).
+		body, err := json.Marshal(map[string]string{
+			"firstName": firstName,
+			"lastName":  lastName,
+			"email":     email,
+		})
+		if err != nil {
+			return fmt.Errorf("marshal: %w", err)
+		}
+		put, err := api.RawPut("/api/users/profile", body, "application/json")
+		if err := checkRespErr(put, err); err != nil {
+			return fmt.Errorf("update profile: %w", err)
+		}
+		fmt.Println("profile updated")
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(userCmd)
 	userCmd.AddCommand(userListCmd)
@@ -199,8 +302,16 @@ func init() {
 	userCmd.AddCommand(userDeleteCmd)
 	userCmd.AddCommand(userSetPasswordCmd)
 	userCmd.AddCommand(userRoleCmd)
+	userCmd.AddCommand(userProfileCmd)
+	userProfileCmd.AddCommand(userProfileSetCmd)
 
 	userListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format: table|json")
+
+	userProfileCmd.Flags().StringVarP(&outputFormat, "output", "o", "json", "output format: json")
+	userProfileSetCmd.Flags().StringVar(&profileSetEmail, "email", "", "new email address")
+	userProfileSetCmd.Flags().StringVar(&profileSetFirstName, "first-name", "", "new first name")
+	userProfileSetCmd.Flags().StringVar(&profileSetLastName, "last-name", "", "new last name")
+	userProfileSetCmd.Flags().StringVar(&profileSetUsername, "username", "", "username (NOT editable via profile; admin-managed)")
 
 	userCreateCmd.Flags().StringVar(&userCreateUsername, "username", "", "username (required)")
 	userCreateCmd.Flags().StringVar(&userCreateEmail, "email", "", "email (required)")

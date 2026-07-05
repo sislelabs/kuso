@@ -141,11 +141,41 @@ var inviteRevokeCmd = &cobra.Command{
 	},
 }
 
+// `kuso invite lookup <token>` — resolve an invite token to its public
+// summary via GET /api/invites/lookup/{token}. This is the read the
+// signup page uses; it's a public endpoint (no admin needed) and only
+// exposes display-safe fields (group name, instance role, uses-left,
+// expiry, note). Returns 404 if the token is unknown, 410 if it's been
+// revoked / expired / used up. JSON out.
+var inviteLookupCmd = &cobra.Command{
+	Use:   "lookup <token>",
+	Short: "Resolve an invite token to its details (public read)",
+	Args:  cobra.ExactArgs(1),
+	Example: `  kuso invite lookup <token>
+  kuso invite lookup <token> -o json | jq '.usesLeft'`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.RawGet("/api/invites/lookup/" + args[0])
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("lookup invite: %w", err)
+		}
+		var data map[string]any
+		if err := json.Unmarshal(resp.Body(), &data); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		return jsonOut(data)
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(inviteCmd)
 	inviteCmd.AddCommand(inviteCreateCmd)
 	inviteCmd.AddCommand(inviteListCmd)
 	inviteCmd.AddCommand(inviteRevokeCmd)
+	inviteCmd.AddCommand(inviteLookupCmd)
+	inviteLookupCmd.Flags().StringVarP(&outputFormat, "output", "o", "json", "output format: json")
 
 	inviteCreateCmd.Flags().StringVar(&inviteCreateGroup, "group", "", "group id to add the invitee to")
 	inviteCreateCmd.Flags().StringVar(&inviteCreateRole, "role", "", "instance role on redeem: admin|editor|viewer")

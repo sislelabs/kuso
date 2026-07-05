@@ -64,3 +64,26 @@ func (k *KusoClient) NotificationFeedReadAll() (*resty.Response, error) {
 func (k *KusoClient) NotificationFeedClear() (*resty.Response, error) {
 	return k.client.Delete("/api/notifications/feed")
 }
+
+// NotificationMyFeed returns recent feed events scoped to the caller's
+// project memberships (admins see everything). Read-only — no unread /
+// read-all / clear variants. Response: a bare JSON array of
+// NotificationEvent (same shape as NotificationFeed).
+func (k *KusoClient) NotificationMyFeed(limit int) (*resty.Response, error) {
+	q := url.Values{}
+	if limit > 0 {
+		q.Set("limit", strconv.Itoa(limit))
+	}
+	path := "/api/notifications/my-feed"
+	if enc := q.Encode(); enc != "" {
+		path += "?" + enc
+	}
+	return k.client.Get(path)
+}
+
+// NotificationOutboxStats returns the webhook delivery queue health:
+// {"pending": N, "dead": N}. A non-zero dead count means at least one
+// external webhook channel is permanently misconfigured.
+func (k *KusoClient) NotificationOutboxStats() (*resty.Response, error) {
+	return k.client.Get("/api/notifications/outbox-stats")
+}

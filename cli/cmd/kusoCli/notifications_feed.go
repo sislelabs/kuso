@@ -147,6 +147,110 @@ are mutually exclusive with each other and with the list:
 	},
 }
 
+// `kuso notifications my-feed` — the non-admin, project-scoped feed.
+// Same row shape as `feed`, but read-only (no unread/read-all/clear)
+// and returns only events for projects the caller can see. Admins get
+// the full feed through this path too.
+//
+//   kuso notifications my-feed [--limit N] [-o json]
+
+var notifMyFeedLimit int
+
+var notificationsMyFeedCmd = &cobra.Command{
+	Use:   "my-feed",
+	Short: "Show the notification feed scoped to your projects (read-only).",
+	Long: `Read the in-app notification feed limited to the projects you can
+access. Unlike 'notifications feed' (admin-only, instance-wide), this
+path is available to any authenticated user and returns only events for
+their project memberships. Read-only — no unread/read-all/clear.`,
+	Example: `  kuso notifications my-feed
+  kuso notifications my-feed --limit 20 -o json`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.NotificationMyFeed(notifMyFeedLimit)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		if outputFormat == "json" {
+			fmt.Println(string(resp.Body()))
+			return nil
+		}
+		var events []kusoApi.NotificationEvent
+		if err := json.Unmarshal(resp.Body(), &events); err != nil {
+			return fmt.Errorf("decode: %w", err)
+		}
+		if len(events) == 0 {
+			fmt.Println("No notification events.")
+			return nil
+		}
+		tw := tablewriter.NewWriter(os.Stdout)
+		tw.SetHeader([]string{"When", "Sev", "Type", "Project", "Service", "Title", "Read"})
+		for _, e := range events {
+			read := "•"
+			if e.ReadAt != nil {
+				read = ""
+			}
+			tw.Append([]string{
+				e.CreatedAt,
+				dashIfEmpty(e.Severity),
+				dashIfEmpty(e.Type),
+				dashIfEmpty(e.Project),
+				dashIfEmpty(e.Service),
+				e.Title,
+				read,
+			})
+		}
+		tw.Render()
+		return nil
+	},
+}
+
+// `kuso notifications outbox-stats` — webhook delivery queue health.
+//
+//   kuso notifications outbox-stats [-o json]
+
+var notificationsOutboxStatsCmd = &cobra.Command{
+	Use:   "outbox-stats",
+	Short: "Show webhook delivery queue health (pending + dead-letter counts).",
+	Long: `Report the external webhook delivery queue health as pending and
+dead-letter row counts. A non-zero dead count means at least one
+notification channel (Slack, Discord, generic webhook) is permanently
+misconfigured. The in-app bell feed bypasses this queue, so these
+numbers only reflect external webhook health.`,
+	Example: `  kuso notifications outbox-stats
+  kuso notifications outbox-stats -o json`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.NotificationOutboxStats()
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		if outputFormat == "json" {
+			fmt.Println(string(resp.Body()))
+			return nil
+		}
+		var out struct {
+			Pending int `json:"pending"`
+			Dead    int `json:"dead"`
+		}
+		if err := json.Unmarshal(resp.Body(), &out); err != nil {
+			return fmt.Errorf("decode: %w", err)
+		}
+		fmt.Printf("pending: %d\ndead:    %d\n", out.Pending, out.Dead)
+		return nil
+	},
+}
+
 func init() {
 	notificationsFeedCmd.Flags().IntVar(&notifFeedLimit, "limit", 0, "max events (default 50 server-side)")
 	notificationsFeedCmd.Flags().BoolVar(&notifFeedUnread, "unread", false, "list only unread events")
@@ -155,4 +259,11 @@ func init() {
 	notificationsFeedCmd.Flags().BoolVar(&notifFeedClear, "clear", false, "delete every event in the feed")
 	notificationsFeedCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	notificationsCmd.AddCommand(notificationsFeedCmd)
+
+	notificationsMyFeedCmd.Flags().IntVar(&notifMyFeedLimit, "limit", 0, "max events (default 50 server-side)")
+	notificationsMyFeedCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	notificationsCmd.AddCommand(notificationsMyFeedCmd)
+
+	notificationsOutboxStatsCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	notificationsCmd.AddCommand(notificationsOutboxStatsCmd)
 }
