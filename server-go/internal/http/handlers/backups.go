@@ -687,6 +687,27 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden: the SQL browser requires the admin role", http.StatusForbidden)
 		return
 	}
+
+	// ClickHouse addons don't use the Postgres path (no read-only tx /
+	// information_schema). Detect by the conn secret and run over the CH HTTP
+	// interface with readonly mode + a CH-specific builtin denylist.
+	if info, isCH, cerr := h.clickhouseConnInfo(ctx, project, addon); cerr == nil && isCH {
+		if reason := blockedClickHouseBuiltin(req.Query); reason != "" {
+			http.Error(w, "query rejected: "+reason, http.StatusForbidden)
+			return
+		}
+		h.auditSQLQuery(ctx, r, project, addon, req.Query)
+		start := time.Now()
+		out, status, err := h.runClickHouseQuery(ctx, info, req.Query, limit)
+		if err != nil {
+			http.Error(w, err.Error(), status)
+			return
+		}
+		out.Elapsed = time.Since(start).Round(time.Millisecond).String()
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+
 	// Reject queries that hit Postgres' file/network/process built-ins.
 	// Read-only TX prevents writes but pg_read_file / pg_ls_dir /
 	// dblink / lo_import etc. are all SELECT-shaped on a misconfigured
@@ -718,37 +739,7 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	start := time.Now()
-	// Audit the query before running it. SQL browser is the
-	// highest-blast-radius read endpoint we expose — Owner role
-	// gates access but a single compromised owner credential
-	// reading every row of `users` should leave a trail.
-	if h.Audit != nil {
-		uid := ""
-		if c, ok := auth.ClaimsFromContext(ctx); ok && c != nil {
-			uid = c.UserID
-		}
-		// Truncate so a multi-MB user-pasted query doesn't blow up
-		// the audit row. 4 KiB is plenty for forensics; the full
-		// query lives in the (ephemeral) postgres pgaudit log if
-		// the operator turned it on. Append sha256(full) so
-		// "did this exact query run twice" stays answerable even
-		// after truncation.
-		q := req.Query
-		sum := sha256.Sum256([]byte(q))
-		hash := hex.EncodeToString(sum[:])[:16]
-		if len(q) > 4096 {
-			q = q[:4096] + "…[truncated]"
-		}
-		h.Audit.Log(ctx, audit.Entry{
-			User:     uid,
-			Severity: "info",
-			Action:   "addon.sql_query",
-			Pipeline: project,
-			App:      addon,
-			Resource: "kusoaddon",
-			Message:  fmt.Sprintf("[sha256:%s] %s", hash, q),
-		})
-	}
+	h.auditSQLQuery(ctx, r, project, addon, req.Query)
 	rows, err := tx.QueryContext(ctx, req.Query)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
@@ -783,6 +774,38 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	out.Elapsed = time.Since(start).Round(time.Millisecond).String()
 	writeJSON(w, http.StatusOK, out)
+}
+
+// auditSQLQuery records a raw SQL-runner invocation. The SQL browser is the
+// highest-blast-radius read endpoint we expose — admin gates access, but a
+// single compromised admin credential reading every row of `users` should
+// leave a trail. Shared by the Postgres and ClickHouse query paths.
+func (h *BackupsHandler) auditSQLQuery(ctx context.Context, r *http.Request, project, addon, query string) {
+	if h.Audit == nil {
+		return
+	}
+	uid := ""
+	if c, ok := auth.ClaimsFromContext(r.Context()); ok && c != nil {
+		uid = c.UserID
+	}
+	// Truncate so a multi-MB user-pasted query doesn't blow up the audit row.
+	// 4 KiB is plenty for forensics. Append sha256(full) so "did this exact
+	// query run twice" stays answerable even after truncation.
+	q := query
+	sum := sha256.Sum256([]byte(q))
+	hash := hex.EncodeToString(sum[:])[:16]
+	if len(q) > 4096 {
+		q = q[:4096] + "…[truncated]"
+	}
+	h.Audit.Log(ctx, audit.Entry{
+		User:     uid,
+		Severity: "info",
+		Action:   "addon.sql_query",
+		Pipeline: project,
+		App:      addon,
+		Resource: "kusoaddon",
+		Message:  fmt.Sprintf("[sha256:%s] %s", hash, q),
+	})
 }
 
 // stringifyCell turns whatever the pg driver returned into a JSON-
