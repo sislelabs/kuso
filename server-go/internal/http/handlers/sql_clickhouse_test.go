@@ -91,13 +91,13 @@ func TestParseClickHouseJSONCompact(t *testing.T) {
 
 func TestStringifyJSONCell(t *testing.T) {
 	cases := map[string]string{
-		`"hello"`:      "hello",
-		`42`:           "42",
-		`3.14`:         "3.14",
-		`null`:         "",
-		`true`:         "true",
-		`["a","b"]`:    `["a","b"]`,
-		`{"k":1}`:      `{"k":1}`,
+		`"hello"`:       "hello",
+		`42`:            "42",
+		`3.14`:          "3.14",
+		`null`:          "",
+		`true`:          "true",
+		`["a","b"]`:     `["a","b"]`,
+		`{"k":1}`:       `{"k":1}`,
 		`"with\"quote"`: `with"quote`,
 	}
 	for in, want := range cases {
@@ -120,7 +120,7 @@ func TestBlockedClickHouseClause(t *testing.T) {
 	blocked := []string{
 		"SELECT 1 SETTINGS max_execution_time=0",
 		"SELECT count() FROM system.numbers settings max_result_rows=0",
-		"SELECT 1) SETTINGS max_execution_time=0 --",     // the subquery-wrap breakout
+		"SELECT 1) SETTINGS max_execution_time=0 --",      // the subquery-wrap breakout
 		"SELECT 1 /*x*/ SETTINGS max_memory_usage=999999", // comment before doesn't hide it
 	}
 	for _, q := range blocked {
@@ -132,11 +132,66 @@ func TestBlockedClickHouseClause(t *testing.T) {
 		"SELECT count() FROM events",
 		"SELECT * FROM events WHERE note = 'my settings are fine'", // 'settings' inside a literal
 		"SELECT 'settings' AS x",                                   // literal only
-		"SELECT settings_col FROM t",                              // word boundary: settings_col != settings
+		"SELECT settings_col FROM t",                               // word boundary: settings_col != settings
 	}
 	for _, q := range allowed {
 		if reason := blockedClickHouseClause(q); reason != "" {
 			t.Errorf("expected %q to pass, but it was blocked: %s", q, reason)
 		}
+	}
+}
+func TestChIdentifier(t *testing.T) {
+	cases := map[string]string{
+		"events":    "`events`",
+		"my table":  "`my table`",
+		"has`tick":  "`has\\`tick`", // backtick backslash-escaped
+		`trail\`:    "`trail\\\\`",  // trailing backslash escaped so it can't escape the close-backtick
+		"litetrack": "`litetrack`",
+	}
+	for in, want := range cases {
+		if got := chIdentifier(in); got != want {
+			t.Errorf("chIdentifier(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestChStringLiteral(t *testing.T) {
+	cases := map[string]string{
+		"events":     "'events'",
+		"o'brien":    `'o\'brien'`,
+		`back\slash`: `'back\\slash'`,
+	}
+	for in, want := range cases {
+		if got := chStringLiteral(in); got != want {
+			t.Errorf("chStringLiteral(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestParseClickHouseEnum(t *testing.T) {
+	got, ok := parseClickHouseEnum("Enum8('a' = 1, 'b' = 2, 'c' = 3)")
+	if !ok || len(got) != 3 || got[0] != "a" || got[2] != "c" {
+		t.Errorf("Enum8 parse = %v (ok=%v), want [a b c]", got, ok)
+	}
+	// wrapped in Nullable
+	got2, ok2 := parseClickHouseEnum("Nullable(Enum16('x' = 10, 'y' = 20))")
+	if !ok2 || len(got2) != 2 || got2[1] != "y" {
+		t.Errorf("Nullable(Enum16) parse = %v (ok=%v), want [x y]", got2, ok2)
+	}
+	// not an enum
+	if _, ok3 := parseClickHouseEnum("LowCardinality(String)"); ok3 {
+		t.Error("LowCardinality(String) should not parse as enum")
+	}
+	if _, ok4 := parseClickHouseEnum("Nullable(String)"); ok4 {
+		t.Error("Nullable(String) should not parse as enum")
+	}
+}
+
+func TestValidClickHouseDir(t *testing.T) {
+	if validClickHouseDir("desc") != "DESC" || validClickHouseDir("DESC") != "DESC" {
+		t.Error("desc should normalize to DESC")
+	}
+	if validClickHouseDir("") != "ASC" || validClickHouseDir("asc") != "ASC" || validClickHouseDir("garbage") != "ASC" {
+		t.Error("non-desc should default to ASC")
 	}
 }

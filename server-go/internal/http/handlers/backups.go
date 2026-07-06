@@ -571,6 +571,31 @@ func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// ClickHouse: list database.table via system.tables (CH's "schema" is a
+	// database). Skip the CH internal databases.
+	if info, isCH, cerr := h.clickhouseConnInfo(ctx, project, addon); cerr == nil && isCH {
+		res, err := h.chSelect(ctx, info,
+			`SELECT database, name FROM system.tables
+			 WHERE database NOT IN ('system','INFORMATION_SCHEMA','information_schema')
+			 ORDER BY database, name`)
+		if err != nil {
+			http.Error(w, "query: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		type row struct {
+			Schema string `json:"schema"`
+			Name   string `json:"name"`
+		}
+		out := make([]row, 0, len(res.Rows))
+		for _, r := range res.Rows {
+			if len(r) >= 2 {
+				out = append(out, row{Schema: r[0], Name: r[1]})
+			}
+		}
+		writeJSON(w, http.StatusOK, out)
+		return
+	}
+
 	conn, err := h.pgConn(ctx, project, addon)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
