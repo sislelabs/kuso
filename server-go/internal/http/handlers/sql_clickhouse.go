@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -273,4 +274,206 @@ func stringifyJSONCell(raw json.RawMessage) string {
 		return s
 	}
 	return trimmed
+}
+
+// ---------------------------------------------------------------------------
+// Structured data browser (read-only) for ClickHouse addons.
+//
+// ClickHouse maps onto the browser's "schema.table" model as database.table.
+// It supports full READ (tables, columns, paginated rows) but NOT the editor's
+// row-write model: UPDATE/DELETE in ClickHouse are asynchronous, partition-
+// rewriting ALTER … mutations, not transactional single-row edits, and there's
+// no RETURNING. So CH tables are surfaced as read-only (Editable=false, same as
+// a Postgres table with no primary key), and the write endpoints reject CH with
+// a clear message rather than faking a dangerous mutation.
+// ---------------------------------------------------------------------------
+
+// chSelect runs a read query (readonly=2) and returns the parsed JSONCompact
+// result. Shared by the introspection helpers below and the rows browser.
+func (h *BackupsHandler) chSelect(ctx context.Context, info chConnInfo, sqlText string) (SQLQueryResponse, error) {
+	q := url.Values{}
+	if info.database != "" {
+		q.Set("database", info.database)
+	}
+	q.Set("default_format", "JSONCompact")
+	q.Set("readonly", "2")
+	q.Set("max_execution_time", "10")
+
+	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, info.baseURL+"/?"+q.Encode(), strings.NewReader(sqlText))
+	if err != nil {
+		return SQLQueryResponse{}, err
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	if info.user != "" {
+		req.Header.Set("X-ClickHouse-User", info.user)
+	}
+	if info.password != "" {
+		req.Header.Set("X-ClickHouse-Key", info.password)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return SQLQueryResponse{}, err
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
+	if resp.StatusCode != http.StatusOK {
+		return SQLQueryResponse{}, fmt.Errorf("%s", strings.TrimSpace(string(body)))
+	}
+	return parseClickHouseJSONCompact(body, 1<<30)
+}
+
+// chIdentifier quotes a ClickHouse identifier (database/table/column) with
+// backticks, escaping any embedded backtick. ClickHouse uses backtick quoting;
+// pq.QuoteIdentifier (double-quotes) is wrong here.
+func chIdentifier(id string) string {
+	return "`" + strings.ReplaceAll(id, "`", "``") + "`"
+}
+
+// chStringLiteral single-quote-escapes a value for a WHERE = '...' literal.
+func chStringLiteral(v string) string {
+	return "'" + strings.ReplaceAll(strings.ReplaceAll(v, "\\", "\\\\"), "'", "\\'") + "'"
+}
+
+// clickhouseTableExists confirms database.table is a real table.
+func (h *BackupsHandler) clickhouseTableExists(ctx context.Context, info chConnInfo, database, table string) (bool, error) {
+	sqlText := fmt.Sprintf(
+		"SELECT count() FROM system.tables WHERE database = %s AND name = %s",
+		chStringLiteral(database), chStringLiteral(table),
+	)
+	out, err := h.chSelect(ctx, info, sqlText)
+	if err != nil {
+		return false, err
+	}
+	if len(out.Rows) == 0 || len(out.Rows[0]) == 0 {
+		return false, nil
+	}
+	return out.Rows[0][0] != "0" && out.Rows[0][0] != "", nil
+}
+
+// clickhouseColumns introspects a table via system.columns and returns the
+// shared columnsResponse. Nullability + enum values are derived from the CH
+// type string. Editable is always false — see the file header.
+func (h *BackupsHandler) clickhouseColumns(ctx context.Context, info chConnInfo, database, table string) (columnsResponse, error) {
+	sqlText := fmt.Sprintf(`SELECT name, type, default_expression, is_in_primary_key, position
+		FROM system.columns
+		WHERE database = %s AND table = %s
+		ORDER BY position`,
+		chStringLiteral(database), chStringLiteral(table))
+	res, err := h.chSelect(ctx, info, sqlText)
+	if err != nil {
+		return columnsResponse{}, err
+	}
+	var out columnsResponse
+	for _, r := range res.Rows {
+		if len(r) < 5 {
+			continue
+		}
+		name, chType, def, isPK, pos := r[0], r[1], r[2], r[3], r[4]
+		ci := columnInfo{
+			Name:     name,
+			DataType: chType,
+			UDTName:  chType,
+			Nullable: strings.Contains(chType, "Nullable("),
+			Default:  def,
+		}
+		if n, perr := strconv.Atoi(pos); perr == nil {
+			ci.Ordinal = n
+		}
+		if vals, ok := parseClickHouseEnum(chType); ok {
+			ci.IsEnum = true
+			ci.EnumValues = vals
+		}
+		out.Columns = append(out.Columns, ci)
+		if isPK == "1" {
+			out.PrimaryKey = append(out.PrimaryKey, name)
+		}
+	}
+	// ClickHouse tables are not row-editable via this browser (async ALTER
+	// mutations, no single-row transactional writes). Surface as read-only.
+	out.Editable = false
+	return out, nil
+}
+
+// parseClickHouseEnum extracts the labels of an Enum8/Enum16 type, e.g.
+// Enum8('a' = 1, 'b' = 2) → ["a","b"]. Handles the enum wrapped in
+// Nullable(...) / LowCardinality(...) too, since we scan for "Enum".
+func parseClickHouseEnum(chType string) ([]string, bool) {
+	i := strings.Index(chType, "Enum")
+	if i < 0 {
+		return nil, false
+	}
+	open := strings.Index(chType[i:], "(")
+	if open < 0 {
+		return nil, false
+	}
+	rest := chType[i+open+1:]
+	end := strings.LastIndex(rest, ")")
+	if end < 0 {
+		return nil, false
+	}
+	var labels []string
+	for _, part := range strings.Split(rest[:end], ",") {
+		part = strings.TrimSpace(part)
+		// each part is 'label' = N — take the quoted label
+		if q1 := strings.Index(part, "'"); q1 >= 0 {
+			if q2 := strings.Index(part[q1+1:], "'"); q2 >= 0 {
+				labels = append(labels, part[q1+1:q1+1+q2])
+			}
+		}
+	}
+	return labels, len(labels) > 0
+}
+
+// clickhouseRows renders a paginated single-table read. dir/orderBy are already
+// validated (orderBy must be a real column). Returns the shared rowsResponse.
+func (h *BackupsHandler) clickhouseRows(ctx context.Context, info chConnInfo, database, table, orderBy, dir string, limit, offset int) (rowsResponse, error) {
+	q := chIdentifier(database) + "." + chIdentifier(table)
+	var b strings.Builder
+	fmt.Fprintf(&b, "SELECT * FROM %s", q)
+	if orderBy != "" {
+		fmt.Fprintf(&b, " ORDER BY %s %s", chIdentifier(orderBy), validClickHouseDir(dir))
+	}
+	// limit+1 to detect truncation, matching the pg path.
+	fmt.Fprintf(&b, " LIMIT %d OFFSET %d", limit+1, offset)
+
+	res, err := h.chSelect(ctx, info, b.String())
+	if err != nil {
+		return rowsResponse{}, err
+	}
+	out := rowsResponse{Columns: res.Columns, Rows: [][]string{}, Nulls: [][]bool{}}
+	for i, r := range res.Rows {
+		if i >= limit {
+			out.Truncated = true
+			break
+		}
+		nulls := make([]bool, len(r))
+		for j := range r {
+			// JSONCompact renders SQL NULL as JSON null → we mapped it to "".
+			// We can't perfectly distinguish "" from NULL post-stringify, so
+			// mark empty cells on Nullable columns as null best-effort: leave
+			// false here (the pg path has real null info; CH over HTTP loses
+			// it). Empty string is the safe display.
+			nulls[j] = false
+		}
+		out.Rows = append(out.Rows, r)
+		out.Nulls = append(out.Nulls, nulls)
+	}
+
+	// Total row count for pagination.
+	cnt, cerr := h.chSelect(ctx, info, "SELECT count() FROM "+q)
+	if cerr == nil && len(cnt.Rows) > 0 && len(cnt.Rows[0]) > 0 {
+		if n, perr := strconv.Atoi(cnt.Rows[0][0]); perr == nil {
+			out.Total = n
+		}
+	}
+	return out, nil
+}
+
+func validClickHouseDir(dir string) string {
+	if strings.EqualFold(strings.TrimSpace(dir), "desc") {
+		return "DESC"
+	}
+	return "ASC"
 }
