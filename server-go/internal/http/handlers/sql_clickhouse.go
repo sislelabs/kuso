@@ -112,9 +112,33 @@ var blockedFunctions = map[string]string{
 	"input":              "input() table function",
 }
 
+// chSettingsRe matches a bareword SETTINGS keyword (case-insensitive) — the
+// query-level settings clause. Used to reject settings overrides that could
+// escape the subquery wrap and raise resource caps under readonly=2.
+var chSettingsRe = regexp.MustCompile(`(?i)\bsettings\b`)
+
+// blockedClickHouseClause rejects query-level clauses the read browser must not
+// allow. Today that's a SETTINGS clause: under readonly=2 the user can raise
+// settings other than readonly, and combined with the subquery LIMIT wrap a
+// crafted `…) SETTINGS max_execution_time=0 --` would remove our resource caps
+// (unbounded scan → DoS). We strip string literals + comments first so a
+// literal containing the word "settings" doesn't false-positive.
+func blockedClickHouseClause(q string) string {
+	scrubbed := chCommentRe.ReplaceAllString(q, " ")
+	scrubbed = chStringLiteralRe.ReplaceAllString(scrubbed, "''")
+	if chSettingsRe.MatchString(scrubbed) {
+		return "query-level SETTINGS is not allowed in the SQL browser"
+	}
+	return ""
+}
+
+// chStringLiteralRe matches single-quoted string literals (with backslash and
+// doubled-quote escapes) so their contents can be blanked before keyword scans.
+var chStringLiteralRe = regexp.MustCompile(`'(?:\\.|''|[^'\\])*'`)
+
 // blockedClickHouseBuiltin rejects the SELECT-shaped table functions that reach
-// the filesystem or the network. readonly mode blocks writes/DDL; this is the
-// ONLY control for these read-side vectors, so it must resist evasion: we strip
+// the filesystem or the network. readonly=2 already forbids table functions, so
+// this is defence-in-depth — but it must still resist evasion: we strip
 // comments, then match function-name-before-paren (tolerating whitespace like
 // `file (...)`), not a naive "file(" substring.
 func blockedClickHouseBuiltin(q string) string {
@@ -141,9 +165,19 @@ func blockedClickHouseBuiltin(q string) string {
 // or run unbounded. Uses JSONCompact so we get typed columns without guessing
 // delimiters.
 func (h *BackupsHandler) runClickHouseQuery(ctx context.Context, info chConnInfo, query string, limit int) (SQLQueryResponse, int, error) {
-	// Wrap the user's query so the row cap is enforced server-side even if they
-	// didn't add a LIMIT. We ask for limit+1 rows to detect truncation.
-	// Subquery form works for SELECTs; readonly mode rejects anything else.
+	// We enforce the row cap by wrapping the user's query in
+	// `SELECT * FROM (…) LIMIT n`. That's precise (URL max_result_rows only
+	// caps at block granularity), but it also means the user string is
+	// concatenated inside our parens — so a query like `SELECT 1) SETTINGS
+	// max_execution_time=0 --` could close the subquery early and append an
+	// OUTER settings clause. Under readonly=2 a user may raise settings other
+	// than `readonly` itself, so that would defeat our max_execution_time /
+	// max_result_rows caps (an unbounded scan → DoS). A read browser never
+	// needs a query-level SETTINGS clause, so we reject it outright, which
+	// closes the breakout regardless of how the query is shaped.
+	if reason := blockedClickHouseClause(query); reason != "" {
+		return SQLQueryResponse{}, http.StatusForbidden, fmt.Errorf("query rejected: %s", reason)
+	}
 	wrapped := fmt.Sprintf("SELECT * FROM (\n%s\n) LIMIT %d", strings.TrimRight(strings.TrimSpace(query), ";"), limit+1)
 
 	q := url.Values{}

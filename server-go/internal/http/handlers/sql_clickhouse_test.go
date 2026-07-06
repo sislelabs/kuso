@@ -115,3 +115,28 @@ func TestValueOr(t *testing.T) {
 		t.Error("non-empty should return value")
 	}
 }
+
+func TestBlockedClickHouseClause(t *testing.T) {
+	blocked := []string{
+		"SELECT 1 SETTINGS max_execution_time=0",
+		"SELECT count() FROM system.numbers settings max_result_rows=0",
+		"SELECT 1) SETTINGS max_execution_time=0 --",     // the subquery-wrap breakout
+		"SELECT 1 /*x*/ SETTINGS max_memory_usage=999999", // comment before doesn't hide it
+	}
+	for _, q := range blocked {
+		if reason := blockedClickHouseClause(q); reason == "" {
+			t.Errorf("expected %q to be blocked (SETTINGS), but it passed", q)
+		}
+	}
+	allowed := []string{
+		"SELECT count() FROM events",
+		"SELECT * FROM events WHERE note = 'my settings are fine'", // 'settings' inside a literal
+		"SELECT 'settings' AS x",                                   // literal only
+		"SELECT settings_col FROM t",                              // word boundary: settings_col != settings
+	}
+	for _, q := range allowed {
+		if reason := blockedClickHouseClause(q); reason != "" {
+			t.Errorf("expected %q to pass, but it was blocked: %s", q, reason)
+		}
+	}
+}
