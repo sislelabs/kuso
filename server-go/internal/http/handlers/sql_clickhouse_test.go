@@ -144,7 +144,8 @@ func TestChIdentifier(t *testing.T) {
 	cases := map[string]string{
 		"events":    "`events`",
 		"my table":  "`my table`",
-		"has`tick":  "`has``tick`", // backtick doubled
+		"has`tick":  "`has\\`tick`", // backtick backslash-escaped
+		`trail\`:    "`trail\\\\`",  // trailing backslash escaped so it can't escape the close-backtick
 		"litetrack": "`litetrack`",
 	}
 	for in, want := range cases {

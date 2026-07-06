@@ -325,10 +325,16 @@ func (h *BackupsHandler) chSelect(ctx context.Context, info chConnInfo, sqlText 
 }
 
 // chIdentifier quotes a ClickHouse identifier (database/table/column) with
-// backticks, escaping any embedded backtick. ClickHouse uses backtick quoting;
-// pq.QuoteIdentifier (double-quotes) is wrong here.
+// backticks. ClickHouse processes backslash escapes inside backtick-quoted
+// identifiers (like string literals), so a trailing `\` would escape the
+// closing backtick and break out — we must escape backslash BEFORE the
+// backtick, mirroring chStringLiteral. pq.QuoteIdentifier (double-quotes) is
+// wrong for ClickHouse. Callers still pass only allowlisted (exists-checked)
+// identifiers; this is belt-and-suspenders.
 func chIdentifier(id string) string {
-	return "`" + strings.ReplaceAll(id, "`", "``") + "`"
+	id = strings.ReplaceAll(id, "\\", "\\\\")
+	id = strings.ReplaceAll(id, "`", "\\`")
+	return "`" + id + "`"
 }
 
 // chStringLiteral single-quote-escapes a value for a WHERE = '...' literal.

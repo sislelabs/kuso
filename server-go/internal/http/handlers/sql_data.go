@@ -489,11 +489,13 @@ func (h *BackupsHandler) SQLRows(w http.ResponseWriter, r *http.Request) {
 	cctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
 
-	// ClickHouse: read-only paginated rows over the HTTP interface.
+	// ClickHouse: read-only paginated rows over the HTTP interface. Run the
+	// admin gate FIRST (before the conn-secret fetch) so an unauthorized caller
+	// never triggers a K8s secret read. The pg path gates first too (dataGuard).
+	if !h.sqlBrowserGate(cctx, w, r) {
+		return
+	}
 	if info, isCH, cerr := h.clickhouseConnInfo(cctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); cerr == nil && isCH {
-		if !h.sqlBrowserGate(cctx, w, r) {
-			return
-		}
 		if schema == "" || table == "" {
 			http.Error(w, "schema and table required", http.StatusBadRequest)
 			return
