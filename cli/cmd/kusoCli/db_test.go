@@ -73,3 +73,69 @@ func TestDecodeAddonSecret(t *testing.T) {
 		})
 	}
 }
+
+func TestLocalDSNFromSecret(t *testing.T) {
+	cases := []struct {
+		name     string
+		secret   map[string]string
+		wantKind string
+		wantDSN  string
+	}{
+		{
+			name:     "postgres",
+			secret:   map[string]string{"DATABASE_URL": "postgres://u:p@db:5432/app?sslmode=require"},
+			wantKind: "postgres",
+			wantDSN:  "postgres://u:p@127.0.0.1:15432/app?sslmode=require",
+		},
+		{
+			name:     "redis",
+			secret:   map[string]string{"REDIS_URL": "redis://:pw@cache:6379/0"},
+			wantKind: "redis",
+			wantDSN:  "redis://:pw@127.0.0.1:15432/0",
+		},
+		{
+			name:     "clickhouse prefers HTTP url over native",
+			secret:   map[string]string{"CLICKHOUSE_URL": "http://default:pw@ch:8123/analytics", "CLICKHOUSE_NATIVE_URL": "clickhouse://default:pw@ch:9000/analytics"},
+			wantKind: "clickhouse",
+			wantDSN:  "http://default:pw@127.0.0.1:15432/analytics",
+		},
+		{
+			name:     "postgres wins when both present (canonical order)",
+			secret:   map[string]string{"DATABASE_URL": "postgres://u:p@db:5432/app", "CLICKHOUSE_URL": "http://d:pw@ch:8123/a"},
+			wantKind: "postgres",
+			wantDSN:  "postgres://u:p@127.0.0.1:15432/app",
+		},
+		{
+			name:     "no usable key",
+			secret:   map[string]string{"SOMETHING_ELSE": "x"},
+			wantKind: "",
+			wantDSN:  "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			kind, dsn := localDSNFromSecret(tc.secret, 15432)
+			if kind != tc.wantKind {
+				t.Errorf("kind = %q, want %q", kind, tc.wantKind)
+			}
+			if dsn != tc.wantDSN {
+				t.Errorf("dsn = %q, want %q", dsn, tc.wantDSN)
+			}
+		})
+	}
+}
+
+func TestClientForKind(t *testing.T) {
+	cases := map[string]string{
+		"postgres":   "psql",
+		"redis":      "redis-cli",
+		"mongo":      "mongosh",
+		"clickhouse": "", // no native client on the HTTP tunnel — runClientFor uses the built-in HTTP shell
+		"unknown":    "",
+	}
+	for kind, want := range cases {
+		if got := clientForKind(kind); got != want {
+			t.Errorf("clientForKind(%q) = %q, want %q", kind, got, want)
+		}
+	}
+}

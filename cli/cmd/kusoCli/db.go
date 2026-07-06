@@ -19,7 +19,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
+	"net/http"
 	"net/url"
 	"os"
 	"os/exec"
@@ -76,12 +78,17 @@ var dbConnectCmd = &cobra.Command{
 	Short: "Open a tunnel and print (or exec) a localhost connection string",
 	Long: `Opens a port-forward to the addon and prints a localhost-rewritten
 DSN you can paste into psql / TablePlus / pg_dump / etc. With --exec
-the matching client (psql for postgres, redis-cli for redis) is run
-directly against the tunnel.
+the matching client (psql for postgres, redis-cli for redis, mongosh for
+mongo) is run directly against the tunnel. For a clickhouse addon --exec
+opens a built-in HTTP shell (reads SQL on stdin) since the tunnel carries
+ClickHouse's HTTP interface — handy for running schema migrations:
+
+  kuso db connect myproj analytics --exec < migrations/001_init.sql
 
 Requires settings:admin (the addon conn-secret fetch is admin-gated).`,
 	Example: `  kuso db connect myproj db
-  kuso db connect myproj db --exec`,
+  kuso db connect myproj db --exec
+  kuso db connect myproj clickhouse --exec < schema.sql`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runConnect(args[0], args[1], connectExec)
@@ -292,8 +299,13 @@ func runConnect(project, addon string, doExec bool) error {
 
 	if doExec {
 		// Print the DSN to stderr (so a piped psql output stays clean
-		// on stdout) and launch the matching client.
-		fmt.Fprintf(os.Stderr, "[kuso] tunnel + %s → %s\n", clientForKind(kindHint), dsn)
+		// on stdout) and launch the matching client. ClickHouse has no
+		// native client on the HTTP tunnel — we run a built-in HTTP shell.
+		client := clientForKind(kindHint)
+		if kindHint == "clickhouse" {
+			client = "clickhouse HTTP shell"
+		}
+		fmt.Fprintf(os.Stderr, "[kuso] tunnel + %s → %s\n", client, dsn)
 	} else {
 		fmt.Fprintf(os.Stderr, "[kuso] tunnel ready. Connect with:\n")
 		fmt.Println(dsn)
@@ -388,6 +400,15 @@ func localDSNFromSecret(s map[string]string, localPort int) (string, string) {
 	if v := s["MONGODB_URL"]; v != "" {
 		return "mongo", rewriteDSNHost(v, "127.0.0.1", localPort)
 	}
+	// ClickHouse. The addon's Service lists the HTTP port (8123) first, and
+	// the server port-forwards Service.Ports[0] — so the tunnel carries the
+	// HTTP interface, and CLICKHOUSE_URL (http://…:8123/db) is the DSN that
+	// works over it. CLICKHOUSE_NATIVE_URL (native 9000) would NOT work over
+	// this tunnel; prefer the HTTP form. Any HTTP client (curl, clickhouse
+	// HTTP drivers) can use it directly.
+	if v := s["CLICKHOUSE_URL"]; v != "" {
+		return "clickhouse", rewriteDSNHost(v, "127.0.0.1", localPort)
+	}
 	return "", ""
 }
 
@@ -420,6 +441,13 @@ func clientForKind(kind string) string {
 // runClientFor execs the matching client tool against the rewritten
 // DSN. Inherits stdio so the user gets an interactive session.
 func runClientFor(kind, dsn string) error {
+	// ClickHouse: the tunnel carries the HTTP interface (8123), not the
+	// native protocol clickhouse-client speaks, so we run a tiny built-in
+	// HTTP query loop instead of exec-ing a native client. No external tool
+	// required — POST each SQL statement to the HTTP endpoint.
+	if kind == "clickhouse" {
+		return runClickHouseHTTP(dsn)
+	}
 	tool := clientForKind(kind)
 	if tool == "" {
 		return fmt.Errorf("no built-in client for kind %q — use the DSN above with your own tool", kind)
@@ -432,6 +460,75 @@ func runClientFor(kind, dsn string) error {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
+}
+
+// runClickHouseHTTP runs a minimal ClickHouse shell over the HTTP tunnel.
+// The DSN is http://user:pass@127.0.0.1:PORT/db. It reads SQL statements
+// from stdin (one per line, or the whole of a piped/heredoc'd body) and
+// POSTs each to the ClickHouse HTTP endpoint, streaming the response. This
+// is enough to run migrations/DDL and ad-hoc queries without a native
+// clickhouse-client on PATH.
+func runClickHouseHTTP(dsn string) error {
+	u, err := url.Parse(dsn)
+	if err != nil {
+		return fmt.Errorf("parse clickhouse DSN: %w", err)
+	}
+	user := u.User.Username()
+	pass, _ := u.User.Password()
+	db := strings.TrimPrefix(u.Path, "/")
+	base := (&url.URL{Scheme: u.Scheme, Host: u.Host}).String()
+
+	run := func(sql string) error {
+		sql = strings.TrimSpace(sql)
+		if sql == "" {
+			return nil
+		}
+		q := url.Values{}
+		if db != "" {
+			q.Set("database", db)
+		}
+		req, err := http.NewRequest(http.MethodPost, base+"/?"+q.Encode(), strings.NewReader(sql))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "text/plain")
+		if user != "" {
+			req.Header.Set("X-ClickHouse-User", user)
+		}
+		if pass != "" {
+			req.Header.Set("X-ClickHouse-Key", pass)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		if resp.StatusCode != http.StatusOK {
+			return fmt.Errorf("clickhouse: %s", strings.TrimSpace(string(body)))
+		}
+		if len(body) > 0 {
+			os.Stdout.Write(body)
+			if body[len(body)-1] != '\n' {
+				fmt.Println()
+			}
+		}
+		return nil
+	}
+
+	// Read all of stdin. If it's a TTY the user types statements terminated
+	// by a blank line or EOF; if it's piped/heredoc we get the whole body.
+	fmt.Fprintln(os.Stderr, "[kuso] clickhouse HTTP shell — send SQL on stdin (Ctrl-D to end). Statements split on ';'.")
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		return err
+	}
+	for _, stmt := range strings.Split(string(data), ";") {
+		if err := run(stmt); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // waitListening dials the local port repeatedly until it accepts a
