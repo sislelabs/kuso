@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -73,32 +74,63 @@ func valueOr(v, def string) string {
 	return v
 }
 
-// blockedClickHouseBuiltin rejects the SELECT-shaped table/scalar functions
-// that reach the filesystem or the network (SSRF / local file read). readonly
-// mode already blocks writes; this is defence-in-depth for reads. Cheap
-// substring scan on the lowercased query.
+// chCommentRe strips SQL comments (block and line) so they can't be used to
+// break up a function name we're scanning for (fi/**/le is a CH syntax error,
+// but stripping comments first is cheap and removes the whole class).
+var chCommentRe = regexp.MustCompile(`(?s)/\*.*?\*/|--[^\n]*`)
+
+// chFuncCallRe matches a bareword identifier immediately followed by optional
+// whitespace and an open paren — i.e. a function call. ClickHouse accepts
+// `file ('x')` (whitespace before the paren), so a literal "file(" substring
+// scan is evadable; we normalize by extracting the function-name-before-paren.
+var chFuncCallRe = regexp.MustCompile(`([a-z0-9_]+)\s*\(`)
+
+// blockedFunctions maps a lowercased ClickHouse function name to the reason it
+// is denied. These reach the filesystem or the network (SSRF / local file
+// read), which readonly mode does NOT block (readonly only stops writes).
+var blockedFunctions = map[string]string{
+	"file":               "filesystem access (file table function)",
+	"url":                "outbound network (url table function)",
+	"urlcluster":         "outbound network (urlCluster table function)",
+	"remote":             "outbound network (remote table function)",
+	"remotesecure":       "outbound network (remoteSecure table function)",
+	"cluster":            "outbound network (cluster table function)",
+	"clusterallreplicas": "outbound network (clusterAllReplicas table function)",
+	"mysql":              "outbound network (mysql table function)",
+	"postgresql":         "outbound network (postgresql table function)",
+	"mongodb":            "outbound network (mongodb table function)",
+	"redis":              "outbound network (redis table function)",
+	"jdbc":               "outbound network (jdbc table function)",
+	"odbc":               "outbound network (odbc table function)",
+	"s3":                 "outbound network (s3 table function)",
+	"s3cluster":          "outbound network (s3Cluster table function)",
+	"hdfs":               "outbound network (hdfs table function)",
+	"hdfscluster":        "outbound network (hdfsCluster table function)",
+	"azureblobstorage":   "outbound network (azureBlobStorage table function)",
+	"deltalake":          "outbound network (deltaLake table function)",
+	"iceberg":            "outbound network (iceberg table function)",
+	"input":              "input() table function",
+}
+
+// blockedClickHouseBuiltin rejects the SELECT-shaped table functions that reach
+// the filesystem or the network. readonly mode blocks writes/DDL; this is the
+// ONLY control for these read-side vectors, so it must resist evasion: we strip
+// comments, then match function-name-before-paren (tolerating whitespace like
+// `file (...)`), not a naive "file(" substring.
 func blockedClickHouseBuiltin(q string) string {
-	lower := strings.ToLower(q)
-	for _, pat := range []struct{ match, reason string }{
-		{"file(", "filesystem access (file table function)"},
-		{"url(", "outbound network (url table function)"},
-		{"remote(", "outbound network (remote table function)"},
-		{"remotesecure(", "outbound network (remoteSecure table function)"},
-		{"cluster(", "outbound network (cluster table function)"},
-		{"mysql(", "outbound network (mysql table function)"},
-		{"postgresql(", "outbound network (postgresql table function)"},
-		{"jdbc(", "outbound network (jdbc table function)"},
-		{"odbc(", "outbound network (odbc table function)"},
-		{"s3(", "outbound network (s3 table function)"},
-		{"s3cluster(", "outbound network (s3Cluster table function)"},
-		{"hdfs(", "outbound network (hdfs table function)"},
-		{"input(", "input() table function"},
-		{"infile", "filesystem access (INFILE)"},
-		{"outfile", "filesystem access (INTO OUTFILE)"},
-	} {
-		if strings.Contains(lower, pat.match) {
-			return pat.reason
+	lower := strings.ToLower(chCommentRe.ReplaceAllString(q, " "))
+	for _, m := range chFuncCallRe.FindAllStringSubmatch(lower, -1) {
+		if reason, bad := blockedFunctions[m[1]]; bad {
+			return reason
 		}
+	}
+	// INFILE / OUTFILE are not function calls (they follow a keyword), so match
+	// them as bare words.
+	if strings.Contains(lower, "infile") {
+		return "filesystem access (INFILE)"
+	}
+	if strings.Contains(lower, "outfile") {
+		return "filesystem access (INTO OUTFILE)"
 	}
 	return ""
 }

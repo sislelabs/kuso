@@ -14,6 +14,17 @@ func TestBlockedClickHouseBuiltin(t *testing.T) {
 		"SELECT * FROM hdfs('hdfs://x')",
 		"SELECT 1 INTO OUTFILE '/tmp/x'",
 		"SELECT * FROM infile('x')",
+		// Evasion: ClickHouse accepts whitespace before the '(', so a naive
+		// "file(" substring check misses these. The normalizer must catch them.
+		"SELECT * FROM file ('/etc/passwd','CSV')",
+		"SELECT * FROM url\t('http://x/','CSV')",
+		"SELECT * FROM remote  ('h', t)",
+		"SELECT * FROM url\n('http://x/','CSV')",
+		// Evasion: block comment between name and paren gets stripped first.
+		"SELECT * FROM file/**/('/x','CSV')",
+		// Newer network table functions.
+		"SELECT * FROM mongodb('h','db','c','u','p','{}')",
+		"SELECT * FROM iceberg('s3://b/k')",
 	}
 	for _, q := range blocked {
 		if reason := blockedClickHouseBuiltin(q); reason == "" {
@@ -26,6 +37,11 @@ func TestBlockedClickHouseBuiltin(t *testing.T) {
 		"SELECT * FROM litetrack.events WHERE project_id = 'p' LIMIT 10",
 		"SELECT is_bot, count() FROM events GROUP BY is_bot",
 		"SELECT profile_name FROM system.settings", // 'file' not present as a call
+		// A column/table whose NAME contains a blocked word but isn't a call.
+		"SELECT filename FROM logs",
+		"SELECT * FROM my_files WHERE url_path = '/x'",
+		// A comment mentioning a blocked function is stripped, so it's allowed.
+		"SELECT count() FROM events -- reads the file table? no",
 	}
 	for _, q := range allowed {
 		if reason := blockedClickHouseBuiltin(q); reason != "" {
