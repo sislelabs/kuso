@@ -2,6 +2,25 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.73] — 2026-06-17
+
+### ✨ Features
+- Feat(scale-to-zero): activator proxy + idle detector for sleep services ([f7c86d0](https://github.com/sislelabs/kuso/commit/f7c86d0d8cdd38450bd20b86b71e9beeed4301c3))
+- Feat(cli): payload template — external-secrets guidance + redis addon + apply-safe comments ([103586f](https://github.com/sislelabs/kuso/commit/103586fbeb1cd4832ea4bcba2b89e965e179fc09))
+- Feat(auth): configurable + disable-able session lifetime ([41c505a](https://github.com/sislelabs/kuso/commit/41c505ac44b40d148e28fab01d48aaf7064fa14f))
+
+### 🐛 Bug Fixes
+- Fix(spec): generated-secret export round-trip + shadow-guard on generate ([4993170](https://github.com/sislelabs/kuso/commit/4993170d1661413a7bdc72da83bf4fcbff402be3))
+
+### 🧪 Tests
+- Test(kube): regenerate kusoenvironments CRD golden for publicEnv ([421bdb9](https://github.com/sislelabs/kuso/commit/421bdb953629275f6bb34ea2295e52aa08a86669))
+
+## [0.18.72] — 2026-06-14
+
+### 🐛 Bug Fixes
+- Fix(install): pgbouncer pg_hba md5 + missing publicEnv on env CRD — two fresh-install blockers ([afd7cf4](https://github.com/sislelabs/kuso/commit/afd7cf46f0a974c7e7a4891240f50ba98706bf02))
+- Fix(postgres): store kuso role as md5 so pgbouncer auth works on fresh install ([158b73f](https://github.com/sislelabs/kuso/commit/158b73f6d80d5d035085350230ea3461adca0b63))
+
 ## [0.18.71] — 2026-06-14
 
 ### ✨ Features
