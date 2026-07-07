@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.124] — 2026-07-07
+
+### 🐛 Bug Fixes
+- Fix(server): stop the image sweep bricking envs + stabilize envFromSecrets order ([dbb4060](https://github.com/sislelabs/kuso/commit/dbb4060e0f9489578bc50e7ac4c3168b2ff20263))
+
+### 🧹 Chores
+- Chore: changelog archive rotation from v0.18.123 ship ([9ff286c](https://github.com/sislelabs/kuso/commit/9ff286ca6747d19b25a5551ef6e1f51143be2ecc))
+
 ## [0.18.123] — 2026-07-07
 
 ### ✨ Features
@@ -413,11 +421,6 @@ messages on every release. The format is loosely based on
 ### 🐛 Bug Fixes
 - Fix(runs): kuso run inherits the service's configured env vars ([cc886b6](https://github.com/sislelabs/kuso/commit/cc886b63abc2d6263858461496c834c45e41c1f5))
 - Fix(release): commit deploy/kuso-activator.yaml on release; correct its tag ([fac0b8f](https://github.com/sislelabs/kuso/commit/fac0b8f455e1b9b8566589b0e6973ad341a88f1f))
-
-## [0.18.74] — 2026-06-17
-
-### 🐛 Bug Fixes
-- Fix(scale-to-zero): activator as direct backend; fix cold-start dial races ([a8d29cf](https://github.com/sislelabs/kuso/commit/a8d29cfe54e52c3ae66b89fcb00e18b3ae27917f))
 
 
 ---
