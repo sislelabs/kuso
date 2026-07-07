@@ -172,6 +172,32 @@ func TestEnsureEnvAddons_NameSuffixPreservesPrNNaming(t *testing.T) {
 	}
 }
 
+// TestEnsureEnvAddons_CloneCarriesTLS pins spec fidelity between a source addon
+// and its per-env clone: a tls=require source must clone into a tls=require
+// preview DB. A dropped TLS field means the clone's conn secret advertises
+// sslmode=disable — apps that gate on "no sslmode=disable in production"
+// (previews inherit the production ENVIRONMENT via shared secrets) crashloop.
+func TestEnsureEnvAddons_CloneCarriesTLS(t *testing.T) {
+	src := addonCR("alpha", "pg", "postgres")
+	src.Spec.TLS = "require"
+	c, dyn := newTestCloner(t, "alpha", src)
+
+	if _, err := c.EnsureEnvAddons(context.Background(), "alpha", "preview-pr-37", EnvAddonOpts{
+		Kinds:      []string{"postgres"},
+		NameSuffix: "-pr-37",
+		PreviewPR:  "37",
+	}); err != nil {
+		t.Fatalf("EnsureEnvAddons: %v", err)
+	}
+	clone := getAddon(t, dyn, "alpha-pg-pr-37")
+	if clone == nil {
+		t.Fatalf("clone alpha-pg-pr-37 not created")
+	}
+	if clone.Spec.TLS != "require" {
+		t.Fatalf("clone tls = %q, want require (source spec.tls dropped by the cloner)", clone.Spec.TLS)
+	}
+}
+
 func getAddon(t *testing.T, dyn *dynamicfake.FakeDynamicClient, name string) *kube.KusoAddon {
 	t.Helper()
 	u, err := dyn.Resource(kube.GVRAddons).Namespace("kuso").Get(context.Background(), name, metav1.GetOptions{})

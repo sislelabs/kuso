@@ -56,6 +56,7 @@ Most fields are **immutable post-creation** — the helm chart is provisioning a
 | `version` | ❌ No | Treat as new addon. Migrate data with `kuso addon backup` → create new → restore. |
 | `size`, `ha`, `storageSize` | ❌ No | StatefulSet PVC templates are immutable. |
 | `password`, `database` | ❌ No | Changing these orphans the existing data. |
+| `tls` (postgres) | ⚠️ With caveat | Only touches the pod template + conn secret, so the flip is safe for the data: DB pod restarts serving (or dropping) TLS and `<name>-conn` re-renders with the matching `sslmode`. BUT consuming app pods resolve `envFrom` at container start — they keep the stale `sslmode` until restarted. Flip the addon, then restart every subscribed env. Not exposed via API/CLI today (create-only internally); a live flip needs `kubectl patch`. node-postgres rejects the self-signed cert that `require` serves; Go pgx/libpq accept it. |
 
 If `kuso addon update` rejects an edit with "immutable", the only path is `backup → delete → create new → restore`. Yes, this is annoying. It's the cost of using StatefulSets honestly instead of pretending they're mutable.
 
