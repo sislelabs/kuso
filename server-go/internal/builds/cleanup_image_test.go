@@ -24,7 +24,7 @@ func TestImagesToUntag(t *testing.T) {
 				mk("b5", "web", "t5", 60), // → untag
 			},
 		}
-		got := imagesToUntag(byKey, 3)
+		got := imagesToUntag(byKey, 3, nil)
 		if len(got) != 2 {
 			t.Fatalf("got %d untag targets, want 2: %+v", len(got), got)
 		}
@@ -48,7 +48,7 @@ func TestImagesToUntag(t *testing.T) {
 		byKey := map[svcKey][]imageRetentionRecord{
 			{"proj", "web"}: {mk("b1", "web", "t1", 100), mk("b2", "web", "t2", 90)},
 		}
-		if got := imagesToUntag(byKey, 3); len(got) != 0 {
+		if got := imagesToUntag(byKey, 3, nil); len(got) != 0 {
 			t.Errorf("got %d, want 0 (2 builds, keep 3)", len(got))
 		}
 	})
@@ -59,7 +59,7 @@ func TestImagesToUntag(t *testing.T) {
 			{"proj", "api"}: {mk("a1", "api", "at1", 100), mk("a2", "api", "at2", 90)},
 		}
 		// keep=1 → web untags 2 (wt2,wt3), api untags 1 (at2).
-		got := imagesToUntag(byKey, 1)
+		got := imagesToUntag(byKey, 1, nil)
 		if len(got) != 3 {
 			t.Fatalf("got %d, want 3", len(got))
 		}
@@ -69,6 +69,35 @@ func TestImagesToUntag(t *testing.T) {
 		}
 		if byRepo["proj/web"] != 2 || byRepo["proj/api"] != 1 {
 			t.Errorf("per-service untag counts wrong: %v", byRepo)
+		}
+	})
+
+	// A tag a live KusoEnvironment still runs must NEVER be untagged, no
+	// matter how far outside the keep-window it falls. Real incident: a
+	// staging env pinned to a May build got its tag swept (production
+	// kept building, staging didn't), so the next pod restart was
+	// ImagePullBackOff — the env was un-restartable until a manual
+	// rebuild.
+	t.Run("live env tags are protected", func(t *testing.T) {
+		byKey := map[svcKey][]imageRetentionRecord{
+			{"proj", "web"}: {
+				mk("b1", "web", "t1", 100),
+				mk("b2", "web", "t2", 90),
+				mk("b3", "web", "t3", 80), // outside keep=1 but LIVE on an env
+				mk("b4", "web", "t4", 70), // outside keep=1 → untag
+			},
+		}
+		protected := map[string]bool{"proj/web:t3": true}
+		got := imagesToUntag(byKey, 1, protected)
+		tags := map[string]bool{}
+		for _, g := range got {
+			tags[g.tag] = true
+		}
+		if tags["t3"] {
+			t.Fatalf("live env tag t3 was untagged: %+v", got)
+		}
+		if !tags["t2"] || !tags["t4"] {
+			t.Errorf("expected t2+t4 untagged, got %v", tags)
 		}
 	})
 }

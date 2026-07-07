@@ -766,8 +766,8 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 		seen[name] = true
 		baseSecrets = append(baseSecrets, name)
 	}
-	for _, a := range addons {
-		addSecret(connSecretName(a.Name))
+	for _, conn := range orderedConnSecrets(addons, excludeConnSecrets) {
+		addSecret(conn)
 	}
 	// Always carry the project-shared + instance-shared secrets. The
 	// merge-patch below REPLACES spec.envFromSecrets wholesale, so any
@@ -837,6 +837,26 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 		}
 	}
 	return nil
+}
+
+// orderedConnSecrets maps addon CRs to their conn-secret names in
+// name-sorted order, dropping excluded ones. The sort is load-bearing:
+// the addon list is served from the informer cache (map iteration
+// order), so without it two refreshes can emit the same SET of secrets
+// in a different ORDER. That order lands in spec.envFromSecrets, the
+// operator sees a spec change, re-renders every env's Deployment, and
+// the whole project rolling-restarts over a no-op.
+func orderedConnSecrets(addonCRs []kube.KusoAddon, exclude map[string]bool) []string {
+	out := make([]string, 0, len(addonCRs))
+	for _, a := range addonCRs {
+		conn := connSecretName(a.Name)
+		if exclude[conn] {
+			continue
+		}
+		out = append(out, conn)
+	}
+	slices.Sort(out)
+	return out
 }
 
 // filterAddonConnsBySubscription mirrors filterEnvFromForSubscription

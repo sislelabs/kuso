@@ -250,7 +250,33 @@ func SweepImagesPastWindow(
 		}
 	}
 
-	targets := imagesToUntag(byKey, keep)
+	// Never untag an image a live env is currently running. Envs that
+	// rarely rebuild (staging branches, long-lived previews) fall out of
+	// the newest-N window while other envs keep building; sweeping their
+	// tag turns the next pod restart into a permanent ImagePullBackOff.
+	protected := map[string]bool{}
+	if envs, eerr := kc.ListKusoEnvironments(ctx, namespace); eerr != nil {
+		// Fail CLOSED: without the live-env view we can't know which
+		// tags are load-bearing, and a skipped sweep is recoverable
+		// while an over-eager one is not.
+		return 0, fmt.Errorf("image-sweep list envs: %w", eerr)
+	} else {
+		for i := range envs {
+			img := envs[i].Spec.Image
+			if img == nil || img.Tag == "" {
+				continue
+			}
+			// Env repositories are "<registry-host>/<project>/<service>";
+			// untag targets are "<project>/<service>". Strip the host.
+			repo := img.Repository
+			if idx := strings.Index(repo, "/"); idx >= 0 {
+				repo = repo[idx+1:]
+			}
+			protected[repo+":"+img.Tag] = true
+		}
+	}
+
+	targets := imagesToUntag(byKey, keep, protected)
 	deleted := 0
 	for _, t := range targets {
 		if err := del.DeleteImageTag(ctx, t.repo, t.tag); err != nil {
@@ -288,7 +314,14 @@ type untagTarget struct {
 // the `keep` newest records and return the untag targets for every older
 // one. Extracted from SweepImagesPastWindow so the windowing logic is
 // unit-testable without a cluster or registry.
-func imagesToUntag(byKey map[svcKey][]imageRetentionRecord, keep int) []untagTarget {
+//
+// protected is a "<project>/<service>:<tag>" set of images a live
+// KusoEnvironment currently runs — those are NEVER untagged regardless
+// of window position. A service whose env rarely rebuilds (a staging
+// branch, a long-lived preview) otherwise falls out of the window while
+// other envs keep building, and its next pod restart is an unrecoverable
+// ImagePullBackOff.
+func imagesToUntag(byKey map[svcKey][]imageRetentionRecord, keep int, protected map[string]bool) []untagTarget {
 	var out []untagTarget
 	for k, recs := range byKey {
 		if len(recs) <= keep {
@@ -297,6 +330,9 @@ func imagesToUntag(byKey map[svcKey][]imageRetentionRecord, keep int) []untagTar
 		sortRecordsNewestFirst(recs)
 		repo := fmt.Sprintf("%s/%s", k.project, k.service)
 		for _, r := range recs[keep:] {
+			if protected[repo+":"+r.imageTag] {
+				continue
+			}
 			out = append(out, untagTarget{repo: repo, tag: r.imageTag, project: k.project, buildName: r.buildName})
 		}
 	}

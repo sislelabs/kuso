@@ -565,6 +565,33 @@ func TestUpdate_TLS(t *testing.T) {
 	})
 }
 
+// TestOrderedConnSecrets pins deterministic conn-secret ordering for
+// the env rebuild. addons.List is served from the informer cache (map
+// order), so without an explicit sort two consecutive refreshes can
+// emit the same SET in a different ORDER — that's a spec change, the
+// operator re-renders, and every env in the project rolling-restarts
+// for nothing. Real incident: the spurious restart hit a staging env
+// whose image tag had been swept → ImagePullBackOff.
+func TestOrderedConnSecrets(t *testing.T) {
+	t.Parallel()
+	shuffled := []kube.KusoAddon{
+		{ObjectMeta: metav1.ObjectMeta{Name: "alpha-storage"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "alpha-db"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "alpha-queue"}},
+		{ObjectMeta: metav1.ObjectMeta{Name: "alpha-cache"}},
+	}
+	got := orderedConnSecrets(shuffled, map[string]bool{connSecretName("alpha-queue"): true})
+	want := []string{"alpha-cache-conn", "alpha-db-conn", "alpha-storage-conn"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("got %v, want %v (order must be name-sorted, excluded addon dropped)", got, want)
+		}
+	}
+}
+
 // TestAdd_WiresConnSecretViaExplicitHandoff confirms Add wires the new
 // addon's conn secret into existing services even though Add relies on
 // the explicit hand-off rather than the (cache-lagged) addon list.
