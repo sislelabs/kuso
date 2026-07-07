@@ -35,6 +35,7 @@ func apiv1CreateAddonToDomain(in apiv1.CreateAddonRequest) addons.CreateAddonReq
 		StorageSize:      in.StorageSize,
 		Database:         in.Database,
 		UseInstanceAddon: in.UseInstanceAddon,
+		TLS:              in.TLS,
 	}
 	if in.External != nil {
 		out.External = &kube.KusoAddonExternal{
@@ -57,6 +58,7 @@ func apiv1UpdateAddonToDomain(in apiv1.UpdateAddonRequest) addons.UpdateAddonReq
 		HA:          in.HA,
 		StorageSize: in.StorageSize,
 		Database:    in.Database,
+		TLS:         in.TLS,
 	}
 	if in.Backup != nil {
 		out.Backup = &addons.UpdateBackupPatch{

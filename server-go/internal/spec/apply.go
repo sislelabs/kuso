@@ -391,6 +391,7 @@ func addonCreateReq(a AddonSpec) addons.CreateAddonRequest {
 		StorageSize:      a.StorageSize,
 		Database:         a.Database,
 		UseInstanceAddon: a.UseInstanceAddon,
+		TLS:              a.TLS,
 	}
 	if a.Pooler != nil {
 		req.Pooler = &kube.KusoAddonPooler{Enabled: a.Pooler.Enabled}

@@ -502,6 +502,69 @@ func TestUpdate_TogglesPooler(t *testing.T) {
 	}
 }
 
+// TestUpdate_TLS covers the tls flip on a live postgres addon: safe per
+// EDIT_SAFETY.md (pod template + conn secret only; the data PVC is
+// untouched), so Update accepts it — validated the same way Add does
+// (postgres-only, "disable"/"require"). Before this, the only way to
+// flip tls was a raw kubectl patch.
+func TestUpdate_TLS(t *testing.T) {
+	t.Parallel()
+	t.Run("flip disable→require on postgres", func(t *testing.T) {
+		s := fakeService(t,
+			seedProj("alpha"),
+			seedAddon("alpha", "pg", "postgres"),
+		)
+		req := "require"
+		got, err := s.Update(context.Background(), "alpha", "pg", UpdateAddonRequest{TLS: &req})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if got.Spec.TLS != "require" {
+			t.Errorf("tls = %q, want require", got.Spec.TLS)
+		}
+	})
+
+	t.Run("flip back to disable", func(t *testing.T) {
+		s := fakeService(t,
+			seedProj("alpha"),
+			typedSeed(kube.GVRAddons, "KusoAddon", &kube.KusoAddon{
+				ObjectMeta: metav1.ObjectMeta{Name: "alpha-pg", Namespace: "kuso"},
+				Spec:       kube.KusoAddonSpec{Project: "alpha", Kind: "postgres", TLS: "require"},
+			}),
+		)
+		off := "disable"
+		got, err := s.Update(context.Background(), "alpha", "pg", UpdateAddonRequest{TLS: &off})
+		if err != nil {
+			t.Fatalf("Update: %v", err)
+		}
+		if got.Spec.TLS != "disable" {
+			t.Errorf("tls = %q, want disable", got.Spec.TLS)
+		}
+	})
+
+	t.Run("invalid value rejected", func(t *testing.T) {
+		s := fakeService(t,
+			seedProj("alpha"),
+			seedAddon("alpha", "pg", "postgres"),
+		)
+		bad := "verify-full"
+		if _, err := s.Update(context.Background(), "alpha", "pg", UpdateAddonRequest{TLS: &bad}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("want ErrInvalid, got %v", err)
+		}
+	})
+
+	t.Run("require on non-postgres rejected", func(t *testing.T) {
+		s := fakeService(t,
+			seedProj("alpha"),
+			seedAddon("alpha", "cache", "redis"),
+		)
+		req := "require"
+		if _, err := s.Update(context.Background(), "alpha", "cache", UpdateAddonRequest{TLS: &req}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("want ErrInvalid, got %v", err)
+		}
+	})
+}
+
 // TestAdd_WiresConnSecretViaExplicitHandoff confirms Add wires the new
 // addon's conn secret into existing services even though Add relies on
 // the explicit hand-off rather than the (cache-lagged) addon list.

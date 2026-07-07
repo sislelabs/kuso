@@ -23,6 +23,7 @@ var (
 	addonUpdateStorageSize string
 	addonUpdateDatabase    string
 	addonUpdateHA          bool
+	addonUpdateTLS         string
 	addonSecretReveal      bool
 	addonSecretKeysOnly    bool
 )
@@ -179,15 +180,32 @@ func maskSecret(v string) string {
 	return v[:3] + fmt.Sprintf("…(%d chars)", len(v))
 }
 
+// validateAddonTLSFlag gates the --tls flag client-side so a typo'd
+// mode fails fast instead of round-tripping to the server's validator.
+// Only the two chart-supported modes exist; "verify-full" in particular
+// is a common guess that the self-signed cert can never satisfy.
+func validateAddonTLSFlag(v string) error {
+	if v != "disable" && v != "require" {
+		return fmt.Errorf("--tls must be \"disable\" or \"require\", got %q", v)
+	}
+	return nil
+}
+
 var addonUpdateCmd = &cobra.Command{
 	Use:   "update <project> <addon>",
-	Short: "Update a live addon's spec (version, size, HA, storage, database)",
+	Short: "Update a live addon's spec (version, size, HA, storage, database, tls)",
 	Long: `Patch an addon's spec. Only the flags you pass are changed. Some fields
 trigger a rolling restart of the addon pod; storageSize is immutable on most
-storage classes (see docs/EDIT_SAFETY.md before resizing).`,
+storage classes (see docs/EDIT_SAFETY.md before resizing).
+
+--tls flips in-cluster wire TLS on a postgres addon: the DB pod restarts
+serving (or dropping) TLS and the conn secret re-renders with the matching
+sslmode. Subscribed services keep the OLD sslmode until their pods restart —
+redeploy or restart them after the flip.`,
 	Example: `  kuso project addon update analiz analiz-postgres --version 17
   kuso project addon update analiz analiz-cache --size medium
-  kuso project addon update analiz analiz-postgres --ha`,
+  kuso project addon update analiz analiz-postgres --ha
+  kuso project addon update analiz analiz-postgres --tls require`,
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -215,8 +233,15 @@ storage classes (see docs/EDIT_SAFETY.md before resizing).`,
 			req.HA = &addonUpdateHA
 			changed = true
 		}
+		if cmd.Flags().Changed("tls") {
+			if err := validateAddonTLSFlag(addonUpdateTLS); err != nil {
+				return err
+			}
+			req.TLS = &addonUpdateTLS
+			changed = true
+		}
 		if !changed {
-			return fmt.Errorf("pass at least one of --version --size --storage-size --database --ha")
+			return fmt.Errorf("pass at least one of --version --size --storage-size --database --ha --tls")
 		}
 		resp, err := api.UpdateAddon(args[0], args[1], req)
 		if err != nil {
@@ -248,4 +273,5 @@ func init() {
 	addonUpdateCmd.Flags().StringVar(&addonUpdateStorageSize, "storage-size", "", "PVC size, e.g. 20Gi (immutable on most storage classes)")
 	addonUpdateCmd.Flags().StringVar(&addonUpdateDatabase, "database", "", "default database name")
 	addonUpdateCmd.Flags().BoolVar(&addonUpdateHA, "ha", false, "enable high-availability (multi-replica)")
+	addonUpdateCmd.Flags().StringVar(&addonUpdateTLS, "tls", "", "in-cluster wire TLS for postgres: disable|require (restart subscribed services after flipping)")
 }

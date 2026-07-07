@@ -235,6 +235,7 @@ func exportAddon(project string, cr kube.KusoAddon) AddonSpec {
 		StorageSize:      cr.Spec.StorageSize,
 		Database:         cr.Spec.Database,
 		UseInstanceAddon: cr.Spec.UseInstanceAddon,
+		TLS:              cr.Spec.TLS,
 	}
 	if cr.Spec.Pooler != nil {
 		a.Pooler = &AddonPoolerSpec{Enabled: cr.Spec.Pooler.Enabled}

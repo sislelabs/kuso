@@ -332,6 +332,12 @@ type UpdateAddonRequest struct {
 	Backup      *UpdateBackupPatch `json:"backup,omitempty"`
 	// Pooler toggles the opt-in PgBouncer pooler. Nil = leave alone.
 	Pooler *AddonPoolerPatch `json:"pooler,omitempty"`
+	// TLS flips in-cluster wire TLS on a kind=postgres addon
+	// ("disable" | "require"). Safe on a live addon: only the pod
+	// template + conn secret re-render, the data PVC is untouched.
+	// Subscribed envs must restart to pick up the new sslmode (envFrom
+	// resolves at container start). Nil = leave alone.
+	TLS *string `json:"tls,omitempty"`
 }
 
 // UpdateBackupPatch carries the per-addon backup schedule + retention.
@@ -438,6 +444,20 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 				}
 				addon.Spec.Backup.RetentionDays = d
 			}
+		}
+		if req.TLS != nil {
+			// Same validation as Add: "disable"/"require", postgres-only.
+			// The flip itself is live-safe (EDIT_SAFETY.md: pod template +
+			// conn secret re-render; PVC untouched) — but subscribed envs
+			// keep the stale sslmode until restarted.
+			v := *req.TLS
+			if v != "" && v != "disable" && v != "require" {
+				return fmt.Errorf("%w: tls must be \"disable\" or \"require\", got %q", ErrInvalid, v)
+			}
+			if v == "require" && addon.Spec.Kind != "postgres" {
+				return fmt.Errorf("%w: tls=require is only supported on kind=postgres addons", ErrInvalid)
+			}
+			addon.Spec.TLS = v
 		}
 		if req.Pooler != nil && req.Pooler.Enabled != nil {
 			// Lazy-init so toggling the pooler doesn't disturb other

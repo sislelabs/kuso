@@ -279,6 +279,10 @@ type AddonSpec struct {
 	Placement        *PlacementSpec     `yaml:"placement,omitempty"`
 	External         *AddonExternalSpec `yaml:"external,omitempty"`
 	UseInstanceAddon string             `yaml:"useInstanceAddon,omitempty"`
+	// TLS opts a kind=postgres addon into in-cluster wire TLS
+	// ("disable" | "require"). require = serve TLS via a self-signed
+	// cert + advertise sslmode=require in the conn secret.
+	TLS string `yaml:"tls,omitempty"`
 }
 
 type AddonPoolerSpec struct {

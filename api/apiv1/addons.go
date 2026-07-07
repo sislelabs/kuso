@@ -28,6 +28,13 @@ type CreateAddonRequest struct {
 	// Pooler enables an opt-in PgBouncer connection pooler in front
 	// of a kind=postgres addon. Nil = no pooler.
 	Pooler *AddonPoolerSpec `json:"pooler,omitempty"`
+	// TLS opts a kind=postgres addon into in-cluster wire TLS.
+	// "" / "disable" (default) = plaintext + sslmode=disable.
+	// "require" = serve TLS via a self-signed cert + advertise
+	// sslmode=require, for apps that mandate encrypted DB
+	// connections. Go pgx/libpq accept the self-signed chain;
+	// default node-postgres rejects it, so this is opt-in.
+	TLS string `json:"tls,omitempty"`
 }
 
 // AddonExternalSpec tells the server to skip provisioning and
@@ -50,6 +57,11 @@ type UpdateAddonRequest struct {
 	Backup      *UpdateAddonBackup  `json:"backup,omitempty"`
 	// Pooler toggles the opt-in PgBouncer pooler. Nil = leave alone.
 	Pooler *AddonPoolerSpec `json:"pooler,omitempty"`
+	// TLS flips in-cluster wire TLS on a kind=postgres addon
+	// ("disable" | "require"). Live-safe: only the pod template +
+	// conn secret re-render; the data PVC is untouched. Subscribed
+	// envs must restart to pick up the new sslmode. Nil = leave alone.
+	TLS *string `json:"tls,omitempty"`
 }
 
 // UpdateAddonBackup carries the per-addon backup schedule +

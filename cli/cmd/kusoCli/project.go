@@ -691,6 +691,7 @@ var (
 	addonAddVersion string
 	addonAddSize    string
 	addonAddHA      bool
+	addonAddTLS     string
 )
 
 var supportedAddonKinds = []string{
@@ -713,6 +714,7 @@ var addonAddCmd = &cobra.Command{
 	Short: "Add an addon to a project (auto-injected as envFrom into every service)",
 	Args:  cobra.ExactArgs(2),
 	Example: `  kuso project addon add analiz pg --kind postgres --version 16
+  kuso project addon add analiz pg --kind postgres --tls require
   kuso project addon add analiz cache --kind redis --version 7 --size small`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -720,6 +722,14 @@ var addonAddCmd = &cobra.Command{
 		}
 		if !contains(supportedAddonKinds, addonAddKind) {
 			return fmt.Errorf("--kind must be one of: %s", strings.Join(supportedAddonKinds, ", "))
+		}
+		if cmd.Flags().Changed("tls") {
+			if err := validateAddonTLSFlag(addonAddTLS); err != nil {
+				return err
+			}
+			if addonAddTLS == "require" && addonAddKind != "postgres" {
+				return fmt.Errorf("--tls require is only supported with --kind postgres")
+			}
 		}
 		// Loud warnings for known-fragile single-pod defaults. These
 		// addons are easy to provision but lose data or messages on
@@ -748,6 +758,7 @@ var addonAddCmd = &cobra.Command{
 			Version: addonAddVersion,
 			Size:    addonAddSize,
 			HA:      addonAddHA,
+			TLS:     addonAddTLS,
 		}
 		resp, err := api.AddAddon(args[0], req)
 		if err != nil {
@@ -1252,6 +1263,7 @@ func init() {
 	addonAddCmd.Flags().StringVar(&addonAddVersion, "version", "", "engine version")
 	addonAddCmd.Flags().StringVar(&addonAddSize, "size", "small", "small|medium|large")
 	addonAddCmd.Flags().BoolVar(&addonAddHA, "ha", false, "use clustered chart variant where supported")
+	addonAddCmd.Flags().StringVar(&addonAddTLS, "tls", "", "in-cluster wire TLS for postgres: disable|require (conn secret advertises the matching sslmode)")
 	_ = addonAddCmd.MarkFlagRequired("kind")
 	projectAddonCmd.AddCommand(addonDeleteCmd)
 	addonDeleteCmd.Flags().BoolVarP(&addonDeleteYes, "yes", "y", false, "skip the confirmation prompt")
