@@ -1128,6 +1128,10 @@ if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
   )
   # Include CHANGELOG.md if git-cliff regenerated it (see step 4d).
   [[ -f CHANGELOG.md ]] && COMMIT_FILES+=(CHANGELOG.md)
+  # The archive rotation rewrites CHANGELOG.archive.md in the same step;
+  # leaving it unstaged strands a dirty tree that fails the NEXT ship's
+  # clean-tree gate (bit v0.18.124 and v0.18.125).
+  [[ -f CHANGELOG.archive.md ]] && COMMIT_FILES+=(CHANGELOG.archive.md)
 
   if git diff --quiet -- "${COMMIT_FILES[@]}"; then
     warn "no version-file changes to commit"

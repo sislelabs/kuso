@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.74] — 2026-06-17
+
+### 🐛 Bug Fixes
+- Fix(scale-to-zero): activator as direct backend; fix cold-start dial races ([a8d29cf](https://github.com/sislelabs/kuso/commit/a8d29cfe54e52c3ae66b89fcb00e18b3ae27917f))
+
 ## [0.18.73] — 2026-06-17
 
 ### ✨ Features
