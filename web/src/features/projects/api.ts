@@ -233,6 +233,11 @@ export interface UpdateAddonBody {
   pooler?: {
     enabled: boolean;
   };
+  // tls flips in-cluster wire TLS (postgres only). The DB pod
+  // restarts serving/dropping TLS and the conn secret re-renders
+  // with the matching sslmode; subscribed services keep the OLD
+  // sslmode until their pods restart. Omit to leave unchanged.
+  tls?: "disable" | "require";
 }
 
 export async function updateAddon(

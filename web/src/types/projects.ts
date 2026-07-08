@@ -177,6 +177,10 @@ export interface KusoAddonSpec {
     // backup run.
     retentionDays?: number;
   };
+  // tls: in-cluster wire TLS on a kind=postgres addon. "require"
+  // serves TLS via a self-signed cert and the conn secret advertises
+  // sslmode=require; omitted / "disable" = plaintext (sslmode=disable).
+  tls?: "disable" | "require";
   // pooler: opt-in PgBouncer in front of a kind=postgres addon.
   // When enabled the addon's <name>-conn Secret gains
   // POOLER_HOST/POOLER_PORT/POOLER_URL keys; DATABASE_URL stays

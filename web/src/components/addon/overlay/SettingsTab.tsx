@@ -159,6 +159,7 @@ function ConfigurationSection({
     storageSize: cr?.spec.storageSize ?? "",
     database: cr?.spec.database ?? "",
     pooler: !!cr?.spec.pooler?.enabled,
+    requireTLS: cr?.spec.tls === "require",
   };
 
   const [version, setVersion] = useState(initial.version);
@@ -167,6 +168,7 @@ function ConfigurationSection({
   const [storageSize, setStorageSize] = useState(initial.storageSize);
   const [database, setDatabase] = useState(initial.database);
   const [pooler, setPooler] = useState(initial.pooler);
+  const [requireTLS, setRequireTLS] = useState(initial.requireTLS);
 
   // Re-baseline whenever the CR changes (e.g. after a successful save
   // or a parallel edit landed on the server). Without this, the form
@@ -179,6 +181,7 @@ function ConfigurationSection({
     setStorageSize(initial.storageSize);
     setDatabase(initial.database);
     setPooler(initial.pooler);
+    setRequireTLS(initial.requireTLS);
   }, [
     initial.version,
     initial.size,
@@ -186,6 +189,7 @@ function ConfigurationSection({
     initial.storageSize,
     initial.database,
     initial.pooler,
+    initial.requireTLS,
   ]);
 
   const dirty =
@@ -194,7 +198,8 @@ function ConfigurationSection({
     ha !== initial.ha ||
     storageSize !== initial.storageSize ||
     database !== initial.database ||
-    pooler !== initial.pooler;
+    pooler !== initial.pooler ||
+    requireTLS !== initial.requireTLS;
 
   const save = useMutation({
     mutationFn: () => {
@@ -208,6 +213,7 @@ function ConfigurationSection({
       if (storageSize !== initial.storageSize) body.storageSize = storageSize.trim();
       if (database !== initial.database) body.database = database.trim();
       if (pooler !== initial.pooler) body.pooler = { enabled: pooler };
+      if (requireTLS !== initial.requireTLS) body.tls = requireTLS ? "require" : "disable";
       return updateAddon(project, addon, body);
     },
     onSuccess: () => {
@@ -224,6 +230,7 @@ function ConfigurationSection({
     setStorageSize(initial.storageSize);
     setDatabase(initial.database);
     setPooler(initial.pooler);
+    setRequireTLS(initial.requireTLS);
   };
   // Register with the overlay shell so the unified SaveBar at the
   // bottom fires onSave + a tab-switch discards local edits cleanly
@@ -359,6 +366,37 @@ function ConfigurationSection({
               point apps at {"${{ <addon>.POOLER_URL }}"}
             </span>
           </label>
+        )}
+        {(cr?.spec.kind ?? "").toLowerCase() === "postgres" && (
+          <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-3 py-2">
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={requireTLS}
+                onChange={(e) => setRequireTLS(e.target.checked)}
+                className="h-3.5 w-3.5 accent-[var(--accent)]"
+              />
+              <span className="text-[12px] font-medium">
+                Require TLS on the wire
+              </span>
+              <span className="ml-auto font-mono text-[10px] text-[var(--text-tertiary)]">
+                {requireTLS ? "sslmode=require" : "sslmode=disable"}
+              </span>
+            </label>
+            {requireTLS !== initial.requireTLS && (
+              <p className="mt-1.5 pl-5 font-mono text-[10px] leading-relaxed text-amber-300/80">
+                The DB pod restarts {requireTLS ? "serving" : "without"} TLS and the
+                conn secret re-renders with the new sslmode — but services keep the
+                OLD value until their pods restart. Redeploy or restart every
+                subscribed service after saving.
+              </p>
+            )}
+            <p className="mt-1.5 pl-5 font-mono text-[10px] leading-relaxed text-[var(--text-tertiary)]">
+              Data is untouched (pod template + conn secret only). Go/pgx and libpq
+              accept the self-signed cert under require; default node-postgres
+              rejects it.
+            </p>
+          </div>
         )}
       </div>
       <footer className="flex items-center justify-end gap-2 border-t border-[var(--border-subtle)] px-3 py-2">
