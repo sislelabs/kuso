@@ -7,11 +7,12 @@ import { api } from "@/lib/api-client";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { X, Globe, Terminal, Box, Clock, Save, Trash2 } from "lucide-react";
+import { X, Globe, Terminal, Box, Clock, Save, Trash2, RefreshCw, Package, KeyRound } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { CronPicker } from "@/components/shared/CronPicker";
+import { nextRuns } from "@/lib/cron-next";
 
 // EditCronDialog opens when a CronNode is clicked. Lets the user edit
 // schedule / target / suspend state, and delete the cron entirely.
@@ -37,7 +38,36 @@ interface CronShape {
     command?: string[];
     suspend?: boolean;
     displayName?: string;
+    // Resolved runtime detail — what the pod actually runs with.
+    image?: { repository?: string; tag?: string; pullPolicy?: string };
+    envFromSecrets?: string[];
+    concurrencyPolicy?: string;
+    activeDeadlineSeconds?: number;
   };
+}
+
+// The registry host is noise — the image identity is owner/repo:tag. Drop the
+// in-cluster registry prefix so "kuso-registry.…:5000/scubatony/internal-system"
+// reads as "scubatony/internal-system".
+function shortImage(repo: string): string {
+  const slash = repo.indexOf("/");
+  const host = slash === -1 ? "" : repo.slice(0, slash);
+  return /[.:]/.test(host) ? repo.slice(slash + 1) : repo;
+}
+
+function fmtRun(d: Date): string {
+  // e.g. "Wed Jul 8, 11:00 UTC"
+  return (
+    d.toLocaleString("en-US", {
+      weekday: "short",
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+      timeZone: "UTC",
+    }) + " UTC"
+  );
 }
 
 interface Props {
@@ -83,6 +113,8 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
     setUrl(cron.spec.url ?? "");
     setSuspend(!!cron.spec.suspend);
     setCmd((cron.spec.command ?? []).join(" "));
+    setImageRepo(cron.spec.image?.repository ?? "");
+    setImageTag(cron.spec.image?.tag ?? "latest");
   }, [cron]);
 
   const qc = useQueryClient();
@@ -177,10 +209,48 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
     onError: (e) => toast.error(e instanceof Error ? e.message : "Delete failed"),
   });
 
+  // Sync image — re-resolve the parent service's CURRENT production image tag +
+  // envFromSecrets and repin the cron. Service-kind crons pin the tag at create
+  // time and DON'T follow later deploys, so this is how you point one at a fresh
+  // build. (kind=command / kind=http carry their own image, so no sync.)
+  const sync = useMutation({
+    mutationFn: async () => {
+      if (!cron) throw new Error("no cron");
+      const svc = cron.spec.service ?? "";
+      const cronShort = shortName(project + "-" + svc.replace(project + "-", ""), cron.metadata.name);
+      return api(
+        `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(svc)}/crons/${encodeURIComponent(cronShort)}/sync`,
+        { method: "POST" },
+      );
+    },
+    onSuccess: () => {
+      toast.success("Synced to the service's current image");
+      qc.invalidateQueries({ queryKey: ["projects", project] });
+      qc.invalidateQueries({ queryKey: ["projects", project, "crons"] });
+    },
+    onError: (e) => toast.error(e instanceof Error ? e.message : "Sync failed"),
+  });
+
   if (!cron) return null;
   const kind = (cron.spec.kind ?? "service").toLowerCase();
   const Icon = KIND_ICONS[kind] ?? Clock;
   const cronTail = tail || cron.metadata.name;
+
+  // Resolved runtime facts for the read-only "Runs from" block. The image/env
+  // come off the CR (server bakes them in for kind=service); the upcoming runs
+  // are computed from the (possibly just-edited) schedule so the preview tracks
+  // the picker live.
+  const img = cron.spec.image;
+  const imageLabel =
+    kind === "http"
+      ? "kuso-backup (curl runtime)"
+      : img?.repository
+        ? `${shortImage(img.repository)}${img.tag ? `:${img.tag}` : ""}`
+        : "—";
+  const secrets = cron.spec.envFromSecrets ?? [];
+  const upcoming = nextRuns(schedule.trim(), 3);
+  const concurrency = cron.spec.concurrencyPolicy || "Forbid";
+  const deadline = cron.spec.activeDeadlineSeconds;
 
   return (
     <AnimatePresence>
@@ -250,6 +320,92 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                 <div className="mt-1.5">
                   <CronPicker value={schedule} onChange={setSchedule} />
                 </div>
+                {upcoming.length > 0 ? (
+                  <p className="mt-1.5 font-mono text-[10px] text-[var(--text-tertiary)]">
+                    next: {fmtRun(upcoming[0])}
+                    {upcoming[1] ? ` · then ${fmtRun(upcoming[1])}` : ""}
+                  </p>
+                ) : (
+                  <p className="mt-1.5 font-mono text-[10px] text-amber-400/80">
+                    couldn&apos;t parse this schedule — double-check the 5 fields
+                  </p>
+                )}
+              </div>
+
+              {/* Runs from — read-only resolved runtime. The one piece of info
+                  people ask for first ("which container / image is this?") plus
+                  the injected secrets, concurrency, and timeout, so the dialog
+                  answers "what will actually run" without leaving the page. */}
+              <div className="rounded-md border border-[var(--border-subtle)] bg-[var(--bg-secondary)] px-3 py-2.5">
+                <div className="mb-2 flex items-center justify-between">
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                    runs from
+                  </span>
+                  {kind === "service" && (
+                    <button
+                      type="button"
+                      onClick={() => sync.mutate()}
+                      disabled={sync.isPending || save.isPending || del.isPending}
+                      title="Re-pin to the service's current production image + secrets"
+                      className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-medium text-[var(--text-secondary)] hover:bg-[var(--bg-tertiary)] hover:text-[var(--text-primary)] disabled:opacity-40"
+                    >
+                      <RefreshCw className={cn("h-3 w-3", sync.isPending && "animate-spin")} />
+                      {sync.isPending ? "Syncing…" : "Sync image"}
+                    </button>
+                  )}
+                </div>
+
+                <dl className="space-y-1.5 text-[11px]">
+                  <div className="flex items-start gap-2">
+                    <Package className="mt-0.5 h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+                    <dt className="w-16 shrink-0 text-[var(--text-tertiary)]">image</dt>
+                    <dd className="min-w-0 break-all font-mono text-[var(--text-secondary)]">{imageLabel}</dd>
+                  </div>
+
+                  <div className="flex items-start gap-2">
+                    <Terminal className="mt-0.5 h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+                    <dt className="w-16 shrink-0 text-[var(--text-tertiary)]">command</dt>
+                    <dd className="min-w-0 break-all font-mono text-[var(--text-secondary)]">
+                      {kind === "http" ? `curl ${url || cron.spec.url || "—"}` : cmd.trim() || "—"}
+                    </dd>
+                  </div>
+
+                  {secrets.length > 0 && (
+                    <div className="flex items-start gap-2">
+                      <KeyRound className="mt-0.5 h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+                      <dt className="w-16 shrink-0 text-[var(--text-tertiary)]">env from</dt>
+                      <dd className="flex min-w-0 flex-wrap gap-1">
+                        {secrets.map((s) => (
+                          <span
+                            key={s}
+                            className="rounded bg-[var(--bg-tertiary)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-secondary)]"
+                          >
+                            {s}
+                          </span>
+                        ))}
+                      </dd>
+                    </div>
+                  )}
+
+                  <div className="flex items-start gap-2">
+                    <Clock className="mt-0.5 h-3 w-3 shrink-0 text-[var(--text-tertiary)]" />
+                    <dt className="w-16 shrink-0 text-[var(--text-tertiary)]">policy</dt>
+                    <dd className="min-w-0 font-mono text-[var(--text-secondary)]">
+                      {concurrency}
+                      {deadline ? ` · timeout ${deadline}s` : ""}
+                    </dd>
+                  </div>
+                </dl>
+
+                {kind === "service" && (
+                  <p className="mt-2 border-t border-[var(--border-subtle)] pt-2 text-[10px] leading-relaxed text-[var(--text-tertiary)]">
+                    Image + env are inherited from{" "}
+                    <span className="font-mono text-[var(--text-secondary)]">{cron.spec.service}</span> and pinned at
+                    create time — they don&apos;t follow later deploys, so hit{" "}
+                    <span className="font-medium text-[var(--text-secondary)]">Sync image</span> after a release to run
+                    on the newest build.
+                  </p>
+                )}
               </div>
 
               {kind === "http" && (
@@ -322,9 +478,6 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                     className="mt-1 h-7 font-mono text-[11px]"
                     spellCheck={false}
                   />
-                  <p className="mt-1 font-mono text-[10px] text-[var(--text-tertiary)]">
-                    Image + envFromSecrets come from {cron.spec.service}.
-                  </p>
                 </div>
               )}
 

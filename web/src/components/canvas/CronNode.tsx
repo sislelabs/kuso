@@ -24,6 +24,14 @@ export interface CronNodeData {
       command?: string[];
       suspend?: boolean;
       displayName?: string;
+      // Resolved runtime detail — what the CronJob's pod actually runs
+      // with. For kind=service these are baked in from the parent
+      // service's production env at create/sync time (so they can drift
+      // from the service until re-synced); the edit dialog surfaces them.
+      image?: { repository?: string; tag?: string; pullPolicy?: string };
+      envFromSecrets?: string[];
+      concurrencyPolicy?: string;
+      activeDeadlineSeconds?: number;
     };
   };
   __onContext?: (e: React.MouseEvent) => void;
