@@ -21,6 +21,11 @@ messages on every release. The format is loosely based on
 
 ## [0.18.126] — 2026-07-08
 
+### 🐛 Bug Fixes
+- Fix(server): addon-event env refresh no longer re-leaks shared secrets ([1663bb7](https://github.com/sislelabs/kuso/commit/1663bb7d4c272a218eb420777c0be2562a152aa1))
+
+## [0.18.126] — 2026-07-08
+
 ### ✨ Features
 - Feat(web): show a cron's resolved runtime + add Sync image (#11) ([2964e30](https://github.com/sislelabs/kuso/commit/2964e30c171d4f0c169cb042e8b3ac1a175d7040))
 
@@ -407,22 +412,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env): per-env clone NAME suffix + canvas shows only the env's own addons ([e8bfda1](https://github.com/sislelabs/kuso/commit/e8bfda16b12a2d82cddcb370c5bc426bc2e0e8f0))
-
-## [0.18.77] — 2026-06-23
-
-### Other
-- Merge: per-environment addon provisioning (kuso environment add gives new envs their own DB/redis/s3) ([baa4cc1](https://github.com/sislelabs/kuso/commit/baa4cc1e22aa1e1fdeb99476b423da29ab5416ca))
-
-### ✨ Features
-- Feat(env): kuso environment add provisions per-env addons by default ([e44d61e](https://github.com/sislelabs/kuso/commit/e44d61ebfa88d219fd72792f3e6a313a488d0bd2))
-- Feat(previewdb): generalize PR clone path into env-scope-keyed EnsureEnvAddons ([d97c230](https://github.com/sislelabs/kuso/commit/d97c230cb8a7be3225e107370e0cade4fb61af81))
-
-### 🐛 Bug Fixes
-- Fix(cli): don't dump usage (or double-print) on runtime errors (#6) ([62db75e](https://github.com/sislelabs/kuso/commit/62db75e0125013855daa4dbb04a67e39463e535a))
-
-### 📝 Docs
-- Docs(plan): per-environment addon provisioning implementation plan ([0bc2983](https://github.com/sislelabs/kuso/commit/0bc298375ed4c62bcf66bb1a01fc59f37f93db5e))
-- Docs(spec): per-environment addon provisioning design ([d003190](https://github.com/sislelabs/kuso/commit/d0031906b1a9553efd13bb1898715b5def7eee24))
 
 
 ---
