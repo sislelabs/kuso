@@ -819,6 +819,23 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 			if live.Spec.SubscribedAddons != nil {
 				perEnv = filterAddonConnsBySubscription(perEnv, projectAddonConns, live.Spec.SubscribedAddons, project)
 			}
+			// Respect the shared-secret subscription (mirrors projects.
+			// pruneSharedSecretsFromEnvFrom): a non-nil sharedEnvKeys env
+			// gets its subscribed keys as per-key valueFrom entries, so
+			// blanket-mounting the shared secrets here would hand every
+			// unsubscribed key (JWT/payment secrets, the instance-PG
+			// admin DSN) to the pod anyway — which is exactly what this
+			// refresh did on every addon event until the tickero leak.
+			// nil = legacy mount-all, unchanged.
+			if live.Spec.SharedEnvKeys != nil {
+				withoutShared := perEnv[:0]
+				for _, name := range perEnv {
+					if !slices.Contains(kube.SharedSecretNames(project), name) {
+						withoutShared = append(withoutShared, name)
+					}
+				}
+				perEnv = withoutShared
+			}
 			// The short service name + env name live on labels every
 			// kuso-created env CR carries. A hand-created CR missing
 			// the service label degrades gracefully.

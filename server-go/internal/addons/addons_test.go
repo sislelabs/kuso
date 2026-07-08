@@ -565,6 +565,89 @@ func TestUpdate_TLS(t *testing.T) {
 	})
 }
 
+// TestRefreshEnvSecrets_RespectsSharedEnvKeys pins the subscription
+// contract on the addon-event rebuild path. resolveSharedEnvKeysForEnv
+// (projects package) prunes the project/instance shared secrets from
+// envFromSecrets when spec.sharedEnvKeys is non-nil — subscribed keys
+// arrive as per-key valueFrom entries instead. refreshEnvSecrets used
+// to re-add the shared secrets unconditionally on EVERY addon event,
+// silently blanket-mounting all shared keys (JWT_SECRET, payment
+// secrets, the instance-PG admin DSN) into pods that subscribed to
+// one key. Found live: tickero's public frontend carried every
+// platform secret while the UI truthfully said "1/13 subscribed".
+func TestRefreshEnvSecrets_RespectsSharedEnvKeys(t *testing.T) {
+	t.Parallel()
+	subscribedEnv := typedSeed(kube.GVREnvironments, "KusoEnvironment", &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alpha-web-production",
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": "alpha",
+				"kuso.sislelabs.com/service": "web",
+				"kuso.sislelabs.com/env":     "production",
+			},
+		},
+		Spec: kube.KusoEnvironmentSpec{
+			Project:       "alpha",
+			Service:       "alpha-web",
+			Kind:          "production",
+			SharedEnvKeys: []string{"ENVIRONMENT"},
+		},
+	})
+	s := fakeService(t,
+		seedProj("alpha"),
+		subscribedEnv,
+		seedEnv("alpha", "api", "production", "alpha-api-production"), // legacy: nil SharedEnvKeys
+		// addons.List filters on the project label — a bare seedAddon is
+		// invisible to the refresh, so label it like a kuso-created CR.
+		typedSeed(kube.GVRAddons, "KusoAddon", &kube.KusoAddon{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "alpha-pg",
+				Namespace: "kuso",
+				Labels:    map[string]string{"kuso.sislelabs.com/project": "alpha"},
+			},
+			Spec: kube.KusoAddonSpec{Project: "alpha", Kind: "postgres"},
+		}),
+	)
+
+	if err := s.RefreshEnvSecrets(context.Background(), "alpha"); err != nil {
+		t.Fatalf("RefreshEnvSecrets: %v", err)
+	}
+
+	has := func(list []string, name string) bool {
+		for _, s := range list {
+			if s == name {
+				return true
+			}
+		}
+		return false
+	}
+
+	sub, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("get subscribed env: %v", err)
+	}
+	for _, banned := range []string{"alpha-shared", "kuso-instance-shared"} {
+		if has(sub.Spec.EnvFromSecrets, banned) {
+			t.Errorf("subscribed env re-leaked %s via envFromSecrets: %v", banned, sub.Spec.EnvFromSecrets)
+		}
+	}
+	// The addon conn + per-service secrets still arrive.
+	if !has(sub.Spec.EnvFromSecrets, "alpha-pg-conn") || !has(sub.Spec.EnvFromSecrets, "alpha-web-secrets") {
+		t.Errorf("subscribed env lost non-shared secrets: %v", sub.Spec.EnvFromSecrets)
+	}
+
+	legacy, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-api-production")
+	if err != nil {
+		t.Fatalf("get legacy env: %v", err)
+	}
+	for _, want := range []string{"alpha-shared", "kuso-instance-shared", "alpha-pg-conn"} {
+		if !has(legacy.Spec.EnvFromSecrets, want) {
+			t.Errorf("legacy (nil sharedEnvKeys) env missing %s: %v", want, legacy.Spec.EnvFromSecrets)
+		}
+	}
+}
+
 // TestOrderedConnSecrets pins deterministic conn-secret ordering for
 // the env rebuild. addons.List is served from the informer cache (map
 // order), so without an explicit sort two consecutive refreshes can
