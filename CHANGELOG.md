@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.126] — 2026-07-08
+
+### ✨ Features
+- Feat(web): show a cron's resolved runtime + add Sync image (#11) ([2964e30](https://github.com/sislelabs/kuso/commit/2964e30c171d4f0c169cb042e8b3ac1a175d7040))
+
 ## [0.18.125] — 2026-07-08
 
 ### ✨ Features
@@ -418,11 +423,6 @@ messages on every release. The format is loosely based on
 ### 📝 Docs
 - Docs(plan): per-environment addon provisioning implementation plan ([0bc2983](https://github.com/sislelabs/kuso/commit/0bc298375ed4c62bcf66bb1a01fc59f37f93db5e))
 - Docs(spec): per-environment addon provisioning design ([d003190](https://github.com/sislelabs/kuso/commit/d0031906b1a9553efd13bb1898715b5def7eee24))
-
-## [0.18.76] — 2026-06-22
-
-### ✨ Features
-- Feat(service): inline rename in header + display name in build notifications ([4d1dbee](https://github.com/sislelabs/kuso/commit/4d1dbeebaaf2239fda8bc21a5b7999b69b1efa60))
 
 
 ---

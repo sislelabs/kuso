@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.76] — 2026-06-22
+
+### ✨ Features
+- Feat(service): inline rename in header + display name in build notifications ([4d1dbee](https://github.com/sislelabs/kuso/commit/4d1dbeebaaf2239fda8bc21a5b7999b69b1efa60))
+
 ## [0.18.75] — 2026-06-18
 
 ### 🐛 Bug Fixes
