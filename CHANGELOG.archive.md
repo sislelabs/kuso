@@ -2,6 +2,12 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.75] — 2026-06-18
+
+### 🐛 Bug Fixes
+- Fix(runs): kuso run inherits the service's configured env vars ([cc886b6](https://github.com/sislelabs/kuso/commit/cc886b63abc2d6263858461496c834c45e41c1f5))
+- Fix(release): commit deploy/kuso-activator.yaml on release; correct its tag ([fac0b8f](https://github.com/sislelabs/kuso/commit/fac0b8f455e1b9b8566589b0e6973ad341a88f1f))
+
 ## [0.18.74] — 2026-06-17
 
 ### 🐛 Bug Fixes

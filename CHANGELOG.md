@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.125] — 2026-07-08
+
+### ✨ Features
+- Feat(web): TLS flip control on the addon Settings tab ([cf9733a](https://github.com/sislelabs/kuso/commit/cf9733abc71ba89051a1cf9de76117d006e3fba9))
+
+### 🐛 Bug Fixes
+- Fix(release): commit CHANGELOG.archive.md rotation with the version bump ([21a2554](https://github.com/sislelabs/kuso/commit/21a255457326092319181738a527e03ce3100525))
+
 ## [0.18.124] — 2026-07-07
 
 ### 🐛 Bug Fixes
@@ -415,12 +423,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(service): inline rename in header + display name in build notifications ([4d1dbee](https://github.com/sislelabs/kuso/commit/4d1dbeebaaf2239fda8bc21a5b7999b69b1efa60))
-
-## [0.18.75] — 2026-06-18
-
-### 🐛 Bug Fixes
-- Fix(runs): kuso run inherits the service's configured env vars ([cc886b6](https://github.com/sislelabs/kuso/commit/cc886b63abc2d6263858461496c834c45e41c1f5))
-- Fix(release): commit deploy/kuso-activator.yaml on release; correct its tag ([fac0b8f](https://github.com/sislelabs/kuso/commit/fac0b8f455e1b9b8566589b0e6973ad341a88f1f))
 
 
 ---
