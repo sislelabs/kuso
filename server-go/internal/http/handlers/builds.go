@@ -144,7 +144,45 @@ func (h *BuildsHandler) LatestPerService(w http.ResponseWriter, r *http.Request)
 		seen[short] = true
 		out[short] = toBuildSummary(b)
 	}
+	// Backfill from the archive for services whose live CRs the 24h
+	// retention sweep already deleted (mirrors the per-service List
+	// handler). Without this the canvas loses the latest-build badge +
+	// commit chip the morning after a deploy day and decays to "env
+	// created Nd ago". Best-effort: an archive read failure still
+	// returns the live results.
+	if h.DB != nil {
+		records, rerr := h.DB.ListProjectBuildRecords(ctx, project, 0)
+		if rerr != nil {
+			h.Logger.Warn("latest builds: archive read", "project", project, "err", rerr)
+		} else {
+			backfillLatestFromArchive(out, records, project, func(serviceFQN, branch string) bool {
+				return resolveForService(serviceFQN)(branch)
+			})
+		}
+	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// backfillLatestFromArchive fills services missing from `out` with their
+// newest branch-matching archived build. `records` must be newest-first
+// (ListProjectBuildRecords order); the first hit per service wins. A
+// service already in `out` (live CR) is never overwritten — the CR is
+// the fresher source. Record.Service is the short name, but tolerate a
+// project-prefixed form for robustness.
+func backfillLatestFromArchive(out map[string]buildSummary, records []db.BuildRecord, project string, branchAllowed func(serviceFQN, branch string) bool) {
+	for _, rec := range records {
+		short := rec.Service
+		if prefix := project + "-"; len(short) > len(prefix) && short[:len(prefix)] == prefix {
+			short = short[len(prefix):]
+		}
+		if _, ok := out[short]; ok {
+			continue
+		}
+		if !branchAllowed(project+"-"+short, rec.Branch) {
+			continue
+		}
+		out[short] = recordToSummary(rec)
+	}
 }
 
 func (h *BuildsHandler) Cancel(w http.ResponseWriter, r *http.Request) {

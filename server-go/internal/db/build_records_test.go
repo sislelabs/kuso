@@ -88,3 +88,41 @@ func TestBuildRecord_ScopedAndDeleted(t *testing.T) {
 		t.Errorf("delete leaked into api: %d records, want 1", len(api))
 	}
 }
+
+// TestListProjectBuildRecords covers the project-wide archive read the
+// canvas's latest-per-service endpoint uses to backfill builds whose
+// live CR the 24h retention sweep already deleted. Without it the
+// canvas regressed to "env created 41d ago" badges the morning after
+// a deploy day.
+func TestListProjectBuildRecords(t *testing.T) {
+	d := openTestDB(t)
+	ctx := context.Background()
+
+	for _, r := range []BuildRecord{
+		{BuildName: "p-web-1", Project: "p", Service: "web", Branch: "main", Status: "succeeded"},
+		{BuildName: "p-api-1", Project: "p", Service: "api", Branch: "main", Status: "succeeded"},
+		{BuildName: "q-web-1", Project: "q", Service: "web", Branch: "main", Status: "succeeded"},
+	} {
+		if err := d.SaveBuildRecord(ctx, r); err != nil {
+			t.Fatalf("save %s: %v", r.BuildName, err)
+		}
+	}
+
+	got, err := d.ListProjectBuildRecords(ctx, "p", 0)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("got %d records, want 2 (both p services, no q leak)", len(got))
+	}
+	seen := map[string]bool{}
+	for _, r := range got {
+		if r.Project != "p" {
+			t.Errorf("record from wrong project: %+v", r)
+		}
+		seen[r.Service] = true
+	}
+	if !seen["web"] || !seen["api"] {
+		t.Errorf("missing a service: %v", seen)
+	}
+}

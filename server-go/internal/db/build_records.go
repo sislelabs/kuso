@@ -115,6 +115,42 @@ func (d *DB) ListBuildRecords(ctx context.Context, project, service string, limi
 	return out, rows.Err()
 }
 
+// ListProjectBuildRecords returns up to `limit` archived build
+// summaries across ALL services of a project, newest-first by
+// createdAt. limit<=0 (or >cap) clamps to buildRecordCap. Used by the
+// canvas's latest-per-service endpoint to backfill builds whose live
+// CR the retention sweep already deleted — without it the canvas
+// decays to "env created Nd ago" badges 24h after the last deploy.
+func (d *DB) ListProjectBuildRecords(ctx context.Context, project string, limit int) ([]BuildRecord, error) {
+	if limit <= 0 || limit > buildRecordCap {
+		limit = buildRecordCap
+	}
+	rows, err := d.QueryContext(ctx, `
+		SELECT "buildName","project","service","branch","commitSha","commitMessage",
+		       "imageTag","status","startedAt","finishedAt","triggeredBy",
+		       "triggeredByUser","errorMessage","createdAt"
+		  FROM "BuildRecord"
+		 WHERE "project"=$1
+		 ORDER BY "createdAt" DESC
+		 LIMIT $2`, project, limit)
+	if err != nil {
+		return nil, fmt.Errorf("ListProjectBuildRecords: %w", err)
+	}
+	defer rows.Close()
+	var out []BuildRecord
+	for rows.Next() {
+		var r BuildRecord
+		if err := rows.Scan(&r.BuildName, &r.Project, &r.Service, &r.Branch,
+			&r.CommitSha, &r.CommitMessage, &r.ImageTag, &r.Status, &r.StartedAt,
+			&r.FinishedAt, &r.TriggeredBy, &r.TriggeredByUser, &r.ErrorMessage,
+			&r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("ListProjectBuildRecords scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 // GetBuildImage returns the archived service short-name + image tag +
 // status for one build, for the rollback fallback when the live CR is
 // gone. ok=false when no record exists. The caller reconstructs the

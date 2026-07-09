@@ -448,6 +448,13 @@ function UptimeBadge({
     // Edge case: succeeded build with finishedAt missing (stale row).
     ts = latestBuild.startedAt;
     label = "build";
+  } else if (env.metadata?.annotations?.["kuso.sislelabs.com/promoted-at"]) {
+    // Stamped by the buildcontroller on every image promotion — the
+    // one deploy timestamp that survives the 24h build-CR retention
+    // sweep. Without this tier the badge decayed to "env created Nd
+    // ago" the morning after a deploy day.
+    ts = env.metadata.annotations["kuso.sislelabs.com/promoted-at"];
+    label = "deploy";
   } else if (env.status?.lastDeployedAt) {
     ts = env.status.lastDeployedAt as string;
     label = "deploy";
