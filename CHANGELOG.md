@@ -19,9 +19,10 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
-## [0.18.126] — 2026-07-08
+## [0.18.127] — 2026-07-09
 
 ### 🐛 Bug Fixes
+- Fix: canvas latest-build badge survives the 24h build-CR retention sweep ([ed1e356](https://github.com/sislelabs/kuso/commit/ed1e3561056c5a2baafcfb6d8e4a7baf15114bd4))
 - Fix(server): addon-event env refresh no longer re-leaks shared secrets ([1663bb7](https://github.com/sislelabs/kuso/commit/1663bb7d4c272a218eb420777c0be2562a152aa1))
 
 ## [0.18.126] — 2026-07-08
