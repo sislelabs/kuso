@@ -1280,6 +1280,17 @@ func (p *Poller) archiveRecord(ctx context.Context, b *kube.KusoBuild, phase str
 	if b.Spec.Image != nil {
 		rec.ImageTag = b.Spec.Image.Tag
 	}
+	// Terminal-phase records must never archive with an empty
+	// FinishedAt: the annotation lives on the API-server copy and the
+	// in-memory `b` can predate the stamp (the transition paths mirror
+	// it now, but any future caller can regress). Archive time IS the
+	// terminal edge, so "now" is accurate to within a poll tick.
+	if rec.FinishedAt == "" {
+		switch phase {
+		case "succeeded", "failed", "cancelled", "release-failed":
+			rec.FinishedAt = time.Now().UTC().Format(time.RFC3339)
+		}
+	}
 	rctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if err := p.LogArchive.SaveBuildRecord(rctx, rec); err != nil {
@@ -2178,14 +2189,22 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 	// the startup re-sync) and resurrect the Job we already cleaned
 	// up. We OOMKilled a 4 GB host once on this — two nixpacks
 	// builds resurrected on top of each other.
+	completedAt := time.Now().UTC().Format(time.RFC3339)
 	patch := fmt.Sprintf(
 		`{"metadata":{"annotations":{%q:"succeeded",%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
-		annPhase, annCompletedAt, time.Now().UTC().Format(time.RFC3339),
+		annPhase, annCompletedAt, completedAt,
 	)
 	if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("patch build status: %w", err)
 	}
+	// Mirror the stamp onto the in-memory object: archiveRecord below
+	// reads b.Annotations, and this copy predates the patch — without
+	// the mirror every archived record carried FinishedAt:"".
+	if b.Annotations == nil {
+		b.Annotations = map[string]string{}
+	}
+	b.Annotations[annCompletedAt] = completedAt
 	// Delete the per-build clone-token Secret immediately rather
 	// than waiting for the Job TTL (1h) to clean it up. The Secret
 	// carries a short-lived GitHub installation token; any pod with
@@ -2241,9 +2260,10 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, msg string) error {
 	// See markSucceeded for why spec.done=true is set — same operator
 	// initial-cache-sync resurrection bug.
+	completedAt := time.Now().UTC().Format(time.RFC3339)
 	patch := fmt.Sprintf(
 		`{"metadata":{"annotations":{%q:"failed",%q:%q,%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`,
-		annPhase, annCompletedAt, time.Now().UTC().Format(time.RFC3339),
+		annPhase, annCompletedAt, completedAt,
 		annMessage, msg,
 	)
 	_, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
@@ -2251,6 +2271,12 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 	if err != nil {
 		return fmt.Errorf("patch build failed: %w", err)
 	}
+	// Mirror onto the in-memory object for archiveRecord (see
+	// markSucceeded — the stale copy is what gets archived).
+	if b.Annotations == nil {
+		b.Annotations = map[string]string{}
+	}
+	b.Annotations[annCompletedAt] = completedAt
 	// Same rationale as markSucceeded: drop the clone-token Secret
 	// the moment the build is terminal instead of leaving it for the
 	// Job TTL to harvest.
