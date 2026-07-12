@@ -1,34 +1,45 @@
 # kuso
 
-Self-hosted, agent-native PaaS on real Kubernetes. Multi-node out of the box, Postgres-backed control plane, HA addons, and an HTTP/CLI/MCP surface designed to be driven by humans **and** AI agents.
+**Self-hosted, agent-native PaaS on real Kubernetes.**
+Push to deploy. Sleep when idle. Drive it from a dashboard, a CLI, an MCP server — or let your AI agent run the whole thing.
+
+[![Latest release](https://img.shields.io/github/v/release/sislelabs/kuso)](https://github.com/sislelabs/kuso/releases)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](./LICENSE)
+
+---
 
 ## What is kuso?
 
-kuso is a **single-tenant** Kubernetes-native PaaS — one team per cluster, like [Coolify](https://coolify.io/), but Kubernetes-native and agent-driven. Every operation in the UI is reachable from a typed CLI command, and every CLI command is callable from a first-party MCP server. Apps sleep when idle, autoscale when busy, and the platform scales horizontally inside one team's cluster — add nodes, add `kuso-server` replicas, point at managed Postgres, ship.
+kuso is a **single-tenant** Kubernetes-native PaaS — one team per cluster, like [Coolify](https://coolify.io/), but Kubernetes-native and built for the age of AI agents. Connect a GitHub repo, and every push builds, migrates, and rolls a zero-downtime deploy with a real Let's Encrypt cert. Idle services scale to zero and wake on the next request. Postgres, Redis, ClickHouse, Kafka-compatible Redpanda and more are one command away, with credentials injected straight into your pods.
 
-The platform is built for teams running serious workloads: real CRDs you can `kubectl edit`, structured outputs you can pipe, idempotent operations agents can drive, and an architecture that doesn't fall over when you stop being one person on one box. **Not a multi-tenant SaaS** — kuso doesn't enforce the strict cross-tenant isolation that a hosted PaaS needs. One team per install.
+Underneath, it's honest Kubernetes: `KusoProject`, `KusoService`, `KusoEnvironment`, `KusoAddon`, `KusoBuild`, `KusoCron`, and `KusoRun` are real CRDs. GitOps works. `kubectl edit` works. When the abstraction leaks, you're on familiar ground — not trapped inside someone's proprietary control plane.
+
+```bash
+kuso project create shop --repo https://github.com/you/shop --domain shop.example.com
+kuso project addon add shop db --kind postgres --version 16
+kuso project service add shop web --runtime dockerfile --port 3000
+kuso build trigger shop web        # first build only — every push after this auto-deploys
+kuso logs shop web -f
+```
 
 ## Why kuso?
 
-- **Real Kubernetes underneath.** `KusoProject`, `KusoService`, `KusoEnvironment`, `KusoAddon`, `KusoBuild`, `KusoCron` are real CRDs. GitOps works. `kubectl edit` works. When the abstraction leaks, you're on familiar ground.
-- **Agent-native, not bolted on.** Every UI action has a typed CLI command and a first-party MCP tool. Claude Code and other agents drive the platform end-to-end — provision a project, add a service, attach an addon, tail logs, troubleshoot.
-- **Built to scale up.** Postgres-backed control plane with `RollingUpdate` and multi-replica `kuso-server`. CloudNativePG-backed HA Postgres addons (3 replicas, ~30s automatic failover). Sentinel-backed HA Redis. Multi-node clusters with token-based bootstrap, label-driven placement, and auto-cordon on node failure.
-- **Self-healing, not just self-hosting.** kuso surfaces control-plane health instead of failing silently: a reconcile-health dashboard flags stuck helm releases and drift cluster-wide (`kuso health`), one-click remediation applies the data-safe fix, and `kuso doctor` diagnoses first-run setup (DNS, TLS, GitHub webhook delivery). Build failures come with an actionable hint, not a raw log dump.
-- **Zero-downtime self-update.** `make ship` cuts a GitHub release; every running instance pulls itself forward on the next updater tick. No ssh-from-laptop. CRD changes apply automatically.
-- **Honest about what's missing.** Multi-region active/active and edge runtimes aren't on the roadmap — you have Cloudflare and managed Postgres for that. We do the control plane and the cluster well; we don't pretend to be Vercel + AWS in a box.
-
-## Lifecycle at a glance
-
-- **Deploy:** connect a GitHub repo (or any public URL) → kuso detects the runtime, builds it, and gives it a live URL with a real cert.
-- **Sleep:** idle services scale to zero and wake on the next request via the activator — no cold-start cost when nobody's looking.
-- **Stop:** hard-stop a service (or a whole project) when you want it deliberately off — pinned to zero replicas, *not* woken by traffic. Visitors get a clean "service stopped" page until you start it again. `kuso project service stop <project> <service>` or the dashboard.
-- **Scale:** per-service HPA (min/max replicas), multi-node placement, HA addons.
+- **Agent-native, not bolted on.** Every UI action has a typed CLI command (~50 top-level commands, `-o json` everywhere) and a first-party MCP server. There's a [drop-in Claude Code skill](./skills/kuso/) that teaches an agent the full operating surface — deploy, debug, migrate, backup — so "fix the failing deploy" is a one-line request.
+- **Deploy = push.** GitHub webhooks drive builds; a merge to `main` *is* the production deploy. Release hooks run your migrations as a gated Job before the new image is promoted — a failed migration never takes down running pods.
+- **Environments that match how teams work.** PR previews with cloned, seeded, isolated databases. Long-lived `staging`/`qa` envs that track their own branch and auto-deploy on push. Per-env config overrides that can't rewrite production.
+- **Sleep, wake, stop.** Idle services scale to zero and wake on the next request via the activator. Payment-webhook paths can pin a service warm. Or hard-stop a service (or a whole project) — deliberately off, with a clean "stopped" page, until you say otherwise.
+- **Managed addons with batteries.** Postgres (optionally HA via CloudNativePG — 3 replicas, ~30s failover), Redis/Valkey, MongoDB, RabbitMQ, ClickHouse, Redpanda (Kafka API), NATS, S3-compatible storage, Meilisearch, Mailpit. Connection secrets auto-inject; per-service subscriptions keep DB creds out of your public frontend; scheduled and on-demand backups included.
+- **A marketplace for the usual suspects.** `kuso marketplace deploy n8n` — Gitea, Metabase, n8n, Plausible, Umami, Uptime Kuma, Vaultwarden, rendered into ordinary kuso services you manage like everything else.
+- **Self-healing, not just self-hosting.** `kuso doctor` diagnoses first-run setup (DNS, TLS, webhook delivery). `kuso health` flags stuck helm releases and drift cluster-wide, with one-command remediation. Failed builds come back with a classified cause and a suggested fix (`kuso build why`), not a raw log dump.
+- **Zero-downtime self-update.** `make ship` cuts a GitHub release; every running instance pulls itself forward on the next updater tick — image swap, operator roll, CRD apply, all in-cluster. No ssh-from-laptop, ever.
+- **Built to scale up.** Postgres-backed, stateless, multi-replica control plane. Multi-node clusters with token-based bootstrap (NAT-friendly), label-driven placement, auto-cordon on node failure. Point the control plane at managed Postgres when you outgrow the bundled one.
+- **Honest about what's missing.** Multi-region active/active, edge functions, a WAF, a Grafana clone — not on the roadmap. Cloudflare and managed Postgres already do those well. kuso does the control plane and the cluster, and does them properly.
 
 ## Install
 
-One-command install on a fresh Ubuntu 22/24 or Debian 12/13 box. Provisions k3s + traefik + cert-manager + Let's Encrypt + Postgres + the kuso operator/server/registry. ~5 minutes from `curl` to a logged-in dashboard.
+One command on a fresh Ubuntu 22/24 or Debian 12/13 box. Provisions k3s + Traefik + cert-manager + Let's Encrypt + Postgres + the kuso operator/server/registry. About 5 minutes from `curl` to a logged-in dashboard.
 
-**Before you run it**, point an A record at the box's public IP:
+**Before you run it**, point DNS at the box's public IP:
 
 ```
 kuso.example.com         A   <your-server-ip>
@@ -44,100 +55,80 @@ curl -sfL https://raw.githubusercontent.com/sislelabs/kuso/main/hack/install.sh 
 
 The script prints the admin password at the end. Log in at `https://kuso.example.com`.
 
-The install uses Let's Encrypt **prod** by default — your browser sees a real cert from the first load. The DNS pre-flight catches most misconfigs before any ACME call goes out, so the prod rate limit (50 certs/week per registered domain, 5 failed validations/hour) is rarely a problem in practice. If you're still iterating on DNS or doing repeated installs against the same domain, pass `--le-staging` to use the staging issuer (loose rate limits, but browser warns about the untrusted cert). See `--help` for all flags.
+Certificates come from Let's Encrypt **prod** by default — a real cert from the first page load. A DNS pre-flight catches most misconfigs before any ACME call, so rate limits rarely bite; if you're still iterating on DNS, pass `--le-staging`. The installer is **idempotent**: re-running preserves the admin password, JWT secret, Postgres credentials, and GitHub App config.
 
-The installer is **idempotent**: re-running it on the same box (e.g. with a newer `--server-version`) preserves the admin password, JWT secret, Postgres credentials, and GitHub App configuration, and skips any provisioning step that's already done. To roll the platform to a new tag, the supported path is `kuso upgrade` (see [Self-update](#self-update)) — re-running install is a fallback for when self-update is broken.
+### Connect GitHub (one click)
 
-GitHub-driven deploys (repo picker + push/PR webhooks) are one click:
+Open **Settings → GitHub → Create GitHub App**. kuso authors the entire app manifest — name, URLs, permissions, webhook events — GitHub creates it, and the credentials (private key included) flow back automatically. Nothing to copy-paste, no `.pem` to download. A manual paste-the-secrets path exists behind "set up manually" if you prefer.
 
-- Open **`https://kuso.example.com/settings/github`** → **Create GitHub App**. kuso authors the whole app manifest (name, URLs, permissions, webhook events), GitHub creates the app, and the credentials — including the private key — flow back automatically. No forms to fill, nothing to copy-paste, no `.pem` to download.
+Without GitHub connected, services still build from any public repo URL via `kuso build trigger` — the repo picker just stays empty.
 
-The manual path (paste App ID / secrets / private key, or `--github-wizard` at install time) is still there behind "set up manually" if you'd rather. Without GitHub connected at all, services still build via `kuso build trigger` against any public repo URL — the repo picker just stays empty.
+### Install the CLI
 
-## Install the CLI
-
-On your workstation:
+On your workstation (replace the host with your instance):
 
 ```bash
 curl -fsSL https://kuso.example.com/install-cli.sh | sh
-```
-
-(Replace `kuso.example.com` with your instance.) The script downloads a prebuilt binary for your platform from GitHub releases — or falls back to `go install` if you have Go on PATH and no release asset matches your OS/arch. Drops `kuso` into `~/.local/bin/` (no sudo) or `/usr/local/bin/` (run as root).
-
-Then point the CLI at your instance:
-
-```bash
 kuso login --api https://kuso.example.com -u admin
+kuso doctor          # verifies DNS, TLS, auth, and the GitHub webhook round-trip
 ```
 
-If you installed with `--le-staging` the cert isn't browser-trusted yet; prefix the command with `KUSO_INSECURE=1` until you flip to prod.
+### Set up your agent
 
-## Self-update
-
-kuso watches its own GitHub releases. When a new tag ships, every
-running instance picks it up:
-
-```bash
-kuso upgrade                     # update to latest
-kuso upgrade --version v0.7.13   # pin to a specific tag (rollback / hotfix)
-kuso upgrade --check             # see current/latest, don't apply
-```
-
-Or click **Settings → Updates** in the dashboard. The updater is an
-in-cluster Job that swaps the kuso-server image, rolls the operator
-when applicable, and applies any new CRDs. ~2 minutes typically.
-
-There's no rollout-from-laptop step in the release flow — releasing
-publishes a GH release, and every kuso install pulls itself forward
-on its own schedule.
-
-## Health & troubleshooting
-
-kuso tries to tell you what's wrong before you have to go digging:
-
-```bash
-kuso doctor          # workstation-side pre-flight: reachability, TLS,
-                     #   DNS, and the GitHub webhook round-trip
-kuso health          # cluster-wide reconcile health — flags stuck helm
-                     #   releases + drift across every addon/environment
-kuso health fix <r>  # apply the recommended data-safe remediation
-kuso build why <p> <s>   # explain a failed build with an actionable fix
-```
-
-The dashboard mirrors this: **Settings → Health** shows the same
-reconcile report with one-click remediation, failed builds surface a
-classified cause + suggested fix (not a raw log dump), and the addon
-status badge reflects the *real* helm-release state rather than assuming
-it's fine. Opt-in unattended auto-remediation (`KUSO_AUTO_REMEDIATE=1`
-on the server, off by default) applies the proven-safe fixes on a timer.
-
-## Scaling
-
-kuso is built to grow with you:
-
-- **Add nodes** in `Settings → Nodes → Add node`. Token-based bootstrap mints a single-use `curl … | sudo sh` one-liner; paste it on the new VM and the agent registers itself. Works behind NAT — no SSH config from kuso. Auto-cordon on node failure (NotReady > 5 min), auto-uncordon on recovery. Full details: **[docs/NODE_BOOTSTRAP.md](./docs/NODE_BOOTSTRAP.md)**.
-- **Scale `kuso-server`** by bumping the deployment replicas. The control plane is stateless above the database — Postgres is the source of truth, `RollingUpdate` is the deploy strategy.
-- **Run HA addons** with `KusoAddon.spec.ha = true` — CloudNativePG for Postgres (3 replicas, automatic failover), Redis Sentinel for Redis. See **[docs/ADDON_HA.md](./docs/ADDON_HA.md)**.
-- **Place workloads** with the label-driven placement editor. `kuso.sislelabs.com/<key>` labels on nodes, AND-of-labels selectors on services and addons. Build node pools, GPU pools, region pools — it's just labels.
-- **Point at managed Postgres** by replacing the `kuso-postgres-conn` Secret's `dsn` with your RDS / Crunchy Bridge / Supabase URI. The bundled in-cluster Postgres is for installs that want a single-binary stack; bring your own when you outgrow it.
-
-## Backups
-
-The control-plane Postgres database holds users, sessions, audit logs, GitHub App config, and instance secrets. Backup is enabled by default — `kuso backup` pulls a consistent dump from your workstation. See **[docs/BACKUP_RESTORE.md](./docs/BACKUP_RESTORE.md)** for the daily-snapshot pattern, recovery paths (rollback, corruption, host loss), and addon data backups. Read this once before putting anything important on the box.
-
-## Editing live deployments safely
-
-Some spec edits on a running service are free (env vars, scale), some trigger a rolling restart (port, image), some hit Let's Encrypt rate limits (TLS hosts), and a few will orphan data if you're not careful (volumes). The contract is in **[docs/EDIT_SAFETY.md](./docs/EDIT_SAFETY.md)** — per-field, with the blast radius spelled out. Worth a read before mass-editing live envs from a script or the CLI.
-
-## Claude Code skill
-
-Drop a kuso skill into any project deployed here so Claude knows the CLI surface, the deploy lifecycle, the `${{ ... }}` env-var ref syntax, and the standard debug playbook. From your project repo root:
+From any project repo deployed on kuso:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/sislelabs/kuso/main/skills/kuso/install.sh | bash
 ```
 
-That writes `.claude/skills/kuso/SKILL.md`; restart Claude Code and `/skills` will show **kuso** active. See **[skills/kuso/](./skills/kuso/)** for the contents and update flow.
+That drops the [kuso Claude Code skill](./skills/kuso/) into `.claude/skills/`, teaching the agent the CLI surface, the deploy lifecycle, the `${{ ... }}` env-reference syntax, and the standard debugging playbook. Prefer MCP? `mcp/` ships a first-party [MCP server](./mcp/) with 16 intent-grouped tools and a `--read-only` mode.
+
+## A tour in ten commands
+
+```bash
+kuso status shop                                  # what's running, where, on which build
+kuso logs shop web -f                             # stream logs; `logs search --q "..."` for the archive
+kuso build why shop web                           # classified failure cause + suggested fix
+kuso env set shop web FEATURE_X=1                 # rolls a new pod; per-env with --env staging
+kuso environment add shop web staging --branch develop --seed-from production
+kuso db sql shop db "SELECT count(*) FROM users"  # query an addon without exposing it
+kuso addon-backup download shop db                # on-demand pg_dump to your laptop
+kuso run shop api -- ./bin/console               # one-shot Job with the service's env
+kuso marketplace deploy uptime-kuma --project tools
+kuso upgrade --check                              # is a newer kuso out?
+```
+
+Everything supports `--help` with examples and `-o json` for scripting.
+
+## How a deploy flows
+
+```
+git push → GitHub webhook → KusoBuild CR → kaniko build → image pushed
+   → release hook Job (your migrations — failure blocks promotion)
+   → env image tag patched → operator reconciles
+   → rolling update (maxSurge 1, maxUnavailable 0) → zero downtime
+```
+
+Previews follow the same flow per PR, with their own cloned database, and are torn down on merge.
+
+## Migrating from somewhere else?
+
+- **docker-compose:** `kuso import compose docker-compose.yml` converts services and datastores into kuso resources — dry-run by default, with a report of anything that has no equivalent.
+- **Coolify v4:** `kuso migrate coolify` walks an existing instance.
+
+## Operations
+
+| Concern | Where to look |
+| --- | --- |
+| Backups (control plane + addon data, DR paths) | [docs/BACKUP_RESTORE.md](./docs/BACKUP_RESTORE.md) |
+| External managed DBs (Neon / Supabase / RDS) with kuso-run backups | [docs/EXTERNAL_DB_BACKUPS.md](./docs/EXTERNAL_DB_BACKUPS.md) |
+| What's safe to edit on a live deployment (per-field blast radius) | [docs/EDIT_SAFETY.md](./docs/EDIT_SAFETY.md) |
+| Adding nodes, node pools, placement labels | [docs/NODE_BOOTSTRAP.md](./docs/NODE_BOOTSTRAP.md) · [docs/BUILD_NODE_POOL.md](./docs/BUILD_NODE_POOL.md) |
+| HA addons (CloudNativePG, Redis Sentinel) | [docs/ADDON_HA.md](./docs/ADDON_HA.md) |
+| Sharing one Postgres server across projects | [docs/SHARED_ADDONS.md](./docs/SHARED_ADDONS.md) |
+| Prometheus metrics + what to alert on | [docs/METRICS.md](./docs/METRICS.md) |
+| Every HTTP endpoint, request/response shapes | [docs/WORKFLOWS.md](./docs/WORKFLOWS.md) |
+| GitHub App manual setup | [docs/GITHUB_APP_SETUP.md](./docs/GITHUB_APP_SETUP.md) |
 
 ## Repo layout
 
@@ -145,11 +136,12 @@ That writes `.claude/skills/kuso/SKILL.md`; restart Claude Code and `/skills` wi
 | ------------ | ------------------------------------------------------------------------- |
 | `server-go/` | Go backend + REST API. Postgres-backed. Serves the embedded SPA from `internal/web`. Also runs the **activator** (scale-to-zero / stopped-service proxy) in `--activator` mode. |
 | `web/`       | Next.js 16 frontend. Built into `server-go/internal/web/dist`.            |
-| `operator/`  | Kubernetes operator that reconciles `Kuso{Project,Service,...}` CRs.     |
+| `operator/`  | Kubernetes operator that reconciles the `Kuso*` CRs.                      |
 | `cli/`       | `kuso` command-line tool (Go, Cobra).                                     |
 | `mcp/`       | `kuso-mcp` Model Context Protocol server (Go).                            |
-| `deploy/`    | Production manifests applied to the test cluster.                         |
-| `docs/`      | Architecture + workflow docs.                                              |
+| `skills/`    | The published Claude Code skill.                                          |
+| `deploy/`    | Production manifests applied at install time.                             |
+| `docs/`      | Architecture + operations docs.                                           |
 
 ## License
 
