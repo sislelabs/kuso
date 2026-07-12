@@ -309,10 +309,19 @@ var logDetectors = []logDetector{
 	// CANCELLED instead of paging @here. Kept ahead of KindRegistryAuth so
 	// a "couldn't find remote ref" never reads as a credentials problem.
 	{
+		// Regex is deliberately NARROW: only phrases git emits when the
+		// FETCH of the target ref fails. Broader git plumbing errors
+		// ("did not match any file(s) known to git", "invalid/ambiguous
+		// reference/argument", "reference broken") were removed — a user's
+		// own build step (RUN git checkout / git describe / a corrupted
+		// checkout) prints those, and matching them would silently CANCEL a
+		// genuine build failure and suppress its page. These alternatives
+		// are specific to fetching the remote ref the build was told to
+		// build; a normal RUN step does not produce them.
 		kind:      KindCloneRefMissing,
 		tab:       TabLogs,
 		buildTime: true,
-		re:        regexp.MustCompile(`(?i)couldn't find remote ref|remote branch .* not found|fatal: reference is not a tree|did not match any file\(s\) known to git|fatal: (?:invalid|ambiguous) (?:reference|argument)|reference broken|fatal: .*: no such ref|unadvertised object|wanted ref .* not found`),
+		re:        regexp.MustCompile(`(?i)couldn't find remote ref|remote branch \S+ not found|fatal: reference is not a tree:|unadvertised object|wanted ref \S+ not found|fatal: couldn't find remote ref`),
 		summarize: func(line string) string {
 			return "The branch or commit this build targeted no longer exists — it was deleted or force-pushed while the build was queued. No action needed."
 		},

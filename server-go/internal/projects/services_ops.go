@@ -1403,6 +1403,28 @@ func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, e
 	if err != nil {
 		return err
 	}
+	// Cross-project ownership guard on every emitted secretKeyRef. This is
+	// the critical check for the AllowPending path (declarative `kuso
+	// apply`): a `${{ beta-pg.PASSWORD }}` ref that doesn't resolve to a
+	// local addon is rewritten to a SPECULATIVE `beta-pg-conn` secretKeyRef
+	// (varrefs.go SecretName = name+"-conn", no project prefix) — which is
+	// exactly another project's real conn secret. Without this an editor
+	// could apply a kuso.yaml that reads project beta's DB password at pod
+	// runtime, bypassing the guard already on the interactive SetEnvVar
+	// paths. Validate the resolved output regardless of AllowPending so the
+	// resolved path is belt-and-braces too.
+	for _, ev := range rewritten {
+		if ev.ValueFrom == nil {
+			continue
+		}
+		refName, _ := secretRefNameOf(ev.ValueFrom)
+		if refName == "" {
+			continue
+		}
+		if verr := s.validateSecretRefName(ctx, project, service, refName); verr != nil {
+			return verr
+		}
+	}
 	// RMW under optimistic concurrency (WithRetry) — the in-process
 	// service lock doesn't span replicas, so fetch-mutate-update so a
 	// concurrent spec edit on another pod isn't clobbered.

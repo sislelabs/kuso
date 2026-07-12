@@ -26,6 +26,12 @@ func TestParseVarRef(t *testing.T) {
 		{"two refs", "${{ a.A }} ${{ b.B }}", VarRef{}, false, ErrCompositeVarRef},
 		{"lowercase key invalid pattern", "${{ pg.url }}", VarRef{}, false, ErrCompositeVarRef},
 		{"key starting with digit", "${{ pg.1FOO }}", VarRef{}, false, ErrCompositeVarRef},
+		// Unclosed "${{" prefix is a LITERAL value, not a ref (no closing
+		// }}). The config-export mask relies on ok=false here so such a
+		// value is masked for non-admins rather than leaked by a naive
+		// HasPrefix("${{") skip.
+		{"unclosed ref prefix is literal", "${{ mypassword", VarRef{}, false, nil},
+		{"unclosed ref no space is literal", "${{secret", VarRef{}, false, nil},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

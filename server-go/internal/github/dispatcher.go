@@ -266,14 +266,16 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 	// in-flight builds for this branch (they'd otherwise clone a vanished
 	// ref, fail, and page @here) and return before the build fan-out.
 	if p.Deleted || isZeroSHA(p.After) {
-		for _, proj := range projects {
-			if !projectTracksRepo(ctx, d, &proj, repoFullName) {
-				continue
-			}
-			if n, cerr := d.Builds.CancelBuildsForRef(ctx, proj.Name, branch, "ref deleted (branch deleted)"); cerr != nil {
-				d.Logger.Warn("cancel builds on branch delete", "project", proj.Name, "branch", branch, "err", cerr)
-			} else if n > 0 {
-				d.Logger.Info("branch deleted → cancelled in-flight builds", "project", proj.Name, "branch", branch, "cancelled", n)
+		if d.Builds != nil { // guard matches the rest of this file's convention
+			for _, proj := range projects {
+				if !projectTracksRepo(ctx, d, &proj, repoFullName) {
+					continue
+				}
+				if n, cerr := d.Builds.CancelBuildsForRef(ctx, proj.Name, branch, "ref deleted (branch deleted)"); cerr != nil {
+					d.Logger.Warn("cancel builds on branch delete", "project", proj.Name, "branch", branch, "err", cerr)
+				} else if n > 0 {
+					d.Logger.Info("branch deleted → cancelled in-flight builds", "project", proj.Name, "branch", branch, "cancelled", n)
+				}
 			}
 		}
 		return nil

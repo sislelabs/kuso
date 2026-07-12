@@ -235,17 +235,25 @@ func TestClassify_BuildDetectors(t *testing.T) {
 
 // TestCloneRefMissing_DoesNotSwallowAuthFailures guards the narrowness of
 // the clone-ref-missing detector: genuine clone failures (bad credentials,
-// repo not found) must NOT be misclassified as ref-missing, or they'd be
-// silently cancelled instead of failing loudly with their real cause.
-func TestCloneRefMissing_DoesNotSwallowAuthFailures(t *testing.T) {
-	authLines := [][]string{
+// repo not found) AND git plumbing errors a user's own build step can emit
+// must NOT be misclassified as ref-missing, or they'd be silently cancelled
+// instead of failing loudly with their real cause.
+func TestCloneRefMissing_DoesNotSwallowRealFailures(t *testing.T) {
+	realFailures := [][]string{
+		// Auth / repo-not-found (real clone problems).
 		{"fatal: Authentication failed for 'https://github.com/x/y.git/'"},
 		{"remote: Repository not found.", "fatal: repository 'https://github.com/x/y.git/' not found"},
 		{"fatal: could not read Username for 'https://github.com': terminal prompts disabled"},
+		// Git plumbing phrases a USER'S OWN build step legitimately prints
+		// — these previously false-matched and would have silently
+		// cancelled a real failure. Must classify as anything BUT ref-missing.
+		{"RUN git checkout config.yml", "error: pathspec 'config.yml' did not match any file(s) known to git"},
+		{"RUN git describe --tags", "fatal: No names found, cannot describe anything.", "fatal: ambiguous argument 'HEAD'"},
+		{"error: object file .git/objects/ab/cd is empty", "fatal: loose object is corrupt", "reference broken"},
 	}
-	for _, ls := range authLines {
+	for _, ls := range realFailures {
 		if got := Classify(ls, Signal{}); got.Kind == KindCloneRefMissing {
-			t.Errorf("auth/repo-missing line misclassified as ref-missing: %v", ls)
+			t.Errorf("real failure misclassified as ref-missing (would be silently cancelled): %v → %v", ls, got.Kind)
 		}
 	}
 }

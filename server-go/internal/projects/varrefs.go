@@ -220,15 +220,15 @@ type RewriteOpts struct {
 // RewriteEnvVar maps a wire-shape EnvVar through the var-ref parser.
 //
 // Resolution order when the value is a pure `${{ name.KEY }}` ref:
-//   1. If KEY is a service-ref key (HOST/PORT/URL/INTERNAL_URL) AND
-//      svcResolver finds <name> as a service in this project, expand
-//      to a literal Value (DNS / port / url string).
-//   2. Else if addonResolver finds <name> as an addon, emit a
-//      secretKeyRef pointing at <addon>-conn / KEY.
-//   3. Else if opts.AllowPending: emit a speculative secretKeyRef
-//      that resolves once the addon's conn Secret exists.
-//   4. Else: ErrUnknownVarRef. We refuse to silently write a broken
-//      reference.
+//  1. If KEY is a service-ref key (HOST/PORT/URL/INTERNAL_URL) AND
+//     svcResolver finds <name> as a service in this project, expand
+//     to a literal Value (DNS / port / url string).
+//  2. Else if addonResolver finds <name> as an addon, emit a
+//     secretKeyRef pointing at <addon>-conn / KEY.
+//  3. Else if opts.AllowPending: emit a speculative secretKeyRef
+//     that resolves once the addon's conn Secret exists.
+//  4. Else: ErrUnknownVarRef. We refuse to silently write a broken
+//     reference.
 //
 // When the resolvers are nil, all refs fall through to the
 // unvalidated addon path. Production wires real resolvers; the
@@ -380,10 +380,17 @@ func (s *Service) validateSecretRefName(ctx context.Context, project, service, n
 	if name == instanceSharedSecretName || name == project+"-shared" {
 		return nil
 	}
-	// This service's own secret. Accept both the FQN and short service
-	// name forms that callers pass.
+	// This service's own secret(s). Accept the service secret
+	// (<P>-<SVC>-secrets) AND any env-scoped secret
+	// (<P>-<SVC>-<env>-secrets, e.g. <P>-<SVC>-staging-secrets) — both are
+	// owned by this service. We match by the <P>-<SVC>- prefix + -secrets
+	// suffix rather than enumerating env names, since the env segment is a
+	// slugified free-form scope (see kube.EnvSecretName). Accept both the
+	// FQN and short service-name forms callers pass.
 	svcShort := strings.TrimPrefix(service, project+"-")
-	if name == project+"-"+svcShort+"-secrets" {
+	svcSecretPrefix := project + "-" + svcShort + "-"
+	if name == project+"-"+svcShort+"-secrets" ||
+		(strings.HasPrefix(name, svcSecretPrefix) && strings.HasSuffix(name, "-secrets")) {
 		return nil
 	}
 	if s.AddonConnSecrets != nil {
@@ -404,3 +411,23 @@ func (s *Service) validateSecretRefName(ctx context.Context, project, service, n
 // project may reference. Kept as a const so the validator and the
 // existing ref-rewrite paths agree on the exact name.
 const instanceSharedSecretName = "kuso-instance-shared"
+
+// secretRefNameOf extracts (name, key) from a valueFrom map shaped
+// {"secretKeyRef": {"name": ..., "key": ...}}. Returns ("", "") when the
+// map isn't a secretKeyRef (e.g. a configMapKeyRef or a malformed entry).
+func secretRefNameOf(valueFrom map[string]any) (name, key string) {
+	if valueFrom == nil {
+		return "", ""
+	}
+	skrRaw, ok := valueFrom["secretKeyRef"]
+	if !ok {
+		return "", ""
+	}
+	skr, ok := skrRaw.(map[string]any)
+	if !ok {
+		return "", ""
+	}
+	name, _ = skr["name"].(string)
+	key, _ = skr["key"].(string)
+	return name, key
+}

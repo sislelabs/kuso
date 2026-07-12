@@ -591,7 +591,16 @@ func (h *ProjectsHandler) Spec(w http.ResponseWriter, r *http.Request) {
 	if f != nil && !callerCanReadSecrets(ctx, h.DB, project) {
 		for si := range f.Services {
 			for k, ev := range f.Services[si].Env {
-				if ev.Generate != "" || strings.HasPrefix(strings.TrimSpace(ev.Value), "${{") {
+				if ev.Generate != "" {
+					continue // a generator directive, not a value
+				}
+				// Skip ONLY a valid, fully-closed ${{ name.KEY }} reference —
+				// that's a pointer, not a secret value. A literal that merely
+				// STARTS with "${{" but isn't a closed ref (e.g. "${{ oops")
+				// is a real value stored verbatim and MUST be masked; a bare
+				// HasPrefix("${{") check would leak it. ParseVarRef returns
+				// ok=true only for the closed pure-ref form.
+				if _, isRef, _ := projects.ParseVarRef(strings.TrimSpace(ev.Value)); isRef {
 					continue
 				}
 				if ev.Value != "" {

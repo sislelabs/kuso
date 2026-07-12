@@ -350,6 +350,76 @@ func TestSetEnvVar_RejectsForeignSecretRef(t *testing.T) {
 	}
 }
 
+// TestSetEnvPending_RejectsForeignAddonRef closes the apply-path variant
+// of the cross-project theft vector: `kuso apply` uses AllowPending, which
+// rewrites an unresolved `${{ beta-pg.PASSWORD }}` into a speculative
+// `beta-pg-conn` secretKeyRef — another project's real conn secret. The
+// SetEnvWithOpts ownership guard must reject it.
+func TestSetEnvPending_RejectsForeignAddonRef(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedAddon("alpha", "pg", "postgres"),
+	)
+	// alpha owns only alpha-pg-conn.
+	s.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) {
+		return []string{"alpha-pg-conn"}, nil
+	}
+	// A pending ref to project beta's addon → speculative beta-pg-conn.
+	err := s.SetEnvPending(context.Background(), "alpha", "web", []EnvVar{
+		{Name: "STOLEN", Value: "${{ beta-pg.PASSWORD }}"},
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("apply-path foreign addon ref must be rejected, got %v", err)
+	}
+}
+
+// TestSetEnvPending_AllowsOwnAddonRef proves the guard doesn't break the
+// legitimate case: a pending ref to THIS project's declared addon passes.
+func TestSetEnvPending_AllowsOwnAddonRef(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedAddon("alpha", "pg", "postgres"),
+	)
+	s.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) {
+		return []string{"alpha-pg-conn"}, nil
+	}
+	if err := s.SetEnvPending(context.Background(), "alpha", "web", []EnvVar{
+		{Name: "DB", Value: "${{ pg.URL }}"},
+	}); err != nil {
+		t.Fatalf("own-project addon ref must be allowed, got %v", err)
+	}
+}
+
+// TestSetEnvVar_AcceptsEnvScopedSecret proves the ownership guard doesn't
+// reject a legitimate env-scoped secret (<P>-<SVC>-<env>-secrets), which is
+// owned by this service — an earlier version only accepted the plain
+// <P>-<SVC>-secrets form.
+func TestSetEnvVar_AcceptsEnvScopedSecret(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	s.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) {
+		return []string{"alpha-pg-conn"}, nil
+	}
+	// alpha-web-staging-secrets is this service's env-scoped secret.
+	if err := s.validateSecretRefName(context.Background(), "alpha", "web", "alpha-web-staging-secrets"); err != nil {
+		t.Fatalf("env-scoped own secret must be allowed, got %v", err)
+	}
+	// But another service's secret must still be rejected.
+	if err := s.validateSecretRefName(context.Background(), "alpha", "web", "alpha-api-secrets"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("another service's secret must be rejected, got %v", err)
+	}
+}
+
 func TestUnsetEnvVar_RemovesByName(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t,
