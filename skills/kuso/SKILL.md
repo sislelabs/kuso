@@ -29,6 +29,7 @@ This skill is current to **v0.18.115**. Run `kuso version` to confirm what's on 
 - **Environment** = one running instance of a service. Each service auto-gets a `production` env. PR previews + named clones (`staging`, `client-demo`) are extra envs.
 - **Addon** = a managed datastore. Each addon writes a `<project>-<addon>-conn` Secret that kuso injects into a service via `envFromSecrets` — you do NOT wire `DATABASE_URL` etc. by hand; they appear in `process.env`. By default (legacy / `subscribedAddons` unset) every addon mounts into every service. Set a per-service subscription so a public frontend doesn't carry `DATABASE_URL`/`REDIS_URL` — see "Env vars & secrets".
 - **Build** = a kaniko Job that produces an image and patches the env's `image.tag`. One build per `(service, ref)`. Helm-operator rolls the new pod.
+- **Deploy = push.** kuso auto-deploys on `git push` to a service's tracked branch (default `main`): the GitHub webhook fires a build, which promotes and rolls the new pod with zero manual steps. **A merge to `main` is already a production deploy — you do NOT run anything to ship it.** `kuso build trigger` / `kuso redeploy` are only for *out-of-band* rebuilds (rebuild without a new commit, deploy a non-tracked branch/ref, or re-run after a transient build failure) — not part of the normal ship flow. (PR-preview envs deploy on PR push; see "Preview environments".)
 - **Release hook** (v0.16+) = an optional Job that runs **before** the new image is promoted. Heroku-style migration phase. Set via `spec.release.command`.
 - **kuso.yml** = optional config-as-code at repo root. **See "Config-as-code caveats" below before using `kuso apply`.**
 
@@ -117,7 +118,9 @@ TOKEN=$(awk '{print $2}' ~/.kuso/credentials.yaml)     # addons: PUT (no CLI ver
 curl -fsS -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -d '{"addons":[]}' https://kuso.<domain>/api/projects/papelito/services/web/subscribed-addons
 
-# 6. Trigger first build (only needed for repo-based runtimes)
+# 6. Trigger the FIRST build (repo-based runtimes only). One-time bootstrap:
+#    there's no commit-since-creation to have fired a webhook yet. After this,
+#    every push to the tracked branch auto-builds+deploys — you won't run this again.
 kuso build trigger papelito web
 
 # Watch it
@@ -481,10 +484,11 @@ kuso logs search <project> [service] --q "<query>" [--since 1h] [--limit 100]
                                                 # full-text search the persisted archive
                                                 # query is the --q FLAG, NOT positional
 
-# Builds
+# Builds  (NB: a normal `git push`/merge to the tracked branch already deploys —
+#          these are for OUT-OF-BAND rebuilds, not the normal ship flow.)
 kuso build list <project> <service>             # newest first; status = pending|running|succeeded|failed|release-failed
-kuso build trigger <project> <service>          # build the project's default branch
-kuso redeploy <project> <service>               # alias; --branch <name> or --ref <sha>
+kuso build trigger <project> <service>          # manual rebuild of the default branch (rebuild w/o a new commit, or after a transient failure)
+kuso redeploy <project> <service>               # alias; --branch <name> or --ref <sha> to deploy a non-tracked branch/ref
 kuso build rollback <project> <service> <id>    # re-point production at an older successful build
 
 # Env vars — ALWAYS env set (sensitive or not). NEVER `kuso secret set`.
@@ -731,10 +735,11 @@ get projects                  list every project
 status <p>                    project rollup (services, URLs, replicas, builds)
 logs <p> <s> [-f]             tail or stream pod logs
 logs search <p> <s> --q "..." search persisted archive (note: --q FLAG)
+# NB: push/merge to the tracked branch AUTO-deploys — the build cmds below are out-of-band.
 build list <p> <s>            build history; status incl release-failed
-build trigger <p> <s>         manual build (runs release hook if configured)
+build trigger <p> <s>         MANUAL rebuild w/o a new commit (runs release hook); not needed for a normal push
 build rollback <p> <s> <id>   re-point production at older successful build
-redeploy <p> <s>              same as build trigger; --branch / --ref
+redeploy <p> <s>              same as build trigger; --branch / --ref to ship a non-tracked ref
 run <p> <s> -- cmd…           one-shot Job (NOTE: -- separator)
 shell <p> <s>                 kubectl exec into a pod
 env list/set/unset            env vars (K=V; --env <n> for per-env override). USE FOR ALL VARS.
