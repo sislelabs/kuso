@@ -7,6 +7,7 @@ package builds
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -26,6 +27,16 @@ import (
 // history rather than a hole. Cancelling a finished build is a no-op
 // 400 — the Job's already gone and the phase is fixed.
 func (s *Service) Cancel(ctx context.Context, project, service, buildName string) error {
+	return s.cancelBuild(ctx, project, buildName, "cancelled by user")
+}
+
+// cancelBuild is the shared cancel core behind the user-initiated
+// Cancel, the webhook ref-deletion cleanup (CancelBuildsForRef), and the
+// poller's clone-ref-missing diversion. `reason` is stored as the build
+// message and shown in `kuso build list` / `build why`. All cancel paths
+// emit build.cancelled at severity=info — never the @here build.failed —
+// so a vanished ref never pages the on-call.
+func (s *Service) cancelBuild(ctx context.Context, project, buildName, reason string) error {
 	if buildName == "" {
 		return fmt.Errorf("%w: empty build name", ErrInvalid)
 	}
@@ -55,8 +66,8 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 	// values level is the only way to make cancel idempotent against
 	// future operator catch-ups.
 	patch := fmt.Sprintf(
-		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:"cancelled by user"},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true,"image":{"tag":""}}}`,
-		annPhase, annCompletedAt, now, annMessage,
+		`{"metadata":{"annotations":{%q:"cancelled",%q:%q,%q:%q},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true,"image":{"tag":""}}}`,
+		annPhase, annCompletedAt, now, annMessage, reason,
 	)
 	if _, perr := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
 		Patch(ctx, buildName, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {
@@ -90,6 +101,48 @@ func (s *Service) Cancel(ctx context.Context, project, service, buildName string
 		})
 	}
 	return nil
+}
+
+// CancelBuildsForRef cancels every in-flight (queued / pending / running)
+// build in a project whose branch matches `branch`, transitioning them to
+// cancelled with the given reason instead of letting them clone a vanished
+// ref and fail. Called from the webhook dispatcher when a PR is
+// closed/merged or a branch is deleted. Returns the number cancelled.
+// Best-effort: a per-build cancel error is logged, not propagated, so one
+// stuck build doesn't block cancelling the rest.
+func (s *Service) CancelBuildsForRef(ctx context.Context, project, branch, reason string) (int, error) {
+	if s.Kube == nil || branch == "" {
+		return 0, nil
+	}
+	ns := s.nsFor(ctx, project)
+	raw, err := s.Kube.ListKusoBuildsByLabels(ctx, ns, map[string]string{
+		kube.LabelProject: project,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("list builds for ref cancel: %w", err)
+	}
+	n := 0
+	for i := range raw {
+		b := &raw[i]
+		// Only in-flight builds — a `build-state=done` label means it
+		// already reached a terminal phase (succeeded/failed/cancelled).
+		if b.Labels["kuso.sislelabs.com/build-state"] == "done" {
+			continue
+		}
+		if b.Spec.Branch != branch {
+			continue
+		}
+		if cerr := s.cancelBuild(ctx, project, b.Name, reason); cerr != nil {
+			// Already-terminal races are expected and benign.
+			if errors.Is(cerr, ErrInvalid) {
+				continue
+			}
+			slog.Default().Warn("builds: cancel for ref", "build", b.Name, "branch", branch, "err", cerr)
+			continue
+		}
+		n++
+	}
+	return n, nil
 }
 
 // Rollback re-points an env at a previous build's image tag. The

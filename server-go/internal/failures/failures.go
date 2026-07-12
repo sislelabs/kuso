@@ -50,6 +50,14 @@ const (
 	KindDockerfileNotFound    Kind = "dockerfile_not_found"    // the configured Dockerfile path doesn't exist in the repo/subdir
 	KindBuildOOM              Kind = "build_oom"               // the build pod (not the app) ran out of memory
 	KindRegistryAuth          Kind = "registry_auth"           // pull/push to a registry denied (base image or cache)
+	// KindCloneRefMissing is the clone init container failing because the
+	// ref it was told to build no longer exists on the remote — the branch
+	// was deleted or force-pushed while the build sat queued. This is NOT a
+	// real failure (nothing is broken; the commit is simply unreachable), so
+	// the poller diverts builds classified this way to CANCELLED rather than
+	// FAILED and suppresses the @here page. Detected from the clone git
+	// fatal; distinct from KindRegistryAuth (a genuine credential problem).
+	KindCloneRefMissing Kind = "clone_ref_missing"
 )
 
 // Tab is the overlay tab slug the UI should open on. Kept as a string
@@ -291,6 +299,30 @@ var logDetectors = []logDetector{
 	// line as well as the specific root cause, and we want the specific,
 	// actionable one to win. Each carries a Remediation because the fix
 	// lives in the user's repo, not kuso settings.
+
+	// Clone target ref is gone. The clone init container was told to fetch
+	// a specific branch/SHA that no longer exists on the remote — the
+	// branch was deleted (squash-merge + delete) or force-pushed while the
+	// build sat queued behind the concurrency limit. git prints one of a
+	// handful of distinctive fatals. This MUST win over the generic
+	// exit-128 / "build failed" lines so the poller can divert the build to
+	// CANCELLED instead of paging @here. Kept ahead of KindRegistryAuth so
+	// a "couldn't find remote ref" never reads as a credentials problem.
+	{
+		kind:      KindCloneRefMissing,
+		tab:       TabLogs,
+		buildTime: true,
+		re:        regexp.MustCompile(`(?i)couldn't find remote ref|remote branch .* not found|fatal: reference is not a tree|did not match any file\(s\) known to git|fatal: (?:invalid|ambiguous) (?:reference|argument)|reference broken|fatal: .*: no such ref|unadvertised object|wanted ref .* not found`),
+		summarize: func(line string) string {
+			return "The branch or commit this build targeted no longer exists — it was deleted or force-pushed while the build was queued. No action needed."
+		},
+		remediate: func(line string, tail []string) *Remediation {
+			return &Remediation{
+				Title:  "Nothing to fix — the ref was deleted",
+				Detail: "The branch was deleted or force-pushed (e.g. a squash-merge that removed the PR branch) while this build sat in the queue, so the clone step couldn't find the commit. This is expected and safe to ignore; the build is marked cancelled, not failed.",
+			}
+		},
+	},
 
 	// pnpm/npm patch file missing from the build context. The package
 	// manager reads `patchedDependencies` from package.json, tries to

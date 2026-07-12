@@ -136,7 +136,9 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event string, body []byte) (e
 // map[string]any) keeps misuse errors out at compile time.
 type pushEvent struct {
 	Ref        string `json:"ref"`
-	After      string `json:"after"` // head SHA of the push (40-char hex)
+	After      string `json:"after"`   // head SHA of the push (40-char hex); all-zeros on a branch delete
+	Deleted    bool   `json:"deleted"` // true when this push deleted the ref
+	Created    bool   `json:"created"`
 	Repository struct {
 		FullName      string `json:"full_name"`
 		DefaultBranch string `json:"default_branch"`
@@ -257,6 +259,24 @@ func (d *Dispatcher) onPush(ctx context.Context, body []byte) error {
 	projects, err := d.Kube.ListKusoProjects(ctx, d.Namespace)
 	if err != nil {
 		return fmt.Errorf("list projects: %w", err)
+	}
+
+	// Branch deletion: GitHub sends deleted=true and an all-zeros "after"
+	// SHA. There is nothing to build — the ref is gone — so cancel any
+	// in-flight builds for this branch (they'd otherwise clone a vanished
+	// ref, fail, and page @here) and return before the build fan-out.
+	if p.Deleted || isZeroSHA(p.After) {
+		for _, proj := range projects {
+			if !projectTracksRepo(ctx, d, &proj, repoFullName) {
+				continue
+			}
+			if n, cerr := d.Builds.CancelBuildsForRef(ctx, proj.Name, branch, "ref deleted (branch deleted)"); cerr != nil {
+				d.Logger.Warn("cancel builds on branch delete", "project", proj.Name, "branch", branch, "err", cerr)
+			} else if n > 0 {
+				d.Logger.Info("branch deleted → cancelled in-flight builds", "project", proj.Name, "branch", branch, "cancelled", n)
+			}
+		}
+		return nil
 	}
 	for _, proj := range projects {
 		// Repo matching is now PER-SERVICE (multi-repo projects): a
@@ -544,6 +564,20 @@ func (d *Dispatcher) onPullRequest(ctx context.Context, body []byte) error {
 				d.ensureReviewerSurface(ctx, &proj, pr)
 			}
 		case "closed":
+			// Cancel any in-flight preview builds for this PR's head ref
+			// FIRST. A PR closed/merged with builds still queued behind the
+			// concurrency limit would otherwise clone a branch that's about
+			// to be (or already) deleted, fail, and page @here for a
+			// non-event. Preview builds carry Branch=pr head ref (see
+			// ensurePreviewEnv), so cancel by that branch. Cancelled builds
+			// emit build.cancelled (info), never build.failed (@here).
+			if d.Builds != nil {
+				if n, cerr := d.Builds.CancelBuildsForRef(ctx, proj.Name, pr.PullRequest.Head.Ref, "ref deleted (PR closed)"); cerr != nil {
+					d.Logger.Warn("cancel builds on PR close", "project", proj.Name, "pr", pr.Number, "err", cerr)
+				} else if n > 0 {
+					d.Logger.Info("PR closed → cancelled in-flight builds", "project", proj.Name, "pr", pr.Number, "branch", pr.PullRequest.Head.Ref, "cancelled", n)
+				}
+			}
 			for i := range services.Items {
 				// Always attempt deletion on close — even for opted-out
 				// services. If the user toggled the opt-out on after a
@@ -658,6 +692,40 @@ func serviceEffectiveRepo(u *unstructured.Unstructured, proj *kube.KusoProject) 
 func serviceRepoMatches(u *unstructured.Unstructured, proj *kube.KusoProject, repoFullName string) bool {
 	repoURL, _ := serviceEffectiveRepo(u, proj)
 	return repoMatches(repoURL, repoFullName)
+}
+
+// isZeroSHA reports whether s is git's all-zeros object id, which GitHub
+// sends as the push "after" SHA when a branch is DELETED (and as "before"
+// when a branch is created). Accepts both the 40-char SHA-1 and 64-char
+// SHA-256 forms.
+func isZeroSHA(s string) bool {
+	if s == "" {
+		return false
+	}
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	return strings.Trim(s, "0") == ""
+}
+
+// projectTracksRepo reports whether any service in the project builds from
+// repoFullName (service spec.repo.url, falling back to the project
+// defaultRepo). Used by the branch-delete path to skip projects that have
+// nothing to cancel. Best-effort: a list error returns false (nothing to
+// cancel there) rather than blocking the whole delete handler.
+func projectTracksRepo(ctx context.Context, d *Dispatcher, proj *kube.KusoProject, repoFullName string) bool {
+	raw, err := d.Kube.Dynamic.Resource(kube.GVRServices).Namespace(d.nsFor(ctx, proj.Name)).
+		List(ctx, metav1.ListOptions{LabelSelector: kube.LabelSelector(map[string]string{kube.LabelProject: proj.Name})})
+	if err != nil {
+		d.Logger.Error("list services for repo-tracks check", "project", proj.Name, "err", err)
+		return false
+	}
+	for i := range raw.Items {
+		if serviceRepoMatches(&raw.Items[i], proj, repoFullName) {
+			return true
+		}
+	}
+	return false
 }
 
 // projectDefaultBranch returns the branch config-as-code is sourced from —

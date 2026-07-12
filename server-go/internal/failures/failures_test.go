@@ -177,6 +177,31 @@ func TestClassify_BuildDetectors(t *testing.T) {
 			wantTab:   TabBuild,
 			wantRemed: true,
 		},
+		{
+			// The clone init container was told to fetch a ref that no
+			// longer exists (branch deleted / force-pushed while queued).
+			name:      "clone couldn't find remote ref",
+			lines:     []string{"Cloning into '/workspace/src'...", "fatal: couldn't find remote ref refs/heads/feature-x"},
+			wantKind:  KindCloneRefMissing,
+			wantTab:   TabLogs,
+			wantRemed: true,
+		},
+		{
+			name:      "clone remote branch not found",
+			lines:     []string{"fatal: Remote branch pr-42 not found in upstream origin"},
+			wantKind:  KindCloneRefMissing,
+			wantTab:   TabLogs,
+			wantRemed: true,
+		},
+		{
+			// Ref-missing must WIN over a trailing generic "build failed"
+			// line — otherwise the poller can't divert to cancelled.
+			name:      "ref-missing beats trailing build-failed line",
+			lines:     []string{"fatal: couldn't find remote ref refs/heads/gone", "error: build failed with exit code 128"},
+			wantKind:  KindCloneRefMissing,
+			wantTab:   TabLogs,
+			wantRemed: true,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -205,6 +230,23 @@ func TestClassify_BuildDetectors(t *testing.T) {
 				t.Error("Remediation.Title is empty")
 			}
 		})
+	}
+}
+
+// TestCloneRefMissing_DoesNotSwallowAuthFailures guards the narrowness of
+// the clone-ref-missing detector: genuine clone failures (bad credentials,
+// repo not found) must NOT be misclassified as ref-missing, or they'd be
+// silently cancelled instead of failing loudly with their real cause.
+func TestCloneRefMissing_DoesNotSwallowAuthFailures(t *testing.T) {
+	authLines := [][]string{
+		{"fatal: Authentication failed for 'https://github.com/x/y.git/'"},
+		{"remote: Repository not found.", "fatal: repository 'https://github.com/x/y.git/' not found"},
+		{"fatal: could not read Username for 'https://github.com': terminal prompts disabled"},
+	}
+	for _, ls := range authLines {
+		if got := Classify(ls, Signal{}); got.Kind == KindCloneRefMissing {
+			t.Errorf("auth/repo-missing line misclassified as ref-missing: %v", ls)
+		}
 	}
 }
 

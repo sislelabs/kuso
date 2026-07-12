@@ -404,9 +404,12 @@ func (s *Service) RunServiceLockGC(ctx context.Context) {
 
 // New constructs a builds.Service with a default namespace fallback.
 //
-// MaxConcurrentBuilds + AdmitTimeout are zero by default (uncapped,
-// matches pre-v0.7.17 behaviour). Callers in main.go set them from
-// KUSO_BUILD_MAX_CONCURRENT and KUSO_BUILD_ADMIT_TIMEOUT env vars.
+// MaxConcurrentBuilds + AdmitTimeout are zero on the bare struct, but
+// main.go ALWAYS sets them before the service is used: MaxConcurrentBuilds
+// from KUSO_BUILD_MAX_CONCURRENT or the adaptive default (max(2,
+// allocatableCPU/4)), and AdmitTimeout from KUSO_BUILD_ADMIT_TIMEOUT_SECONDS
+// (default 60s). The live cap is admin-tunable via the Settings table.
+// Do not treat the zero-value here as the production default — it is not.
 func New(k *kube.Client, namespace string) *Service {
 	if namespace == "" {
 		namespace = "kuso"
@@ -588,7 +591,16 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 		// Phase 5 cannot resolve branch → SHA via GitHub yet. Synthesize
 		// a unique-ish ref. Phase 6 will replace this branch with the
 		// real github resolve.
-		sha = fmt.Sprintf("%s-%s", branch, strconv.FormatInt(time.Now().UnixMilli(), 36))
+		//
+		// Slugify the branch first: it flows straight into spec.Ref, the
+		// image tag (ImageTag), and the kuso.sislelabs.com/build-ref Job
+		// label. A branch like "deploy/kuso" carries a '/', which is
+		// illegal in both a Docker tag and a kube label value — the Job
+		// create then fails ("a valid label must consist of alphanumeric
+		// characters, '-', '_' or '.'"), no build pod ever appears, and
+		// the service is stuck at 0 replicas. shortRef is the same
+		// slugifier buildCRName already applies to keep the CR name legal.
+		sha = fmt.Sprintf("%s-%s", shortRef(branch), strconv.FormatInt(time.Now().UnixMilli(), 36))
 	}
 
 	// Dedup concurrent Create calls for the same (project, service, sha).
@@ -2258,6 +2270,57 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 }
 
 func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, msg string) error {
+	// Classify the failure ONCE, up front, so both the persisted build
+	// record (read by the Deployments tab to render the hint + the
+	// copy-pasteable remediation) and the notify card below share one
+	// classification. Pull the last 50 lines — the classifier walks the
+	// tail in reverse for a known failure regex; a 5-line window misses
+	// errors that print 10-30 lines before the end of buildkit/nixpacks
+	// output. Feed the pod's terminated reason/exit too: an OOMKilled
+	// build leaves little in the logs (kernel kills it mid-step), so
+	// reason="OOMKilled"/exit=137 is what reaches KindOOM/KindBuildOOM.
+	//
+	// Done BEFORE stamping phase=failed so a clone-ref-missing build can be
+	// diverted to CANCELLED instead — the ref was deleted/force-pushed
+	// while the build sat queued, nothing is actually broken, and a
+	// build.failed here would page @here for a non-event.
+	classifyLines := p.tailBuildLogLines(ctx, ns, b, 50)
+	var sig failures.Signal
+	if bp, perr := p.Svc.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
+		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": b.Name}),
+	}); perr == nil {
+		reason, exit := extractTerminatedSignal(bp.Items)
+		sig.Reason, sig.ExitCode = reason, exit
+	}
+	classification := failures.Classify(classifyLines, sig)
+
+	// Divert clone-of-deleted-ref failures to cancelled: no build.failed,
+	// no @here. cancelBuild stamps phase=cancelled with a "ref deleted"
+	// reason and emits build.cancelled at severity=info. On cancel error
+	// (e.g. the build already went terminal in a race) fall through to the
+	// normal failed path so the build never silently disappears.
+	if classification.Kind == failures.KindCloneRefMissing {
+		if cerr := p.Svc.cancelBuild(ctx, b.Spec.Project, b.Name, "ref deleted (branch deleted or force-pushed while build was queued)"); cerr == nil {
+			// Persist the classification so an explicit `kuso build why
+			// <id>` still explains a ref-deleted cancel (the auto-pick only
+			// scans failed builds; this one is cancelled). Best-effort.
+			if cj, mErr := json.Marshal(classification); mErr == nil {
+				cPatch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, annClassification, string(cj))
+				if _, pErr := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+					Patch(ctx, b.Name, types.MergePatchType, []byte(cPatch), metav1.PatchOptions{}); pErr != nil {
+					p.logger().Warn("persist ref-missing classification", "build", b.Name, "err", pErr)
+				}
+			}
+			p.deleteCloneTokenSecret(ns, b.Name)
+			p.logger().Info("build cancelled: clone ref no longer exists",
+				"build", b.Name, "branch", b.Spec.Branch, "project", b.Spec.Project)
+			return nil
+		} else {
+			p.logger().Warn("clone-ref-missing cancel failed; falling through to failed",
+				"build", b.Name, "err", cerr)
+		}
+	}
+
 	// See markSucceeded for why spec.done=true is set — same operator
 	// initial-cache-sync resurrection bug.
 	completedAt := time.Now().UTC().Format(time.RFC3339)
@@ -2282,25 +2345,6 @@ func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, m
 	// Job TTL to harvest.
 	p.deleteCloneTokenSecret(ns, b.Name)
 	p.queueArchive(ctx, ns, b, "failed")
-
-	// Classify the failure ONCE, up front, so both the persisted build
-	// record (read by the Deployments tab to render the hint + the
-	// copy-pasteable remediation) and the notify card below share one
-	// classification. Pull the last 50 lines — the classifier walks the
-	// tail in reverse for a known failure regex; a 5-line window misses
-	// errors that print 10-30 lines before the end of buildkit/nixpacks
-	// output. Feed the pod's terminated reason/exit too: an OOMKilled
-	// build leaves little in the logs (kernel kills it mid-step), so
-	// reason="OOMKilled"/exit=137 is what reaches KindOOM/KindBuildOOM.
-	classifyLines := p.tailBuildLogLines(ctx, ns, b, 50)
-	var sig failures.Signal
-	if bp, perr := p.Svc.Kube.Clientset.CoreV1().Pods(ns).List(ctx, metav1.ListOptions{
-		LabelSelector: kube.LabelSelector(map[string]string{"app.kubernetes.io/instance": b.Name}),
-	}); perr == nil {
-		reason, exit := extractTerminatedSignal(bp.Items)
-		sig.Reason, sig.ExitCode = reason, exit
-	}
-	classification := failures.Classify(classifyLines, sig)
 	// Persist the classification (incl. any actionable Remediation) on
 	// the build CR so the Deployments tab can render the fix when the
 	// user opens the failed build — not just in the bell popover. JSON

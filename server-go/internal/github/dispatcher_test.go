@@ -133,6 +133,23 @@ func seedPersistentEnv(project, service, envName, branch string) seed {
 	return typedSeed(kube.GVREnvironments, "KusoEnvironment", e)
 }
 
+func TestIsZeroSHA(t *testing.T) {
+	t.Parallel()
+	cases := map[string]bool{
+		"0000000000000000000000000000000000000000": true,  // SHA-1 delete marker
+		strings.Repeat("0", 64):                    true,  // SHA-256 delete marker
+		"1111111111111111111111111111111111111111": false, // real SHA
+		"abc1234":                                   false, // short SHA
+		"":                                          false, // empty
+		"000000":                                    false, // wrong length
+	}
+	for in, want := range cases {
+		if got := isZeroSHA(in); got != want {
+			t.Errorf("isZeroSHA(%q) = %v, want %v", in, got, want)
+		}
+	}
+}
+
 func TestDispatch_PushOnBranchTrackedByEnv_TriggersBuild(t *testing.T) {
 	t.Parallel()
 	// A staging env tracks the `staging` branch; a push to staging must
@@ -821,6 +838,95 @@ func TestDispatch_PRClosed_DeletesPreviewEnv(t *testing.T) {
 	}
 	if _, err := d.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-42"); err == nil {
 		t.Error("preview env still present after PR closed")
+	}
+}
+
+// TestDispatch_BranchDelete_CancelsInFlightBuilds locks in the phantom-
+// alert fix: a push that DELETES a branch (deleted=true, all-zeros after
+// SHA) must cancel any queued/running builds for that branch instead of
+// leaving them to clone a vanished ref and page @here.
+func TestDispatch_BranchDelete_CancelsInFlightBuilds(t *testing.T) {
+	t.Parallel()
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", false, 0),
+		seedSvc("alpha", "web"),
+		seedPersistentEnv("alpha", "web", "feature", "feature-x"),
+	)
+	ctx := context.Background()
+	// A push to feature-x triggers a build (a persistent env tracks it).
+	push := []byte(`{
+		"ref": "refs/heads/feature-x",
+		"after": "1111111111111111111111111111111111111111",
+		"repository": {"full_name": "example/alpha", "default_branch": "main"}
+	}`)
+	if err := d.Dispatch(ctx, "push", push); err != nil {
+		t.Fatalf("Dispatch push: %v", err)
+	}
+	bs, _ := d.Builds.List(ctx, "alpha", "web")
+	if len(bs) != 1 {
+		t.Fatalf("expected 1 in-flight build before delete, got %d", len(bs))
+	}
+	// Now delete the branch: deleted=true, all-zeros after SHA.
+	del := []byte(`{
+		"ref": "refs/heads/feature-x",
+		"deleted": true,
+		"after": "0000000000000000000000000000000000000000",
+		"repository": {"full_name": "example/alpha", "default_branch": "main"}
+	}`)
+	if err := d.Dispatch(ctx, "push", del); err != nil {
+		t.Fatalf("Dispatch delete push: %v", err)
+	}
+	// The build must now be cancelled, not still in-flight, and NOT a
+	// second build (the delete push must not trigger a new build).
+	bs, _ = d.Builds.List(ctx, "alpha", "web")
+	if len(bs) != 1 {
+		t.Fatalf("expected exactly 1 build after delete (no new build), got %d", len(bs))
+	}
+	if got := bs[0].Annotations["kuso.sislelabs.com/build-phase"]; got != "cancelled" {
+		t.Errorf("build phase = %q, want cancelled", got)
+	}
+}
+
+// TestDispatch_PRClosed_CancelsInFlightBuilds is the PR-close counterpart:
+// closing/merging a PR must cancel the preview build for its head ref.
+func TestDispatch_PRClosed_CancelsInFlightBuilds(t *testing.T) {
+	t.Parallel()
+	d := newDispatcher(t,
+		seedProj("alpha", "https://github.com/example/alpha", "main", true, 5),
+		seedSvc("alpha", "web"),
+	)
+	ctx := context.Background()
+	// Open the PR → creates the preview env + an in-flight build on the
+	// head ref feat/x.
+	open := []byte(`{
+		"action": "opened",
+		"number": 42,
+		"pull_request": {"head": {"ref": "feat/x", "sha": "abc1234"}, "base": {"ref": "main"}, "state": "open", "author_association": "OWNER"},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(ctx, "pull_request", open); err != nil {
+		t.Fatalf("Dispatch pr opened: %v", err)
+	}
+	bs, _ := d.Builds.List(ctx, "alpha", "web")
+	if len(bs) != 1 {
+		t.Fatalf("expected 1 preview build after PR open, got %d", len(bs))
+	}
+	// Close the PR → the head-ref build must be cancelled.
+	closed := []byte(`{
+		"action": "closed",
+		"number": 42,
+		"pull_request": {"head": {"ref": "feat/x", "sha": "abc1234"}, "base": {"ref": "main"}, "state": "closed"},
+		"repository": {"full_name": "example/alpha"}
+	}`)
+	if err := d.Dispatch(ctx, "pull_request", closed); err != nil {
+		t.Fatalf("Dispatch pr closed: %v", err)
+	}
+	bs, _ = d.Builds.List(ctx, "alpha", "web")
+	if len(bs) != 1 {
+		t.Fatalf("expected 1 build after PR close, got %d", len(bs))
+	}
+	if got := bs[0].Annotations["kuso.sislelabs.com/build-phase"]; got != "cancelled" {
+		t.Errorf("build phase = %q, want cancelled", got)
 	}
 }
 
