@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.78] — 2026-06-24
+
+### 🐛 Bug Fixes
+- Fix(env): per-env clone NAME suffix + canvas shows only the env's own addons ([e8bfda1](https://github.com/sislelabs/kuso/commit/e8bfda16b12a2d82cddcb370c5bc426bc2e0e8f0))
+
 ## [0.18.77] — 2026-06-23
 
 ### Other

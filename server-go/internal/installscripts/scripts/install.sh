@@ -64,8 +64,8 @@ set -euo pipefail
 # --- defaults ---
 KUSO_DOMAIN="${KUSO_DOMAIN:-}"
 KUSO_EMAIL="${KUSO_EMAIL:-}"
-KUSO_VERSION="${KUSO_VERSION:-v0.18.127}"
-KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.18.127}"
+KUSO_VERSION="${KUSO_VERSION:-v0.18.128}"
+KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.18.128}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
 
@@ -84,9 +84,43 @@ while [[ $# -gt 0 ]]; do
     --no-dns-check)      KUSO_SKIP_DNS_CHECK=1; shift ;;
     --github-wizard)     KUSO_GITHUB_WIZARD=1; shift ;;
     -h|--help)
-      # Print the doc header (everything between line 2 and the
-      # `set -euo` guard, minus the guard line itself).
-      sed -n '2,/^set -euo/p' "$0" | sed -e 's/^# \?//' -e '$d'
+      # Heredoc, NOT `sed "$0"`: in the documented `curl … | bash -s -- -h`
+      # invocation $0 is "bash", so a self-sed reads the wrong file and
+      # prints garbage — exactly the pipe mode the usage advertises.
+      cat <<'USAGE'
+kuso single-command installer.
+
+Provisions k3s (if absent) + traefik + cert-manager + Let's Encrypt issuer
++ kuso CRDs + operator + server + in-cluster registry on a single Linux host.
+After it finishes, https://<KUSO_DOMAIN>/ serves the kuso UI.
+
+Usage:
+  curl -sfL https://raw.githubusercontent.com/sislelabs/kuso/main/hack/install.sh \
+    | sudo bash -s -- --domain kuso.example.com --email you@example.com
+
+Prerequisites:
+  - a fresh root-capable Ubuntu/Debian host
+  - DNS: <domain> (and a *.<domain> wildcard for previews) → this host's public IP
+  - inbound TCP 80 + 443 open (ACME http-01 + traefik); 6443 if you add nodes
+
+Flags / env:
+  --domain / KUSO_DOMAIN                 hostname for kuso UI (REQUIRED)
+  --email  / KUSO_EMAIL                  email for Let's Encrypt (REQUIRED)
+  --operator-version / KUSO_VERSION      operator image tag
+  --server-version / KUSO_SERVER_VERSION server image tag
+  --repo   / KUSO_REPO                   github source for raw manifests
+  --le-staging (KUSO_LE_ENV=staging)     use LE staging (avoids the prod
+                                         50 certs/week + 5 failed/hr limits;
+                                         not browser-trusted)
+  --no-dns-check (KUSO_SKIP_DNS_CHECK=1) skip the pre-flight DNS resolve
+  --github-wizard (KUSO_GITHUB_WIZARD=1) interactive GitHub App setup
+  KUSO_ADMIN_PASSWORD                    override the generated admin password
+  KUSO_SKIP_K3S=1                        assume k3s + traefik already installed
+  KUSO_REF                               git ref for manifests (default: the
+                                         server release tag)
+
+To remove kuso: hack/uninstall.sh
+USAGE
       exit 0
       ;;
     *) printf 'unknown flag: %s\n' "$1" >&2; exit 2 ;;
@@ -94,10 +128,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Manifests (CRDs, deploy/*.yaml) are pulled from KUSO_REF on GitHub.
-# Defaults to "main" because that's the only ref guaranteed to exist:
-# `make release-roll` doesn't push git tags, only docker images. To pin
-# manifests to a specific commit, pass KUSO_REF=<sha>.
-KUSO_REF="${KUSO_REF:-main}"
+# Defaults to the server release TAG so manifests and the running image
+# come from the SAME release — `make ship` runs `gh release create
+# $VERSION`, which creates the git tag, so the tag is guaranteed to exist.
+# Pinning to the tag (not "main") makes installs hermetic: an unrelated
+# change on main can no longer break every fresh install before the next
+# release. Pass KUSO_REF=main (or a sha) to override for dev installs.
+KUSO_REF="${KUSO_REF:-$KUSO_SERVER_VERSION}"
 KUSO_RAW="https://raw.githubusercontent.com/${KUSO_REPO}/${KUSO_REF}"
 
 # --- styling ---
@@ -963,6 +1000,18 @@ kubectl delete clusterrolebinding kuso-server-cluster-admin --ignore-not-found 2
 curl -sfL "${KUSO_RAW}/deploy/server-go.yaml" \
   | sed -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
   | kubectl apply -f - >/dev/null
+
+# Node-join: the /bootstrap/register-node endpoint mints a join command
+# pointing at KUSO_K3S_URL. Without it the server falls back to the
+# in-cluster ClusterIP (10.43.0.1), which a NEW VM can't reach — so the
+# first multi-node attempt fails opaquely on the joining host. We already
+# computed this box's public IP for the DNS pre-flight; wire it in as the
+# reachable API endpoint so "paste one curl command" actually works.
+if [[ -n "${PUBLIC_IP:-}" ]]; then
+  kubectl set env deployment/kuso-server -n kuso \
+    "KUSO_K3S_URL=https://${PUBLIC_IP}:6443" >/dev/null 2>&1 \
+    || warn "could not set KUSO_K3S_URL (node-join will fall back to the ClusterIP)"
+fi
 
 # kuso-activator: the scale-to-zero request-holding proxy (runs the same
 # image in --activator mode). Reuses the kuso-server ServiceAccount, so

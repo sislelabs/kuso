@@ -19,6 +19,15 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.18.128] — 2026-07-12
+
+### 🐛 Bug Fixes
+- Fix: close gaps found in adversarial review of the platform-review fixes ([7d5f700](https://github.com/sislelabs/kuso/commit/7d5f700d63b59d98e2ddbf7eacf7bb97715d4fa8))
+- Fix: remaining platform-review findings (reliability, DX) ([cdd7811](https://github.com/sislelabs/kuso/commit/cdd7811f4e5e6c3b68fb1809d23a58ef39c2a1fa))
+- Fix: platform-review findings (security, DX, scalability, UX) ([c57102e](https://github.com/sislelabs/kuso/commit/c57102e219fdfe9baf472399a458e97b3894e2db))
+- Fix(builds): cancel builds for deleted/force-pushed refs instead of paging ([238ed88](https://github.com/sislelabs/kuso/commit/238ed8804480a9aaae25e8d28dec0e3ff1b07cf7))
+- Fix(server): archived build records carry a real FinishedAt ([53ae4e4](https://github.com/sislelabs/kuso/commit/53ae4e401e933c058695e1478cdaed5d3741b341))
+
 ## [0.18.127] — 2026-07-09
 
 ### 🐛 Bug Fixes
@@ -408,11 +417,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(public-tcp): grant operator traefik RBAC + declutter the public-URL UI ([18848ea](https://github.com/sislelabs/kuso/commit/18848eaebada96b89f534e7f8af765744e047cf8))
-
-## [0.18.78] — 2026-06-24
-
-### 🐛 Bug Fixes
-- Fix(env): per-env clone NAME suffix + canvas shows only the env's own addons ([e8bfda1](https://github.com/sislelabs/kuso/commit/e8bfda16b12a2d82cddcb370c5bc426bc2e0e8f0))
 
 
 ---
