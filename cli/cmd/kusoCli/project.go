@@ -696,11 +696,12 @@ var (
 
 var supportedAddonKinds = []string{
 	// Implemented kinds — chart renders real workloads + conn secret.
-	"postgres", "redis", "s3",
+	// Must track $supported in operator/helm-charts/kusoaddon/templates/unsupported.yaml.
+	"postgres", "redis", "valkey", "mongodb", "rabbitmq", "s3",
 	"mailpit", "nats", "meilisearch", "clickhouse", "redpanda",
 	// Reserved (chart emits an "unsupported" marker); listed so the
 	// CLI accepts the kind for projects that pre-declare the field.
-	"mongodb", "mysql", "rabbitmq", "memcached",
+	"mysql", "memcached",
 	"elasticsearch", "kafka", "cockroachdb", "couchdb",
 }
 
