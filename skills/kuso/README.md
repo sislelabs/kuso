@@ -29,7 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/sislelabs/kuso/main/skills/kuso/SKI
 Re-run the same `curl` — `install.sh` overwrites `SKILL.md` with the latest from `main`. Pin to a specific kuso release with:
 
 ```bash
-KUSO_SKILL_REF=v0.9.58 curl -fsSL \
+KUSO_SKILL_REF=v0.18.128 curl -fsSL \
   "https://raw.githubusercontent.com/sislelabs/kuso/${KUSO_SKILL_REF}/skills/kuso/install.sh" | bash
 ```
 
@@ -41,14 +41,15 @@ rm -rf .claude/skills/kuso
 
 ## What's in the skill
 
-- **Mental model** — projects, services, environments, addons, builds
-- **The 12 CLI commands** you'll actually use, with concrete shapes
-- **How a deploy actually flows** — push → build CR → kaniko → image promote → kube roll
-- **Failure modes** ranked by frequency: GH App not installed, OOMKilled snapshot, wrong port, NEXTAUTH_URL mismatch, CrashLoopBackOff
-- **`${{ ... }}` env-var reference syntax** — addon refs, service-to-service refs, the rules
-- **Debugging playbook** — the standard 7-step order
+- **Mental model** — projects, services, environments (incl. branch-tracking staging envs), addons, builds
+- **The CLI commands you'll actually use**, with concrete shapes and the flag-convention gotchas
+- **Env vars & secrets** — the `env set` vs `secret set` rule, shared secrets, addon subscriptions (least privilege), `${{ ... }}` reference syntax
+- **How a deploy actually flows** — push → build CR → kaniko → release hook → image promote → kube roll
+- **Failure modes** ranked by frequency: GH App not installed, OOMKilled snapshot, wrong port, release-failed, exit-127 capability drops
+- **Debugging playbook** — the standard order, starting with `kuso build why`
 - **Edit safety** — what's hot-swappable vs. what triggers a rollout
-- **`kuso.yml` shape** for config-as-code
+- **Addons** — kinds, conn-secret keys, TLS, public TCP, backups, the SQL browser
+- **`kuso.yml` shape** for config-as-code, docker-compose import, marketplace apps
 
 The skill content is in [`SKILL.md`](./SKILL.md). It's a single file by design — every Claude Code session pays the token cost of loading active skills, so we keep it tight.
 
