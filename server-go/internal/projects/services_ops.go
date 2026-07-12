@@ -415,6 +415,9 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		}
 		releaseSpec = &kube.KusoReleaseSpec{Command: req.Release.Command, TimeoutSeconds: timeout}
 	}
+	if err := kube.ValidateSecurityContext(req.SecurityContext); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
+	}
 	svc := &kube.KusoService{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: fqn,
@@ -1876,6 +1879,10 @@ func (s *Service) RevertService(ctx context.Context, project, service string, ra
 }
 
 func (s *Service) PatchService(ctx context.Context, project, service string, req PatchServiceRequest) (*kube.KusoService, error) {
+	if err := kube.ValidateSecurityContext(req.SecurityContext); err != nil {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
+	}
+
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 

@@ -37,7 +37,7 @@ const COPY: Record<FailureKind, CopyPair> = {
   },
   crash_loop: {
     headline: "Pod keeps crashing.",
-    body: "The last failure line is highlighted in the log viewer below.",
+    body: "Check the log viewer below — the crash is usually in the last few lines before each restart.",
   },
   image_pull_failed: {
     headline: "Couldn't pull the image.",
@@ -53,7 +53,7 @@ const COPY: Record<FailureKind, CopyPair> = {
   },
   build_command_failed: {
     headline: "Build command exited non-zero.",
-    body: "See the highlighted line in the build log below for the failing step.",
+    body: "See the build log below — the failing step is the last command before the non-zero exit.",
   },
   generic: {
     headline: "Deploy failed.",

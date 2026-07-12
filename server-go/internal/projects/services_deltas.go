@@ -235,6 +235,9 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 	if hasValue {
 		next.Value = req.Value
 	} else {
+		if err := s.validateSecretRefName(ctx, project, service, req.SecretRef.Name); err != nil {
+			return nil, err
+		}
 		next.ValueFrom = map[string]any{
 			"secretKeyRef": map[string]any{
 				"name": req.SecretRef.Name,

@@ -85,7 +85,7 @@ output names the next concrete step for every finding.`,
 			serverURL = strings.TrimRight(currentInstance.ApiUrl, "/")
 		}
 		if serverURL == "" {
-			report("server URL", "no KUSO_SERVER configured — run: kuso login --server https://<your-instance>", "fail")
+			report("server URL", "no instance configured — run: kuso login --api https://<your-instance>", "fail")
 			if fail {
 				os.Exit(1)
 			}

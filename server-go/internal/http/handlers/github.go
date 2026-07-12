@@ -149,6 +149,12 @@ func (h *GithubHandler) RunInstallLimiterGC(ctx context.Context) {
 // setup-callback handles the GitHub redirect that arrives mid-OAuth.
 func (h *GithubHandler) MountPublic(r chi.Router) {
 	r.Post("/api/webhooks/github", h.Webhook)
+	// Alias: the App-manifest flow (github_manifest.go) registers the
+	// created App's hook URL as /api/github/webhook, and the install
+	// wizard historically printed the same path. Serve it here so both
+	// already-created Apps and the one-click flow deliver successfully —
+	// otherwise every push/PR 404s and auto-deploys silently never fire.
+	r.Post("/api/github/webhook", h.Webhook)
 	r.Get("/api/github/setup-callback", h.SetupCallback)
 }
 

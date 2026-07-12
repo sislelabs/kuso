@@ -234,6 +234,9 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 		next.Value = rewritten.Value
 		next.ValueFrom = rewritten.ValueFrom
 	} else {
+		if err := s.validateSecretRefName(ctx, project, service, req.SecretRef.Name); err != nil {
+			return nil, err
+		}
 		next.ValueFrom = map[string]any{
 			"secretKeyRef": map[string]any{"name": req.SecretRef.Name, "key": req.SecretRef.Key},
 		}

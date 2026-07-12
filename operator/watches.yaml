@@ -26,14 +26,21 @@
   version: v1alpha1
   kind: KusoService
   chart: helm-charts/kusoservice
-  reconcilePeriod: 3m
-  maxConcurrentReconciles: 4
+  # Service + Environment are the highest-cardinality kinds (one Service
+  # and >=1 Environment per app). At hundreds of each, a 3m periodic
+  # resync means ~600 full helm renders every 3 minutes — reconcile lag
+  # grows unboundedly somewhere past ~300 CRs. Spec edits still reconcile
+  # immediately via the watch, so the periodic resync only self-heals
+  # drift; a 10m cadence is plenty and 8 workers clears a restart backlog
+  # faster. Same rationale the KusoAddon 30m period already relies on.
+  reconcilePeriod: 10m
+  maxConcurrentReconciles: 8
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoEnvironment
   chart: helm-charts/kusoenvironment
-  reconcilePeriod: 3m
-  maxConcurrentReconciles: 4
+  reconcilePeriod: 10m
+  maxConcurrentReconciles: 8
 - group: application.kuso.sislelabs.com
   version: v1alpha1
   kind: KusoAddon

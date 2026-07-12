@@ -1,6 +1,9 @@
 package kube
 
 import (
+	"fmt"
+	"strings"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -436,6 +439,53 @@ type KusoCapabilities struct {
 type KusoSecurityContext struct {
 	Capabilities             *KusoCapabilities `json:"capabilities,omitempty"`
 	AllowPrivilegeEscalation *bool             `json:"allowPrivilegeEscalation,omitempty"`
+}
+
+// allowedAddCapabilities is the server-side allowlist of Linux
+// capabilities a user may add via spec.securityContext. It is a small,
+// deliberately safe set — the capabilities a normal service entrypoint
+// legitimately needs (bind low ports, drop privileges, fix file
+// ownership). Escape-equivalent capabilities (SYS_ADMIN, SYS_PTRACE,
+// SYS_MODULE, NET_ADMIN, NET_RAW, …) are NOT here and are rejected.
+//
+// This is defense-in-depth that does NOT rely on the namespace
+// PodSecurity `restricted` label: that label is applied as a
+// non-clobbering patch and operators are explicitly invited to downgrade
+// it per-namespace. The moment a namespace is relaxed to baseline, PSA
+// stops blocking added caps — so the app layer must enforce its own
+// allowlist on a field it fully controls.
+var allowedAddCapabilities = map[string]struct{}{
+	"NET_BIND_SERVICE": {}, // bind ports < 1024
+	"CHOWN":            {}, // chown files at startup
+	"DAC_OVERRIDE":     {}, // bypass file perms (common in entrypoints)
+	"FOWNER":           {},
+	"SETUID":           {}, // drop root via setuid
+	"SETGID":           {},
+	"SETPCAP":          {}, // needed by setpriv/gosu to narrow caps
+	"KILL":             {},
+}
+
+// ValidateSecurityContext rejects a client-supplied securityContext that
+// would grant a dangerous capability. Returns a non-nil error naming the
+// offending capability; callers map it to HTTP 400. Nil ctx / nil
+// capabilities are valid (they mean "use the hardened default").
+func ValidateSecurityContext(sc *KusoSecurityContext) error {
+	if sc == nil || sc.Capabilities == nil {
+		return nil
+	}
+	for _, c := range sc.Capabilities.Add {
+		name := strings.ToUpper(strings.TrimSpace(strings.TrimPrefix(strings.ToUpper(strings.TrimSpace(c)), "CAP_")))
+		if name == "" {
+			continue
+		}
+		if name == "ALL" {
+			return fmt.Errorf("capability %q is not permitted; add only specific capabilities from the allowlist", c)
+		}
+		if _, ok := allowedAddCapabilities[name]; !ok {
+			return fmt.Errorf("capability %q is not permitted (allowed: NET_BIND_SERVICE, CHOWN, DAC_OVERRIDE, FOWNER, SETUID, SETGID, SETPCAP, KILL)", c)
+		}
+	}
+	return nil
 }
 
 // MinValue returns scale.Min as an int, falling back to the CRD default

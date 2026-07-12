@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -581,6 +582,24 @@ func (h *ProjectsHandler) Spec(w http.ResponseWriter, r *http.Request) {
 		h.Logger.Error("spec export", "project", project, "err", err)
 		http.Error(w, "export failed", http.StatusInternalServerError)
 		return
+	}
+	// Mask literal env VALUES for callers who can't read secrets — the
+	// same gate GetService/GetEnv enforce. Without this, the config-export
+	// endpoint is a plaintext-secret read for any viewer, bypassing the
+	// mask everywhere else. ${{ }} varrefs and {generate:} directives are
+	// references, not values, so they stay verbatim (they leak nothing).
+	if f != nil && !callerCanReadSecrets(ctx, h.DB, project) {
+		for si := range f.Services {
+			for k, ev := range f.Services[si].Env {
+				if ev.Generate != "" || strings.HasPrefix(strings.TrimSpace(ev.Value), "${{") {
+					continue
+				}
+				if ev.Value != "" {
+					ev.Value = envMaskSentinel
+					f.Services[si].Env[k] = ev
+				}
+			}
+		}
 	}
 	out, err := yaml.Marshal(f)
 	if err != nil {

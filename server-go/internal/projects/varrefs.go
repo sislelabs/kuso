@@ -1,6 +1,7 @@
 package projects
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"regexp"
@@ -352,3 +353,54 @@ var addonRefDNSSafeRE = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 func addonRefDNSSafe(name string) bool {
 	return addonRefDNSSafeRE.MatchString(name)
 }
+
+// validateSecretRefName enforces that a client-supplied
+// secretKeyRef.name points at a Secret THIS project legitimately owns,
+// closing the cross-project credential-theft vector: in the default
+// single-namespace install every project's `-conn`/`-shared` secrets
+// live side by side, and the CRD admission regex only checks the shape
+// (`*-conn` / `*-shared`), not ownership. Without this an editor on
+// project A could set an env var referencing `projb-pg-conn` and read
+// project B's DB password at pod runtime.
+//
+// Allowed for project P (service SVC):
+//   - any of P's addon conn secrets (via AddonConnSecrets)
+//   - "<P>-shared"                  (project shared secrets)
+//   - "<P>-<SVC>-secrets"           (this service's own secret)
+//   - "kuso-instance-shared"        (instance-wide shared secrets)
+//
+// Returns ErrInvalid for anything else. Fails safe: if the addon
+// resolver is unwired (tests) the deterministic names above still pass,
+// but a foreign `-conn` name is rejected.
+func (s *Service) validateSecretRefName(ctx context.Context, project, service, name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("%w: secretRef.name required", ErrInvalid)
+	}
+	if name == instanceSharedSecretName || name == project+"-shared" {
+		return nil
+	}
+	// This service's own secret. Accept both the FQN and short service
+	// name forms that callers pass.
+	svcShort := strings.TrimPrefix(service, project+"-")
+	if name == project+"-"+svcShort+"-secrets" {
+		return nil
+	}
+	if s.AddonConnSecrets != nil {
+		owned, err := s.AddonConnSecrets(ctx, project)
+		if err != nil {
+			return fmt.Errorf("resolve addon secrets: %w", err)
+		}
+		for _, sec := range owned {
+			if sec == name {
+				return nil
+			}
+		}
+	}
+	return fmt.Errorf("%w: secretRef.name %q is not a secret owned by project %q", ErrInvalid, name, project)
+}
+
+// instanceSharedSecretName is the instance-wide shared secret every
+// project may reference. Kept as a const so the validator and the
+// existing ref-rewrite paths agree on the exact name.
+const instanceSharedSecretName = "kuso-instance-shared"

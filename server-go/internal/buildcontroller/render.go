@@ -792,12 +792,20 @@ func renderBuildpacksContainer(buildName string, b *kube.KusoBuild, res corev1.R
 // context and streams progress back.
 func renderBuildkitContainer(b *kube.KusoBuild, strategy string, res corev1.ResourceRequirements) corev1.Container {
 	path := repoPath(b)
+	// dockerfile strategy honors the per-service override (monorepo
+	// services building from e.g. "Dockerfile.dev"); nixpacks/static use
+	// their generated Dockerfiles. Mirrors the helm-chart renderer, which
+	// resolves `.Values.dockerfile | default "Dockerfile"`.
 	dockerfile := "Dockerfile"
 	switch strategy {
 	case "nixpacks":
 		dockerfile = ".nixpacks/Dockerfile"
 	case "static":
 		dockerfile = ".kuso-static.Dockerfile"
+	default:
+		if df := strings.TrimSpace(b.Spec.Dockerfile); df != "" {
+			dockerfile = df
+		}
 	}
 	image := fmt.Sprintf("%s:%s", b.Spec.Image.Repository, b.Spec.Image.Tag)
 	cache := fmt.Sprintf("%s:buildcache", b.Spec.Image.Repository)

@@ -298,6 +298,11 @@ func TestSetEnvVar_AcceptsSecretRef(t *testing.T) {
 		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
 		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
 	)
+	// The ref names an addon conn secret this project owns; validateSecretRefName
+	// requires it to appear in AddonConnSecrets (cross-project theft guard).
+	s.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) {
+		return []string{"alpha-postgres-conn"}, nil
+	}
 
 	got, err := s.SetEnvVar(context.Background(), "alpha", "web", "DATABASE_URL", SetEnvVarRequest{
 		SecretRef: &SetEnvVarSecretRefBody{Name: "alpha-postgres-conn", Key: "DATABASE_URL"},
@@ -318,6 +323,30 @@ func TestSetEnvVar_AcceptsSecretRef(t *testing.T) {
 	}
 	if skr["name"] != "alpha-postgres-conn" || skr["key"] != "DATABASE_URL" {
 		t.Errorf("secretKeyRef: %+v", skr)
+	}
+}
+
+// TestSetEnvVar_RejectsForeignSecretRef locks in the cross-project
+// credential-theft guard: project alpha may not reference another
+// project's -conn secret, even though the CRD name-shape regex would
+// accept it.
+func TestSetEnvVar_RejectsForeignSecretRef(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	// alpha owns only its own conn secret; "beta-pg-conn" belongs to
+	// another project and must be refused.
+	s.AddonConnSecrets = func(ctx context.Context, project string) ([]string, error) {
+		return []string{"alpha-pg-conn"}, nil
+	}
+	_, err := s.SetEnvVar(context.Background(), "alpha", "web", "STOLEN", SetEnvVarRequest{
+		SecretRef: &SetEnvVarSecretRefBody{Name: "beta-pg-conn", Key: "PASSWORD"},
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("want ErrInvalid for foreign secretRef, got %v", err)
 	}
 }
 

@@ -94,10 +94,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Manifests (CRDs, deploy/*.yaml) are pulled from KUSO_REF on GitHub.
-# Defaults to "main" because that's the only ref guaranteed to exist:
-# `make release-roll` doesn't push git tags, only docker images. To pin
-# manifests to a specific commit, pass KUSO_REF=<sha>.
-KUSO_REF="${KUSO_REF:-main}"
+# Defaults to the server release TAG so manifests and the running image
+# come from the SAME release — `make ship` runs `gh release create
+# $VERSION`, which creates the git tag, so the tag is guaranteed to exist.
+# Pinning to the tag (not "main") makes installs hermetic: an unrelated
+# change on main can no longer break every fresh install before the next
+# release. Pass KUSO_REF=main (or a sha) to override for dev installs.
+KUSO_REF="${KUSO_REF:-$KUSO_SERVER_VERSION}"
 KUSO_RAW="https://raw.githubusercontent.com/${KUSO_REPO}/${KUSO_REF}"
 
 # --- styling ---

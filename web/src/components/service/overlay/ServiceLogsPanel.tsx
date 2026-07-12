@@ -42,9 +42,18 @@ export function ServiceLogsPanel({ project, service }: Props) {
     return list
       .map((e) => {
         if (e.spec.kind === "production") return { value: "production", label: "production" };
-        // Env CR name is `<project>-<service>-<short>`; the last two
-        // dash-segments are the short identifier (e.g. "preview-pr-12").
-        const short = e.metadata.name.split("-").slice(-2).join("-");
+        // The log store filters by the pod's `kuso.sislelabs.com/env`
+        // label (logship shipper.go:317), so the dropdown VALUE must equal
+        // that label. Prefer the label off the env CR; fall back to
+        // stripping the real `<project>-<service>-` prefix from the CR
+        // name. The old `slice(-2)` was wrong for single-segment env ids
+        // (env `staging` on service `frontend` → CR `frontend-staging` →
+        // yielded `frontend-staging`, so the filter matched zero rows).
+        const short =
+          e.metadata.labels?.["kuso.sislelabs.com/env"] ||
+          (fqn && e.metadata.name.startsWith(fqn + "-")
+            ? e.metadata.name.slice(fqn.length + 1)
+            : e.metadata.name);
         return { value: short, label: short };
       })
       .sort((a, b) => {

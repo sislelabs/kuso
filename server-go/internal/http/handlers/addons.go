@@ -237,10 +237,27 @@ func (h *AddonsHandler) Secret(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden: reading addon connection values requires the admin role", http.StatusForbidden)
 		return
 	}
-	values, err := h.Svc.SecretValues(ctx, project, chi.URLParam(r, "addon"))
+	addon := chi.URLParam(r, "addon")
+	values, err := h.Svc.SecretValues(ctx, project, addon)
 	if err != nil {
 		h.fail(w, "addon secret", err)
 		return
+	}
+	// Audit the plaintext-credential read. The mutating addon actions are
+	// already logged; the read that actually discloses DB passwords /
+	// DATABASE_URL must leave a trail too, so an incident responder can
+	// see what a compromised admin token exfiltrated. Values are never
+	// recorded — only that a disclosure happened, by whom.
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "addon.secret_read",
+			Pipeline: project,
+			App:      addon,
+			Resource: "kusoaddon",
+			Message:  fmt.Sprintf("connection credentials read for addon %s/%s", project, addon),
+		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"values": values})
 }
