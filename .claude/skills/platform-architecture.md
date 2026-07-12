@@ -3,7 +3,7 @@ name: platform-architecture
 description: Use when reasoning about kuso's runtime shape — control-plane scaling, persistence, HA, leader election, multi-node placement. The "what kuso actually is in production" reference.
 ---
 
-# kuso platform architecture (v0.9+)
+# kuso platform architecture
 
 kuso is a multi-node, multi-replica Kubernetes PaaS. The control plane is stateless above Postgres; data-tier addons can run HA; node placement is label-driven. This file is the source-of-truth for how the moving parts fit together.
 
@@ -38,7 +38,7 @@ kuso-server (Deployment, RollingUpdate, replicas ≥ 1)
 
 The bundled in-cluster Postgres is a single-replica StatefulSet co-located on the control-plane node. For serious deployments, replace `kuso-postgres-conn` Secret's `dsn` with a managed Postgres URI (RDS / Crunchy Bridge / Supabase) — `kuso-server` doesn't care.
 
-`server-go/internal/db/db.go` has the connection-pool shape: `MaxOpenConns=25`, `MaxIdleConns=5`, idle-timeout 5 min, lifetime 30 min. Cap is per-replica; with three replicas and the operator + logship + addon pollers, the bundled Postgres `max_connections=100` ceiling is the next bottleneck — PgBouncer is the answer when you cross it.
+`server-go/internal/db/db.go` has the connection-pool shape: `MaxOpenConns=25`, `MaxIdleConns=5`, idle-timeout 5 min, lifetime 5 min. Cap is per-replica; with three replicas and the operator + logship + addon pollers, the bundled Postgres `max_connections=100` ceiling is the next bottleneck — PgBouncer is the answer when you cross it.
 
 ## HA addons
 

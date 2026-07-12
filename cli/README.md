@@ -59,25 +59,50 @@ kuso remote select prod    # switch to the prod instance
 
 ## Command overview
 
+The CLI has web-UI parity — roughly 50 top-level commands. The ones you'll
+reach for first, by theme:
+
 ```
-kuso login                 # auth against a kuso server
-kuso get projects|services|envs|builds|tokens|addons
-kuso project create|update|describe|delete <name>
-kuso project service add|delete <project> <service>
-kuso project env delete <project> <env>
-kuso project addon add|delete <project> <addon>
-kuso env list|set|unset <project> <service> ...    # plain env vars
-kuso secret list|set|unset <project> <service> ... # K8s-Secret-backed
-kuso build trigger|list <project> <service>
-kuso token create|list|revoke
-kuso github installations
-kuso logs <project> <service>
-kuso config show
-kuso debug                  # print client + server versions
+# Session & orientation
+kuso login --api https://kuso.example.com     # auth (also: --token, --instance)
+kuso doctor                                   # pre-flight: DNS, TLS, webhook health
+kuso status [project]                         # project rollup
+kuso get projects|services|envs|addons|pods|roles
+kuso version / kuso upgrade                   # client version / server self-update
+
+# Resources
+kuso project create|update|describe|delete|stop|start|export <name>
+kuso project service add|set|delete|rename|stop|start|wake <project> <service>
+kuso project addon add|update|delete|subscribe|unsubscribe|placement|public-tcp …
+kuso environment add|delete|list              # long-lived envs (staging, …)
+kuso domains add|remove|list <project> <service>
+
+# Env vars & secrets
+kuso env list|set|unset|share|unshare <project> <service> …
+kuso secret list|set|unset <project> <service> …   # K8s-Secret-backed
+kuso shared-secret list|set|unset <project>        # project-level
+
+# Builds, runs, logs, debugging
+kuso build trigger|list|latest|rollback|cancel|why <project> <service>
+kuso redeploy <project> <service>
+kuso run <project> <service> -- <cmd…>        # one-shot Job
+kuso logs <project> <service> [-f]  ·  kuso logs search --q "…"
+kuso shell <project> <service>
+kuso service errors|pods|drift <project> <service>
+kuso db sql|tables|columns|rows|connect|port-forward <project> <addon>  # admin
+kuso health [fix <resource>]                  # reconcile health + remediation
+
+# Operations & admin
+kuso addon-backup list|download|restore|schedule <project> <addon>
+kuso backup [settings|health|db-stats]  ·  kuso restore <file>
+kuso cron list|add|add-http|add-command|edit|sync|delete …
+kuso node add-token|list|label|updates|apply-updates …
+kuso role|user|invite|group|token|instance-config|instance-secret …
+kuso marketplace list|info|deploy  ·  kuso import compose  ·  kuso apply
 ```
 
-Add `--help` to any command for full flags. Add `-o json` to most
-read-only commands for machine output.
+Add `--help` to any command or group for the full tree and flags. Add
+`-o json` to most read-only commands for machine output.
 
 ---
 

@@ -1,7 +1,7 @@
 # Kuso server: HTTP workflows reference
 
 Source-of-truth catalogue of every endpoint the kuso-server exposes,
-the request/response shape, and the Vue page or CLI command that
+the request/response shape, and the web-UI page or CLI command that
 triggers it. Read alongside `LIVE_TEST_PLAN.md` for the journey-derived
 walkthrough used to verify the Go rewrite against the live cluster.
 
@@ -12,8 +12,9 @@ Conventions:
   cookie is also accepted on browser-driven endpoints.
 - Path params in `{curlies}` mirror chi syntax.
 - `body` blocks describe the JSON request body.
-- "Trigger" calls out the Vue page or CLI command that fires the route
-  in production usage.
+- "Trigger" calls out the web-UI page or CLI command that fires the route
+  in production usage. (The UI is the Next.js app under `web/`, embedded
+  in the server binary.)
 - ✅ marks routes that are implemented in `server-go/`.
 
 ---
@@ -26,9 +27,9 @@ Conventions:
 - Trigger: kuberprobes, uptime monitors.
 
 ### `GET /api/status` ✅
-- Auth: none (public; the Vue UI footer reads it pre-login).
+- Auth: none (public; the web UI footer reads it pre-login).
 - Response: `{ status, version, kubernetesVersion, operatorVersion }`.
-- Trigger: Vue UI footer.
+- Trigger: web UI footer.
 
 ---
 
@@ -49,7 +50,7 @@ Conventions:
 ### `GET /api/auth/session` ✅
 - Auth: bearer.
 - Response: `{ isAuthenticated, userId, username, role, userGroups, permissions, adminDisabled, templatesEnabled, consoleEnabled, metricsEnabled, sleepEnabled, auditEnabled, buildPipeline }`.
-- Trigger: every Vue page on first paint; CLI `kuso whoami`.
+- Trigger: every web-UI page on first paint; CLI `kuso user profile`.
 
 ### `GET /api/auth/github` ✅ (only when `GITHUB_CLIENT_*` are set)
 - Auth: none. Sets `kuso_oauth_state` cookie, redirects to GitHub.
@@ -241,7 +242,7 @@ Wire envelope: `{ success: bool, data?: ..., message?: string }`.
 ### `GET /api/projects/{project}` ✅
 - Rolled-up describe: `{ project, services, environments }`.
 - *(Addon list is fetched separately; the TS Describe also bundled
-  addons but the Vue UI calls them via /addons anyway.)*
+  addons but the web UI calls them via /addons anyway.)*
 
 ### `DELETE /api/projects/{project}` ✅
 - Cascade-deletes envs + services. Addon deletion happens via the
@@ -381,22 +382,24 @@ Wire envelope: `{ success: bool, data?: ..., message?: string }`.
 - Body: `{ installationId, owner, repo, branch, path? }`.
 - Response: `{ runtime, port, reason }`.
 - Rules: Dockerfile → port from EXPOSE; index.html-only → static port
-  80; package.json → nixpacks 3000; go.mod / Cargo.toml / Python →
-  nixpacks 8080; fallback nixpacks 8080.
+  80; package.json → nixpacks with a port guessed from the package
+  (framework defaults); go.mod / Cargo.toml / Python → nixpacks 8080;
+  fallback nixpacks 8080.
 
 ---
 
 ## 14. SPA (catch-all)
 
 Any GET that doesn't match an `/api/*` or `/healthz` or
-`/api/webhooks/*` route returns `index.html` from the embedded Vue
-bundle (`internal/web/dist`). The Vue router takes over from there.
+`/api/webhooks/*` route returns the page from the embedded Next.js
+static export (`internal/web/dist`). The client-side router takes over
+from there.
 
 ---
 
 ## Triggers index
 
-| Vue page / CLI command           | Endpoints exercised                                                                                                                                        |
+| Web-UI page / CLI command        | Endpoints exercised                                                                                                                                        |
 | -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Login page                       | `GET /api/auth/methods`, `POST /api/auth/login`, `GET /api/auth/github` (start), `GET /api/auth/oauth2` (start)                                            |
 | Every authenticated page         | `GET /api/auth/session`, `GET /api/status`                                                                                                                  |
@@ -416,13 +419,13 @@ bundle (`internal/web/dist`). The Vue router takes over from there.
 | GitHub webhooks (server-side)    | `POST /api/webhooks/github`                                                                                                                                   |
 | GitHub install redirect          | `GET /api/github/setup-callback`                                                                                                                              |
 | `kuso login`                     | `POST /api/auth/login`                                                                                                                                        |
-| `kuso project list`              | `GET /api/projects`                                                                                                                                           |
+| `kuso get projects`              | `GET /api/projects`                                                                                                                                           |
 | `kuso project create`            | `POST /api/projects`                                                                                                                                          |
 | `kuso project service add`       | `POST /api/projects/{p}/services`                                                                                                                             |
 | `kuso build trigger`             | `POST /api/projects/{p}/services/{s}/builds`                                                                                                                  |
 | `kuso secret set` / `unset`      | `POST` / `DELETE` `/api/projects/{p}/services/{s}/secrets[/{k}]`                                                                                              |
 | `kuso logs`                      | `GET /api/projects/{p}/services/{s}/logs`                                                                                                                     |
-| `kuso token issue` / `list` / `revoke` | `/api/tokens/my*`                                                                                                                                       |
+| `kuso token create` / `list` / `revoke` | `/api/tokens/my*`                                                                                                                                      |
 
 ---
 

@@ -157,17 +157,14 @@ RUN=$(kubectl -n kuso get kusoruns -l kuso.sislelabs.com/service=smoke-api \
 until kubectl -n kuso get kusorun "$RUN" \
     -o jsonpath='{.metadata.annotations.kuso\.sislelabs\.com/run-phase}' \
     2>/dev/null | grep -q running; do sleep 4; done
-# cancel via API (CLI cancel is reserved for builds today):
-TOK=$(awk '/HOST:/ {print $2}' ~/.kuso/credentials.yaml)
-curl -fsS -X POST -H "Authorization: Bearer $TOK" \
-    "https://HOST/api/projects/smoke/runs/$RUN/cancel" \
-    -w '\nstatus=%{http_code}\n'
+# cancel via the CLI:
+$CLI run cancel smoke "$RUN"
 # verify:
 kubectl -n kuso get kusorun "$RUN" \
     -o jsonpath='{.metadata.annotations.kuso\.sislelabs\.com/run-phase}{"\n"}'
 ```
 
-**Pass**: HTTP 204, then phase=cancelled.
+**Pass**: cancel succeeds, then phase=cancelled.
 
 ### 10. Trigger second build + rollback
 

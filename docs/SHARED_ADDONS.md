@@ -19,9 +19,8 @@ The first two are obvious. The third is the new one — that's what `feat(addons
 An admin registers a shared Postgres server with kuso once, by handing the server a **superuser DSN** that has `CREATE DATABASE` and `CREATE ROLE` permissions:
 
 ```bash
-kuso instance-addon register \
-  --name primary-pg \
-  --dsn 'postgres://kuso_super:secret@pg-shared.internal:5432/postgres'
+kuso instance-addon register primary-pg \
+  'postgres://kuso_super:secret@pg-shared.internal:5432/postgres'
 ```
 
 The DSN is stored in the cluster-scoped `kuso-instance-shared` Secret under the key `INSTANCE_ADDON_PRIMARY_PG_DSN_ADMIN`. Only kuso admins can read or modify it; the password never leaves the cluster.
@@ -98,7 +97,7 @@ DIRECT_URL   = ${{ <addon>.DIRECT_URL }}
 
 ### Failure modes
 
-1. **Superuser DSN expires or rotates.** Re-run `kuso instance-addon register --name primary-pg --dsn '<new>'`. Existing per-project DSNs aren't affected — they use their own roles, not the super DSN.
+1. **Superuser DSN expires or rotates.** Re-run `kuso instance-addon register primary-pg '<new-dsn>'`. Existing per-project DSNs aren't affected — they use their own roles, not the super DSN.
 2. **Shared server out of disk.** Every project on it stops accepting writes. The shared model concentrates this risk; pick a host with monitoring + alerting before sharing.
 3. **Bad DSN at registration.** kuso parses the URL but doesn't dial the server until the first project tries to use it. A typo'd registration looks fine in the dropdown until someone picks it.
 4. **Project deletion leaves orphan DBs.** As above. We may add an admin-side "list orphan DBs on this server" verb in a future release; for now the shared-server admin is responsible for housekeeping.
@@ -109,7 +108,7 @@ DIRECT_URL   = ${{ <addon>.DIRECT_URL }}
 - Only `kind: postgres`. MySQL/Mongo/Redis instance-sharing would each need their own `provisionInstanceAddonDB` implementation.
 - No automatic `DROP DATABASE` on addon delete. Deliberate.
 - No backup schedule per project — the shared server's backup is the admin's responsibility, not kuso's. Per-project pg_dump-shaped backup is on the table for a future release.
-- No connection pooling layer (PgBouncer / RDS Proxy) — every per-project role connects directly. Fine up to a few dozen projects; PgBouncer in front is the next mitigation when you fan out further.
+- Pooling depends on the instance: the kuso-managed cluster PG fronts per-project DBs with PgBouncer (that's where `POOLER_*` / the pooled `DATABASE_URL` come from), but a BYO registered server has whatever pooling you run yourself — kuso doesn't install one for you.
 
 ## When to pick which
 

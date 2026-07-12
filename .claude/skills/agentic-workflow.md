@@ -10,27 +10,27 @@ kuso is built **for** AI agents and **with** AI agents. Most operational and dev
 ## What you can do without asking
 
 - Read any file in the repo.
-- Run any non-destructive command: `git status`, `git log`, `git diff`, `go build ./...`, `yarn lint`, `kubectl get`, `kubectl describe`, `kuso app status`, `kuso app logs`.
-- Edit code in `server-go/`, `client/`, `operator/`, `cli/`, `mcp/`.
+- Run any non-destructive command: `git status`, `git log`, `git diff`, `go build ./...`, `pnpm lint` (in `web/`), `kubectl get`, `kubectl describe`, `kuso status`, `kuso logs`, `kuso get …`, `kuso service errors/pods`.
+- Edit code in `server-go/`, `web/`, `operator/`, `cli/`, `mcp/`.
 - Create new branches, write commits on a branch, run tests.
 - Write to `.claude/skills/` to capture new conventions you've learned.
-- Update `docs/` as you go (PRD updates, REBRAND.md additions).
+- Update `docs/` as you go.
 
 ## What requires explicit confirmation
 
 - `git push`, `gh pr create`, anything that hits the network with state changes.
 - `kubectl apply`, `kubectl delete`, anything that mutates a real cluster.
-- `kuso app deploy/restart/stop`, anything that affects running production apps.
+- `kuso build trigger` / `kuso redeploy` / `kuso project service stop|start` / `kuso apply`, anything that affects running production apps.
 - `git reset --hard`, `git checkout --`, `rm -rf` on tracked files — anything destructive to local state.
-- Adding new dependencies (npm/yarn/go modules).
+- Adding new dependencies (pnpm/go modules).
 - Editing `LICENSE`, `NOTICE`, or the attribution paragraph in root `README.md`.
 
 ## Atomic commits
 
 The history is intentionally structured. Each commit should be one logical change with a clear message. Examples of good commits:
 
-- `feat(cli): add kuso app logs --follow`
-- `feat(operator): support envFrom on KusoApp`
+- `feat(cli): add kuso logs --follow`
+- `feat(operator): support envFrom on KusoService`
 - `refactor: extract sleep policy into its own helm chart`
 - `fix(server): handle race in deploy webhook`
 
@@ -38,7 +38,7 @@ Bad commits to avoid:
 
 - "WIP", "fixes", "stuff" — write descriptive messages.
 - Mega-commits touching server + operator + cli for unrelated changes.
-- Commits that leave the build broken (each commit should pass `go build` and `yarn build` for the affected subdir).
+- Commits that leave the build broken (each commit should pass `go build` and `pnpm build` for the affected subdir).
 
 ## When you find something surprising
 

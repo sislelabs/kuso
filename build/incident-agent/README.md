@@ -40,9 +40,10 @@ docker build \
   build/incident-agent
 ```
 
-A `make incident-agent-image` target should mirror the other `build/*` image
-targets (cross-build the CLI into the context, then `docker buildx build
---push` for linux/amd64 + linux/arm64). Not wired here.
+`make incident-agent-image` (repo-root Makefile) is the canonical build:
+it cross-builds the CLI into the context, then `docker buildx build --push`
+for linux/amd64 + linux/arm64. The manual invocations above are for
+one-off debugging.
 
 ## Claude Code credentials secret
 

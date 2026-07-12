@@ -12,7 +12,7 @@ kuso has three distinct kinds of state. They have different recovery stories.
 | Kubernetes-native state | etcd / k3s | All `KusoProject` / `KusoService` / `KusoEnvironment` / `KusoAddon` / `KusoBuild` / `KusoCron` CRs, plus every Deployment / Service / Ingress / Secret kuso ever created |
 | Addon data | Per-addon PVC inside the addon's own StatefulSet (or CNPG cluster volumes for HA Postgres) | Postgres / MySQL / Redis / Mongo data |
 
-**The Postgres metadata DB is the highest-leverage thing to back up.** The CRDs are recreatable from your repo + GitHub App config (which itself is in Postgres). The addon PVCs need their own backup story (see `kuso addon backup` below).
+**The Postgres metadata DB is the highest-leverage thing to back up.** The CRDs are recreatable from your repo + GitHub App config (which itself is in Postgres). The addon PVCs need their own backup story (see `kuso addon-backup` below).
 
 ## Daily: snapshot the metadata DB
 
@@ -106,7 +106,7 @@ For warm-spare DR (faster than re-running install), point `kuso-postgres-conn` a
 
 ## Addon data
 
-`kuso addon backup` triggers an addon-specific backup job (Postgres → `pg_dump`, Redis → `BGSAVE` + RDB copy, etc.) and uploads to whatever object store the addon is configured against. See `kuso addon backup --help`. Snapshot the metadata DB **and** the addons on the same schedule — restoring one without the other is a guaranteed bad time.
+`kuso addon-backup` is the addon-data surface: `schedule` sets a recurring dump to the cluster-wide S3 bucket (`kuso backup settings set` configures the bucket; `kuso backup health` reports whether backups are actually landing), `list` shows stored dumps, `restore` replays one, and `download` streams an on-demand dump straight to disk (postgres → `.sql.gz`, s3 → `.tar.gz`) with no S3 config needed. See `kuso addon-backup --help`. Snapshot the metadata DB **and** the addons on the same schedule — restoring one without the other is a guaranteed bad time.
 
 For HA Postgres addons (CNPG-backed `KusoAddon.spec.ha = true`), CNPG-native backups are the right path — see `docs/ADDON_HA.md`. The `pg_dump` cron is suppressed in HA mode.
 

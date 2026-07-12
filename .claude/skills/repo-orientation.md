@@ -13,7 +13,7 @@ kuso is a self-hosted, agent-native PaaS on real Kubernetes. Multi-node, multi-r
 | ------------ | -------------------------------------- | ------------------------------------------------------------------------------------------- |
 | `server-go/` | Go + chi + client-go                   | REST API, auth, orchestrates k8s via dynamic client. Postgres-backed (lib/pq). Embeds the Next.js SPA via //go:embed. |
 | `web/`       | Next.js 16 (App Router, static export) | Web UI. Built into `server-go/internal/web/dist`; the Go binary serves it.                  |
-| `operator/`  | Go + Operator-SDK (helm-based)         | Reconciles `KusoProject`, `KusoService`, `KusoEnvironment`, `KusoBuild`, `KusoAddon` CRs.   |
+| `operator/`  | Go + Operator-SDK (helm-based)         | Reconciles `KusoProject`, `KusoService`, `KusoEnvironment`, `KusoAddon`, `KusoBuild`, `KusoCron`, `KusoRun` CRs. |
 | `cli/`       | Go + Cobra                             | `kuso` command-line tool. Talks to the server REST API.                                     |
 | `mcp/`       | Go                                     | `kuso-mcp` Model Context Protocol server. Wraps `cli/` and REST API.                        |
 | `deploy/`    | YAML manifests                         | Production manifests applied to the test cluster.                                           |
@@ -35,7 +35,7 @@ kuso is a self-hosted, agent-native PaaS on real Kubernetes. Multi-node, multi-r
 | Change CRD schema                        | `operator/helm-charts/<chart>/` + `server-go/internal/kube/types.go` |
 | Add an MCP tool                          | `mcp/`                                                   |
 | Update UI                                | `web/src/`                                               |
-| Add a new addon                          | `operator/helm-charts/kusoaddon<name>`                   |
+| Add a new addon kind                     | `operator/helm-charts/kusoaddon/` (single parameterized chart) |
 
 ## Before opening a PR
 
@@ -44,4 +44,4 @@ kuso is a self-hosted, agent-native PaaS on real Kubernetes. Multi-node, multi-r
 - `server-go/`: `cd server-go && go vet ./... && go build ./... && go test ./...`
 - `web/`: `cd web && pnpm build` (output lands in `server-go/internal/web/dist/`)
 
-There is no monorepo-wide build yet — each subproject builds independently.
+`make verify` at the repo root is the canonical pre-PR gate (web typecheck + server-go tests + CLI/API parity check); the pre-push hook (`make hooks-install`) runs the same validation on touched modules.

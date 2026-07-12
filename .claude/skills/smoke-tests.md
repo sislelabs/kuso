@@ -12,13 +12,18 @@ There are three layers of smoke tests, in increasing order of cost and coverage.
 Fast (sub-second to a few seconds). No external dependencies.
 
 ```bash
+make verify                # canonical gate: web typecheck + server-go tests + CLI/API parity grep
+# Or per-subproject:
+cd server-go && go test ./...
 cd cli && go test ./...
 cd mcp && go test ./...
+cd web && pnpm typecheck   # the web app has no unit tests; typecheck is the gate
 cd operator && for c in helm-charts/*/; do helm lint "$c"; done
-cd server && yarn test     # not yet wired up locally — skip in agent sessions
 ```
 
-What they catch: pure logic bugs, type errors, helm template syntax, broken imports.
+What they catch: pure logic bugs, type errors, helm template syntax, broken imports, and (via `verify-parity`) new HTTP routes added without a matching CLI command.
+
+The repo's pre-push hook (`make hooks-install` once per clone) runs the same validation on touched modules; `make verify-ci` runs the full matrix locally (includes `next build` + the kind CRD dry-run).
 
 ## Level 2: MCP integration test (3a)
 

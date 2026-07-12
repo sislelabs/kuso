@@ -2,7 +2,7 @@
 
 A [Model Context Protocol](https://modelcontextprotocol.io) server for kuso. It lets MCP-speaking clients (Claude Code, Cursor, Claude Desktop) drive a kuso PaaS instance — list and describe apps, deploy, troubleshoot, manage secrets, etc.
 
-**Status:** v0.1.0 — pre-release. Skeleton only; the only registered tool today is `health` (smoke test).
+**Status:** v0.1.0 — pre-release, but functional: 16 tools registered covering project bootstrap, services, addons, builds, env/secrets, logs, status, one-shot runs, and config-as-code plan/apply.
 
 ## Run
 
@@ -36,24 +36,28 @@ The server speaks MCP over stdio. Wire it up in your client by pointing at the `
 
 ## Tool surface
 
-The v0.2 reshape replaced the pipelines/apps tool surface with a
-project-shaped one. Current state:
+All tools are project-shaped (intent-grouped, not REST-mirrored). Registered today:
 
-| Tool                | Status      |
-| ------------------- | ----------- |
-| `health`            | implemented |
-| `list_projects`     | implemented |
-| `describe_project`  | implemented |
-| `bootstrap_project` | implemented (mutating; `confirm: true`) |
-| `add_service`       | implemented (mutating; `confirm: true`) |
-| `manage_addon`      | implemented — add / delete (mutating; `confirm: true`) |
-| `deploy_service`        | planned (lands with the build pipeline) |
-| `set_service_config`    | planned |
-| `tail_logs`             | planned (per-environment) |
-| `troubleshoot_service`  | planned |
-| `manage_env`            | planned (delete preview env, redeploy) |
-| `cluster_health`        | planned |
-| `cost_report`           | planned |
+| Tool                | What it does |
+| ------------------- | ------------ |
+| `health`            | smoke test: server reachability + read-only flag |
+| `list_projects`     | all projects |
+| `describe_project`  | project + services + envs + addons in one call |
+| `status`            | runtime rollup for a project/service |
+| `logs`              | fetch service logs |
+| `bootstrap_project` | create a project (mutating; `confirm: true`) |
+| `update_project`    | patch project fields (mutating) |
+| `add_service`       | add a service (mutating; `confirm: true`) |
+| `manage_addon`      | add / delete addons (mutating; `confirm: true`) |
+| `set_env`           | set plain env vars (mutating) |
+| `set_secret`        | set secret-backed vars (mutating) |
+| `build`             | trigger a build (mutating) |
+| `build_status`      | build state for a service |
+| `run`               | one-shot Job in a service's context (mutating) |
+| `plan`              | diff a kuso.yaml against live state (read-only) |
+| `apply`             | reconcile kuso.yaml (mutating; `confirm: true`) |
+
+`--read-only` disables every mutating tool.
 
 ## Layout
 

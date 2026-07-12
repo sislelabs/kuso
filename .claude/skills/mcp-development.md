@@ -20,8 +20,10 @@ mcp/
 │   │   └── config_test.go
 │   ├── kusoclient/          # HTTP wrapper for kuso server REST API
 │   │   └── client.go
-│   └── tools/               # one file per topic: tools.go, apps.go, secrets.go, ...
-│       └── tools.go
+│   ├── types/               # shared request/response types
+│   └── tools/               # one file per verb group: tools.go, projects.go,
+│       └── ...              #   build.go, env.go, observe.go, run.go, apply.go,
+│                            #   plan.go, health.go
 └── README.md
 ```
 
@@ -33,19 +35,19 @@ These come from `docs/PRD.md` Workstream B and Anthropic's MCP guidance. Don't s
 
 1. **Intent-grouped, not REST-mirrored.** Wrong: `get_project`, `get_project_services`, `get_project_envs`. Right: `describe_project` returns all of that in one call. Wrong: `delete_addon`, `add_addon`, `update_addon`. Right: `manage_addon(project, action, …)` with one entrypoint per resource.
 
-2. **Composite tools beat chains.** `describe_project(name)` rolls up project metadata + services + environments + addons in one response. `troubleshoot_service` (planned) will do the same for runtime diagnostics. Agents make worse decisions when they have to chain three tools to inspect a project.
+2. **Composite tools beat chains.** `describe_project(name)` rolls up project metadata + services + environments + addons in one response. `status` and `logs` (in `observe.go`) bundle runtime state the same way. Agents make worse decisions when they have to chain three tools to inspect a project.
 
 3. **Every tool returns structured data + a human-readable summary.** The SDK's `CallToolResult` has `Content` (the human summary) and a typed return value (the structured data). Use both.
 
-4. **Destructive operations require an explicit `confirm: true` arg.** This is enforced in the tool itself, not the SDK. Examples: `exec_app`, `delete_app`, `manage_secret(action="delete")`.
+4. **Destructive operations require an explicit `confirm: true` arg.** This is enforced in the tool itself, not the SDK. Examples: `run`, `apply`, `manage_addon(action="delete")`.
 
 5. **Honor `--read-only`.** Mutating tools should check `client.ReadOnly()` and return an error if set. Read tools can ignore the flag.
 
-6. **Tool descriptions explicitly tell the agent which composite to prefer.** Example for `tail_logs` (planned): "Use this for live log streaming; for one-shot debugging, prefer `troubleshoot_service` which bundles logs with status and events."
+6. **Tool descriptions explicitly tell the agent which composite to prefer.** Example: `logs`' description should point one-shot debugging at `status` (which bundles state + recent builds) rather than raw log streaming.
 
 ## Adding a new tool
 
-1. Create or extend a file in `internal/tools/` named after the topic (e.g. `apps.go`, `secrets.go`, `cluster.go`).
+1. Create or extend a file in `internal/tools/` named after the verb group (e.g. `projects.go`, `env.go`, `observe.go`).
 2. Define an args struct with `json:""` and `jsonschema:""` tags. The jsonschema tag is the description the agent sees.
 3. Define a result struct (also exported, also tagged) so callers get typed JSON.
 4. Write a `register<Name>(server, client)` function that calls `mcp.AddTool`. The handler returns `(*mcp.CallToolResult, <YourResult>, error)`.

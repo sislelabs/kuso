@@ -115,11 +115,13 @@ GiB). With 3 replicas your storage cost triples — plan accordingly.
 seamless today**. The single-node StatefulSet uses different storage
 layout from CNPG's per-replica PVCs. Recommended flow:
 
-1. `kuso project addon backup my-project-pg` — manual snapshot.
+1. `kuso addon-backup download my-project my-project-pg` — manual snapshot
+   to disk (or `kuso addon-backup list` for the S3-scheduled dumps).
 2. Set `ha: true` on the addon (this triggers a helm uninstall of
    the StatefulSet path + install of the CNPG Cluster path).
 3. Restore the snapshot into the new HA cluster:
-   `kuso project addon restore my-project-pg --from-snapshot=...`
+   `kuso addon-backup restore my-project my-project-pg <s3-key>` (or
+   replay a downloaded dump with `psql` via `kuso db connect`).
 4. Bounce dependent services so they pick up the new `-conn` Secret
    (the host name changes from `<addon>` to `<addon>-rw`).
 

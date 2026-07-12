@@ -49,7 +49,7 @@ kuso_db_pool_in_use
 ```
 
 Plot alongside `kuso_db_pool_open`. The pool max is 25 (see
-`internal/db/db.go:65`). When `in_use > 20` for sustained periods
+`SetMaxOpenConns` in `internal/db/db.go`). When `in_use > 20` for sustained periods
 you're seeing pool contention — every additional dashboard tab adds
 to the queue and a slow query stalls the rest. Either bump
 `MaxOpenConns` (env `KUSO_DB_MAX_OPEN_CONNS`, when implemented) or
