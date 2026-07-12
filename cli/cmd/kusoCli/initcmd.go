@@ -95,10 +95,6 @@ func renderPayloadTemplate(project, repo string) string {
 # Self-sufficient source of truth on every push: 'kuso apply' is the whole
 # deploy. The ONLY thing you must change is the domain (set baseDomain + the
 # two NEXT_PUBLIC_* URLs to your real host).
-#
-# Keep values comment-free on their own line — the CLI's apply reads
-# 'project:' with a cheap line parser that does NOT strip trailing inline
-# comments, so 'project: foo  # note' would break 'kuso apply'.
 
 project: %s
 # ← set to your real domain

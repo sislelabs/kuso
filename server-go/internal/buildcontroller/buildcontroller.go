@@ -55,6 +55,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/cache"
@@ -79,13 +80,13 @@ const (
 	defaultCacheInitImage     = "alpine:3.20"
 	defaultBuildkitHost       = "tcp://kuso-buildkitd.kuso.svc.cluster.local:1234"
 
-	defaultCPURequest    = "200m"
-	defaultMemRequest    = "512Mi"
-	defaultCPULimit      = "1500m"
-	defaultMemLimit      = "2Gi"
-	jobTTLSecondsAfter   = int32(3600)
-	jobActiveBudgetMins  = int32(60) // ActiveDeadlineSeconds = 1h ceiling
-	jobBackoffLimit      = int32(0)
+	defaultCPURequest   = "200m"
+	defaultMemRequest   = "512Mi"
+	defaultCPULimit     = "1500m"
+	defaultMemLimit     = "2Gi"
+	jobTTLSecondsAfter  = int32(3600)
+	jobActiveBudgetMins = int32(60) // ActiveDeadlineSeconds = 1h ceiling
+	jobBackoffLimit     = int32(0)
 )
 
 // Service is the controller entry point. Held on the server-go Deps
@@ -103,10 +104,10 @@ const (
 // the canonical wiring is "boot calls Start once, leader controls
 // LeaderActive."
 type Service struct {
-	Kube         *kube.Client
-	Cache        *kube.Cache
-	Namespace    string // home namespace (only used for cross-ns logging)
-	Logger       *slog.Logger
+	Kube      *kube.Client
+	Cache     *kube.Cache
+	Namespace string // home namespace (only used for cross-ns logging)
+	Logger    *slog.Logger
 	// LeaderActive gates per-event work. nil = always-active (safe
 	// for single-replica deploys where leader election is bypassed);
 	// non-nil = only reconcile while this atomic reads true.
@@ -176,6 +177,40 @@ func (s *Service) maybeReconcile(ctx context.Context, obj any, source string) {
 		return
 	}
 	s.reconcile(ctx, obj, source)
+}
+
+// ResyncActive reconciles every not-done KusoBuild currently in the
+// informer cache. Call it right after this replica becomes leader: during
+// a lease transfer (~15s), an Add event fires on BOTH the outgoing and
+// incoming leader and both skip it (the old leader is losing the gate, the
+// new one hasn't taken it yet), so a build created in that window would
+// otherwise sit unreconciled until the informer's 10-minute resync. This
+// one-shot sweep — O(active builds) — closes the gap deterministically.
+// reconcile() itself skips terminal CRs and is idempotent (it no-ops when
+// the Job already exists), so re-touching in-flight builds is safe.
+func (s *Service) ResyncActive(ctx context.Context) {
+	if s == nil || s.Cache == nil {
+		return
+	}
+	items, ok := s.Cache.ListFromCache(kube.GVRBuilds, "", labels.Everything())
+	if !ok {
+		if s.Logger != nil {
+			s.Logger.Warn("buildcontroller: resync skipped — build informer not synced")
+		}
+		return
+	}
+	n := 0
+	for _, u := range items {
+		done, _, _ := unstructured.NestedBool(u.Object, "spec", "done")
+		if done {
+			continue
+		}
+		s.reconcile(ctx, u, "leader-resync")
+		n++
+	}
+	if s.Logger != nil {
+		s.Logger.Info("buildcontroller: leader resync swept in-flight builds", "count", n)
+	}
 }
 
 // reconcile is the per-event entry point. Decodes the unstructured
@@ -314,8 +349,8 @@ func decodeBuild(u *unstructured.Unstructured) (*kube.KusoBuild, error) {
 	return &b, nil
 }
 
-func ptrTrue() *bool { v := true; return &v }
-func ptrFalse() *bool { v := false; return &v }
+func ptrTrue() *bool          { v := true; return &v }
+func ptrFalse() *bool         { v := false; return &v }
 func ptrInt32(v int32) *int32 { return &v }
 func ptrInt64(v int64) *int64 { return &v }
 
@@ -451,9 +486,38 @@ func kusoBuildLabels(b *kube.KusoBuild, buildName string) map[string]string {
 		out["kuso.sislelabs.com/service"] = b.Spec.Service
 	}
 	if b.Spec.Ref != "" {
-		out["kuso.sislelabs.com/build-ref"] = b.Spec.Ref
+		// Defensive: a label VALUE must be alphanumeric plus '-', '_',
+		// '.' (≤63 chars, alnum at both ends). Refs are normally already
+		// slug-safe (builds.shortRef slugifies synthetic branch refs at
+		// creation), but a raw ref carrying a '/' — e.g. a branch like
+		// "deploy/kuso" — would make the whole Job create fail k8s
+		// validation, so no build pod ever starts. Sanitize here so a
+		// bad ref degrades the label rather than bricking the build.
+		out["kuso.sislelabs.com/build-ref"] = sanitizeLabelValue(b.Spec.Ref)
 	}
 	return out
+}
+
+// sanitizeLabelValue coerces an arbitrary string into a valid kube
+// label value: lowercase alnum plus '-'/'_'/'.', trimmed to 63 chars
+// with alphanumeric ends. Illegal runes collapse to '-'.
+func sanitizeLabelValue(s string) string {
+	out := make([]byte, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= '0' && c <= '9', c == '-', c == '_', c == '.':
+			out = append(out, c)
+		case c >= 'A' && c <= 'Z':
+			out = append(out, c+('a'-'A'))
+		default:
+			out = append(out, '-')
+		}
+	}
+	if len(out) > 63 {
+		out = out[:63]
+	}
+	return strings.Trim(string(out), "-_.")
 }
 
 // _ keeps intstr alive — referenced via Job spec parallelism shape

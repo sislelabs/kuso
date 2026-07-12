@@ -128,12 +128,21 @@ func (w *Watcher) evaluateService(ctx context.Context, svc *kube.KusoService) {
 	// the service CR's own name is the fq <project>-<service>.
 	envName := svc.Name + "-production"
 
-	dep, err := w.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, envName, metav1.GetOptions{})
-	if err != nil {
-		if !apierrors.IsNotFound(err) {
-			w.Logger.Warn("scaledown: get deployment", "env", envName, "err", err)
+	// Serve the Deployment from the informer cache — this runs per
+	// sleep-enabled service every minute, and the cluster cache already
+	// watches Deployments, so a live Get per service is needless apiserver
+	// chatter that grows with service count. Fall back to a live Get only
+	// when the cache isn't synced.
+	dep, ok := w.Kube.Cache.GetDeployment(ns, envName)
+	if !ok {
+		d, err := w.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, envName, metav1.GetOptions{})
+		if err != nil {
+			if !apierrors.IsNotFound(err) {
+				w.Logger.Warn("scaledown: get deployment", "env", envName, "err", err)
+			}
+			return
 		}
-		return
+		dep = d
 	}
 	// Already at 0 (or scaling down) — nothing to do.
 	if dep.Spec.Replicas != nil && *dep.Spec.Replicas == 0 {

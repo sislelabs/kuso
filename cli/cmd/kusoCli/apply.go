@@ -92,10 +92,60 @@ func readProjectFromYAML(body []byte) string {
 	for _, line := range splitLines(body) {
 		line = trimAny(line, " \t")
 		if hasPrefixA(line, "project:") {
-			return trimQuotes(trimAny(line[len("project:"):], " \t"))
+			val := trimAny(line[len("project:"):], " \t")
+			val = stripInlineComment(val)
+			return trimQuotes(trimAny(val, " \t"))
 		}
 	}
 	return ""
+}
+
+// stripInlineComment removes a trailing YAML `# comment` from a scalar
+// value so `project: foo # note` yields "foo", not "foo # note". A '#'
+// inside single/double quotes is left intact (it's part of the value).
+// This is the line-scan equivalent of what a real YAML parser does; the
+// full parse is deliberately avoided here (see readProjectFromYAML).
+func stripInlineComment(s string) string {
+	inSingle, inDouble := false, false
+	for i := 0; i < len(s); i++ {
+		switch s[i] {
+		case '\'':
+			if !inDouble {
+				inSingle = !inSingle
+			}
+		case '"':
+			if !inSingle {
+				inDouble = !inDouble
+			}
+		case '#':
+			// A comment must be preceded by whitespace (or start the
+			// value) per YAML — "a#b" is a literal, "a #b" is a comment.
+			if !inSingle && !inDouble && (i == 0 || s[i-1] == ' ' || s[i-1] == '\t') {
+				return trimTrailing(s[:i], " \t")
+			}
+		}
+	}
+	return s
+}
+
+// trimTrailing drops trailing runs of any byte in cut (trimAny only
+// trims leading).
+func trimTrailing(s, cut string) string {
+	for len(s) > 0 {
+		last := s[len(s)-1]
+		drop := false
+		for i := 0; i < len(cut); i++ {
+			if last == cut[i] {
+				s = s[:len(s)-1]
+				drop = true
+				break
+			}
+		}
+		if !drop {
+			return s
+		}
+	}
+	return s
 }
 
 func printApplyResult(body []byte, dryRun bool) {

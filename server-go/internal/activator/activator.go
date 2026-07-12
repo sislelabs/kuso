@@ -39,6 +39,15 @@ import (
 	"kuso/server/internal/kube"
 )
 
+// wakeOpTimeout bounds a single detached doWake (the Deployment scale
+// patch + env-CR replicaCount update). It runs off the request context so
+// a client giving up can't abort the scale-up, but must not run unbounded:
+// a hang would leak the waking[key] entry and wedge every future wake for
+// that service. 30s is generous for two API writes against a healthy
+// apiserver and short enough that a stuck one clears well within a
+// subsequent request's hold budget.
+const wakeOpTimeout = 30 * time.Second
+
 // Activator is the HTTP handler that wakes scaled-to-zero services and
 // proxies the request once they are Ready.
 type Activator struct {
@@ -304,8 +313,18 @@ func (a *Activator) wakeAndWait(ctx context.Context, ns, name string) error {
 		a.waking[key] = st
 		a.wakeMu.Unlock()
 		// We own the wake. Run it; broadcast the result; clean up.
+		//
+		// Detached from the request ctx on purpose — a client that gives up
+		// must not abort the scale-up other waiters are blocked on — but
+		// BOUNDED by an independent timeout. Without a deadline, a doWake
+		// that hangs on a half-dead apiserver connection would never close
+		// st.done nor delete waking[key], so every future request for this
+		// host would wait on the stale wake until its hold budget expired
+		// and the service could never wake until the activator restarted.
 		go func() {
-			st.err = a.doWake(context.Background(), ns, name)
+			wakeCtx, cancel := context.WithTimeout(context.Background(), wakeOpTimeout)
+			defer cancel()
+			st.err = a.doWake(wakeCtx, ns, name)
 			close(st.done)
 			a.wakeMu.Lock()
 			delete(a.waking, key)

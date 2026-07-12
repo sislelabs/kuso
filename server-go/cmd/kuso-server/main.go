@@ -635,20 +635,30 @@ func main() {
 		// a fresh handler every acquire, each holding its own
 		// `running` map, producing N parallel reconciles per CR
 		// event after N flaps.
+		var buildCtrl *buildcontroller.Service
 		if kc.Cache != nil {
 			if os.Getenv("KUSO_BUILD_CONTROLLER_DISABLED") != "true" {
-				(&buildcontroller.Service{
+				buildCtrl = &buildcontroller.Service{
 					Kube:         kc,
 					Cache:        kc.Cache,
 					Namespace:    *namespace,
 					Logger:       logger,
 					LeaderActive: &leaderActive,
-				}).Start(ctx)
+				}
+				buildCtrl.Start(ctx)
 			}
 		}
 
 		startSingletons := func(workCtx context.Context) {
 			leaderActive.Store(true)
+			// Just became leader: sweep every in-flight KusoBuild once so a
+			// build created during the ~15s lease transfer (when both the
+			// outgoing and incoming leader skip its Add event) gets its Job
+			// rendered now, instead of stalling until the informer's 10-min
+			// resync. Idempotent — reconcile no-ops when the Job exists.
+			if buildCtrl != nil {
+				buildCtrl.ResyncActive(workCtx)
+			}
 			// Tell readyz this pod is leading AND running the poller, so
 			// it enforces the poller heartbeat. Only set when the poller
 			// is actually enabled — otherwise readyz would expect a beat

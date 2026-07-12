@@ -7,19 +7,37 @@ import (
 	"time"
 
 	"kuso/server/internal/auth"
-	"kuso/server/internal/db"
 )
 
-// revocationCacheTTL bounds how long a last-known-good answer is
-// trusted when the DB query errors. Short enough that a real revoke
-// takes effect within 30s of Postgres recovering; long enough that a
-// brief pool blip doesn't 401 every active user.
-const revocationCacheTTL = 30 * time.Second
+// revocationStore is the slice of the DB the revocation checker needs.
+// Narrowed to an interface so the read-through logic is unit-testable
+// without a live Postgres.
+type revocationStore interface {
+	IsTokenRevoked(ctx context.Context, jti string) (bool, error)
+	UserTokenWatermark(ctx context.Context, userID string) (time.Time, error)
+}
 
-// revocationCache memoises the per-request answer when we have to
-// fall back during a DB outage. Two maps so per-jti and per-user
-// lookups don't contend; both are tiny and bounded by active session
-// count.
+// revocationFreshTTL is the happy-path read-through window. Within it a
+// cached "not revoked" answer is served WITHOUT touching Postgres, so
+// steady-state auth adds ~zero DB QPS instead of two queries per request.
+// A revoke therefore takes effect within this window in the worst case —
+// the same staleness a short cache always implies. Positive (revoked)
+// results are authoritative and cached too, so a revoke that HAS been read
+// keeps blocking regardless of the DB's state.
+const revocationFreshTTL = 10 * time.Second
+
+// revocationOutageTTL bounds how long a last-known-good answer survives
+// once the DB starts erroring. Longer than the fresh window: a multi-
+// minute Postgres restart must not 401 every active user and bounce them
+// to /login for reads that live entirely in kube CRs. After it expires we
+// fail closed (unknown tokens are treated as revoked).
+const revocationOutageTTL = 5 * time.Minute
+
+// revocationCache memoises the per-request answer read-through: an entry
+// is FRESH (serve without a DB hit) until freshUntil, then STALE-usable
+// (serve only while the DB is erroring) until staleUntil, then gone. Two
+// maps so per-jti and per-user lookups don't contend; both are tiny and
+// bounded by active session count.
 type revocationCache struct {
 	mu        sync.RWMutex
 	jti       map[string]cachedBool
@@ -27,14 +45,25 @@ type revocationCache struct {
 }
 
 type cachedBool struct {
-	v     bool
-	until time.Time
+	v          bool
+	freshUntil time.Time
+	staleUntil time.Time
 }
 
 type cachedTime struct {
-	v     time.Time
-	until time.Time
+	v          time.Time
+	freshUntil time.Time
+	staleUntil time.Time
 }
+
+// cacheState is the outcome of a cache lookup.
+type cacheState int
+
+const (
+	cacheMiss  cacheState = iota // not present or fully expired
+	cacheFresh                   // within the read-through window; skip the DB
+	cacheStale                   // past fresh but usable as an outage fallback
+)
 
 func newRevocationCache() *revocationCache {
 	return &revocationCache{
@@ -43,82 +72,119 @@ func newRevocationCache() *revocationCache {
 	}
 }
 
-func (c *revocationCache) getJTI(k string) (bool, bool) {
+func (c *revocationCache) getJTI(k string) (bool, cacheState) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	e, ok := c.jti[k]
-	if !ok || time.Now().After(e.until) {
-		return false, false
+	if !ok {
+		return false, cacheMiss
 	}
-	return e.v, true
+	now := time.Now()
+	switch {
+	case now.Before(e.freshUntil):
+		return e.v, cacheFresh
+	case now.Before(e.staleUntil):
+		return e.v, cacheStale
+	default:
+		return false, cacheMiss
+	}
 }
 
 func (c *revocationCache) putJTI(k string, v bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.jti[k] = cachedBool{v: v, until: time.Now().Add(revocationCacheTTL)}
+	now := time.Now()
+	c.jti[k] = cachedBool{v: v, freshUntil: now.Add(revocationFreshTTL), staleUntil: now.Add(revocationOutageTTL)}
 }
 
-func (c *revocationCache) getWatermark(k string) (time.Time, bool) {
+func (c *revocationCache) getWatermark(k string) (time.Time, cacheState) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	e, ok := c.watermark[k]
-	if !ok || time.Now().After(e.until) {
-		return time.Time{}, false
+	if !ok {
+		return time.Time{}, cacheMiss
 	}
-	return e.v, true
+	now := time.Now()
+	switch {
+	case now.Before(e.freshUntil):
+		return e.v, cacheFresh
+	case now.Before(e.staleUntil):
+		return e.v, cacheStale
+	default:
+		return time.Time{}, cacheMiss
+	}
 }
 
 func (c *revocationCache) putWatermark(k string, v time.Time) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.watermark[k] = cachedTime{v: v, until: time.Now().Add(revocationCacheTTL)}
+	now := time.Now()
+	c.watermark[k] = cachedTime{v: v, freshUntil: now.Add(revocationFreshTTL), staleUntil: now.Add(revocationOutageTTL)}
 }
 
 // makeRevocationChecker returns the closure wired into the auth
-// middleware. Fails closed on DB error after the cache window expires
-// — see the comment in main.go where this is installed.
-func makeRevocationChecker(database *db.DB) auth.RevocationChecker {
+// middleware. It is READ-THROUGH: a fresh cached answer short-circuits the
+// DB entirely (steady-state auth adds ~zero DB QPS), the DB is queried only
+// on a cache miss / expiry, and a stale entry is the outage fallback. Fails
+// closed once even the stale window expires — see the comment in main.go
+// where this is installed.
+func makeRevocationChecker(database revocationStore) auth.RevocationChecker {
 	cache := newRevocationCache()
 	return func(ctx context.Context, jti, userID string, iat time.Time) bool {
 		// Per-jti check.
 		if jti != "" {
-			revoked, err := database.IsTokenRevoked(ctx, jti)
-			if err != nil {
-				if cached, ok := cache.getJTI(jti); ok {
-					if cached {
-						return true
-					}
-					// fall through to the watermark check below
-				} else {
-					slog.Default().Warn("revocation: jti probe failed, no cache; failing closed",
-						"jti", jti, "err", err)
+			if cached, state := cache.getJTI(jti); state == cacheFresh {
+				// Read-through hit: trust it without a DB round-trip. A
+				// cached revoke stays authoritative; a cached non-revoke
+				// still falls through to the watermark check below.
+				if cached {
 					return true
 				}
 			} else {
-				cache.putJTI(jti, revoked)
-				if revoked {
-					return true
+				revoked, err := database.IsTokenRevoked(ctx, jti)
+				if err != nil {
+					// DB error: fall back to a stale entry if we have one,
+					// else fail closed.
+					if cached, s := cache.getJTI(jti); s != cacheMiss {
+						if cached {
+							return true
+						}
+					} else {
+						slog.Default().Warn("revocation: jti probe failed, no cache; failing closed",
+							"jti", jti, "err", err)
+						return true
+					}
+				} else {
+					cache.putJTI(jti, revoked)
+					if revoked {
+						return true
+					}
 				}
 			}
 		}
 		// Per-user watermark check.
 		if userID != "" && !iat.IsZero() {
-			watermark, err := database.UserTokenWatermark(ctx, userID)
-			if err != nil {
-				if cached, ok := cache.getWatermark(userID); ok {
-					if !cached.IsZero() && iat.Before(cached) {
-						return true
-					}
-				} else {
-					slog.Default().Warn("revocation: watermark probe failed, no cache; failing closed",
-						"user", userID, "err", err)
+			if cached, state := cache.getWatermark(userID); state == cacheFresh {
+				if !cached.IsZero() && iat.Before(cached) {
 					return true
 				}
 			} else {
-				cache.putWatermark(userID, watermark)
-				if !watermark.IsZero() && iat.Before(watermark) {
-					return true
+				watermark, err := database.UserTokenWatermark(ctx, userID)
+				if err != nil {
+					if cached, s := cache.getWatermark(userID); s != cacheMiss {
+						if !cached.IsZero() && iat.Before(cached) {
+							return true
+						}
+					} else {
+						slog.Default().Warn("revocation: watermark probe failed, no cache; failing closed",
+							"user", userID, "err", err)
+						return true
+					}
+				} else {
+					cache.putWatermark(userID, watermark)
+					if !watermark.IsZero() && iat.Before(watermark) {
+						return true
+					}
 				}
 			}
 		}
