@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -43,16 +44,16 @@ func registerLogs(server *mcp.Server, client *kusoclient.Client) {
 		if args.Project == "" || args.Service == "" {
 			return nil, logsResult{}, errors.New("project and service are required")
 		}
-		path := "/api/projects/" + args.Project + "/services/" + args.Service + "/logs"
-		q := []string{}
+		path := apiPath("api", "projects", args.Project, "services", args.Service, "logs")
+		q := url.Values{}
 		if args.Env != "" {
-			q = append(q, "env="+args.Env)
+			q.Set("env", args.Env)
 		}
 		if args.Lines > 0 {
-			q = append(q, "lines="+strconv.Itoa(args.Lines))
+			q.Set("lines", strconv.Itoa(args.Lines))
 		}
 		if len(q) > 0 {
-			path += "?" + strings.Join(q, "&")
+			path += "?" + q.Encode()
 		}
 		var out logsResult
 		if err := client.GetJSON(ctx, path, &out); err != nil {
@@ -117,7 +118,7 @@ func registerStatus(server *mcp.Server, client *kusoclient.Client) {
 				Status map[string]any `json:"status"`
 			} `json:"environments"`
 		}
-		if err := client.GetJSON(ctx, "/api/projects/"+args.Project, &rollup); err != nil {
+		if err := client.GetJSON(ctx, apiPath("api", "projects", args.Project), &rollup); err != nil {
 			return nil, statusResult{}, fmt.Errorf("get status: %w", err)
 		}
 		out := statusResult{

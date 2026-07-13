@@ -215,17 +215,15 @@ func (s *Service) ListServices(ctx context.Context, project string) ([]kube.Kuso
 	return s.listServicesForProject(ctx, project)
 }
 
-// GetService loads a single service by FQN <project>-<service>.
+// GetService loads a single service by FQN <project>-<service>. The
+// fetched CR is verified to belong to project (see getOwnedService) so
+// a pre-qualified name can't reach a sibling project's CR.
 func (s *Service) GetService(ctx context.Context, project, service string) (*kube.KusoService, error) {
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
 	}
-	svc, err := s.Kube.GetKusoService(ctx, ns, serviceCRName(project, service))
-	if apierrors.IsNotFound(err) {
-		return nil, ErrNotFound
-	}
-	return svc, err
+	return s.getOwnedService(ctx, ns, project, service)
 }
 
 // AddService validates + persists a new KusoService and auto-creates its
@@ -254,6 +252,13 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	}
 	if !serviceNameRE.MatchString(slug) {
 		return nil, fmt.Errorf("%w: slugified name %q must match [a-z0-9-], 1-32 chars", ErrInvalid, slug)
+	}
+	// Same reserved-segment rule as project names: a service named
+	// "new" would collide with the /projects/<p>/services/new create
+	// page, and the other segments are stripped by the SPA's
+	// pathname-based param extraction.
+	if reservedRouteNames[slug] {
+		return nil, fmt.Errorf("%w: %q is reserved — it collides with a web route segment (new, projects, services, addons, envs, logs, settings, invite)", ErrInvalid, slug)
 	}
 	displayName := strings.TrimSpace(req.DisplayName)
 	if displayName == "" {
@@ -306,6 +311,23 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	} else if err != nil && !apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("preflight: %w", err)
 	}
+
+	// Create-time env vars go through the SAME pipeline as SetEnv —
+	// name validation, ${{ … }} rewrite, unsupported-valueFrom
+	// rejection, and validateSecretRefName on every secretKeyRef.
+	// Pre-fix, raw valueFrom input was copied verbatim onto the
+	// service AND its production env CR, so an editor could mount
+	// another project's `-conn`/`-shared` Secret at create time,
+	// bypassing the ownership guard the update path enforces.
+	// AllowPending matches the declarative-create posture (`kuso
+	// apply` creates services whose refs may point at an addon still
+	// mid-provisioning; SetEnvPending has the same tolerance) — the
+	// ownership guard runs on the resolved output regardless.
+	envVars, err := s.validateAndRewriteEnvVars(ctx, ns, project, req.Name, req.EnvVars, SetEnvOpts{AllowPending: true})
+	if err != nil {
+		return nil, err
+	}
+	req.EnvVars = envVars
 
 	repoURL := ""
 	repoPath := "."
@@ -1340,6 +1362,53 @@ func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, e
 	mu := s.lockService(project, service)
 	defer mu.Unlock()
 
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return err
+	}
+	rewritten, err := s.validateAndRewriteEnvVars(ctx, ns, project, service, envVars, opts)
+	if err != nil {
+		return err
+	}
+	// RMW under optimistic concurrency (WithRetry) — the in-process
+	// service lock doesn't span replicas, so fetch-mutate-update so a
+	// concurrent spec edit on another pod isn't clobbered. Ownership-
+	// checked so a pre-qualified service name can't write onto a sibling
+	// project's CR (see updateOwnedServiceWithRetry).
+	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
+		svc.Spec.EnvVars = convertEnvVars(rewritten)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("update service env: %w", err)
+	}
+	// Propagate to envs — the chart reads from the env CR, not the
+	// service CR (see propagateChangedToEnvs). Best-effort: a kube
+	// error here doesn't fail the user-facing save, but we log it
+	// loudly because the env CRs ARE the source of truth for what
+	// the pod sees; a silent propagation skip = drift the user can't
+	// see in the UI without inspecting the env CR by hand.
+	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{EnvVars: true}); err != nil {
+		slog.WarnContext(ctx, "SetEnv: env propagation failed",
+			"project", project, "service", service, "err", err)
+		return nil
+	}
+	return nil
+}
+
+// validateAndRewriteEnvVars is the single admission pipeline for a
+// service's env-var list, shared by the create path (AddService) and
+// the update path (SetEnvWithOpts) so create-time input can't bypass
+// the rewrite + ownership validation the update path enforces.
+//
+// It normalizes + validates names, rewrites ${{ … }} var refs, rejects
+// unsupported valueFrom source kinds (only secretKeyRef is supported),
+// and runs validateSecretRefName over every emitted secretKeyRef — the
+// cross-project ownership guard: in the shared-namespace install every
+// project's `-conn`/`-shared` Secrets live side by side, so a raw
+// valueFrom.secretKeyRef naming another project's Secret would read
+// that project's credentials at pod runtime.
+func (s *Service) validateAndRewriteEnvVars(ctx context.Context, ns, project, service string, envVars []EnvVar, opts SetEnvOpts) ([]EnvVar, error) {
 	// Validate + normalize before any kube round-trip. Trims names
 	// (a leading non-breaking space slipped in once and was
 	// effectively unfixable from the editor), enforces POSIX env
@@ -1359,13 +1428,13 @@ func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, e
 			continue
 		}
 		if !envNameValid(name) {
-			return fmt.Errorf("%w: env var name %q must match [A-Za-z_][A-Za-z0-9_]*", ErrInvalid, name)
+			return nil, fmt.Errorf("%w: env var name %q must match [A-Za-z_][A-Za-z0-9_]*", ErrInvalid, name)
 		}
 		if reason := envNameReserved(name); reason != "" {
-			return fmt.Errorf("%w: %q is reserved — %s", ErrInvalid, name, reason)
+			return nil, fmt.Errorf("%w: %q is reserved — %s", ErrInvalid, name, reason)
 		}
 		if _, dup := seen[name]; dup {
-			return fmt.Errorf("%w: duplicate env var name %q", ErrInvalid, name)
+			return nil, fmt.Errorf("%w: duplicate env var name %q", ErrInvalid, name)
 		}
 		seen[name] = struct{}{}
 		// Drop literal-empty rows: no value AND no valueFrom = a
@@ -1379,18 +1448,14 @@ func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, e
 	}
 	envVars = clean
 
-	ns, err := s.namespaceFor(ctx, project)
-	if err != nil {
-		return err
-	}
 	// Build a resolver that knows the project's services so
 	// ${{otherSvc.HOST|PORT|URL|INTERNAL_URL}} expands to a literal
 	// in-cluster DNS string. Closure over ns + the project's
-	// service list — fetched once per SetEnv so a 50-var update
+	// service list — fetched once per call so a 50-var update
 	// doesn't fan out 50 list calls.
 	svcResolver, err := s.buildServiceResolver(ctx, project, ns)
 	if err != nil {
-		return fmt.Errorf("resolve services: %w", err)
+		return nil, fmt.Errorf("resolve services: %w", err)
 	}
 	// Addon resolver — same pattern. Without this, a typo'd
 	// ${{ pg.URL }} when there's no `pg` addon silently emits a
@@ -1401,7 +1466,7 @@ func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, e
 		AllowPending: opts.AllowPending,
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// Cross-project ownership guard on every emitted secretKeyRef. This is
 	// the critical check for the AllowPending path (declarative `kuso
@@ -1419,34 +1484,17 @@ func (s *Service) SetEnvWithOpts(ctx context.Context, project, service string, e
 		}
 		refName, _ := secretRefNameOf(ev.ValueFrom)
 		if refName == "" {
-			continue
+			// Not a (well-formed) secretKeyRef. Nothing else is
+			// supported: a configMapKeyRef / fieldRef / resourceFieldRef
+			// could read cluster state we never vetted for ownership, so
+			// refuse it outright instead of persisting it unvalidated.
+			return nil, fmt.Errorf("%w: env var %q: unsupported valueFrom — only secretKeyRef with a non-empty name is supported", ErrInvalid, ev.Name)
 		}
 		if verr := s.validateSecretRefName(ctx, project, service, refName); verr != nil {
-			return verr
+			return nil, verr
 		}
 	}
-	// RMW under optimistic concurrency (WithRetry) — the in-process
-	// service lock doesn't span replicas, so fetch-mutate-update so a
-	// concurrent spec edit on another pod isn't clobbered.
-	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, serviceCRName(project, service), func(svc *kube.KusoService) error {
-		svc.Spec.EnvVars = convertEnvVars(rewritten)
-		return nil
-	})
-	if err != nil {
-		return fmt.Errorf("update service env: %w", err)
-	}
-	// Propagate to envs — the chart reads from the env CR, not the
-	// service CR (see propagateChangedToEnvs). Best-effort: a kube
-	// error here doesn't fail the user-facing save, but we log it
-	// loudly because the env CRs ARE the source of truth for what
-	// the pod sees; a silent propagation skip = drift the user can't
-	// see in the UI without inspecting the env CR by hand.
-	if err := s.propagateChangedToEnvs(ctx, ns, project, service, updated, changedFields{EnvVars: true}); err != nil {
-		slog.WarnContext(ctx, "SetEnv: env propagation failed",
-			"project", project, "service", service, "err", err)
-		return nil
-	}
-	return nil
+	return rewritten, nil
 }
 
 // buildAddonResolver returns a closure that maps an addon ref name
@@ -1927,7 +1975,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	// status patch) can't silently clobber this save. The changed-field
 	// flags are captured into `changed` for the post-update propagation.
 	var changed changedFields
-	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, serviceCRName(project, service), func(svc *kube.KusoService) error {
+	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
 		if req.DisplayName != nil {
 			dn := strings.TrimSpace(*req.DisplayName)
 			if dn != "" && !displayNameRE.MatchString(dn) {

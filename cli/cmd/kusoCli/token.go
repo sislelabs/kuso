@@ -64,7 +64,11 @@ var tokenCreateCmd = &cobra.Command{
 			Token     string `json:"token"`
 			ExpiresAt string `json:"expiresAt"`
 		}
-		_ = json.Unmarshal(resp.Body(), &data)
+		// The token is shown exactly once — a swallowed decode error
+		// here would print an empty token and lose it forever.
+		if err := json.Unmarshal(resp.Body(), &data); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
 		fmt.Printf("Token %q created. Expires %s.\n\n", data.Name, data.ExpiresAt)
 		fmt.Println("  --- This token is shown ONCE. Save it now. ---")
 		fmt.Println()
@@ -84,8 +88,8 @@ var tokenListCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListTokens()
-		if err != nil {
-			return err
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("list tokens: %w", err)
 		}
 		var items []map[string]any
 		if err := json.Unmarshal(resp.Body(), &items); err != nil {

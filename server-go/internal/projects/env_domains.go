@@ -65,7 +65,7 @@ func (s *Service) AddEnvDomain(ctx context.Context, project, service, envName, h
 		}
 	}
 
-	updated, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envCRName, func(env *kube.KusoEnvironment) error {
+	updated, err := s.updateOwnedEnvWithRetry(ctx, ns, project, envCRName, func(env *kube.KusoEnvironment) error {
 		// Idempotent: re-adding an existing host is a no-op. The CLI
 		// retry path benefits; the UI's "+ Add" doesn't repeat-fire
 		// but the safety still matters.
@@ -97,7 +97,7 @@ func (s *Service) RemoveEnvDomain(ctx context.Context, project, service, envName
 		return nil, err
 	}
 	envCRName := envCRNameFor(project, service, envName)
-	updated, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envCRName, func(env *kube.KusoEnvironment) error {
+	updated, err := s.updateOwnedEnvWithRetry(ctx, ns, project, envCRName, func(env *kube.KusoEnvironment) error {
 		out := env.Spec.AdditionalHosts[:0]
 		for _, h := range env.Spec.AdditionalHosts {
 			if !strings.EqualFold(h, host) {
@@ -167,7 +167,7 @@ func (s *Service) SetEnvDomains(ctx context.Context, project, service, envName s
 		}
 	}
 
-	updated, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envCRName, func(env *kube.KusoEnvironment) error {
+	updated, err := s.updateOwnedEnvWithRetry(ctx, ns, project, envCRName, func(env *kube.KusoEnvironment) error {
 		env.Spec.AdditionalHosts = clean
 		env.Spec.TLSHosts = computeTLSHosts(env.Spec.Host, env.Spec.AdditionalHosts)
 		return nil
@@ -242,7 +242,7 @@ func (s *Service) SetEnvScopedVar(ctx context.Context, project, service, envName
 		}
 	}
 
-	return s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envCRName, func(env *kube.KusoEnvironment) error {
+	return s.updateOwnedEnvWithRetry(ctx, ns, project, envCRName, func(env *kube.KusoEnvironment) error {
 		// Record this name as a DELIBERATE per-env override so later
 		// service-level propagation preserves it instead of re-stamping
 		// the service value over it. This explicit marker is what lets
@@ -278,7 +278,7 @@ func (s *Service) UnsetEnvScopedVar(ctx context.Context, project, service, envNa
 	}
 	envCRName := envCRNameFor(project, service, envName)
 	var notFound bool
-	updated, err := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envCRName, func(env *kube.KusoEnvironment) error {
+	updated, err := s.updateOwnedEnvWithRetry(ctx, ns, project, envCRName, func(env *kube.KusoEnvironment) error {
 		notFound = false
 		out := make([]kube.KusoEnvVar, 0, len(env.Spec.EnvVars))
 		found := false

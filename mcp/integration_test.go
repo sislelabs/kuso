@@ -15,6 +15,7 @@ package main_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -54,6 +55,9 @@ func startFakeKuso(t *testing.T) *httptest.Server {
 			})
 
 		case r.Method == http.MethodGet && r.URL.Path == "/api/projects/analiz":
+			// Mirrors the real projects.DescribeResponse: project +
+			// services + environments, NO addons key (addons live on
+			// their own route below).
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"project": map[string]any{
 					"metadata": map[string]any{"name": "analiz"},
@@ -66,7 +70,18 @@ func startFakeKuso(t *testing.T) *httptest.Server {
 				},
 				"services":     []any{map[string]any{"metadata": map[string]any{"name": "analiz-api"}}},
 				"environments": []any{},
-				"addons":       []any{},
+			})
+
+		case r.Method == http.MethodGet && r.URL.Path == "/api/projects/analiz/addons":
+			_ = json.NewEncoder(w).Encode([]map[string]any{
+				{
+					"metadata": map[string]any{"name": "analiz-pg"},
+					"spec": map[string]any{
+						"project": "analiz",
+						"kind":    "postgres",
+						"size":    "small",
+					},
+				},
 			})
 
 		case r.Method == http.MethodPost && r.URL.Path == "/api/projects":
@@ -82,8 +97,46 @@ func startFakeKuso(t *testing.T) *httptest.Server {
 			_, _ = w.Write([]byte(`{"metadata":{"name":"x-pg"}}`))
 
 		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/addons/"):
+			// Mirror the real server's typed-confirmation guard
+			// (handlers/addons.go Delete): DELETE without
+			// ?confirm=<addon-name> is a 400.
+			addon := r.URL.Path[strings.LastIndex(r.URL.Path, "/")+1:]
+			if r.URL.Query().Get("confirm") != addon {
+				http.Error(w, "addon delete requires ?confirm=<addon-name> to acknowledge data loss", http.StatusBadRequest)
+				return
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{}`))
+
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/apply"):
+			// Mirrors the real /apply contract: the full spec.Plan shape
+			// (services + addons + crons + wouldDelete), and — crucially —
+			// per-step errors returned with HTTP 200 (the server does not
+			// abort on one bad resource).
+			body, _ := io.ReadAll(r.Body)
+			plan := map[string]any{
+				"servicesToCreate": []string{"api"},
+				"servicesToUpdate": []string{},
+				"servicesToDelete": []string{},
+				"addonsToCreate":   []string{},
+				"addonsToUpdate":   []string{},
+				"addonsToDelete":   []string{},
+				"cronsToCreate":    []string{"nightly"},
+				"cronsToUpdate":    []string{},
+				"cronsToDelete":    []string{},
+				"wouldDelete":      []string{"service:legacy"},
+			}
+			if r.URL.Query().Get("dryRun") == "1" {
+				_ = json.NewEncoder(w).Encode(plan)
+				return
+			}
+			resp := map[string]any{"plan": plan}
+			if strings.Contains(string(body), "badsvc") {
+				resp["errors"] = []map[string]any{
+					{"resource": "service:badsvc", "op": "create", "message": "boom"},
+				}
+			}
+			_ = json.NewEncoder(w).Encode(resp)
 
 		default:
 			http.Error(w, "unknown path: "+r.Method+" "+r.URL.Path, http.StatusNotFound)
@@ -204,6 +257,9 @@ func TestMCPDescribeProject(t *testing.T) {
 	if !strings.Contains(text, "services: 1") {
 		t.Errorf("expected services count, got %q", text)
 	}
+	if !strings.Contains(text, "addons: 1") {
+		t.Errorf("expected addons count from the dedicated addons route, got %q", text)
+	}
 }
 
 func TestMCPBootstrapRequiresConfirm(t *testing.T) {
@@ -308,6 +364,66 @@ func TestMCPManageAddon(t *testing.T) {
 	})
 	if !strings.Contains(contentText(t, del), "analiz/pg deleted") {
 		t.Errorf("expected addon delete confirmation, got %q", contentText(t, del))
+	}
+}
+
+func TestMCPPlanIncludesCronsAndWouldDelete(t *testing.T) {
+	srv := startFakeKuso(t)
+	bin := buildBinary(t)
+	s := newSession(t, bin, srv.URL)
+
+	res := callTool(t, s, "plan", map[string]any{
+		"project": "analiz",
+		"yaml":    "project: analiz\n",
+	})
+	text := contentText(t, res)
+	if !strings.Contains(text, "+ Crons nightly") {
+		t.Errorf("expected cron create in plan summary, got %q", text)
+	}
+	if !strings.Contains(text, "would delete service:legacy") {
+		t.Errorf("expected wouldDelete report in plan summary, got %q", text)
+	}
+}
+
+func TestMCPApplyIncludesCronsAndWouldDelete(t *testing.T) {
+	srv := startFakeKuso(t)
+	bin := buildBinary(t)
+	s := newSession(t, bin, srv.URL)
+
+	res := callTool(t, s, "apply", map[string]any{
+		"project": "analiz",
+		"yaml":    "project: analiz\n",
+	})
+	text := contentText(t, res)
+	if !strings.Contains(text, "+ Crons nightly") {
+		t.Errorf("expected cron create in apply summary, got %q", text)
+	}
+	if !strings.Contains(text, "would delete service:legacy") {
+		t.Errorf("expected wouldDelete report in apply summary, got %q", text)
+	}
+}
+
+func TestMCPApplyPartialFailureIsError(t *testing.T) {
+	srv := startFakeKuso(t)
+	bin := buildBinary(t)
+	s := newSession(t, bin, srv.URL)
+
+	res, err := s.CallTool(context.Background(), &mcp.CallToolParams{
+		Name: "apply",
+		Arguments: map[string]any{
+			"project": "analiz",
+			"yaml":    "project: analiz\nservices:\n  - name: badsvc\n",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CallTool: %v", err)
+	}
+	if !res.IsError {
+		t.Errorf("expected IsError when the server reports per-step apply errors")
+	}
+	text := contentText(t, res)
+	if !strings.Contains(text, "service:badsvc") || !strings.Contains(text, "boom") {
+		t.Errorf("expected per-step error detail in content, got %q", text)
 	}
 }
 

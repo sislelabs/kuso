@@ -94,12 +94,18 @@ var migrateCoolifyCmd = &cobra.Command{
 		}
 
 		fmt.Fprintln(os.Stderr, "→ applying to kuso…")
-		applied := applyMigration(cmd.Context(), c, items)
-		fmt.Fprintf(os.Stderr, "→ applied %d resources\n", applied)
+		stats := applyMigration(cmd.Context(), c, items)
+		fmt.Fprintf(os.Stderr, "→ applied: %d created, %d skipped (already exist), %d failed\n",
+			stats.created, stats.skipped, stats.failed)
 
 		if migrateOutDir != "" {
 			n := writeDataMigrationScripts(items, migrateOutDir)
 			fmt.Fprintf(os.Stderr, "→ wrote %d migrate-data.sh stubs to %s\n", n, migrateOutDir)
+		}
+		// Partial failure must not exit 0 — scripts chaining on this
+		// command would treat a half-migrated instance as done.
+		if stats.failed > 0 {
+			return fmt.Errorf("%d resource(s) failed to migrate — see ✗/⚠ lines above", stats.failed)
 		}
 		return nil
 	},
@@ -183,8 +189,18 @@ func actionEmoji(a string) string {
 	return "·"
 }
 
-func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item) int {
-	created := 0
+// migrationStats is the per-resource outcome tally for --apply.
+// created = newly created on kuso; skipped = 409 conflicts (already
+// exist, fine on re-runs); failed = anything that errored and was NOT
+// applied. The command exits non-zero when failed > 0.
+type migrationStats struct {
+	created int
+	skipped int
+	failed  int
+}
+
+func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item) migrationStats {
+	var stats migrationStats
 	// Group by Coolify project NAME first (not slug) so two distinct
 	// Coolify projects that happen to slugify to the same string each
 	// get their own bucket. assignKusoSlugs adds the collision suffix.
@@ -223,6 +239,7 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 		}
 		if defaultRepoURL == "" {
 			fmt.Fprintf(os.Stderr, "    ⚠ no git-backed app — skipping project (kuso requires a defaultRepo)\n")
+			stats.failed += len(byProject[projectSlug])
 			continue
 		}
 
@@ -236,17 +253,20 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 		resp, err := api.CreateProject(req)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "    ✗ create project: %v\n", err)
+			stats.failed++
 			continue
 		}
 		switch {
 		case resp.StatusCode() == 409:
 			fmt.Fprintf(os.Stderr, "    · project exists (ok)\n")
+			stats.skipped++
 		case resp.StatusCode() >= 300:
 			fmt.Fprintf(os.Stderr, "    ✗ create project %d: %s\n", resp.StatusCode(), string(resp.Body()))
+			stats.failed++
 			continue
 		default:
 			fmt.Fprintf(os.Stderr, "    ✓ project created\n")
-			created++
+			stats.created++
 		}
 
 		// Apps → services + envs.
@@ -271,18 +291,28 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 			sr, err := api.AddService(projectSlug, svcReq)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "      ✗ service %s: %v\n", svcSlug, err)
+				stats.failed++
 				continue
 			}
 			if sr.StatusCode() >= 300 && sr.StatusCode() != 409 {
 				fmt.Fprintf(os.Stderr, "      ✗ service %s %d: %s\n", svcSlug, sr.StatusCode(), string(sr.Body()))
+				stats.failed++
 				continue
 			}
-			created++
-			fmt.Fprintf(os.Stderr, "      ✓ service %s\n", svcSlug)
+			if sr.StatusCode() == 409 {
+				// Conflict = already exists. Fine on a re-run, but it is
+				// NOT a newly created resource — count it separately.
+				stats.skipped++
+				fmt.Fprintf(os.Stderr, "      · service %s exists (ok)\n", svcSlug)
+			} else {
+				stats.created++
+				fmt.Fprintf(os.Stderr, "      ✓ service %s\n", svcSlug)
+			}
 
 			envs, err := c.ListApplicationEnvs(ctx, it.App.UUID)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "        ⚠ list envs: %v\n", err)
+				stats.failed++
 				continue
 			}
 			body := kusoApi.SetEnvRequest{EnvVars: []map[string]any{}}
@@ -298,10 +328,12 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 			er, err := api.SetEnv(projectSlug, svcSlug, body)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "        ⚠ set env: %v\n", err)
+				stats.failed++
 				continue
 			}
 			if er.StatusCode() >= 300 {
 				fmt.Fprintf(os.Stderr, "        ⚠ set env %d: %s\n", er.StatusCode(), string(er.Body()))
+				stats.failed++
 				continue
 			}
 			fmt.Fprintf(os.Stderr, "        ✓ %d env vars\n", len(body.EnvVars))
@@ -320,17 +352,24 @@ func applyMigration(ctx context.Context, c *coolify.Client, items []coolify.Item
 			ar, err := api.AddAddon(projectSlug, kusoApi.CreateAddonRequest{Name: addonName, Kind: kind})
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "      ✗ addon %s: %v\n", addonName, err)
+				stats.failed++
 				continue
 			}
 			if ar.StatusCode() >= 300 && ar.StatusCode() != 409 {
 				fmt.Fprintf(os.Stderr, "      ✗ addon %s %d: %s\n", addonName, ar.StatusCode(), string(ar.Body()))
+				stats.failed++
 				continue
 			}
-			created++
-			fmt.Fprintf(os.Stderr, "      ✓ addon %s (%s)\n", addonName, kind)
+			if ar.StatusCode() == 409 {
+				stats.skipped++
+				fmt.Fprintf(os.Stderr, "      · addon %s exists (ok)\n", addonName)
+			} else {
+				stats.created++
+				fmt.Fprintf(os.Stderr, "      ✓ addon %s (%s)\n", addonName, kind)
+			}
 		}
 	}
-	return created
+	return stats
 }
 
 func writeDataMigrationScripts(items []coolify.Item, outDir string) int {

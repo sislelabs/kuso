@@ -99,6 +99,19 @@ func imageParts(image string) (repo, tag string) {
 	return strings.ToLower(image), ""
 }
 
+// imageDigest returns the "@sha256:…" digest suffix of an image
+// reference, or "" when the image isn't digest-pinned. kuso's image
+// spec is repository:tag only (the env chart renders exactly that), so
+// a digest can never be carried through — callers use this to flag the
+// drop instead of silently converting a pinned image to a mutable tag.
+func imageDigest(image string) string {
+	image = strings.TrimSpace(image)
+	if at := strings.Index(image, "@"); at >= 0 {
+		return image[at:]
+	}
+	return ""
+}
+
 // baseImageName strips a known registry host from a repository so
 // "docker.io/library/postgres" and "postgres" both normalize to
 // "postgres", and "ghcr.io/bitnami/redis" → "bitnami/redis".

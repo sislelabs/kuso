@@ -1,4 +1,4 @@
-import { Box, Package, FileCode2, Layers } from "lucide-react";
+import { Box, Package, FileCode2, Layers, Container, Cog } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const map = {
@@ -6,6 +6,11 @@ const map = {
   nixpacks: { Icon: Package, label: "Nixpacks" },
   buildpacks: { Icon: Layers, label: "Buildpacks" },
   static: { Icon: FileCode2, label: "Static" },
+  // Non-build runtimes. Without these, image services rendered with
+  // the Dockerfile icon+label (misleading — they never build) and
+  // workers fell through to Dockerfile too.
+  image: { Icon: Container, label: "Image" },
+  worker: { Icon: Cog, label: "Worker" },
 } as const;
 
 export type Runtime = keyof typeof map;

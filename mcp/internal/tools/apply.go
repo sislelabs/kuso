@@ -27,27 +27,25 @@ type applyArgs struct {
 	YAML    string `json:"yaml" jsonschema:"the full kuso.yml as a string"`
 }
 
-// applyResult mirrors spec.ApplyResult: the executed plan + per-step errors.
+// applyResult mirrors spec.ApplyResult: the executed plan + per-step
+// errors. The plan reuses the planResult projection (services + addons
+// + crons + wouldDelete) so plan and apply report the same shape.
 type applyResult struct {
-	Plan struct {
-		ServicesToCreate []string `json:"servicesToCreate"`
-		ServicesToUpdate []string `json:"servicesToUpdate"`
-		ServicesToDelete []string `json:"servicesToDelete"`
-		AddonsToCreate   []string `json:"addonsToCreate"`
-		AddonsToUpdate   []string `json:"addonsToUpdate"`
-		AddonsToDelete   []string `json:"addonsToDelete"`
-	} `json:"plan"`
-	Errors []struct {
-		Resource string `json:"resource"`
-		Op       string `json:"op"`
-		Message  string `json:"message"`
-	} `json:"errors,omitempty"`
+	Plan   planResult  `json:"plan"`
+	Errors []stepError `json:"errors,omitempty"`
+}
+
+// stepError mirrors spec.StepError.
+type stepError struct {
+	Resource string `json:"resource"` // "service:api" / "addon:db" / "cron:nightly"
+	Op       string `json:"op"`       // "create" / "update" / "delete" / …
+	Message  string `json:"message"`
 }
 
 func registerApply(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "apply",
-		Description: "Apply a desired-state kuso.yml to a live project — reconciles services + addons (create/update/delete, prune-gated). Mutating; refused in --read-only mode. Call plan first to preview the blast radius. Returns the executed plan plus any per-step errors (apply does not abort on one bad resource — it surfaces every failure).",
+		Description: "Apply a desired-state kuso.yml to a live project — reconciles services + addons + crons (create/update/delete, prune-gated; wouldDelete reports skipped prune candidates). Mutating; refused in --read-only mode. Call plan first to preview the blast radius. Returns the executed plan plus any per-step errors (apply does not abort on one bad resource — it surfaces every failure). Any per-step error marks the tool result as an error: treat that as a partially-failed apply, not success.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args applyArgs) (*mcp.CallToolResult, applyResult, error) {
 		if args.Project == "" {
 			return nil, applyResult{}, errors.New("project is required")
@@ -56,27 +54,31 @@ func registerApply(server *mcp.Server, client *kusoclient.Client) {
 			return nil, applyResult{}, errors.New("yaml is required")
 		}
 		var out applyResult
-		path := "/api/projects/" + args.Project + "/apply"
+		path := apiPath("api", "projects", args.Project, "apply")
 		if err := client.PostRaw(ctx, path, "application/x-yaml", []byte(args.YAML), false, &out); err != nil {
 			return nil, applyResult{}, fmt.Errorf("apply: %w", err)
 		}
 		var b strings.Builder
-		writeSection(&b, "Services", "+", out.Plan.ServicesToCreate)
-		writeSection(&b, "Services", "~", out.Plan.ServicesToUpdate)
-		writeSection(&b, "Services", "-", out.Plan.ServicesToDelete)
-		writeSection(&b, "Addons", "+", out.Plan.AddonsToCreate)
-		writeSection(&b, "Addons", "~", out.Plan.AddonsToUpdate)
-		writeSection(&b, "Addons", "-", out.Plan.AddonsToDelete)
+		writePlanSections(&b, out.Plan)
+		// The server intentionally returns per-step errors with HTTP
+		// 200 (it doesn't abort on one bad resource). For the calling
+		// agent a partial failure IS a failure: mark the tool result
+		// IsError so it can't be mistaken for a clean apply. The
+		// structured payload still carries the executed plan + errors.
+		if len(out.Errors) > 0 {
+			fmt.Fprintf(&b, "Apply PARTIALLY FAILED — %d step error(s); the remaining steps were applied:\n", len(out.Errors))
+			for _, e := range out.Errors {
+				fmt.Fprintf(&b, "  ✖ %s (%s): %s\n", e.Resource, e.Op, e.Message)
+			}
+			return &mcp.CallToolResult{
+				IsError: true,
+				Content: []mcp.Content{&mcp.TextContent{Text: b.String()}},
+			}, out, nil
+		}
 		if b.Len() == 0 {
 			b.WriteString("Applied: no changes — live state already matched the YAML.\n")
 		} else {
 			b.WriteString("Applied.\n")
-		}
-		if len(out.Errors) > 0 {
-			fmt.Fprintf(&b, "\n%d step error(s):\n", len(out.Errors))
-			for _, e := range out.Errors {
-				fmt.Fprintf(&b, "  ✖ %s (%s): %s\n", e.Resource, e.Op, e.Message)
-			}
 		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: b.String()}},

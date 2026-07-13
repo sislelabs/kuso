@@ -130,7 +130,9 @@ var instanceConfigPodSizeCreateCmd = &cobra.Command{
 			return fmt.Errorf("create pod size: %w", err)
 		}
 		var data map[string]any
-		_ = json.Unmarshal(resp.Body(), &data)
+		if err := json.Unmarshal(resp.Body(), &data); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
 		fmt.Printf("pod size %q created (id=%s)\n", podSizeName, asString(data["ID"]))
 		return nil
 	},

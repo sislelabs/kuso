@@ -44,6 +44,7 @@ func apiv1CreateToDomain(in apiv1.CreateProjectRequest) projects.CreateProjectRe
 		out.DefaultRepo = &projects.CreateProjectRepoSpec{
 			URL:           in.DefaultRepo.URL,
 			DefaultBranch: in.DefaultRepo.DefaultBranch,
+			Path:          in.DefaultRepo.Path,
 		}
 	}
 	if in.GitHub != nil {
@@ -114,6 +115,27 @@ func apiv1CreateServiceToDomain(in apiv1.CreateServiceRequest) projects.CreateSe
 	if in.Image != nil {
 		out.Image = &projects.ServiceImageSpec{Repository: in.Image.Repository, Tag: in.Image.Tag}
 	}
+	// Release hook, build args, public env, and security context were
+	// silently DROPPED by this conversion before — the wire DTO didn't
+	// carry them, so callers sending them got 201 with the config
+	// missing. Map them through 1:1 with the internal create shape.
+	if in.Release != nil {
+		out.Release = &projects.PatchReleaseRequest{
+			Command:        in.Release.Command,
+			TimeoutSeconds: in.Release.TimeoutSeconds,
+		}
+	}
+	out.BuildArgs = in.BuildArgs
+	out.PublicEnv = in.PublicEnv
+	if in.SecurityContext != nil {
+		sc := &kube.KusoSecurityContext{
+			AllowPrivilegeEscalation: in.SecurityContext.AllowPrivilegeEscalation,
+		}
+		if in.SecurityContext.Capabilities != nil {
+			sc.Capabilities = &kube.KusoCapabilities{Add: in.SecurityContext.Capabilities.Add}
+		}
+		out.SecurityContext = sc
+	}
 	return out
 }
 
@@ -142,6 +164,7 @@ func apiv1UpdateToDomain(in apiv1.UpdateProjectRequest) projects.UpdateProjectRe
 		out.DefaultRepo = &projects.CreateProjectRepoSpec{
 			URL:           in.DefaultRepo.URL,
 			DefaultBranch: in.DefaultRepo.DefaultBranch,
+			Path:          in.DefaultRepo.Path,
 		}
 	}
 	if in.GitHub != nil {

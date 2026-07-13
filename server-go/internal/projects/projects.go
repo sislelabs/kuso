@@ -257,6 +257,78 @@ func serviceCRName(project, service string) string {
 	return fmt.Sprintf("%s-%s", project, service)
 }
 
+// serviceOwnedByProject reports whether a fetched service CR actually
+// belongs to project. serviceCRName tolerates pre-qualified input, so
+// with overlapping project names ("foo" vs "foo-bar") a foo-authorized
+// caller passing service="foo-bar-web" resolves to foo-bar's CR — the
+// string layer cannot disambiguate; only the fetched CR's spec.project
+// (or, for older CRs, its project label) can.
+func serviceOwnedByProject(svc *kube.KusoService, project string) bool {
+	if svc == nil {
+		return false
+	}
+	if svc.Spec.Project != "" {
+		return svc.Spec.Project == project
+	}
+	return svc.Labels[labelProject] == project
+}
+
+// getOwnedService fetches serviceCRName(project, service) and verifies
+// ownership. A CR that exists but belongs to another project returns
+// ErrNotFound — same as a missing CR, so existence isn't leaked.
+func (s *Service) getOwnedService(ctx context.Context, ns, project, service string) (*kube.KusoService, error) {
+	svc, err := s.Kube.GetKusoService(ctx, ns, serviceCRName(project, service))
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if !serviceOwnedByProject(svc, project) {
+		return nil, fmt.Errorf("%w: service %s/%s", ErrNotFound, project, service)
+	}
+	return svc, nil
+}
+
+// updateOwnedServiceWithRetry is UpdateKusoServiceWithRetry with the
+// ownership check run inside the mutate closure (so it re-applies on
+// every optimistic-concurrency retry). Every write path that resolves
+// a user-supplied service name MUST go through this — a bare
+// UpdateKusoServiceWithRetry(serviceCRName(...)) call can write to a
+// sibling project's CR when project names overlap.
+func (s *Service) updateOwnedServiceWithRetry(ctx context.Context, ns, project, service string, mutate func(*kube.KusoService) error) (*kube.KusoService, error) {
+	return s.Kube.UpdateKusoServiceWithRetry(ctx, ns, serviceCRName(project, service), func(svc *kube.KusoService) error {
+		if !serviceOwnedByProject(svc, project) {
+			return fmt.Errorf("%w: service %s/%s", ErrNotFound, project, service)
+		}
+		return mutate(svc)
+	})
+}
+
+// envOwnedByProject is the KusoEnvironment analogue of
+// serviceOwnedByProject. Env CR names embed "<project>-<service>-…",
+// which is just as ambiguous under overlapping project names.
+func envOwnedByProject(env *kube.KusoEnvironment, project string) bool {
+	if env == nil {
+		return false
+	}
+	if env.Spec.Project != "" {
+		return env.Spec.Project == project
+	}
+	return env.Labels[labelProject] == project
+}
+
+// updateOwnedEnvWithRetry mirrors updateOwnedServiceWithRetry for env
+// CRs reached via user-supplied (project, service, env) tuples.
+func (s *Service) updateOwnedEnvWithRetry(ctx context.Context, ns, project, name string, mutate func(*kube.KusoEnvironment) error) (*kube.KusoEnvironment, error) {
+	return s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, name, func(env *kube.KusoEnvironment) error {
+		if !envOwnedByProject(env, project) {
+			return fmt.Errorf("%w: environment %s/%s", ErrNotFound, project, name)
+		}
+		return mutate(env)
+	})
+}
+
 // productionEnvName is the well-known name for a service's production env.
 func productionEnvName(project, service string) string {
 	return fmt.Sprintf("%s-%s-production", project, service)

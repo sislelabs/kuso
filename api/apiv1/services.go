@@ -13,14 +13,14 @@ package v1
 // pre-slugify value is preserved as the display name; when both
 // are set, DisplayName wins.
 type CreateServiceRequest struct {
-	Name        string                 `json:"name"`
-	DisplayName string                 `json:"displayName,omitempty"`
-	Repo        *ServiceRepoSpec       `json:"repo,omitempty"`
-	Runtime     string                 `json:"runtime,omitempty"`
+	Name        string           `json:"name"`
+	DisplayName string           `json:"displayName,omitempty"`
+	Repo        *ServiceRepoSpec `json:"repo,omitempty"`
+	Runtime     string           `json:"runtime,omitempty"`
 	// Dockerfile overrides the Dockerfile filename (relative to repo.path)
 	// for runtime=dockerfile. Empty = "Dockerfile". For monorepos with a
 	// non-standard name, e.g. "apps/web/Dockerfile.dev".
-	Dockerfile  string                 `json:"dockerfile,omitempty"`
+	Dockerfile string `json:"dockerfile,omitempty"`
 	// Command is argv for runtime=worker. Ignored for other runtimes.
 	Command []string `json:"command,omitempty"`
 	// FromService is the sibling service whose built image this service
@@ -30,13 +30,13 @@ type CreateServiceRequest struct {
 	// argv. The build poller propagates new tags to FromService
 	// consumers in promoteToFromServiceConsumers
 	// (server-go/internal/builds).
-	FromService string           `json:"fromService,omitempty"`
-	Port        int32            `json:"port,omitempty"`
-	Domains []ServiceDomain  `json:"domains,omitempty"`
-	EnvVars []EnvVar         `json:"envVars,omitempty"`
-	Scale   *ServiceScale    `json:"scale,omitempty"`
-	Sleep   *ServiceSleep    `json:"sleep,omitempty"`
-	Static  *ServiceStatic   `json:"static,omitempty"`
+	FromService string          `json:"fromService,omitempty"`
+	Port        int32           `json:"port,omitempty"`
+	Domains     []ServiceDomain `json:"domains,omitempty"`
+	EnvVars     []EnvVar        `json:"envVars,omitempty"`
+	Scale       *ServiceScale   `json:"scale,omitempty"`
+	Sleep       *ServiceSleep   `json:"sleep,omitempty"`
+	Static      *ServiceStatic  `json:"static,omitempty"`
 	// Buildpacks configures the buildpacks runtime. Both fields
 	// default to Paketo's jammy-base + lifecycle 0.20.x when empty.
 	Buildpacks *ServiceBuildpacks `json:"buildpacks,omitempty"`
@@ -44,6 +44,42 @@ type CreateServiceRequest struct {
 	// image instead of building from a repo. Repository required;
 	// Tag defaults to "latest" when empty.
 	Image *ServiceImage `json:"image,omitempty"`
+	// Release configures the pre-deploy release hook (migrations etc.)
+	// at create time. An empty/omitted Command means no hook.
+	Release *ServiceRelease `json:"release,omitempty"`
+	// BuildArgs / PublicEnv configure build-time env at create time.
+	// BuildArgs become --build-arg inputs; PublicEnv names get
+	// sentinel-baked at build and substituted at pod start.
+	BuildArgs map[string]string `json:"buildArgs,omitempty"`
+	PublicEnv []string          `json:"publicEnv,omitempty"`
+	// SecurityContext is the opt-in escape hatch for images that need
+	// specific Linux capabilities or privilege escalation (e.g.
+	// setpriv-based entrypoints). nil = chart default (drop-ALL, no
+	// escalation). The server validates capabilities against its
+	// allowlist.
+	SecurityContext *ServiceSecurityContext `json:"securityContext,omitempty"`
+}
+
+// ServiceRelease is the pre-deploy release hook (migrations etc.).
+// TimeoutSeconds defaults to 900 server-side when <= 0.
+type ServiceRelease struct {
+	Command        []string `json:"command,omitempty"`
+	TimeoutSeconds int      `json:"timeoutSeconds,omitempty"`
+}
+
+// ServiceSecurityContext mirrors the KusoService spec.securityContext
+// block: an allowlisted set of added capabilities plus the
+// allowPrivilegeEscalation toggle. Pointer bool so "omitted" and
+// "explicitly false" stay distinguishable on the wire.
+type ServiceSecurityContext struct {
+	Capabilities             *ServiceCapabilities `json:"capabilities,omitempty"`
+	AllowPrivilegeEscalation *bool                `json:"allowPrivilegeEscalation,omitempty"`
+}
+
+// ServiceCapabilities is the capabilities block on
+// ServiceSecurityContext.
+type ServiceCapabilities struct {
+	Add []string `json:"add,omitempty"`
 }
 
 // PatchServiceRequest is intentionally NOT in this file yet. The

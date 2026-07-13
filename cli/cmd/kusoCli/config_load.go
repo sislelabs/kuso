@@ -152,6 +152,15 @@ func saveToken(instanceName, token string) error {
 	if err := os.WriteFile(tmp, body, 0o600); err != nil {
 		return fmt.Errorf("write tmp credentials: %w", err)
 	}
+	// WriteFile's mode argument only applies when the file is CREATED —
+	// a stale tmp file left by an older run keeps whatever (possibly
+	// wider) mode it already had, and the rename below would promote it
+	// to the live credentials path. Chmod unconditionally so 0600 is
+	// guaranteed regardless of umask or leftovers.
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		_ = os.Remove(tmp)
+		return fmt.Errorf("chmod tmp credentials: %w", err)
+	}
 	if err := os.Rename(tmp, path); err != nil {
 		_ = os.Remove(tmp)
 		return fmt.Errorf("rename credentials: %w", err)

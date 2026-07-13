@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ExternalLink, Check, AlertCircle, X as XIcon } from "lucide-react";
 
 // Public reviewer page (v0.17.0 Phase 2). Unauthenticated — the URL
@@ -39,6 +39,12 @@ interface ReviewerView {
 export default function ReviewerPage() {
   const [token, setToken] = useState<string>("");
   const [view, setView] = useState<ReviewerView | null>(null);
+  // The polling interval below is created once per token and would
+  // otherwise close over the INITIAL `view` (null) forever — meaning
+  // "stop once seeded/decided" never triggered and the page polled for
+  // its whole lifetime. The ref always holds the latest view.
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [comment, setComment] = useState("");
@@ -62,7 +68,8 @@ export default function ReviewerPage() {
     // sees "seeding…" flip to "ready" automatically. Once the
     // decision is recorded the page stops polling.
     const id = setInterval(() => {
-      if (!view || (view.seedPhase !== "succeeded" && view.decision === "")) {
+      const v = viewRef.current;
+      if (!v || (v.seedPhase !== "succeeded" && v.decision === "")) {
         void fetchReview();
       }
     }, 10000);

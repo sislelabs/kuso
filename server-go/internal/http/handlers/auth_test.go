@@ -39,16 +39,16 @@ func seedAdmin(t *testing.T, d *db.DB, password string) {
 	}
 	now := time.Now().UTC()
 	if _, err := d.ExecContext(context.Background(), `
-INSERT INTO "Role" (id, name, description, "createdAt", "updatedAt") VALUES ('r1', 'admin', '', ?, ?)`, now, now); err != nil {
+INSERT INTO "Role" (id, name, description, "createdAt", "updatedAt") VALUES ('r1', 'admin', '', $1, $2)`, now, now); err != nil {
 		t.Fatalf("seed role: %v", err)
 	}
 	if _, err := d.ExecContext(context.Background(), `
 INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", "roleId", provider, "createdAt", "updatedAt")
-VALUES ('u1', 'admin', 'a@b', ?, false, true, 'r1', 'local', ?, ?)`, hash, now, now); err != nil {
+VALUES ('u1', 'admin', 'a@b', $1, false, true, 'r1', 'local', $2, $3)`, hash, now, now); err != nil {
 		t.Fatalf("seed user: %v", err)
 	}
 	if _, err := d.ExecContext(context.Background(), `
-INSERT INTO "Permission" (id, resource, action, "createdAt", "updatedAt") VALUES ('p1', 'app', 'read', ?, ?)`, now, now); err != nil {
+INSERT INTO "Permission" (id, resource, action, "createdAt", "updatedAt") VALUES ('p1', 'app', 'read', $1, $2)`, now, now); err != nil {
 		t.Fatalf("seed perm: %v", err)
 	}
 	if _, err := d.ExecContext(context.Background(), `

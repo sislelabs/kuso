@@ -35,6 +35,23 @@ type Note struct {
 // JSON-tagged and stable.
 type Report struct {
 	Notes []Note `json:"notes"`
+	// UnresolvedEnvFiles lists env_file paths whose values were never
+	// read (the parser deliberately doesn't inline env files, see
+	// Parse). Services would deploy WITHOUT that configuration, so the
+	// CLI refuses --apply while this is non-empty unless the user
+	// passes --allow-missing-env-files.
+	UnresolvedEnvFiles []string `json:"unresolvedEnvFiles,omitempty"`
+}
+
+// unresolvedEnvFile records an env_file whose values were not read,
+// deduplicating across services that reference the same file.
+func (r *Report) unresolvedEnvFile(path string) {
+	for _, p := range r.UnresolvedEnvFiles {
+		if p == path {
+			return
+		}
+	}
+	r.UnresolvedEnvFiles = append(r.UnresolvedEnvFiles, path)
 }
 
 func (r *Report) add(a Action, service, format string, args ...any) {

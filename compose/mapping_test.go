@@ -279,6 +279,8 @@ services:
 func TestParse_MissingEnvFileDoesNotFail(t *testing.T) {
 	// A referenced env_file that isn't present on disk must not abort
 	// the import — compose-go stats it by default; we disable that.
+	// But because the values are never read, the conversion must carry
+	// a BLOCKING flag + record the file so --apply refuses.
 	doc, rep := convertString(t, `
 services:
   worker:
@@ -289,14 +291,231 @@ services:
 	if findService(doc, "worker") == nil {
 		t.Fatal("worker service should still convert despite missing env_file")
 	}
-	sawEnvFileSkip := false
+	sawEnvFileFlag := false
 	for _, n := range rep.Notes {
-		if n.Action == ActionSkip && strings.Contains(n.Detail, "env_file") {
-			sawEnvFileSkip = true
+		if n.Action == ActionFlag && strings.Contains(n.Detail, "env_file") {
+			sawEnvFileFlag = true
 		}
 	}
-	if !sawEnvFileSkip {
-		t.Error("missing env_file should be reported as skipped")
+	if !sawEnvFileFlag {
+		t.Error("unread env_file should be reported as a blocking flag")
+	}
+	if len(rep.UnresolvedEnvFiles) != 1 || rep.UnresolvedEnvFiles[0] != ".env.production" {
+		t.Errorf("UnresolvedEnvFiles = %v, want [.env.production]", rep.UnresolvedEnvFiles)
+	}
+}
+
+func TestConvert_EnvFileDedupedAcrossServices(t *testing.T) {
+	_, rep := convertString(t, `
+services:
+  api:
+    image: myorg/api:1
+    env_file: [.env]
+  worker:
+    image: myorg/worker:1
+    env_file: [.env]
+`)
+	if len(rep.UnresolvedEnvFiles) != 1 || rep.UnresolvedEnvFiles[0] != ".env" {
+		t.Errorf("UnresolvedEnvFiles = %v, want the shared file recorded once", rep.UnresolvedEnvFiles)
+	}
+}
+
+func TestImageDigest(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"redis@sha256:abc", "@sha256:abc"},
+		{"ghcr.io/me/api:1.4@sha256:def", "@sha256:def"},
+		{"postgres:16", ""},
+		{"", ""},
+	}
+	for _, c := range cases {
+		if got := imageDigest(c.in); got != c.want {
+			t.Errorf("imageDigest(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestConvert_DigestPinnedImageFlagged(t *testing.T) {
+	// kuso's image spec is repository:tag only — a digest pin can't be
+	// preserved. It must surface as a flag, never silently become a
+	// mutable tag.
+	doc, rep := convertString(t, `
+services:
+  api:
+    image: ghcr.io/me/api@sha256:0123456789abcdef
+`)
+	svc := findService(doc, "api")
+	if svc == nil {
+		t.Fatal("api service not found")
+	}
+	if svc.Image == nil || svc.Image.Repository != "ghcr.io/me/api" || svc.Image.Tag != "latest" {
+		t.Errorf("image = %+v, want ghcr.io/me/api:latest", svc.Image)
+	}
+	sawDigestFlag := false
+	for _, n := range rep.Notes {
+		if n.Action == ActionFlag && strings.Contains(n.Detail, "sha256:0123456789abcdef") {
+			sawDigestFlag = true
+		}
+	}
+	if !sawDigestFlag {
+		t.Error("dropped digest pin should be flagged")
+	}
+}
+
+func TestRepoSubPath(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{".", ""},
+		{"./", ""},
+		{"", ""},
+		{"./web", "web"},
+		{"web", "web"},
+		{"apps/api/", "apps/api"},
+		{"../outside", ""},
+		{"/abs/path", ""},
+		{"https://github.com/me/repo.git", ""},
+		{"git@github.com:me/repo.git", ""},
+	}
+	for _, c := range cases {
+		if got := repoSubPath(c.in); got != c.want {
+			t.Errorf("repoSubPath(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestConvert_BuildDetailsMappedOrFlagged(t *testing.T) {
+	doc, rep := convertString(t, `
+services:
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile.prod
+      target: runner
+      args:
+        NODE_ENV: production
+        PASSTHRU:
+`)
+	svc := findService(doc, "web")
+	if svc == nil {
+		t.Fatal("web service not found")
+	}
+	if svc.Path != "web" {
+		t.Errorf("path = %q, want %q (build context subdir)", svc.Path, "web")
+	}
+	if svc.BuildArgs == nil || svc.BuildArgs["NODE_ENV"] != "production" {
+		t.Errorf("buildArgs = %v, want NODE_ENV=production mapped", svc.BuildArgs)
+	}
+	// Valueless args (host-env pass-through) are dropped by compose-go's
+	// own normalization before the converter sees them (unset on this
+	// host), so they must not appear as mapped values.
+	if _, ok := svc.BuildArgs["PASSTHRU"]; ok {
+		t.Error("valueless build arg must not be mapped (host-env pass-through)")
+	}
+	var sawDockerfile, sawTarget bool
+	for _, n := range rep.Notes {
+		if n.Action != ActionFlag {
+			continue
+		}
+		if strings.Contains(n.Detail, "Dockerfile.prod") {
+			sawDockerfile = true
+		}
+		if strings.Contains(n.Detail, "build.target") {
+			sawTarget = true
+		}
+	}
+	if !sawDockerfile {
+		t.Error("custom dockerfile filename should be flagged")
+	}
+	if !sawTarget {
+		t.Error("build.target should be flagged")
+	}
+}
+
+func TestConvert_AddonDataNotMigratedFlagged(t *testing.T) {
+	// A datastore conversion mints a fresh, EMPTY addon. Source data
+	// volume, credentials env, and init-script bind mounts must all be
+	// flagged as NOT migrated — never reported as attached storage.
+	_, rep := convertString(t, `
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: hunter2
+    volumes:
+      - dbdata:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+volumes:
+  dbdata:
+`)
+	var sawVolume, sawEnv, sawBind bool
+	for _, n := range rep.Notes {
+		if n.Action != ActionFlag {
+			continue
+		}
+		if strings.Contains(n.Detail, "NOT attached or copied") {
+			sawVolume = true
+		}
+		if strings.Contains(n.Detail, "NOT carried over") {
+			sawEnv = true
+		}
+		if strings.Contains(n.Detail, "init scripts") {
+			sawBind = true
+		}
+	}
+	if !sawVolume {
+		t.Error("addon data volume should be flagged as not migrated")
+	}
+	if !sawEnv {
+		t.Error("addon credentials env should be flagged as not carried over")
+	}
+	if !sawBind {
+		t.Error("addon bind mount (init scripts) should be flagged")
+	}
+}
+
+func TestConvert_RuntimeSemanticsReportedNotDropped(t *testing.T) {
+	// Compose fields with no kuso equivalent must show up in the
+	// report — nothing silently dropped.
+	_, rep := convertString(t, `
+services:
+  app:
+    image: myorg/app:1
+    user: "1000:1000"
+    working_dir: /srv
+    labels:
+      com.example.team: platform
+    depends_on:
+      db:
+        condition: service_healthy
+    secrets:
+      - app_secret
+    configs:
+      - app_config
+    mem_limit: 512m
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+  db:
+    image: postgres:16
+secrets:
+  app_secret:
+    file: ./secret.txt
+configs:
+  app_config:
+    file: ./config.ini
+`)
+	wants := []string{"user=", "working_dir=", "labels", "depends_on", "secrets", "configs", "deploy.resources", "mem_limit"}
+	for _, want := range wants {
+		found := false
+		for _, n := range rep.Notes {
+			if n.Service == "app" && strings.Contains(n.Detail, want) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("compose key %q should be reported for service app, got:\n%s", want, rep.Markdown())
+		}
 	}
 }
 

@@ -789,7 +789,11 @@ export function ServiceOverlay({
                     )}
                     {tab === "metrics" && (
                       <div className="p-5">
-                        <ServiceMetricsPanel project={project} service={service ?? ""} />
+                        {/* env: the resolved env CR for the active
+                            env-switcher selection, so the panel reads
+                            THIS env's pods/timeseries — previously it
+                            always looked up production itself. */}
+                        <ServiceMetricsPanel project={project} service={service ?? ""} env={env} />
                       </div>
                     )}
                     {tab === "logs" && (

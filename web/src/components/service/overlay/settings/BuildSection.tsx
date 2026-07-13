@@ -7,6 +7,44 @@ import { Section, Row, RUNTIMES, type SectionProps } from "./_primitives";
 
 export function BuildSection({ state, setState }: SectionProps) {
   const isDockerfile = state.runtime === "dockerfile";
+  // runtime=image services never build — the chart pulls the image
+  // straight from the registry. Editing the reference here + saving
+  // IS the redeploy path for them, so instead of the build-strategy
+  // pills (which would silently convert the service to a build
+  // runtime with no repo configured) we surface the image ref.
+  if (state.runtime === "image") {
+    return (
+      <Section id="build" title="Image" icon={Hammer} hint="pre-built — no build pipeline">
+        <Row
+          label="repository"
+          hint="full registry path, e.g. ghcr.io/owner/app"
+          control={
+            <Input
+              value={state.imageRepository}
+              onChange={(e) => setState((s) => ({ ...s, imageRepository: e.target.value }))}
+              placeholder="ghcr.io/owner/app"
+              className="h-7 w-full font-mono text-[12px]"
+              spellCheck={false}
+            />
+          }
+        />
+        <Row
+          label="tag"
+          hint="save a new tag to roll the service; blank = latest"
+          control={
+            <Input
+              value={state.imageTag}
+              onChange={(e) => setState((s) => ({ ...s, imageTag: e.target.value }))}
+              placeholder="latest"
+              className="h-7 w-48 font-mono text-[12px]"
+              spellCheck={false}
+            />
+          }
+          last
+        />
+      </Section>
+    );
+  }
   return (
     <Section id="build" title="Build" icon={Hammer}>
       <Row

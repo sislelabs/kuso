@@ -723,11 +723,17 @@ type KusoAddon struct {
 }
 
 type KusoAddonSpec struct {
-	Project     string         `json:"project"`
-	Kind        string         `json:"kind"`
-	Version     string         `json:"version,omitempty"`
-	Size        string         `json:"size,omitempty"`
-	HA          bool           `json:"ha,omitempty"`
+	Project string `json:"project"`
+	Kind    string `json:"kind"`
+	Version string `json:"version,omitempty"`
+	Size    string `json:"size,omitempty"`
+	HA      bool   `json:"ha,omitempty"`
+	// SingleNode is only honoured when HA=true on a kind=postgres
+	// addon. It relaxes the CNPG pod anti-affinity so the 3 replicas
+	// may colocate on one kube node — accepts the SPOF in exchange
+	// for HA-shaped replication on a single-node cluster (dev /
+	// staging). Default false: replicas land on different nodes.
+	SingleNode  bool           `json:"singleNode,omitempty"`
 	StorageSize string         `json:"storageSize,omitempty"`
 	Resources   map[string]any `json:"resources,omitempty"`
 	// PasswordSecret is a SecretKeyRef escape hatch for bringing

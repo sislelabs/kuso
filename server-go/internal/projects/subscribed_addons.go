@@ -257,7 +257,7 @@ func (s *Service) SetSubscribedAddons(ctx context.Context, project, service stri
 	// update under optimistic concurrency so a concurrent spec edit on
 	// another pod (or a mid-flight operator status patch) can't be
 	// clobbered — the mutation re-runs against the fresh object on 409.
-	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, serviceCRName(project, service), func(svc *kube.KusoService) error {
+	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
 		svc.Spec.SubscribedAddons = clean
 		return nil
 	})

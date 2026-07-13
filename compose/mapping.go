@@ -1,6 +1,26 @@
 package compose
 
-import "strings"
+import (
+	"path"
+	"strings"
+)
+
+// repoSubPath maps a compose build context onto kuso's `path:` field
+// (the subdirectory of the repo the build runs in). Only a plain
+// relative subdirectory maps; "." (repo root), absolute paths, parent
+// escapes, and URL/git contexts return "" — those are still reported
+// via the build-context note, just not mapped.
+func repoSubPath(context string) string {
+	c := strings.TrimSpace(context)
+	if c == "" || strings.Contains(c, "://") || strings.HasPrefix(c, "git@") {
+		return ""
+	}
+	c = path.Clean(c)
+	if c == "." || strings.HasPrefix(c, "/") || c == ".." || strings.HasPrefix(c, "../") {
+		return ""
+	}
+	return c
+}
 
 // slugify turns an arbitrary compose service / volume name into a
 // kube-safe slug: lowercase, runs of non-[a-z0-9] collapse to "-",

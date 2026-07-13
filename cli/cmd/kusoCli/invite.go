@@ -11,6 +11,7 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 
 	"kuso/pkg/kusoApi"
@@ -69,7 +70,9 @@ var inviteCreateCmd = &cobra.Command{
 			Invite map[string]any `json:"invite"`
 			URL    string         `json:"url"`
 		}
-		_ = json.Unmarshal(resp.Body(), &data)
+		if err := json.Unmarshal(resp.Body(), &data); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
 		fmt.Printf("invite %s created\n\n", asString(data.Invite["id"]))
 		fmt.Println(data.URL)
 		return nil
@@ -157,7 +160,7 @@ var inviteLookupCmd = &cobra.Command{
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.RawGet("/api/invites/lookup/" + args[0])
+		resp, err := api.RawGet("/api/invites/lookup/" + url.PathEscape(args[0]))
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("lookup invite: %w", err)
 		}

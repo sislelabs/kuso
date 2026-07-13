@@ -265,6 +265,11 @@ export interface PatchServiceBody {
   // (relative to repo path). "" clears back to the default "Dockerfile";
   // absent leaves it unchanged.
   dockerfile?: string;
+  // image re-points a runtime=image service at a different registry
+  // repository/tag. Absent leaves it unchanged; tag defaults to
+  // "latest" server-side. This is ALSO how image services redeploy —
+  // they never build, so there's no build endpoint to hit.
+  image?: { repository: string; tag?: string };
   domains?: { host: string; tls?: boolean }[];
   scale?: { min?: number; max?: number; targetCPU?: number };
   // Pod CPU/memory requests+limits (k8s ResourceRequirements shape).

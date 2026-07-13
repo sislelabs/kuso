@@ -398,8 +398,9 @@ func (h *InvitesHandler) RedeemLocal(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// Pre-flight: make sure the username + email aren't already
-	// taken. We do this BEFORE redeeming so an in-use credential
-	// doesn't burn an invite seat.
+	// taken, for a friendly 409. The real guarantee is the unique
+	// index inside the redemption transaction below — a race past
+	// this check rolls the whole redemption back, seat included.
 	if _, err := h.DB.FindUserByUsername(ctx, req.Username); err == nil {
 		http.Error(w, "username already taken", http.StatusConflict)
 		return
@@ -416,42 +417,20 @@ func (h *InvitesHandler) RedeemLocal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	inv, err := h.DB.RedeemInvite(ctx, req.Token)
-	if err != nil {
-		h.fail(w, err)
-		return
-	}
-
+	// One transaction: seat claim, user creation, the invite's direct
+	// instance role, group membership (or pending fallback), and the
+	// redemption audit row. No partial states — a failure after the
+	// seat claim used to burn the seat and/or leave a user without
+	// the invite's intended membership.
 	id := randomHex(16)
-	if err := h.DB.CreateUser(ctx, db.CreateUserInput{
+	if _, err := h.DB.RedeemInviteNewUser(ctx, req.Token, db.InviteNewUser{
 		ID:           id,
 		Username:     req.Username,
 		Email:        req.Email,
 		PasswordHash: hash,
-		IsActive:     true,
 	}); err != nil {
-		h.Logger.Error("invite: create user", "err", err)
-		http.Error(w, "internal", http.StatusInternalServerError)
+		h.fail(w, err)
 		return
-	}
-
-	// Wire group membership. Best-effort — failure here doesn't
-	// block sign-in (an admin can fix it later) but we surface the
-	// error in logs so it's visible.
-	if inv.GroupID.Valid {
-		if err := h.DB.AddUserToGroup(ctx, id, inv.GroupID.String); err != nil {
-			h.Logger.Warn("invite: add to group", "user", id, "group", inv.GroupID.String, "err", err)
-		}
-	} else {
-		// No group on the invite → drop the user in the pending
-		// group so an admin can reach them. Mirrors what OAuth does
-		// for un-invited GH signups.
-		if err := h.DB.AddUserToPendingGroup(ctx, id); err != nil {
-			h.Logger.Warn("invite: pending group", "user", id, "err", err)
-		}
-	}
-	if err := h.DB.RecordRedemption(ctx, inv.ID, id); err != nil {
-		h.Logger.Warn("invite: record redemption", "err", err)
 	}
 
 	jwt, err := h.signFor(ctx, id, "local")

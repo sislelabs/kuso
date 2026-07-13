@@ -72,12 +72,8 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 	if err != nil {
 		return nil, err
 	}
-	fqn := service
-	if !strings.HasPrefix(service, project+"-") {
-		fqn = project + "-" + service
-	}
 	var dupConflict bool
-	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, fqn, func(svc *kube.KusoService) error {
+	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
 		dupConflict = false
 		for i := range svc.Spec.Domains {
 			if strings.EqualFold(svc.Spec.Domains[i].Host, host) {
@@ -120,7 +116,6 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 	return updated, nil
 }
 
-
 // RemoveDomain drops a domain from spec.domains by host. ErrNotFound
 // when the host isn't present — distinguishes "I deleted it from the
 // UI but it was already gone" (idempotent retry) from "I tried to
@@ -144,12 +139,8 @@ func (s *Service) RemoveDomain(ctx context.Context, project, service, host strin
 	if err != nil {
 		return nil, err
 	}
-	fqn := service
-	if !strings.HasPrefix(service, project+"-") {
-		fqn = project + "-" + service
-	}
 	var notFound bool
-	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, fqn, func(svc *kube.KusoService) error {
+	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
 		notFound = false
 		out := make([]kube.KusoDomain, 0, len(svc.Spec.Domains))
 		found := false
@@ -226,10 +217,6 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 	if err != nil {
 		return nil, err
 	}
-	fqn := service
-	if !strings.HasPrefix(service, project+"-") {
-		fqn = project + "-" + service
-	}
 
 	next := kube.KusoEnvVar{Name: name}
 	if hasValue {
@@ -246,7 +233,7 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 		}
 	}
 
-	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, fqn, func(svc *kube.KusoService) error {
+	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
 		replaced := false
 		for i := range svc.Spec.EnvVars {
 			if svc.Spec.EnvVars[i].Name == name {
@@ -287,13 +274,9 @@ func (s *Service) UnsetEnvVar(ctx context.Context, project, service, name string
 	if err != nil {
 		return nil, err
 	}
-	fqn := service
-	if !strings.HasPrefix(service, project+"-") {
-		fqn = project + "-" + service
-	}
 
 	var notFound bool
-	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, fqn, func(svc *kube.KusoService) error {
+	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
 		notFound = false
 		out := make([]kube.KusoEnvVar, 0, len(svc.Spec.EnvVars))
 		found := false

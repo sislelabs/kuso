@@ -61,7 +61,7 @@ func registerSetEnv(server *mcp.Server, client *kusoclient.Client) {
 			return nil, struct{}{}, errors.New("project and service are required")
 		}
 		body := setEnvRequest{EnvVars: args.EnvVars}
-		path := "/api/projects/" + args.Project + "/services/" + args.Service + "/env"
+		path := apiPath("api", "projects", args.Project, "services", args.Service, "env")
 		if err := client.PostJSON(ctx, path, body, nil); err != nil {
 			return nil, struct{}{}, fmt.Errorf("set env: %w", err)
 		}
@@ -84,7 +84,7 @@ func registerSetSecret(server *mcp.Server, client *kusoclient.Client) {
 			return nil, struct{}{}, errors.New("key is required")
 		}
 		body := setSecretRequest{Key: args.Key, Value: args.Value, Env: args.Env, Force: args.Force}
-		path := "/api/projects/" + args.Project + "/services/" + args.Service + "/secrets"
+		path := apiPath("api", "projects", args.Project, "services", args.Service, "secrets")
 		if err := client.PostJSON(ctx, path, body, nil); err != nil {
 			return nil, struct{}{}, fmt.Errorf("set secret: %w", err)
 		}

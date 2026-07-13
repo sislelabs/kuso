@@ -34,6 +34,7 @@ import {
   Variable,
 } from "lucide-react";
 import { triggerBuild } from "@/features/services";
+import { serviceShortName } from "@/lib/utils";
 import { toast } from "sonner";
 
 // Pull the current project name out of the pathname when we're on a
@@ -91,16 +92,19 @@ export function CommandPalette() {
   // though the literal isn't in metadata.name — we cram the env-var
   // keys into the value string and surface them as their own
   // CommandGroup so the result reads as "DATABASE_URL → web".
+  // service is the SHORT name (metadata.name is the CR FQN
+  // "<project>-web"; the ?service= param and every /services/:s API
+  // endpoint take "web").
   const envVarRows = useMemo(() => {
     const rows: { service: string; key: string }[] = [];
     for (const s of serviceList) {
-      const name = s.metadata.name;
+      const name = serviceShortName(currentProject, s.metadata.name);
       for (const v of s.spec.envVars ?? []) {
         if (v.name) rows.push({ service: name, key: v.name });
       }
     }
     return rows;
-  }, [serviceList]);
+  }, [serviceList, currentProject]);
 
   const runBuild = async (svc: string) => {
     setOpen(false);
@@ -120,9 +124,12 @@ export function CommandPalette() {
 
         {currentProject && serviceList.length > 0 && (
           <>
+            {/* metadata.name is the CR FQN ("<project>-web"); the
+                ?service= param and the build API both take the SHORT
+                name ("web") — passing the FQN 404s. */}
             <CommandGroup heading={`Services in ${currentProject}`}>
               {serviceList.map((s) => {
-                const name = s.metadata.name;
+                const name = serviceShortName(currentProject, s.metadata.name);
                 return (
                   <CommandItem
                     key={s.metadata.uid ?? name}
@@ -140,23 +147,28 @@ export function CommandPalette() {
 
             {/* Service actions — power users hit cmd-K + "redeploy api"
                 instead of clicking through to the canvas and finding
-                the Trigger button. Same for tailing logs. */}
+                the Trigger button. Same for tailing logs. Image
+                services never build (the server 400s the build
+                endpoint) — they redeploy by bumping the image tag in
+                Settings, so they get no Redeploy row. */}
             <CommandGroup heading="Service actions">
+              {serviceList
+                .filter((s) => s.spec.runtime !== "image")
+                .map((s) => {
+                  const name = serviceShortName(currentProject, s.metadata.name);
+                  return (
+                    <CommandItem
+                      key={`redeploy-${name}`}
+                      onSelect={() => runBuild(name)}
+                      value={`redeploy build trigger ${name}`}
+                    >
+                      <Play className="h-4 w-4 text-[var(--text-tertiary)]" />
+                      <span>Redeploy {name}</span>
+                    </CommandItem>
+                  );
+                })}
               {serviceList.map((s) => {
-                const name = s.metadata.name;
-                return (
-                  <CommandItem
-                    key={`redeploy-${name}`}
-                    onSelect={() => runBuild(name)}
-                    value={`redeploy build trigger ${name}`}
-                  >
-                    <Play className="h-4 w-4 text-[var(--text-tertiary)]" />
-                    <span>Redeploy {name}</span>
-                  </CommandItem>
-                );
-              })}
-              {serviceList.map((s) => {
-                const name = s.metadata.name;
+                const name = serviceShortName(currentProject, s.metadata.name);
                 return (
                   <CommandItem
                     key={`logs-${name}`}

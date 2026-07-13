@@ -56,6 +56,7 @@ spec:
                   enum:
                     - postgres
                     - redis
+                    - valkey
                     - s3
                     - mailpit
                     - nats
@@ -79,6 +80,16 @@ spec:
                 ha:
                   type: boolean
                   default: false
+                singleNode:
+                  type: boolean
+                  default: false
+                  description: >-
+                    Only honoured when ha=true on a kind=postgres addon.
+                    Relaxes the CNPG pod anti-affinity so the 3 replicas
+                    may colocate on one kube node — accepts the SPOF in
+                    exchange for HA-shaped replication on a single-node
+                    cluster (dev / staging). Default false: replicas land
+                    on different nodes.
                 pooler:
                   type: object
                   description: >-

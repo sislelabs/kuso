@@ -122,6 +122,9 @@ func (h *AddonsHandler) EnablePublicTCP(w http.ResponseWriter, r *http.Request) 
 	}
 	project := chi.URLParam(r, "project")
 	name := chi.URLParam(r, "addon")
+	if !h.requireAddonOwned(ctx, w, project, name) {
+		return
+	}
 	port, err := h.Svc.EnablePublicTCP(ctx, project, name)
 	if err != nil {
 		h.fail(w, "enable public-tcp", err)
@@ -152,6 +155,9 @@ func (h *AddonsHandler) DisablePublicTCP(w http.ResponseWriter, r *http.Request)
 	}
 	project := chi.URLParam(r, "project")
 	name := chi.URLParam(r, "addon")
+	if !h.requireAddonOwned(ctx, w, project, name) {
+		return
+	}
 	if err := h.Svc.DisablePublicTCP(ctx, project, name); err != nil {
 		h.fail(w, "disable public-tcp", err)
 		return
@@ -180,6 +186,9 @@ func (h *AddonsHandler) RepairPassword(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
+	if !h.requireAddonOwned(ctx, w, chi.URLParam(r, "project"), chi.URLParam(r, "addon")) {
+		return
+	}
 	if err := h.Svc.RepairPassword(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
 		h.fail(w, "repair addon password", err)
 		return
@@ -193,6 +202,9 @@ func (h *AddonsHandler) ResyncInstance(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := addonsCtx(r)
 	defer cancel()
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
+		return
+	}
+	if !h.requireAddonOwned(ctx, w, chi.URLParam(r, "project"), chi.URLParam(r, "addon")) {
 		return
 	}
 	if err := h.Svc.ResyncInstanceAddon(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon")); err != nil {
@@ -238,6 +250,9 @@ func (h *AddonsHandler) Secret(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	addon := chi.URLParam(r, "addon")
+	if !h.requireAddonOwned(ctx, w, project, addon) {
+		return
+	}
 	values, err := h.Svc.SecretValues(ctx, project, addon)
 	if err != nil {
 		h.fail(w, "addon secret", err)
@@ -271,6 +286,9 @@ func (h *AddonsHandler) SecretKeys(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
 		return
 	}
+	if !h.requireAddonOwned(ctx, w, chi.URLParam(r, "project"), chi.URLParam(r, "addon")) {
+		return
+	}
 	keys, err := h.Svc.SecretKeys(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "addon"))
 	if err != nil {
 		h.fail(w, "addon secret keys", err)
@@ -281,6 +299,24 @@ func (h *AddonsHandler) SecretKeys(w http.ResponseWriter, r *http.Request) {
 
 func addonsCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 10*time.Second)
+}
+
+// requireAddonOwned verifies that the {addon} URL param resolves to a CR
+// actually owned by {project} (addons.Service.GetOwned) and writes the
+// error response when it doesn't. Addon names are accepted in both the
+// short ("pg") and pre-qualified ("myproj-pg") forms, and with
+// overlapping project names (foo vs foo-bar) the pre-qualified form can
+// resolve to a sibling project's CR — requireProjectAccess alone doesn't
+// catch that. Add/Update/Placement/Delete enforce ownership inside
+// addons.Service; this guard covers the routes whose implementations
+// fetch by CR name in sibling files (secret keys/values, public-tcp,
+// repair, instance resync).
+func (h *AddonsHandler) requireAddonOwned(ctx context.Context, w http.ResponseWriter, project, addon string) bool {
+	if _, err := h.Svc.GetOwned(ctx, project, addon); err != nil {
+		h.fail(w, "resolve addon", err)
+		return false
+	}
+	return true
 }
 
 func (h *AddonsHandler) List(w http.ResponseWriter, r *http.Request) {

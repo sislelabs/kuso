@@ -59,7 +59,7 @@ func registerBuild(server *mcp.Server, client *kusoclient.Client) {
 		}
 		body := buildRequest{Branch: args.Branch, Ref: args.Ref, DryRun: args.DryRun}
 		var out buildSummary
-		path := "/api/projects/" + args.Project + "/services/" + args.Service + "/builds"
+		path := apiPath("api", "projects", args.Project, "services", args.Service, "builds")
 		if err := client.PostJSON(ctx, path, body, &out); err != nil {
 			return nil, buildSummary{}, fmt.Errorf("trigger build: %w", err)
 		}
@@ -80,7 +80,7 @@ func registerBuild(server *mcp.Server, client *kusoclient.Client) {
 			return nil, buildSummary{}, errors.New("project and service are required")
 		}
 		var list []buildSummary
-		path := "/api/projects/" + args.Project + "/services/" + args.Service + "/builds"
+		path := apiPath("api", "projects", args.Project, "services", args.Service, "builds")
 		if err := client.GetJSON(ctx, path, &list); err != nil {
 			return nil, buildSummary{}, fmt.Errorf("list builds: %w", err)
 		}

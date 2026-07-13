@@ -50,6 +50,11 @@ export interface FormState {
   // dockerfile overrides the Dockerfile filename for runtime=dockerfile
   // (relative to repo path). Empty = "Dockerfile".
   dockerfile: string;
+  // Image reference for runtime=image services (registry path + tag).
+  // Editing + saving these is the redeploy path for image services —
+  // they bypass the build pipeline entirely.
+  imageRepository: string;
+  imageTag: string;
   // Storage
   volumes: VolumeRow[];
   // Placement
@@ -124,6 +129,8 @@ export function fromSvc(svc?: KusoService): FormState {
     memLimit: svc?.spec.resources?.limits?.memory ?? "",
     runtime: svc?.spec.runtime ?? "dockerfile",
     dockerfile: svc?.spec.dockerfile ?? "",
+    imageRepository: svc?.spec.image?.repository ?? "",
+    imageTag: svc?.spec.image?.tag ?? "",
     volumes: (svc?.spec.volumes ?? []).map((v: KusoVolume) => ({
       name: v.name,
       mountPath: v.mountPath,

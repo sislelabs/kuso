@@ -107,19 +107,26 @@ spec:
            accepts the SPOF for dev. */}}
     enablePodAntiAffinity: {{ ne (default false .Values.singleNode) true }}
     topologyKey: kubernetes.io/hostname
-  {{- /* Placement = nodeSelector. Same shape the bare chart uses. */}}
-  {{- with (include "kusoaddon.placement" . | trim) }}
-  # Note: CNPG accepts spec.affinity.nodeSelector OR spec.nodeSelector;
-  # we render via the helper so spec.placement.{labels,nodes} maps the
-  # same way it does for the single-node chart.
-  nodeSelector:
-    {{- $sel := fromYaml (include "kusoaddon.placement" .) -}}
-    {{- if $sel }}
-    {{- with $sel.nodeSelector }}
-    {{- toYaml . | nindent 4 }}
+    {{- /* Placement. Same spec.placement.{labels,nodes} mapping as the
+           single-node chart, but CNPG nests every scheduling knob under
+           spec.affinity (nodeSelector / nodeAffinity / tolerations —
+           there is no top-level spec.nodeSelector on a Cluster), so we
+           parse the shared helper's output and re-nest it here. */}}
+    {{- $placement := include "kusoaddon.placement" . | fromYaml | default dict }}
+    {{- with $placement.nodeSelector }}
+    nodeSelector:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with $placement.tolerations }}
+    tolerations:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with $placement.affinity }}
+    {{- with .nodeAffinity }}
+    nodeAffinity:
+      {{- toYaml . | nindent 6 }}
     {{- end }}
     {{- end }}
-  {{- end }}
 ---
 {{- /* Conn Secret: same key set as the single-node chart so consumer
        envs round-trip unchanged. POSTGRES_HOST points at the

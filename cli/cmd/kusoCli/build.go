@@ -55,7 +55,7 @@ func pollBuildToTerminal(project, service, buildID string) (string, error) {
 	deadline := time.Now().Add(20 * time.Minute)
 	for time.Now().Before(deadline) {
 		resp, err := api.ListBuilds(project, service)
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return "", fmt.Errorf("poll builds: %w", err)
 		}
 		var items []struct {
@@ -120,7 +120,9 @@ var buildTriggerCmd = &cobra.Command{
 			Branch string `json:"branch"`
 			Status string `json:"status"`
 		}
-		_ = json.Unmarshal(resp.Body(), &data)
+		if err := json.Unmarshal(resp.Body(), &data); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
 		fmt.Printf("build %s started (branch=%s, status=%s)\n", data.ID, data.Branch, data.Status)
 		if buildTriggerFollow && !buildTriggerDryRun && data.ID != "" {
 			status, ferr := pollBuildToTerminal(args[0], args[1], data.ID)
@@ -143,7 +145,7 @@ var buildListCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListBuilds(args[0], args[1])
-		if err != nil {
+		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("list builds: %w", err)
 		}
 		// Server returns []BuildSummary (flat wire shape). The old code

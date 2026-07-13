@@ -133,41 +133,34 @@ func (h *OAuthHandler) GithubCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	// Invite redemption: if the user came from /api/invites/redeem/oauth/start,
 	// the kuso_invite_token cookie pins the GH login to a specific
-	// invite. Try to consume it BEFORE upsertAndIssue so the
-	// bootstrap-or-pending fallback doesn't drop the user in pending.
-	// Failure to redeem is non-fatal: log and continue with the
-	// regular login flow so a stale cookie doesn't lock the user
-	// out.
-	var inviteToConsume *db.Invite
+	// invite. The token is handed to loginAndIssue, which redeems it
+	// atomically AFTER the user row is resolved — and which suppresses
+	// the disaster-recovery admin promotion for invite flows (an
+	// invitee gets exactly what the invite configured, never a
+	// bootstrap promotion to admin).
+	var inviteToken string
 	if c, err := r.Cookie(inviteOAuthCookie); err == nil && c.Value != "" {
-		if inv, ierr := h.DB.RedeemInvite(ctx, c.Value); ierr != nil {
-			h.Logger.Warn("oauth: invite redeem failed; continuing", "err", ierr)
-		} else {
-			inviteToConsume = inv
-		}
+		inviteToken = c.Value
 		// Always clear the cookie — single use.
 		http.SetCookie(w, &http.Cookie{
 			Name: inviteOAuthCookie, Value: "", Path: "/", MaxAge: -1,
 			HttpOnly: true, SameSite: http.SameSiteLaxMode, Secure: isHTTPS(r),
 		})
 	}
-	jwt, err := h.upsertAndIssueWithInvite(ctx, prof, "oauth2", inviteToConsume)
+	jwt, user, err := h.loginAndIssue(ctx, prof, "oauth2", inviteToken)
 	if err != nil {
-		h.fail(w, "issue jwt", err)
+		h.failLogin(w, "github login", err)
 		return
 	}
-	if h.DB != nil && tok != nil {
+	if tok != nil {
 		// Persist the GithubUserLink so the project flow knows which
 		// installations this user can see.
-		userID, _ := h.userIDForProvider(ctx, prof)
-		if userID != "" {
-			ghID, _ := strconv.ParseInt(prof.ProviderID, 10, 64)
-			access := tok.AccessToken
-			_ = h.DB.UpsertGithubUserLink(ctx, db.GithubUserLink{
-				UserID: userID, GithubLogin: prof.Login, GithubID: ghID,
-				AccessToken: nullStringFrom(access),
-			})
-		}
+		ghID, _ := strconv.ParseInt(prof.ProviderID, 10, 64)
+		access := tok.AccessToken
+		_ = h.DB.UpsertGithubUserLink(ctx, db.GithubUserLink{
+			UserID: user.ID, GithubLogin: prof.Login, GithubID: ghID,
+			AccessToken: nullStringFrom(access),
+		})
 	}
 	redirectWithJWT(w, r, jwt)
 }
@@ -218,81 +211,47 @@ func (h *OAuthHandler) OAuth2Callback(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "oauth2 exchange", err)
 		return
 	}
-	jwt, err := h.upsertAndIssue(ctx, prof, "oauth2")
+	jwt, _, err := h.loginAndIssue(ctx, prof, "oauth2", "")
 	if err != nil {
-		h.fail(w, "issue jwt", err)
+		h.failLogin(w, "oauth2 login", err)
 		return
 	}
 	redirectWithJWT(w, r, jwt)
 }
 
-// upsertAndIssueWithInvite is the invite-aware wrapper. When the
-// callback came from a kuso_invite_token cookie, the redemption row
-// has already been incremented; we just need to attach the user to
-// the invite's group instead of falling through to the generic
-// pending-or-admin bootstrap.
-//
-// Idempotency: a re-attempt of the OAuth callback (browser refresh)
-// gets a brand-new invite cookie or none at all, so this method only
-// runs the group-attach path when an invite was actually consumed
-// this call.
-func (h *OAuthHandler) upsertAndIssueWithInvite(ctx context.Context, prof *auth.OAuthProfile, strategy string, inv *db.Invite) (string, error) {
-	jwt, err := h.upsertAndIssue(ctx, prof, strategy)
-	if err != nil {
-		return "", err
-	}
-	if inv == nil {
-		return jwt, nil
-	}
-	uid, _ := h.userIDForProvider(ctx, prof)
-	if uid == "" {
-		return jwt, nil
-	}
-	if inv.GroupID.Valid {
-		if err := h.DB.AddUserToGroup(ctx, uid, inv.GroupID.String); err != nil {
-			h.Logger.Warn("invite oauth: add to group", "user", uid, "group", inv.GroupID.String, "err", err)
-		}
-	}
-	if err := h.DB.RecordRedemption(ctx, inv.ID, uid); err != nil {
-		h.Logger.Warn("invite oauth: record redemption", "err", err)
-	}
-	// We need to RE-ISSUE the JWT so the new group's permissions land
-	// in the claims. Otherwise the user would have to log out + in to
-	// see their new tenancy.
-	freshJWT, err := h.upsertAndIssue(ctx, prof, strategy)
-	if err != nil {
-		// If re-sign fails, return the original — the user is still
-		// logged in, they just won't see new perms until next login.
-		return jwt, nil
-	}
-	return freshJWT, nil
-}
+// Sentinel errors for the OAuth login flow. Wrapped with context via
+// fmt.Errorf("%w: …") at the emit sites; failLogin maps them to HTTP
+// statuses via errors.Is, matching the codebase's error convention.
+var (
+	// errOAuthAccountConflict: the OAuth identity's username/email
+	// collides with an existing account that is NOT linked to this
+	// (provider, providerID). Logging in as that account would be an
+	// account takeover; the flow rejects instead.
+	errOAuthAccountConflict = errors.New("oauth: account conflict")
+	// errOAuthAccountDisabled: the resolved account has isActive=false.
+	errOAuthAccountDisabled = errors.New("oauth: account disabled")
+)
 
-// upsertAndIssue finds-or-creates a kuso User row from the OAuth profile
-// and returns a signed JWT carrying their permissions.
-func (h *OAuthHandler) upsertAndIssue(ctx context.Context, prof *auth.OAuthProfile, strategy string) (string, error) {
+// loginAndIssue resolves the OAuth profile to a kuso User by its
+// immutable (provider, providerID) identity, applies invite/bootstrap
+// membership, and returns a signed JWT carrying the user's permissions.
+//
+// inviteToken != "" marks an invite flow: the invite is redeemed
+// atomically (seat + role + membership + audit row in one tx) and the
+// disaster-recovery admin promotion is SUPPRESSED — an invitee gets the
+// invite's configured access, never a bootstrap promotion to admin.
+func (h *OAuthHandler) loginAndIssue(ctx context.Context, prof *auth.OAuthProfile, strategy, inviteToken string) (string, *db.User, error) {
 	if h.DB == nil {
-		return "", errors.New("oauth: DB not wired")
+		return "", nil, errors.New("oauth: DB not wired")
 	}
-	user, err := h.DB.FindUserByUsername(ctx, prof.Username)
-	created := false
+	user, err := h.resolveOAuthUser(ctx, prof)
 	if err != nil {
-		// Create a stub local user. Password hash is set to a bcrypt of
-		// a random secret so password login is impossible — the user is
-		// OAuth-only until they set a password through the UI.
-		dummy, _ := auth.HashPassword(randomHex(32), 4)
-		id := randomHex(16)
-		isActive := true
-		if err := h.DB.CreateUser(ctx, db.CreateUserInput{
-			ID: id, Username: prof.Username, Email: prof.Email, PasswordHash: dummy, IsActive: isActive,
-		}); err != nil {
-			return "", fmt.Errorf("create user: %w", err)
-		}
-		user, err = h.DB.FindUserByID(ctx, id)
-		if err != nil {
-			return "", fmt.Errorf("re-read user: %w", err)
-		}
-		created = true
+		return "", nil, err
+	}
+	// Disabled accounts must not get a session — same rule the local
+	// login path enforces before password verification.
+	if !user.IsActive {
+		return "", nil, fmt.Errorf("%w: user %s", errOAuthAccountDisabled, user.ID)
 	}
 	// Sync the OAuth provider's avatar onto the kuso user row so the
 	// profile page + nav avatar render the GitHub/Google picture.
@@ -309,20 +268,35 @@ func (h *OAuthHandler) upsertAndIssue(ctx context.Context, prof *auth.OAuthProfi
 			user.Image.Valid = true
 		}
 	}
-	// Bootstrap: pick a group for this user. Runs on EVERY login, not
-	// just newly-created accounts — that catches the regression where
-	// a first-OAuth-login on a pre-tenancy build created the user
-	// without bootstrapping, and every subsequent login skipped the
-	// bootstrap because the user already existed.
-	//
-	// PromoteUserToAdminIfNoAdmin is the core: if the cluster has
-	// zero admin-group members, the current user becomes admin. So
-	// the first person to log in to a fresh install always gets
-	// admin, regardless of which version they're on when they do.
-	if err := h.bootstrapOrPending(ctx, user.ID); err != nil {
-		h.Logger.Warn("oauth: bootstrap user", "err", err, "user", user.ID)
+	if inviteToken != "" {
+		// Invite flow. Redemption failure is non-fatal (a stale cookie
+		// must not lock the user out of a plain login) but the flow
+		// STAYS an invite flow: no bootstrap promotion. A user left
+		// group-less lands in pending so an admin can find them.
+		if _, err := h.DB.RedeemInviteExistingUser(ctx, inviteToken, user.ID); err != nil {
+			h.Logger.Warn("oauth: invite redeem failed; continuing without invite", "err", err, "user", user.ID)
+			if groups, gerr := h.DB.UserGroupNames(ctx, user.ID); gerr == nil && len(groups) == 0 {
+				if perr := h.DB.AddUserToPendingGroup(ctx, user.ID); perr != nil {
+					h.Logger.Warn("oauth: pending fallback", "err", perr, "user", user.ID)
+				}
+			}
+		}
+	} else {
+		// Bootstrap: pick a group for this user. Runs on EVERY
+		// non-invite login, not just newly-created accounts — that
+		// catches the regression where a first-OAuth-login on a
+		// pre-tenancy build created the user without bootstrapping, and
+		// every subsequent login skipped the bootstrap because the user
+		// already existed.
+		//
+		// PromoteUserToAdminIfNoAdmin is the core: if the cluster has
+		// zero admin-group members, the current user becomes admin. So
+		// the first person to log in to a fresh install always gets
+		// admin, regardless of which version they're on when they do.
+		if err := h.bootstrapOrPending(ctx, user.ID); err != nil {
+			h.Logger.Warn("oauth: bootstrap user", "err", err, "user", user.ID)
+		}
 	}
-	_ = created // retained for future audit logging
 	roleName, _ := h.DB.UserRoleName(ctx, user.ID)
 	if roleName == "" {
 		roleName = "none"
@@ -353,7 +327,116 @@ func (h *OAuthHandler) upsertAndIssue(ctx context.Context, prof *auth.OAuthProfi
 		UserID: user.ID, Username: user.Username, Role: roleName,
 		UserGroups: groups, Permissions: perms, Strategy: strategy,
 	})
-	return tok, err
+	return tok, user, err
+}
+
+// resolveOAuthUser maps an OAuth profile to a kuso User row:
+//
+//  1. Exact (provider, providerID) match → that user. This is the only
+//     path that resolves to an EXISTING linked account; the provider ID
+//     is immutable where usernames are not.
+//  2. Username/email collision with an unlinked account → auto-link in
+//     two narrow migration cases (below), otherwise reject with
+//     errOAuthAccountConflict. Silently logging in as the colliding
+//     account (the pre-fix behaviour) let anyone who registered the
+//     right username at the provider take that account over.
+//  3. No collision → fresh signup carrying the provider identity.
+func (h *OAuthHandler) resolveOAuthUser(ctx context.Context, prof *auth.OAuthProfile) (*db.User, error) {
+	if prof.Provider == "" || prof.ProviderID == "" {
+		return nil, fmt.Errorf("oauth: provider %q returned no stable user id for %q", prof.Provider, prof.Username)
+	}
+	user, err := h.DB.FindUserByProvider(ctx, prof.Provider, prof.ProviderID)
+	if err == nil {
+		return user, nil
+	}
+	if !errors.Is(err, db.ErrNotFound) {
+		return nil, fmt.Errorf("find user by provider: %w", err)
+	}
+	// Identity not linked yet. Check for collisions before creating.
+	existing, err := h.DB.FindUserByUsername(ctx, prof.Username)
+	if err == nil {
+		if h.mayAutoLink(ctx, existing, prof) {
+			if err := h.DB.LinkUserProvider(ctx, existing.ID, prof.Provider, prof.ProviderID); err != nil {
+				return nil, fmt.Errorf("link provider: %w", err)
+			}
+			h.Logger.Info("oauth: auto-linked pre-existing account to provider identity",
+				"user", existing.ID, "provider", prof.Provider)
+			return existing, nil
+		}
+		return nil, fmt.Errorf("%w: an account named %q already exists and is not linked to this %s identity; sign in with that account's password, or have an admin resolve the collision",
+			errOAuthAccountConflict, prof.Username, prof.Provider)
+	}
+	if !errors.Is(err, db.ErrNotFound) {
+		return nil, fmt.Errorf("find user by username: %w", err)
+	}
+	if prof.Email != "" {
+		if _, err := h.DB.FindUserByEmail(ctx, prof.Email); err == nil {
+			return nil, fmt.Errorf("%w: an account with email %q already exists and is not linked to this %s identity; sign in with that account's password, or have an admin resolve the collision",
+				errOAuthAccountConflict, prof.Email, prof.Provider)
+		} else if !errors.Is(err, db.ErrNotFound) {
+			return nil, fmt.Errorf("find user by email: %w", err)
+		}
+	}
+	// Fresh signup. Password hash is a bcrypt of a random secret so
+	// password login is impossible — the user is OAuth-only until they
+	// set a password through the UI. StubPasswordCost doubles as the
+	// "never had a real password" marker mayAutoLink relies on.
+	dummy, err := auth.HashPassword(randomHex(32), auth.StubPasswordCost)
+	if err != nil {
+		return nil, fmt.Errorf("stub password: %w", err)
+	}
+	id := randomHex(16)
+	if err := h.DB.CreateOAuthUser(ctx, db.CreateOAuthUserInput{
+		ID: id, Username: prof.Username, Email: prof.Email, PasswordHash: dummy,
+		Provider: prof.Provider, ProviderID: prof.ProviderID,
+	}); err != nil {
+		return nil, fmt.Errorf("create user: %w", err)
+	}
+	user, err = h.DB.FindUserByID(ctx, id)
+	if err != nil {
+		return nil, fmt.Errorf("re-read user: %w", err)
+	}
+	return user, nil
+}
+
+// mayAutoLink decides whether an unlinked account whose username
+// collides with the OAuth profile may be adopted by this provider
+// identity without an explicit linking flow. Deliberately narrow —
+// these are the migration paths for accounts created before the User
+// row recorded (provider, providerId):
+//
+//   - Never when the account already carries a provider identity.
+//   - GitHub: only when the account has no human-set password (the
+//     OAuth stub marker) AND the GithubUserLink table maps this exact
+//     githubId to this account — i.e. this identity has authenticated
+//     as (or been linked by) this user before. GitHub usernames are
+//     publicly registrable, so a username match alone proves nothing.
+//   - Generic oauth2: only when the account has no human-set password.
+//     The generic IdP is configured by the instance admin (their own
+//     Keycloak/Authentik/Google), so its username namespace is trusted
+//     — unlike GitHub's.
+//
+// Everything else (local accounts with real passwords, accounts linked
+// to another provider) must go through an explicit admin resolution.
+func (h *OAuthHandler) mayAutoLink(ctx context.Context, existing *db.User, prof *auth.OAuthProfile) bool {
+	if existing.ProviderID.Valid && existing.ProviderID.String != "" {
+		return false
+	}
+	if !auth.IsStubPasswordHash(existing.Password) {
+		return false
+	}
+	switch prof.Provider {
+	case "github":
+		ghID, err := strconv.ParseInt(prof.ProviderID, 10, 64)
+		if err != nil {
+			return false
+		}
+		uid, err := h.DB.FindUserIDByGithubLink(ctx, ghID)
+		return err == nil && uid == existing.ID
+	case "oauth2":
+		return true
+	}
+	return false
 }
 
 // bootstrapOrPending decides where a fresh OAuth user lands. We try
@@ -361,9 +444,9 @@ func (h *OAuthHandler) upsertAndIssue(ctx context.Context, prof *auth.OAuthProfi
 //
 //  1. Disaster recovery: if no admin group member exists in the whole
 //     cluster, promote this user to admin. Covers two cases —
-//       (a) first OAuth login on a fresh install (admin group exists
-//           empty after EnsureAdminGroup, no seed admin user), and
-//       (b) the seed admin was deleted and someone needs to take over.
+//     (a) first OAuth login on a fresh install (admin group exists
+//     empty after EnsureAdminGroup, no seed admin user), and
+//     (b) the seed admin was deleted and someone needs to take over.
 //  2. Otherwise drop them in the pending group so an admin can grant
 //     access without them stumbling around the UI.
 //
@@ -406,17 +489,27 @@ func containsStr(haystack []string, s string) bool {
 	return false
 }
 
-func (h *OAuthHandler) userIDForProvider(ctx context.Context, prof *auth.OAuthProfile) (string, error) {
-	u, err := h.DB.FindUserByUsername(ctx, prof.Username)
-	if err != nil {
-		return "", err
-	}
-	return u.ID, nil
-}
-
 func (h *OAuthHandler) fail(w http.ResponseWriter, op string, err error) {
 	h.Logger.Error("oauth handler", "op", op, "err", err)
 	http.Error(w, "internal", http.StatusInternalServerError)
+}
+
+// failLogin maps the login-flow sentinels onto HTTP statuses. Disabled
+// accounts get the same opaque 401 the local login path emits; account
+// collisions get a 409 whose body explains the conflict (the user is
+// mid-browser-redirect, so the text is what they'll see). Everything
+// else is an internal error.
+func (h *OAuthHandler) failLogin(w http.ResponseWriter, op string, err error) {
+	switch {
+	case errors.Is(err, errOAuthAccountDisabled):
+		h.Logger.Warn("oauth: login rejected — account disabled", "op", op, "err", err)
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	case errors.Is(err, errOAuthAccountConflict):
+		h.Logger.Warn("oauth: login rejected — account collision", "op", op, "err", err)
+		http.Error(w, err.Error(), http.StatusConflict)
+	default:
+		h.fail(w, op, err)
+	}
 }
 
 // requireOAuthDB HARD-FAILS the OAuth flow when no DB is wired. The

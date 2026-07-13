@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -94,21 +95,30 @@ func runDescribeProject(ctx context.Context, client *kusoclient.Client, args des
 		return describeProjectResult{}, errors.New("project is required")
 	}
 	var detail types.ProjectDetail
-	if err := client.GetJSON(ctx, "/api/projects/"+args.Project, &detail); err != nil {
+	if err := client.GetJSON(ctx, apiPath("api", "projects", args.Project), &detail); err != nil {
 		return describeProjectResult{}, fmt.Errorf("describe project: %w", err)
+	}
+	// GET /api/projects/:p rolls up project + services + envs only —
+	// addons live on their own route.
+	var addons []types.Addon
+	if err := client.GetJSON(ctx, apiPath("api", "projects", args.Project, "addons"), &addons); err != nil {
+		return describeProjectResult{}, fmt.Errorf("list addons: %w", err)
 	}
 	return describeProjectResult{
 		Project:      detail.Project,
 		Services:     detail.Services,
 		Environments: detail.Environments,
-		Addons:       detail.Addons,
+		Addons:       addons,
 	}, nil
 }
 
 func registerDescribeProject(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "describe_project",
-		Description: "Return everything about a kuso project: project metadata, all services, all environments (production + preview), all addons. " +
+		Description: "Return a kuso project's declared configuration: project spec (repo, base domain, namespace, placement, previews), " +
+			"services (runtime, port, domains, volumes, scale/sleep, placement, security context, release hook), " +
+			"environments (production + preview, hosts + TLS hosts), and addons (kind, version, size, HA, storage, backup, TLS, placement, external/instance wiring). " +
+			"Fields outside this projection are not included. For the runtime view (is it up?) use status. " +
 			"For incident triage of a specific running env, prefer troubleshoot_environment(project, env) once it lands.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args describeProjectArgs) (*mcp.CallToolResult, describeProjectResult, error) {
 		out, err := runDescribeProject(ctx, client, args)
@@ -260,7 +270,7 @@ func runUpdateProject(ctx context.Context, client *kusoclient.Client, args updat
 		}
 		body["previews"] = pv
 	}
-	if err := client.PatchJSON(ctx, "/api/projects/"+args.Name, body, nil); err != nil {
+	if err := client.PatchJSON(ctx, apiPath("api", "projects", args.Name), body, nil); err != nil {
 		return updateProjectResult{}, fmt.Errorf("update project: %w", err)
 	}
 	return updateProjectResult{Project: args.Name, Status: "updated"}, nil
@@ -315,7 +325,7 @@ func runAddService(ctx context.Context, client *kusoclient.Client, args addServi
 		"runtime": fallback(args.Runtime, "dockerfile"),
 		"port":    fallbackInt(args.Port, 8080),
 	}
-	if err := client.PostJSON(ctx, "/api/projects/"+args.Project+"/services", body, nil); err != nil {
+	if err := client.PostJSON(ctx, apiPath("api", "projects", args.Project, "services"), body, nil); err != nil {
 		return addServiceResult{}, fmt.Errorf("add service: %w", err)
 	}
 	return addServiceResult{Project: args.Project, Service: args.Name, Status: "added"}, nil
@@ -385,12 +395,18 @@ func runManageAddon(ctx context.Context, client *kusoclient.Client, args manageA
 			"size":    fallback(args.Size, "small"),
 			"ha":      args.HA,
 		}
-		if err := client.PostJSON(ctx, "/api/projects/"+args.Project+"/addons", body, nil); err != nil {
+		if err := client.PostJSON(ctx, apiPath("api", "projects", args.Project, "addons"), body, nil); err != nil {
 			return manageAddonResult{}, fmt.Errorf("add addon: %w", err)
 		}
 		return manageAddonResult{Project: args.Project, Addon: args.Name, Action: "add", Status: "added"}, nil
 	case "delete":
-		if err := client.DeleteJSON(ctx, "/api/projects/"+args.Project+"/addons/"+args.Name); err != nil {
+		// The server's typed-confirmation guard: DELETE requires
+		// ?confirm=<addon-name> to acknowledge the data loss (the
+		// PVC goes with the addon). The MCP-level confirm=true flag
+		// above is the agent's acknowledgement; echo the name here.
+		q := url.Values{"confirm": {args.Name}}
+		path := apiPath("api", "projects", args.Project, "addons", args.Name) + "?" + q.Encode()
+		if err := client.DeleteJSON(ctx, path); err != nil {
 			return manageAddonResult{}, fmt.Errorf("delete addon: %w", err)
 		}
 		return manageAddonResult{Project: args.Project, Addon: args.Name, Action: "delete", Status: "deleted"}, nil

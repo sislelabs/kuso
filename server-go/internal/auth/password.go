@@ -35,3 +35,21 @@ func HashPassword(plaintext string, cost int) (string, error) {
 	}
 	return string(h), nil
 }
+
+// StubPasswordCost is the bcrypt cost the OAuth signup path uses when
+// minting the throwaway password hash for an OAuth-only account (a
+// bcrypt of a random secret, so password login is impossible). Every
+// human-set password in kuso is hashed at bcrypt.DefaultCost (10), so
+// the cost doubles as a durable marker: cost==StubPasswordCost means
+// "this account has never had a user-chosen password".
+const StubPasswordCost = bcrypt.MinCost // 4
+
+// IsStubPasswordHash reports whether stored is an OAuth-signup stub
+// hash (see StubPasswordCost). Used by the OAuth account-linking flow
+// to tell "OAuth-only account from before provider IDs were recorded"
+// apart from "local account with a real password" — only the former is
+// safe to auto-link to an OAuth identity by username.
+func IsStubPasswordHash(stored string) bool {
+	c, err := bcrypt.Cost([]byte(stored))
+	return err == nil && c == StubPasswordCost
+}

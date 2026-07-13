@@ -191,7 +191,9 @@ var roleCreateCmd = &cobra.Command{
 			return fmt.Errorf("create role: %w", err)
 		}
 		var data map[string]any
-		_ = json.Unmarshal(resp.Body(), &data)
+		if err := json.Unmarshal(resp.Body(), &data); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
 		fmt.Printf("role %q created (id=%s, permissions=%d)\n", roleName, asString(data["id"]), len(perms))
 		return nil
 	},

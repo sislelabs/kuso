@@ -312,7 +312,7 @@ func (k *KusoClient) GetEnvironments(project string) (*resty.Response, error) {
 }
 
 func (k *KusoClient) GetEnvironment(project, env string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + esc(project) + "/envs/" + env)
+	return k.client.Get("/api/projects/" + esc(project) + "/envs/" + esc(env))
 }
 
 // AddEnvironment creates a custom environment (e.g. "staging", "qa")
@@ -326,7 +326,7 @@ func (k *KusoClient) AddEnvironment(project, service string, req CreateEnvReques
 }
 
 func (k *KusoClient) DeleteEnvironment(project, env string) (*resty.Response, error) {
-	return k.client.Delete("/api/projects/" + esc(project) + "/envs/" + env)
+	return k.client.Delete("/api/projects/" + esc(project) + "/envs/" + esc(env))
 }
 
 // Addons

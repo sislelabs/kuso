@@ -21,10 +21,12 @@ import (
 // Touches nothing without --apply.
 
 var (
-	importProject string
-	importOut     string
-	importApply   bool
-	importDryRun  bool
+	importProject          string
+	importOut              string
+	importApply            bool
+	importDryRun           bool
+	importAllowEmptyAddons bool
+	importAllowMissingEnv  bool
 )
 
 var importCmd = &cobra.Command{
@@ -43,7 +45,13 @@ are reported, never silently dropped.
 
 Default is dry-run: prints the generated kuso.yaml + a mapping report,
 touches nothing. -o writes the kuso.yaml to disk. --apply creates the
-resources on the connected kuso instance.`,
+resources on the connected kuso instance.
+
+--apply refuses to run when the conversion carries data-loss risk:
+datastore conversions create EMPTY managed addons (source volumes,
+data, users and init scripts are NOT migrated — override with
+--allow-empty-addons), and env_file values are never imported
+(override with --allow-missing-env-files).`,
 	Example: `  # dry-run: print the generated kuso.yaml + report
   kuso import compose docker-compose.yml
 
@@ -110,6 +118,9 @@ resources on the connected kuso instance.`,
 		// compose import is usually a brand-new project. 409 (already
 		// exists) is fine; anything else is fatal.
 		if !importDryRun {
+			if err := composeApplyGates(doc, rep); err != nil {
+				return err
+			}
 			pr, err := api.CreateProject(kusoApi.CreateProjectRequest{Name: doc.Project})
 			if err != nil {
 				return fmt.Errorf("create project: %w", err)
@@ -128,6 +139,28 @@ resources on the connected kuso instance.`,
 		printApplyResult(resp.Body(), importDryRun)
 		return nil
 	},
+}
+
+// composeApplyGates refuses a real (non-dry-run) --apply when the
+// conversion carries data-loss or missing-config risk that needs an
+// explicit acknowledgement:
+//   - datastore conversions mint FRESH, EMPTY managed addons — source
+//     volumes, data, users and init scripts are NOT migrated. Gate:
+//     --allow-empty-addons.
+//   - env_file values were never read, so services would deploy
+//     without that configuration. Gate: --allow-missing-env-files.
+func composeApplyGates(doc *compose.Doc, rep *compose.Report) error {
+	if len(doc.Addons) > 0 && !importAllowEmptyAddons {
+		names := make([]string, 0, len(doc.Addons))
+		for _, a := range doc.Addons {
+			names = append(names, fmt.Sprintf("%s (%s)", a.Name, a.Kind))
+		}
+		return fmt.Errorf("refusing --apply: %s would be created as EMPTY managed addon(s) — existing volumes, data, users and init scripts are NOT migrated. Plan a manual data migration (dump & restore), then re-run with --allow-empty-addons", strings.Join(names, ", "))
+	}
+	if len(rep.UnresolvedEnvFiles) > 0 && !importAllowMissingEnv {
+		return fmt.Errorf("refusing --apply: env_file value(s) were not imported (%s) — services would deploy without that configuration. Copy the values into kuso env vars, then re-run with --allow-missing-env-files", strings.Join(rep.UnresolvedEnvFiles, ", "))
+	}
+	return nil
 }
 
 // projectNameFromPath derives a kuso project slug from the compose
@@ -151,6 +184,8 @@ func init() {
 	importComposeCmd.Flags().StringVarP(&importOut, "out", "o", "", "write the generated kuso.yaml to this path")
 	importComposeCmd.Flags().BoolVar(&importApply, "apply", false, "create resources on the connected kuso (default is dry-run)")
 	importComposeCmd.Flags().BoolVar(&importDryRun, "server-dry-run", false, "with --apply, ask the server for the plan without writing")
+	importComposeCmd.Flags().BoolVar(&importAllowEmptyAddons, "allow-empty-addons", false, "with --apply, permit datastore conversions — the managed addons start EMPTY; source volumes/data are NOT migrated")
+	importComposeCmd.Flags().BoolVar(&importAllowMissingEnv, "allow-missing-env-files", false, "with --apply, permit services whose env_file values were not imported")
 	importCmd.AddCommand(importComposeCmd)
 	rootCmd.AddCommand(importCmd)
 }

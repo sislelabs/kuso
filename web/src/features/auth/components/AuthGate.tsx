@@ -2,18 +2,24 @@
 
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect } from "react";
+import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useSession, usePending } from "../hooks";
 
 export function AuthGate({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { data, isPending, isError } = useSession();
+  const { data, isPending, isError, isFetching, refetch } = useSession();
   const pending = usePending();
 
   useEffect(() => {
     if (isPending) return;
-    if (data === null || isError) {
+    // isError here means a NETWORK or SERVER failure — useSession maps
+    // 401/403 to `data === null` and only throws for everything else.
+    // Bouncing to /login on a transient outage would strand a valid
+    // session, so errors get a retry screen below instead of a redirect.
+    if (isError) return;
+    if (data === null) {
       const next = encodeURIComponent(pathname);
       router.replace(`/login?next=${next}`);
       return;
@@ -30,9 +36,14 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   // Loading — session not yet resolved.
   if (isPending) return <AuthSkeleton />;
 
+  // Network/server failure — the session may still be perfectly valid,
+  // we just couldn't verify it. Offer a retry instead of dumping the
+  // user on /login (which would read as "you were logged out").
+  if (isError) return <AuthError retrying={isFetching} onRetry={() => void refetch()} />;
+
   // Unauthenticated → effect above redirects to /login. Render
   // nothing in the meantime so we don't flash the app shell.
-  if (data === null || isError) return null;
+  if (data === null) return null;
 
   // Pending users have a session but zero perms. The effect above is
   // pushing them to /awaiting-access, but useEffect runs AFTER render
@@ -45,6 +56,27 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
   }
 
   return <>{children}</>;
+}
+
+// AuthError renders when the session check failed for a non-auth
+// reason (network down, server 5xx mid-roll). The session itself may
+// still be valid, so we keep the user where they are and let them
+// retry rather than redirecting to /login.
+function AuthError({ retrying, onRetry }: { retrying: boolean; onRetry: () => void }) {
+  return (
+    <div className="flex h-screen items-center justify-center">
+      <div className="max-w-sm text-center">
+        <h1 className="mb-2 text-lg font-semibold">Can&apos;t reach the server</h1>
+        <p className="mb-4 text-sm text-[var(--text-secondary)]">
+          Checking your session failed — this is usually a network blip or the
+          server restarting, not a sign-out.
+        </p>
+        <Button size="sm" onClick={onRetry} disabled={retrying}>
+          {retrying ? "Retrying…" : "Retry"}
+        </Button>
+      </div>
+    </div>
+  );
 }
 
 // AuthSkeleton renders a sidebar+content placeholder while the auth

@@ -92,6 +92,116 @@ func (d *DB) FindUserByEmail(ctx context.Context, email string) (*User, error) {
 	return u, nil
 }
 
+// FindUserByProvider returns the User linked to the given OAuth
+// identity — the immutable (provider, providerID) pair — or
+// ErrNotFound. This is the ONLY lookup the OAuth login path may use to
+// resolve an existing account: usernames are mutable/reassignable on
+// every provider, so matching on them lets a colliding identity
+// authenticate as someone else's account.
+func (d *DB) FindUserByProvider(ctx context.Context, provider, providerID string) (*User, error) {
+	if provider == "" || providerID == "" {
+		return nil, ErrNotFound
+	}
+	row := d.QueryRowContext(ctx,
+		`SELECT `+userColumns+` FROM "User" WHERE provider = $1 AND "providerId" = $2 LIMIT 1`,
+		provider, providerID)
+	u, err := scanUser(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("db: find user by provider: %w", err)
+	}
+	return u, nil
+}
+
+// LinkUserProvider stamps an OAuth identity onto an existing user row.
+// Refuses (ErrConflictingProviderLink) when the user is already linked
+// to a different identity — re-linking the SAME identity is an
+// idempotent no-op. Callers must have verified the link is legitimate
+// (see the auto-link rules in the OAuth handler) before calling.
+func (d *DB) LinkUserProvider(ctx context.Context, userID, provider, providerID string) error {
+	if userID == "" || provider == "" || providerID == "" {
+		return errors.New("db: link provider: userID, provider, providerID required")
+	}
+	res, err := d.ExecContext(ctx, `
+UPDATE "User" SET provider = $1, "providerId" = $2, "updatedAt" = $3
+WHERE id = $4
+  AND ("providerId" IS NULL OR (provider = $1 AND "providerId" = $2))`,
+		provider, providerID, prismaNow(), userID)
+	if err != nil {
+		return fmt.Errorf("db: link user provider: %w", err)
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		// Either the user vanished or they're linked to a different
+		// identity already. Disambiguate for the caller.
+		if _, ferr := d.FindUserByID(ctx, userID); errors.Is(ferr, ErrNotFound) {
+			return ErrNotFound
+		}
+		return fmt.Errorf("%w: user %s already linked to another identity", ErrConflictingProviderLink, userID)
+	}
+	return nil
+}
+
+// ErrConflictingProviderLink is returned when a provider-link write
+// would overwrite a different existing OAuth identity on the user.
+var ErrConflictingProviderLink = errors.New("db: user linked to a different provider identity")
+
+// CreateOAuthUserInput is the field set for OAuth-originated signups.
+// PasswordHash must be the stub hash (see auth.StubPasswordCost) — the
+// account is OAuth-only until the user sets a real password.
+type CreateOAuthUserInput struct {
+	ID           string
+	Username     string
+	Email        string
+	PasswordHash string
+	Provider     string
+	ProviderID   string
+}
+
+// CreateOAuthUser inserts a user row that carries its OAuth identity
+// from birth, so subsequent logins resolve by (provider, providerId)
+// instead of the mutable username. Kept separate from CreateUser
+// (which hardcodes provider='local') so the admin create-user handler
+// keeps its shape.
+func (d *DB) CreateOAuthUser(ctx context.Context, in CreateOAuthUserInput) error {
+	if in.ID == "" || in.Username == "" || in.Email == "" || in.PasswordHash == "" {
+		return errors.New("db: create oauth user: id, username, email, password required")
+	}
+	if in.Provider == "" || in.ProviderID == "" {
+		return errors.New("db: create oauth user: provider identity required")
+	}
+	now := prismaNow()
+	_, err := d.ExecContext(ctx, `
+INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", provider, "providerId", "createdAt", "updatedAt")
+VALUES ($1, $2, $3, $4, false, true, $5, $6, $7, $8)`,
+		in.ID, in.Username, in.Email, in.PasswordHash, in.Provider, in.ProviderID, now, now)
+	if err != nil {
+		return fmt.Errorf("db: create oauth user: %w", err)
+	}
+	return nil
+}
+
+// FindUserIDByGithubLink resolves the kuso user linked to a GitHub
+// account through the GithubUserLink table (written on every GitHub
+// OAuth login and by the explicit repo-access link flow). Used as the
+// migration path for accounts created before the User row recorded
+// (provider, providerId): a GithubUserLink row proves this exact
+// GitHub identity authenticated as (or was linked by) that user
+// before, so auto-linking is safe.
+func (d *DB) FindUserIDByGithubLink(ctx context.Context, githubID int64) (string, error) {
+	var userID string
+	err := d.QueryRowContext(ctx,
+		`SELECT "userId" FROM "GithubUserLink" WHERE "githubId" = $1 LIMIT 1`, githubID).Scan(&userID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("db: find user by github link: %w", err)
+	}
+	return userID, nil
+}
+
 // FindUserByID returns the User with the given id, or ErrNotFound.
 func (d *DB) FindUserByID(ctx context.Context, id string) (*User, error) {
 	row := d.QueryRowContext(ctx, `SELECT `+userColumns+` FROM "User" WHERE id = $1 LIMIT 1`, id)

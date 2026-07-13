@@ -3,10 +3,9 @@
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Cpu, MemoryStick, Activity, AlertTriangle, Timer } from "lucide-react";
-import { useService } from "@/features/services";
-import { useEnvironments } from "@/features/projects";
 import { api } from "@/lib/api-client";
 import { cn } from "@/lib/utils";
+import type { KusoEnvironment } from "@/types/projects";
 
 const RANGES = ["1h", "6h", "1d", "7d", "30d"] as const;
 type Range = (typeof RANGES)[number];
@@ -14,6 +13,12 @@ type Range = (typeof RANGES)[number];
 interface Props {
   project: string;
   service: string;
+  // The env CR the overlay's env-switcher resolved. The panel used to
+  // ignore the selected env and always look up production itself, so
+  // staging/preview tabs showed production's metrics. Undefined while
+  // the envs list is loading (or when no env exists yet) — the
+  // queries stay disabled and the empty-state note renders.
+  env?: KusoEnvironment;
 }
 
 interface PodMetric {
@@ -38,17 +43,10 @@ interface TimeseriesResponse {
   };
 }
 
-export function ServiceMetricsPanel({ project, service }: Props) {
+export function ServiceMetricsPanel({ env }: Props) {
   const [range, setRange] = useState<Range>("1h");
 
-  const svc = useService(project, service);
-  const envs = useEnvironments(project);
-  void svc;
-  const fqn = project + "-" + service;
-  const prodEnv = (envs.data ?? []).find(
-    (e) => e.spec.service === fqn && e.spec.kind === "production"
-  );
-  const envName = prodEnv?.metadata.name ?? "";
+  const envName = env?.metadata.name ?? "";
 
   const podMetrics = useQuery({
     queryKey: ["kubernetes", "envs", envName, "metrics"],
@@ -154,7 +152,7 @@ export function ServiceMetricsPanel({ project, service }: Props) {
 
       {!envName && (
         <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
-          No production environment yet — push to the connected branch or hit Redeploy.
+          No environment deployed yet — push to the connected branch or hit Redeploy.
         </p>
       )}
     </div>

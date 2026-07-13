@@ -33,6 +33,7 @@ export function ServerVersionGuard() {
   const armed = useRef(false);
 
   useEffect(() => {
+    let idleTimer: number | undefined;
     const arm = () => {
       if (armed.current) return;
       armed.current = true;
@@ -47,22 +48,23 @@ export function ServerVersionGuard() {
           onClick: () => window.location.reload(),
         },
       });
+      // Auto-reload on long-idle (30s after the drift is OBSERVED, not
+      // after mount — a mount-time timer only covered tabs younger than
+      // 30s and never fired for a tab parked open across a server roll)
+      // so a tab left on the dashboard eventually catches up without
+      // user action. The route-change effect below usually wins first.
+      idleTimer = window.setTimeout(() => {
+        if (getServerVersionMismatch()) {
+          window.location.reload();
+        }
+      }, 30_000);
     };
     if (getServerVersionMismatch()) arm();
     const off = onServerVersionMismatch(arm);
 
-    // Auto-reload on long-idle (30s after observed drift) so a tab
-    // left open on the dashboard eventually catches up without user
-    // action. Cancelled if the user navigates first (handled below).
-    const idleTimer = window.setTimeout(() => {
-      if (getServerVersionMismatch()) {
-        window.location.reload();
-      }
-    }, 30_000);
-
     return () => {
       off();
-      window.clearTimeout(idleTimer);
+      if (idleTimer !== undefined) window.clearTimeout(idleTimer);
     };
   }, []);
 

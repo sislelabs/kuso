@@ -114,7 +114,9 @@ var userCreateCmd = &cobra.Command{
 			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var data map[string]any
-		_ = json.Unmarshal(resp.Body(), &data)
+		if err := json.Unmarshal(resp.Body(), &data); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
 		fmt.Printf("user %q created (id=%s)\n", userCreateUsername, asString(data["id"]))
 		return nil
 	},

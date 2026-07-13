@@ -147,7 +147,18 @@ boundary as reading env values or opening a shell. --keys lists keys only
 			return fmt.Errorf("decode response: %w", err)
 		}
 		if outputFormat == "json" {
-			b, _ := json.MarshalIndent(out.Values, "", "  ")
+			// Same masking contract as the table path below: values stay
+			// hidden unless --reveal is passed. JSON is the scriptable
+			// surface, so serializing the raw values here would silently
+			// bypass the flag.
+			vals := out.Values
+			if !addonSecretReveal {
+				vals = make(map[string]string, len(out.Values))
+				for k, v := range out.Values {
+					vals[k] = maskSecret(v)
+				}
+			}
+			b, _ := json.MarshalIndent(vals, "", "  ")
 			fmt.Println(string(b))
 			return nil
 		}

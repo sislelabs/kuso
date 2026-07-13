@@ -29,7 +29,8 @@ type planArgs struct {
 }
 
 // planResult mirrors spec.Plan from the server side. Field names match
-// the JSON the apply endpoint returns under dryRun=1.
+// the JSON the apply endpoint returns under dryRun=1. Shared with the
+// apply tool (spec.ApplyResult embeds the same Plan).
 type planResult struct {
 	ServicesToCreate []string `json:"servicesToCreate"`
 	ServicesToUpdate []string `json:"servicesToUpdate"`
@@ -37,12 +38,44 @@ type planResult struct {
 	AddonsToCreate   []string `json:"addonsToCreate"`
 	AddonsToUpdate   []string `json:"addonsToUpdate"`
 	AddonsToDelete   []string `json:"addonsToDelete"`
+	CronsToCreate    []string `json:"cronsToCreate"`
+	CronsToUpdate    []string `json:"cronsToUpdate"`
+	CronsToDelete    []string `json:"cronsToDelete"`
+	// WouldDelete lists live resources absent from the YAML when
+	// prune is false — reported by the server, not executed. Entries
+	// are "kind:name", e.g. "service:old".
+	WouldDelete []string `json:"wouldDelete,omitempty"`
+}
+
+// changeCount is the number of create/update/delete steps in the plan
+// (WouldDelete excluded — those are reported, not executed).
+func (p planResult) changeCount() int {
+	return len(p.ServicesToCreate) + len(p.ServicesToUpdate) + len(p.ServicesToDelete) +
+		len(p.AddonsToCreate) + len(p.AddonsToUpdate) + len(p.AddonsToDelete) +
+		len(p.CronsToCreate) + len(p.CronsToUpdate) + len(p.CronsToDelete)
+}
+
+// writePlanSections renders the +/~/- change lines plus the
+// would-delete report. Shared by the plan and apply summaries.
+func writePlanSections(b *strings.Builder, p planResult) {
+	writeSection(b, "Services", "+", p.ServicesToCreate)
+	writeSection(b, "Services", "~", p.ServicesToUpdate)
+	writeSection(b, "Services", "-", p.ServicesToDelete)
+	writeSection(b, "Addons", "+", p.AddonsToCreate)
+	writeSection(b, "Addons", "~", p.AddonsToUpdate)
+	writeSection(b, "Addons", "-", p.AddonsToDelete)
+	writeSection(b, "Crons", "+", p.CronsToCreate)
+	writeSection(b, "Crons", "~", p.CronsToUpdate)
+	writeSection(b, "Crons", "-", p.CronsToDelete)
+	for _, wd := range p.WouldDelete {
+		fmt.Fprintf(b, "  ! would delete %s (prune: false — skipped)\n", wd)
+	}
 }
 
 func registerPlan(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "plan",
-		Description: "Diff a desired-state kuso.yml against a live project. Returns the set of services/addons that would be created, updated, or deleted by an apply. Read-only — does NOT mutate the cluster. Use this before calling apply to see the blast radius.",
+		Description: "Diff a desired-state kuso.yml against a live project. Returns the set of services/addons/crons that would be created, updated, or deleted by an apply, plus wouldDelete: live resources absent from the YAML that a prune: true apply would remove. Read-only — does NOT mutate the cluster. Use this before calling apply to see the blast radius.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args planArgs) (*mcp.CallToolResult, planResult, error) {
 		if args.Project == "" {
 			return nil, planResult{}, errors.New("project is required")
@@ -51,26 +84,26 @@ func registerPlan(server *mcp.Server, client *kusoclient.Client) {
 			return nil, planResult{}, errors.New("yaml is required")
 		}
 		var out planResult
-		path := "/api/projects/" + args.Project + "/apply?dryRun=1"
+		path := apiPath("api", "projects", args.Project, "apply") + "?dryRun=1"
 		if err := client.PostRaw(ctx, path, "application/x-yaml", []byte(args.YAML), true, &out); err != nil {
 			return nil, planResult{}, fmt.Errorf("plan: %w", err)
 		}
 		// Human-readable summary for the text Content. Mirrors the
 		// shape `terraform plan` uses: `+` for create, `~` for
-		// update, `-` for delete.
+		// update, `-` for delete, `!` for skipped would-deletes.
 		var b strings.Builder
-		writeSection(&b, "Services", "+", out.ServicesToCreate)
-		writeSection(&b, "Services", "~", out.ServicesToUpdate)
-		writeSection(&b, "Services", "-", out.ServicesToDelete)
-		writeSection(&b, "Addons", "+", out.AddonsToCreate)
-		writeSection(&b, "Addons", "~", out.AddonsToUpdate)
-		writeSection(&b, "Addons", "-", out.AddonsToDelete)
+		writePlanSections(&b, out)
 		if b.Len() == 0 {
 			b.WriteString("Plan: no changes — live state matches the YAML.")
 		} else {
-			fmt.Fprintf(&b, "Plan: %d service create, %d service update, %d service delete, %d addon create, %d addon update, %d addon delete.",
+			fmt.Fprintf(&b, "Plan: %d change(s) — services +%d ~%d -%d, addons +%d ~%d -%d, crons +%d ~%d -%d.",
+				out.changeCount(),
 				len(out.ServicesToCreate), len(out.ServicesToUpdate), len(out.ServicesToDelete),
-				len(out.AddonsToCreate), len(out.AddonsToUpdate), len(out.AddonsToDelete))
+				len(out.AddonsToCreate), len(out.AddonsToUpdate), len(out.AddonsToDelete),
+				len(out.CronsToCreate), len(out.CronsToUpdate), len(out.CronsToDelete))
+			if len(out.WouldDelete) > 0 {
+				fmt.Fprintf(&b, " %d resource(s) would be deleted under prune: true.", len(out.WouldDelete))
+			}
 		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: b.String()}},

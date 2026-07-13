@@ -162,17 +162,16 @@ func (d *DB) DeleteInvite(ctx context.Context, id string) error {
 }
 
 // RedeemInvite atomically validates and increments usage. Returns
-// the invite row as it was BEFORE the increment so the caller has
-// the configured groupId/role. Errors:
+// the invite row (usedCount reflects the state AFTER this claim).
+// Errors:
 //   - ErrNotFound: token unknown
 //   - ErrInviteExpired / ErrInviteExhausted / ErrInviteRevoked: the
 //     invite isn't redeemable for the given reason
 //
-// The caller (HTTP handler) is responsible for actually creating the
-// user, adding them to the group, and writing the InviteRedemption
-// row via RecordRedemption — that's split out so a partial failure
-// (e.g. group add fails after user create) doesn't leave a phantom
-// usage count.
+// Prefer RedeemInviteNewUser / RedeemInviteExistingUser, which claim
+// the seat AND apply user creation + membership + the redemption row
+// in one transaction. This standalone form claims a seat with nothing
+// attached to it — a failure in the caller afterwards burns the seat.
 func (d *DB) RedeemInvite(ctx context.Context, token string) (*Invite, error) {
 	tx, err := d.BeginTx(ctx, nil)
 	if err != nil {
@@ -180,38 +179,190 @@ func (d *DB) RedeemInvite(ctx context.Context, token string) (*Invite, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	row := tx.QueryRowContext(ctx,
-		`SELECT id, token, "groupId", "instanceRole", "createdBy",
-		        "createdAt", "expiresAt", "maxUses", "usedCount",
-		        "revokedAt", note
-		 FROM "Invite" WHERE token = $1`, token)
-	var inv Invite
-	err = row.Scan(&inv.ID, &inv.Token, &inv.GroupID, &inv.InstanceRole,
-		&inv.CreatedBy, &inv.CreatedAt, &inv.ExpiresAt,
-		&inv.MaxUses, &inv.UsedCount, &inv.RevokedAt, &inv.Note)
-	if errors.Is(err, sql.ErrNoRows) {
-		return nil, ErrNotFound
-	}
+	inv, err := consumeInviteTx(ctx, tx, token)
 	if err != nil {
-		return nil, fmt.Errorf("db: redeem read: %w", err)
-	}
-	if inv.RevokedAt.Valid {
-		return nil, ErrInviteRevoked
-	}
-	if inv.ExpiresAt.Valid && inv.ExpiresAt.Time.Before(time.Now()) {
-		return nil, ErrInviteExpired
-	}
-	if inv.UsedCount >= inv.MaxUses {
-		return nil, ErrInviteExhausted
-	}
-	if _, err := tx.ExecContext(ctx,
-		`UPDATE "Invite" SET "usedCount" = "usedCount" + 1 WHERE id = $1`, inv.ID); err != nil {
-		return nil, fmt.Errorf("db: bump usedCount: %w", err)
+		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("db: redeem commit: %w", err)
 	}
-	return &inv, nil
+	return inv, nil
+}
+
+// consumeInviteTx claims one seat on the invite inside the caller's
+// transaction. The claim is a single conditional UPDATE … RETURNING,
+// so concurrent redemptions serialize on the row: the guard
+// usedCount < maxUses is re-evaluated under the row lock and the loser
+// of a race sees 0 rows instead of blowing past the cap (the old
+// read-check-increment shape allowed usedCount > maxUses under
+// concurrency). When the claim misses, the row is re-read to classify
+// the failure into the sentinel errors.
+func consumeInviteTx(ctx context.Context, tx *Tx, token string) (*Invite, error) {
+	row := tx.QueryRowContext(ctx, `
+		UPDATE "Invite" SET "usedCount" = "usedCount" + 1
+		WHERE token = $1
+		  AND "revokedAt" IS NULL
+		  AND ("expiresAt" IS NULL OR "expiresAt" > CURRENT_TIMESTAMP)
+		  AND "usedCount" < "maxUses"
+		RETURNING id, token, "groupId", "instanceRole", "createdBy",
+		          "createdAt", "expiresAt", "maxUses", "usedCount",
+		          "revokedAt", note`, token)
+	var inv Invite
+	err := row.Scan(&inv.ID, &inv.Token, &inv.GroupID, &inv.InstanceRole,
+		&inv.CreatedBy, &inv.CreatedAt, &inv.ExpiresAt,
+		&inv.MaxUses, &inv.UsedCount, &inv.RevokedAt, &inv.Note)
+	if err == nil {
+		return &inv, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, fmt.Errorf("db: claim invite seat: %w", err)
+	}
+	// Claim missed — re-read to say why.
+	row = tx.QueryRowContext(ctx,
+		`SELECT "expiresAt", "maxUses", "usedCount", "revokedAt"
+		 FROM "Invite" WHERE token = $1`, token)
+	err = row.Scan(&inv.ExpiresAt, &inv.MaxUses, &inv.UsedCount, &inv.RevokedAt)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("db: classify invite miss: %w", err)
+	}
+	switch {
+	case inv.RevokedAt.Valid:
+		return nil, ErrInviteRevoked
+	case inv.ExpiresAt.Valid && inv.ExpiresAt.Time.Before(time.Now()):
+		return nil, ErrInviteExpired
+	case inv.UsedCount >= inv.MaxUses:
+		return nil, ErrInviteExhausted
+	}
+	return nil, fmt.Errorf("db: invite %q not claimable for unknown reason", token)
+}
+
+// InviteNewUser is the account payload RedeemInviteNewUser creates.
+// PasswordHash must already be bcrypted (handler's job).
+type InviteNewUser struct {
+	ID           string
+	Username     string
+	Email        string
+	PasswordHash string
+}
+
+// RedeemInviteNewUser is the atomic local-signup redemption: seat
+// claim, user creation, the invite's direct instance role, group
+// membership (or pending fallback), and the InviteRedemption audit row
+// all commit together. Any failure — duplicate username, missing
+// group FK, whatever — rolls the whole thing back, so a failed signup
+// neither burns a seat nor leaves a half-provisioned account.
+func (d *DB) RedeemInviteNewUser(ctx context.Context, token string, user InviteNewUser) (*Invite, error) {
+	if user.ID == "" || user.Username == "" || user.Email == "" || user.PasswordHash == "" {
+		return nil, errors.New("db: redeem invite: id, username, email, password required")
+	}
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("db: redeem tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	inv, err := consumeInviteTx(ctx, tx, token)
+	if err != nil {
+		return nil, err
+	}
+	now := prismaNow()
+	if _, err := tx.ExecContext(ctx, `
+INSERT INTO "User" (id, username, email, password, "twoFaEnabled", "isActive", provider, "createdAt", "updatedAt")
+VALUES ($1, $2, $3, $4, false, true, 'local', $5, $6)`,
+		user.ID, user.Username, user.Email, user.PasswordHash, now, now); err != nil {
+		return nil, fmt.Errorf("db: redeem invite: create user: %w", err)
+	}
+	if err := applyInviteGrantsTx(ctx, tx, inv, user.ID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("db: redeem commit: %w", err)
+	}
+	d.EvictUserTenancy(user.ID)
+	return inv, nil
+}
+
+// RedeemInviteExistingUser is the atomic redemption for a user who
+// already has an account (the OAuth callback path — the user row is
+// resolved/created by the provider-identity logic first). Seat claim,
+// direct role, membership, and the redemption row commit together.
+func (d *DB) RedeemInviteExistingUser(ctx context.Context, token, userID string) (*Invite, error) {
+	if userID == "" {
+		return nil, errors.New("db: redeem invite: userID required")
+	}
+	tx, err := d.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("db: redeem tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	inv, err := consumeInviteTx(ctx, tx, token)
+	if err != nil {
+		return nil, err
+	}
+	if err := applyInviteGrantsTx(ctx, tx, inv, userID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("db: redeem commit: %w", err)
+	}
+	d.EvictUserTenancy(userID)
+	return inv, nil
+}
+
+// applyInviteGrantsTx applies what the invite CONFIGURED — direct
+// instance role, group membership (pending fallback when the invite
+// carries no group), and the InviteRedemption audit row — inside the
+// caller's transaction. The direct role is upgrade-only: an invite can
+// raise a user's access to its configured level but never demote an
+// existing admin who happens to click a viewer link.
+func applyInviteGrantsTx(ctx context.Context, tx *Tx, inv *Invite, userID string) error {
+	if inv.InstanceRole.Valid && inv.InstanceRole.String != "" {
+		wanted := InstanceRole(inv.InstanceRole.String)
+		var current sql.NullString
+		if err := tx.QueryRowContext(ctx,
+			`SELECT "instanceRole" FROM "User" WHERE id = $1`, userID).Scan(&current); err != nil {
+			return fmt.Errorf("db: redeem invite: read instance role: %w", err)
+		}
+		if rankInstance(wanted) > rankInstance(InstanceRole(current.String)) {
+			if _, err := tx.ExecContext(ctx,
+				`UPDATE "User" SET "instanceRole" = $1, "updatedAt" = $2 WHERE id = $3`,
+				string(wanted), prismaNow(), userID); err != nil {
+				return fmt.Errorf("db: redeem invite: set instance role: %w", err)
+			}
+		}
+	}
+	if inv.GroupID.Valid && inv.GroupID.String != "" {
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO "_UserToUserGroup" ("A", "B") VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+			userID, inv.GroupID.String); err != nil {
+			return fmt.Errorf("db: redeem invite: add to group: %w", err)
+		}
+	} else {
+		// No group configured → pending, so an admin can find them.
+		// Mirrors AddUserToPendingGroup but stays inside the tx.
+		now := prismaNow()
+		if _, err := tx.ExecContext(ctx, `
+INSERT INTO "UserGroup" (id, name, description, "instanceRole", "projectMemberships", "createdAt", "updatedAt")
+VALUES ('grp-pending', 'kuso-pending', 'users awaiting admin approval', 'pending', '[]', $1, $2)
+ON CONFLICT DO NOTHING`, now, now); err != nil {
+			return fmt.Errorf("db: redeem invite: ensure pending group: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO "_UserToUserGroup" ("A", "B") VALUES ($1, 'grp-pending') ON CONFLICT DO NOTHING`,
+			userID); err != nil {
+			return fmt.Errorf("db: redeem invite: add to pending: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx,
+		`INSERT INTO "InviteRedemption" ("inviteId","userId") VALUES ($1, $2)`,
+		inv.ID, userID); err != nil {
+		return fmt.Errorf("db: redeem invite: record redemption: %w", err)
+	}
+	return nil
 }
 
 // RecordRedemption logs a (invite, user) pair so admins can trace

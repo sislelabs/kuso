@@ -12,6 +12,23 @@ import { restoreFormDraft } from "@/lib/query-client";
 import { toast } from "sonner";
 import { Plus, ArrowRight, Globe, Store } from "lucide-react";
 
+// Route segments the app owns. A project with one of these names would
+// collide with a static page (/projects/new) or be stripped by the
+// pathname-based param extraction in lib/dynamic-params.ts, leaving it
+// unreachable. Mirrors reservedRouteNames in
+// server-go/internal/projects/projects_ops.go — the server rejects
+// these too; checking here just gives an instant, friendlier error.
+const RESERVED_NAMES = new Set([
+  "new",
+  "projects",
+  "services",
+  "addons",
+  "envs",
+  "logs",
+  "settings",
+  "invite",
+]);
+
 // NewProjectPage creates an empty project — just a name and optional
 // base domain. Repos attach later as services (each service owns its
 // own repo). The old combined wizard tried to do everything in one
@@ -65,6 +82,10 @@ export default function NewProjectPage() {
     const trimmed = name.trim();
     if (!/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(trimmed)) {
       toast.error("Name: lowercase letters, digits, and dashes; ≤ 63 chars");
+      return;
+    }
+    if (RESERVED_NAMES.has(trimmed)) {
+      toast.error(`"${trimmed}" is reserved — it collides with an app route. Pick another name.`);
       return;
     }
     setSubmitting(true);

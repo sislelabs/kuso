@@ -174,6 +174,62 @@ func TestCreate_RejectsReservedKusoPrefix(t *testing.T) {
 	}
 }
 
+// Web-route segments (STATIC_SEGMENTS in web/src/lib/dynamic-params.ts
+// plus the static /projects/new page) are stripped by the SPA's
+// pathname-based param extraction, so a project carrying one of those
+// names would be unreachable in the UI. Create must reject them with
+// ErrInvalid; AddService applies the same rule to service slugs.
+func TestCreate_RejectsReservedRouteNames(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t)
+	for _, name := range []string{"new", "projects", "services", "addons", "envs", "logs", "settings", "invite"} {
+		if _, err := s.Create(context.Background(), CreateProjectRequest{Name: name}); !errors.Is(err, ErrInvalid) {
+			t.Errorf("project name %q should be rejected as reserved (ErrInvalid), got %v", name, err)
+		}
+	}
+	// Names that merely CONTAIN a reserved segment are fine.
+	for _, name := range []string{"new-app", "my-settings", "logstash"} {
+		if _, err := s.Create(context.Background(), CreateProjectRequest{Name: name}); err != nil {
+			t.Errorf("project name %q should be allowed, got %v", name, err)
+		}
+	}
+}
+
+func TestAddService_RejectsReservedRouteNames(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/x/y", DefaultBranch: "main"},
+		BaseDomain:  "alpha.example.com",
+	}))
+	for _, name := range []string{"new", "services", "settings"} {
+		_, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{
+			Name:    name,
+			Runtime: "dockerfile",
+			Port:    3000,
+		})
+		if !errors.Is(err, ErrInvalid) {
+			t.Errorf("service name %q should be rejected as reserved (ErrInvalid), got %v", name, err)
+		}
+	}
+	// The check runs on the SLUG, so a display name that slugifies to a
+	// reserved segment is rejected too.
+	if _, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{
+		Name:    "New",
+		Runtime: "dockerfile",
+		Port:    3000,
+	}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("service name \"New\" (slug \"new\") should be rejected, got %v", err)
+	}
+	// Containing a reserved segment is fine.
+	if _, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{
+		Name:    "new-web",
+		Runtime: "dockerfile",
+		Port:    3000,
+	}); err != nil {
+		t.Errorf("service name %q should be allowed, got %v", "new-web", err)
+	}
+}
+
 // As of v0.3.5, defaultRepo is optional — a project is just a
 // container, services bring their own repos. Verify a bare-name
 // create succeeds and produces a CR with no DefaultRepo.

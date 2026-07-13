@@ -36,8 +36,8 @@ var marketplaceListCmd = &cobra.Command{
 			return fmt.Errorf("run `kuso login` first")
 		}
 		resp, err := api.MarketplaceList()
-		if err != nil {
-			return err
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("list marketplace apps: %w", err)
 		}
 		var body struct {
 			Apps []struct {
@@ -68,6 +68,9 @@ var marketplaceInfoCmd = &cobra.Command{
 		}
 		if resp.StatusCode() == 404 {
 			return fmt.Errorf("app %q not found", args[0])
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		fmt.Println(string(resp.Body()))
 		return nil

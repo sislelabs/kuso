@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
-import { useBuilds, useTriggerBuild } from "@/features/services";
+import { useBuilds, useService, useTriggerBuild } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
 import type { BuildSummary } from "@/features/services/api";
 import type { KusoEnvironment } from "@/types/projects";
@@ -100,6 +100,11 @@ function classify(
 export function ServiceDeploymentsPanel({ project, service, env }: Props) {
   const builds = useBuilds(project, service);
   const trigger = useTriggerBuild(project, service);
+  // runtime=image services never build — the server 400s the build
+  // endpoint for them ("change image.tag and save the service spec to
+  // redeploy"). Hide the Redeploy button and point at Settings instead.
+  const svc = useService(project, service);
+  const isImage = svc.data?.spec.runtime === "image";
   const [expanded, setExpanded] = useState<string | null>(null);
   const canDeploy = useCanOnProject(project, Perms.ServicesWrite);
   // Re-render every second while at least one build is running so
@@ -153,7 +158,14 @@ export function ServiceDeploymentsPanel({ project, service, env }: Props) {
             <span className="font-mono text-[var(--text-tertiary)]">{env.spec.kind}</span>
           )}
         </div>
-        {canDeploy ? (
+        {isImage ? (
+          <span
+            className="font-mono text-[10px] text-[var(--text-tertiary)]"
+            title="This service deploys a pre-built image and never builds. To roll it, change the image tag in Settings → Image and save."
+          >
+            pre-built image — redeploy via Settings
+          </span>
+        ) : canDeploy ? (
           <Button
             size="sm"
             onClick={requestRedeploy}

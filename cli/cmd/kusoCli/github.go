@@ -36,11 +36,13 @@ var githubStatusCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.GetInstallURL()
-		if err != nil {
-			return err
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("github status: %w", err)
 		}
 		var data map[string]any
-		_ = json.Unmarshal(resp.Body(), &data)
+		if err := json.Unmarshal(resp.Body(), &data); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
 		fmt.Printf("configured: %v\n", data["configured"])
 		if u, ok := data["url"].(string); ok && u != "" {
 			fmt.Printf("install URL: %s\n", u)
@@ -58,11 +60,13 @@ var githubInstallationsCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListInstallations()
-		if err != nil {
-			return err
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("list installations: %w", err)
 		}
 		var items []map[string]any
-		_ = json.Unmarshal(resp.Body(), &items)
+		if err := json.Unmarshal(resp.Body(), &items); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
 		sort.Slice(items, func(i, j int) bool {
 			return asString(items[i]["accountLogin"]) < asString(items[j]["accountLogin"])
 		})
@@ -109,11 +113,13 @@ var githubReposCmd = &cobra.Command{
 			return fmt.Errorf("installation id must be a positive integer, got %q", args[0])
 		}
 		resp, err := api.ListInstallationRepos(id)
-		if err != nil {
-			return err
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("list repos: %w", err)
 		}
 		var items []map[string]any
-		_ = json.Unmarshal(resp.Body(), &items)
+		if err := json.Unmarshal(resp.Body(), &items); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
 		sort.Slice(items, func(i, j int) bool {
 			return asString(items[i]["fullName"]) < asString(items[j]["fullName"])
 		})

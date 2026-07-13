@@ -260,3 +260,107 @@ func TestDBStats_Admin_ReturnsCounters(t *testing.T) {
 		t.Errorf("negative pool counter: %+v", snap)
 	}
 }
+
+// --- local redemption (public signup path) ------------------------------
+
+// End-to-end local redemption: the invite's configured group AND
+// instanceRole must land on the created user atomically with the seat
+// claim (S-review Finding 7 — the role used to be advertised but never
+// applied).
+func TestInvites_RedeemLocal_AppliesGroupAndRole(t *testing.T) {
+	r, d, iss := newInviteServer(t)
+	ctx := context.Background()
+	if err := d.CreateGroup(ctx, "grp-eng", "engineering", ""); err != nil {
+		t.Fatalf("group: %v", err)
+	}
+	role := "editor"
+	gid := "grp-eng"
+	if err := d.CreateInvite(ctx, db.CreateInviteInput{
+		ID: "inv-local", Token: "tok-local", GroupID: &gid, InstanceRole: &role,
+		CreatedBy: "admin", MaxUses: 1,
+	}); err != nil {
+		t.Fatalf("invite: %v", err)
+	}
+
+	body := strings.NewReader(`{"token":"tok-local","username":"newbie","email":"newbie@example.com","password":"hunter2hunter2"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/invites/redeem", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("redeem: status=%d body=%s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		AccessToken string `json:"access_token"`
+	}
+	if err := json.NewDecoder(rr.Body).Decode(&resp); err != nil || resp.AccessToken == "" {
+		t.Fatalf("no access_token: err=%v body=%s", err, rr.Body.String())
+	}
+	claims, err := iss.Verify(resp.AccessToken)
+	if err != nil {
+		t.Fatalf("verify jwt: %v", err)
+	}
+
+	user, err := d.FindUserByUsername(ctx, "newbie")
+	if err != nil {
+		t.Fatalf("user not created: %v", err)
+	}
+	if claims.UserID != user.ID {
+		t.Errorf("jwt user mismatch: %s vs %s", claims.UserID, user.ID)
+	}
+	ten, err := d.ListUserTenancy(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("tenancy: %v", err)
+	}
+	if ten.InstanceRole != db.InstanceRoleEditor {
+		t.Errorf("instance role: %q (want editor)", ten.InstanceRole)
+	}
+	groups, err := d.UserGroupNames(ctx, user.ID)
+	if err != nil {
+		t.Fatalf("groups: %v", err)
+	}
+	if len(groups) != 1 || groups[0] != "engineering" {
+		t.Errorf("groups: %v (want [engineering])", groups)
+	}
+	inv, err := d.FindInviteByToken(ctx, "tok-local")
+	if err != nil {
+		t.Fatalf("re-read invite: %v", err)
+	}
+	if inv.UsedCount != 1 {
+		t.Errorf("usedCount: %d (want 1)", inv.UsedCount)
+	}
+}
+
+// A taken username must not burn a seat — the redemption transaction
+// rolls back whole.
+func TestInvites_RedeemLocal_TakenUsernameKeepsSeat(t *testing.T) {
+	r, d, _ := newInviteServer(t)
+	ctx := context.Background()
+	if err := d.CreateUser(ctx, db.CreateUserInput{
+		ID: "u-first", Username: "dibs", Email: "dibs@example.com",
+		PasswordHash: "hash", IsActive: true,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := d.CreateInvite(ctx, db.CreateInviteInput{
+		ID: "inv-seat", Token: "tok-seat", CreatedBy: "admin", MaxUses: 1,
+	}); err != nil {
+		t.Fatalf("invite: %v", err)
+	}
+
+	body := strings.NewReader(`{"token":"tok-seat","username":"dibs","email":"other@example.com","password":"hunter2hunter2"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/invites/redeem", body)
+	req.Header.Set("Content-Type", "application/json")
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status=%d want 409 body=%s", rr.Code, rr.Body.String())
+	}
+	inv, err := d.FindInviteByToken(ctx, "tok-seat")
+	if err != nil {
+		t.Fatalf("re-read invite: %v", err)
+	}
+	if inv.UsedCount != 0 {
+		t.Errorf("seat burned: usedCount=%d (want 0)", inv.UsedCount)
+	}
+}

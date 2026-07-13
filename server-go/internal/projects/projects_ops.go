@@ -8,8 +8,8 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/kube"
@@ -33,8 +33,8 @@ func (s *Service) Get(ctx context.Context, name string) (*kube.KusoProject, erro
 // hook surface). Phase 3 ships project + services + envs only; addons
 // land in Phase 5+.
 type DescribeResponse struct {
-	Project      *kube.KusoProject     `json:"project"`
-	Services     []kube.KusoService    `json:"services"`
+	Project      *kube.KusoProject      `json:"project"`
+	Services     []kube.KusoService     `json:"services"`
 	Environments []kube.KusoEnvironment `json:"environments"`
 }
 
@@ -75,6 +75,26 @@ func (s *Service) Describe(ctx context.Context, name string) (*DescribeResponse,
 	return &DescribeResponse{Project: p, Services: services, Environments: envs}, nil
 }
 
+// reservedRouteNames are web-route path segments the SPA owns. The
+// static export ships literal routes like /projects/new, and the
+// dynamic-param parser (web/src/lib/dynamic-params.ts) unconditionally
+// skips the segments listed in its STATIC_SEGMENTS set when extracting
+// [project]/[service] values from the pathname. A project or service
+// with one of these names would therefore create a resource whose page
+// is unreachable (or renders the wrong thing), so we refuse the names
+// at creation time. Keep in lockstep with STATIC_SEGMENTS + the static
+// route table under web/src/app/(app)/.
+var reservedRouteNames = map[string]bool{
+	"new":      true,
+	"projects": true,
+	"services": true,
+	"addons":   true,
+	"envs":     true,
+	"logs":     true,
+	"settings": true,
+	"invite":   true,
+}
+
 // Create validates input, refuses duplicates, and persists a new project.
 //
 // As of v0.3.5 a project is just a container — defaultRepo is no longer
@@ -84,6 +104,9 @@ func (s *Service) Describe(ctx context.Context, name string) (*DescribeResponse,
 func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.KusoProject, error) {
 	if req.Name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalid)
+	}
+	if reservedRouteNames[req.Name] {
+		return nil, fmt.Errorf("%w: %q is reserved — it collides with a web route segment (new, projects, services, addons, envs, logs, settings, invite)", ErrInvalid, req.Name)
 	}
 	// The "kuso-" prefix is reserved for kuso-internal resources (the
 	// cluster-PG addon uses the synthetic project "kuso-instance"). Reject
@@ -124,9 +147,19 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 		if branch == "" {
 			branch = "main"
 		}
+		// Path (monorepo subdir) was silently dropped here before —
+		// the public DTO exposes defaultRepo.path but only URL +
+		// branch made it onto the CR. Validate like the service-level
+		// repo.path (it flows into the same shell contexts).
+		if req.DefaultRepo.Path != "" {
+			if err := validateRepoPath(req.DefaultRepo.Path); err != nil {
+				return nil, err
+			}
+		}
 		defaultRepo = &kube.KusoRepoRef{
 			URL:           req.DefaultRepo.URL,
 			DefaultBranch: branch,
+			Path:          req.DefaultRepo.Path,
 		}
 	}
 
@@ -201,6 +234,15 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 			}
 			if req.DefaultRepo.DefaultBranch != "" {
 				cur.Spec.DefaultRepo.DefaultBranch = req.DefaultRepo.DefaultBranch
+			}
+			// Same empty-means-leave-alone semantics as URL/branch.
+			// Path was previously dropped on update, matching the
+			// create-path gap (finding: defaultRepo.path discarded).
+			if req.DefaultRepo.Path != "" {
+				if err := validateRepoPath(req.DefaultRepo.Path); err != nil {
+					return err
+				}
+				cur.Spec.DefaultRepo.Path = req.DefaultRepo.Path
 			}
 		}
 		if req.GitHub != nil {
@@ -500,7 +542,6 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 	}
 	return nil
 }
-
 
 // listServicesForProject filters by label rather than relying on
 // spec.project so we use indexed lookups. Routes through the project's

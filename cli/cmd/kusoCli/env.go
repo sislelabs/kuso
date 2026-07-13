@@ -50,8 +50,8 @@ var envListCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.GetEnv(args[0], args[1])
-		if err != nil {
-			return err
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("list env vars: %w", err)
 		}
 		// Server returns `{envVars: [{name, value, valueFrom}]}`. Plain
 		// entries have value populated; secret-backed entries have
@@ -63,7 +63,9 @@ var envListCmd = &cobra.Command{
 				ValueFrom map[string]any `json:"valueFrom,omitempty"`
 			} `json:"envVars"`
 		}
-		_ = json.Unmarshal(resp.Body(), &data)
+		if err := json.Unmarshal(resp.Body(), &data); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
 		switch outputFormat {
 		case "json":
 			return jsonOut(data)
@@ -320,14 +322,16 @@ var secretListCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		resp, err := api.ListSecrets(args[0], args[1], secretEnvFlag)
-		if err != nil {
-			return err
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("list secrets: %w", err)
 		}
 		var data struct {
 			Keys []string `json:"keys"`
 			Env  *string  `json:"env"`
 		}
-		_ = json.Unmarshal(resp.Body(), &data)
+		if err := json.Unmarshal(resp.Body(), &data); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
 		sort.Strings(data.Keys)
 		switch outputFormat {
 		case "json":

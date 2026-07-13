@@ -131,6 +131,44 @@ func CRName(project, name string) string {
 // callers and tests reach for the lowercase name.
 func addonCRName(project, name string) string { return CRName(project, name) }
 
+// addonOwnedByProject reports whether a fetched addon CR actually
+// belongs to project. CRName tolerates pre-qualified input, so with
+// overlapping project names ("foo" vs "foo-bar") a foo-authorized
+// caller passing "foo-bar-pg" resolves to foo-bar's CR — the string
+// layer cannot disambiguate; only the fetched CR's spec.project (or,
+// for older CRs, its project label) can.
+func addonOwnedByProject(a *kube.KusoAddon, project string) bool {
+	if a == nil {
+		return false
+	}
+	if a.Spec.Project != "" {
+		return a.Spec.Project == project
+	}
+	return a.Labels[kube.LabelProject] == project
+}
+
+// GetOwned fetches the addon CR for (project, name) and verifies it
+// belongs to project. A CR that exists under the resolved name but is
+// owned by another project returns ErrNotFound — same as a missing CR,
+// so existence isn't leaked. Exported so HTTP handlers can gate routes
+// whose implementations fetch by CR name in sibling files (secret
+// keys/values, public-tcp, repair, instance resync) without repeating
+// the ownership rule per handler.
+func (s *Service) GetOwned(ctx context.Context, project, name string) (*kube.KusoAddon, error) {
+	ns := s.nsFor(ctx, project)
+	a, err := s.Kube.GetKusoAddon(ctx, ns, addonCRName(project, name))
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+		}
+		return nil, fmt.Errorf("get addon: %w", err)
+	}
+	if !addonOwnedByProject(a, project) {
+		return nil, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+	}
+	return a, nil
+}
+
 // ShortName is the inverse of CRName: strip the "<project>-" prefix
 // if it's there. Useful for paths that key on the short name (S3
 // backup prefixes, helm chart .Values.name).
@@ -385,6 +423,12 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 	// overwriting the operator's status block). Same fix shape as
 	// F-03 on the service side.
 	updated, err := s.Kube.UpdateKusoAddonWithRetry(ctx, ns, fqn, func(addon *kube.KusoAddon) error {
+		// Ownership guard: a pre-qualified name can resolve to a sibling
+		// project's CR when project names overlap (foo vs foo-bar).
+		// Checked inside the closure so it re-applies on every retry.
+		if !addonOwnedByProject(addon, project) {
+			return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+		}
 		if req.Version != nil {
 			addon.Spec.Version = *req.Version
 		}
@@ -519,6 +563,10 @@ func (s *Service) SetPlacement(ctx context.Context, project, name string, p *kub
 		return err
 	}
 	_, err := s.Kube.UpdateKusoAddonWithRetry(ctx, ns, fqn, func(addon *kube.KusoAddon) error {
+		// Same ownership guard as Update — see addonOwnedByProject.
+		if !addonOwnedByProject(addon, project) {
+			return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+		}
 		addon.Spec.Placement = p
 		return nil
 	})
@@ -575,6 +623,12 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 			return ErrNotFound
 		}
 		return err
+	}
+	// Ownership guard — see addonOwnedByProject. Without it a member
+	// of project foo could delete foo-bar's addon "pg" by passing the
+	// pre-qualified name "foo-bar-pg".
+	if !addonOwnedByProject(cr, project) {
+		return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
 	}
 	// Ephemeral preview-clone DB cleanup. A per-PR instance-pg clone
 	// (labelled preview-pr) lives as a database on the SHARED server, so
@@ -1013,6 +1067,10 @@ func (s *Service) ResyncExternal(ctx context.Context, project, name string) erro
 			return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
 		}
 		return fmt.Errorf("get addon: %w", err)
+	}
+	// Ownership guard — see addonOwnedByProject.
+	if !addonOwnedByProject(addon, project) {
+		return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
 	}
 	if addon.Spec.External == nil || addon.Spec.External.SecretName == "" {
 		return fmt.Errorf("%w: addon %s/%s is not external", ErrInvalid, project, name)

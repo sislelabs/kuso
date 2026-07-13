@@ -22,16 +22,18 @@ type Doc struct {
 
 // Service mirrors spec.ServiceSpec (the subset the converter produces).
 type Service struct {
-	Name    string            `yaml:"name"`
-	Runtime string            `yaml:"runtime,omitempty"`
-	Repo    string            `yaml:"repo,omitempty"`
-	Port    int32             `yaml:"port,omitempty"`
-	Command []string          `yaml:"command,omitempty"`
-	Domains []Domain          `yaml:"domains,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
-	Scale   *Scale            `yaml:"scale,omitempty"`
-	Volumes []Volume          `yaml:"volumes,omitempty"`
-	Image   *Image            `yaml:"image,omitempty"`
+	Name      string            `yaml:"name"`
+	Runtime   string            `yaml:"runtime,omitempty"`
+	Repo      string            `yaml:"repo,omitempty"`
+	Path      string            `yaml:"path,omitempty"`
+	Port      int32             `yaml:"port,omitempty"`
+	Command   []string          `yaml:"command,omitempty"`
+	Domains   []Domain          `yaml:"domains,omitempty"`
+	Env       map[string]string `yaml:"env,omitempty"`
+	Scale     *Scale            `yaml:"scale,omitempty"`
+	Volumes   []Volume          `yaml:"volumes,omitempty"`
+	Image     *Image            `yaml:"image,omitempty"`
+	BuildArgs map[string]string `yaml:"buildArgs,omitempty"`
 }
 
 type Domain struct {
@@ -122,20 +124,29 @@ func (d *Doc) Marshal() ([]byte, error) {
 
 func convertAddon(svc types.ServiceConfig, slug, kind, version string, rep *Report) Addon {
 	a := Addon{Name: slug, Kind: kind, Version: version}
-	// A named volume on the datastore becomes the addon's storage; we
-	// can't read a size from compose, so leave it at the chart default
-	// and just note the data path.
+	// The managed addon provisions FRESH, EMPTY storage — nothing from
+	// the compose side is attached or copied. Flag every trace of
+	// existing state (data volumes, credentials, init-script mounts) so
+	// the user knows a manual migration stands between them and cutover.
 	for _, v := range svc.Volumes {
-		if v.Type == "volume" && v.Source != "" {
-			rep.addon(svc.Name, "data volume %q → addon storage (chart default size)", v.Target)
-			break
+		switch {
+		case v.Type == "volume" && v.Source != "":
+			rep.flag(svc.Name, "data volume %q is NOT attached or copied — the managed addon starts with fresh, empty storage; migrate existing data by hand (dump & restore) before switching traffic", v.Source)
+		case v.Type == "bind":
+			rep.flag(svc.Name, "bind mount %q→%q is NOT imported — init scripts / seed data mounted there do not run against the managed addon", v.Source, v.Target)
 		}
+	}
+	if len(svc.Environment) > 0 {
+		rep.flag(svc.Name, "datastore environment (%d vars — users, passwords, database names) is NOT carried over — kuso mints its own credentials in the addon's conn-secret", len(svc.Environment))
+	}
+	if len(svc.EnvFiles) > 0 {
+		rep.flag(svc.Name, "datastore env_file(s) NOT read — any users/passwords/db names in them are NOT carried over; kuso mints its own credentials in the addon's conn-secret")
 	}
 	verNote := version
 	if verNote == "" {
 		verNote = "(chart default)"
 	}
-	rep.addon(svc.Name, "→ addon `%s` (kind=%s, version=%s); project services get its conn vars automatically", slug, kind, verNote)
+	rep.addon(svc.Name, "→ addon `%s` (kind=%s, version=%s); project services get its conn vars automatically. The addon starts EMPTY — no data is migrated from the compose deployment", slug, kind, verNote)
 	noteUnmapped(svc, rep)
 	return a
 }
@@ -149,14 +160,33 @@ func convertService(svc types.ServiceConfig, slug string, addons map[string]addo
 		out.Runtime = "dockerfile"
 		rep.service(svc.Name, "build context %q → runtime=dockerfile; set `repo:` to the service's git URL before deploying", svc.Build.Context)
 		rep.flag(svc.Name, "no repo set — kuso builds from a git repo; fill in `repo:` for service `%s`", slug)
+		if p := repoSubPath(svc.Build.Context); p != "" {
+			out.Path = p
+			rep.service(svc.Name, "build context %q → path: %q (assumes the compose file sits at the repo root — adjust if not)", svc.Build.Context, p)
+		}
+		if svc.Build.Dockerfile != "" && svc.Build.Dockerfile != "Dockerfile" {
+			rep.flag(svc.Name, "build.dockerfile=%q has no kuso field — kuso builds `Dockerfile` at the service path; rename or move it in the repo", svc.Build.Dockerfile)
+		}
+		if svc.Build.Target != "" {
+			rep.flag(svc.Name, "build.target=%q has no kuso field — kuso builds the Dockerfile's final stage", svc.Build.Target)
+		}
+		out.BuildArgs = convertBuildArgs(svc, rep)
 	case svc.Image != "":
 		repo, tag := imageParts(svc.Image)
+		digest := imageDigest(svc.Image)
 		if tag == "" {
 			tag = "latest"
 		}
 		out.Runtime = "image"
 		out.Image = &Image{Repository: repo, Tag: tag}
 		rep.service(svc.Name, "image %q → runtime=image (%s:%s)", svc.Image, repo, tag)
+		// kuso image services are repository:tag only (the env chart
+		// renders exactly that), so a digest pin can't be preserved.
+		// Flag it loudly — the reproducible artifact just became a
+		// mutable tag — rather than silently defaulting.
+		if digest != "" {
+			rep.flag(svc.Name, "digest pin %s dropped — kuso image services take repository:tag only, so the deploy tracks the MUTABLE %s:%s; push or pick an immutable tag if you need reproducibility", digest, repo, tag)
+		}
 		// A datastore image kuso doesn't have a managed addon for yet:
 		// it deploys fine as a raw image service, but the user loses the
 		// managed-addon goodies (conn-secret, backups). Flag so they
@@ -224,14 +254,8 @@ func portString(p types.ServicePortConfig) string {
 }
 
 func convertEnv(svc types.ServiceConfig, addons map[string]addonRef, rep *Report) map[string]string {
+	noteEnvFiles(svc, rep)
 	if len(svc.Environment) == 0 {
-		if len(svc.EnvFiles) > 0 {
-			names := make([]string, 0, len(svc.EnvFiles))
-			for _, e := range svc.EnvFiles {
-				names = append(names, e.Path)
-			}
-			rep.skip(svc.Name, "env_file %s not inlined — values weren't read; copy them into kuso env vars", strings.Join(names, ", "))
-		}
 		return nil
 	}
 	env := map[string]string{}
@@ -247,14 +271,47 @@ func convertEnv(svc types.ServiceConfig, addons map[string]addonRef, rep *Report
 		}
 		env[k] = val
 	}
-	if len(svc.EnvFiles) > 0 {
-		names := make([]string, 0, len(svc.EnvFiles))
-		for _, e := range svc.EnvFiles {
-			names = append(names, e.Path)
-		}
-		rep.skip(svc.Name, "env_file %s not inlined — copy any needed values into kuso env vars", strings.Join(names, ", "))
-	}
 	return env
+}
+
+// noteEnvFiles flags env_file entries as BLOCKING: the parser never
+// reads env-file contents (see Parse), so the converted services would
+// deploy without whatever configuration or credentials those files
+// carry. The CLI refuses --apply while Report.UnresolvedEnvFiles is
+// non-empty unless the user explicitly overrides.
+func noteEnvFiles(svc types.ServiceConfig, rep *Report) {
+	if len(svc.EnvFiles) == 0 {
+		return
+	}
+	names := make([]string, 0, len(svc.EnvFiles))
+	for _, e := range svc.EnvFiles {
+		names = append(names, e.Path)
+		rep.unresolvedEnvFile(e.Path)
+	}
+	rep.flag(svc.Name, "env_file %s NOT read — its values are missing from the import; copy them into kuso env vars before deploying", strings.Join(names, ", "))
+}
+
+// convertBuildArgs maps compose build.args onto kuso's buildArgs.
+// Args with no value (host-env pass-through) can't be resolved — the
+// import mustn't depend on the importer's shell — so they're flagged
+// for the user to fill in by hand.
+func convertBuildArgs(svc types.ServiceConfig, rep *Report) map[string]string {
+	if svc.Build == nil || len(svc.Build.Args) == 0 {
+		return nil
+	}
+	out := map[string]string{}
+	for k, v := range svc.Build.Args {
+		if v == nil {
+			rep.flag(svc.Name, "build arg %s has no value in compose (host-env pass-through) — set it under `buildArgs:` by hand", k)
+			continue
+		}
+		out[k] = *v
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	rep.service(svc.Name, "build.args → buildArgs (%d value(s))", len(out))
+	return out
 }
 
 // rewriteAddonRef rewrites a connection-string-ish env value that
@@ -332,6 +389,45 @@ func noteUnmapped(svc types.ServiceConfig, rep *Report) {
 	}
 	if len(svc.Entrypoint) > 0 {
 		rep.skip(svc.Name, "entrypoint not imported — set it in your Dockerfile or use command")
+	}
+	if svc.WorkingDir != "" {
+		rep.skip(svc.Name, "working_dir=%q not imported — set WORKDIR in the Dockerfile", svc.WorkingDir)
+	}
+	if svc.User != "" {
+		rep.skip(svc.Name, "user=%q not imported — set USER in the Dockerfile", svc.User)
+	}
+	if len(svc.DependsOn) > 0 {
+		rep.skip(svc.Name, "depends_on not imported — kuso has no start ordering (incl. condition: service_healthy); services must retry their dependencies")
+	}
+	if len(svc.Secrets) > 0 {
+		rep.flag(svc.Name, "secrets not imported — recreate each as a kuso env var (the secret file contents are NOT read)")
+	}
+	if len(svc.Configs) > 0 {
+		rep.flag(svc.Name, "configs not imported — bake the files into the image or recreate the values as env vars")
+	}
+	if len(svc.Labels) > 0 {
+		rep.skip(svc.Name, "labels not imported")
+	}
+	if svc.Deploy != nil && (svc.Deploy.Resources.Limits != nil || svc.Deploy.Resources.Reservations != nil) {
+		rep.skip(svc.Name, "deploy.resources not imported — set the pod size in kuso after import")
+	}
+	if svc.MemLimit > 0 || svc.CPUS > 0 {
+		rep.skip(svc.Name, "mem_limit/cpus not imported — set the pod size in kuso after import")
+	}
+	if len(svc.ExtraHosts) > 0 {
+		rep.skip(svc.Name, "extra_hosts not imported")
+	}
+	if len(svc.Sysctls) > 0 {
+		rep.skip(svc.Name, "sysctls not imported")
+	}
+	if len(svc.Ulimits) > 0 {
+		rep.skip(svc.Name, "ulimits not imported")
+	}
+	if svc.Logging != nil {
+		rep.skip(svc.Name, "logging not imported — kuso captures stdout/stderr")
+	}
+	if svc.StopGracePeriod != nil {
+		rep.skip(svc.Name, "stop_grace_period not imported")
 	}
 }
 

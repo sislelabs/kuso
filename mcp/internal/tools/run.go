@@ -83,7 +83,7 @@ func registerRun(server *mcp.Server, client *kusoclient.Client) {
 				Service string `json:"service"`
 			} `json:"spec"`
 		}
-		path := "/api/projects/" + args.Project + "/services/" + args.Service + "/runs"
+		path := apiPath("api", "projects", args.Project, "services", args.Service, "runs")
 		if err := client.PostJSON(ctx, path, body, &raw); err != nil {
 			return nil, runResult{}, fmt.Errorf("create run: %w", err)
 		}

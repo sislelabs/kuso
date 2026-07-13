@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Input } from "@/components/ui/input";
@@ -16,7 +16,9 @@ import {
   type DetectRuntimeResponse,
 } from "@/features/github";
 import { useRouteParams } from "@/lib/dynamic-params";
+import { useServices } from "@/features/projects";
 import { api, ApiError } from "@/lib/api-client";
+import { serviceShortName } from "@/lib/utils";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
 import { slugifyServiceName } from "@/features/services/slug";
 
@@ -61,6 +63,10 @@ export function AddServiceView() {
   // (relative to the repo path). Empty = "Dockerfile".
   const [dockerfile, setDockerfile] = useState<string>("");
   const [command, setCommand] = useState<string>("");
+  // fromService: the sibling service whose built image a
+  // runtime=worker service reuses. Required by the server for
+  // workers — a worker has no repo/build of its own.
+  const [fromService, setFromService] = useState<string>("");
   const [port, setPort] = useState<string>("");
   const [reason, setReason] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -78,6 +84,26 @@ export function AddServiceView() {
     return allRepos.filter(({ repo }) => repo.fullName.toLowerCase().includes(q));
   }, [allRepos, repoQuery]);
 
+  // Candidate image sources for runtime=worker: the project's existing
+  // services, minus workers (their image comes from someone else) and
+  // image services (no builds, so their tag never propagates to
+  // consumers). Short names — that's what spec.fromService stores.
+  const projectServices = useServices(project);
+  const workerSources = useMemo(
+    () =>
+      (projectServices.data ?? [])
+        .filter((s) => s.spec.runtime !== "worker" && s.spec.runtime !== "image")
+        .map((s) => serviceShortName(project, s.metadata.name)),
+    [projectServices.data, project]
+  );
+
+  // Monotonic token for runtime detection. Detect requests aren't
+  // cancellable, so a user who picks repo A, changes their mind, and
+  // picks repo B can have A's (slower) response land AFTER B's —
+  // stamping A's runtime+port onto B's form. Latest-wins: only the
+  // response matching the most recent pick is applied.
+  const detectSeq = useRef(0);
+
   // Prefill name from repo + run detect on first pick.
   useEffect(() => {
     if (!picked) return;
@@ -87,6 +113,7 @@ export function AddServiceView() {
     if (!name) setName(repoName);
 
     const [owner, repoOnly] = picked.repo.fullName.split("/");
+    const seq = ++detectSeq.current;
     detect
       .mutateAsync({
         installationId: picked.installationId,
@@ -96,6 +123,7 @@ export function AddServiceView() {
         path: "",
       })
       .then((res: DetectRuntimeResponse) => {
+        if (seq !== detectSeq.current) return; // stale — a newer pick superseded this
         setRuntime(res.runtime ?? "dockerfile");
         if (res.port) setPort(String(res.port));
         setReason(res.reason ?? null);
@@ -120,6 +148,10 @@ export function AddServiceView() {
     }
     if (source === "image" && !imageRepo.trim()) {
       toast.error("Image repository required, e.g. ghcr.io/owner/app");
+      return;
+    }
+    if (source === "repo" && runtime === "worker" && !fromService) {
+      toast.error("Pick the service whose image this worker runs");
       return;
     }
     setSubmitting(true);
@@ -158,6 +190,10 @@ export function AddServiceView() {
           ...(runtime === "worker" && command.trim()
             ? { command: command.trim().split(/\s+/).filter(Boolean) }
             : {}),
+          // fromService is REQUIRED server-side for runtime=worker
+          // (the worker reuses this sibling's built image). Validated
+          // above so we never submit a worker without it.
+          ...(runtime === "worker" ? { fromService } : {}),
           ...(port ? { port: parseInt(port, 10) } : {}),
           github: { installationId: picked!.installationId },
         };
@@ -388,6 +424,9 @@ export function AddServiceView() {
               <button
                 type="button"
                 onClick={() => {
+                  // Invalidate any in-flight detection so a late
+                  // response can't stamp the cleared form.
+                  detectSeq.current++;
                   setPicked(null);
                   setName("");
                   setPath("");
@@ -478,6 +517,37 @@ export function AddServiceView() {
               </Field>
             )}
             {runtime === "worker" && (
+              <Field
+                label="runs image of"
+                hint="sibling service whose built image this worker reuses"
+              >
+                {workerSources.length === 0 ? (
+                  <p className="font-mono text-[10px] text-[var(--text-tertiary)]">
+                    No buildable services in this project yet — add a web service first,
+                    then come back for its worker.
+                  </p>
+                ) : (
+                  <div className="inline-flex flex-wrap gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] p-0.5">
+                    {workerSources.map((s) => (
+                      <button
+                        key={s}
+                        type="button"
+                        onClick={() => setFromService(s)}
+                        className={
+                          "rounded px-2 py-1 font-mono text-[11px] " +
+                          (fromService === s
+                            ? "bg-[var(--bg-tertiary)] text-[var(--text-primary)]"
+                            : "text-[var(--text-tertiary)] hover:text-[var(--text-primary)]")
+                        }
+                      >
+                        {s}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </Field>
+            )}
+            {runtime === "worker" && (
               <Field label="command">
                 <Input
                   value={command}
@@ -504,7 +574,14 @@ export function AddServiceView() {
             >
               ← cancel
             </Link>
-            <Button type="button" size="sm" onClick={onAdd} disabled={submitting}>
+            <Button
+              type="button"
+              size="sm"
+              onClick={onAdd}
+              // Workers can't submit without a source service — the
+              // server hard-rejects runtime=worker with no fromService.
+              disabled={submitting || (runtime === "worker" && !fromService)}
+            >
               <Plus className="h-3.5 w-3.5" />
               {submitting ? "Adding…" : "Add service"}
             </Button>

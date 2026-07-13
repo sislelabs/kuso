@@ -281,6 +281,21 @@ export function ServiceSettingsPanel({ project, service, svc, env }: Props) {
     if (state.dockerfile !== baseline.dockerfile) {
       body.dockerfile = state.dockerfile;
     }
+    // Image reference: only meaningful for runtime=image services,
+    // where re-pointing repository/tag + saving is the redeploy path
+    // (they never build). Repository must stay non-empty — clearing
+    // it would strand the service with nothing to run.
+    if (
+      state.imageRepository !== baseline.imageRepository ||
+      state.imageTag !== baseline.imageTag
+    ) {
+      const repository = state.imageRepository.trim();
+      if (!repository) {
+        toast.error("Image repository can't be empty");
+        return;
+      }
+      body.image = { repository, tag: state.imageTag.trim() || undefined };
+    }
     if (
       state.repoURL !== baseline.repoURL ||
       state.repoBranch !== baseline.repoBranch ||

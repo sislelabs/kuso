@@ -45,10 +45,25 @@ export interface KusoServiceSpec {
   // the slug is a separate destructive flow.
   displayName?: string;
   repo?: KusoRepoRef;
-  runtime?: "dockerfile" | "nixpacks" | "buildpacks" | "static";
+  // Mirrors the server's supported runtimes (services_ops.go
+  // validateRuntime): the four build strategies plus "worker" (no
+  // HTTP surface, reuses a sibling's image via fromService) and
+  // "image" (pre-built OCI image, bypasses the build pipeline).
+  runtime?: "dockerfile" | "nixpacks" | "buildpacks" | "static" | "worker" | "image";
   // dockerfile overrides the Dockerfile filename for runtime=dockerfile
   // (relative to repo.path). Empty = "Dockerfile".
   dockerfile?: string;
+  // image is the registry pointer for runtime=image services. The env
+  // chart pulls it directly — no build. Editing tag+saving is how an
+  // image service redeploys (there is no build endpoint for these).
+  image?: { repository?: string; tag?: string };
+  // fromService names the sibling service (short name, e.g. "web")
+  // whose built image a runtime=worker service reuses. Required by
+  // the server for runtime=worker, rejected for every other runtime.
+  fromService?: string;
+  // command overrides the container argv (workers run the sibling's
+  // image with this command instead of its default ENTRYPOINT).
+  command?: string[];
   port?: number;
   domains?: { host?: string; tls?: boolean }[];
   envVars?: KusoEnvVar[];

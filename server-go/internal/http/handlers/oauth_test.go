@@ -130,9 +130,19 @@ func newOAuthHarness(t *testing.T) (*chi.Mux, *handlers.OAuthHandler, *githubMoc
 // drive runs the full /api/auth/github → GitHub mock → /api/auth/github/callback
 // roundtrip end-to-end. Returns the final response (the redirect to "/").
 func drive(t *testing.T, r http.Handler, gm *githubMock) *httptest.ResponseRecorder {
+	return driveWithCookies(t, r, gm)
+}
+
+// driveWithCookies is drive with extra cookies attached to the
+// callback request — used to exercise the invite-cookie flow. All
+// requests carry X-Forwarded-Proto: https (TLS-terminating-proxy
+// shape) so the Secure cookie attribute is exercised the way
+// production sees it.
+func driveWithCookies(t *testing.T, r http.Handler, gm *githubMock, extra ...*http.Cookie) *httptest.ResponseRecorder {
 	t.Helper()
 	// Step 1 — start. Captures the state cookie + redirect to the mock.
 	startReq := httptest.NewRequest(http.MethodGet, "/api/auth/github", nil)
+	startReq.Header.Set("X-Forwarded-Proto", "https")
 	startRR := httptest.NewRecorder()
 	r.ServeHTTP(startRR, startReq)
 	if startRR.Code != http.StatusFound {
@@ -156,7 +166,11 @@ func drive(t *testing.T, r http.Handler, gm *githubMock) *httptest.ResponseRecor
 		fmt.Sprintf("/api/auth/github/callback?code=%s&state=%s",
 			url.QueryEscape(gm.wantCode), url.QueryEscape(state)),
 		nil)
+	cbReq.Header.Set("X-Forwarded-Proto", "https")
 	for _, c := range stateCookie {
+		cbReq.AddCookie(c)
+	}
+	for _, c := range extra {
 		cbReq.AddCookie(c)
 	}
 	cbRR := httptest.NewRecorder()
@@ -171,16 +185,12 @@ func TestOAuth_FullCallbackHappyPath(t *testing.T) {
 	if rr.Code != http.StatusFound {
 		t.Fatalf("callback status: %d body=%q", rr.Code, rr.Body.String())
 	}
-	// The redirect target is now "/#token=<jwt>" — the URL fragment
-	// hands the JWT to the SPA without exposing it to the server logs
-	// or to any non-same-origin redirect tracker. The fragment is
-	// stripped by api-client.ts on first paint and the bearer is
-	// stored in localStorage. See setJWTCookie + redirectWithJWT
-	// for the change. Test asserts the prefix instead of equality
-	// so the JWT contents aren't pinned.
-	got := rr.Header().Get("Location")
-	if !strings.HasPrefix(got, "/#token=") {
-		t.Errorf("redirect target: %q (want prefix \"/#token=\")", got)
+	// The redirect target is "/?login=ok" — the JWT travels only in
+	// the HttpOnly kuso.JWT_TOKEN cookie (see redirectWithJWT); the
+	// legacy "/#token=<jwt>" fragment delivery is closed so the token
+	// never sits in browser history / referers.
+	if got := rr.Header().Get("Location"); got != "/?login=ok" {
+		t.Errorf("redirect target: %q (want \"/?login=ok\")", got)
 	}
 	if gm.exchanges != 1 {
 		t.Errorf("exchanges: %d (want 1)", gm.exchanges)
@@ -397,5 +407,252 @@ func TestOAuth_StartHonorsConfiguredEndpoint(t *testing.T) {
 	loc := startRR.Header().Get("Location")
 	if !strings.HasPrefix(loc, gm.URL+"/login/oauth/authorize?") {
 		t.Errorf("start redirected to %q; want it to begin with %s/login/oauth/authorize", loc, gm.URL)
+	}
+}
+
+// --- provider-identity resolution (S-review Finding 1) -----------------
+
+// jwtCookie extracts the session cookie from a callback response, or
+// nil when the flow didn't establish a session.
+func jwtCookie(rr *httptest.ResponseRecorder) *http.Cookie {
+	for _, c := range rr.Result().Cookies() {
+		if c.Name == "kuso.JWT_TOKEN" && c.Value != "" {
+			return c
+		}
+	}
+	return nil
+}
+
+// A user already linked to this exact (provider, providerID) logs in
+// as that account even when their kuso username no longer matches the
+// GitHub login — the immutable ID wins, not the mutable username.
+func TestOAuth_ResolvesByProviderID_NotUsername(t *testing.T) {
+	r, h, gm, d := newOAuthHarness(t)
+	ctx := context.Background()
+	stub, _ := auth.HashPassword("irrelevant", auth.StubPasswordCost)
+	if err := d.CreateOAuthUser(ctx, db.CreateOAuthUserInput{
+		ID: "u-linked", Username: "renamed-locally", Email: "linked@example.com",
+		PasswordHash: stub, Provider: "github", ProviderID: "424242",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	rr := drive(t, r, gm)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("callback: %d %q", rr.Code, rr.Body.String())
+	}
+	c := jwtCookie(rr)
+	if c == nil {
+		t.Fatal("no session cookie")
+	}
+	claims, err := h.Issuer.Verify(c.Value)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+	if claims.UserID != "u-linked" || claims.Username != "renamed-locally" {
+		t.Errorf("resolved wrong account: %+v", claims)
+	}
+	// No second account under the GitHub login may have been created.
+	if _, err := d.FindUserByUsername(ctx, "octocat"); err == nil {
+		t.Error("a duplicate user was created under the provider username")
+	}
+}
+
+// A GitHub login whose username collides with an existing local
+// password account must NOT authenticate as (or link to) that account.
+func TestOAuth_UsernameCollision_LocalAccount_Rejected(t *testing.T) {
+	r, _, gm, d := newOAuthHarness(t)
+	ctx := context.Background()
+	hash, _ := auth.HashPassword("a-real-password", 0)
+	if err := d.CreateUser(ctx, db.CreateUserInput{
+		ID: "u-victim", Username: "octocat", Email: "victim@example.com",
+		PasswordHash: hash, IsActive: true,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	rr := drive(t, r, gm)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status: %d (want 409) body=%q", rr.Code, rr.Body.String())
+	}
+	if jwtCookie(rr) != nil {
+		t.Error("session cookie issued despite account collision")
+	}
+	u, err := d.FindUserByID(ctx, "u-victim")
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if u.ProviderID.Valid && u.ProviderID.String != "" {
+		t.Errorf("victim account got silently linked: providerId=%q", u.ProviderID.String)
+	}
+}
+
+// Email collisions are rejected the same way username collisions are.
+func TestOAuth_EmailCollision_Rejected(t *testing.T) {
+	r, _, gm, d := newOAuthHarness(t)
+	hash, _ := auth.HashPassword("a-real-password", 0)
+	if err := d.CreateUser(context.Background(), db.CreateUserInput{
+		ID: "u-mail", Username: "not-octocat", Email: "octocat@github.example",
+		PasswordHash: hash, IsActive: true,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	rr := drive(t, r, gm)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status: %d (want 409) body=%q", rr.Code, rr.Body.String())
+	}
+	if jwtCookie(rr) != nil {
+		t.Error("session cookie issued despite email collision")
+	}
+}
+
+// Migration path: an account created before provider IDs were recorded
+// (stub password, no providerId) whose GithubUserLink row maps this
+// exact githubId to it gets auto-linked and logs in.
+func TestOAuth_AutoLinksViaGithubUserLink(t *testing.T) {
+	r, _, gm, d := newOAuthHarness(t)
+	ctx := context.Background()
+	stub, _ := auth.HashPassword("throwaway", auth.StubPasswordCost)
+	if err := d.CreateUser(ctx, db.CreateUserInput{
+		ID: "u-legacy", Username: "octocat", Email: "octocat@github.example",
+		PasswordHash: stub, IsActive: true,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := d.UpsertGithubUserLink(ctx, db.GithubUserLink{
+		UserID: "u-legacy", GithubLogin: "octocat", GithubID: 424242,
+	}); err != nil {
+		t.Fatalf("seed link: %v", err)
+	}
+
+	rr := drive(t, r, gm)
+	if rr.Code != http.StatusFound {
+		t.Fatalf("callback: %d %q", rr.Code, rr.Body.String())
+	}
+	u, err := d.FindUserByProvider(ctx, "github", "424242")
+	if err != nil {
+		t.Fatalf("account was not linked: %v", err)
+	}
+	if u.ID != "u-legacy" {
+		t.Errorf("linked wrong account: %s", u.ID)
+	}
+}
+
+// A stub-password account with NO GithubUserLink proof must not be
+// adopted by a colliding GitHub identity — GitHub usernames are
+// publicly registrable, so the username match alone proves nothing.
+func TestOAuth_StubAccountWithoutLink_Rejected(t *testing.T) {
+	r, _, gm, d := newOAuthHarness(t)
+	ctx := context.Background()
+	stub, _ := auth.HashPassword("throwaway", auth.StubPasswordCost)
+	if err := d.CreateUser(ctx, db.CreateUserInput{
+		ID: "u-idp", Username: "octocat", Email: "idp-user@example.com",
+		PasswordHash: stub, IsActive: true,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	rr := drive(t, r, gm)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status: %d (want 409) body=%q", rr.Code, rr.Body.String())
+	}
+	if jwtCookie(rr) != nil {
+		t.Error("session cookie issued for unproven stub-account collision")
+	}
+}
+
+// --- disabled accounts (S-review Finding 8) ----------------------------
+
+func TestOAuth_DisabledUser_Unauthorized(t *testing.T) {
+	r, _, gm, d := newOAuthHarness(t)
+	ctx := context.Background()
+	stub, _ := auth.HashPassword("throwaway", auth.StubPasswordCost)
+	if err := d.CreateOAuthUser(ctx, db.CreateOAuthUserInput{
+		ID: "u-off", Username: "octocat", Email: "octocat@github.example",
+		PasswordHash: stub, Provider: "github", ProviderID: "424242",
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	off := false
+	if err := d.UpdateUser(ctx, "u-off", db.UpdateUserInput{IsActive: &off}); err != nil {
+		t.Fatalf("deactivate: %v", err)
+	}
+
+	rr := drive(t, r, gm)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("status: %d (want 401) body=%q", rr.Code, rr.Body.String())
+	}
+	if jwtCookie(rr) != nil {
+		t.Error("session cookie issued for a disabled account")
+	}
+}
+
+// --- invite flow must not bootstrap-promote (S-review Finding 2) -------
+
+func TestOAuth_InviteRedemption_DoesNotPromoteToAdmin(t *testing.T) {
+	r, h, gm, d := newOAuthHarness(t)
+	ctx := context.Background()
+
+	// A viewer-level invite into a team group, on a cluster with NO
+	// admin — exactly the disaster-recovery shape that used to promote
+	// the invitee to admin before honoring the invite.
+	if err := d.CreateGroup(ctx, "grp-team", "team", "test group"); err != nil {
+		t.Fatalf("group: %v", err)
+	}
+	if err := d.SetGroupTenancy(ctx, "grp-team", db.GroupTenancy{InstanceRole: db.InstanceRoleViewer}); err != nil {
+		t.Fatalf("tenancy: %v", err)
+	}
+	role := "viewer"
+	gid := "grp-team"
+	if err := d.CreateInvite(ctx, db.CreateInviteInput{
+		ID: "inv-1", Token: "invite-token-1", GroupID: &gid, InstanceRole: &role,
+		CreatedBy: "admin", MaxUses: 1,
+	}); err != nil {
+		t.Fatalf("invite: %v", err)
+	}
+
+	rr := driveWithCookies(t, r, gm, &http.Cookie{Name: "kuso_invite_token", Value: "invite-token-1"})
+	if rr.Code != http.StatusFound {
+		t.Fatalf("callback: %d %q", rr.Code, rr.Body.String())
+	}
+	c := jwtCookie(rr)
+	if c == nil {
+		t.Fatal("no session cookie")
+	}
+	claims, err := h.Issuer.Verify(c.Value)
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+
+	groups, err := d.UserGroupNames(ctx, claims.UserID)
+	if err != nil {
+		t.Fatalf("groups: %v", err)
+	}
+	for _, g := range groups {
+		if g == "kuso-admins" {
+			t.Fatalf("invitee was bootstrap-promoted to admin: groups=%v", groups)
+		}
+	}
+	found := false
+	for _, g := range groups {
+		if g == "team" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("invitee not attached to the invite's group: %v", groups)
+	}
+	ten, err := d.ListUserTenancy(ctx, claims.UserID)
+	if err != nil {
+		t.Fatalf("tenancy: %v", err)
+	}
+	if ten.InstanceRole != db.InstanceRoleViewer {
+		t.Errorf("instance role: %q (want viewer)", ten.InstanceRole)
+	}
+	inv, err := d.FindInviteByToken(ctx, "invite-token-1")
+	if err != nil {
+		t.Fatalf("re-read invite: %v", err)
+	}
+	if inv.UsedCount != 1 {
+		t.Errorf("usedCount: %d (want 1)", inv.UsedCount)
 	}
 }

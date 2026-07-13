@@ -198,7 +198,7 @@ env-var convention.`,
 // Returns: resolved service name, callback URL, homepage URL.
 func resolveServiceURLs(project, requestedService, explicitCallback string) (string, string, string, error) {
 	resp, err := api.GetServices(project)
-	if err != nil {
+	if err := checkRespErr(resp, err); err != nil {
 		return "", "", "", err
 	}
 	var services []map[string]any

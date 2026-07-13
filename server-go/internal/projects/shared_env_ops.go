@@ -129,7 +129,7 @@ func (s *Service) SetSharedEnvKeys(ctx context.Context, project, service string,
 	// RMW under optimistic concurrency (WithRetry) — the in-process
 	// service lock doesn't span replicas, so fetch-mutate-update so a
 	// concurrent spec edit on another pod isn't clobbered.
-	updated, err := s.Kube.UpdateKusoServiceWithRetry(ctx, ns, serviceCRName(project, service), func(svc *kube.KusoService) error {
+	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
 		svc.Spec.SharedEnvKeys = clean
 		return nil
 	})

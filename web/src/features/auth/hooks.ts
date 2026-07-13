@@ -90,6 +90,13 @@ export function useLogin() {
     mutationFn: (input: LoginInput) => loginApi(input),
     onSuccess: async (data) => {
       setJwt(data.access_token);
+      // Identity boundary: start from a clean cache. If a previous user
+      // signed out in this tab without a full reload, their cached
+      // queries (projects, users, audit, tokens…) would otherwise be
+      // served to this session until each one's next refetch. clear()
+      // also makes any mounted session observer refetch with the new
+      // cookie, so the old invalidateQueries call is subsumed.
+      qc.clear();
       await qc.invalidateQueries({ queryKey: sessionQueryKey });
       const url = new URL(window.location.href);
       const raw = url.searchParams.get("next") ?? "/projects";
@@ -109,9 +116,18 @@ export function useSignOut() {
   const qc = useQueryClient();
   const router = useRouter();
   return () => {
-    void clearJwt();
-    qc.removeQueries({ queryKey: sessionQueryKey });
-    router.replace("/login");
+    // Await the server-side cookie drop before clearing local state so
+    // a fast follow-up login can't race the old session. clearJwt
+    // swallows network errors, so .finally always runs.
+    void clearJwt().finally(() => {
+      // Identity boundary: wipe the ENTIRE query cache, not just the
+      // session query. removeQueries(sessionQueryKey) alone left every
+      // other cached query (projects, users, audit, tokens, SQL
+      // results) readable by the next user of this browser until its
+      // own refetch.
+      qc.clear();
+      router.replace("/login");
+    });
   };
 }
 

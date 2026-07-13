@@ -23,6 +23,9 @@ type CreateProjectRequest struct {
 type CreateProjectRepoSpec struct {
 	URL           string `json:"url,omitempty"`
 	DefaultBranch string `json:"defaultBranch,omitempty"`
+	// Path is the repo-relative directory the project's services
+	// default to (monorepo subdir). Mirrors kube.KusoRepoRef.Path.
+	Path string `json:"path,omitempty"`
 }
 
 type CreateProjectGithubSpec struct {
