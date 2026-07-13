@@ -45,9 +45,14 @@ type chConnInfo struct {
 // a ClickHouse addon (has CLICKHOUSE_HOST), else (_, false). Mirrors how the
 // CLI's localDSNFromSecret discriminates by which canonical key is present.
 func (h *BackupsHandler) clickhouseConnInfo(ctx context.Context, project, addon string) (chConnInfo, bool, error) {
-	releaseName := addons.CRName(project, addon)
-	connSecret := addons.ConnSecretName(releaseName)
-	sec, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Get(ctx, connSecret, metav1.GetOptions{})
+	// Ownership-checked resolution + per-project execution namespace —
+	// same rationale as pgConn (see ownedAddon).
+	cr, ns, err := h.ownedAddon(ctx, project, addon)
+	if err != nil {
+		return chConnInfo{}, false, err
+	}
+	connSecret := addons.ConnSecretName(cr.Name)
+	sec, err := h.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, connSecret, metav1.GetOptions{})
 	if err != nil {
 		return chConnInfo{}, false, err
 	}

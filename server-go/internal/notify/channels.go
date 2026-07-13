@@ -13,8 +13,10 @@ package notify
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"mime"
+	"net"
 	"net/smtp"
 	"net/url"
 	"strings"
@@ -250,19 +252,95 @@ func (d *Dispatcher) sendEmailSync(ctx context.Context, cfg map[string]any, e Ev
 		auth = smtp.PlainAuth("", username, password, host)
 	}
 
-	// smtp.SendMail does not take a context; run it in a goroutine and
-	// select on ctx so a hung SMTP server can't pin the outbox worker.
-	done := make(chan error, 1)
-	go func() {
-		done <- smtp.SendMail(host+":"+port, auth, from, recipients, []byte(msg))
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case err := <-done:
-		if err != nil {
-			return fmt.Errorf("smtp: %w", err)
+	if err := smtpSendMail(ctx, host, port, auth, from, recipients, []byte(msg)); err != nil {
+		// Context cancellation closes the conn mid-conversation, which
+		// surfaces as an opaque I/O error — report the cancellation.
+		if cerr := ctx.Err(); cerr != nil {
+			return cerr
 		}
-		return nil
+		return fmt.Errorf("smtp: %w", err)
 	}
+	return nil
+}
+
+// smtpSendMail is smtp.SendMail with a context. The stdlib function
+// takes none, so the previous shape ran it in a goroutine and selected
+// on ctx — which returned early but LEAKED the goroutine + socket
+// (SendMail kept blocking on a hung server), accumulating both across
+// outbox retries. Here the dial is context-aware, the conn carries a
+// hard deadline, and a watchdog closes the conn on cancellation so the
+// whole SMTP conversation actually tears down.
+func smtpSendMail(ctx context.Context, host, port string, auth smtp.Auth, from string, recipients []string, msg []byte) error {
+	// Mirror smtp.SendMail's validateLine: addresses go verbatim into
+	// MAIL FROM / RCPT TO lines, so CR/LF would inject commands.
+	for _, line := range append([]string{from}, recipients...) {
+		if strings.ContainsAny(line, "\r\n") {
+			return fmt.Errorf("address contains CR/LF: %q", line)
+		}
+	}
+	dialer := &net.Dialer{Timeout: 15 * time.Second}
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	if err != nil {
+		return err
+	}
+	// Hard ceiling on the whole conversation, even without a ctx
+	// deadline — a server that accepts the dial then stalls mid-DATA
+	// must not pin the outbox worker.
+	deadline := time.Now().Add(60 * time.Second)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	_ = conn.SetDeadline(deadline)
+	// Watchdog: cancellation closes the conn so any blocked read/write
+	// inside the smtp client returns immediately.
+	watchdogDone := make(chan struct{})
+	defer close(watchdogDone)
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = conn.Close()
+		case <-watchdogDone:
+		}
+	}()
+
+	c, err := smtp.NewClient(conn, host)
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	defer c.Close()
+	// STARTTLS when the server offers it, plain otherwise — same
+	// opportunistic policy smtp.SendMail applied.
+	if ok, _ := c.Extension("STARTTLS"); ok {
+		if err := c.StartTLS(&tls.Config{ServerName: host}); err != nil {
+			return err
+		}
+	}
+	if auth != nil {
+		if ok, _ := c.Extension("AUTH"); ok {
+			if err := c.Auth(auth); err != nil {
+				return err
+			}
+		}
+	}
+	if err := c.Mail(from); err != nil {
+		return err
+	}
+	for _, rcpt := range recipients {
+		if err := c.Rcpt(rcpt); err != nil {
+			return err
+		}
+	}
+	wc, err := c.Data()
+	if err != nil {
+		return err
+	}
+	if _, err := wc.Write(msg); err != nil {
+		_ = wc.Close()
+		return err
+	}
+	if err := wc.Close(); err != nil {
+		return err
+	}
+	return c.Quit()
 }

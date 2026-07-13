@@ -72,12 +72,14 @@ set -euo pipefail
 
 VERSION=""
 DRY_RUN=0
+ALLOW_BREAKING_CRDS="${KUSO_RELEASE_ALLOW_BREAKING_CRDS:-0}"
 # Parse args. Flags can come before or after VERSION; flag-style is
 # the modern convention but bare positional VERSION still works for
 # muscle memory + the Makefile shim.
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -n|--dry-run) DRY_RUN=1; shift ;;
+    --allow-breaking-crds) ALLOW_BREAKING_CRDS=1; shift ;;
     -h|--help)
       cat <<EOF
 usage: $0 [--dry-run] vX.Y.Z
@@ -87,6 +89,11 @@ Cuts a kuso release.
   --dry-run   don't push docker images, don't kubectl, don't gh release,
               don't git push. Logs every side-effecting step as
               [DRY-RUN]. Safe to run with no creds.
+
+  --allow-breaking-crds
+              skip the CRD breaking-change guard. Only pass this after
+              applying the manual CRD migration to live clusters — the
+              updater blindly re-applies crds.yaml and assumes additive.
 
 Env knobs (see release.sh header for the full list):
   KUSO_RELEASE_ROLL=1       roll the live cluster after build
@@ -227,6 +234,163 @@ if [[ "$CURRENT" == "$VERSION" ]]; then
   warn "VERSION already at $VERSION — skipping rewrite step"
 else
   log "bumping $CURRENT → $VERSION"
+fi
+
+# ---- 1b. CRD breaking-change guard ---------------------------------
+#
+# The in-cluster updater blindly `kubectl apply`s this release's
+# crds.yaml, and release.json always declares migrations: [] — that
+# contract is only safe while CRD changes stay ADDITIVE. Nothing used
+# to enforce it. This guard diffs every CRD under
+# operator/config/crd/bases/ against the previous released tag and
+# FAILS the ship on anything non-additive: removed CRD files, removed
+# versions, removed fields, removed/newly-added enum restrictions,
+# type changes, changed defaults, newly-required fields.
+#
+# Runs before anything is built/pushed and before the version rewrite,
+# so a guard failure leaves no side effects and a clean tree. Uses the
+# local git tag as the reference (the same source the breaking-commit
+# scan uses) — no network needed.
+#
+# Override with --allow-breaking-crds / KUSO_RELEASE_ALLOW_BREAKING_CRDS=1
+# ONLY after the manual migration has been applied over ssh (see the
+# crds.yaml bundling comment in step 4b).
+
+CRD_GUARD_PREV_TAG="$(git tag --list 'v*' --sort=-v:refname | grep -v "^${VERSION}\$" | head -1 || true)"
+if [[ "$ALLOW_BREAKING_CRDS" == "1" ]]; then
+  warn "--allow-breaking-crds set — SKIPPING the CRD breaking-change guard"
+elif [[ -z "$CRD_GUARD_PREV_TAG" ]]; then
+  warn "no previous release tag found — skipping CRD breaking-change guard (first release?)"
+elif ! python3 -c 'import yaml' >/dev/null 2>&1; then
+  # A guard that silently skips is no guard. PyYAML is the only
+  # non-stdlib dependency; refuse to ship without it rather than
+  # letting a breaking CRD slip through unchecked.
+  fail "CRD breaking-change guard needs python3 with PyYAML (pip3 install pyyaml).
+       Install it, or pass --allow-breaking-crds to explicitly ship unguarded."
+else
+  log "CRD guard: diffing operator/config/crd/bases against ${CRD_GUARD_PREV_TAG}"
+  CRD_GUARD_FAILED=0
+
+  # A CRD file removed since the last release is breaking on its own
+  # (the updater's crds.yaml would simply stop carrying it while live
+  # clusters still hold CRs of that kind).
+  while IFS= read -r oldf; do
+    if [[ -n "$oldf" && ! -f "$oldf" ]]; then
+      warn "CRD guard: ${oldf} existed in ${CRD_GUARD_PREV_TAG} but is gone"
+      CRD_GUARD_FAILED=1
+    fi
+  done < <(git ls-tree -r --name-only "$CRD_GUARD_PREV_TAG" -- operator/config/crd/bases/ 2>/dev/null | grep '\.yaml$' || true)
+
+  for f in operator/config/crd/bases/*.yaml; do
+    [[ -f "$f" ]] || continue
+    CRD_GUARD_OLD="$(mktemp)"
+    if ! git show "${CRD_GUARD_PREV_TAG}:${f}" > "$CRD_GUARD_OLD" 2>/dev/null; then
+      rm -f "$CRD_GUARD_OLD"
+      continue  # new CRD this release — additive by definition
+    fi
+    if ! python3 - "$CRD_GUARD_OLD" "$f" <<'PYCRD'
+import sys
+import yaml
+
+old_path, new_path = sys.argv[1], sys.argv[2]
+with open(old_path) as fh:
+    old = yaml.safe_load(fh)
+with open(new_path) as fh:
+    new = yaml.safe_load(fh)
+
+problems = []
+
+def walk(o, n, path):
+    """Recursively compare two openAPIV3Schema nodes; append breaking diffs."""
+    if not isinstance(o, dict):
+        return
+    if not isinstance(n, dict):
+        problems.append(f"{path}: schema node removed")
+        return
+    ot, nt = o.get("type"), n.get("type")
+    if ot and nt and ot != nt:
+        problems.append(f"{path}: type changed {ot} -> {nt}")
+    oe, ne = o.get("enum"), n.get("enum")
+    if isinstance(ne, list):
+        if isinstance(oe, list):
+            removed = [v for v in oe if v not in ne]
+            if removed:
+                problems.append(f"{path}: enum values removed: {removed}")
+        else:
+            problems.append(f"{path}: enum added to previously-unrestricted field: {ne}")
+    if "default" in o:
+        if "default" not in n:
+            problems.append(f"{path}: default removed (was {o['default']!r})")
+        elif n["default"] != o["default"]:
+            problems.append(f"{path}: default changed {o['default']!r} -> {n['default']!r}")
+    newly_required = sorted(set(n.get("required") or []) - set(o.get("required") or []))
+    if newly_required:
+        problems.append(f"{path}: newly required: {newly_required}")
+    op, np = o.get("properties") or {}, n.get("properties") or {}
+    if isinstance(op, dict) and isinstance(np, dict):
+        for k, ov in op.items():
+            if k not in np:
+                problems.append(f"{path}.{k}: field removed")
+            else:
+                walk(ov, np[k], f"{path}.{k}")
+    oi, ni = o.get("items"), n.get("items")
+    if isinstance(oi, dict):
+        if isinstance(ni, dict):
+            walk(oi, ni, path + "[]")
+        else:
+            problems.append(f"{path}[]: items schema removed")
+    oa, na = o.get("additionalProperties"), n.get("additionalProperties")
+    if isinstance(oa, dict):
+        if isinstance(na, dict):
+            walk(oa, na, path + ".*")
+        else:
+            problems.append(f"{path}.*: additionalProperties schema removed")
+
+def versions(doc):
+    return {v.get("name"): v for v in ((doc.get("spec") or {}).get("versions") or [])}
+
+# Identity fields: changing any of these re-keys every existing CR.
+for keys in (("spec", "group"), ("spec", "scope"),
+             ("spec", "names", "plural"), ("spec", "names", "kind")):
+    o, n = old, new
+    for k in keys:
+        o = (o or {}).get(k)
+        n = (n or {}).get(k)
+    if o is not None and o != n:
+        problems.append(f"{'.'.join(keys)}: changed {o!r} -> {n!r}")
+
+ov, nv = versions(old), versions(new)
+for name, oldv in ov.items():
+    if name not in nv:
+        problems.append(f"version {name}: removed")
+        continue
+    if oldv.get("served", True) and not nv[name].get("served", True):
+        problems.append(f"version {name}: served flipped to false")
+    os_ = ((oldv.get("schema") or {}).get("openAPIV3Schema")) or {}
+    ns_ = ((nv[name].get("schema") or {}).get("openAPIV3Schema")) or {}
+    walk(os_, ns_, name)
+
+if problems:
+    crd = (new.get("metadata") or {}).get("name", new_path)
+    print(f"  BREAKING: {crd}", file=sys.stderr)
+    for p in problems:
+        print(f"    - {p}", file=sys.stderr)
+    sys.exit(1)
+PYCRD
+    then
+      CRD_GUARD_FAILED=1
+    fi
+    rm -f "$CRD_GUARD_OLD"
+  done
+
+  if [[ "$CRD_GUARD_FAILED" == "1" ]]; then
+    fail "non-additive CRD change(s) since ${CRD_GUARD_PREV_TAG} (details above).
+       The auto-updater blindly re-applies crds.yaml and cannot migrate
+       existing CRs. Apply the manual migration to live clusters first
+       (kubectl apply over ssh — see docs), then re-run with
+       --allow-breaking-crds to acknowledge."
+  fi
+  log "CRD guard passed — all CRD changes since ${CRD_GUARD_PREV_TAG} are additive"
 fi
 
 # ---- 2. rewrite version files --------------------------------------
@@ -386,6 +550,15 @@ fi
 # Skipped when KUSO_RELEASE_SKIP_BUILD=1 — used by `make roll` when CI
 # already built + pushed the image and we just need to flip the live
 # cluster to it.
+#
+# TODO(multi-arch): every image in this script (server, updater,
+# nixpacks, env-detect, operator) is built linux/amd64-only. Adding
+# arm64 is mostly `--platform linux/amd64,linux/arm64` on each buildx
+# invocation, but it needs QEMU binfmt on the build host, roughly
+# doubles build+push wall time, and none of the images have been
+# validated on arm64. Until that happens, hack/install.sh fail-fasts
+# on non-amd64 hosts (escape hatch: KUSO_SKIP_ARCH_CHECK=1) — if you
+# ever add arm64 here, remove that installer guard in the same PR.
 
 if [[ "${KUSO_RELEASE_SKIP_BUILD:-0}" != "1" ]]; then
   log "docker buildx --platform linux/amd64 → ${KUSO_RELEASE_IMAGE}:${VERSION}"
@@ -718,6 +891,52 @@ log "writing dist/release.json + dist/crds.yaml for GitHub release"
   done
 } > "$DIST_DIR/crds.yaml"
 
+# upgrade-manifests.yaml: the non-workload platform resources
+# (RBAC, ServiceAccounts, PriorityClasses, NetworkPolicies, PDBs)
+# extracted from deploy/*.yaml. The updater Job applies this bundle
+# before rolling images so self-updating installs pick up RBAC and
+# policy changes — previously they drifted forever (new server code
+# needing new RBAC verbs broke only on self-updated clusters).
+# Workload kinds (Deployments, Services, ConfigMaps) are deliberately
+# excluded: operators customize env vars / resources on those, and
+# the updater's kubectl-set-image path owns their rollout.
+log "writing dist/upgrade-manifests.yaml (RBAC/policy bundle for self-upgrades)"
+python3 - "$DIST_DIR/upgrade-manifests.yaml" <<'PYMANIFESTS'
+import glob, sys, yaml
+
+SAFE_KINDS = {
+    "ServiceAccount", "Role", "RoleBinding", "ClusterRole",
+    "ClusterRoleBinding", "PriorityClass", "NetworkPolicy",
+    "PodDisruptionBudget",
+}
+# Every doc must live in a namespace guaranteed to exist on a kuso
+# install (or be cluster-scoped) — an apply into a missing namespace
+# would fail the whole updater Job.
+KNOWN_NS = {"kuso", "kuso-operator-system"}
+
+out, skipped = [], []
+for f in sorted(glob.glob("deploy/*.yaml")):
+    for doc in yaml.safe_load_all(open(f)):
+        if not doc or doc.get("kind") not in SAFE_KINDS:
+            continue
+        ns = doc.get("metadata", {}).get("namespace")
+        if ns is not None and ns not in KNOWN_NS:
+            skipped.append(f"{f}:{doc['kind']}/{doc['metadata'].get('name')}")
+            continue
+        out.append(doc)
+
+if skipped:
+    print(f"upgrade-manifests: skipped {len(skipped)} docs in unknown namespaces: {skipped}",
+          file=sys.stderr)
+if not out:
+    print("upgrade-manifests: no safe-kind docs found under deploy/ — refusing to write an empty bundle",
+          file=sys.stderr)
+    sys.exit(1)
+with open(sys.argv[1], "w") as fh:
+    yaml.safe_dump_all(out, fh, sort_keys=False)
+print(f"upgrade-manifests: bundled {len(out)} docs")
+PYMANIFESTS
+
 # release.json: stable wire shape consumed by internal/updater.Manifest.
 # Keep "additive" as the default migration kind; the moment we ship
 # something destructive, this script grows a CRD-diff step.
@@ -773,6 +992,9 @@ cat > "$DIST_DIR/release.json" <<EOF
     "url": "https://github.com/${KUSO_RELEASE_REPO:-sislelabs/kuso}/releases/download/${VERSION}/crds.yaml",
     "minServer": "v0.4.0",
     "migrations": []
+  },
+  "manifests": {
+    "url": "https://github.com/${KUSO_RELEASE_REPO:-sislelabs/kuso}/releases/download/${VERSION}/upgrade-manifests.yaml"
   },
   "breaking": ${BREAKING}
 }
@@ -903,6 +1125,28 @@ else
   warn "go not on PATH (or KUSO_RELEASE_CLI=0) — skipping CLI binaries; install-cli.sh will fall back to source"
 fi
 
+# publish_gh_release flips the draft release to published (+ latest).
+# Called as the FINAL step of the ship: after every asset is uploaded
+# AND verified, and (on the commit+push path) after the git tag is
+# confirmed on origin. Hard-fails when it can't publish — a draft
+# release is invisible to the updater endpoint, so silently leaving it
+# draft means the ship didn't actually ship.
+publish_gh_release() {
+  local ok=0
+  for try in 1 2 3; do
+    if gh release edit "${VERSION}" --draft=false --latest >/dev/null 2>&1; then
+      ok=1; break
+    fi
+    warn "gh release edit ${VERSION} --draft=false attempt ${try}/3 failed; retrying"
+    sleep $((try * 3))
+  done
+  if [[ "$ok" != "1" ]]; then
+    fail "couldn't publish GH release ${VERSION} — it is still a DRAFT (updaters can't see it).
+       Publish manually once GH recovers: gh release edit ${VERSION} --draft=false --latest"
+  fi
+  log "GH release ${VERSION} published + marked latest"
+}
+
 # Optionally cut the GH release. Off by default so iteration doesn't
 # spam tags; turn on with KUSO_RELEASE_GH=1 once a tag is real.
 if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
@@ -934,21 +1178,30 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
       [[ -f "$f" ]] && CLI_ASSETS+=("$f")
     done
     if [[ "$DRY_RUN" == "1" ]]; then
-      dry "gh release create $VERSION --title $VERSION --notes-file <…> $DIST_DIR/release.json $DIST_DIR/crds.yaml ${CLI_ASSETS[*]}"
+      dry "gh release create $VERSION --draft --title $VERSION --notes-file <…>; gh release upload $DIST_DIR/release.json $DIST_DIR/crds.yaml ${CLI_ASSETS[*]}; verify assets; publish (gh release edit --draft=false) after the tag push"
     else
-      # Two-phase: create the release with no assets first, then
-      # upload each asset with retries. The bundled-create form
-      # (everything in one call) was rolling back the entire release
-      # on a single asset's transient 404/422 from the GH upload API
-      # — and we hit those, repeatedly, on the cross-built CLI
-      # binaries. Doing it incrementally lets each upload retry
-      # independently and keeps a partial release around to recover.
+      # Three-phase, DRAFT-first: create the release as an explicit
+      # draft, upload each asset with retries, verify every asset
+      # landed, and only publish (gh release edit --draft=false) as
+      # the very last step of the ship — after the git tag is pushed
+      # + verified in step 6. Why:
+      #   - the bundled-create form (everything in one call) was
+      #     rolling back the entire release on a single asset's
+      #     transient 404/422 from the GH upload API; incremental
+      #     uploads retry independently.
+      #   - a NON-draft release is visible to every auto-updating
+      #     cluster the moment it exists, i.e. before release.json/
+      #     crds.yaml finish uploading and long before the tag is
+      #     pushed. (GitHub does NOT default to draft for a missing
+      #     tag — an earlier version of this script assumed it did.)
+      #     --draft keeps the release invisible until it's whole.
       if ! gh release view "$VERSION" >/dev/null 2>&1; then
         # GitHub's release-create endpoint occasionally 502s; retry
         # a few times with backoff before giving up.
         ok=0
         for try in 1 2 3; do
           if gh release create "$VERSION" \
+              --draft \
               --title "$VERSION" \
               --notes-file "$NOTES_FILE" >/dev/null 2>&1; then
             ok=1; break
@@ -960,7 +1213,7 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
           fail "couldn't create GH release after 3 tries"
         fi
       fi
-      ALL_ASSETS=( "$DIST_DIR/release.json" "$DIST_DIR/crds.yaml" "${CLI_ASSETS[@]}" )
+      ALL_ASSETS=( "$DIST_DIR/release.json" "$DIST_DIR/crds.yaml" "$DIST_DIR/upgrade-manifests.yaml" "${CLI_ASSETS[@]}" )
       # Upload the signature too when present.
       if [[ -f "$DIST_DIR/release.json.sig" ]]; then
         ALL_ASSETS+=( "$DIST_DIR/release.json.sig" )
@@ -978,9 +1231,38 @@ if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]]; then
           fail "couldn't upload $(basename "$asset") after 3 tries"
         fi
       done
+
+      # Verify every asset is actually attached before anything can
+      # publish this release — an "upload succeeded" exit code has
+      # lied to us before, and a published release missing
+      # release.json bricks the updater poll.
+      have_assets="$(gh release view "$VERSION" --json assets --jq '.assets[].name' 2>/dev/null || true)"
+      missing_assets=()
+      for asset in "${ALL_ASSETS[@]}"; do
+        base="$(basename "$asset")"
+        if ! grep -qxF "$base" <<<"$have_assets"; then
+          missing_assets+=("$base")
+        fi
+      done
+      if [[ ${#missing_assets[@]} -gt 0 ]]; then
+        fail "assets missing from GH release ${VERSION} after upload: ${missing_assets[*]} — release left as DRAFT; re-run to retry"
+      fi
+
+      if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" && "${KUSO_RELEASE_PUSH:-1}" == "1" ]]; then
+        # Normal ship path: the tag is pushed + verified in step 6
+        # below, and the draft is published right after it.
+        log "GH release ${VERSION} staged as DRAFT (release.json + crds.yaml + ${#CLI_ASSETS[@]} CLI assets verified) — publishing after the tag push"
+      else
+        # No tag push will happen this run (COMMIT/PUSH disabled).
+        # Publish now that all assets are verified; GitHub will mint
+        # tag ${VERSION} from the default branch's current HEAD, which
+        # may not contain the version bumps — same caveat as the old
+        # flow, but at least the release is complete when it appears.
+        warn "KUSO_RELEASE_COMMIT/KUSO_RELEASE_PUSH disabled — publishing now; GitHub will create tag ${VERSION} from the default branch HEAD"
+        publish_gh_release
+      fi
     fi
     rm -f "$NOTES_FILE"
-    log "GitHub release ${VERSION} published (release.json + crds.yaml + ${#CLI_ASSETS[@]} CLI assets)"
   fi
 fi
 
@@ -1204,19 +1486,20 @@ if [[ "${KUSO_RELEASE_COMMIT:-0}" == "1" ]]; then
         log "tag ${VERSION} force-repointed to ${local_sha:0:12}"
       fi
 
-      # The GH release was created in step 4, BEFORE the tag landed
-      # on origin. GH defaults to draft when its target tag-name
-      # doesn't yet exist remotely — so the release is sitting as a
-      # draft right now. Flip it to published + mark as latest now
-      # that the tag is on origin. Best-effort: gh CLI not installed
-      # or GH API hiccups just leaves the release as draft, which is
-      # recoverable manually.
+      # The GH release was created in step 4d as an EXPLICIT draft
+      # (gh release create --draft — GitHub does NOT default to draft
+      # for a missing tag, contrary to what this script once assumed)
+      # and every asset has been uploaded + verified there. Publishing
+      # is deliberately the FINAL step: verify the tag actually landed
+      # on origin, then flip the draft public. Auto-updaters can
+      # therefore never observe a release with missing assets or a
+      # dangling tag.
       if [[ "${KUSO_RELEASE_GH:-0}" == "1" ]] && command -v gh >/dev/null 2>&1; then
-        if gh release edit "${VERSION}" --draft=false --latest >/dev/null 2>&1; then
-          log "GH release ${VERSION} published + marked latest"
-        else
-          warn "gh release edit ${VERSION} --draft=false --latest failed — release may still be draft"
+        if ! git ls-remote --exit-code origin "refs/tags/${VERSION}" >/dev/null 2>&1; then
+          fail "tag ${VERSION} not visible on origin after push — NOT publishing the draft release.
+       Re-run the ship (or push the tag and run: gh release edit ${VERSION} --draft=false --latest)"
         fi
+        publish_gh_release
       fi
     fi
     log "pushed commit + tag to origin"

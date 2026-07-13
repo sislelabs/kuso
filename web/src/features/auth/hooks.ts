@@ -213,6 +213,7 @@ export const Perms = {
   SecretsWrite: "secrets:write",
   SecretsRead: "secrets:read",
   SQLRead: "sql:read",
+  ShellExec: "shell:exec",
   AddonsWrite: "addons:write",
   AddonsRead: "addons:read",
   SystemUpdate: "system:update",

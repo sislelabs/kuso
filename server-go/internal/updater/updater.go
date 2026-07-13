@@ -51,8 +51,19 @@ type Manifest struct {
 	PublishedAt time.Time          `json:"publishedAt"`
 	Components  ManifestComponents `json:"components"`
 	CRDs        ManifestCRDs       `json:"crds"`
-	Notes       string             `json:"notes,omitempty"`
-	Breaking    bool               `json:"breaking,omitempty"`
+	// Manifests points at the release's upgrade-manifests.yaml — the
+	// non-workload platform resources (RBAC, ServiceAccounts,
+	// PriorityClasses, NetworkPolicies, PDBs) the updater Job applies
+	// before rolling images so self-updating installs don't drift.
+	// Optional: absent on releases that predate the bundle.
+	Manifests ManifestBundle `json:"manifests,omitempty"`
+	Notes     string         `json:"notes,omitempty"`
+	Breaking  bool           `json:"breaking,omitempty"`
+}
+
+// ManifestBundle references an applyable YAML asset on the release.
+type ManifestBundle struct {
+	URL string `json:"url"`
 }
 
 type ManifestComponents struct {
@@ -702,6 +713,7 @@ func (s *Service) StartUpdate(ctx context.Context, targetVersion string) (string
 			"KUSO_SERVER_IMAGE":     m.Components.Server.Image,
 			"KUSO_OPERATOR_IMAGE":   m.Components.Operator.Image,
 			"KUSO_CRDS_URL":         m.CRDs.URL,
+			"KUSO_MANIFESTS_URL":    m.Manifests.URL,
 			"KUSO_NAMESPACE":        s.Namespace,
 			"KUSO_STATUS_CONFIGMAP": updateConfigMapName,
 		},

@@ -45,6 +45,7 @@ import { EditCronDialog } from "@/components/cron/EditCronDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { serviceShortName } from "@/lib/utils";
 import { useTriggerBuild } from "@/features/services";
+import { useCanOnProject, Perms } from "@/features/auth";
 import {
   ExternalLink,
   ScrollText,
@@ -543,6 +544,20 @@ export function ProjectCanvas({
   const trigger = useTriggerBuild(project, "");
   const qc = useQueryClient();
 
+  // Project-scoped write capabilities. The server enforces these
+  // (403), but surfacing them here keeps viewers from clicking
+  // trigger/stop/delete/create controls that can only end in an
+  // error toast. Mirrors permsForProjectRole in features/auth —
+  // viewers get read-only, editors+ get the write set.
+  const canServicesWrite = useCanOnProject(project, Perms.ServicesWrite);
+  const canAddonsWrite = useCanOnProject(project, Perms.AddonsWrite);
+
+  // editorGate: context-menu affordance for gated items. Disabled
+  // items stay visible (discoverability) with a right-aligned hint
+  // in the shortcut slot — the menu rows have no tooltip surface.
+  const editorGate = (can: boolean) =>
+    can ? {} : { disabled: true, shortcut: "needs editor" };
+
   // Keyboard shortcuts on the canvas. Convention is single-letter,
   // unmodified, fired only when no input/textarea has focus and no
   // dialog/overlay is on top (we use document.body as the focus
@@ -618,6 +633,10 @@ export function ProjectCanvas({
         case "r":
           if (focused && focusedShort) {
             e.preventDefault();
+            if (!canServicesWrite) {
+              toast.error("Triggering a build requires editor access on this project");
+              break;
+            }
             const data = focused.data as ServiceNodeData;
             void callTrigger(data.project, focusedShort, trigger).then(
               () => toast.success(`Build triggered for ${focusedShort}`),
@@ -638,7 +657,7 @@ export function ProjectCanvas({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [nodes, focusIdx, project, onSelectService, trigger]);
+  }, [nodes, focusIdx, project, onSelectService, trigger, canServicesWrite]);
 
   useEffect(() => {
     if (!project) return;
@@ -678,6 +697,13 @@ export function ProjectCanvas({
   // in local state.
   const onConnect = async (c: Connection) => {
     if (!c.source || !c.target) return;
+    // Wiring a connection writes an env var on the target service —
+    // an editor-level mutation. Fail fast with a clear message
+    // instead of letting the setServiceEnv call 403.
+    if (!canServicesWrite) {
+      toast.error("Connecting nodes requires editor access on this project");
+      return;
+    }
     const planResult = planConnection({
       project,
       sourceId: c.source,
@@ -797,6 +823,7 @@ export function ProjectCanvas({
         id: "trigger",
         label: "Trigger build",
         icon: RotateCcw,
+        ...editorGate(canServicesWrite),
         onSelect: async () => {
           try {
             await callTrigger(data.project, short, trigger);
@@ -839,6 +866,7 @@ export function ProjectCanvas({
             id: "start",
             label: "Start service",
             icon: Play,
+            ...editorGate(canServicesWrite),
             onSelect: async () => {
               try {
                 await callStopStart(data.project, short, "start", qc);
@@ -852,6 +880,7 @@ export function ProjectCanvas({
             id: "stop",
             label: "Stop service…",
             icon: Square,
+            ...editorGate(canServicesWrite),
             onSelect: () =>
               setConfirmStop({ short, nodeId: `svc:${data.service.metadata.name}` }),
           },
@@ -861,6 +890,7 @@ export function ProjectCanvas({
         label: "Delete service…",
         icon: Trash2,
         destructive: true,
+        ...editorGate(canServicesWrite),
         onSelect: () =>
           setConfirmDelete({
             kind: "service",
@@ -920,6 +950,7 @@ export function ProjectCanvas({
         label: "Delete addon…",
         icon: Trash2,
         destructive: true,
+        ...editorGate(canAddonsWrite),
         onSelect: () =>
           setConfirmDelete({
             kind: "addon",
@@ -946,6 +977,7 @@ export function ProjectCanvas({
         id: "add-service",
         label: "Add service",
         icon: Plus,
+        ...editorGate(canServicesWrite),
         onSelect: () => {
           window.location.href = `/projects/${encodeURIComponent(project)}/services/new`;
         },
@@ -954,12 +986,17 @@ export function ProjectCanvas({
         id: "add-addon",
         label: "Add addon",
         icon: Plus,
+        ...editorGate(canAddonsWrite),
         onSelect: () => setShowAddAddon(true),
       },
       {
         id: "add-cron",
         label: "Add cron",
         icon: Plus,
+        // Cron create/update/delete requires editor on the server
+        // (crons.go requireProjectAccess Editor) — services:write is
+        // the matching client-side capability.
+        ...editorGate(canServicesWrite),
         onSelect: () => setShowAddCron(true),
       },
       { id: "sep1", kind: "separator" },

@@ -11,9 +11,17 @@
 #
 # Strategy: pg_dump every hour to S3-compatible object storage. Keeps
 # 24 hourly + 7 daily + 12 monthly snapshots. The schedule is opt-in
-# via the kuso-postgres-backup Secret — operators who haven't set up
-# S3 see the CronJob suspend itself on first run rather than failing
-# loudly.
+# via the kuso-postgres-backup Secret — every secretKeyRef below is
+# optional:true, and the job exits 0 with a "not configured" log line
+# when the Secret is absent/incomplete rather than failing loudly.
+# The backup-health banner (internal/backuphealth) reads Secret
+# presence, so operators still get nagged to configure it.
+#
+# Two containers so no tooling is installed at runtime (the pod runs
+# as uid 999 with all capabilities dropped — apt-get/installers can't
+# work, and shouldn't):
+#   initContainer dump   (postgres:16-bookworm)  pg_dump | gzip → emptyDir
+#   container    upload  (amazon/aws-cli)        aws s3 cp ← emptyDir
 #
 # Restore is documented in docs/runbooks/restore-postgres.md and is
 # manual: pause kuso-server, exec into postgres pod, psql < dump.sql.
@@ -55,26 +63,30 @@ spec:
             - key: node-role.kubernetes.io/control-plane
               operator: Exists
               effect: NoSchedule
-          containers:
-            - name: pg-backup
-              # postgres image carries pg_dump; awscli adds aws s3 cp.
-              # Pinned to a Debian-based postgres for apt access.
+          volumes:
+            - name: workdir
+              emptyDir: {}
+          initContainers:
+            - name: dump
+              # postgres image carries pg_dump. It only writes to the
+              # shared emptyDir — no runtime package installs (the pod
+              # runs non-root with all caps dropped; apt-get can't work).
               image: postgres:16-bookworm
               command: ["/bin/bash", "-eu", "-c"]
               args:
                 - |
-                  apt-get update -qq
-                  apt-get install -qq -y --no-install-recommends curl unzip ca-certificates
-                  curl -fsSL "https://awscli.amazonaws.com/awscli-exe-linux-$(uname -m).zip" -o /tmp/awscliv2.zip
-                  unzip -q /tmp/awscliv2.zip -d /tmp
-                  /tmp/aws/install -i /usr/local/aws-cli -b /usr/local/bin > /dev/null
+                  # Opt-in gate: without a complete kuso-postgres-backup
+                  # Secret this is a documented no-op (exit 0), not a
+                  # failure. The backup-health banner keeps nagging the
+                  # operator until the Secret exists.
+                  if [ -z "${KUSO_BACKUP_BUCKET:-}" ] || [ -z "${KUSO_BACKUP_ENDPOINT:-}" ] \
+                     || [ -z "${AWS_ACCESS_KEY_ID:-}" ] || [ -z "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+                    echo "backup not configured (kuso-postgres-backup Secret missing or incomplete) — skipping"
+                    exit 0
+                  fi
 
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
-                  HOUR=$(date -u +%H)
-                  DOW=$(date -u +%u)
-                  DOM=$(date -u +%d)
-                  DEST_PREFIX="${KUSO_BACKUP_PREFIX:-kuso-postgres}"
-                  DUMP="/tmp/kuso-${TS}.sql.gz"
+                  DUMP="/backup/kuso-${TS}.sql.gz"
 
                   echo "dumping kuso DB → $DUMP"
                   pg_dump --format=plain --no-owner --no-privileges \
@@ -83,6 +95,72 @@ spec:
 
                   SIZE=$(stat -c%s "$DUMP")
                   echo "dump size: $SIZE bytes"
+
+                  # Hand off to the upload container. Retention slot keys
+                  # are computed HERE so dump + upload agree on the hour
+                  # even if the pod straddles a boundary between containers.
+                  cat > /backup/meta.env <<META
+                  TS=$TS
+                  HOUR=$(date -u +%H)
+                  DOW=$(date -u +%u)
+                  DOM=$(date -u +%d)
+                  MONTH=$(date -u +%m)
+                  SIZE=$SIZE
+                  DUMP=$DUMP
+                  META
+              env:
+                # DSN of the kuso DB — same Secret kuso-server consumes,
+                # so credential rotation flows through automatically.
+                - name: KUSO_DB_DSN
+                  valueFrom:
+                    secretKeyRef:
+                      name: kuso-postgres-conn
+                      key: dsn
+                # S3 target config is read here ONLY for the opt-in
+                # gate; the upload container consumes it for real.
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef: { name: kuso-postgres-backup, key: AWS_ACCESS_KEY_ID, optional: true }
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef: { name: kuso-postgres-backup, key: AWS_SECRET_ACCESS_KEY, optional: true }
+                - name: KUSO_BACKUP_BUCKET
+                  valueFrom:
+                    secretKeyRef: { name: kuso-postgres-backup, key: KUSO_BACKUP_BUCKET, optional: true }
+                - name: KUSO_BACKUP_ENDPOINT
+                  valueFrom:
+                    secretKeyRef: { name: kuso-postgres-backup, key: KUSO_BACKUP_ENDPOINT, optional: true }
+              volumeMounts:
+                - { name: workdir, mountPath: /backup }
+              resources:
+                requests:
+                  cpu: 100m
+                  memory: 128Mi
+                limits:
+                  cpu: 500m
+                  memory: 512Mi
+              securityContext:
+                runAsNonRoot: true
+                runAsUser: 999
+                runAsGroup: 999
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: false
+                capabilities:
+                  drop: [ALL]
+          containers:
+            - name: upload
+              # Official image already carries the aws CLI — nothing to
+              # install at runtime. Pinned for reproducibility.
+              image: amazon/aws-cli:2.22.35
+              command: ["/bin/sh", "-eu", "-c"]
+              args:
+                - |
+                  if [ ! -f /backup/meta.env ]; then
+                    echo "nothing to upload — backup not configured (see dump container log)"
+                    exit 0
+                  fi
+                  . /backup/meta.env
+                  DEST_PREFIX="${KUSO_BACKUP_PREFIX:-kuso-postgres}"
 
                   # Hourly retention: 24 slots, keyed by UTC hour.
                   HOURLY="${DEST_PREFIX}/hourly/${HOUR}.sql.gz"
@@ -98,9 +176,8 @@ spec:
                       --metadata "kuso-ts=$TS,kuso-size=$SIZE"
                   fi
 
-                  # Monthly retention: 12 slots, keyed by day-of-month.
+                  # Monthly retention: 12 slots, keyed by month.
                   if [ "$HOUR" = "00" ] && [ "$DOM" = "01" ]; then
-                    MONTH=$(date -u +%m)
                     MONTHLY="${DEST_PREFIX}/monthly/${MONTH}.sql.gz"
                     aws s3 cp "$DUMP" "s3://${KUSO_BACKUP_BUCKET}/${MONTHLY}" \
                       --endpoint-url "$KUSO_BACKUP_ENDPOINT" \
@@ -109,16 +186,12 @@ spec:
 
                   echo "backup complete"
               env:
-                # DSN of the kuso DB — same Secret kuso-server consumes,
-                # so credential rotation flows through automatically.
-                - name: KUSO_DB_DSN
-                  valueFrom:
-                    secretKeyRef:
-                      name: kuso-postgres-conn
-                      key: dsn
+                # HOME must be writable for the aws CLI's config/cache.
+                - name: HOME
+                  value: /tmp
                 # S3-compatible target. The kuso-postgres-backup Secret
-                # is operator-supplied; without it the CronJob aborts
-                # on first run. Set up via:
+                # is operator-supplied; all refs optional so the CronJob
+                # no-ops (never errors) until it exists. Set up via:
                 #
                 #   kubectl create secret generic kuso-postgres-backup \
                 #     -n kuso \
@@ -133,16 +206,16 @@ spec:
                 # AWS S3 API.
                 - name: AWS_ACCESS_KEY_ID
                   valueFrom:
-                    secretKeyRef: { name: kuso-postgres-backup, key: AWS_ACCESS_KEY_ID }
+                    secretKeyRef: { name: kuso-postgres-backup, key: AWS_ACCESS_KEY_ID, optional: true }
                 - name: AWS_SECRET_ACCESS_KEY
                   valueFrom:
-                    secretKeyRef: { name: kuso-postgres-backup, key: AWS_SECRET_ACCESS_KEY }
+                    secretKeyRef: { name: kuso-postgres-backup, key: AWS_SECRET_ACCESS_KEY, optional: true }
                 - name: KUSO_BACKUP_BUCKET
                   valueFrom:
-                    secretKeyRef: { name: kuso-postgres-backup, key: KUSO_BACKUP_BUCKET }
+                    secretKeyRef: { name: kuso-postgres-backup, key: KUSO_BACKUP_BUCKET, optional: true }
                 - name: KUSO_BACKUP_ENDPOINT
                   valueFrom:
-                    secretKeyRef: { name: kuso-postgres-backup, key: KUSO_BACKUP_ENDPOINT }
+                    secretKeyRef: { name: kuso-postgres-backup, key: KUSO_BACKUP_ENDPOINT, optional: true }
                 - name: KUSO_BACKUP_PREFIX
                   valueFrom:
                     secretKeyRef:
@@ -155,6 +228,8 @@ spec:
                       name: kuso-postgres-backup
                       key: AWS_DEFAULT_REGION
                       optional: true
+              volumeMounts:
+                - { name: workdir, mountPath: /backup }
               resources:
                 requests:
                   cpu: 100m

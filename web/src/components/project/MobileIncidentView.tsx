@@ -12,6 +12,7 @@ import {
   useBuilds,
 } from "@/features/services";
 import { api } from "@/lib/api-client";
+import { useCanOnProject, Perms } from "@/features/auth";
 import { Button } from "@/components/ui/button";
 import {
   ExternalLink,
@@ -59,7 +60,12 @@ export function MobileIncidentView({ project, services, envs, onSelectService }:
           key={svc.metadata.name}
           project={project}
           service={svc}
-          env={envs.find((e) => e.spec.service === svc.metadata.name && e.spec.kind === "production")}
+          // The parent view already filtered `envs` to the selected
+          // env-group (production / staging / preview-pr-N), so the
+          // service's env in THAT group is a plain find. The old
+          // `kind === "production"` re-filter meant any non-production
+          // selection matched nothing and every card lost its env.
+          env={envs.find((e) => e.spec.service === svc.metadata.name)}
           onSelectService={onSelectService}
         />
       ))}
@@ -170,8 +176,29 @@ function MobileServiceCard({
   const start = useStartService(project, shortName);
   const builds = useBuilds(project, shortName);
   const [envOpen, setEnvOpen] = useState(false);
+  // Redeploy + stop/start are editor-level mutations; disable with a
+  // hint for viewers instead of a post-tap 403 toast.
+  const canWrite = useCanOnProject(project, Perms.ServicesWrite);
 
-  const url = env?.status?.url || service.spec.domains?.[0];
+  // URL fallback chain — mirrors ServiceOverlay/ServiceNode so all
+  // three surfaces agree. The old `env?.status?.url ||
+  // service.spec.domains?.[0]` fallback interpolated the domain
+  // OBJECT ({ host, tls }) into the href, producing
+  // "https://[object Object]".
+  const internal = !!(service.spec as { internal?: boolean }).internal;
+  const envTLS = env?.spec?.tlsEnabled ?? true;
+  const envCustomHost = env?.spec?.additionalHosts?.find((h) => !!h);
+  const envHost = env?.spec?.host;
+  const customDomainEntry = service.spec.domains?.find((d) => d?.host);
+  const url = internal
+    ? undefined
+    : envCustomHost
+      ? `${envTLS ? "https" : "http"}://${envCustomHost}`
+      : envHost
+        ? `${envTLS ? "https" : "http"}://${envHost}`
+        : customDomainEntry?.host
+          ? `${(customDomainEntry.tls ?? true) ? "https" : "http"}://${customDomainEntry.host}`
+          : env?.status?.url;
   const phase = env?.status?.phase || "unknown";
   const stopped = service.spec.stopped === true;
   const latest = builds.data?.[0];
@@ -207,7 +234,7 @@ function MobileServiceCard({
         </div>
         {url && (
           <a
-            href={String(url).startsWith("http") ? String(url) : `https://${url}`}
+            href={url}
             target="_blank"
             rel="noreferrer"
             className="shrink-0 rounded-md border border-[var(--border-subtle)] p-2 text-[var(--text-secondary)]"
@@ -222,7 +249,13 @@ function MobileServiceCard({
         <Button type="button" variant="outline" size="sm" onClick={() => onSelectService?.(shortName, "logs")}>
           <ScrollText className="mr-1.5 h-3.5 w-3.5" /> Logs
         </Button>
-        <Button type="button" size="sm" onClick={redeploy} disabled={trigger.isPending}>
+        <Button
+          type="button"
+          size="sm"
+          onClick={redeploy}
+          disabled={trigger.isPending || !canWrite}
+          title={canWrite ? undefined : "Requires editor access on this project"}
+        >
           <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
           {trigger.isPending ? "Queuing" : "Redeploy"}
         </Button>
@@ -231,7 +264,8 @@ function MobileServiceCard({
           variant={stopped ? "default" : "outline"}
           size="sm"
           onClick={toggleStop}
-          disabled={toggling}
+          disabled={toggling || !canWrite}
+          title={canWrite ? undefined : "Requires editor access on this project"}
           className={stopped ? "" : "text-[var(--error)]"}
         >
           {stopped ? (

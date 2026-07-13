@@ -164,42 +164,71 @@ spec:
                   echo "[gc] done"
               volumeMounts:
                 - { name: data, mountPath: /var/lib/registry }
-              # preStop ensures the registry Deployment scales back
-              # up even if this container fails (the kuso-server can
-              # tolerate a brief registry outage; never can't).
-              lifecycle:
-                preStop:
-                  exec:
-                    command: [/bin/sh, -ec, "true"]
             - name: scaler-up
-              # Sidecar that waits for `gc` to finish (via a shared
-              # signal file) then scales the registry back up. Uses
-              # the same kubectl image. We can't rely on initContainer
+              # Sidecar that waits for `gc` to finish and scales the
+              # registry back up. We can't rely on initContainer
               # ordering for "post-main" work, so this sidecar pattern
               # is the simplest correct shape.
+              #
+              # CORRECTNESS: the registry must only come back once GC
+              # has genuinely finished (exit 0) or been abandoned.
+              # Under restartPolicy=OnFailure a non-zero gc exit is
+              # TRANSIENT — kubelet restarts the container in-pod — so
+              # scaling up on "terminated" alone would let a restarted
+              # GC run concurrently with live registry writes, which
+              # the registry README explicitly calls unsafe. So:
+              #   - terminated exitCode==0        → restore, exit 0
+              #   - terminated exitCode!=0        → keep waiting for the
+              #     kubelet restart (crash backoff caps at 5m); only if
+              #     it stays dead-failed >10m do we assume kubelet gave
+              #     up and restore anyway (registry can't stay down).
+              #   - pod killed (Job backoffLimit exhausted deletes the
+              #     pod) → TERM trap restores on the way out, inside
+              #     the pod's 30s grace period.
               image: alpine/k8s:1.30.4
               command: [/bin/sh, -ec]
               args:
                 - |
                   set -e
-                  # Poll until the gc container's pod is in
-                  # phase=Succeeded OR Failed. Signaling via shared
-                  # fs would require an emptyDir + a file the gc
-                  # container has to write; checking pod-status
-                  # via the API is simpler.
                   POD=$(hostname)
+                  scale_up() {
+                    echo "[scaler-up] scaling registry back up"
+                    kubectl -n kuso scale deployment kuso-registry --replicas=1
+                    kubectl -n kuso rollout status deployment kuso-registry --timeout=120s || true
+                  }
+                  # Abandonment path: the Job controller terminates the
+                  # pod once backoffLimit is exhausted. Restore the
+                  # registry before dying — nothing else will.
+                  trap 'echo "[scaler-up] pod terminating — restoring registry"; scale_up; exit 0' TERM INT
                   echo "[scaler-up] waiting for gc container in pod $POD"
+                  FAILED_SINCE=""
                   while true; do
-                    PHASE=$(kubectl -n kuso get pod "$POD" -o jsonpath='{.status.containerStatuses[?(@.name=="gc")].state}')
-                    case "$PHASE" in
-                      *terminated*) break ;;
-                    esac
+                    EXIT_CODE=$(kubectl -n kuso get pod "$POD" \
+                      -o jsonpath='{.status.containerStatuses[?(@.name=="gc")].state.terminated.exitCode}' 2>/dev/null || echo "")
+                    if [ "$EXIT_CODE" = "0" ]; then
+                      echo "[scaler-up] gc succeeded"
+                      scale_up
+                      echo "[scaler-up] done"
+                      exit 0
+                    elif [ -n "$EXIT_CODE" ]; then
+                      # Failed-terminated: kubelet will restart it
+                      # (OnFailure). Don't restore writes yet — wait
+                      # for the retry. 10m stuck in this state means
+                      # no restart is coming; give up and restore.
+                      NOW=$(date +%s)
+                      if [ -z "$FAILED_SINCE" ]; then FAILED_SINCE=$NOW; fi
+                      if [ $((NOW - FAILED_SINCE)) -ge 600 ]; then
+                        echo "[scaler-up] gc dead (exit $EXIT_CODE, no restart in 10m) — restoring registry and failing"
+                        scale_up
+                        exit 1
+                      fi
+                    else
+                      # Running / waiting (includes the post-failure
+                      # restart) — reset the stuck-failed clock.
+                      FAILED_SINCE=""
+                    fi
                     sleep 5
                   done
-                  echo "[scaler-up] scaling registry back up"
-                  kubectl -n kuso scale deployment kuso-registry --replicas=1
-                  kubectl -n kuso rollout status deployment kuso-registry --timeout=120s
-                  echo "[scaler-up] done"
           volumes:
             - name: data
               persistentVolumeClaim:

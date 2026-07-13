@@ -391,7 +391,7 @@ func (h *BackupsHandler) dataGuard(w http.ResponseWriter, r *http.Request, schem
 	}
 	conn, err := h.pgConn(ctx, project, addon)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeAddonErr(w, err)
 		return nil, colSet{}, false
 	}
 	exists, err := tableExists(ctx, conn, schema, table)
@@ -456,7 +456,7 @@ func (h *BackupsHandler) SQLColumns(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := h.pgConn(cctx, project, addon)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeAddonErr(w, err)
 		return
 	}
 	defer conn.Close()

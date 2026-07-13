@@ -37,7 +37,14 @@ import (
 func SSRFSafeTransport() *http.Transport {
 	dialer := &net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}
 	return &http.Transport{
-		Proxy: http.ProxyFromEnvironment,
+		// No proxy — ever. With ProxyFromEnvironment, an HTTP(S)_PROXY
+		// env var makes the transport validate and dial the PROXY
+		// address instead of the requested destination, so the proxy
+		// happily fetches 169.254.169.254 / RFC1918 targets on our
+		// behalf and the reserved-IP dial check below never sees them.
+		// Operators who need an egress proxy must not route these
+		// user-supplied-URL fetches through it.
+		Proxy: nil,
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(addr)
 			if err != nil {

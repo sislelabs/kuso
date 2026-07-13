@@ -37,6 +37,20 @@ TMP_CRDS=$(mktemp)
 curl -fsSL "$KUSO_CRDS_URL" -o "$TMP_CRDS"
 kubectl apply -f "$TMP_CRDS" >/dev/null
 
+# Apply the release's non-workload platform manifests (RBAC,
+# ServiceAccounts, PriorityClasses, NetworkPolicies, PDBs) before
+# rolling images, so new server/operator code never starts under
+# stale RBAC. Absent on releases that predate the bundle — skip
+# cleanly so old release.json payloads still upgrade.
+if [ -n "${KUSO_MANIFESTS_URL:-}" ]; then
+  write_status "applying-manifests" "downloading ${KUSO_MANIFESTS_URL}"
+  TMP_MANIFESTS=$(mktemp)
+  curl -fsSL "$KUSO_MANIFESTS_URL" -o "$TMP_MANIFESTS"
+  kubectl apply -f "$TMP_MANIFESTS" >/dev/null
+else
+  echo "==> no upgrade-manifests bundle in this release; skipping (pre-bundle release)"
+fi
+
 write_status "rolling-server" "${KUSO_SERVER_IMAGE}"
 kubectl set image -n "$NS" deploy/kuso-server "server=${KUSO_SERVER_IMAGE}" >/dev/null
 kubectl rollout status -n "$NS" deploy/kuso-server --timeout=180s

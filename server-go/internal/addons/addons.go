@@ -16,6 +16,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -77,6 +78,20 @@ var (
 	ErrConflict = errors.New("addons: conflict")
 	ErrInvalid  = errors.New("addons: invalid")
 )
+
+// noHAKinds lists addon kinds whose chart templates gate on `not
+// .Values.ha` and have NO -ha counterpart — ha=true renders zero
+// resources, so the chart's unsupported.yaml fails the release. Keep in
+// sync with operator/helm-charts/kusoaddon/templates/unsupported.yaml
+// ($noHA). postgres/redis/nats have real HA templates; clickhouse,
+// mailpit, meilisearch and s3 ignore ha by design (single-node
+// fallback), so they're deliberately absent here.
+var noHAKinds = map[string]bool{
+	"valkey":   true,
+	"mongodb":  true,
+	"rabbitmq": true,
+	"redpanda": true,
+}
 
 // CreateAddonRequest is the body of POST /api/projects/:p/addons.
 type CreateAddonRequest struct {
@@ -307,6 +322,16 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	if req.External != nil && req.External.SecretName != "" && req.UseInstanceAddon != "" {
 		return nil, fmt.Errorf("%w: external and useInstanceAddon are mutually exclusive", ErrInvalid)
 	}
+	// Mirror the kusoaddon chart's unsupported.yaml guard: these kinds
+	// have no -ha template, so ha=true would fail helm rendering after
+	// the CR is written (a wedged addon the user has to delete). Refuse
+	// at the API boundary instead. external / useInstanceAddon bypass
+	// provisioning entirely, so ha is moot on those paths — same
+	// conditions the chart guard applies.
+	if req.HA && noHAKinds[req.Kind] &&
+		(req.External == nil || req.External.SecretName == "") && req.UseInstanceAddon == "" {
+		return nil, fmt.Errorf("%w: kind %q does not support ha=true — no HA template exists; set ha=false or use an HA-capable kind (postgres, redis, nats)", ErrInvalid, req.Kind)
+	}
 	if req.External != nil && req.External.SecretName != "" {
 		if err := s.mirrorExternalSecret(ctx, ns, fqn, req.External); err != nil {
 			return nil, fmt.Errorf("%w: mirror external secret: %w", ErrInvalid, err)
@@ -330,6 +355,20 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	}
 	created, err := createAddon(ctx, s, ns, addon)
 	if err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			// A concurrent create won the race between our existence
+			// preflight and this write. Do NOT clean up the side effects
+			// above — same name means same conn secret / instance DB, so
+			// they now serve the winner's CR. Same message as the
+			// preflight so the client sees one conflict shape.
+			return nil, fmt.Errorf("%w: addon %s/%s already exists", ErrConflict, project, req.Name)
+		}
+		// The CR never landed, but the side effects above (mirrored conn
+		// secret, instance database + role) did — without cleanup they'd
+		// linger with no addon owning them, and a later re-create would
+		// silently adopt the stale state. Best-effort; failures are
+		// logged as an orphan trail.
+		s.cleanupAddSideEffects(ctx, ns, fqn, project, req)
 		return nil, err
 	}
 	// Env-scoped addons (preview-DB clones, which carry a preview-pr env
@@ -355,6 +394,35 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 		return created, fmt.Errorf("addon created but env refresh failed: %w", err)
 	}
 	return created, nil
+}
+
+// cleanupAddSideEffects rolls back the durable side effects Add
+// provisions BEFORE the CR write (mirrored external conn secret,
+// instance-shared database + role + conn secret) when the CR create
+// itself fails. Best-effort: every failure is logged so an operator has
+// an orphan trail, and nothing here masks the original create error.
+// Runs on a cancel-shielded context so an aborted request still cleans
+// up after itself.
+func (s *Service) cleanupAddSideEffects(ctx context.Context, ns, fqn, project string, req CreateAddonRequest) {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+	hasExternal := req.External != nil && req.External.SecretName != ""
+	if (hasExternal || req.UseInstanceAddon != "") && s.Kube != nil && s.Kube.Clientset != nil {
+		if err := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(cctx, connSecretName(fqn), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			slog.Default().Warn("addon create failed; conn-secret cleanup failed (orphaned)",
+				"project", project, "addon", req.Name, "secret", connSecretName(fqn), "err", err)
+		}
+	}
+	if req.UseInstanceAddon != "" {
+		adminDSN, err := s.instanceAdminDSN(cctx, req.UseInstanceAddon)
+		if err == nil {
+			err = s.dropInstanceAddonDB(adminDSN, project, req.Name)
+		}
+		if err != nil {
+			slog.Default().Warn("addon create failed; instance-DB cleanup failed (orphaned on shared server)",
+				"project", project, "addon", req.Name, "err", err)
+		}
+	}
 }
 
 // UpdateAddonRequest is the partial-update body. Pointer fields

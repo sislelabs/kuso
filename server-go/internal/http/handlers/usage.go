@@ -47,10 +47,10 @@ func (h *UsageHandler) Mount(rt interface {
 // the UI can recompute on the fly (a "what if cpu were $0.05" knob)
 // without re-hitting the server.
 type UsageResponse struct {
-	Days   int                  `json:"days"`
-	Daily  []db.CostRollupDay   `json:"daily"`
-	Totals []db.CostTotal       `json:"totals"`
-	Rates  UsageRates           `json:"rates"`
+	Days   int                `json:"days"`
+	Daily  []db.CostRollupDay `json:"daily"`
+	Totals []db.CostTotal     `json:"totals"`
+	Rates  UsageRates         `json:"rates"`
 	// Projected is the next-30-days projection in operator currency.
 	// Trivial extrapolation: scale Totals × (30/days). Operators see
 	// "if usage continues, you'll spend $X next month" as the
@@ -85,14 +85,18 @@ func (h *UsageHandler) Get(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	ctx := r.Context()
+	// Log the DB error server-side; the client gets a generic message —
+	// raw Postgres errors leak schema/operational detail to any authed user.
 	daily, err := h.DB.CostRollup(ctx, days)
 	if err != nil {
-		http.Error(w, "cost rollup: "+err.Error(), http.StatusInternalServerError)
+		h.logErr("usage: cost rollup", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 	totals, err := h.DB.CostTotals(ctx, days)
 	if err != nil {
-		http.Error(w, "cost totals: "+err.Error(), http.StatusInternalServerError)
+		h.logErr("usage: cost totals", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 	rates := readRates(h.Cfg)
@@ -123,11 +127,11 @@ type ProjectUsageRow struct {
 // Projects is the headline table. ClusterTotal is the sum across
 // projects — useful as a sanity check against the per-node total.
 type ProjectUsageResponse struct {
-	Days         int                  `json:"days"`
-	Daily        []db.ProjectCostDay  `json:"daily"`
-	Projects     []ProjectUsageRow    `json:"projects"`
-	ClusterTotal UsageProjection      `json:"clusterTotal"`
-	Rates        UsageRates           `json:"rates"`
+	Days         int                 `json:"days"`
+	Daily        []db.ProjectCostDay `json:"daily"`
+	Projects     []ProjectUsageRow   `json:"projects"`
+	ClusterTotal UsageProjection     `json:"clusterTotal"`
+	Rates        UsageRates          `json:"rates"`
 }
 
 // GetProjects handles GET /api/usage/projects?days=N (default 30).
@@ -140,14 +144,17 @@ func (h *UsageHandler) GetProjects(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	ctx := r.Context()
+	// Same generic-error policy as Get — log details, don't echo them.
 	daily, err := h.DB.ProjectCostRollup(ctx, days)
 	if err != nil {
-		http.Error(w, "project rollup: "+err.Error(), http.StatusInternalServerError)
+		h.logErr("usage: project rollup", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 	totals, err := h.DB.ProjectCostTotals(ctx, days)
 	if err != nil {
-		http.Error(w, "project totals: "+err.Error(), http.StatusInternalServerError)
+		h.logErr("usage: project totals", err)
+		http.Error(w, "internal", http.StatusInternalServerError)
 		return
 	}
 	rates := readRates(h.Cfg)
@@ -195,6 +202,14 @@ func (h *UsageHandler) GetProjects(w http.ResponseWriter, r *http.Request) {
 		},
 		Rates: rates,
 	})
+}
+
+// logErr logs an internal failure. Nil-safe on Logger so a bare
+// UsageHandler in tests doesn't panic.
+func (h *UsageHandler) logErr(msg string, err error) {
+	if h.Logger != nil {
+		h.Logger.Error(msg, "err", err)
+	}
 }
 
 // readRates pulls spec.cost.{cpuPerHour, memGBPerHour, currency} off

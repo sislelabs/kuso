@@ -18,6 +18,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { CronPicker } from "@/components/shared/CronPicker";
+import { useCanOnProject, Perms } from "@/features/auth";
 import { toast } from "sonner";
 import { relativeTime } from "@/lib/format";
 
@@ -101,19 +102,16 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
     queryFn: () => listBackups(project, addon),
     refetchInterval: 30_000,
   });
+  // Restore + schedule edits are addons:write mutations; viewers get
+  // the buttons disabled with a hint instead of a post-click 403.
+  const canWrite = useCanOnProject(project, Perms.AddonsWrite);
   const restore = useMutation({
-    mutationFn: ({ key, into }: { key: string; into?: string }) =>
-      // In-place restore (no `into`, or into === source) is destructive;
-      // the server requires `confirm` to echo the addon name. The user
-      // has already opted into the destructive path via this dialog, so
-      // supply it here rather than adding a second type-the-name step.
-      restoreBackup(
-        project,
-        addon,
-        key,
-        into,
-        !into || into === addon ? addon : undefined
-      ),
+    mutationFn: ({ key, into, confirm }: { key: string; into?: string; confirm?: string }) =>
+      // In-place restore (no `into`) is destructive; the server requires
+      // `confirm` to echo the addon name. We forward exactly what the
+      // user typed in the dialog — auto-supplying it here would defeat
+      // the server's type-the-name safeguard.
+      restoreBackup(project, addon, key, into, confirm),
     onSuccess: (res) => {
       toast.success(`Restore job started: ${res.job}`);
       qc.invalidateQueries({ queryKey: ["addons", project, addon, "backups"] });
@@ -139,7 +137,7 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
     const noS3 = msg.includes("503") || /s3|bucket|credentials/i.test(msg);
     return (
       <div className="space-y-4 p-5">
-        <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} />
+        <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} canWrite={canWrite} />
         <div className="flex items-center justify-between">
           <h3 className="font-heading text-sm font-semibold tracking-tight">Backups</h3>
           <DownloadBackupButton project={project} addon={addon} kind={thisAddon?.spec.kind} />
@@ -171,7 +169,7 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
   if (items.length === 0) {
     return (
       <div className="space-y-4 p-5">
-        <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} />
+        <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} canWrite={canWrite} />
         <div className="flex items-center justify-between">
           <h3 className="font-heading text-sm font-semibold tracking-tight">Backups</h3>
           <DownloadBackupButton project={project} addon={addon} kind={thisAddon?.spec.kind} />
@@ -187,7 +185,7 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
 
   return (
     <div className="space-y-4 p-5">
-      <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} />
+      <BackupScheduleEditor project={project} addon={addon} thisAddon={thisAddon} canWrite={canWrite} />
       <header className="mb-3 flex items-center justify-between gap-3">
         <h3 className="font-heading text-sm font-semibold tracking-tight">Backups</h3>
         <div className="flex items-center gap-3">
@@ -216,7 +214,8 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
             <Button
               size="sm"
               variant="outline"
-              disabled={restore.isPending}
+              disabled={restore.isPending || !canWrite}
+              title={canWrite ? undefined : "Requires editor access on this project"}
               onClick={() => setConfirmKey(b.key)}
             >
               <RotateCcw className="h-3 w-3" />
@@ -231,8 +230,8 @@ export function BackupsTab({ project, addon }: { project: string; addon: string 
         sourceAddon={addon}
         siblings={siblingAddons.map((a) => addonShort(project, a.metadata.name))}
         onCancel={() => setConfirmKey(null)}
-        onConfirm={(key, into) => {
-          restore.mutate({ key, into });
+        onConfirm={(key, into, confirm) => {
+          restore.mutate({ key, into, confirm });
           setConfirmKey(null);
         }}
       />
@@ -253,14 +252,26 @@ function ConfirmRestore({
   sourceAddon: string;
   siblings: string[];
   onCancel: () => void;
-  onConfirm: (key: string, into?: string) => void;
+  onConfirm: (key: string, into?: string, confirm?: string) => void;
 }) {
   const [target, setTarget] = useState<string>("");
+  // Typed-name gate for the destructive in-place path. Mirrors
+  // ConfirmDialog's typeToConfirm: the restore button stays disabled
+  // until the user types the addon name, and we send exactly what
+  // they typed so the server's own confirm check stays meaningful.
+  const [typed, setTyped] = useState("");
+  const inPlace = target === "";
   // Reset target to in-place every time a new backup gets picked so
   // the user explicitly opts into the cross-addon path each time.
+  // The typed confirmation resets alongside it — a prior dialog's
+  // input must never pre-satisfy the gate.
   useEffect(() => {
-    if (item) setTarget("");
+    if (item) {
+      setTarget("");
+      setTyped("");
+    }
   }, [item]);
+  const allow = !pending && (!inPlace || typed === sourceAddon);
   return (
     <AnimatePresence>
       {item && (
@@ -294,7 +305,11 @@ function ConfirmRestore({
               </label>
               <select
                 value={target}
-                onChange={(e) => setTarget(e.target.value)}
+                onChange={(e) => {
+                  setTarget(e.target.value);
+                  // Path switch invalidates any typed confirmation.
+                  setTyped("");
+                }}
                 className="block w-full rounded-md border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-2 py-1.5 font-mono text-[12px]"
               >
                 <option value="">{sourceAddon} (overwrite — destructive)</option>
@@ -305,10 +320,25 @@ function ConfirmRestore({
                 ))}
               </select>
               {target === "" ? (
-                <p className="font-mono text-[10px] text-red-400">
-                  Existing tables in {sourceAddon} will be overwritten. Cannot be
-                  undone.
-                </p>
+                <>
+                  <p className="font-mono text-[10px] text-red-400">
+                    Existing tables in {sourceAddon} will be overwritten. Cannot be
+                    undone.
+                  </p>
+                  <div className="space-y-1 pt-1">
+                    <div className="font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+                      type{" "}
+                      <span className="text-[var(--text-primary)]">{sourceAddon}</span>{" "}
+                      to confirm
+                    </div>
+                    <Input
+                      value={typed}
+                      onChange={(e) => setTyped(e.target.value)}
+                      spellCheck={false}
+                      className="h-8 font-mono text-[12px]"
+                    />
+                  </div>
+                </>
               ) : (
                 <p className="font-mono text-[10px] text-amber-400">
                   {sourceAddon} stays as-is; the dump goes into {target}. {target} must
@@ -323,8 +353,16 @@ function ConfirmRestore({
               <Button
                 variant={target === "" ? "destructive" : "default"}
                 size="sm"
-                onClick={() => onConfirm(item.key, target || undefined)}
-                disabled={pending}
+                onClick={() =>
+                  onConfirm(
+                    item.key,
+                    target || undefined,
+                    // Only the destructive in-place path carries the
+                    // typed confirmation; cross-restore doesn't need it.
+                    inPlace ? typed : undefined,
+                  )
+                }
+                disabled={!allow}
               >
                 <RotateCcw className="h-3 w-3" />
                 {pending ? "Starting…" : `Restore into ${target || sourceAddon}`}
@@ -353,10 +391,15 @@ function BackupScheduleEditor({
   project,
   addon,
   thisAddon,
+  canWrite,
 }: {
   project: string;
   addon: string;
   thisAddon?: KusoAddon;
+  // addons:write gate, resolved by the parent tab. Saving the
+  // schedule PATCHes the addon CR — viewers see the current config
+  // but can't submit changes.
+  canWrite: boolean;
 }) {
   const qc = useQueryClient();
   const initialSchedule = thisAddon?.spec.backup?.schedule ?? "";
@@ -478,7 +521,8 @@ function BackupScheduleEditor({
           <Button
             size="sm"
             onClick={() => save.mutate()}
-            disabled={!dirty || !scheduleValid || !retentionValid || save.isPending}
+            disabled={!canWrite || !dirty || !scheduleValid || !retentionValid || save.isPending}
+            title={canWrite ? undefined : "Requires editor access on this project"}
           >
             {save.isPending ? "Saving…" : "Save"}
           </Button>

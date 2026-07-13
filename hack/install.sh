@@ -68,6 +68,14 @@ KUSO_VERSION="${KUSO_VERSION:-v0.18.128}"
 KUSO_SERVER_VERSION="${KUSO_SERVER_VERSION:-v0.18.128}"
 KUSO_REPO="${KUSO_REPO:-sislelabs/kuso}"
 KUSO_LE_ENV="${KUSO_LE_ENV:-prod}"
+# Public-TCP entrypoint pool for addons (docs/superpowers/specs/
+# 2026-05-21-tcp-proxy-design.md). Traefik entrypoints are static
+# config, so the pool must be declared at traefik install time; the
+# kuso server's allocator (KUSO_TCP_PROXY_PORTS env on kuso-server,
+# wired below) only hands out ports from this range, and the kusoaddon
+# chart renders IngressRouteTCPs bound to the matching tcp-<port>
+# entrypoints. Set to "0" (or empty) to disable the feature.
+KUSO_TCP_PROXY_PORTS="${KUSO_TCP_PROXY_PORTS:-30000-30019}"
 
 # --- arg parsing ---
 # Both flags and env vars are accepted. Flags win when both are
@@ -116,6 +124,11 @@ Flags / env:
   --github-wizard (KUSO_GITHUB_WIZARD=1) interactive GitHub App setup
   KUSO_ADMIN_PASSWORD                    override the generated admin password
   KUSO_SKIP_K3S=1                        assume k3s + traefik already installed
+  KUSO_TCP_PROXY_PORTS                   traefik entrypoint pool for addon
+                                         public-TCP endpoints (default
+                                         30000-30019; 0 disables)
+  KUSO_SKIP_ARCH_CHECK=1                 skip the amd64-only architecture guard
+                                         (only with self-built images)
   KUSO_REF                               git ref for manifests (default: the
                                          server release tag)
 
@@ -194,6 +207,30 @@ else
   warn "/etc/os-release not found; can't verify OS. Continuing."
 fi
 
+# Architecture check. Every kuso release image (server, operator,
+# updater, nixpacks, env-detect) is built linux/amd64-only — see
+# hack/release.sh's `docker buildx --platform linux/amd64` invocations.
+# On an arm64 (or other) host every kuso pod would sit in
+# CrashLoopBackOff with `exec format error`, which looks nothing like
+# an arch problem. Fail fast here instead. Override with
+# KUSO_SKIP_ARCH_CHECK=1 only if you build + host your own multi-arch
+# images (KUSO_REPO / image overrides).
+ARCH="$(uname -m)"
+case "$ARCH" in
+  x86_64|amd64) ;;
+  *)
+    if [[ "${KUSO_SKIP_ARCH_CHECK:-0}" == "1" ]]; then
+      warn "unsupported CPU architecture ${ARCH} — continuing because KUSO_SKIP_ARCH_CHECK=1 (you must supply your own ${ARCH} images)"
+    else
+      die "unsupported CPU architecture: ${ARCH}.
+kuso release images are built for linux/amd64 only, so every kuso pod
+on this host would fail with 'exec format error'. Use an amd64/x86_64
+host, or — if you build your own images for ${ARCH} — re-run with
+KUSO_SKIP_ARCH_CHECK=1."
+    fi
+    ;;
+esac
+
 # DNS pre-flight. Without this, Let's Encrypt http-01 challenges fail
 # silently and the user thinks the install hung. The fix is always
 # "you need to point a DNS A record at this box first" — so we check
@@ -245,7 +282,13 @@ if [[ "${KUSO_SKIP_K3S:-0}" != "1" ]] && ! command -v k3s >/dev/null 2>&1; then
   # an Encryption-Provider-Config rotation procedure. Disable via
   # KUSO_SKIP_SECRETS_ENCRYPTION=1 only when integrating with an
   # external KMS that handles encryption at the storage layer.
-  K3S_EXTRA="--disable=traefik --tls-san=${KUSO_DOMAIN} --write-kubeconfig-mode=644"
+  # --write-kubeconfig-mode=600: the kubeconfig at /etc/rancher/k3s/
+  # k3s.yaml is a cluster-admin credential. 644 would let ANY local
+  # user read it and own the cluster. This script runs as root (see
+  # the EUID gate above) and every kubectl below runs as root too, so
+  # root-only is safe. Operators who want unprivileged kubectl access
+  # should copy the file to ~/.kube/config with their own perms.
+  K3S_EXTRA="--disable=traefik --tls-san=${KUSO_DOMAIN} --write-kubeconfig-mode=600"
   if [[ "${KUSO_SKIP_SECRETS_ENCRYPTION:-0}" != "1" ]]; then
     K3S_EXTRA="${K3S_EXTRA} --secrets-encryption"
   fi
@@ -300,8 +343,39 @@ if ! command -v helm >/dev/null 2>&1; then
 fi
 
 # -------- 4. traefik --------
+# Public-TCP entrypoint pool: parse KUSO_TCP_PROXY_PORTS into per-port
+# --set flags. Entrypoints are STATIC traefik config, so they have to
+# exist before the kusoaddon chart's IngressRouteTCP can route anything
+# — otherwise the route reconciles but traffic falls through to the
+# web entrypoint's HTTP redirect. The kuso-server env var is wired
+# after the server deploy below, and ONLY when the entrypoints are
+# verifiably present, so the allocator can never hand out unreachable
+# ports.
+TCP_POOL_ARGS=()
+TCP_POOL_LO=""
+TCP_POOL_HI=""
+if [[ "$KUSO_TCP_PROXY_PORTS" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+  TCP_POOL_LO="${BASH_REMATCH[1]}"
+  TCP_POOL_HI="${BASH_REMATCH[2]}"
+  if (( TCP_POOL_LO < 1024 || TCP_POOL_HI > 65535 || TCP_POOL_LO > TCP_POOL_HI )); then
+    die "KUSO_TCP_PROXY_PORTS=${KUSO_TCP_PROXY_PORTS} is not a sane range (want 1024-65535, lo<=hi)"
+  fi
+  if (( TCP_POOL_HI - TCP_POOL_LO >= 100 )); then
+    die "KUSO_TCP_PROXY_PORTS=${KUSO_TCP_PROXY_PORTS} spans $((TCP_POOL_HI - TCP_POOL_LO + 1)) ports — each one is a traefik entrypoint + LoadBalancer port; keep it under 100"
+  fi
+  for p in $(seq "$TCP_POOL_LO" "$TCP_POOL_HI"); do
+    TCP_POOL_ARGS+=(
+      --set "ports.tcp-${p}.port=${p}"
+      --set "ports.tcp-${p}.expose.default=true"
+      --set "ports.tcp-${p}.protocol=TCP"
+    )
+  done
+elif [[ -n "$KUSO_TCP_PROXY_PORTS" && "$KUSO_TCP_PROXY_PORTS" != "0" ]]; then
+  die "KUSO_TCP_PROXY_PORTS must look like 30000-30019 (or 0 to disable); got: ${KUSO_TCP_PROXY_PORTS}"
+fi
+
 if ! kubectl get svc -n traefik traefik >/dev/null 2>&1; then
-  log "installing traefik"
+  log "installing traefik${TCP_POOL_LO:+ (with public-TCP entrypoints tcp-${TCP_POOL_LO}..tcp-${TCP_POOL_HI})}"
   helm repo add traefik https://traefik.github.io/charts >/dev/null 2>&1 || true
   helm repo update >/dev/null
   helm upgrade --install traefik traefik/traefik \
@@ -309,9 +383,24 @@ if ! kubectl get svc -n traefik traefik >/dev/null 2>&1; then
     --set ports.web.expose.default=true \
     --set ports.websecure.expose.default=true \
     --set service.type=LoadBalancer \
+    "${TCP_POOL_ARGS[@]}" \
     --wait --timeout=180s >/dev/null
 else
   log "traefik already installed; skipping"
+  # Pre-existing traefik (KUSO_SKIP_K3S installs, re-runs of older
+  # installers): we do NOT helm-upgrade it here — --reuse-values vs a
+  # chart bump has its own footguns and the user may manage traefik
+  # themselves. If the pool entrypoints are missing, public-TCP simply
+  # stays disabled (the env-var wiring below verifies before enabling)
+  # and we print the exact command to add them.
+  if [[ -n "$TCP_POOL_LO" ]] && ! kubectl get svc -n traefik traefik \
+      -o jsonpath='{.spec.ports[*].name}' 2>/dev/null | tr ' ' '\n' | grep -qx "tcp-${TCP_POOL_LO}"; then
+    warn "traefik has no tcp-<port> entrypoint pool — addon public-TCP endpoints will stay disabled."
+    warn "To add the pool to your existing traefik install:"
+    warn "  helm upgrade traefik traefik/traefik -n traefik --reuse-values \\"
+    warn "    \$(for p in \$(seq ${TCP_POOL_LO} ${TCP_POOL_HI}); do printf -- '--set ports.tcp-%s.port=%s --set ports.tcp-%s.expose.default=true --set ports.tcp-%s.protocol=TCP ' \$p \$p \$p \$p; done)"
+    warn "then re-run this installer to wire KUSO_TCP_PROXY_PORTS onto kuso-server."
+  fi
 fi
 
 # -------- 5. cert-manager --------
@@ -491,14 +580,30 @@ Fix outbound network (or a proxy), then re-run this installer."
 fi
 
 if [[ "${KUSO_USE_EXTERNAL_POSTGRES:-0}" == "1" ]]; then
+  # The kuso-server Deployment reads ONE key from this Secret:
+  # `dsn` (deploy/server-go.yaml → KUSO_DB_DSN secretKeyRef, not
+  # optional). A Secret with only component keys (username/host/...)
+  # leaves the pod in CreateContainerConfigError, so the dsn key is
+  # what we require + document here. The component keys are optional
+  # extras for tooling parity with the bundled-Postgres Secret shape.
+  EXT_PG_DSN_HELP="    kubectl create secret generic kuso-postgres-conn -n kuso \\
+      --from-literal=dsn='postgres://<user>:<pass>@<host>:5432/<dbname>?sslmode=require' \\
+      --from-literal=username=<user> --from-literal=password=<pass> \\
+      --from-literal=host=<host> --from-literal=port=5432 --from-literal=database=<dbname>"
   if ! kubectl get secret -n kuso kuso-postgres-conn >/dev/null 2>&1; then
     die "KUSO_USE_EXTERNAL_POSTGRES=1 is set but the Secret kuso-postgres-conn is missing.
-Create it first with your external DB's connection details, then re-run:
-    kubectl create secret generic kuso-postgres-conn -n kuso \\
-      --from-literal=username=<user> --from-literal=password=<pass> \\
-      --from-literal=host=<host> --from-literal=port=5432 --from-literal=dbname=kuso"
+Create it first with your external DB's connection details (the dsn key
+is REQUIRED — it's what kuso-server consumes), then re-run:
+${EXT_PG_DSN_HELP}"
   fi
-  log "external Postgres mode — using existing kuso-postgres-conn Secret"
+  if ! kubectl get secret -n kuso kuso-postgres-conn -o jsonpath='{.data.dsn}' 2>/dev/null | grep -q .; then
+    die "KUSO_USE_EXTERNAL_POSTGRES=1: Secret kuso-postgres-conn exists but has no 'dsn' key.
+kuso-server reads KUSO_DB_DSN from that key and will sit in
+CreateContainerConfigError without it. Add it, then re-run:
+    kubectl patch secret kuso-postgres-conn -n kuso --type=merge \\
+      -p '{\"stringData\":{\"dsn\":\"postgres://<user>:<pass>@<host>:5432/<dbname>?sslmode=require\"}}'"
+  fi
+  log "external Postgres mode — using existing kuso-postgres-conn Secret (dsn key present)"
 else
   # Reuse an existing password if one's already in the cluster (re-
   # run safety). Otherwise mint a fresh one. CNPG bootstrap also
@@ -673,29 +778,19 @@ log "applying kuso-server-secrets"
 #   openssl genpkey -algorithm Ed25519 -out kuso-release.priv
 #   openssl pkey -in kuso-release.priv -pubout -outform DER \
 #     | tail -c 32 | base64
-# Empty is fine for unsigned releases — the updater logs a warn but
-# proceeds. Set KUSO_REQUIRE_SIGNATURES=true to refuse unsigned.
+# Empty falls back to the key embedded in the server binary
+# (server-go/internal/updater/releasekey.pub) — set this only to
+# override for a rotation.
 KUSO_RELEASE_PUBKEY="${KUSO_RELEASE_PUBLIC_KEY:-}"
 #
-# WHY THIS DEFAULTS TO false (and can't safely be flipped to true yet):
-# Releases ARE signed — release.sh publishes a release.json.sig asset and
-# the updater (server-go/internal/updater) verifies it Ed25519. BUT a
-# stock install ships NO public key: KUSO_RELEASE_PUBLIC_KEY above defaults
-# to empty AND the embedded server-go/internal/updater/releasekey.pub is a
-# 0-byte placeholder (hack/release-keygen.sh has never been run for this
-# repo). With a signature present but no key, verifyManifestSignature
-# returns "release is signed but no release public key configured", which
-# under KUSO_REQUIRE_SIGNATURES=true is a HARD FAIL on every update — it
-# would break self-update on all stock installs. So we default to false.
-#
-# TO SAFELY ENABLE (flip to true): distribute the release public key first.
-#   1. Run hack/release-keygen.sh (writes releasekey.pub + a private key),
-#      commit the non-empty releasekey.pub, and cut a release signed with
-#      the matching private key. Now the key is embedded in the binary, OR
-#   2. pass KUSO_RELEASE_PUBLIC_KEY=<base64 ed25519 pubkey> to this install.
-# Once a real key is present on the install, set KUSO_REQUIRE_SIGNATURES=true
-# to enforce supply-chain verification.
-KUSO_REQUIRE_SIGS="${KUSO_REQUIRE_SIGNATURES:-false}"
+# Signature verification is ON by default: releases are signed
+# (release.sh publishes release.json.sig, signed with the project key
+# whose public half is embedded in the server binary via releasekey.pub),
+# so a stock install verifies out of the box. Set
+# KUSO_REQUIRE_SIGNATURES=false only for self-built releases signed
+# with no key at all — with a key embedded, an unsigned or wrongly-
+# signed release.json is refused, which is the point.
+KUSO_REQUIRE_SIGS="${KUSO_REQUIRE_SIGNATURES:-true}"
 kubectl create secret generic kuso-server-secrets -n kuso --dry-run=client -o yaml \
   --from-literal=KUSO_SESSION_KEY="$SESSION_KEY" \
   --from-literal=JWT_SECRET="$JWT_SECRET" \
@@ -1013,6 +1108,22 @@ if [[ -n "${PUBLIC_IP:-}" ]]; then
     || warn "could not set KUSO_K3S_URL (node-join will fall back to the ClusterIP)"
 fi
 
+# Public-TCP allocator pool: only wire the env var when the traefik
+# entrypoints VERIFIABLY exist (fresh install above added them; a
+# pre-existing traefik may lack them — the warn in section 4 already
+# told the user how to add them). Wiring the env without the
+# entrypoints would let the server allocate ports that route nowhere.
+if [[ -n "$TCP_POOL_LO" ]]; then
+  if kubectl get svc -n traefik traefik -o jsonpath='{.spec.ports[*].name}' 2>/dev/null \
+      | tr ' ' '\n' | grep -qx "tcp-${TCP_POOL_LO}"; then
+    kubectl set env deployment/kuso-server -n kuso \
+      "KUSO_TCP_PROXY_PORTS=${KUSO_TCP_PROXY_PORTS}" >/dev/null 2>&1 \
+      || warn "could not set KUSO_TCP_PROXY_PORTS (addon public-TCP endpoints stay disabled)"
+  else
+    warn "traefik entrypoint tcp-${TCP_POOL_LO} not found — leaving KUSO_TCP_PROXY_PORTS unset (addon public-TCP disabled)"
+  fi
+fi
+
 # kuso-activator: the scale-to-zero request-holding proxy (runs the same
 # image in --activator mode). Reuses the kuso-server ServiceAccount, so
 # it must apply AFTER server-go.yaml (which declares the SA + RBAC). The
@@ -1022,6 +1133,38 @@ fi
 curl -sfL "${KUSO_RAW}/deploy/kuso-activator.yaml" \
   | sed -E "s|kuso-server-go:v[0-9]+\\.[0-9]+\\.[0-9]+([-A-Za-z0-9.]*)?|kuso-server-go:${KUSO_SERVER_VERSION}|g" \
   | kubectl apply -f - >/dev/null 2>&1 || warn "kuso-activator apply failed (scale-to-zero wake won't work until fixed)"
+
+# -------- 11a. auxiliary platform manifests --------
+# These back server features that otherwise fail or stay dark:
+#
+#   incident-agent-rbac.yaml   ServiceAccount + read-only RBAC the
+#                              incident-agent investigate Jobs run as
+#                              (internal/incidents/jobs.go hardcodes the
+#                              SA name — without it every incident Job
+#                              pod fails to schedule).
+#   pkg-probe.yaml             per-node DaemonSet that writes the host
+#                              package-update advisory annotations the
+#                              nodes page + pkgupdates apply path read.
+#   postgres-backup.yaml       hourly control-plane pg_dump→S3 CronJob.
+#                              Safe to apply unconfigured: it no-ops
+#                              (exit 0) until the operator creates the
+#                              kuso-postgres-backup Secret; the backup-
+#                              health banner in settings nags about it.
+#
+# NOT applied here: incident-agent-refresher.yaml — its CronJob mounts
+# the kuso-incident-agent-cc Secret (non-optional), which only exists
+# after the operator uploads Claude Code credentials in settings.
+# Applying it earlier just makes a failing-forever CronJob. Apply it
+# when enabling the incident agent:
+#   kubectl apply -f deploy/incident-agent-refresher.yaml
+#
+# Like CRDs, these are refreshed by re-running install.sh — the image
+# auto-updater only flips image tags and does not (re)apply manifests.
+for aux in incident-agent-rbac pkg-probe postgres-backup; do
+  log "applying deploy/${aux}.yaml"
+  curl -sfL "${KUSO_RAW}/deploy/${aux}.yaml" | kubectl apply -f - >/dev/null \
+    || warn "deploy/${aux}.yaml apply failed — feature backed by it will be degraded; re-run installer or apply manually"
+done
 
 kubectl apply -f - <<EOF >/dev/null
 # kuso-server's ServiceAccount + RBAC are owned by deploy/server-go.yaml

@@ -35,11 +35,46 @@ import (
 // kuso-backup-s3 Secret) and /api/projects/{p}/addons/{a}/backups
 // (list + restore, gated on the same Secret existing).
 type BackupsHandler struct {
-	Kube      *kube.Client
-	DB        *db.DB
-	Audit     *audit.Service
+	Kube  *kube.Client
+	DB    *db.DB
+	Audit *audit.Service
+	// Addons resolves (project, addon) URL pairs to ownership-checked
+	// CRs and to the project's execution namespace. Every addon-scoped
+	// path here goes through it (see ownedAddon) — the raw CRName()
+	// string mapping tolerates pre-qualified names, so with overlapping
+	// project names ("foo" vs "foo-bar") it could resolve a sibling
+	// project's addon, and the static home namespace is wrong for
+	// projects with a per-project execution namespace.
+	Addons    *addons.Service
 	Namespace string
 	Logger    *slog.Logger
+}
+
+// ownedAddon fetches the addon CR for (project, addon), verifying it
+// belongs to project, and returns it with the project's execution
+// namespace (where its -conn Secret and pods live). Falls back to a
+// throwaway addons.Service pinned to the home namespace when Addons
+// isn't wired (tests) — ownership is still enforced.
+func (h *BackupsHandler) ownedAddon(ctx context.Context, project, addon string) (*kube.KusoAddon, string, error) {
+	svc := h.Addons
+	if svc == nil {
+		svc = addons.New(h.Kube, h.Namespace)
+	}
+	cr, err := svc.GetOwned(ctx, project, addon)
+	if err != nil {
+		return nil, "", err
+	}
+	return cr, svc.NamespaceFor(ctx, project), nil
+}
+
+// writeAddonErr maps an addon-resolution failure to HTTP: an unknown
+// (or other-project-owned) addon is a 404, anything else a 502.
+func writeAddonErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, addons.ErrNotFound) {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	http.Error(w, err.Error(), http.StatusBadGateway)
 }
 
 const backupSecretName = "kuso-backup-s3"
@@ -321,34 +356,51 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 			http.StatusBadRequest)
 		return
 	}
-	// Kind compatibility — refuse to point a postgres dump at a
-	// redis addon (the seed Job would only fail mid-restore with
-	// an opaque psql error after the dump's already partially
-	// streamed). Both addons must exist for List to have shown
-	// them; we just compare kinds.
+	// Resolve BOTH addons through the ownership-checked path. This (a)
+	// yields the project's execution namespace — the -conn Secret the
+	// restore Job references and the Job itself must live there, not in
+	// the static home namespace — and (b) blocks a cross-project write:
+	// `into` accepts pre-qualified names, so without the ownership check
+	// a foo-authorized caller passing into="foo-bar-pg" would restore
+	// INTO the sibling project foo-bar's database.
+	srcCR, ns, err := h.ownedAddon(ctx, project, addon)
+	if err != nil {
+		writeAddonErr(w, err)
+		return
+	}
+	destCR := srcCR
 	if req.Into != "" {
-		ns := h.Namespace
-		srcCR, sErr := h.Kube.GetKusoAddon(ctx, ns, addons.CRName(project, addon))
-		dstCR, dErr := h.Kube.GetKusoAddon(ctx, ns, addons.CRName(project, destAddon))
-		if sErr == nil && dErr == nil && srcCR != nil && dstCR != nil &&
-			srcCR.Spec.Kind != "" && dstCR.Spec.Kind != "" &&
-			srcCR.Spec.Kind != dstCR.Spec.Kind {
+		if destCR, _, err = h.ownedAddon(ctx, project, destAddon); err != nil {
+			writeAddonErr(w, err)
+			return
+		}
+		// Kind compatibility — refuse to point a postgres dump at a
+		// redis addon (the seed Job would only fail mid-restore with
+		// an opaque psql error after the dump's already partially
+		// streamed).
+		if srcCR.Spec.Kind != "" && destCR.Spec.Kind != "" &&
+			srcCR.Spec.Kind != destCR.Spec.Kind {
 			http.Error(w,
 				fmt.Sprintf("kind mismatch: source addon %q is %s, destination %q is %s",
-					addon, srcCR.Spec.Kind, destAddon, dstCR.Spec.Kind),
+					addon, srcCR.Spec.Kind, destAddon, destCR.Spec.Kind),
 				http.StatusBadRequest)
 			return
 		}
 	}
-	releaseName := addons.CRName(project, destAddon)
+	releaseName := destCR.Name
 	jobName := fmt.Sprintf("%s-restore-%d", releaseName, time.Now().Unix())
 
 	one := int32(1)
 	zero := int32(0)
 	job := &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
+			// The project's execution namespace: the <release>-conn
+			// Secret the env refs below resolve against is namespace-
+			// local, so a Job in the home namespace can't start for
+			// projects with a per-project namespace. Matches where the
+			// chart's scheduled backup CronJob runs.
 			Name:      jobName,
-			Namespace: h.Namespace,
+			Namespace: ns,
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by":    "kuso-server",
 				"kuso.sislelabs.com/role":         "restore",
@@ -406,7 +458,7 @@ echo "==> done"
 			},
 		},
 	}
-	created, err := h.Kube.Clientset.BatchV1().Jobs(h.Namespace).Create(ctx, job, metav1.CreateOptions{})
+	created, err := h.Kube.Clientset.BatchV1().Jobs(ns).Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
 		h.Logger.Error("backup: create restore job", "err", err)
 		http.Error(w, "internal", http.StatusInternalServerError)
@@ -507,11 +559,17 @@ func envFromSecretOptional(name, secretName, key string) corev1.EnvVar {
 func (h *BackupsHandler) pgConn(ctx context.Context, project, addon string) (*sql.DB, error) {
 	// addon may arrive as either the short name ("pg") or the
 	// fully-qualified CR name ("e2e-test-pg"); both are valid URL
-	// args. addons.CRName collapses to the canonical form so we
-	// don't end up looking for "e2e-test-e2e-test-pg-conn".
-	releaseName := addons.CRName(project, addon)
+	// args. ownedAddon collapses to the canonical form (so we don't
+	// end up looking for "e2e-test-e2e-test-pg-conn"), verifies the
+	// CR belongs to this project, and yields the namespace its -conn
+	// Secret actually lives in.
+	cr, ns, err := h.ownedAddon(ctx, project, addon)
+	if err != nil {
+		return nil, err
+	}
+	releaseName := cr.Name
 	connSecret := addons.ConnSecretName(releaseName)
-	sec, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Get(ctx, connSecret, metav1.GetOptions{})
+	sec, err := h.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, connSecret, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil, fmt.Errorf("addon %s/%s has no -conn secret", project, addon)
 	}
@@ -598,7 +656,7 @@ func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := h.pgConn(ctx, project, addon)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeAddonErr(w, err)
 		return
 	}
 	defer conn.Close()
@@ -744,7 +802,7 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 	}
 	conn, err := h.pgConn(ctx, project, addon)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		writeAddonErr(w, err)
 		return
 	}
 	defer conn.Close()

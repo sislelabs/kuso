@@ -124,7 +124,10 @@ func NewRouter(d Deps) http.Handler {
 	// log-shipper / WS endpoints don't go through this router. A
 	// 1 MiB ceiling stops a malicious client from streaming gigabytes
 	// into json.NewDecoder(r.Body).Decode, which would otherwise
-	// happily consume the whole stream into memory.
+	// happily consume the whole stream into memory. The project-import
+	// route is the one exception: it ingests whole export tarballs and
+	// documents a 16 MiB cap, which the global 1 MiB ceiling would
+	// silently break (MaxBytesReader wrapping is outermost-wins).
 	r.Use(maxBodyBytes(1 << 20))
 	r.Use(apiSecurityHeadersMW)
 	r.Use(metricsMW)
@@ -613,7 +616,10 @@ func mountAuthenticatedRoutes(
 		if d.Logs != nil { // Logs implies a kube client; reuse it for /api/kubernetes/*.
 			kubeH := &httphandlers.KubernetesHandler{Kube: d.Logs.Kube, Namespace: d.Logs.Namespace, DB: d.DB, Logger: d.Logger}
 			kubeH.Mount(r)
-			backupsH := &httphandlers.BackupsHandler{Kube: d.Logs.Kube, DB: d.DB, Audit: d.Audit, Namespace: d.Logs.Namespace, Logger: d.Logger}
+			// Addons is the ownership + per-project-namespace resolver for
+			// every addon-scoped backup/SQL route; without it the handler
+			// falls back to home-namespace-only resolution.
+			backupsH := &httphandlers.BackupsHandler{Kube: d.Logs.Kube, DB: d.DB, Audit: d.Audit, Addons: d.Addons, Namespace: d.Logs.Namespace, Logger: d.Logger}
 			backupsH.Mount(r)
 		}
 		if d.Updater != nil {
@@ -837,7 +843,13 @@ func maxBodyBytes(n int64) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.Body != nil {
-				r.Body = http.MaxBytesReader(w, r.Body, n)
+				limit := n
+				// Project import ingests whole export tarballs; its
+				// documented (and handler-enforced) cap is 16 MiB.
+				if r.URL.Path == "/api/projects/import" {
+					limit = httphandlers.MaxImportRequestBytes
+				}
+				r.Body = http.MaxBytesReader(w, r.Body, limit)
 			}
 			next.ServeHTTP(w, r)
 		})

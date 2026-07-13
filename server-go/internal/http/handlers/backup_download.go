@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -82,9 +83,10 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	releaseName := addons.CRName(project, addon)
-	cr, err := h.Kube.GetKusoAddon(ctx, h.Namespace, releaseName)
-	if apierrors.IsNotFound(err) {
+	// Ownership-checked resolution + the project's execution namespace
+	// (where the -conn Secret lives) — see ownedAddon in backups.go.
+	cr, ns, err := h.ownedAddon(ctx, project, addon)
+	if errors.Is(err, addons.ErrNotFound) {
 		http.Error(w, fmt.Sprintf("addon %s/%s not found", project, addon), http.StatusNotFound)
 		return
 	}
@@ -92,13 +94,14 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "resolve addon: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	releaseName := cr.Name
 
 	stamp := time.Now().UTC().Format("20060102T150405Z")
 	switch cr.Spec.Kind {
 	case "postgres":
-		h.downloadPostgres(ctx, w, project, addon, releaseName, stamp)
+		h.downloadPostgres(ctx, w, project, addon, ns, releaseName, stamp)
 	case "s3", "minio":
-		h.downloadS3(ctx, w, project, addon, releaseName, stamp)
+		h.downloadS3(ctx, w, project, addon, ns, releaseName, stamp)
 	default:
 		http.Error(w,
 			fmt.Sprintf("direct download not supported for %s addons (postgres and s3 only)", cr.Spec.Kind),
@@ -112,8 +115,8 @@ func (h *BackupsHandler) Download(w http.ResponseWriter, r *http.Request) {
 // refuse with "server version too new" — the client sees a failed
 // download (truncated gzip), not a corrupt one. Bump the Dockerfile's
 // client version when we ship a newer Postgres addon.
-func (h *BackupsHandler) downloadPostgres(ctx context.Context, w http.ResponseWriter, project, addon, releaseName, stamp string) {
-	dsn, err := h.addonDSN(ctx, releaseName)
+func (h *BackupsHandler) downloadPostgres(ctx context.Context, w http.ResponseWriter, project, addon, ns, releaseName, stamp string) {
+	dsn, err := h.addonDSN(ctx, ns, releaseName)
 	if err != nil {
 		http.Error(w, "backup unavailable: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -161,8 +164,8 @@ func (h *BackupsHandler) downloadPostgres(ctx context.Context, w http.ResponseWr
 // downloadS3 lists the addon's bucket and streams every object into a
 // single gzipped tar. The addon's storage endpoint is in-cluster
 // (http://<release>-storage:9000) and reachable from kuso-server.
-func (h *BackupsHandler) downloadS3(ctx context.Context, w http.ResponseWriter, project, addon, releaseName, stamp string) {
-	cli, bucket, err := h.addonS3Client(ctx, releaseName)
+func (h *BackupsHandler) downloadS3(ctx context.Context, w http.ResponseWriter, project, addon, ns, releaseName, stamp string) {
+	cli, bucket, err := h.addonS3Client(ctx, ns, releaseName)
 	if err != nil {
 		http.Error(w, "backup unavailable: "+err.Error(), http.StatusServiceUnavailable)
 		return
@@ -237,9 +240,9 @@ func (h *BackupsHandler) streamS3Object(ctx context.Context, cli *s3.Client, tw 
 // addonDSN resolves a libpq DSN string for pg_dump from the addon's
 // <release>-conn Secret. Sibling of pgConn (backups.go), which returns a
 // *sql.DB; pg_dump wants the DSN as a CLI arg instead.
-func (h *BackupsHandler) addonDSN(ctx context.Context, releaseName string) (string, error) {
+func (h *BackupsHandler) addonDSN(ctx context.Context, ns, releaseName string) (string, error) {
 	connSecret := addons.ConnSecretName(releaseName)
-	sec, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Get(ctx, connSecret, metav1.GetOptions{})
+	sec, err := h.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, connSecret, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return "", fmt.Errorf("addon has no -conn secret")
 	}
@@ -276,9 +279,9 @@ func (h *BackupsHandler) addonDSN(ctx context.Context, releaseName string) (stri
 // Secret (S3_ENDPOINT/BUCKET/ACCESS_KEY_ID/SECRET_ACCESS_KEY). Distinct
 // from s3Client (backups.go), which reads the cluster-wide kuso-backup-s3
 // Secret — this one targets the addon's storage itself.
-func (h *BackupsHandler) addonS3Client(ctx context.Context, releaseName string) (*s3.Client, string, error) {
+func (h *BackupsHandler) addonS3Client(ctx context.Context, ns, releaseName string) (*s3.Client, string, error) {
 	connSecret := addons.ConnSecretName(releaseName)
-	sec, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Get(ctx, connSecret, metav1.GetOptions{})
+	sec, err := h.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, connSecret, metav1.GetOptions{})
 	if apierrors.IsNotFound(err) {
 		return nil, "", fmt.Errorf("addon has no -conn secret")
 	}

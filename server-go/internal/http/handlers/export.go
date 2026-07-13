@@ -256,6 +256,20 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
+// Import ingest limits. MaxImportRequestBytes is exported because the
+// router's global body-cap middleware (1 MiB everywhere else) must
+// carve out the import route for the documented 16 MiB to actually
+// work — MaxBytesReader wrapping is outermost-wins, so the handler's
+// own cap can't raise it. The decompression-side limits bound what a
+// hostile (or corrupt) tarball can expand to in memory: total
+// decompressed bytes, per-entry size, and entry count.
+const (
+	MaxImportRequestBytes = 16 << 20 // compressed upload cap (documented)
+	maxImportDecompressed = 64 << 20 // total decompressed budget
+	maxImportEntryBytes   = 16 << 20 // single tar entry cap
+	maxImportEntries      = 4096     // tar entry count cap
+)
+
 // importResult is what /api/projects/import returns on success.
 type importResult struct {
 	Project      string   `json:"project"`
@@ -304,8 +318,10 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 
 	// Cap upload size at 16 MiB. A spec-only export is typically
 	// tens of KB; 16 MiB is room for an unusually-busy project
-	// while bounding the memory we'll hold.
-	body := http.MaxBytesReader(w, r.Body, 16<<20)
+	// while bounding the memory we'll hold. The router's global
+	// 1 MiB body-cap middleware exempts this route (it keys on
+	// MaxImportRequestBytes) — this inner reader is belt-and-braces.
+	body := http.MaxBytesReader(w, r.Body, MaxImportRequestBytes)
 	defer body.Close()
 
 	gz, err := gzip.NewReader(body)
@@ -314,23 +330,55 @@ func (h *ExportHandler) Import(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer gz.Close()
-	tr := tar.NewReader(gz)
+	// Bound the DECOMPRESSED size too: the request cap above only
+	// limits compressed bytes, and gzip bombs expand ~1000x. The
+	// LimitedReader budget is checked in the error paths below so a
+	// bomb reports 413, not a confusing "unexpected EOF".
+	lr := &io.LimitedReader{R: gz, N: maxImportDecompressed + 1}
+	tr := tar.NewReader(lr)
 
 	// First pass: load every file into memory keyed by path. Two-pass
 	// is required because the manifest can appear anywhere in the
 	// archive; rewinding a tar stream isn't free and the spec data
 	// is small enough that in-memory is fine.
 	files := map[string][]byte{}
+	entries := 0
 	for {
 		hdr, err := tr.Next()
-		if err != nil {
+		if err == io.EOF {
 			break
+		}
+		if err != nil {
+			// A malformed archive (bad header, truncated stream) is a
+			// client error — treating it like EOF would silently import
+			// a partial project.
+			if lr.N <= 0 {
+				http.Error(w, fmt.Sprintf("archive exceeds %d MiB decompressed", maxImportDecompressed>>20), http.StatusRequestEntityTooLarge)
+				return
+			}
+			http.Error(w, fmt.Sprintf("malformed tar: %v", err), http.StatusBadRequest)
+			return
+		}
+		if entries++; entries > maxImportEntries {
+			http.Error(w, fmt.Sprintf("archive has more than %d entries", maxImportEntries), http.StatusBadRequest)
+			return
 		}
 		if hdr.Typeflag != tar.TypeReg {
 			continue
 		}
+		// hdr.Size is attacker-controlled — cap it BEFORE the
+		// allocation, or a header claiming terabytes OOMs the server
+		// without a single payload byte.
+		if hdr.Size < 0 || hdr.Size > maxImportEntryBytes {
+			http.Error(w, fmt.Sprintf("tar entry %s exceeds %d MiB", hdr.Name, maxImportEntryBytes>>20), http.StatusRequestEntityTooLarge)
+			return
+		}
 		buf := make([]byte, hdr.Size)
 		if _, err := io.ReadFull(tr, buf); err != nil {
+			if lr.N <= 0 {
+				http.Error(w, fmt.Sprintf("archive exceeds %d MiB decompressed", maxImportDecompressed>>20), http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, fmt.Sprintf("tar read %s: %v", hdr.Name, err), http.StatusBadRequest)
 			return
 		}

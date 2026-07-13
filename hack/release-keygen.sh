@@ -4,11 +4,11 @@
 # Workflow:
 #   1. Run this script once per project install. It writes:
 #        server-go/internal/updater/releasekey.pub  (committed to git)
-#        ~/.kuso/release-signing.key                (NEVER committed)
+#        ~/.kuso/release-keys/release.pem           (NEVER committed)
 #   2. Commit the updated releasekey.pub. Future builds will refuse
 #      unsigned releases (or releases signed by a different key).
-#   3. release.sh reads ~/.kuso/release-signing.key to sign manifests.
-#      A built binary verifies against the embedded public key.
+#   3. release.sh reads ~/.kuso/release-keys/release.pem to sign
+#      manifests. A built binary verifies against the embedded pub.
 #
 # Key rotation: re-run this script, commit the new pub, ship a release
 # signed with the old key one last time so existing instances can
@@ -19,16 +19,27 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PUB_DST="$REPO_ROOT/server-go/internal/updater/releasekey.pub"
-KEY_DIR="${KUSO_KEY_DIR:-$HOME/.kuso}"
-PRIV_DST="$KEY_DIR/release-signing.key"
+# Must match where release.sh looks for the signing key
+# (KUSO_KEYS_DIR/release.pem) — a key generated anywhere else is
+# silently never used for signing.
+KEY_DIR="${KUSO_KEYS_DIR:-$HOME/.kuso/release-keys}"
+PRIV_DST="$KEY_DIR/release.pem"
 
 mkdir -p "$KEY_DIR"
 chmod 700 "$KEY_DIR"
 
 if [[ -s "$PRIV_DST" ]]; then
-  echo "error: private key already exists at $PRIV_DST" >&2
-  echo "       refusing to overwrite. delete it manually to rotate." >&2
-  exit 1
+  # Never overwrite an existing private key, but DO re-derive and
+  # embed its public half — recovers the "key exists but
+  # releasekey.pub was never committed" state idempotently.
+  echo "private key already exists at $PRIV_DST — re-deriving public key only"
+  openssl pkey -in "$PRIV_DST" -pubout -outform DER \
+    | tail -c 32 \
+    | base64 \
+    | tr -d '\n' > "$PUB_DST"
+  echo "wrote public key: $PUB_DST  (commit this)"
+  echo "to rotate the private key, delete it manually first."
+  exit 0
 fi
 
 # OpenSSL 3.0+ ships Ed25519 support out of the box. The raw private key

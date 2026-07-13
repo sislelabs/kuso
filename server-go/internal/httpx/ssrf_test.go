@@ -147,3 +147,15 @@ func TestIsReservedIP_MalformedBlockCIDRsIgnored(t *testing.T) {
 		t.Error("address outside any valid CIDR should be allowed")
 	}
 }
+
+// The SSRF-guarded transport must never route through a proxy: with
+// ProxyFromEnvironment, an HTTP(S)_PROXY env var made the transport
+// dial (and reserved-IP-check) the PROXY instead of the destination, so
+// the proxy fetched private/metadata targets on our behalf.
+func TestSSRFSafeTransport_NoProxy(t *testing.T) {
+	t.Setenv("HTTP_PROXY", "http://127.0.0.1:9")
+	t.Setenv("HTTPS_PROXY", "http://127.0.0.1:9")
+	if tr := SSRFSafeTransport(); tr.Proxy != nil {
+		t.Fatal("SSRFSafeTransport.Proxy must be nil — a proxy defeats the reserved-IP dial guard")
+	}
+}

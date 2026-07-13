@@ -6,6 +6,7 @@ import { useService, useDrift, useBuilds, rollbackBuild, useServiceCrons, useRun
 import { useEnvironments } from "@/features/projects";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Undo2, Square, Play } from "lucide-react";
+import { useCanOnProject, Perms } from "@/features/auth";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { Skeleton } from "@/components/ui/skeleton";
 import { RuntimeIcon } from "@/components/service/RuntimeIcon";
@@ -370,6 +371,11 @@ export function ServiceOverlay({
   }, [builds.data]);
   const showCrons = (crons.data?.length ?? -1) !== 0;
   const showRuns = (runs.data?.length ?? -1) !== 0;
+  // Shell is project-admin only on the server (terminal_ws.go gates on
+  // auth.PermShellExec). Hide the tab for everyone else — same call
+  // AddonOverlay makes for its SQL tab: rendering a terminal that can
+  // only 403 on connect is worse than not offering it.
+  const canShell = useCanOnProject(project, Perms.ShellExec);
   // Build the visible tab list. Crons/Runs are normally hidden when
   // empty (v0.14.0 audit fix), but we always show whichever one the
   // user is currently looking at — without this the active-tab
@@ -379,12 +385,13 @@ export function ServiceOverlay({
   const MAIN_TABS = useMemo(
     () =>
       ALL_MAIN_TABS.filter((t) => {
+        if (t.id === "shell") return canShell;
         if (t.alwaysShow) return true;
         if (t.id === "crons") return showCrons || tab === "crons";
         if (t.id === "runs") return showRuns || tab === "runs";
         return true;
       }),
-    [showCrons, showRuns, tab],
+    [showCrons, showRuns, tab, canShell],
   );
 
   // If the visibility-driven tab list drops the current tab (e.g.
@@ -400,9 +407,12 @@ export function ServiceOverlay({
     if (tab === "settings") return;
     if (tab === "crons" && prevShowCrons.current && !showCrons) setTab("deployments");
     if (tab === "runs" && prevShowRuns.current && !showRuns) setTab("deployments");
+    // Shell hidden for non-admins — a remembered/deep-linked shell tab
+    // would otherwise render with no strip entry to anchor to.
+    if (tab === "shell" && !canShell) setTab("deployments");
     prevShowCrons.current = showCrons;
     prevShowRuns.current = showRuns;
-  }, [tab, showCrons, showRuns]);
+  }, [tab, showCrons, showRuns, canShell]);
   const fqn = service ? project + "-" + service : "";
   // Find the env CR matching (service, envParam). The previous
   // split("-").slice(-2) heuristic produced "frontend-staging" for
@@ -940,6 +950,10 @@ function StopStartControl({
   const [confirming, setConfirming] = useState(false);
   const stop = useStopService(project, service);
   const start = useStartService(project, service);
+  // Stop/start are editor-level mutations; keep the buttons visible
+  // for viewers but disabled with a hint so the affordance stays
+  // discoverable without ending in a 403 toast.
+  const canWrite = useCanOnProject(project, Perms.ServicesWrite);
 
   const onStop = async () => {
     try {
@@ -972,9 +986,9 @@ function StopStartControl({
         </span>
         <button
           type="button"
-          disabled={start.isPending}
+          disabled={start.isPending || !canWrite}
           onClick={onStart}
-          title="Start the service"
+          title={canWrite ? "Start the service" : "Requires editor access on this project"}
           className="inline-flex items-center gap-1 rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] text-emerald-300 hover:brightness-110 disabled:opacity-50"
         >
           <Play className="h-3 w-3" />
@@ -988,9 +1002,13 @@ function StopStartControl({
     <>
       <button
         type="button"
-        disabled={stop.isPending}
+        disabled={stop.isPending || !canWrite}
         onClick={() => setConfirming(true)}
-        title="Stop the service (takes it offline)"
+        title={
+          canWrite
+            ? "Stop the service (takes it offline)"
+            : "Requires editor access on this project"
+        }
         className="inline-flex items-center gap-1 rounded-md border border-[var(--border-subtle)] bg-[var(--bg-tertiary)] px-2 py-0.5 font-mono text-[10px] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:brightness-110 disabled:opacity-50"
       >
         <Square className="h-3 w-3" />
@@ -1036,6 +1054,8 @@ function HeaderRollbackChip({
   const builds = useBuilds(project, service);
   const [confirming, setConfirming] = useState(false);
   const qc = useQueryClient();
+  // Rollback re-points the env at an older image — editor-level.
+  const canWrite = useCanOnProject(project, Perms.ServicesWrite);
   // Order newest → oldest. The hook already returns this order but
   // we don't want to depend on that contract for a header surface;
   // a stable copy + explicit sort keeps the chip safe against an
@@ -1093,12 +1113,17 @@ function HeaderRollbackChip({
     return (
       <button
         type="button"
+        disabled={!canWrite}
         onClick={(e) => {
           e.stopPropagation();
           setConfirming(true);
         }}
-        title={`Roll production back to ${sha}${ageStamp ? ` (${ageStamp})` : ""}`}
-        className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] text-amber-200 hover:brightness-110"
+        title={
+          canWrite
+            ? `Roll production back to ${sha}${ageStamp ? ` (${ageStamp})` : ""}`
+            : "Requires editor access on this project"
+        }
+        className="inline-flex items-center gap-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] text-amber-200 hover:brightness-110 disabled:opacity-50 disabled:hover:brightness-100"
       >
         <Undo2 className="h-3 w-3" />
         rollback to {sha}
