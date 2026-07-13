@@ -202,13 +202,28 @@ spec:
                                 # Cluster-wide secrets (kuso-server-secrets,
                                 # kuso-postgres-conn, kuso-github-app, etc.)
                                 # remain unreferencable from a tenant CR.
+                                # The CEL rule closes the pattern's blind
+                                # spot: kuso-postgres-conn matches *-conn.
                                 pattern: "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$"
+                                x-kubernetes-validations:
+                                  - rule: "self == 'kuso-instance-shared' || !self.startsWith('kuso-')"
+                                    message: "control-plane secrets (kuso-*) cannot be referenced from workload CRs"
                               key:
                                 type: string
                 envFromSecrets:
+                  # Server-stamped mount list: addon conn-secrets
+                  # (<project>-<addon>-conn), <project>-shared,
+                  # <project>-<svc>[-env]-secrets, kuso-instance-shared.
+                  # Shape + CEL guard keep a hand-edited CR from
+                  # mounting control-plane secrets (kuso-postgres-conn
+                  # etc.) into tenant pods.
                   type: array
                   items:
                     type: string
+                    pattern: "^([a-z0-9][a-z0-9-]*-(conn|shared|secrets)|kuso-instance-shared)$"
+                    x-kubernetes-validations:
+                      - rule: "self == 'kuso-instance-shared' || !self.startsWith('kuso-')"
+                        message: "control-plane secrets (kuso-*) cannot be mounted into workload pods"
                 envOverrides:
                   type: array
                   description: >-

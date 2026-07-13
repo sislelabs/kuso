@@ -78,7 +78,13 @@
                 "type": "string"
               },
               "name": {
-                "type": "string"
+                "type": "string",
+                "x-kubernetes-validations": [
+                  {
+                    "message": "control-plane secrets (kuso-*) cannot be used as passwordSecret",
+                    "rule": "!self.startsWith('kuso-')"
+                  }
+                ]
               }
             },
             "type": "object"

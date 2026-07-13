@@ -39,7 +39,14 @@
           },
           "envFromSecrets": {
             "items": {
-              "type": "string"
+              "pattern": "^([a-z0-9][a-z0-9-]*-(conn|shared|secrets)|kuso-instance-shared)$",
+              "type": "string",
+              "x-kubernetes-validations": [
+                {
+                  "message": "control-plane secrets (kuso-*) cannot be mounted into workload pods",
+                  "rule": "self == 'kuso-instance-shared' || !self.startsWith('kuso-')"
+                }
+              ]
             },
             "type": "array"
           },
@@ -84,7 +91,13 @@
                   },
                   "name": {
                     "pattern": "^[a-z0-9][a-z0-9-]*-conn$",
-                    "type": "string"
+                    "type": "string",
+                    "x-kubernetes-validations": [
+                      {
+                        "message": "control-plane secrets (kuso-*) cannot be referenced from workload CRs",
+                        "rule": "!self.startsWith('kuso-')"
+                      }
+                    ]
                   }
                 },
                 "required": [

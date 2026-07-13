@@ -190,8 +190,16 @@ spec:
                     a random one. Leave unset to let the chart
                     generate a random 24-char password.
                   properties:
-                    name: { type: string }
-                    key:  { type: string, default: password }
+                    name:
+                      type: string
+                      # Free-form (BYO password secret), but never a
+                      # control-plane secret — the chart copies the
+                      # referenced value into the tenant-readable
+                      # <release>-conn Secret.
+                      x-kubernetes-validations:
+                        - rule: "!self.startsWith('kuso-')"
+                          message: "control-plane secrets (kuso-*) cannot be used as passwordSecret"
+                    key: { type: string, default: password }
                 database:
                   type: string
                 backup:

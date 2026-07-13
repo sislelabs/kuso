@@ -74,12 +74,36 @@ spec:
                       # valueFrom carries a ${{ }} alias (secretKeyRef /
                       # configMapKeyRef) so a service's aliased env (e.g.
                       # DATABASE_URI: ${{ db.DATABASE_URL }}) reaches the run.
-                      # Free-form (preserve-unknown) — the job chart renders it
-                      # verbatim into the container env. value + valueFrom are
-                      # mutually exclusive per var (kube rule).
+                      # Closed schema (was preserve-unknown): the job chart
+                      # renders this verbatim into the container env, so an
+                      # open shape let a hand-edited CR smuggle arbitrary
+                      # secretKeyRefs (kuso-postgres-conn) or fieldRefs into
+                      # an executable job. Only the two documented alias
+                      # kinds survive; everything else is pruned. value +
+                      # valueFrom are mutually exclusive per var (kube rule).
                       valueFrom:
                         type: object
-                        x-kubernetes-preserve-unknown-fields: true
+                        properties:
+                          secretKeyRef:
+                            type: object
+                            required: [name, key]
+                            properties:
+                              name:
+                                type: string
+                                pattern: "^([a-z0-9][a-z0-9-]*-(conn|shared|secrets)|kuso-instance-shared)$"
+                                x-kubernetes-validations:
+                                  - rule: "self == 'kuso-instance-shared' || !self.startsWith('kuso-')"
+                                    message: "control-plane secrets (kuso-*) cannot be referenced from workload CRs"
+                              key:
+                                type: string
+                          configMapKeyRef:
+                            type: object
+                            required: [name, key]
+                            properties:
+                              name:
+                                type: string
+                              key:
+                                type: string
                 # timeoutSeconds bounds the Pod. The Job's
                 # activeDeadlineSeconds gets set to this value; past
                 # it, the Pod is killed and the run goes
@@ -112,11 +136,18 @@ spec:
                     pullPolicy: { type: string }
                 # envFromSecrets is the parent service's resolved
                 # envFromSecrets list so the run inherits DB and
-                # cache connection strings.
+                # cache connection strings. Same shape + CEL guard as
+                # KusoEnvironment.spec.envFromSecrets — the job chart
+                # mounts these verbatim, so control-plane secrets
+                # (kuso-*) must stay unreferencable.
                 envFromSecrets:
                   type: array
                   items:
                     type: string
+                    pattern: "^([a-z0-9][a-z0-9-]*-(conn|shared|secrets)|kuso-instance-shared)$"
+                    x-kubernetes-validations:
+                      - rule: "self == 'kuso-instance-shared' || !self.startsWith('kuso-')"
+                        message: "control-plane secrets (kuso-*) cannot be mounted into workload pods"
                 # placement inherits from the parent service so
                 # the run lands on the same node pool.
                 placement:

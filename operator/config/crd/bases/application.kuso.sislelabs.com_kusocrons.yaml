@@ -97,8 +97,16 @@ spec:
                       type: string
                       default: IfNotPresent
                 envFromSecrets:
+                  # Server-resolved from the parent service env. Shape +
+                  # CEL guard keep a hand-edited CR from mounting
+                  # control-plane secrets (kuso-*) into the CronJob.
                   type: array
-                  items: { type: string }
+                  items:
+                    type: string
+                    pattern: "^([a-z0-9][a-z0-9-]*-(conn|shared|secrets)|kuso-instance-shared)$"
+                    x-kubernetes-validations:
+                      - rule: "self == 'kuso-instance-shared' || !self.startsWith('kuso-')"
+                        message: "control-plane secrets (kuso-*) cannot be mounted into workload pods"
                 placement:
                   type: object
                   properties:
@@ -135,6 +143,9 @@ spec:
                         name:
                           type: string
                           pattern: "^[a-z0-9][a-z0-9-]*-conn$"
+                          x-kubernetes-validations:
+                            - rule: "!self.startsWith('kuso-')"
+                              message: "control-plane secrets (kuso-*) cannot be referenced from workload CRs"
                         key:
                           type: string
             status:

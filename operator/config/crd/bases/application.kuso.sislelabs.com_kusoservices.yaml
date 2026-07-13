@@ -161,7 +161,16 @@ spec:
                                 # expansion passes the same admission
                                 # check. Cluster-wide secrets like
                                 # kuso-server-secrets remain unreferencable.
+                                # The CEL rule closes the pattern's blind
+                                # spot: kuso-postgres-conn matches *-conn
+                                # but is the control plane's own DB
+                                # credential. Project names can't start
+                                # with kuso-, so no tenant secret is ever
+                                # kuso-* except kuso-instance-shared.
                                 pattern: "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$"
+                                x-kubernetes-validations:
+                                  - rule: "self == 'kuso-instance-shared' || !self.startsWith('kuso-')"
+                                    message: "control-plane secrets (kuso-*) cannot be referenced from workload CRs"
                               key:
                                 type: string
                 scale:
@@ -401,6 +410,9 @@ spec:
                                   name:
                                     type: string
                                     pattern: "^([a-z0-9][a-z0-9-]*-conn|[a-z0-9][a-z0-9-]*-shared|kuso-instance-shared)$"
+                                    x-kubernetes-validations:
+                                      - rule: "self == 'kuso-instance-shared' || !self.startsWith('kuso-')"
+                                        message: "control-plane secrets (kuso-*) cannot be referenced from workload CRs"
                                   key:
                                     type: string
                 release:
