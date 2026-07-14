@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.19.1] — 2026-07-14
+
+### 🐛 Bug Fixes
+- Fix(operator): addon backup CronJobs degrade gracefully without S3 config ([0bcf53e](https://github.com/sislelabs/kuso/commit/0bcf53e3d8a0cdefdddf21c731d2037ace513ef8))
+
 ## [0.19.0] — 2026-07-14
 
 ### 🐛 Bug Fixes
@@ -422,11 +427,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(builds,envs,addons): stuck-build timeout, promote CAS, token+PVC leaks, env-editor round-trip ([2603f4c](https://github.com/sislelabs/kuso/commit/2603f4c321cdb03d861fae1e9d9a4d7c158f5eae))
-
-## [0.18.80] — 2026-06-24
-
-### 🐛 Bug Fixes
-- Fix(envs): per-env DB isolation, TLS-secret + clone-PVC cleanup on delete ([ce3ccba](https://github.com/sislelabs/kuso/commit/ce3ccba437d86ee68dc032583cacb1bba5c51c88))
 
 
 ---

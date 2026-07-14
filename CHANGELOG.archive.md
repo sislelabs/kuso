@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.80] — 2026-06-24
+
+### 🐛 Bug Fixes
+- Fix(envs): per-env DB isolation, TLS-secret + clone-PVC cleanup on delete ([ce3ccba](https://github.com/sislelabs/kuso/commit/ce3ccba437d86ee68dc032583cacb1bba5c51c88))
+
 ## [0.18.79] — 2026-06-24
 
 ### 🐛 Bug Fixes
