@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.79] — 2026-06-24
+
+### 🐛 Bug Fixes
+- Fix(public-tcp): grant operator traefik RBAC + declutter the public-URL UI ([18848ea](https://github.com/sislelabs/kuso/commit/18848eaebada96b89f534e7f8af765744e047cf8))
+
 ## [0.18.78] — 2026-06-24
 
 ### 🐛 Bug Fixes

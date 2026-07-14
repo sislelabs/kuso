@@ -19,6 +19,21 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.19.0] — 2026-07-14
+
+### 🐛 Bug Fixes
+- Fix: review round — regressions found by post-fix code review ([37e1639](https://github.com/sislelabs/kuso/commit/37e1639ac82a0e547dcabbb8331f54a0e851a285))
+- Fix: platform review wave 2 — findings 9-12,17,18,30-36,39-43,47,48,51 ([24fffde](https://github.com/sislelabs/kuso/commit/24fffdeca52aa06d4e811c1ab82a2031670a2141))
+- Fix: block control-plane secret injection via workload CRDs (finding 16) ([b9923ac](https://github.com/sislelabs/kuso/commit/b9923acf22b53045d27d4db9f8db159cf6c141e6))
+- Fix: platform review wave 1 — findings 1-8,13-15,19-29,37,38,44-46,49-61 ([b3ab60c](https://github.com/sislelabs/kuso/commit/b3ab60cec610ad3f6969258a0a278737a58ba7fa))
+- Fix(cli): sync addon --kind list with the chart (valkey, mongodb, rabbitmq) ([e6bc889](https://github.com/sislelabs/kuso/commit/e6bc88954e3f5d550f43491a0dfa0da3e628691b))
+
+### 📝 Docs
+- Docs(readme): rewrite the root README ([ff88910](https://github.com/sislelabs/kuso/commit/ff8891011626a3ac6a387e3cee390c6490bd197b))
+- Docs: accuracy pass across docs/, sub-READMEs, and .claude/skills ([79c2d8b](https://github.com/sislelabs/kuso/commit/79c2d8bf3fd1c591a693736290862f02700b358c))
+- Docs(skill): update kuso skill to v0.18.128 for operator agents ([fd50b7b](https://github.com/sislelabs/kuso/commit/fd50b7bc4079eef240564f18c7ac6ca210bab6e6))
+- Docs(skill): clarify that push/merge to main auto-deploys ([ef92605](https://github.com/sislelabs/kuso/commit/ef92605d4c9db3b2d85580884e8c428b2c4b8edb))
+
 ## [0.18.128] — 2026-07-12
 
 ### 🐛 Bug Fixes
@@ -412,11 +427,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(envs): per-env DB isolation, TLS-secret + clone-PVC cleanup on delete ([ce3ccba](https://github.com/sislelabs/kuso/commit/ce3ccba437d86ee68dc032583cacb1bba5c51c88))
-
-## [0.18.79] — 2026-06-24
-
-### 🐛 Bug Fixes
-- Fix(public-tcp): grant operator traefik RBAC + declutter the public-URL UI ([18848ea](https://github.com/sislelabs/kuso/commit/18848eaebada96b89f534e7f8af765744e047cf8))
 
 
 ---
