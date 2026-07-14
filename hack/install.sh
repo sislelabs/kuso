@@ -1108,19 +1108,27 @@ if [[ -n "${PUBLIC_IP:-}" ]]; then
     || warn "could not set KUSO_K3S_URL (node-join will fall back to the ClusterIP)"
 fi
 
-# Public-TCP allocator pool: only wire the env var when the traefik
-# entrypoints VERIFIABLY exist (fresh install above added them; a
-# pre-existing traefik may lack them — the warn in section 4 already
-# told the user how to add them). Wiring the env without the
-# entrypoints would let the server allocate ports that route nowhere.
+# Public-TCP allocator pool: only wire the env var when EVERY traefik
+# entrypoint in the requested range VERIFIABLY exists (fresh install
+# above added them; a pre-existing traefik may lack some or all — the
+# warn in section 4 already told the user how to add them). Wiring the
+# env without the full pool would let the server allocate ports in the
+# gaps that route nowhere: the allocator hands out any port in
+# [lo,hi], not just the lowest, so checking only tcp-<lo> would green-
+# light a partial pool and produce dead public endpoints.
 if [[ -n "$TCP_POOL_LO" ]]; then
-  if kubectl get svc -n traefik traefik -o jsonpath='{.spec.ports[*].name}' 2>/dev/null \
-      | tr ' ' '\n' | grep -qx "tcp-${TCP_POOL_LO}"; then
+  present_entrypoints="$(kubectl get svc -n traefik traefik \
+    -o jsonpath='{.spec.ports[*].name}' 2>/dev/null | tr ' ' '\n')"
+  missing_ports=()
+  for p in $(seq "$TCP_POOL_LO" "$TCP_POOL_HI"); do
+    grep -qx "tcp-${p}" <<<"$present_entrypoints" || missing_ports+=("$p")
+  done
+  if (( ${#missing_ports[@]} == 0 )); then
     kubectl set env deployment/kuso-server -n kuso \
       "KUSO_TCP_PROXY_PORTS=${KUSO_TCP_PROXY_PORTS}" >/dev/null 2>&1 \
       || warn "could not set KUSO_TCP_PROXY_PORTS (addon public-TCP endpoints stay disabled)"
   else
-    warn "traefik entrypoint tcp-${TCP_POOL_LO} not found — leaving KUSO_TCP_PROXY_PORTS unset (addon public-TCP disabled)"
+    warn "traefik is missing ${#missing_ports[@]} of the requested tcp-<port> entrypoints (e.g. tcp-${missing_ports[0]}) — leaving KUSO_TCP_PROXY_PORTS unset so the allocator can't hand out ports that route nowhere (addon public-TCP disabled). Add the full pool (see the section-4 warning) and re-run."
   fi
 fi
 

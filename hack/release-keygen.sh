@@ -28,15 +28,37 @@ PRIV_DST="$KEY_DIR/release.pem"
 mkdir -p "$KEY_DIR"
 chmod 700 "$KEY_DIR"
 
+# derive_pub PRIV PUB: write the raw-32-byte base64 public half of PRIV
+# to PUB, but ONLY if the whole derivation pipeline succeeds. Writing to a
+# temp file and mv-ing on success avoids the truncate-before-openssl bug:
+# a plain `... > "$PUB"` truncates the (committed) pub file to empty BEFORE
+# openssl runs, so any failure (bad key, missing openssl) would clobber a
+# valid committed key with nothing. pipefail makes the pipeline fail if any
+# stage does; the trap cleans up the temp file on the way out.
+derive_pub() {
+  local priv="$1" pub="$2" tmp
+  tmp="$(mktemp "${pub}.XXXXXX")"
+  # shellcheck disable=SC2064
+  trap "rm -f '$tmp'" RETURN
+  openssl pkey -in "$priv" -pubout -outform DER \
+    | tail -c 32 \
+    | base64 \
+    | tr -d '\n' > "$tmp"
+  # A successful pipeline still produces 44 base64 chars for 32 raw bytes;
+  # refuse to publish an empty/short result.
+  if [[ ! -s "$tmp" ]]; then
+    echo "error: derived public key is empty — refusing to overwrite $pub" >&2
+    return 1
+  fi
+  mv "$tmp" "$pub"
+}
+
 if [[ -s "$PRIV_DST" ]]; then
   # Never overwrite an existing private key, but DO re-derive and
   # embed its public half — recovers the "key exists but
   # releasekey.pub was never committed" state idempotently.
   echo "private key already exists at $PRIV_DST — re-deriving public key only"
-  openssl pkey -in "$PRIV_DST" -pubout -outform DER \
-    | tail -c 32 \
-    | base64 \
-    | tr -d '\n' > "$PUB_DST"
+  derive_pub "$PRIV_DST" "$PUB_DST"
   echo "wrote public key: $PUB_DST  (commit this)"
   echo "to rotate the private key, delete it manually first."
   exit 0
@@ -49,10 +71,7 @@ openssl genpkey -algorithm ed25519 -out "$PRIV_DST"
 chmod 600 "$PRIV_DST"
 
 # Extract the public key as raw 32 bytes, base64-encode for the embed.
-openssl pkey -in "$PRIV_DST" -pubout -outform DER \
-  | tail -c 32 \
-  | base64 \
-  | tr -d '\n' > "$PUB_DST"
+derive_pub "$PRIV_DST" "$PUB_DST"
 
 echo "wrote private key: $PRIV_DST  (chmod 600, never commit)"
 echo "wrote public key:  $PUB_DST  (commit this)"

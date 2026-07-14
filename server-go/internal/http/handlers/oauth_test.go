@@ -538,6 +538,108 @@ func TestOAuth_AutoLinksViaGithubUserLink(t *testing.T) {
 	}
 }
 
+// newOAuth2Harness wires the GENERIC oauth2 provider against a fresh
+// DB and an httptest IdP that returns a fixed userinfo document. Used
+// to prove the generic-provider collision behaviour independently of
+// the GitHub path.
+func newOAuth2Harness(t *testing.T, userinfo map[string]any) (*chi.Mux, *db.DB, string) {
+	t.Helper()
+	d := openHandlerTestDB(t)
+	iss, err := auth.NewIssuer("test-secret", time.Hour)
+	if err != nil {
+		t.Fatalf("NewIssuer: %v", err)
+	}
+	const code = "oauth2-code"
+	mux := http.NewServeMux()
+	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		if r.FormValue("code") != code {
+			http.Error(w, "bad code", 400)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"access_token": "at", "token_type": "bearer"})
+	})
+	mux.HandleFunc("/userinfo", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(userinfo)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	o2 := &auth.GenericOAuth{
+		Cfg: &oauth2.Config{
+			ClientID: "cid", ClientSecret: "csec",
+			RedirectURL: "https://kuso.example/api/auth/oauth2/callback",
+			Endpoint:    oauth2.Endpoint{AuthURL: srv.URL + "/auth", TokenURL: srv.URL + "/token"},
+		},
+		UserURL: srv.URL + "/userinfo",
+	}
+	h := &handlers.OAuthHandler{DB: d, Issuer: iss, OAuth2: o2, Logger: slog.Default()}
+	r := chi.NewRouter()
+	h.MountPublic(r)
+	return r, d, code
+}
+
+// driveOAuth2 runs the generic /api/auth/oauth2 → IdP → callback roundtrip.
+func driveOAuth2(t *testing.T, r http.Handler, code string) *httptest.ResponseRecorder {
+	t.Helper()
+	startReq := httptest.NewRequest(http.MethodGet, "/api/auth/oauth2", nil)
+	startReq.Header.Set("X-Forwarded-Proto", "https")
+	startRR := httptest.NewRecorder()
+	r.ServeHTTP(startRR, startReq)
+	if startRR.Code != http.StatusFound {
+		t.Fatalf("oauth2 start: %d body=%q", startRR.Code, startRR.Body.String())
+	}
+	loc, _ := url.Parse(startRR.Header().Get("Location"))
+	state := loc.Query().Get("state")
+	cbReq := httptest.NewRequest(http.MethodGet,
+		fmt.Sprintf("/api/auth/oauth2/callback?code=%s&state=%s",
+			url.QueryEscape(code), url.QueryEscape(state)), nil)
+	cbReq.Header.Set("X-Forwarded-Proto", "https")
+	for _, c := range startRR.Result().Cookies() {
+		cbReq.AddCookie(c)
+	}
+	cbRR := httptest.NewRecorder()
+	r.ServeHTTP(cbRR, cbReq)
+	return cbRR
+}
+
+// An unlinked stub-password account whose username collides with a
+// generic-oauth2 login must NOT be auto-linked. Legacy builds created
+// ALL oauth users (GitHub included) as provider='local'/providerId=NULL
+// with a stub password, so "stub + unlinked" is NOT proof the account
+// came from this oauth2 IdP. Auto-linking on username alone here would
+// be cross-provider account takeover on any self-registering IdP.
+func TestOAuth2_StubAccountUsernameCollision_NotAutoLinked(t *testing.T) {
+	r, d, code := newOAuth2Harness(t, map[string]any{
+		"sub": "idp-subject-9000", "preferred_username": "alice", "email": "alice@idp.example",
+	})
+	ctx := context.Background()
+	stub, _ := auth.HashPassword("throwaway", auth.StubPasswordCost)
+	if err := d.CreateUser(ctx, db.CreateUserInput{
+		ID: "u-alice", Username: "alice", Email: "alice-existing@example.com",
+		PasswordHash: stub, IsActive: true,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	rr := driveOAuth2(t, r, code)
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status: %d (want 409) body=%q", rr.Code, rr.Body.String())
+	}
+	if jwtCookie(rr) != nil {
+		t.Error("session cookie issued for unproven oauth2 username collision")
+	}
+	u, err := d.FindUserByID(ctx, "u-alice")
+	if err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if u.ProviderID.Valid && u.ProviderID.String != "" {
+		t.Errorf("account got silently linked: providerId=%q", u.ProviderID.String)
+	}
+}
+
 // A stub-password account with NO GithubUserLink proof must not be
 // adopted by a colliding GitHub identity — GitHub usernames are
 // publicly registrable, so the username match alone proves nothing.

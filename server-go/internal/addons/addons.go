@@ -406,6 +406,24 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 func (s *Service) cleanupAddSideEffects(ctx context.Context, ns, fqn, project string, req CreateAddonRequest) {
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
+	// A create error doesn't prove the CR write didn't land: a client-side
+	// context deadline (or a transport error) can fire AFTER the apiserver
+	// already persisted the object. Destroying the instance DB / conn secret
+	// under a live CR would silently corrupt a committed addon. So re-GET
+	// first — only clean up when the CR is confirmed absent. On a GET error
+	// we can't confirm absence either, so we skip (leave an orphan trail
+	// rather than risk data loss); the createAddon error is still returned.
+	if s.Kube != nil {
+		if _, gerr := s.Kube.GetKusoAddon(cctx, ns, fqn); gerr == nil {
+			slog.Default().Warn("addon create returned an error but the CR is present; skipping side-effect cleanup to avoid destroying a committed addon",
+				"project", project, "addon", req.Name)
+			return
+		} else if !apierrors.IsNotFound(gerr) {
+			slog.Default().Warn("addon create failed; could not confirm CR absence, skipping side-effect cleanup (possible orphan)",
+				"project", project, "addon", req.Name, "err", gerr)
+			return
+		}
+	}
 	hasExternal := req.External != nil && req.External.SecretName != ""
 	if (hasExternal || req.UseInstanceAddon != "") && s.Kube != nil && s.Kube.Clientset != nil {
 		if err := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(cctx, connSecretName(fqn), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {

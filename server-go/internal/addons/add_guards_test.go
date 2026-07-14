@@ -110,6 +110,47 @@ func TestAdd_CleanupOnCreateFailure(t *testing.T) {
 	}
 }
 
+// TestAdd_CommittedDespiteErrorLeavesSideEffects — a create can return
+// an error to the client (e.g. a client-side context deadline or a
+// transport blip) AFTER the apiserver already persisted the CR. In that
+// case the side effects (mirrored conn secret / instance DB) belong to a
+// LIVE addon and must NOT be destroyed. Cleanup re-GETs the CR and skips
+// when it's present. Here the create reactor errors but ALSO leaves the
+// object in the tracker, so the re-GET finds it.
+func TestAdd_CommittedDespiteErrorLeavesSideEffects(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProj("alpha"))
+	cs := kubefake.NewSimpleClientset(&corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "user-db-creds", Namespace: "kuso"},
+		Data:       map[string][]byte{"DATABASE_URL": []byte("postgres://u:p@h/db")},
+	})
+	s.Kube.Clientset = cs
+	dyn := s.Kube.Dynamic.(*dynamicfake.FakeDynamicClient)
+	dyn.PrependReactor("create", "kusoaddons", func(action ktesting.Action) (bool, runtime.Object, error) {
+		// Persist the object into the tracker (the apiserver committed it),
+		// then return an error to the caller (the client never saw success).
+		ca := action.(ktesting.CreateAction)
+		_ = dyn.Tracker().Create(kube.GVRAddons, ca.GetObject(), "kuso")
+		return true, nil, fmt.Errorf("connection reset by peer")
+	})
+
+	_, err := s.Add(context.Background(), "alpha", CreateAddonRequest{
+		Name: "pg", Kind: "postgres",
+		External: &kube.KusoAddonExternal{SecretName: "user-db-creds"},
+	})
+	if err == nil {
+		t.Fatal("Add succeeded, want the create error surfaced")
+	}
+	if errors.Is(err, ErrConflict) {
+		t.Fatalf("got conflict, want plain failure: %v", err)
+	}
+	// The committed CR's conn secret must SURVIVE — destroying it would
+	// corrupt a live addon.
+	if _, gerr := cs.CoreV1().Secrets("kuso").Get(context.Background(), "alpha-pg-conn", metav1.GetOptions{}); gerr != nil {
+		t.Errorf("conn secret was cleaned up despite the CR being committed (get err = %v)", gerr)
+	}
+}
+
 // TestAdd_ConflictLeavesSideEffectsForWinner — when the create loses to
 // a CONCURRENT create of the same name, the conn secret now serves the
 // winner's CR and must NOT be cleaned up.

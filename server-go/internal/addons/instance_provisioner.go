@@ -354,6 +354,12 @@ func (s *Service) ResyncInstanceAddon(ctx context.Context, project, name string)
 		}
 		return fmt.Errorf("get addon: %w", err)
 	}
+	// Self-guard ownership: a pre-qualified name can resolve to a sibling
+	// project's CR when project names overlap. Guarded inside the Service
+	// method so the guarantee doesn't depend on the handler precheck.
+	if !addonOwnedByProject(addon, project) {
+		return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+	}
 	if addon.Spec.UseInstanceAddon == "" {
 		return fmt.Errorf("%w: addon %s/%s does not use an instance addon", ErrInvalid, project, name)
 	}

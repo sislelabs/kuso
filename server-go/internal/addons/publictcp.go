@@ -23,6 +23,8 @@ import (
 	"strings"
 	"sync"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+
 	"kuso/server/internal/kube"
 )
 
@@ -87,7 +89,16 @@ func (s *Service) EnablePublicTCP(ctx context.Context, project, name string) (in
 	fqn := addonCRName(project, name)
 	cur, err := s.Kube.GetKusoAddon(ctx, ns, fqn)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return 0, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+		}
 		return 0, fmt.Errorf("get addon: %w", err)
+	}
+	// Self-guard ownership: a pre-qualified name can resolve to a sibling
+	// project's CR when project names overlap. Guard inside the Service
+	// method so the guarantee doesn't depend on the handler precheck.
+	if !addonOwnedByProject(cur, project) {
+		return 0, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
 	}
 	if cur.Spec.PublicTCP != nil && cur.Spec.PublicTCP.Enabled && cur.Spec.PublicTCP.Port > 0 {
 		return cur.Spec.PublicTCP.Port, nil
@@ -110,6 +121,12 @@ func (s *Service) EnablePublicTCP(ctx context.Context, project, name string) (in
 	}
 
 	updated, err := s.Kube.UpdateKusoAddonWithRetry(ctx, ns, fqn, func(a *kube.KusoAddon) error {
+		// Re-check ownership on every retry — the fetched CR is re-read
+		// each 409, and a pre-qualified name can resolve to a sibling
+		// project's CR when project names overlap.
+		if !addonOwnedByProject(a, project) {
+			return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+		}
 		// Re-check inside the retry loop: a concurrent EnablePublicTCP
 		// for a DIFFERENT addon could have grabbed our port between
 		// the scan and the patch. The mutex covers single-replica
@@ -160,6 +177,12 @@ func (s *Service) DisablePublicTCP(ctx context.Context, project, name string) er
 	ns := s.nsFor(ctx, project)
 	fqn := addonCRName(project, name)
 	_, err := s.Kube.UpdateKusoAddonWithRetry(ctx, ns, fqn, func(a *kube.KusoAddon) error {
+		// Self-guard ownership inside the closure so it re-checks on every
+		// 409 retry — a pre-qualified name can resolve to a sibling
+		// project's CR when project names overlap.
+		if !addonOwnedByProject(a, project) {
+			return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+		}
 		// Clear both fields so the chart unrenders the IngressRouteTCP
 		// AND the next EnablePublicTCP allocates fresh (a stale port
 		// left behind would otherwise sit in usedPublicTCPPorts).

@@ -1478,19 +1478,38 @@ func (s *Service) validateAndRewriteEnvVars(ctx context.Context, ns, project, se
 	// runtime, bypassing the guard already on the interactive SetEnvVar
 	// paths. Validate the resolved output regardless of AllowPending so the
 	// resolved path is belt-and-braces too.
+	// Resolve the project's owned addon-conn secret set ONCE up-front, then
+	// validate every emitted secretKeyRef against it. Previously each ref
+	// triggered its own AddonConnSecrets → full kube LIST (an N+1 on a
+	// many-var save); buildAddonResolver above already fetched that list, so
+	// this second resolve is one LIST regardless of ref count.
+	ownedAddonConn, err := s.ownedAddonConnSet(ctx, project)
+	if err != nil {
+		return nil, err
+	}
 	for _, ev := range rewritten {
 		if ev.ValueFrom == nil {
 			continue
 		}
+		if _, isSecretKeyRef := ev.ValueFrom["secretKeyRef"]; !isSecretKeyRef {
+			// Not a secretKeyRef (e.g. a configMapKeyRef or a fieldRef).
+			// We don't rewrite these, and they're not a cross-project
+			// SECRET vector — configMapKeyRef reads a ConfigMap, not another
+			// project's -conn Secret. Historically these were persisted
+			// verbatim (the pre-rewrite code did `if refName == "" { continue }`),
+			// so a single legacy entry on a pre-upgrade service must not make
+			// every subsequent full-list env save 400. Carry them through
+			// unchanged rather than reject the whole save.
+			continue
+		}
+		// It IS a secretKeyRef: the only cross-project-secret vector, so its
+		// name must resolve to a secret this project owns. An empty name is a
+		// malformed ref we won't persist.
 		refName, _ := secretRefNameOf(ev.ValueFrom)
 		if refName == "" {
-			// Not a (well-formed) secretKeyRef. Nothing else is
-			// supported: a configMapKeyRef / fieldRef / resourceFieldRef
-			// could read cluster state we never vetted for ownership, so
-			// refuse it outright instead of persisting it unvalidated.
-			return nil, fmt.Errorf("%w: env var %q: unsupported valueFrom — only secretKeyRef with a non-empty name is supported", ErrInvalid, ev.Name)
+			return nil, fmt.Errorf("%w: env var %q: secretKeyRef with an empty name is not supported", ErrInvalid, ev.Name)
 		}
-		if verr := s.validateSecretRefName(ctx, project, service, refName); verr != nil {
+		if verr := s.validateSecretRefNameIn(project, service, refName, ownedAddonConn); verr != nil {
 			return nil, verr
 		}
 	}

@@ -411,13 +411,23 @@ func (h *OAuthHandler) resolveOAuthUser(ctx context.Context, prof *auth.OAuthPro
 //     githubId to this account — i.e. this identity has authenticated
 //     as (or been linked by) this user before. GitHub usernames are
 //     publicly registrable, so a username match alone proves nothing.
-//   - Generic oauth2: only when the account has no human-set password.
-//     The generic IdP is configured by the instance admin (their own
-//     Keycloak/Authentik/Google), so its username namespace is trusted
-//     — unlike GitHub's.
+//
+// There is deliberately NO auto-link path for the generic oauth2
+// provider. Legacy builds created ALL oauth users (GitHub included) as
+// provider='local'/providerId=NULL with a stub password, so "unlinked +
+// stub password" does NOT prove the account originated from oauth2. If
+// the instance runs a self-registering oauth2 IdP, an attacker could
+// register a colliding username and — under a stub-password-alone rule —
+// be handed the victim's account (the exact cross-provider takeover the
+// (provider, providerId) resolution was introduced to close). Auto-link
+// is only safe with POSITIVE proof the account previously authenticated
+// via that same provider; for GitHub that proof is the GithubUserLink
+// row. A legacy oauth2 user is recovered by the migration-0007 backfill
+// or an explicit authenticated link flow, never by username alone.
 //
 // Everything else (local accounts with real passwords, accounts linked
-// to another provider) must go through an explicit admin resolution.
+// to another provider, any oauth2 collision) must go through explicit
+// resolution.
 func (h *OAuthHandler) mayAutoLink(ctx context.Context, existing *db.User, prof *auth.OAuthProfile) bool {
 	if existing.ProviderID.Valid && existing.ProviderID.String != "" {
 		return false
@@ -433,8 +443,6 @@ func (h *OAuthHandler) mayAutoLink(ctx context.Context, existing *db.User, prof 
 		}
 		uid, err := h.DB.FindUserIDByGithubLink(ctx, ghID)
 		return err == nil && uid == existing.ID
-	case "oauth2":
-		return true
 	}
 	return false
 }

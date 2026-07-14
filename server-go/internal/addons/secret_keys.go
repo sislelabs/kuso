@@ -26,6 +26,13 @@ func (s *Service) SecretKeys(ctx context.Context, project, addon string) ([]stri
 		}
 		return nil, fmt.Errorf("get addon: %w", err)
 	}
+	// Self-guard ownership: a pre-qualified name can resolve to a sibling
+	// project's CR when project names overlap. ErrNotFound (not a distinct
+	// forbidden) so existence isn't leaked. Kept inside the Service method
+	// so the guarantee doesn't depend on the HTTP handler remembering.
+	if !addonOwnedByProject(a, project) {
+		return nil, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, addon)
+	}
 
 	secretName := connSecretName(a.Name)
 	if a.Status != nil {
@@ -66,6 +73,12 @@ func (s *Service) SecretValues(ctx context.Context, project, addon string) (map[
 			return nil, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, addon)
 		}
 		return nil, fmt.Errorf("get addon: %w", err)
+	}
+	// Self-guard ownership — see SecretKeys. SecretValues exposes plaintext
+	// values, so a cross-project leak here is the worst case; guard it here
+	// rather than trust the handler precheck.
+	if !addonOwnedByProject(a, project) {
+		return nil, fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, addon)
 	}
 	secretName := connSecretName(a.Name)
 	if a.Status != nil {

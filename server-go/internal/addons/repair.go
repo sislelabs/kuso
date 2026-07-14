@@ -48,6 +48,14 @@ func (s *Service) RepairPassword(ctx context.Context, project, name string) erro
 		}
 		return fmt.Errorf("get addon: %w", err)
 	}
+	// Self-guard ownership: a pre-qualified name can resolve to a sibling
+	// project's CR when project names overlap. Guarded inside the Service
+	// method — previewdb.go calls RepairPassword directly (bypassing the
+	// HTTP handler precheck), so the ownership rule must live here, not
+	// only in the handler.
+	if !addonOwnedByProject(addon, project) {
+		return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
+	}
 	if addon.Spec.Kind != "postgres" {
 		return fmt.Errorf("%w: repair-password only supports postgres", ErrInvalid)
 	}

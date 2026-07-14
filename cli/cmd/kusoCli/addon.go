@@ -3,6 +3,7 @@ package kusoCli
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"sort"
 	"strings"
 
@@ -157,6 +158,11 @@ boundary as reading env values or opening a shell. --keys lists keys only
 				for k, v := range out.Values {
 					vals[k] = maskSecret(v)
 				}
+				// A script consuming this JSON used to get real values.
+				// Masking is now the default; warn on stderr (never on
+				// stdout — the JSON must stay clean) so the breakage is
+				// self-explaining and points at the flag.
+				fmt.Fprintln(os.Stderr, "warning: connection values are masked; pass --reveal to emit real values")
 			}
 			b, _ := json.MarshalIndent(vals, "", "  ")
 			fmt.Println(string(b))

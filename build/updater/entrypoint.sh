@@ -39,14 +39,36 @@ kubectl apply -f "$TMP_CRDS" >/dev/null
 
 # Apply the release's non-workload platform manifests (RBAC,
 # ServiceAccounts, PriorityClasses, NetworkPolicies, PDBs) before
-# rolling images, so new server/operator code never starts under
-# stale RBAC. Absent on releases that predate the bundle — skip
-# cleanly so old release.json payloads still upgrade.
+# rolling images, so new server/operator code picks up RBAC/policy
+# changes instead of drifting. Absent on releases that predate the
+# bundle — skip cleanly so old release.json payloads still upgrade.
+#
+# BEST-EFFORT BY DESIGN: this Job runs as the kuso-server
+# ServiceAccount, which deliberately CANNOT mutate ClusterRoles /
+# RoleBindings / NetworkPolicies / PriorityClasses (granting the
+# control plane rbac-escalate power would be a worse hole than the
+# drift it fixes). So a forbidden/partial apply must NOT abort the
+# upgrade — we log it to status and roll images anyway. An operator
+# whose release genuinely needs new RBAC applies the bundle manually
+# (or re-runs install.sh), exactly as before this bundle existed.
+# The alternative — hard-failing here — would brick self-update on
+# every cluster the moment a release touched RBAC, with no recovery
+# path, since the fix ships inside the very Job that's failing.
 if [ -n "${KUSO_MANIFESTS_URL:-}" ]; then
   write_status "applying-manifests" "downloading ${KUSO_MANIFESTS_URL}"
   TMP_MANIFESTS=$(mktemp)
-  curl -fsSL "$KUSO_MANIFESTS_URL" -o "$TMP_MANIFESTS"
-  kubectl apply -f "$TMP_MANIFESTS" >/dev/null
+  if curl -fsSL "$KUSO_MANIFESTS_URL" -o "$TMP_MANIFESTS"; then
+    # server-side apply, non-fatal: capture output, warn on failure.
+    if apply_out=$(kubectl apply -f "$TMP_MANIFESTS" 2>&1); then
+      echo "==> applied upgrade manifests"
+    else
+      echo "==> WARNING: upgrade-manifests apply incomplete (continuing with image roll):"
+      echo "$apply_out" | sed 's/^/    /'
+      write_status "applying-manifests" "partial — some platform manifests need manual apply (see updater logs); continuing"
+    fi
+  else
+    echo "==> WARNING: could not download upgrade-manifests bundle; continuing with image roll"
+  fi
 else
   echo "==> no upgrade-manifests bundle in this release; skipping (pre-bundle release)"
 fi

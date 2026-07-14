@@ -387,6 +387,28 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The restore Job's env sources BUCKET/S3_ENDPOINT/AWS creds from the
+	// kuso-backup-s3 Secret, which SetSettings only ever writes into the
+	// HOME namespace. For a project with a per-project execution namespace,
+	// a Job in `ns` referencing that secret would fail
+	// CreateContainerConfigError ("secret kuso-backup-s3 not found") and,
+	// with BackoffLimit=0, never run — while the API still returned 200 +
+	// jobName. Mirror the secret into `ns` first (or fail with a clear
+	// "backups not configured" error if it doesn't exist in home) so the
+	// Job can actually start. The scheduled-backup CronJob path is
+	// chart-rendered into the project ns with its own secret, so it's
+	// unaffected by this gap.
+	if ns != h.Namespace {
+		if err := h.mirrorBackupSecret(ctx, ns); err != nil {
+			if errors.Is(err, addons.ErrNotFound) {
+				http.Error(w, "backups not configured: kuso-backup-s3 secret missing (set backup settings first)", http.StatusPreconditionFailed)
+				return
+			}
+			h.Logger.Error("backup: mirror s3 secret into project ns", "err", err, "ns", ns)
+			http.Error(w, "internal", http.StatusInternalServerError)
+			return
+		}
+	}
 	releaseName := destCR.Name
 	jobName := fmt.Sprintf("%s-restore-%d", releaseName, time.Now().Unix())
 
@@ -483,6 +505,58 @@ echo "==> done"
 		})
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"job": created.Name})
+}
+
+// mirrorBackupSecret copies the home-namespace kuso-backup-s3 Secret
+// into a target (project execution) namespace so a restore Job running
+// there can resolve its BUCKET/S3_ENDPOINT/AWS-credential env refs. The
+// secret is only ever written into the home namespace by SetSettings, so
+// without this a restore Job in a per-project namespace fails
+// CreateContainerConfigError and (BackoffLimit=0) silently never runs.
+//
+// Idempotent: updates the mirror's data in place when it already exists.
+// Fresh ObjectMeta is built (no resourceVersion/uid/namespace carried
+// over) so the create/update is clean. Returns addons.ErrNotFound when
+// the source secret doesn't exist in the home namespace, so the caller
+// can surface "backups not configured" instead of minting a doomed Job.
+func (h *BackupsHandler) mirrorBackupSecret(ctx context.Context, ns string) error {
+	src, err := h.Kube.Clientset.CoreV1().Secrets(h.Namespace).Get(ctx, backupSecretName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return fmt.Errorf("%w: %s not found in %s", addons.ErrNotFound, backupSecretName, h.Namespace)
+	}
+	if err != nil {
+		return fmt.Errorf("read source secret: %w", err)
+	}
+	data := make(map[string][]byte, len(src.Data))
+	for k, v := range src.Data {
+		data[k] = v
+	}
+	secrets := h.Kube.Clientset.CoreV1().Secrets(ns)
+	if existing, gerr := secrets.Get(ctx, backupSecretName, metav1.GetOptions{}); gerr == nil {
+		existing.Data = data
+		if _, uerr := secrets.Update(ctx, existing, metav1.UpdateOptions{}); uerr != nil {
+			return fmt.Errorf("update mirrored secret: %w", uerr)
+		}
+		return nil
+	} else if !apierrors.IsNotFound(gerr) {
+		return fmt.Errorf("check mirrored secret: %w", gerr)
+	}
+	dst := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      backupSecretName,
+			Namespace: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "kuso-server",
+				"kuso.sislelabs.com/mirror-of": h.Namespace,
+			},
+		},
+		Type: src.Type,
+		Data: data,
+	}
+	if _, cerr := secrets.Create(ctx, dst, metav1.CreateOptions{}); cerr != nil && !apierrors.IsAlreadyExists(cerr) {
+		return fmt.Errorf("create mirrored secret: %w", cerr)
+	}
+	return nil
 }
 
 // s3Client builds an aws-sdk-v2 S3 client from the kuso-backup-s3

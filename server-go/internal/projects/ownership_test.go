@@ -146,24 +146,65 @@ func TestAddService_RejectsForeignSecretRef(t *testing.T) {
 	}
 }
 
-func TestAddService_RejectsUnsupportedValueFromKind(t *testing.T) {
+// A non-secretKeyRef valueFrom (here a configMapKeyRef) must be carried
+// through UNCHANGED rather than rejected. It is not a cross-project
+// SECRET vector (it reads a ConfigMap, not another project's -conn
+// Secret), and the KusoService CRD's valueFrom schema is closed to
+// secretKeyRef only — so any configMapKeyRef is PRUNED by the apiserver
+// on write anyway. Rejecting it here was the C3 regression: because
+// SetEnv/AddService/spec.Apply do a full-list replace, a SINGLE legacy
+// entry on a pre-upgrade service made every subsequent env save 400.
+func TestAddService_PreservesNonSecretKeyRefValueFrom(t *testing.T) {
 	t.Parallel()
 	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
 		DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/x/y", DefaultBranch: "main"},
 	}))
 
-	_, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{
+	created, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{
 		Name:    "web",
 		Runtime: "dockerfile",
-		EnvVars: []EnvVar{{
-			Name: "SNIFFED",
-			ValueFrom: map[string]any{
+		EnvVars: []EnvVar{
+			{Name: "PLAIN", Value: "1"},
+			{Name: "FROM_CONFIGMAP", ValueFrom: map[string]any{
 				"configMapKeyRef": map[string]any{"name": "cluster-config", "key": "anything"},
-			},
-		}},
+			}},
+		},
 	})
-	if !errors.Is(err, ErrInvalid) {
-		t.Fatalf("want ErrInvalid for configMapKeyRef at create, got %v", err)
+	if err != nil {
+		t.Fatalf("configMapKeyRef must not fail the save (C3): %v", err)
+	}
+	var found bool
+	for _, ev := range created.Spec.EnvVars {
+		if ev.Name == "FROM_CONFIGMAP" {
+			found = true
+			if _, ok := ev.ValueFrom["configMapKeyRef"]; !ok {
+				t.Errorf("configMapKeyRef was not carried through unchanged: %+v", ev.ValueFrom)
+			}
+		}
+	}
+	if !found {
+		t.Error("FROM_CONFIGMAP env var was dropped")
+	}
+}
+
+// After a legacy non-secretKeyRef var is present, an UNRELATED valid var
+// can still be added/saved — the full-list replace must not 400 on the
+// pre-existing configMapKeyRef entry (C3 regression: it did).
+func TestSetEnv_LegacyConfigMapRef_DoesNotBlockLaterSave(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t, seedProject("alpha", kube.KusoProjectSpec{
+		DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/x/y", DefaultBranch: "main"},
+	}))
+	if _, err := s.AddService(context.Background(), "alpha", CreateServiceRequest{
+		Name: "web", Runtime: "dockerfile",
+		EnvVars: []EnvVar{
+			{Name: "LEGACY", ValueFrom: map[string]any{
+				"configMapKeyRef": map[string]any{"name": "cfg", "key": "K"},
+			}},
+			{Name: "NEW", Value: "1"},
+		},
+	}); err != nil {
+		t.Fatalf("save with legacy configMapKeyRef + new var failed (C3): %v", err)
 	}
 }
 

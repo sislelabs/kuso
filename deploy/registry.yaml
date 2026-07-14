@@ -178,10 +178,19 @@ spec:
               # GC run concurrently with live registry writes, which
               # the registry README explicitly calls unsafe. So:
               #   - terminated exitCode==0        → restore, exit 0
-              #   - terminated exitCode!=0        → keep waiting for the
-              #     kubelet restart (crash backoff caps at 5m); only if
-              #     it stays dead-failed >10m do we assume kubelet gave
-              #     up and restore anyway (registry can't stay down).
+              #   - gc failing (terminated!=0 or CrashLoopBackOff) →
+              #     keep the registry down so a kubelet-restarted GC
+              #     can't run concurrently with live writes — BUT only
+              #     up to a hard ceiling. A crash-looping GC cycles
+              #     terminated→waiting→running→terminated, so we must
+              #     NOT reset the ceiling clock on the transient
+              #     running/waiting phases (that's the bug that let a
+              #     CrashLoopBackOff keep the registry at 0 forever).
+              #     We arm the clock the FIRST time GC is observed
+              #     failing (a non-empty exitCode OR a restartCount>0)
+              #     and never rewind it until GC succeeds. 10m armed
+              #     without success → assume GC won't recover, restore
+              #     and fail so the registry can't stay down.
               #   - pod killed (Job backoffLimit exhausted deletes the
               #     pod) → TERM trap restores on the way out, inside
               #     the pod's 30s grace period.
@@ -201,31 +210,37 @@ spec:
                   # registry before dying — nothing else will.
                   trap 'echo "[scaler-up] pod terminating — restoring registry"; scale_up; exit 0' TERM INT
                   echo "[scaler-up] waiting for gc container in pod $POD"
-                  FAILED_SINCE=""
+                  # FAILING_SINCE arms the first time we see gc fail and
+                  # is NEVER rewound until gc succeeds — so a crash loop
+                  # (which oscillates through running/waiting between
+                  # failures) still trips the 10m ceiling.
+                  FAILING_SINCE=""
                   while true; do
-                    EXIT_CODE=$(kubectl -n kuso get pod "$POD" \
-                      -o jsonpath='{.status.containerStatuses[?(@.name=="gc")].state.terminated.exitCode}' 2>/dev/null || echo "")
+                    GC_STATUS=$(kubectl -n kuso get pod "$POD" \
+                      -o jsonpath='{.status.containerStatuses[?(@.name=="gc")]}' 2>/dev/null || echo "")
+                    EXIT_CODE=$(echo "$GC_STATUS" | sed -n 's/.*"terminated":{[^}]*"exitCode":\([0-9-]*\).*/\1/p')
+                    RESTARTS=$(echo "$GC_STATUS" | sed -n 's/.*"restartCount":\([0-9]*\).*/\1/p')
                     if [ "$EXIT_CODE" = "0" ]; then
                       echo "[scaler-up] gc succeeded"
                       scale_up
                       echo "[scaler-up] done"
                       exit 0
-                    elif [ -n "$EXIT_CODE" ]; then
-                      # Failed-terminated: kubelet will restart it
-                      # (OnFailure). Don't restore writes yet — wait
-                      # for the retry. 10m stuck in this state means
-                      # no restart is coming; give up and restore.
+                    fi
+                    # Arm (once) the abandonment clock as soon as gc has
+                    # failed at least once: a non-zero terminated exit,
+                    # OR any restart (CrashLoopBackOff between failures).
+                    if { [ -n "$EXIT_CODE" ] && [ "$EXIT_CODE" != "0" ]; } || \
+                       { [ -n "$RESTARTS" ] && [ "$RESTARTS" -gt 0 ]; }; then
                       NOW=$(date +%s)
-                      if [ -z "$FAILED_SINCE" ]; then FAILED_SINCE=$NOW; fi
-                      if [ $((NOW - FAILED_SINCE)) -ge 600 ]; then
-                        echo "[scaler-up] gc dead (exit $EXIT_CODE, no restart in 10m) — restoring registry and failing"
+                      if [ -z "$FAILING_SINCE" ]; then
+                        FAILING_SINCE=$NOW
+                        echo "[scaler-up] gc failing (exit=${EXIT_CODE:-none} restarts=${RESTARTS:-0}) — holding registry down, 10m ceiling armed"
+                      fi
+                      if [ $((NOW - FAILING_SINCE)) -ge 600 ]; then
+                        echo "[scaler-up] gc still failing after 10m — restoring registry and failing"
                         scale_up
                         exit 1
                       fi
-                    else
-                      # Running / waiting (includes the post-failure
-                      # restart) — reset the stuck-failed clock.
-                      FAILED_SINCE=""
                     fi
                     sleep 5
                   done

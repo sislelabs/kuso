@@ -373,6 +373,39 @@ func addonRefDNSSafe(name string) bool {
 // resolver is unwired (tests) the deterministic names above still pass,
 // but a foreign `-conn` name is rejected.
 func (s *Service) validateSecretRefName(ctx context.Context, project, service, name string) error {
+	// Resolve the owned addon-conn set on demand. Callers validating a
+	// batch of refs should prefer ownedAddonConnSet + validateSecretRefNameIn
+	// to avoid one full kube LIST per ref (see validateAndRewriteEnvVars).
+	owned, err := s.ownedAddonConnSet(ctx, project)
+	if err != nil {
+		return err
+	}
+	return s.validateSecretRefNameIn(project, service, name, owned)
+}
+
+// ownedAddonConnSet returns the project's addon connection-secret names
+// as a set, resolved from AddonConnSecrets with ONE kube LIST. Callers
+// validating many refs resolve this once and hand it to
+// validateSecretRefNameIn, avoiding an N+1 LIST fan-out. Returns an empty
+// (non-nil) set when AddonConnSecrets isn't wired.
+func (s *Service) ownedAddonConnSet(ctx context.Context, project string) (map[string]struct{}, error) {
+	set := map[string]struct{}{}
+	if s.AddonConnSecrets == nil {
+		return set, nil
+	}
+	owned, err := s.AddonConnSecrets(ctx, project)
+	if err != nil {
+		return nil, fmt.Errorf("resolve addon secrets: %w", err)
+	}
+	for _, sec := range owned {
+		set[sec] = struct{}{}
+	}
+	return set, nil
+}
+
+// validateSecretRefNameIn is validateSecretRefName against a pre-resolved
+// owned addon-conn set — no kube LIST. Same acceptance rules.
+func (s *Service) validateSecretRefNameIn(project, service, name string, ownedAddonConn map[string]struct{}) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return fmt.Errorf("%w: secretRef.name required", ErrInvalid)
@@ -393,16 +426,8 @@ func (s *Service) validateSecretRefName(ctx context.Context, project, service, n
 		(strings.HasPrefix(name, svcSecretPrefix) && strings.HasSuffix(name, "-secrets")) {
 		return nil
 	}
-	if s.AddonConnSecrets != nil {
-		owned, err := s.AddonConnSecrets(ctx, project)
-		if err != nil {
-			return fmt.Errorf("resolve addon secrets: %w", err)
-		}
-		for _, sec := range owned {
-			if sec == name {
-				return nil
-			}
-		}
+	if _, ok := ownedAddonConn[name]; ok {
+		return nil
 	}
 	return fmt.Errorf("%w: secretRef.name %q is not a secret owned by project %q", ErrInvalid, name, project)
 }
