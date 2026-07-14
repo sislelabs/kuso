@@ -62,6 +62,15 @@ spec:
               args:
                 - |
                   set -eu
+                  # Graceful no-op when backup S3 isn't configured: the
+                  # kuso-backup-s3 Secret is absent until an operator sets
+                  # up backup settings, so BUCKET is empty (its secretKeyRef
+                  # is optional). Exit 0 with a clear message rather than
+                  # failing every scheduled run.
+                  if [ -z "${BUCKET:-}" ]; then
+                    echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
+                    exit 0
+                  fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
@@ -118,10 +127,16 @@ spec:
                       key: POSTGRES_PASSWORD
                 # S3 credentials: cluster-wide Secret managed by the
                 # kuso server's settings page.
-                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket } } }
-                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint } } }
-                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId } } }
-                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey } } }
+                # S3 creds are optional:true so the CronJob installs and
+                # RUNS even before backup S3 settings are configured — the
+                # script guards on empty BUCKET and exits 0 ("not
+                # configured") instead of the pod crashing with
+                # CreateContainerConfigError "secret kuso-backup-s3 not
+                # found". Mirrors deploy/postgres-backup.yaml.
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
                 - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region }, optional: true } }
 {{- end }}
 
@@ -184,6 +199,15 @@ spec:
               args:
                 - |
                   set -eu
+                  # Graceful no-op when backup S3 isn't configured: the
+                  # kuso-backup-s3 Secret is absent until an operator sets
+                  # up backup settings, so BUCKET is empty (its secretKeyRef
+                  # is optional). Exit 0 with a clear message rather than
+                  # failing every scheduled run.
+                  if [ -z "${BUCKET:-}" ]; then
+                    echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
+                    exit 0
+                  fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
@@ -222,10 +246,16 @@ spec:
                     secretKeyRef:
                       name: {{ printf "%s-conn" (include "kusoaddon.fullname" .) | quote }}
                       key: DATABASE_URL
-                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket } } }
-                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint } } }
-                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId } } }
-                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey } } }
+                # S3 creds are optional:true so the CronJob installs and
+                # RUNS even before backup S3 settings are configured — the
+                # script guards on empty BUCKET and exits 0 ("not
+                # configured") instead of the pod crashing with
+                # CreateContainerConfigError "secret kuso-backup-s3 not
+                # found". Mirrors deploy/postgres-backup.yaml.
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
                 - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region }, optional: true } }
 {{- end }}
 
@@ -275,6 +305,15 @@ spec:
               args:
                 - |
                   set -eu
+                  # Graceful no-op when backup S3 isn't configured: the
+                  # kuso-backup-s3 Secret is absent until an operator sets
+                  # up backup settings, so BUCKET is empty (its secretKeyRef
+                  # is optional). Exit 0 with a clear message rather than
+                  # failing every scheduled run.
+                  if [ -z "${BUCKET:-}" ]; then
+                    echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
+                    exit 0
+                  fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   KEY="${PROJECT}/${ADDON}/${TS}.rdb.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
@@ -311,10 +350,16 @@ spec:
                     secretKeyRef:
                       name: {{ printf "%s-conn" (include "kusoaddon.fullname" .) | quote }}
                       key: REDIS_PASSWORD
-                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket } } }
-                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint } } }
-                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId } } }
-                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey } } }
+                # S3 creds are optional:true so the CronJob installs and
+                # RUNS even before backup S3 settings are configured — the
+                # script guards on empty BUCKET and exits 0 ("not
+                # configured") instead of the pod crashing with
+                # CreateContainerConfigError "secret kuso-backup-s3 not
+                # found". Mirrors deploy/postgres-backup.yaml.
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
                 - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region }, optional: true } }
 {{- end }}
 
@@ -362,6 +407,15 @@ spec:
               args:
                 - |
                   set -eu
+                  # Graceful no-op when backup S3 isn't configured: the
+                  # kuso-backup-s3 Secret is absent until an operator sets
+                  # up backup settings, so BUCKET is empty (its secretKeyRef
+                  # is optional). Exit 0 with a clear message rather than
+                  # failing every scheduled run.
+                  if [ -z "${BUCKET:-}" ]; then
+                    echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
+                    exit 0
+                  fi
                   TS=$(date -u +%Y%m%dT%H%M%SZ)
                   DEST="s3://${BUCKET}/${PROJECT}/${ADDON}/${TS}/"
                   PREFIX="${PROJECT}/${ADDON}/"
@@ -419,9 +473,15 @@ spec:
                       name: {{ printf "%s-conn" (include "kusoaddon.fullname" .) | quote }}
                       key: S3_SECRET_ACCESS_KEY
                 # Destination: cluster-wide backup bucket.
-                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket } } }
-                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint } } }
-                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId } } }
-                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey } } }
+                # S3 creds are optional:true so the CronJob installs and
+                # RUNS even before backup S3 settings are configured — the
+                # script guards on empty BUCKET and exits 0 ("not
+                # configured") instead of the pod crashing with
+                # CreateContainerConfigError "secret kuso-backup-s3 not
+                # found". Mirrors deploy/postgres-backup.yaml.
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
                 - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region }, optional: true } }
 {{- end }}
