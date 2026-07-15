@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.20.1] — 2026-07-15
+
+### Other
+- Map tlsSecret through the AddDomain + create-service HTTP handlers ([3df5f70](https://github.com/sislelabs/kuso/commit/3df5f703cac20731069fbda591c7c4c50dad99a6))
+
 ## [0.20.0] — 2026-07-15
 
 ### Other
@@ -420,14 +425,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(cli,obs,ux): env-group/grant CLI, run cancel/rm, build --follow, verb-aware parity, addon-crash + prev-logs, projects memo ([6603934](https://github.com/sislelabs/kuso/commit/6603934455f9eeaf27cd7d35d73886f07a6b4536))
-
-## [0.18.82] — 2026-06-25
-
-### ✨ Features
-- Feat(ux,perf): pre-build holding state, build deadline, HTTP liveness, OOM classify, drift cache, CLI+UI gaps ([e2cdf82](https://github.com/sislelabs/kuso/commit/e2cdf82b353eda2ee1f4e3cfa9f31b5b09894594))
-
-### 🐛 Bug Fixes
-- Fix(db): grant pods/portforward RBAC + stop relaying WS error frames as TCP data ([229dac1](https://github.com/sislelabs/kuso/commit/229dac1eb4e435ae1ab561425bfcbecb48d76417))
 
 
 ---

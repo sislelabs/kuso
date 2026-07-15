@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.82] — 2026-06-25
+
+### ✨ Features
+- Feat(ux,perf): pre-build holding state, build deadline, HTTP liveness, OOM classify, drift cache, CLI+UI gaps ([e2cdf82](https://github.com/sislelabs/kuso/commit/e2cdf82b353eda2ee1f4e3cfa9f31b5b09894594))
+
+### 🐛 Bug Fixes
+- Fix(db): grant pods/portforward RBAC + stop relaying WS error frames as TCP data ([229dac1](https://github.com/sislelabs/kuso/commit/229dac1eb4e435ae1ab561425bfcbecb48d76417))
+
 ## [0.18.81] — 2026-06-24
 
 ### 🐛 Bug Fixes
