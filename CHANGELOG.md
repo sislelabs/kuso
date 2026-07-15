@@ -19,6 +19,12 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.20.0] — 2026-07-15
+
+### Other
+- Wildcard hosts with pre-provisioned certs (kills the per-tenant LE ceiling) ([5a00b12](https://github.com/sislelabs/kuso/commit/5a00b120b96d0f43361599d107634030e7b0013a))
+- Branch-change propagation + platformApiEgress opt-in ([7010d1b](https://github.com/sislelabs/kuso/commit/7010d1b019a3f6b6eea61108cac9f8b73778761f))
+
 ## [0.19.1] — 2026-07-14
 
 ### 🐛 Bug Fixes
@@ -422,11 +428,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(db): grant pods/portforward RBAC + stop relaying WS error frames as TCP data ([229dac1](https://github.com/sislelabs/kuso/commit/229dac1eb4e435ae1ab561425bfcbecb48d76417))
-
-## [0.18.81] — 2026-06-24
-
-### 🐛 Bug Fixes
-- Fix(builds,envs,addons): stuck-build timeout, promote CAS, token+PVC leaks, env-editor round-trip ([2603f4c](https://github.com/sislelabs/kuso/commit/2603f4c321cdb03d861fae1e9d9a4d7c158f5eae))
 
 
 ---

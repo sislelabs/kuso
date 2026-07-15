@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.81] — 2026-06-24
+
+### 🐛 Bug Fixes
+- Fix(builds,envs,addons): stuck-build timeout, promote CAS, token+PVC leaks, env-editor round-trip ([2603f4c](https://github.com/sislelabs/kuso/commit/2603f4c321cdb03d861fae1e9d9a4d7c158f5eae))
+
 ## [0.18.80] — 2026-06-24
 
 ### 🐛 Bug Fixes
