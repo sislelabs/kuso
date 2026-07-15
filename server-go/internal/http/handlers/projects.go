@@ -86,7 +86,7 @@ func apiv1CreateServiceToDomain(in apiv1.CreateServiceRequest) projects.CreateSe
 	if len(in.Domains) > 0 {
 		out.Domains = make([]projects.ServiceDomain, len(in.Domains))
 		for i, d := range in.Domains {
-			out.Domains[i] = projects.ServiceDomain{Host: d.Host, TLS: d.TLS}
+			out.Domains[i] = projects.ServiceDomain{Host: d.Host, TLS: d.TLS, TLSSecret: d.TLSSecret}
 		}
 	}
 	if len(in.EnvVars) > 0 {
@@ -679,7 +679,7 @@ func (h *ProjectsHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	out, err := h.Svc.AddDomain(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"),
-		projects.AddDomainRequest{Host: wire.Host, TLS: wire.TLS})
+		projects.AddDomainRequest{Host: wire.Host, TLS: wire.TLS, TLSSecret: wire.TLSSecret})
 	if err != nil {
 		h.fail(w, "add domain", err)
 		return
