@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -91,6 +92,7 @@ func (h *BackupsHandler) Mount(r chi.Router) {
 	// addon's postgres. The query is wrapped in a read-only
 	// transaction with a statement_timeout — defence in depth against
 	// a stray `; DROP TABLE` or a runaway scan.
+	r.Get("/api/projects/{project}/addons/{addon}/sql/databases", h.SQLDatabases)
 	r.Get("/api/projects/{project}/addons/{addon}/sql/tables", h.SQLTables)
 	r.Post("/api/projects/{project}/addons/{addon}/sql/query", h.SQLQuery)
 	// Structured data browser/editor (sql_data.go): per-table schema +
@@ -630,7 +632,12 @@ func envFromSecretOptional(name, secretName, key string) corev1.EnvVar {
 // connection Secret (<release>-conn). Returns a *sql.DB the caller
 // must Close. Adds a 5s connect timeout so a wedged addon can't hang
 // the request.
-func (h *BackupsHandler) pgConn(ctx context.Context, project, addon string) (*sql.DB, error) {
+// validDBName gates the ?database= override: a Postgres identifier,
+// nothing else — this string ends up in a DSN, so the gate is what
+// keeps the override from becoming an injection surface.
+var validDBName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_$]{0,62}$`)
+
+func (h *BackupsHandler) pgConn(ctx context.Context, project, addon, database string) (*sql.DB, error) {
 	// addon may arrive as either the short name ("pg") or the
 	// fully-qualified CR name ("e2e-test-pg"); both are valid URL
 	// args. ownedAddon collapses to the canonical form (so we don't
@@ -669,6 +676,15 @@ func (h *BackupsHandler) pgConn(ctx context.Context, project, addon string) (*sq
 	pass := string(sec.Data["POSTGRES_PASSWORD"])
 	if pass == "" {
 		return nil, errors.New("addon -conn secret missing POSTGRES_PASSWORD")
+	}
+	// Optional logical-database override (multi-DB servers: one addon
+	// hosting a database per tenant). The conn secret's credentials are
+	// the server admin, so they can browse every logical DB.
+	if database != "" {
+		if !validDBName.MatchString(database) {
+			return nil, fmt.Errorf("invalid database name %q", database)
+		}
+		dbName = database
 	}
 	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=disable connect_timeout=5",
 		host, port, user, pass, dbName)
@@ -728,7 +744,7 @@ func (h *BackupsHandler) SQLTables(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := h.pgConn(ctx, project, addon)
+	conn, err := h.pgConn(ctx, project, addon, r.URL.Query().Get("database"))
 	if err != nil {
 		writeAddonErr(w, err)
 		return
@@ -874,7 +890,7 @@ func (h *BackupsHandler) SQLQuery(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "query rejected: "+reason, http.StatusForbidden)
 		return
 	}
-	conn, err := h.pgConn(ctx, project, addon)
+	conn, err := h.pgConn(ctx, project, addon, r.URL.Query().Get("database"))
 	if err != nil {
 		writeAddonErr(w, err)
 		return

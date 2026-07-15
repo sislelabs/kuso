@@ -26,9 +26,10 @@ import (
 )
 
 var (
-	sqlSchema string
-	sqlTable  string
-	sqlLimit  int
+	sqlSchema   string
+	sqlTable    string
+	sqlLimit    int
+	sqlDatabase string // optional logical-DB override (multi-DB addons)
 )
 
 var dbTablesCmd = &cobra.Command{
@@ -43,7 +44,7 @@ information_schema are filtered out). Requires the project admin role.`,
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
-		resp, err := api.SQLTables(args[0], args[1])
+		resp, err := api.SQLTables(args[0], args[1], sqlDatabase)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("list tables: %w", err)
 		}
@@ -84,7 +85,7 @@ Requires the project admin role.`,
 		if sqlTable == "" {
 			return fmt.Errorf("--table is required")
 		}
-		resp, err := api.SQLColumns(args[0], args[1], sqlSchema, sqlTable)
+		resp, err := api.SQLColumns(args[0], args[1], sqlSchema, sqlTable, sqlDatabase)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("list columns: %w", err)
 		}
@@ -145,7 +146,7 @@ project admin role.`,
 		if sqlTable == "" {
 			return fmt.Errorf("--table is required")
 		}
-		resp, err := api.SQLRows(args[0], args[1], sqlSchema, sqlTable, sqlLimit, 0)
+		resp, err := api.SQLRows(args[0], args[1], sqlSchema, sqlTable, sqlLimit, 0, sqlDatabase)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("fetch rows: %w", err)
 		}
@@ -177,7 +178,7 @@ Requires the project admin role.`,
 		resp, err := api.SQLQuery(args[0], args[1], kusoApi.SQLQueryRequest{
 			Query: args[2],
 			Limit: sqlLimit,
-		})
+		}, sqlDatabase)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("run query: %w", err)
 		}
@@ -246,6 +247,47 @@ func asAnySlice(v any) []any {
 	return nil
 }
 
+var dbDatabasesCmd = &cobra.Command{
+	Use:   "databases <project> <addon>",
+	Short: "List the logical databases on a postgres addon's server",
+	Long: `One postgres addon is one SERVER, which can hold many logical
+databases (multi-tenant platforms create one per tenant). List them here,
+then aim any other db subcommand at one with --database.`,
+	Args: cobra.ExactArgs(2),
+	Example: `  kuso db databases saiton stores
+  kuso db tables saiton stores --database store_acme
+  kuso db sql saiton stores "SELECT count(*) FROM orders" --database store_acme`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		resp, err := api.SQLDatabases(args[0], args[1])
+		if err := checkRespErr(resp, err); err != nil {
+			return fmt.Errorf("list databases: %w", err)
+		}
+		var out struct {
+			Databases []string `json:"databases"`
+		}
+		if err := json.Unmarshal(resp.Body(), &out); err != nil {
+			return fmt.Errorf("decode response: %w", err)
+		}
+		switch outputFormat {
+		case "json":
+			return jsonOut(out.Databases)
+		case "table", "":
+			t := tablewriter.NewWriter(os.Stdout)
+			t.SetHeader([]string{"DATABASE"})
+			for _, d := range out.Databases {
+				t.Append([]string{d})
+			}
+			t.Render()
+			return nil
+		default:
+			return fmt.Errorf("unsupported output format %q", outputFormat)
+		}
+	},
+}
+
 func init() {
 	dbColumnsCmd.Flags().StringVar(&sqlSchema, "schema", "public", "table schema")
 	dbColumnsCmd.Flags().StringVar(&sqlTable, "table", "", "table name (required)")
@@ -259,12 +301,18 @@ func init() {
 	// -o output format for the SQL read subcommands. dbCmd doesn't define a
 	// persistent --output (it's a connection command group), so scope the
 	// flag to each SQL subcommand that renders structured output.
-	for _, c := range []*cobra.Command{dbTablesCmd, dbColumnsCmd, dbRowsCmd, dbSQLCmd} {
+	for _, c := range []*cobra.Command{dbTablesCmd, dbColumnsCmd, dbRowsCmd, dbSQLCmd, dbDatabasesCmd} {
 		c.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
+	}
+	// --database on every read subcommand: aim it at one logical DB of a
+	// multi-DB addon (see `kuso db databases`). Empty = the addon default.
+	for _, c := range []*cobra.Command{dbTablesCmd, dbColumnsCmd, dbRowsCmd, dbSQLCmd} {
+		c.Flags().StringVar(&sqlDatabase, "database", "", "logical database to target (default: the addon's own)")
 	}
 
 	dbCmd.AddCommand(dbTablesCmd)
 	dbCmd.AddCommand(dbColumnsCmd)
 	dbCmd.AddCommand(dbRowsCmd)
 	dbCmd.AddCommand(dbSQLCmd)
+	dbCmd.AddCommand(dbDatabasesCmd)
 }

@@ -456,14 +456,14 @@ func (h *NodeBootstrapHandler) registryEndpoint(ctx context.Context) (host, ip s
 // publicBaseURL derives kuso's externally-reachable base URL.
 //
 // Preference order:
-//   1. KUSO_PUBLIC_URL env (when set) — operator's source of truth.
-//   2. X-Forwarded-{Proto,Host} headers when the request arrived from
-//      a peer in KUSO_TRUSTED_PROXIES (operator-configured, fully
-//      trusts the proxy to set host + scheme).
-//   3. X-Forwarded-Proto from any peer (scheme-only) — see "Scheme
-//      heuristic" below; never reads X-Forwarded-Host from untrusted
-//      peers to avoid Host-spoofing.
-//   4. r.TLS + r.Host as the last resort (direct caller, no proxy).
+//  1. KUSO_PUBLIC_URL env (when set) — operator's source of truth.
+//  2. X-Forwarded-{Proto,Host} headers when the request arrived from
+//     a peer in KUSO_TRUSTED_PROXIES (operator-configured, fully
+//     trusts the proxy to set host + scheme).
+//  3. X-Forwarded-Proto from any peer (scheme-only) — see "Scheme
+//     heuristic" below; never reads X-Forwarded-Host from untrusted
+//     peers to avoid Host-spoofing.
+//  4. r.TLS + r.Host as the last resort (direct caller, no proxy).
 //
 // # Scheme heuristic
 //

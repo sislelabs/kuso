@@ -35,6 +35,7 @@ export {
   restoreBackup,
   downloadAddonBackup,
   listSQLTables,
+  listSQLDatabases,
   runSQL,
   getSQLColumns,
   getSQLRows,

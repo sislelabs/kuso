@@ -26,11 +26,13 @@ export function TableGrid({
   addon,
   schema,
   table,
+  database,
 }: {
   project: string;
   addon: string;
   schema: string;
   table: string;
+  database?: string;
 }) {
   const qc = useQueryClient();
   const [page, setPage] = useState(0);
@@ -49,17 +51,18 @@ export function TableGrid({
   }
 
   const cols = useQuery({
-    queryKey: ["addons", project, addon, "sql", "columns", schema, table],
-    queryFn: () => getSQLColumns(project, addon, schema, table),
+    queryKey: ["addons", project, addon, database ?? "", "sql", "columns", schema, table],
+    queryFn: () => getSQLColumns(project, addon, schema, table, database),
     staleTime: 60_000,
   });
 
   const rows = useQuery({
-    queryKey: ["addons", project, addon, "sql", "rows", schema, table, page, orderBy, dir],
+    queryKey: ["addons", project, addon, database ?? "", "sql", "rows", schema, table, page, orderBy, dir],
     queryFn: () =>
       getSQLRows(project, addon, {
         schema,
         table,
+        database,
         limit: PAGE,
         offset: page * PAGE,
         orderBy: orderBy || undefined,
@@ -74,11 +77,11 @@ export function TableGrid({
   const colByName = new Map<string, SQLColumn>((cols.data?.columns ?? []).map((c) => [c.name, c]));
 
   const invalidate = () =>
-    qc.invalidateQueries({ queryKey: ["addons", project, addon, "sql", "rows", schema, table] });
+    qc.invalidateQueries({ queryKey: ["addons", project, addon, database ?? "", "sql", "rows", schema, table] });
 
   const del = useMutation({
     mutationFn: (pkVals: Record<string, SQLCellValue>) =>
-      deleteSQLRow(project, addon, schema, table, pkVals),
+      deleteSQLRow(project, addon, schema, table, pkVals, database),
     onSuccess: () => {
       toast.success("row deleted");
       invalidate();
@@ -90,7 +93,7 @@ export function TableGrid({
     mutationFn: (v: {
       pk: Record<string, SQLCellValue>;
       set: Record<string, SQLCellValue>;
-    }) => updateSQLRow(project, addon, schema, table, v.pk, v.set),
+    }) => updateSQLRow(project, addon, schema, table, v.pk, v.set, database),
     onSuccess: () => {
       toast.success("saved");
       invalidate();
@@ -303,6 +306,7 @@ export function TableGrid({
         <InsertRowDialog
           project={project}
           addon={addon}
+          database={database}
           schema={schema}
           table={table}
           columns={cols.data.columns}

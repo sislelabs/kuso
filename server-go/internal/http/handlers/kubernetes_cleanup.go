@@ -26,10 +26,10 @@ const cleanupPageLimit = 500
 // surface them in a more detailed log if a future iteration wants
 // per-namespace drill-down.
 type CleanupResponse struct {
-	PodsDeleted      int      `json:"podsDeleted"`
-	JobsDeleted      int      `json:"jobsDeleted"`
-	Namespaces       []string `json:"namespaces"`
-	Errors           []string `json:"errors,omitempty"`
+	PodsDeleted int      `json:"podsDeleted"`
+	JobsDeleted int      `json:"jobsDeleted"`
+	Namespaces  []string `json:"namespaces"`
+	Errors      []string `json:"errors,omitempty"`
 }
 
 // CleanupCompleted deletes finished pods (Succeeded / Failed phases)

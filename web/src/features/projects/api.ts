@@ -352,10 +352,28 @@ export interface SQLTable {
   schema: string;
   name: string;
 }
-export async function listSQLTables(project: string, addon: string): Promise<SQLTable[]> {
+export async function listSQLTables(
+  project: string,
+  addon: string,
+  database?: string
+): Promise<SQLTable[]> {
   return api<SQLTable[]>(
-    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/tables`
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/tables${dbQS(database)}`
   );
+}
+
+// Multi-DB postgres addons (one server, a logical database per tenant):
+// the picker lists databases here and every other /sql call carries the
+// picked name via ?database= (dbQS). Absent/empty = the addon's default.
+export async function listSQLDatabases(project: string, addon: string): Promise<string[]> {
+  const res = await api<{ databases: string[] | null }>(
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/databases`
+  );
+  return res.databases ?? [];
+}
+
+function dbQS(database?: string, sep: "?" | "&" = "?"): string {
+  return database ? `${sep}database=${encodeURIComponent(database)}` : "";
 }
 
 export interface SQLQueryResponse {
@@ -368,10 +386,11 @@ export async function runSQL(
   project: string,
   addon: string,
   query: string,
-  limit?: number
+  limit?: number,
+  database?: string
 ): Promise<SQLQueryResponse> {
   return api<SQLQueryResponse>(
-    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/query`,
+    `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/query${dbQS(database)}`,
     { method: "POST", body: { query, limit } }
   );
 }
@@ -409,9 +428,12 @@ export async function getSQLColumns(
   project: string,
   addon: string,
   schema: string,
-  table: string
+  table: string,
+  database?: string
 ): Promise<SQLColumnsResponse> {
-  const qs = new URLSearchParams({ schema, table }).toString();
+  const params = new URLSearchParams({ schema, table });
+  if (database) params.set("database", database);
+  const qs = params.toString();
   return api<SQLColumnsResponse>(
     `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/columns?${qs}`
   );
@@ -436,9 +458,11 @@ export async function getSQLRows(
     offset?: number;
     orderBy?: string;
     dir?: "asc" | "desc";
+    database?: string;
   }
 ): Promise<SQLRowsResponse> {
   const qs = new URLSearchParams({ schema: opts.schema, table: opts.table });
+  if (opts.database) qs.set("database", opts.database);
   if (opts.limit != null) qs.set("limit", String(opts.limit));
   if (opts.offset != null) qs.set("offset", String(opts.offset));
   if (opts.orderBy) qs.set("orderBy", opts.orderBy);
@@ -448,8 +472,8 @@ export async function getSQLRows(
   );
 }
 
-function rowsURL(project: string, addon: string): string {
-  return `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/rows`;
+function rowsURL(project: string, addon: string, database?: string): string {
+  return `/api/projects/${encodeURIComponent(project)}/addons/${encodeURIComponent(addon)}/sql/rows${dbQS(database)}`;
 }
 
 export interface SQLWriteResult {
@@ -462,9 +486,10 @@ export async function insertSQLRow(
   addon: string,
   schema: string,
   table: string,
-  values: Record<string, SQLCellValue>
+  values: Record<string, SQLCellValue>,
+  database?: string
 ): Promise<SQLWriteResult> {
-  return api<SQLWriteResult>(rowsURL(project, addon), {
+  return api<SQLWriteResult>(rowsURL(project, addon, database), {
     method: "POST",
     body: { schema, table, values },
   });
@@ -476,9 +501,10 @@ export async function updateSQLRow(
   schema: string,
   table: string,
   pk: Record<string, SQLCellValue>,
-  set: Record<string, SQLCellValue>
+  set: Record<string, SQLCellValue>,
+  database?: string
 ): Promise<SQLWriteResult> {
-  return api<SQLWriteResult>(rowsURL(project, addon), {
+  return api<SQLWriteResult>(rowsURL(project, addon, database), {
     method: "PATCH",
     body: { schema, table, pk, set },
   });
@@ -489,9 +515,10 @@ export async function deleteSQLRow(
   addon: string,
   schema: string,
   table: string,
-  pk: Record<string, SQLCellValue>
+  pk: Record<string, SQLCellValue>,
+  database?: string
 ): Promise<{ deleted: number }> {
-  return api<{ deleted: number }>(rowsURL(project, addon), {
+  return api<{ deleted: number }>(rowsURL(project, addon, database), {
     method: "DELETE",
     body: { schema, table, pk },
   });

@@ -41,10 +41,10 @@ type ComposeRequest struct {
 // ComposeResponse carries the generated kuso.yaml and the report the
 // UI renders as a per-service table.
 type ComposeResponse struct {
-	Project string           `json:"project"`
-	YAML    string           `json:"yaml"`
-	Notes   []compose.Note   `json:"notes"`
-	Flagged bool             `json:"flagged"`
+	Project string         `json:"project"`
+	YAML    string         `json:"yaml"`
+	Notes   []compose.Note `json:"notes"`
+	Flagged bool           `json:"flagged"`
 }
 
 // Preview converts the compose file. POST /api/import/compose.

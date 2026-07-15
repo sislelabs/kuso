@@ -389,7 +389,7 @@ func (h *BackupsHandler) dataGuard(w http.ResponseWriter, r *http.Request, schem
 		http.Error(w, "schema and table required", http.StatusBadRequest)
 		return nil, colSet{}, false
 	}
-	conn, err := h.pgConn(ctx, project, addon)
+	conn, err := h.pgConn(ctx, project, addon, r.URL.Query().Get("database"))
 	if err != nil {
 		writeAddonErr(w, err)
 		return nil, colSet{}, false
@@ -454,7 +454,7 @@ func (h *BackupsHandler) SQLColumns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	conn, err := h.pgConn(cctx, project, addon)
+	conn, err := h.pgConn(cctx, project, addon, r.URL.Query().Get("database"))
 	if err != nil {
 		writeAddonErr(w, err)
 		return

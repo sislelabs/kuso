@@ -23,10 +23,12 @@ export function InsertRowDialog({
   addon,
   schema,
   table,
+  database,
   columns,
   onClose,
   onInserted,
 }: {
+  database?: string;
   project: string;
   addon: string;
   schema: string;
@@ -65,7 +67,7 @@ export function InsertRowDialog({
         throw new Error("fix the highlighted fields");
       }
       setErrs({});
-      return insertSQLRow(project, addon, schema, table, values);
+      return insertSQLRow(project, addon, schema, table, values, database);
     },
     onSuccess: () => {
       toast.success("row inserted");

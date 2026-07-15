@@ -5,6 +5,7 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Play } from "lucide-react";
 import {
   listSQLTables,
+  listSQLDatabases,
   runSQL,
   repairAddonPassword,
 } from "@/features/projects";
@@ -20,9 +21,20 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
   // SELECT in sql mode.
   const [mode, setMode] = useState<"browse" | "sql">("browse");
   const [selected, setSelected] = useState<{ schema: string; name: string } | null>(null);
+  // Logical-database picker. A postgres addon is a SERVER that can hold
+  // many databases (multi-tenant platforms create one per tenant); ""
+  // means the addon's default DB. Non-postgres addons return an error or
+  // a single entry — the picker hides itself below 2 databases.
+  const [database, setDatabase] = useState("");
+  const databases = useQuery({
+    queryKey: ["addons", project, addon, "sql", "databases"],
+    queryFn: () => listSQLDatabases(project, addon),
+    staleTime: 60_000,
+    retry: 1,
+  });
   const tables = useQuery({
-    queryKey: ["addons", project, addon, "sql", "tables"],
-    queryFn: () => listSQLTables(project, addon),
+    queryKey: ["addons", project, addon, database, "sql", "tables"],
+    queryFn: () => listSQLTables(project, addon, database || undefined),
     staleTime: 30_000,
     retry: 2,
     retryDelay: (i) => 1000 * (i + 1),
@@ -36,7 +48,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
   } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const run = useMutation({
-    mutationFn: (q: string) => runSQL(project, addon, q, 100),
+    mutationFn: (q: string) => runSQL(project, addon, q, 100, database || undefined),
     onSuccess: (data) => {
       setResp(data);
       setError(null);
@@ -82,6 +94,31 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
     // inner `overflow-auto` actually scroll the table independently.
     <div className="grid h-full min-w-0 grid-cols-[200px_minmax(0,1fr)] gap-0">
       <aside className="overflow-y-auto border-r border-[var(--border-subtle)] bg-[var(--bg-secondary)]/40 p-3">
+        {(databases.data ?? []).length > 1 && (
+          <>
+            <h4 className="mb-1 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
+              database
+            </h4>
+            <select
+              value={database}
+              onChange={(e) => {
+                setDatabase(e.target.value);
+                setSelected(null);
+                setResp(null);
+                setError(null);
+              }}
+              className="mb-3 w-full rounded border border-[var(--border-subtle)] bg-[var(--bg-primary)] px-1.5 py-1 font-mono text-[11px] text-[var(--text-primary)] outline-none focus:border-[var(--border-strong)]"
+              aria-label="database"
+            >
+              <option value="">(default)</option>
+              {databases.data!.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         <h4 className="mb-2 font-mono text-[10px] uppercase tracking-widest text-[var(--text-tertiary)]">
           tables
         </h4>
@@ -171,6 +208,7 @@ export function SQLTab({ project, addon }: { project: string; addon: string }) {
             <TableGrid
               project={project}
               addon={addon}
+              database={database || undefined}
               schema={selected.schema}
               table={selected.name}
             />

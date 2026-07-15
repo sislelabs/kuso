@@ -82,9 +82,9 @@ func (h *RolesHandler) ListWithPermissions(w http.ResponseWriter, r *http.Reques
 }
 
 type roleRequest struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	Permissions []db.PermissionInput   `json:"permissions"`
+	Name        string               `json:"name"`
+	Description string               `json:"description"`
+	Permissions []db.PermissionInput `json:"permissions"`
 }
 
 func (h *RolesHandler) Create(w http.ResponseWriter, r *http.Request) {

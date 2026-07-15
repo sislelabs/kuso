@@ -21,20 +21,39 @@ import (
 // SQLTables lists the addon database's user tables (pg_catalog +
 // information_schema filtered out). Response is a JSON array of
 // {"schema": ..., "name": ...}.
-func (k *KusoClient) SQLTables(project, addon string) (*resty.Response, error) {
-	return k.client.Get("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/sql/tables")
+func (k *KusoClient) SQLTables(project, addon, database string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/sql/tables" + dbQS(database))
+}
+
+// SQLDatabases lists the logical databases on a postgres addon's server
+// (multi-DB addons: one database per tenant). Response:
+// {"databases": ["postgres", "store_a", ...]}.
+func (k *KusoClient) SQLDatabases(project, addon string) (*resty.Response, error) {
+	return k.client.Get("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/sql/databases")
+}
+
+// dbQS renders the optional ?database= override every /sql endpoint
+// accepts (empty = the addon's default database).
+func dbQS(database string) string {
+	if database == "" {
+		return ""
+	}
+	return "?database=" + url.QueryEscape(database)
 }
 
 // SQLColumns introspects one table's columns + primary key + enum
 // labels. schema/table are QUERY params (the server reads them off the
 // URL query, not the path). Response is columnsResponse:
 // {"columns": [...], "primaryKey": [...], "editable": bool}.
-func (k *KusoClient) SQLColumns(project, addon, schema, table string) (*resty.Response, error) {
+func (k *KusoClient) SQLColumns(project, addon, schema, table, database string) (*resty.Response, error) {
 	q := url.Values{}
 	if schema != "" {
 		q.Set("schema", schema)
 	}
 	q.Set("table", table)
+	if database != "" {
+		q.Set("database", database)
+	}
 	return k.client.Get("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/sql/columns?" + q.Encode())
 }
 
@@ -43,12 +62,15 @@ func (k *KusoClient) SQLColumns(project, addon, schema, table string) (*resty.Re
 // {"columns": [...], "rows": [[...]], "nulls": [[...]], "total": N,
 //
 //	"truncated": bool, "elapsed": "..."}.
-func (k *KusoClient) SQLRows(project, addon, schema, table string, limit, offset int) (*resty.Response, error) {
+func (k *KusoClient) SQLRows(project, addon, schema, table string, limit, offset int, database string) (*resty.Response, error) {
 	q := url.Values{}
 	if schema != "" {
 		q.Set("schema", schema)
 	}
 	q.Set("table", table)
+	if database != "" {
+		q.Set("database", database)
+	}
 	if limit > 0 {
 		q.Set("limit", strconv.Itoa(limit))
 	}
@@ -71,7 +93,7 @@ type SQLQueryRequest struct {
 // project/addon are escaped as path segments; the query text rides in
 // the JSON body and is NOT path-escaped. Response is SQLQueryResponse:
 // {"columns": [...], "rows": [[...]], "truncated": bool, "elapsed": "..."}.
-func (k *KusoClient) SQLQuery(project, addon string, req SQLQueryRequest) (*resty.Response, error) {
+func (k *KusoClient) SQLQuery(project, addon string, req SQLQueryRequest, database string) (*resty.Response, error) {
 	k.client.SetBody(req)
-	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/sql/query")
+	return k.client.Post("/api/projects/" + esc(project) + "/addons/" + esc(addon) + "/sql/query" + dbQS(database))
 }
