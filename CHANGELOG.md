@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.20.2] — 2026-07-15
+
+### Other
+- DB browser: logical-database picker for multi-DB postgres addons ([713c5f6](https://github.com/sislelabs/kuso/commit/713c5f672c4d0531df4a411ea9ec4a87eb83a1c6))
+
 ## [0.20.1] — 2026-07-15
 
 ### Other
@@ -420,11 +425,6 @@ messages on every release. The format is loosely based on
 
 ### 🧪 Tests
 - Test(httpx,placement): pin SSRF guard + placement matcher contracts ([592e7a3](https://github.com/sislelabs/kuso/commit/592e7a3dc19981c6f585547eff56db648ffae0a8))
-
-## [0.18.83] — 2026-06-25
-
-### ✨ Features
-- Feat(cli,obs,ux): env-group/grant CLI, run cancel/rm, build --follow, verb-aware parity, addon-crash + prev-logs, projects memo ([6603934](https://github.com/sislelabs/kuso/commit/6603934455f9eeaf27cd7d35d73886f07a6b4536))
 
 
 ---

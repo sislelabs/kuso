@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.83] — 2026-06-25
+
+### ✨ Features
+- Feat(cli,obs,ux): env-group/grant CLI, run cancel/rm, build --follow, verb-aware parity, addon-crash + prev-logs, projects memo ([6603934](https://github.com/sislelabs/kuso/commit/6603934455f9eeaf27cd7d35d73886f07a6b4536))
+
 ## [0.18.82] — 2026-06-25
 
 ### ✨ Features
