@@ -223,6 +223,9 @@ type ImageSpec struct {
 type DomainSpec struct {
 	Host string `yaml:"host"`
 	TLS  bool   `yaml:"tls,omitempty"`
+	// TLSSecret names a pre-provisioned TLS secret; required for (and
+	// only valid with) wildcard hosts ("*.example.com").
+	TLSSecret string `yaml:"tlsSecret,omitempty"`
 }
 
 type ScaleSpec struct {

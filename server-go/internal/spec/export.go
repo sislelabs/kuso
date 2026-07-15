@@ -108,7 +108,7 @@ func exportService(project string, cr kube.KusoService) ServiceSpec {
 		s.Path = cr.Spec.Repo.Path
 	}
 	for _, d := range cr.Spec.Domains {
-		s.Domains = append(s.Domains, DomainSpec{Host: d.Host, TLS: d.TLS})
+		s.Domains = append(s.Domains, DomainSpec{Host: d.Host, TLS: d.TLS, TLSSecret: d.TLSSecret})
 	}
 	if cr.Spec.Scale != nil {
 		s.Scale = &ScaleSpec{

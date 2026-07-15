@@ -29,6 +29,8 @@ of the service as a whole. A host may only be claimed by one env in the
 project at a time — adding a host already routed elsewhere returns 409.`,
 }
 
+var envDomainAddTLSSecret string
+
 var environmentDomainAddCmd = &cobra.Command{
 	Use:     "add <project> <service> <env> <host>",
 	Short:   "Add one hostname to an environment's additionalHosts",
@@ -39,7 +41,7 @@ var environmentDomainAddCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		project, service, env, host := args[0], args[1], args[2], args[3]
-		resp, err := api.AddEnvDomain(project, service, env, host)
+		resp, err := api.AddEnvDomain(project, service, env, host, envDomainAddTLSSecret)
 		if err != nil {
 			return fmt.Errorf("add env domain: %w", err)
 		}
@@ -103,6 +105,7 @@ Pass no hosts to clear every additional host on that env.`,
 func init() {
 	// environmentCmd is the package-level var defined in environment.go.
 	environmentCmd.AddCommand(environmentDomainCmd)
+	environmentDomainAddCmd.Flags().StringVar(&envDomainAddTLSSecret, "tls-secret", "", "pre-provisioned TLS secret name (required for wildcard hosts)")
 	environmentDomainCmd.AddCommand(environmentDomainAddCmd)
 	environmentDomainCmd.AddCommand(environmentDomainRmCmd)
 	environmentDomainCmd.AddCommand(environmentDomainSetCmd)

@@ -156,6 +156,9 @@ type CreateServiceRepo struct {
 type ServiceDomain struct {
 	Host string `json:"host,omitempty"`
 	TLS  bool   `json:"tls,omitempty"`
+	// TLSSecret names a pre-provisioned TLS secret; set for wildcard
+	// hosts. See kube.KusoWildcardDomain.
+	TLSSecret string `json:"tlsSecret,omitempty"`
 }
 
 // EnvVar is the wire-shape of a per-service environment variable. The

@@ -48,6 +48,10 @@
                 "tls": {
                   "default": true,
                   "type": "boolean"
+                },
+                "tlsSecret": {
+                  "description": "Pre-provisioned TLS secret name; required for wildcard hosts (*.example.com) — routes every matching subdomain with one DNS-01 wildcard cert instead of per-host Let's Encrypt issuance.",
+                  "type": "string"
                 }
               },
               "type": "object"
@@ -179,6 +183,11 @@
               }
             },
             "type": "object"
+          },
+          "platformApiEgress": {
+            "default": false,
+            "description": "When true, this service's pods may call the kuso API over in-cluster DNS (http://kuso-server). Grants egress ONLY to the kuso-server pods; for apps that orchestrate kuso via its API. Mirrored onto every KusoEnvironment owned by this service.",
+            "type": "boolean"
           },
           "port": {
             "format": "int32",

@@ -17,6 +17,7 @@ package projects
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -27,13 +28,36 @@ import (
 // Same dedupe + TLS-eligibility checks as the service-level AddDomain.
 // envName is the user-facing short env name (production, staging,
 // preview-pr-N); we resolve to the FQ CR name internally.
-func (s *Service) AddEnvDomain(ctx context.Context, project, service, envName, host string) (*kube.KusoEnvironment, error) {
+//
+// Wildcard hosts ("*.example.com") require tlsSecret — the name of a
+// pre-provisioned TLS secret (a DNS-01 wildcard cert; Let's Encrypt
+// can't HTTP-01 a wildcard). They land in env.Spec.WildcardDomains,
+// never in AdditionalHosts/TLSHosts, so no per-host certs are minted
+// for covered subdomains.
+func (s *Service) AddEnvDomain(ctx context.Context, project, service, envName, host, tlsSecret string) (*kube.KusoEnvironment, error) {
 	host = strings.ToLower(strings.TrimSpace(host))
+	tlsSecret = strings.TrimSpace(tlsSecret)
 	if host == "" {
 		return nil, fmt.Errorf("%w: host required", ErrInvalid)
 	}
-	if !validHostname(host) {
-		return nil, fmt.Errorf("%w: %q is not a valid hostname", ErrInvalid, host)
+	wildcard := strings.HasPrefix(host, "*.")
+	if wildcard {
+		if !validHostname(strings.TrimPrefix(host, "*.")) {
+			return nil, fmt.Errorf("%w: %q is not a valid wildcard hostname", ErrInvalid, host)
+		}
+		if tlsSecret == "" {
+			return nil, fmt.Errorf("%w: wildcard host %q needs tlsSecret — the name of a pre-provisioned wildcard cert Secret (Let's Encrypt can't HTTP-01 a wildcard; mint one via a cert-manager DNS-01 Certificate first)", ErrInvalid, host)
+		}
+		if !validSecretName(tlsSecret) {
+			return nil, fmt.Errorf("%w: %q is not a valid Secret name", ErrInvalid, tlsSecret)
+		}
+	} else {
+		if !validHostname(host) {
+			return nil, fmt.Errorf("%w: %q is not a valid hostname", ErrInvalid, host)
+		}
+		if tlsSecret != "" {
+			return nil, fmt.Errorf("%w: tlsSecret is only supported for wildcard hosts (*.example.com); non-wildcard hosts get a cert-manager cert automatically", ErrInvalid)
+		}
 	}
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
@@ -63,9 +87,28 @@ func (s *Service) AddEnvDomain(ctx context.Context, project, service, envName, h
 				return nil, fmt.Errorf("%w: %q already on env %q", ErrConflict, host, existing[i].Name)
 			}
 		}
+		for _, w := range existing[i].Spec.WildcardDomains {
+			if strings.EqualFold(w.Host, host) {
+				return nil, fmt.Errorf("%w: %q already on env %q", ErrConflict, host, existing[i].Name)
+			}
+		}
 	}
 
 	updated, err := s.updateOwnedEnvWithRetry(ctx, ns, project, envCRName, func(env *kube.KusoEnvironment) error {
+		if wildcard {
+			// Idempotent upsert: same host re-add updates the secret
+			// (lets the operator rotate to a renamed cert secret).
+			for i := range env.Spec.WildcardDomains {
+				if strings.EqualFold(env.Spec.WildcardDomains[i].Host, host) {
+					env.Spec.WildcardDomains[i].TLSSecret = tlsSecret
+					return nil
+				}
+			}
+			env.Spec.WildcardDomains = append(env.Spec.WildcardDomains, kube.KusoWildcardDomain{
+				Host: host, TLSSecret: tlsSecret,
+			})
+			return nil
+		}
 		// Idempotent: re-adding an existing host is a no-op. The CLI
 		// retry path benefits; the UI's "+ Add" doesn't repeat-fire
 		// but the safety still matters.
@@ -106,6 +149,19 @@ func (s *Service) RemoveEnvDomain(ctx context.Context, project, service, envName
 		}
 		env.Spec.AdditionalHosts = out
 		env.Spec.TLSHosts = computeTLSHosts(env.Spec.Host, env.Spec.AdditionalHosts)
+		// Wildcard entries are removed by the same verb — one namespace
+		// of hosts for the user, two storage fields internally.
+		wout := env.Spec.WildcardDomains[:0]
+		for _, w := range env.Spec.WildcardDomains {
+			if !strings.EqualFold(w.Host, host) {
+				wout = append(wout, w)
+			}
+		}
+		if len(wout) == 0 {
+			env.Spec.WildcardDomains = nil
+		} else {
+			env.Spec.WildcardDomains = wout
+		}
 		return nil
 	})
 	if err != nil {
@@ -113,6 +169,17 @@ func (s *Service) RemoveEnvDomain(ctx context.Context, project, service, envName
 	}
 	return updated, nil
 }
+
+// validSecretName reports whether s is a valid k8s Secret name
+// (RFC 1123 subdomain, ≤253 chars).
+func validSecretName(s string) bool {
+	if s == "" || len(s) > 253 {
+		return false
+	}
+	return secretNameRE.MatchString(s)
+}
+
+var secretNameRE = regexp.MustCompile(`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`)
 
 // SetEnvDomains replaces the entire AdditionalHosts list. Used by the
 // dashboard's textarea-style editor; for incremental add/remove use

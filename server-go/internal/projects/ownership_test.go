@@ -100,7 +100,7 @@ func TestEnvScopedWrites_RejectCrossProjectQualifiedName(t *testing.T) {
 
 	// envCRNameFor("foo", "foo-bar-web", "production") lands on
 	// "foo-bar-web-production" — foo-bar's production env.
-	if _, err := s.AddEnvDomain(ctx, "foo", "foo-bar-web", "production", "evil.example.com"); !errors.Is(err, ErrNotFound) {
+	if _, err := s.AddEnvDomain(ctx, "foo", "foo-bar-web", "production", "evil.example.com", ""); !errors.Is(err, ErrNotFound) {
 		t.Errorf("AddEnvDomain: want ErrNotFound, got %v", err)
 	}
 	if _, err := s.SetEnvDomains(ctx, "foo", "foo-bar-web", "production", []string{"evil.example.com"}); !errors.Is(err, ErrNotFound) {

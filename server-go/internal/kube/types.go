@@ -394,6 +394,23 @@ type KusoVolume struct {
 type KusoDomain struct {
 	Host string `json:"host,omitempty"`
 	TLS  bool   `json:"tls,omitempty"`
+	// TLSSecret names a pre-provisioned TLS secret for this host.
+	// Set for wildcard hosts ("*.example.com"): cert-manager can't
+	// HTTP-01 a wildcard, so the operator provisions one DNS-01 cert
+	// out of band and the chart serves it directly (no per-host LE
+	// issuance for covered subdomains).
+	TLSSecret string `json:"tlsSecret,omitempty"`
+}
+
+// KusoWildcardDomain is one wildcard host served by an env with a
+// pre-provisioned TLS secret. Rendered by the kusoenvironment chart as
+// a separate Ingress WITHOUT the cert-manager annotation: routing for
+// every matching subdomain, TLS from the named secret, zero per-host
+// certificates. This is what lifts the Let's Encrypt ~50 certs/week
+// ceiling for platforms hosting many tenant subdomains.
+type KusoWildcardDomain struct {
+	Host      string `json:"host"`
+	TLSSecret string `json:"tlsSecret"`
 }
 
 // KusoEnvVar is intentionally permissive (preserve-unknown-fields on items)
@@ -592,6 +609,12 @@ type KusoEnvironmentSpec struct {
 	// that aren't listed here get an HTTP-only rule. Empty = no tls
 	// block at all.
 	TLSHosts []string `json:"tlsHosts,omitempty"`
+	// WildcardDomains are wildcard hosts ("*.example.com") served with
+	// a pre-provisioned TLS secret each. Rendered as a SEPARATE Ingress
+	// without the cert-manager annotation (see the kusoenvironment
+	// chart) so ingress-shim never tries to issue for them. Never
+	// included in TLSHosts. Managed via the domains API with tlsSecret.
+	WildcardDomains []KusoWildcardDomain `json:"wildcardDomains,omitempty"`
 	// Internal=true mirrors KusoService.spec.internal so the chart can
 	// gate Ingress emission off the env CR alone (chart never reads
 	// the service spec). Propagated via propagateInternalToEnvs.

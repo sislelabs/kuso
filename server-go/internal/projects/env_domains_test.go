@@ -183,7 +183,7 @@ func TestAddEnvDomain_AppendsAndComputesTLS(t *testing.T) {
 		seedEnv("alpha", "web", "staging", "develop", "alpha-web-staging"),
 	)
 
-	env, err := s.AddEnvDomain(context.Background(), "alpha", "web", "staging", "staging.example.com")
+	env, err := s.AddEnvDomain(context.Background(), "alpha", "web", "staging", "staging.example.com", "")
 	if err != nil {
 		t.Fatalf("AddEnvDomain: %v", err)
 	}
@@ -195,7 +195,7 @@ func TestAddEnvDomain_AppendsAndComputesTLS(t *testing.T) {
 	}
 
 	// Idempotent re-add.
-	env, err = s.AddEnvDomain(context.Background(), "alpha", "web", "staging", "staging.example.com")
+	env, err = s.AddEnvDomain(context.Background(), "alpha", "web", "staging", "staging.example.com", "")
 	if err != nil {
 		t.Fatalf("AddEnvDomain (re-add): %v", err)
 	}
@@ -220,11 +220,11 @@ func TestAddEnvDomain_CrossEnvConflict(t *testing.T) {
 	)
 
 	// Claim the host on production first.
-	if _, err := s.AddEnvDomain(context.Background(), "alpha", "web", "production", "shop.example.com"); err != nil {
+	if _, err := s.AddEnvDomain(context.Background(), "alpha", "web", "production", "shop.example.com", ""); err != nil {
 		t.Fatalf("seed production domain: %v", err)
 	}
 	// Staging trying to claim the same host must conflict.
-	_, err := s.AddEnvDomain(context.Background(), "alpha", "web", "staging", "shop.example.com")
+	_, err := s.AddEnvDomain(context.Background(), "alpha", "web", "staging", "shop.example.com", "")
 	if !errors.Is(err, ErrConflict) {
 		t.Errorf("expected ErrConflict when two envs claim the same host, got %v", err)
 	}
@@ -237,7 +237,7 @@ func TestRemoveEnvDomain_Idempotent(t *testing.T) {
 		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
 		seedEnv("alpha", "web", "staging", "develop", "alpha-web-staging"),
 	)
-	if _, err := s.AddEnvDomain(context.Background(), "alpha", "web", "staging", "staging.example.com"); err != nil {
+	if _, err := s.AddEnvDomain(context.Background(), "alpha", "web", "staging", "staging.example.com", ""); err != nil {
 		t.Fatalf("AddEnvDomain: %v", err)
 	}
 	env, err := s.RemoveEnvDomain(context.Background(), "alpha", "web", "staging", "staging.example.com")
@@ -272,5 +272,65 @@ func TestSetEnvDomains_NormalizesAndDedupes(t *testing.T) {
 	}
 	if !containsHost(env.Spec.AdditionalHosts, "a.example.com") || !containsHost(env.Spec.AdditionalHosts, "b.example.com") {
 		t.Errorf("normalized hosts wrong: %v", env.Spec.AdditionalHosts)
+	}
+}
+
+// Wildcard hosts land in env.Spec.WildcardDomains with their cert secret —
+// never in AdditionalHosts/TLSHosts (that would mint per-host LE certs for
+// hosts the wildcard already covers). tlsSecret is mandatory: a wildcard
+// can't be HTTP-01'd, so routing one without a pre-provisioned cert would
+// serve traefik's default cert and read as an outage.
+func TestAddEnvDomain_Wildcard(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+
+	// Missing tlsSecret → rejected.
+	if _, err := s.AddEnvDomain(context.Background(), "alpha", "web", "production", "*.example.com", ""); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("wildcard without tlsSecret should be ErrInvalid, got %v", err)
+	}
+
+	env, err := s.AddEnvDomain(context.Background(), "alpha", "web", "production", "*.example.com", "wildcard-example-tls")
+	if err != nil {
+		t.Fatalf("AddEnvDomain wildcard: %v", err)
+	}
+	if len(env.Spec.WildcardDomains) != 1 ||
+		env.Spec.WildcardDomains[0].Host != "*.example.com" ||
+		env.Spec.WildcardDomains[0].TLSSecret != "wildcard-example-tls" {
+		t.Fatalf("wildcardDomains wrong: %+v", env.Spec.WildcardDomains)
+	}
+	if len(env.Spec.AdditionalHosts) != 0 {
+		t.Errorf("wildcard must not land in additionalHosts: %v", env.Spec.AdditionalHosts)
+	}
+	for _, h := range env.Spec.TLSHosts {
+		if h == "*.example.com" {
+			t.Errorf("wildcard must not land in tlsHosts (per-host LE issuance): %v", env.Spec.TLSHosts)
+		}
+	}
+
+	// Idempotent upsert: re-add with a new secret updates in place.
+	env, err = s.AddEnvDomain(context.Background(), "alpha", "web", "production", "*.example.com", "rotated-tls")
+	if err != nil {
+		t.Fatalf("re-add: %v", err)
+	}
+	if len(env.Spec.WildcardDomains) != 1 || env.Spec.WildcardDomains[0].TLSSecret != "rotated-tls" {
+		t.Fatalf("upsert should update the secret: %+v", env.Spec.WildcardDomains)
+	}
+
+	// tlsSecret on a NON-wildcard host is rejected (scope guard).
+	if _, err := s.AddEnvDomain(context.Background(), "alpha", "web", "production", "shop.example.com", "some-tls"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("tlsSecret on non-wildcard should be ErrInvalid, got %v", err)
+	}
+
+	// Removal via the same verb.
+	env, err = s.RemoveEnvDomain(context.Background(), "alpha", "web", "production", "*.example.com")
+	if err != nil {
+		t.Fatalf("RemoveEnvDomain wildcard: %v", err)
+	}
+	if len(env.Spec.WildcardDomains) != 0 {
+		t.Fatalf("wildcard should be removed: %+v", env.Spec.WildcardDomains)
 	}
 }

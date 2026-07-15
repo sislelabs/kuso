@@ -136,7 +136,8 @@ var domainsListCmd = &cobra.Command{
 }
 
 var (
-	domainsAddNoTLS bool
+	domainsAddNoTLS     bool
+	domainsAddTLSSecret string
 )
 
 var domainsAddCmd = &cobra.Command{
@@ -149,7 +150,15 @@ cert-manager will mint a Let's Encrypt cert on first request to the
 host (HTTP-01 challenge). If the host doesn't resolve to the cluster
 yet you'll see traefik default-cert during the propagation window.
 
-Adds are idempotent: duplicate (host, tls) returns 409 with no change.`,
+Adds are idempotent: duplicate (host, tls) returns 409 with no change.
+
+Wildcard hosts ("*.example.com") route every matching subdomain and
+require --tls-secret — the name of a pre-provisioned wildcard cert
+Secret (mint it once with a cert-manager DNS-01 Certificate). No
+per-host Let's Encrypt certs are issued for covered subdomains, which
+lifts the ~50 certs/week LE ceiling for many-tenant platforms:
+
+  kuso domains add saiton saiton '*.getsaiton.com' --tls-secret wildcard-getsaiton-tls`,
 	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -163,7 +172,7 @@ Adds are idempotent: duplicate (host, tls) returns 409 with no change.`,
 
 		// --env: bind directly to that environment's additionalHosts.
 		if domainsEnv != "" {
-			resp, err := api.AddEnvDomain(project, service, domainsEnv, host)
+			resp, err := api.AddEnvDomain(project, service, domainsEnv, host, domainsAddTLSSecret)
 			if err != nil {
 				return fmt.Errorf("add env domain: %w", err)
 			}
@@ -174,7 +183,7 @@ Adds are idempotent: duplicate (host, tls) returns 409 with no change.`,
 			return nil
 		}
 
-		req := kusoApi.AddDomainRequest{Host: host, TLS: !domainsAddNoTLS}
+		req := kusoApi.AddDomainRequest{Host: host, TLS: !domainsAddNoTLS, TLSSecret: domainsAddTLSSecret}
 		resp, err := api.AddDomain(project, service, req)
 		if err != nil {
 			return fmt.Errorf("add domain: %w", err)
@@ -227,6 +236,7 @@ var domainsRemoveCmd = &cobra.Command{
 
 func init() {
 	domainsAddCmd.Flags().BoolVar(&domainsAddNoTLS, "no-tls", false, "skip the cert-manager TLS entry (HTTP-only host)")
+	domainsAddCmd.Flags().StringVar(&domainsAddTLSSecret, "tls-secret", "", "pre-provisioned TLS secret name (required for wildcard hosts)")
 	// --env on the group: scope add/remove/list to one environment. Empty
 	// (default) = service-level (the server mirrors to production).
 	domainsCmd.PersistentFlags().StringVar(&domainsEnv, "env", "",

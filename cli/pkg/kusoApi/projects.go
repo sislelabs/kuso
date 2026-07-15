@@ -266,8 +266,12 @@ func (k *KusoClient) RemoveDomain(project, service, host string) (*resty.Respons
 // production env — this targets the named env exactly (staging,
 // preview-pr-N, ...). 409 if another env in the project already claims the
 // host.
-func (k *KusoClient) AddEnvDomain(project, service, env, host string) (*resty.Response, error) {
-	k.client.SetBody(map[string]string{"host": host})
+func (k *KusoClient) AddEnvDomain(project, service, env, host, tlsSecret string) (*resty.Response, error) {
+	body := map[string]string{"host": host}
+	if tlsSecret != "" {
+		body["tlsSecret"] = tlsSecret
+	}
+	k.client.SetBody(body)
 	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/envs/" + esc(env) + "/domains")
 }
 

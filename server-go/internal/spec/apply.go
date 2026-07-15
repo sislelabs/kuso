@@ -278,7 +278,7 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 
 	domains := make([]projects.ServiceDomain, 0, len(s.Domains))
 	for _, d := range s.Domains {
-		domains = append(domains, projects.ServiceDomain{Host: d.Host, TLS: d.TLS})
+		domains = append(domains, projects.ServiceDomain{Host: d.Host, TLS: d.TLS, TLSSecret: d.TLSSecret})
 	}
 
 	scale := &projects.PatchScaleRequest{}

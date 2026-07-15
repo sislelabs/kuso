@@ -39,6 +39,9 @@ import (
 type AddDomainRequest struct {
 	Host string `json:"host"`
 	TLS  bool   `json:"tls"`
+	// TLSSecret names a pre-provisioned TLS secret; required for (and
+	// only valid with) wildcard hosts. See kube.KusoWildcardDomain.
+	TLSSecret string `json:"tlsSecret,omitempty"`
 }
 
 // AddDomain appends a domain to spec.domains, deduplicating by host.
@@ -53,11 +56,24 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 	if host == "" {
 		return nil, fmt.Errorf("%w: host required", ErrInvalid)
 	}
-	if !validHostname(host) {
-		return nil, fmt.Errorf("%w: %q is not a valid hostname", ErrInvalid, host)
-	}
-	if req.TLS && !isPublicFQDN(host) {
-		return nil, fmt.Errorf("%w: %q can't get a Let's Encrypt cert (not a public FQDN — single-label or reserved TLD); add it with TLS off if you only need HTTP routing", ErrInvalid, host)
+	wildcard := strings.HasPrefix(host, "*.")
+	if wildcard {
+		// Wildcard hosts are validated in depth (incl. the tlsSecret
+		// requirement) by AddEnvDomain below; here just gate the shape
+		// so an invalid host never lands on the service spec.
+		if !validHostname(strings.TrimPrefix(host, "*.")) {
+			return nil, fmt.Errorf("%w: %q is not a valid wildcard hostname", ErrInvalid, host)
+		}
+		if strings.TrimSpace(req.TLSSecret) == "" {
+			return nil, fmt.Errorf("%w: wildcard host %q needs tlsSecret — the name of a pre-provisioned wildcard cert Secret", ErrInvalid, host)
+		}
+	} else {
+		if !validHostname(host) {
+			return nil, fmt.Errorf("%w: %q is not a valid hostname", ErrInvalid, host)
+		}
+		if req.TLS && !isPublicFQDN(host) {
+			return nil, fmt.Errorf("%w: %q can't get a Let's Encrypt cert (not a public FQDN — single-label or reserved TLD); add it with TLS off if you only need HTTP routing", ErrInvalid, host)
+		}
 	}
 
 	// In-process mutex guards same-replica races. Multi-replica
@@ -77,15 +93,16 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 		dupConflict = false
 		for i := range svc.Spec.Domains {
 			if strings.EqualFold(svc.Spec.Domains[i].Host, host) {
-				if svc.Spec.Domains[i].TLS == req.TLS {
+				if svc.Spec.Domains[i].TLS == req.TLS && svc.Spec.Domains[i].TLSSecret == req.TLSSecret {
 					dupConflict = true
 					return kube.ErrAbortRetry
 				}
 				svc.Spec.Domains[i].TLS = req.TLS
+				svc.Spec.Domains[i].TLSSecret = req.TLSSecret
 				return nil
 			}
 		}
-		svc.Spec.Domains = append(svc.Spec.Domains, kube.KusoDomain{Host: host, TLS: req.TLS})
+		svc.Spec.Domains = append(svc.Spec.Domains, kube.KusoDomain{Host: host, TLS: req.TLS, TLSSecret: req.TLSSecret})
 		return nil
 	})
 	if dupConflict {
@@ -105,7 +122,7 @@ func (s *Service) AddDomain(ctx context.Context, project, service string, req Ad
 	// claiming production's domain). AddEnvDomain is idempotent + reuses
 	// the cross-env conflict check + computeTLSHosts. For TLS=false hosts
 	// it still routes (additionalHosts) but won't be added to tlsHosts.
-	if _, perr := s.AddEnvDomain(ctx, project, service, "production", host); perr != nil {
+	if _, perr := s.AddEnvDomain(ctx, project, service, "production", host, req.TLSSecret); perr != nil {
 		// A missing production env (rare: service mid-create) shouldn't
 		// fail the service-level write — the domain is recorded on the
 		// service and a later env reconcile/redeploy can re-mirror it.

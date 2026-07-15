@@ -67,7 +67,7 @@ type ProjectsAPI interface {
 	SetSubscribedAddons(ctx context.Context, project, service string, addons []string) (*kube.KusoService, error)
 	// Per-env custom domains (v0.16.19). Replaces the service-level
 	// spec.domains propagation that used to clobber sibling envs.
-	AddEnvDomain(ctx context.Context, project, service, envName, host string) (*kube.KusoEnvironment, error)
+	AddEnvDomain(ctx context.Context, project, service, envName, host, tlsSecret string) (*kube.KusoEnvironment, error)
 	RemoveEnvDomain(ctx context.Context, project, service, envName, host string) (*kube.KusoEnvironment, error)
 	SetEnvDomains(ctx context.Context, project, service, envName string, hosts []string) (*kube.KusoEnvironment, error)
 	SetEnvScopedVar(ctx context.Context, project, service, envName, name string, req projects.SetEnvVarRequest) (*kube.KusoEnvironment, error)

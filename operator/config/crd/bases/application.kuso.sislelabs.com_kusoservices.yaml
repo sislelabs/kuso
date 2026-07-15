@@ -88,6 +88,7 @@ spec:
                     properties:
                       host: { type: string }
                       tls: { type: boolean, default: true }
+                      tlsSecret: { type: string, description: "Pre-provisioned TLS secret name; required for wildcard hosts (*.example.com) — routes every matching subdomain with one DNS-01 wildcard cert instead of per-host Let's Encrypt issuance." }
                 internal:
                   type: boolean
                   description: When true, skip the Ingress entirely. The in-cluster Service still exists so sibling pods can reach the service via ${{ svc.URL }}, but no public domain or TLS is provisioned. Mirrored onto every KusoEnvironment owned by this service.

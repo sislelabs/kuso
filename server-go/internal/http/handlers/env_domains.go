@@ -44,9 +44,12 @@ func (h *ProjectsHandler) SetEnvDomains(w http.ResponseWriter, r *http.Request) 
 
 // POST /api/projects/{project}/services/{service}/envs/{env}/domains
 // Body: { "host": "api-staging.example.com" }
+// Wildcard hosts need a pre-provisioned cert secret:
+// Body: { "host": "*.example.com", "tlsSecret": "wildcard-example-tls" }
 func (h *ProjectsHandler) AddEnvDomain(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Host string `json:"host"`
+		Host      string `json:"host"`
+		TLSSecret string `json:"tlsSecret"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -58,7 +61,7 @@ func (h *ProjectsHandler) AddEnvDomain(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
-	updated, err := h.Svc.AddEnvDomain(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "env"), body.Host)
+	updated, err := h.Svc.AddEnvDomain(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "env"), body.Host, body.TLSSecret)
 	if err != nil {
 		h.fail(w, "add env domain", err)
 		return

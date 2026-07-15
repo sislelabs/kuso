@@ -543,10 +543,12 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 	envHost := defaultHost(req.Name, project, proj.Spec.BaseDomain)
 	envAdditionalHosts := domainHosts(created.Spec.Domains)
 	envTLSHosts := computeTLSHosts(envHost, envAdditionalHosts)
+	envWildcardDomains := wildcardDomainsOf(created.Spec.Domains)
 	if created.Spec.Runtime == "worker" {
 		envHost = ""
 		envAdditionalHosts = nil
 		envTLSHosts = nil
+		envWildcardDomains = nil
 	}
 	// Pre-build holding state: a build-based service is born with no image
 	// (the build pipeline patches spec.image on the first successful build).
@@ -597,6 +599,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			Host:              envHost,
 			AdditionalHosts:   envAdditionalHosts,
 			TLSHosts:          envTLSHosts,
+			WildcardDomains:   envWildcardDomains,
 			Internal:          created.Spec.Internal,
 			PrivateEgress:     created.Spec.PrivateEgress,
 			PlatformAPIEgress: created.Spec.PlatformAPIEgress,
@@ -2374,12 +2377,28 @@ func domainHosts(domains []kube.KusoDomain) []string {
 	out := make([]string, 0, len(domains))
 	for _, d := range domains {
 		h := strings.TrimSpace(d.Host)
-		if h != "" {
+		// Wildcard hosts live in env.Spec.WildcardDomains (own Ingress,
+		// pre-provisioned cert) — never in additionalHosts/tlsHosts,
+		// where they'd trigger per-host cert-manager issuance.
+		if h != "" && !strings.HasPrefix(h, "*.") {
 			out = append(out, h)
 		}
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+// wildcardDomainsOf extracts the wildcard entries of a service's
+// domains list in the env-CR shape. Companion of domainHosts.
+func wildcardDomainsOf(domains []kube.KusoDomain) []kube.KusoWildcardDomain {
+	var out []kube.KusoWildcardDomain
+	for _, d := range domains {
+		h := strings.TrimSpace(d.Host)
+		if strings.HasPrefix(h, "*.") && d.TLSSecret != "" {
+			out = append(out, kube.KusoWildcardDomain{Host: h, TLSSecret: d.TLSSecret})
+		}
 	}
 	return out
 }
@@ -2396,7 +2415,7 @@ func convertDomains(in []ServiceDomain) []kube.KusoDomain {
 	}
 	out := make([]kube.KusoDomain, len(in))
 	for i, d := range in {
-		out[i] = kube.KusoDomain{Host: d.Host, TLS: d.TLS}
+		out[i] = kube.KusoDomain{Host: d.Host, TLS: d.TLS, TLSSecret: d.TLSSecret}
 	}
 	return out
 }

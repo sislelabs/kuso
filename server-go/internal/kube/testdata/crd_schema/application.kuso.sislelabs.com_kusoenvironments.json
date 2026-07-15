@@ -213,6 +213,11 @@
             },
             "type": "object"
           },
+          "platformApiEgress": {
+            "default": false,
+            "description": "When true, allow this env's pods to call the kuso API over in-cluster DNS. Mirrors KusoService.spec.platformApiEgress.",
+            "type": "boolean"
+          },
           "port": {
             "format": "int32",
             "type": "integer"
@@ -366,6 +371,21 @@
                   "type": "integer"
                 },
                 "storageClass": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "wildcardDomains": {
+            "description": "Wildcard hosts served with a pre-provisioned TLS secret each. Rendered as a separate Ingress without the cert-manager annotation — no per-host LE issuance for covered subdomains.",
+            "items": {
+              "properties": {
+                "host": {
+                  "type": "string"
+                },
+                "tlsSecret": {
                   "type": "string"
                 }
               },

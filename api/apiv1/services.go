@@ -102,6 +102,12 @@ type ServiceRepoSpec struct {
 type ServiceDomain struct {
 	Host string `json:"host,omitempty"`
 	TLS  bool   `json:"tls,omitempty"`
+	// TLSSecret names a pre-provisioned TLS secret serving this host.
+	// Required for (and currently only valid with) wildcard hosts
+	// ("*.example.com"): Let's Encrypt can't HTTP-01 a wildcard, so the
+	// operator provisions one DNS-01 cert out of band and kuso routes
+	// every matching subdomain with it — no per-host issuance.
+	TLSSecret string `json:"tlsSecret,omitempty"`
 }
 
 // EnvVar is the wire-shape of a per-service environment variable.
@@ -156,9 +162,12 @@ type ServiceImage struct {
 }
 
 // AddDomainRequest is the body of POST .../services/{s}/domains.
+// TLSSecret is required for wildcard hosts ("*.example.com") and names
+// the pre-provisioned wildcard cert secret; see ServiceDomain.TLSSecret.
 type AddDomainRequest struct {
-	Host string `json:"host"`
-	TLS  bool   `json:"tls"`
+	Host      string `json:"host"`
+	TLS       bool   `json:"tls"`
+	TLSSecret string `json:"tlsSecret,omitempty"`
 }
 
 // SetEnvRequest is the body of POST .../services/{s}/env (whole-

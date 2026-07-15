@@ -83,6 +83,16 @@ tlsHosts: []
 # nothing is exposed to traefik. Mirrors KusoService.spec.internal.
 internal: false
 
+# wildcardDomains: wildcard hosts served with a pre-provisioned TLS
+# secret each (a cert-manager DNS-01 wildcard Certificate the operator
+# set up out of band). Rendered as a separate Ingress WITHOUT the
+# cert-manager annotation — no per-host LE issuance for covered
+# subdomains. Mirrors KusoEnvironment.spec.wildcardDomains.
+#   wildcardDomains:
+#     - host: "*.example.com"
+#       tlsSecret: wildcard-example-tls
+wildcardDomains: []
+
 # privateEgress: when true, this service's pods are denied public
 # internet egress (sibling pods, DNS, and the in-cluster registry are
 # still reachable). Default false: pods CAN reach the internet. When

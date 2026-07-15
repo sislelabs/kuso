@@ -175,4 +175,58 @@ spec:
                 {{- end }}
     {{- end }}
 {{- end }}
+{{- /* Wildcard hosts (spec.wildcardDomains): a SEPARATE Ingress with
+       NO cert-manager annotation. Each entry serves "*.example.com"
+       with a pre-provisioned TLS secret (a DNS-01 wildcard cert the
+       operator minted out of band). Two reasons for the split:
+         1. cert-manager's ingress-shim creates a Certificate for every
+            tls[] entry on an annotated Ingress — it would try (and
+            fail, HTTP-01) to issue for the wildcard, burning LE quota
+            on retries.
+         2. Keeping per-host and wildcard TLS blocks independent means
+            a missing wildcard secret can't drag the per-host Ingress
+            into traefik's default-cert fallback.
+       Backend logic (activator vs service) mirrors the main Ingress. */ -}}
+{{- if and
+      (not (eq (default "" .Values.runtime) "worker"))
+      (not .Values.internal)
+      .Values.wildcardDomains }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "kusoenvironment.fullname" . }}-wildcard
+  labels:
+    {{- include "kusoenvironment.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingressClassName | quote }}
+  {{- if .Values.tlsEnabled }}
+  tls:
+    {{- range .Values.wildcardDomains }}
+    - hosts:
+        - {{ .host | quote }}
+      secretName: {{ .tlsSecret | quote }}
+    {{- end }}
+  {{- end }}
+  rules:
+    {{- $useActivator := or (and .Values.sleep .Values.sleep.enabled) .Values.stopped -}}
+    {{- range .Values.wildcardDomains }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                {{- if $useActivator }}
+                name: kuso-activator
+                port:
+                  number: 80
+                {{- else }}
+                name: {{ include "kusoenvironment.fullname" $ }}
+                port:
+                  name: http
+                {{- end }}
+    {{- end }}
+{{- end }}
 {{- end }}
