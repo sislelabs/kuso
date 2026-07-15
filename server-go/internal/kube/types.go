@@ -199,6 +199,15 @@ type KusoServiceSpec struct {
 	// NetworkPolicy's allow-public-egress rule keys on that label.
 	// Mirrored onto every KusoEnvironment owned by this service.
 	PrivateEgress bool `json:"privateEgress,omitempty"`
+	// PlatformAPIEgress, when true, allows this service's pods to call
+	// the kuso API over in-cluster DNS (http://kuso-server). The default
+	// project NetworkPolicy denies all cluster-internal egress, so an
+	// app that orchestrates kuso (creates domains, projects, …) needs
+	// this opt-in. The kusoenvironment chart stamps the
+	// kuso.sislelabs.com/network-egress-platform-api pod label; the
+	// kusoproject NetworkPolicy's allow-platform-api-egress rule keys on
+	// it. Mirrored onto every KusoEnvironment owned by this service.
+	PlatformAPIEgress bool `json:"platformApiEgress,omitempty"`
 	// Stopped hard-stops the service: pinned to 0 replicas and NOT woken
 	// by traffic (unlike sleep, which the activator wakes on the next
 	// request). A stopped service's visitors get a "service stopped" 503
@@ -592,6 +601,10 @@ type KusoEnvironmentSpec struct {
 	// public-egress pod label. Server-managed: propagated from the
 	// service spec by propagateChangedToEnvs.
 	PrivateEgress bool `json:"privateEgress,omitempty"`
+	// PlatformAPIEgress mirrors KusoService.spec.platformApiEgress so
+	// the chart can stamp the platform-api egress pod label. Server-
+	// managed: propagated from the service spec by propagateChangedToEnvs.
+	PlatformAPIEgress bool `json:"platformApiEgress,omitempty"`
 	// Stopped mirrors KusoService.spec.stopped. The kusoenvironment chart
 	// pins replicas:0 when set, and the activator refuses to wake a stopped
 	// env (serving a "service stopped" 503 instead). Server-managed:

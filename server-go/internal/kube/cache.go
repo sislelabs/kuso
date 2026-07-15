@@ -4,13 +4,13 @@
 //
 // Why bother:
 //
-//   At 100 projects × 5 services × 3 envs the read paths used to LIST
-//   the full CR set on every request. With a few users on the
-//   dashboard plus the github dispatcher's periodic scans plus the
-//   build poller, that's hundreds of LISTs per minute against the
-//   k3s API server — each one re-marshalling the full unstructured
-//   payload through json. The cache reduces this to one WATCH per
-//   GVR and O(1) lookups.
+//	At 100 projects × 5 services × 3 envs the read paths used to LIST
+//	the full CR set on every request. With a few users on the
+//	dashboard plus the github dispatcher's periodic scans plus the
+//	build poller, that's hundreds of LISTs per minute against the
+//	k3s API server — each one re-marshalling the full unstructured
+//	payload through json. The cache reduces this to one WATCH per
+//	GVR and O(1) lookups.
 //
 // Design notes:
 //
@@ -378,4 +378,3 @@ func (c *Cache) ListFromCache(gvr schema.GroupVersionResource, namespace string,
 	}
 	return out, true
 }
-

@@ -41,7 +41,8 @@ func (k *KusoClient) SQLColumns(project, addon, schema, table string) (*resty.Re
 // SQLRows returns a paginated single-table SELECT. schema/table/limit/
 // offset are QUERY params. Response is rowsResponse:
 // {"columns": [...], "rows": [[...]], "nulls": [[...]], "total": N,
-//  "truncated": bool, "elapsed": "..."}.
+//
+//	"truncated": bool, "elapsed": "..."}.
 func (k *KusoClient) SQLRows(project, addon, schema, table string, limit, offset int) (*resty.Response, error) {
 	q := url.Values{}
 	if schema != "" {

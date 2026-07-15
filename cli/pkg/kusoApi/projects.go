@@ -189,15 +189,16 @@ type PatchServiceDomain = apiv1.ServiceDomain
 // scale, sleep, repo, previews — the domain shape is broader than
 // the create path). The CLI only edits the small subset below.
 type PatchServiceRequest struct {
-	DisplayName     *string                      `json:"displayName,omitempty"`
-	Port            *int32                       `json:"port,omitempty"`
-	Runtime         *string                      `json:"runtime,omitempty"`
-	Domains         *[]PatchServiceDomain        `json:"domains,omitempty"`
-	Internal        *bool                        `json:"internal,omitempty"`
-	PrivateEgress   *bool                        `json:"privateEgress,omitempty"`
-	Scale           *PatchScaleRequest           `json:"scale,omitempty"`
-	Repo            *PatchRepoRequest            `json:"repo,omitempty"`
-	SecurityContext *PatchSecurityContextRequest `json:"securityContext,omitempty"`
+	DisplayName       *string                      `json:"displayName,omitempty"`
+	Port              *int32                       `json:"port,omitempty"`
+	Runtime           *string                      `json:"runtime,omitempty"`
+	Domains           *[]PatchServiceDomain        `json:"domains,omitempty"`
+	Internal          *bool                        `json:"internal,omitempty"`
+	PrivateEgress     *bool                        `json:"privateEgress,omitempty"`
+	PlatformAPIEgress *bool                        `json:"platformApiEgress,omitempty"`
+	Scale             *PatchScaleRequest           `json:"scale,omitempty"`
+	Repo              *PatchRepoRequest            `json:"repo,omitempty"`
+	SecurityContext   *PatchSecurityContextRequest `json:"securityContext,omitempty"`
 }
 
 // PatchSecurityContextRequest mirrors the server's kube.KusoSecurityContext.

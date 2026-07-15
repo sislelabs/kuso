@@ -55,6 +55,9 @@ type changedFields struct {
 	// stamps the public-egress pod label off the env CR's value, so a
 	// service-level toggle that isn't propagated never reaches a pod.
 	PrivateEgress bool
+	// PlatformAPIEgress carries spec.platformApiEgress changes — same
+	// chart-reads-env-only reasoning as PrivateEgress.
+	PlatformAPIEgress bool
 	// Release carries spec.release changes. The build poller reads
 	// it off the env CR (which is already in its hot-path GET) when
 	// deciding whether to run a release Job before promoting an image.
@@ -88,7 +91,7 @@ type changedFields struct {
 }
 
 func (c changedFields) any() bool {
-	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.Release || c.Command || c.Resources || c.Stopped || c.Sleep || c.SecurityContext
+	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.PlatformAPIEgress || c.Release || c.Command || c.Resources || c.Stopped || c.Sleep || c.SecurityContext
 }
 
 // propagateChangedToEnvs is the single chokepoint that mirrors a
@@ -294,6 +297,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			if changed.PrivateEgress {
 				env.Spec.PrivateEgress = svc.Spec.PrivateEgress
 			}
+			if changed.PlatformAPIEgress {
+				env.Spec.PlatformAPIEgress = svc.Spec.PlatformAPIEgress
+			}
 			if changed.Stopped {
 				env.Spec.Stopped = svc.Spec.Stopped
 			}
@@ -368,6 +374,103 @@ func (s *Service) propagateBaseDomain(ctx context.Context, project, oldBase, new
 		}
 	}
 	return nil
+}
+
+// propagateDefaultBranch restamps env.Spec.Branch on every owned env
+// that was tracking the OLD project default branch. Without this, a
+// project-level default-branch change updates the project CR but every
+// existing env keeps the old branch — and because build promotion
+// filters on env.Spec.Branch == build.Spec.Branch, builds from the new
+// branch succeed and then silently never promote (env stuck on the old
+// image / 0 replicas, no error anywhere). The most expensive way to
+// discover this is in production; see the 2026-07 saiton incident.
+//
+// Guards, mirroring propagateBaseDomain's "only move what looks
+// auto-set" contract:
+//   - envs whose branch differs from the old default are left alone
+//     (preview envs track PR branches; custom env-groups pin their own)
+//   - envs of services with an explicit spec.repo.defaultBranch are
+//     left alone — the user pinned those by name, and the service-level
+//     patch path (propagateServiceBranch) owns them.
+func (s *Service) propagateDefaultBranch(ctx context.Context, project, oldBranch, newBranch string) error {
+	if oldBranch == "" || newBranch == "" || oldBranch == newBranch {
+		return nil
+	}
+	ns, err := s.namespaceFor(ctx, project)
+	if err != nil {
+		return err
+	}
+	// Services with their own branch override — their envs are pinned.
+	pinned := map[string]bool{} // key: FQN service name
+	if svcs, serr := s.Kube.ListKusoServices(ctx, ns); serr == nil {
+		for i := range svcs {
+			svc := &svcs[i]
+			if svc.Spec.Project != project {
+				continue
+			}
+			if svc.Spec.Repo != nil && svc.Spec.Repo.DefaultBranch != "" {
+				pinned[svc.Name] = true
+			}
+		}
+	}
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		kube.LabelProject: project,
+	})
+	if err != nil {
+		return fmt.Errorf("list envs: %w", err)
+	}
+	var errs []error
+	for i := range envs {
+		env := &envs[i]
+		if env.Spec.Branch != oldBranch || pinned[env.Spec.Service] {
+			continue
+		}
+		if _, uerr := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(live *kube.KusoEnvironment) error {
+			live.Spec.Branch = newBranch
+			return nil
+		}); uerr != nil {
+			errs = append(errs, fmt.Errorf("update env %s: %w", env.Name, uerr))
+			continue
+		}
+		slog.InfoContext(ctx, "propagate: env branch restamped",
+			"env", env.Name, "from", oldBranch, "to", newBranch)
+	}
+	return errors.Join(errs...)
+}
+
+// propagateServiceBranch is the service-level analogue: after a
+// service's spec.repo.defaultBranch changes (PatchService req.Repo),
+// restamp this service's envs that tracked the old effective branch.
+// Same "only move what matched the old value" guard as above — preview
+// envs on PR branches and custom-branch envs stay put.
+func (s *Service) propagateServiceBranch(ctx context.Context, ns, project, service, oldBranch, newBranch string) error {
+	if oldBranch == "" || newBranch == "" || oldBranch == newBranch {
+		return nil
+	}
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		labelProject: project,
+		labelService: service,
+	})
+	if err != nil {
+		return fmt.Errorf("list envs: %w", err)
+	}
+	var errs []error
+	for i := range envs {
+		env := &envs[i]
+		if env.Spec.Branch != oldBranch {
+			continue
+		}
+		if _, uerr := s.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, env.Name, func(live *kube.KusoEnvironment) error {
+			live.Spec.Branch = newBranch
+			return nil
+		}); uerr != nil {
+			errs = append(errs, fmt.Errorf("update env %s: %w", env.Name, uerr))
+			continue
+		}
+		slog.InfoContext(ctx, "propagate: env branch restamped",
+			"env", env.Name, "from", oldBranch, "to", newBranch)
+	}
+	return errors.Join(errs...)
 }
 
 // rescopeServiceRefLiterals walks every envVar value looking for the

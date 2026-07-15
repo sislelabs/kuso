@@ -45,11 +45,11 @@ type CostTotal struct {
 // CostRollupDay is one (node, day) usage bucket. Mirrors
 // server-go internal/db.CostRollupDay.
 type CostRollupDay struct {
-	Node          string `json:"node"`
-	Day           string `json:"day"`
-	CPUMilliHours int64  `json:"cpuMilliHours"`
+	Node          string  `json:"node"`
+	Day           string  `json:"day"`
+	CPUMilliHours int64   `json:"cpuMilliHours"`
 	MemGBHours    float64 `json:"memGBHours"`
-	SampleCount   int    `json:"sampleCount"`
+	SampleCount   int     `json:"sampleCount"`
 }
 
 // UsageResponse is the wire shape of GET /api/usage. Daily is the

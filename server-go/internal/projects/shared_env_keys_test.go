@@ -86,7 +86,7 @@ func TestExtractEnvOnlyOverrides(t *testing.T) {
 				{Name: "AUTH_URL", Value: "https://ticketmaster.sisle.org"},
 			},
 			overrides: nil, // no deliberate override recorded
-			wantNames: nil,  // drops; service value wins
+			wantNames: nil, // drops; service value wins
 		},
 		{
 			name:      "no env entries",

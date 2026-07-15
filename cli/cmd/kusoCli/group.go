@@ -73,9 +73,9 @@ var groupListCmd = &cobra.Command{
 }
 
 var groupCreateCmd = &cobra.Command{
-	Use:   "create",
-	Short: "Create a new group",
-	Args:  cobra.NoArgs,
+	Use:     "create",
+	Short:   "Create a new group",
+	Args:    cobra.NoArgs,
 	Example: `  kuso group create --name devs --description 'engineering team'`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {

@@ -73,6 +73,9 @@ spec:
         {{- if not .Values.privateEgress }}
         kuso.sislelabs.com/network-egress-public: "true"
         {{- end }}
+        {{- if .Values.platformApiEgress }}
+        kuso.sislelabs.com/network-egress-platform-api: "true"
+        {{- end }}
       {{- with .Values.secretsRev }}
       annotations:
         kuso.sislelabs.com/secrets-rev: {{ . | quote }}

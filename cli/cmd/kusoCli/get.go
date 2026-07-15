@@ -41,10 +41,11 @@ func checkRespErr(resp *resty.Response, err error) error {
 }
 
 // getCmd is the agent-friendly read entrypoint. v0.2 surfaces:
-//   kuso get projects [-o json]
-//   kuso get services <project> [-o json]
-//   kuso get envs <project> [-o json]
-//   kuso get addons <project> [-o json]
+//
+//	kuso get projects [-o json]
+//	kuso get services <project> [-o json]
+//	kuso get envs <project> [-o json]
+//	kuso get addons <project> [-o json]
 //
 // Output is deterministic (stable sort) so JSON diffs round-trip cleanly.
 var getCmd = &cobra.Command{

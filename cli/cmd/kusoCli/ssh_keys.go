@@ -64,9 +64,9 @@ var sshKeyListCmd = &cobra.Command{
 }
 
 var (
-	sshKeyGenerate    bool
-	sshKeyPubFile     string
-	sshKeyPrivFile    string
+	sshKeyGenerate bool
+	sshKeyPubFile  string
+	sshKeyPrivFile string
 )
 
 var sshKeyAddCmd = &cobra.Command{

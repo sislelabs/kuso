@@ -90,15 +90,15 @@ func TestValidateDockerfile(t *testing.T) {
 		in     string
 		wantOK bool
 	}{
-		{"", true},                       // empty → chart default
+		{"", true}, // empty → chart default
 		{"Dockerfile", true},
 		{"apps/web/Dockerfile.dev", true},
 		{"sub_dir/Docker-file", true},
-		{"/etc/passwd", false},           // absolute
-		{"../escape/Dockerfile", false},  // traversal
+		{"/etc/passwd", false},            // absolute
+		{"../escape/Dockerfile", false},   // traversal
 		{`Dockerfile";rm -rf /;"`, false}, // shell injection
-		{"Docker file", false},           // space
-		{"$(touch x)", false},            // command substitution
+		{"Docker file", false},            // space
+		{"$(touch x)", false},             // command substitution
 	}
 	for _, c := range cases {
 		err := validateDockerfile(c.in)

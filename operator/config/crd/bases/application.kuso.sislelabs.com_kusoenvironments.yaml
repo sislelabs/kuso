@@ -157,6 +157,10 @@ spec:
                   type: boolean
                   description: When true, deny public internet egress for this env's pods. Mirrors KusoService.spec.privateEgress.
                   default: false
+                platformApiEgress:
+                  type: boolean
+                  description: When true, allow this env's pods to call the kuso API over in-cluster DNS. Mirrors KusoService.spec.platformApiEgress.
+                  default: false
                 stopped:
                   type: boolean
                   description: When true, hard-stop this env — pin to 0 replicas and do NOT wake on traffic. Mirrors KusoService.spec.stopped. The activator serves a "service stopped" 503 for a stopped env instead of scaling it up.

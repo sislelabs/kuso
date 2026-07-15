@@ -12,7 +12,6 @@ import (
 	"k8s.io/client-go/util/retry"
 )
 
-
 // fromUnstructured decodes a single unstructured object into out.
 //
 // runtime.DefaultUnstructuredConverter handles json struct tags correctly,

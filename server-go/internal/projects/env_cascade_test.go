@@ -68,7 +68,7 @@ func TestEnvVarCascade(t *testing.T) {
 		sharedKeys     []string
 		svcExplicit    []kube.KusoEnvVar
 		envExplicit    []kube.KusoEnvVar
-		envOverrides   []string       // names deliberately pinned per-env
+		envOverrides   []string // names deliberately pinned per-env
 		envFromSecrets []string
 		extraSecret    *corev1.Secret // optional per-env Secret to seed
 		// expectations
@@ -234,4 +234,3 @@ func cascadeSvc(t *testing.T, secrets ...*corev1.Secret) *Service {
 	cs := kubefake.NewSimpleClientset(objs...)
 	return New(&kube.Client{Dynamic: dyn, Clientset: cs}, "kuso")
 }
-

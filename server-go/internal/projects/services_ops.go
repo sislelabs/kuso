@@ -586,23 +586,24 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			OwnerReferences: []metav1.OwnerReference{kube.OwnerRefForService(created)},
 		},
 		Spec: kube.KusoEnvironmentSpec{
-			Project:          project,
-			Service:          fqn,
-			Kind:             "production",
-			Branch:           defaultBranch,
-			Port:             port,
-			ReplicaCount:     intPtr(initialReplicas),
-			Autoscaling:      autoscalingFromScale(scale),
-			SpreadPolicy:     s.resolveSpreadPolicy(ctx),
-			Host:             envHost,
-			AdditionalHosts:  envAdditionalHosts,
-			TLSHosts:         envTLSHosts,
-			Internal:         created.Spec.Internal,
-			PrivateEgress:    created.Spec.PrivateEgress,
-			TLSEnabled:       true,
-			ClusterIssuer:    "letsencrypt-prod",
-			IngressClassName: "traefik",
-			EnvFromSecrets:   envFromSecrets,
+			Project:           project,
+			Service:           fqn,
+			Kind:              "production",
+			Branch:            defaultBranch,
+			Port:              port,
+			ReplicaCount:      intPtr(initialReplicas),
+			Autoscaling:       autoscalingFromScale(scale),
+			SpreadPolicy:      s.resolveSpreadPolicy(ctx),
+			Host:              envHost,
+			AdditionalHosts:   envAdditionalHosts,
+			TLSHosts:          envTLSHosts,
+			Internal:          created.Spec.Internal,
+			PrivateEgress:     created.Spec.PrivateEgress,
+			PlatformAPIEgress: created.Spec.PlatformAPIEgress,
+			TLSEnabled:        true,
+			ClusterIssuer:     "letsencrypt-prod",
+			IngressClassName:  "traefik",
+			EnvFromSecrets:    envFromSecrets,
 			// Per-service env vars are stamped onto the env CR
 			// directly because the kusoenvironment chart reads only
 			// .Values.envVars (no merge from KusoService at reconcile
@@ -977,24 +978,25 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			// (staging.example.com mirrored at qa.example.com) can
 			// add it via `kuso domains add` after env creation —
 			// that's an explicit opt-in, not silent inheritance.
-			AdditionalHosts:  nil,
-			TLSHosts:         computeTLSHosts(host, nil),
-			Internal:         svc.Spec.Internal,
-			PrivateEgress:    svc.Spec.PrivateEgress,
-			Stopped:          svc.Spec.Stopped,
-			Sleep:            envSleepFrom(svc.Spec.Sleep),
-			TLSEnabled:       true,
-			ClusterIssuer:    "letsencrypt-prod",
-			IngressClassName: "traefik",
-			EnvFromSecrets:   envFromSecrets,
-			EnvVars:          mergedEnvVars,
-			SharedEnvKeys:    svc.Spec.SharedEnvKeys,
-			SubscribedAddons: svc.Spec.SubscribedAddons,
-			Placement:        ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement),
-			Volumes:          svc.Spec.Volumes,
-			Resources:        svc.Spec.Resources,
-			Runtime:          svc.Spec.Runtime,
-			Command:          svc.Spec.Command,
+			AdditionalHosts:   nil,
+			TLSHosts:          computeTLSHosts(host, nil),
+			Internal:          svc.Spec.Internal,
+			PrivateEgress:     svc.Spec.PrivateEgress,
+			PlatformAPIEgress: svc.Spec.PlatformAPIEgress,
+			Stopped:           svc.Spec.Stopped,
+			Sleep:             envSleepFrom(svc.Spec.Sleep),
+			TLSEnabled:        true,
+			ClusterIssuer:     "letsencrypt-prod",
+			IngressClassName:  "traefik",
+			EnvFromSecrets:    envFromSecrets,
+			EnvVars:           mergedEnvVars,
+			SharedEnvKeys:     svc.Spec.SharedEnvKeys,
+			SubscribedAddons:  svc.Spec.SubscribedAddons,
+			Placement:         ResolvePlacement(proj.Spec.Placement, svc.Spec.Placement),
+			Volumes:           svc.Spec.Volumes,
+			Resources:         svc.Spec.Resources,
+			Runtime:           svc.Spec.Runtime,
+			Command:           svc.Spec.Command,
 		},
 	}
 	created, err := s.Kube.CreateKusoEnvironment(ctx, ns, env)
@@ -1804,6 +1806,10 @@ type PatchServiceRequest struct {
 	// namespace-internal only; false/unset = pods can reach the
 	// internet. Pointer so "unset" (leave alone) is distinguishable.
 	PrivateEgress *bool `json:"privateEgress,omitempty"`
+	// PlatformAPIEgress grants (true) or revokes (false) egress to the
+	// kuso API pods for apps that orchestrate kuso. Pointer so "unset"
+	// (leave alone) is distinguishable.
+	PlatformAPIEgress *bool `json:"platformApiEgress,omitempty"`
 	// Stopped hard-stops (true) or starts (false) the service. Distinct
 	// from Sleep: a stopped service is pinned to 0 replicas and is NOT
 	// woken by traffic. Pointer so "unset" (leave alone) is distinct.
@@ -1986,6 +1992,16 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		return nil, err
 	}
 
+	// Project default branch, resolved once for the effective-branch
+	// bookkeeping in the req.Repo block below (a service with no explicit
+	// repo branch tracks the project default). Best-effort: on a project
+	// fetch error we fall back to "main", matching AddService's default.
+	projDefaultBranch := "main"
+	if proj, perr := s.Kube.GetKusoProject(ctx, s.Namespace, project); perr == nil &&
+		proj.Spec.DefaultRepo != nil && proj.Spec.DefaultRepo.DefaultBranch != "" {
+		projDefaultBranch = proj.Spec.DefaultRepo.DefaultBranch
+	}
+
 	// RMW under optimistic concurrency: the in-process lockService above
 	// serializes writers within ONE replica but not across pods. Running
 	// the whole mutation inside UpdateKusoServiceWithRetry means every
@@ -1994,6 +2010,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 	// status patch) can't silently clobber this save. The changed-field
 	// flags are captured into `changed` for the post-update propagation.
 	var changed changedFields
+	var oldEffBranch, newEffBranch string
 	updated, err := s.updateOwnedServiceWithRetry(ctx, ns, project, service, func(svc *kube.KusoService) error {
 		if req.DisplayName != nil {
 			dn := strings.TrimSpace(*req.DisplayName)
@@ -2026,6 +2043,11 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		if req.PrivateEgress != nil {
 			svc.Spec.PrivateEgress = *req.PrivateEgress
 			privateEgressChanged = true
+		}
+		platformAPIEgressChanged := false
+		if req.PlatformAPIEgress != nil {
+			svc.Spec.PlatformAPIEgress = *req.PlatformAPIEgress
+			platformAPIEgressChanged = true
 		}
 		stoppedChanged := false
 		if req.Stopped != nil {
@@ -2085,6 +2107,13 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		}
 		volumesChanged := false
 		if req.Repo != nil {
+			// Effective-branch bookkeeping for the post-update env
+			// restamp (recomputed on every retry attempt): a service
+			// with no explicit repo branch tracks the project default.
+			oldEffBranch = projDefaultBranch
+			if svc.Spec.Repo != nil && svc.Spec.Repo.DefaultBranch != "" {
+				oldEffBranch = svc.Spec.Repo.DefaultBranch
+			}
 			// Replace (not merge) — the user's intent when editing the
 			// repo URL is "this is the new source," not "merge with the
 			// old path." Empty URL clears the repo.
@@ -2105,6 +2134,10 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			// service installation, separate from the project's default.
 			if req.Repo.InstallationID > 0 {
 				svc.Spec.Github = &kube.KusoServiceGithubSpec{InstallationID: req.Repo.InstallationID}
+			}
+			newEffBranch = projDefaultBranch
+			if svc.Spec.Repo != nil && svc.Spec.Repo.DefaultBranch != "" {
+				newEffBranch = svc.Spec.Repo.DefaultBranch
 			}
 		}
 		if req.Volumes != nil {
@@ -2246,25 +2279,38 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 		// Capture which fields changed for the post-update propagation.
 		// Recomputed on every retry attempt — deterministic from req.
 		changed = changedFields{
-			Placement:       placementChanged,
-			Volumes:         volumesChanged,
-			Port:            portChanged,
-			Scale:           scaleChanged,
-			Domains:         domainsChanged,
-			Internal:        internalChanged,
-			Runtime:         runtimeChanged,
-			PrivateEgress:   privateEgressChanged,
-			Stopped:         stoppedChanged,
-			Sleep:           sleepChanged,
-			Release:         releaseChanged,
-			Command:         commandChanged,
-			Resources:       resourcesChanged,
-			SecurityContext: securityContextChanged,
+			Placement:         placementChanged,
+			Volumes:           volumesChanged,
+			Port:              portChanged,
+			Scale:             scaleChanged,
+			Domains:           domainsChanged,
+			Internal:          internalChanged,
+			Runtime:           runtimeChanged,
+			PrivateEgress:     privateEgressChanged,
+			PlatformAPIEgress: platformAPIEgressChanged,
+			Stopped:           stoppedChanged,
+			Sleep:             sleepChanged,
+			Release:           releaseChanged,
+			Command:           commandChanged,
+			Resources:         resourcesChanged,
+			SecurityContext:   securityContextChanged,
 		}
 		return nil
 	})
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
+	}
+
+	// Restamp env branches when the repo edit moved the effective
+	// branch. Envs still tracking the old branch follow it; envs on
+	// other branches (PR previews, custom env-groups) stay pinned.
+	// Best-effort like the propagation below — the service spec is the
+	// durable record.
+	if req.Repo != nil && oldEffBranch != newEffBranch {
+		if perr := s.propagateServiceBranch(ctx, ns, project, service, oldEffBranch, newEffBranch); perr != nil {
+			slog.ErrorContext(ctx, "propagate: service branch restamp incomplete",
+				"project", project, "service", service, "err", perr)
+		}
 	}
 
 	// Single chokepoint for service → env propagation. Lists envs

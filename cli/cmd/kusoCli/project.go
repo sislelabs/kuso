@@ -304,7 +304,7 @@ var runServiceAdd = func(cmd *cobra.Command, args []string) error {
 		Dockerfile: serviceAddDockerfile,
 		Port:       int32(serviceAddPort),
 		Repo:       &kusoApi.ServiceRepoSpec{Path: serviceAddPath},
-		Command: serviceAddCommand,
+		Command:    serviceAddCommand,
 	}
 	// Build a ServiceScale only when the user actually set a flag —
 	// passing an all-zero struct would clobber the chart's defaults
@@ -469,18 +469,19 @@ resource names are immutable, so the operation has real cost:
 // ---------------- project service set ----------------
 
 var (
-	serviceSetDisplayName   string
-	serviceSetPort          int32
-	serviceSetRuntime       string
-	serviceSetDomains       string // comma- or newline-separated host list
-	serviceSetInternal      string // "on" | "off" | "" (leave alone)
-	serviceSetPrivateEgress string // "on" | "off" | "" (leave alone)
-	serviceSetMinReplicas   int
-	serviceSetMaxReplicas   int
-	serviceSetPath          string   // monorepo subpath (relative to repo root)
-	serviceSetBranch        string   // git branch override
-	serviceSetCapAdd        []string // Linux capabilities to add back (e.g. SETUID,SETGID)
-	serviceSetAllowPrivEsc  string   // "on" | "off" | "" (leave alone)
+	serviceSetDisplayName       string
+	serviceSetPort              int32
+	serviceSetRuntime           string
+	serviceSetDomains           string // comma- or newline-separated host list
+	serviceSetInternal          string // "on" | "off" | "" (leave alone)
+	serviceSetPrivateEgress     string // "on" | "off" | "" (leave alone)
+	serviceSetPlatformAPIEgress string // "on" | "off" | "" (leave alone)
+	serviceSetMinReplicas       int
+	serviceSetMaxReplicas       int
+	serviceSetPath              string   // monorepo subpath (relative to repo root)
+	serviceSetBranch            string   // git branch override
+	serviceSetCapAdd            []string // Linux capabilities to add back (e.g. SETUID,SETGID)
+	serviceSetAllowPrivEsc      string   // "on" | "off" | "" (leave alone)
 )
 
 var serviceSetCmd = &cobra.Command{
@@ -498,6 +499,8 @@ Settings → Source / Networking flow.
   --internal=off                # re-expose publicly
   --private-egress=on           # deny public internet egress
   --private-egress=off          # allow public internet egress
+  --platform-api-egress=on      # allow calling the kuso API (http://kuso-server) from pods
+  --platform-api-egress=off     # revoke kuso API access (the default)
   --cap-add SETUID --cap-add SETGID   # add back Linux capabilities (repeatable)
   --allow-privilege-escalation=on     # allow a process to gain more privs than its parent
   --allow-privilege-escalation=off    # disallow (kuso's hardened default)`,
@@ -559,6 +562,16 @@ Settings → Source / Networking flow.
 				req.PrivateEgress = kusoApi.BoolPtr(false)
 			default:
 				return fmt.Errorf("--private-egress must be on|off (got %q)", serviceSetPrivateEgress)
+			}
+		}
+		if cmd.Flags().Changed("platform-api-egress") {
+			switch serviceSetPlatformAPIEgress {
+			case "on", "true", "yes":
+				req.PlatformAPIEgress = kusoApi.BoolPtr(true)
+			case "off", "false", "no":
+				req.PlatformAPIEgress = kusoApi.BoolPtr(false)
+			default:
+				return fmt.Errorf("--platform-api-egress must be on|off (got %q)", serviceSetPlatformAPIEgress)
 			}
 		}
 		if cmd.Flags().Changed("replicas") || cmd.Flags().Changed("max-replicas") {
@@ -1248,6 +1261,7 @@ func init() {
 	serviceSetCmd.Flags().StringVar(&serviceSetDomains, "domains", "", "comma- or space-separated custom domains (replaces list; empty clears)")
 	serviceSetCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
+	serviceSetCmd.Flags().StringVar(&serviceSetPlatformAPIEgress, "platform-api-egress", "", "allow pods to call the kuso API over in-cluster DNS (on|off)")
 	serviceSetCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
 	serviceSetCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
 	serviceSetCmd.Flags().StringVar(&serviceSetPath, "path", "", "monorepo subpath relative to repo root (e.g. apps/api)")
@@ -1316,6 +1330,7 @@ func init() {
 	serviceSetTopCmd.Flags().StringVar(&serviceSetDomains, "domains", "", "comma- or space-separated custom domains (replaces list; empty clears)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetPlatformAPIEgress, "platform-api-egress", "", "allow pods to call the kuso API over in-cluster DNS (on|off)")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMinReplicas, "replicas", 0, "set minimum replica count (HPA min). 0 keeps current value.")
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPath, "path", "", "monorepo subpath relative to repo root (e.g. apps/api)")

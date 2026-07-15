@@ -280,7 +280,7 @@ func init() {
 service short-name). Pass --env to filter to an env-group's branch
 (e.g. production, staging, preview-pr-7); omit it for the newest build
 per service regardless of branch.`,
-		Args:    cobra.ExactArgs(1),
+		Args: cobra.ExactArgs(1),
 		Example: `  kuso build latest scubatony -o json
   kuso build latest scubatony --env production`,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -355,10 +355,10 @@ per service regardless of branch.`,
 
 	// `kuso redeploy <project> <service>` shortcut at top level.
 	redeployCmd := &cobra.Command{
-		Use:     "redeploy <project> <service>",
-		Short:   "Trigger a fresh build + deploy of a service",
-		Args:    cobra.ExactArgs(2),
-		RunE:    buildTriggerCmd.RunE,
+		Use:   "redeploy <project> <service>",
+		Short: "Trigger a fresh build + deploy of a service",
+		Args:  cobra.ExactArgs(2),
+		RunE:  buildTriggerCmd.RunE,
 	}
 	redeployCmd.Flags().StringVar(&buildTriggerBranch, "branch", "", "branch to deploy")
 	redeployCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "specific commit SHA")

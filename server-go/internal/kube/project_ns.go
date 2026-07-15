@@ -16,9 +16,9 @@ import (
 // create import cycles — projects uses secrets through the http layer
 // in places).
 type ProjectNamespaceResolver struct {
-	Client     *Client
-	HomeNS     string
-	TTL        time.Duration
+	Client *Client
+	HomeNS string
+	TTL    time.Duration
 
 	mu    sync.RWMutex
 	cache map[string]nsEntry

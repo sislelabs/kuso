@@ -282,6 +282,9 @@ func (s *Service) GetDrift(ctx context.Context, project, service string) (*Drift
 	if svc.Spec.PrivateEgress != env.Spec.PrivateEgress {
 		out.SpecPending = append(out.SpecPending, "privateEgress")
 	}
+	if svc.Spec.PlatformAPIEgress != env.Spec.PlatformAPIEgress {
+		out.SpecPending = append(out.SpecPending, "platformApiEgress")
+	}
 	if svc.Spec.Stopped != env.Spec.Stopped {
 		out.SpecPending = append(out.SpecPending, "stopped")
 	}

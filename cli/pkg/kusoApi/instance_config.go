@@ -31,13 +31,13 @@ func (k *KusoClient) SetInstanceConfig(settings map[string]any) (*resty.Response
 // capitalized and Description is a sql.NullString ({String, Valid}) rather
 // than a bare string — hence the nested type here.
 type PodSize struct {
-	ID            string       `json:"ID,omitempty"`
-	Name          string       `json:"Name"`
-	CPULimit      string       `json:"CPULimit"`
-	MemoryLimit   string       `json:"MemoryLimit"`
-	CPURequest    string       `json:"CPURequest"`
-	MemoryRequest string       `json:"MemoryRequest"`
-	Description   NullString   `json:"Description"`
+	ID            string     `json:"ID,omitempty"`
+	Name          string     `json:"Name"`
+	CPULimit      string     `json:"CPULimit"`
+	MemoryLimit   string     `json:"MemoryLimit"`
+	CPURequest    string     `json:"CPURequest"`
+	MemoryRequest string     `json:"MemoryRequest"`
+	Description   NullString `json:"Description"`
 }
 
 // NullString mirrors sql.NullString's JSON shape for round-tripping the

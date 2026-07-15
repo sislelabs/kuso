@@ -227,6 +227,40 @@ spec:
               - {{ . | quote }}
               {{- end }}
 ---
+# Egress to the kuso API (kuso-server) for pods that opted in via
+# KusoService.spec.platformApiEgress. The default-deny above blocks all
+# cluster-internal egress, and the public-egress rule explicitly excepts
+# RFC1918 — so an app that ORCHESTRATES kuso (creates projects, attaches
+# domains, …) can reach the API neither via the ClusterIP nor by
+# hairpinning the public URL (hostPort hairpin is refused from the
+# overlay). This rule is the sanctioned path: pods carrying the
+# network-egress-platform-api label may reach kuso-server pods on their
+# HTTP port, nothing else. Always rendered; inert until a pod carries
+# the label.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}-allow-platform-api-egress
+  labels:
+    {{- include "kusoproject.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      kuso.sislelabs.com/project: {{ .Release.Name }}
+      kuso.sislelabs.com/network-egress-platform-api: "true"
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.platformNamespace | quote }}
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: kuso-server
+      ports:
+        - port: 3000
+          protocol: TCP
+---
 # Egress to the cluster-shared (instance) Postgres + its PgBouncer.
 # Projects that opt into the cluster DB (KusoAddon spec.useInstanceAddon)
 # get a per-project database on the instance PG, reached via the

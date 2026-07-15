@@ -94,12 +94,13 @@ func Export(ctx context.Context, k *kube.Client, namespace, project string) (*Fi
 // exportService maps a live KusoService CR back into a ServiceSpec.
 func exportService(project string, cr kube.KusoService) ServiceSpec {
 	s := ServiceSpec{
-		Name:          shortName(project, cr.Name),
-		Runtime:       cr.Spec.Runtime,
-		Port:          cr.Spec.Port,
-		Internal:      cr.Spec.Internal,
-		PrivateEgress: cr.Spec.PrivateEgress,
-		Command:       cr.Spec.Command,
+		Name:              shortName(project, cr.Name),
+		Runtime:           cr.Spec.Runtime,
+		Port:              cr.Spec.Port,
+		Internal:          cr.Spec.Internal,
+		PrivateEgress:     cr.Spec.PrivateEgress,
+		PlatformAPIEgress: cr.Spec.PlatformAPIEgress,
+		Command:           cr.Spec.Command,
 	}
 	if cr.Spec.Repo != nil {
 		s.Repo = cr.Spec.Repo.URL

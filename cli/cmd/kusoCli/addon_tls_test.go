@@ -9,7 +9,7 @@ func TestValidateAddonTLSFlag(t *testing.T) {
 	}{
 		{"disable", false},
 		{"require", false},
-		{"", true},           // --tls with empty value is a mistake, not "leave alone"
+		{"", true},            // --tls with empty value is a mistake, not "leave alone"
 		{"verify-full", true}, // not supported by the chart
 		{"on", true},
 	}

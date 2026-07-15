@@ -212,12 +212,16 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 	// operator status patch) can't clobber this write. prevBaseDomain is
 	// captured from the object as it was just before this write so the
 	// post-update baseDomain-change propagation below is accurate.
-	var prevBaseDomain string
+	var prevBaseDomain, prevDefaultBranch string
 	out, err := s.Kube.UpdateKusoProjectWithRetry(ctx, s.Namespace, name, func(cur *kube.KusoProject) error {
 		if req.Description != nil {
 			cur.Spec.Description = *req.Description
 		}
 		prevBaseDomain = cur.Spec.BaseDomain
+		prevDefaultBranch = ""
+		if cur.Spec.DefaultRepo != nil {
+			prevDefaultBranch = cur.Spec.DefaultRepo.DefaultBranch
+		}
 		if req.BaseDomain != nil {
 			v := strings.TrimSpace(*req.BaseDomain)
 			if v != "" && !isPublicFQDN(v) {
@@ -290,6 +294,19 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 	if req.BaseDomain != nil && prevBaseDomain != out.Spec.BaseDomain {
 		if perr := s.propagateBaseDomain(ctx, name, prevBaseDomain, out.Spec.BaseDomain); perr != nil {
 			fmt.Printf("warn: propagate baseDomain project=%s: %v\n", name, perr)
+		}
+	}
+	// Propagate a default-branch change to envs still tracking the old
+	// branch. Build promotion filters on env.Spec.Branch, so skipping
+	// this leaves every existing env deploying nothing, silently. Same
+	// best-effort contract as the baseDomain propagation above.
+	if req.DefaultRepo != nil && req.DefaultRepo.DefaultBranch != "" {
+		newBranch := ""
+		if out.Spec.DefaultRepo != nil {
+			newBranch = out.Spec.DefaultRepo.DefaultBranch
+		}
+		if perr := s.propagateDefaultBranch(ctx, name, prevDefaultBranch, newBranch); perr != nil {
+			fmt.Printf("warn: propagate defaultBranch project=%s: %v\n", name, perr)
 		}
 	}
 	return out, nil

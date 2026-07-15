@@ -274,6 +274,7 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 	runtime := s.Runtime
 	internal := s.Internal
 	privateEgress := s.PrivateEgress
+	platformAPIEgress := s.PlatformAPIEgress
 
 	domains := make([]projects.ServiceDomain, 0, len(s.Domains))
 	for _, d := range s.Domains {
@@ -358,23 +359,24 @@ func servicePatchReq(s ServiceSpec) projects.PatchServiceRequest {
 	publicEnv := append([]string{}, s.PublicEnv...)
 
 	return projects.PatchServiceRequest{
-		Port:            &port,
-		Runtime:         &runtime,
-		Internal:        &internal,
-		PrivateEgress:   &privateEgress,
-		Domains:         &domains,
-		Scale:           scale,
-		Sleep:           sleep,
-		Placement:       placement,
-		Volumes:         &volumes,
-		Static:          static,
-		Buildpacks:      buildpacks,
-		Image:           image,
-		Command:         &cmd,
-		Release:         release,
-		BuildArgs:       &buildArgs,
-		PublicEnv:       &publicEnv,
-		SecurityContext: toKubeSecurityContext(s.SecurityContext),
+		Port:              &port,
+		Runtime:           &runtime,
+		Internal:          &internal,
+		PrivateEgress:     &privateEgress,
+		PlatformAPIEgress: &platformAPIEgress,
+		Domains:           &domains,
+		Scale:             scale,
+		Sleep:             sleep,
+		Placement:         placement,
+		Volumes:           &volumes,
+		Static:            static,
+		Buildpacks:        buildpacks,
+		Image:             image,
+		Command:           &cmd,
+		Release:           release,
+		BuildArgs:         &buildArgs,
+		PublicEnv:         &publicEnv,
+		SecurityContext:   toKubeSecurityContext(s.SecurityContext),
 	}
 }
 

@@ -27,12 +27,12 @@ import (
 )
 
 var (
-	podSizeName       string
-	podSizeCPULimit   string
-	podSizeMemLimit   string
-	podSizeCPUReq     string
-	podSizeMemReq     string
-	podSizeDescr      string
+	podSizeName     string
+	podSizeCPULimit string
+	podSizeMemLimit string
+	podSizeCPUReq   string
+	podSizeMemReq   string
+	podSizeDescr    string
 )
 
 var instanceConfigPodSizeCmd = &cobra.Command{

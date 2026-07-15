@@ -18,8 +18,8 @@ func TestClassifyUpgradePhase(t *testing.T) {
 		{"applying-crds", false, false},
 		{"rolling-server", false, false},
 		{"rolling-operator", false, false},
-		{"done", true, false},   // the regression: must be terminal-success
-		{"failed", true, true},  // terminal-failure, not a 15m timeout
+		{"done", true, false},  // the regression: must be terminal-success
+		{"failed", true, true}, // terminal-failure, not a 15m timeout
 		{"rolled-back", true, true},
 		{"rollback-failed", true, true},
 		// Defensive capitalized aliases.

@@ -96,6 +96,10 @@ spec:
                   type: boolean
                   description: When true, this service's pods are denied public internet egress (sibling pods, DNS and the in-cluster registry stay reachable). Default false — pods can reach the internet. Mirrored onto every KusoEnvironment owned by this service.
                   default: false
+                platformApiEgress:
+                  type: boolean
+                  description: When true, this service's pods may call the kuso API over in-cluster DNS (http://kuso-server). Grants egress ONLY to the kuso-server pods; for apps that orchestrate kuso via its API. Mirrored onto every KusoEnvironment owned by this service.
+                  default: false
                 stopped:
                   type: boolean
                   description: When true, the service is HARD-STOPPED — pinned to 0 replicas and NOT woken by traffic (unlike sleep, which the activator wakes on the next request). Visitors get a "service stopped" 503 until it is explicitly started. Mirrored onto every KusoEnvironment owned by this service.

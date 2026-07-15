@@ -185,4 +185,3 @@ func deleteRemote(name string) error {
 	fmt.Println("Deleted instance:", name)
 	return nil
 }
-

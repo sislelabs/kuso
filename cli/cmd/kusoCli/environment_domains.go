@@ -30,8 +30,8 @@ project at a time — adding a host already routed elsewhere returns 409.`,
 }
 
 var environmentDomainAddCmd = &cobra.Command{
-	Use:   "add <project> <service> <env> <host>",
-	Short: "Add one hostname to an environment's additionalHosts",
+	Use:     "add <project> <service> <env> <host>",
+	Short:   "Add one hostname to an environment's additionalHosts",
 	Example: `  kuso environment domain add scubatony api staging api-staging.example.com`,
 	Args:    cobra.ExactArgs(4),
 	RunE: func(cmd *cobra.Command, args []string) error {

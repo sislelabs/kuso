@@ -148,4 +148,3 @@ func (k *KusoClient) RawGet(path string) (*resty.Response, error) {
 	}
 	return k.client.Get(path)
 }
-

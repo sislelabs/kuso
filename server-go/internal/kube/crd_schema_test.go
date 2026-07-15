@@ -26,10 +26,10 @@ import (
 // closes that gap by anchoring the YAML itself.
 //
 // Update flow:
-//   1. You change a CRD YAML.
-//   2. `go test ./internal/kube/ -run TestCRDSchema_GoldenStable -update`
-//   3. Inspect the diff in testdata/crd_schema/<kind>.json.
-//   4. Commit both files together.
+//  1. You change a CRD YAML.
+//  2. `go test ./internal/kube/ -run TestCRDSchema_GoldenStable -update`
+//  3. Inspect the diff in testdata/crd_schema/<kind>.json.
+//  4. Commit both files together.
 func TestCRDSchema_GoldenStable(t *testing.T) {
 	t.Parallel()
 	crdDir := "../../../operator/config/crd/bases"

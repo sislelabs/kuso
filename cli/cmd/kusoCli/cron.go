@@ -161,21 +161,21 @@ var cronSyncCmd = &cobra.Command{
 // Project-scoped cron flags. Shared between `cron add-http`,
 // `cron add-command`, and `cron edit`.
 var (
-	pCronName                  string
-	pCronDisplayName           string
-	pCronSchedule              string
-	pCronURL                   string
-	pCronImage                 string
-	pCronImageTag              string
-	pCronCmdString             string
-	pCronSuspend               bool
-	pCronConcurrencyPolicy     string
+	pCronName              string
+	pCronDisplayName       string
+	pCronSchedule          string
+	pCronURL               string
+	pCronImage             string
+	pCronImageTag          string
+	pCronCmdString         string
+	pCronSuspend           bool
+	pCronConcurrencyPolicy string
 )
 
 var cronAddHTTPCmd = &cobra.Command{
-	Use:   "add-http <project>",
-	Short: "Schedule a recurring HTTP probe (curl <url>; fail on non-2xx)",
-	Args:  cobra.ExactArgs(1),
+	Use:     "add-http <project>",
+	Short:   "Schedule a recurring HTTP probe (curl <url>; fail on non-2xx)",
+	Args:    cobra.ExactArgs(1),
 	Example: `  kuso cron add-http myproj --name healthcheck --schedule '*/5 * * * *' --url https://api.example.com/healthz`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -206,9 +206,9 @@ var cronAddHTTPCmd = &cobra.Command{
 }
 
 var cronAddCommandCmd = &cobra.Command{
-	Use:   "add-command <project>",
-	Short: "Schedule a recurring command run (user-supplied image + argv)",
-	Args:  cobra.ExactArgs(1),
+	Use:     "add-command <project>",
+	Short:   "Schedule a recurring command run (user-supplied image + argv)",
+	Args:    cobra.ExactArgs(1),
 	Example: `  kuso cron add-command myproj --name nightly-prune --schedule '0 4 * * *' --image alpine:3.21 --cmd 'sh -c "rm -rf /tmp/*"'`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {

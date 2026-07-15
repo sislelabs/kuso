@@ -91,6 +91,14 @@ internal: false
 # selects. Mirrors KusoService.spec.privateEgress.
 privateEgress: false
 
+# platformApiEgress: when true, the pod template carries the
+# kuso.sislelabs.com/network-egress-platform-api label, which the
+# kusoproject NetworkPolicy's allow-platform-api-egress rule selects —
+# granting egress to the kuso-server API pods (and nothing else). For
+# apps that orchestrate kuso via its API. Mirrors
+# KusoService.spec.platformApiEgress.
+platformApiEgress: false
+
 # stopped: when true, HARD-STOP this env — pin the Deployment to 0
 # replicas and skip the HPA, so it stays down. Distinct from scale-to-
 # zero sleep: the activator refuses to wake a stopped env (it serves a

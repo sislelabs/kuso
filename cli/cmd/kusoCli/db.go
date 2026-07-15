@@ -337,7 +337,7 @@ func runConnect(project, addon string, doExec bool) error {
 //   - wrapped, string values:  {"values": {"DATABASE_URL": "postgres://…"}}
 //   - flat, string values:     {"DATABASE_URL": "postgres://…"}
 //   - wrapped/flat, OBJECT values (older servers that mirror the env-list shape):
-//                               {"values": {"DATABASE_URL": {"value": "…", "type": "secret"}}}
+//     {"values": {"DATABASE_URL": {"value": "…", "type": "secret"}}}
 //
 // The original code only handled the two string-valued shapes and decoded into
 // map[string]string, so an object-valued secret blew up with "cannot unmarshal

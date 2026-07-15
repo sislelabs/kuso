@@ -92,13 +92,14 @@ type ServiceSpec struct {
 	Port       int      `json:"port,omitempty"`
 	// Internal skips the public Ingress; PrivateEgress denies egress
 	// to the public internet; Stopped hard-stops at 0 replicas.
-	Internal      bool       `json:"internal,omitempty"`
-	PrivateEgress bool       `json:"privateEgress,omitempty"`
-	Stopped       bool       `json:"stopped,omitempty"`
-	Domains       []Domain   `json:"domains,omitempty"`
-	Volumes       []Volume   `json:"volumes,omitempty"`
-	Placement     *Placement `json:"placement,omitempty"`
-	Scale         struct {
+	Internal          bool       `json:"internal,omitempty"`
+	PrivateEgress     bool       `json:"privateEgress,omitempty"`
+	PlatformAPIEgress bool       `json:"platformApiEgress,omitempty"`
+	Stopped           bool       `json:"stopped,omitempty"`
+	Domains           []Domain   `json:"domains,omitempty"`
+	Volumes           []Volume   `json:"volumes,omitempty"`
+	Placement         *Placement `json:"placement,omitempty"`
+	Scale             struct {
 		Min       int `json:"min,omitempty"`
 		Max       int `json:"max,omitempty"`
 		TargetCPU int `json:"targetCPU,omitempty"`

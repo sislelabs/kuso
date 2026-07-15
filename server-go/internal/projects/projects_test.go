@@ -1165,3 +1165,102 @@ func TestPatchService_ScaleDoesNotTouchPreviewEnvs(t *testing.T) {
 		t.Errorf("preview env replicaCount should stay 1, got %v", prev.Spec.ReplicaCount)
 	}
 }
+
+// Changing a project's default branch must restamp env.Spec.Branch on envs
+// still tracking the old default — build promotion filters on branch match,
+// so a stranded env silently stops deploying (the 2026-07 saiton incident:
+// deploy/kuso → main left production at image=nil, 0/0, no error anywhere).
+// Envs on other branches (PR previews) and envs of services with an explicit
+// repo-branch pin must be left alone.
+func TestUpdate_DefaultBranchRestampsEnvs(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{
+			DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"},
+		}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedEnv("alpha", "web", "preview", "feat/x", "alpha-web-pr-9"),
+		// A second service explicitly pinned to "main" — the pin means the
+		// user chose that branch by name; a project-default change must not
+		// move it.
+		seedService("alpha", "worker", kube.KusoServiceSpec{
+			Project: "alpha", Port: 3000,
+			Repo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"},
+		}),
+		seedEnv("alpha", "worker", "production", "main", "alpha-worker-production"),
+	)
+
+	if _, err := s.Update(context.Background(), "alpha", UpdateProjectRequest{
+		DefaultRepo: &CreateProjectRepoSpec{DefaultBranch: "develop"},
+	}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	web, _ := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if web.Spec.Branch != "develop" {
+		t.Errorf("production env should follow the new default branch, got %q", web.Spec.Branch)
+	}
+	prev, _ := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-9")
+	if prev.Spec.Branch != "feat/x" {
+		t.Errorf("preview env branch must stay pinned to its PR branch, got %q", prev.Spec.Branch)
+	}
+	worker, _ := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-worker-production")
+	if worker.Spec.Branch != "main" {
+		t.Errorf("explicitly-pinned service's env must not follow the project default, got %q", worker.Spec.Branch)
+	}
+}
+
+// Same contract at the service level: PatchService with a repo.branch change
+// restamps this service's envs that tracked the old effective branch.
+func TestPatchService_RepoBranchRestampsEnvs(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{
+			DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"},
+		}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+		seedEnv("alpha", "web", "preview", "feat/x", "alpha-web-pr-9"),
+	)
+
+	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{
+		Repo: &PatchRepoRequest{URL: "x", Branch: "develop"},
+	}); err != nil {
+		t.Fatalf("PatchService: %v", err)
+	}
+
+	prod, _ := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if prod.Spec.Branch != "develop" {
+		t.Errorf("production env should follow the service repo branch, got %q", prod.Spec.Branch)
+	}
+	prev, _ := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-pr-9")
+	if prev.Spec.Branch != "feat/x" {
+		t.Errorf("preview env branch must stay pinned to its PR branch, got %q", prev.Spec.Branch)
+	}
+}
+
+// platformApiEgress must reach the env CR (the chart stamps the pod label
+// off the env, not the service) — same contract as privateEgress.
+func TestPatchService_PlatformAPIEgressPropagatesToEnvironments(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x", DefaultBranch: "main"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 3000}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	on := true
+	if _, err := s.PatchService(context.Background(), "alpha", "web", PatchServiceRequest{
+		PlatformAPIEgress: &on,
+	}); err != nil {
+		t.Fatalf("PatchService: %v", err)
+	}
+	svc, _ := s.GetService(context.Background(), "alpha", "web")
+	if !svc.Spec.PlatformAPIEgress {
+		t.Fatalf("service spec should carry platformApiEgress=true")
+	}
+	env, _ := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if !env.Spec.PlatformAPIEgress {
+		t.Errorf("env spec should mirror platformApiEgress=true")
+	}
+}

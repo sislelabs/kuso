@@ -74,25 +74,28 @@ type File struct {
 
 // ServiceSpec mirrors KusoServiceSpec, flattened for human authoring.
 type ServiceSpec struct {
-	Name          string              `yaml:"name"`
-	Repo          string              `yaml:"repo,omitempty"`
-	Branch        string              `yaml:"branch,omitempty"`
-	Path          string              `yaml:"path,omitempty"`
-	Runtime       string              `yaml:"runtime,omitempty"`
-	Port          int32               `yaml:"port,omitempty"`
-	Internal      bool                `yaml:"internal,omitempty"`
-	PrivateEgress bool                `yaml:"privateEgress,omitempty"`
-	Command       []string            `yaml:"command,omitempty"`
-	Domains       []DomainSpec        `yaml:"domains,omitempty"`
-	Env           map[string]EnvValue `yaml:"env,omitempty"`
-	Scale         *ScaleSpec          `yaml:"scale,omitempty"`
-	Sleep         *SleepSpec          `yaml:"sleep,omitempty"`
-	Placement     *PlacementSpec      `yaml:"placement,omitempty"`
-	Volumes       []VolumeSpec        `yaml:"volumes,omitempty"`
-	Static        *StaticSpec         `yaml:"static,omitempty"`
-	Buildpacks    *BuildpacksSpec     `yaml:"buildpacks,omitempty"`
-	Image         *ImageSpec          `yaml:"image,omitempty"`
-	Release       *ReleaseSpec        `yaml:"release,omitempty"`
+	Name          string `yaml:"name"`
+	Repo          string `yaml:"repo,omitempty"`
+	Branch        string `yaml:"branch,omitempty"`
+	Path          string `yaml:"path,omitempty"`
+	Runtime       string `yaml:"runtime,omitempty"`
+	Port          int32  `yaml:"port,omitempty"`
+	Internal      bool   `yaml:"internal,omitempty"`
+	PrivateEgress bool   `yaml:"privateEgress,omitempty"`
+	// PlatformAPIEgress allows the service's pods to call the kuso API
+	// over in-cluster DNS (for apps that orchestrate kuso).
+	PlatformAPIEgress bool                `yaml:"platformApiEgress,omitempty"`
+	Command           []string            `yaml:"command,omitempty"`
+	Domains           []DomainSpec        `yaml:"domains,omitempty"`
+	Env               map[string]EnvValue `yaml:"env,omitempty"`
+	Scale             *ScaleSpec          `yaml:"scale,omitempty"`
+	Sleep             *SleepSpec          `yaml:"sleep,omitempty"`
+	Placement         *PlacementSpec      `yaml:"placement,omitempty"`
+	Volumes           []VolumeSpec        `yaml:"volumes,omitempty"`
+	Static            *StaticSpec         `yaml:"static,omitempty"`
+	Buildpacks        *BuildpacksSpec     `yaml:"buildpacks,omitempty"`
+	Image             *ImageSpec          `yaml:"image,omitempty"`
+	Release           *ReleaseSpec        `yaml:"release,omitempty"`
 	// BuildArgs are passed to the image build as --build-arg KEY=VAL.
 	// True build-time constants — the SAME across every environment (the
 	// built artifact is identical), so use them for things compiled in,
