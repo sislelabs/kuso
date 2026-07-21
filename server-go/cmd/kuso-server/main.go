@@ -692,6 +692,13 @@ func main() {
 					Notifier:      notifyAdapter{notifyDisp},
 					LogArchive:    buildArchiveAdapter{database},
 					ReleaseRunner: releaserun.New(kc),
+					// Pre-deploy snapshot: for opted-in services, snapshot
+					// subscribed postgres addons before the release hook runs.
+					Snapshotter: func() builds.Snapshotter {
+						a := newSnapshotAdapter(kc, *namespace)
+						a.addons.NSResolver = nsResolver
+						return &builds.PredeploySnapshotter{Kinds: a, Jobs: a}
+					}(),
 					// Image-retention sweep: untag build images past the
 					// rollback window so the registry doesn't grow
 					// unbounded. NewInClusterImageDeleter returns nil for
