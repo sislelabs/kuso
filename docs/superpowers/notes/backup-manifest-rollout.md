@@ -64,3 +64,26 @@ as before. No operator action required for old backups.
   either, so this matches the existing pattern. Add web toggle + a
   "restore pre-deploy snapshot" button (reads the build annotation, calls
   the existing restore endpoint) as a focused follow-up.
+
+## Piece 5 addendum — mysql addon kind + producer
+
+- MySQL is now a first-class addon kind: `operator/helm-charts/kusoaddon/
+  templates/mysql.yaml` (mysql:8 StatefulSet + Service + conn Secret with
+  MYSQL_* + MYSQL_URL/DATABASE_URL, resource-policy=keep, annotation-free
+  VCT, password-reuse + drift guard). Added to `$supported` + `$noHA`
+  (unsupported.yaml) and `noHAKinds` (addons.go). No HA in v1.
+- Backup: mysqldump CronJob branch + a `mysqlProducer` in the registry
+  (mysqldump / `mysql` restore, sha256 manifest). Restore conn env branch
+  added for kind=mysql.
+- Backup image gained `mysql-client` (alpine mariadb-client, wire-compatible;
+  verified installable in alpine:3.21). Needs `make backup-image` to
+  rebuild+push before mysql backups run on the cluster.
+- Web: mysql added to the AddAddonDialog kind picker (AddonIcon already had
+  a mysql brand + mariadb alias). Web typecheck passes. CLI accepts
+  `--kind mysql` with no client-side allowlist change (kind is validated
+  server/chart-side).
+- CRD/chart apply on cluster required (new template + validation lists);
+  the auto-updater only flips image tags.
+- Deferred (documented): mysql HA, DB browser (`kuso db sql`) for mysql,
+  previewdb clone for mysql. mongodb was already a kind (Piece 3), so this
+  piece was mysql-only.

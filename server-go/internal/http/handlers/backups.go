@@ -526,6 +526,14 @@ func restoreConnEnv(kind, releaseName string) []corev1.EnvVar {
 			envFromSecret("MONGO_URL", releaseName+"-conn", "MONGO_URL"),
 		}
 	}
+	if kind == "mysql" {
+		return []corev1.EnvVar{
+			envFromSecret("MYSQL_HOST", releaseName+"-conn", "MYSQL_HOST"),
+			envFromSecret("MYSQL_USER", releaseName+"-conn", "MYSQL_USER"),
+			envFromSecret("MYSQL_DB", releaseName+"-conn", "MYSQL_DB"),
+			envFromSecret("MYSQL_PASSWORD", releaseName+"-conn", "MYSQL_PASSWORD"),
+		}
+	}
 	// postgres (default) — source ALL connection parameters from the
 	// addon's <release>-conn Secret so the restore Job tracks whatever the
 	// chart wrote (same source of truth as the application pods).

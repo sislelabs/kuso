@@ -20,6 +20,13 @@ func TestRestoreScriptForKind(t *testing.T) {
 	if !strings.Contains(m, "mongorestore") {
 		t.Errorf("mongodb restore script wrong: %q", m)
 	}
+	my, err := restoreScriptForKind("mysql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(my, "mysql") {
+		t.Errorf("mysql restore script wrong")
+	}
 	if _, err := restoreScriptForKind("nats"); err == nil {
 		t.Error("nats should be rejected as not restorable")
 	}
