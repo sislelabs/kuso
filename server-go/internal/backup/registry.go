@@ -12,6 +12,7 @@ func NewDefaultRegistry() *Registry {
 		postgresProducer{},
 		redisProducer{},
 		mongoProducer{},
+		mysqlProducer{},
 	} {
 		r.byKind[p.Kind()] = p
 	}
@@ -118,6 +119,38 @@ else
 fi
 echo "==> restoring via mongorestore"
 mongorestore --uri "${MONGO_URL}" --archive=/tmp/dump.archive.gz --gzip --drop
+echo "==> done"
+`
+}
+
+// --- mysql ------------------------------------------------------------
+
+type mysqlProducer struct{}
+
+func (mysqlProducer) Kind() string        { return "mysql" }
+func (mysqlProducer) PayloadKind() string { return "mysqldump" }
+func (mysqlProducer) ArtifactExt() string { return "sql.gz" }
+func (mysqlProducer) RestoreScript() string {
+	return `
+set -eo pipefail
+echo "==> downloading s3://${BUCKET}/${KEY}"
+aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}" /tmp/dump.sql.gz
+if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.json" /tmp/manifest.json 2>/dev/null; then
+  WANT=$(grep -o '"sha256":"[^"]*"' /tmp/manifest.json | head -1 | cut -d'"' -f4)
+  GOT=$(sha256sum /tmp/dump.sql.gz | awk '{print $1}')
+  if [ -z "${WANT}" ]; then
+    echo "==> manifest present but no sha256 — skipping verification"
+  elif [ "${WANT}" != "${GOT}" ]; then
+    echo "==> checksum MISMATCH: manifest=${WANT} actual=${GOT} — aborting before touching the database"
+    exit 1
+  else
+    echo "==> checksum OK (${GOT})"
+  fi
+else
+  echo "==> no manifest for this backup — integrity NOT verified, proceeding"
+fi
+echo "==> piping into mysql"
+gunzip -c /tmp/dump.sql.gz | MYSQL_PWD="${MYSQL_PASSWORD}" mysql -h "${MYSQL_HOST}" -u "${MYSQL_USER}" "${MYSQL_DB}"
 echo "==> done"
 `
 }

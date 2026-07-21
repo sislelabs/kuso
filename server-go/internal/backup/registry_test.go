@@ -48,3 +48,19 @@ func TestMongoRestoreScript(t *testing.T) {
 		}
 	}
 }
+
+func TestMysqlProducer(t *testing.T) {
+	p, ok := NewDefaultRegistry().For("mysql")
+	if !ok {
+		t.Fatal("mysql not registered")
+	}
+	if p.PayloadKind() != "mysqldump" || p.ArtifactExt() != "sql.gz" {
+		t.Fatalf("mysql producer metadata wrong: %s/%s", p.PayloadKind(), p.ArtifactExt())
+	}
+	s := p.RestoreScript()
+	for _, want := range []string{"mysql", "MYSQL_HOST", "manifest.json", "MISMATCH", "gunzip"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("mysql restore script missing %q", want)
+		}
+	}
+}
