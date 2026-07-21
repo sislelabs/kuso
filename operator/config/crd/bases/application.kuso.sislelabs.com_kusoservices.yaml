@@ -449,6 +449,13 @@ spec:
                       type: integer
                       description: Hard cap on the Job. On timeout the build is marked release-failed. Default 900s (15min).
                       default: 900
+                snapshotBeforeDeploy:
+                  type: boolean
+                  description: |
+                    When true, snapshot the service's subscribed postgres
+                    addon(s) BEFORE the release hook runs, so a bad migration
+                    has a one-click restore. Only fires when a release hook is
+                    also present. Mirrored onto every owned KusoEnvironment.
             status:
               type: object
               x-kubernetes-preserve-unknown-fields: true

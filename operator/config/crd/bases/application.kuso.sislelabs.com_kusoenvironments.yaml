@@ -322,6 +322,9 @@ spec:
                     timeoutSeconds:
                       type: integer
                       default: 900
+                snapshotBeforeDeploy:
+                  type: boolean
+                  description: Mirrored from KusoService.spec.snapshotBeforeDeploy. When true and a release hook exists, the poller snapshots subscribed postgres addons before the hook runs.
                 placement:
                   type: object
                   description: Inherits the parent service placement so the env-helm chart can render nodeSelector + topologySpread. Pruning was the v0.7.x silent-data-loss bug — schema now covers what server-go writes.
