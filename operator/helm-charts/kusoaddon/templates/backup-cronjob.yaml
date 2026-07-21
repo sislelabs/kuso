@@ -382,6 +382,101 @@ spec:
 {{- end }}
 
 {{- /*
+MongoDB backup. mongodump --archive --gzip streams a single compressed
+archive to /tmp, we sha256 + upload it plus a manifest, same key shape
+(<project>/<addon>/<ts>.archive.gz) and prune logic as the others.
+MONGO_URL is the full connection URI from the addon's -conn Secret.
+*/ -}}
+{{- if and .Values.backup.schedule (eq .Values.kind "mongodb") (not .Values.external) (not .Values.useInstanceAddon) }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ printf "%s-backup" (include "kusoaddon.fullname" .) | quote }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+    kuso.sislelabs.com/role: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            kuso.sislelabs.com/role: backup
+            kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
+            kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
+        spec:
+          restartPolicy: OnFailure
+          {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
+          containers:
+            - name: dump
+              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
+              imagePullPolicy: IfNotPresent
+              command: [sh, -c]
+              args:
+                - |
+                  set -eu
+                  if [ -z "${BUCKET:-}" ]; then
+                    echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
+                    exit 0
+                  fi
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  KEY="${PROJECT}/${ADDON}/${TS}.archive.gz"
+                  PREFIX="${PROJECT}/${ADDON}/"
+                  echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
+                  mongodump --uri "${MONGO_URL}" --archive --gzip > /tmp/dump.archive.gz
+                  SHA=$(sha256sum /tmp/dump.archive.gz | awk '{print $1}')
+                  BYTES=$(wc -c < /tmp/dump.archive.gz | tr -d ' ')
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.archive.gz "s3://${BUCKET}/${KEY}"
+                  echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"mongodb","producer":"mongodump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"mongodump"}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
+                  rm -f /tmp/dump.archive.gz /tmp/manifest.json
+                  echo "==> manifest done"
+
+                  if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
+                    CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
+                             || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
+                    echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
+                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                      | awk '{print $1, $2, $4}' \
+                      | while read date time name; do
+                          [ -z "${name}" ] && continue
+                          obj_ts=$(date -u -d "${date}T${time}Z" +%s 2>/dev/null || echo 0)
+                          if [ "${obj_ts}" -gt 0 ] && [ "${obj_ts}" -lt "${CUTOFF}" ]; then
+                            echo "    rm s3://${BUCKET}/${PREFIX}${name}"
+                            aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
+                          fi
+                        done
+                  fi
+                  echo "==> done"
+              env:
+                - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
+                - { name: ADDON,   value: {{ .Release.Name | quote }} }
+                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
+                - name: MONGO_URL
+                  valueFrom:
+                    secretKeyRef:
+                      # Use connSecretName (the same helper mongodb.yaml uses to
+                      # NAME this secret) rather than fullname-conn — they match
+                      # today but only connSecretName is the authoritative name.
+                      name: {{ include "kusoaddon.connSecretName" . | quote }}
+                      key: MONGO_URL
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
+                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region }, optional: true } }
+{{- end }}
+
+{{- /*
 S3/MinIO bucket backup. Mirrors the entire in-cluster bucket to the
 cluster-wide backup bucket under <project>/<addon>/<utc-iso>/. Uses
 `aws s3 sync` with `--delete` against a per-run timestamp prefix so
