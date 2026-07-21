@@ -5,17 +5,23 @@ import (
 	"testing"
 )
 
-func TestRestoreScriptVerifiesChecksum(t *testing.T) {
-	s := restoreScript()
-	for _, want := range []string{
-		"manifest.json",
-		"sha256sum",
-		"MISMATCH",
-		"no manifest", // backward-compat warning branch
-	} {
-		if !strings.Contains(s, want) {
-			t.Errorf("restore script missing %q", want)
-		}
+func TestRestoreScriptForKind(t *testing.T) {
+	s, err := restoreScriptForKind("postgres")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(s, "psql") || !strings.Contains(s, "MISMATCH") {
+		t.Errorf("postgres restore script wrong: %q", s)
+	}
+	m, err := restoreScriptForKind("mongodb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(m, "mongorestore") {
+		t.Errorf("mongodb restore script wrong: %q", m)
+	}
+	if _, err := restoreScriptForKind("nats"); err == nil {
+		t.Error("nats should be rejected as not restorable")
 	}
 }
 

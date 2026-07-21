@@ -27,6 +27,7 @@ import (
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/audit"
+	"kuso/server/internal/backup"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
@@ -423,6 +424,16 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	releaseName := destCR.Name
 	jobName := fmt.Sprintf("%s-restore-%d", releaseName, time.Now().Unix())
 
+	// Resolve the restore shell by the destination addon's kind. An
+	// unbackable kind is a 400 rather than a doomed Job. (src/dest kinds
+	// are already validated equal above when restoring into a sibling.)
+	restoreShell, err := restoreScriptForKind(destCR.Spec.Kind)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName), restoreS3Env()...)
+
 	one := int32(1)
 	zero := int32(0)
 	job := &batchv1.Job{
@@ -454,30 +465,11 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 						Image:           "ghcr.io/sislelabs/kuso-backup:latest",
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						Command:         []string{"sh", "-c"},
-						Args:            []string{restoreScript()},
-						Env: []corev1.EnvVar{
-							{Name: "KEY", Value: req.Key},
-							// Source ALL connection parameters from the
-							// addon's <release>-conn Secret. Hard-coding
-							// host/user/db here was the v0.7.51 bug:
-							// host had a stale "-postgresql" suffix
-							// (left over from when the chart used the
-							// bitnami subchart's naming) and db
-							// defaulted to "kuso" but the chart actually
-							// uses "<project>". Reading from the conn
-							// secret means the restore Job tracks
-							// whatever the chart wrote — same source of
-							// truth as the application pods.
-							envFromSecret("POSTGRES_HOST", releaseName+"-conn", "POSTGRES_HOST"),
-							envFromSecret("POSTGRES_USER", releaseName+"-conn", "POSTGRES_USER"),
-							envFromSecret("POSTGRES_DB", releaseName+"-conn", "POSTGRES_DB"),
-							envFromSecret("POSTGRES_PASSWORD", releaseName+"-conn", "POSTGRES_PASSWORD"),
-							envFromSecret("BUCKET", backupSecretName, "bucket"),
-							envFromSecret("S3_ENDPOINT", backupSecretName, "endpoint"),
-							envFromSecret("AWS_ACCESS_KEY_ID", backupSecretName, "accessKeyId"),
-							envFromSecret("AWS_SECRET_ACCESS_KEY", backupSecretName, "secretAccessKey"),
-							envFromSecretOptional("AWS_DEFAULT_REGION", backupSecretName, "region"),
-						},
+						Args:            []string{restoreShell},
+						// KEY names the artifact; the rest of the env is the
+						// kind-aware connection params (restoreConnEnv) +
+						// shared S3 creds (restoreS3Env), computed above.
+						Env: append([]corev1.EnvVar{{Name: "KEY", Value: req.Key}}, restoreEnv...),
 					}},
 				},
 			},
@@ -510,35 +502,50 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"job": created.Name})
 }
 
-// restoreScript is the shell the restore Job runs. It downloads the
-// artifact AND its sibling manifest, verifies the artifact's sha256
-// against the manifest before applying (aborting on mismatch), and
-// warns-but-proceeds when a pre-manifest backup has no manifest.
-func restoreScript() string {
-	return `
-set -eo pipefail
-echo "==> downloading s3://${BUCKET}/${KEY}"
-aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}" /tmp/dump.sql.gz
-echo "==> checking for manifest s3://${BUCKET}/${KEY}.manifest.json"
-if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.json" /tmp/manifest.json 2>/dev/null; then
-  WANT=$(grep -o '"sha256":"[^"]*"' /tmp/manifest.json | head -1 | cut -d'"' -f4)
-  GOT=$(sha256sum /tmp/dump.sql.gz | awk '{print $1}')
-  if [ -z "${WANT}" ]; then
-    echo "==> manifest present but no sha256 — skipping verification"
-  elif [ "${WANT}" != "${GOT}" ]; then
-    echo "==> checksum MISMATCH: manifest=${WANT} actual=${GOT} — aborting before touching the database"
-    exit 1
-  else
-    echo "==> checksum OK (${GOT})"
-  fi
-else
-  echo "==> no manifest for this backup — integrity NOT verified, proceeding"
-fi
-echo "==> piping into psql"
-gunzip -c /tmp/dump.sql.gz | PGPASSWORD="${POSTGRES_PASSWORD}" psql \
-  -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}"
-echo "==> done"
-`
+// restoreScriptForKind returns the restore shell for an addon kind via
+// the producer registry. Unknown/unbackable kinds are rejected so the
+// caller can return a clear 400 instead of minting a doomed Job. The
+// per-kind script downloads the artifact + its sibling manifest, verifies
+// the sha256 before applying (aborting on mismatch), and warns-but-
+// proceeds when a pre-manifest backup has no manifest.
+func restoreScriptForKind(kind string) (string, error) {
+	p, ok := backup.NewDefaultRegistry().For(kind)
+	if !ok {
+		return "", fmt.Errorf("addon kind %q is not restorable", kind)
+	}
+	return p.RestoreScript(), nil
+}
+
+// restoreConnEnv returns the addon connection env the restore Job needs
+// for a given kind, sourced from the addon's <release>-conn Secret.
+// postgres keeps the exact POSTGRES_* set it always had; mongodb needs
+// only the MONGO_URL connection URI.
+func restoreConnEnv(kind, releaseName string) []corev1.EnvVar {
+	if kind == "mongodb" {
+		return []corev1.EnvVar{
+			envFromSecret("MONGO_URL", releaseName+"-conn", "MONGO_URL"),
+		}
+	}
+	// postgres (default) — source ALL connection parameters from the
+	// addon's <release>-conn Secret so the restore Job tracks whatever the
+	// chart wrote (same source of truth as the application pods).
+	return []corev1.EnvVar{
+		envFromSecret("POSTGRES_HOST", releaseName+"-conn", "POSTGRES_HOST"),
+		envFromSecret("POSTGRES_USER", releaseName+"-conn", "POSTGRES_USER"),
+		envFromSecret("POSTGRES_DB", releaseName+"-conn", "POSTGRES_DB"),
+		envFromSecret("POSTGRES_PASSWORD", releaseName+"-conn", "POSTGRES_PASSWORD"),
+	}
+}
+
+// restoreS3Env returns the S3 credential env shared by all restore kinds.
+func restoreS3Env() []corev1.EnvVar {
+	return []corev1.EnvVar{
+		envFromSecret("BUCKET", backupSecretName, "bucket"),
+		envFromSecret("S3_ENDPOINT", backupSecretName, "endpoint"),
+		envFromSecret("AWS_ACCESS_KEY_ID", backupSecretName, "accessKeyId"),
+		envFromSecret("AWS_SECRET_ACCESS_KEY", backupSecretName, "secretAccessKey"),
+		envFromSecretOptional("AWS_DEFAULT_REGION", backupSecretName, "region"),
+	}
 }
 
 // mirrorBackupSecret copies the home-namespace kuso-backup-s3 Secret
