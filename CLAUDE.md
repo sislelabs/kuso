@@ -25,6 +25,7 @@ When you need to check the state of the live cluster (services, addons, builds, 
 | RBAC roles                       | `kuso get roles` · `kuso role create/edit/delete`                        |
 | Backup policy / health           | `kuso backup settings get` · `kuso backup health`                        |
 | Pod-size presets                 | `kuso instance-config podsize list`                                      |
+| Hit any API endpoint directly    | `kuso api <METHOD> <path> [-f k=v] [--data @f.json] [--jq expr]`         |
 
 **Why this matters:**
 - The CLI hits the same `/api/...` surface the UI uses, so what you see is what users see — no "but on my machine" mismatches.
@@ -38,6 +39,10 @@ browser (`kuso db sql/tables/columns/rows`), service pods/errors, and the
 github/user/invite/notification helpers all have commands. `kuso <group> --help`
 lists them. If you reach for the web UI or kubectl for a kuso-managed resource,
 that's now a gap worth reporting, not a fallback.
+
+`kuso api` is the raw escape hatch — any `/api` endpoint is reachable
+even before it has a dedicated command (gh-api style: `kuso api GET
+projects`, `kuso api POST .../builds -f branch=main`, `--jq` to filter).
 
 **Fall back to `kubectl` only when**:
 - The CLI genuinely has no equivalent: `kubectl logs` of a non-kuso pod, helm-operator state, raw CRD yaml for operator reconcile debugging, or **kube events** (no kuso endpoint exists — verified).
