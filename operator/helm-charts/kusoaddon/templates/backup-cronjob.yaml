@@ -77,9 +77,21 @@ spec:
                   echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
                   PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump \
                     -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" \
-                    | gzip \
-                    | aws s3 cp --endpoint-url "${S3_ENDPOINT}" - "s3://${BUCKET}/${KEY}"
-                  echo "==> upload done"
+                    | gzip > /tmp/dump.gz
+                  SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
+                  BYTES=$(wc -c < /tmp/dump.gz | tr -d ' ')
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.gz "s3://${BUCKET}/${KEY}"
+                  echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
+                  # Integrity manifest written beside the artifact. Restore
+                  # verifies the sha256 before applying. No secret values here.
+                  # printf (not a heredoc): the script is indented inside a YAML
+                  # block scalar, and an indented heredoc terminator is never
+                  # matched — it would swallow the rest of the script.
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"postgres","producer":"pg_dump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"pg_dump"}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
+                  rm -f /tmp/dump.gz /tmp/manifest.json
+                  echo "==> manifest done"
 
                   # Retention prune. List existing dumps, drop ones
                   # older than RETENTION_DAYS. We keep the logic in the
@@ -319,9 +331,15 @@ spec:
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> snapshotting ${ADDON} → s3://${BUCKET}/${KEY}"
                   redis-cli -h "${REDIS_HOST}" -a "${REDIS_PASSWORD}" --no-auth-warning --rdb /tmp/dump.rdb
-                  gzip -c /tmp/dump.rdb \
-                    | aws s3 cp --endpoint-url "${S3_ENDPOINT}" - "s3://${BUCKET}/${KEY}"
-                  rm -f /tmp/dump.rdb
+                  gzip -c /tmp/dump.rdb > /tmp/dump.rdb.gz
+                  SHA=$(sha256sum /tmp/dump.rdb.gz | awk '{print $1}')
+                  BYTES=$(wc -c < /tmp/dump.rdb.gz | tr -d ' ')
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.rdb.gz "s3://${BUCKET}/${KEY}"
+                  echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"redis","producer":"redis_rdb","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"redis_rdb"}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
+                  rm -f /tmp/dump.rdb /tmp/dump.rdb.gz /tmp/manifest.json
                   echo "==> upload done"
 
                   if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
