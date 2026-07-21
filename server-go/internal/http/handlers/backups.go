@@ -445,15 +445,7 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 						Image:           "ghcr.io/sislelabs/kuso-backup:latest",
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						Command:         []string{"sh", "-c"},
-						Args: []string{`
-set -eo pipefail
-echo "==> downloading s3://${BUCKET}/${KEY}"
-aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}" /tmp/dump.sql.gz
-echo "==> piping into psql"
-gunzip -c /tmp/dump.sql.gz | PGPASSWORD="${POSTGRES_PASSWORD}" psql \
-  -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}"
-echo "==> done"
-`},
+						Args:            []string{restoreScript()},
 						Env: []corev1.EnvVar{
 							{Name: "KEY", Value: req.Key},
 							// Source ALL connection parameters from the
@@ -507,6 +499,37 @@ echo "==> done"
 		})
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"job": created.Name})
+}
+
+// restoreScript is the shell the restore Job runs. It downloads the
+// artifact AND its sibling manifest, verifies the artifact's sha256
+// against the manifest before applying (aborting on mismatch), and
+// warns-but-proceeds when a pre-manifest backup has no manifest.
+func restoreScript() string {
+	return `
+set -eo pipefail
+echo "==> downloading s3://${BUCKET}/${KEY}"
+aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}" /tmp/dump.sql.gz
+echo "==> checking for manifest s3://${BUCKET}/${KEY}.manifest.json"
+if aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}.manifest.json" /tmp/manifest.json 2>/dev/null; then
+  WANT=$(grep -o '"sha256":"[^"]*"' /tmp/manifest.json | head -1 | cut -d'"' -f4)
+  GOT=$(sha256sum /tmp/dump.sql.gz | awk '{print $1}')
+  if [ -z "${WANT}" ]; then
+    echo "==> manifest present but no sha256 — skipping verification"
+  elif [ "${WANT}" != "${GOT}" ]; then
+    echo "==> checksum MISMATCH: manifest=${WANT} actual=${GOT} — aborting before touching the database"
+    exit 1
+  else
+    echo "==> checksum OK (${GOT})"
+  fi
+else
+  echo "==> no manifest for this backup — integrity NOT verified, proceeding"
+fi
+echo "==> piping into psql"
+gunzip -c /tmp/dump.sql.gz | PGPASSWORD="${POSTGRES_PASSWORD}" psql \
+  -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}"
+echo "==> done"
+`
 }
 
 // mirrorBackupSecret copies the home-namespace kuso-backup-s3 Secret
