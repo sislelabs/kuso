@@ -62,6 +62,9 @@ type changedFields struct {
 	// it off the env CR (which is already in its hot-path GET) when
 	// deciding whether to run a release Job before promoting an image.
 	Release bool
+	// Snapshot carries spec.snapshotBeforeDeploy changes so the poller's
+	// pre-deploy snapshot decision tracks the current service spec.
+	Snapshot bool
 	// Command carries spec.command changes. The chart's Deployment
 	// template renders args off the env CR's command field; without
 	// propagation a `kuso service set --command` change updates the
@@ -91,7 +94,7 @@ type changedFields struct {
 }
 
 func (c changedFields) any() bool {
-	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.PlatformAPIEgress || c.Release || c.Command || c.Resources || c.Stopped || c.Sleep || c.SecurityContext
+	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.PlatformAPIEgress || c.Release || c.Command || c.Resources || c.Stopped || c.Sleep || c.SecurityContext || c.Snapshot
 }
 
 // propagateChangedToEnvs is the single chokepoint that mirrors a
@@ -308,6 +311,9 @@ func (s *Service) propagateChangedToEnvs(ctx context.Context, ns, project, servi
 			}
 			if changed.Release {
 				env.Spec.Release = svc.Spec.Release
+			}
+			if changed.Snapshot {
+				env.Spec.SnapshotBeforeDeploy = svc.Spec.SnapshotBeforeDeploy
 			}
 			if changed.Command {
 				env.Spec.Command = svc.Spec.Command

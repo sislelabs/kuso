@@ -111,6 +111,9 @@ type CreateServiceRequest struct {
 	// means no hook. Mirrors PatchReleaseRequest minus Clear (a brand-new
 	// service has nothing to clear).
 	Release *PatchReleaseRequest `json:"release,omitempty"`
+	// SnapshotBeforeDeploy opts this service into a pre-deploy postgres
+	// snapshot before its release hook runs. nil = default (false).
+	SnapshotBeforeDeploy *bool `json:"snapshotBeforeDeploy,omitempty"`
 	// BuildArgs / PublicEnv configure build-time env at create time.
 	// BuildArgs become --build-arg inputs; PublicEnv names get sentinel-
 	// baked at build and substituted at pod start. Mirror KusoServiceSpec.
