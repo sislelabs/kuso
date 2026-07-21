@@ -26,3 +26,18 @@ as before. No operator action required for old backups.
 - The manifest JSON is emitted with `printf`, not a heredoc: the CronJob script
   runs inside a YAML block scalar where an indented heredoc terminator is never
   matched and would silently swallow the rest of the script.
+
+## Piece 3 addendum — producer registry + mongodb
+
+- New `server-go/internal/backup` registry drives the restore Job's script
+  per addon kind (postgres/redis/mongodb registered; others → "not
+  restorable" 400).
+- mongodb now has a scheduled backup CronJob branch (mongodump --archive
+  --gzip) + sha256 manifest, and restore via mongorestore --drop.
+- The `kuso-backup` image gained `mongodb-tools` (mongodump/mongorestore)
+  AND `redis` (redis-cli — the redis branch was already broken without it).
+  This requires `make backup-image` to rebuild+push before mongodb/redis
+  backups run on the cluster — the auto-updater does NOT rebuild this image.
+  apk names verified installable in alpine:3.21.
+- Other addon kinds (valkey/clickhouse/rabbitmq/meilisearch/nats/redpanda)
+  are registry-ready but not yet implemented — follow-up work.
