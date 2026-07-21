@@ -1,0 +1,143 @@
+{{- if and (eq .Values.kind "mysql") (not .Values.ha) (not .Values.external) (not .Values.useInstanceAddon) -}}
+{{- /* Single-node MySQL. Uses the official `mysql` image with a non-root
+       app user seeded from the conn Secret. The conn Secret emits
+       MYSQL_URL / DATABASE_URL so apps keyed on either name connect
+       unchanged. No HA template exists — ha=true is rejected server-side
+       (noHAKinds) and by unsupported.yaml. */ -}}
+{{- $version := .Values.version | default "8.0" -}}
+{{- $database := .Values.database | default .Values.project -}}
+{{- $name := include "kusoaddon.fullname" . -}}
+{{- $secretName := include "kusoaddon.connSecretName" . -}}
+{{/* Password reuse — same reconcile-stability reason as postgres/mongodb. */}}
+{{- $existing := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- $existingPw := "" -}}
+{{- if and $existing $existing.data (index $existing.data "MYSQL_PASSWORD") -}}
+  {{- $existingPw = (index $existing.data "MYSQL_PASSWORD" | b64dec) -}}
+{{- end -}}
+{{/* Drift guard: a StatefulSet whose data PVC already seeded a user must
+     NOT get a fresh random password (it wouldn't match on-disk auth). */}}
+{{- $existingSts := lookup "apps/v1" "StatefulSet" .Release.Namespace $name -}}
+{{- if and $existingSts (not $existingPw) (not .Values.password) -}}
+  {{- fail (printf "kusoaddon %s/%s: StatefulSet exists but conn Secret is missing — refusing to generate a fresh password. Run `kuso project addon repair-password` to recover." .Release.Namespace $name) -}}
+{{- end -}}
+{{- $password := .Values.password | default $existingPw | default (randAlphaNum 24) -}}
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ $name }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "kusoaddon.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "kusoaddon.selectorLabels" . | nindent 8 }}
+        {{- include "kusoaddon.labels" . | nindent 8 }}
+    spec:
+      {{- include "kusoaddon.podSecurityContext" . | nindent 6 }}
+      {{- include "kusoaddon.placement" . | nindent 6 }}
+      containers:
+        - name: mysql
+          image: "mysql:{{ $version }}"
+          {{- include "kusoaddon.containerSecurityContext" . | nindent 10 }}
+          ports:
+            - name: mysql
+              containerPort: 3306
+          env:
+            # Root password: MySQL requires one to init. We reuse the app
+            # password for it (single-tenant addon; the app user is what
+            # apps use). MYSQL_USER/DATABASE create the app user + db.
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: MYSQL_PASSWORD
+            - name: MYSQL_DATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: MYSQL_DB
+            - name: MYSQL_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: MYSQL_USER
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: MYSQL_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+          readinessProbe:
+            exec:
+              command:
+                - sh
+                - -c
+                - mysqladmin ping -h 127.0.0.1 -u root -p"${MYSQL_ROOT_PASSWORD}" --silent
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          resources:
+            {{- include "kusoaddon.resources" . | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        # NOTE: volumeClaimTemplates must stay annotation-free. K8s forbids
+        # any change to a StatefulSet's volumeClaimTemplates after creation,
+        # so adding a VCT annotation traps every pre-existing addon in a
+        # failed helm upgrade (see chart_render addon_vct_test). PVC data is
+        # retained regardless: a StatefulSet never garbage-collects its
+        # VCT-spawned PVCs, and helm uninstall doesn't own them either.
+      spec:
+        accessModes: [ReadWriteOnce]
+        resources:
+          requests:
+            storage: {{ include "kusoaddon.storageSize" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "kusoaddon.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ $secretName }}
+  annotations:
+    # Align the conn Secret's lifecycle with the data PVC's (which survives
+    # addon deletion). Without keep, a delete+re-add over the surviving PVC
+    # mints a fresh password that won't match the DB initialised with the
+    # original — every app fails auth. Mirrors mongodb/postgres-ha.
+    helm.sh/resource-policy: keep
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+type: Opaque
+# base64 `data:` not `stringData:` — see postgres.yaml conn Secret comment.
+data:
+  MYSQL_HOST: {{ $name | b64enc | quote }}
+  MYSQL_PORT: {{ "3306" | b64enc | quote }}
+  MYSQL_USER: {{ "kuso" | b64enc | quote }}
+  MYSQL_PASSWORD: {{ $password | b64enc | quote }}
+  MYSQL_DB: {{ $database | b64enc | quote }}
+  # urlquery the password so reserved chars don't corrupt the URI.
+  MYSQL_URL: {{ printf "mysql://kuso:%s@%s:3306/%s" ($password | urlquery) $name $database | b64enc | quote }}
+  # DATABASE_URL alias — generic ecosystems expect this name.
+  DATABASE_URL: {{ printf "mysql://kuso:%s@%s:3306/%s" ($password | urlquery) $name $database | b64enc | quote }}
+{{- end }}
