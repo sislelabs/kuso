@@ -166,61 +166,76 @@ get one. A `--require-manifest` flag (default off) can force strict mode later.
 
 ---
 
-## Piece 3 — Backup producer registry + volume producer
+## Piece 3 — Backup producer registry + mongodb producer
+
+> **REVISED during implementation (2026-07-21), superseding the original "registry + volume
+> producer" text.** Two facts discovered while grounding the plan changed the approach:
+>
+> 1. **kuso already has 11 addon kinds**, not the 4 the audit found: postgres, redis, valkey,
+>    mongodb, clickhouse, redpanda, rabbitmq, meilisearch, nats, mailpit, s3 (chart templates in
+>    `operator/helm-charts/kusoaddon/templates/`). Backups today cover only postgres, redis, s3.
+>    **mongodb is already a kind** — so Piece 5 shrinks to "add mysql kind + mysql/mongo backup
+>    producers" (mongo the kind already exists).
+> 2. **A raw "volume" producer is not viable as designed.** An addon PVC is `ReadWriteOnce` and
+>    already mounted by its running StatefulSet pod, so a backup Job cannot mount it concurrently
+>    on typical storage classes. The chosen approach is **native network dumps** (like pg_dump /
+>    redis-cli today), not a volume tar. VolumeSnapshot-based capture is deferred as a possible
+>    future universal fallback.
+>
+> **Revised scope:** build the registry seam and ship **one** new producer — **mongodb
+> (`mongodump`)** — to prove the seam end-to-end. valkey/clickhouse/rabbitmq/meilisearch/nats/
+> redpanda producers become separately-scoped follow-ups that plug into the registry.
 
 ### Purpose
 Refactor the currently-hardcoded producer logic (postgres pg_dump, redis rdb) into a small
-registry keyed by `payloadKind`, so new producers plug in. Ship the **volume** producer (tar +
-zstd of the addon PVC) — the universal fallback that makes clickhouse/redpanda (currently
-un-dumpable) backable. This is the seam mysql/mongo (Piece 5) plug into.
+registry keyed by addon kind, so new producers plug in without editing the handler or the chart's
+`{{ if eq .kind }}` ladder. Ship the mongodb producer as the first registry-native addition.
 
-### Model (server-side, Go)
+### Model (server-side, Go, in `server-go/internal/backup`)
 ```go
+// Producer emits the shell a backup/restore Job runs for one addon kind.
+// Scripts run in the kuso-backup Job pod against the addon's -conn Secret
+// env — the producer returns shell text, it does not talk to the DB itself.
 type Producer interface {
-    // Kind is the payloadKind string recorded in the manifest.
-    Kind() string
-    // Detects reports whether this producer handles the given addon.
-    Detects(addon AddonRef) bool
-    // BackupScript / RestoreScript return the shell fragments the Job runs,
-    // parameterized by the addon's -conn Secret env.
-    BackupScript(a AddonRef) string
-    RestoreScript(a AddonRef) string
+    Kind() string          // addon kind this handles, e.g. "mongodb"
+    PayloadKind() string   // manifest payloadKind, e.g. "mongodump"
+    Artifact(ts string) string // artifact basename, e.g. ts+".archive.gz"
+    BackupScript() string  // writes /tmp artifact, sets SHA/BYTES, uploads artifact+manifest
+    RestoreScript() string // downloads+verifies manifest, applies to the addon
 }
 ```
-- A registry resolves `producerFor(addon)` by walking registered producers in priority order —
-  **specific kinds first** (postgres, redis, mysql, mongo), **volume last** as the catch-all.
-  This mirrors Openship's ordering (DB producers win auto-detect before the volume fallback).
-- Producers emit shell fragments (not Go that talks to the DB) because the actual work runs in
-  the `kuso-backup` Job pod against the addon's `-conn` Secret — consistent with today's design.
+- `Registry.For(kind string) (Producer, bool)` — exact-kind lookup (no catch-all yet; unknown
+  kind → not backable, surfaced clearly rather than silently tarring a volume).
+- The manifest (Piece 2) already carries `producer`/`payloadKind` — the mongodb producer sets
+  `producer:"mongodump"`, `payloadKind:"mongodump"`.
 
-### Volume producer
-- Backup: `tar -C /data -cf - . | zstd -c -3 > dump.tar.zst` where `/data` is the addon PVC
-  mounted read-only into the Job (or a VolumeSnapshot-backed clone if the storageclass supports
-  it — the plan evaluates; default is a direct RO mount with a note that the addon should ideally
-  be quiesced/paused for a consistent volume backup).
-- Restore: stop addon → replace PVC contents from `zstd -d | tar -x` → start addon. This is the
-  first restore path that must **stop/start the addon**, so it needs the two-phase treatment
-  (see Cross-cutting).
-- Manifest `payloadKind: "volume"`, one artifact.
+### mongodb producer
+- Backup: `mongodump --uri "$MONGO_URI" --archive --gzip > /tmp/dump.archive.gz`, then the same
+  sha256 + manifest + upload flow as pg/redis (Piece 2). Artifact ext `.archive.gz`.
+- Restore: download + verify manifest, then
+  `mongorestore --uri "$MONGO_URI" --archive --gzip --drop < /tmp/dump.archive.gz`.
+- Requires `mongodb-tools` in the `kuso-backup` image (currently absent — Task adds it).
+- `MONGO_URI` sourced from the mongodb addon's `-conn` Secret (confirm the exact key name during
+  implementation; mongodb.yaml uses `MONGO_INITDB_ROOT_*` + a conn secret).
 
-### Consistency caveat (documented, not hidden)
-A live-volume tar of a running database is crash-consistent at best. The volume producer is the
-right tool for clickhouse/redpanda and generic PVCs; for postgres/redis the native dump
-producers remain the default (registry priority ensures this). This tradeoff goes in the addon
-backup docs.
+### Where the registry is used
+- **New backup CronJob branch** for mongodb in `backup-cronjob.yaml`, mirroring the pg/redis
+  branches but using the producer's script. (The chart stays the source of the CronJob; the Go
+  registry is the source of truth for the restore Job + for validating "is this kind backable".)
+- **Restore handler** (`backups.go`): `restoreScript()` becomes kind-aware — resolve the producer
+  by the addon's kind and use its `RestoreScript()`; postgres keeps today's exact behavior.
 
-### Components
-- `server-go/internal/backup/` (new package, or a `producers/` subtree under an existing backup
-  location): registry + Producer implementations (postgres, redis extracted from current
-  hardcode; volume new).
-- Wire `backups.go` handler + `backup-cronjob.yaml` to resolve scripts via the registry instead
-  of inline `{{ if eq .kind "postgres" }}`.
-- Manifest from Piece 2 gains `volume` as a valid payloadKind.
+### Pre-existing bug to fix here
+The `kuso-backup` image (`build/backup/Dockerfile`) installs `postgresql16-client` but **no
+redis-cli** — the redis backup CronJob would fail today. Add `redis`/`valkey` client tooling
+while adding `mongodb-tools`, so the image matches the kinds the chart tries to back up.
 
 ### Testing
-- Unit: registry resolution order (postgres addon → pg_dump not volume; clickhouse addon →
-  volume); script generation snapshot tests.
-- Integration: volume backup+restore round-trip against a throwaway addon PVC; verify manifest.
+- Unit: `Registry.For("mongodb")` returns the mongo producer; `For("postgres")` returns pg;
+  `For("nats")` returns not-found; producer script contains `mongodump`/`mongorestore` +
+  manifest/sha256 steps.
+- Integration (if a live target exists): create a mongodb addon, back it up, corrupt → restore
+  aborts, clean → restore round-trips.
 
 ---
 
