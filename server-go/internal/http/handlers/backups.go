@@ -225,6 +225,12 @@ type BackupObject struct {
 	When time.Time `json:"when"`
 }
 
+// isManifestKey reports whether an S3 key is a backup manifest sidecar
+// rather than a restorable artifact.
+func isManifestKey(key string) bool {
+	return strings.HasSuffix(key, ".manifest.json")
+}
+
 func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	addon := chi.URLParam(r, "addon")
@@ -264,6 +270,9 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	items := make([]BackupObject, 0, len(out.Contents))
 	for _, o := range out.Contents {
 		key := aws.ToString(o.Key)
+		if isManifestKey(key) {
+			continue // sidecar, not a restorable backup
+		}
 		size := aws.ToInt64(o.Size)
 		when := time.Time{}
 		if o.LastModified != nil {

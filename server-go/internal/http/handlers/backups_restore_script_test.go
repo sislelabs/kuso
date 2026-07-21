@@ -18,3 +18,12 @@ func TestRestoreScriptVerifiesChecksum(t *testing.T) {
 		}
 	}
 }
+
+func TestIsManifestKey(t *testing.T) {
+	if !isManifestKey("acme/acme-db/x.sql.gz.manifest.json") {
+		t.Error("manifest key should be detected")
+	}
+	if isManifestKey("acme/acme-db/x.sql.gz") {
+		t.Error("artifact key is not a manifest")
+	}
+}
