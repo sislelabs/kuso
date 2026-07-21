@@ -41,3 +41,26 @@ as before. No operator action required for old backups.
   apk names verified installable in alpine:3.21.
 - Other addon kinds (valkey/clickhouse/rabbitmq/meilisearch/nats/redpanda)
   are registry-ready but not yet implemented — follow-up work.
+
+## Piece 4 addendum — pre-deploy snapshot
+
+- New `spec.snapshotBeforeDeploy` (bool) on KusoService, mirrored to
+  KusoEnvironment. Opt-in; postgres-only; fires only when a release hook
+  also exists. Snapshot runs before the release/migration Job; snapshot
+  infra-failure blocks the deploy; on migration failure the build is
+  annotated `kuso.sislelabs.com/predeploy-snapshot-keys` with the snapshot
+  S3 keys for a one-click restore-to-pre-deploy.
+- CRD schema changed (both kusoservices + kusoenvironments) → needs
+  `kubectl apply` of the two CRD YAMLs on the cluster (auto-updater only
+  flips image tags). CRD golden test refreshed (`KUSO_UPDATE_GOLDENS=1`).
+- Snapshot Jobs reuse the pg_dump + sha256 manifest flow (Pieces 2–3), so
+  they appear in the existing backup list and restore through the verified
+  path. Manifest carries extra `trigger`/`buildRef` fields (ignored by the
+  Piece-2 parser — forward-compatible).
+- **Surface gap (follow-up):** the field is wired end-to-end server-side and
+  settable via the API (incl. `kuso api PATCH .../services/<svc> -f
+  snapshotBeforeDeploy=true`). A dedicated CLI flag + a web toggle/restore
+  button are NOT yet added — release isn't surfaced in the CLI kuso.yaml
+  either, so this matches the existing pattern. Add web toggle + a
+  "restore pre-deploy snapshot" button (reads the build annotation, calls
+  the existing restore endpoint) as a focused follow-up.

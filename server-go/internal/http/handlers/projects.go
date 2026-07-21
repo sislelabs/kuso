@@ -125,6 +125,7 @@ func apiv1CreateServiceToDomain(in apiv1.CreateServiceRequest) projects.CreateSe
 			TimeoutSeconds: in.Release.TimeoutSeconds,
 		}
 	}
+	out.SnapshotBeforeDeploy = in.SnapshotBeforeDeploy
 	out.BuildArgs = in.BuildArgs
 	out.PublicEnv = in.PublicEnv
 	if in.SecurityContext != nil {

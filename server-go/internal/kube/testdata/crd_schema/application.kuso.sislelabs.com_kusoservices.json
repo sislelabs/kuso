@@ -387,6 +387,10 @@
             },
             "type": "object"
           },
+          "snapshotBeforeDeploy": {
+            "description": "When true, snapshot the service's subscribed postgres\naddon(s) BEFORE the release hook runs, so a bad migration\nhas a one-click restore. Only fires when a release hook is\nalso present. Mirrored onto every owned KusoEnvironment.\n",
+            "type": "boolean"
+          },
           "static": {
             "type": "object",
             "x-kubernetes-preserve-unknown-fields": true
