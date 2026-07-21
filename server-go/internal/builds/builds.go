@@ -1121,6 +1121,11 @@ type Poller struct {
 	// releaserun.New(kube.Client).
 	ReleaseRunner ReleaseRunner
 
+	// Snapshotter takes a pre-deploy backup of subscribed postgres addons
+	// before the release hook runs, when the env opts in via
+	// spec.snapshotBeforeDeploy. Optional: nil → snapshots skipped.
+	Snapshotter Snapshotter
+
 	// ImageDeleter unties registry image tags for builds that age out of
 	// the rollback window (imageRetentionWindow). ImageRecords supplies
 	// archived build summaries so the window spans builds whose CR is
@@ -2655,6 +2660,24 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		// re-deploy of the same tag is a no-op (Job exists, already
 		// succeeded). See releaserun.JobName.
 		if shouldRunRelease(&e) && p.ReleaseRunner != nil {
+			// Pre-deploy snapshot: when the env opts in, snapshot its
+			// subscribed postgres addon(s) BEFORE the migration runs so a
+			// bad migration has a one-click restore. A snapshot infra
+			// failure blocks the deploy — if we promised a safety net and
+			// couldn't take it, don't proceed into the migration.
+			var snapKeys []string
+			if shouldSnapshot(&e, p.Snapshotter) {
+				keys, serr := runPredeploySnapshot(ctx, ns, &e, p.Snapshotter)
+				if serr != nil {
+					releaseBlocked = true
+					p.logger().Error("pre-deploy snapshot failed — blocking deploy",
+						"env", e.Name, "build", b.Name, "err", serr)
+					continue
+				}
+				snapKeys = keys
+				p.logger().Info("pre-deploy snapshot taken",
+					"env", e.Name, "build", b.Name, "keys", snapKeys)
+			}
 			res, rerr := p.ReleaseRunner.Run(ctx, ns, &e, b.Spec.Image)
 			if rerr != nil {
 				// Infra error talking to kube — log + skip this env
@@ -2670,7 +2693,7 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 				releaseBlocked = true
 				p.logger().Warn("release hook failed — skipping image promote",
 					"env", e.Name, "build", b.Name, "outcome", res.Outcome, "job", res.JobName, "msg", res.Message)
-				p.markReleaseFailed(ctx, ns, b, &e, res)
+				p.markReleaseFailedWithSnapshot(ctx, ns, b, &e, res, snapKeys)
 				continue
 			}
 			p.logger().Info("release hook succeeded",
@@ -2814,6 +2837,27 @@ type ReleaseRunner interface {
 	Run(ctx context.Context, ns string, env *kube.KusoEnvironment, image *kube.KusoImage) (releaserun.Result, error)
 }
 
+// Snapshotter takes a pre-deploy backup of an env's subscribed postgres
+// addon(s). Returns the S3 keys of the snapshots taken. Defined locally
+// so builds doesn't import the backup handler package directly (keeps the
+// import graph one-way; main.go wires the concrete type in).
+type Snapshotter interface {
+	Snapshot(ctx context.Context, ns string, env *kube.KusoEnvironment) ([]string, error)
+}
+
+// shouldSnapshot reports whether a pre-deploy snapshot should run for this
+// env: the opt-in flag is set, a snapshotter is wired, and a release hook
+// exists (the risk surface). No hook = no migration = nothing to guard.
+func shouldSnapshot(e *kube.KusoEnvironment, s Snapshotter) bool {
+	return e.Spec.SnapshotBeforeDeploy && s != nil && shouldRunRelease(e)
+}
+
+// runPredeploySnapshot invokes the snapshotter and returns the keys taken.
+// A non-nil error means the caller must NOT proceed into the migration.
+func runPredeploySnapshot(ctx context.Context, ns string, e *kube.KusoEnvironment, s Snapshotter) ([]string, error) {
+	return s.Snapshot(ctx, ns, e)
+}
+
 // shouldRunRelease reports whether the build poller should run the pre-deploy
 // release Job for this env. It runs for any env carrying a release command —
 // EXCEPT preview envs. Preview migrations are owned by the seed path
@@ -2831,6 +2875,15 @@ func shouldRunRelease(e *kube.KusoEnvironment) bool {
 		return false
 	}
 	return true
+}
+
+// markReleaseFailedWithSnapshot marks the build release-failed and, when a
+// pre-deploy snapshot was taken, records the snapshot keys on the build so
+// the UI/CLI can offer a restore-to-pre-deploy action. (Task 4 fleshes out
+// the snapshot-key surfacing; today it delegates to markReleaseFailed.)
+func (p *Poller) markReleaseFailedWithSnapshot(ctx context.Context, ns string, b *kube.KusoBuild, e *kube.KusoEnvironment, res releaserun.Result, snapKeys []string) {
+	p.markReleaseFailed(ctx, ns, b, e, res)
+	_ = snapKeys
 }
 
 // markReleaseFailed stamps the build CR with phase=release-failed and
