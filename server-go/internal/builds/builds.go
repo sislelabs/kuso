@@ -2877,13 +2877,30 @@ func shouldRunRelease(e *kube.KusoEnvironment) bool {
 	return true
 }
 
+// annPredeploySnapshotKeys records, on a release-failed build, the S3 keys
+// of the pre-deploy snapshot(s) so the UI/CLI can offer a restore action.
+const annPredeploySnapshotKeys = "kuso.sislelabs.com/predeploy-snapshot-keys"
+
+// snapshotKeysAnnotationValue joins snapshot keys for the build annotation.
+func snapshotKeysAnnotationValue(keys []string) string {
+	return strings.Join(keys, ",")
+}
+
 // markReleaseFailedWithSnapshot marks the build release-failed and, when a
 // pre-deploy snapshot was taken, records the snapshot keys on the build so
-// the UI/CLI can offer a restore-to-pre-deploy action. (Task 4 fleshes out
-// the snapshot-key surfacing; today it delegates to markReleaseFailed.)
+// the UI/CLI can offer a restore-to-pre-deploy action.
 func (p *Poller) markReleaseFailedWithSnapshot(ctx context.Context, ns string, b *kube.KusoBuild, e *kube.KusoEnvironment, res releaserun.Result, snapKeys []string) {
 	p.markReleaseFailed(ctx, ns, b, e, res)
-	_ = snapKeys
+	if len(snapKeys) == 0 {
+		return
+	}
+	patch := fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`,
+		annPredeploySnapshotKeys, snapshotKeysAnnotationValue(snapKeys))
+	if _, err := p.Svc.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).
+		Patch(ctx, b.Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); err != nil {
+		p.logger().Error("annotate build with pre-deploy snapshot keys",
+			"build", b.Name, "err", err)
+	}
 }
 
 // markReleaseFailed stamps the build CR with phase=release-failed and

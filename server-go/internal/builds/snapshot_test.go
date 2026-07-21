@@ -55,3 +55,13 @@ func TestSnapshotInfraFailBlocks(t *testing.T) {
 		t.Fatal("snapshotter should have been called")
 	}
 }
+
+func TestSnapshotKeysAnnotation(t *testing.T) {
+	got := snapshotKeysAnnotationValue([]string{"a/b/1.sql.gz", "a/c/2.sql.gz"})
+	if got != "a/b/1.sql.gz,a/c/2.sql.gz" {
+		t.Fatalf("annotation value = %q", got)
+	}
+	if snapshotKeysAnnotationValue(nil) != "" {
+		t.Fatal("nil keys -> empty annotation value")
+	}
+}
