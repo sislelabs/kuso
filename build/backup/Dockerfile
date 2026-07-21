@@ -26,10 +26,13 @@ RUN apk add --no-cache \
       postgresql16-client \
       redis \
       mongodb-tools \
+      mysql-client \
       gzip
 # redis        -> redis-cli, needed by the redis backup CronJob branch
 #                (it was referenced but missing from this image before).
 # mongodb-tools-> mongodump / mongorestore for the mongodb producer.
+# mysql-client -> mysqldump / mysql for the mysql producer (alpine's
+#                mysql-client is the mariadb-client, wire-compatible).
 
 # Run as non-root so a compromised CronJob can't touch the host.
 RUN adduser -D -u 1001 kuso

@@ -91,6 +91,7 @@ var noHAKinds = map[string]bool{
 	"mongodb":  true,
 	"rabbitmq": true,
 	"redpanda": true,
+	"mysql":    true,
 }
 
 // CreateAddonRequest is the body of POST /api/projects/:p/addons.
