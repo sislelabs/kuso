@@ -383,7 +383,11 @@ func (s *Service) ConfigureExternal(ctx context.Context, req ConfigureExternalRe
 func coerceSSLMode(dsn string) (string, error) {
 	u, err := url.Parse(dsn)
 	if err != nil {
-		return "", fmt.Errorf("dsn parse: %s", err)
+		// STATIC message — url.Parse's error text embeds the offending
+		// input, and dsn is the external PG admin credential (password
+		// and all). ConfigureExternal wraps this into an editor-visible
+		// 400 body, so never echo the parse error (or the DSN) back.
+		return "", errors.New("malformed dsn")
 	}
 	host := u.Hostname()
 	local := isLocalHost(host)

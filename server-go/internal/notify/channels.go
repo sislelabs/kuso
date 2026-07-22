@@ -21,6 +21,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"kuso/server/internal/httpx"
 )
 
 // plainSummary renders an Event as a compact plain-text block used by
@@ -263,6 +265,12 @@ func (d *Dispatcher) sendEmailSync(ctx context.Context, cfg map[string]any, e Ev
 	return nil
 }
 
+// smtpIsReservedIP guards the SMTP dial against reserved/private
+// targets. It's an overridable seam so the tear-down tests (which must
+// dial a loopback stub) can relax it; production always uses the shared
+// httpx policy.
+var smtpIsReservedIP = httpx.IsReservedIP
+
 // smtpSendMail is smtp.SendMail with a context. The stdlib function
 // takes none, so the previous shape ran it in a goroutine and selected
 // on ctx — which returned early but LEAKED the goroutine + socket
@@ -278,8 +286,27 @@ func smtpSendMail(ctx context.Context, host, port string, auth smtp.Auth, from s
 			return fmt.Errorf("address contains CR/LF: %q", line)
 		}
 	}
+	// SSRF defence-in-depth. The SMTP host is admin-supplied so this is
+	// less exposed than the user-set HTTP webhook channels, but keep it
+	// consistent with them: resolve the host and refuse to dial any IP
+	// in a reserved/private range (loopback, link-local incl. cloud
+	// metadata 169.254.169.254, RFC1918). We dial the *resolved* IP so
+	// there's no check-then-dial rebinding gap, matching httpx's
+	// SSRFSafeTransport policy. Every resolved IP must pass.
+	ips, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
+	if err != nil {
+		return err
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("smtp: no IPs for host %q", host)
+	}
+	for _, ip := range ips {
+		if smtpIsReservedIP(ip) {
+			return fmt.Errorf("smtp: refusing to dial reserved address %s (%s)", ip, host)
+		}
+	}
 	dialer := &net.Dialer{Timeout: 15 * time.Second}
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(ips[0].String(), port))
 	if err != nil {
 		return err
 	}

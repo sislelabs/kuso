@@ -198,7 +198,7 @@ func TestCoerceSSLMode(t *testing.T) {
 		{
 			name:    "garbage DSN parse fails",
 			in:      "postgres://[::::not-a-url",
-			wantErr: "dsn parse",
+			wantErr: "malformed dsn",
 		},
 		{
 			name: "public host, sslmode=require already set → untouched",
@@ -225,6 +225,29 @@ func TestCoerceSSLMode(t *testing.T) {
 				t.Errorf("coerceSSLMode(%q) = %q, want %q", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestCoerceSSLMode_DoesNotLeakDSNOnParseError guards the credential-
+// redaction fix: url.Parse's error text embeds the offending input, and
+// the DSN is the external PG superuser credential. coerceSSLMode's error
+// flows into an editor-visible 400 body, so it must NOT contain the DSN
+// (or its password).
+func TestCoerceSSLMode_DoesNotLeakDSNOnParseError(t *testing.T) {
+	t.Parallel()
+	// A DSN that fails url.Parse (bad bracketed host) but carries a
+	// recognizable secret we can assert is absent from the error.
+	const secret = "sup3rs3cr3t"
+	dsn := "postgres://admin:" + secret + "@[::::bad-host/db"
+	_, err := coerceSSLMode(dsn)
+	if err == nil {
+		t.Fatal("expected a parse error for a malformed DSN")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Errorf("error leaks the DSN password: %q", err.Error())
+	}
+	if strings.Contains(err.Error(), "admin") || strings.Contains(err.Error(), "bad-host") {
+		t.Errorf("error leaks DSN contents: %q", err.Error())
 	}
 }
 

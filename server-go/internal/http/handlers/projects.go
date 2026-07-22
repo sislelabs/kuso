@@ -330,6 +330,65 @@ func projectCtx(r *http.Request) (context.Context, context.CancelFunc) {
 	return context.WithTimeout(r.Context(), 5*time.Second)
 }
 
+// maskKusoEnvVars replaces every literal env-var Value with the mask
+// sentinel, in place. Names + valueFrom refs survive so the editor UI
+// still shows which keys exist. Mirrors maskEnvValues (which operates on
+// the projects.EnvVar wire shape) for the raw kube.KusoEnvVar carried on
+// Service/Environment CRs.
+func maskKusoEnvVars(vars []kube.KusoEnvVar) {
+	for i := range vars {
+		if vars[i].Value != "" {
+			vars[i].Value = envMaskSentinel
+		}
+	}
+}
+
+// maskServiceEnvIfNeeded masks the env-var VALUES on a service CR unless
+// the caller may read secrets. Env values are admin-only (secrets:read);
+// every endpoint that serializes a KusoService to the client MUST route
+// it through here so the admin-only mask can't regress per-handler. The
+// mutation is in place on the passed copy — callers must hand it a fresh
+// decode (the domain service returns one per call), never a cached CR.
+func maskServiceEnvIfNeeded(ctx context.Context, dbConn *db.DB, project string, svc *kube.KusoService) {
+	if svc == nil || callerCanReadSecrets(ctx, dbConn, project) {
+		return
+	}
+	maskKusoEnvVars(svc.Spec.EnvVars)
+}
+
+// maskServicesEnvIfNeeded is the slice form of maskServiceEnvIfNeeded for
+// list endpoints. The secret-read gate is resolved once (it's the same
+// answer for every service in one project) and applied across the slice.
+func maskServicesEnvIfNeeded(ctx context.Context, dbConn *db.DB, project string, svcs []kube.KusoService) {
+	if len(svcs) == 0 || callerCanReadSecrets(ctx, dbConn, project) {
+		return
+	}
+	for i := range svcs {
+		maskKusoEnvVars(svcs[i].Spec.EnvVars)
+	}
+}
+
+// maskEnvIfNeeded masks the env-var VALUES on a KusoEnvironment CR unless
+// the caller may read secrets. Same admin-only gate as the service form —
+// an env CR carries a resolved copy of the service's env vars, so leaking
+// it plaintext is the same disclosure.
+func maskEnvIfNeeded(ctx context.Context, dbConn *db.DB, project string, env *kube.KusoEnvironment) {
+	if env == nil || callerCanReadSecrets(ctx, dbConn, project) {
+		return
+	}
+	maskKusoEnvVars(env.Spec.EnvVars)
+}
+
+// maskEnvsIfNeeded is the slice form of maskEnvIfNeeded for list endpoints.
+func maskEnvsIfNeeded(ctx context.Context, dbConn *db.DB, project string, envs []kube.KusoEnvironment) {
+	if len(envs) == 0 || callerCanReadSecrets(ctx, dbConn, project) {
+		return
+	}
+	for i := range envs {
+		maskKusoEnvVars(envs[i].Spec.EnvVars)
+	}
+}
+
 func (h *ProjectsHandler) List(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := projectCtx(r)
 	defer cancel()
@@ -393,10 +452,18 @@ func (h *ProjectsHandler) Describe(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
 		return
 	}
-	out, err := h.Svc.Describe(ctx, chi.URLParam(r, "project"))
+	project := chi.URLParam(r, "project")
+	out, err := h.Svc.Describe(ctx, project)
 	if err != nil {
 		h.fail(w, "describe project", err)
 		return
+	}
+	// The rollup embeds full Service + Environment CRs, both carrying
+	// env-var VALUES. Mask them for callers who can't read secrets — the
+	// same admin-only gate GetService/GetEnv enforce.
+	if out != nil {
+		maskServicesEnvIfNeeded(ctx, h.DB, project, out.Services)
+		maskEnvsIfNeeded(ctx, h.DB, project, out.Environments)
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -470,11 +537,13 @@ func (h *ProjectsHandler) ListServices(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
 		return
 	}
-	out, err := h.Svc.ListServices(ctx, chi.URLParam(r, "project"))
+	project := chi.URLParam(r, "project")
+	out, err := h.Svc.ListServices(ctx, project)
 	if err != nil {
 		h.fail(w, "list services", err)
 		return
 	}
+	maskServicesEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -489,11 +558,13 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
-	out, err := h.Svc.AddService(ctx, chi.URLParam(r, "project"), apiv1CreateServiceToDomain(wire))
+	project := chi.URLParam(r, "project")
+	out, err := h.Svc.AddService(ctx, project, apiv1CreateServiceToDomain(wire))
 	if err != nil {
 		h.fail(w, "add service", err)
 		return
 	}
+	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusCreated, out)
 }
 
@@ -513,13 +584,7 @@ func (h *ProjectsHandler) GetService(w http.ResponseWriter, r *http.Request) {
 	// who can't read secrets (editor/viewer) — admin only sees the real
 	// values. Mutates the returned CR copy in place; GetService returns a
 	// fresh decode per call so this doesn't poison a cache.
-	if out != nil && !callerCanReadSecrets(ctx, h.DB, project) {
-		for i := range out.Spec.EnvVars {
-			if out.Spec.EnvVars[i].Value != "" {
-				out.Spec.EnvVars[i].Value = envMaskSentinel
-			}
-		}
-	}
+	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -657,11 +722,13 @@ func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
-	out, err := h.Svc.PatchService(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
+	project := chi.URLParam(r, "project")
+	out, err := h.Svc.PatchService(ctx, project, chi.URLParam(r, "service"), req)
 	if err != nil {
 		h.fail(w, "patch service", err)
 		return
 	}
+	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -679,12 +746,14 @@ func (h *ProjectsHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
-	out, err := h.Svc.AddDomain(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"),
+	project := chi.URLParam(r, "project")
+	out, err := h.Svc.AddDomain(ctx, project, chi.URLParam(r, "service"),
 		projects.AddDomainRequest{Host: wire.Host, TLS: wire.TLS, TLSSecret: wire.TLSSecret})
 	if err != nil {
 		h.fail(w, "add domain", err)
 		return
 	}
+	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -696,14 +765,16 @@ func (h *ProjectsHandler) RemoveDomain(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
+	project := chi.URLParam(r, "project")
 	out, err := h.Svc.RemoveDomain(ctx,
-		chi.URLParam(r, "project"),
+		project,
 		chi.URLParam(r, "service"),
 		chi.URLParam(r, "host"))
 	if err != nil {
 		h.fail(w, "remove domain", err)
 		return
 	}
+	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -749,6 +820,7 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 	if h.DB != nil {
 		_ = h.DB.DeleteEnvHint(ctx, project, service, name)
 	}
+	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -760,14 +832,16 @@ func (h *ProjectsHandler) UnsetEnvVar(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
+	project := chi.URLParam(r, "project")
 	out, err := h.Svc.UnsetEnvVar(ctx,
-		chi.URLParam(r, "project"),
+		project,
 		chi.URLParam(r, "service"),
 		chi.URLParam(r, "name"))
 	if err != nil {
 		h.fail(w, "unset env var", err)
 		return
 	}
+	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -816,8 +890,9 @@ func (h *ProjectsHandler) RenameService(w http.ResponseWriter, r *http.Request) 
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
+	project := chi.URLParam(r, "project")
 	out, err := h.Svc.RenameService(ctx,
-		chi.URLParam(r, "project"),
+		project,
 		chi.URLParam(r, "service"),
 		req.NewName,
 	)
@@ -825,6 +900,7 @@ func (h *ProjectsHandler) RenameService(w http.ResponseWriter, r *http.Request) 
 		h.fail(w, "rename service", err)
 		return
 	}
+	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -1143,11 +1219,13 @@ func (h *ProjectsHandler) ListEnvironments(w http.ResponseWriter, r *http.Reques
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
 		return
 	}
-	out, err := h.Svc.ListEnvironments(ctx, chi.URLParam(r, "project"))
+	project := chi.URLParam(r, "project")
+	out, err := h.Svc.ListEnvironments(ctx, project)
 	if err != nil {
 		h.fail(w, "list envs", err)
 		return
 	}
+	maskEnvsIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 
@@ -1166,8 +1244,9 @@ func (h *ProjectsHandler) AddEnvironment(w http.ResponseWriter, r *http.Request)
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
 		return
 	}
+	project := chi.URLParam(r, "project")
 	out, err := h.Svc.AddEnvironment(ctx,
-		chi.URLParam(r, "project"),
+		project,
 		chi.URLParam(r, "service"),
 		req,
 	)
@@ -1175,6 +1254,7 @@ func (h *ProjectsHandler) AddEnvironment(w http.ResponseWriter, r *http.Request)
 		h.fail(w, "add environment", err)
 		return
 	}
+	maskEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusCreated, out)
 }
 
@@ -1184,11 +1264,13 @@ func (h *ProjectsHandler) GetEnvironment(w http.ResponseWriter, r *http.Request)
 	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleViewer) {
 		return
 	}
-	out, err := h.Svc.GetEnvironment(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "env"))
+	project := chi.URLParam(r, "project")
+	out, err := h.Svc.GetEnvironment(ctx, project, chi.URLParam(r, "env"))
 	if err != nil {
 		h.fail(w, "get env", err)
 		return
 	}
+	maskEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
 

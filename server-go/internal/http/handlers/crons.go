@@ -174,10 +174,21 @@ func (h *CronsHandler) Add(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
-	out, err := h.Svc.Add(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), req)
+	// A service cron mounts the parent service's full envFromSecrets
+	// (DATABASE_URL, API keys, signing secrets) and runs a caller-
+	// supplied command inside that environment — exactly the capability
+	// the run + pod-shell endpoints admin-gate (an editor could
+	// otherwise `printenv` past the env-value + shell restrictions).
+	// Require the same secrets:read (admin) boundary here.
+	if !callerCanReadSecrets(ctx, h.DB, project) {
+		http.Error(w, "forbidden: creating a service cron requires the admin role", http.StatusForbidden)
+		return
+	}
+	out, err := h.Svc.Add(ctx, project, chi.URLParam(r, "service"), req)
 	if err != nil {
 		h.fail(w, "add cron", err)
 		return
@@ -193,10 +204,19 @@ func (h *CronsHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := cronsCtx(r)
 	defer cancel()
-	if !requireProjectAccess(ctx, w, h.DB, chi.URLParam(r, "project"), db.ProjectRoleEditor) {
+	project := chi.URLParam(r, "project")
+	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleEditor) {
 		return
 	}
-	out, err := h.Svc.Update(ctx, chi.URLParam(r, "project"), chi.URLParam(r, "service"), chi.URLParam(r, "name"), req)
+	// Editing a service cron re-resolves the parent service's
+	// envFromSecrets and can change the command it runs against them —
+	// same secret-bearing arbitrary-exec surface as Add, so it carries
+	// the same admin gate the run + pod-shell endpoints use.
+	if !callerCanReadSecrets(ctx, h.DB, project) {
+		http.Error(w, "forbidden: editing a service cron requires the admin role", http.StatusForbidden)
+		return
+	}
+	out, err := h.Svc.Update(ctx, project, chi.URLParam(r, "service"), chi.URLParam(r, "name"), req)
 	if err != nil {
 		h.fail(w, "update cron", err)
 		return

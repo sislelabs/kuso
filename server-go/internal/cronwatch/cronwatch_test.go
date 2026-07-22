@@ -22,6 +22,19 @@ import (
 	"kuso/server/internal/kube"
 )
 
+// allowLoopbackWebhook relaxes the dispatch-time URL shape check for the
+// duration of a test so the loopback httptest servers below are
+// reachable. Also returns a plain (non-SSRF) client to inject as
+// w.HTTP, since the production client's SSRFSafeTransport dialer would
+// itself refuse to dial 127.0.0.1. Production keeps both guards.
+func allowLoopbackWebhook(t *testing.T) *http.Client {
+	t.Helper()
+	prev := validateWebhookURLFn
+	validateWebhookURLFn = func(string) error { return nil }
+	t.Cleanup(func() { validateWebhookURLFn = prev })
+	return &http.Client{Timeout: 5 * time.Second}
+}
+
 func failedJob(name, cron, uid string) *batchv1.Job {
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -88,6 +101,7 @@ func TestTick_DispatchesConcurrently(t *testing.T) {
 	w := &Watcher{
 		Kube:   &kube.Client{Clientset: cs, Dynamic: dyn},
 		Config: Config{}, Logger: slog.Default(),
+		HTTP:       allowLoopbackWebhook(t),
 		dispatched: map[types.UID]struct{}{},
 	}
 
@@ -101,6 +115,36 @@ func TestTick_DispatchesConcurrently(t *testing.T) {
 	// Serial would be ~400ms; concurrent ~200ms. Allow slack.
 	if elapsed > 350*time.Millisecond {
 		t.Errorf("tick took %v — handlers appear to run serially, not concurrently", elapsed)
+	}
+}
+
+// TestDispatchWebhook_RejectsSSRFTarget is the SSRF regression: a stored
+// onFailure webhook URL pointing at a reserved/private target (RFC1918
+// IP literal here, cluster-internal .svc name below) must be refused
+// before any request goes out. Exercises the real validateWebhookURL
+// (no loopback relax) — the belt to the SSRFSafeTransport braces.
+func TestDispatchWebhook_RejectsSSRFTarget(t *testing.T) {
+	w := &Watcher{Logger: slog.Default()}
+	job := failedJob("job-x", "cron-x", "uid-x")
+	cases := []string{
+		"http://10.0.0.5/hook",       // RFC1918
+		"http://169.254.169.254/",    // cloud metadata
+		"http://addon-pg.alpha.svc/", // cluster-internal DNS
+		"http://localhost:9000/hook", // loopback name
+	}
+	for _, url := range cases {
+		cron := &kube.KusoCron{
+			ObjectMeta: metav1.ObjectMeta{Name: "cron-x", Namespace: "kuso"},
+			Spec: kube.KusoCronSpec{
+				Project:   "alpha",
+				Service:   "web",
+				OnFailure: &kube.KusoCronOnFailure{WebhookURL: url},
+			},
+		}
+		err := w.dispatchWebhook(context.Background(), cron, job)
+		if err == nil {
+			t.Errorf("dispatchWebhook(%q) = nil, want SSRF rejection", url)
+		}
 	}
 }
 
@@ -124,6 +168,7 @@ func TestTick_DedupesAcrossTicks(t *testing.T) {
 	w := &Watcher{
 		Kube:   &kube.Client{Clientset: cs, Dynamic: dyn},
 		Config: Config{}, Logger: slog.Default(),
+		HTTP:       allowLoopbackWebhook(t),
 		dispatched: map[types.UID]struct{}{},
 	}
 	w.tick(context.Background())
