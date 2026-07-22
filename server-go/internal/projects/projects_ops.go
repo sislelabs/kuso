@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -95,6 +96,25 @@ var reservedRouteNames = map[string]bool{
 	"invite":   true,
 }
 
+// rfc1123Label is the constraint kube enforces on a resource name (a
+// project name becomes the CR name and a namespace). Validating it at the
+// domain boundary turns an apiserver 422 (which our handlers map to a bare
+// 500) into an actionable ErrInvalid -> 400. Project names also prefix
+// addon CR names ("<project>-<addon>"), so we cap length with headroom.
+var rfc1123Label = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+// validateProjectName rejects names kube would reject, before the CR/namespace
+// write. Returns ErrInvalid so the HTTP layer maps it to 400.
+func validateProjectName(name string) error {
+	if len(name) > 40 {
+		return fmt.Errorf("%w: name must be 40 characters or fewer", ErrInvalid)
+	}
+	if !rfc1123Label.MatchString(name) {
+		return fmt.Errorf("%w: name must be lowercase alphanumeric or '-', and start/end alphanumeric (RFC 1123)", ErrInvalid)
+	}
+	return nil
+}
+
 // Create validates input, refuses duplicates, and persists a new project.
 //
 // As of v0.3.5 a project is just a container — defaultRepo is no longer
@@ -104,6 +124,9 @@ var reservedRouteNames = map[string]bool{
 func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.KusoProject, error) {
 	if req.Name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalid)
+	}
+	if err := validateProjectName(req.Name); err != nil {
+		return nil, err
 	}
 	if reservedRouteNames[req.Name] {
 		return nil, fmt.Errorf("%w: %q is reserved — it collides with a web route segment (new, projects, services, addons, envs, logs, settings, invite)", ErrInvalid, req.Name)

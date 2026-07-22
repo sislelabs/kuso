@@ -491,7 +491,13 @@ func compareDeploymentToEnv(ctx context.Context, s *Service, ns string, env kube
 	dep, derr := s.driftGetDeployment(ctx, ns, env.Name)
 	if derr == nil && env.Spec.ReplicaCount != nil && dep.Spec.Replicas != nil &&
 		int32(env.Spec.ReplicaCountValue()) != *dep.Spec.Replicas {
-		if dep.Annotations["autoscaling.alpha.kubernetes.io/conditions"] == "" {
+		// Don't report replica drift when the HPA owns scaling — it moves
+		// replicas outside spec by design. HPA ownership is signalled by the
+		// env's derived Autoscaling block (nil = static replicas). The old
+		// check read `autoscaling.alpha.kubernetes.io/conditions` off the
+		// Deployment, but that annotation only ever lands on the HPA object,
+		// so it was always "" and this exemption never fired.
+		if env.Spec.Autoscaling == nil {
 			out = append(out, "replicas")
 		}
 	}
@@ -540,7 +546,10 @@ func compareDeploymentTemplateToEnv(ctx context.Context, s *Service, ns string, 
 	}
 	if env.Spec.ReplicaCount != nil && dep.Spec.Replicas != nil &&
 		int32(env.Spec.ReplicaCountValue()) != *dep.Spec.Replicas {
-		if dep.Annotations["autoscaling.alpha.kubernetes.io/conditions"] == "" {
+		// HPA-owned scaling is exempt (see the sibling site above); the env's
+		// derived Autoscaling block is the correct signal, not the never-set
+		// Deployment annotation the old check read.
+		if env.Spec.Autoscaling == nil {
 			out = append(out, "replicas")
 		}
 	}
