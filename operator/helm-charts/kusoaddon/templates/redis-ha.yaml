@@ -329,6 +329,12 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: {{ include "kusoaddon.connSecretName" . }}
+  annotations:
+    # Keep the conn Secret aligned with the data PVCs' lifecycle: a
+    # delete+re-add over the surviving PVCs must reuse the same password, or
+    # clients fail AUTH against the retained Redis data. Mirrors mongodb /
+    # valkey / postgres-ha conn Secrets.
+    helm.sh/resource-policy: keep
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
 type: Opaque

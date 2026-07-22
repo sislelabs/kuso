@@ -490,6 +490,22 @@ type AddonPoolerPatch struct {
 // downstream, just with a worse error.
 var cronExpr5 = regexp.MustCompile(`^[\d\*\/\,\-\?]+\s+[\d\*\/\,\-\?]+\s+[\d\*\/\,\-\?]+\s+[\d\*\/\,\-\?]+\s+[\d\*\/\,\-\?]+$`)
 
+// storageForSize returns the VCT storage request the chart derives from a
+// t-shirt size when storageSize is not explicitly pinned. It MUST stay in
+// step with the `kusoaddon.storageSize` helper in
+// operator/helm-charts/kusoaddon/templates/_helpers.tpl — Update relies on
+// it to detect a size change that would move the (immutable) VCT request.
+func storageForSize(size string) string {
+	switch size {
+	case "medium":
+		return "20Gi"
+	case "large":
+		return "100Gi"
+	default: // "small" and any unknown value fall through to the chart default
+		return "5Gi"
+	}
+}
+
 // Update applies the partial UpdateAddonRequest to a KusoAddon CR.
 // Unset fields stay as they are. Helm-operator picks up the spec
 // change on its next reconcile (or via watch) and re-renders.
@@ -516,10 +532,33 @@ func (s *Service) Update(ctx context.Context, project, name string, req UpdateAd
 		if !addonOwnedByProject(addon, project) {
 			return fmt.Errorf("%w: addon %s/%s", ErrNotFound, project, name)
 		}
-		if req.Version != nil {
-			addon.Spec.Version = *req.Version
+		// Version is IMMUTABLE on a live addon (docs/EDIT_SAFETY.md:
+		// version = "treat as new addon"). For data-dir-versioned engines
+		// (postgres/mysql/mongodb) the on-disk data directory is tagged with
+		// the major version — a pg 16→17 bump boots a v17 binary against a
+		// v16 PVC and crash-loops ("database files are incompatible with
+		// server"). We refuse ANY version change here (the simplest, safest
+		// rule); a no-op patch (same value) is allowed so RevertAddon and
+		// idempotent re-saves still pass. To move versions: back up, delete,
+		// recreate at the new version, then restore.
+		if req.Version != nil && *req.Version != addon.Spec.Version {
+			return fmt.Errorf("%w: changing the version on a live addon is not supported — a new-version engine crash-loops against the old data directory; back up, delete, recreate at the new version, then restore", ErrConflict)
 		}
-		if req.Size != nil {
+		// Size drives the VCT storage request when storageSize is empty
+		// (see kusoaddon.storageSize helper: small=5Gi, medium=20Gi,
+		// large=100Gi). A StatefulSet's volumeClaimTemplates are immutable,
+		// so a size change that MOVES the effective storage request wedges
+		// every future helm upgrade with "updates to statefulset spec for
+		// fields other than 'replicas'... are forbidden". Refuse a size
+		// change that would alter the effective storage request; a size
+		// change is still fine when storageSize is pinned (storageSize wins
+		// in the helper, so the request doesn't move) or when the new size
+		// derives the same storage as the old one. No-op patch allowed.
+		if req.Size != nil && *req.Size != addon.Spec.Size {
+			if addon.Spec.StorageSize == "" &&
+				storageForSize(*req.Size) != storageForSize(addon.Spec.Size) {
+				return fmt.Errorf("%w: changing size from %q to %q would move the effective storage request (%s → %s) but the StatefulSet PVC template is immutable; pin storageSize to keep the current volume, or back up, delete, recreate at the new size, then restore", ErrConflict, addon.Spec.Size, *req.Size, storageForSize(addon.Spec.Size), storageForSize(*req.Size))
+			}
 			addon.Spec.Size = *req.Size
 		}
 		// HA is IMMUTABLE on a live addon (docs/EDIT_SAFETY.md: size/ha/

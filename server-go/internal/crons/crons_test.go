@@ -44,6 +44,20 @@ func TestValidateSchedule(t *testing.T) {
 		// Wrong char.
 		{"alpha", "every minute", false, "5-field"},
 		{"semicolon", "0 0 * * *;rm", false, "5-field"},
+
+		// Out-of-range values that PASS the shape regex but kube CronJob
+		// rejects at reconcile (the "validator lies" bug). Must be caught
+		// inline via per-field range checks.
+		{"hour-25", "0 25 * * *", false, "range"},
+		{"good-3am", "0 3 * * *", true, ""},
+		{"minute-60", "60 * * * *", false, "range"},
+		{"dom-0", "0 0 0 * *", false, "range"},
+		{"dom-32", "0 0 32 * *", false, "range"},
+		{"month-13", "0 0 1 13 *", false, "range"},
+		{"dow-7", "0 0 * * 7", false, "range"},
+		{"range-endpoint-oob", "0 0-24 * * *", false, "range"},
+		{"list-elem-oob", "0 1,25 * * *", false, "range"},
+		{"zero-step", "*/0 * * * *", false, "range"},
 	}
 	for _, c := range cases {
 		err := validateSchedule(c.in)

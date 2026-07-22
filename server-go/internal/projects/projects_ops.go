@@ -468,9 +468,24 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 			return fmt.Errorf("list project-scoped secrets: %w", lerr)
 		} else {
 			for i := range labelled.Items {
+				sec := &labelled.Items[i]
+				// Skip helm-owned conn/tls Secrets. The kusoaddon chart
+				// annotates `<addon>-conn` / `<addon>-tls` with
+				// `helm.sh/resource-policy: keep` so the data survives a
+				// delete+recreate at the same name (the surviving pgdata PVC
+				// must keep matching the surviving password). Sweeping them
+				// here mints a fresh password on the next `addon add`, which
+				// then fails to auth against the old data — silent DB outage.
+				// The helm-uninstall triggered by the addon-CR cascade already
+				// respects the keep policy and leaves these behind on purpose;
+				// this sweep must do the same. (PurgeData is the explicit
+				// destructive path and handles PVCs separately below.)
+				if sec.Annotations["helm.sh/resource-policy"] == "keep" {
+					continue
+				}
 				if derr := s.Kube.Clientset.CoreV1().Secrets(ns).
-					Delete(ctx, labelled.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
-					return fmt.Errorf("delete project-scoped secret %s: %w", labelled.Items[i].Name, derr)
+					Delete(ctx, sec.Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+					return fmt.Errorf("delete project-scoped secret %s: %w", sec.Name, derr)
 				}
 			}
 		}
