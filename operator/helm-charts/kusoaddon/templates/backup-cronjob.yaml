@@ -61,7 +61,7 @@ spec:
               command: [sh, -c]
               args:
                 - |
-                  set -eu
+                  set -euo pipefail
                   # Graceful no-op when backup S3 isn't configured: the
                   # kuso-backup-s3 Secret is absent until an operator sets
                   # up backup settings, so BUCKET is empty (its secretKeyRef
@@ -92,6 +92,20 @@ spec:
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
                   rm -f /tmp/dump.gz /tmp/manifest.json
                   echo "==> manifest done"
+
+                  # Multi-DB detection: this backup only dumps the primary
+                  # $POSTGRES_DB. If the addon hosts additional logical
+                  # databases they are silently NOT in this artifact. We
+                  # can't safely change the artifact/manifest shape here
+                  # (that's the restore contract), so make the gap LOUD.
+                  OTHER_DBS=$(PGPASSWORD="${POSTGRES_PASSWORD}" psql \
+                    -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+                    -tAc "SELECT datname FROM pg_database WHERE datistemplate=false AND datname NOT IN ('postgres')" \
+                    2>/dev/null | grep -vxF "${POSTGRES_DB}" || true)
+                  if [ -n "${OTHER_DBS}" ]; then
+                    N=$(printf '%s\n' "${OTHER_DBS}" | grep -c . || true)
+                    echo "WARNING: addon has ${N} logical DBs but only ${POSTGRES_DB} is backed up — other DBs are NOT in this backup" >&2
+                  fi
 
                   # Retention prune. List existing dumps, drop ones
                   # older than RETENTION_DAYS. We keep the logic in the
@@ -210,7 +224,7 @@ spec:
               command: [sh, -c]
               args:
                 - |
-                  set -eu
+                  set -euo pipefail
                   # Graceful no-op when backup S3 isn't configured: the
                   # kuso-backup-s3 Secret is absent until an operator sets
                   # up backup settings, so BUCKET is empty (its secretKeyRef
@@ -228,10 +242,22 @@ spec:
                   # disallow GRANT/REVOKE commands in dumps, which makes
                   # an unfiltered pg_dump fail at restore time. Match
                   # what PlanetScale / Neon / Supabase docs recommend.
-                  pg_dump --no-owner --no-acl "${DATABASE_URL}" \
-                    | gzip \
-                    | aws s3 cp --endpoint-url "${S3_ENDPOINT}" - "s3://${BUCKET}/${KEY}"
-                  echo "==> upload done"
+                  # Dump to /tmp first (not a streamed pipe to s3) so we can
+                  # sha256 the artifact and emit an integrity manifest — the
+                  # restore path verifies sha256 before applying.
+                  pg_dump --no-owner --no-acl "${DATABASE_URL}" | gzip > /tmp/dump.gz
+                  SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
+                  BYTES=$(wc -c < /tmp/dump.gz | tr -d ' ')
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.gz "s3://${BUCKET}/${KEY}"
+                  echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
+                  # Integrity manifest written beside the artifact. printf
+                  # (not a heredoc): indented heredoc terminators never match
+                  # inside a YAML block scalar.
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"postgres","producer":"pg_dump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"pg_dump"}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
+                  rm -f /tmp/dump.gz /tmp/manifest.json
+                  echo "==> manifest done"
 
                   if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
                     CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
@@ -316,7 +342,7 @@ spec:
               command: [sh, -c]
               args:
                 - |
-                  set -eu
+                  set -euo pipefail
                   # Graceful no-op when backup S3 isn't configured: the
                   # kuso-backup-s3 Secret is absent until an operator sets
                   # up backup settings, so BUCKET is empty (its secretKeyRef
@@ -421,7 +447,7 @@ spec:
               command: [sh, -c]
               args:
                 - |
-                  set -eu
+                  set -euo pipefail
                   if [ -z "${BUCKET:-}" ]; then
                     echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
                     exit 0
@@ -515,7 +541,7 @@ spec:
               command: [sh, -c]
               args:
                 - |
-                  set -eu
+                  set -euo pipefail
                   if [ -z "${BUCKET:-}" ]; then
                     echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
                     exit 0
@@ -613,7 +639,7 @@ spec:
               command: [sh, -c]
               args:
                 - |
-                  set -eu
+                  set -euo pipefail
                   # Graceful no-op when backup S3 isn't configured: the
                   # kuso-backup-s3 Secret is absent until an operator sets
                   # up backup settings, so BUCKET is empty (its secretKeyRef

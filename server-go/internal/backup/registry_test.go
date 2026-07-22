@@ -49,6 +49,24 @@ func TestMongoRestoreScript(t *testing.T) {
 	}
 }
 
+// TestPostgresRestoreIsAtomicAndFailLoud pins the P1 fix: the restore must
+// pipe into psql with ON_ERROR_STOP=1 (no silent partial apply) and
+// --single-transaction (all-or-nothing). Without these a broken/incompatible
+// dump onto a populated DB would silently no-op or duplicate rows.
+func TestPostgresRestoreIsAtomicAndFailLoud(t *testing.T) {
+	p, _ := NewDefaultRegistry().For("postgres")
+	s := p.RestoreScript()
+	for _, want := range []string{"ON_ERROR_STOP=1", "--single-transaction"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("postgres restore script missing %q — silent-partial guard not in place", want)
+		}
+	}
+	// The apply must still gunzip the artifact and target the addon's DB.
+	if !strings.Contains(s, `gunzip -c /tmp/dump.sql.gz`) || !strings.Contains(s, `"${POSTGRES_DB}"`) {
+		t.Errorf("postgres restore apply line malformed: %q", s)
+	}
+}
+
 func TestMysqlProducer(t *testing.T) {
 	p, ok := NewDefaultRegistry().For("mysql")
 	if !ok {

@@ -79,3 +79,31 @@ func TestBuildJob_WaitForAddonsInitContainer(t *testing.T) {
 		t.Errorf("release Job backoffLimit must stay 0 (never retry a failed migration), got %v", job.Spec.BackoffLimit)
 	}
 }
+
+// TestJobName_DistinctForSyntheticRefs pins the P1 fix: synthetic refs put
+// their uniqueness nonce at the END of the tag, so two deploys of the same
+// long-branch env produce DIFFERENT tags. The Job name MUST differ, or Run()'s
+// already-succeeded fast-path skips new migrations.
+func TestJobName_DistinctForSyntheticRefs(t *testing.T) {
+	env := "acme-web-production"
+	// Same branch slug, different trailing nonce (the synthetic-ref shape).
+	a := JobName(env, "deploy-kuso-lx8f92a3")
+	b := JobName(env, "deploy-kuso-lx8f92b7")
+	if a == b {
+		t.Fatalf("distinct tags produced same Job name: %q", a)
+	}
+	for _, n := range []string{a, b} {
+		if len(n) > 63 {
+			t.Errorf("Job name exceeds 63 chars: %q (%d)", n, len(n))
+		}
+	}
+	// Same tag → same name (idempotency preserved).
+	if JobName(env, "deploy-kuso-lx8f92a3") != a {
+		t.Error("same tag should yield same Job name")
+	}
+	// Very long env + tag still stays under 63 and keeps the uniqueness hash.
+	long := JobName("very-long-environment-name-that-eats-budget-xyz", "another-long-tag-value-9z")
+	if len(long) > 63 {
+		t.Errorf("long name not truncated: %q (%d)", long, len(long))
+	}
+}

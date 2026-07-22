@@ -30,6 +30,7 @@ import (
 	"kuso/server/internal/backup"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
+	"kuso/server/internal/httpx"
 	"kuso/server/internal/kube"
 )
 
@@ -295,12 +296,14 @@ type RestoreRequest struct {
 	// with the same kind).
 	Into string `json:"into,omitempty"`
 	// Confirm must echo the destination addon name for an IN-PLACE
-	// restore (Into == "" or Into == source). The restore streams a
-	// `psql`-applied `--clean --if-exists` dump that DROPs and recreates
-	// the target's tables, overwriting live data — the same blast radius
-	// as an addon Delete, which is why it demands the same typed
-	// acknowledgement. Ignored when restoring into a distinct sibling
-	// addon (non-destructive to the source).
+	// restore — i.e. whenever the destination CR resolves to the SAME CR
+	// as the source (Into == "", Into == source, or Into a different
+	// alias of the same addon such as the short vs fully-qualified name).
+	// The restore streams the dump into the target's own database via
+	// `psql --single-transaction`, overwriting live data — the same blast
+	// radius as an addon Delete, which is why it demands the same typed
+	// acknowledgement. Ignored only when restoring into a GENUINELY
+	// distinct sibling addon (non-destructive to the source).
 	Confirm string `json:"confirm,omitempty"`
 }
 
@@ -354,20 +357,6 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	if req.Into != "" {
 		destAddon = req.Into
 	}
-	// Typed-confirmation guard for the DESTRUCTIVE in-place restore.
-	// When the destination is the source addon, the restore Job applies
-	// a `--clean --if-exists` dump that DROPs and recreates the target's
-	// tables — it overwrites live data with no undo, the same blast
-	// radius as an addon Delete. Demand the caller echo the destination
-	// addon name in `confirm`, mirroring AddonsHandler.Delete's
-	// ?confirm=<addon> gate. Restoring into a DISTINCT sibling addon
-	// leaves the source untouched, so it's exempt.
-	if destAddon == addon && req.Confirm != destAddon {
-		http.Error(w,
-			"in-place restore overwrites live data — set \"confirm\":\"<addon-name>\" to acknowledge (or restore into a different addon via \"into\")",
-			http.StatusBadRequest)
-		return
-	}
 	// Resolve BOTH addons through the ownership-checked path. This (a)
 	// yields the project's execution namespace — the -conn Secret the
 	// restore Job references and the Job itself must live there, not in
@@ -398,6 +387,25 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 				http.StatusBadRequest)
 			return
 		}
+	}
+	// Typed-confirmation guard for the DESTRUCTIVE in-place restore.
+	// Compare the RESOLVED CR names, not the raw request strings: `pg` and
+	// `myproj-pg` both resolve to the same CR, so a caller could pass
+	// into="myproj-pg" while the URL addon is "pg" and — under the old
+	// raw-string check (destAddon == addon) — dodge the confirm gate while
+	// still overwriting the source addon's live data in place. When the
+	// destination CR IS the source CR, the restore Job applies the dump onto
+	// the target's own database (all-or-nothing psql --single-transaction),
+	// overwriting live data with no undo — the same blast radius as an addon
+	// Delete. Demand the caller echo the destination addon name in `confirm`,
+	// mirroring AddonsHandler.Delete's ?confirm=<addon> gate. Restoring into a
+	// GENUINELY DISTINCT sibling addon leaves the source untouched, so it's
+	// exempt.
+	if inPlaceRestoreNeedsConfirm(srcCR.Name, destCR.Name, destAddon, req.Confirm) {
+		http.Error(w,
+			"in-place restore overwrites live data — set \"confirm\":\"<addon-name>\" to acknowledge (or restore into a different addon via \"into\")",
+			http.StatusBadRequest)
+		return
 	}
 	// The restore Job's env sources BUCKET/S3_ENDPOINT/AWS creds from the
 	// kuso-backup-s3 Secret, which SetSettings only ever writes into the
@@ -500,6 +508,21 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"job": created.Name})
+}
+
+// inPlaceRestoreNeedsConfirm decides whether the destructive-in-place
+// confirmation gate applies. It compares the RESOLVED CR names (srcName /
+// destName) rather than the raw request strings, so short-name/FQN aliasing
+// (`pg` vs `myproj-pg`, both the same CR) can't be used to slip an in-place
+// overwrite past the gate. When the destination CR is the source CR the
+// restore overwrites live data in place and the caller must have echoed the
+// destination addon name in confirm; a genuinely distinct sibling destination
+// is exempt.
+func inPlaceRestoreNeedsConfirm(srcName, destName, destAddon, confirm string) bool {
+	if destName != srcName {
+		return false // distinct destination CR — non-destructive to source
+	}
+	return confirm != destAddon
 }
 
 // restoreScriptForKind returns the restore shell for an addon kind via
@@ -627,9 +650,17 @@ func (h *BackupsHandler) s3Client(ctx context.Context) (*s3.Client, string, erro
 	if region == "" {
 		region = "auto"
 	}
+	// The endpoint is admin-supplied and validateWebhookURL only blocks IP
+	// literals — a hostname that RESOLVES to a private/metadata address (IMDS
+	// 169.254.169.254, RFC1918, .svc) would otherwise be reachable on the
+	// AWS SDK's default transport. Dial through the SSRF-safe transport, which
+	// resolves the host, rejects reserved-range IPs, and re-dials the resolved
+	// IP (defeating DNS rebinding between check and dial). Same guard the
+	// notification/coolify-import outbound clients use.
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(akid, skey, "")),
+		awsconfig.WithHTTPClient(&http.Client{Transport: httpx.SSRFSafeTransport()}),
 	)
 	if err != nil {
 		return nil, "", err
