@@ -39,6 +39,7 @@ func (h *ProjectsHandler) SetEnvDomains(w http.ResponseWriter, r *http.Request) 
 		h.fail(w, "set env domains", err)
 		return
 	}
+	maskEnvIfNeeded(ctx, h.DB, project, updated)
 	writeJSON(w, http.StatusOK, updated)
 }
 
@@ -66,6 +67,7 @@ func (h *ProjectsHandler) AddEnvDomain(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "add env domain", err)
 		return
 	}
+	maskEnvIfNeeded(ctx, h.DB, project, updated)
 	writeJSON(w, http.StatusCreated, updated)
 }
 
@@ -82,6 +84,7 @@ func (h *ProjectsHandler) RemoveEnvDomain(w http.ResponseWriter, r *http.Request
 		h.fail(w, "remove env domain", err)
 		return
 	}
+	maskEnvIfNeeded(ctx, h.DB, project, updated)
 	writeJSON(w, http.StatusOK, updated)
 }
 

@@ -25,6 +25,36 @@ import (
 type applyArgs struct {
 	Project string `json:"project" jsonschema:"project name; must match the project: field in the YAML"`
 	YAML    string `json:"yaml" jsonschema:"the full kuso.yml as a string"`
+	Confirm bool   `json:"confirm,omitempty" jsonschema:"must be true when the YAML sets prune: true — guards the destructive delete of live services/addons/crons absent from the YAML"`
+}
+
+// yamlSetsPruneTrue reports whether the kuso.yml sets the top-level
+// `prune: true`. prune is a document-level scalar (spec.File.Prune,
+// yaml:"prune"), so we only honour it at column 0 — a `prune:` nested
+// under some block is a different (hypothetical) key and must not trip
+// the confirm gate. Comments (`#…`) and quoting variants of true are
+// handled; anything ambiguous falls through as "not pruning" and the
+// server's own prune gate still applies.
+func yamlSetsPruneTrue(y string) bool {
+	for _, raw := range strings.Split(y, "\n") {
+		// Top-level keys start in column 0 (no leading whitespace).
+		if len(raw) == 0 || raw[0] == ' ' || raw[0] == '\t' || raw[0] == '#' {
+			continue
+		}
+		line := raw
+		if i := strings.IndexByte(line, '#'); i >= 0 {
+			line = line[:i]
+		}
+		key, val, ok := strings.Cut(line, ":")
+		if !ok || strings.TrimSpace(key) != "prune" {
+			continue
+		}
+		switch strings.ToLower(strings.Trim(strings.TrimSpace(val), `"'`)) {
+		case "true", "yes", "on":
+			return true
+		}
+	}
+	return false
 }
 
 // applyResult mirrors spec.ApplyResult: the executed plan + per-step
@@ -45,13 +75,21 @@ type stepError struct {
 func registerApply(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "apply",
-		Description: "Apply a desired-state kuso.yml to a live project — reconciles services + addons + crons (create/update/delete, prune-gated; wouldDelete reports skipped prune candidates). Mutating; refused in --read-only mode. Call plan first to preview the blast radius. Returns the executed plan plus any per-step errors (apply does not abort on one bad resource — it surfaces every failure). Any per-step error marks the tool result as an error: treat that as a partially-failed apply, not success.",
+		Description: "Apply a desired-state kuso.yml to a live project — reconciles services + addons + crons (create/update/delete, prune-gated; wouldDelete reports skipped prune candidates). Mutating; refused in --read-only mode. Call plan first to preview the blast radius. When the YAML sets prune: true (which DELETES live services/addons/crons absent from the YAML) you MUST also pass confirm=true. Returns the executed plan plus any per-step errors (apply does not abort on one bad resource — it surfaces every failure). Any per-step error marks the tool result as an error: treat that as a partially-failed apply, not success.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args applyArgs) (*mcp.CallToolResult, applyResult, error) {
 		if args.Project == "" {
 			return nil, applyResult{}, errors.New("project is required")
 		}
 		if strings.TrimSpace(args.YAML) == "" {
 			return nil, applyResult{}, errors.New("yaml is required")
+		}
+		// prune: true deletes every live service/addon/cron missing from
+		// the YAML. Gate that behind confirm=true, matching the
+		// confirm-convention of the other mutating tools (bootstrap_project,
+		// update_project, manage_addon delete). Run plan first to see what
+		// would be removed.
+		if yamlSetsPruneTrue(args.YAML) && !args.Confirm {
+			return nil, applyResult{}, errors.New("this YAML sets prune: true, which DELETES live resources absent from the YAML — retry with confirm=true (run plan first to see the blast radius)")
 		}
 		var out applyResult
 		path := apiPath("api", "projects", args.Project, "apply")

@@ -328,6 +328,11 @@ type KusoServiceSpec struct {
 	// on the previous image. Mirrored onto every owned env so the
 	// build poller can read it off either CR.
 	Release *KusoReleaseSpec `json:"release,omitempty"`
+	// SnapshotBeforeDeploy, when true, snapshots the service's subscribed
+	// postgres addon(s) BEFORE the release hook (migration) runs, so a bad
+	// migration has a one-click restore. Only fires when a release hook is
+	// also present. Mirrored onto every owned env.
+	SnapshotBeforeDeploy bool `json:"snapshotBeforeDeploy,omitempty"`
 }
 
 // KusoReleaseSpec configures a release hook. The Job uses the new
@@ -705,6 +710,9 @@ type KusoEnvironmentSpec struct {
 	// loaded for the image-patch step) without a second GET. Server-
 	// managed: propagated from the service spec.
 	Release *KusoReleaseSpec `json:"release,omitempty"`
+	// SnapshotBeforeDeploy mirrors KusoServiceSpec.SnapshotBeforeDeploy so
+	// the build poller can read it off the env CR. Server-managed.
+	SnapshotBeforeDeploy bool `json:"snapshotBeforeDeploy,omitempty"`
 }
 
 // ReplicaCountValue returns spec.ReplicaCount as an int, falling back

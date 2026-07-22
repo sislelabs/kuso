@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -95,6 +96,25 @@ var reservedRouteNames = map[string]bool{
 	"invite":   true,
 }
 
+// rfc1123Label is the constraint kube enforces on a resource name (a
+// project name becomes the CR name and a namespace). Validating it at the
+// domain boundary turns an apiserver 422 (which our handlers map to a bare
+// 500) into an actionable ErrInvalid -> 400. Project names also prefix
+// addon CR names ("<project>-<addon>"), so we cap length with headroom.
+var rfc1123Label = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+
+// validateProjectName rejects names kube would reject, before the CR/namespace
+// write. Returns ErrInvalid so the HTTP layer maps it to 400.
+func validateProjectName(name string) error {
+	if len(name) > 40 {
+		return fmt.Errorf("%w: name must be 40 characters or fewer", ErrInvalid)
+	}
+	if !rfc1123Label.MatchString(name) {
+		return fmt.Errorf("%w: name must be lowercase alphanumeric or '-', and start/end alphanumeric (RFC 1123)", ErrInvalid)
+	}
+	return nil
+}
+
 // Create validates input, refuses duplicates, and persists a new project.
 //
 // As of v0.3.5 a project is just a container — defaultRepo is no longer
@@ -104,6 +124,9 @@ var reservedRouteNames = map[string]bool{
 func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.KusoProject, error) {
 	if req.Name == "" {
 		return nil, fmt.Errorf("%w: name is required", ErrInvalid)
+	}
+	if err := validateProjectName(req.Name); err != nil {
+		return nil, err
 	}
 	if reservedRouteNames[req.Name] {
 		return nil, fmt.Errorf("%w: %q is reserved — it collides with a web route segment (new, projects, services, addons, envs, logs, settings, invite)", ErrInvalid, req.Name)
@@ -468,9 +491,24 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 			return fmt.Errorf("list project-scoped secrets: %w", lerr)
 		} else {
 			for i := range labelled.Items {
+				sec := &labelled.Items[i]
+				// Skip helm-owned conn/tls Secrets. The kusoaddon chart
+				// annotates `<addon>-conn` / `<addon>-tls` with
+				// `helm.sh/resource-policy: keep` so the data survives a
+				// delete+recreate at the same name (the surviving pgdata PVC
+				// must keep matching the surviving password). Sweeping them
+				// here mints a fresh password on the next `addon add`, which
+				// then fails to auth against the old data — silent DB outage.
+				// The helm-uninstall triggered by the addon-CR cascade already
+				// respects the keep policy and leaves these behind on purpose;
+				// this sweep must do the same. (PurgeData is the explicit
+				// destructive path and handles PVCs separately below.)
+				if sec.Annotations["helm.sh/resource-policy"] == "keep" {
+					continue
+				}
 				if derr := s.Kube.Clientset.CoreV1().Secrets(ns).
-					Delete(ctx, labelled.Items[i].Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
-					return fmt.Errorf("delete project-scoped secret %s: %w", labelled.Items[i].Name, derr)
+					Delete(ctx, sec.Name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+					return fmt.Errorf("delete project-scoped secret %s: %w", sec.Name, derr)
 				}
 			}
 		}

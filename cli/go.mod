@@ -5,6 +5,8 @@ go 1.25.0
 require (
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
+	github.com/itchyny/gojq v0.12.19
+	github.com/mattn/go-shellwords v1.0.12
 	github.com/olekukonko/tablewriter v0.0.5
 	github.com/sislelabs/kuso/api/apiv1 v0.0.0
 	github.com/sislelabs/kuso/compose v0.0.0
@@ -24,13 +26,14 @@ replace github.com/sislelabs/kuso/coolify => ../coolify
 replace github.com/sislelabs/kuso/compose => ../compose
 
 require (
+	github.com/clipperhouse/stringish v0.1.1 // indirect
+	github.com/clipperhouse/uax29/v2 v2.3.0 // indirect
 	github.com/compose-spec/compose-go/v2 v2.4.7 // indirect
 	github.com/distribution/reference v0.5.0 // indirect
 	github.com/docker/go-connections v0.4.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/go-viper/mapstructure/v2 v2.2.1 // indirect
-	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/mattn/go-shellwords v1.0.12 // indirect
+	github.com/itchyny/timefmt-go v0.1.8 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
@@ -53,10 +56,9 @@ require (
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51 // indirect
 	github.com/mattn/go-colorable v0.1.14 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
-	github.com/mattn/go-runewidth v0.0.16 // indirect
+	github.com/mattn/go-runewidth v0.0.19 // indirect
 	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d // indirect
 	github.com/pelletier/go-toml/v2 v2.2.3 // indirect
-	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sagikazarmark/locafero v0.8.0 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
 	github.com/spf13/afero v1.14.0 // indirect

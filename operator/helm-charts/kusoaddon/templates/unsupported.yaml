@@ -1,4 +1,4 @@
-{{- $supported := list "postgres" "redis" "valkey" "mongodb" "rabbitmq" "s3" "mailpit" "nats" "meilisearch" "clickhouse" "redpanda" -}}
+{{- $supported := list "postgres" "redis" "valkey" "mongodb" "mysql" "rabbitmq" "s3" "mailpit" "nats" "meilisearch" "clickhouse" "redpanda" -}}
 {{- /* Kinds whose per-kind templates gate on `not .Values.ha` and have
        no -ha counterpart. Without this guard, ha=true on one of these
        renders ZERO resources yet helm exits 0 — the addon reconciles
@@ -7,7 +7,7 @@
        ignore ha and fall back to single-node by design — see values.yaml.
        external / useInstanceAddon bypass provisioning entirely, so ha
        is moot on those paths.) */ -}}
-{{- $noHA := list "valkey" "mongodb" "rabbitmq" "redpanda" -}}
+{{- $noHA := list "valkey" "mongodb" "mysql" "rabbitmq" "redpanda" -}}
 {{- if and .Values.ha (has .Values.kind $noHA) (not .Values.external) (not .Values.useInstanceAddon) -}}
 {{- fail (printf "kusoaddon: kind %q does not support ha=true — no HA template exists, so nothing would be deployed. Set ha=false, or use an HA-capable kind (postgres, redis, nats)." .Values.kind) -}}
 {{- end -}}

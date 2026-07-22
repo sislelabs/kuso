@@ -61,7 +61,7 @@ spec:
               command: [sh, -c]
               args:
                 - |
-                  set -eu
+                  set -euo pipefail
                   # Graceful no-op when backup S3 isn't configured: the
                   # kuso-backup-s3 Secret is absent until an operator sets
                   # up backup settings, so BUCKET is empty (its secretKeyRef
@@ -75,11 +75,41 @@ spec:
                   KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
-                  PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump \
+                  # --clean --if-exists so a restore onto a populated DB
+                  # (the pre-deploy-snapshot rollback case) DROPs-then-recreates
+                  # instead of aborting on "relation already exists" under the
+                  # restore's ON_ERROR_STOP=1 --single-transaction.
+                  PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump --clean --if-exists \
                     -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" \
-                    | gzip \
-                    | aws s3 cp --endpoint-url "${S3_ENDPOINT}" - "s3://${BUCKET}/${KEY}"
-                  echo "==> upload done"
+                    | gzip > /tmp/dump.gz
+                  SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
+                  BYTES=$(wc -c < /tmp/dump.gz | tr -d ' ')
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.gz "s3://${BUCKET}/${KEY}"
+                  echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
+                  # Integrity manifest written beside the artifact. Restore
+                  # verifies the sha256 before applying. No secret values here.
+                  # printf (not a heredoc): the script is indented inside a YAML
+                  # block scalar, and an indented heredoc terminator is never
+                  # matched — it would swallow the rest of the script.
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"postgres","producer":"pg_dump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"pg_dump"}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
+                  rm -f /tmp/dump.gz /tmp/manifest.json
+                  echo "==> manifest done"
+
+                  # Multi-DB detection: this backup only dumps the primary
+                  # $POSTGRES_DB. If the addon hosts additional logical
+                  # databases they are silently NOT in this artifact. We
+                  # can't safely change the artifact/manifest shape here
+                  # (that's the restore contract), so make the gap LOUD.
+                  OTHER_DBS=$(PGPASSWORD="${POSTGRES_PASSWORD}" psql \
+                    -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" -d "${POSTGRES_DB}" \
+                    -tAc "SELECT datname FROM pg_database WHERE datistemplate=false AND datname NOT IN ('postgres')" \
+                    2>/dev/null | grep -vxF "${POSTGRES_DB}" || true)
+                  if [ -n "${OTHER_DBS}" ]; then
+                    N=$(printf '%s\n' "${OTHER_DBS}" | grep -c . || true)
+                    echo "WARNING: addon has ${N} logical DBs but only ${POSTGRES_DB} is backed up — other DBs are NOT in this backup" >&2
+                  fi
 
                   # Retention prune. List existing dumps, drop ones
                   # older than RETENTION_DAYS. We keep the logic in the
@@ -90,7 +120,12 @@ spec:
                     CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
                              || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
                     echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                    # `|| true`: the backup + manifest already uploaded OK by
+                    # here. Under `set -o pipefail` a transient `aws s3 ls`
+                    # error (or the trailing `while`'s exit status) would
+                    # otherwise abort the whole Job AFTER success, firing a
+                    # false backup-failed alert. Prune is best-effort.
+                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
                       | awk '{print $1, $2, $4}' \
                       | while read date time name; do
                           [ -z "${name}" ] && continue
@@ -99,7 +134,7 @@ spec:
                             echo "    rm s3://${BUCKET}/${PREFIX}${name}"
                             aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
                           fi
-                        done
+                        done ; } || true
                   fi
                   echo "==> done"
               env:
@@ -198,7 +233,7 @@ spec:
               command: [sh, -c]
               args:
                 - |
-                  set -eu
+                  set -euo pipefail
                   # Graceful no-op when backup S3 isn't configured: the
                   # kuso-backup-s3 Secret is absent until an operator sets
                   # up backup settings, so BUCKET is empty (its secretKeyRef
@@ -216,16 +251,33 @@ spec:
                   # disallow GRANT/REVOKE commands in dumps, which makes
                   # an unfiltered pg_dump fail at restore time. Match
                   # what PlanetScale / Neon / Supabase docs recommend.
-                  pg_dump --no-owner --no-acl "${DATABASE_URL}" \
-                    | gzip \
-                    | aws s3 cp --endpoint-url "${S3_ENDPOINT}" - "s3://${BUCKET}/${KEY}"
-                  echo "==> upload done"
+                  # Dump to /tmp first (not a streamed pipe to s3) so we can
+                  # sha256 the artifact and emit an integrity manifest — the
+                  # restore path verifies sha256 before applying.
+                  pg_dump --clean --if-exists --no-owner --no-acl "${DATABASE_URL}" | gzip > /tmp/dump.gz
+                  SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
+                  BYTES=$(wc -c < /tmp/dump.gz | tr -d ' ')
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.gz "s3://${BUCKET}/${KEY}"
+                  echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
+                  # Integrity manifest written beside the artifact. printf
+                  # (not a heredoc): indented heredoc terminators never match
+                  # inside a YAML block scalar.
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"postgres","producer":"pg_dump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"pg_dump"}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
+                  rm -f /tmp/dump.gz /tmp/manifest.json
+                  echo "==> manifest done"
 
                   if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
                     CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
                              || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
                     echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                    # `|| true`: the backup + manifest already uploaded OK by
+                    # here. Under `set -o pipefail` a transient `aws s3 ls`
+                    # error (or the trailing `while`'s exit status) would
+                    # otherwise abort the whole Job AFTER success, firing a
+                    # false backup-failed alert. Prune is best-effort.
+                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
                       | awk '{print $1, $2, $4}' \
                       | while read date time name; do
                           [ -z "${name}" ] && continue
@@ -234,7 +286,7 @@ spec:
                             echo "    rm s3://${BUCKET}/${PREFIX}${name}"
                             aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
                           fi
-                        done
+                        done ; } || true
                   fi
                   echo "==> done"
               env:
@@ -304,7 +356,7 @@ spec:
               command: [sh, -c]
               args:
                 - |
-                  set -eu
+                  set -euo pipefail
                   # Graceful no-op when backup S3 isn't configured: the
                   # kuso-backup-s3 Secret is absent until an operator sets
                   # up backup settings, so BUCKET is empty (its secretKeyRef
@@ -319,16 +371,27 @@ spec:
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> snapshotting ${ADDON} → s3://${BUCKET}/${KEY}"
                   redis-cli -h "${REDIS_HOST}" -a "${REDIS_PASSWORD}" --no-auth-warning --rdb /tmp/dump.rdb
-                  gzip -c /tmp/dump.rdb \
-                    | aws s3 cp --endpoint-url "${S3_ENDPOINT}" - "s3://${BUCKET}/${KEY}"
-                  rm -f /tmp/dump.rdb
+                  gzip -c /tmp/dump.rdb > /tmp/dump.rdb.gz
+                  SHA=$(sha256sum /tmp/dump.rdb.gz | awk '{print $1}')
+                  BYTES=$(wc -c < /tmp/dump.rdb.gz | tr -d ' ')
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.rdb.gz "s3://${BUCKET}/${KEY}"
+                  echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"redis","producer":"redis_rdb","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"redis_rdb"}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
+                  rm -f /tmp/dump.rdb /tmp/dump.rdb.gz /tmp/manifest.json
                   echo "==> upload done"
 
                   if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
                     CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
                              || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
                     echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                    # `|| true`: the backup + manifest already uploaded OK by
+                    # here. Under `set -o pipefail` a transient `aws s3 ls`
+                    # error (or the trailing `while`'s exit status) would
+                    # otherwise abort the whole Job AFTER success, firing a
+                    # false backup-failed alert. Prune is best-effort.
+                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
                       | awk '{print $1, $2, $4}' \
                       | while read date time name; do
                           [ -z "${name}" ] && continue
@@ -337,7 +400,7 @@ spec:
                             echo "    rm s3://${BUCKET}/${PREFIX}${name}"
                             aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
                           fi
-                        done
+                        done ; } || true
                   fi
                   echo "==> done"
               env:
@@ -356,6 +419,205 @@ spec:
                 # configured") instead of the pod crashing with
                 # CreateContainerConfigError "secret kuso-backup-s3 not
                 # found". Mirrors deploy/postgres-backup.yaml.
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
+                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region }, optional: true } }
+{{- end }}
+
+{{- /*
+MongoDB backup. mongodump --archive --gzip streams a single compressed
+archive to /tmp, we sha256 + upload it plus a manifest, same key shape
+(<project>/<addon>/<ts>.archive.gz) and prune logic as the others.
+MONGO_URL is the full connection URI from the addon's -conn Secret.
+*/ -}}
+{{- if and .Values.backup.schedule (eq .Values.kind "mongodb") (not .Values.external) (not .Values.useInstanceAddon) }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ printf "%s-backup" (include "kusoaddon.fullname" .) | quote }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+    kuso.sislelabs.com/role: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            kuso.sislelabs.com/role: backup
+            kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
+            kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
+        spec:
+          restartPolicy: OnFailure
+          {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
+          containers:
+            - name: dump
+              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
+              imagePullPolicy: IfNotPresent
+              command: [sh, -c]
+              args:
+                - |
+                  set -euo pipefail
+                  if [ -z "${BUCKET:-}" ]; then
+                    echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
+                    exit 0
+                  fi
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  KEY="${PROJECT}/${ADDON}/${TS}.archive.gz"
+                  PREFIX="${PROJECT}/${ADDON}/"
+                  echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
+                  mongodump --uri "${MONGO_URL}" --archive --gzip > /tmp/dump.archive.gz
+                  SHA=$(sha256sum /tmp/dump.archive.gz | awk '{print $1}')
+                  BYTES=$(wc -c < /tmp/dump.archive.gz | tr -d ' ')
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.archive.gz "s3://${BUCKET}/${KEY}"
+                  echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"mongodb","producer":"mongodump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"mongodump"}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
+                  rm -f /tmp/dump.archive.gz /tmp/manifest.json
+                  echo "==> manifest done"
+
+                  if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
+                    CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
+                             || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
+                    echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
+                    # `|| true`: the backup + manifest already uploaded OK by
+                    # here. Under `set -o pipefail` a transient `aws s3 ls`
+                    # error (or the trailing `while`'s exit status) would
+                    # otherwise abort the whole Job AFTER success, firing a
+                    # false backup-failed alert. Prune is best-effort.
+                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                      | awk '{print $1, $2, $4}' \
+                      | while read date time name; do
+                          [ -z "${name}" ] && continue
+                          obj_ts=$(date -u -d "${date}T${time}Z" +%s 2>/dev/null || echo 0)
+                          if [ "${obj_ts}" -gt 0 ] && [ "${obj_ts}" -lt "${CUTOFF}" ]; then
+                            echo "    rm s3://${BUCKET}/${PREFIX}${name}"
+                            aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
+                          fi
+                        done ; } || true
+                  fi
+                  echo "==> done"
+              env:
+                - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
+                - { name: ADDON,   value: {{ .Release.Name | quote }} }
+                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
+                - name: MONGO_URL
+                  valueFrom:
+                    secretKeyRef:
+                      # Use connSecretName (the same helper mongodb.yaml uses to
+                      # NAME this secret) rather than fullname-conn — they match
+                      # today but only connSecretName is the authoritative name.
+                      name: {{ include "kusoaddon.connSecretName" . | quote }}
+                      key: MONGO_URL
+                - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
+                - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
+                - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
+                - { name: AWS_SECRET_ACCESS_KEY, valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: secretAccessKey, optional: true } } }
+                - { name: AWS_DEFAULT_REGION,    valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: region }, optional: true } }
+{{- end }}
+
+{{- /*
+MySQL backup. mysqldump | gzip to /tmp, sha256 + upload artifact +
+manifest, same key shape (<project>/<addon>/<ts>.sql.gz) + prune as the
+others. MYSQL_PASSWORD from the conn Secret; host/user/db are known.
+*/ -}}
+{{- if and .Values.backup.schedule (eq .Values.kind "mysql") (not .Values.external) (not .Values.useInstanceAddon) }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ printf "%s-backup" (include "kusoaddon.fullname" .) | quote }}
+  labels:
+    {{- include "kusoaddon.labels" . | nindent 4 }}
+    kuso.sislelabs.com/role: backup
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      template:
+        metadata:
+          labels:
+            kuso.sislelabs.com/role: backup
+            kuso.sislelabs.com/addon: {{ .Release.Name | quote }}
+            kuso.sislelabs.com/project: {{ .Values.project | default "" | quote }}
+        spec:
+          restartPolicy: OnFailure
+          {{- include "kusoaddon.podSecurityContext" . | nindent 10 }}
+          containers:
+            - name: dump
+              image: {{ default "ghcr.io/sislelabs/kuso-backup:latest" .Values.backup.image | quote }}
+              {{- include "kusoaddon.containerSecurityContext" . | nindent 14 }}
+              imagePullPolicy: IfNotPresent
+              command: [sh, -c]
+              args:
+                - |
+                  set -euo pipefail
+                  if [ -z "${BUCKET:-}" ]; then
+                    echo "==> backup S3 not configured (no kuso-backup-s3 secret) — skipping"
+                    exit 0
+                  fi
+                  TS=$(date -u +%Y%m%dT%H%M%SZ)
+                  KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
+                  PREFIX="${PROJECT}/${ADDON}/"
+                  echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
+                  MYSQL_PWD="${MYSQL_PASSWORD}" mysqldump -h "${MYSQL_HOST}" -u "${MYSQL_USER}" "${MYSQL_DB}" | gzip > /tmp/dump.sql.gz
+                  SHA=$(sha256sum /tmp/dump.sql.gz | awk '{print $1}')
+                  BYTES=$(wc -c < /tmp/dump.sql.gz | tr -d ' ')
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.sql.gz "s3://${BUCKET}/${KEY}"
+                  echo "==> upload done (sha256=${SHA} bytes=${BYTES})"
+                  printf '{"schemaVersion":1,"createdAt":"%s","project":"%s","addon":"%s","addonKind":"mysql","producer":"mysqldump","artifacts":[{"key":"%s","sha256":"%s","bytes":%s,"payloadKind":"mysqldump"}]}\n' \
+                    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "${PROJECT}" "${ADDON}" "${KEY}" "${SHA}" "${BYTES}" > /tmp/manifest.json
+                  aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/manifest.json "s3://${BUCKET}/${KEY}.manifest.json"
+                  rm -f /tmp/dump.sql.gz /tmp/manifest.json
+                  echo "==> manifest done"
+
+                  if [ -n "${RETENTION_DAYS:-}" ] && [ "${RETENTION_DAYS}" -gt 0 ]; then
+                    CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
+                             || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
+                    echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
+                    # `|| true`: the backup + manifest already uploaded OK by
+                    # here. Under `set -o pipefail` a transient `aws s3 ls`
+                    # error (or the trailing `while`'s exit status) would
+                    # otherwise abort the whole Job AFTER success, firing a
+                    # false backup-failed alert. Prune is best-effort.
+                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                      | awk '{print $1, $2, $4}' \
+                      | while read date time name; do
+                          [ -z "${name}" ] && continue
+                          obj_ts=$(date -u -d "${date}T${time}Z" +%s 2>/dev/null || echo 0)
+                          if [ "${obj_ts}" -gt 0 ] && [ "${obj_ts}" -lt "${CUTOFF}" ]; then
+                            echo "    rm s3://${BUCKET}/${PREFIX}${name}"
+                            aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
+                          fi
+                        done ; } || true
+                  fi
+                  echo "==> done"
+              env:
+                - { name: PROJECT, value: {{ .Values.project | default "" | quote }} }
+                - { name: ADDON,   value: {{ .Release.Name | quote }} }
+                - { name: MYSQL_HOST, value: {{ include "kusoaddon.fullname" . | quote }} }
+                - { name: MYSQL_USER, value: {{ default "kuso" .Values.username | quote }} }
+                - { name: MYSQL_DB,   value: {{ .Values.database | default .Values.project | default "kuso" | quote }} }
+                - { name: RETENTION_DAYS, value: {{ .Values.backup.retentionDays | default 14 | quote }} }
+                - name: MYSQL_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "kusoaddon.connSecretName" . | quote }}
+                      key: MYSQL_PASSWORD
                 - { name: BUCKET,        valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: bucket, optional: true } } }
                 - { name: S3_ENDPOINT,   valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: endpoint, optional: true } } }
                 - { name: AWS_ACCESS_KEY_ID,     valueFrom: { secretKeyRef: { name: kuso-backup-s3, key: accessKeyId, optional: true } } }
@@ -406,7 +668,7 @@ spec:
               command: [sh, -c]
               args:
                 - |
-                  set -eu
+                  set -euo pipefail
                   # Graceful no-op when backup S3 isn't configured: the
                   # kuso-backup-s3 Secret is absent until an operator sets
                   # up backup settings, so BUCKET is empty (its secretKeyRef

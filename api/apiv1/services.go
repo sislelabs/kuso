@@ -47,6 +47,9 @@ type CreateServiceRequest struct {
 	// Release configures the pre-deploy release hook (migrations etc.)
 	// at create time. An empty/omitted Command means no hook.
 	Release *ServiceRelease `json:"release,omitempty"`
+	// SnapshotBeforeDeploy opts the service into a pre-deploy postgres
+	// snapshot before its release hook runs. nil = default (false).
+	SnapshotBeforeDeploy *bool `json:"snapshotBeforeDeploy,omitempty"`
 	// BuildArgs / PublicEnv configure build-time env at create time.
 	// BuildArgs become --build-arg inputs; PublicEnv names get
 	// sentinel-baked at build and substituted at pod start.

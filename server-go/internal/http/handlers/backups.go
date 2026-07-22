@@ -27,8 +27,10 @@ import (
 
 	"kuso/server/internal/addons"
 	"kuso/server/internal/audit"
+	"kuso/server/internal/backup"
 	"kuso/server/internal/auth"
 	"kuso/server/internal/db"
+	"kuso/server/internal/httpx"
 	"kuso/server/internal/kube"
 )
 
@@ -225,6 +227,12 @@ type BackupObject struct {
 	When time.Time `json:"when"`
 }
 
+// isManifestKey reports whether an S3 key is a backup manifest sidecar
+// rather than a restorable artifact.
+func isManifestKey(key string) bool {
+	return strings.HasSuffix(key, ".manifest.json")
+}
+
 func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	project := chi.URLParam(r, "project")
 	addon := chi.URLParam(r, "addon")
@@ -264,6 +272,9 @@ func (h *BackupsHandler) List(w http.ResponseWriter, r *http.Request) {
 	items := make([]BackupObject, 0, len(out.Contents))
 	for _, o := range out.Contents {
 		key := aws.ToString(o.Key)
+		if isManifestKey(key) {
+			continue // sidecar, not a restorable backup
+		}
 		size := aws.ToInt64(o.Size)
 		when := time.Time{}
 		if o.LastModified != nil {
@@ -285,12 +296,14 @@ type RestoreRequest struct {
 	// with the same kind).
 	Into string `json:"into,omitempty"`
 	// Confirm must echo the destination addon name for an IN-PLACE
-	// restore (Into == "" or Into == source). The restore streams a
-	// `psql`-applied `--clean --if-exists` dump that DROPs and recreates
-	// the target's tables, overwriting live data — the same blast radius
-	// as an addon Delete, which is why it demands the same typed
-	// acknowledgement. Ignored when restoring into a distinct sibling
-	// addon (non-destructive to the source).
+	// restore — i.e. whenever the destination CR resolves to the SAME CR
+	// as the source (Into == "", Into == source, or Into a different
+	// alias of the same addon such as the short vs fully-qualified name).
+	// The restore streams the dump into the target's own database via
+	// `psql --single-transaction`, overwriting live data — the same blast
+	// radius as an addon Delete, which is why it demands the same typed
+	// acknowledgement. Ignored only when restoring into a GENUINELY
+	// distinct sibling addon (non-destructive to the source).
 	Confirm string `json:"confirm,omitempty"`
 }
 
@@ -344,20 +357,6 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	if req.Into != "" {
 		destAddon = req.Into
 	}
-	// Typed-confirmation guard for the DESTRUCTIVE in-place restore.
-	// When the destination is the source addon, the restore Job applies
-	// a `--clean --if-exists` dump that DROPs and recreates the target's
-	// tables — it overwrites live data with no undo, the same blast
-	// radius as an addon Delete. Demand the caller echo the destination
-	// addon name in `confirm`, mirroring AddonsHandler.Delete's
-	// ?confirm=<addon> gate. Restoring into a DISTINCT sibling addon
-	// leaves the source untouched, so it's exempt.
-	if destAddon == addon && req.Confirm != destAddon {
-		http.Error(w,
-			"in-place restore overwrites live data — set \"confirm\":\"<addon-name>\" to acknowledge (or restore into a different addon via \"into\")",
-			http.StatusBadRequest)
-		return
-	}
 	// Resolve BOTH addons through the ownership-checked path. This (a)
 	// yields the project's execution namespace — the -conn Secret the
 	// restore Job references and the Job itself must live there, not in
@@ -389,6 +388,25 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Typed-confirmation guard for the DESTRUCTIVE in-place restore.
+	// Compare the RESOLVED CR names, not the raw request strings: `pg` and
+	// `myproj-pg` both resolve to the same CR, so a caller could pass
+	// into="myproj-pg" while the URL addon is "pg" and — under the old
+	// raw-string check (destAddon == addon) — dodge the confirm gate while
+	// still overwriting the source addon's live data in place. When the
+	// destination CR IS the source CR, the restore Job applies the dump onto
+	// the target's own database (all-or-nothing psql --single-transaction),
+	// overwriting live data with no undo — the same blast radius as an addon
+	// Delete. Demand the caller echo the destination addon name in `confirm`,
+	// mirroring AddonsHandler.Delete's ?confirm=<addon> gate. Restoring into a
+	// GENUINELY DISTINCT sibling addon leaves the source untouched, so it's
+	// exempt.
+	if inPlaceRestoreNeedsConfirm(srcCR.Name, destCR.Name, destAddon, req.Confirm) {
+		http.Error(w,
+			"in-place restore overwrites live data — set \"confirm\":\"<addon-name>\" to acknowledge (or restore into a different addon via \"into\")",
+			http.StatusBadRequest)
+		return
+	}
 	// The restore Job's env sources BUCKET/S3_ENDPOINT/AWS creds from the
 	// kuso-backup-s3 Secret, which SetSettings only ever writes into the
 	// HOME namespace. For a project with a per-project execution namespace,
@@ -413,6 +431,16 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 	}
 	releaseName := destCR.Name
 	jobName := fmt.Sprintf("%s-restore-%d", releaseName, time.Now().Unix())
+
+	// Resolve the restore shell by the destination addon's kind. An
+	// unbackable kind is a 400 rather than a doomed Job. (src/dest kinds
+	// are already validated equal above when restoring into a sibling.)
+	restoreShell, err := restoreScriptForKind(destCR.Spec.Kind)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	restoreEnv := append(restoreConnEnv(destCR.Spec.Kind, releaseName), restoreS3Env()...)
 
 	one := int32(1)
 	zero := int32(0)
@@ -445,38 +473,11 @@ func (h *BackupsHandler) Restore(w http.ResponseWriter, r *http.Request) {
 						Image:           "ghcr.io/sislelabs/kuso-backup:latest",
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						Command:         []string{"sh", "-c"},
-						Args: []string{`
-set -eo pipefail
-echo "==> downloading s3://${BUCKET}/${KEY}"
-aws s3 cp --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${KEY}" /tmp/dump.sql.gz
-echo "==> piping into psql"
-gunzip -c /tmp/dump.sql.gz | PGPASSWORD="${POSTGRES_PASSWORD}" psql \
-  -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}"
-echo "==> done"
-`},
-						Env: []corev1.EnvVar{
-							{Name: "KEY", Value: req.Key},
-							// Source ALL connection parameters from the
-							// addon's <release>-conn Secret. Hard-coding
-							// host/user/db here was the v0.7.51 bug:
-							// host had a stale "-postgresql" suffix
-							// (left over from when the chart used the
-							// bitnami subchart's naming) and db
-							// defaulted to "kuso" but the chart actually
-							// uses "<project>". Reading from the conn
-							// secret means the restore Job tracks
-							// whatever the chart wrote — same source of
-							// truth as the application pods.
-							envFromSecret("POSTGRES_HOST", releaseName+"-conn", "POSTGRES_HOST"),
-							envFromSecret("POSTGRES_USER", releaseName+"-conn", "POSTGRES_USER"),
-							envFromSecret("POSTGRES_DB", releaseName+"-conn", "POSTGRES_DB"),
-							envFromSecret("POSTGRES_PASSWORD", releaseName+"-conn", "POSTGRES_PASSWORD"),
-							envFromSecret("BUCKET", backupSecretName, "bucket"),
-							envFromSecret("S3_ENDPOINT", backupSecretName, "endpoint"),
-							envFromSecret("AWS_ACCESS_KEY_ID", backupSecretName, "accessKeyId"),
-							envFromSecret("AWS_SECRET_ACCESS_KEY", backupSecretName, "secretAccessKey"),
-							envFromSecretOptional("AWS_DEFAULT_REGION", backupSecretName, "region"),
-						},
+						Args:            []string{restoreShell},
+						// KEY names the artifact; the rest of the env is the
+						// kind-aware connection params (restoreConnEnv) +
+						// shared S3 creds (restoreS3Env), computed above.
+						Env: append([]corev1.EnvVar{{Name: "KEY", Value: req.Key}}, restoreEnv...),
 					}},
 				},
 			},
@@ -507,6 +508,75 @@ echo "==> done"
 		})
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"job": created.Name})
+}
+
+// inPlaceRestoreNeedsConfirm decides whether the destructive-in-place
+// confirmation gate applies. It compares the RESOLVED CR names (srcName /
+// destName) rather than the raw request strings, so short-name/FQN aliasing
+// (`pg` vs `myproj-pg`, both the same CR) can't be used to slip an in-place
+// overwrite past the gate. When the destination CR is the source CR the
+// restore overwrites live data in place and the caller must have echoed the
+// destination addon name in confirm; a genuinely distinct sibling destination
+// is exempt.
+func inPlaceRestoreNeedsConfirm(srcName, destName, destAddon, confirm string) bool {
+	if destName != srcName {
+		return false // distinct destination CR — non-destructive to source
+	}
+	return confirm != destAddon
+}
+
+// restoreScriptForKind returns the restore shell for an addon kind via
+// the producer registry. Unknown/unbackable kinds are rejected so the
+// caller can return a clear 400 instead of minting a doomed Job. The
+// per-kind script downloads the artifact + its sibling manifest, verifies
+// the sha256 before applying (aborting on mismatch), and warns-but-
+// proceeds when a pre-manifest backup has no manifest.
+func restoreScriptForKind(kind string) (string, error) {
+	p, ok := backup.NewDefaultRegistry().For(kind)
+	if !ok {
+		return "", fmt.Errorf("addon kind %q is not restorable", kind)
+	}
+	return p.RestoreScript(), nil
+}
+
+// restoreConnEnv returns the addon connection env the restore Job needs
+// for a given kind, sourced from the addon's <release>-conn Secret.
+// postgres keeps the exact POSTGRES_* set it always had; mongodb needs
+// only the MONGO_URL connection URI.
+func restoreConnEnv(kind, releaseName string) []corev1.EnvVar {
+	if kind == "mongodb" {
+		return []corev1.EnvVar{
+			envFromSecret("MONGO_URL", releaseName+"-conn", "MONGO_URL"),
+		}
+	}
+	if kind == "mysql" {
+		return []corev1.EnvVar{
+			envFromSecret("MYSQL_HOST", releaseName+"-conn", "MYSQL_HOST"),
+			envFromSecret("MYSQL_USER", releaseName+"-conn", "MYSQL_USER"),
+			envFromSecret("MYSQL_DB", releaseName+"-conn", "MYSQL_DB"),
+			envFromSecret("MYSQL_PASSWORD", releaseName+"-conn", "MYSQL_PASSWORD"),
+		}
+	}
+	// postgres (default) — source ALL connection parameters from the
+	// addon's <release>-conn Secret so the restore Job tracks whatever the
+	// chart wrote (same source of truth as the application pods).
+	return []corev1.EnvVar{
+		envFromSecret("POSTGRES_HOST", releaseName+"-conn", "POSTGRES_HOST"),
+		envFromSecret("POSTGRES_USER", releaseName+"-conn", "POSTGRES_USER"),
+		envFromSecret("POSTGRES_DB", releaseName+"-conn", "POSTGRES_DB"),
+		envFromSecret("POSTGRES_PASSWORD", releaseName+"-conn", "POSTGRES_PASSWORD"),
+	}
+}
+
+// restoreS3Env returns the S3 credential env shared by all restore kinds.
+func restoreS3Env() []corev1.EnvVar {
+	return []corev1.EnvVar{
+		envFromSecret("BUCKET", backupSecretName, "bucket"),
+		envFromSecret("S3_ENDPOINT", backupSecretName, "endpoint"),
+		envFromSecret("AWS_ACCESS_KEY_ID", backupSecretName, "accessKeyId"),
+		envFromSecret("AWS_SECRET_ACCESS_KEY", backupSecretName, "secretAccessKey"),
+		envFromSecretOptional("AWS_DEFAULT_REGION", backupSecretName, "region"),
+	}
 }
 
 // mirrorBackupSecret copies the home-namespace kuso-backup-s3 Secret
@@ -580,9 +650,17 @@ func (h *BackupsHandler) s3Client(ctx context.Context) (*s3.Client, string, erro
 	if region == "" {
 		region = "auto"
 	}
+	// The endpoint is admin-supplied and validateWebhookURL only blocks IP
+	// literals — a hostname that RESOLVES to a private/metadata address (IMDS
+	// 169.254.169.254, RFC1918, .svc) would otherwise be reachable on the
+	// AWS SDK's default transport. Dial through the SSRF-safe transport, which
+	// resolves the host, rejects reserved-range IPs, and re-dials the resolved
+	// IP (defeating DNS rebinding between check and dial). Same guard the
+	// notification/coolify-import outbound clients use.
 	cfg, err := awsconfig.LoadDefaultConfig(ctx,
 		awsconfig.WithRegion(region),
 		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(akid, skey, "")),
+		awsconfig.WithHTTPClient(&http.Client{Transport: httpx.SSRFSafeTransport()}),
 	)
 	if err != nil {
 		return nil, "", err

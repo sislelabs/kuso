@@ -153,14 +153,7 @@ func (s *Service) installHandler(ctx context.Context) {
 	_, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    func(obj any) { s.maybeReconcile(ctx, obj, "add") },
 		UpdateFunc: func(_, newObj any) { s.maybeReconcile(ctx, newObj, "update") },
-		DeleteFunc: func(obj any) {
-			if u, ok := obj.(*unstructured.Unstructured); ok {
-				key := u.GetNamespace() + "/" + u.GetName()
-				s.mu.Lock()
-				delete(s.running, key)
-				s.mu.Unlock()
-			}
-		},
+		DeleteFunc: s.handleDelete,
 	})
 	if err != nil && s.Logger != nil {
 		s.Logger.Warn("buildcontroller: AddEventHandler", "err", err)
@@ -168,6 +161,33 @@ func (s *Service) installHandler(ctx context.Context) {
 	if s.Logger != nil {
 		s.Logger.Info("buildcontroller: started — rendering KusoBuild → Job in-process")
 	}
+}
+
+// handleDelete drops the deleted CR's key from the running dedup set so a
+// same-name rebuild is reconciled instead of deduped forever.
+//
+// It MUST unwrap cache.DeletedFinalStateUnknown. When the informer's watch
+// connection drops and relists, any delete that happened during the gap is
+// delivered not as the object itself but as a DeletedFinalStateUnknown
+// tombstone wrapping the last-known object. The old handler only type-
+// asserted *unstructured.Unstructured, so a missed delete never cleared the
+// running key — and because reconcile no-ops when the key is present, a
+// build CR of the same name (a retriggered build after the first was
+// deleted) stayed deduped and its Job was never rendered. Unwrapping the
+// tombstone (standard client-go pattern) recovers the embedded object and
+// clears the key.
+func (s *Service) handleDelete(obj any) {
+	if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+		obj = tombstone.Obj
+	}
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return
+	}
+	key := u.GetNamespace() + "/" + u.GetName()
+	s.mu.Lock()
+	delete(s.running, key)
+	s.mu.Unlock()
 }
 
 // maybeReconcile is the leader-gated dispatch step. Non-leaders see

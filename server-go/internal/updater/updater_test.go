@@ -62,6 +62,56 @@ func TestFetchVersion_FallsBackEmptyOperatorImage(t *testing.T) {
 	}
 }
 
+// TestFetchVersion_RefusesSynthWhenKeyConfigured is the supply-chain
+// regression: a release with NO release.json (hence no signature to
+// verify) must NOT be deployed when a signing public key is wired and
+// signatures are required. Previously fetchVersion synthesized a
+// manifest with hardcoded ghcr tags and returned BEFORE any signature
+// gate — letting an attacker who can publish/spoof a GH release ship an
+// unsigned upgrade. With a key present + require=on we now fail closed.
+func TestFetchVersion_RefusesSynthWhenKeyConfigured(t *testing.T) {
+	// A real 32-byte Ed25519 pubkey (base64). Wiring it via the env var
+	// makes resolveReleasePubKey() non-empty regardless of the embedded
+	// releasekey.pub state.
+	t.Setenv("KUSO_RELEASE_PUBLIC_KEY", "PA/PGYRHPzk4HkFDek3poIQjFeOyMc+5Nq5zBLhnRks=")
+	t.Setenv("KUSO_REQUIRE_SIGNATURES", "true")
+
+	ghRelease := `{"tag_name":"v8.8.8","body":"n","assets":[]}`
+	s := &Service{
+		Repo:    "sislelabs/kuso",
+		Current: "v8.8.7",
+		client: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			return jsonResp(200, ghRelease), nil
+		})},
+	}
+	if _, err := s.fetchVersion(context.Background(), "v8.8.8"); err == nil {
+		t.Fatal("fetchVersion synthesized an unsigned manifest with a signing key configured — want refusal")
+	} else if !strings.Contains(err.Error(), "refusing to deploy an unsigned manifest") {
+		t.Errorf("wrong error: %v", err)
+	}
+}
+
+// TestFetchLatest_RefusesSynthWhenKeyConfigured is the fetchLatest
+// (background ticker / non-pinned) counterpart to the above.
+func TestFetchLatest_RefusesSynthWhenKeyConfigured(t *testing.T) {
+	t.Setenv("KUSO_RELEASE_PUBLIC_KEY", "PA/PGYRHPzk4HkFDek3poIQjFeOyMc+5Nq5zBLhnRks=")
+	t.Setenv("KUSO_REQUIRE_SIGNATURES", "true")
+
+	ghRelease := `{"tag_name":"v8.8.8","body":"n","assets":[]}`
+	s := &Service{
+		Repo:    "sislelabs/kuso",
+		Current: "v8.8.7",
+		client: &http.Client{Transport: rtFunc(func(r *http.Request) (*http.Response, error) {
+			return jsonResp(200, ghRelease), nil
+		})},
+	}
+	if _, _, err := s.fetchLatest(context.Background()); err == nil {
+		t.Fatal("fetchLatest synthesized an unsigned manifest with a signing key configured — want refusal")
+	} else if !strings.Contains(err.Error(), "refusing to deploy an unsigned manifest") {
+		t.Errorf("wrong error: %v", err)
+	}
+}
+
 // TestFetchVersion_SynthesizesWhenNoManifest covers the no-release.json
 // path: both images are synthesized from the tag.
 func TestFetchVersion_SynthesizesWhenNoManifest(t *testing.T) {

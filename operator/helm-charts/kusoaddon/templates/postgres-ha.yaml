@@ -72,6 +72,13 @@ metadata:
   name: {{ $appSecret }}
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
+  annotations:
+    # Keep the bootstrap app Secret on uninstall for the same reason the
+    # Cluster (and its PVCs) are kept below: on a delete+recreate at the
+    # same name the surviving pgdata must keep matching the surviving
+    # password. Losing this Secret would regenerate a fresh password that
+    # can't auth against the retained data volumes.
+    "helm.sh/resource-policy": keep
 type: kubernetes.io/basic-auth
 # base64 data: not stringData: — avoids perpetual helm-operator reconcile churn (see postgres.yaml conn Secret comment).
 data:
@@ -84,6 +91,15 @@ metadata:
   name: {{ $name }}
   labels:
     {{- include "kusoaddon.labels" . | nindent 4 }}
+  annotations:
+    # Retain the CNPG Cluster on helm uninstall. The Cluster's per-replica
+    # data PVCs carry ownerReferences back to this Cluster object, so a helm
+    # delete of the Cluster cascades into deleting EVERY replica PVC — total
+    # data loss. Keeping the Cluster means uninstall leaves the Cluster + its
+    # PVCs behind, matching the single-node StatefulSet behavior (whose
+    # VCT-spawned PVCs a StatefulSet never GCs and helm doesn't own). A
+    # deliberate teardown goes through the PurgeData path, not helm uninstall.
+    "helm.sh/resource-policy": keep
 spec:
   imageName: "ghcr.io/cloudnative-pg/postgresql:{{ $version }}"
   instances: 3

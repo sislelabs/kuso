@@ -437,6 +437,7 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 		}
 		releaseSpec = &kube.KusoReleaseSpec{Command: req.Release.Command, TimeoutSeconds: timeout}
 	}
+	snapshotBeforeDeploy := req.SnapshotBeforeDeploy != nil && *req.SnapshotBeforeDeploy
 	if err := kube.ValidateSecurityContext(req.SecurityContext); err != nil {
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, err.Error())
 	}
@@ -463,19 +464,20 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			// tag. Set blindly here; the create validator above is
 			// responsible for catching combinations that don't make
 			// sense (e.g. fromService set with runtime=dockerfile).
-			FromService:     req.FromService,
-			Port:            req.Port,
-			Domains:         convertDomains(req.Domains),
-			EnvVars:         convertEnvVars(req.EnvVars),
-			Scale:           scale,
-			Sleep:           sleep,
-			Static:          toStaticSpec(req.Static),
-			Buildpacks:      toBuildpacksSpec(req.Buildpacks),
-			Image:           imgSpec,
-			Release:         releaseSpec,
-			BuildArgs:       req.BuildArgs,
-			PublicEnv:       req.PublicEnv,
-			SecurityContext: req.SecurityContext,
+			FromService:          req.FromService,
+			Port:                 req.Port,
+			Domains:              convertDomains(req.Domains),
+			EnvVars:              convertEnvVars(req.EnvVars),
+			Scale:                scale,
+			Sleep:                sleep,
+			Static:               toStaticSpec(req.Static),
+			Buildpacks:           toBuildpacksSpec(req.Buildpacks),
+			Image:                imgSpec,
+			Release:              releaseSpec,
+			SnapshotBeforeDeploy: snapshotBeforeDeploy,
+			BuildArgs:            req.BuildArgs,
+			PublicEnv:            req.PublicEnv,
+			SecurityContext:      req.SecurityContext,
 		},
 	}
 	created, err := s.Kube.CreateKusoService(ctx, ns, svc)
@@ -613,7 +615,13 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			// time, contrary to a stale comment in values.yaml). Any
 			// later SetEnv / PatchService call propagates updates via
 			// propagateChangedToEnvs to keep them in lockstep.
-			EnvVars:          prodEnvVars,
+			EnvVars: prodEnvVars,
+			// PublicEnv drives the build-time sentinel bake + pod-start
+			// substitution for NEXT_PUBLIC_* style vars. Propagated from
+			// the service spec here so a first deploy already substitutes;
+			// propagate.go re-stamps it on later service edits. Dropped
+			// pre-fix — public vars weren't substituted until a later save.
+			PublicEnv:        created.Spec.PublicEnv,
 			SharedEnvKeys:    created.Spec.SharedEnvKeys,
 			SubscribedAddons: created.Spec.SubscribedAddons,
 			// Effective placement: service overrides project. Both
@@ -640,7 +648,8 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			// so a first deploy of a service with a release hook (e.g. a
 			// marketplace app that ships an empty DB) would otherwise skip
 			// the migration and crash on missing tables until a later patch.
-			Release: created.Spec.Release,
+			Release:              created.Spec.Release,
+			SnapshotBeforeDeploy: created.Spec.SnapshotBeforeDeploy,
 		},
 	}
 	if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {
@@ -936,6 +945,23 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 		}
 	}
 
+	// runtime=image services carry a real image from the service spec —
+	// a custom env must be born with it (built runtimes start imageless
+	// and the build poller promotes on the first build). Withhold the
+	// image behind PendingImage when a release hook must run first, exactly
+	// like the production-env path in AddService, so an un-migrated image
+	// never serves. Dropped pre-fix: a custom env of a runtime=image
+	// service came up imageless (0 replicas, "awaiting first build" that
+	// never comes) because Image was never copied off the service.
+	var envImage, envPendingImage *kube.KusoImage
+	if svc.Spec.Image != nil &&
+		svc.Spec.Release != nil && len(svc.Spec.Release.Command) > 0 &&
+		svc.Spec.Runtime == "image" {
+		envPendingImage = svc.Spec.Image
+	} else {
+		envImage = svc.Spec.Image
+	}
+
 	env := &kube.KusoEnvironment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: envCRName,
@@ -1000,6 +1026,23 @@ func (s *Service) AddEnvironment(ctx context.Context, project, service string, r
 			Resources:         svc.Spec.Resources,
 			Runtime:           svc.Spec.Runtime,
 			Command:           svc.Spec.Command,
+			// The following are service-derived spec fields that the
+			// production-env literal (AddService) and propagate.go both
+			// stamp. They were dropped from this custom-env literal, so a
+			// staging/qa env was born WITHOUT them and only picked them up
+			// on the next PatchService propagation (or never, for fields
+			// propagation doesn't touch on a no-op edit). Keep this block
+			// in lockstep with the production-env literal in AddService —
+			// TestEnvLiteralsShareServiceDerivedFields trips if they drift.
+			SecurityContext:      svc.Spec.SecurityContext,
+			Healthcheck:          svc.Spec.Healthcheck,
+			PublicEnv:            svc.Spec.PublicEnv,
+			Release:              svc.Spec.Release,
+			SnapshotBeforeDeploy: svc.Spec.SnapshotBeforeDeploy,
+			// runtime=image carries a real image; withheld behind
+			// PendingImage when a release hook must run first (see above).
+			Image:        envImage,
+			PendingImage: envPendingImage,
 		},
 	}
 	created, err := s.Kube.CreateKusoEnvironment(ctx, ns, env)
@@ -1865,6 +1908,9 @@ type PatchServiceRequest struct {
 	// removes the hook entirely; otherwise the command + timeout replace
 	// whatever was there.
 	Release *PatchReleaseRequest `json:"release,omitempty"`
+	// SnapshotBeforeDeploy toggles the pre-deploy postgres snapshot.
+	// Pointer so omitting leaves it as-is; a non-nil pointer sets it.
+	SnapshotBeforeDeploy *bool `json:"snapshotBeforeDeploy,omitempty"`
 	// BuildArgs / PublicEnv replace the build-time env config wholesale.
 	// Pointer so omitting leaves it alone; a non-nil pointer (even to an
 	// empty map/slice) resets it — declarative reset, matching Static.
@@ -2269,6 +2315,11 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			}
 			releaseChanged = true
 		}
+		snapshotChanged := false
+		if req.SnapshotBeforeDeploy != nil && svc.Spec.SnapshotBeforeDeploy != *req.SnapshotBeforeDeploy {
+			svc.Spec.SnapshotBeforeDeploy = *req.SnapshotBeforeDeploy
+			snapshotChanged = true
+		}
 		// Build-time env config. Wholesale replace on a non-nil pointer
 		// (declarative reset); leave alone when omitted. These are consumed
 		// when the next build CR is created (builds.Create reads the service
@@ -2294,6 +2345,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			Stopped:           stoppedChanged,
 			Sleep:             sleepChanged,
 			Release:           releaseChanged,
+			Snapshot:          snapshotChanged,
 			Command:           commandChanged,
 			Resources:         resourcesChanged,
 			SecurityContext:   securityContextChanged,

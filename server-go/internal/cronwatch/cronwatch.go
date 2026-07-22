@@ -28,7 +28,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,6 +40,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
+	"kuso/server/internal/httpx"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/notify"
 )
@@ -114,7 +118,7 @@ func (w *Watcher) Run(ctx context.Context) {
 		w.dispatched = map[types.UID]struct{}{}
 	}
 	if w.HTTP == nil {
-		w.HTTP = &http.Client{Timeout: w.Config.httpTimeout()}
+		w.HTTP = newWebhookClient(w.Config.httpTimeout())
 	}
 	w.Logger.Info("cronwatch starting", "tick", w.Config.tick())
 	t := time.NewTicker(w.Config.tick())
@@ -270,7 +274,63 @@ func (w *Watcher) httpClient() *http.Client {
 	if w.HTTP != nil {
 		return w.HTTP
 	}
-	return &http.Client{Timeout: w.Config.httpTimeout()}
+	return newWebhookClient(w.Config.httpTimeout())
+}
+
+// newWebhookClient builds the outbound webhook client with the shared
+// SSRF-safe transport. The onFailure webhook URL is user-supplied
+// (anyone who can edit a cron sets it), so a bare http.Client would
+// happily POST the failure payload — including the deep-link logsURL —
+// at 169.254.169.254 (cloud metadata) or 10.0.0.0/8 (in-cluster
+// apiserver / addon DBs). The httpx transport resolves the host,
+// rejects reserved/private IPs, and re-dials the resolved IP so a DNS
+// rebind between check and dial can't slip through — string validation
+// of the stored URL alone is rebinding-racy. Mirrors the notify
+// dispatcher's client construction.
+func newWebhookClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout:   timeout,
+		Transport: httpx.SSRFSafeTransport(),
+	}
+}
+
+// validateWebhookURLFn is an overridable seam so the dispatch tests
+// (which point at loopback httptest servers) can relax the shape check;
+// the SSRFSafeTransport dial guard is exercised separately. Production
+// always uses validateWebhookURL.
+var validateWebhookURLFn = validateWebhookURL
+
+// validateWebhookURL is the dispatch-time shape check for the stored
+// onFailure webhook URL. It mirrors the handler-side validator
+// (internal/http/handlers/notifications.go) but shares the httpx
+// reserved-IP policy so an IP-literal in a private range is rejected
+// consistently. This is a cheap allowlist; the SSRFSafeTransport dialer
+// is what actually defeats DNS rebinding at dial time.
+func validateWebhookURL(raw string) error {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return fmt.Errorf("scheme must be http or https")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("missing host")
+	}
+	hostLower := strings.ToLower(host)
+	if hostLower == "localhost" {
+		return fmt.Errorf("localhost is not allowed")
+	}
+	for _, suf := range []string{".svc", ".svc.cluster.local", ".cluster.local", ".internal", ".local"} {
+		if strings.HasSuffix(hostLower, suf) {
+			return fmt.Errorf("cluster-internal hostnames (%s) are not allowed", suf)
+		}
+	}
+	if ip := net.ParseIP(host); ip != nil && httpx.IsReservedIP(ip) {
+		return fmt.Errorf("IP %s is in a reserved/private range", ip)
+	}
+	return nil
 }
 
 // Payload is the JSON body POSTed to the per-cron onFailure webhook.
@@ -288,6 +348,14 @@ type Payload struct {
 }
 
 func (w *Watcher) dispatchWebhook(ctx context.Context, cron *kube.KusoCron, job *batchv1.Job) error {
+	// Cheap pre-flight on the stored URL. The SSRF-safe transport is the
+	// load-bearing defence (it re-resolves + rejects at dial time, which
+	// a DNS-rebinding attack can't beat), but rejecting an obviously bad
+	// scheme/host/IP-literal here fails fast without a wasted dial and
+	// keeps the check visible next to the call site.
+	if err := validateWebhookURLFn(cron.Spec.OnFailure.WebhookURL); err != nil {
+		return fmt.Errorf("reject webhook url: %w", err)
+	}
 	startedAt, finishedAt := jobTimestamps(job)
 	p := Payload{
 		Project:    cron.Spec.Project,

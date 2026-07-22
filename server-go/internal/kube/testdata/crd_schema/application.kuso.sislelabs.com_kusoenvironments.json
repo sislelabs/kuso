@@ -318,6 +318,10 @@
             },
             "type": "object"
           },
+          "snapshotBeforeDeploy": {
+            "description": "Mirrored from KusoService.spec.snapshotBeforeDeploy. When true and a release hook exists, the poller snapshots subscribed postgres addons before the hook runs.",
+            "type": "boolean"
+          },
           "spreadPolicy": {
             "description": "How multi-replica pods spread across nodes. \"hard\" = topologySpreadConstraints DoNotSchedule (replicas forced onto distinct nodes); \"soft\"/\"\" = ScheduleAnyway (single-node safe). Server-managed from the live schedulable-node count.",
             "type": "string"

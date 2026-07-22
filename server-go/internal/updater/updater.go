@@ -285,6 +285,15 @@ func (s *Service) fetchLatest(ctx context.Context) (string, *Manifest, error) {
 		// server still surfaces "latest=v0.4.2" even when there's no
 		// release.json, and `canAutoUpgrade=false` because we don't
 		// know what migrations might be needed.
+		//
+		// SECURITY: a release with no release.json has no signature to
+		// verify against, so synthesizing a manifest here would let an
+		// attacker who can publish (or spoof) a GH release ship an
+		// unsigned upgrade past the whole verifyManifestSignature gate.
+		// Fail closed when signing is configured — see synthAllowed.
+		if err := s.synthAllowed(rel.TagName); err != nil {
+			return rel.TagName, nil, err
+		}
 		saveETag()
 		return rel.TagName, &Manifest{
 			Version: rel.TagName,
@@ -397,6 +406,14 @@ func (s *Service) fetchVersion(ctx context.Context, version string) (*Manifest, 
 		// the updater image still knows how to roll the deploy from
 		// just the version tag. Worst case we miss the migration
 		// classification — pinned upgrades trust the user.
+		//
+		// SECURITY: same fail-closed gate as fetchLatest. A pinned
+		// upgrade is exactly the path an attacker prefers (name an old,
+		// unsigned tag), so with a signing key configured we refuse to
+		// synthesize an unverifiable manifest rather than deploy it.
+		if err := s.synthAllowed(rel.TagName); err != nil {
+			return nil, err
+		}
 		return &Manifest{
 			Version: rel.TagName,
 			Notes:   rel.Body,
@@ -935,6 +952,29 @@ var ErrUnsignedNoKey = errors.New("updater: no signature on release and no publi
 func requireSignatures() bool {
 	v := getenv("KUSO_REQUIRE_SIGNATURES")
 	return v != "false" && v != "0"
+}
+
+// synthAllowed decides whether it's safe to synthesize a manifest for a
+// release that ships no release.json (and therefore no release.json.sig
+// to verify). A synthesized manifest bypasses verifyManifestSignature
+// entirely — it points the updater Job at hardcoded ghcr tags with no
+// integrity check — so if this instance has a signing public key wired
+// (embedded or via KUSO_RELEASE_PUBLIC_KEY) AND enforces signatures, we
+// refuse: an unsigned/unverifiable upgrade must never be deployed on a
+// signing-enabled install. Mirrors the ErrUnsignedNoKey wording so the
+// two "we won't run this unsigned" paths read alike.
+//
+// Fail-open cases (return nil):
+//   - no public key configured — a fresh install that hasn't run
+//     hack/release-keygen.sh yet can still see/roll pre-signing
+//     releases, same bootstrap allowance verifyManifestSignature makes.
+//   - KUSO_REQUIRE_SIGNATURES=false — operator explicitly opted out of
+//     the supply-chain gate.
+func (s *Service) synthAllowed(tag string) error {
+	if resolveReleasePubKey() != "" && requireSignatures() {
+		return fmt.Errorf("verify manifest signature: release %s has no release.json to verify but a release public key is configured — refusing to deploy an unsigned manifest (set KUSO_REQUIRE_SIGNATURES=false to opt out, or publish a signed release.json)", tag)
+	}
+	return nil
 }
 
 // embeddedReleaseKey is the kuso project's Ed25519 release-signing

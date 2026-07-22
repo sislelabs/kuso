@@ -591,8 +591,16 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				ReplicaCount:     intPtr(scaleMin),
 				Autoscaling:      autoscalingFromScale(item.svc.Spec.Scale),
 				Host:             host,
-				AdditionalHosts:  domainHosts(item.svc.Spec.Domains),
-				TLSHosts:         computeTLSHosts(host, domainHosts(item.svc.Spec.Domains)),
+				// Do NOT inherit the source service's custom domains into the
+				// clone. Stamping item.svc.Spec.Domains here made the cloned
+				// env claim production's AdditionalHosts/TLSHosts with TLS on —
+				// its Ingress then races production for the same host and Let's
+				// Encrypt cert (traffic hijack + rate-limit burn). The
+				// single-env / preview path NILs these for the same reason
+				// (services_ops.go ~L987). Custom domains on a cloned env are
+				// an explicit opt-in via `kuso domains add` after creation.
+				AdditionalHosts:  nil,
+				TLSHosts:         computeTLSHosts(host, nil),
 				Internal:         item.svc.Spec.Internal,
 				Stopped:          item.svc.Spec.Stopped,
 				Sleep:            envSleepFrom(item.svc.Spec.Sleep),

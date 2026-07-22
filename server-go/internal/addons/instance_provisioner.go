@@ -148,7 +148,12 @@ func (s *Service) provisionInstanceAddonDB(adminDSN, project, addonShort string)
 	// admin DSN. Keeps host / port / sslmode etc. intact.
 	u, err := url.Parse(adminDSN)
 	if err != nil {
-		return "", "", fmt.Errorf("parse admin DSN: %w", err)
+		// STATIC message only — url.Parse's error embeds the input it
+		// choked on, and adminDSN is the superuser DSN (password and
+		// all). Wrapping it here (or logging it) would leak that
+		// credential into an editor-reachable 400 body. Return a bare,
+		// DSN-free error instead.
+		return "", "", fmt.Errorf("%w: malformed admin DSN", ErrInvalid)
 	}
 	u.User = url.UserPassword(userName, pw)
 	u.Path = "/" + dbName

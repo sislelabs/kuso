@@ -175,11 +175,15 @@ type Dispatcher struct {
 	ch     chan Event
 	client *http.Client
 
-	// isLeader, when set, gates webhook fan-out so multi-replica
-	// installs don't N-times-deliver the same event to Slack/Discord.
-	// Persistence (the bell-icon feed) still runs on every replica
-	// because that path dedups via a DB unique constraint. nil =
-	// always-on (single-replica installs and tests).
+	// isLeader, when set, gates the outbox DRAIN (outboxWorker →
+	// shouldRunOutbox) so multi-replica installs don't N-times-deliver
+	// the same event to Slack/Discord. It does NOT gate outbox ENQUEUE
+	// (dispatch) — any replica must be able to persist an emitted event to
+	// the durable outbox, or events from a pod that isn't the singletons
+	// leader are lost. Delivery stays single-flight via the leader-gated
+	// drain + FOR UPDATE SKIP LOCKED claim. The bell-icon feed (Emit's
+	// persist) dedups via a DB unique constraint. nil = always-on
+	// (single-replica installs and tests).
 	isLeader func() bool
 
 	// eventHook, when set, is called synchronously from Emit AFTER the
@@ -407,16 +411,18 @@ func (d *Dispatcher) dispatch(ctx context.Context, e Event) {
 	if d.db == nil {
 		return
 	}
-	// Multi-replica safety: webhook fan-out runs only on the leader
-	// so a 3-replica deploy doesn't post 3× to Slack. The bell-icon
-	// feed (persisted by Emit) is unaffected — its uniqueness is
-	// enforced by the DB.
-	d.mu.Lock()
-	leaderFn := d.isLeader
-	d.mu.Unlock()
-	if leaderFn != nil && !leaderFn() {
-		return
-	}
+	// Intentionally NOT leader-gated. Any replica that emits an event
+	// must be able to write it to the durable outbox — otherwise events
+	// emitted on a pod that doesn't hold the "singletons" lease (e.g. the
+	// cluster-singletons leader in a 2+replica HA deploy, which is where
+	// nodewatch/alerts/cronwatch/pkgupdates/backuphealth emit from) are
+	// silently dropped from the outbox and never delivered.
+	//
+	// Single-delivery is enforced DOWNSTREAM, not here: the outbox drain
+	// workers (outboxWorker → shouldRunOutbox → d.isLeader, in outbox.go)
+	// stay leader-gated so exactly one replica delivers each row, and
+	// ClaimOutboxRow uses FOR UPDATE SKIP LOCKED + a lease so concurrent
+	// enqueue from multiple pods still yields at-most-once delivery.
 	notifs, err := d.cachedNotifications(ctx)
 	if err != nil {
 		d.logger.Warn("notify: list configs", "err", err)

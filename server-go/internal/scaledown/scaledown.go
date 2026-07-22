@@ -119,6 +119,23 @@ func sleepEligible(svc *kube.KusoService) bool {
 	return true
 }
 
+// hpaManaged reports whether the service's env Deployment is owned by an
+// HPA, in which case scale-to-zero must not touch its replica count.
+//
+// The signal is the same one the env chart uses to decide whether to
+// render an HPA (see projects.autoscalingFromScale): autoscaling is ON
+// exactly when the user asked for headroom, i.e. scale.Max is greater
+// than scale.Min. We read it off the service spec — the authoritative
+// source — rather than probing the live HPA, which keeps this a pure,
+// cache-free check on the object we already have in hand.
+func hpaManaged(svc *kube.KusoService) bool {
+	s := svc.Spec.Scale
+	if s == nil {
+		return false
+	}
+	return s.Max > s.MinValue()
+}
+
 func (w *Watcher) evaluateService(ctx context.Context, svc *kube.KusoService) {
 	ns := svc.Namespace
 	if ns == "" {
@@ -150,8 +167,19 @@ func (w *Watcher) evaluateService(ctx context.Context, svc *kube.KusoService) {
 	}
 	// If an HPA owns this Deployment we must not fight it — scale-to-zero
 	// requires autoscaling OFF (the chart only stamps spec.replicas when
-	// the HPA is absent). Detect via the standard HPA-managed annotation.
-	if _, hpaManaged := dep.Annotations["autoscaling.alpha.kubernetes.io/conditions"]; hpaManaged {
+	// the HPA is absent; with an HPA present, patching replicas=0 just gets
+	// reverted on the HPA's next sync and thrashes the Deployment).
+	//
+	// The old check looked for the "autoscaling.alpha.kubernetes.io/
+	// conditions" annotation ON THE DEPLOYMENT — but that annotation only
+	// ever lands on the HPA object, never the target Deployment, so it was
+	// always absent and hpaManaged was always false. Result: an
+	// autoscaling+sleep service got scaled to 0 anyway. Detect ownership
+	// from the SERVICE SPEC instead, which is the exact same signal the
+	// chart uses to decide whether to render an HPA: autoscalingFromScale
+	// returns non-nil (Enabled) precisely when scale.Max > scale.Min. That
+	// mirrors projects.autoscalingFromScale.
+	if hpaManaged(svc) {
 		return
 	}
 

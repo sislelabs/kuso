@@ -13,6 +13,8 @@ package releaserun
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -213,21 +215,33 @@ func (r *Runner) Run(ctx context.Context, ns string, env *kube.KusoEnvironment, 
 // poller can reference it in CR annotations + the web layer can deep-
 // link to logs without re-deriving.
 func JobName(envName, imageTag string) string {
+	// A readable prefix from the tag PLUS a hash of the FULL tag. Taking
+	// only tag[:12] used to erase the uniqueness nonce that synthetic refs
+	// carry at the END (`<branch-slug>-<unixms36>`): for branch slugs ≳10
+	// chars every deploy produced the same Job name, so Run()'s
+	// already-succeeded fast-path skipped new migrations (or one failure
+	// poisoned every redeploy for the TTL). The full-tag hash guarantees
+	// distinct tags → distinct Job names regardless of length.
+	safe := func(s string) string {
+		return strings.Map(func(r rune) rune {
+			if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+				return r
+			}
+			return '-'
+		}, strings.ToLower(s))
+	}
 	short := imageTag
 	if len(short) > 12 {
 		short = short[:12]
 	}
-	// Strip anything that isn't kube-name-safe — image tags can carry
-	// colons/dots from the registry path; strip to be safe.
-	short = strings.Map(func(r rune) rune {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
-			return r
-		}
-		return '-'
-	}, strings.ToLower(short))
-	name := fmt.Sprintf("%s-release-%s", envName, short)
+	sum := sha256.Sum256([]byte(imageTag))
+	h := hex.EncodeToString(sum[:])[:8]
+	name := fmt.Sprintf("%s-release-%s-%s", envName, safe(short), h)
 	if len(name) > 63 {
-		name = name[:63]
+		// Preserve the trailing hash (uniqueness) when truncating: drop
+		// from the readable middle, not the end.
+		keepTail := len("-" + h)
+		name = name[:63-keepTail] + "-" + h
 	}
 	return strings.TrimRight(name, "-")
 }

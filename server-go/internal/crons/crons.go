@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -166,6 +167,69 @@ func validateSchedule(s string) error {
 	}
 	if !cronExpr.MatchString(s) {
 		return fmt.Errorf("%w: schedule %q does not look like a 5-field cron expression (e.g. `*/15 * * * *`)", ErrInvalid, s)
+	}
+	// Shape passing the regex isn't enough: `0 25 * * *` matches the
+	// grammar but hour=25 is out of range. kube CronJob accepts the CR
+	// (201) then silently rejects it at reconcile — the "validator lies"
+	// class of bug. Range-check each field's numeric values against the
+	// standard-cron bounds so the user sees the error inline.
+	fields := strings.Fields(s)
+	// cronExpr already guarantees exactly five fields; belt-and-braces.
+	if len(fields) != 5 {
+		return fmt.Errorf("%w: schedule %q must have exactly 5 fields", ErrInvalid, s)
+	}
+	bounds := [5]struct {
+		name     string
+		min, max int
+	}{
+		{"minute", 0, 59},
+		{"hour", 0, 23},
+		{"day-of-month", 1, 31},
+		{"month", 1, 12},
+		{"day-of-week", 0, 6},
+	}
+	for i, f := range fields {
+		if err := checkCronField(f, bounds[i].name, bounds[i].min, bounds[i].max); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// checkCronField range-checks one cron field's numeric literals against
+// [min,max]. Handles the *, /step, a-b range, and a,b,c list syntax the
+// regex admits — every bare integer that appears (in a range endpoint, a
+// list element, or standalone) must fall in bounds. `*` and the step
+// value after `/` are not range-checked (a step of 0 is the only invalid
+// step and is rejected explicitly).
+func checkCronField(field, name string, min, max int) error {
+	invalid := func() error {
+		return fmt.Errorf("%w: cron %s field %q is out of range (%d-%d)", ErrInvalid, name, field, min, max)
+	}
+	for _, part := range strings.Split(field, ",") {
+		if part == "" {
+			return invalid()
+		}
+		// Split off an optional step: "<value>/<step>".
+		value := part
+		if slash := strings.Index(part, "/"); slash >= 0 {
+			step := part[slash+1:]
+			if n, err := strconv.Atoi(step); err != nil || n <= 0 {
+				return invalid()
+			}
+			value = part[:slash]
+		}
+		if value == "*" || value == "" {
+			// "*" or "*/step" — whole-range base, nothing to bound-check.
+			continue
+		}
+		// Range "a-b" or a single integer.
+		for _, endpoint := range strings.SplitN(value, "-", 2) {
+			n, err := strconv.Atoi(endpoint)
+			if err != nil || n < min || n > max {
+				return invalid()
+			}
+		}
 	}
 	return nil
 }
