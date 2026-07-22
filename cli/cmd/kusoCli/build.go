@@ -82,6 +82,17 @@ func pollBuildToTerminal(project, service, buildID string) (string, error) {
 					return b.Status, fmt.Errorf("build %s: %s", b.Status, b.ErrorMessage)
 				}
 				return b.Status, fmt.Errorf("build %s", b.Status)
+			case "release-failed":
+				// The image built + pushed fine, but the release hook
+				// (migration) failed, so the env was NOT promoted — the
+				// last GREEN build stays live. This IS terminal: without
+				// this arm --follow polled the full 20m deadline waiting
+				// for a status that never changes. Return non-zero so CI
+				// catches the failed migration.
+				if b.ErrorMessage != "" {
+					return b.Status, fmt.Errorf("build %s: %s", b.Status, b.ErrorMessage)
+				}
+				return b.Status, fmt.Errorf("build %s (release hook failed; image not promoted)", b.Status)
 			}
 		}
 		time.Sleep(5 * time.Second)

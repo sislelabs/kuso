@@ -28,6 +28,7 @@ type setEnvArgs struct {
 	Project string  `json:"project" jsonschema:"project name"`
 	Service string  `json:"service" jsonschema:"service short name (no project prefix)"`
 	EnvVars []envKV `json:"envVars" jsonschema:"the FULL set of plain env vars; this is a whole-list replace — keys you omit are removed"`
+	Confirm bool    `json:"confirm,omitempty" jsonschema:"must be true — set_env is a destructive whole-list replace that deletes any env var you omit; guards against accidentally wiping the service's env"`
 }
 
 // setEnvRequest mirrors apiv1.SetEnvRequest.
@@ -55,10 +56,13 @@ type setSecretRequest struct {
 func registerSetEnv(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "set_env",
-		Description: "Replace a service's PLAIN env vars. This is a WHOLE-LIST replace — send every var you want the service to have; any key you omit is removed. For secret values use set_secret instead. Mutating; refused in --read-only mode.",
+		Description: "Replace a service's PLAIN env vars. This is a WHOLE-LIST replace — send every var you want the service to have; any key you omit is removed. REQUIRES confirm=true (the omitted-keys-are-deleted semantics make this destructive). For secret values use set_secret instead. Mutating; refused in --read-only mode.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args setEnvArgs) (*mcp.CallToolResult, struct{}, error) {
 		if args.Project == "" || args.Service == "" {
 			return nil, struct{}{}, errors.New("project and service are required")
+		}
+		if !args.Confirm {
+			return nil, struct{}{}, errors.New("confirm=true is required — set_env replaces the ENTIRE env list and deletes any key you omit")
 		}
 		body := setEnvRequest{EnvVars: args.EnvVars}
 		path := apiPath("api", "projects", args.Project, "services", args.Service, "env")

@@ -194,8 +194,7 @@ func buildPortForwardURL(project, addon string) (string, error) {
 // local connection gets its own WS — matches how kube port-forward
 // multiplexes underneath and keeps the bridge simple.
 func proxyOneConnection(ctx context.Context, local net.Conn, wsURL, tok string) error {
-	dialer := websocket.DefaultDialer
-	dialer.Subprotocols = []string{"kuso.bearer", tok}
+	dialer := wsDialer([]string{"kuso.bearer", tok})
 	ws, _, err := dialer.DialContext(ctx, wsURL, nil)
 	if err != nil {
 		return fmt.Errorf("ws dial: %w", err)

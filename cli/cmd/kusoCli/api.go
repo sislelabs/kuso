@@ -90,6 +90,15 @@ The path may omit the leading slash and the /api prefix:
 		}
 		path := normalizeAPIPath(pathArg)
 
+		// resty is built with AllowGetMethodPayload=false, so a body on a
+		// GET is silently dropped — the request goes out bodiless and the
+		// user never learns their -d/-f/-F was ignored. Reject it up front
+		// with a clear error rather than send a misleading request. (GET
+		// with a body is non-idiomatic anyway; use POST/PUT/PATCH.)
+		if method == "GET" && (apiData != "" || len(apiFields) > 0 || len(apiCapF) > 0) {
+			return fmt.Errorf("GET requests can't carry a body — drop -d/-f/-F, or use a method that takes one (POST/PUT/PATCH)")
+		}
+
 		body, err := buildBody(apiData, apiFields, apiCapF)
 		if err != nil {
 			return err

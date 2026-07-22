@@ -35,6 +35,21 @@ export function SourceSection({
     retry: false,
   });
   const repoDisplay = state.repoURL.replace(/^https?:\/\/(www\.)?/, "");
+  // Only treat the repo URL as a clickable link when it parses as an
+  // http(s) URL. A stored value like `javascript:alert(1)` would
+  // otherwise render into an <a href> and execute on click; render it
+  // as inert text instead. new URL() throws on garbage, so the try
+  // guards the parse.
+  const repoIsHttp = useMemo(() => {
+    const raw = state.repoURL.trim();
+    if (!raw) return false;
+    try {
+      const proto = new URL(raw).protocol;
+      return proto === "http:" || proto === "https:";
+    } catch {
+      return false;
+    }
+  }, [state.repoURL]);
   // Parse owner/repo so we can preview the auto-resolution + run a
   // server-side access probe. Mirrors the server's parser; kept
   // local because the regex is one line.
@@ -85,7 +100,7 @@ export function SourceSection({
         }
         control={
           <div className="flex w-full items-center gap-1.5">
-            {state.repoURL && (
+            {state.repoURL && repoIsHttp && (
               <a
                 href={state.repoURL}
                 target="_blank"
@@ -96,6 +111,15 @@ export function SourceSection({
               >
                 <ExternalLink className="h-3 w-3" />
               </a>
+            )}
+            {state.repoURL && !repoIsHttp && (
+              <span
+                aria-label="Repository URL is not a web link"
+                title={repoDisplay}
+                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-[var(--text-tertiary)] opacity-40"
+              >
+                <ExternalLink className="h-3 w-3" />
+              </span>
             )}
             <Input
               value={state.repoURL}

@@ -1335,6 +1335,13 @@ func init() {
 	serviceSetTopCmd.Flags().IntVar(&serviceSetMaxReplicas, "max-replicas", 0, "set maximum replica count (HPA max). 0 keeps current value.")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPath, "path", "", "monorepo subpath relative to repo root (e.g. apps/api)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetBranch, "branch", "", "git branch override (empty = follow project default)")
+	// These two mirror the project-scoped `service set` above. They were
+	// missing from the alias, so the SAME RunE silently never saw the
+	// flags as Changed() — `kuso service set … --cap-add SETUID` was a
+	// no-op via the short form while working via the long form. Both must
+	// register every flag the shared RunE reads.
+	serviceSetTopCmd.Flags().StringSliceVar(&serviceSetCapAdd, "cap-add", nil, "Linux capability to add back, without CAP_ (repeatable, e.g. --cap-add SETUID --cap-add SETGID)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetAllowPrivEsc, "allow-privilege-escalation", "", "allow a process to gain more privileges than its parent (on|off)")
 }
 
 // serviceSetTopCmd is the top-level `kuso service set` shell. Same

@@ -1,6 +1,7 @@
 package kusoCli
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"net/url"
@@ -12,6 +13,31 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/spf13/cobra"
 )
+
+// wsDialer returns a WebSocket dialer configured for kuso, with the
+// given subprotocols set. It CLONES websocket.DefaultDialer rather than
+// mutating the package-global (two concurrent dials — e.g. `db pf` with
+// several psql tabs — otherwise stomp each other's Subprotocols/TLS).
+//
+// It honours KUSO_INSECURE=1 the same way the REST client does
+// (kusoApi.main.go): on a fresh install the instance serves Let's
+// Encrypt *staging* certs that Go's TLS stack rejects, so REST worked
+// (it read the env var) but every WebSocket dial — logs --follow, db
+// port-forward — failed x509. Clone + set InsecureSkipVerify under the
+// same env gate so both surfaces agree.
+func wsDialer(subprotocols []string) *websocket.Dialer {
+	d := *websocket.DefaultDialer // copy the struct, don't alias the global
+	d.Subprotocols = subprotocols
+	if v := strings.TrimSpace(os.Getenv("KUSO_INSECURE")); v == "1" || strings.EqualFold(v, "true") {
+		tc := &tls.Config{InsecureSkipVerify: true}
+		if d.TLSClientConfig != nil {
+			tc = d.TLSClientConfig.Clone()
+			tc.InsecureSkipVerify = true
+		}
+		d.TLSClientConfig = tc
+	}
+	return &d
+}
 
 // `kuso logs <project> <service>` — print recent log lines from the
 // pods backing a service's environment. One-shot tail; no streaming
@@ -126,8 +152,7 @@ func streamLogs(project, service, env string, tail int) error {
 	// subprotocol list — the JWT slot needs to be the next entry
 	// after the literal kuso.bearer name. Browsers split the
 	// list themselves; here we hand it to gorilla as []string.
-	dialer := websocket.DefaultDialer
-	dialer.Subprotocols = []string{"kuso.bearer", tok}
+	dialer := wsDialer([]string{"kuso.bearer", tok})
 	conn, _, err := dialer.Dial(u.String(), nil)
 	if err != nil {
 		return fmt.Errorf("ws connect: %w", err)

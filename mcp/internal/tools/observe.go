@@ -29,11 +29,21 @@ type logsArgs struct {
 	Lines   int    `json:"lines,omitempty" jsonschema:"number of lines to tail; default 200, server caps at 2000"`
 }
 
+// logLine mirrors the server's per-line wire shape: the logs endpoint
+// returns [{pod,line}] objects, NOT a flat []string. Decoding into
+// []string failed with "cannot unmarshal object into Go value of type
+// string" on every service that had any log output — so the tool was
+// unusable exactly when it mattered. Mirror the CLI's shape (logs.go).
+type logLine struct {
+	Pod  string `json:"pod"`
+	Line string `json:"line"`
+}
+
 type logsResult struct {
-	Project string   `json:"project"`
-	Service string   `json:"service"`
-	Env     string   `json:"env"`
-	Lines   []string `json:"lines"`
+	Project string    `json:"project"`
+	Service string    `json:"service"`
+	Env     string    `json:"env"`
+	Lines   []logLine `json:"lines"`
 }
 
 func registerLogs(server *mcp.Server, client *kusoclient.Client) {
@@ -62,8 +72,9 @@ func registerLogs(server *mcp.Server, client *kusoclient.Client) {
 		var b strings.Builder
 		fmt.Fprintf(&b, "logs %s (env=%s, %d lines):\n", args.Service, out.Env, len(out.Lines))
 		for _, l := range out.Lines {
-			b.WriteString(l)
-			b.WriteString("\n")
+			// Pod-prefixed so multi-replica output is attributable, same
+			// as the CLI's `[pod] line` format.
+			fmt.Fprintf(&b, "[%s] %s\n", l.Pod, l.Line)
 		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: b.String()}},

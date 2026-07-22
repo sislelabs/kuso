@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/go-resty/resty/v2"
+	shellwords "github.com/mattn/go-shellwords"
 	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/cobra"
 
@@ -14,6 +15,59 @@ import (
 )
 
 // `kuso cron` — schedule recurring jobs against a service's image.
+
+// splitCmd tokenises a --cmd string the way a shell would, so quoted
+// arguments survive as a single argv entry. `strings.Fields` — the
+// previous approach — split on every space, so `sh -c "echo tick"`
+// (shown verbatim in this command's own --help examples) became
+// ["sh", "-c", "\"echo", "tick\""], mangling the command. shellwords
+// honours single/double quotes + backslash escapes. Falls back to
+// Fields only if the input has an unbalanced quote (a user typo) so we
+// still produce *some* argv rather than erroring on the parse.
+func splitCmd(s string) []string {
+	argv, err := shellwords.Parse(s)
+	if err != nil {
+		return strings.Fields(s)
+	}
+	return argv
+}
+
+// currentProjectCronRepo fetches the named project-scoped cron and
+// returns its current spec.image.repository. Used by `cron edit` to
+// preserve the repository when only --image-tag is bumped (the server
+// replaces spec.image wholesale, so we must resend the repository).
+// Returns "" (no error) when the cron exists but carries no image.
+func currentProjectCronRepo(project, name string) (string, error) {
+	resp, err := api.ListCrons(project)
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode() >= 300 {
+		return "", fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+	}
+	var items []struct {
+		Metadata struct {
+			Name string `json:"name"`
+		} `json:"metadata"`
+		Spec struct {
+			Image *struct {
+				Repository string `json:"repository"`
+			} `json:"image"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal(resp.Body(), &items); err != nil {
+		return "", fmt.Errorf("decode crons: %w", err)
+	}
+	for _, c := range items {
+		if c.Metadata.Name == name {
+			if c.Spec.Image != nil {
+				return c.Spec.Image.Repository, nil
+			}
+			return "", nil
+		}
+	}
+	return "", fmt.Errorf("cron %q not found in project %q", name, project)
+}
 
 var cronCmd = &cobra.Command{
 	Use:     "cron",
@@ -97,7 +151,7 @@ var cronAddCommand = &cobra.Command{
 		if cronAddName == "" || cronAddSchedule == "" || cronAddCmdString == "" {
 			return fmt.Errorf("--name, --schedule, and --cmd are required")
 		}
-		argv := strings.Fields(cronAddCmdString)
+		argv := splitCmd(cronAddCmdString)
 		req := kusoApi.CreateCronRequest{
 			Name:              cronAddName,
 			Schedule:          cronAddSchedule,
@@ -223,7 +277,7 @@ var cronAddCommandCmd = &cobra.Command{
 			Kind:              "command",
 			Schedule:          pCronSchedule,
 			Image:             &kusoApi.CronImage{Repository: pCronImage, Tag: pCronImageTag},
-			Command:           strings.Fields(pCronCmdString),
+			Command:           splitCmd(pCronCmdString),
 			Suspend:           pCronSuspend,
 			ConcurrencyPolicy: pCronConcurrencyPolicy,
 		}
@@ -269,10 +323,27 @@ add roundtrip via the per-service path.`,
 			req.URL = &v
 		}
 		if cmd.Flags().Changed("image") || cmd.Flags().Changed("image-tag") {
-			req.Image = &kusoApi.CronImage{Repository: pCronImage, Tag: pCronImageTag}
+			repo := pCronImage
+			// Editing ONLY --image-tag must not blank out the repository.
+			// The server replaces spec.image verbatim, so sending
+			// {repository:"", tag:"v2"} produced an InvalidImageName
+			// (":v2") and the cronjob never scheduled. Fetch the current
+			// cron and preserve its repository so a tag-only bump keeps
+			// the image it's already running.
+			if !cmd.Flags().Changed("image") {
+				cur, cerr := currentProjectCronRepo(args[0], args[1])
+				if cerr != nil {
+					return fmt.Errorf("--image-tag needs the current image; %w (pass --image to set it explicitly)", cerr)
+				}
+				if cur == "" {
+					return fmt.Errorf("--image-tag requires an existing image on cron %q — none found; pass --image too", args[1])
+				}
+				repo = cur
+			}
+			req.Image = &kusoApi.CronImage{Repository: repo, Tag: pCronImageTag}
 		}
 		if cmd.Flags().Changed("cmd") {
-			req.Command = strings.Fields(pCronCmdString)
+			req.Command = splitCmd(pCronCmdString)
 		}
 		if cmd.Flags().Changed("concurrency") {
 			v := pCronConcurrencyPolicy
@@ -318,7 +389,7 @@ func init() {
 	cronCmd.AddCommand(cronAddCommand)
 	cronAddCommand.Flags().StringVar(&cronAddName, "name", "", "cron name (required)")
 	cronAddCommand.Flags().StringVar(&cronAddSchedule, "schedule", "", "cron expression — '*/15 * * * *' (required)")
-	cronAddCommand.Flags().StringVar(&cronAddCmdString, "cmd", "", "command argv (split on whitespace) (required)")
+	cronAddCommand.Flags().StringVar(&cronAddCmdString, "cmd", "", "command argv (shell-quoted; e.g. 'sh -c \"echo tick\"') (required)")
 	cronAddCommand.Flags().BoolVar(&cronAddSuspend, "suspend", false, "create suspended")
 	cronAddCommand.Flags().StringVar(&cronAddConcurrencyPolicy, "concurrency", "Forbid", "Allow|Forbid|Replace")
 	cronCmd.AddCommand(cronDeleteCmd)
@@ -332,7 +403,7 @@ func init() {
 		c.Flags().StringVar(&pCronURL, "url", "", "target URL (kind=http only)")
 		c.Flags().StringVar(&pCronImage, "image", "", "container image repo (kind=command only)")
 		c.Flags().StringVar(&pCronImageTag, "image-tag", "latest", "container image tag")
-		c.Flags().StringVar(&pCronCmdString, "cmd", "", "command argv (split on whitespace)")
+		c.Flags().StringVar(&pCronCmdString, "cmd", "", "command argv (shell-quoted; e.g. 'sh -c \"echo tick\"')")
 		c.Flags().BoolVar(&pCronSuspend, "suspend", false, "create / set suspended")
 		c.Flags().StringVar(&pCronConcurrencyPolicy, "concurrency", "Forbid", "Allow|Forbid|Replace")
 	}

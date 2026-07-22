@@ -28,6 +28,19 @@ interface Row {
   value: string;
   fromSecret: boolean;
   visible: boolean;
+  // origValueFrom preserves the raw `valueFrom` blob the server sent
+  // for a secret-backed row that the editor has NO user-facing
+  // representation for (legacy fieldRef / configMapKeyRef, a
+  // secretKeyRef against a renamed/deleted addon, or a ref that
+  // simply hasn't resolved because the addons query is still in
+  // flight). Without re-emitting it verbatim, toEnvVar collapsed these
+  // rows to `{name}` only — and the server, seeing a name with neither
+  // value nor valueFrom, DROPPED the var on every save. We stash the
+  // original here at load time and hand it straight back on save so an
+  // untouched fromSecret row round-trips losslessly. Undefined for
+  // rows the editor CAN represent (plain values, addon refs) — those
+  // re-resolve from their edited value.
+  origValueFrom?: Record<string, unknown>;
 }
 
 // rid mints a fresh id for a Row. Math.random is fine — these
@@ -105,6 +118,9 @@ function toRow(
     value: fromSecret ? "" : literalToRef(raw, project, knownScopes),
     fromSecret,
     visible: false,
+    // Stash the opaque valueFrom so save() can re-emit it unchanged —
+    // the editor can't render it, but it must not silently delete it.
+    origValueFrom: fromSecret ? v.valueFrom : undefined,
   };
 }
 
@@ -129,6 +145,14 @@ function addonRefFromValueFrom(
 
 function toEnvVar(r: Row): KusoEnvVar {
   if (r.fromSecret) {
+    // Re-emit the original valueFrom verbatim. The server round-trips
+    // secretKeyRef / fieldRef / configMapKeyRef intact, so an untouched
+    // secret-backed row survives the save. Emitting `{name}` alone (the
+    // old behaviour) made the server drop the var — a name with neither
+    // value nor valueFrom is not a valid env entry.
+    if (r.origValueFrom) {
+      return { name: r.name.trim(), valueFrom: r.origValueFrom };
+    }
     return { name: r.name.trim() };
   }
   return { name: r.name.trim(), value: r.value };
