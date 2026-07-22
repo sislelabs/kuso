@@ -75,7 +75,11 @@ spec:
                   KEY="${PROJECT}/${ADDON}/${TS}.sql.gz"
                   PREFIX="${PROJECT}/${ADDON}/"
                   echo "==> dumping ${ADDON} → s3://${BUCKET}/${KEY}"
-                  PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump \
+                  # --clean --if-exists so a restore onto a populated DB
+                  # (the pre-deploy-snapshot rollback case) DROPs-then-recreates
+                  # instead of aborting on "relation already exists" under the
+                  # restore's ON_ERROR_STOP=1 --single-transaction.
+                  PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump --clean --if-exists \
                     -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" \
                     | gzip > /tmp/dump.gz
                   SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
@@ -245,7 +249,7 @@ spec:
                   # Dump to /tmp first (not a streamed pipe to s3) so we can
                   # sha256 the artifact and emit an integrity manifest — the
                   # restore path verifies sha256 before applying.
-                  pg_dump --no-owner --no-acl "${DATABASE_URL}" | gzip > /tmp/dump.gz
+                  pg_dump --clean --if-exists --no-owner --no-acl "${DATABASE_URL}" | gzip > /tmp/dump.gz
                   SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
                   BYTES=$(wc -c < /tmp/dump.gz | tr -d ' ')
                   aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.gz "s3://${BUCKET}/${KEY}"

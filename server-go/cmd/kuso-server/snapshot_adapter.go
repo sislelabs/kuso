@@ -89,7 +89,7 @@ if [ -z "${BUCKET:-}" ]; then
   exit 1
 fi
 echo "==> pre-deploy snapshot %s → s3://${BUCKET}/${KEY}"
-PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" | gzip > /tmp/dump.gz
+PGPASSWORD="${POSTGRES_PASSWORD}" pg_dump --clean --if-exists -h "${POSTGRES_HOST}" -U "${POSTGRES_USER}" "${POSTGRES_DB}" | gzip > /tmp/dump.gz
 SHA=$(sha256sum /tmp/dump.gz | awk '{print $1}')
 BYTES=$(wc -c < /tmp/dump.gz | tr -d ' ')
 aws s3 cp --endpoint-url "${S3_ENDPOINT}" /tmp/dump.gz "s3://${BUCKET}/${KEY}"
