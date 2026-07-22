@@ -115,6 +115,28 @@ func TestAnotherNodeRebooting(t *testing.T) {
 			want:   "b",
 		},
 		{
+			// Regression: settling must count as busy. Node b is back +
+			// uncordoned but its reboot-stranded singletons are still
+			// rescheduling; starting node a's drain now risks evicting the
+			// last healthy replica of a service mid-reschedule on b.
+			name: "other node settling",
+			nodes: []*corev1.Node{
+				mkNode("a", nil),
+				mkNode("b", applyState("settling")),
+			},
+			except: "a",
+			want:   "b",
+		},
+		{
+			name: "other node running (apply job in flight)",
+			nodes: []*corev1.Node{
+				mkNode("a", nil),
+				mkNode("b", applyState("running")),
+			},
+			except: "a",
+			want:   "b",
+		},
+		{
 			name: "the excepted node itself being busy does not count",
 			nodes: []*corev1.Node{
 				mkNode("a", map[string]string{CordonAnnotation: "true"}),
@@ -272,5 +294,53 @@ func TestReconcileRebootsSweepsLateStrandedPod(t *testing.T) {
 	w.reconcileReboots(context.Background(), slogDiscard())
 	if _, err := cs.CoreV1().Pods("kuso").Get(context.Background(), "pooler", metav1.GetOptions{}); err == nil {
 		t.Error("pass 2: late-stranded pod should have been swept during settling")
+	}
+}
+
+// TestReconcileRebootsSkipsNodeMidApply covers the P1 bug: Apply() stamps
+// our cordon marker UP FRONT (before the Job's apt/drain runs), so a node
+// in phase=running or =draining is a healthy, cordoned, Ready node that is
+// STILL doing the apply work. The 15s finalize tick must NOT uncordon it,
+// clear the marker, or stomp its phase — that would let scheduling resume
+// and drop the phase toward done while apt/drain is mid-flight.
+func TestReconcileRebootsSkipsNodeMidApply(t *testing.T) {
+	t.Parallel()
+	mkNode := func(phase string) *corev1.Node {
+		return &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "worker",
+				Annotations: map[string]string{
+					CordonAnnotation:     "true", // stamped up-front by Apply()
+					ApplyStateAnnotation: `{"phase":"` + phase + `","at":"","log":""}`,
+				},
+			},
+			// Cordoned (unschedulable) + Ready: exactly the mid-apply state.
+			Spec: corev1.NodeSpec{Unschedulable: true},
+			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{
+				{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+			}},
+		}
+	}
+
+	for _, phase := range []string{"running", "draining"} {
+		t.Run(phase, func(t *testing.T) {
+			cs := kubefake.NewSimpleClientset(mkNode(phase))
+			w := &Watcher{Kube: &kube.Client{Clientset: cs}}
+			w.reconcileReboots(context.Background(), slogDiscard())
+
+			n, err := cs.CoreV1().Nodes().Get(context.Background(), "worker", metav1.GetOptions{})
+			if err != nil {
+				t.Fatalf("get node: %v", err)
+			}
+			if !n.Spec.Unschedulable {
+				t.Errorf("phase=%s: node was uncordoned mid-apply (must stay cordoned)", phase)
+			}
+			if n.Annotations[CordonAnnotation] != "true" {
+				t.Errorf("phase=%s: cordon marker was cleared mid-apply", phase)
+			}
+			if got := parseApplyState(n.Annotations[ApplyStateAnnotation]).Phase; got != phase {
+				t.Errorf("phase=%s: apply-state was stomped to %q mid-apply", phase, got)
+			}
+		})
 	}
 }

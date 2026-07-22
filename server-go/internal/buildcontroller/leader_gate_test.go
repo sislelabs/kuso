@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/client-go/tools/cache"
 
 	"kuso/server/internal/kube"
 )
@@ -146,6 +147,50 @@ func TestKusoBuildLabelsAlwaysSetsInstance(t *testing.T) {
 	if labels["kuso.sislelabs.com/project"] != "alpha" {
 		t.Errorf("project label = %q", labels["kuso.sislelabs.com/project"])
 	}
+}
+
+// TestHandleDelete_UnwrapsTombstone pins fix #4: DeleteFunc must clear the
+// running-dedup key even when the delete arrives as a
+// cache.DeletedFinalStateUnknown tombstone (delivered when a delete is
+// missed during a watch relist). Before the fix the handler only asserted
+// *unstructured.Unstructured, so a tombstoned delete left the key set and a
+// same-name rebuild was deduped forever (its Job never rendered).
+func TestHandleDelete_UnwrapsTombstone(t *testing.T) {
+	newU := func(ns, name string) *unstructured.Unstructured {
+		u := &unstructured.Unstructured{Object: map[string]any{}}
+		u.SetNamespace(ns)
+		u.SetName(name)
+		return u
+	}
+
+	t.Run("direct unstructured clears key", func(t *testing.T) {
+		s := &Service{running: map[string]struct{}{"kuso/alpha-web-abc": {}}}
+		s.handleDelete(newU("kuso", "alpha-web-abc"))
+		if _, still := s.running["kuso/alpha-web-abc"]; still {
+			t.Fatalf("direct delete did not clear the running key")
+		}
+	})
+
+	t.Run("tombstone-wrapped delete clears key", func(t *testing.T) {
+		s := &Service{running: map[string]struct{}{"kuso/alpha-web-abc": {}}}
+		tombstone := cache.DeletedFinalStateUnknown{
+			Key: "kuso/alpha-web-abc",
+			Obj: newU("kuso", "alpha-web-abc"),
+		}
+		s.handleDelete(tombstone)
+		if _, still := s.running["kuso/alpha-web-abc"]; still {
+			t.Fatalf("tombstoned delete did not clear the running key — same-name rebuild would be deduped forever")
+		}
+	})
+
+	t.Run("garbage payload is ignored without panic", func(t *testing.T) {
+		s := &Service{running: map[string]struct{}{"kuso/keep": {}}}
+		s.handleDelete("not-an-object")
+		s.handleDelete(cache.DeletedFinalStateUnknown{Key: "x", Obj: "still-not-an-object"})
+		if _, still := s.running["kuso/keep"]; !still {
+			t.Fatalf("garbage payloads should not touch unrelated keys")
+		}
+	})
 }
 
 // TestDecodeBuildHandlesUnstructured verifies the decode path

@@ -237,13 +237,46 @@ func (c *Cloner) EnsureEnvAddons(ctx context.Context, project, envScope string, 
 	return connSecrets, nil
 }
 
-// DeletePRAddons removes every "*-pr-<N>" addon CR for the project.
-// Helm-operator's uninstall finalizer drops the StatefulSet + PVCs.
+// previewPRLabel is the ownership label EnsureEnvAddons stamps on a
+// per-PR postgres clone (value = the PR number). It's the authoritative
+// signal that an addon is a preview clone for a given PR — the name
+// suffix alone is NOT, because a real project addon can legitimately be
+// named "events-pr-2".
+const previewPRLabel = "kuso.sislelabs.com/preview-pr"
+
+// isPRClone reports whether addon a is a preview clone belonging to the
+// PR identified by prLabel (the decimal PR number) / suffix ("-pr-<N>").
+//
+// Label-first: an addon carrying preview-pr=<N> is unambiguously this
+// PR's clone. The name-suffix path is a legacy fallback for clones minted
+// before the preview-pr label existed — but it's gated on the addon ALSO
+// carrying the generic env label (kuso.sislelabs.com/env), so a real
+// project addon that merely happens to be named "<x>-pr-<N>" (and has no
+// preview/env labels at all) is never swept.
+func isPRClone(a *kube.KusoAddon, prLabel, suffix string) bool {
+	if a.Labels[previewPRLabel] == prLabel {
+		return true
+	}
+	// Legacy fallback: pre-label clones. Require the generic env label so
+	// we don't delete a non-preview addon that shares the -pr-N name shape.
+	if a.Labels[kube.LabelEnv] != "" && strings.HasSuffix(a.Name, suffix) {
+		return true
+	}
+	return false
+}
+
+// DeletePRAddons removes the postgres clones this project minted for PR
+// <N>. Selection is by the kuso.sislelabs.com/preview-pr ownership label
+// (with a legacy name-suffix fallback gated on the env label) — NEVER by
+// the name suffix alone, or a real addon named e.g. "events-pr-2" would
+// be dropped when PR #2 closes. Helm-operator's uninstall finalizer drops
+// the StatefulSet + PVCs.
 func (c *Cloner) DeletePRAddons(ctx context.Context, project string, prNumber int) error {
 	if c == nil || c.Addons == nil {
 		return nil
 	}
 	suffix := fmt.Sprintf("-pr-%d", prNumber)
+	prLabel := fmt.Sprintf("%d", prNumber)
 	all, err := c.Addons.List(ctx, project)
 	if err != nil {
 		return fmt.Errorf("list addons: %w", err)
@@ -252,7 +285,7 @@ func (c *Cloner) DeletePRAddons(ctx context.Context, project string, prNumber in
 	for i := range all {
 		a := &all[i]
 		short := addons.ShortName(project, a.Name)
-		if !strings.HasSuffix(short, suffix) {
+		if !isPRClone(a, prLabel, suffix) {
 			continue
 		}
 		if err := c.Addons.Delete(ctx, project, short); err != nil {
@@ -277,7 +310,13 @@ func (c *Cloner) seedAsync(ctx context.Context, ns, project, sourceFQN, cloneFQN
 		if c.cloneReady(ctx, ns, cloneFQN, instancePG) {
 			break
 		}
-		time.Sleep(5 * time.Second)
+		// Honor cancellation (graceful shutdown / 30-min seedCtx timeout)
+		// instead of blocking a bare 5s Sleep past a cancelled ctx.
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(5 * time.Second):
+		}
 	}
 	if !c.cloneReady(ctx, ns, cloneFQN, instancePG) {
 		c.Logger.Warn("preview db clone never reached ready", "clone", cloneFQN)

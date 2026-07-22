@@ -358,6 +358,58 @@ func (s *Service) serviceLockFor(project, service string) *sync.Mutex {
 	return e.mu
 }
 
+// findActiveForServiceLive returns the name of an in-flight KusoBuild
+// for (project, fqn), or "" if none — same contract as
+// findActiveForService, but reads LIVE from the apiserver instead of the
+// informer cache.
+//
+// Why a live read: the queued/active decision at Create time must be
+// read-your-writes. findActiveForService lists through the cache, which
+// lags the apiserver by a watch round-trip; two Create calls ~50ms apart
+// both see an empty cache, both decide queued=false, and both create
+// active (render-eligible) CRs → two parallel kaniko builds for one
+// service. The per-service mutex serializes the two Creates within THIS
+// process, but the cache can still be stale inside the lock (the first
+// Create's CR hasn't propagated to the informer yet). Listing directly
+// against the API — the Dynamic client bypasses the cache the typed
+// list[] helper would otherwise consult — closes the single-process
+// window.
+//
+// NOTE: this only fixes single-process double-creation. Across replicas
+// the per-service mutex is process-local, so two leaders (or a brief
+// double-leadership window) can still both pass this check and create.
+// Closing that needs leader-gating the Create path or server-side
+// enforcement (a uniqueness admission webhook / a status-subresource
+// lease) — out of scope for this pass.
+func (s *Service) findActiveForServiceLive(ctx context.Context, ns, project, fqn string) (string, error) {
+	if s.Kube == nil || s.Kube.Dynamic == nil {
+		return "", nil
+	}
+	lctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	raw, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace(ns).List(lctx, metav1.ListOptions{
+		LabelSelector: kube.LabelSelector(map[string]string{
+			kube.LabelProject: project,
+			kube.LabelService: fqn,
+		}),
+	})
+	if err != nil {
+		return "", fmt.Errorf("live-list active builds: %w", err)
+	}
+	for i := range raw.Items {
+		var b kube.KusoBuild
+		if derr := runtime.DefaultUnstructuredConverter.FromUnstructured(raw.Items[i].Object, &b); derr != nil {
+			continue
+		}
+		// "In-flight" = no build-state label yet (running/pending/queued
+		// carry no terminal marker; done builds carry build-state=done).
+		if b.Labels["kuso.sislelabs.com/build-state"] == "" {
+			return b.Name, nil
+		}
+	}
+	return "", nil
+}
+
 // gcServiceLocks drops lock entries older than `maxAge` whose mutex
 // can be acquired in non-blocking mode (i.e. nobody is currently
 // using it). Safe to call on a timer; cheap (one TryLock per entry).
@@ -687,7 +739,13 @@ func (s *Service) Create(ctx context.Context, project, service string, req Creat
 	// no node resources.
 	queued := capHit
 	if !queued {
-		if active, err := s.findActiveForService(ctx, ns, project, fqn); err == nil && active != "" && active != buildName {
+		// LIVE read (not the informer cache) inside the per-service lock so
+		// the active-check is read-your-writes: a Create ~50ms earlier whose
+		// CR hasn't reached the cache yet is still seen here, closing the
+		// single-process double-active-CR TOCTOU. See findActiveForServiceLive
+		// — cross-replica double-creation still needs leader-gating /
+		// server-side enforcement and is out of scope for this pass.
+		if active, err := s.findActiveForServiceLive(ctx, ns, project, fqn); err == nil && active != "" && active != buildName {
 			queued = true
 		}
 	}
@@ -1687,6 +1745,21 @@ func (p *Poller) setCursor(ns, project string) {
 // cursor); false on any kube error (caller logs and tries the next
 // service).
 func (p *Poller) promoteOne(ctx context.Context, ns, project, fqn string, next *kube.KusoBuild) bool {
+	// Re-read the queued CR right before promoting. `next` is a stale
+	// snapshot from the dispatch scan; a user Cancel that landed between
+	// the scan and here stamped phase=cancelled + build-state=done +
+	// spec.done=true. The MergePatch below would un-cancel it — clearing
+	// build-state, stamping phase=pending, and patching spec.image back in
+	// — resurrecting the CR into a render-eligible zombie the operator then
+	// spins a kaniko Job for. Bail if the fresh CR is already terminal.
+	if cur, gerr := p.Svc.Kube.GetKusoBuild(ctx, ns, next.Name); gerr == nil {
+		if ph := buildPhase(cur); ph == "cancelled" || ph == "succeeded" || ph == "failed" || ph == "release-failed" ||
+			cur.Labels["kuso.sislelabs.com/build-state"] == "done" || cur.Spec.Done {
+			p.logger().Info("queued build already terminal; skipping promote",
+				"build", next.Name, "phase", ph)
+			return false
+		}
+	}
 	// Promote: remove the queued label (operator's selector now
 	// matches it), stamp phase=pending, AND patch in spec.image
 	// (the chart's render gate). The image is computed the same
@@ -2275,6 +2348,22 @@ func (p *Poller) markSucceeded(ctx context.Context, ns string, b *kube.KusoBuild
 }
 
 func (p *Poller) markFailed(ctx context.Context, ns string, b *kube.KusoBuild, msg string) error {
+	// Re-read the CR right before stamping, mirroring markSucceeded's
+	// pre-patch guard. markFailed writes a non-CAS MergePatch off a stale
+	// poller snapshot; a user Cancel that lands between the Job-failed
+	// observation and this patch would otherwise be clobbered — we'd flip
+	// phase=cancelled back to failed and page @here (build.failed) for a
+	// build the user intentionally stopped. If the fresh CR already reached
+	// a terminal state (cancelled, or any build-state=done / spec.done=true
+	// stamp from a concurrent writer), turn this into a no-op.
+	if cur, gerr := p.Svc.Kube.GetKusoBuild(ctx, ns, b.Name); gerr == nil {
+		if ph := buildPhase(cur); ph == "cancelled" || ph == "succeeded" || ph == "failed" || ph == "release-failed" ||
+			cur.Labels["kuso.sislelabs.com/build-state"] == "done" || cur.Spec.Done {
+			p.logger().Info("build already terminal; skipping mark-failed",
+				"build", b.Name, "phase", ph)
+			return nil
+		}
+	}
 	// Classify the failure ONCE, up front, so both the persisted build
 	// record (read by the Deployments tab to render the hint + the
 	// copy-pasteable remediation) and the notify card below share one
@@ -2474,6 +2563,45 @@ func buildTriggerTimestamp(b *kube.KusoBuild) string {
 	return ""
 }
 
+// promotedAtIsNewer reports whether the env's recorded promoted-at (prev)
+// is strictly newer than this build's trigger (bTrigger) — i.e. a younger
+// build already won the promote race, so the current build must skip to
+// avoid overwriting production with older code.
+//
+// It compares parsed time.Time values, NOT raw strings. The naive
+// `prev > bTrigger` lexicographic compare is UNSOUND across the two
+// timestamp formats we mix here: build triggers are stamped whole-second
+// RFC3339 (buildTriggerTimestamp uses RFC3339Nano but CreationTimestamp
+// has second granularity → no fractional part → "…:05Z"), while a user
+// rollback stamps promoted-at with fractional RFC3339Nano ("…:05.123Z").
+// Within the same second the byte after the seconds differs — '.' (0x2E)
+// sorts BEFORE 'Z' (0x5A) — so the fractional rollback string compares as
+// SMALLER than the whole-second build string. Lexicographically the guard
+// then reads "prev(rollback) < bTrigger(build)" → does NOT skip → the
+// in-flight auto-promote clobbers the user's rollback. Parsing to time.Time
+// orders them correctly (rollback at .123 is genuinely after the second
+// boundary, so it wins).
+//
+// RFC3339Nano parses both the fractional and whole-second forms, so one
+// parser covers every stamp we write. Parse failure is treated
+// conservatively as "not newer" (don't skip): that preserves the original
+// intent — an unparseable/empty prev never blocks a promote — and matches
+// the old code, which no-op'd the guard when prev was "".
+func promotedAtIsNewer(prev, bTrigger string) bool {
+	if prev == "" || bTrigger == "" {
+		return false
+	}
+	pv, err := time.Parse(time.RFC3339Nano, prev)
+	if err != nil {
+		return false
+	}
+	bt, err := time.Parse(time.RFC3339Nano, bTrigger)
+	if err != nil {
+		return false
+	}
+	return pv.After(bt)
+}
+
 // promoteEnvImageCAS patches the build's image onto one env with real
 // compare-and-set semantics on the promoted-at annotation. The naive
 // "read from a List snapshot, then unconditionally MergePatch" pattern
@@ -2503,8 +2631,10 @@ func (p *Poller) promoteEnvImageCAS(ctx context.Context, ns, envName, bName, bTr
 			return false, fmt.Errorf("decode env %s: %w", envName, derr)
 		}
 		// Re-evaluate the last-trigger-wins guard against the fresh
-		// annotation, not the stale List snapshot.
-		if prev := e.Annotations[annPromotedAt]; prev != "" && bTrigger != "" && prev > bTrigger {
+		// annotation, not the stale List snapshot. Compare parsed times,
+		// not raw strings — see promotedAtIsNewer for why the lexicographic
+		// compare is unsound across the whole-second vs fractional stamps.
+		if prev := e.Annotations[annPromotedAt]; promotedAtIsNewer(prev, bTrigger) {
 			p.logger().Info("build promote skipped (older trigger than current, CAS recheck)",
 				"env", envName, "build", bName, "buildTrigger", bTrigger, "envPromotedAt", prev)
 			return false, nil
@@ -2644,7 +2774,10 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		// would otherwise overwrite production with older code. This is
 		// an early-out on the stale List snapshot; the authoritative
 		// re-check happens under CAS in promoteEnvImageCAS below.
-		if prev := e.Annotations[annPromotedAt]; prev != "" && bTrigger != "" && prev > bTrigger {
+		// Parsed-time compare (see promotedAtIsNewer) — a raw string
+		// compare inverts ordering within a second and lets an auto-promote
+		// clobber a user rollback.
+		if prev := e.Annotations[annPromotedAt]; promotedAtIsNewer(prev, bTrigger) {
 			p.logger().Info("build promote skipped (older trigger than current)",
 				"env", e.Name, "build", b.Name, "buildTrigger", bTrigger, "envPromotedAt", prev)
 			continue
@@ -2811,7 +2944,9 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 			if b.Spec.Branch != "" && e.Spec.Branch != "" && e.Spec.Branch != b.Spec.Branch {
 				continue
 			}
-			if prev := e.Annotations[annPromotedAt]; prev != "" && bTrigger != "" && prev > bTrigger {
+			// Parsed-time compare (see promotedAtIsNewer) — raw string
+			// compare is unsound across whole-second vs fractional stamps.
+			if prev := e.Annotations[annPromotedAt]; promotedAtIsNewer(prev, bTrigger) {
 				continue
 			}
 			promoted, err := p.promoteEnvImageCAS(ctx, ns, e.Name, b.Name, bTrigger, b.Spec.Image)

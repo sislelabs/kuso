@@ -4,7 +4,79 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"kuso/server/internal/kube"
 )
+
+// TestIsPRClone locks in the DeletePRAddons ownership-label fix: a real
+// project addon named "events-pr-2" (no preview labels) must NOT be
+// treated as PR #2's clone and deleted when the PR closes. Selection is
+// label-first; the name-suffix path is a legacy fallback gated on the env
+// label.
+func TestIsPRClone(t *testing.T) {
+	t.Parallel()
+
+	const prLabel = "2"
+	const suffix = "-pr-2"
+
+	addon := func(name string, labels map[string]string) *kube.KusoAddon {
+		return &kube.KusoAddon{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels}}
+	}
+
+	cases := []struct {
+		name string
+		a    *kube.KusoAddon
+		want bool
+	}{
+		{
+			// The regression: a genuine project addon that merely shares
+			// the "-pr-2" name shape and carries no preview/env labels.
+			"real addon named events-pr-2 is NOT a clone",
+			addon("myproj-events-pr-2", nil),
+			false,
+		},
+		{
+			"labeled clone (preview-pr matches) IS a clone",
+			addon("myproj-pg-pr-2", map[string]string{
+				previewPRLabel: "2",
+				kube.LabelEnv:  "preview-pr-2",
+			}),
+			true,
+		},
+		{
+			"clone for a DIFFERENT PR is not swept for PR 2",
+			addon("myproj-pg-pr-9", map[string]string{
+				previewPRLabel: "9",
+				kube.LabelEnv:  "preview-pr-9",
+			}),
+			false,
+		},
+		{
+			"legacy clone: no preview-pr label but has env label + suffix",
+			addon("myproj-pg-pr-2", map[string]string{
+				kube.LabelEnv: "preview-pr-2",
+			}),
+			true,
+		},
+		{
+			"legacy fallback does NOT fire without the env label",
+			addon("myproj-events-pr-2", map[string]string{
+				"kuso.sislelabs.com/project": "myproj",
+			}),
+			false,
+		},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isPRClone(tc.a, prLabel, suffix); got != tc.want {
+				t.Errorf("isPRClone(%q, labels=%v) = %v, want %v", tc.a.Name, tc.a.Labels, got, tc.want)
+			}
+		})
+	}
+}
 
 // findEnv returns the EnvVar with the given name, or nil.
 func findEnv(env []corev1.EnvVar, name string) *corev1.EnvVar {

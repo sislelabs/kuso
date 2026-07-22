@@ -172,10 +172,28 @@ func (w *Watcher) tick(ctx context.Context) {
 				downFor = now.Sub(first)
 			}
 			delete(w.notReadySince, n.Name)
-			if _, was := w.alerted[n.Name]; was {
-				delete(w.alerted, n.Name)
+			_, was := w.alerted[n.Name]
+			delete(w.alerted, n.Name)
+			// Trigger uncordon when EITHER we alerted on this node in this
+			// process's lifetime (was) OR the node still carries OUR durable
+			// cordon marker. The marker is the restart-safe signal: after a
+			// leader handover / server restart the in-memory `alerted` map is
+			// empty, so a node that recovered while we were down would
+			// otherwise stay cordoned forever. Keying off the persisted
+			// annotation as well makes recovery idempotent and restart-safe.
+			// uncordonIfOurs re-checks the live annotation, so enqueuing on a
+			// cache-stale marker is harmless.
+			carriesOurMarker := n.Annotations[CordonAnnotation] == "true"
+			if was || carriesOurMarker {
+				// Only emit the "recovered" card when we actually tracked the
+				// downtime (was) — a bare marker after a restart has no
+				// trustworthy downFor and would emit a misleading 0s recovery.
+				var emit notify.Event
+				if was {
+					emit = notify.NodeRecovered(n.Name, downFor)
+				}
 				actions = append(actions, pendingAction{
-					kind: "uncordon", node: n, emit: notify.NodeRecovered(n.Name, downFor),
+					kind: "uncordon", node: n, emit: emit,
 				})
 			}
 			// Clear the persisted marker so a future flap doesn't see
@@ -262,9 +280,21 @@ func (w *Watcher) tick(ctx context.Context) {
 			w.Notify.Emit(a.emit)
 		case "uncordon":
 			if err := w.uncordonIfOurs(ctx, a.node); err != nil {
-				w.Logger.Warn("nodewatch uncordon", "node", a.node.Name, "err", err)
+				// A transient uncordon failure must NOT be dropped silently —
+				// the node stays cordoned with our marker intact. Because
+				// recovery now keys off the persisted marker (not the
+				// in-memory alerted map), the next tick re-observes the marker
+				// on a Ready node and re-enqueues this uncordon automatically.
+				// So we just log and skip the emit; the retry is structural.
+				w.Logger.Warn("nodewatch uncordon (will retry next tick)", "node", a.node.Name, "err", err)
+				continue
 			}
-			w.Notify.Emit(a.emit)
+			// Only emit a "recovered" card when we assembled a real event —
+			// a restart-driven uncordon (bare marker, no tracked downtime)
+			// carries a zero Event we must not persist/fan-out.
+			if a.emit.Type != "" {
+				w.Notify.Emit(a.emit)
+			}
 		case "stamp-notready-marker":
 			// Best-effort: failure here just means a leader handover
 			// during this exact NotReady window resets the timer.
@@ -290,13 +320,22 @@ func (w *Watcher) tick(ctx context.Context) {
 
 // cordon patches spec.unschedulable=true and stamps our annotation so
 // the recovery path can tell our cordon from a manual one.
+//
+// Ownership contract: we stamp CordonAnnotation ONLY on a node WE
+// actually transitioned unschedulable. A node that is already
+// unschedulable was cordoned by someone/something else (an operator
+// draining for maintenance, pkgupdates for a patch+reboot, a manual
+// `kubectl cordon`). Claiming ownership of that pre-existing cordon
+// would make recovery uncordon a node kuso never cordoned — silently
+// undoing an operator's deliberate drain. So we leave an
+// already-unschedulable node completely alone here (no spec patch, no
+// marker); recovery's "only uncordon if WE cordoned" guard then
+// correctly leaves it drained.
 func (w *Watcher) cordon(ctx context.Context, n *corev1.Node) error {
 	if n.Spec.Unschedulable {
-		// Already cordoned — still stamp the annotation so a later
-		// recovery uncordons. Without this, manually-cordoned nodes
-		// that go NotReady would never auto-recover even if they
-		// flip Ready, which is the more confusing footgun.
-		_ = w.annotate(ctx, n.Name, true)
+		// Not ours to cordon (already unschedulable). Do NOT stamp the
+		// ownership marker — otherwise recovery would uncordon a node we
+		// never transitioned, breaking the ownership contract.
 		return nil
 	}
 	patch := []byte(fmt.Sprintf(
@@ -344,17 +383,6 @@ func (w *Watcher) uncordonIfOurs(ctx context.Context, n *corev1.Node) error {
 	return nil
 }
 
-func (w *Watcher) annotate(ctx context.Context, name string, on bool) error {
-	val := "true"
-	if !on {
-		val = "false"
-	}
-	patch := []byte(fmt.Sprintf(`{"metadata":{"annotations":{%q:%q}}}`, CordonAnnotation, val))
-	_, err := w.Kube.Clientset.CoreV1().Nodes().Patch(
-		ctx, name, types.MergePatchType, patch, metav1.PatchOptions{},
-	)
-	return err
-}
 
 func isReady(n *corev1.Node) bool {
 	for _, c := range n.Status.Conditions {

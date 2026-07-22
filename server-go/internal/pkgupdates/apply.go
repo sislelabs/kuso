@@ -139,7 +139,11 @@ func (w *Watcher) anotherNodeRebooting(ctx context.Context, except string) (stri
 			return n.Name, nil
 		}
 		switch parseApplyState(n.Annotations[ApplyStateAnnotation]).Phase {
-		case "draining", "rebooting", "running":
+		case "draining", "rebooting", "running", "settling":
+			// "settling" counts as busy: node A is back + uncordoned but
+			// its reboot-stranded singletons are still rescheduling. Starting
+			// a second node's drain now could evict the last healthy replica
+			// of a service whose other replica is mid-reschedule on A.
 			return n.Name, nil
 		}
 	}
@@ -168,8 +172,19 @@ func (w *Watcher) reconcileReboots(ctx context.Context, logger *slog.Logger) {
 		// race overwrote the apply-state, the marker is the durable signal
 		// that we cordoned this node for a patch and owe it an uncordon).
 		// Skip nodes we don't own.
+		//
+		// CRITICAL: Apply() stamps our cordon marker UP FRONT (before the
+		// Job even runs its apt/drain), so a node in phase=running or
+		// =draining is a healthy, cordoned, Ready node that is STILL doing
+		// the apply work. The marker clause below must not fire on it — else
+		// this 15s finalize tick would uncordon it, clear the marker, and
+		// stomp running/draining → settling → done while the Job's apt/drain
+		// is still in flight. Only finalize a node that's actually PAST the
+		// apply/drain work (rebooting/settling), or one carrying the marker
+		// whose phase is NOT a live apply phase.
 		ours := n.Annotations[CordonAnnotation] == "true"
-		if st.Phase != "rebooting" && st.Phase != "settling" && !ours {
+		inApplyWork := st.Phase == "running" || st.Phase == "draining"
+		if st.Phase != "rebooting" && st.Phase != "settling" && !(ours && !inApplyWork) {
 			continue
 		}
 		if !nodeReady(n) {

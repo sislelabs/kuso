@@ -14,6 +14,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -112,8 +113,8 @@ func TestImageTag(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
 		"abcdef0123456789abcdef0123456789abcdef01": "abcdef012345",
-		"main-abc":  "main-abc",
-		"feat/x":    "feat/x", // not validated for branches
+		"main-abc": "main-abc",
+		"feat/x":   "feat/x", // not validated for branches
 	}
 	for in, want := range cases {
 		if got := ImageTag(in); got != want {
@@ -1329,4 +1330,131 @@ func TestCheckBuild_StuckNoJob(t *testing.T) {
 			t.Fatalf("young build should not be force-failed yet; phase=%q", ph)
 		}
 	})
+}
+
+// TestPromotedAtIsNewer_SameSecondRollbackWins pins the fix for the
+// lexicographic promoted-at compare (P2 #1). A user rollback stamps
+// promoted-at with fractional RFC3339Nano ("…:05.500Z"); an in-flight
+// build carries a whole-second trigger ("…:05Z"). Within the same second
+// the fractional stamp is genuinely LATER, so an auto-promote must skip
+// (the rollback wins). The old `prev > bTrigger` string compare inverts
+// this — '.'(0x2E) < 'Z'(0x5A) makes the rollback string sort SMALLER, so
+// the guard reads "not newer" and the promote clobbers the rollback.
+func TestPromotedAtIsNewer_SameSecondRollbackWins(t *testing.T) {
+	t.Parallel()
+	// Same wall-clock second; the rollback lands 500ms into it.
+	buildTrigger := "2026-07-22T10:20:05Z"      // whole-second build trigger
+	rollbackAt := "2026-07-22T10:20:05.500000Z" // fractional user rollback
+
+	// The rollback is strictly newer than the build trigger, so a build
+	// promoting against an env already at `rollbackAt` MUST be skipped.
+	if !promotedAtIsNewer(rollbackAt, buildTrigger) {
+		t.Fatalf("same-second rollback should be newer than whole-second build trigger; "+
+			"prev=%q bTrigger=%q — the lexicographic bug would let the promote clobber the rollback", rollbackAt, buildTrigger)
+	}
+	// Sanity: string compare is the WRONG answer here (regression witness).
+	if rollbackAt > buildTrigger {
+		t.Fatalf("test premise broken: rollback string unexpectedly sorts after build string")
+	}
+
+	// A genuinely older env stamp must NOT be treated as newer (promote proceeds).
+	olderStamp := "2026-07-22T10:20:04.900000Z"
+	if promotedAtIsNewer(olderStamp, buildTrigger) {
+		t.Errorf("older stamp %q should not be newer than %q", olderStamp, buildTrigger)
+	}
+
+	// Conservative handling: empty or unparseable strings never skip.
+	if promotedAtIsNewer("", buildTrigger) {
+		t.Errorf("empty prev should not skip promote")
+	}
+	if promotedAtIsNewer("not-a-time", buildTrigger) {
+		t.Errorf("unparseable prev should not skip promote")
+	}
+	if promotedAtIsNewer(rollbackAt, "") {
+		t.Errorf("empty bTrigger should not skip promote")
+	}
+}
+
+// TestPromoteEnvImageCAS_SameSecondRollbackNotClobbered is the end-to-end
+// version of the fix: an env carrying a fractional-second rollback stamp
+// must not be overwritten by an in-flight build whose trigger is in the
+// SAME whole second. promoteEnvImageCAS must return promoted=false and
+// leave the env's image untouched.
+func TestPromoteEnvImageCAS_SameSecondRollbackNotClobbered(t *testing.T) {
+	t.Parallel()
+	rollbackAt := "2026-07-22T10:20:05.500000Z"
+	env := &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "alpha-web-production",
+			Namespace: "kuso",
+			Annotations: map[string]string{
+				annPromotedBuild: "alpha-web-rollback",
+				annPromotedAt:    rollbackAt,
+			},
+		},
+		Spec: kube.KusoEnvironmentSpec{
+			Project: "alpha", Service: "alpha-web", Kind: "production",
+			Image: &kube.KusoImage{Repository: "registry/alpha/web", Tag: "goodtag"},
+		},
+	}
+	s := fakeService(t, typedSeed(kube.GVREnvironments, "KusoEnvironment", env))
+	p := &Poller{Svc: s, Logger: slog.Default()}
+
+	// In-flight build triggered in the same second (whole-second stamp).
+	buildTrigger := "2026-07-22T10:20:05Z"
+	newImg := &kube.KusoImage{Repository: "registry/alpha/web", Tag: "clobbertag"}
+	promoted, err := p.promoteEnvImageCAS(context.Background(), "kuso", "alpha-web-production",
+		"alpha-web-newbuild", buildTrigger, newImg)
+	if err != nil {
+		t.Fatalf("promoteEnvImageCAS: %v", err)
+	}
+	if promoted {
+		t.Errorf("promote should have been skipped — same-second build must not clobber a fractional-second rollback")
+	}
+	got, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if got.Spec.Image == nil || got.Spec.Image.Tag != "goodtag" {
+		t.Errorf("rollback image was clobbered: %+v", got.Spec.Image)
+	}
+}
+
+// TestPoller_MarkFailedSkipsCancelledMidTick pins fix #2: a user Cancel
+// landing between the Job-failed observation and markFailed's patch must
+// not be clobbered back to phase=failed. markFailed now re-reads the CR
+// and no-ops when it finds a terminal state. We simulate the race by
+// stamping the live CR cancelled AFTER building the stale poller snapshot
+// but BEFORE calling markFailed.
+func TestPoller_MarkFailedSkipsCancelledMidTick(t *testing.T) {
+	t.Parallel()
+	build := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-race", Namespace: "kuso",
+			Annotations: map[string]string{annPhase: "running"}},
+		Spec: kube.KusoBuildSpec{Project: "alpha", Service: "alpha-web", Ref: "race", Image: &kube.KusoImage{}},
+	}
+	s := fakeService(t, seedBuild(build))
+	// Stale snapshot the poller holds (phase=running).
+	stale, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-race")
+	if err != nil {
+		t.Fatalf("get stale: %v", err)
+	}
+	// A Cancel lands mid-tick: stamp the LIVE CR cancelled + terminal.
+	cancelPatch := `{"metadata":{"annotations":{"kuso.sislelabs.com/build-phase":"cancelled"},"labels":{"kuso.sislelabs.com/build-state":"done"}},"spec":{"done":true}}`
+	if _, err := s.Kube.Dynamic.Resource(kube.GVRBuilds).Namespace("kuso").
+		Patch(context.Background(), "alpha-web-race", types.MergePatchType, []byte(cancelPatch), metav1.PatchOptions{}); err != nil {
+		t.Fatalf("cancel patch: %v", err)
+	}
+
+	p := &Poller{Svc: s, Logger: slog.Default()}
+	if err := p.markFailed(context.Background(), "kuso", stale, "kaniko exit 1"); err != nil {
+		t.Fatalf("markFailed: %v", err)
+	}
+	got, err := s.Kube.GetKusoBuild(context.Background(), "kuso", "alpha-web-race")
+	if err != nil {
+		t.Fatalf("get build: %v", err)
+	}
+	if ph := buildPhase(got); ph != "cancelled" {
+		t.Errorf("markFailed clobbered a mid-tick Cancel: phase=%q, want cancelled", ph)
+	}
 }
