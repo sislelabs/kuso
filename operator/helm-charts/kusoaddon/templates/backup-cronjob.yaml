@@ -120,7 +120,12 @@ spec:
                     CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
                              || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
                     echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                    # `|| true`: the backup + manifest already uploaded OK by
+                    # here. Under `set -o pipefail` a transient `aws s3 ls`
+                    # error (or the trailing `while`'s exit status) would
+                    # otherwise abort the whole Job AFTER success, firing a
+                    # false backup-failed alert. Prune is best-effort.
+                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
                       | awk '{print $1, $2, $4}' \
                       | while read date time name; do
                           [ -z "${name}" ] && continue
@@ -129,7 +134,7 @@ spec:
                             echo "    rm s3://${BUCKET}/${PREFIX}${name}"
                             aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
                           fi
-                        done
+                        done ; } || true
                   fi
                   echo "==> done"
               env:
@@ -267,7 +272,12 @@ spec:
                     CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
                              || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
                     echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                    # `|| true`: the backup + manifest already uploaded OK by
+                    # here. Under `set -o pipefail` a transient `aws s3 ls`
+                    # error (or the trailing `while`'s exit status) would
+                    # otherwise abort the whole Job AFTER success, firing a
+                    # false backup-failed alert. Prune is best-effort.
+                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
                       | awk '{print $1, $2, $4}' \
                       | while read date time name; do
                           [ -z "${name}" ] && continue
@@ -276,7 +286,7 @@ spec:
                             echo "    rm s3://${BUCKET}/${PREFIX}${name}"
                             aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
                           fi
-                        done
+                        done ; } || true
                   fi
                   echo "==> done"
               env:
@@ -376,7 +386,12 @@ spec:
                     CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
                              || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
                     echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                    # `|| true`: the backup + manifest already uploaded OK by
+                    # here. Under `set -o pipefail` a transient `aws s3 ls`
+                    # error (or the trailing `while`'s exit status) would
+                    # otherwise abort the whole Job AFTER success, firing a
+                    # false backup-failed alert. Prune is best-effort.
+                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
                       | awk '{print $1, $2, $4}' \
                       | while read date time name; do
                           [ -z "${name}" ] && continue
@@ -385,7 +400,7 @@ spec:
                             echo "    rm s3://${BUCKET}/${PREFIX}${name}"
                             aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
                           fi
-                        done
+                        done ; } || true
                   fi
                   echo "==> done"
               env:
@@ -475,7 +490,12 @@ spec:
                     CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
                              || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
                     echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                    # `|| true`: the backup + manifest already uploaded OK by
+                    # here. Under `set -o pipefail` a transient `aws s3 ls`
+                    # error (or the trailing `while`'s exit status) would
+                    # otherwise abort the whole Job AFTER success, firing a
+                    # false backup-failed alert. Prune is best-effort.
+                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
                       | awk '{print $1, $2, $4}' \
                       | while read date time name; do
                           [ -z "${name}" ] && continue
@@ -484,7 +504,7 @@ spec:
                             echo "    rm s3://${BUCKET}/${PREFIX}${name}"
                             aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
                           fi
-                        done
+                        done ; } || true
                   fi
                   echo "==> done"
               env:
@@ -569,7 +589,12 @@ spec:
                     CUTOFF=$(date -u -d "-${RETENTION_DAYS} days" +%s 2>/dev/null \
                              || python3 -c "import datetime,sys; print(int((datetime.datetime.utcnow()-datetime.timedelta(days=int(sys.argv[1]))).timestamp()))" "${RETENTION_DAYS}")
                     echo "==> pruning dumps older than ${RETENTION_DAYS}d (cutoff=$CUTOFF)"
-                    aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
+                    # `|| true`: the backup + manifest already uploaded OK by
+                    # here. Under `set -o pipefail` a transient `aws s3 ls`
+                    # error (or the trailing `while`'s exit status) would
+                    # otherwise abort the whole Job AFTER success, firing a
+                    # false backup-failed alert. Prune is best-effort.
+                    { aws s3 ls --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}" \
                       | awk '{print $1, $2, $4}' \
                       | while read date time name; do
                           [ -z "${name}" ] && continue
@@ -578,7 +603,7 @@ spec:
                             echo "    rm s3://${BUCKET}/${PREFIX}${name}"
                             aws s3 rm --endpoint-url "${S3_ENDPOINT}" "s3://${BUCKET}/${PREFIX}${name}" || true
                           fi
-                        done
+                        done ; } || true
                   fi
                   echo "==> done"
               env:
