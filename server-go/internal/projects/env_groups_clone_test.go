@@ -4,6 +4,10 @@ import (
 	"context"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+
 	"kuso/server/internal/kube"
 )
 
@@ -69,9 +73,14 @@ func TestCreateEnvGroup_DoesNotInheritCustomDomains(t *testing.T) {
 func TestCreateEnvGroup_CarriesServiceSecrets(t *testing.T) {
 	t.Parallel()
 
-	s := fakeService(t,
+	// Source service has a managed app-config secret (acme-web-secrets).
+	srcSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: kube.ServiceSecretName("acme", "web"), Namespace: "kuso"},
+		Data:       map[string][]byte{"APP_KEY": []byte("s3cr3t")},
+	}
+	s := fakeServiceWithSecrets(t, []runtime.Object{srcSecret},
 		seedProject("acme", kube.KusoProjectSpec{BaseDomain: "apps.example.com"}),
-		seedService("acme", "web", kube.KusoServiceSpec{Port: 8080}),
+		seedService("acme", "web", kube.KusoServiceSpec{Project: "acme", Port: 8080}),
 		seedEnv("acme", "web", "production", "main", "acme-web-production"),
 	)
 
@@ -92,12 +101,25 @@ func TestCreateEnvGroup_CarriesServiceSecrets(t *testing.T) {
 		}
 		return false
 	}
-	if !has(kube.ServiceSecretName("acme", "web")) {
-		t.Errorf("cloned env missing service secret %q: %v",
+	// The clone must mount its OWN label-consistent managed secret
+	// (acme-web-staging-secrets), NOT the source's acme-web-secrets — the
+	// label-derived name is what RefreshEnvSecrets recomputes, so mounting
+	// the source name would be dropped on the next addon churn.
+	wantSvc := kube.ServiceSecretName("acme", "web-staging")
+	if !has(wantSvc) {
+		t.Errorf("cloned env missing label-consistent service secret %q: %v", wantSvc, env.Spec.EnvFromSecrets)
+	}
+	if has(kube.ServiceSecretName("acme", "web")) {
+		t.Errorf("cloned env mounts the SOURCE secret %q (label-mismatched, will be dropped by RefreshEnvSecrets): %v",
 			kube.ServiceSecretName("acme", "web"), env.Spec.EnvFromSecrets)
 	}
-	if !has(kube.EnvSecretName("acme", "web", "staging")) {
-		t.Errorf("cloned env missing env-scoped secret %q: %v",
-			kube.EnvSecretName("acme", "web", "staging"), env.Spec.EnvFromSecrets)
+	// And the source secret's contents must have been COPIED into the
+	// clone's own secret (isolated staging config).
+	copied, err := s.Kube.Clientset.CoreV1().Secrets("kuso").Get(context.Background(), wantSvc, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("clone secret %s not created: %v", wantSvc, err)
+	}
+	if string(copied.Data["APP_KEY"]) != "s3cr3t" {
+		t.Errorf("clone secret did not copy source data: %v", copied.Data)
 	}
 }

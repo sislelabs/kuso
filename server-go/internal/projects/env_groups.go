@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -517,6 +518,22 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 			rollback()
 			return nil, fmt.Errorf("clone service %s: %w", item.short, err)
 		}
+
+		// Seed the clone's OWN managed app-config secret by copying the
+		// source service's <project>-<service>-secrets into
+		// <project>-<newSvcShort>-secrets. This is load-bearing: the clone
+		// env is labeled service=<newSvcShort>, and RefreshEnvSecrets
+		// (fires on every addon add/delete) recomputes envFromSecrets from
+		// that label — so it will ALWAYS look for <newSvcShort>-secrets. If
+		// we only mounted the source's <service>-secrets (different name),
+		// the next addon churn would drop it and re-open the 0/N crash-loop.
+		// Copying gives staging its own isolated config under the
+		// label-consistent name. Best-effort: a missing source secret just
+		// means there's nothing to copy (service had no managed secrets).
+		if err := s.copyManagedServiceSecret(ctx, ns, item.short, newSvcShort, project, req.Name); err != nil {
+			rollback()
+			return nil, fmt.Errorf("copy managed secret for %s: %w", item.short, err)
+		}
 		createdServices = append(createdServices, newSvcCR)
 
 		// Env CR name follows the production-env pattern:
@@ -607,16 +624,17 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				TLSEnabled:       true,
 				ClusterIssuer:    "letsencrypt-prod",
 				IngressClassName: "traefik",
-				// addonConnSecrets (addon conn + shared) PLUS the service's
-				// OWN managed secrets. The clone previously dropped these, so
-				// a cloned env booted without the app's core config
-				// (<svc>-secrets holds app keys/config) and crash-looped at
-				// 0/N ready. Carry the service-level secret (same shared
-				// config across envs) and the env-scoped secret for the NEW
-				// env (per-env overrides; optional mount, created on demand).
+				// addonConnSecrets (addon conn + shared) PLUS the clone's OWN
+				// managed secrets, named against newSvcShort so they MATCH the
+				// env's service label. RefreshEnvSecrets (fires on every addon
+				// add/delete) recomputes envFromSecrets from that label, so the
+				// name MUST be <newSvcShort>-secrets — using item.short here
+				// would disagree with the label and get dropped on the next
+				// addon churn, re-opening the 0/N crash-loop this fix closes.
+				// The copyManagedServiceSecret call above seeds that secret.
 				EnvFromSecrets: append(append([]string{}, addonConnSecrets...),
-					kube.ServiceSecretName(project, item.short),
-					kube.EnvSecretName(project, item.short, req.Name),
+					kube.ServiceSecretName(project, newSvcShort),
+					kube.EnvSecretName(project, newSvcShort, req.Name),
 				),
 				EnvVars:         newEnvVars,
 				Image:           inheritImage,
@@ -1003,4 +1021,61 @@ func freshAddonShorts(m map[string]string) []string {
 		}
 	}
 	return out
+}
+
+// copyManagedServiceSecret seeds a cloned service's OWN managed
+// app-config secret by copying the source service's
+// <project>-<srcShort>-secrets into <project>-<dstShort>-secrets. Called
+// during env-group clone so the clone env — labeled service=<dstShort> —
+// has a label-consistent managed secret that survives RefreshEnvSecrets
+// (which recomputes envFromSecrets from the label on every addon churn).
+//
+// The copy gives the clone an ISOLATED copy of the config: editing
+// staging's secrets never touches production's. Preserves the source's
+// keys; drops the generated-* annotations' binding to the source (the
+// values are copied verbatim, which is the intended clone behavior).
+// Best-effort on a MISSING source (service had no managed secret) — that
+// is not an error; there is simply nothing to copy. Idempotent: if the
+// destination already exists (re-run), it is left as-is.
+func (s *Service) copyManagedServiceSecret(ctx context.Context, ns, srcShort, dstShort, project, envName string) error {
+	if s.Kube == nil || s.Kube.Clientset == nil {
+		return nil // no core client wired (test fixtures) — nothing to copy
+	}
+	srcName := kube.ServiceSecretName(project, srcShort)
+	dstName := kube.ServiceSecretName(project, dstShort)
+
+	src, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, srcName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil // nothing to copy
+	}
+	if err != nil {
+		return fmt.Errorf("read source secret %s: %w", srcName, err)
+	}
+
+	data := make(map[string][]byte, len(src.Data))
+	for k, v := range src.Data {
+		data[k] = v
+	}
+	dst := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      dstName,
+			Namespace: ns,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by": "kuso-server",
+				labelProject:                   project,
+				kube.LabelService:              dstShort,
+				labelEnv:                       envName,
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: data,
+	}
+	_, err = s.Kube.Clientset.CoreV1().Secrets(ns).Create(ctx, dst, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		return nil // idempotent re-run
+	}
+	if err != nil {
+		return fmt.Errorf("create clone secret %s: %w", dstName, err)
+	}
+	return nil
 }

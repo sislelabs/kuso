@@ -38,6 +38,16 @@ interface Row {
   // server; `secretDirty` tracks whether the user actually entered a new
   // one so save only PUTs changed rows and the diff masks untouched ones.
   managedSecret: boolean;
+  // origManaged is true only when the row was LOADED from the server as a
+  // managed-secret (source="managed-secret") — i.e. a value already exists
+  // in <service>-secrets. It stays false when the user toggles a plain var
+  // to secret in-session. cleanRows uses it to distinguish "untouched
+  // server secret, leave alone" (origManaged && !secretDirty) from
+  // "user converted a literal to secret but typed no value" (!origManaged
+  // && !secretDirty) — the latter would otherwise silently DELETE the var
+  // (excluded from the bulk payload, no secretValue write) and must be
+  // rejected instead.
+  origManaged?: boolean;
   // secretDirty is true once the user edits a managedSecret row's value
   // this session. Only dirty managed-secret rows get a secretValue PUT;
   // untouched ones are left alone (their real value stays in the Secret).
@@ -139,6 +149,7 @@ function toRow(
       value: "",
       fromSecret: false,
       managedSecret: true,
+      origManaged: true,
       visible: false,
     };
   }
@@ -631,7 +642,18 @@ export function EnvVarsEditor({
       // managed-secret row keeps whatever value already lives in the
       // Secret.
       if (r.managedSecret) {
-        if (r.secretDirty) secretWrites.push({ name, value: r.value });
+        if (r.secretDirty) {
+          secretWrites.push({ name, value: r.value });
+        } else if (!r.origManaged) {
+          // User toggled a plain var to secret but typed no value. This row
+          // is excluded from the bulk payload AND has no secretValue write,
+          // so saving would silently DELETE the var. Refuse instead — the
+          // user must enter a value to convert it to a secret.
+          toast.error(`Enter a value for "${name}" to store it as a secret (or toggle it back to a plain value)`);
+          return null;
+        }
+        // origManaged && !secretDirty: untouched server-backed secret —
+        // leave its value in the Secret alone.
         continue;
       }
       if (!r.fromSecret && r.value === "") continue;
