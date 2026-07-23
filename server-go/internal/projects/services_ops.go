@@ -1292,9 +1292,14 @@ func (s *Service) GetEnv(ctx context.Context, project, service string) ([]EnvVar
 	if err != nil {
 		return nil, err
 	}
+	// Surface keys from the kuso-managed <service>-secrets envFrom mount as
+	// managed-secret entries (name-only). This is the endpoint the web env
+	// editor + `kuso env list` consume, so enrichment MUST happen here too —
+	// not only on the full-CR read paths. Best-effort (no-op on read error).
+	s.EnrichServiceWithManagedSecretKeys(ctx, project, service, svc)
 	out := make([]EnvVar, 0, len(svc.Spec.EnvVars))
 	for _, e := range svc.Spec.EnvVars {
-		ev := EnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom}
+		ev := EnvVar{Name: e.Name, Value: e.Value, ValueFrom: e.ValueFrom, Source: e.Source}
 		if ev.ValueFrom != nil {
 			ev.Value = "" // redact opaque values
 		}

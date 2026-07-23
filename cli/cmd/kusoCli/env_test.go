@@ -95,3 +95,73 @@ func TestEnvUnset_PreservesValueFrom(t *testing.T) {
 		t.Errorf("KEEP_SECRET lost its valueFrom: %+v", secret)
 	}
 }
+
+// TestEnvSet_Secret verifies `kuso env set … --secret` sends
+// {"secretValue":"…"} to the single-var PUT (so the value lands in the
+// kuso-managed <service>-secrets Secret) rather than {"value":"…"} on the
+// bulk POST.
+func TestEnvSet_Secret(t *testing.T) {
+	var (
+		putPath string
+		body    map[string]any
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut {
+			http.Error(w, "expected PUT to the single-var endpoint, got "+r.Method, 405)
+			return
+		}
+		putPath = r.URL.Path
+		defer r.Body.Close()
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, "{}")
+	}))
+	defer srv.Close()
+
+	api = &kusoApi.KusoClient{}
+	api.Init(srv.URL, "test-token")
+	defer func() { api = nil }()
+	// Reset the package-level flag so state doesn't leak across tests.
+	envSecretFlag = true
+	defer func() { envSecretFlag = false }()
+
+	args := []string{"alpha", "web", "WETRAVEL_API_KEY=s3cr3t"}
+	if err := envSetCmd.RunE(envSetCmd, args); err != nil {
+		t.Fatalf("set --secret RunE: %v", err)
+	}
+
+	if want := "/api/projects/alpha/services/web/env-vars/WETRAVEL_API_KEY"; putPath != want {
+		t.Errorf("PUT path = %q, want %q", putPath, want)
+	}
+	// Must send secretValue, NOT value.
+	if _, hasValue := body["value"]; hasValue {
+		t.Errorf("body carried plaintext value; want secretValue only: %+v", body)
+	}
+	sv, ok := body["secretValue"]
+	if !ok {
+		t.Fatalf("body missing secretValue: %+v", body)
+	}
+	if sv != "s3cr3t" {
+		t.Errorf("secretValue = %v, want s3cr3t", sv)
+	}
+}
+
+// TestEnvSet_SecretRejectsEnvScope guards the incompatibility: --secret is
+// a service-level write; the per-env override path has no secretValue wire
+// field, so combining them must error rather than silently drop the value.
+func TestEnvSet_SecretRejectsEnvScope(t *testing.T) {
+	api = &kusoApi.KusoClient{}
+	api.Init("http://127.0.0.1:0", "test-token")
+	defer func() { api = nil }()
+	envSecretFlag = true
+	envScopeFlag = "production"
+	defer func() { envSecretFlag = false; envScopeFlag = "" }()
+
+	err := envSetCmd.RunE(envSetCmd, []string{"alpha", "web", "K=v"})
+	if err == nil {
+		t.Fatal("expected --secret + --env to error, got nil")
+	}
+}

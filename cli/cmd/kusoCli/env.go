@@ -40,6 +40,20 @@ var envCmd = &cobra.Command{
 // wins over the service-level value for the same key.
 var envScopeFlag string
 
+// envSecretFlag routes `env set` writes into the kuso-managed
+// <service>-secrets Secret (envFrom-mounted into the pod) as an actual
+// secret VALUE, instead of a plaintext literal on the CR. These land as
+// source:"managed-secret" entries in `env list`. Service-level only — see
+// the guard in envSetCmd (the per-env override path has no secretValue
+// wire field).
+var envSecretFlag bool
+
+// managedSecretSource mirrors the server's Source tag on env vars
+// enumerated from the kuso-managed <service>-secrets envFrom mount
+// (kube.KusoEnvVar.Source). Kept in sync with server-go's
+// projects.managedSecretSource.
+const managedSecretSource = "managed-secret"
+
 var envListCmd = &cobra.Command{
 	Use:     "list <project> <service>",
 	Aliases: []string{"ls"},
@@ -53,14 +67,18 @@ var envListCmd = &cobra.Command{
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("list env vars: %w", err)
 		}
-		// Server returns `{envVars: [{name, value, valueFrom}]}`. Plain
-		// entries have value populated; secret-backed entries have
-		// valueFrom + value redacted to empty.
+		// Server returns `{envVars: [{name, value, valueFrom, source}]}`.
+		// Plain entries have value populated; secret-ref entries have
+		// valueFrom + value redacted to empty; entries enumerated from the
+		// kuso-managed <service>-secrets envFrom mount carry
+		// source:"managed-secret" with an empty value (the actual value
+		// never round-trips).
 		var data struct {
 			EnvVars []struct {
 				Name      string         `json:"name"`
 				Value     string         `json:"value"`
 				ValueFrom map[string]any `json:"valueFrom,omitempty"`
+				Source    string         `json:"source,omitempty"`
 			} `json:"envVars"`
 		}
 		if err := json.Unmarshal(resp.Body(), &data); err != nil {
@@ -74,9 +92,15 @@ var envListCmd = &cobra.Command{
 			t.SetHeader([]string{"NAME", "VALUE", "TYPE"})
 			sort.Slice(data.EnvVars, func(i, j int) bool { return data.EnvVars[i].Name < data.EnvVars[j].Name })
 			for _, e := range data.EnvVars {
-				if e.ValueFrom != nil {
+				switch {
+				case e.Source == managedSecretSource:
+					// Value stored in the kuso-managed <service>-secrets
+					// Secret and mounted via envFrom — the value never
+					// comes back over the wire.
+					t.Append([]string{e.Name, "•••••", "managed-secret"})
+				case e.ValueFrom != nil:
 					t.Append([]string{e.Name, "<secret>", "secret"})
-				} else {
+				default:
 					t.Append([]string{e.Name, e.Value, "plain"})
 				}
 			}
@@ -95,6 +119,33 @@ var envSetCmd = &cobra.Command{
 			return fmt.Errorf("not logged in; run 'kuso login' first")
 		}
 		project, service, kvs := args[0], args[1], args[2:]
+
+		// --secret: store an actual secret VALUE in the kuso-managed
+		// <service>-secrets Secret (envFrom-mounted) via the single-var
+		// PUT, sending {"secretValue":"…"}. This is a service-level write
+		// only — the per-env override path (--env) has no secretValue wire
+		// field, so combining the two would silently drop the secret. Refuse.
+		if envSecretFlag {
+			if envScopeFlag != "" {
+				return fmt.Errorf("--secret cannot be combined with --env (managed-secret values are service-level only)")
+			}
+			for _, kv := range kvs {
+				eq := strings.IndexByte(kv, '=')
+				if eq <= 0 {
+					return fmt.Errorf("argument %q is not KEY=VALUE", kv)
+				}
+				val := kv[eq+1:]
+				resp, err := api.SetEnvVar(project, service, kv[:eq], kusoApi.SetEnvVarRequest{SecretValue: &val})
+				if err != nil {
+					return err
+				}
+				if resp.StatusCode() >= 300 {
+					return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+				}
+			}
+			fmt.Printf("set %d secret env var(s) on %s/%s [managed-secret]\n", len(kvs), project, service)
+			return nil
+		}
 
 		// --env: write per-env overrides directly onto ONE env CR. Each
 		// KEY=VALUE is an idempotent per-key upsert (the server merges it
@@ -558,6 +609,9 @@ func init() {
 	// --env on set/unset: write a per-env override instead of a service-level
 	// var. Empty keeps the service-level (all-envs) behavior.
 	envSetCmd.Flags().StringVar(&envScopeFlag, "env", "", "scope to one environment (e.g. staging); empty = service-level (all envs)")
+	// --secret: store the VALUE in the kuso-managed <service>-secrets Secret
+	// (envFrom-mounted) instead of as a plaintext literal on the CR.
+	envSetCmd.Flags().BoolVar(&envSecretFlag, "secret", false, "store the value as a managed secret in <service>-secrets (envFrom-mounted) instead of a plaintext literal")
 	envUnsetCmd.Flags().StringVar(&envScopeFlag, "env", "", "scope to one environment (e.g. staging); empty = service-level (all envs)")
 
 	rootCmd.AddCommand(secretCmd)

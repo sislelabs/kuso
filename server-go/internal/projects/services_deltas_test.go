@@ -6,8 +6,50 @@ import (
 	"sync"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+
 	"kuso/server/internal/kube"
 )
+
+// fakeServiceWithSecrets mirrors fakeService but also wires a fake
+// CoreV1 Clientset so the managed-secret (SecretValue) code paths, which
+// read/write real Secrets, have a backing store. Any *corev1.Secret in
+// secretObjs is pre-seeded.
+func fakeServiceWithSecrets(t *testing.T, secretObjs []runtime.Object, seeds ...seed) *Service {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	listKinds := map[schema.GroupVersionResource]string{
+		kube.GVRKuso:         "KusoList",
+		kube.GVRProjects:     "KusoProjectList",
+		kube.GVRServices:     "KusoServiceList",
+		kube.GVREnvironments: "KusoEnvironmentList",
+		kube.GVRAddons:       "KusoAddonList",
+		kube.GVRBuilds:       "KusoBuildList",
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, listKinds)
+	for _, sd := range seeds {
+		if err := dyn.Tracker().Create(sd.gvr, sd.obj, sd.obj.GetNamespace()); err != nil {
+			t.Fatalf("seed %s: %v", sd.obj.GetName(), err)
+		}
+	}
+	cs := k8sfake.NewSimpleClientset(secretObjs...)
+	return New(&kube.Client{Dynamic: dyn, Clientset: cs}, "kuso")
+}
+
+// getSecret is a small test helper: fetch a Secret from the fake clientset.
+func getSecret(t *testing.T, s *Service, ns, name string) *corev1.Secret {
+	t.Helper()
+	sec, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get secret %s: %v", name, err)
+	}
+	return sec
+}
 
 func TestAddDomain_AppendsToEmptyList(t *testing.T) {
 	t.Parallel()
@@ -480,5 +522,194 @@ func TestSetEnvVar_ConcurrentDifferentKeysAllSurvive(t *testing.T) {
 	}
 	if len(got.Spec.EnvVars) != len(keys) {
 		t.Fatalf("lost concurrent env-var edits: have %d, expected %d", len(got.Spec.EnvVars), len(keys))
+	}
+}
+
+func strptr(s string) *string { return &s }
+
+// TestSetEnvVar_SecretValueUpsertsManagedSecret is the core new-mode test:
+// SecretValue writes into <project>-<service>-secrets (creating it if
+// absent), does NOT touch spec.envVars, and rolls the pods via a
+// spec.secretsRev bump on the owned env.
+func TestSetEnvVar_SecretValueCreatesManagedSecret(t *testing.T) {
+	t.Parallel()
+	s := fakeServiceWithSecrets(t, nil,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+
+	got, err := s.SetEnvVar(context.Background(), "alpha", "web", "WETRAVEL_API_KEY", SetEnvVarRequest{
+		SecretValue: strptr("sk-live-123"),
+	})
+	if err != nil {
+		t.Fatalf("SetEnvVar (secretValue): %v", err)
+	}
+	// spec.envVars must be untouched.
+	if len(got.Spec.EnvVars) != 0 {
+		t.Errorf("spec.envVars should be untouched, got %+v", got.Spec.EnvVars)
+	}
+	// The managed secret must now carry the key with the plaintext value.
+	sec := getSecret(t, s, "kuso", kube.ServiceSecretName("alpha", "web"))
+	if string(sec.Data["WETRAVEL_API_KEY"]) != "sk-live-123" {
+		t.Errorf("secret value: %q", sec.Data["WETRAVEL_API_KEY"])
+	}
+	// Managed labels stamped on create.
+	if sec.Labels[kube.ManagedByLabel] != "kuso-server" ||
+		sec.Labels[kube.LabelProject] != "alpha" ||
+		sec.Labels[kube.LabelService] != "web" {
+		t.Errorf("managed labels missing/wrong: %+v", sec.Labels)
+	}
+	// Rollout: spec.secretsRev bumped on the production env.
+	env, err := s.Kube.GetKusoEnvironment(context.Background(), "kuso", "alpha-web-production")
+	if err != nil {
+		t.Fatalf("get env: %v", err)
+	}
+	if env.Spec.SecretsRev == "" {
+		t.Errorf("expected spec.secretsRev to be bumped on the env, got empty")
+	}
+}
+
+// TestSetEnvVar_SecretValuePreservesOtherKeysAndAnnotations locks in the
+// read-modify-write contract: writing one key must NOT drop other keys and
+// must NOT clear the secrets.kuso.sislelabs.com/generated-* annotations.
+func TestSetEnvVar_SecretValuePreservesOtherKeysAndAnnotations(t *testing.T) {
+	t.Parallel()
+	existing := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      kube.ServiceSecretName("alpha", "web"),
+			Namespace: "kuso",
+			Labels: map[string]string{
+				kube.ManagedByLabel: "kuso-server",
+				kube.LabelProject:   "alpha",
+				kube.LabelService:   "web",
+			},
+			Annotations: map[string]string{
+				"secrets.kuso.sislelabs.com/generated-JWT_SECRET": "hex32",
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"JWT_SECRET": []byte("deadbeef"),
+			"OTHER_KEY":  []byte("keepme"),
+		},
+	}
+	s := fakeServiceWithSecrets(t, []runtime.Object{existing},
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+
+	if _, err := s.SetEnvVar(context.Background(), "alpha", "web", "WETRAVEL_API_KEY", SetEnvVarRequest{
+		SecretValue: strptr("sk-live-123"),
+	}); err != nil {
+		t.Fatalf("SetEnvVar (secretValue): %v", err)
+	}
+
+	sec := getSecret(t, s, "kuso", kube.ServiceSecretName("alpha", "web"))
+	if string(sec.Data["WETRAVEL_API_KEY"]) != "sk-live-123" {
+		t.Errorf("new key value: %q", sec.Data["WETRAVEL_API_KEY"])
+	}
+	if string(sec.Data["JWT_SECRET"]) != "deadbeef" {
+		t.Errorf("JWT_SECRET clobbered: %q", sec.Data["JWT_SECRET"])
+	}
+	if string(sec.Data["OTHER_KEY"]) != "keepme" {
+		t.Errorf("OTHER_KEY clobbered: %q", sec.Data["OTHER_KEY"])
+	}
+	if sec.Annotations["secrets.kuso.sislelabs.com/generated-JWT_SECRET"] != "hex32" {
+		t.Errorf("generated-* annotation cleared: %+v", sec.Annotations)
+	}
+}
+
+// TestSetEnvVar_RejectsValuePlusSecretValue extends the XOR guard to the
+// third mode — value + secretValue together is invalid.
+func TestSetEnvVar_RejectsValuePlusSecretValue(t *testing.T) {
+	t.Parallel()
+	s := fakeServiceWithSecrets(t, nil,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	_, err := s.SetEnvVar(context.Background(), "alpha", "web", "DB", SetEnvVarRequest{
+		Value:       "literal",
+		SecretValue: strptr("secret"),
+	})
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("want ErrInvalid for value+secretValue, got %v", err)
+	}
+}
+
+// TestSetEnvVar_SecretValueEmptyStringIsValid proves a non-nil empty
+// SecretValue counts as "set" (clearing a key's value while keeping it).
+func TestSetEnvVar_SecretValueEmptyStringIsValid(t *testing.T) {
+	t.Parallel()
+	s := fakeServiceWithSecrets(t, nil,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	if _, err := s.SetEnvVar(context.Background(), "alpha", "web", "EMPTY_OK", SetEnvVarRequest{
+		SecretValue: strptr(""),
+	}); err != nil {
+		t.Fatalf("empty secretValue should be valid, got %v", err)
+	}
+	sec := getSecret(t, s, "kuso", kube.ServiceSecretName("alpha", "web"))
+	if _, ok := sec.Data["EMPTY_OK"]; !ok {
+		t.Errorf("EMPTY_OK key should be present (empty value), data=%v", sec.Data)
+	}
+}
+
+// TestUnsetEnvVar_RemovesManagedSecretOnlyKey covers the unset fall-through:
+// a key that exists ONLY in <svc>-secrets (never in spec.envVars) is removed
+// from the Secret, leaving other keys intact.
+func TestUnsetEnvVar_RemovesManagedSecretOnlyKey(t *testing.T) {
+	t.Parallel()
+	existing := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      kube.ServiceSecretName("alpha", "web"),
+			Namespace: "kuso",
+			Annotations: map[string]string{
+				"secrets.kuso.sislelabs.com/generated-KEEP": "hex32",
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"WETRAVEL_API_KEY": []byte("sk-live-123"),
+			"KEEP":             []byte("stay"),
+		},
+	}
+	s := fakeServiceWithSecrets(t, []runtime.Object{existing},
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+
+	if _, err := s.UnsetEnvVar(context.Background(), "alpha", "web", "WETRAVEL_API_KEY"); err != nil {
+		t.Fatalf("UnsetEnvVar (managed-secret key): %v", err)
+	}
+	sec := getSecret(t, s, "kuso", kube.ServiceSecretName("alpha", "web"))
+	if _, ok := sec.Data["WETRAVEL_API_KEY"]; ok {
+		t.Errorf("WETRAVEL_API_KEY should be removed, data=%v", sec.Data)
+	}
+	if string(sec.Data["KEEP"]) != "stay" {
+		t.Errorf("KEEP should survive, got %q", sec.Data["KEEP"])
+	}
+	if sec.Annotations["secrets.kuso.sislelabs.com/generated-KEEP"] != "hex32" {
+		t.Errorf("annotation cleared on unset: %+v", sec.Annotations)
+	}
+}
+
+// TestUnsetEnvVar_NotInSpecNorSecretIsNotFound: a name absent from both
+// spec.envVars and the managed secret still returns ErrNotFound.
+func TestUnsetEnvVar_NotInSpecNorSecretIsNotFound(t *testing.T) {
+	t.Parallel()
+	s := fakeServiceWithSecrets(t, nil,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		seedEnv("alpha", "web", "production", "main", "alpha-web-production"),
+	)
+	_, err := s.UnsetEnvVar(context.Background(), "alpha", "web", "GHOST")
+	if !errors.Is(err, ErrNotFound) {
+		t.Errorf("want ErrNotFound, got %v", err)
 	}
 }

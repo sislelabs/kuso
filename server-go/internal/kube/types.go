@@ -428,6 +428,13 @@ type KusoEnvVar struct {
 	// secretKeyRef/configMapKeyRef on round-trip until the consumer needs
 	// them.
 	ValueFrom map[string]any `json:"valueFrom,omitempty"`
+	// Source is a read-only, server-set hint for the UI/CLI. Empty for
+	// normal spec.envVars entries. "managed-secret" marks an entry that
+	// was NOT in spec.envVars but enumerated from the kuso-managed
+	// <service>-secrets envFrom mount, so the editor renders it as an
+	// editable secret value. Never persisted onto the CR (json omitempty
+	// + the reconcile/propagate paths only ever copy Name/Value/ValueFrom).
+	Source string `json:"source,omitempty"`
 }
 
 type KusoScaleSpec struct {

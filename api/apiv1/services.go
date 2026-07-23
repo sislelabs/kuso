@@ -187,10 +187,16 @@ type SetEnvRequest struct {
 
 // SetEnvVarRequest is the body of PUT
 // .../services/{s}/env-vars/{name} (single-var idempotent set).
-// Exactly one of Value or SecretRef must be set.
+// Exactly one of Value, SecretRef, or SecretValue must be set.
 type SetEnvVarRequest struct {
 	Value     string         `json:"value,omitempty"`
 	SecretRef *SecretRefBody `json:"secretRef,omitempty"`
+	// SecretValue stores an actual secret VALUE in the kuso-managed
+	// <service>-secrets Secret (envFrom-mounted into the pod) rather than a
+	// literal on the CR or a secretKeyRef pointer. Pointer so an empty
+	// string is a valid write distinct from "not set". This is how the
+	// editor writes secret env values (e.g. WETRAVEL_API_KEY).
+	SecretValue *string `json:"secretValue,omitempty"`
 }
 
 // SecretRefBody is the shape valueFrom.secretKeyRef takes in the
