@@ -172,6 +172,11 @@ type EnvVar struct {
 	Name      string         `json:"name"`
 	Value     string         `json:"value,omitempty"`
 	ValueFrom map[string]any `json:"valueFrom,omitempty"`
+	// Source is a server-set, read-only hint. "managed-secret" marks a key
+	// enumerated from the kuso-managed <service>-secrets envFrom mount (not
+	// a spec.envVars entry) so the editor renders it as an editable secret
+	// value. Empty for normal entries.
+	Source string `json:"source,omitempty"`
 }
 
 type ServiceScale struct {

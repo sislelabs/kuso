@@ -1,7 +1,12 @@
 package projects
 
 import (
+	"context"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"kuso/server/internal/kube"
 )
@@ -60,5 +65,39 @@ func TestMergeManagedSecretKeys_NoSecret(t *testing.T) {
 	got := mergeManagedSecretKeys(existing, "svc-secrets", nil)
 	if len(got) != 1 {
 		t.Fatalf("no secret keys should leave envVars unchanged, got %d", len(got))
+	}
+}
+
+// TestGetEnv_SurfacesManagedSecretKeys is the end-to-end read test for the
+// endpoint the web editor + CLI env list consume: GetEnv must surface keys
+// that live only in the kuso-managed <service>-secrets envFrom mount (e.g.
+// WETRAVEL_API_KEY from the coolify import), tagged managed-secret.
+func TestGetEnv_SurfacesManagedSecretKeys(t *testing.T) {
+	t.Parallel()
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: kube.ServiceSecretName("alpha", "web"), Namespace: "kuso"},
+		Data: map[string][]byte{
+			"WETRAVEL_API_KEY":    []byte("k"),
+			"INTERNAL_JWT_SECRET": []byte("j"),
+		},
+	}
+	s := fakeServiceWithSecrets(t, []runtime.Object{secret},
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080,
+			EnvVars: []kube.KusoEnvVar{{Name: "NODE_ENV", Value: "production"}}}),
+	)
+	out, err := s.GetEnv(context.Background(), "alpha", "web")
+	if err != nil {
+		t.Fatalf("GetEnv: %v", err)
+	}
+	got := map[string]string{} // name -> source
+	for _, e := range out {
+		got[e.Name] = e.Source
+	}
+	if got["WETRAVEL_API_KEY"] != managedSecretSource {
+		t.Errorf("WETRAVEL_API_KEY source = %q, want managed-secret (surfaced from <service>-secrets)", got["WETRAVEL_API_KEY"])
+	}
+	if _, ok := got["NODE_ENV"]; !ok {
+		t.Errorf("existing literal NODE_ENV missing from GetEnv output")
 	}
 }

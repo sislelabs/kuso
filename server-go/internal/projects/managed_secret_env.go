@@ -47,7 +47,7 @@ func mergeManagedSecretKeys(envVars []kube.KusoEnvVar, secretName string, secret
 // the handler). Best-effort: a missing secret or read error leaves the
 // service untouched — surfacing is a convenience, not a correctness gate.
 func (s *Service) EnrichServiceWithManagedSecretKeys(ctx context.Context, project, service string, svc *kube.KusoService) {
-	if svc == nil {
+	if svc == nil || s.Kube == nil || s.Kube.Clientset == nil {
 		return
 	}
 	ns, err := s.namespaceFor(ctx, project)
@@ -68,7 +68,7 @@ func (s *Service) EnrichServiceWithManagedSecretKeys(ctx context.Context, projec
 // mounts whichever are in its envFromSecrets — and surfaces keys not already
 // represented. Best-effort.
 func (s *Service) EnrichEnvWithManagedSecretKeys(ctx context.Context, project string, env *kube.KusoEnvironment) {
-	if env == nil {
+	if env == nil || s.Kube == nil || s.Kube.Clientset == nil {
 		return
 	}
 	ns, err := s.namespaceFor(ctx, project)
