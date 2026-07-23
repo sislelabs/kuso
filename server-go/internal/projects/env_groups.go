@@ -583,14 +583,14 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				OwnerReferences: []metav1.OwnerReference{kube.OwnerRefForService(createdClone)},
 			},
 			Spec: kube.KusoEnvironmentSpec{
-				Project:          project,
-				Service:          newSvcCR,
-				Kind:             "production", // chart-side semantics: "always-on env"
-				Branch:           coalesce(item.svc.Spec.Repo).DefaultBranch,
-				Port:             port,
-				ReplicaCount:     intPtr(scaleMin),
-				Autoscaling:      autoscalingFromScale(item.svc.Spec.Scale),
-				Host:             host,
+				Project:      project,
+				Service:      newSvcCR,
+				Kind:         "production", // chart-side semantics: "always-on env"
+				Branch:       coalesce(item.svc.Spec.Repo).DefaultBranch,
+				Port:         port,
+				ReplicaCount: intPtr(scaleMin),
+				Autoscaling:  autoscalingFromScale(item.svc.Spec.Scale),
+				Host:         host,
 				// Do NOT inherit the source service's custom domains into the
 				// clone. Stamping item.svc.Spec.Domains here made the cloned
 				// env claim production's AdditionalHosts/TLSHosts with TLS on —
@@ -607,15 +607,25 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				TLSEnabled:       true,
 				ClusterIssuer:    "letsencrypt-prod",
 				IngressClassName: "traefik",
-				EnvFromSecrets:   addonConnSecrets,
-				EnvVars:          newEnvVars,
-				Image:            inheritImage,
-				Placement:        ResolvePlacement(proj.Spec.Placement, item.svc.Spec.Placement),
-				Volumes:          item.svc.Spec.Volumes,
-				Resources:        item.svc.Spec.Resources,
-				SecurityContext:  item.svc.Spec.SecurityContext,
-				Runtime:          item.svc.Spec.Runtime,
-				Command:          item.svc.Spec.Command,
+				// addonConnSecrets (addon conn + shared) PLUS the service's
+				// OWN managed secrets. The clone previously dropped these, so
+				// a cloned env booted without the app's core config
+				// (<svc>-secrets holds app keys/config) and crash-looped at
+				// 0/N ready. Carry the service-level secret (same shared
+				// config across envs) and the env-scoped secret for the NEW
+				// env (per-env overrides; optional mount, created on demand).
+				EnvFromSecrets: append(append([]string{}, addonConnSecrets...),
+					kube.ServiceSecretName(project, item.short),
+					kube.EnvSecretName(project, item.short, req.Name),
+				),
+				EnvVars:         newEnvVars,
+				Image:           inheritImage,
+				Placement:       ResolvePlacement(proj.Spec.Placement, item.svc.Spec.Placement),
+				Volumes:         item.svc.Spec.Volumes,
+				Resources:       item.svc.Spec.Resources,
+				SecurityContext: item.svc.Spec.SecurityContext,
+				Runtime:         item.svc.Spec.Runtime,
+				Command:         item.svc.Spec.Command,
 			},
 		}
 		if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, envCR); err != nil {
