@@ -343,6 +343,34 @@ func maskKusoEnvVars(vars []kube.KusoEnvVar) {
 	}
 }
 
+// shortServiceName strips the "<project>-" prefix from a KusoService CR
+// name to recover the user-facing short name. Service CRs are named
+// <project>-<service>; the short form is what the domain enrichment
+// methods (and every /services/{service} route) address.
+func shortServiceName(project, crName string) string {
+	prefix := project + "-"
+	if strings.HasPrefix(crName, prefix) {
+		return strings.TrimPrefix(crName, prefix)
+	}
+	return crName
+}
+
+// enrichServicesWithManagedSecretKeys surfaces managed-secret keys on
+// every service in a list before the mask runs. Per-service short name is
+// recovered from the CR name. Best-effort inside the domain call.
+func enrichServicesWithManagedSecretKeys(ctx context.Context, svc ProjectsAPI, project string, svcs []kube.KusoService) {
+	for i := range svcs {
+		svc.EnrichServiceWithManagedSecretKeys(ctx, project, shortServiceName(project, svcs[i].Name), &svcs[i])
+	}
+}
+
+// enrichEnvsWithManagedSecretKeys is the slice form for env lists.
+func enrichEnvsWithManagedSecretKeys(ctx context.Context, svc ProjectsAPI, project string, envs []kube.KusoEnvironment) {
+	for i := range envs {
+		svc.EnrichEnvWithManagedSecretKeys(ctx, project, &envs[i])
+	}
+}
+
 // maskServiceEnvIfNeeded masks the env-var VALUES on a service CR unless
 // the caller may read secrets. Env values are admin-only (secrets:read);
 // every endpoint that serializes a KusoService to the client MUST route
@@ -462,6 +490,10 @@ func (h *ProjectsHandler) Describe(w http.ResponseWriter, r *http.Request) {
 	// env-var VALUES. Mask them for callers who can't read secrets — the
 	// same admin-only gate GetService/GetEnv enforce.
 	if out != nil {
+		// Surface managed-secret keys as name-only entries BEFORE masking
+		// so they list alongside literal env vars (masked uniformly).
+		enrichServicesWithManagedSecretKeys(ctx, h.Svc, project, out.Services)
+		enrichEnvsWithManagedSecretKeys(ctx, h.Svc, project, out.Environments)
 		maskServicesEnvIfNeeded(ctx, h.DB, project, out.Services)
 		maskEnvsIfNeeded(ctx, h.DB, project, out.Environments)
 	}
@@ -543,6 +575,7 @@ func (h *ProjectsHandler) ListServices(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "list services", err)
 		return
 	}
+	enrichServicesWithManagedSecretKeys(ctx, h.Svc, project, out)
 	maskServicesEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
@@ -564,6 +597,9 @@ func (h *ProjectsHandler) AddService(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, "add service", err)
 		return
 	}
+	if out != nil {
+		h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, shortServiceName(project, out.Name), out)
+	}
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusCreated, out)
 }
@@ -575,11 +611,15 @@ func (h *ProjectsHandler) GetService(w http.ResponseWriter, r *http.Request) {
 	if !requireProjectAccess(ctx, w, h.DB, project, db.ProjectRoleViewer) {
 		return
 	}
-	out, err := h.Svc.GetService(ctx, project, chi.URLParam(r, "service"))
+	service := chi.URLParam(r, "service")
+	out, err := h.Svc.GetService(ctx, project, service)
 	if err != nil {
 		h.fail(w, "get service", err)
 		return
 	}
+	// Surface managed-secret keys (name-only) BEFORE masking so orphaned
+	// secret keys list as first-class env vars in the editor.
+	h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, service, out)
 	// The service spec carries env-var VALUES. Mask them for any caller
 	// who can't read secrets (editor/viewer) — admin only sees the real
 	// values. Mutates the returned CR copy in place; GetService returns a
@@ -723,11 +763,13 @@ func (h *ProjectsHandler) PatchService(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project := chi.URLParam(r, "project")
-	out, err := h.Svc.PatchService(ctx, project, chi.URLParam(r, "service"), req)
+	service := chi.URLParam(r, "service")
+	out, err := h.Svc.PatchService(ctx, project, service, req)
 	if err != nil {
 		h.fail(w, "patch service", err)
 		return
 	}
+	h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, service, out)
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
@@ -747,12 +789,14 @@ func (h *ProjectsHandler) AddDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project := chi.URLParam(r, "project")
-	out, err := h.Svc.AddDomain(ctx, project, chi.URLParam(r, "service"),
+	service := chi.URLParam(r, "service")
+	out, err := h.Svc.AddDomain(ctx, project, service,
 		projects.AddDomainRequest{Host: wire.Host, TLS: wire.TLS, TLSSecret: wire.TLSSecret})
 	if err != nil {
 		h.fail(w, "add domain", err)
 		return
 	}
+	h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, service, out)
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
@@ -766,14 +810,16 @@ func (h *ProjectsHandler) RemoveDomain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	project := chi.URLParam(r, "project")
+	service := chi.URLParam(r, "service")
 	out, err := h.Svc.RemoveDomain(ctx,
 		project,
-		chi.URLParam(r, "service"),
+		service,
 		chi.URLParam(r, "host"))
 	if err != nil {
 		h.fail(w, "remove domain", err)
 		return
 	}
+	h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, service, out)
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
@@ -799,7 +845,7 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 	// non-admins; a read-modify-write client that didn't strip the mask
 	// would echo the sentinel back here and clobber the real value. Refuse
 	// the literal sentinel rather than persist it.
-	if wire.Value == envMaskSentinel {
+	if wire.Value == envMaskSentinel || (wire.SecretValue != nil && *wire.SecretValue == envMaskSentinel) {
 		http.Error(w,
 			fmt.Sprintf("refusing to write masked sentinel value for %q — env values are admin-only; supply a real value", name),
 			http.StatusBadRequest)
@@ -808,6 +854,9 @@ func (h *ProjectsHandler) SetEnvVar(w http.ResponseWriter, r *http.Request) {
 	req := projects.SetEnvVarRequest{Value: wire.Value}
 	if wire.SecretRef != nil {
 		req.SecretRef = &projects.SetEnvVarSecretRefBody{Name: wire.SecretRef.Name, Key: wire.SecretRef.Key}
+	}
+	if wire.SecretValue != nil {
+		req.SecretValue = wire.SecretValue
 	}
 	out, err := h.Svc.SetEnvVar(ctx, project, service, name, req)
 	if err != nil {
@@ -899,6 +948,9 @@ func (h *ProjectsHandler) RenameService(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		h.fail(w, "rename service", err)
 		return
+	}
+	if out != nil {
+		h.Svc.EnrichServiceWithManagedSecretKeys(ctx, project, shortServiceName(project, out.Name), out)
 	}
 	maskServiceEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
@@ -1225,6 +1277,7 @@ func (h *ProjectsHandler) ListEnvironments(w http.ResponseWriter, r *http.Reques
 		h.fail(w, "list envs", err)
 		return
 	}
+	enrichEnvsWithManagedSecretKeys(ctx, h.Svc, project, out)
 	maskEnvsIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }
@@ -1254,6 +1307,7 @@ func (h *ProjectsHandler) AddEnvironment(w http.ResponseWriter, r *http.Request)
 		h.fail(w, "add environment", err)
 		return
 	}
+	h.Svc.EnrichEnvWithManagedSecretKeys(ctx, project, out)
 	maskEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusCreated, out)
 }
@@ -1270,6 +1324,7 @@ func (h *ProjectsHandler) GetEnvironment(w http.ResponseWriter, r *http.Request)
 		h.fail(w, "get env", err)
 		return
 	}
+	h.Svc.EnrichEnvWithManagedSecretKeys(ctx, project, out)
 	maskEnvIfNeeded(ctx, h.DB, project, out)
 	writeJSON(w, http.StatusOK, out)
 }

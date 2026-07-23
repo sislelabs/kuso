@@ -73,6 +73,15 @@ type ProjectsAPI interface {
 	SetEnvScopedVar(ctx context.Context, project, service, envName, name string, req projects.SetEnvVarRequest) (*kube.KusoEnvironment, error)
 	UnsetEnvScopedVar(ctx context.Context, project, service, envName, name string) (*kube.KusoEnvironment, error)
 
+	// Managed-secret key surfacing. Enrich the CR's spec.envVars with
+	// name-only entries for keys that live in the kuso-managed
+	// <project>-<service>[-<env>]-secrets envFrom mount but have no
+	// matching spec.envVars row, so the editor lists them as first-class
+	// (masked) secret values. Best-effort — a read error leaves the CR
+	// untouched. Must run BEFORE the env-value mask.
+	EnrichServiceWithManagedSecretKeys(ctx context.Context, project, service string, svc *kube.KusoService)
+	EnrichEnvWithManagedSecretKeys(ctx context.Context, project string, env *kube.KusoEnvironment)
+
 	// Environments
 	ListEnvironments(ctx context.Context, project string) ([]kube.KusoEnvironment, error)
 	GetEnvironment(ctx context.Context, project, env string) (*kube.KusoEnvironment, error)

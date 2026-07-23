@@ -26,11 +26,17 @@ package projects
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
+	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/kube"
 )
@@ -194,11 +200,20 @@ func (s *Service) RemoveDomain(ctx context.Context, project, service, host strin
 
 // SetEnvVarRequest is the wire shape for PUT .../env-vars/:name.
 //
-// Setting Value sets a literal env var. SecretRef sets a valueFrom
-// secretKeyRef pointer. Exactly one must be present.
+// Exactly one of three modes must be set:
+//   - Value: a literal env var written to spec.envVars.
+//   - SecretRef: a valueFrom secretKeyRef pointer written to spec.envVars.
+//   - SecretValue: a secret VALUE stored in the kuso-managed
+//     <project>-<service>-secrets Secret (the one the pod already
+//     envFrom-mounts). spec.envVars is NOT touched — the value lives
+//     only in the Secret, and the editor surfaces the key via the
+//     managed-secret enrichment path (see managed_secret_env.go). This
+//     is how a key like WETRAVEL_API_KEY becomes editable without ever
+//     landing its plaintext on the KusoService CR.
 type SetEnvVarRequest struct {
-	Value     string                  `json:"value,omitempty"`
-	SecretRef *SetEnvVarSecretRefBody `json:"secretRef,omitempty"`
+	Value       string                  `json:"value,omitempty"`
+	SecretRef   *SetEnvVarSecretRefBody `json:"secretRef,omitempty"`
+	SecretValue *string                 `json:"secretValue,omitempty"`
 }
 
 type SetEnvVarSecretRefBody struct {
@@ -223,8 +238,14 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 	}
 	hasValue := req.Value != ""
 	hasRef := req.SecretRef != nil && req.SecretRef.Name != "" && req.SecretRef.Key != ""
-	if hasValue == hasRef {
-		return nil, fmt.Errorf("%w: exactly one of value or secretRef must be set", ErrInvalid)
+	// A non-nil SecretValue pointer is the signal, even for the empty
+	// string — an empty secret value is a legitimate write (clearing a
+	// key's value while keeping the key present), distinct from "field
+	// absent". Value/SecretRef use presence-by-content because their
+	// wire shapes carry no way to distinguish empty-set from unset.
+	hasSecretValue := req.SecretValue != nil
+	if count := btoi(hasValue) + btoi(hasRef) + btoi(hasSecretValue); count != 1 {
+		return nil, fmt.Errorf("%w: exactly one of value, secretRef, or secretValue must be set", ErrInvalid)
 	}
 
 	mu := s.lockService(project, service)
@@ -233,6 +254,31 @@ func (s *Service) SetEnvVar(ctx context.Context, project, service, name string, 
 	ns, err := s.namespaceFor(ctx, project)
 	if err != nil {
 		return nil, err
+	}
+
+	// SecretValue mode: write the value into the kuso-managed
+	// <project>-<service>-secrets Secret and roll the pods, WITHOUT
+	// touching spec.envVars. The key becomes visible in the editor via
+	// EnrichServiceWithManagedSecretKeys. We return the (unchanged)
+	// service spec so the caller can re-baseline like the other branches.
+	if hasSecretValue {
+		if err := s.upsertManagedSecretKey(ctx, ns, project, service, name, *req.SecretValue); err != nil {
+			return nil, err
+		}
+		// Value-only Secret changes do NOT restart pods on their own —
+		// the helm chart re-renders the Deployment only when a watched
+		// env-CR field changes. Bump spec.secretsRev on every owned env
+		// (mirrors secrets.bumpRev) so the new value actually reaches a
+		// running pod. Best-effort: the Secret is the source of truth and
+		// the next reconcile/redeploy re-picks it up if the bump misses.
+		if err := s.bumpSecretsRevForService(ctx, ns, project, service); err != nil {
+			return nil, fmt.Errorf("bump secretsRev after secret write: %w", err)
+		}
+		svc, gerr := s.GetService(ctx, project, service)
+		if gerr != nil {
+			return nil, gerr
+		}
+		return svc, nil
 	}
 
 	next := kube.KusoEnvVar{Name: name}
@@ -312,7 +358,24 @@ func (s *Service) UnsetEnvVar(ctx context.Context, project, service, name string
 		return nil
 	})
 	if notFound {
-		return nil, fmt.Errorf("%w: env var %q", ErrNotFound, name)
+		// Not a spec.envVars entry — it may be a managed-secret-only key
+		// (set via SecretValue mode, which never touches spec.envVars).
+		// Remove it from <project>-<service>-secrets and roll the pods.
+		removed, rerr := s.removeManagedSecretKey(ctx, ns, project, service, name)
+		if rerr != nil {
+			return nil, rerr
+		}
+		if !removed {
+			return nil, fmt.Errorf("%w: env var %q", ErrNotFound, name)
+		}
+		if berr := s.bumpSecretsRevForService(ctx, ns, project, service); berr != nil {
+			return nil, fmt.Errorf("bump secretsRev after secret unset: %w", berr)
+		}
+		svc, gerr := s.GetService(ctx, project, service)
+		if gerr != nil {
+			return nil, gerr
+		}
+		return svc, nil
 	}
 	if err != nil {
 		return nil, fmt.Errorf("update service: %w", err)
@@ -321,6 +384,153 @@ func (s *Service) UnsetEnvVar(ctx context.Context, project, service, name string
 		return nil, fmt.Errorf("propagate envVars to envs: %w", perr)
 	}
 	return updated, nil
+}
+
+// btoi returns 1 for true, 0 for false — used to count how many of a
+// set of mutually-exclusive request modes were supplied.
+func btoi(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}
+
+// upsertManagedSecretKey writes (key, value) into the kuso-managed
+// <project>-<service>-secrets Secret via read-modify-write, preserving
+// every OTHER key AND all annotations (notably the
+// secrets.kuso.sislelabs.com/generated-* markers). Creates the Secret
+// with the kuso managed labels if it doesn't exist yet.
+//
+// The chart marks this Secret optional and the kusoenvironment
+// envFromSecrets already references <svc>-secrets on every non-preview
+// env, so a freshly-created Secret is picked up without any env-CR wiring
+// change here (see managed_secret_env.go / secrets.attachToAllEnvs).
+func (s *Service) upsertManagedSecretKey(ctx context.Context, ns, project, service, key, value string) error {
+	name := kube.ServiceSecretName(project, service)
+	secrets := s.Kube.Clientset.CoreV1().Secrets(ns)
+	sec, err := secrets.Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		sec = &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: ns,
+				// Mirror the labels kuso stamps on the resources it owns
+				// (app.kubernetes.io/managed-by=kuso-server) plus the
+				// project/service selectors used across the codebase, so
+				// the Secret is discoverable + attributable like the rest.
+				Labels: map[string]string{
+					kube.ManagedByLabel: "kuso-server",
+					kube.LabelProject:   project,
+					kube.LabelService:   service,
+				},
+			},
+			Type: corev1.SecretTypeOpaque,
+			Data: map[string][]byte{key: []byte(value)},
+		}
+		if _, cerr := secrets.Create(ctx, sec, metav1.CreateOptions{}); cerr != nil {
+			// A concurrent creator won the race — fall through to a
+			// read-modify-write patch so we don't clobber its keys.
+			if apierrors.IsAlreadyExists(cerr) {
+				return s.patchManagedSecretKey(ctx, ns, name, key, value)
+			}
+			return fmt.Errorf("create secret %s: %w", name, cerr)
+		}
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("read secret %s: %w", name, err)
+	}
+	// RMW: copy the existing Data, set only our key, write the whole
+	// object back. This preserves every other key; Update carries the
+	// existing annotations/labels through untouched (we never clear them).
+	if sec.Data == nil {
+		sec.Data = map[string][]byte{}
+	}
+	sec.Data[key] = []byte(value)
+	if _, uerr := secrets.Update(ctx, sec, metav1.UpdateOptions{}); uerr != nil {
+		return fmt.Errorf("update secret %s: %w", name, uerr)
+	}
+	return nil
+}
+
+// patchManagedSecretKey is the create-race fallback: merge-patch a single
+// key so a Secret another writer just created keeps all of its keys +
+// annotations. Mirrors secrets.upsertKey's merge-patch shape.
+func (s *Service) patchManagedSecretKey(ctx context.Context, ns, name, key, value string) error {
+	// Merge-patch a single key via .stringData — the apiserver writes it
+	// into .data (base64-encoding for us) and merges it in without
+	// disturbing the other keys or the annotations. Using stringData
+	// avoids doing the base64 dance by hand.
+	body, err := json.Marshal(map[string]any{
+		"stringData": map[string]string{key: value},
+	})
+	if err != nil {
+		return fmt.Errorf("marshal secret patch: %w", err)
+	}
+	if _, perr := s.Kube.Clientset.CoreV1().Secrets(ns).
+		Patch(ctx, name, types.MergePatchType, body, metav1.PatchOptions{}); perr != nil {
+		return fmt.Errorf("patch secret %s: %w", name, perr)
+	}
+	return nil
+}
+
+// removeManagedSecretKey deletes key from <project>-<service>-secrets via
+// read-modify-write, leaving every OTHER key and all annotations intact.
+// Returns (false, nil) when the Secret or key is absent so the caller can
+// map that to ErrNotFound. Deletes the Secret entirely when the removed
+// key was its last one (mirrors secrets.UnsetKey), so an empty managed
+// Secret doesn't linger.
+func (s *Service) removeManagedSecretKey(ctx context.Context, ns, project, service, key string) (bool, error) {
+	name := kube.ServiceSecretName(project, service)
+	secrets := s.Kube.Clientset.CoreV1().Secrets(ns)
+	sec, err := secrets.Get(ctx, name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read secret %s: %w", name, err)
+	}
+	if _, ok := sec.Data[key]; !ok {
+		return false, nil
+	}
+	if len(sec.Data) == 1 {
+		if derr := secrets.Delete(ctx, name, metav1.DeleteOptions{}); derr != nil && !apierrors.IsNotFound(derr) {
+			return false, fmt.Errorf("delete secret %s: %w", name, derr)
+		}
+		return true, nil
+	}
+	delete(sec.Data, key)
+	if _, uerr := secrets.Update(ctx, sec, metav1.UpdateOptions{}); uerr != nil {
+		return false, fmt.Errorf("update secret %s: %w", name, uerr)
+	}
+	return true, nil
+}
+
+// bumpSecretsRevForService stamps a fresh spec.secretsRev on every owned
+// env so the helm-operator re-renders the Deployment and the pods pick up
+// the changed Secret value. This is the minimal rollout equivalent to what
+// propagateChangedToEnvs achieves for spec-field changes — a value-only
+// Secret write leaves the env CRs otherwise untouched, so without this the
+// running pods keep the stale value until the next unrelated save. Mirrors
+// secrets.bumpRev (same {"spec":{"secretsRev":...}} patch shape).
+func (s *Service) bumpSecretsRevForService(ctx context.Context, ns, project, service string) error {
+	envs, err := s.Kube.ListKusoEnvironmentsByLabels(ctx, ns, map[string]string{
+		labelProject: project,
+		labelService: service,
+	})
+	if err != nil {
+		return fmt.Errorf("list envs for secretsRev bump: %w", err)
+	}
+	rev := strconv.FormatInt(time.Now().UnixMilli(), 10)
+	patch := fmt.Sprintf(`{"spec":{"secretsRev":%q}}`, rev)
+	var errs []error
+	for i := range envs {
+		if _, perr := s.Kube.Dynamic.Resource(kube.GVREnvironments).Namespace(ns).
+			Patch(ctx, envs[i].Name, types.MergePatchType, []byte(patch), metav1.PatchOptions{}); perr != nil {
+			errs = append(errs, fmt.Errorf("patch env %s: %w", envs[i].Name, perr))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // validHostname is a permissive RFC-1123-ish check. We don't try to
