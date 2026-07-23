@@ -19,6 +19,54 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.21.0] — 2026-07-23
+
+### Other
+- Merge: Openship-inspired features + 50-finding platform-review fixes ([f0c9c8c](https://github.com/sislelabs/kuso/commit/f0c9c8c35d3f478ac6996468ce7b90441be8a24e))
+
+### ✨ Features
+- Feat(addon): mysql restore env + web picker + docs ([71033bd](https://github.com/sislelabs/kuso/commit/71033bdc4d8e68a17f8f805020b51a4cec8590bd))
+- Feat(addon): mysql validation/HA gating + backup CronJob + image tooling ([c748f63](https://github.com/sislelabs/kuso/commit/c748f6371c01c1d0830515cc7594a1fa567a86ae))
+- Feat(addon): mysql kind chart template (statefulset/service/conn) ([1a2d0b5](https://github.com/sislelabs/kuso/commit/1a2d0b5e63606076f95203e28862b55d651b1c75))
+- Feat(backup): mysql producer in registry ([e5d8068](https://github.com/sislelabs/kuso/commit/e5d8068595170ebb2230dcad3d34b95aaafa3088))
+- Feat(snapshot): apiv1 wiring + docs for snapshotBeforeDeploy ([3c903f1](https://github.com/sislelabs/kuso/commit/3c903f184069150f4b0e11a304d12b8563a2c9b8))
+- Feat(snapshot): concrete pre-deploy snapshotter + main.go wiring ([47a079d](https://github.com/sislelabs/kuso/commit/47a079dd33f80219664b8ac06ed8c4d41aa8f956))
+- Feat(snapshot): record snapshot keys on release-failed build ([7d75074](https://github.com/sislelabs/kuso/commit/7d75074f9012766747ef4d587a5d069d496bb7ac))
+- Feat(snapshot): Snapshotter seam + pre-deploy hook in build poller ([20db88d](https://github.com/sislelabs/kuso/commit/20db88d6461278edc028df58bce977c83b596a22))
+- Feat(snapshot): propagate snapshotBeforeDeploy service->env ([efe6926](https://github.com/sislelabs/kuso/commit/efe6926878f8164373f9e478303df690b9b07b02))
+- Feat(snapshot): add snapshotBeforeDeploy to service+env spec/CRD ([3ad0408](https://github.com/sislelabs/kuso/commit/3ad0408851f0d4ca599ff20e0c76a80724bfa4a6))
+- Feat(backup): kind-aware restore via producer registry ([083f433](https://github.com/sislelabs/kuso/commit/083f43346d6199832f2d63eeec2c3c99993d4cb2))
+- Feat(backup): mongodb backup CronJob branch + mongodb-tools/redis in image ([32d9b90](https://github.com/sislelabs/kuso/commit/32d9b90ff5e8046c3a8d03011bcbbc5c68856e92))
+- Feat(backup): producer registry (postgres/redis/mongodb restore) ([a4baa66](https://github.com/sislelabs/kuso/commit/a4baa6633cd85e958de846f4339e9a34e9a79bbf))
+- Feat(backup): verify sha256 manifest on restore, abort on mismatch ([9741912](https://github.com/sislelabs/kuso/commit/9741912b7f448a98d46ba7a6065ab9f1896b46a4))
+- Feat(backup): write sha256 manifest beside pg/redis backups ([63435cc](https://github.com/sislelabs/kuso/commit/63435ccc82aef10e0083f1d1598daaa64df463d7))
+- Feat(backup): manifest type + package for integrity metadata ([a8bd16e](https://github.com/sislelabs/kuso/commit/a8bd16ee0e27526ee668f02180fb12ccccb1b4ac))
+- Feat(cli): add 'kuso api' raw passthrough command with --jq ([cbea812](https://github.com/sislelabs/kuso/commit/cbea81273e03d5c2ee0f3b9578e6a5d8be20a467))
+- Feat(cli): body/path/method assembly for kuso api ([a47b005](https://github.com/sislelabs/kuso/commit/a47b005de0bad0bbf98c3e733778e2080381f5ae))
+- Feat(cli): add KusoClient.Raw passthrough method ([d6c5fb7](https://github.com/sislelabs/kuso/commit/d6c5fb72308001a9ecf8591e38246d38ea4a7fac))
+
+### 🐛 Bug Fixes
+- Fix(backup): retention prune is best-effort under pipefail ([40f0b71](https://github.com/sislelabs/kuso/commit/40f0b71ddfc0d78ce56067b58d9483f21c39606c))
+- Fix(backup): pg_dump --clean --if-exists so restore lands on a populated DB ([8298a93](https://github.com/sislelabs/kuso/commit/8298a937e6a0e09ba93ea84c36df46c2a4676fa0))
+- Fix(projects): drift HPA-guard duplicate + project-name validation (P2/P3) ([e798917](https://github.com/sislelabs/kuso/commit/e79891709959d46899a5239bfe89c64ddcbcd2ac))
+- Fix(web+cli+mcp): contract + safety bugs (P1/P2/P3) ([3581cd8](https://github.com/sislelabs/kuso/commit/3581cd831e302bf9de148f8ef8b3bc65eff6b4e2))
+- Fix(reconcile+nodes): races and lifecycle state-machine gaps (P2/P3) ([9ea17e6](https://github.com/sislelabs/kuso/commit/9ea17e66437d91acc050430a06b23e49a5e412c2))
+- Fix(operator): blast-radius + field-drop guards (P1/P2) ([6a4f221](https://github.com/sislelabs/kuso/commit/6a4f221f191e91a2fffa14e266f954e24408addb))
+- Fix(security): authz gaps, SSRF, secret leaks, supply-chain (P1/P2/P3) ([09d64d3](https://github.com/sislelabs/kuso/commit/09d64d3e39181d905c356c2070092481b13043e0))
+- Fix(backup): data-integrity hardening (7 P1 + S3 SSRF) ([77e83c5](https://github.com/sislelabs/kuso/commit/77e83c5744f27d4ae3e4b04bf72f3d3b2a930cc0))
+- Fix(backup): exclude .manifest.json sidecars from backup list ([f2a699e](https://github.com/sislelabs/kuso/commit/f2a699e181751093dad1d83eda61865ce05f8db7))
+
+### 📝 Docs
+- Docs: deep multi-agent platform review (50 verified findings) ([5d53641](https://github.com/sislelabs/kuso/commit/5d53641886c6eee15f107c484315550cd7a1622c))
+- Docs: implementation plans for pieces 4 (pre-deploy snapshot) + 5 (mysql kind) ([08afc62](https://github.com/sislelabs/kuso/commit/08afc628ec6f3237325959324462befb135722e1))
+- Docs(backup): piece 3 rollout note (registry + mongodb) ([a663871](https://github.com/sislelabs/kuso/commit/a663871ce2c923953137cde0a27362d09cd4b6be))
+- Docs: revise piece 3 (registry + mongodb, native dumps) + plan ([d345043](https://github.com/sislelabs/kuso/commit/d345043ea37c9f5c523baf12eb0bf432a430eb46))
+- Docs(backup): manifest/verify rollout note (piece 2) ([93c7260](https://github.com/sislelabs/kuso/commit/93c72600976f25dd7d551916c006b0558ccc938f))
+- Docs: implementation plan for backup manifest+verify (piece 2) ([0b09de8](https://github.com/sislelabs/kuso/commit/0b09de8479294c3488d7bd41f6fc5c272e9f9549))
+- Docs(cli): document 'kuso api' raw passthrough in CLAUDE.md ([ae20e48](https://github.com/sislelabs/kuso/commit/ae20e4861c10deca2f2714effde49b6bbc31b642))
+- Docs: implementation plan for kuso api passthrough (piece 1) ([51f99f2](https://github.com/sislelabs/kuso/commit/51f99f2da0ed412d8dd88ee5878d14f54fc59715))
+- Docs: design for Openship-inspired improvements (5 pieces) ([1416c60](https://github.com/sislelabs/kuso/commit/1416c600425491f8b4b1e54c0924c5c6f6df475f))
+
 ## [0.20.2] — 2026-07-15
 
 ### Other
@@ -420,11 +468,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(addons): drop immutable VCT annotation that broke all addon helm upgrades ([7ce05b7](https://github.com/sislelabs/kuso/commit/7ce05b720e763b8d4fb548617a2f6fc484bc2de5))
-
-## [0.18.84] — 2026-06-25
-
-### 🧪 Tests
-- Test(httpx,placement): pin SSRF guard + placement matcher contracts ([592e7a3](https://github.com/sislelabs/kuso/commit/592e7a3dc19981c6f585547eff56db648ffae0a8))
 
 
 ---

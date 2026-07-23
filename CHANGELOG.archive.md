@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.84] — 2026-06-25
+
+### 🧪 Tests
+- Test(httpx,placement): pin SSRF guard + placement matcher contracts ([592e7a3](https://github.com/sislelabs/kuso/commit/592e7a3dc19981c6f585547eff56db648ffae0a8))
+
 ## [0.18.83] — 2026-06-25
 
 ### ✨ Features
