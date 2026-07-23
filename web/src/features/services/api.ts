@@ -34,6 +34,27 @@ export async function setServiceEnv(
   );
 }
 
+// setServiceEnvSecret writes a single secret VALUE into the kuso-managed
+// <project>-<service>-secrets Secret via the per-key set endpoint. Unlike
+// the bulk POST /env (which overwrites spec.envVars), this never lands the
+// plaintext on the KusoService CR — the value lives only in the Secret and
+// the key surfaces back through the managed-secret enrichment path. Used
+// by the env editor for rows tagged source="managed-secret" (or rows the
+// user explicitly marks as a secret). An empty string is a valid write
+// (clears the value while keeping the key), so the caller always passes a
+// concrete string.
+export async function setServiceEnvSecret(
+  project: string,
+  service: string,
+  name: string,
+  secretValue: string,
+): Promise<void> {
+  return api(
+    `/api/projects/${encodeURIComponent(project)}/services/${encodeURIComponent(service)}/env-vars/${encodeURIComponent(name)}`,
+    { method: "PUT", body: { secretValue } },
+  );
+}
+
 export interface DetectedEnv {
   // Names surfaced by the build-time env-detect init container
   // (.env.example + source grep). Empty until the next build runs.

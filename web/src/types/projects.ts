@@ -115,6 +115,12 @@ export interface KusoEnvVar {
   name?: string;
   value?: string;
   valueFrom?: Record<string, unknown>;
+  // source is a read-only, server-set hint. "managed-secret" tags a key
+  // that lives in the kuso-managed <service>-secrets envFrom mount but has
+  // no matching spec.envVars entry — surfaced so the editor can render it
+  // as an editable secret value (written back via secretValue, never as a
+  // literal). Empty/absent for ordinary literal + secretKeyRef entries.
+  source?: string;
 }
 
 export interface KusoService {
