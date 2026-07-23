@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.85] — 2026-06-25
+
+### 🐛 Bug Fixes
+- Fix(addons): drop immutable VCT annotation that broke all addon helm upgrades ([7ce05b7](https://github.com/sislelabs/kuso/commit/7ce05b720e763b8d4fb548617a2f6fc484bc2de5))
+
 ## [0.18.84] — 2026-06-25
 
 ### 🧪 Tests

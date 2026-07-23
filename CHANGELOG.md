@@ -19,6 +19,23 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.21.1] — 2026-07-23
+
+### Other
+- Merge: env-secret editor visibility + env-group clone secret fix ([8a0f92e](https://github.com/sislelabs/kuso/commit/8a0f92ebc7bb9dae36a49ce51ce9def5a513240d))
+
+### ✨ Features
+- Feat(env): CLI + web surface for managed-secret env vars ([aadf5ca](https://github.com/sislelabs/kuso/commit/aadf5ca5c4691759a611653e7f2215a65ff26b42))
+- Feat(env): surface <service>-secrets keys as first-class env vars ([5652f99](https://github.com/sislelabs/kuso/commit/5652f99b134b251f44f175b92c157a57908fd5ed))
+
+### 🐛 Bug Fixes
+- Fix(env): release-review highs — clone secret survives churn + no silent delete ([1b721de](https://github.com/sislelabs/kuso/commit/1b721de7c2f2c54de604ea2458503333aaff5f96))
+- Fix(env): enrich GET /env with managed-secret keys + nil-safe guard ([ef5c9cb](https://github.com/sislelabs/kuso/commit/ef5c9cb797a06411a75f61752383274435629556))
+- Fix(env-group): clone carries the service's own managed secrets ([6f66741](https://github.com/sislelabs/kuso/commit/6f66741895c941b7b445661f196c0359a6e0952e))
+
+### 📝 Docs
+- Docs: design for surfacing <service>-secrets keys in env editor ([0829dd8](https://github.com/sislelabs/kuso/commit/0829dd8f318284ba75ab570086a6dd7ae6fb332c))
+
 ## [0.21.0] — 2026-07-23
 
 ### Other
@@ -463,11 +480,6 @@ messages on every release. The format is loosely based on
 - Feat(cli): usage, audit, ssh-keys, notification feed + users/groups/invites/config ([bb2ccb0](https://github.com/sislelabs/kuso/commit/bb2ccb0e342627b679d28973fc1495aa7f6fe240))
 - Feat(cli): node management + service wake/drift + env-scoped domains ([33d2da2](https://github.com/sislelabs/kuso/commit/33d2da2c62804465f30b7106003973f40c6b0b85))
 - Feat(cli): addon public-tcp, secret reveal, and update commands ([e0455d0](https://github.com/sislelabs/kuso/commit/e0455d07660411dd492442f3fdcfb5fddc9cb45d))
-
-## [0.18.85] — 2026-06-25
-
-### 🐛 Bug Fixes
-- Fix(addons): drop immutable VCT annotation that broke all addon helm upgrades ([7ce05b7](https://github.com/sislelabs/kuso/commit/7ce05b720e763b8d4fb548617a2f6fc484bc2de5))
 
 
 ---
