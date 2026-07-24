@@ -144,6 +144,35 @@ func (s *Service) provisionInstanceAddonDB(adminDSN, project, addonShort string)
 		return "", "", fmt.Errorf("grant: %w", err)
 	}
 
+	// PG15+ locks down the `public` schema: GRANT ALL ON DATABASE does NOT
+	// confer CREATE/USAGE on `public`, so a non-owner role gets
+	// "permission denied for schema public" the first time the app runs a
+	// migration (Prisma/Drizzle/etc. create their migration table there).
+	// The grant is schema-scoped, so it MUST run connected to the new DB,
+	// not the admin DB. Make the per-project role own `public` (simplest
+	// durable fix — the role then has full DDL there) and grant explicitly.
+	// Connect as admin to the NEW database (swap the path on adminDSN).
+	{
+		au, perr := url.Parse(adminDSN)
+		if perr != nil {
+			return "", "", fmt.Errorf("%w: malformed admin DSN", ErrInvalid)
+		}
+		au.Path = "/" + dbName
+		dbConn, derr := sql.Open("postgres", au.String())
+		if derr != nil {
+			return "", "", fmt.Errorf("open new db for schema grant: %w", derr)
+		}
+		defer dbConn.Close()
+		for _, stmt := range []string{
+			fmt.Sprintf(`GRANT ALL ON SCHEMA public TO %s`, pq.QuoteIdentifier(userName)),
+			fmt.Sprintf(`ALTER SCHEMA public OWNER TO %s`, pq.QuoteIdentifier(userName)),
+		} {
+			if _, err := dbConn.Exec(stmt); err != nil {
+				return "", "", fmt.Errorf("grant schema public: %w", err)
+			}
+		}
+	}
+
 	// Build per-project DSN by swapping the database + auth on the
 	// admin DSN. Keeps host / port / sslmode etc. intact.
 	u, err := url.Parse(adminDSN)
