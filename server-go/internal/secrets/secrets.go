@@ -3,10 +3,10 @@
 //
 // Two scopes:
 //   - shared:  <project>-<service>-secrets, mounted on EVERY env of
-//              the service. env="" or absent.
+//     the service. env="" or absent.
 //   - per-env: <project>-<service>-<env-sanitised>-secrets, mounted
-//              only on that env. Per-env values OVERRIDE shared
-//              (envFrom mounts shared first, per-env second).
+//     only on that env. Per-env values OVERRIDE shared
+//     (envFrom mounts shared first, per-env second).
 //
 // The race-free patch logic in setKey/removeKey is the landmine —
 // any change to this file MUST keep the merge-patch (set) and
@@ -565,7 +565,7 @@ func (s *Service) findEnv(ctx context.Context, project, service, env string) (*k
 		return nil, err
 	}
 	for _, e := range envs {
-		if e.Name == env || e.Spec.Kind == env || strings.HasSuffix(e.Name, "-"+env) {
+		if e.Name == env || e.Labels[kube.LabelEnv] == env || strings.HasSuffix(e.Name, "-"+env) {
 			return &e, nil
 		}
 	}

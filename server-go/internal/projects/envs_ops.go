@@ -134,7 +134,10 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 	e, gerr := s.GetEnvironment(ctx, project, env)
 	switch {
 	case gerr == nil:
-		if e.Spec.Kind == "production" {
+		// Protect the TRUE production env-GROUP only. spec.kind is chart
+		// semantics and is "production" on staging clones too; guarding
+		// on it would wrongly make a deletable staging clone undeletable.
+		if e.Labels[kube.LabelEnv] == "production" {
 			return fmt.Errorf("%w: cannot delete production environment %s", ErrInvalid, env)
 		}
 		serviceFQN = e.Spec.Service

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	"kuso/server/internal/kube"
 )
 
@@ -332,5 +334,82 @@ func TestAddEnvDomain_Wildcard(t *testing.T) {
 	}
 	if len(env.Spec.WildcardDomains) != 0 {
 		t.Fatalf("wildcard should be removed: %+v", env.Spec.WildcardDomains)
+	}
+}
+
+// seedEnvDivergent builds an env whose env-GROUP label and chart-semantics
+// Spec.Kind differ — the shape an env-group CLONE takes (Spec.Kind is forced
+// to "production" for always-on chart semantics, while the true group lives
+// in the env label). host lands on Spec.Host so resolver selection is visible.
+func seedEnvDivergent(project, service, envLabel, specKind, name, host string) seed {
+	return typedSeed(kube.GVREnvironments, "KusoEnvironment", name, &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "kuso",
+			Labels: map[string]string{
+				labelProject: project,
+				labelService: service,
+				labelEnv:     envLabel,
+			},
+		},
+		Spec: kube.KusoEnvironmentSpec{
+			Project:    project,
+			Service:    serviceCRName(project, service),
+			Kind:       specKind,
+			Host:       host,
+			TLSEnabled: host != "",
+		},
+	})
+}
+
+// buildServiceResolver must pick the auto-domain Host from the PRODUCTION
+// env-GROUP (env label), NOT from any env whose chart-semantics Spec.Kind
+// happens to be "production". An env-group staging clone carries
+// Spec.Kind="production" too, and previously overwrote the real prod entry,
+// leaking the staging host into ${{ web.URL }} resolution.
+func TestBuildServiceResolver_SelectsProdByEnvLabelNotSpecKind(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha", Port: 8080}),
+		// true production env: label + kind both production, real host.
+		seedEnvDivergent("alpha", "web", "production", "production", "alpha-web-production", "web.example.com"),
+		// staging clone: kind forced to "production", but env group is staging.
+		seedEnvDivergent("alpha", "web", "staging", "production", "alpha-web-staging", "web-staging.example.com"),
+	)
+
+	resolver, err := s.buildServiceResolver(context.Background(), "alpha", "kuso")
+	if err != nil {
+		t.Fatalf("buildServiceResolver: %v", err)
+	}
+	ref, ok := resolver("web")
+	if !ok {
+		t.Fatalf("resolver missing web")
+	}
+	if ref.PublicHost != "web.example.com" {
+		t.Fatalf("resolver picked host %q, want the true production host web.example.com (a staging clone with Spec.Kind==production must not overwrite it)", ref.PublicHost)
+	}
+}
+
+// DeleteEnvironment must protect only the TRUE production env-GROUP (env
+// label), not every env whose chart-semantics Spec.Kind is "production". A
+// staging clone (Spec.Kind="production", env label "staging") must be
+// deletable; the real production env stays protected.
+func TestDeleteEnvironment_ProtectsProdByEnvLabelNotSpecKind(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+		seedEnvDivergent("alpha", "web", "production", "production", "alpha-web-production", ""),
+		seedEnvDivergent("alpha", "web", "staging", "production", "alpha-web-staging", ""),
+	)
+
+	// Staging clone is deletable despite Spec.Kind=="production".
+	if err := s.DeleteEnvironment(context.Background(), "alpha", "alpha-web-staging"); err != nil {
+		t.Fatalf("DeleteEnvironment(staging clone) should succeed, got %v", err)
+	}
+	// True production env stays protected.
+	if err := s.DeleteEnvironment(context.Background(), "alpha", "alpha-web-production"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("DeleteEnvironment(production) should be ErrInvalid, got %v", err)
 	}
 }

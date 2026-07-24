@@ -291,7 +291,9 @@ func lookupSiteURL(ctx context.Context, kc *kube.Client, ns, project, fqn string
 	}
 	for i := range envs {
 		e := &envs[i]
-		if e.Spec.Kind != "production" {
+		// Select by the env-GROUP label, not spec.kind — clones set
+		// spec.kind="production" but belong to their own env group.
+		if e.Labels[kube.LabelEnv] != "production" {
 			continue
 		}
 		// Internal-only services aren't reachable from outside the

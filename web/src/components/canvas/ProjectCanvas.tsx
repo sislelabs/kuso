@@ -44,6 +44,7 @@ import { AddCronDialog } from "@/components/cron/AddCronDialog";
 import { EditCronDialog } from "@/components/cron/EditCronDialog";
 import { ConfirmDialog } from "@/components/shared/ConfirmDialog";
 import { serviceShortName } from "@/lib/utils";
+import { isProductionGroup } from "@/lib/env-group";
 import { useTriggerBuild } from "@/features/services";
 import { useCanOnProject, Perms } from "@/features/auth";
 import {
@@ -168,8 +169,11 @@ export function ProjectCanvas({
       // Fallback to ANY env when there's no production one — covers
       // preview-only / staging-only setups.
       const allForService = envs.filter((e) => e.spec.service === s.metadata.name);
+      // Select the production-GROUP env via the kuso.sislelabs.com/env
+      // label — spec.kind==="production" also matches staging/custom
+      // clones, so keying on it duplicated the tile with a clone's URL.
       const env =
-        allForService.find((e) => e.spec.kind === "production") ??
+        allForService.find((e) => isProductionGroup(e)) ??
         allForService[0];
       // serviceShortName strips the "<project>-" prefix the server
       // uses for the FQ name; the latest-builds endpoint returns the
@@ -780,7 +784,7 @@ export function ProjectCanvas({
     const short = serviceShortName(data.project, data.service.metadata.name);
     const env = envs.find(
       (x) =>
-        x.spec.service === data.service.metadata.name && x.spec.kind === "production"
+        x.spec.service === data.service.metadata.name && isProductionGroup(x)
     );
     const url = env?.status?.url as string | undefined;
 

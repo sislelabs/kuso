@@ -19,6 +19,7 @@ import {
 } from "@/components/canvas/CanvasContextMenu";
 import { LayoutGrid, Plus, ArrowUpRight, GitBranch, Globe, Box, Database, Cpu, MemoryStick, Settings, Star, FolderPlus, Folder, ChevronDown, Power, Pause, ExternalLink, FolderOpen } from "lucide-react";
 import { relativeTime } from "@/lib/format";
+import { isProductionGroup } from "@/lib/env-group";
 import { useQueries } from "@tanstack/react-query";
 import { api } from "@/lib/api-client";
 import type { KusoEnvironment, KusoService, KusoAddon } from "@/types/projects";
@@ -287,7 +288,9 @@ function defaultProjectHost(
     let lone: string | undefined;
     let count = 0;
     for (const e of environments) {
-      if (e.spec?.kind !== "production" || !e.spec?.host) continue;
+      // Group identity is the kuso.sislelabs.com/env label, not spec.kind
+      // (staging/custom clones also carry spec.kind="production").
+      if (!isProductionGroup(e) || !e.spec?.host) continue;
       count++;
       lone = e.spec.host;
       if (want && e.metadata?.labels?.["kuso.sislelabs.com/service"] === want) {
@@ -483,7 +486,7 @@ function ProjectsGrid({
         const liveServices = services.filter((s) => {
           const fqn = s.metadata.name;
           const prod = envs.find(
-            (e) => e.spec.service === fqn && e.spec.kind === "production"
+            (e) => e.spec.service === fqn && isProductionGroup(e)
           );
           if (!prod) return false;
           const st = prod.status as
@@ -525,7 +528,7 @@ function ProjectsGrid({
           };
           const live = services.find((s) => {
             const prod = envs.find(
-              (e) => e.spec.service === s.metadata.name && e.spec.kind === "production"
+              (e) => e.spec.service === s.metadata.name && isProductionGroup(e)
             );
             const st = prod?.status as
               | { ready?: boolean; replicas?: { ready?: number } }

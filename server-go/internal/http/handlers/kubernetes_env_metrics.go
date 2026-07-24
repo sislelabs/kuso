@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"kuso/server/internal/db"
+	"kuso/server/internal/kube"
 )
 
 // Per-env runtime telemetry: pod-level CPU/RAM snapshots from
@@ -172,7 +173,10 @@ func (h *KubernetesHandler) ProjectMetrics(w http.ResponseWriter, r *http.Reques
 	}
 	prodEnvs := make(map[string]struct{}, len(envs))
 	for i := range envs {
-		if envs[i].Spec.Kind == "production" {
+		// Scope the project card to the PRODUCTION env-GROUP via the env
+		// label. spec.kind="production" is also set on staging clones, so
+		// keying on it would inflate the prod card with clone metrics.
+		if envs[i].Labels[kube.LabelEnv] == "production" {
 			prodEnvs[envs[i].Name] = struct{}{}
 		}
 	}

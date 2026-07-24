@@ -424,8 +424,15 @@ export function ServiceOverlay({
   // segment fallback for legacy CRs without the label.
   const env = (envs.data ?? []).find((e) => {
     if (e.spec.service !== fqn) return false;
-    if (envParam === "production") return e.spec.kind === "production";
     const envLabel = (e.metadata.labels ?? {})["kuso.sislelabs.com/env"];
+    if (envParam === "production") {
+      // Group identity is the label — a staging clone carries
+      // spec.kind="production" too, so matching on spec.kind pulled the
+      // clone into the "production" tab. Prefer the label; fall back to
+      // spec.kind for legacy CRs missing it.
+      if (envLabel) return envLabel === "production";
+      return e.spec.kind === "production";
+    }
     if (envLabel) return envLabel === envParam;
     // Fallback: last segment of the CR name (tickero-frontend-staging → staging).
     const parts = e.metadata.name.split("-");

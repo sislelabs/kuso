@@ -524,9 +524,13 @@ func (s *Service) DeleteWithOptions(ctx context.Context, name string, opts Delet
 				if e.Spec.Service != svc.Name {
 					continue
 				}
-				envKind := e.Spec.Kind
+				// Prefer the env-GROUP label — that's the true group a
+				// clone belongs to. spec.kind is chart semantics and is
+				// "production" on staging clones too, which would target
+				// the wrong <...>-production-secrets on cleanup.
+				envKind := e.Labels[kube.LabelEnv]
 				if envKind == "" {
-					envKind = e.Labels[kube.LabelEnv]
+					envKind = e.Spec.Kind
 				}
 				if envKind == "" {
 					continue

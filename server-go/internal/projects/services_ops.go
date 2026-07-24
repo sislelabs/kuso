@@ -1644,7 +1644,11 @@ func (s *Service) buildServiceResolver(ctx context.Context, project, ns string) 
 	prodEnvByService := make(map[string]*kube.KusoEnvironment, len(services))
 	if envs, err := s.Kube.ListKusoEnvironments(ctx, ns); err == nil {
 		for i := range envs {
-			if envs[i].Spec.Kind != "production" {
+			// Select by the env-GROUP label, not spec.kind. spec.kind
+			// carries chart semantics (production=always-on) and is set
+			// to "production" on env-group clones too, so a staging
+			// clone would otherwise overwrite the real prod entry.
+			if envs[i].Labels[kube.LabelEnv] != "production" {
 				continue
 			}
 			prodEnvByService[envs[i].Spec.Service] = &envs[i]

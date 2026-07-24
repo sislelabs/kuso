@@ -10,6 +10,7 @@ import type { LogLine, LogSearchResponse } from "@/features/services";
 import { useEnvironments } from "@/features/projects";
 import { Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { isProductionGroup } from "@/lib/env-group";
 
 interface Props {
   project: string;
@@ -41,7 +42,6 @@ export function ServiceLogsPanel({ project, service }: Props) {
     const list = (envs.data ?? []).filter((e) => e.spec.service === fqn);
     return list
       .map((e) => {
-        if (e.spec.kind === "production") return { value: "production", label: "production" };
         // The log store filters by the pod's `kuso.sislelabs.com/env`
         // label (logship shipper.go:317), so the dropdown VALUE must equal
         // that label. Prefer the label off the env CR; fall back to
@@ -54,6 +54,11 @@ export function ServiceLogsPanel({ project, service }: Props) {
           (fqn && e.metadata.name.startsWith(fqn + "-")
             ? e.metadata.name.slice(fqn.length + 1)
             : e.metadata.name);
+        // Only the production-GROUP env renders as "production". A staging
+        // clone carries spec.kind="production" too, so keying on spec.kind
+        // mislabeled it "production" — drive the option off the group label
+        // (with the legacy spec.kind fallback for label-less CRs).
+        if (isProductionGroup(e)) return { value: "production", label: "production" };
         return { value: short, label: short };
       })
       .sort((a, b) => {

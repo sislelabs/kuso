@@ -361,11 +361,11 @@ func TestSetKey_PerEnvAttachOnlyThatEnv(t *testing.T) {
 func TestJSONPointerEscape(t *testing.T) {
 	t.Parallel()
 	cases := map[string]string{
-		"plain":      "plain",
-		"a/b":        "a~1b",
-		"a~b":        "a~0b",
-		"a/b~c/d":    "a~1b~0c~1d",
-		"~/":         "~0~1",
+		"plain":   "plain",
+		"a/b":     "a~1b",
+		"a~b":     "a~0b",
+		"a/b~c/d": "a~1b~0c~1d",
+		"~/":      "~0~1",
 	}
 	for in, want := range cases {
 		if got := jsonPointerEscape(in); got != want {
@@ -409,5 +409,57 @@ func TestGeneratedKinds_NoClientsetIsGraceful(t *testing.T) {
 	}
 	if len(kinds) != 0 {
 		t.Fatalf("expected empty, got %v", kinds)
+	}
+}
+
+// seedEnvKindLabel builds an env whose chart-semantics Spec.Kind and
+// env-GROUP label diverge — the exact shape an env-group CLONE takes
+// (clones set Spec.Kind="production" but carry their own env label).
+func seedEnvKindLabel(name, project, service, kind, envLabel string) envSeed {
+	return envSeed{env: &kube.KusoEnvironment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "kuso",
+			Labels: map[string]string{
+				"kuso.sislelabs.com/project": project,
+				"kuso.sislelabs.com/service": service,
+				"kuso.sislelabs.com/env":     envLabel,
+			},
+		},
+		Spec: kube.KusoEnvironmentSpec{
+			Project: project,
+			Service: project + "-" + service,
+			Kind:    kind,
+		},
+	}}
+}
+
+// findEnv must resolve by the env-GROUP label, not Spec.Kind. A staging
+// clone carries Spec.Kind="production" (chart semantics) — findEnv("production")
+// must NOT match it, and findEnv("staging") must.
+func TestFindEnv_SelectsByEnvLabelNotSpecKind(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		// true production: kind + label both "production"
+		seedEnvKindLabel("alpha-web-production", "alpha", "web", "production", "production"),
+		// staging clone: chart-semantics kind="production" but env group "staging"
+		seedEnvKindLabel("alpha-web-staging", "alpha", "web", "production", "staging"),
+	)
+	ctx := context.Background()
+
+	prod, err := s.findEnv(ctx, "alpha", "web", "production")
+	if err != nil {
+		t.Fatalf("findEnv(production): %v", err)
+	}
+	if prod.Name != "alpha-web-production" {
+		t.Fatalf("findEnv(production) selected %q, want the true production env (a staging clone with kind==production must not match)", prod.Name)
+	}
+
+	staging, err := s.findEnv(ctx, "alpha", "web", "staging")
+	if err != nil {
+		t.Fatalf("findEnv(staging): %v", err)
+	}
+	if staging.Name != "alpha-web-staging" {
+		t.Fatalf("findEnv(staging) selected %q, want alpha-web-staging", staging.Name)
 	}
 }
