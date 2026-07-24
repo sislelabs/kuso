@@ -413,3 +413,20 @@ func TestDeleteEnvironment_ProtectsProdByEnvLabelNotSpecKind(t *testing.T) {
 		t.Fatalf("DeleteEnvironment(production) should be ErrInvalid, got %v", err)
 	}
 }
+
+// TestDeleteEnvironment_ProtectsLegacyLabellessProd guards the spec.kind
+// FALLBACK: a legacy/hand-created production env with NO env-group label
+// must still be protected from deletion (label-first, kind-fallback).
+// Dropping the fallback would make a label-less prod env wrongly deletable.
+func TestDeleteEnvironment_ProtectsLegacyLabellessProd(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", kube.KusoProjectSpec{DefaultRepo: &kube.KusoRepoRef{URL: "x"}}),
+		seedService("alpha", "web", kube.KusoServiceSpec{Project: "alpha"}),
+		// env-label empty (legacy), spec.kind=production.
+		seedEnvDivergent("alpha", "web", "", "production", "alpha-web-production", ""),
+	)
+	if err := s.DeleteEnvironment(context.Background(), "alpha", "alpha-web-production"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("legacy label-less production env must stay protected via spec.kind fallback, got %v", err)
+	}
+}

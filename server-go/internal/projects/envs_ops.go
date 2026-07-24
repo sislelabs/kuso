@@ -137,7 +137,15 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 		// Protect the TRUE production env-GROUP only. spec.kind is chart
 		// semantics and is "production" on staging clones too; guarding
 		// on it would wrongly make a deletable staging clone undeletable.
-		if e.Labels[kube.LabelEnv] == "production" {
+		// Label-first, with a spec.kind FALLBACK for legacy/hand-created
+		// production envs that predate the env label — dropping the
+		// fallback would make a label-less prod env wrongly deletable
+		// (mirrors the web isProductionGroup helper).
+		grp := e.Labels[kube.LabelEnv]
+		if grp == "" {
+			grp = e.Spec.Kind
+		}
+		if grp == "production" {
 			return fmt.Errorf("%w: cannot delete production environment %s", ErrInvalid, env)
 		}
 		serviceFQN = e.Spec.Service
