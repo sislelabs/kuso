@@ -19,6 +19,14 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.21.2] — 2026-07-24
+
+### 🐛 Bug Fixes
+- Fix(env-group): clean up instance addon DB/role/secret on clone rollback + delete (review medium) ([8abd8fd](https://github.com/sislelabs/kuso/commit/8abd8fde557690d9d7c9036014a0f513cbda3b5f))
+- Fix(env): restore spec.kind fallback in delete-guard (review low) ([a44f803](https://github.com/sislelabs/kuso/commit/a44f8031eb60d1a3e1007b12940ae7546d167e9d))
+- Fix(env): stop treating env-group clones as production (spec.kind overload) ([799361b](https://github.com/sislelabs/kuso/commit/799361bf62fc3c26e034c8b51147d6031ff33109))
+- Fix(env-group): clone provisions instance-shared addons (THE crash fix) ([a4ff482](https://github.com/sislelabs/kuso/commit/a4ff4824a2373a7452493d8d130f78c304f42624))
+
 ## [0.21.1] — 2026-07-23
 
 ### Other
@@ -473,13 +481,6 @@ messages on every release. The format is loosely based on
 - Feat(platform): health dashboard, build-hint card, truthful addon status ([75576d2](https://github.com/sislelabs/kuso/commit/75576d2799bde2238e679b0388c4a273bd4e9357))
 - Feat(platform): reconcile-health API + remediation + build-hint surfacing + CLI ([f9da1a5](https://github.com/sislelabs/kuso/commit/f9da1a589dc0c7857558a4e442368ba2ba53b828))
 - Feat(platform): failure-remediation + reconcile-health + remediator foundations ([118a929](https://github.com/sislelabs/kuso/commit/118a929d94b59123e954a974a0eed144dd37f7ba))
-
-## [0.18.86] — 2026-06-25
-
-### ✨ Features
-- Feat(cli): usage, audit, ssh-keys, notification feed + users/groups/invites/config ([bb2ccb0](https://github.com/sislelabs/kuso/commit/bb2ccb0e342627b679d28973fc1495aa7f6fe240))
-- Feat(cli): node management + service wake/drift + env-scoped domains ([33d2da2](https://github.com/sislelabs/kuso/commit/33d2da2c62804465f30b7106003973f40c6b0b85))
-- Feat(cli): addon public-tcp, secret reveal, and update commands ([e0455d0](https://github.com/sislelabs/kuso/commit/e0455d07660411dd492442f3fdcfb5fddc9cb45d))
 
 
 ---

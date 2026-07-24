@@ -2,6 +2,13 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.86] — 2026-06-25
+
+### ✨ Features
+- Feat(cli): usage, audit, ssh-keys, notification feed + users/groups/invites/config ([bb2ccb0](https://github.com/sislelabs/kuso/commit/bb2ccb0e342627b679d28973fc1495aa7f6fe240))
+- Feat(cli): node management + service wake/drift + env-scoped domains ([33d2da2](https://github.com/sislelabs/kuso/commit/33d2da2c62804465f30b7106003973f40c6b0b85))
+- Feat(cli): addon public-tcp, secret reveal, and update commands ([e0455d0](https://github.com/sislelabs/kuso/commit/e0455d07660411dd492442f3fdcfb5fddc9cb45d))
+
 ## [0.18.85] — 2026-06-25
 
 ### 🐛 Bug Fixes
