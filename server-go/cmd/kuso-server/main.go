@@ -567,6 +567,11 @@ func main() {
 		// every existing project addon. Without this, services added
 		// AFTER an addon boot without DATABASE_URL etc. and crashloop.
 		projSvc.AddonConnSecrets = addonSvc.ConnSecretsForProject
+		// Env-group clones write instance-shared addon CRs directly (bypassing
+		// addons.Add), so wire the provisioner that mints their per-project DB +
+		// <addon>-conn secret — without it the cloned service crashloops on a
+		// missing DATABASE_URL secretKeyRef (CreateContainerConfigError).
+		projSvc.ProvisionInstanceAddon = addonSvc.ProvisionInstanceAddon
 		// Per-env addon provisioning: a new named env (staging/qa) gets its OWN
 		// addons (own DB/redis/s3) by default — the same isolation PR previews
 		// get. Backed by a previewdb cloner (independent of the github/preview

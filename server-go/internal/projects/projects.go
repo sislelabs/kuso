@@ -47,6 +47,16 @@ type Service struct {
 	// re-attach secrets manually after creating the addon.
 	AddonConnSecrets func(ctx context.Context, project string) ([]string, error)
 
+	// ProvisionInstanceAddon provisions the per-project database +
+	// <addon>-conn secret for an instance-shared addon (spec.useInstanceAddon)
+	// whose CR was written directly — i.e. an env-group clone, which calls
+	// Kube.CreateKusoAddon and so skips addons.Add's provisioning path. Without
+	// this the clone has a CR but no DB and no conn secret, so the cloned
+	// service's DATABASE_URL secretKeyRef fails with CreateContainerConfigError
+	// (0/N ready). Idempotent. nil = skip (tests / servers without the addons
+	// package wired). Backed by addons.Service.ProvisionInstanceAddon.
+	ProvisionInstanceAddon func(ctx context.Context, project, addonShort, instanceName string) error
+
 	// EnvAddons provisions per-env addon instances (own DB/redis/s3) for a new
 	// named environment and returns the clones' conn-secret names, scoped by the
 	// kuso.sislelabs.com/env label = envScope. nil = the env shares the project's

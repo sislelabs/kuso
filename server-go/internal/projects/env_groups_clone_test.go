@@ -11,6 +11,71 @@ import (
 	"kuso/server/internal/kube"
 )
 
+// TestCreateEnvGroup_ProvisionsInstanceAddonClone guards the bukvite
+// env-group clone crash: when the source addon is instance-shared
+// (spec.useInstanceAddon — a per-project DB on a shared server, NOT a
+// StatefulSet), the fresh-clone loop writes the CR via CreateKusoAddon
+// directly, which does NOT create the per-project DB or the <addon>-conn
+// secret. The cloned service's DATABASE_URL secretKeyRef into that conn
+// secret then fails (CreateContainerConfigError, 0/N ready). CreateEnvGroup
+// must call ProvisionInstanceAddon for the fresh clone, passing the CLONED
+// short name (short-<group>) and the source's UseInstanceAddon instance.
+func TestCreateEnvGroup_ProvisionsInstanceAddonClone(t *testing.T) {
+	t.Parallel()
+
+	// Source addon is instance-shared: kind=postgres + UseInstanceAddon="pg".
+	srcAddon := typedSeed(kube.GVRAddons, "KusoAddon", "acme-db", &kube.KusoAddon{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "acme-db",
+			Namespace: "kuso",
+			Labels:    map[string]string{labelProject: "acme"},
+		},
+		Spec: kube.KusoAddonSpec{Project: "acme", Kind: "postgres", UseInstanceAddon: "pg"},
+	})
+
+	s := fakeService(t,
+		seedProject("acme", kube.KusoProjectSpec{BaseDomain: "apps.example.com"}),
+		seedService("acme", "web", kube.KusoServiceSpec{Project: "acme", Port: 8080}),
+		seedEnv("acme", "web", "production", "main", "acme-web-production"),
+		srcAddon,
+	)
+
+	var got struct {
+		project      string
+		addonShort   string
+		instanceName string
+		calls        int
+	}
+	s.ProvisionInstanceAddon = func(ctx context.Context, project, addonShort, instanceName string) error {
+		got.project = project
+		got.addonShort = addonShort
+		got.instanceName = instanceName
+		got.calls++
+		return nil
+	}
+
+	// No policy override → the "db" addon defaults to fresh, so it's cloned.
+	if _, err := s.CreateEnvGroup(context.Background(), "acme", CreateEnvGroupRequest{Name: "staging"}); err != nil {
+		t.Fatalf("CreateEnvGroup: %v", err)
+	}
+
+	if got.calls != 1 {
+		t.Fatalf("ProvisionInstanceAddon called %d times, want 1", got.calls)
+	}
+	if got.project != "acme" {
+		t.Errorf("ProvisionInstanceAddon project = %q, want %q", got.project, "acme")
+	}
+	// The cloned addon's short name is "<source-short>-<group>" = "db-staging".
+	if got.addonShort != "db-staging" {
+		t.Errorf("ProvisionInstanceAddon addonShort = %q, want %q (cloned short name)", got.addonShort, "db-staging")
+	}
+	// The shared instance the clone points at is inherited from the source's
+	// spec.useInstanceAddon.
+	if got.instanceName != "pg" {
+		t.Errorf("ProvisionInstanceAddon instanceName = %q, want %q", got.instanceName, "pg")
+	}
+}
+
 // TestCreateEnvGroup_DoesNotInheritCustomDomains guards against the
 // traffic-hijack bug where a cloned env stamped the SOURCE service's
 // production custom domains into its own AdditionalHosts/TLSHosts (TLS on).

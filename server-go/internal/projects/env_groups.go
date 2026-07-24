@@ -406,6 +406,19 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		}
 		createdAddons = append(createdAddons, newCRName)
 		freshAddonRename[short] = newShort
+		// Instance-shared addons (spec.useInstanceAddon) are a per-project DB
+		// on a shared server, NOT a StatefulSet — the CR alone provisions
+		// nothing. CreateKusoAddon above only wrote the CR; unlike addons.Add
+		// it does NOT create the per-project DB or the <addon>-conn secret the
+		// cloned service's DATABASE_URL secretKeyRef needs. Provision it here.
+		// A clone whose DB can't be provisioned must fail loudly rather than
+		// leave a broken env (CreateContainerConfigError, 0/N ready).
+		if clone.Spec.UseInstanceAddon != "" && s.ProvisionInstanceAddon != nil {
+			if err := s.ProvisionInstanceAddon(ctx, project, newShort, clone.Spec.UseInstanceAddon); err != nil {
+				rollback()
+				return nil, fmt.Errorf("provision instance addon %s: %w", newShort, err)
+			}
+		}
 	}
 
 	// 2) Clone services + create their envs.
@@ -632,6 +645,16 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				// would disagree with the label and get dropped on the next
 				// addon churn, re-opening the 0/N crash-loop this fix closes.
 				// The copyManagedServiceSecret call above seeds that secret.
+				//
+				// EnvSecretName(project, newSvcShort, req.Name) is CONSISTENT
+				// with RefreshEnvSecrets, which recomputes the env-scoped
+				// secret name from the env's labels as EnvSecretName(project,
+				// live.Labels[LabelService], live.Labels[LabelEnv]) — and this
+				// env CR is labeled service=newSvcShort, env=req.Name (see
+				// below). newSvcShort already embeds req.Name in the SERVICE
+				// segment while EnvSecretName appends req.Name as the ENV
+				// segment; both call sites pass the same two args, so the two
+				// names match exactly (no mismatch to reconcile).
 				EnvFromSecrets: append(append([]string{}, addonConnSecrets...),
 					kube.ServiceSecretName(project, newSvcShort),
 					kube.EnvSecretName(project, newSvcShort, req.Name),

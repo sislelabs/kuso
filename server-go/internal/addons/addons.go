@@ -397,6 +397,45 @@ func (s *Service) Add(ctx context.Context, project string, req CreateAddonReques
 	return created, nil
 }
 
+// ProvisionInstanceAddon provisions the per-project database + <addon>-conn
+// secret for an instance-shared addon (spec.useInstanceAddon) that already
+// has a CR but no backing DB — e.g. an env-group clone, which writes the CR
+// directly via Kube.CreateKusoAddon and so bypasses Add's provisioning path.
+// It mirrors the sequence Add runs at addons.go for a useInstanceAddon
+// request: instanceAdminDSN -> provisionInstanceAddonDB ->
+// writeInstanceAddonConnSecret. addonShort is the cloned addon's short name
+// (its CR is <project>-<addonShort>); instanceName is the shared instance the
+// clone points at (clone.Spec.UseInstanceAddon).
+//
+// Idempotent: if the <addon>-conn secret already exists we no-op, so a retry
+// of a partially-completed clone is safe (CREATE DATABASE / CREATE USER are
+// themselves idempotent, but skipping avoids minting a fresh password that
+// wouldn't match the surviving DB role).
+func (s *Service) ProvisionInstanceAddon(ctx context.Context, project, addonShort, instanceName string) error {
+	ns := s.nsFor(ctx, project)
+	fqn := addonCRName(project, addonShort)
+	if _, err := s.Kube.Clientset.CoreV1().Secrets(ns).Get(ctx, connSecretName(fqn), metav1.GetOptions{}); err == nil {
+		// Conn secret already present — DB + role were provisioned on a
+		// prior run. Re-running would mint a new password that no longer
+		// matches the existing role, so leave it be.
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("preflight conn secret: %w", err)
+	}
+	adminDSN, err := s.instanceAdminDSN(ctx, instanceName)
+	if err != nil {
+		return err
+	}
+	dsn, pw, err := s.provisionInstanceAddonDB(adminDSN, project, addonShort)
+	if err != nil {
+		return fmt.Errorf("%w: provision instance addon db: %w", ErrInvalid, err)
+	}
+	if err := s.writeInstanceAddonConnSecret(ctx, ns, fqn, dsn, pw, s.instanceHasPooler(ctx, ns, dsn)); err != nil {
+		return fmt.Errorf("%w: write conn secret: %w", ErrInvalid, err)
+	}
+	return nil
+}
+
 // cleanupAddSideEffects rolls back the durable side effects Add
 // provisions BEFORE the CR write (mirrored external conn secret,
 // instance-shared database + role + conn secret) when the CR create
