@@ -31,6 +31,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
 	"kuso/server/internal/config"
@@ -353,6 +354,15 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 
 	// Track what we created so we can roll back on partial failure.
 	var createdAddons, createdServices, createdEnvs []string
+	// provisionedInstanceAddons records the SHORT name of every fresh
+	// instance-shared clone whose ProvisionInstanceAddon returned nil.
+	// Those provisioned a per-project DB + login role + <addon>-conn secret
+	// on the shared server that DeleteKusoAddon alone does NOT reclaim — so
+	// rollback must call CleanupInstanceAddon for each, or a mid-clone abort
+	// leaks an empty DB + live credential + ownerless secret unbounded across
+	// retries. Recorded only AFTER a successful provision so we never try to
+	// clean up something that never provisioned.
+	var provisionedInstanceAddons []string
 	rollback := func() {
 		// Best-effort. Errors here are noise; the create already
 		// failed and the user's caller will retry or clean up.
@@ -361,6 +371,16 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 		}
 		for _, n := range createdServices {
 			_ = s.Kube.DeleteKusoService(ctx, ns, n)
+		}
+		// Drop the instance DB/role + conn secret BEFORE deleting the addon
+		// CR: CleanupInstanceAddon reads the CR's spec.useInstanceAddon to
+		// resolve which shared server to drop the DB on. Deleting the CR first
+		// would leave it unable to build the admin DSN (conn-secret still gets
+		// cleaned, but the DB/role would orphan).
+		for _, short := range provisionedInstanceAddons {
+			if s.CleanupInstanceAddon != nil {
+				_ = s.CleanupInstanceAddon(ctx, project, short)
+			}
 		}
 		for _, n := range createdAddons {
 			_ = s.Kube.DeleteKusoAddon(ctx, ns, n)
@@ -418,6 +438,9 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				rollback()
 				return nil, fmt.Errorf("provision instance addon %s: %w", newShort, err)
 			}
+			// Provision landed the DB/role + conn secret on the shared server;
+			// record it so a LATER-step failure's rollback reclaims them.
+			provisionedInstanceAddons = append(provisionedInstanceAddons, newShort)
 		}
 	}
 
@@ -748,6 +771,19 @@ func (s *Service) DeleteEnvGroup(ctx context.Context, project, name string) erro
 	if addonList != nil {
 		for i := range addonList.Items {
 			n := addonList.Items[i].GetName()
+			// Instance-shared addons (spec.useInstanceAddon) back a per-project
+			// DB + login role + <addon>-conn secret on a shared server that
+			// DeleteKusoAddon does NOT reclaim (the CR alone owns none of it).
+			// Drop those side effects BEFORE deleting the CR — CleanupInstanceAddon
+			// reads the CR's spec.useInstanceAddon to resolve which shared server
+			// to drop the DB on, so it must run while the CR still exists.
+			if inst, _, _ := unstructured.NestedString(addonList.Items[i].Object, "spec", "useInstanceAddon"); inst != "" && s.CleanupInstanceAddon != nil {
+				short := strings.TrimPrefix(n, project+"-")
+				if short == "" {
+					short = n
+				}
+				_ = s.CleanupInstanceAddon(ctx, project, short)
+			}
 			if err := s.Kube.DeleteKusoAddon(ctx, ns, n); err != nil && !apierrors.IsNotFound(err) {
 				return fmt.Errorf("delete addon %s: %w", n, err)
 			}

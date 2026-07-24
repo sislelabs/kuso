@@ -57,6 +57,15 @@ type Service struct {
 	// package wired). Backed by addons.Service.ProvisionInstanceAddon.
 	ProvisionInstanceAddon func(ctx context.Context, project, addonShort, instanceName string) error
 
+	// CleanupInstanceAddon rolls back what ProvisionInstanceAddon created for
+	// an instance-shared clone: the per-project DB + login role on the shared
+	// server and the <addon>-conn secret. Called on env-group create partial
+	// failure (rollback) so a mid-clone abort doesn't leak an empty DB + live
+	// credential + ownerless secret. Best-effort + idempotent. nil = skip
+	// (tests / servers without the addons package wired). Backed by
+	// addons.Service.CleanupInstanceAddon.
+	CleanupInstanceAddon func(ctx context.Context, project, addonShort string) error
+
 	// EnvAddons provisions per-env addon instances (own DB/redis/s3) for a new
 	// named environment and returns the clones' conn-secret names, scoped by the
 	// kuso.sislelabs.com/env label = envScope. nil = the env shares the project's

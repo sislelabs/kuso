@@ -76,6 +76,137 @@ func TestCreateEnvGroup_ProvisionsInstanceAddonClone(t *testing.T) {
 	}
 }
 
+// TestCreateEnvGroup_RollbackCleansUpProvisionedInstanceAddon guards the
+// orphan-leak fix: once ProvisionInstanceAddon has landed a per-project DB +
+// login role + <addon>-conn secret on the shared server, a LATER-step failure
+// (here a service-clone name conflict) must roll them back via
+// CleanupInstanceAddon — otherwise a mid-clone abort leaks an empty DB + a live
+// credential + an ownerless secret, unbounded across retries. Deleting the
+// addon CR alone (raw DeleteKusoAddon) does NOT reclaim any of that.
+func TestCreateEnvGroup_RollbackCleansUpProvisionedInstanceAddon(t *testing.T) {
+	t.Parallel()
+
+	// Source addon is instance-shared (spec.useInstanceAddon), so the fresh
+	// clone loop calls ProvisionInstanceAddon.
+	srcAddon := typedSeed(kube.GVRAddons, "KusoAddon", "acme-db", &kube.KusoAddon{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "acme-db",
+			Namespace: "kuso",
+			Labels:    map[string]string{labelProject: "acme"},
+		},
+		Spec: kube.KusoAddonSpec{Project: "acme", Kind: "postgres", UseInstanceAddon: "pg"},
+	})
+
+	// Decoy service that COLLIDES by name with the clone target
+	// ("acme-web-staging") so CreateKusoService fails AFTER the addon has been
+	// provisioned. It carries env=other so it's excluded from the source-service
+	// list (only production services are mirrored) and never buckets under the
+	// "staging" group in the pre-existing-group conflict check.
+	decoy := typedSeed(kube.GVRServices, "KusoService", "acme-web-staging", &kube.KusoService{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "acme-web-staging",
+			Namespace: "kuso",
+			Labels: map[string]string{
+				labelProject: "acme",
+				labelService: "web-staging",
+				labelEnv:     "other",
+			},
+		},
+		Spec: kube.KusoServiceSpec{Project: "acme", Port: 8080},
+	})
+
+	s := fakeService(t,
+		seedProject("acme", kube.KusoProjectSpec{BaseDomain: "apps.example.com"}),
+		seedService("acme", "web", kube.KusoServiceSpec{Project: "acme", Port: 8080}),
+		seedEnv("acme", "web", "production", "main", "acme-web-production"),
+		srcAddon,
+		decoy,
+	)
+
+	var provisioned int
+	s.ProvisionInstanceAddon = func(ctx context.Context, project, addonShort, instanceName string) error {
+		provisioned++
+		return nil
+	}
+	var cleanup struct {
+		calls      int
+		project    string
+		addonShort string
+	}
+	s.CleanupInstanceAddon = func(ctx context.Context, project, addonShort string) error {
+		cleanup.calls++
+		cleanup.project = project
+		cleanup.addonShort = addonShort
+		return nil
+	}
+
+	// The service clone collides with the decoy → CreateEnvGroup fails AFTER
+	// the instance addon was provisioned.
+	_, err := s.CreateEnvGroup(context.Background(), "acme", CreateEnvGroupRequest{Name: "staging"})
+	if err == nil {
+		t.Fatal("CreateEnvGroup succeeded, want failure from service-clone conflict")
+	}
+
+	if provisioned != 1 {
+		t.Fatalf("ProvisionInstanceAddon called %d times, want 1 (provision must land before the failure)", provisioned)
+	}
+	if cleanup.calls != 1 {
+		t.Fatalf("CleanupInstanceAddon called %d times, want 1 (rollback must reclaim the provisioned instance addon)", cleanup.calls)
+	}
+	if cleanup.project != "acme" {
+		t.Errorf("CleanupInstanceAddon project = %q, want %q", cleanup.project, "acme")
+	}
+	// Cleanup must target the CLONED short name ("db-staging"), the same name
+	// ProvisionInstanceAddon was given.
+	if cleanup.addonShort != "db-staging" {
+		t.Errorf("CleanupInstanceAddon addonShort = %q, want %q (cloned short name)", cleanup.addonShort, "db-staging")
+	}
+}
+
+// TestDeleteEnvGroup_CleansUpInstanceAddon guards the symmetric leak on
+// teardown: DeleteEnvGroup raw-deletes the cloned addon CRs, which does NOT
+// reclaim an instance-shared addon's per-project DB + role + conn secret. It
+// must call CleanupInstanceAddon for each instance-shared addon in the group
+// (while the CR still exists, so the instance can be resolved).
+func TestDeleteEnvGroup_CleansUpInstanceAddon(t *testing.T) {
+	t.Parallel()
+
+	// A cloned instance-shared addon living in env-group "staging".
+	cloned := typedSeed(kube.GVRAddons, "KusoAddon", "acme-db-staging", &kube.KusoAddon{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "acme-db-staging",
+			Namespace: "kuso",
+			Labels:    map[string]string{labelProject: "acme", labelEnv: "staging"},
+		},
+		Spec: kube.KusoAddonSpec{Project: "acme", Kind: "postgres", UseInstanceAddon: "pg"},
+	})
+
+	s := fakeService(t,
+		seedProject("acme", kube.KusoProjectSpec{BaseDomain: "apps.example.com"}),
+		cloned,
+	)
+
+	var cleanup struct {
+		calls      int
+		addonShort string
+	}
+	s.CleanupInstanceAddon = func(ctx context.Context, project, addonShort string) error {
+		cleanup.calls++
+		cleanup.addonShort = addonShort
+		return nil
+	}
+
+	if err := s.DeleteEnvGroup(context.Background(), "acme", "staging"); err != nil {
+		t.Fatalf("DeleteEnvGroup: %v", err)
+	}
+	if cleanup.calls != 1 {
+		t.Fatalf("CleanupInstanceAddon called %d times, want 1", cleanup.calls)
+	}
+	if cleanup.addonShort != "db-staging" {
+		t.Errorf("CleanupInstanceAddon addonShort = %q, want %q", cleanup.addonShort, "db-staging")
+	}
+}
+
 // TestCreateEnvGroup_DoesNotInheritCustomDomains guards against the
 // traffic-hijack bug where a cloned env stamped the SOURCE service's
 // production custom domains into its own AdditionalHosts/TLSHosts (TLS on).

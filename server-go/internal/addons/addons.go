@@ -436,6 +436,67 @@ func (s *Service) ProvisionInstanceAddon(ctx context.Context, project, addonShor
 	return nil
 }
 
+// CleanupInstanceAddon rolls back the durable side effects
+// ProvisionInstanceAddon creates for an instance-shared addon
+// (spec.useInstanceAddon): the per-project database + login role on the
+// shared server and the <addon>-conn secret. It's the teardown mirror of
+// ProvisionInstanceAddon, exposed so callers that provision a clone's
+// instance addon by hand (env-group create/delete) can undo it on partial
+// failure — the same way cleanupAddSideEffects undoes Add's provisioning
+// when the CR write fails.
+//
+// addonShort is the cloned addon's short name (its CR is
+// <project>-<addonShort>). The shared instance to target is read from the
+// addon CR's spec.useInstanceAddon; if the CR is already gone we fall
+// through and only drop the conn secret (nothing else to key the admin DSN
+// off). Best-effort + not-found-safe throughout: every failure is logged
+// so an operator has an orphan trail, and we return nil so the caller's
+// rollback loop never aborts. Runs on a cancel-shielded context so an
+// aborted request still cleans up after itself.
+func (s *Service) CleanupInstanceAddon(ctx context.Context, project, addonShort string) error {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancel()
+
+	ns := s.nsFor(cctx, project)
+	fqn := addonCRName(project, addonShort)
+
+	// Resolve the shared instance name from the CR before it (possibly)
+	// gets deleted by the caller's CR-teardown loop. Best-effort: if the
+	// CR is gone we can still drop the conn secret below.
+	var instanceName string
+	if s.Kube != nil {
+		if a, err := s.Kube.GetKusoAddon(cctx, ns, fqn); err == nil && a != nil {
+			instanceName = a.Spec.UseInstanceAddon
+		}
+	}
+
+	// Delete the <addon>-conn secret (no ownerRef, so it never GCs on its
+	// own).
+	if s.Kube != nil && s.Kube.Clientset != nil {
+		if err := s.Kube.Clientset.CoreV1().Secrets(ns).Delete(cctx, connSecretName(fqn), metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
+			slog.Default().Warn("instance-addon cleanup: conn-secret delete failed (orphaned)",
+				"project", project, "addon", addonShort, "secret", connSecretName(fqn), "err", err)
+		}
+	}
+
+	// Drop the per-project DB + role on the shared server. Needs the admin
+	// DSN, which we can only build if we recovered the instance name.
+	if instanceName != "" {
+		adminDSN, err := s.instanceAdminDSN(cctx, instanceName)
+		if err == nil {
+			err = s.dropInstanceAddonDB(adminDSN, project, addonShort)
+		}
+		if err != nil {
+			slog.Default().Warn("instance-addon cleanup: instance-DB drop failed (orphaned on shared server)",
+				"project", project, "addon", addonShort, "instance", instanceName, "err", err)
+		}
+	} else {
+		slog.Default().Warn("instance-addon cleanup: could not resolve shared instance (CR gone?); per-project DB/role may be orphaned",
+			"project", project, "addon", addonShort)
+	}
+	return nil
+}
+
 // cleanupAddSideEffects rolls back the durable side effects Add
 // provisions BEFORE the CR write (mirrored external conn secret,
 // instance-shared database + role + conn secret) when the CR create

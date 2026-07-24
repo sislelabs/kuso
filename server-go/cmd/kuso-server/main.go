@@ -572,6 +572,10 @@ func main() {
 		// <addon>-conn secret — without it the cloned service crashloops on a
 		// missing DATABASE_URL secretKeyRef (CreateContainerConfigError).
 		projSvc.ProvisionInstanceAddon = addonSvc.ProvisionInstanceAddon
+		// Teardown mirror: on env-group create partial failure, roll back the
+		// per-project DB/role + conn secret a successful ProvisionInstanceAddon
+		// left behind, so a mid-clone abort doesn't leak them on the shared server.
+		projSvc.CleanupInstanceAddon = addonSvc.CleanupInstanceAddon
 		// Per-env addon provisioning: a new named env (staging/qa) gets its OWN
 		// addons (own DB/redis/s3) by default — the same isolation PR previews
 		// get. Backed by a previewdb cloner (independent of the github/preview
