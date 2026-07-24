@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.21.3] — 2026-07-24
+
+### 🐛 Bug Fixes
+- Fix(instance-addon): grant role privileges on public schema (PG15+) ([db8a5f9](https://github.com/sislelabs/kuso/commit/db8a5f9bb3014311fd898e20b3af5310326b1b11))
+
 ## [0.21.2] — 2026-07-24
 
 ### 🐛 Bug Fixes
@@ -471,16 +476,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(web): clarify env-branch vs default-branch + drop no-op rollback chip ([0fbca7b](https://github.com/sislelabs/kuso/commit/0fbca7bfe0959aa73fdf9b9fa62db5f200defb03))
-
-## [0.18.87] — 2026-06-27
-
-### Other
-- Style(failures): gofmt build-detector test table ([4a1295e](https://github.com/sislelabs/kuso/commit/4a1295e12629c7afa754e3655bca1aed633f1a5e))
-
-### ✨ Features
-- Feat(platform): health dashboard, build-hint card, truthful addon status ([75576d2](https://github.com/sislelabs/kuso/commit/75576d2799bde2238e679b0388c4a273bd4e9357))
-- Feat(platform): reconcile-health API + remediation + build-hint surfacing + CLI ([f9da1a5](https://github.com/sislelabs/kuso/commit/f9da1a589dc0c7857558a4e442368ba2ba53b828))
-- Feat(platform): failure-remediation + reconcile-health + remediator foundations ([118a929](https://github.com/sislelabs/kuso/commit/118a929d94b59123e954a974a0eed144dd37f7ba))
 
 
 ---
