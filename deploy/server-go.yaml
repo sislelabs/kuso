@@ -172,8 +172,16 @@ rules:
   # for the same reason: it's the one permission kuso-prometheus's
   # ClusterRole grants that kuso-server did not already have, so the
   # apply was rejected as an escalation attempt.
+  #
+  # rolebindings repeats the resource named above deliberately: the
+  # per-project rule intentionally withholds update/patch (once stamped,
+  # a project binding is immutable from the server's view), but
+  # `kubectl apply` over an EXISTING RoleBinding in the bundle needs
+  # them. RBAC rules are additive — the union is what applies — so
+  # listing it here grants the updater's re-apply without rewriting the
+  # narrower rule's intent.
   - apiGroups: [rbac.authorization.k8s.io]
-    resources: [roles, clusterroles, clusterrolebindings]
+    resources: [roles, rolebindings, clusterroles, clusterrolebindings]
     verbs: [get, list, create, update, patch]
   # PodDisruptionBudgets ship with the pgbouncer/prometheus manifests
   # so a drain can't take out the last replica.

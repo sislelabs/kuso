@@ -913,7 +913,16 @@ func (s *Service) Delete(ctx context.Context, project, name string) error {
 	// Without this exclude its conn would be re-injected into every env
 	// and, once the chart's conn secret is GC'd, the next pod restart
 	// fails CreateContainerConfigError on the dangling secret ref.
-	return s.refreshEnvSecretsFiltered(ctx, project, nil, map[string]bool{connSecretName(name): true})
+	//
+	// Key on fqn, NOT the short name. connSecretName takes an addon CR
+	// name, and every consumer of this map builds its lookup key from
+	// the CR name too — orderedConnSecrets and addAddonConn both call
+	// connSecretName(a.Name) where a.Name is "<project>-<addon>". Passing
+	// the short name here produced "pg-conn" while the lookups asked for
+	// "tickero-pg-conn", so the exclude silently never matched and this
+	// guard did nothing at all. Every caller reaches Delete with a short
+	// name, so it was defeated on every code path.
+	return s.refreshEnvSecretsFiltered(ctx, project, nil, map[string]bool{connSecretName(fqn): true})
 }
 
 // retainedPVCsForAddon returns the names of PVCs that will survive the

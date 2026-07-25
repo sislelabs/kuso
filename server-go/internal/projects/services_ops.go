@@ -2114,6 +2114,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			privateEgressChanged = true
 		}
 		platformAPIEgressChanged := false
+		publicEnvChanged := false
 		if req.PlatformAPIEgress != nil {
 			svc.Spec.PlatformAPIEgress = *req.PlatformAPIEgress
 			platformAPIEgressChanged = true
@@ -2341,14 +2342,22 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			snapshotChanged = true
 		}
 		// Build-time env config. Wholesale replace on a non-nil pointer
-		// (declarative reset); leave alone when omitted. These are consumed
-		// when the next build CR is created (builds.Create reads the service
-		// spec), not propagated to env CRs — no changedFields entry needed.
+		// (declarative reset); leave alone when omitted.
+		//
+		// BuildArgs really is build-only: builds.Create reads it off the
+		// service spec and nothing on the env CR consumes it.
 		if req.BuildArgs != nil {
 			svc.Spec.BuildArgs = *req.BuildArgs
 		}
+		// PublicEnv is NOT build-only, despite living next to BuildArgs.
+		// The build bakes __KUSO_RUNTIME_<KEY>__ sentinels from the
+		// service spec, but the chart substitutes them at pod start from
+		// the ENV CR — so it needs a changedFields entry or a
+		// publicEnv-only PATCH never reaches a pod and the browser gets
+		// the raw sentinel strings.
 		if req.PublicEnv != nil {
 			svc.Spec.PublicEnv = *req.PublicEnv
+			publicEnvChanged = true
 		}
 		// Capture which fields changed for the post-update propagation.
 		// Recomputed on every retry attempt — deterministic from req.
@@ -2362,6 +2371,7 @@ func (s *Service) PatchService(ctx context.Context, project, service string, req
 			Runtime:           runtimeChanged,
 			PrivateEgress:     privateEgressChanged,
 			PlatformAPIEgress: platformAPIEgressChanged,
+			PublicEnv:         publicEnvChanged,
 			Stopped:           stoppedChanged,
 			Sleep:             sleepChanged,
 			Release:           releaseChanged,

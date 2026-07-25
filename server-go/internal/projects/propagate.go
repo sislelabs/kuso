@@ -58,6 +58,17 @@ type changedFields struct {
 	// PlatformAPIEgress carries spec.platformApiEgress changes — same
 	// chart-reads-env-only reasoning as PrivateEgress.
 	PlatformAPIEgress bool
+	// PublicEnv carries spec.publicEnv changes. There are TWO consumers
+	// reading DIFFERENT CRs: builds.Create bakes the
+	// __KUSO_RUNTIME_<KEY>__ sentinels from the SERVICE spec, while the
+	// kusoenvironment chart substitutes them at pod start from the ENV
+	// CR. A PatchService carrying only publicEnv used to set the service
+	// field and stop — no changed-flag meant propagateChangedToEnvs
+	// early-returned on !any(), so the unconditional env mirror below
+	// never ran and the browser was served literal
+	// __KUSO_RUNTIME_NEXT_PUBLIC_API_URL__ strings. `kuso apply` masked
+	// it by co-setting other fields; the raw PATCH endpoint did not.
+	PublicEnv bool
 	// Release carries spec.release changes. The build poller reads
 	// it off the env CR (which is already in its hot-path GET) when
 	// deciding whether to run a release Job before promoting an image.
@@ -94,7 +105,7 @@ type changedFields struct {
 }
 
 func (c changedFields) any() bool {
-	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.PlatformAPIEgress || c.Release || c.Command || c.Resources || c.Stopped || c.Sleep || c.SecurityContext || c.Snapshot
+	return c.EnvVars || c.Placement || c.Volumes || c.Port || c.Scale || c.Domains || c.Internal || c.Runtime || c.PrivateEgress || c.PlatformAPIEgress || c.Release || c.Command || c.Resources || c.Stopped || c.Sleep || c.SecurityContext || c.Snapshot || c.PublicEnv
 }
 
 // propagateChangedToEnvs is the single chokepoint that mirrors a

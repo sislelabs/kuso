@@ -718,6 +718,22 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				PrivateEgress:        item.svc.Spec.PrivateEgress,
 				PlatformAPIEgress:    item.svc.Spec.PlatformAPIEgress,
 				SpreadPolicy:         s.resolveSpreadPolicy(ctx),
+				// SharedEnvKeys and SubscribedAddons are the two
+				// nil-means-LEGACY-ALLOW-ALL fields. Leaving them unset on a
+				// clone is not a cosmetic drop: addons.refreshEnvSecrets
+				// gates on `!= nil`, so a nil here reverts the clone to
+				// "mount every project addon and inherit every shared key" —
+				// re-opening exactly the DATABASE_URL-into-a-public-frontend
+				// leak these fields exist to close. Copy them so a clone
+				// inherits the source service's subscriptions verbatim.
+				SharedEnvKeys:    item.svc.Spec.SharedEnvKeys,
+				SubscribedAddons: item.svc.Spec.SubscribedAddons,
+				// PendingImage is deliberately NOT set here. The other two
+				// literals derive it (withholding a runtime=image service's
+				// image until its release hook passes), but this clone
+				// inherits inheritImage from the SOURCE'S PRODUCTION ENV —
+				// an image that has already cleared that gate. Re-withholding
+				// it would strand the clone imageless.
 			},
 		}
 		if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, envCR); err != nil {
