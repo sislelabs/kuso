@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.93] — 2026-07-01
+
+### ✨ Features
+- Feat(activator): creative "4∅4" not-found page ([050d66d](https://github.com/sislelabs/kuso/commit/050d66d7339ef6b1ad40ff4bfa31cd7c7bee3dd1))
+
 ## [0.18.92] — 2026-07-01
 
 ### ✨ Features

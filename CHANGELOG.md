@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.21.9] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(rbac): grant updater the RBAC it applies; stop shipping what it can't ([6535bb2](https://github.com/sislelabs/kuso/commit/6535bb2d14db1ecdf65def3302628bfbad9ea58b))
+
 ## [0.21.8] — 2026-07-25
 
 ### 🐛 Bug Fixes
@@ -467,11 +472,6 @@ messages on every release. The format is loosely based on
 
 ### 🔨 Refactors
 - Refactor(activator): restrained, editorial 404 (drop the maximalist version) ([b988f68](https://github.com/sislelabs/kuso/commit/b988f687cfa61b437503ce780cdbc82f9295406a))
-
-## [0.18.93] — 2026-07-01
-
-### ✨ Features
-- Feat(activator): creative "4∅4" not-found page ([050d66d](https://github.com/sislelabs/kuso/commit/050d66d7339ef6b1ad40ff4bfa31cd7c7bee3dd1))
 
 
 ---
