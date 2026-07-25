@@ -83,7 +83,34 @@ func (s *Service) SweepExpiredPreviews(ctx context.Context, onErr func(name stri
 			if err != nil || !exp.Before(now) {
 				continue
 			}
-			if err := s.Kube.DeleteKusoEnvironment(ctx, ns, e.Name); err != nil {
+			// Route through the full DeleteEnvironment rather than
+			// DeleteKusoEnvironment. The bare CR delete leaves the per-env
+			// Secret, the PR's addon clones (StatefulSet + data PVC) and
+			// the cert-manager TLS Secrets behind — nothing GCs those, so
+			// every preview that lapses by TTL instead of a PR-close
+			// webhook orphaned its storage forever. TTL expiry is the
+			// HIGHER-volume path (a PR opened and abandoned never fires a
+			// close event), so this was the main orphan source.
+			// DeleteEnvironment is documented idempotent and resumable, so
+			// it is safe to call here and safe to retry on the next tick.
+			proj := e.Spec.Project
+			if proj == "" {
+				proj = e.Labels[kube.LabelProject]
+			}
+			if proj == "" {
+				// Can't resolve the project — fall back to the bare CR
+				// delete so an unlabelled env still expires rather than
+				// lingering past its TTL forever.
+				if err := s.Kube.DeleteKusoEnvironment(ctx, ns, e.Name); err != nil {
+					if onErr != nil {
+						onErr(e.Name, err)
+					}
+					continue
+				}
+				deleted++
+				continue
+			}
+			if err := s.DeleteEnvironment(ctx, proj, e.Name); err != nil && !apierrors.IsNotFound(err) {
 				if onErr != nil {
 					onErr(e.Name, err)
 				}
@@ -174,6 +201,7 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 	// orphan StatefulSets + PVCs forever. Per-addon errors are tolerated
 	// — the env is already gone, the addon will get reconciled on the
 	// next sweep tick.
+	var deletedCloneAddons []string
 	if pr := previewPRNumber(env, serviceFQN); pr != "" {
 		selector := kube.LabelSelector(map[string]string{
 			kube.LabelProject:               project,
@@ -186,6 +214,8 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 				name := addonList.Items[i].GetName()
 				if derr := s.Kube.DeleteKusoAddon(ctx, ns, name); derr != nil && !apierrors.IsNotFound(derr) {
 					_ = derr
+				} else {
+					deletedCloneAddons = append(deletedCloneAddons, name)
 				}
 			}
 		}
@@ -196,7 +226,6 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 			kube.LabelProject: project,
 			kube.LabelEnv:     scope,
 		})
-		var deletedCloneAddons []string
 		if addonList, lerr := s.Kube.Dynamic.Resource(kube.GVRAddons).Namespace(ns).List(ctx, metav1.ListOptions{
 			LabelSelector: selector,
 		}); lerr == nil {
@@ -209,27 +238,35 @@ func (s *Service) DeleteEnvironment(ctx context.Context, project, env string) er
 				}
 			}
 		}
-		// Purge the clone addons' retained data PVCs. The addon helm chart
-		// stamps `helm.sh/resource-policy: keep` on the data PVC to protect
-		// the PROJECT's production data on delete — but an env-scoped clone
-		// (staging/qa's own throwaway DB) is meant to be removed with the
-		// env. Worse, leaving the PVC behind while the conn Secret is NOT
-		// retained means a same-named env recreate reuses the old pgdata
-		// (old password baked into initdb) against a freshly-generated
-		// conn password → SASL auth crashloop. So we explicitly reclaim
-		// these PVCs here. Best-effort: a still-mounted PVC stamps a
-		// deletionTimestamp and GCs once the StatefulSet unmounts.
-		if s.Kube.Clientset != nil {
-			for _, addonFQN := range deletedCloneAddons {
-				pvcs, lerr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
-					LabelSelector: "app.kubernetes.io/instance=" + addonFQN,
-				})
-				if lerr != nil {
-					continue
-				}
-				for i := range pvcs.Items {
-					_ = s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcs.Items[i].Name, metav1.DeleteOptions{})
-				}
+	}
+
+	// Purge the clone addons' retained data PVCs. The addon helm chart
+	// stamps `helm.sh/resource-policy: keep` on the data PVC to protect
+	// the PROJECT's production data on delete — but an env-scoped clone
+	// (staging/qa's own throwaway DB, or a preview's per-PR DB) is meant
+	// to be removed with the env. Worse, leaving the PVC behind while the
+	// conn Secret is NOT retained means a same-named env recreate reuses
+	// the old pgdata (old password baked into initdb) against a freshly-
+	// generated conn password → SASL auth crashloop.
+	//
+	// This applies to previews as much as to named envs: preview clone
+	// names are deterministic (`<base>-pr-<N>`), so a retained PVC from
+	// PR #42 is mounted verbatim by the NEXT PR #42 in the same repo —
+	// one PR's database silently readable by another. This reclaim used
+	// to live inside the named-env branch only, which is exactly how
+	// tickero accumulated 11 orphaned pr-* volumes still holding data.
+	// Best-effort: a still-mounted PVC stamps a deletionTimestamp and
+	// GCs once the StatefulSet unmounts.
+	if s.Kube.Clientset != nil {
+		for _, addonFQN := range deletedCloneAddons {
+			pvcs, lerr := s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).List(ctx, metav1.ListOptions{
+				LabelSelector: "app.kubernetes.io/instance=" + addonFQN,
+			})
+			if lerr != nil {
+				continue
+			}
+			for i := range pvcs.Items {
+				_ = s.Kube.Clientset.CoreV1().PersistentVolumeClaims(ns).Delete(ctx, pvcs.Items[i].Name, metav1.DeleteOptions{})
 			}
 		}
 	}

@@ -650,6 +650,17 @@ func (s *Service) AddService(ctx context.Context, project string, req CreateServ
 			// the migration and crash on missing tables until a later patch.
 			Release:              created.Spec.Release,
 			SnapshotBeforeDeploy: created.Spec.SnapshotBeforeDeploy,
+			// Stopped / Sleep / Volumes were absent from this literal
+			// while the AddEnvironment and env-group literals both
+			// carried them. Sleep in particular is computed above and
+			// stamped onto the SERVICE spec but never reached the env CR,
+			// so a service created with sleep.enabled would miss the
+			// activator ingress route until the first propagation healed
+			// it. Keep all three in lockstep with the sibling literals —
+			// see TestEnvLiteralsShareServiceDerivedFields.
+			Stopped: created.Spec.Stopped,
+			Sleep:   envSleepFrom(created.Spec.Sleep),
+			Volumes: created.Spec.Volumes,
 		},
 	}
 	if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, env); err != nil {

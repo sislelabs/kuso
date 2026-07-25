@@ -114,7 +114,13 @@ func TestImageTag(t *testing.T) {
 	cases := map[string]string{
 		"abcdef0123456789abcdef0123456789abcdef01": "abcdef012345",
 		"main-abc": "main-abc",
-		"feat/x":   "feat/x", // not validated for branches
+		// A slash is legal in a git ref but NOT in a Docker tag, so it
+		// must be slugified exactly as shortRef does. This case used to
+		// assert "feat/x" with the note "not validated for branches" —
+		// that encoded the bug: the build got a CR + Job fine (both go
+		// through shortRef) and then failed at image push. See
+		// refs_test.go for the full ref→identifier coverage.
+		"feat/x": "feat-x",
 	}
 	for in, want := range cases {
 		if got := ImageTag(in); got != want {

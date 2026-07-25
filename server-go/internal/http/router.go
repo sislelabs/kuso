@@ -546,6 +546,7 @@ func mountAuthenticatedRoutes(
 					Namespace:      d.Namespace,
 					DB:             d.DB,
 					Logger:         d.Logger,
+					Audit:          d.Audit,
 				}
 				exportH.Mount(r)
 			}

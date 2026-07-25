@@ -231,6 +231,15 @@ func (s *Service) ConnSecretsForProject(ctx context.Context, project string) ([]
 	for _, a := range addons {
 		out = append(out, connSecretName(a.Name))
 	}
+	// Sort for the same reason orderedConnSecrets does: s.List is
+	// informer-cache backed, so iteration order is non-deterministic.
+	// An unsorted list here means two envs of the same project created
+	// moments apart carry the same secrets in different orders — and
+	// kube envFrom is last-source-wins on duplicate keys, so a key
+	// present in two mounted secrets would resolve differently per env.
+	// It also makes the first refreshEnvSecrets after any addon churn
+	// look like a real spec diff and roll those pods for nothing.
+	slices.Sort(out)
 	return out, nil
 }
 

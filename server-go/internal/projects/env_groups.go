@@ -696,6 +696,28 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				SecurityContext: item.svc.Spec.SecurityContext,
 				Runtime:         item.svc.Spec.Runtime,
 				Command:         item.svc.Spec.Command,
+				// Service-derived fields below. These were missing from this
+				// literal while the two service-owned literals in
+				// services_ops.go carried them, so a cloned env silently
+				// differed from an equivalent hand-made one until the next
+				// save re-ran propagate.go and healed it — an intermittent
+				// "the clone was broken until I touched it" bug.
+				//
+				// PublicEnv is the sharp one: it drives the build-time
+				// __KUSO_RUNTIME_<KEY>__ sentinel bake and the pod-start
+				// substitution. A cloned env inheriting production's image
+				// without it serves literal sentinel strings where the
+				// NEXT_PUBLIC_* values belong.
+				//
+				// Release matters too — without it the clone skips its
+				// pre-deploy migration on first deploy.
+				PublicEnv:            item.svc.Spec.PublicEnv,
+				Healthcheck:          item.svc.Spec.Healthcheck,
+				Release:              item.svc.Spec.Release,
+				SnapshotBeforeDeploy: item.svc.Spec.SnapshotBeforeDeploy,
+				PrivateEgress:        item.svc.Spec.PrivateEgress,
+				PlatformAPIEgress:    item.svc.Spec.PlatformAPIEgress,
+				SpreadPolicy:         s.resolveSpreadPolicy(ctx),
 			},
 		}
 		if _, err := s.Kube.CreateKusoEnvironment(ctx, ns, envCR); err != nil {

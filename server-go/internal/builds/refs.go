@@ -19,12 +19,22 @@ import (
 // ImageTag returns the immutable tag we push for a build. For a full
 // 40-char SHA, the leading 12 chars (matches `git rev-parse --short`).
 // For an arbitrary ref string (a branch name in the dev path), the
-// full string — branch names are already kube-name-safe via shortRef.
+// slugified form.
+//
+// The slugify is NOT optional: a Docker tag may only contain
+// [A-Za-z0-9_.-], so a branch like `deploy/kuso` or `tenant/acme`
+// produced an invalid tag and the image push failed. The old comment
+// here claimed branch names were "already kube-name-safe via shortRef"
+// — true of the CR name and Job labels, which do route through
+// shortRef, but this function did not, so the slash survived into the
+// tag. Routing through shortRef makes every ref→identifier path use
+// one slugifier. Callers that need the raw ref must keep it separately
+// (spec.Branch already does).
 func ImageTag(ref string) string {
 	if shaRE.MatchString(ref) {
 		return ref[:12]
 	}
-	return ref
+	return shortRef(ref)
 }
 
 // buildCRName composes the canonical KusoBuild CR name. The format

@@ -3,6 +3,7 @@ package projects
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -316,7 +317,12 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 	// failure logs but doesn't fail the project update.
 	if req.BaseDomain != nil && prevBaseDomain != out.Spec.BaseDomain {
 		if perr := s.propagateBaseDomain(ctx, name, prevBaseDomain, out.Spec.BaseDomain); perr != nil {
-			fmt.Printf("warn: propagate baseDomain project=%s: %v\n", name, perr)
+			// slog, not fmt.Printf: a partial propagation leaves SOME
+			// envs on the old value, which is the same silent-drift
+			// failure the propagation exists to prevent. On stdout with
+			// no level or fields it was invisible to log-based alerting.
+			slog.Warn("propagate baseDomain failed; some envs may still carry the old host",
+				"project", name, "from", prevBaseDomain, "to", out.Spec.BaseDomain, "err", perr)
 		}
 	}
 	// Propagate a default-branch change to envs still tracking the old
@@ -329,7 +335,13 @@ func (s *Service) Update(ctx context.Context, name string, req UpdateProjectRequ
 			newBranch = out.Spec.DefaultRepo.DefaultBranch
 		}
 		if perr := s.propagateDefaultBranch(ctx, name, prevDefaultBranch, newBranch); perr != nil {
-			fmt.Printf("warn: propagate defaultBranch project=%s: %v\n", name, perr)
+			// A partial failure here is the saiton failure mode: envs
+			// left on the old branch promote nothing, silently, because
+			// build promotion filters on env.Spec.Branch. Surface it at
+			// warn with both branches so the operator can see which envs
+			// to re-stamp.
+			slog.Warn("propagate defaultBranch failed; some envs may still track the old branch and will not promote builds",
+				"project", name, "from", prevDefaultBranch, "to", newBranch, "err", perr)
 		}
 	}
 	return out, nil

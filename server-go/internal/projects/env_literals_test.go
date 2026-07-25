@@ -238,4 +238,96 @@ func TestEnvLiteralsShareServiceDerivedFields(t *testing.T) {
 	if (prodEnv.Spec.PendingImage != nil) != (custEnv.Spec.PendingImage != nil) {
 		t.Errorf("PendingImage drift: prod=%v cust=%v", prodEnv.Spec.PendingImage != nil, custEnv.Spec.PendingImage != nil)
 	}
+
+	// --- AddService, driven off a fully-populated SERVICE spec ---
+	// The create-request subset above can't reach Stopped/Sleep/Volumes
+	// (CreateServiceRequest doesn't expose them), which is exactly how
+	// those three stayed dropped from the AddService literal while the
+	// other two literals carried them. Seeding the service CR directly
+	// and re-reading the production env closes that hole.
+	seeded := fakeService(t,
+		seedProject("beta", kube.KusoProjectSpec{
+			DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/x/y", DefaultBranch: "main"},
+			BaseDomain:  "beta.example.com",
+		}),
+		typedSeed(kube.GVRServices, "KusoService", serviceCRName("beta", "web"), &kube.KusoService{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      serviceCRName("beta", "web"),
+				Namespace: "kuso",
+				Labels:    map[string]string{labelProject: "beta", labelService: "web"},
+			},
+			Spec: fullyPopulatedServiceSpec("beta"),
+		}),
+		seedEnv("beta", "web", "production", "main", "beta-web-production"),
+	)
+	// Mint a custom env and an env-group clone off the SAME service spec,
+	// then assert every service-derived field survives both paths.
+	betaCust, err := seeded.AddEnvironment(context.Background(), "beta", "web", CreateEnvRequest{
+		Name: "qa", Branch: "qa", ShareAddons: true,
+	})
+	if err != nil {
+		t.Fatalf("AddEnvironment(beta): %v", err)
+	}
+	for _, f := range serviceDerivedEnvSpecFields {
+		if !specFieldPopulated(t, betaCust, f) {
+			t.Errorf("AddEnvironment literal dropped service-derived field %q", f)
+		}
+	}
+
+	// --- env-group clone literal ---
+	// This is the THIRD env-minting path and was previously untested
+	// altogether, which is how it came to drop PublicEnv/Healthcheck/
+	// Release/SnapshotBeforeDeploy/egress flags. propagate.go re-stamps
+	// several of these on the next service save, so the bug presented as
+	// an intermittent "the clone was broken until I touched it".
+	cloneSvc := fakeService(t,
+		seedProject("gamma", kube.KusoProjectSpec{
+			DefaultRepo: &kube.KusoRepoRef{URL: "https://github.com/x/y", DefaultBranch: "main"},
+			BaseDomain:  "gamma.example.com",
+		}),
+		typedSeed(kube.GVRServices, "KusoService", serviceCRName("gamma", "web"), &kube.KusoService{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      serviceCRName("gamma", "web"),
+				Namespace: "kuso",
+				Labels:    map[string]string{labelProject: "gamma", labelService: "web"},
+			},
+			Spec: fullyPopulatedServiceSpec("gamma"),
+		}),
+		seedEnv("gamma", "web", "production", "main", "gamma-web-production"),
+	)
+	if _, err := cloneSvc.CreateEnvGroup(context.Background(), "gamma", CreateEnvGroupRequest{
+		Name: "demo",
+	}); err != nil {
+		t.Fatalf("CreateEnvGroup: %v", err)
+	}
+	// The clone mints a NEW service (<svc>-<group>) plus its env; find the
+	// env belonging to the demo group rather than assuming a name shape.
+	envs, err := cloneSvc.Kube.ListKusoEnvironments(context.Background(), "kuso")
+	if err != nil {
+		t.Fatalf("list envs: %v", err)
+	}
+	var cloneEnv *kube.KusoEnvironment
+	for i := range envs {
+		if envs[i].Labels[labelEnv] == "demo" {
+			cloneEnv = &envs[i]
+			break
+		}
+	}
+	if cloneEnv == nil {
+		t.Fatalf("env-group clone produced no env labelled env=demo (got %d envs)", len(envs))
+	}
+	// Placement is resolved against the project (which has none here) and
+	// Stopped is deliberately not inherited into a fresh group, so compare
+	// the fields the clone is contractually required to carry.
+	cloneMustCarry := []string{
+		"Internal", "PrivateEgress", "PlatformAPIEgress",
+		"Sleep", "Resources", "Volumes", "Runtime", "Command",
+		"SecurityContext", "Healthcheck", "PublicEnv",
+		"Release", "SnapshotBeforeDeploy",
+	}
+	for _, f := range cloneMustCarry {
+		if !specFieldPopulated(t, cloneEnv, f) {
+			t.Errorf("env-group clone literal dropped service-derived field %q — it must stay in lockstep with the other two env literals", f)
+		}
+	}
 }

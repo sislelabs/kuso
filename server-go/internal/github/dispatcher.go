@@ -1220,6 +1220,26 @@ func (d *Dispatcher) deletePreviewEnv(ctx context.Context, project, serviceFQN s
 			d.Logger.Warn("preview secret cleanup", "env", envName, "err", err)
 		}
 	}
+	// Reclaim the cert-manager TLS Secrets for this preview. The Ingress
+	// only carries the cluster-issuer annotation, so cert-manager (not
+	// helm) mints the "<env>-tls" / "<env>-tls-extra-<host>" Secrets.
+	// They aren't part of the helm release, and the populated Secret has
+	// no ownerReference, so neither the uninstall nor the GC removes
+	// them — every closed PR leaked one forever. projects.DeleteEnvironment
+	// already does this for named envs; previews go through this path
+	// instead, so the same reclaim has to happen here.
+	if d.Kube != nil && d.Kube.Clientset != nil {
+		ns := d.nsFor(ctx, project)
+		_ = d.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, envName+"-tls", metav1.DeleteOptions{})
+		prefix := envName + "-tls-extra-"
+		if secs, lerr := d.Kube.Clientset.CoreV1().Secrets(ns).List(ctx, metav1.ListOptions{}); lerr == nil {
+			for i := range secs.Items {
+				if strings.HasPrefix(secs.Items[i].Name, prefix) {
+					_ = d.Kube.Clientset.CoreV1().Secrets(ns).Delete(ctx, secs.Items[i].Name, metav1.DeleteOptions{})
+				}
+			}
+		}
+	}
 	d.Logger.Info("PR preview env deleted", "env", envName, "pr", prNumber)
 	return nil
 }

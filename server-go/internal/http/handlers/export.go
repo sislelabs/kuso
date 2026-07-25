@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"kuso/server/internal/addons"
+	"kuso/server/internal/audit"
 	"kuso/server/internal/db"
 	"kuso/server/internal/kube"
 	"kuso/server/internal/projects"
@@ -46,6 +47,14 @@ type ExportHandler struct {
 	Namespace      string
 	DB             *db.DB
 	Logger         *slog.Logger
+	// Audit records the export. This is the largest single credential
+	// disclosure in the API — a tarball of every secret in the project —
+	// and it was going unlogged while a single addon's secret read WAS
+	// audited. The Mount comment below has always claimed the POST verb
+	// was chosen because export "produces a side effect (audit log
+	// entry)"; this field is what finally makes that true. nil = no
+	// audit sink wired (kube-less/test installs).
+	Audit *audit.Service
 }
 
 // Mount registers POST /api/projects/{project}/export on the bearer
@@ -248,6 +257,22 @@ func (h *ExportHandler) Export(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Audit the disclosure. Logged at the end so the entry reflects an
+	// export that actually streamed, and at severity=warn to match
+	// addon.secret_read — this is the strictly larger disclosure of the
+	// two (every secret in the project, not one addon's). Values are
+	// never recorded, only that a disclosure happened and by whom.
+	if h.Audit != nil {
+		h.Audit.Log(ctx, audit.Entry{
+			User:     auditUser(ctx),
+			Severity: "warn",
+			Action:   "project.export",
+			Pipeline: project,
+			Resource: "kusoproject",
+			Message: fmt.Sprintf("project %s exported with secret values (%d services, %d envs, %d addons)",
+				project, manifest.Services, manifest.Environments, manifest.Addons),
+		})
+	}
 	h.Logger.Info("project exported",
 		"project", project,
 		"services", manifest.Services,
