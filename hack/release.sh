@@ -914,16 +914,42 @@ SAFE_KINDS = {
 # would fail the whole updater Job.
 KNOWN_NS = {"kuso", "kuso-operator-system"}
 
-out, skipped = [], []
+# RBAC the updater can NEVER apply, so shipping it only produces noisy
+# Forbidden errors that mask real ones. Kubernetes' privilege-escalation
+# prevention lets a subject create RBAC only for permissions it already
+# holds, and the operator's ClusterRole deliberately grants writes
+# kuso-server withholds from itself — cluster-wide secrets
+# create/update/delete above all, which the ClusterRole comment in
+# deploy/server-go.yaml explicitly reserves so an RCE on kuso-server
+# cannot mutate Secrets outside managed namespaces.
+#
+# Granting kuso-server those verbs just to make the apply succeed would
+# dissolve that boundary for the sake of tidier logs. The operator's
+# RBAC is installed once at bootstrap (hack/install.sh) and changes to
+# it need a deliberate `kubectl apply` by a cluster admin.
+ESCALATION_EXCLUDED = {
+    ("ClusterRole", "kuso-operator"),
+    ("ClusterRoleBinding", "kuso-operator"),
+}
+
+out, skipped, excluded = [], [], []
 for f in sorted(glob.glob("deploy/*.yaml")):
     for doc in yaml.safe_load_all(open(f)):
         if not doc or doc.get("kind") not in SAFE_KINDS:
+            continue
+        name = doc.get("metadata", {}).get("name")
+        if (doc["kind"], name) in ESCALATION_EXCLUDED:
+            excluded.append(f"{doc['kind']}/{name}")
             continue
         ns = doc.get("metadata", {}).get("namespace")
         if ns is not None and ns not in KNOWN_NS:
             skipped.append(f"{f}:{doc['kind']}/{doc['metadata'].get('name')}")
             continue
         out.append(doc)
+
+if excluded:
+    print(f"upgrade-manifests: excluded {len(excluded)} docs the updater cannot apply "
+          f"without a privilege escalation: {excluded}", file=sys.stderr)
 
 if skipped:
     print(f"upgrade-manifests: skipped {len(skipped)} docs in unknown namespaces: {skipped}",
