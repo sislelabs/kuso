@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.21.4] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(env-group): stamp service label on cloned service (prod-canvas duplicate) ([92a0144](https://github.com/sislelabs/kuso/commit/92a0144f52a40b6608af92bf37604c6297d9a95e))
+
 ## [0.21.3] — 2026-07-24
 
 ### 🐛 Bug Fixes
@@ -471,11 +476,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(sql-browser): tables with enum columns wrongly shown read-only (no PK) ([6b0b006](https://github.com/sislelabs/kuso/commit/6b0b0069a662e5b7be2cf483215e82e3c63570f8))
-
-## [0.18.88] — 2026-06-27
-
-### 🐛 Bug Fixes
-- Fix(web): clarify env-branch vs default-branch + drop no-op rollback chip ([0fbca7b](https://github.com/sislelabs/kuso/commit/0fbca7bfe0959aa73fdf9b9fa62db5f200defb03))
 
 
 ---

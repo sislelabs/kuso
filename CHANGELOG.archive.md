@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.88] — 2026-06-27
+
+### 🐛 Bug Fixes
+- Fix(web): clarify env-branch vs default-branch + drop no-op rollback chip ([0fbca7b](https://github.com/sislelabs/kuso/commit/0fbca7bfe0959aa73fdf9b9fa62db5f200defb03))
+
 ## [0.18.87] — 2026-06-27
 
 ### Other
