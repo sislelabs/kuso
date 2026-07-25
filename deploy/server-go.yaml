@@ -154,6 +154,35 @@ rules:
   - apiGroups: [rbac.authorization.k8s.io]
     resources: [rolebindings]
     verbs: [get, list, create]
+  # The in-cluster updater Job applies dist/upgrade-manifests.yaml on
+  # every release. That bundle carries the RBAC for the platform's own
+  # helper workloads (kuso-pkg-probe, kuso-prometheus,
+  # kuso-incident-agent, kuso-postgres-dsn), so applying it needs
+  # get/create/update/patch on roles + cluster(role|rolebinding)s.
+  # Without these, six manifests fail `Forbidden` on EVERY upgrade and
+  # the updater reports "applying-manifests — partial": the image roll
+  # still succeeds, so the failure is easy to miss, but any NEW helper
+  # RBAC never lands and the feature depending on it silently doesn't
+  # work.
+  #
+  # Kubernetes privilege-escalation prevention means a subject can only
+  # create RBAC granting permissions it already holds itself, so this
+  # is not a blank cheque — kuso-server can only stamp roles that are a
+  # subset of the rules above. `services` (list/watch) is added below
+  # for the same reason: it's the one permission kuso-prometheus's
+  # ClusterRole grants that kuso-server did not already have, so the
+  # apply was rejected as an escalation attempt.
+  - apiGroups: [rbac.authorization.k8s.io]
+    resources: [roles, clusterroles, clusterrolebindings]
+    verbs: [get, list, create, update, patch]
+  # PodDisruptionBudgets ship with the pgbouncer/prometheus manifests
+  # so a drain can't take out the last replica.
+  - apiGroups: [policy]
+    resources: [poddisruptionbudgets]
+    verbs: [get, list, create, update, patch]
+  - apiGroups: [""]
+    resources: [services]
+    verbs: [get, list, watch]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

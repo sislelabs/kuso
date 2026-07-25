@@ -308,12 +308,35 @@ spec:
           ports:
             - name: sentinel
               containerPort: 26379
+          # The probe below authenticates, so the sentinel container
+          # needs the password too — previously only the render-conf
+          # init container had it.
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: REDIS_PASSWORD
           volumeMounts:
             - name: conf
               mountPath: /conf
           readinessProbe:
             exec:
-              command: ["sh", "-c", "redis-cli -p 26379 ping | grep -q PONG"]
+              # MUST pass -a: the rendered sentinel.conf sets
+              # `requirepass`, so an unauthenticated PING returns
+              # "NOAUTH Authentication required." and never PONG. The
+              # redis container's probe two blocks up always did this
+              # correctly; this one didn't, so every Sentinel pod sat
+              # 0/1 forever (233k+ probe failures over 13 days on the
+              # test cluster) while Sentinel itself was healthy and
+              # holding quorum. A 0/1 pod is pulled from Services and
+              # is evicted first under node pressure, so this could
+              # have taken out the quorum it was meant to protect.
+              #
+              # --no-auth-warning keeps the "using a password" notice
+              # off stderr; without it the probe still passes but the
+              # kubelet logs a warning every period.
+              command: ["sh", "-c", "redis-cli -p 26379 -a \"$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
             initialDelaySeconds: 5
             periodSeconds: 5
           resources:
