@@ -140,16 +140,18 @@ export function ProjectDetailView() {
   // any other value (staging, client-demo, preview-pr-N) matches
   // exactly.
   //
-  // SERVICES are intentionally NOT filtered by env label. A
-  // KusoService is env-independent: one CR per app, with N
-  // KusoEnvironment CRs (one per env-group) referencing it. The
-  // filter that used to live here checked s.metadata.labels[env]
-  // — but services don't carry that label, so any selectedEnv
-  // other than "production" filtered out every service and the
-  // canvas rendered "Empty project". Show the same service list
-  // for every env; the env-scoped view comes from picking the
-  // right KusoEnvironment for each service downstream (URL,
-  // replicas, latest build).
+  // Two service models coexist:
+  //  A) A shared, env-independent KusoService (one CR, referenced by N
+  //     KusoEnvironments) carries NO env label — it belongs to EVERY
+  //     env-group. Filtering it out on non-production tabs was the old
+  //     "Empty project" bug; inGroup keeps it (label absent -> matches).
+  //  B) An env-group CLONE creates a SEPARATE KusoService CR labeled
+  //     kuso.sislelabs.com/env=<group> — it belongs ONLY to that group.
+  //     Not filtering these was the "duplicate node in production" bug
+  //     (the staging clone's service leaked into the production canvas).
+  // inGroup handles both: no label -> shown everywhere; a label -> shown
+  // only on its own env tab. So we CAN filter services through it now
+  // (clone services carry the label as of the env-group service-label fix).
   const envLabel = "kuso.sislelabs.com/env";
   const inGroup = (labels: Record<string, string> | undefined) => {
     const v = labels?.[envLabel];
@@ -196,7 +198,10 @@ export function ProjectDetailView() {
   const envExists =
     envs.length > 0 ||
     allAddons.some((a) => a.metadata.labels?.[envLabel] === selectedEnv);
-  const services = envExists ? allServices : [];
+  // Filter services to the selected env-group: shared (no env label)
+  // services show on every tab; a clone's env-labeled service shows only
+  // on its own tab (fixes the duplicate node bleeding into production).
+  const services = envExists ? allServices.filter((s) => inGroup(s.metadata.labels)) : [];
   const onProduction = selectedEnv === "production";
 
   if (services.length === 0 && addonsList.length === 0) {
