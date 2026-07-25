@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.21.11] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(cli): rollback env targeting, FTS docs, dead flags, paging ([7af8495](https://github.com/sislelabs/kuso/commit/7af849502e433aae19ff16bc977bfd90263ff622))
+
 ## [0.21.10] — 2026-07-25
 
 ### 🐛 Bug Fixes
@@ -460,18 +465,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(web): right-click context menu on project cards ([1a536b7](https://github.com/sislelabs/kuso/commit/1a536b746cf13e620c17aa8cfbf49f2946e7f17b))
-
-## [0.18.95] — 2026-07-01
-
-### Other
-- Merge: README refresh + 12 high-severity review fixes ([b2eca5b](https://github.com/sislelabs/kuso/commit/b2eca5bbfd22944c0efd8c8f126f818bddf3f009))
-
-### 🐛 Bug Fixes
-- Fix: medium + low findings from full-system review (33 fixes) ([dfb3b15](https://github.com/sislelabs/kuso/commit/dfb3b15ecd6b749ebdea167cc52e8266be77fb2d))
-- Fix: 12 high-severity findings from full-system review ([38cf128](https://github.com/sislelabs/kuso/commit/38cf12805e6037d0edcf322f17a4b5c6be8abe0c))
-
-### 📝 Docs
-- Docs(readme): stop/start, one-click GitHub App, health/remediation, activator ([da74de3](https://github.com/sislelabs/kuso/commit/da74de3ec6a1398d4d29dd35bda93162f3b89cc7))
 
 
 ---
