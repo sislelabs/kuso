@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.89] — 2026-06-28
+
+### 🐛 Bug Fixes
+- Fix(sql-browser): tables with enum columns wrongly shown read-only (no PK) ([6b0b006](https://github.com/sislelabs/kuso/commit/6b0b0069a662e5b7be2cf483215e82e3c63570f8))
+
 ## [0.18.88] — 2026-06-27
 
 ### 🐛 Bug Fixes
