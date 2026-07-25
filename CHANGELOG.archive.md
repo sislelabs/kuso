@@ -2,6 +2,14 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.92] — 2026-07-01
+
+### ✨ Features
+- Feat(activator): branded "no service here" 404 for unmatched domains ([66ebd5e](https://github.com/sislelabs/kuso/commit/66ebd5e814e3eccb1764d0cb2a6730a58695fa8f))
+
+### 🐛 Bug Fixes
+- Fix(release): roll kuso-activator in lockstep with kuso-server ([d52157a](https://github.com/sislelabs/kuso/commit/d52157a28bc92518f1aeee1b58a77f5ed5a0b8ed))
+
 ## [0.18.91] — 2026-07-01
 
 ### ✨ Features

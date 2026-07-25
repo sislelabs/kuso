@@ -19,6 +19,12 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.21.8] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(addons,projects): delete-exclude key, clone subscriptions, publicEnv propagation ([52fed6f](https://github.com/sislelabs/kuso/commit/52fed6f9b3c1511e4a51274043c623641160e9d8))
+- Fix(redis-ha,rbac): sentinel readiness probe auth + updater RBAC gaps ([11361aa](https://github.com/sislelabs/kuso/commit/11361aa75ac260618c5730479fa98d89982e6452))
+
 ## [0.21.7] — 2026-07-25
 
 ### 🐛 Bug Fixes
@@ -466,14 +472,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(activator): creative "4∅4" not-found page ([050d66d](https://github.com/sislelabs/kuso/commit/050d66d7339ef6b1ad40ff4bfa31cd7c7bee3dd1))
-
-## [0.18.92] — 2026-07-01
-
-### ✨ Features
-- Feat(activator): branded "no service here" 404 for unmatched domains ([66ebd5e](https://github.com/sislelabs/kuso/commit/66ebd5e814e3eccb1764d0cb2a6730a58695fa8f))
-
-### 🐛 Bug Fixes
-- Fix(release): roll kuso-activator in lockstep with kuso-server ([d52157a](https://github.com/sislelabs/kuso/commit/d52157a28bc92518f1aeee1b58a77f5ed5a0b8ed))
 
 
 ---
