@@ -317,27 +317,43 @@ per service regardless of branch.`,
 		},
 	}
 	buildLatestCmd.Flags().StringVar(&buildLatestEnv, "env", "", "env-group filter (production, staging, preview-pr-N)")
+	// Its own Example documents `-o json`, which errored with
+	// "unknown shorthand flag" because the flag was never registered.
+	buildLatestCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	buildCmd.AddCommand(buildLatestCmd)
 
+	var buildRollbackEnv string
 	rollbackCmd := &cobra.Command{
 		Use:   "rollback <project> <service> <build>",
-		Short: "Re-point production at a previous successful build's image",
-		Args:  cobra.ExactArgs(3),
+		Short: "Re-point an environment at a previous successful build's image",
+		Long: `Re-point an environment at a previous successful build's image.
+
+Defaults to the production env. Pass --env to roll back a named env
+(staging, qa, preview-pr-N) instead — without it a rollback aimed at
+staging would silently roll PRODUCTION back.`,
+		Example: `  kuso build rollback tickero api tickero-api-3abf9b99
+  kuso build rollback tickero api tickero-api-3abf9b99 --env staging`,
+		Args: cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if api == nil {
 				return fmt.Errorf("not logged in; run 'kuso login' first")
 			}
-			resp, err := api.RollbackBuild(args[0], args[1], args[2])
+			resp, err := api.RollbackBuild(args[0], args[1], args[2], buildRollbackEnv)
 			if err != nil {
 				return err
 			}
 			if resp.StatusCode() >= 300 {
 				return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 			}
-			fmt.Printf("rolled %s/%s back to build %s\n", args[0], args[1], args[2])
+			target := buildRollbackEnv
+			if target == "" {
+				target = "production"
+			}
+			fmt.Printf("rolled %s/%s (%s) back to build %s\n", args[0], args[1], target, args[2])
 			return nil
 		},
 	}
+	rollbackCmd.Flags().StringVar(&buildRollbackEnv, "env", "", "environment to roll back (default production)")
 	buildCmd.AddCommand(rollbackCmd)
 
 	cancelCmd := &cobra.Command{
@@ -371,7 +387,14 @@ per service regardless of branch.`,
 		Args:  cobra.ExactArgs(2),
 		RunE:  buildTriggerCmd.RunE,
 	}
+	// redeploy reuses buildTriggerCmd.RunE verbatim, so it must bind
+	// EVERY flag that RunE reads — it reads buildTriggerDryRun and
+	// buildTriggerFollow too. Binding only branch/ref made
+	// `kuso redeploy p api --follow` fail with "unknown flag" despite
+	// the two commands being documented as equivalent.
 	redeployCmd.Flags().StringVar(&buildTriggerBranch, "branch", "", "branch to deploy")
 	redeployCmd.Flags().StringVar(&buildTriggerRef, "ref", "", "specific commit SHA")
+	redeployCmd.Flags().BoolVar(&buildTriggerDryRun, "dry-run", false, "resolve the ref and print what would build, without creating a build")
+	redeployCmd.Flags().BoolVar(&buildTriggerFollow, "follow", false, "stream build logs until the build finishes")
 	rootCmd.AddCommand(redeployCmd)
 }

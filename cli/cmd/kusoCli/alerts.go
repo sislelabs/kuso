@@ -92,7 +92,7 @@ var alertAddLogMatchCmd = &cobra.Command{
 	Use:   "add-log-match",
 	Short: "Add a log-match alert rule",
 	Example: `  kuso alert add-log-match --name 'OOMKilled' --query OOMKilled --threshold 1 --window 5m
-  kuso alert add-log-match --name 'fatal errors' --project myproj --service api --query '"fatal error"' --threshold 5`,
+  kuso alert add-log-match --name 'fatal errors' --project myproj --service api --query 'fatal error' --threshold 5`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
 			return fmt.Errorf("not logged in; run 'kuso login' first")
@@ -284,18 +284,26 @@ func init() {
 	alertCmd.AddCommand(alertListCmd)
 	alertListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 
+	// Flags shared by BOTH add- subcommands.
 	for _, sub := range []*cobra.Command{alertAddLogMatchCmd, alertAddNodePressureCmd} {
 		sub.Flags().StringVar(&alertAddName, "name", "", "human-readable name")
-		sub.Flags().StringVar(&alertAddProject, "project", "", "scope to one project (log-match only)")
-		sub.Flags().StringVar(&alertAddService, "service", "", "scope to one service (log-match only)")
-		sub.Flags().StringVar(&alertAddQuery, "query", "", "FTS5 MATCH expression (log-match only)")
-		sub.Flags().Int64Var(&alertAddThresh, "threshold", 1, "match-count threshold (log-match only)")
-		sub.Flags().Float64Var(&alertAddPct, "threshold-pct", 80, "percentage threshold (node-pressure only)")
 		sub.Flags().StringVar(&alertAddWindow, "window", "5m", "evaluation window (5m, 300s, 300)")
 		sub.Flags().StringVar(&alertAddSeverity, "severity", "warn", "info | warn | error")
 		sub.Flags().StringVar(&alertAddThrottle, "throttle", "10m", "min interval between fires (10m, 600s, 600)")
 		alertCmd.AddCommand(sub)
 	}
+	// Log-match-only flags. These used to be registered on BOTH commands
+	// with a "(log-match only)" note in the description — but
+	// add-node-pressure's RunE never reads them, so
+	// `alert add-node-pressure cpu --project myproj` was accepted
+	// silently and created a CLUSTER-WIDE alert. Registering them only
+	// where they work turns that into an "unknown flag" error.
+	alertAddLogMatchCmd.Flags().StringVar(&alertAddProject, "project", "", "scope to one project")
+	alertAddLogMatchCmd.Flags().StringVar(&alertAddService, "service", "", "scope to one service")
+	alertAddLogMatchCmd.Flags().StringVar(&alertAddQuery, "query", "", "case-insensitive substring to match in log lines (not FTS — no quoting/AND/OR/prefix)")
+	alertAddLogMatchCmd.Flags().Int64Var(&alertAddThresh, "threshold", 1, "match-count threshold")
+	// Node-pressure-only.
+	alertAddNodePressureCmd.Flags().Float64Var(&alertAddPct, "threshold-pct", 80, "percentage threshold")
 	alertCmd.AddCommand(alertDeleteCmd)
 	alertCmd.AddCommand(alertEnableCmd)
 	alertCmd.AddCommand(alertDisableCmd)

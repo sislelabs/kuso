@@ -39,7 +39,7 @@ func TestNoCommandRegistersNonTableDefaultOnSharedVar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("glob: %v", err)
 	}
-	re := regexp.MustCompile(`StringVarP\(&outputFormat,\s*"output",\s*"o",\s*"([a-z]+)"`)
+	re := regexp.MustCompile(`StringVarP\(&outputFormat,\s*"output",\s*"o",\s*"([a-z]*)"`)
 	var bad []string
 	for _, f := range files {
 		src, err := os.ReadFile(f)

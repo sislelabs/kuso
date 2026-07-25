@@ -172,6 +172,14 @@ lifts the ~50 certs/week LE ceiling for many-tenant platforms:
 
 		// --env: bind directly to that environment's additionalHosts.
 		if domainsEnv != "" {
+			// Per-env domains always get TLS: the server's AddEnvDomain
+			// takes no tls toggle (only tlsSecret, for wildcards), so
+			// silently accepting --no-tls here would provision a cert
+			// anyway and report success. Fail loudly instead of lying.
+			if domainsAddNoTLS {
+				return fmt.Errorf("--no-tls is not supported with --env: per-environment domains are always TLS-enabled; " +
+					"drop --env to set a plaintext host at the service level")
+			}
 			resp, err := api.AddEnvDomain(project, service, domainsEnv, host, domainsAddTLSSecret)
 			if err != nil {
 				return fmt.Errorf("add env domain: %w", err)
@@ -241,6 +249,12 @@ func init() {
 	// (default) = service-level (the server mirrors to production).
 	domainsCmd.PersistentFlags().StringVar(&domainsEnv, "env", "",
 		"scope to one environment (e.g. staging, preview-pr-7); empty = service-level + production mirror")
+	// domainsListOutput was declared and read (twice) but its flag was
+	// never registered, so `kuso domains list p s -o json` failed with
+	// "unknown shorthand flag: 'o'" and the JSON branch was dead code.
+	// Bind its own variable rather than the shared outputFormat — see
+	// output_format_test.go for why that global is not safe to reuse.
+	domainsListCmd.Flags().StringVarP(&domainsListOutput, "output", "o", "table", "output format [table, json]")
 	domainsCmd.AddCommand(domainsListCmd, domainsAddCmd, domainsRemoveCmd)
 	rootCmd.AddCommand(domainsCmd)
 }

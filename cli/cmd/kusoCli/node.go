@@ -679,7 +679,7 @@ var nodeHistoryCmd = &cobra.Command{
 			return fmt.Errorf("decode: %w", err)
 		}
 		if len(body.Samples) == 0 {
-			fmt.Printf("No samples yet for %s (the sampler runs every ~30 min).\n", body.Node)
+			fmt.Printf("No samples yet for %s (the sampler runs every ~5 min).\n", body.Node)
 			return nil
 		}
 		tw := tablewriter.NewWriter(os.Stdout)
@@ -825,11 +825,11 @@ func init() {
 	nodeAddTokenCmd.Flags().StringVar(&nodeTokenName, "name", "",
 		"Override the joined node's name (default: VM hostname).")
 	nodeAddTokenCmd.Flags().StringVar(&nodeTokenTTL, "ttl", "",
-		"Token lifetime (e.g. 15m, 1h). Default 15m. Capped at 1h.")
-	nodeAddTokenCmd.Flags().StringVarP(&outputFormat, "output", "o", "",
-		"Output format: json | (default human)")
+		"Token lifetime (e.g. 15m, 1h). Default 5m. Capped at 1h.")
+	nodeAddTokenCmd.Flags().StringVarP(&outputFormat, "output", "o", "table",
+		"Output format: json | table (human)")
 
-	nodePendingCmd.Flags().StringVarP(&outputFormat, "output", "o", "",
+	nodePendingCmd.Flags().StringVarP(&outputFormat, "output", "o", "table",
 		"Output format: json | (default human)")
 
 	nodeCmd.AddCommand(nodeAddTokenCmd)

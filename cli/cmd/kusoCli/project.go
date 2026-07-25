@@ -598,7 +598,7 @@ Settings → Source / Networking flow.
 				return fmt.Errorf("fetch current service spec: %w", err)
 			}
 			if cur.StatusCode() >= 300 {
-				return fmt.Errorf("fetch current service spec: server %d", cur.StatusCode())
+				return fmt.Errorf("fetch current service spec: server returned %d: %s", cur.StatusCode(), string(cur.Body()))
 			}
 			var curWire struct {
 				Spec struct {
@@ -641,7 +641,7 @@ Settings → Source / Networking flow.
 				return fmt.Errorf("fetch current service spec: %w", err)
 			}
 			if cur.StatusCode() >= 300 {
-				return fmt.Errorf("fetch current service spec: server %d", cur.StatusCode())
+				return fmt.Errorf("fetch current service spec: server returned %d: %s", cur.StatusCode(), string(cur.Body()))
 			}
 			var curWire struct {
 				Spec struct {
@@ -1241,7 +1241,7 @@ func init() {
 	projectCmd.AddCommand(projectServiceCmd)
 	projectServiceCmd.AddCommand(serviceAddCmd)
 	serviceAddCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
-	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static|image — nixpacks auto-detects most languages with zero config; image deploys an existing registry image without building")
+	serviceAddCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static|worker|image — nixpacks auto-detects most languages with zero config; worker runs a headless argv (no Service/Ingress); image deploys an existing registry image without building")
 	serviceAddCmd.Flags().StringVar(&serviceAddDockerfile, "dockerfile", "", "Dockerfile filename relative to --path (runtime=dockerfile only; default \"Dockerfile\"), e.g. apps/web/Dockerfile.dev")
 	serviceAddCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	serviceAddCmd.Flags().StringVar(&serviceAddImageRepo, "image-repo", "", "(runtime=image) registry image, e.g. ghcr.io/owner/app")
@@ -1257,7 +1257,7 @@ func init() {
 	projectServiceCmd.AddCommand(serviceSetCmd)
 	serviceSetCmd.Flags().StringVar(&serviceSetDisplayName, "display-name", "", "free-form label shown on the canvas + overlay header")
 	serviceSetCmd.Flags().Int32Var(&serviceSetPort, "port", 8080, "container port")
-	serviceSetCmd.Flags().StringVar(&serviceSetRuntime, "runtime", "", "build runtime (dockerfile|nixpacks|buildpacks|static|worker)")
+	serviceSetCmd.Flags().StringVar(&serviceSetRuntime, "runtime", "", "build runtime (dockerfile|nixpacks|buildpacks|static|worker|image)")
 	serviceSetCmd.Flags().StringVar(&serviceSetDomains, "domains", "", "comma- or space-separated custom domains (replaces list; empty clears)")
 	serviceSetCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
 	serviceSetCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")
@@ -1310,7 +1310,7 @@ func init() {
 	rootCmd.AddCommand(serviceCmd)
 	serviceCmd.AddCommand(serviceAddTopCmd)
 	serviceAddTopCmd.Flags().StringVar(&serviceAddPath, "path", ".", "monorepo subpath")
-	serviceAddTopCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static|image — nixpacks auto-detects most languages with zero config; image deploys an existing registry image without building")
+	serviceAddTopCmd.Flags().StringVar(&serviceAddRuntime, "runtime", "nixpacks", "nixpacks|dockerfile|buildpacks|static|worker|image — nixpacks auto-detects most languages with zero config; worker runs a headless argv (no Service/Ingress); image deploys an existing registry image without building")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddDockerfile, "dockerfile", "", "Dockerfile filename relative to --path (runtime=dockerfile only; default \"Dockerfile\"), e.g. apps/web/Dockerfile.dev")
 	serviceAddTopCmd.Flags().IntVar(&serviceAddPort, "port", 8080, "container port")
 	serviceAddTopCmd.Flags().StringVar(&serviceAddImageRepo, "image-repo", "", "(runtime=image) registry image, e.g. ghcr.io/owner/app")
@@ -1326,7 +1326,7 @@ func init() {
 	serviceCmd.AddCommand(serviceSetTopCmd)
 	serviceSetTopCmd.Flags().StringVar(&serviceSetDisplayName, "display-name", "", "free-form label shown on the canvas + overlay header")
 	serviceSetTopCmd.Flags().Int32Var(&serviceSetPort, "port", 8080, "container port")
-	serviceSetTopCmd.Flags().StringVar(&serviceSetRuntime, "runtime", "", "build runtime (dockerfile|nixpacks|buildpacks|static|worker)")
+	serviceSetTopCmd.Flags().StringVar(&serviceSetRuntime, "runtime", "", "build runtime (dockerfile|nixpacks|buildpacks|static|worker|image)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetDomains, "domains", "", "comma- or space-separated custom domains (replaces list; empty clears)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetInternal, "internal", "", "skip public Ingress (on|off)")
 	serviceSetTopCmd.Flags().StringVar(&serviceSetPrivateEgress, "private-egress", "", "deny public internet egress (on|off)")

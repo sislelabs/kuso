@@ -29,6 +29,7 @@ var (
 	sqlSchema   string
 	sqlTable    string
 	sqlLimit    int
+	sqlOffset   int
 	sqlDatabase string // optional logical-DB override (multi-DB addons)
 )
 
@@ -146,7 +147,7 @@ project admin role.`,
 		if sqlTable == "" {
 			return fmt.Errorf("--table is required")
 		}
-		resp, err := api.SQLRows(args[0], args[1], sqlSchema, sqlTable, sqlLimit, 0, sqlDatabase)
+		resp, err := api.SQLRows(args[0], args[1], sqlSchema, sqlTable, sqlLimit, sqlOffset, sqlDatabase)
 		if err := checkRespErr(resp, err); err != nil {
 			return fmt.Errorf("fetch rows: %w", err)
 		}
@@ -295,6 +296,10 @@ func init() {
 	dbRowsCmd.Flags().StringVar(&sqlSchema, "schema", "public", "table schema")
 	dbRowsCmd.Flags().StringVar(&sqlTable, "table", "", "table name (required)")
 	dbRowsCmd.Flags().IntVar(&sqlLimit, "limit", 0, "max rows to return (0 = server default 100, max 1000)")
+	// The client and server have always taken an offset; the sole caller
+	// passed a literal 0, so tables past the 1000-row cap were
+	// unpageable from the CLI.
+	dbRowsCmd.Flags().IntVar(&sqlOffset, "offset", 0, "rows to skip (paging: --limit 1000 --offset 1000)")
 
 	dbSQLCmd.Flags().IntVar(&sqlLimit, "limit", 0, "max rows to return (0 = server default 100, max 1000)")
 

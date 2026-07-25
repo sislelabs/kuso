@@ -15,16 +15,19 @@ import (
 // into the bound variable, last init() wins).
 var logsSearchOutput string
 
-// `kuso logs search` — full-text search over the SQLite-stored
-// log archive. Backed by FTS5 server-side; query grammar is
-// FTS5 standard (phrase quoting, AND/OR/NOT, prefix `foo*`).
+// `kuso logs search` — substring search over the persisted log
+// archive. NOT full-text: FTS5 was removed server-side in v0.9 and
+// SearchLogs now runs a plain case-insensitive ILIKE (db/log_db.go).
+// There is no phrase quoting, no AND/OR/NOT, no prefix operator — the
+// query is matched literally, so quoting a phrase searches for the
+// quote characters themselves and reliably returns nothing.
 
 var logsSearchCmd = &cobra.Command{
 	Use:   "search <project> [service]",
-	Short: "Search the persisted log archive (FTS5 MATCH)",
+	Short: "Search the persisted log archive (case-insensitive substring)",
 	Args:  cobra.RangeArgs(1, 2),
 	Example: `  kuso logs search myproj api --q OOMKilled --since 1h
-  kuso logs search myproj --q '"connection refused"' --limit 100
+  kuso logs search myproj --q 'connection refused' --limit 100
   kuso logs search myproj api --since 2026-05-04T08:00:00Z --until 2026-05-04T09:00:00Z`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		if api == nil {
@@ -128,7 +131,7 @@ func parseSinceFlag(s string) (time.Time, error) {
 
 func init() {
 	logsCmd.AddCommand(logsSearchCmd)
-	logsSearchCmd.Flags().StringVar(&logsSearchQ, "q", "", "FTS5 MATCH — phrase with quotes, AND/OR/NOT, prefix foo*")
+	logsSearchCmd.Flags().StringVar(&logsSearchQ, "q", "", "case-insensitive substring to find in log lines (matched literally — no quoting/AND/OR/prefix)")
 	logsSearchCmd.Flags().StringVar(&logsSearchEnv, "env", "", "filter by env (production, preview-pr-N)")
 	logsSearchCmd.Flags().StringVar(&logsSearchLimit, "limit", "100", "max lines to return (server caps at 500)")
 	logsSearchCmd.Flags().StringVar(&logsSearchSince, "since", "", "lower bound (1h, RFC3339, unix)")

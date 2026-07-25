@@ -313,7 +313,6 @@ func init() {
 	userProfileSetCmd.Flags().StringVar(&profileSetEmail, "email", "", "new email address")
 	userProfileSetCmd.Flags().StringVar(&profileSetFirstName, "first-name", "", "new first name")
 	userProfileSetCmd.Flags().StringVar(&profileSetLastName, "last-name", "", "new last name")
-	userProfileSetCmd.Flags().StringVar(&profileSetUsername, "username", "", "username (NOT editable via profile; admin-managed)")
 
 	userCreateCmd.Flags().StringVar(&userCreateUsername, "username", "", "username (required)")
 	userCreateCmd.Flags().StringVar(&userCreateEmail, "email", "", "email (required)")

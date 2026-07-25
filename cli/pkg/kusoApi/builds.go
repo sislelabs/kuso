@@ -25,8 +25,17 @@ func (k *KusoClient) CreateBuild(project, service string, req CreateBuildRequest
 
 // RollbackBuild re-points the production env at a previous build's
 // image. Server validates phase=succeeded.
-func (k *KusoClient) RollbackBuild(project, service, build string) (*resty.Response, error) {
-	return k.client.Post("/api/projects/" + esc(project) + "/services/" + esc(service) + "/builds/" + esc(build) + "/rollback")
+// env scopes the rollback to a named environment; empty means the
+// server's default ("production"). Without this the CLI could only ever
+// roll production back — a bad staging build was un-rollbackable, and
+// worse, `kuso build rollback` aimed at staging silently rolled
+// PRODUCTION back instead. The server has read ?env= since v0.17.1.
+func (k *KusoClient) RollbackBuild(project, service, build, env string) (*resty.Response, error) {
+	url := "/api/projects/" + esc(project) + "/services/" + esc(service) + "/builds/" + esc(build) + "/rollback"
+	if env != "" {
+		url += "?env=" + esc(env)
+	}
+	return k.client.Post(url)
 }
 
 // CancelBuild stops an in-flight build. The build CR is preserved

@@ -99,7 +99,7 @@ func streamRunUntilDone(project, service, runName string) error {
 			return fmt.Errorf("get run: %w", err)
 		}
 		if resp.StatusCode() >= 300 {
-			return fmt.Errorf("get run: server returned %d", resp.StatusCode())
+			return fmt.Errorf("get run: server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 		}
 		var data struct {
 			Metadata struct {

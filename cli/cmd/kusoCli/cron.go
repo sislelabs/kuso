@@ -37,13 +37,13 @@ func splitCmd(s string) []string {
 // preserve the repository when only --image-tag is bumped (the server
 // replaces spec.image wholesale, so we must resend the repository).
 // Returns "" (no error) when the cron exists but carries no image.
-func currentProjectCronRepo(project, name string) (string, error) {
+func currentProjectCronImage(project, name string) (repo, tag string, err error) {
 	resp, err := api.ListCrons(project)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	if resp.StatusCode() >= 300 {
-		return "", fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		return "", "", fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
 	}
 	var items []struct {
 		Metadata struct {
@@ -52,21 +52,22 @@ func currentProjectCronRepo(project, name string) (string, error) {
 		Spec struct {
 			Image *struct {
 				Repository string `json:"repository"`
+				Tag        string `json:"tag"`
 			} `json:"image"`
 		} `json:"spec"`
 	}
 	if err := json.Unmarshal(resp.Body(), &items); err != nil {
-		return "", fmt.Errorf("decode crons: %w", err)
+		return "", "", fmt.Errorf("decode crons: %w", err)
 	}
 	for _, c := range items {
 		if c.Metadata.Name == name {
 			if c.Spec.Image != nil {
-				return c.Spec.Image.Repository, nil
+				return c.Spec.Image.Repository, c.Spec.Image.Tag, nil
 			}
-			return "", nil
+			return "", "", nil
 		}
 	}
-	return "", fmt.Errorf("cron %q not found in project %q", name, project)
+	return "", "", fmt.Errorf("cron %q not found in project %q", name, project)
 }
 
 var cronCmd = &cobra.Command{
@@ -330,8 +331,9 @@ add roundtrip via the per-service path.`,
 			// (":v2") and the cronjob never scheduled. Fetch the current
 			// cron and preserve its repository so a tag-only bump keeps
 			// the image it's already running.
+			tag := pCronImageTag
 			if !cmd.Flags().Changed("image") {
-				cur, cerr := currentProjectCronRepo(args[0], args[1])
+				cur, _, cerr := currentProjectCronImage(args[0], args[1])
 				if cerr != nil {
 					return fmt.Errorf("--image-tag needs the current image; %w (pass --image to set it explicitly)", cerr)
 				}
@@ -340,7 +342,17 @@ add roundtrip via the per-service path.`,
 				}
 				repo = cur
 			}
-			req.Image = &kusoApi.CronImage{Repository: repo, Tag: pCronImageTag}
+			// Mirror of the above: editing ONLY --image must not reset the
+			// TAG. --image-tag defaults to "latest", so sending it
+			// unconditionally silently unpinned a cron from e.g.
+			// alpine:3.21 → alpine:latest on an unrelated repo change.
+			if !cmd.Flags().Changed("image-tag") {
+				_, curTag, cerr := currentProjectCronImage(args[0], args[1])
+				if cerr == nil && curTag != "" {
+					tag = curTag
+				}
+			}
+			req.Image = &kusoApi.CronImage{Repository: repo, Tag: tag}
 		}
 		if cmd.Flags().Changed("cmd") {
 			req.Command = splitCmd(pCronCmdString)
@@ -397,7 +409,14 @@ func init() {
 
 	// Project-scoped commands.
 	for _, c := range []*cobra.Command{cronAddHTTPCmd, cronAddCommandCmd, cronEditCmd} {
-		c.Flags().StringVar(&pCronName, "name", "", "cron name")
+		// --name only on the ADD commands. `cron edit` takes the cron
+		// name positionally and cannot rename: the CR name is immutable
+		// and UpdateProjectCronRequest has no Name field, so the flag
+		// was registered, silently ignored, and the command still
+		// printed "updated". Use --display-name to change the label.
+		if c != cronEditCmd {
+			c.Flags().StringVar(&pCronName, "name", "", "cron name")
+		}
 		c.Flags().StringVar(&pCronDisplayName, "display-name", "", "free-form label shown in canvas")
 		c.Flags().StringVar(&pCronSchedule, "schedule", "", "cron expression — '*/15 * * * *'")
 		c.Flags().StringVar(&pCronURL, "url", "", "target URL (kind=http only)")

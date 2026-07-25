@@ -36,6 +36,11 @@ var migrateCmd = &cobra.Command{
 var migrateCoolifyCmd = &cobra.Command{
 	Use:   "coolify",
 	Short: "Migrate a Coolify v4 instance to kuso (dry-run by default)",
+	// Flag-driven, no positionals. Without this cobra defaults to
+	// ArbitraryArgs and RunE never looks at args, so
+	// `kuso migrate coolify myproject --apply` silently migrated the
+	// ENTIRE instance while the user believed they had scoped it.
+	Args: cobra.NoArgs,
 	Example: `  # dry-run report (touches nothing on either side)
   kuso migrate coolify --coolify-url https://ops.example.com --coolify-token 'sk_…'
 
