@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.21.10] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(operator,cli): placement panic, cron alerting, -o table, empty images ([78c7d66](https://github.com/sislelabs/kuso/commit/78c7d66a8bdee976bc20d0168acc59c2fd7e6c38))
+
 ## [0.21.9] — 2026-07-25
 
 ### 🐛 Bug Fixes
@@ -467,11 +472,6 @@ messages on every release. The format is loosely based on
 
 ### 📝 Docs
 - Docs(readme): stop/start, one-click GitHub App, health/remediation, activator ([da74de3](https://github.com/sislelabs/kuso/commit/da74de3ec6a1398d4d29dd35bda93162f3b89cc7))
-
-## [0.18.94] — 2026-07-01
-
-### 🔨 Refactors
-- Refactor(activator): restrained, editorial 404 (drop the maximalist version) ([b988f68](https://github.com/sislelabs/kuso/commit/b988f687cfa61b437503ce780cdbc82f9295406a))
 
 
 ---

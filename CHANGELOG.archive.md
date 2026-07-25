@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.94] — 2026-07-01
+
+### 🔨 Refactors
+- Refactor(activator): restrained, editorial 404 (drop the maximalist version) ([b988f68](https://github.com/sislelabs/kuso/commit/b988f687cfa61b437503ce780cdbc82f9295406a))
+
 ## [0.18.93] — 2026-07-01
 
 ### ✨ Features
