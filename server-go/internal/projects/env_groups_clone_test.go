@@ -319,3 +319,29 @@ func TestCreateEnvGroup_CarriesServiceSecrets(t *testing.T) {
 		t.Errorf("clone secret did not copy source data: %v", copied.Data)
 	}
 }
+
+// TestCreateEnvGroup_ClonedServiceCarriesServiceLabel guards the production-
+// canvas duplicate bug: the cloned KusoService MUST carry the
+// kuso.sislelabs.com/service label (=its own short name), or the canvas +
+// resolvers can't scope it to its env and it leaks into the production view.
+func TestCreateEnvGroup_ClonedServiceCarriesServiceLabel(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("acme", kube.KusoProjectSpec{BaseDomain: "apps.example.com"}),
+		seedService("acme", "web", kube.KusoServiceSpec{Project: "acme", Port: 8080}),
+		seedEnv("acme", "web", "production", "main", "acme-web-production"),
+	)
+	if _, err := s.CreateEnvGroup(context.Background(), "acme", CreateEnvGroupRequest{Name: "staging"}); err != nil {
+		t.Fatalf("CreateEnvGroup: %v", err)
+	}
+	svc, err := s.Kube.GetKusoService(context.Background(), "kuso", "acme-web-staging")
+	if err != nil {
+		t.Fatalf("get cloned service: %v", err)
+	}
+	if got := svc.Labels[kube.LabelService]; got != "web-staging" {
+		t.Errorf("cloned service label kuso.sislelabs.com/service = %q, want web-staging (unlabeled -> leaks into prod canvas): labels=%v", got, svc.Labels)
+	}
+	if svc.Labels[kube.LabelEnv] != "staging" {
+		t.Errorf("cloned service env label = %q, want staging", svc.Labels[kube.LabelEnv])
+	}
+}

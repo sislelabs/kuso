@@ -542,6 +542,12 @@ func (s *Service) CreateEnvGroup(ctx context.Context, project string, req Create
 				Labels: map[string]string{
 					labelProject: project,
 					labelEnv:     req.Name,
+					// Every service carries the service label; the canvas +
+					// resolvers scope nodes by it. Omitting it (the bug)
+					// left the cloned service unscoped, so it leaked into the
+					// PRODUCTION canvas as a duplicate node. Stamp the clone's
+					// own short name (matches the env CR's service label).
+					labelService: newSvcShort,
 				},
 				Annotations: map[string]string{
 					"kuso.sislelabs.com/env-group-source-service": item.fqn,
