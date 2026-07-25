@@ -127,7 +127,15 @@ var statusCmd = &cobra.Command{
 				if url != "" {
 					fmt.Printf("    %s\n", url)
 				}
-				if e.Spec.Branch != "" && e.Spec.Kind == "production" {
+				// Print the branch for EVERY env, not just production.
+				// Suppressing it elsewhere hid the most diagnostic field
+				// on staging/preview envs — and this is precisely where
+				// it matters, since a project default-branch change that
+				// fails to restamp env.spec.branch leaves an env
+				// silently promoting nothing. `kuso get envs` always
+				// showed it; status disagreeing made the two views
+				// contradict each other.
+				if e.Spec.Branch != "" {
 					fmt.Printf("    branch %s\n", e.Spec.Branch)
 				}
 			}

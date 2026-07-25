@@ -143,6 +143,6 @@ func init() {
 	revisionCmd.AddCommand(revisionListCmd)
 	revisionListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 	revisionCmd.AddCommand(revisionShowCmd)
-	revisionShowCmd.Flags().StringVarP(&outputFormat, "output", "o", "json", "output format [json]")
+	revisionShowCmd.Flags().StringVarP(&outputFormatJSONOnly, "output", "o", "json", "output format [json]")
 	revisionCmd.AddCommand(revisionRevertCmd)
 }

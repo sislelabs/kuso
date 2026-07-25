@@ -30,7 +30,23 @@ var (
 
 	// outputFormat is wired by `kuso get -o json` and read by table
 	// renderers to decide between human + machine output.
+	//
+	// IMPORTANT: every command binding this variable MUST register the
+	// same default ("table"). pflag writes a flag's default into the
+	// bound variable at registration time, so with one shared variable
+	// the LAST init() to run decides the value for EVERY command —
+	// init() order is alphabetical by filename, which is not something
+	// a command author can reason about locally. Four JSON-only
+	// commands used to register "json" here and, via user.go sorting
+	// last, silently flipped the default for all ~48 table commands to
+	// json. Those now bind outputFormatJSONOnly below.
 	outputFormat string
+
+	// outputFormatJSONOnly backs the handful of commands that emit JSON
+	// unconditionally (their -o flag is accepted for symmetry but the
+	// renderer ignores it). Kept separate so their "json" default can
+	// never leak into the shared outputFormat above.
+	outputFormatJSONOnly string
 
 	// force suppresses interactive prompts in scripted contexts. Set
 	// by per-command flags; respected by promptLine.

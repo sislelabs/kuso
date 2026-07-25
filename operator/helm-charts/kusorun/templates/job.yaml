@@ -1,5 +1,9 @@
 {{- if not .Values.done }}
-{{- if .Values.image.tag }}
+{{- /* Gate on repository AND tag. Gating on tag alone let a
+   pre-first-build service (empty repository, defaulted tag) render
+   `image: ":latest"`, which kube rejects as InvalidImageName — the
+   same gap kusocron had. */}}
+{{- if and .Values.image.repository .Values.image.tag }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -45,7 +49,7 @@ spec:
                       - {{ . | quote }}
                       {{- end }}
       {{- end }}
-      {{- if .labels.region }}
+      {{- if and .labels .labels.region }}
       tolerations:
         - key: kuso.sislelabs.com/region
           operator: Equal

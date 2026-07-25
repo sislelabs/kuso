@@ -13,6 +13,10 @@ import (
 	"kuso/pkg/kusoApi"
 )
 
+// notificationsGetOutput backs `kuso notifications get -o`. Separate
+// from the shared outputFormat for the same reason as logsSearchOutput.
+var notificationsGetOutput string
+
 // `kuso notifications` — CRUD for Discord / webhook / Slack notification
 // channels. Feature-parity with the web UI at /settings/notifications.
 //
@@ -53,7 +57,7 @@ var notificationsListCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
-		switch outputFormat {
+		switch notificationsGetOutput {
 		case "json":
 			return jsonOut(items)
 		default:
@@ -491,7 +495,7 @@ func init() {
 	notificationsListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format [table, json]")
 
 	notificationsCmd.AddCommand(notificationsGetCmd)
-	notificationsGetCmd.Flags().StringVarP(&outputFormat, "output", "o", "pretty", "output format [pretty, json]")
+	notificationsGetCmd.Flags().StringVarP(&notificationsGetOutput, "output", "o", "pretty", "output format [pretty, json]")
 	notificationsGetCmd.Flags().BoolVar(&notifReveal, "reveal", false, "show webhook URL and secret instead of redacting")
 
 	for _, c := range []*cobra.Command{notificationsCreateCmd, notificationsUpdateCmd} {

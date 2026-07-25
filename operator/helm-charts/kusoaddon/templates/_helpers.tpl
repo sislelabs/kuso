@@ -126,7 +126,7 @@ affinity:
                 {{- end }}
             {{- end }}
 {{- end }}
-{{- if .labels.region }}
+{{- if and .labels .labels.region }}
 tolerations:
   - key: kuso.sislelabs.com/region
     operator: Equal

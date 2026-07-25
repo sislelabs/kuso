@@ -309,7 +309,7 @@ func init() {
 
 	userListCmd.Flags().StringVarP(&outputFormat, "output", "o", "table", "output format: table|json")
 
-	userProfileCmd.Flags().StringVarP(&outputFormat, "output", "o", "json", "output format: json")
+	userProfileCmd.Flags().StringVarP(&outputFormatJSONOnly, "output", "o", "json", "output format: json")
 	userProfileSetCmd.Flags().StringVar(&profileSetEmail, "email", "", "new email address")
 	userProfileSetCmd.Flags().StringVar(&profileSetFirstName, "first-name", "", "new first name")
 	userProfileSetCmd.Flags().StringVar(&profileSetLastName, "last-name", "", "new last name")

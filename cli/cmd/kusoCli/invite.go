@@ -178,7 +178,7 @@ func init() {
 	inviteCmd.AddCommand(inviteListCmd)
 	inviteCmd.AddCommand(inviteRevokeCmd)
 	inviteCmd.AddCommand(inviteLookupCmd)
-	inviteLookupCmd.Flags().StringVarP(&outputFormat, "output", "o", "json", "output format: json")
+	inviteLookupCmd.Flags().StringVarP(&outputFormatJSONOnly, "output", "o", "json", "output format: json")
 
 	inviteCreateCmd.Flags().StringVar(&inviteCreateGroup, "group", "", "group id to add the invitee to")
 	inviteCreateCmd.Flags().StringVar(&inviteCreateRole, "role", "", "instance role on redeem: admin|editor|viewer")

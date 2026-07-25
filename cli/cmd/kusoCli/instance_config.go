@@ -236,7 +236,7 @@ func init() {
 	rootCmd.AddCommand(instanceConfigCmd)
 	instanceConfigCmd.AddCommand(instanceConfigGetCmd)
 	instanceConfigCmd.AddCommand(instanceConfigSetCmd)
-	instanceConfigGetCmd.Flags().StringVarP(&outputFormat, "output", "o", "json", "output format: json")
+	instanceConfigGetCmd.Flags().StringVarP(&outputFormatJSONOnly, "output", "o", "json", "output format: json")
 
 	instanceConfigCmd.AddCommand(buildSettingsCmd)
 	buildSettingsCmd.AddCommand(buildSettingsGetCmd)

@@ -9,6 +9,12 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// logsSearchOutput backs `kuso logs search -o`. Deliberately NOT the
+// shared outputFormat: its "text" default would become the default for
+// every other -o command (pflag writes defaults at registration time
+// into the bound variable, last init() wins).
+var logsSearchOutput string
+
 // `kuso logs search` — full-text search over the SQLite-stored
 // log archive. Backed by FTS5 server-side; query grammar is
 // FTS5 standard (phrase quoting, AND/OR/NOT, prefix `foo*`).
@@ -70,7 +76,7 @@ var logsSearchCmd = &cobra.Command{
 		if code >= 300 {
 			return fmt.Errorf("server returned %d: %s", code, string(body))
 		}
-		if outputFormat == "json" {
+		if logsSearchOutput == "json" {
 			fmt.Println(string(body))
 			return nil
 		}
@@ -127,5 +133,5 @@ func init() {
 	logsSearchCmd.Flags().StringVar(&logsSearchLimit, "limit", "100", "max lines to return (server caps at 500)")
 	logsSearchCmd.Flags().StringVar(&logsSearchSince, "since", "", "lower bound (1h, RFC3339, unix)")
 	logsSearchCmd.Flags().StringVar(&logsSearchUntil, "until", "", "upper bound (RFC3339, unix)")
-	logsSearchCmd.Flags().StringVarP(&outputFormat, "output", "o", "text", "output format [text, json]")
+	logsSearchCmd.Flags().StringVarP(&logsSearchOutput, "output", "o", "text", "output format [text, json]")
 }

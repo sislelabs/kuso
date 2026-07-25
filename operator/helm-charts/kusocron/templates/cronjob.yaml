@@ -6,11 +6,37 @@ metadata:
     {{- include "kusocron.labels" . | nindent 4 }}
 spec:
   schedule: {{ .Values.schedule | quote }}
-  suspend: {{ .Values.suspend }}
+  {{- /* Suspend while the service has no built image yet. crons.go
+     passes env.Spec.Image straight through, and a pre-first-build env
+     legitimately has an empty repository — which rendered
+     `image: ":latest"` and made every firing fail InvalidImageName.
+     kusoenvironment guards the same case by pinning replicas: 0; for a
+     CronJob the equivalent is to not fire at all until an image
+     exists. Once the first build promotes, this flips back to the
+     user's own suspend setting. */}}
+  suspend: {{ if not .Values.image.repository }}true{{ else }}{{ .Values.suspend }}{{ end }}
   concurrencyPolicy: {{ .Values.concurrencyPolicy }}
   successfulJobsHistoryLimit: {{ .Values.successfulJobsHistoryLimit }}
   failedJobsHistoryLimit: {{ .Values.failedJobsHistoryLimit }}
   jobTemplate:
+    # Labels on the JOB itself, not just its pod template. Kubernetes
+    # does NOT copy CronJob labels onto the Jobs it spawns, and the two
+    # existing label blocks sit on either side of the Job: one on the
+    # CronJob (top of this file), one on the pod template below.
+    #
+    # cronwatch.Watcher LISTs *Jobs* with selector
+    # kuso.sislelabs.com/cron and then reads that label's VALUE to find
+    # the KusoCron CR (cronwatch.go:214). Without this block the Jobs
+    # matched the selector but carried an empty value, so handleFailure
+    # returned immediately and cron.failed notify events, bell-icon
+    # entries and per-cron onFailure webhooks never fired — a silent,
+    # total loss of cron failure alerting.
+    #
+    # cronwatch_test.go hand-builds its fixture Job WITH this label,
+    # which is why the unit test passed while production saw nothing.
+    metadata:
+      labels:
+        {{- include "kusocron.labels" . | nindent 8 }}
     spec:
       {{- if gt (int .Values.activeDeadlineSeconds) 0 }}
       activeDeadlineSeconds: {{ .Values.activeDeadlineSeconds }}
@@ -68,7 +94,7 @@ spec:
                           - {{ . | quote }}
                           {{- end }}
           {{- end }}
-          {{- if .labels.region }}
+          {{- if and .labels .labels.region }}
           tolerations:
             - key: kuso.sislelabs.com/region
               operator: Equal
