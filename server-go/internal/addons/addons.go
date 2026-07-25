@@ -1085,14 +1085,46 @@ func (s *Service) refreshEnvSecretsFiltered(ctx context.Context, project string,
 	// of spec.SubscribedAddons; the subscription filter only ran on the
 	// next propagateChangedToEnvs (i.e. silently violated until the
 	// next user save).
-	projectAddonConns := make([]string, 0, len(addons))
-	for _, a := range addons {
-		conn := connSecretName(a.Name)
-		if excludeConnSecrets[conn] {
-			// Skip a just-deleted addon that the stale cache still lists.
-			continue
+	projectAddonConns := make([]string, 0, len(addons)+len(extraConnSecrets))
+	seenAddonConn := make(map[string]bool, len(addons)+len(extraConnSecrets))
+	addAddonConn := func(conn string) {
+		if conn == "" || seenAddonConn[conn] || excludeConnSecrets[conn] {
+			return
 		}
+		seenAddonConn[conn] = true
 		projectAddonConns = append(projectAddonConns, conn)
+	}
+	for _, a := range addons {
+		// excludeConnSecrets skips a just-deleted addon that the stale
+		// cache still lists.
+		addAddonConn(connSecretName(a.Name))
+	}
+	// extraConnSecrets MUST also count as project addon conns, not just
+	// as baseSecrets entries. They are addon conns by definition — the
+	// callers pass exactly connSecretName(<addon>) — and the addon List
+	// above is watch-cache served, so a brand-new addon is routinely
+	// absent from it. Omitting them here opened a real leak:
+	// filterAddonConnsBySubscription passes through any secret it does
+	// not recognise as a project addon conn (on the theory that it's a
+	// per-service or user-named secret). So a just-created conn sat in
+	// baseSecrets, failed the projectAddonSet lookup, took the
+	// "not an addon, leave it alone" branch, and was mounted on EVERY
+	// env in the project regardless of subscription.
+	//
+	// That is the tickero incident of 2026-07-25: adding
+	// `storage-staging` put tickero-storage-staging-conn on all four
+	// PRODUCTION envs. s3 conns all export the same key names
+	// (S3_BUCKET/S3_ENDPOINT/AWS_*) and kube envFrom is
+	// last-source-wins, so production pods resolved to staging's bucket
+	// and tickero-api-production crashlooped. The `kuso project addon
+	// list` view read correctly (unsubscribed) while the pod had it
+	// mounted — that divergence is the diagnostic tell.
+	//
+	// The Add() call site above already documents this exact failure for
+	// env-scoped preview clones and dodges it with an early return.
+	// Feeding the extras in here fixes the general case instead.
+	for _, conn := range extraConnSecrets {
+		addAddonConn(conn)
 	}
 	for i := range envs {
 		env := &envs[i]
