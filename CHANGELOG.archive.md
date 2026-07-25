@@ -2,6 +2,12 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.91] — 2026-07-01
+
+### ✨ Features
+- Feat(stop): branded stopped page, project card stopped state, stop-whole-project ([ff69409](https://github.com/sislelabs/kuso/commit/ff6940998255edb8c554873d91d2842f355293fb))
+- Feat(onboarding): one-click GitHub App creation + install summary + doctor webhook check ([b21cfb7](https://github.com/sislelabs/kuso/commit/b21cfb7ffe5381c7060f17e8d7534dee6a28543c))
+
 ## [0.18.90] — 2026-07-01
 
 ### ✨ Features

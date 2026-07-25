@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.21.7] — 2026-07-25
+
+### 🐛 Bug Fixes
+- Fix(addons): stop a new addon's conn leaking into unsubscribed envs ([eba6a7d](https://github.com/sislelabs/kuso/commit/eba6a7d0cfdf12fad1cd6bda549b7b38bbde26a3))
+
 ## [0.21.6] — 2026-07-25
 
 ### 🐛 Bug Fixes
@@ -469,12 +474,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(release): roll kuso-activator in lockstep with kuso-server ([d52157a](https://github.com/sislelabs/kuso/commit/d52157a28bc92518f1aeee1b58a77f5ed5a0b8ed))
-
-## [0.18.91] — 2026-07-01
-
-### ✨ Features
-- Feat(stop): branded stopped page, project card stopped state, stop-whole-project ([ff69409](https://github.com/sislelabs/kuso/commit/ff6940998255edb8c554873d91d2842f355293fb))
-- Feat(onboarding): one-click GitHub App creation + install summary + doctor webhook check ([b21cfb7](https://github.com/sislelabs/kuso/commit/b21cfb7ffe5381c7060f17e8d7534dee6a28543c))
 
 
 ---
