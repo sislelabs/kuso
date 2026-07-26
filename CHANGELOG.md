@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.21.14] — 2026-07-26
+
+### 🐛 Bug Fixes
+- Fix(runs): stop managed-secret placeholders shadowing the real secret ([777230e](https://github.com/sislelabs/kuso/commit/777230e7abb1c0987894435dc35d623137dec959))
+
 ## [0.21.13] — 2026-07-26
 
 ### 🐛 Bug Fixes
@@ -460,11 +465,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(security): harden fork previews, token revocation, build promotion, and RMW writes ([7643d36](https://github.com/sislelabs/kuso/commit/7643d36c3dc8544666ae509e58ff20e925156bc3))
-
-## [0.18.98] — 2026-07-01
-
-### ✨ Features
-- Feat(web): best-in-class mobile incident experience ([28d061b](https://github.com/sislelabs/kuso/commit/28d061b172440b0c69baad0d70675cfba72eadd6))
 
 
 ---

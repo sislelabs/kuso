@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.98] — 2026-07-01
+
+### ✨ Features
+- Feat(web): best-in-class mobile incident experience ([28d061b](https://github.com/sislelabs/kuso/commit/28d061b172440b0c69baad0d70675cfba72eadd6))
+
 ## [0.18.97] — 2026-07-01
 
 ### 🐛 Bug Fixes
