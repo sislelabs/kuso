@@ -19,10 +19,18 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
-## [0.21.14] — 2026-07-26
+## [0.21.15] — 2026-07-26
 
 ### 🐛 Bug Fixes
-- Fix(runs): stop managed-secret placeholders shadowing the real secret ([777230e](https://github.com/sislelabs/kuso/commit/777230e7abb1c0987894435dc35d623137dec959))
+- Fix(cli): add `cron edit-service` — service crons had no edit path ([71e61a1](https://github.com/sislelabs/kuso/commit/71e61a1744e9988f15dba3c9b294c5a13d004bb4))
+
+## [0.21.14] — 2026-07-26
+
+### ✨ Features
+- Feat(crons): pinImage opt-out + protect cron images from the sweep ([5ab7642](https://github.com/sislelabs/kuso/commit/5ab7642817f51bae71062f2daafb10d67e28cf60))
+
+### 🐛 Bug Fixes
+- Fix(runs): stop managed-secret placeholders shadowing the real secret ([b01c5f8](https://github.com/sislelabs/kuso/commit/b01c5f81e712ae0662de5f63099928b5b0248c4b))
 
 ## [0.21.13] — 2026-07-26
 
@@ -460,11 +468,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix: bound addon memory, log growth, and activator wake budget ([b59f86f](https://github.com/sislelabs/kuso/commit/b59f86f4918e3ae5236f8e209ae3d862284333e6))
-
-## [0.18.99] — 2026-07-02
-
-### 🐛 Bug Fixes
-- Fix(security): harden fork previews, token revocation, build promotion, and RMW writes ([7643d36](https://github.com/sislelabs/kuso/commit/7643d36c3dc8544666ae509e58ff20e925156bc3))
 
 
 ---

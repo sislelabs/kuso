@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.99] — 2026-07-02
+
+### 🐛 Bug Fixes
+- Fix(security): harden fork previews, token revocation, build promotion, and RMW writes ([7643d36](https://github.com/sislelabs/kuso/commit/7643d36c3dc8544666ae509e58ff20e925156bc3))
+
 ## [0.18.98] — 2026-07-01
 
 ### ✨ Features
