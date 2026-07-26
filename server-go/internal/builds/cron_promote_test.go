@@ -41,7 +41,15 @@ func TestPromoteToCrons_RepointsInheritedImage(t *testing.T) {
 		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
 		seedService("alpha", "web"),
 		// Inherits the service image — must be repointed.
-		seedCron("alpha-web-sweeps", "alpha", "web", "service", "oldtag00000"),
+		//
+		// spec.service carries the FULLY-QUALIFIED name here, which is
+		// what crons.Add actually writes. The first version of this test
+		// seeded the SHORT form and passed against a buggy
+		// implementation that only compared the short name — the real
+		// cron on the cluster never matched. Keep the FQN case first.
+		seedCron("alpha-web-sweeps", "alpha", "alpha-web", "service", "oldtag00000"),
+		// Short form too: hand-written CRs and older records use it.
+		seedCron("alpha-web-sweeps-short", "alpha", "web", "service", "oldtag00000"),
 		// kind=command carries its OWN image — must NOT be touched.
 		seedCron("alpha-web-standalone", "alpha", "web", "command", "pinned-v1"),
 		// Different service — out of scope.
@@ -64,7 +72,8 @@ func TestPromoteToCrons_RepointsInheritedImage(t *testing.T) {
 	}
 
 	for _, tc := range []struct{ cron, want string }{
-		{"alpha-web-sweeps", "newtag11111"},   // repointed
+		{"alpha-web-sweeps", "newtag11111"},       // repointed (FQN spec.service)
+		{"alpha-web-sweeps-short", "newtag11111"}, // repointed (short spec.service)
 		{"alpha-web-standalone", "pinned-v1"}, // kind=command untouched
 		{"alpha-api-sweeps", "othertag000"},   // other service untouched
 	} {

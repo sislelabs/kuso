@@ -3009,7 +3009,19 @@ func (p *Poller) promoteToCrons(ctx context.Context, ns string, b *kube.KusoBuil
 		if c.Spec.Kind == "command" {
 			continue
 		}
-		if c.Spec.Service == "" || c.Spec.Service != sourceShortName {
+		// Match on BOTH name shapes. crons.Add stores the
+		// fully-qualified "<project>-<service>" in spec.service, but the
+		// caller hands us the SHORT name (promoteImage derives
+		// shortService by trimming the project prefix). Comparing only
+		// against the short form silently matched nothing — the same
+		// short-vs-FQN mismatch that defeated addons.Delete's exclude
+		// key. Accept either so hand-written CRs using the short form
+		// work too.
+		if c.Spec.Service == "" {
+			continue
+		}
+		cronShort := strings.TrimPrefix(c.Spec.Service, b.Spec.Project+"-")
+		if c.Spec.Service != sourceShortName && cronShort != sourceShortName {
 			continue
 		}
 		if c.Spec.Image != nil && c.Spec.Image.Tag == b.Spec.Image.Tag {
