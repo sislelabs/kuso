@@ -215,6 +215,62 @@ var cronSyncCmd = &cobra.Command{
 	},
 }
 
+// cronEditServiceCmd edits a SERVICE-ATTACHED cron (kind=service).
+// `cron edit` only covers the project-scoped kinds (http/command), so
+// without this there was no way to change a service cron's schedule,
+// suspend state or pinImage from the CLI at all — the flag existed but
+// was unreachable for the exact cron type it matters most for.
+var (
+	cronSetSchedule string
+	cronSetSuspend  bool
+	cronSetPinImage bool
+)
+
+var cronEditServiceCmd = &cobra.Command{
+	Use:     "edit-service <project> <service> <name>",
+	Aliases: []string{"set"},
+	Short:   "Edit a service-attached cron (schedule / suspend / pin-image)",
+	Long: `Edit a cron that runs a parent service's image (kind=service).
+
+--pin-image freezes the cron on its current build instead of following
+the service's deploys. Following is the default and is usually what you
+want: a pinned cron stops moving while its service keeps building, and
+only stays workable because the image sweep treats cron-referenced tags
+as in-use. Pin when the job must run a known-good build.
+
+Use ` + "`kuso cron edit`" + ` for project-scoped (http / command) crons.`,
+	Example: `  kuso cron edit-service scubatony internal-system daily-sweeps --pin-image
+  kuso cron edit-service scubatony internal-system daily-sweeps --schedule '0 4 * * *'`,
+	Args: cobra.ExactArgs(3),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if api == nil {
+			return fmt.Errorf("not logged in; run 'kuso login' first")
+		}
+		req := kusoApi.UpdateCronRequest{}
+		if cmd.Flags().Changed("schedule") {
+			v := cronSetSchedule
+			req.Schedule = &v
+		}
+		if cmd.Flags().Changed("suspend") {
+			v := cronSetSuspend
+			req.Suspend = &v
+		}
+		if cmd.Flags().Changed("pin-image") {
+			v := cronSetPinImage
+			req.PinImage = &v
+		}
+		resp, err := api.UpdateCron(args[0], args[1], args[2], req)
+		if err != nil {
+			return err
+		}
+		if resp.StatusCode() >= 300 {
+			return fmt.Errorf("server returned %d: %s", resp.StatusCode(), string(resp.Body()))
+		}
+		fmt.Printf("cron %s/%s updated\n", args[1], args[2])
+		return nil
+	},
+}
+
 // Project-scoped cron flags. Shared between `cron add-http`,
 // `cron add-command`, and `cron edit`.
 var (
@@ -416,6 +472,10 @@ func init() {
 	cronAddCommand.Flags().StringVar(&cronAddConcurrencyPolicy, "concurrency", "Forbid", "Allow|Forbid|Replace")
 	cronCmd.AddCommand(cronDeleteCmd)
 	cronCmd.AddCommand(cronSyncCmd)
+	cronEditServiceCmd.Flags().StringVar(&cronSetSchedule, "schedule", "", "cron expression — '*/15 * * * *'")
+	cronEditServiceCmd.Flags().BoolVar(&cronSetSuspend, "suspend", false, "pause the cron (schedule stays saved)")
+	cronEditServiceCmd.Flags().BoolVar(&cronSetPinImage, "pin-image", false, "freeze the image instead of following the service's builds")
+	cronCmd.AddCommand(cronEditServiceCmd)
 
 	// Project-scoped commands.
 	for _, c := range []*cobra.Command{cronAddHTTPCmd, cronAddCommandCmd, cronEditCmd} {
