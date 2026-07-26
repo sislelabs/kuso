@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.21.13] — 2026-07-26
+
+### 🐛 Bug Fixes
+- Fix(builds): match cron spec.service on both FQN and short name ([71bf10e](https://github.com/sislelabs/kuso/commit/71bf10e6d4c4b2fcdcaaca4852952416c7b48879))
+
 ## [0.21.12] — 2026-07-26
 
 ### 🐛 Bug Fixes
@@ -460,11 +465,6 @@ messages on every release. The format is loosely based on
 
 ### ✨ Features
 - Feat(web): best-in-class mobile incident experience ([28d061b](https://github.com/sislelabs/kuso/commit/28d061b172440b0c69baad0d70675cfba72eadd6))
-
-## [0.18.97] — 2026-07-01
-
-### 🐛 Bug Fixes
-- Fix(env): don't leak plaintext env values from UnsetEnvScopedVar ([971a229](https://github.com/sislelabs/kuso/commit/971a229c1ae5285dc905b6ede341e78255594611))
 
 
 ---

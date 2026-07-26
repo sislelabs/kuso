@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.97] — 2026-07-01
+
+### 🐛 Bug Fixes
+- Fix(env): don't leak plaintext env values from UnsetEnvScopedVar ([971a229](https://github.com/sislelabs/kuso/commit/971a229c1ae5285dc905b6ede341e78255594611))
+
 ## [0.18.96] — 2026-07-01
 
 ### ✨ Features
