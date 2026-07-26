@@ -37,6 +37,7 @@ interface CronShape {
     schedule?: string;
     command?: string[];
     suspend?: boolean;
+    pinImage?: boolean;
     displayName?: string;
     // Resolved runtime detail — what the pod actually runs with.
     image?: { repository?: string; tag?: string; pullPolicy?: string };
@@ -104,6 +105,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
   const [imageTag, setImageTag] = useState("latest");
   const [cmd, setCmd] = useState("");
   const [suspend, setSuspend] = useState(false);
+  const [pinImage, setPinImage] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
@@ -112,6 +114,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
     setSchedule(cron.spec.schedule ?? "0 3 * * *");
     setUrl(cron.spec.url ?? "");
     setSuspend(!!cron.spec.suspend);
+    setPinImage(!!cron.spec.pinImage);
     setCmd((cron.spec.command ?? []).join(" "));
     setImageRepo(cron.spec.image?.repository ?? "");
     setImageTag(cron.spec.image?.tag ?? "latest");
@@ -142,6 +145,7 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
           displayName: displayName.trim(),
           schedule: schedule.trim(),
           suspend,
+          pinImage,
         };
         if (kind === "http") {
           body.url = url.trim();
@@ -400,10 +404,20 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                 {kind === "service" && (
                   <p className="mt-2 border-t border-[var(--border-subtle)] pt-2 text-[10px] leading-relaxed text-[var(--text-tertiary)]">
                     Image + env are inherited from{" "}
-                    <span className="font-mono text-[var(--text-secondary)]">{cron.spec.service}</span> and pinned at
-                    create time — they don&apos;t follow later deploys, so hit{" "}
-                    <span className="font-medium text-[var(--text-secondary)]">Sync image</span> after a release to run
-                    on the newest build.
+                    <span className="font-mono text-[var(--text-secondary)]">{cron.spec.service}</span>.{" "}
+                    {pinImage ? (
+                      <>
+                        The image is <span className="font-medium text-[var(--text-secondary)]">pinned</span> — it stays
+                        on this build until you hit{" "}
+                        <span className="font-medium text-[var(--text-secondary)]">Sync image</span> or unpin.
+                      </>
+                    ) : (
+                      <>
+                        The image <span className="font-medium text-[var(--text-secondary)]">follows every deploy</span>{" "}
+                        of that service automatically; <span className="font-medium text-[var(--text-secondary)]">Sync image</span>{" "}
+                        is only needed to pull env changes early.
+                      </>
+                    )}
                   </p>
                 )}
               </div>
@@ -479,6 +493,27 @@ export function EditCronDialog({ project, cron, onClose }: Props) {
                     spellCheck={false}
                   />
                 </div>
+              )}
+
+              {kind === "service" && (
+                <label className={cn(
+                  "flex cursor-pointer items-center gap-2 rounded-md border px-3 py-2 text-[12px]",
+                  pinImage
+                    ? "border-amber-500/40 bg-amber-500/5"
+                    : "border-[var(--border-subtle)] bg-[var(--bg-secondary)]",
+                )}>
+                  <input
+                    type="checkbox"
+                    checked={pinImage}
+                    onChange={(e) => setPinImage(e.target.checked)}
+                    className="h-3.5 w-3.5 cursor-pointer accent-[var(--accent)]"
+                  />
+                  <span>
+                    Pin the image — stay on the current build instead of following{" "}
+                    {cron.spec.service ?? "the service"}&apos;s deploys. Use when this job must run a
+                    known-good build rather than whatever shipped that day.
+                  </span>
+                </label>
               )}
 
               <label className={cn(

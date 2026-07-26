@@ -81,6 +81,7 @@ var (
 	cronAddSchedule          string
 	cronAddCmdString         string
 	cronAddSuspend           bool
+	cronAddPinImage          bool
 	cronAddConcurrencyPolicy string
 )
 
@@ -158,6 +159,7 @@ var cronAddCommand = &cobra.Command{
 			Schedule:          cronAddSchedule,
 			Command:           argv,
 			Suspend:           cronAddSuspend,
+			PinImage:          cronAddPinImage,
 			ConcurrencyPolicy: cronAddConcurrencyPolicy,
 		}
 		resp, err := api.AddCron(args[0], args[1], req)
@@ -217,6 +219,7 @@ var cronSyncCmd = &cobra.Command{
 // `cron add-command`, and `cron edit`.
 var (
 	pCronName              string
+	pCronPinImage          bool
 	pCronDisplayName       string
 	pCronSchedule          string
 	pCronURL               string
@@ -246,6 +249,7 @@ var cronAddHTTPCmd = &cobra.Command{
 			Schedule:          pCronSchedule,
 			URL:               pCronURL,
 			Suspend:           pCronSuspend,
+			PinImage:          pCronPinImage,
 			ConcurrencyPolicy: pCronConcurrencyPolicy,
 		}
 		resp, err := api.AddProjectCron(args[0], req)
@@ -280,6 +284,7 @@ var cronAddCommandCmd = &cobra.Command{
 			Image:             &kusoApi.CronImage{Repository: pCronImage, Tag: pCronImageTag},
 			Command:           splitCmd(pCronCmdString),
 			Suspend:           pCronSuspend,
+			PinImage:          pCronPinImage,
 			ConcurrencyPolicy: pCronConcurrencyPolicy,
 		}
 		resp, err := api.AddProjectCron(args[0], req)
@@ -354,6 +359,10 @@ add roundtrip via the per-service path.`,
 			}
 			req.Image = &kusoApi.CronImage{Repository: repo, Tag: tag}
 		}
+		if cmd.Flags().Changed("pin-image") {
+			v := pCronPinImage
+			req.PinImage = &v
+		}
 		if cmd.Flags().Changed("cmd") {
 			req.Command = splitCmd(pCronCmdString)
 		}
@@ -403,6 +412,7 @@ func init() {
 	cronAddCommand.Flags().StringVar(&cronAddSchedule, "schedule", "", "cron expression — '*/15 * * * *' (required)")
 	cronAddCommand.Flags().StringVar(&cronAddCmdString, "cmd", "", "command argv (shell-quoted; e.g. 'sh -c \"echo tick\"') (required)")
 	cronAddCommand.Flags().BoolVar(&cronAddSuspend, "suspend", false, "create suspended")
+	cronAddCommand.Flags().BoolVar(&cronAddPinImage, "pin-image", false, "freeze the image instead of following the service's builds")
 	cronAddCommand.Flags().StringVar(&cronAddConcurrencyPolicy, "concurrency", "Forbid", "Allow|Forbid|Replace")
 	cronCmd.AddCommand(cronDeleteCmd)
 	cronCmd.AddCommand(cronSyncCmd)
@@ -418,6 +428,11 @@ func init() {
 			c.Flags().StringVar(&pCronName, "name", "", "cron name")
 		}
 		c.Flags().StringVar(&pCronDisplayName, "display-name", "", "free-form label shown in canvas")
+		// Default false = the cron FOLLOWS its service's builds. Pin only
+		// when a job must run a known-good image rather than whatever
+		// shipped that day; a pinned tag stays safe because the image
+		// sweep treats cron-referenced images as in-use.
+		c.Flags().BoolVar(&pCronPinImage, "pin-image", false, "freeze the image instead of following the service's builds")
 		c.Flags().StringVar(&pCronSchedule, "schedule", "", "cron expression — '*/15 * * * *'")
 		c.Flags().StringVar(&pCronURL, "url", "", "target URL (kind=http only)")
 		c.Flags().StringVar(&pCronImage, "image", "", "container image repo (kind=command only)")

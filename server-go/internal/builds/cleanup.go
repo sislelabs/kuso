@@ -275,6 +275,32 @@ func SweepImagesPastWindow(
 			protected[repo+":"+img.Tag] = true
 		}
 	}
+	// Same protection for crons. A KusoCron carries its own copy of an
+	// image tag, and a PINNED cron deliberately sits still while its
+	// service keeps building — so it falls out of the newest-N window
+	// faster than anything else and its tag gets swept. That is exactly
+	// how scubatony-internal-system-daily-sweeps broke: the sweep
+	// untagged 9bca1d03de79 while the cron still referenced it, and
+	// every subsequent fire was an unrecoverable ImagePullBackOff.
+	//
+	// Fail CLOSED like the env lookup above: without the cron view we
+	// cannot know which tags are load-bearing, and a skipped sweep is
+	// recoverable while an over-eager one is not.
+	if crons, cerr := kc.ListKusoCrons(ctx, namespace); cerr != nil {
+		return 0, fmt.Errorf("image-sweep list crons: %w", cerr)
+	} else {
+		for i := range crons {
+			img := crons[i].Spec.Image
+			if img == nil || img.Tag == "" {
+				continue
+			}
+			repo := img.Repository
+			if idx := strings.Index(repo, "/"); idx >= 0 {
+				repo = repo[idx+1:]
+			}
+			protected[repo+":"+img.Tag] = true
+		}
+	}
 
 	targets := imagesToUntag(byKey, keep, protected)
 	deleted := 0

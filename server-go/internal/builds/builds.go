@@ -3009,6 +3009,12 @@ func (p *Poller) promoteToCrons(ctx context.Context, ns string, b *kube.KusoBuil
 		if c.Spec.Kind == "command" {
 			continue
 		}
+		// Opt-out: a pinned cron runs a deliberately-chosen image and
+		// only `kuso cron sync` moves it. Safe to pin because the
+		// registry GC treats cron-referenced tags as in-use.
+		if c.Spec.PinImage {
+			continue
+		}
 		// Match on BOTH name shapes. crons.Add stores the
 		// fully-qualified "<project>-<service>" in spec.service, but the
 		// caller hands us the SHORT name (promoteImage derives

@@ -11,12 +11,17 @@ import (
 )
 
 func seedCron(name, project, service, kind, tag string) seed {
+	return seedCronPinned(name, project, service, kind, tag, false)
+}
+
+func seedCronPinned(name, project, service, kind, tag string, pin bool) seed {
 	return typedSeed(kube.GVRCrons, "KusoCron", &kube.KusoCron{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso"},
 		Spec: kube.KusoCronSpec{
-			Project: project,
-			Service: service,
-			Kind:    kind,
+			Project:  project,
+			Service:  service,
+			Kind:     kind,
+			PinImage: pin,
 			Image: &kube.KusoImage{
 				Repository: "kuso-registry.kuso.svc.cluster.local:5000/" + project + "/" + service,
 				Tag:        tag,
@@ -54,6 +59,8 @@ func TestPromoteToCrons_RepointsInheritedImage(t *testing.T) {
 		seedCron("alpha-web-standalone", "alpha", "web", "command", "pinned-v1"),
 		// Different service — out of scope.
 		seedCron("alpha-api-sweeps", "alpha", "api", "service", "othertag000"),
+		// Explicitly pinned — the opt-out. Must NOT be repointed.
+		seedCronPinned("alpha-web-pinned", "alpha", "alpha-web", "service", "pinnedtag00", true),
 	)
 	p := &Poller{Svc: s, Logger: slog.Default()}
 
@@ -74,8 +81,9 @@ func TestPromoteToCrons_RepointsInheritedImage(t *testing.T) {
 	for _, tc := range []struct{ cron, want string }{
 		{"alpha-web-sweeps", "newtag11111"},       // repointed (FQN spec.service)
 		{"alpha-web-sweeps-short", "newtag11111"}, // repointed (short spec.service)
-		{"alpha-web-standalone", "pinned-v1"}, // kind=command untouched
-		{"alpha-api-sweeps", "othertag000"},   // other service untouched
+		{"alpha-web-standalone", "pinned-v1"},     // kind=command untouched
+		{"alpha-api-sweeps", "othertag000"},       // other service untouched
+		{"alpha-web-pinned", "pinnedtag00"},       // pinImage=true opts out
 	} {
 		got, err := s.Kube.GetKusoCron(context.Background(), "kuso", tc.cron)
 		if err != nil {

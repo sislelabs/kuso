@@ -19,6 +19,7 @@ func cronCreateReq(c CronSpec) crons.CreateProjectCronRequest {
 		URL:      c.URL,
 		Command:  c.Command,
 		Suspend:  c.Suspend,
+		PinImage: c.PinImage,
 	}
 	if c.Kind == "command" && c.Image != "" {
 		repo, tag := splitImage(c.Image)
@@ -33,10 +34,12 @@ func cronCreateReq(c CronSpec) crons.CreateProjectCronRequest {
 func cronUpdateReq(c CronSpec) crons.UpdateProjectCronRequest {
 	sched := c.Schedule
 	susp := c.Suspend
+	pin := c.PinImage
 	return crons.UpdateProjectCronRequest{
 		Schedule: &sched,
 		Command:  c.Command,
 		Suspend:  &susp,
+		PinImage: &pin,
 	}
 }
 

@@ -315,6 +315,11 @@ type CronSpec struct {
 	Image    string   `yaml:"image,omitempty"`   // kind=command
 	Command  []string `yaml:"command,omitempty"`
 	Suspend  bool     `yaml:"suspend,omitempty"`
+	// PinImage freezes a kind=service cron's image instead of letting it
+	// follow the parent service's builds. Default false = follow, which
+	// is what keeps a cron from rotting into ImagePullBackOff once the
+	// image sweep untags the build it was created against.
+	PinImage bool `yaml:"pinImage,omitempty"`
 }
 
 // Errors that can leak to API callers.

@@ -63,10 +63,13 @@ func CRName(project, service, short string) string {
 
 // CreateCronRequest is the body of POST /api/projects/:p/services/:s/crons.
 type CreateCronRequest struct {
-	Name      string   `json:"name"`
-	Schedule  string   `json:"schedule"`
-	Command   []string `json:"command"`
-	Suspend   bool     `json:"suspend,omitempty"`
+	Name     string   `json:"name"`
+	Schedule string   `json:"schedule"`
+	Command  []string `json:"command"`
+	Suspend  bool     `json:"suspend,omitempty"`
+	// PinImage freezes the image at create time instead of following
+	// the parent service's builds. Default false = follow.
+	PinImage bool `json:"pinImage,omitempty"`
 	// Concurrency, default Forbid. One of Allow/Forbid/Replace.
 	ConcurrencyPolicy string `json:"concurrencyPolicy,omitempty"`
 	// 0 = no deadline.
@@ -77,13 +80,13 @@ type CreateCronRequest struct {
 // the project-scoped variant. Kind disambiguates between the three
 // flavours; fields are validated per-kind.
 type CreateProjectCronRequest struct {
-	Name        string   `json:"name"`
-	DisplayName string   `json:"displayName,omitempty"`
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName,omitempty"`
 	// Kind ∈ {http, command}. Service-kind crons go through the
 	// existing per-service Add flow; the canvas right-click "Add
 	// cron" only ever produces the standalone variants.
-	Kind     string   `json:"kind"`
-	Schedule string   `json:"schedule"`
+	Kind     string `json:"kind"`
+	Schedule string `json:"schedule"`
 	// URL: required when Kind=http.
 	URL string `json:"url,omitempty"`
 	// Image + Command: required when Kind=command.
@@ -91,6 +94,7 @@ type CreateProjectCronRequest struct {
 	Command []string        `json:"command,omitempty"`
 	// Optional knobs — same defaults as CreateCronRequest.
 	Suspend               bool   `json:"suspend,omitempty"`
+	PinImage              bool   `json:"pinImage,omitempty"`
 	ConcurrencyPolicy     string `json:"concurrencyPolicy,omitempty"`
 	ActiveDeadlineSeconds int    `json:"activeDeadlineSeconds,omitempty"`
 }
@@ -101,6 +105,7 @@ type UpdateCronRequest struct {
 	Schedule              *string  `json:"schedule,omitempty"`
 	Command               []string `json:"command,omitempty"`
 	Suspend               *bool    `json:"suspend,omitempty"`
+	PinImage              *bool    `json:"pinImage,omitempty"`
 	ConcurrencyPolicy     *string  `json:"concurrencyPolicy,omitempty"`
 	ActiveDeadlineSeconds *int     `json:"activeDeadlineSeconds,omitempty"`
 }
@@ -113,6 +118,7 @@ type UpdateProjectCronRequest struct {
 	DisplayName           *string         `json:"displayName,omitempty"`
 	Schedule              *string         `json:"schedule,omitempty"`
 	Suspend               *bool           `json:"suspend,omitempty"`
+	PinImage              *bool           `json:"pinImage,omitempty"`
 	URL                   *string         `json:"url,omitempty"`
 	Image                 *kube.KusoImage `json:"image,omitempty"`
 	Command               []string        `json:"command,omitempty"`
@@ -345,6 +351,7 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 			Schedule:              req.Schedule,
 			Command:               req.Command,
 			Suspend:               req.Suspend,
+			PinImage:              req.PinImage,
 			ConcurrencyPolicy:     policy,
 			ActiveDeadlineSeconds: req.ActiveDeadlineSeconds,
 			Image:                 image,
@@ -423,6 +430,7 @@ func (s *Service) AddProject(ctx context.Context, project string, req CreateProj
 			Image:                 req.Image,
 			DisplayName:           req.DisplayName,
 			Suspend:               req.Suspend,
+			PinImage:              req.PinImage,
 			ConcurrencyPolicy:     policy,
 			ActiveDeadlineSeconds: req.ActiveDeadlineSeconds,
 		},
@@ -460,6 +468,9 @@ func (s *Service) Update(ctx context.Context, project, service, name string, req
 		}
 		if req.Suspend != nil {
 			cr.Spec.Suspend = *req.Suspend
+		}
+		if req.PinImage != nil {
+			cr.Spec.PinImage = *req.PinImage
 		}
 		if req.ConcurrencyPolicy != nil {
 			cr.Spec.ConcurrencyPolicy = *req.ConcurrencyPolicy
@@ -566,6 +577,9 @@ func (s *Service) UpdateProject(ctx context.Context, project, name string, req U
 		}
 		if req.Suspend != nil {
 			cr.Spec.Suspend = *req.Suspend
+		}
+		if req.PinImage != nil {
+			cr.Spec.PinImage = *req.PinImage
 		}
 		if req.URL != nil {
 			cr.Spec.URL = strings.TrimSpace(*req.URL)

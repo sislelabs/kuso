@@ -72,6 +72,25 @@ spec:
                 suspend:
                   type: boolean
                   default: false
+                pinImage:
+                  type: boolean
+                  default: false
+                  description: >-
+                    When false (the default) the cron FOLLOWS its parent
+                    service: every successful build repoints spec.image at
+                    the newly promoted tag. When true the image is frozen
+                    at whatever it is now and only an explicit
+                    `kuso cron sync` moves it.
+
+                    Following is the default because a pinned cron silently
+                    rots — it keeps working until the weekly registry GC
+                    reaps its tag, then fails ImagePullBackOff on every fire
+                    while the service itself is healthy on a newer build.
+                    Pin deliberately, when a job must run a known-good
+                    image rather than whatever shipped that day.
+
+                    Ignored for kind=command crons, which carry their own
+                    image by contract and never follow a service.
                 concurrencyPolicy:
                   type: string
                   enum: [Allow, Forbid, Replace]

@@ -1108,6 +1108,14 @@ type KusoCronSpec struct {
 	//                  attach via the chart anyway).
 	//   kind=http    → server uses the kuso-backup image (it has
 	//                  curl pre-installed).
+	// PinImage freezes spec.image against build promotion. Default
+	// false = the cron FOLLOWS its parent service and every successful
+	// build repoints it (builds.promoteToCrons). Set true when a job
+	// must run a known-good image rather than whatever shipped that day
+	// — but note a pinned tag is only safe because registry GC treats
+	// cron-referenced images as in-use; without that a pin rots into
+	// ImagePullBackOff once GC reaps the tag.
+	PinImage       bool           `json:"pinImage,omitempty"`
 	Image          *KusoImage     `json:"image,omitempty"`
 	EnvFromSecrets []string       `json:"envFromSecrets,omitempty"`
 	Placement      *KusoPlacement `json:"placement,omitempty"`

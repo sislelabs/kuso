@@ -8,6 +8,7 @@ type CreateCronRequest struct {
 	Schedule              string   `json:"schedule"`
 	Command               []string `json:"command"`
 	Suspend               bool     `json:"suspend,omitempty"`
+	PinImage              bool     `json:"pinImage,omitempty"`
 	ConcurrencyPolicy     string   `json:"concurrencyPolicy,omitempty"`
 	ActiveDeadlineSeconds int      `json:"activeDeadlineSeconds,omitempty"`
 }
@@ -33,6 +34,7 @@ type CreateProjectCronRequest struct {
 	Image                 *CronImage `json:"image,omitempty"`
 	Command               []string   `json:"command,omitempty"`
 	Suspend               bool       `json:"suspend,omitempty"`
+	PinImage              bool       `json:"pinImage,omitempty"`
 	ConcurrencyPolicy     string     `json:"concurrencyPolicy,omitempty"`
 	ActiveDeadlineSeconds int        `json:"activeDeadlineSeconds,omitempty"`
 }
@@ -44,6 +46,7 @@ type UpdateProjectCronRequest struct {
 	DisplayName           *string    `json:"displayName,omitempty"`
 	Schedule              *string    `json:"schedule,omitempty"`
 	Suspend               *bool      `json:"suspend,omitempty"`
+	PinImage              *bool      `json:"pinImage,omitempty"`
 	URL                   *string    `json:"url,omitempty"`
 	Image                 *CronImage `json:"image,omitempty"`
 	Command               []string   `json:"command,omitempty"`
@@ -55,6 +58,7 @@ type UpdateCronRequest struct {
 	Schedule              *string  `json:"schedule,omitempty"`
 	Command               []string `json:"command,omitempty"`
 	Suspend               *bool    `json:"suspend,omitempty"`
+	PinImage              *bool    `json:"pinImage,omitempty"`
 	ConcurrencyPolicy     *string  `json:"concurrencyPolicy,omitempty"`
 	ActiveDeadlineSeconds *int     `json:"activeDeadlineSeconds,omitempty"`
 }
