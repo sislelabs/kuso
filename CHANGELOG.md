@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.21.12] — 2026-07-26
+
+### 🐛 Bug Fixes
+- Fix(builds): repoint crons at the new image on every deploy ([6359ed7](https://github.com/sislelabs/kuso/commit/6359ed7530a5247a9381a2f53ca66e27b00c0b8f))
+
 ## [0.21.11] — 2026-07-25
 
 ### 🐛 Bug Fixes
@@ -460,11 +465,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(env): don't leak plaintext env values from UnsetEnvScopedVar ([971a229](https://github.com/sislelabs/kuso/commit/971a229c1ae5285dc905b6ede341e78255594611))
-
-## [0.18.96] — 2026-07-01
-
-### ✨ Features
-- Feat(web): right-click context menu on project cards ([1a536b7](https://github.com/sislelabs/kuso/commit/1a536b746cf13e620c17aa8cfbf49f2946e7f17b))
 
 
 ---

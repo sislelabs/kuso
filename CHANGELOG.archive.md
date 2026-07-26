@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.96] — 2026-07-01
+
+### ✨ Features
+- Feat(web): right-click context menu on project cards ([1a536b7](https://github.com/sislelabs/kuso/commit/1a536b746cf13e620c17aa8cfbf49f2946e7f17b))
+
 ## [0.18.95] — 2026-07-01
 
 ### Other
