@@ -105,6 +105,45 @@ func TestMergeRunEnv_OverlayWinsAndAdds(t *testing.T) {
 	}
 }
 
+func TestMergeRunEnv_SkipsManagedSecretPlaceholders(t *testing.T) {
+	// A managed-secret entry is a server-set DISPLAY hint enumerated from the
+	// <service>-secrets envFrom mount: Source="managed-secret", empty Value,
+	// no ValueFrom. Carrying it into the run's explicit env emits
+	// `{name: K, value: ""}`, and an explicit env entry BEATS envFrom in kube —
+	// so the run sees an empty string instead of the real secret. That made
+	// `kuso run … -- sh -c 'echo $STRIPE_WEBHOOK_SECRET'` print the stale/empty
+	// value even after `kuso secret set`, which reads as "the secret didn't
+	// save" when in fact only the run's view was wrong.
+	svc := []kube.KusoEnvVar{
+		{Name: "STRIPE_WEBHOOK_SECRET", Source: "managed-secret"},
+		{Name: "NODE_ENV", Value: "production"},
+	}
+	got := mergeRunEnv(svc, nil)
+	for _, v := range got {
+		if v.Name == "STRIPE_WEBHOOK_SECRET" {
+			t.Fatalf("managed-secret placeholder must NOT be carried into run env "+
+				"(it would shadow the envFrom mount with an empty value): %#v", v)
+		}
+	}
+	if names(got)["NODE_ENV"] != "production" {
+		t.Fatalf("normal vars must still be carried: %#v", got)
+	}
+}
+
+func TestMergeRunEnv_OverlayStillWinsOverManagedSecret(t *testing.T) {
+	// Dropping the placeholder must not break an explicit --env override of the
+	// same name: the caller asked for that literal value, so it still applies.
+	svc := []kube.KusoEnvVar{{Name: "STRIPE_WEBHOOK_SECRET", Source: "managed-secret"}}
+	overlay := []EnvVar{{Name: "STRIPE_WEBHOOK_SECRET", Value: "whsec_override"}}
+	got := mergeRunEnv(svc, overlay)
+	if len(got) != 1 {
+		t.Fatalf("expected exactly one entry, got %#v", got)
+	}
+	if got[0].Value != "whsec_override" {
+		t.Fatalf("explicit overlay must still win: %#v", got[0])
+	}
+}
+
 func TestMergeRunEnv_SkipsEmptyNames(t *testing.T) {
 	got := mergeRunEnv([]kube.KusoEnvVar{{Name: "", Value: "nope"}}, []EnvVar{{Name: "", Value: "nope2"}})
 	if len(got) != 0 {

@@ -47,6 +47,13 @@ var (
 	ErrConflict = errors.New("runs: conflict")
 )
 
+// managedSecretSource mirrors projects.managedSecretSource — the Source tag the
+// server sets on env vars it enumerated from a service's kuso-managed
+// <service>-secrets envFrom mount. Duplicated as a literal rather than imported
+// to keep runs free of a dependency on the projects package for one string; the
+// value is part of the CR's wire format, so it changes only with the API.
+const managedSecretSource = "managed-secret"
+
 // Service is the package façade. New from cmd/kuso-server.
 type Service struct {
 	Kube      *kube.Client
@@ -371,11 +378,25 @@ func genRunName(project, service string) string {
 // the run and broke seeds/migrations that read the aliased name. An --env overlay
 // (plain value) always wins over a service var of the same name, clearing its
 // ValueFrom (kube forbids value + valueFrom on one var).
+//
+// managed-secret entries are SKIPPED. Those are server-set display hints
+// enumerated from the kuso-managed <service>-secrets envFrom mount (see
+// projects.mergeManagedSecretKeys): Source="managed-secret", empty Value, no
+// ValueFrom. The run already mounts that Secret via EnvFromSecrets, and an
+// explicit env entry OUTRANKS envFrom in kube — so carrying the placeholder
+// would pin the var to "" and hide the real secret. Symptom when this
+// regressed: `kuso secret set` reported success and the spec showed
+// source=managed-secret, but `kuso run … -- echo $KEY` kept printing the old
+// or empty value, making a correctly-stored secret look unsaved.
 func mergeRunEnv(serviceVars []kube.KusoEnvVar, overlay []EnvVar) []kube.KusoRunEnv {
 	out := make([]kube.KusoRunEnv, 0, len(serviceVars)+len(overlay))
 	idx := make(map[string]int, len(serviceVars)+len(overlay))
 	for _, e := range serviceVars {
 		if e.Name == "" {
+			continue
+		}
+		// Placeholder with no value of its own — let envFrom supply it.
+		if e.Source == managedSecretSource && e.Value == "" && e.ValueFrom == nil {
 			continue
 		}
 		idx[e.Name] = len(out)
