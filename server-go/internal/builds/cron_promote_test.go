@@ -1,0 +1,79 @@
+package builds
+
+import (
+	"context"
+	"log/slog"
+	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"kuso/server/internal/kube"
+)
+
+func seedCron(name, project, service, kind, tag string) seed {
+	return typedSeed(kube.GVRCrons, "KusoCron", &kube.KusoCron{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "kuso"},
+		Spec: kube.KusoCronSpec{
+			Project: project,
+			Service: service,
+			Kind:    kind,
+			Image: &kube.KusoImage{
+				Repository: "kuso-registry.kuso.svc.cluster.local:5000/" + project + "/" + service,
+				Tag:        tag,
+			},
+		},
+	})
+}
+
+// TestPromoteToCrons_RepointsInheritedImage is the regression for the
+// scubatony-internal-system-daily-sweeps failure of 2026-07-26.
+//
+// A cron snapshots the production env's image at creation time and, pre-
+// fix, only re-resolved on an explicit `kuso cron sync`. Every deploy
+// left it one build further behind. The drift was invisible while the
+// old tag still existed — then the weekly registry GC reaped it and the
+// CronJob began failing ImagePullBackOff on every fire, emitting a
+// pod.crashed alert every ~25 minutes while the service itself was
+// perfectly healthy on a newer tag.
+func TestPromoteToCrons_RepointsInheritedImage(t *testing.T) {
+	t.Parallel()
+	s := fakeService(t,
+		seedProject("alpha", "main", "https://github.com/example/alpha", 0),
+		seedService("alpha", "web"),
+		// Inherits the service image — must be repointed.
+		seedCron("alpha-web-sweeps", "alpha", "web", "service", "oldtag00000"),
+		// kind=command carries its OWN image — must NOT be touched.
+		seedCron("alpha-web-standalone", "alpha", "web", "command", "pinned-v1"),
+		// Different service — out of scope.
+		seedCron("alpha-api-sweeps", "alpha", "api", "service", "othertag000"),
+	)
+	p := &Poller{Svc: s, Logger: slog.Default()}
+
+	b := &kube.KusoBuild{
+		ObjectMeta: metav1.ObjectMeta{Name: "alpha-web-newtag", Namespace: "kuso"},
+		Spec: kube.KusoBuildSpec{
+			Project: "alpha", Service: "alpha-web", Branch: "main",
+			Image: &kube.KusoImage{
+				Repository: "kuso-registry.kuso.svc.cluster.local:5000/alpha/web",
+				Tag:        "newtag11111",
+			},
+		},
+	}
+	if err := p.promoteToCrons(context.Background(), "kuso", b, "web"); err != nil {
+		t.Fatalf("promoteToCrons: %v", err)
+	}
+
+	for _, tc := range []struct{ cron, want string }{
+		{"alpha-web-sweeps", "newtag11111"},   // repointed
+		{"alpha-web-standalone", "pinned-v1"}, // kind=command untouched
+		{"alpha-api-sweeps", "othertag000"},   // other service untouched
+	} {
+		got, err := s.Kube.GetKusoCron(context.Background(), "kuso", tc.cron)
+		if err != nil {
+			t.Fatalf("get %s: %v", tc.cron, err)
+		}
+		if got.Spec.Image == nil || got.Spec.Image.Tag != tc.want {
+			t.Errorf("%s: image tag = %v, want %q", tc.cron, got.Spec.Image, tc.want)
+		}
+	}
+}

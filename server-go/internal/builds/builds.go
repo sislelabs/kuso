@@ -2876,6 +2876,13 @@ func (p *Poller) promoteImage(ctx context.Context, ns string, b *kube.KusoBuild)
 		// marked terminal — the release-failed annotation is the record.
 		return nil
 	}
+	// Repoint crons that inherit this service's image. Same rationale as
+	// the fromService fan-out below: a consumer that carries a snapshot
+	// of the image goes stale on every deploy and breaks outright once
+	// registry GC reaps the pinned tag.
+	if err := p.promoteToCrons(ctx, ns, b, shortService); err != nil {
+		p.logger().Warn("promote to crons failed", "service", b.Spec.Service, "err", err)
+	}
 	if err := p.promoteToFromServiceConsumers(ctx, ns, b, shortService, bTrigger); err != nil {
 		// Workers being stale is a real bug but not worth failing the
 		// whole promotion over — the api/web env did get patched and
@@ -2960,6 +2967,64 @@ func (p *Poller) promoteToFromServiceConsumers(ctx context.Context, ns string, b
 			p.logger().Info("worker env promoted via fromService",
 				"env", e.Name, "fromService", sourceShortName, "tag", b.Spec.Image.Tag)
 		}
+	}
+	return nil
+}
+
+// promoteToCrons repoints every KusoCron that inherits this service's
+// image at the newly-built tag.
+//
+// A cron SNAPSHOTS the production env's image at creation time
+// (crons.resolveFromProductionEnv) and, before this, only ever
+// re-resolved when someone hit the "Sync image" button /
+// `kuso cron sync`. So every deploy left the cron one build further
+// behind, and the drift was invisible while the old tag still existed
+// in the registry. Once the weekly registry GC reaped it, the CronJob
+// started failing ImagePullBackOff on every fire — with the pod stuck
+// retrying, that is a pod.crashed alert every ~25 minutes, forever.
+//
+// Observed on scubatony-internal-system-daily-sweeps: three nightly
+// runs completed fine, then the run after GC failed permanently while
+// the service itself was healthy on a newer tag.
+//
+// Errors are logged, never fatal: the env promotion already succeeded
+// and users are serving traffic. A missed cron re-sync is fixed by the
+// next build or an explicit sync.
+func (p *Poller) promoteToCrons(ctx context.Context, ns string, b *kube.KusoBuild, sourceShortName string) error {
+	if b.Spec.Image == nil {
+		return nil
+	}
+	crons, err := p.Svc.Kube.ListKusoCrons(ctx, ns)
+	if err != nil {
+		return fmt.Errorf("list crons: %w", err)
+	}
+	for i := range crons {
+		c := &crons[i]
+		if c.Spec.Project != b.Spec.Project {
+			continue
+		}
+		// kind=command crons carry their OWN image and must not be
+		// repointed — Service is unused there by contract. Only crons
+		// that inherit the parent service's image are in scope.
+		if c.Spec.Kind == "command" {
+			continue
+		}
+		if c.Spec.Service == "" || c.Spec.Service != sourceShortName {
+			continue
+		}
+		if c.Spec.Image != nil && c.Spec.Image.Tag == b.Spec.Image.Tag {
+			continue
+		}
+		name := c.Name
+		if _, uerr := p.Svc.Kube.UpdateKusoCronWithRetry(ctx, ns, name, func(live *kube.KusoCron) error {
+			img := *b.Spec.Image
+			live.Spec.Image = &img
+			return nil
+		}); uerr != nil {
+			p.logger().Warn("promote cron image failed", "cron", name, "err", uerr)
+			continue
+		}
+		p.logger().Info("cron image promoted", "cron", name, "service", sourceShortName, "tag", b.Spec.Image.Tag)
 	}
 	return nil
 }
