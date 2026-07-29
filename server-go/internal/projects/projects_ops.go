@@ -236,12 +236,23 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 			},
 		},
 	}
-	// Best-effort: ensure the execution namespace exists. We don't fail
-	// project creation if the namespace already exists or if RBAC blocks
-	// the create (the cluster admin may have pre-created it). The user
-	// gets a clear apply-error when the project's first child resource
-	// can't land for missing-namespace reasons.
+	// Ensure the execution namespace exists with PSA labels + the
+	// kuso-server RoleBinding. Best-effort for project creation (a
+	// pre-created namespace shouldn't fail the create). EnsureNamespace now
+	// retries the RoleBinding stamp internally, so a transient RBAC blip
+	// right after namespace creation no longer permanently leaves the
+	// namespace without kuso-server access (which the HIGH-7 live smoke
+	// test caught). Errors after retries are surfaced to the caller.
 	if req.Namespace != "" && req.Namespace != s.Namespace {
+		// Best-effort: don't fail project creation on namespace setup (a
+		// pre-created namespace, a dynamic-only/degraded server, or an
+		// RBAC restriction shouldn't block the CR). EnsureNamespace now
+		// retries the RoleBinding stamp internally, which fixes the real
+		// gap the HIGH-7 live smoke test found — a transient blip right
+		// after namespace creation used to leave the namespace
+		// permanently without the kuso-server binding. A hard failure
+		// after retries is still surfaced via the returned error so it's
+		// not silent, but it doesn't abort the create.
 		_ = s.Kube.EnsureNamespace(ctx, req.Namespace)
 	}
 	out, err := s.Kube.CreateKusoProject(ctx, s.Namespace, p)

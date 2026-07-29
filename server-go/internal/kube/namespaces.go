@@ -131,11 +131,29 @@ func (c *Client) ensureManagedNSBinding(ctx context.Context, ns string) error {
 			Namespace: ServerSANamespace,
 		}},
 	}
-	_, err := c.Clientset.RbacV1().RoleBindings(ns).Create(ctx, rb, metav1.CreateOptions{})
-	if err == nil || apierrors.IsAlreadyExists(err) {
-		return nil
+	// Retry on transient failures. Right after a namespace is created,
+	// the RBAC create can briefly fail (the namespace isn't yet admitting
+	// writes, or client-side throttling delays it). This stamp used to be
+	// one-shot best-effort at project create with no retry, so a single
+	// transient blip left the namespace permanently without the binding —
+	// and kuso-server then couldn't exec / stream logs / manage secrets
+	// there. A short bounded retry self-heals that window.
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(time.Duration(attempt) * 300 * time.Millisecond):
+			}
+		}
+		_, err := c.Clientset.RbacV1().RoleBindings(ns).Create(ctx, rb, metav1.CreateOptions{})
+		if err == nil || apierrors.IsAlreadyExists(err) {
+			return nil
+		}
+		lastErr = err
 	}
-	return fmt.Errorf("kube: ensure managed-ns binding in %q: %w", ns, err)
+	return fmt.Errorf("kube: ensure managed-ns binding in %q (after retries): %w", ns, lastErr)
 }
 
 // IsManagedNamespace reports whether the named namespace carries
