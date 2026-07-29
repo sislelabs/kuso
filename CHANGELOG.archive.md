@@ -2,6 +2,11 @@
 
 Older release entries split out of the main CHANGELOG.md once it grew past 50 releases. Promoted out of the main file release-by-release.
 
+## [0.18.102] — 2026-07-02
+
+### ✨ Features
+- Feat(cli): accept bare node-label keys (valueless capability flags) ([2784da8](https://github.com/sislelabs/kuso/commit/2784da882114a57377d27afc2545697dbcabe1e5))
+
 ## [0.18.101] — 2026-07-02
 
 ### ✨ Features

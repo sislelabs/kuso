@@ -19,6 +19,11 @@ messages on every release. The format is loosely based on
 > --cascade=orphan` (pods + PVCs survive) before the operator recreates the
 > clean StatefulSet. See `memory/addon-vct-annotation-breaks-helm-upgrades.md`.
 
+## [0.22.2] — 2026-07-29
+
+### 🐛 Bug Fixes
+- Fix(netpol): remove registry-ingress policy — it breaks kubelet pulls under kube-router ([1c462f6](https://github.com/sislelabs/kuso/commit/1c462f6440569abe26767eea7a69ea1d12c01024))
+
 ## [0.22.1] — 2026-07-29
 
 ### 🐛 Bug Fixes
@@ -483,11 +488,6 @@ messages on every release. The format is loosely based on
 
 ### 🐛 Bug Fixes
 - Fix(pkgupdates): finalize reboots promptly + reschedule stranded pods ([843b42c](https://github.com/sislelabs/kuso/commit/843b42c29379b3ba567185831f50e64cb66d24c4))
-
-## [0.18.102] — 2026-07-02
-
-### ✨ Features
-- Feat(cli): accept bare node-label keys (valueless capability flags) ([2784da8](https://github.com/sislelabs/kuso/commit/2784da882114a57377d27afc2545697dbcabe1e5))
 
 
 ---
