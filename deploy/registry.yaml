@@ -292,69 +292,26 @@ subjects:
     name: kuso-registry-gc
     namespace: kuso
 ---
-# Ingress lock-down for the in-cluster registry (HIGH-4).
+# Registry access control (HIGH-4): the in-cluster registry is
+# unauthenticated plain-HTTP, and we want to stop a tenant APPLICATION
+# pod from reaching it to enumerate/pull/overwrite other projects' images
+# (a cross-project tampering path).
 #
-# The registry is unauthenticated plain-HTTP. Before this policy, every
-# project's egress rule opened :5000 to ALL of that project's pods, so a
-# tenant application pod could reach kuso-registry directly and:
-#   - GET /v2/_catalog          enumerate every project's images
-#   - GET .../manifests/<tag>   pull another project's image (exfil build secrets)
-#   - PUT .../manifests/<tag>   OVERWRITE another project's production tag
-#                               → cross-project RCE on the victim's next pull.
+# We deliberately do NOT put an ingress NetworkPolicy on the registry.
+# On k3s (kube-router NetworkPolicy controller) a registry-ingress policy
+# also blocks the KUBELET's image pull — the kubelet's connection to the
+# registry ClusterIP is subject to the same per-node iptables rules and
+# carries no pod identity the policy can allow. An ingress lock-down here
+# therefore breaks every runtime pod with ImagePullBackOff ("connection
+# refused" on :5000) and every build's push. (This regressed once — see
+# the v0.22.x history — hence this explicit note.)
 #
-# This mirrors kuso-buildkitd-ingress: only pods that carry the
-# component=kusobuild label AND live in a kuso-managed namespace
-# (app.kubernetes.io/managed-by=kuso, stamped by EnsureNamespace) may
-# reach the registry over the pod network. Requiring BOTH means the pod
-# label alone is not self-applicable — an attacker would need to also
-# label a namespace kuso-managed, which requires kuso-server-level perms.
-#
-# NOTE ON PULLS: runtime pods do NOT need this hole. Image pulls are
-# performed by the kubelet from the node's host network, which CNIs do
-# not subject to pod NetworkPolicy — so restricting in-POD access to
-# build pushers does not break runtime image pulls. The companion change
-# narrows the project egress rule to component=kusobuild as well, so the
-# two policies agree and only build pods can dial the registry in-cluster.
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: kuso-registry-ingress
-  namespace: kuso
-  labels:
-    app.kubernetes.io/name: kuso-registry
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/name: kuso-registry
-  policyTypes:
-    - Ingress
-  ingress:
-    # Build pods in kuso-managed namespaces. NOTE: with the shared
-    # BuildKit daemon, the build POD drives the build but kuso-buildkitd
-    # performs the actual image PUSH — so buildkitd needs registry ingress
-    # too (see the platform-pods rule below). The build pod still pulls the
-    # build cache directly, so it's allowed here.
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              app.kubernetes.io/managed-by: kuso
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/component: kusobuild
-      ports:
-        - protocol: TCP
-          port: 5000
-    # Platform pods that legitimately reach the registry:
-    #   - kuso-buildkitd  → pushes built layers on every build (REQUIRED —
-    #     omitting it breaks every build with "connection refused" on push)
-    #   - kuso-server     → GC / inspection
-    #   - kuso-registry-gc → the registry garbage-collect job
-    - from:
-        - podSelector:
-            matchExpressions:
-              - key: app.kubernetes.io/name
-                operator: In
-                values: ["kuso-buildkitd", "kuso-server", "kuso-registry-gc"]
-      ports:
-        - protocol: TCP
-          port: 5000
+# The correct, CNI-agnostic control is on the EGRESS side, enforced
+# per-pod: the project NetworkPolicy's allow-registry-egress rule is
+# scoped to component=kusobuild pods only (see
+# operator/helm-charts/kusoproject/templates/networkpolicy.yaml). A tenant
+# app pod is not a build pod, so its egress to :5000 is denied by the
+# project default-deny — it cannot reach the registry at all. Build pods
+# and the buildkit daemon (a platform pod, unconstrained) still can, and
+# kubelet pulls are untouched. That closes the tenant-pod path without the
+# ingress policy's collateral damage.
