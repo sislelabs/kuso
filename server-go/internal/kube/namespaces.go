@@ -63,6 +63,11 @@ func (c *Client) EnsureNamespace(ctx context.Context, ns string) error {
 	if ns == "" {
 		return nil
 	}
+	if c == nil || c.Clientset == nil {
+		// No typed client wired (e.g. dynamic-only test harness). Callers
+		// invoke this best-effort; don't panic.
+		return fmt.Errorf("kube: no clientset to ensure namespace %q", ns)
+	}
 	labels := map[string]string{ManagedByLabel: ManagedByValue}
 	for k, v := range pssLabels {
 		labels[k] = v

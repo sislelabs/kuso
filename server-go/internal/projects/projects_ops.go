@@ -116,6 +116,16 @@ func validateProjectName(name string) error {
 	return nil
 }
 
+// derivedProjectNamespace returns the per-project execution namespace a
+// project gets when the caller doesn't pin one explicitly (HIGH-7).
+// "kuso-<name>" — the "kuso-" prefix is reserved (user project names
+// can't start with it), so this never collides with a user namespace,
+// and project names are ≤40 chars so the result is a valid ≤63-char
+// RFC 1123 namespace label.
+func derivedProjectNamespace(name string) string {
+	return "kuso-" + name
+}
+
 // Create validates input, refuses duplicates, and persists a new project.
 //
 // As of v0.3.5 a project is just a container — defaultRepo is no longer
@@ -162,6 +172,28 @@ func (s *Service) Create(ctx context.Context, req CreateProjectRequest) (*kube.K
 	var ghSpec *kube.KusoProjectGithubSpec
 	if req.GitHub != nil && req.GitHub.InstallationID != 0 {
 		ghSpec = &kube.KusoProjectGithubSpec{InstallationID: req.GitHub.InstallationID}
+	}
+
+	// HIGH-7: isolate each NEW project in its own namespace by default.
+	// Previously an empty spec.namespace meant "run in the home (kuso)
+	// namespace", co-resident with kuso-server, the control-plane
+	// Postgres, the registry, and buildkitd — a namespace that CANNOT
+	// carry PodSecurity=restricted (the registry needs runAsRoot), so
+	// tenant workloads there had no PSA backstop and quota was unusable.
+	// Deriving "kuso-<project>" (EnsureNamespace stamps PSS=restricted)
+	// restores admission enforcement and makes ResourceQuota per-project.
+	//
+	// Only applies when the caller didn't pin a namespace explicitly.
+	// Project names are DNS-1123 and cannot start with "kuso-" (rejected
+	// above), so "kuso-<name>" is collision-free with the reserved prefix.
+	// EXISTING projects created with an empty spec.namespace are NOT
+	// affected: this only sets the field on newly-created CRs, so their
+	// live pods never move. Migrating an already-running project to its
+	// own namespace recreates every pod and rebinds PVCs, so it's a
+	// deliberate operator action (back up, recreate) rather than something
+	// this path does implicitly.
+	if req.Namespace == "" {
+		req.Namespace = derivedProjectNamespace(req.Name)
 	}
 	// DefaultRepo is now optional; pass nil through when omitted so
 	// the CR doesn't carry an empty repo struct.
