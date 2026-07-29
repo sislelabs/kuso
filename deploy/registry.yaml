@@ -329,8 +329,11 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # Build pods (kaniko/buildkit) in kuso-managed namespaces — the only
-    # in-pod clients that legitimately push/pull layers.
+    # Build pods in kuso-managed namespaces. NOTE: with the shared
+    # BuildKit daemon, the build POD drives the build but kuso-buildkitd
+    # performs the actual image PUSH — so buildkitd needs registry ingress
+    # too (see the platform-pods rule below). The build pod still pulls the
+    # build cache directly, so it's allowed here.
     - from:
         - namespaceSelector:
             matchLabels:
@@ -341,13 +344,17 @@ spec:
       ports:
         - protocol: TCP
           port: 5000
-    # Platform pods (kuso-server GC/inspection, the registry GC job).
+    # Platform pods that legitimately reach the registry:
+    #   - kuso-buildkitd  → pushes built layers on every build (REQUIRED —
+    #     omitting it breaks every build with "connection refused" on push)
+    #   - kuso-server     → GC / inspection
+    #   - kuso-registry-gc → the registry garbage-collect job
     - from:
         - podSelector:
             matchExpressions:
               - key: app.kubernetes.io/name
                 operator: In
-                values: ["kuso-server", "kuso-registry-gc"]
+                values: ["kuso-buildkitd", "kuso-server", "kuso-registry-gc"]
       ports:
         - protocol: TCP
           port: 5000
