@@ -132,9 +132,14 @@ spec:
                 values: ["traefik", "kuso-server", "kuso-prometheus"]
 ---
 # Egress to the in-cluster image registry. The build pods need this
-# to push, the runtime pods need it to pull (when imagePullPolicy is
-# Always or the kubelet's cache misses). Selecting by namespace +
-# pod label keeps the rule narrow.
+# to push. Runtime pods do NOT need this rule to pull: image pulls are
+# performed by the kubelet from the node's host network, which is exempt
+# from pod NetworkPolicy — so scoping this to build pods only does not
+# break runtime pulls. Narrowing to component=kusobuild (HIGH-4/MED-7)
+# closes the path where any tenant app pod could dial the unauthenticated
+# registry and enumerate/pull/overwrite other projects' images. Pairs
+# with the kuso-registry-ingress policy in deploy/registry.yaml.
+{{- $buildPodSelector := dict "matchLabels" (dict "kuso.sislelabs.com/project" .Release.Name "app.kubernetes.io/component" "kusobuild") -}}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -143,7 +148,7 @@ metadata:
     {{- include "kusoproject.labels" . | nindent 4 }}
 spec:
   podSelector:
-    {{- toYaml $projectSelector | nindent 4 }}
+    {{- toYaml $buildPodSelector | nindent 4 }}
   policyTypes: [Egress]
   egress:
     - to:
@@ -175,8 +180,13 @@ metadata:
   labels:
     {{- include "kusoproject.labels" . | nindent 4 }}
 spec:
+  # Only build pods talk to buildkitd. Narrowed from all project pods to
+  # component=kusobuild (MED-7) so the egress side agrees with buildkitd's
+  # own ingress policy — previously every tenant app pod had egress to the
+  # privileged, unauthenticated build daemon, gated only by the daemon's
+  # ingress pod-label check (a single-control-deep defense).
   podSelector:
-    {{- toYaml $projectSelector | nindent 4 }}
+    {{- toYaml $buildPodSelector | nindent 4 }}
   policyTypes: [Egress]
   egress:
     - to:

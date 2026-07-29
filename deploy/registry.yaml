@@ -291,3 +291,63 @@ subjects:
   - kind: ServiceAccount
     name: kuso-registry-gc
     namespace: kuso
+---
+# Ingress lock-down for the in-cluster registry (HIGH-4).
+#
+# The registry is unauthenticated plain-HTTP. Before this policy, every
+# project's egress rule opened :5000 to ALL of that project's pods, so a
+# tenant application pod could reach kuso-registry directly and:
+#   - GET /v2/_catalog          enumerate every project's images
+#   - GET .../manifests/<tag>   pull another project's image (exfil build secrets)
+#   - PUT .../manifests/<tag>   OVERWRITE another project's production tag
+#                               → cross-project RCE on the victim's next pull.
+#
+# This mirrors kuso-buildkitd-ingress: only pods that carry the
+# component=kusobuild label AND live in a kuso-managed namespace
+# (app.kubernetes.io/managed-by=kuso, stamped by EnsureNamespace) may
+# reach the registry over the pod network. Requiring BOTH means the pod
+# label alone is not self-applicable — an attacker would need to also
+# label a namespace kuso-managed, which requires kuso-server-level perms.
+#
+# NOTE ON PULLS: runtime pods do NOT need this hole. Image pulls are
+# performed by the kubelet from the node's host network, which CNIs do
+# not subject to pod NetworkPolicy — so restricting in-POD access to
+# build pushers does not break runtime image pulls. The companion change
+# narrows the project egress rule to component=kusobuild as well, so the
+# two policies agree and only build pods can dial the registry in-cluster.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: kuso-registry-ingress
+  namespace: kuso
+  labels:
+    app.kubernetes.io/name: kuso-registry
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: kuso-registry
+  policyTypes:
+    - Ingress
+  ingress:
+    # Build pods (kaniko/buildkit) in kuso-managed namespaces — the only
+    # in-pod clients that legitimately push/pull layers.
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              app.kubernetes.io/managed-by: kuso
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: kusobuild
+      ports:
+        - protocol: TCP
+          port: 5000
+    # Platform pods (kuso-server GC/inspection, the registry GC job).
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/name
+                operator: In
+                values: ["kuso-server", "kuso-registry-gc"]
+      ports:
+        - protocol: TCP
+          port: 5000
