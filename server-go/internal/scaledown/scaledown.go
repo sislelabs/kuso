@@ -46,7 +46,19 @@ type Watcher struct {
 	// PromURL overrides the prometheus base URL (KUSO_PROMETHEUS_URL).
 	PromURL string
 
+	// Now is time.Now, overridable in tests. Use w.now() to read it.
+	Now func() time.Time
+
 	httpc *http.Client
+}
+
+// now returns the Watcher's clock, defaulting to time.Now when unset so
+// callers that build a Watcher as a bare struct literal still work.
+func (w *Watcher) now() time.Time {
+	if w.Now != nil {
+		return w.Now()
+	}
+	return time.Now()
 }
 
 // Run loops until ctx is cancelled. Intended to run under the
@@ -199,6 +211,16 @@ func (w *Watcher) evaluateService(ctx context.Context, svc *kube.KusoService) {
 		return // had traffic in the window → still in use
 	}
 
+	// HIGH-5a: the Prometheus query above reads the app's OWN traefik
+	// service, but a sleep-enabled env's ingress backend is kuso-activator
+	// — so the app's counter never increments and `active` is always 0.
+	// The activator, which IS in-path for every request, stamps a
+	// last-activity annotation; honor it so a busy env is not wrongly
+	// slept. If the annotation is within the idle window, the env is live.
+	if w.recentlyActive(ctx, ns, envName, idleMin) {
+		return
+	}
+
 	// Idle. Scale the Deployment to 0 and stamp the env CR so the
 	// operator's reconcile keeps it there until the activator wakes it.
 	if err := w.scaleToZero(ctx, ns, envName); err != nil {
@@ -220,16 +242,69 @@ func (w *Watcher) requestsInWindow(ctx context.Context, ns, envName string, idle
 	return w.promInstant(ctx, q)
 }
 
+// PreSleepReplicasAnnotation records the replica count an env had just
+// before scaledown put it to sleep, so the activator can restore the
+// SAME capacity on wake instead of hardcoding 1. Without this, a service
+// running at replicaCount=3 came back at 1 after its first idle window
+// and stayed there — a silent 3x capacity loss (HIGH-5b).
+const PreSleepReplicasAnnotation = "kuso.sislelabs.com/pre-sleep-replicas"
+
+// LastActivityAnnotation records (RFC3339) the last time the activator
+// proxied a request for this env. Because a sleep-routed env's traffic
+// flows through kuso-activator (not the app's own traefik service), the
+// Prometheus request counter reads zero — so this annotation is the
+// authoritative "was there recent traffic" signal for the idle check
+// (HIGH-5a). Written by the activator's recordActivity, read by
+// recentlyActive below.
+const LastActivityAnnotation = "kuso.sislelabs.com/last-activity"
+
+// recentlyActive reports whether the activator stamped activity for this
+// env within the idle window. A parse failure / missing annotation → not
+// recently active (fall through to sleeping), which is safe: the env only
+// reaches this check after the Prometheus query already returned 0, and a
+// genuinely-busy env gets its annotation refreshed every 30s.
+func (w *Watcher) recentlyActive(ctx context.Context, ns, envName string, idleMin int) bool {
+	env, err := w.Kube.GetKusoEnvironment(ctx, ns, envName)
+	if err != nil || env == nil {
+		return false
+	}
+	v := env.Annotations[LastActivityAnnotation]
+	if v == "" {
+		return false
+	}
+	ts, err := time.Parse(time.RFC3339, v)
+	if err != nil {
+		return false
+	}
+	return w.now().Sub(ts) < time.Duration(idleMin)*time.Minute
+}
+
 // scaleToZero patches the Deployment to 0 replicas and persists
 // replicaCount=0 on the env CR (so the helm-operator reconcile doesn't
-// scale it back up).
+// scale it back up). Before zeroing, it stashes the current replica count
+// in an annotation so wake can restore it.
 func (w *Watcher) scaleToZero(ctx context.Context, ns, envName string) error {
+	// Capture the pre-sleep replica count from the live Deployment (the
+	// source of truth for current capacity) so wake restores it exactly.
+	prior := 1
+	if dep, err := w.Kube.Clientset.AppsV1().Deployments(ns).Get(ctx, envName, metav1.GetOptions{}); err == nil {
+		if dep.Spec.Replicas != nil && *dep.Spec.Replicas > 0 {
+			prior = int(*dep.Spec.Replicas)
+		}
+	}
+
 	patch := []byte(`{"spec":{"replicas":0}}`)
 	if _, err := w.Kube.Clientset.AppsV1().Deployments(ns).Patch(
 		ctx, envName, types.MergePatchType, patch, metav1.PatchOptions{}); err != nil {
 		return fmt.Errorf("patch deployment: %w", err)
 	}
 	if _, err := w.Kube.UpdateKusoEnvironmentWithRetry(ctx, ns, envName, func(e *kube.KusoEnvironment) error {
+		// Stash the pre-sleep count on the CR before zeroing, so the
+		// activator can restore it on wake (HIGH-5b).
+		if e.Annotations == nil {
+			e.Annotations = map[string]string{}
+		}
+		e.Annotations[PreSleepReplicasAnnotation] = strconv.Itoa(prior)
 		e.Spec.SetReplicaCount(0)
 		return nil
 	}); err != nil {

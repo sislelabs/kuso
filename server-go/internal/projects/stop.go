@@ -85,8 +85,20 @@ func (s *Service) setProjectStopped(ctx context.Context, project string, stopped
 // ingress at the activator for scale-to-zero). Nil / disabled → nil, so
 // the env's ingress points at the app's own Service. Shared by the env-
 // creation sites and the propagation chokepoint so they can't diverge.
+//
+// HIGH-5c: when wakeOn.excludePaths is set, the service is deliberately
+// kept warm (sleepEligible returns false for it, so it never scales to
+// zero). Routing its ingress through the activator anyway gained nothing
+// and made the activator a hard dependency for 100% of that service's
+// traffic — so a brief activator outage 502'd the very webhook/payment
+// paths excludePaths exists to protect. Treat excludePaths as "never
+// activator-route": return nil so the env's ingress points straight at
+// the app's own Service.
 func envSleepFrom(s *kube.KusoServiceSleep) *kube.KusoEnvSleep {
 	if s == nil || !s.Enabled {
+		return nil
+	}
+	if s.WakeOn != nil && len(s.WakeOn.ExcludePaths) > 0 {
 		return nil
 	}
 	return &kube.KusoEnvSleep{Enabled: true}
