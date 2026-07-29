@@ -26,6 +26,12 @@ type Client struct {
 
 	appTransport http.RoundTripper
 
+	// baseURL, when non-empty, overrides the go-github API base URL for
+	// the App client. Production leaves it empty (→ api.github.com); tests
+	// point it at an httptest server to assert request shapes (e.g. that
+	// MintRepoScopedToken carries the repository restriction).
+	baseURL string
+
 	mu         sync.Mutex
 	transports map[int64]http.RoundTripper
 }
@@ -50,7 +56,15 @@ func NewClient(cfg *Config) (*Client, error) {
 // App returns a go-github client signed with the App JWT. Use for
 // App-level calls only (e.g. ListInstallations).
 func (c *Client) App() *gogithub.Client {
-	return gogithub.NewClient(&http.Client{Transport: c.appTransport})
+	cli := gogithub.NewClient(&http.Client{Transport: c.appTransport})
+	if c.baseURL != "" {
+		// WithEnterpriseURLs normalises the trailing-slash / /api/v3 quirks;
+		// on parse failure we keep the default rather than panic.
+		if ec, err := cli.WithEnterpriseURLs(c.baseURL, c.baseURL); err == nil {
+			cli = ec
+		}
+	}
+	return cli
 }
 
 // Installation returns a go-github client whose transport carries an
@@ -70,7 +84,15 @@ func (c *Client) Installation(installationID int64) (*gogithub.Client, error) {
 }
 
 // MintInstallationToken returns a fresh installation token for the given
-// id. Used by the build path to seed the kaniko clone Secret.
+// id, scoped to the WHOLE installation. Used by callers that legitimately
+// need installation-wide access (e.g. the incidents push-token resolver).
+//
+// SECURITY: prefer MintRepoScopedToken for the build clone path — an
+// installation-wide token mounted into a build pod grants read (and, per
+// the App's permissions, write) access to EVERY repo in the installation,
+// so a compromised/hostile build (fork-PR RCE, malicious dependency) could
+// exfiltrate or tamper with sibling repos. Repo-scoping shrinks that blast
+// radius to the single repo actually being built.
 func (c *Client) MintInstallationToken(ctx context.Context, installationID int64) (string, error) {
 	itr, err := c.installationTransport(installationID)
 	if err != nil {
@@ -81,6 +103,37 @@ func (c *Client) MintInstallationToken(ctx context.Context, installationID int64
 		return "", fmt.Errorf("github: mint token: %w", err)
 	}
 	return tok, nil
+}
+
+// MintRepoScopedToken mints an installation token restricted to a SINGLE
+// repository (owner/repo) via the GitHub API's repository_ids/Repositories
+// option. The resulting token can only clone/read (and, if the App has the
+// permission, write) that one repo — not the rest of the installation.
+//
+// This is the token the build clone/buildpacks containers should carry:
+// a build pod is untrusted execution (arbitrary code from the repo + its
+// dependencies, and — when fork previews are enabled — from an untrusted
+// author), so its credentials must not reach sibling repos.
+//
+// Scoping is done off the App-JWT transport (Apps.CreateInstallationToken),
+// NOT the cached ghinstallation transport, because ghinstallation.Token()
+// always mints installation-wide. On any failure we fall back to the
+// installation-wide token rather than break the build — a working (if
+// broader) clone beats a hard build failure, and the caller logs the
+// downgrade.
+func (c *Client) MintRepoScopedToken(ctx context.Context, installationID int64, owner, repo string) (string, error) {
+	if owner == "" || repo == "" {
+		// No repo coordinates to scope by — fall back to installation-wide.
+		return c.MintInstallationToken(ctx, installationID)
+	}
+	app := c.App()
+	tok, _, err := app.Apps.CreateInstallationToken(ctx, installationID, &gogithub.InstallationTokenOptions{
+		Repositories: []string{repo},
+	})
+	if err != nil {
+		return "", fmt.Errorf("github: mint repo-scoped token for %s/%s: %w", owner, repo, err)
+	}
+	return tok.GetToken(), nil
 }
 
 // installationTransport returns the cached *ghinstallation.Transport for
