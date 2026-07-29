@@ -26,6 +26,7 @@ type buildArgs struct {
 	Branch  string `json:"branch,omitempty" jsonschema:"branch to build; defaults to the service's default branch"`
 	Ref     string `json:"ref,omitempty" jsonschema:"explicit git ref/SHA to build; overrides branch"`
 	DryRun  bool   `json:"dryRun,omitempty" jsonschema:"compile + assemble layers but skip registry push and env promotion"`
+	Confirm bool   `json:"confirm,omitempty" jsonschema:"must be true for the build tool — a non-dryRun build PROMOTES a new image to the live environment (a production deploy); ignored by build_status"`
 }
 
 // buildRequest mirrors the server's builds.CreateBuildRequest.
@@ -52,10 +53,13 @@ type buildSummary struct {
 func registerBuild(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "build",
-		Description: "Trigger a build of a service from a branch or ref. Mutating; refused in --read-only mode. Returns the created build's id + status. Poll build_status to follow it to succeeded/failed.",
+		Description: "Trigger a build of a service from a branch or ref. REQUIRES confirm=true — a non-dryRun build promotes a new image to the live environment (a production deploy). Mutating; refused in --read-only mode. Returns the created build's id + status. Poll build_status to follow it to succeeded/failed.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args buildArgs) (*mcp.CallToolResult, buildSummary, error) {
 		if args.Project == "" || args.Service == "" {
 			return nil, buildSummary{}, errors.New("project and service are required")
+		}
+		if !args.Confirm {
+			return nil, buildSummary{}, errors.New("confirm=true is required — a build promotes a new image to the live environment (production deploy)")
 		}
 		body := buildRequest{Branch: args.Branch, Ref: args.Ref, DryRun: args.DryRun}
 		var out buildSummary
@@ -95,7 +99,11 @@ func registerBuild(server *mcp.Server, client *kusoclient.Client) {
 			text += "\n  image: " + out.ImageTag
 		}
 		if out.ErrorMessage != "" {
-			text += "\n  error: " + out.ErrorMessage
+			// errorMessage is regex-scraped from raw build logs — it is
+			// attacker-controllable (a build can print anything). Fence it
+			// so an injected "instruction" in a failing build's output
+			// can't be read as a real directive.
+			text += "\n  error (untrusted build output):\n" + wrapUntrusted(out.ErrorMessage)
 		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: text}},

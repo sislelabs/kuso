@@ -43,6 +43,7 @@ type setSecretArgs struct {
 	Value   string `json:"value" jsonschema:"secret value (may be empty to set a present-but-blank key)"`
 	Env     string `json:"env,omitempty" jsonschema:"scope to one environment; empty = shared across all envs"`
 	Force   bool   `json:"force,omitempty" jsonschema:"bypass the shadow check when this would override a project-shared key of the same name"`
+	Confirm bool   `json:"confirm,omitempty" jsonschema:"must be true — set_secret writes a secret to the live service (and can overwrite an existing credential, triggering a rolling restart); guards against an unintended secret write"`
 }
 
 // setSecretRequest mirrors the server's setSecretRequest.
@@ -79,13 +80,16 @@ func registerSetEnv(server *mcp.Server, client *kusoclient.Client) {
 func registerSetSecret(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        "set_secret",
-		Description: "Upsert ONE secret-typed key into a service's Secret (single-key, not a whole-list replace). Optionally scope to one env. If it would shadow a project-shared key the server returns 409 (code \"shadowed\") — retry with force=true to override intentionally. Mutating; refused in --read-only mode.",
+		Description: "Upsert ONE secret-typed key into a service's Secret (single-key, not a whole-list replace). Optionally scope to one env. REQUIRES confirm=true (a secret write to the live service, possibly overwriting an existing credential). If it would shadow a project-shared key the server returns 409 (code \"shadowed\") — retry with force=true to override intentionally. Mutating; refused in --read-only mode.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args setSecretArgs) (*mcp.CallToolResult, struct{}, error) {
 		if args.Project == "" || args.Service == "" {
 			return nil, struct{}{}, errors.New("project and service are required")
 		}
 		if args.Key == "" {
 			return nil, struct{}{}, errors.New("key is required")
+		}
+		if !args.Confirm {
+			return nil, struct{}{}, errors.New("confirm=true is required — set_secret writes a secret to the live service and can overwrite an existing credential")
 		}
 		body := setSecretRequest{Key: args.Key, Value: args.Value, Env: args.Env, Force: args.Force}
 		path := apiPath("api", "projects", args.Project, "services", args.Service, "secrets")

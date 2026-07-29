@@ -30,6 +30,7 @@ type runArgs struct {
 	Command        []string       `json:"command" jsonschema:"argv to exec in the run container; use sh -c when shell expansion is needed"`
 	Env            []runEnvKV     `json:"env,omitempty" jsonschema:"optional env-var overlay; merged on top of the service's resolved envFromSecrets"`
 	TimeoutSeconds int            `json:"timeoutSeconds,omitempty" jsonschema:"max run duration in seconds; 0 = use server default (1800)"`
+	Confirm        bool           `json:"confirm,omitempty" jsonschema:"must be true — run executes an ARBITRARY command against the live service image + real envFromSecrets (prod DB/secrets); guards against an unintended production command"`
 }
 
 type runEnvKV struct {
@@ -57,13 +58,16 @@ type runResult struct {
 func registerRun(server *mcp.Server, client *kusoclient.Client) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "run",
-		Description: "Fire a one-shot task pod against a service's most-recent succeeded build image. Same image + envFromSecrets the service runs with, plus an optional env overlay. Used for migrations, seeds, one-off scripts. Mutating — refused in --read-only mode.",
+		Description: "Fire a one-shot task pod against a service's most-recent succeeded build image. Same image + envFromSecrets the service runs with, plus an optional env overlay. Used for migrations, seeds, one-off scripts. REQUIRES confirm=true — the command runs with the service's real (production) secrets, so it can mutate live data. Mutating — refused in --read-only mode.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args runArgs) (*mcp.CallToolResult, runResult, error) {
 		if args.Project == "" || args.Service == "" {
 			return nil, runResult{}, errors.New("project and service are required")
 		}
 		if len(args.Command) == 0 {
 			return nil, runResult{}, errors.New("command (argv) is required")
+		}
+		if !args.Confirm {
+			return nil, runResult{}, errors.New("confirm=true is required — run executes an arbitrary command against the live service image with its real (production) envFromSecrets")
 		}
 		body := runRequest{
 			Command:        args.Command,
