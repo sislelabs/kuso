@@ -150,6 +150,11 @@
             "description": "For kind=service only. KusoService FQN (e.g. \u003cproject\u003e-\u003cshort\u003e) whose image + envFromSecrets we reuse.",
             "type": "string"
           },
+          "startingDeadlineSeconds": {
+            "default": 300,
+            "description": "Missed-schedule lookback window in seconds. Bounds how far behind the CronJob controller looks for schedules it failed to start. Without it, a CronJob that misses \u003e100 consecutive schedules wedges permanently and never self-heals; a finite deadline caps the miss window. 0 = unset (kube default: unbounded lookback).",
+            "type": "integer"
+          },
           "successfulJobsHistoryLimit": {
             "default": 3,
             "type": "integer"

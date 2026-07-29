@@ -124,6 +124,12 @@ func sleepEligible(svc *kube.KusoService) bool {
 	if svc.Spec.Sleep == nil || !svc.Spec.Sleep.Enabled {
 		return false
 	}
+	// A hard-stopped service is already pinned to 0 by the operator and
+	// must NOT be woken by traffic; scaledown has nothing to do and
+	// touching its Deployment would only race the operator's pin.
+	if svc.Spec.Stopped {
+		return false
+	}
 	// wakeOn.excludePaths → keep warm (same guard as effectiveScaleMin).
 	if w := svc.Spec.Sleep.WakeOn; w != nil && len(w.ExcludePaths) > 0 {
 		return false
@@ -221,6 +227,17 @@ func (w *Watcher) evaluateService(ctx context.Context, svc *kube.KusoService) {
 		return
 	}
 
+	// Don't sleep a service while one of its crons/runs is mid-flight.
+	// Cron- and run-spawned Jobs carry kuso.sislelabs.com/service=<fqn>
+	// (svc.Name is the fq <project>-<service>). Scaling the app
+	// Deployment to 0 doesn't kill the Job pod itself, but a kind=service
+	// cron shares the app's conn secrets and may depend on the app being
+	// warm; more importantly, sleeping mid-run makes the "is this service
+	// in use" signal lie. If any labelled Job is still Active, skip.
+	if w.hasActiveJobs(ctx, ns, svc.Name) {
+		return
+	}
+
 	// Idle. Scale the Deployment to 0 and stamp the env CR so the
 	// operator's reconcile keeps it there until the activator wakes it.
 	if err := w.scaleToZero(ctx, ns, envName); err != nil {
@@ -277,6 +294,30 @@ func (w *Watcher) recentlyActive(ctx context.Context, ns, envName string, idleMi
 		return false
 	}
 	return w.now().Sub(ts) < time.Duration(idleMin)*time.Minute
+}
+
+// hasActiveJobs reports whether any cron/run Job for this service is
+// currently running (Status.Active > 0). Both the kusocron and kusorun
+// charts stamp kuso.sislelabs.com/service=<fqn> on the Job; serviceFQN is
+// svc.Name (the fq <project>-<service>). A LIST error fails safe by
+// reporting "active" so a transient apiserver hiccup never causes a
+// mid-run sleep.
+func (w *Watcher) hasActiveJobs(ctx context.Context, ns, serviceFQN string) bool {
+	listCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	jobs, err := w.Kube.Clientset.BatchV1().Jobs(ns).List(listCtx, metav1.ListOptions{
+		LabelSelector: "kuso.sislelabs.com/service=" + serviceFQN,
+	})
+	if err != nil {
+		w.Logger.Warn("scaledown: list jobs for in-flight guard", "service", serviceFQN, "err", err)
+		return true // fail safe: don't sleep on a broken LIST
+	}
+	for i := range jobs.Items {
+		if jobs.Items[i].Status.Active > 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // scaleToZero patches the Deployment to 0 replicas and persists

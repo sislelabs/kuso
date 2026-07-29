@@ -1493,6 +1493,13 @@ func runFinalizerSweep(ctx context.Context, kc *kube.Client, namespace string, l
 			{"kusoservices", kube.GVRServices},
 			{"kusoaddons", kube.GVRAddons},
 			{"kusoprojects", kube.GVRProjects},
+			// KusoCron / KusoRun are helm-operator-managed too
+			// (operator/watches.yaml), so they get the same
+			// uninstall-release finalizer. Without them in the sweep, a
+			// cron or run deleted after its helm release secret is gone
+			// wedges Terminating forever.
+			{"kusocrons", kube.GVRCrons},
+			{"kusoruns", kube.GVRRuns},
 		} {
 			cleared, _, err := kc.CleanupStuckHelmFinalizers(c, namespace, item.gvr, logFn)
 			if err != nil {

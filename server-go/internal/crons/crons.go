@@ -86,6 +86,10 @@ type CreateCronRequest struct {
 	ConcurrencyPolicy string `json:"concurrencyPolicy,omitempty"`
 	// 0 = no deadline.
 	ActiveDeadlineSeconds int `json:"activeDeadlineSeconds,omitempty"`
+	// StartingDeadlineSeconds bounds the missed-schedule lookback so a
+	// fallen-behind CronJob self-heals instead of wedging. 0 = defaulted
+	// to 300 at create time.
+	StartingDeadlineSeconds int `json:"startingDeadlineSeconds,omitempty"`
 }
 
 // CreateProjectCronRequest is the body of POST /api/projects/:p/crons —
@@ -105,10 +109,11 @@ type CreateProjectCronRequest struct {
 	Image   *kube.KusoImage `json:"image,omitempty"`
 	Command []string        `json:"command,omitempty"`
 	// Optional knobs — same defaults as CreateCronRequest.
-	Suspend               bool   `json:"suspend,omitempty"`
-	PinImage              bool   `json:"pinImage,omitempty"`
-	ConcurrencyPolicy     string `json:"concurrencyPolicy,omitempty"`
-	ActiveDeadlineSeconds int    `json:"activeDeadlineSeconds,omitempty"`
+	Suspend                 bool   `json:"suspend,omitempty"`
+	PinImage                bool   `json:"pinImage,omitempty"`
+	ConcurrencyPolicy       string `json:"concurrencyPolicy,omitempty"`
+	ActiveDeadlineSeconds   int    `json:"activeDeadlineSeconds,omitempty"`
+	StartingDeadlineSeconds int    `json:"startingDeadlineSeconds,omitempty"`
 	// OnFailure: optional failure webhook set at create time. Its
 	// SecretRef is ownership-validated before the CR is written — same
 	// guard the update path applies (HIGH-1). nil = no webhook.
@@ -120,10 +125,11 @@ type CreateProjectCronRequest struct {
 type UpdateCronRequest struct {
 	Schedule              *string  `json:"schedule,omitempty"`
 	Command               []string `json:"command,omitempty"`
-	Suspend               *bool    `json:"suspend,omitempty"`
-	PinImage              *bool    `json:"pinImage,omitempty"`
-	ConcurrencyPolicy     *string  `json:"concurrencyPolicy,omitempty"`
-	ActiveDeadlineSeconds *int     `json:"activeDeadlineSeconds,omitempty"`
+	Suspend                 *bool    `json:"suspend,omitempty"`
+	PinImage                *bool    `json:"pinImage,omitempty"`
+	ConcurrencyPolicy       *string  `json:"concurrencyPolicy,omitempty"`
+	ActiveDeadlineSeconds   *int     `json:"activeDeadlineSeconds,omitempty"`
+	StartingDeadlineSeconds *int     `json:"startingDeadlineSeconds,omitempty"`
 }
 
 // UpdateProjectCronRequest covers the kind=http and kind=command
@@ -137,9 +143,10 @@ type UpdateProjectCronRequest struct {
 	PinImage              *bool           `json:"pinImage,omitempty"`
 	URL                   *string         `json:"url,omitempty"`
 	Image                 *kube.KusoImage `json:"image,omitempty"`
-	Command               []string        `json:"command,omitempty"`
-	ConcurrencyPolicy     *string         `json:"concurrencyPolicy,omitempty"`
-	ActiveDeadlineSeconds *int            `json:"activeDeadlineSeconds,omitempty"`
+	Command                 []string        `json:"command,omitempty"`
+	ConcurrencyPolicy       *string         `json:"concurrencyPolicy,omitempty"`
+	ActiveDeadlineSeconds   *int            `json:"activeDeadlineSeconds,omitempty"`
+	StartingDeadlineSeconds *int            `json:"startingDeadlineSeconds,omitempty"`
 	// OnFailure: nil = leave alone. Send a non-nil struct with
 	// Clear=true to drop the webhook entirely.
 	OnFailure *OnFailureUpdate `json:"onFailure,omitempty"`
@@ -366,13 +373,14 @@ func (s *Service) Add(ctx context.Context, project, service string, req CreateCr
 			Service:               serviceFQN,
 			Schedule:              req.Schedule,
 			Command:               req.Command,
-			Suspend:               req.Suspend,
-			PinImage:              req.PinImage,
-			ConcurrencyPolicy:     policy,
-			ActiveDeadlineSeconds: req.ActiveDeadlineSeconds,
-			Image:                 image,
-			EnvFromSecrets:        envFromSecrets,
-			Placement:             placement,
+			Suspend:                 req.Suspend,
+			PinImage:                req.PinImage,
+			ConcurrencyPolicy:       policy,
+			ActiveDeadlineSeconds:   req.ActiveDeadlineSeconds,
+			StartingDeadlineSeconds: defaultStartingDeadline(req.StartingDeadlineSeconds),
+			Image:                   image,
+			EnvFromSecrets:          envFromSecrets,
+			Placement:               placement,
 		},
 	}
 	created, err := s.Kube.CreateKusoCron(ctx, ns, cr)
@@ -452,11 +460,12 @@ func (s *Service) AddProject(ctx context.Context, project string, req CreateProj
 			Command:               req.Command,
 			Image:                 req.Image,
 			DisplayName:           req.DisplayName,
-			Suspend:               req.Suspend,
-			PinImage:              req.PinImage,
-			ConcurrencyPolicy:     policy,
-			ActiveDeadlineSeconds: req.ActiveDeadlineSeconds,
-			OnFailure:             req.OnFailure,
+			Suspend:                 req.Suspend,
+			PinImage:                req.PinImage,
+			ConcurrencyPolicy:       policy,
+			ActiveDeadlineSeconds:   req.ActiveDeadlineSeconds,
+			StartingDeadlineSeconds: defaultStartingDeadline(req.StartingDeadlineSeconds),
+			OnFailure:               req.OnFailure,
 		},
 	}
 	created, err := s.Kube.CreateKusoCron(ctx, ns, cr)
@@ -502,6 +511,9 @@ func (s *Service) Update(ctx context.Context, project, service, name string, req
 		if req.ActiveDeadlineSeconds != nil {
 			cr.Spec.ActiveDeadlineSeconds = *req.ActiveDeadlineSeconds
 		}
+		if req.StartingDeadlineSeconds != nil {
+			cr.Spec.StartingDeadlineSeconds = *req.StartingDeadlineSeconds
+		}
 		return nil
 	})
 	if err != nil {
@@ -511,6 +523,18 @@ func (s *Service) Update(ctx context.Context, project, service, name string, req
 		return nil, fmt.Errorf("update cron: %w", err)
 	}
 	return updated, nil
+}
+
+// defaultStartingDeadline returns the requested missed-schedule lookback,
+// defaulting to 300s when the caller left it unset (0). A finite deadline
+// stops a fallen-behind CronJob (>100 missed schedules) from wedging
+// permanently. Callers wanting kube's unbounded default can't express it
+// via the create path — that trade is intentional (self-heal by default).
+func defaultStartingDeadline(v int) int {
+	if v <= 0 {
+		return 300
+	}
+	return v
 }
 
 // resolveFromProductionEnv looks up "<service-fqn>-production" and
@@ -683,6 +707,9 @@ func (s *Service) UpdateProject(ctx context.Context, project, name string, req U
 		}
 		if req.ActiveDeadlineSeconds != nil {
 			cr.Spec.ActiveDeadlineSeconds = *req.ActiveDeadlineSeconds
+		}
+		if req.StartingDeadlineSeconds != nil {
+			cr.Spec.StartingDeadlineSeconds = *req.StartingDeadlineSeconds
 		}
 		if req.OnFailure != nil {
 			if req.OnFailure.Clear {

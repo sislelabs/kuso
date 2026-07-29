@@ -1,7 +1,14 @@
 package scaledown
 
 import (
+	"context"
+	"log/slog"
 	"testing"
+
+	batchv1 "k8s.io/api/batch/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"kuso/server/internal/kube"
 )
@@ -19,6 +26,10 @@ func TestSleepEligible(t *testing.T) {
 		}
 		return s
 	}
+	stopped := func(s *kube.KusoService) *kube.KusoService {
+		s.Spec.Stopped = true
+		return s
+	}
 
 	cases := []struct {
 		name string
@@ -29,6 +40,9 @@ func TestSleepEligible(t *testing.T) {
 		{"sleep on, no excludes", mk(true, nil), true},
 		{"sleep on, has excludes → keep warm", mk(true, []string{"/webhook"}), false},
 		{"nil sleep", &kube.KusoService{}, false},
+		// MED-1e: a hard-stopped service is pinned to 0 by the operator and
+		// must never be a scaledown candidate (would race the operator pin).
+		{"sleep on but stopped → not eligible", stopped(mk(true, nil)), false},
 	}
 	for _, c := range cases {
 		if got := sleepEligible(c.svc); got != c.want {
@@ -65,6 +79,54 @@ func TestHpaManaged(t *testing.T) {
 		if got := hpaManaged(c.svc); got != c.want {
 			t.Errorf("%s: hpaManaged = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// TestHasActiveJobs covers MED-1e: scaledown must not sleep a service
+// while one of its cron/run Jobs is mid-flight. Jobs are matched by the
+// kuso.sislelabs.com/service=<fqn> label; an Active count > 0 means
+// in-flight. A LIST failure isn't exercised here (fake never errors), but
+// the code fails safe by reporting "active".
+func TestHasActiveJobs(t *testing.T) {
+	t.Parallel()
+
+	const ns, fqn = "kuso-alpha", "alpha-web"
+	job := func(name, svc string, active int32) *batchv1.Job {
+		return &batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: ns,
+				Labels:    map[string]string{"kuso.sislelabs.com/service": svc},
+			},
+			Status: batchv1.JobStatus{Active: active},
+		}
+	}
+
+	cases := []struct {
+		name string
+		jobs []*batchv1.Job
+		want bool
+	}{
+		{"no jobs", nil, false},
+		{"labelled job active", []*batchv1.Job{job("j1", fqn, 1)}, true},
+		{"labelled job finished (active 0)", []*batchv1.Job{job("j1", fqn, 0)}, false},
+		{"active job for a different service", []*batchv1.Job{job("j1", "alpha-api", 1)}, false},
+		{"mixed: one other done, one ours active", []*batchv1.Job{job("j1", fqn, 0), job("j2", fqn, 2)}, true},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			objs := make([]runtime.Object, 0, len(c.jobs))
+			for _, j := range c.jobs {
+				objs = append(objs, j)
+			}
+			cs := fake.NewSimpleClientset(objs...)
+			w := &Watcher{Kube: &kube.Client{Clientset: cs}, Logger: slog.Default()}
+			if got := w.hasActiveJobs(context.Background(), ns, fqn); got != c.want {
+				t.Errorf("%s: hasActiveJobs = %v, want %v", c.name, got, c.want)
+			}
+		})
 	}
 }
 
